@@ -1,0 +1,27 @@
+{
+  "name": "flowfi-functions",
+  "version": "0.1.0",
+  "private": true,
+  "description": "FlowFi Financial Document Intelligence Engine — Cloud Functions (Architecture v1.0, docs/adr/ADR-001, ADR-003).",
+  "main": "lib/index.js",
+  "engines": {
+    "node": "20"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc -p tsconfig.test.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "firebase-admin": "^13.0.2",
+    "firebase-functions": "^6.4.0",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^6.2.108",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "typescript": "^5",
+    "vitest": "^4.1.10"
+  }
+}

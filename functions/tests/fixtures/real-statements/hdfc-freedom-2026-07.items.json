@@ -1,0 +1,2948 @@
+[
+  {
+    "pageNumber": 1,
+    "items": [
+      {
+        "str": "TOTAL AMOUNT DUE",
+        "x": 445.946,
+        "y": 614.759,
+        "width": 62.167,
+        "height": 7
+      },
+      {
+        "str": "C",
+        "x": 445.946,
+        "y": 591.665,
+        "width": 7.41,
+        "height": 15
+      },
+      {
+        "str": "10,006.00",
+        "x": 453.356,
+        "y": 591.665,
+        "width": 61.11,
+        "height": 15
+      },
+      {
+        "str": "MINIMUM DUE",
+        "x": 445.946,
+        "y": 562.007,
+        "width": 45.255,
+        "height": 7
+      },
+      {
+        "str": "C",
+        "x": 445.946,
+        "y": 544.163,
+        "width": 3.952,
+        "height": 8
+      },
+      {
+        "str": "1,818.00",
+        "x": 449.898,
+        "y": 544.163,
+        "width": 28.536,
+        "height": 8
+      },
+      {
+        "str": "DUE DATE",
+        "x": 512.079,
+        "y": 562.007,
+        "width": 29.512,
+        "height": 7
+      },
+      {
+        "str": "08 Aug, 2026",
+        "x": 512.079,
+        "y": 544.163,
+        "width": 42.952,
+        "height": 8
+      },
+      {
+        "str": "Reward Points",
+        "x": 197.898,
+        "y": 361.382,
+        "width": 48.627,
+        "height": 8
+      },
+      {
+        "str": "803",
+        "x": 197.898,
+        "y": 343.044,
+        "width": 30.705,
+        "height": 20
+      },
+      {
+        "str": "REDEEM REWARDS",
+        "x": 202.19,
+        "y": 326.201,
+        "width": 64.486,
+        "height": 8
+      },
+      {
+        "str": "Opening Balance",
+        "x": 299.548,
+        "y": 363.892,
+        "width": 42.327,
+        "height": 6
+      },
+      {
+        "str": "Earned",
+        "x": 370.318,
+        "y": 363.892,
+        "width": 17.648,
+        "height": 6
+      },
+      {
+        "str": "Disbursed",
+        "x": 447.879,
+        "y": 363.892,
+        "width": 25.091,
+        "height": 6
+      },
+      {
+        "str": "Adjusted/Lapsed",
+        "x": 524.879,
+        "y": 363.892,
+        "width": 42.66,
+        "height": 6
+      },
+      {
+        "str": "765",
+        "x": 299.548,
+        "y": 349.634,
+        "width": 10.747,
+        "height": 7
+      },
+      {
+        "str": "38",
+        "x": 370.318,
+        "y": 349.634,
+        "width": 7.164,
+        "height": 7
+      },
+      {
+        "str": "0",
+        "x": 447.879,
+        "y": 349.634,
+        "width": 3.582,
+        "height": 7
+      },
+      {
+        "str": "0",
+        "x": 524.879,
+        "y": 349.634,
+        "width": 3.582,
+        "height": 7
+      },
+      {
+        "str": "POINTS EXPIRING",
+        "x": 299.548,
+        "y": 331.878,
+        "width": 53.119,
+        "height": 7
+      },
+      {
+        "str": "IN 30 DAYS",
+        "x": 370.318,
+        "y": 331.628,
+        "width": 35.844,
+        "height": 7
+      },
+      {
+        "str": "0",
+        "x": 409.811,
+        "y": 331.628,
+        "width": 4.094,
+        "height": 8
+      },
+      {
+        "str": "IN 60 DAYS",
+        "x": 447.879,
+        "y": 331.628,
+        "width": 35.844,
+        "height": 7
+      },
+      {
+        "str": "0",
+        "x": 486.916,
+        "y": 331.628,
+        "width": 4.094,
+        "height": 8
+      },
+      {
+        "str": "* All contents of the statement will be deemed to be correct and accepted by you, unless you inform us of any discrepancies within 30 days from the date of this statement.",
+        "x": 159.893,
+        "y": 307.096,
+        "width": 423.11,
+        "height": 6
+      },
+      {
+        "str": "* The available credit limit showed herein takes into account charges incurred but not billed.",
+        "x": 159.893,
+        "y": 299.77,
+        "width": 227.701,
+        "height": 6
+      },
+      {
+        "str": "Your Card Control Setting",
+        "x": 169.622,
+        "y": 281.466,
+        "width": 80.434,
+        "height": 7.499
+      },
+      {
+        "str": "As on : 19 Jul, 2026",
+        "x": 254.646,
+        "y": 281.466,
+        "width": 49.515,
+        "height": 5.999
+      },
+      {
+        "str": "Domestic Transaction",
+        "x": 169.432,
+        "y": 268.171,
+        "width": 54.719,
+        "height": 5.999
+      },
+      {
+        "str": "International Transaction",
+        "x": 320.538,
+        "y": 268.171,
+        "width": 64.188,
+        "height": 5.999
+      },
+      {
+        "str": "Online",
+        "x": 189.058,
+        "y": 253.433,
+        "width": 16.27,
+        "height": 5.999
+      },
+      {
+        "str": "POS",
+        "x": 242.091,
+        "y": 253.433,
+        "width": 9.981,
+        "height": 5.999
+      },
+      {
+        "str": "Tap & Pay",
+        "x": 284.558,
+        "y": 253.433,
+        "width": 24.825,
+        "height": 5.999
+      },
+      {
+        "str": "Online",
+        "x": 338.725,
+        "y": 253.433,
+        "width": 16.27,
+        "height": 5.999
+      },
+      {
+        "str": "POS",
+        "x": 391.758,
+        "y": 253.433,
+        "width": 9.981,
+        "height": 5.999
+      },
+      {
+        "str": "Tap & Pay",
+        "x": 434.225,
+        "y": 253.433,
+        "width": 24.825,
+        "height": 5.999
+      },
+      {
+        "str": "MODIFY ON MyCards",
+        "x": 520.97,
+        "y": 253.558,
+        "width": 49.573,
+        "height": 5.499
+      },
+      {
+        "str": "ENABLED",
+        "x": 178.831,
+        "y": 236.11,
+        "width": 19.575,
+        "height": 4.999
+      },
+      {
+        "str": "ENABLED",
+        "x": 228.72,
+        "y": 236.11,
+        "width": 19.575,
+        "height": 4.999
+      },
+      {
+        "str": "DISABLED",
+        "x": 278.043,
+        "y": 236.11,
+        "width": 20.708,
+        "height": 4.999
+      },
+      {
+        "str": "ENABLED",
+        "x": 328.498,
+        "y": 236.11,
+        "width": 19.575,
+        "height": 4.999
+      },
+      {
+        "str": "ENABLED",
+        "x": 378.386,
+        "y": 236.11,
+        "width": 19.575,
+        "height": 4.999
+      },
+      {
+        "str": "DISABLED",
+        "x": 427.709,
+        "y": 236.11,
+        "width": 20.708,
+        "height": 4.999
+      },
+      {
+        "str": "Card Control",
+        "x": 481.406,
+        "y": 235.86,
+        "width": 31.308,
+        "height": 5.999
+      },
+      {
+        "str": "Set Pin",
+        "x": 545.83,
+        "y": 235.86,
+        "width": 17.001,
+        "height": 5.999
+      },
+      {
+        "str": "Purchase Indicator / Insights (PI)",
+        "x": 169.622,
+        "y": 202.093,
+        "width": 102.652,
+        "height": 7.5
+      },
+      {
+        "str": "l",
+        "x": 165.304,
+        "y": 183.284,
+        "width": 4.931,
+        "height": 6.5
+      },
+      {
+        "str": "SERVICES",
+        "x": 171.612,
+        "y": 183.284,
+        "width": 23.088,
+        "height": 6
+      },
+      {
+        "str": "70%",
+        "x": 171.925,
+        "y": 175.958,
+        "width": 10.621,
+        "height": 6
+      },
+      {
+        "str": "l",
+        "x": 248.674,
+        "y": 183.284,
+        "width": 4.931,
+        "height": 6.5
+      },
+      {
+        "str": "GOVERNMENT",
+        "x": 254.982,
+        "y": 183.284,
+        "width": 36.64,
+        "height": 6
+      },
+      {
+        "str": "16%",
+        "x": 255.295,
+        "y": 175.958,
+        "width": 10.621,
+        "height": 6
+      },
+      {
+        "str": "l",
+        "x": 332.044,
+        "y": 183.284,
+        "width": 4.931,
+        "height": 6.5
+      },
+      {
+        "str": "TELECOM & CABLE",
+        "x": 338.352,
+        "y": 183.284,
+        "width": 46.499,
+        "height": 6
+      },
+      {
+        "str": "8%",
+        "x": 338.665,
+        "y": 175.958,
+        "width": 7.532,
+        "height": 6
+      },
+      {
+        "str": "l",
+        "x": 415.414,
+        "y": 183.284,
+        "width": 4.931,
+        "height": 6.5
+      },
+      {
+        "str": "B2B",
+        "x": 421.722,
+        "y": 183.284,
+        "width": 9.719,
+        "height": 6
+      },
+      {
+        "str": "1%",
+        "x": 422.035,
+        "y": 175.958,
+        "width": 7.532,
+        "height": 6
+      },
+      {
+        "str": "l",
+        "x": 498.784,
+        "y": 183.284,
+        "width": 4.931,
+        "height": 6.5
+      },
+      {
+        "str": "MISC",
+        "x": 505.092,
+        "y": 183.284,
+        "width": 12.79,
+        "height": 6
+      },
+      {
+        "str": "5%",
+        "x": 505.405,
+        "y": 175.958,
+        "width": 7.532,
+        "height": 6
+      },
+      {
+        "str": "IMPORTANT INFORMATION",
+        "x": 175.181,
+        "y": 453.588,
+        "width": 86.955,
+        "height": 7.5
+      },
+      {
+        "str": "1.",
+        "x": 175.181,
+        "y": 435.124,
+        "width": 5.313,
+        "height": 7
+      },
+      {
+        "str": "MITC - MINIMUM AMOUNT DUE(MAD) CALCULATION ON YOUR HDFC BANK CREDIT CARD REVISEDWEF JUNE 2025 STMT REF MITC FOR",
+        "x": 185.102,
+        "y": 435.124,
+        "width": 386.204,
+        "height": 7
+      },
+      {
+        "str": "DETAILS",
+        "x": 185.102,
+        "y": 426.577,
+        "width": 23.1,
+        "height": 7
+      },
+      {
+        "str": "2.",
+        "x": 175.181,
+        "y": 418.03,
+        "width": 5.313,
+        "height": 7
+      },
+      {
+        "str": "MISSED PAYMENT OF MINIMUM AMOUNT DUE WITHIN 3 GRACE DAYS OF DUE DATE WILL BE REPORTED TO CREDIT INFORMATION",
+        "x": 185.102,
+        "y": 418.03,
+        "width": 373.954,
+        "height": 7
+      },
+      {
+        "str": "COMPANIES",
+        "x": 185.102,
+        "y": 409.483,
+        "width": 34.937,
+        "height": 7
+      },
+      {
+        "str": "3.",
+        "x": 175.181,
+        "y": 400.936,
+        "width": 5.313,
+        "height": 7
+      },
+      {
+        "str": "FEATURES ON YOUR HDFC BANK FREEDOM CREDIT CARD WILL BE REVISED FROM NOV 01, 2021. VISIT WWW.HDFCBANK.COM FOR",
+        "x": 185.102,
+        "y": 400.936,
+        "width": 372.638,
+        "height": 7
+      },
+      {
+        "str": "DETAILS",
+        "x": 185.102,
+        "y": 392.389,
+        "width": 23.1,
+        "height": 7
+      },
+      {
+        "str": "Domestic Transactions",
+        "x": 169.512,
+        "y": 145.4,
+        "width": 70.343,
+        "height": 7.5
+      },
+      {
+        "str": "DATE & TIME",
+        "x": 169.512,
+        "y": 130.437,
+        "width": 38.5,
+        "height": 7
+      },
+      {
+        "str": "TRANSACTION DESCRIPTION",
+        "x": 250.741,
+        "y": 130.437,
+        "width": 82.831,
+        "height": 7
+      },
+      {
+        "str": "REWARDS",
+        "x": 460.323,
+        "y": 130.437,
+        "width": 29.603,
+        "height": 7
+      },
+      {
+        "str": "AMOUNT",
+        "x": 530.299,
+        "y": 130.437,
+        "width": 27.741,
+        "height": 7
+      },
+      {
+        "str": "PI",
+        "x": 568.05,
+        "y": 130.437,
+        "width": 5.593,
+        "height": 7
+      },
+      {
+        "str": "TEST CARDHOLDER",
+        "x": 250.741,
+        "y": 115.85,
+        "width": 32.312,
+        "height": 7
+      },
+      {
+        "str": "[CKYC ID : 99999999999999 ]",
+        "x": 318.773,
+        "y": 115.85,
+        "width": 83.65,
+        "height": 7
+      },
+      {
+        "str": "19/06/2026| 22:16",
+        "x": 169.512,
+        "y": 101.264,
+        "width": 54.67,
+        "height": 7
+      },
+      {
+        "str": "ETREASURYKERALATHIRUVANAN",
+        "x": 250.741,
+        "y": 101.264,
+        "width": 93.863,
+        "height": 7
+      },
+      {
+        "str": "C",
+        "x": 528.192,
+        "y": 101.264,
+        "width": 3.458,
+        "height": 7
+      },
+      {
+        "str": "1,361.24",
+        "x": 533.232,
+        "y": 101.264,
+        "width": 24.808,
+        "height": 7
+      },
+      {
+        "str": "l",
+        "x": 568.232,
+        "y": 100.606,
+        "width": 5.229,
+        "height": 7
+      },
+      {
+        "str": "19/06/2026| 00:00",
+        "x": 169.512,
+        "y": 86.403,
+        "width": 54.67,
+        "height": 7
+      },
+      {
+        "str": "IGST-VPS2717151193919-RATE 18.0 -32 (Ref#",
+        "x": 250.741,
+        "y": 90.677,
+        "width": 130.13,
+        "height": 7
+      },
+      {
+        "str": "09999999980619002660882)",
+        "x": 250.741,
+        "y": 82.13,
+        "width": 83.748,
+        "height": 7
+      },
+      {
+        "str": "C",
+        "x": 537.04,
+        "y": 86.403,
+        "width": 3.458,
+        "height": 7
+      },
+      {
+        "str": "28.26",
+        "x": 542.08,
+        "y": 86.403,
+        "width": 15.96,
+        "height": 7
+      },
+      {
+        "str": "l",
+        "x": 568.232,
+        "y": 85.745,
+        "width": 5.229,
+        "height": 7
+      },
+      {
+        "str": "19/06/2026| 00:00",
+        "x": 169.512,
+        "y": 70.856,
+        "width": 54.67,
+        "height": 7
+      },
+      {
+        "str": "IGST-VPS2717151193921-RATE 18.0 -32 (Ref#",
+        "x": 250.741,
+        "y": 75.13,
+        "width": 130.13,
+        "height": 7
+      },
+      {
+        "str": "09999999980619002660908)",
+        "x": 250.741,
+        "y": 66.583,
+        "width": 83.748,
+        "height": 7
+      },
+      {
+        "str": "C",
+        "x": 540.589,
+        "y": 70.856,
+        "width": 3.458,
+        "height": 7
+      },
+      {
+        "str": "7.20",
+        "x": 545.629,
+        "y": 70.856,
+        "width": 12.411,
+        "height": 7
+      },
+      {
+        "str": "l",
+        "x": 568.232,
+        "y": 70.198,
+        "width": 5.229,
+        "height": 7
+      },
+      {
+        "str": "25/06/2026| 12:40",
+        "x": 169.512,
+        "y": 55.996,
+        "width": 54.67,
+        "height": 7
+      },
+      {
+        "str": "EMI",
+        "x": 232.251,
+        "y": 55.996,
+        "width": 11.403,
+        "height": 7
+      },
+      {
+        "str": "RONY GEORGEERNAKULAM",
+        "x": 250.741,
+        "y": 55.996,
+        "width": 78.953,
+        "height": 7
+      },
+      {
+        "str": "C",
+        "x": 528.192,
+        "y": 55.996,
+        "width": 3.458,
+        "height": 7
+      },
+      {
+        "str": "6,000.00",
+        "x": 533.232,
+        "y": 55.996,
+        "width": 24.808,
+        "height": 7
+      },
+      {
+        "str": "l",
+        "x": 568.232,
+        "y": 55.338,
+        "width": 5.229,
+        "height": 7
+      },
+      {
+        "str": "25/06/2026| 04:24",
+        "x": 169.512,
+        "y": 41.823,
+        "width": 54.67,
+        "height": 7
+      },
+      {
+        "str": "RELIANCE RETAIL LIMITENOIDA",
+        "x": 250.741,
+        "y": 41.823,
+        "width": 88.746,
+        "height": 7
+      },
+      {
+        "str": "C",
+        "x": 533.491,
+        "y": 41.823,
+        "width": 3.458,
+        "height": 7
+      },
+      {
+        "str": "189.00",
+        "x": 538.531,
+        "y": 41.823,
+        "width": 19.509,
+        "height": 7
+      },
+      {
+        "str": "l",
+        "x": 568.232,
+        "y": 41.165,
+        "width": 5.229,
+        "height": 7
+      },
+      {
+        "str": "Page 1 of 4",
+        "x": 26.646,
+        "y": 6.839,
+        "width": 27.294,
+        "height": 6
+      },
+      {
+        "str": "Past Dues",
+        "x": 23.811,
+        "y": 499.434,
+        "width": 30.503,
+        "height": 7.5
+      },
+      {
+        "str": "(if any)",
+        "x": 23.811,
+        "y": 491.402,
+        "width": 17.502,
+        "height": 6
+      },
+      {
+        "str": "OVER LIMIT",
+        "x": 102.553,
+        "y": 500.393,
+        "width": 29.22,
+        "height": 6
+      },
+      {
+        "str": "C",
+        "x": 102.553,
+        "y": 491.942,
+        "width": 3.705,
+        "height": 7.5
+      },
+      {
+        "str": "0.00",
+        "x": 106.258,
+        "y": 491.942,
+        "width": 13.41,
+        "height": 7.5
+      },
+      {
+        "str": "3 MONTHS +",
+        "x": 182.713,
+        "y": 500.393,
+        "width": 31.59,
+        "height": 6
+      },
+      {
+        "str": "C",
+        "x": 182.713,
+        "y": 491.942,
+        "width": 3.705,
+        "height": 7.5
+      },
+      {
+        "str": "0.00",
+        "x": 186.418,
+        "y": 491.942,
+        "width": 13.41,
+        "height": 7.5
+      },
+      {
+        "str": "2 MONTHS",
+        "x": 262.873,
+        "y": 500.393,
+        "width": 27.246,
+        "height": 6
+      },
+      {
+        "str": "C",
+        "x": 262.873,
+        "y": 491.942,
+        "width": 3.705,
+        "height": 7.5
+      },
+      {
+        "str": "0.00",
+        "x": 266.578,
+        "y": 491.942,
+        "width": 13.41,
+        "height": 7.5
+      },
+      {
+        "str": "1 MONTH",
+        "x": 343.033,
+        "y": 500.393,
+        "width": 24.408,
+        "height": 6
+      },
+      {
+        "str": "C",
+        "x": 343.033,
+        "y": 491.942,
+        "width": 3.705,
+        "height": 7.5
+      },
+      {
+        "str": "0.00",
+        "x": 346.738,
+        "y": 491.942,
+        "width": 13.41,
+        "height": 7.5
+      },
+      {
+        "str": "CURRENT DUES",
+        "x": 423.192,
+        "y": 500.393,
+        "width": 38.52,
+        "height": 6
+      },
+      {
+        "str": "C",
+        "x": 423.192,
+        "y": 491.942,
+        "width": 3.705,
+        "height": 7.5
+      },
+      {
+        "str": "1,818.38",
+        "x": 426.897,
+        "y": 491.942,
+        "width": 26.752,
+        "height": 7.5
+      },
+      {
+        "str": "MINIMUM DUES",
+        "x": 504.769,
+        "y": 500.393,
+        "width": 41.628,
+        "height": 6
+      },
+      {
+        "str": "C",
+        "x": 504.769,
+        "y": 491.942,
+        "width": 3.705,
+        "height": 7.5
+      },
+      {
+        "str": "1,818.00",
+        "x": 508.474,
+        "y": 491.942,
+        "width": 26.752,
+        "height": 7.5
+      },
+      {
+        "str": "PREVIOUS STATEMENT DUES",
+        "x": 39.687,
+        "y": 615.344,
+        "width": 84.084,
+        "height": 7
+      },
+      {
+        "str": "PAYMENTS/CREDITS",
+        "x": 155.653,
+        "y": 619.617,
+        "width": 59.654,
+        "height": 7
+      },
+      {
+        "str": "RECEIVED",
+        "x": 171.326,
+        "y": 611.07,
+        "width": 28.308,
+        "height": 7
+      },
+      {
+        "str": "PURCHASES/DEBIT",
+        "x": 258.423,
+        "y": 619.617,
+        "width": 54.733,
+        "height": 7
+      },
+      {
+        "str": "(Current Billing Cycle)",
+        "x": 254.412,
+        "y": 611.07,
+        "width": 62.755,
+        "height": 7
+      },
+      {
+        "str": "FINANCE CHARGES",
+        "x": 353.519,
+        "y": 615.344,
+        "width": 54.74,
+        "height": 7
+      },
+      {
+        "str": "C",
+        "x": 65.485,
+        "y": 591.73,
+        "width": 3.952,
+        "height": 8
+      },
+      {
+        "str": "3,910.68",
+        "x": 69.437,
+        "y": 591.73,
+        "width": 28.536,
+        "height": 8
+      },
+      {
+        "str": "C",
+        "x": 169.236,
+        "y": 591.73,
+        "width": 3.952,
+        "height": 8
+      },
+      {
+        "str": "3,911.00",
+        "x": 173.188,
+        "y": 591.73,
+        "width": 28.536,
+        "height": 8
+      },
+      {
+        "str": "C",
+        "x": 267.517,
+        "y": 591.73,
+        "width": 3.952,
+        "height": 8
+      },
+      {
+        "str": "10,006.61",
+        "x": 271.469,
+        "y": 591.73,
+        "width": 32.592,
+        "height": 8
+      },
+      {
+        "str": "C",
+        "x": 371.761,
+        "y": 591.73,
+        "width": 3.952,
+        "height": 8
+      },
+      {
+        "str": "0.00",
+        "x": 375.713,
+        "y": 591.73,
+        "width": 14.304,
+        "height": 8
+      },
+      {
+        "str": "TOTAL CREDIT LIMIT",
+        "x": 64.562,
+        "y": 568.005,
+        "width": 59.115,
+        "height": 7
+      },
+      {
+        "str": "(Including Cash)",
+        "x": 70.992,
+        "y": 559.458,
+        "width": 46.256,
+        "height": 7
+      },
+      {
+        "str": "AVAILABLE CREDIT LIMIT",
+        "x": 182.661,
+        "y": 563.732,
+        "width": 72.247,
+        "height": 7
+      },
+      {
+        "str": "AVAILABLE CASH LIMIT",
+        "x": 317.794,
+        "y": 563.732,
+        "width": 67.116,
+        "height": 7
+      },
+      {
+        "str": "C",
+        "x": 80.972,
+        "y": 540.117,
+        "width": 3.952,
+        "height": 8
+      },
+      {
+        "str": "38,000",
+        "x": 84.924,
+        "y": 540.117,
+        "width": 22.344,
+        "height": 8
+      },
+      {
+        "str": "C",
+        "x": 205.637,
+        "y": 540.117,
+        "width": 3.952,
+        "height": 8
+      },
+      {
+        "str": "11,691",
+        "x": 209.589,
+        "y": 540.117,
+        "width": 22.344,
+        "height": 8
+      },
+      {
+        "str": "C",
+        "x": 347.348,
+        "y": 540.117,
+        "width": 3.952,
+        "height": 8
+      },
+      {
+        "str": "0",
+        "x": 351.3,
+        "y": 540.117,
+        "width": 4.056,
+        "height": 8
+      },
+      {
+        "str": "Benefits on your card",
+        "x": 20.409,
+        "y": 470.271,
+        "width": 75.421,
+        "height": 8.5
+      },
+      {
+        "str": "Freedom Credit Card Statement",
+        "x": 26.646,
+        "y": 778.468,
+        "width": 158.184,
+        "height": 12
+      },
+      {
+        "str": "HSN Code: 997113",
+        "x": 26.646,
+        "y": 766.816,
+        "width": 60.584,
+        "height": 8
+      },
+      {
+        "str": "HDFC Bank Credit Cards GSTIN: 33AAACH2702H2Z6",
+        "x": 101.694,
+        "y": 766.816,
+        "width": 167.144,
+        "height": 8
+      },
+      {
+        "str": "TEST CARDHOLDER",
+        "x": 26.646,
+        "y": 742.917,
+        "width": 46.16,
+        "height": 10
+      },
+      {
+        "str": "FIXTURE HOUSE TEST STREET,",
+        "x": 26.929,
+        "y": 726.852,
+        "width": 101.633,
+        "height": 7
+      },
+      {
+        "str": "TESTTOWN VENMONY",
+        "x": 26.929,
+        "y": 718.305,
+        "width": 73.878,
+        "height": 7
+      },
+      {
+        "str": "TESTDISTRICT 689000 KER",
+        "x": 26.929,
+        "y": 709.758,
+        "width": 89.775,
+        "height": 7
+      },
+      {
+        "str": "Email :",
+        "x": 26.646,
+        "y": 696.653,
+        "width": 19.04,
+        "height": 7
+      },
+      {
+        "str": "test.cardholder@example.com",
+        "x": 47.268,
+        "y": 696.653,
+        "width": 76.412,
+        "height": 7
+      },
+      {
+        "str": "Credit Card No.",
+        "x": 192.252,
+        "y": 743.946,
+        "width": 43.631,
+        "height": 7
+      },
+      {
+        "str": "Alternate Account Number",
+        "x": 192.252,
+        "y": 729.294,
+        "width": 76.713,
+        "height": 7
+      },
+      {
+        "str": "Statement Date",
+        "x": 192.252,
+        "y": 714.642,
+        "width": 44.912,
+        "height": 7
+      },
+      {
+        "str": "Billing Period",
+        "x": 192.252,
+        "y": 699.99,
+        "width": 37.324,
+        "height": 7
+      },
+      {
+        "str": "CKYC ID",
+        "x": 192.252,
+        "y": 685.338,
+        "width": 22.162,
+        "height": 7
+      },
+      {
+        "str": "489377XXXXXX1234",
+        "x": 318.449,
+        "y": 743.946,
+        "width": 58.632,
+        "height": 7
+      },
+      {
+        "str": "0009999999999999999",
+        "x": 309.65,
+        "y": 729.294,
+        "width": 67.431,
+        "height": 7
+      },
+      {
+        "str": "19 Jul, 2026",
+        "x": 343.019,
+        "y": 714.642,
+        "width": 34.062,
+        "height": 7
+      },
+      {
+        "str": "20 Jun, 2026 - 19 Jul, 2026",
+        "x": 301.614,
+        "y": 699.99,
+        "width": 75.467,
+        "height": 7
+      },
+      {
+        "str": "99999999999999",
+        "x": 327.395,
+        "y": 685.338,
+        "width": 49.686,
+        "height": 7
+      },
+      {
+        "str": "To update personal details",
+        "x": 26.362,
+        "y": 665.6,
+        "width": 77.329,
+        "height": 7
+      },
+      {
+        "str": ":",
+        "x": 105.273,
+        "y": 665.6,
+        "width": 1.876,
+        "height": 7
+      },
+      {
+        "str": "Change of Address: click here",
+        "x": 108.731,
+        "y": 665.6,
+        "width": 85.05,
+        "height": 7
+      },
+      {
+        "str": "|",
+        "x": 211.183,
+        "y": 665.6,
+        "width": 3.325,
+        "height": 7
+      },
+      {
+        "str": "Change of email-id: click here",
+        "x": 231.91,
+        "y": 665.6,
+        "width": 85.435,
+        "height": 7
+      },
+      {
+        "str": "|",
+        "x": 334.747,
+        "y": 665.6,
+        "width": 3.325,
+        "height": 7
+      },
+      {
+        "str": "Change of Mobile number: click here",
+        "x": 355.474,
+        "y": 665.6,
+        "width": 106.862,
+        "height": 7
+      },
+      {
+        "str": "To update any other personal details, please write a letter to",
+        "x": 26.362,
+        "y": 657.053,
+        "width": 176.61,
+        "height": 7
+      },
+      {
+        "str": ": The Manager, HDFC Bank Cards Division, Door No 94 SP, Estate Bus Stand, Wavin Main Road, Mogappair West, Chennai - 600058",
+        "x": 204.554,
+        "y": 657.053,
+        "width": 369.852,
+        "height": 7
+      },
+      {
+        "str": "_",
+        "x": 132.888,
+        "y": 596.28,
+        "width": 4.98,
+        "height": 10
+      },
+      {
+        "str": "+",
+        "x": 232.866,
+        "y": 592.084,
+        "width": 4.98,
+        "height": 10
+      },
+      {
+        "str": "+",
+        "x": 334.205,
+        "y": 592.084,
+        "width": 4.98,
+        "height": 10
+      },
+      {
+        "str": "=",
+        "x": 423.779,
+        "y": 592.084,
+        "width": 4.98,
+        "height": 10
+      }
+    ]
+  },
+  {
+    "pageNumber": 2,
+    "items": [
+      {
+        "str": "Domestic Transactions",
+        "x": 25.512,
+        "y": 585.399,
+        "width": 70.343,
+        "height": 7.5
+      },
+      {
+        "str": "DATE & TIME",
+        "x": 25.512,
+        "y": 570.435,
+        "width": 38.5,
+        "height": 7
+      },
+      {
+        "str": "TRANSACTION DESCRIPTION",
+        "x": 136.291,
+        "y": 570.435,
+        "width": 82.831,
+        "height": 7
+      },
+      {
+        "str": "REWARDS",
+        "x": 424.419,
+        "y": 570.435,
+        "width": 29.603,
+        "height": 7
+      },
+      {
+        "str": "AMOUNT",
+        "x": 524.526,
+        "y": 570.435,
+        "width": 27.741,
+        "height": 7
+      },
+      {
+        "str": "PI",
+        "x": 565.235,
+        "y": 570.435,
+        "width": 5.593,
+        "height": 7
+      },
+      {
+        "str": "30/06/2026| 04:51",
+        "x": 25.512,
+        "y": 556.262,
+        "width": 54.67,
+        "height": 7
+      },
+      {
+        "str": "FS *SUPERCELLSTOREfsprg.nl",
+        "x": 136.291,
+        "y": 556.262,
+        "width": 82.873,
+        "height": 7
+      },
+      {
+        "str": "C",
+        "x": 527.718,
+        "y": 556.262,
+        "width": 3.458,
+        "height": 7
+      },
+      {
+        "str": "378.00",
+        "x": 532.758,
+        "y": 556.262,
+        "width": 19.509,
+        "height": 7
+      },
+      {
+        "str": "l",
+        "x": 565.417,
+        "y": 555.604,
+        "width": 5.229,
+        "height": 7
+      },
+      {
+        "str": "02/07/2026| 00:00",
+        "x": 25.512,
+        "y": 542.089,
+        "width": 54.67,
+        "height": 7
+      },
+      {
+        "str": "1.75% on all DCC Transaction (Ref# ST261840084000012820645)",
+        "x": 136.291,
+        "y": 542.089,
+        "width": 184.163,
+        "height": 7
+      },
+      {
+        "str": "C",
+        "x": 534.816,
+        "y": 542.089,
+        "width": 3.458,
+        "height": 7
+      },
+      {
+        "str": "6.62",
+        "x": 539.856,
+        "y": 542.089,
+        "width": 12.411,
+        "height": 7
+      },
+      {
+        "str": "l",
+        "x": 565.417,
+        "y": 541.431,
+        "width": 5.229,
+        "height": 7
+      },
+      {
+        "str": "03/07/2026| 16:21",
+        "x": 25.512,
+        "y": 527.915,
+        "width": 54.67,
+        "height": 7
+      },
+      {
+        "str": "GOOGLE WORKSPACE CYBSSI MUMBAI",
+        "x": 136.291,
+        "y": 527.915,
+        "width": 110.768,
+        "height": 7
+      },
+      {
+        "str": "C",
+        "x": 531.267,
+        "y": 527.915,
+        "width": 3.458,
+        "height": 7
+      },
+      {
+        "str": "62.30",
+        "x": 536.307,
+        "y": 527.915,
+        "width": 15.96,
+        "height": 7
+      },
+      {
+        "str": "l",
+        "x": 565.417,
+        "y": 527.257,
+        "width": 5.229,
+        "height": 7
+      },
+      {
+        "str": "06/07/2026| 21:36",
+        "x": 25.512,
+        "y": 513.742,
+        "width": 54.67,
+        "height": 7
+      },
+      {
+        "str": "CREDIT CARD PAYMENTNet Banking (Ref# 00000000000706019151184)",
+        "x": 136.291,
+        "y": 513.742,
+        "width": 204.372,
+        "height": 7
+      },
+      {
+        "str": "+",
+        "x": 515.769,
+        "y": 513.742,
+        "width": 3.486,
+        "height": 7
+      },
+      {
+        "str": "C",
+        "x": 522.419,
+        "y": 513.742,
+        "width": 3.458,
+        "height": 7
+      },
+      {
+        "str": "3,911.00",
+        "x": 527.459,
+        "y": 513.742,
+        "width": 24.808,
+        "height": 7
+      },
+      {
+        "str": "l",
+        "x": 565.417,
+        "y": 513.084,
+        "width": 5.229,
+        "height": 7
+      },
+      {
+        "str": "09/07/2026| 00:48",
+        "x": 25.512,
+        "y": 499.569,
+        "width": 54.67,
+        "height": 7
+      },
+      {
+        "str": "KERALA VISION BROAD BABANGALORE",
+        "x": 136.291,
+        "y": 499.569,
+        "width": 110.621,
+        "height": 7
+      },
+      {
+        "str": "C",
+        "x": 527.718,
+        "y": 499.569,
+        "width": 3.458,
+        "height": 7
+      },
+      {
+        "str": "504.17",
+        "x": 532.758,
+        "y": 499.569,
+        "width": 19.509,
+        "height": 7
+      },
+      {
+        "str": "l",
+        "x": 565.417,
+        "y": 498.911,
+        "width": 5.229,
+        "height": 7
+      },
+      {
+        "str": "14/07/2026| 09:24",
+        "x": 25.512,
+        "y": 485.396,
+        "width": 54.67,
+        "height": 7
+      },
+      {
+        "str": "RELIANCE RETAIL LIMITENOIDA",
+        "x": 136.291,
+        "y": 485.396,
+        "width": 88.746,
+        "height": 7
+      },
+      {
+        "str": "C",
+        "x": 531.267,
+        "y": 485.396,
+        "width": 3.458,
+        "height": 7
+      },
+      {
+        "str": "11.00",
+        "x": 536.307,
+        "y": 485.396,
+        "width": 15.96,
+        "height": 7
+      },
+      {
+        "str": "l",
+        "x": 565.417,
+        "y": 484.738,
+        "width": 5.229,
+        "height": 7
+      },
+      {
+        "str": "14/07/2026| 02:20",
+        "x": 25.512,
+        "y": 471.222,
+        "width": 54.67,
+        "height": 7
+      },
+      {
+        "str": "FS *SUPERCELLSTOREfsprg.nl",
+        "x": 136.291,
+        "y": 471.222,
+        "width": 82.873,
+        "height": 7
+      },
+      {
+        "str": "C",
+        "x": 531.267,
+        "y": 471.222,
+        "width": 3.458,
+        "height": 7
+      },
+      {
+        "str": "79.00",
+        "x": 536.307,
+        "y": 471.222,
+        "width": 15.96,
+        "height": 7
+      },
+      {
+        "str": "l",
+        "x": 565.417,
+        "y": 470.564,
+        "width": 5.229,
+        "height": 7
+      },
+      {
+        "str": "16/07/2026| 00:00",
+        "x": 25.512,
+        "y": 457.049,
+        "width": 54.67,
+        "height": 7
+      },
+      {
+        "str": "1.75% on all DCC Transaction (Ref# ST261980084000011767102)",
+        "x": 136.291,
+        "y": 457.049,
+        "width": 184.163,
+        "height": 7
+      },
+      {
+        "str": "C",
+        "x": 534.816,
+        "y": 457.049,
+        "width": 3.458,
+        "height": 7
+      },
+      {
+        "str": "1.38",
+        "x": 539.856,
+        "y": 457.049,
+        "width": 12.411,
+        "height": 7
+      },
+      {
+        "str": "l",
+        "x": 565.417,
+        "y": 456.391,
+        "width": 5.229,
+        "height": 7
+      },
+      {
+        "str": "19/07/2026| 00:00",
+        "x": 25.512,
+        "y": 442.876,
+        "width": 54.67,
+        "height": 7
+      },
+      {
+        "str": "INSTALOAN,PRIN NB:10,00000130457051 (Ref# 09999999980719002569875)",
+        "x": 136.291,
+        "y": 442.876,
+        "width": 220.829,
+        "height": 7
+      },
+      {
+        "str": "C",
+        "x": 527.718,
+        "y": 442.876,
+        "width": 3.458,
+        "height": 7
+      },
+      {
+        "str": "500.00",
+        "x": 532.758,
+        "y": 442.876,
+        "width": 19.509,
+        "height": 7
+      },
+      {
+        "str": "l",
+        "x": 565.417,
+        "y": 442.218,
+        "width": 5.229,
+        "height": 7
+      },
+      {
+        "str": "19/07/2026| 00:00",
+        "x": 25.512,
+        "y": 428.703,
+        "width": 54.67,
+        "height": 7
+      },
+      {
+        "str": "OFFUS EMI,PRIN NB:04,00000138859163 (Ref# 09999999980719002569891)",
+        "x": 136.291,
+        "y": 428.703,
+        "width": 219.233,
+        "height": 7
+      },
+      {
+        "str": "C",
+        "x": 527.718,
+        "y": 428.703,
+        "width": 3.458,
+        "height": 7
+      },
+      {
+        "str": "695.00",
+        "x": 532.758,
+        "y": 428.703,
+        "width": 19.509,
+        "height": 7
+      },
+      {
+        "str": "l",
+        "x": 565.417,
+        "y": 428.045,
+        "width": 5.229,
+        "height": 7
+      },
+      {
+        "str": "19/07/2026| 00:00",
+        "x": 25.512,
+        "y": 414.53,
+        "width": 54.67,
+        "height": 7
+      },
+      {
+        "str": "INSTALOAN,INT NBR:10,00000130457051 (Ref# 09999999980719002569883)",
+        "x": 136.291,
+        "y": 414.53,
+        "width": 220.619,
+        "height": 7
+      },
+      {
+        "str": "C",
+        "x": 527.718,
+        "y": 414.53,
+        "width": 3.458,
+        "height": 7
+      },
+      {
+        "str": "152.00",
+        "x": 532.758,
+        "y": 414.53,
+        "width": 19.509,
+        "height": 7
+      },
+      {
+        "str": "l",
+        "x": 565.417,
+        "y": 413.872,
+        "width": 5.229,
+        "height": 7
+      },
+      {
+        "str": "19/07/2026| 00:00",
+        "x": 25.512,
+        "y": 400.356,
+        "width": 54.67,
+        "height": 7
+      },
+      {
+        "str": "OFFUS EMI,INT NBR:04,00000138859163 (Ref# 09999999980719002569909)",
+        "x": 136.291,
+        "y": 400.356,
+        "width": 219.023,
+        "height": 7
+      },
+      {
+        "str": "C",
+        "x": 531.267,
+        "y": 400.356,
+        "width": 3.458,
+        "height": 7
+      },
+      {
+        "str": "30.00",
+        "x": 536.307,
+        "y": 400.356,
+        "width": 15.96,
+        "height": 7
+      },
+      {
+        "str": "l",
+        "x": 565.417,
+        "y": 399.698,
+        "width": 5.229,
+        "height": 7
+      },
+      {
+        "str": "International Transactions",
+        "x": 25.512,
+        "y": 353.875,
+        "width": 81.997,
+        "height": 7.5
+      },
+      {
+        "str": "DATE & TIME",
+        "x": 25.512,
+        "y": 338.912,
+        "width": 38.5,
+        "height": 7
+      },
+      {
+        "str": "TRANSACTION DESCRIPTION",
+        "x": 136.299,
+        "y": 338.912,
+        "width": 82.831,
+        "height": 7
+      },
+      {
+        "str": "REWARDS",
+        "x": 424.419,
+        "y": 338.912,
+        "width": 29.603,
+        "height": 7
+      },
+      {
+        "str": "AMOUNT",
+        "x": 527.533,
+        "y": 338.912,
+        "width": 27.741,
+        "height": 7
+      },
+      {
+        "str": "PI",
+        "x": 566.738,
+        "y": 338.912,
+        "width": 5.593,
+        "height": 7
+      },
+      {
+        "str": "TEST CARDHOLDER",
+        "x": 136.299,
+        "y": 324.739,
+        "width": 32.312,
+        "height": 7
+      },
+      {
+        "str": "[CKYC ID : 99999999999999 ]",
+        "x": 204.331,
+        "y": 324.739,
+        "width": 83.65,
+        "height": 7
+      },
+      {
+        "str": "02/07/2026 | 00:00",
+        "x": 25.512,
+        "y": 309.879,
+        "width": 56.252,
+        "height": 7
+      },
+      {
+        "str": "IGST-VPS2718487072790-RATE 18.0 -32 (Ref#",
+        "x": 136.299,
+        "y": 314.152,
+        "width": 130.13,
+        "height": 7
+      },
+      {
+        "str": "ST261840084000012820645)",
+        "x": 136.299,
+        "y": 305.605,
+        "width": 83.272,
+        "height": 7
+      },
+      {
+        "str": "C",
+        "x": 537.823,
+        "y": 309.879,
+        "width": 3.458,
+        "height": 7
+      },
+      {
+        "str": "1.19",
+        "x": 542.863,
+        "y": 309.879,
+        "width": 12.411,
+        "height": 7
+      },
+      {
+        "str": "l",
+        "x": 566.92,
+        "y": 309.221,
+        "width": 5.229,
+        "height": 7
+      },
+      {
+        "str": "16/07/2026 | 00:00",
+        "x": 25.512,
+        "y": 294.332,
+        "width": 56.252,
+        "height": 7
+      },
+      {
+        "str": "IGST-VPS2719835090222-RATE 18.0 -32 (Ref#",
+        "x": 136.299,
+        "y": 298.605,
+        "width": 130.13,
+        "height": 7
+      },
+      {
+        "str": "ST261980084000011767102)",
+        "x": 136.299,
+        "y": 290.058,
+        "width": 83.272,
+        "height": 7
+      },
+      {
+        "str": "C",
+        "x": 537.823,
+        "y": 294.332,
+        "width": 3.458,
+        "height": 7
+      },
+      {
+        "str": "0.25",
+        "x": 542.863,
+        "y": 294.332,
+        "width": 12.411,
+        "height": 7
+      },
+      {
+        "str": "l",
+        "x": 566.92,
+        "y": 293.674,
+        "width": 5.229,
+        "height": 7
+      },
+      {
+        "str": "*Transaction time captured in IST Zone.",
+        "x": 20.007,
+        "y": 265.222,
+        "width": 112.854,
+        "height": 7
+      },
+      {
+        "str": "Eligible for",
+        "x": 53.68,
+        "y": 229.814,
+        "width": 44.21,
+        "height": 10
+      },
+      {
+        "str": "EMI",
+        "x": 106.93,
+        "y": 229.814,
+        "width": 16.29,
+        "height": 10
+      },
+      {
+        "str": "TRANSACTIONS",
+        "x": 196.49,
+        "y": 235.919,
+        "width": 65.01,
+        "height": 10
+      },
+      {
+        "str": "1",
+        "x": 226.46,
+        "y": 223.709,
+        "width": 5.07,
+        "height": 10
+      },
+      {
+        "str": "TOTAL AMOUNT",
+        "x": 348.976,
+        "y": 235.919,
+        "width": 68.84,
+        "height": 10
+      },
+      {
+        "str": "C",
+        "x": 363.091,
+        "y": 223.709,
+        "width": 4.94,
+        "height": 10
+      },
+      {
+        "str": "6,000.00",
+        "x": 368.031,
+        "y": 223.709,
+        "width": 35.67,
+        "height": 10
+      },
+      {
+        "str": "CONVERT TO EMI",
+        "x": 494.398,
+        "y": 230.314,
+        "width": 58.024,
+        "height": 8
+      },
+      {
+        "str": "Rewards Program Points Summary",
+        "x": 25.512,
+        "y": 192.827,
+        "width": 107.947,
+        "height": 7.5
+      },
+      {
+        "str": "SR NO.",
+        "x": 25.512,
+        "y": 177.863,
+        "width": 20.048,
+        "height": 7
+      },
+      {
+        "str": "PROGRAMS",
+        "x": 77.676,
+        "y": 177.863,
+        "width": 34.468,
+        "height": 7
+      },
+      {
+        "str": "BONUS POINTS",
+        "x": 523.755,
+        "y": 177.863,
+        "width": 44.45,
+        "height": 7
+      },
+      {
+        "str": "1",
+        "x": 25.512,
+        "y": 163.69,
+        "width": 3.549,
+        "height": 7
+      },
+      {
+        "str": "1 CashPoint per 200 onOther Spends",
+        "x": 77.676,
+        "y": 163.69,
+        "width": 104.552,
+        "height": 7
+      },
+      {
+        "str": "36 pts",
+        "x": 550.768,
+        "y": 163.69,
+        "width": 17.437,
+        "height": 7
+      },
+      {
+        "str": "2",
+        "x": 25.512,
+        "y": 149.517,
+        "width": 3.549,
+        "height": 7
+      },
+      {
+        "str": "Reward Points_on_Telecom",
+        "x": 77.676,
+        "y": 149.517,
+        "width": 79.59,
+        "height": 7
+      },
+      {
+        "str": "2 pts",
+        "x": 554.317,
+        "y": 149.517,
+        "width": 13.888,
+        "height": 7
+      },
+      {
+        "str": "Total",
+        "x": 77.676,
+        "y": 135.344,
+        "width": 14.84,
+        "height": 7
+      },
+      {
+        "str": "38 pts",
+        "x": 550.544,
+        "y": 135.344,
+        "width": 17.661,
+        "height": 7
+      },
+      {
+        "str": "Offers on your card",
+        "x": 22.677,
+        "y": 783.074,
+        "width": 68.221,
+        "height": 8.5
+      },
+      {
+        "str": "Page 2 of 4",
+        "x": 26.646,
+        "y": 18.177,
+        "width": 27.294,
+        "height": 6
+      },
+      {
+        "str": "Freedom Credit Card Statement",
+        "x": 29.764,
+        "y": 806.304,
+        "width": 158.184,
+        "height": 12
+      },
+      {
+        "str": "HSN Code: 997113",
+        "x": 508.783,
+        "y": 812.188,
+        "width": 60.584,
+        "height": 8
+      },
+      {
+        "str": "HDFC Bank Credit Cards GSTIN: 33AAACH2702H2Z6",
+        "x": 402.223,
+        "y": 802.42,
+        "width": 167.144,
+        "height": 8
+      }
+    ]
+  },
+  {
+    "pageNumber": 3,
+    "items": [
+      {
+        "str": "Freedom Credit Card Statement",
+        "x": 29.764,
+        "y": 806.304,
+        "width": 158.184,
+        "height": 12
+      },
+      {
+        "str": "HSN Code: 997113",
+        "x": 508.783,
+        "y": 812.188,
+        "width": 60.584,
+        "height": 8
+      },
+      {
+        "str": "HDFC Bank Credit Cards GSTIN: 33AAACH2702H2Z6",
+        "x": 402.223,
+        "y": 802.42,
+        "width": 167.144,
+        "height": 8
+      },
+      {
+        "str": "Smart EMI Loan Summary",
+        "x": 25.512,
+        "y": 775.32,
+        "width": 80.55,
+        "height": 7.5
+      },
+      {
+        "str": "LOAN NUMBER",
+        "x": 25.563,
+        "y": 759.064,
+        "width": 41.522,
+        "height": 6.5
+      },
+      {
+        "str": "BOOKED DATE",
+        "x": 96.899,
+        "y": 759.064,
+        "width": 39.149,
+        "height": 6.5
+      },
+      {
+        "str": "AMOUNT",
+        "x": 161.764,
+        "y": 759.064,
+        "width": 25.76,
+        "height": 6.5
+      },
+      {
+        "str": "LOAN TENURE",
+        "x": 232.345,
+        "y": 759.064,
+        "width": 38.584,
+        "height": 6.5
+      },
+      {
+        "str": "RATE OF INTEREST",
+        "x": 292.453,
+        "y": 763.032,
+        "width": 49.835,
+        "height": 6.5
+      },
+      {
+        "str": "P.A%",
+        "x": 292.453,
+        "y": 755.096,
+        "width": 13.871,
+        "height": 6.5
+      },
+      {
+        "str": "BALANCE PRINCIPAL",
+        "x": 358.17,
+        "y": 763.032,
+        "width": 55.094,
+        "height": 6.5
+      },
+      {
+        "str": "OUTSTANDING",
+        "x": 358.17,
+        "y": 755.096,
+        "width": 40.625,
+        "height": 6.5
+      },
+      {
+        "str": "BALANCE INTEREST",
+        "x": 440.955,
+        "y": 763.032,
+        "width": 52.169,
+        "height": 6.5
+      },
+      {
+        "str": "PAYABLE",
+        "x": 442.372,
+        "y": 755.096,
+        "width": 24.284,
+        "height": 6.5
+      },
+      {
+        "str": "BALANCE TENURE",
+        "x": 526.708,
+        "y": 759.064,
+        "width": 48.386,
+        "height": 6.5
+      },
+      {
+        "str": "138859163",
+        "x": 25.563,
+        "y": 742.056,
+        "width": 29.66,
+        "height": 6.5
+      },
+      {
+        "str": "13/04/2026",
+        "x": 96.899,
+        "y": 742.056,
+        "width": 31.382,
+        "height": 6.5
+      },
+      {
+        "str": "C",
+        "x": 161.764,
+        "y": 742.056,
+        "width": 3.211,
+        "height": 6.5
+      },
+      {
+        "str": "4,142.00",
+        "x": 164.975,
+        "y": 742.056,
+        "width": 23.036,
+        "height": 6.5
+      },
+      {
+        "str": "6 Months",
+        "x": 232.345,
+        "y": 742.056,
+        "width": 25.292,
+        "height": 6.5
+      },
+      {
+        "str": "17%",
+        "x": 292.453,
+        "y": 742.056,
+        "width": 11.239,
+        "height": 6.5
+      },
+      {
+        "str": "C",
+        "x": 358.17,
+        "y": 742.056,
+        "width": 3.211,
+        "height": 6.5
+      },
+      {
+        "str": "1,420.00",
+        "x": 361.381,
+        "y": 742.056,
+        "width": 23.036,
+        "height": 6.5
+      },
+      {
+        "str": "C",
+        "x": 440.955,
+        "y": 742.056,
+        "width": 3.211,
+        "height": 6.5
+      },
+      {
+        "str": "30.00",
+        "x": 444.166,
+        "y": 742.056,
+        "width": 14.82,
+        "height": 6.5
+      },
+      {
+        "str": "2 Months",
+        "x": 526.708,
+        "y": 742.056,
+        "width": 25.292,
+        "height": 6.5
+      },
+      {
+        "str": "Insta Loan Summary",
+        "x": 25.512,
+        "y": 707.028,
+        "width": 63.352,
+        "height": 7.5
+      },
+      {
+        "str": "LOAN NUMBER",
+        "x": 25.563,
+        "y": 690.772,
+        "width": 41.522,
+        "height": 6.5
+      },
+      {
+        "str": "BOOKED DATE",
+        "x": 96.899,
+        "y": 690.772,
+        "width": 39.149,
+        "height": 6.5
+      },
+      {
+        "str": "AMOUNT",
+        "x": 161.764,
+        "y": 690.772,
+        "width": 25.76,
+        "height": 6.5
+      },
+      {
+        "str": "LOAN TENURE",
+        "x": 232.345,
+        "y": 690.772,
+        "width": 38.584,
+        "height": 6.5
+      },
+      {
+        "str": "RATE OF INTEREST",
+        "x": 292.453,
+        "y": 694.741,
+        "width": 49.835,
+        "height": 6.5
+      },
+      {
+        "str": "P.A%",
+        "x": 292.453,
+        "y": 686.804,
+        "width": 13.871,
+        "height": 6.5
+      },
+      {
+        "str": "BALANCE PRINCIPAL",
+        "x": 358.17,
+        "y": 694.741,
+        "width": 55.094,
+        "height": 6.5
+      },
+      {
+        "str": "OUTSTANDING",
+        "x": 358.17,
+        "y": 686.804,
+        "width": 40.625,
+        "height": 6.5
+      },
+      {
+        "str": "BALANCE INTEREST",
+        "x": 440.955,
+        "y": 694.741,
+        "width": 52.169,
+        "height": 6.5
+      },
+      {
+        "str": "PAYABLE",
+        "x": 442.372,
+        "y": 686.804,
+        "width": 24.284,
+        "height": 6.5
+      },
+      {
+        "str": "BALANCE TENURE",
+        "x": 526.708,
+        "y": 690.772,
+        "width": 48.386,
+        "height": 6.5
+      },
+      {
+        "str": "130457051",
+        "x": 25.563,
+        "y": 673.764,
+        "width": 29.66,
+        "height": 6.5
+      },
+      {
+        "str": "30/09/2025",
+        "x": 96.899,
+        "y": 673.764,
+        "width": 31.382,
+        "height": 6.5
+      },
+      {
+        "str": "C",
+        "x": 161.764,
+        "y": 673.764,
+        "width": 3.211,
+        "height": 6.5
+      },
+      {
+        "str": "19,665.00",
+        "x": 164.975,
+        "y": 673.764,
+        "width": 26.332,
+        "height": 6.5
+      },
+      {
+        "str": "36 Months",
+        "x": 232.345,
+        "y": 673.764,
+        "width": 28.587,
+        "height": 6.5
+      },
+      {
+        "str": "11.88%",
+        "x": 292.453,
+        "y": 673.764,
+        "width": 19.468,
+        "height": 6.5
+      },
+      {
+        "str": "C",
+        "x": 358.17,
+        "y": 673.764,
+        "width": 3.211,
+        "height": 6.5
+      },
+      {
+        "str": "14,883.00",
+        "x": 361.381,
+        "y": 673.764,
+        "width": 26.332,
+        "height": 6.5
+      },
+      {
+        "str": "C",
+        "x": 440.955,
+        "y": 673.764,
+        "width": 3.211,
+        "height": 6.5
+      },
+      {
+        "str": "2,068.00",
+        "x": 444.166,
+        "y": 673.764,
+        "width": 23.036,
+        "height": 6.5
+      },
+      {
+        "str": "26 Months",
+        "x": 526.708,
+        "y": 673.764,
+        "width": 28.587,
+        "height": 6.5
+      },
+      {
+        "str": "*Pre-closure charges as applicable.",
+        "x": 20.007,
+        "y": 649.469,
+        "width": 99.337,
+        "height": 7
+      },
+      {
+        "str": "GST Summary",
+        "x": 25.512,
+        "y": 623.239,
+        "width": 40.53,
+        "height": 7
+      },
+      {
+        "str": "IGST",
+        "x": 25.512,
+        "y": 608.4,
+        "width": 13.104,
+        "height": 7
+      },
+      {
+        "str": "CGST",
+        "x": 134.901,
+        "y": 608.4,
+        "width": 14.938,
+        "height": 7
+      },
+      {
+        "str": "SGST",
+        "x": 247.124,
+        "y": 608.4,
+        "width": 14.546,
+        "height": 7
+      },
+      {
+        "str": "REVERSAL",
+        "x": 359.348,
+        "y": 608.4,
+        "width": 29.365,
+        "height": 7
+      },
+      {
+        "str": "TOTAL GST",
+        "x": 471.572,
+        "y": 608.4,
+        "width": 31.682,
+        "height": 7
+      },
+      {
+        "str": "C",
+        "x": 25.512,
+        "y": 594.227,
+        "width": 3.458,
+        "height": 7
+      },
+      {
+        "str": "36.9",
+        "x": 28.97,
+        "y": 594.227,
+        "width": 12.411,
+        "height": 7
+      },
+      {
+        "str": "C",
+        "x": 134.901,
+        "y": 594.227,
+        "width": 3.458,
+        "height": 7
+      },
+      {
+        "str": "0",
+        "x": 138.359,
+        "y": 594.227,
+        "width": 3.549,
+        "height": 7
+      },
+      {
+        "str": "C",
+        "x": 247.124,
+        "y": 594.227,
+        "width": 3.458,
+        "height": 7
+      },
+      {
+        "str": "0",
+        "x": 250.582,
+        "y": 594.227,
+        "width": 3.549,
+        "height": 7
+      },
+      {
+        "str": "C",
+        "x": 359.348,
+        "y": 594.227,
+        "width": 3.458,
+        "height": 7
+      },
+      {
+        "str": "0",
+        "x": 362.806,
+        "y": 594.227,
+        "width": 3.549,
+        "height": 7
+      },
+      {
+        "str": "C",
+        "x": 471.572,
+        "y": 594.227,
+        "width": 3.458,
+        "height": 7
+      },
+      {
+        "str": "36.9",
+        "x": 475.03,
+        "y": 594.227,
+        "width": 12.411,
+        "height": 7
+      },
+      {
+        "str": "*GST levied on statement date is always billed in the subsequent statement.",
+        "x": 19.781,
+        "y": 579.977,
+        "width": 216.874,
+        "height": 7
+      },
+      {
+        "str": "Important Information",
+        "x": 22.677,
+        "y": 557.035,
+        "width": 70.868,
+        "height": 7.5
+      },
+      {
+        "str": "l",
+        "x": 21.26,
+        "y": 543.408,
+        "width": 3.735,
+        "height": 5
+      },
+      {
+        "str": "The \"Available Credit Limit\" shown in this statement takes into account charges incurred but not due. Please ensure that at least the \"Minimum Amount Due\" reaches us by the \"Due Date\".",
+        "x": 32.598,
+        "y": 543.408,
+        "width": 496.867,
+        "height": 6.5
+      },
+      {
+        "str": "l",
+        "x": 21.26,
+        "y": 531.198,
+        "width": 3.735,
+        "height": 5
+      },
+      {
+        "str": "Maintain a healthy credit status: Pay atleast minimum amount by the due date, or within 3 days after, to avoid Defaulter status with Credit Information Companies.",
+        "x": 32.598,
+        "y": 531.198,
+        "width": 442.533,
+        "height": 6.5
+      },
+      {
+        "str": "l",
+        "x": 21.26,
+        "y": 518.988,
+        "width": 3.735,
+        "height": 5
+      },
+      {
+        "str": "If the minimum amount due or part amount less than the total amount due is paid, interest charges are applicable (including fresh purchases, if any) on an average daily reducing balance method.",
+        "x": 32.598,
+        "y": 518.988,
+        "width": 514.566,
+        "height": 6.5
+      },
+      {
+        "str": "l",
+        "x": 21.26,
+        "y": 506.778,
+        "width": 3.735,
+        "height": 5
+      },
+      {
+        "str": "If you miss paying the undisputed minimum amount due within 3 grace days from the due date the bank will report the default to credit information companies and other regulatory / statutory",
+        "x": 32.598,
+        "y": 506.778,
+        "width": 510.952,
+        "height": 6.5
+      },
+      {
+        "str": "authorities as per prevalent regulatory requirements, laws and directions.",
+        "x": 32.598,
+        "y": 497.193,
+        "width": 196.352,
+        "height": 6.5
+      },
+      {
+        "str": "l",
+        "x": 21.26,
+        "y": 486.632,
+        "width": 3.735,
+        "height": 5
+      },
+      {
+        "str": "Effective 15th May 2026, Product Features, Fees & Charges on your credit card will be revised. Please refer to the MITC / product webpage for details.",
+        "x": 32.598,
+        "y": 486.632,
+        "width": 396.065,
+        "height": 6.5
+      },
+      {
+        "str": "l",
+        "x": 21.26,
+        "y": 474.422,
+        "width": 3.735,
+        "height": 5
+      },
+      {
+        "str": "To Hotlist your credit card, login into Netbanking, please",
+        "x": 32.598,
+        "y": 474.422,
+        "width": 148.804,
+        "height": 6.5
+      },
+      {
+        "str": "click here or call our phone banking numbers.",
+        "x": 182.759,
+        "y": 474.422,
+        "width": 120.419,
+        "height": 6.5
+      },
+      {
+        "str": "l",
+        "x": 21.26,
+        "y": 462.212,
+        "width": 3.735,
+        "height": 5
+      },
+      {
+        "str": "Making only the minimum payment every month would result in the repayment stretching over months/years with consequential compounded interest payment on your outstanding balance. The level",
+        "x": 32.598,
+        "y": 462.212,
+        "width": 542.334,
+        "height": 6.5
+      },
+      {
+        "str": "of unpaid amount of the bill i.e., part payment beyond 'minimum amount due', at which the interest-free credit period benefits would not be available to cardholders.",
+        "x": 32.598,
+        "y": 452.627,
+        "width": 449.546,
+        "height": 6.5
+      },
+      {
+        "str": "l",
+        "x": 21.26,
+        "y": 442.065,
+        "width": 3.735,
+        "height": 5
+      },
+      {
+        "str": "When the card member receives communication from Bank regarding a refund from the merchant for a transaction incurred kindly call Phone-Banking @ 1800 1600 / 1800 2600 to issue DD or to obtain an",
+        "x": 32.598,
+        "y": 442.065,
+        "width": 539.578,
+        "height": 6.5
+      },
+      {
+        "str": "update on the refund. Customers travelling overseas can reach out to +9122 61606160.",
+        "x": 32.598,
+        "y": 432.48,
+        "width": 230.776,
+        "height": 6.5
+      },
+      {
+        "str": "l",
+        "x": 21.26,
+        "y": 421.919,
+        "width": 3.735,
+        "height": 5
+      },
+      {
+        "str": "To know the Voluntary Codes as prescribed by the \"The Banking Codes and Standards Board of India (BCSBI)\", please",
+        "x": 32.598,
+        "y": 421.919,
+        "width": 307.658,
+        "height": 6.5
+      },
+      {
+        "str": "click here",
+        "x": 341.612,
+        "y": 421.919,
+        "width": 25.07,
+        "height": 6.5
+      },
+      {
+        "str": "l",
+        "x": 21.26,
+        "y": 409.709,
+        "width": 3.735,
+        "height": 5
+      },
+      {
+        "str": "How to read GST entry in your Credit Card statement:",
+        "x": 32.598,
+        "y": 409.709,
+        "width": 141.55,
+        "height": 6.5
+      },
+      {
+        "str": "GST Entry",
+        "x": 163.392,
+        "y": 394.738,
+        "width": 26.208,
+        "height": 6.5
+      },
+      {
+        "str": "GST",
+        "x": 291.053,
+        "y": 397.289,
+        "width": 10.433,
+        "height": 6.5
+      },
+      {
+        "str": "Type",
+        "x": 289.74,
+        "y": 389.353,
+        "width": 13.059,
+        "height": 6.5
+      },
+      {
+        "str": "Invoice Number",
+        "x": 317.531,
+        "y": 393.321,
+        "width": 42.978,
+        "height": 6.5
+      },
+      {
+        "str": "GST",
+        "x": 381.803,
+        "y": 397.289,
+        "width": 10.433,
+        "height": 6.5
+      },
+      {
+        "str": "Rate %",
+        "x": 377.718,
+        "y": 389.353,
+        "width": 18.603,
+        "height": 6.5
+      },
+      {
+        "str": "State",
+        "x": 416.809,
+        "y": 397.289,
+        "width": 14.066,
+        "height": 6.5
+      },
+      {
+        "str": "Code",
+        "x": 416.994,
+        "y": 389.353,
+        "width": 13.696,
+        "height": 6.5
+      },
+      {
+        "str": "SGST-VPS *********** - Rate 9.0 - 33****",
+        "x": 161.974,
+        "y": 376.181,
+        "width": 114.946,
+        "height": 6.5
+      },
+      {
+        "str": "SGST",
+        "x": 289.653,
+        "y": 376.181,
+        "width": 13.234,
+        "height": 6.5
+      },
+      {
+        "str": "VPS*************",
+        "x": 312.964,
+        "y": 376.181,
+        "width": 52.111,
+        "height": 6.5
+      },
+      {
+        "str": "9.0",
+        "x": 382.905,
+        "y": 376.181,
+        "width": 8.229,
+        "height": 6.5
+      },
+      {
+        "str": "33",
+        "x": 420.546,
+        "y": 376.181,
+        "width": 6.591,
+        "height": 6.5
+      },
+      {
+        "str": "“I/We hereby declare that though our aggregate turnover in any preceding financial year from 2017-18 onwards is more than the aggregate turnover notified under sub-rule (4) of rule 48, we are not required to",
+        "x": 24.094,
+        "y": 358.519,
+        "width": 554.561,
+        "height": 6.5
+      },
+      {
+        "str": "prepare an invoice in terms of the provisions of the said sub-rule.”",
+        "x": 24.094,
+        "y": 350.582,
+        "width": 174.824,
+        "height": 6.5
+      },
+      {
+        "str": "Page 3 of 4",
+        "x": 26.646,
+        "y": 18.177,
+        "width": 27.294,
+        "height": 6
+      }
+    ]
+  },
+  {
+    "pageNumber": 4,
+    "items": [
+      {
+        "str": "Freedom Credit Card Statement",
+        "x": 29.764,
+        "y": 806.304,
+        "width": 158.184,
+        "height": 12
+      },
+      {
+        "str": "HSN Code: 997113",
+        "x": 508.783,
+        "y": 812.188,
+        "width": 60.584,
+        "height": 8
+      },
+      {
+        "str": "HDFC Bank Credit Cards GSTIN: 33AAACH2702H2Z6",
+        "x": 402.223,
+        "y": 802.42,
+        "width": 167.144,
+        "height": 8
+      },
+      {
+        "str": "Useful Links",
+        "x": 28.346,
+        "y": 767.248,
+        "width": 37.238,
+        "height": 7.5
+      },
+      {
+        "str": "Statement & Payment",
+        "x": 57.775,
+        "y": 740.607,
+        "width": 55.326,
+        "height": 6
+      },
+      {
+        "str": "related information",
+        "x": 57.775,
+        "y": 730.611,
+        "width": 49.068,
+        "height": 6
+      },
+      {
+        "str": "MITC (Most Important",
+        "x": 191.477,
+        "y": 740.607,
+        "width": 55.932,
+        "height": 6
+      },
+      {
+        "str": "Terms and Conditions)",
+        "x": 191.477,
+        "y": 730.611,
+        "width": 56.106,
+        "height": 6
+      },
+      {
+        "str": "Payment Options",
+        "x": 330.586,
+        "y": 736.944,
+        "width": 43.236,
+        "height": 6
+      },
+      {
+        "str": "Customer Rights Policy",
+        "x": 469.737,
+        "y": 736.944,
+        "width": 56.958,
+        "height": 6
+      },
+      {
+        "str": "Page 4 of 4",
+        "x": 26.646,
+        "y": 18.177,
+        "width": 27.294,
+        "height": 6
+      }
+    ]
+  }
+]

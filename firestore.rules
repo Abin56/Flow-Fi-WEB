@@ -1,0 +1,177 @@
+rules_version = '2';
+
+// FlowFi Firestore Security Rules
+//
+// This is the first firestore.rules file committed to this repository (see
+// docs/adr/ADR-002 — no rules file previously existed here to extend). It
+// covers BOTH the pre-existing app schema (accounts, transactions, budgets,
+// creditCards, ...) and the new Financial Document Intelligence Engine
+// collections (Architecture v1.0), reconciled onto this app's existing
+// users/{uid}/... convention.
+//
+// IMPORTANT — Firestore rule-matching semantics (learned the hard way, see
+// tests/rules/firestore.rules.test.ts and the emulator run that caught it):
+// Firestore does NOT pick "the most specific matching rule." If multiple
+// `match` blocks match a given path, access is granted if ANY of them
+// allows it (OR, not override). A single blanket `users/{uid}/{document=**}`
+// rule therefore CANNOT be safely combined with stricter per-collection
+// overrides — the blanket rule would always win for any path it also
+// matches. Every user-scoped collection is listed explicitly below instead.
+//
+// Backlog task: M1-T1.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    // --- Pre-existing app collections (lib/firestore/collections.ts) ---
+    // Simple owner-scoped CRUD, matching how this app has always worked —
+    // there is no Cloud Functions layer in front of these today, so
+    // tightening them further here would be an unrelated, uncoordinated
+    // behavior change outside this backlog's scope. Each match's
+    // {document=**} also covers that collection's own nested subcollections
+    // (ledger under people, occurrences/payments under bills, installments
+    // under paymentSchedules, paymentBreakdowns under emis, statements/
+    // statementPayments under creditCards).
+    match /users/{uid}/accounts/{document=**} { allow read, write: if isOwner(uid); }
+    match /users/{uid}/transactions/{document=**} { allow read, write: if isOwner(uid); }
+    match /users/{uid}/categories/{document=**} { allow read, write: if isOwner(uid); }
+    match /users/{uid}/budgets/{document=**} { allow read, write: if isOwner(uid); }
+    match /users/{uid}/savingsGoals/{document=**} { allow read, write: if isOwner(uid); }
+    match /users/{uid}/people/{document=**} { allow read, write: if isOwner(uid); }
+    match /users/{uid}/bills/{document=**} { allow read, write: if isOwner(uid); }
+    match /users/{uid}/loans/{document=**} { allow read, write: if isOwner(uid); }
+    match /users/{uid}/emis/{document=**} { allow read, write: if isOwner(uid); }
+    match /users/{uid}/expenses/{document=**} { allow read, write: if isOwner(uid); }
+    match /users/{uid}/paymentSchedules/{document=**} { allow read, write: if isOwner(uid); }
+    match /users/{uid}/creditCards/{document=**} { allow read, write: if isOwner(uid); }
+    match /users/{uid}/sharedCreditLimits/{document=**} { allow read, write: if isOwner(uid); }
+
+    // pdfAnalyzerConfig: one doc per card (fixed id == cardId), holding only
+    // a password-generation RULE — never raw personal data (DOB/PAN/etc.),
+    // so client write access here carries none of the risk the Financial
+    // Document Intelligence collections below are restricted against.
+    match /users/{uid}/pdfAnalyzerConfig/{document=**} { allow read, write: if isOwner(uid); }
+
+    // --- Financial Document Intelligence Engine (Architecture v1.0) ---
+    // Reconciled onto users/{uid}/... by docs/adr/ADR-002. More restrictive
+    // than the collections above, because these back the parsing pipeline's
+    // integrity guarantees (Architecture §5/§29: "parsing remains
+    // server-side only") rather than being plain user-entered CRUD data.
+
+    // financialDocuments: created and status-transitioned only by the
+    // ingestion/parsing Cloud Functions (backlog M2-T1, M2-T2), via the
+    // Admin SDK, which is not subject to these rules at all. Clients may
+    // only read their own documents — never write, so a client can't
+    // fabricate parse results or short-circuit the pipeline.
+    match /users/{uid}/financialDocuments/{documentId} {
+      allow read: if isOwner(uid);
+      allow write: if false;
+
+      match /importHistory/{entryId} {
+        allow read: if isOwner(uid);
+        allow write: if false;
+      }
+      match /versionHistory/{versionId} {
+        allow read: if isOwner(uid);
+        allow write: if false;
+      }
+      match /changeLog/{entryId} {
+        allow read: if isOwner(uid);
+        allow write: if false;
+      }
+    }
+
+    // documentImports: the staging area the Review Workspace (backlog
+    // Milestone 8) reads and edits directly — unlike financialDocuments,
+    // this is meant to be client-writable, since split/merge/recategorize/
+    // tag/delete are exactly what Review does. Two restrictions matter:
+    //   1. A client can never CREATE a documentImports doc — only the
+    //      parsing worker may, so a client can't inject fabricated staged
+    //      data that was never actually parsed from a real document.
+    //   2. A client can never set status to "committed" — only the Import
+    //      Engine (backlog Milestone 9) may, preserving the atomicity/
+    //      idempotency guarantees RFC §28.9 requires.
+    match /users/{uid}/documentImports/{importId} {
+      allow read: if isOwner(uid);
+      allow create: if false;
+      allow update: if isOwner(uid) && request.resource.data.status in ['draft', 'reviewing', 'discarded'];
+      allow delete: if isOwner(uid) && resource.data.status in ['draft', 'reviewing'];
+
+      match /records/{recordId} {
+        allow read, write: if isOwner(uid);
+      }
+    }
+
+    // smsTransactionCandidates: SMS Transaction Intelligence (Phase 3).
+    // Direct match of the authoritative rule in Finance_App/firestore.rules
+    // (same Firebase project, financeapp-585eb — see docs/sms-candidate-contract.md
+    // for the full cross-repo reconciliation). Structured candidates built
+    // entirely on-device by Android from the user's own SMS; the raw message
+    // never leaves the device. Plain owner-scoped CRUD like accounts/
+    // transactions above: unlike documentImports, there is no separate
+    // server-side worker — the Android app itself both creates and deletes
+    // these documents (`SmsCandidateCloudSync`), and the web app only reads
+    // and deletes (see lib/repositories/sms-transaction-candidate-repository.ts).
+    // There is no status/state-machine field on this document at all — an
+    // earlier version of this rule invented one; that was never real,
+    // corrected once the actual Android-side model was found and audited.
+    match /users/{uid}/smsTransactionCandidates/{document=**} { allow read, write: if isOwner(uid); }
+
+    // Personal merchant mapping corrections (Architecture §11.2, write-side
+    // learning loop, backlog M13-T1) — plain owner-scoped CRUD, same as the
+    // pre-existing collections above.
+    match /users/{uid}/merchantMappings/{mappingId} {
+      allow read, write: if isOwner(uid);
+    }
+
+    // parserHistory: diagnostics written by the parsing worker (backlog
+    // M13-T3) — informative for the user's own audit trail (Architecture
+    // §24) but never client-authored, so it stays a trustworthy record of
+    // what the pipeline actually did.
+    match /users/{uid}/parserHistory/{entryId} {
+      allow read: if isOwner(uid);
+      allow write: if false;
+    }
+
+    // aiInsights: generated by the Insight Engine (backlog Milestone 12).
+    // The one thing a client may legitimately change is dismissing an
+    // insight — everything else (the message, the numbers behind it) must
+    // stay exactly what the rule-triggered engine computed.
+    match /users/{uid}/aiInsights/{insightId} {
+      allow read: if isOwner(uid);
+      allow create, delete: if false;
+      allow update: if isOwner(uid) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['dismissed']);
+    }
+
+    // --- Global, cross-user config/data — NOT under users/{uid} ---
+
+    // Document Type Registry (Architecture §3): defines the parsing
+    // pipeline's behavior per document type. Deployed via CI using the
+    // Admin SDK (docs/adr/ADR-001) — never editable by any client, staging
+    // or production, which is what keeps registry changes reviewable code
+    // rather than ad-hoc Firestore edits (RFC §28.13).
+    match /documentTypeRegistry/{documentType} {
+      allow read: if isSignedIn();
+      allow write: if false;
+    }
+
+    // Global merchant alias table (Architecture §11.2, docs/adr/ADR-002).
+    // Promotion from a user's personal correction
+    // (users/{uid}/merchantMappings) to this global table is corroboration-
+    // gated (backlog M13-T2) and happens via the Admin SDK only — this is
+    // exactly the control RFC §28.5's global-mapping-poisoning finding
+    // required, so clients never get a direct write path here.
+    match /merchantMappings/{mappingId} {
+      allow read: if isSignedIn();
+      allow write: if false;
+    }
+  }
+}

@@ -1,0 +1,26 @@
+rules_version = '2';
+
+// Firebase Storage rules — Architecture v1.0 §24, backlog M1-T3.
+//
+// Path convention: users/{uid}/documents/{documentType}/{fileName}
+// (Architecture §24 — corrected: decrypted intermediates are NEVER written
+// to Storage at all, per the RFC §28.8 fix; only the original encrypted/
+// plain uploaded file lives here.)
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /users/{uid}/documents/{documentType}/{fileName} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+
+      // Upload is additionally bounded by size and content-type — the
+      // parsing pipeline (pdf-lib/pdfjs-dist, functions/src/pdf) only ever
+      // reads PDFs, and nothing in the ingestion flow expects a file above
+      // this size. Rejecting oversized/non-PDF uploads here is cheaper and
+      // safer than only catching it once the parsing worker touches it.
+      allow write: if request.auth != null
+        && request.auth.uid == uid
+        && request.resource.size < 25 * 1024 * 1024
+        && request.resource.contentType == 'application/pdf';
+    }
+  }
+}

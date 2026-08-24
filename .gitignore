@@ -1,0 +1,61 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files (can opt-in for committing if needed)
+.env*
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# functions/ build output (functions/package.json "build" script)
+functions/lib/
+
+# firebase emulators
+firestore-debug.log
+storage-debug.log
+ui-debug.log
+firebase-debug.log
+.firebase/
+
+# Claude Code local (personal, machine-specific) tool permissions
+.claude/settings.local.json
+# .claude/settings.json was committed by mistake — it held a personal, session-accumulated
+# Bash/PowerShell permission allowlist (including a hardcoded developer-machine path), not
+# genuine shared project config. Untracked; kept ignored so it isn't re-added accidentally.
+.claude/settings.json
+
+# unidentified stray artifact at repo root — not deleted, just kept out of history
+/start

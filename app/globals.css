@@ -1,0 +1,493 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-geist-mono);
+  --font-heading: var(--font-sans);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+
+  /* Flat rectangular design language — every rounded-{name} utility app-wide resolves through
+     this single scale, so zeroing it here flattens every card, button, dialog, input, and badge
+     to sharp corners in one place, without touching component markup or logic. */
+  --radius-sm: 0px;
+  --radius-md: 0px;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
+  --radius-2xl: 0px;
+  --radius-3xl: 0px;
+  --radius-4xl: 0px;
+
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-expense: var(--expense);
+  --color-expense-foreground: var(--expense-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-purple: var(--purple);
+  --color-purple-foreground: var(--purple-foreground);
+
+  /* Ocean semantic tokens — surfaces, accents, and gradients every component should reference instead of hex. */
+  --color-surface: var(--surface);
+  --color-surface-elevated: var(--surface-elevated);
+  --color-surface-hero: var(--surface-hero);
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-danger: var(--danger);
+  --color-danger-foreground: var(--danger-foreground);
+
+  /* Layered blue family — the "Ocean" palette. Primary is the workhorse; royal/sky/ice/cyan/navy
+     give hero art, charts, and gradients somewhere to live besides one flat blue. */
+  --color-royal: var(--royal);
+  --color-sky: var(--sky);
+  --color-ice: var(--ice);
+  --color-cyan: var(--cyan);
+  --color-navy: var(--navy);
+
+  /* Semantic icon accents (section 9 of the theme brief) — icons read by meaning, not by
+     "everything is blue". Transfer/AI/Calendar stay inside the blue family; the rest break out
+     deliberately so category glyphs stay scannable at a glance. */
+  --color-icon-income: var(--icon-income);
+  --color-icon-expense: var(--icon-expense);
+  --color-icon-transfer: var(--icon-transfer);
+  --color-icon-savings: var(--icon-savings);
+  --color-icon-loan: var(--icon-loan);
+  --color-icon-credit-card: var(--icon-credit-card);
+  --color-icon-ai: var(--icon-ai);
+  --color-icon-reports: var(--icon-reports);
+  --color-icon-calendar: var(--icon-calendar);
+  --color-icon-settings: var(--icon-settings);
+
+  /* Elevation scale exposed as Tailwind z-* utilities (z-surface, z-hero, z-attached, ...) — see the token
+     definitions below for what each layer means. */
+  --z-index-background: var(--z-background);
+  --z-index-surface: var(--z-surface);
+  --z-index-widget: var(--z-widget);
+  --z-index-hero: var(--z-hero);
+  --z-index-attached: var(--z-attached);
+  --z-index-dialog: var(--z-dialog);
+  --z-index-command: var(--z-command);
+
+  /*
+   * Ocean elevation: a dual directional shadow (soft blue-ambient dark side + near-white light
+   * side, single upper-left lightsource) — this is the "floating glass" read the theme brief asks
+   * for, in place of the old warm clay pairing. e1..e4 = resting to floating; -pressed is the
+   * inset/"pushed in" state for active nav items and button taps. Never gray/black — every shadow
+   * in the app resolves to this blue-tinted pair (or the floating/dialog/command escalations below).
+   */
+  --shadow-e1: 2px 2px 6px var(--shadow-tint-dark), -2px -2px 6px var(--shadow-tint-light);
+  --shadow-e2: 0 8px 20px -6px var(--shadow-tint-dark), -4px -4px 14px var(--shadow-tint-light);
+  --shadow-e3: 0 16px 36px -10px var(--shadow-tint-dark), -6px -6px 18px var(--shadow-tint-light);
+  --shadow-e4: 0 28px 56px -14px var(--shadow-tint-dark), -8px -8px 22px var(--shadow-tint-light);
+  --shadow-pressed: inset 3px 3px 7px var(--shadow-tint-dark), inset -3px -3px 7px var(--shadow-tint-light);
+  --shadow-pressed-sm: inset 2px 2px 4px var(--shadow-tint-dark), inset -2px -2px 4px var(--shadow-tint-light);
+
+  /* Elevation scale — the single source of truth for stacking order app-wide. Every layer that needs to sit
+     above another references one of these instead of an ad-hoc z-index, so a dialog is always above a hero
+     attachment which is always above a standard surface, by construction, everywhere.
+     0 background   — ambient page background
+     1 surface      — standard resting cards/sections
+     2 widget       — primary widgets that sit forward of plain surfaces
+     3 hero         — the page's spatial anchor
+     4 attached     — floating panels docked to the hero (AI Insight, Quick Actions, Bills ribbon)
+     5 dialog       — modals, sheets, dropdowns
+     6 command      — command palette, toasts — always topmost */
+  --z-background: 0;
+  --z-surface: 1;
+  --z-widget: 2;
+  --z-hero: 3;
+  --z-attached: 4;
+  --z-dialog: 5;
+  --z-command: 6;
+
+  /* Spatial rhythm: two numbers every hero/attachment relationship derives from, instead of each component
+     hardcoding its own offsets. --space-attach is how far an attachment overlaps the hero's edge; --size-
+     attach-aside is how wide a corner-docked attachment is, which the hero reads back to know how much of
+     its own width to reserve so the two never collide. */
+  --space-attach: 2.5rem;
+  --size-attach-aside: 18rem;
+
+  /* Motion language — Tailwind v4 turns these into ease-spring / duration-fast|base|slow utilities.
+     Apple-style: a restrained spring with the faintest overshoot, never a cartoon bounce. */
+  --ease-spring: cubic-bezier(0.22, 1.12, 0.36, 1);
+  --duration-fast: 150ms;
+  --duration-base: 220ms;
+  --duration-slow: 320ms;
+}
+
+:root {
+  /* Ocean — cool, soft-white ground with a barely-there blue cast. Every component reads color from
+     these semantic tokens, never a hardcoded hex, so retheming (or dark mode) only ever touches this file. */
+  --background: oklch(0.978 0.008 247);
+  --foreground: oklch(0.208 0.042 265.8);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.208 0.042 265.8);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.208 0.042 265.8);
+
+  /* Royal Blue primary — the Ocean signature. */
+  --primary: oklch(0.546 0.245 262.9);
+  --primary-hover: oklch(0.488 0.243 264.4);
+  --primary-foreground: oklch(0.99 0.006 260);
+  --secondary: oklch(0.965 0.014 254.6);
+  --secondary-foreground: oklch(0.379 0.146 265.5);
+  --muted: oklch(0.96 0.012 254.6);
+  --muted-foreground: oklch(0.554 0.046 257.4);
+  --accent: oklch(0.93 0.03 254.6);
+  --accent-foreground: oklch(0.379 0.146 265.5);
+  --destructive: oklch(0.637 0.237 25.3);
+  --border: oklch(0.546 0.245 262.9 / 0.1);
+  --input: oklch(0.546 0.245 262.9 / 0.14);
+  --ring: oklch(0.623 0.214 259.8 / 0.4);
+
+  /* Layered blue family. */
+  --royal: oklch(0.623 0.214 259.8);
+  --sky: oklch(0.707 0.165 254.6);
+  --ice: oklch(0.809 0.105 251.8);
+  --cyan: oklch(0.746 0.16 232.7);
+  --navy: oklch(0.379 0.146 265.5);
+
+  /* Purple secondary accent — used sparingly (credit cards, secondary CTAs), tuned to sit next to
+     the blue family without reading as a different app. */
+  --purple: oklch(0.606 0.25 292.7);
+  --purple-foreground: oklch(0.99 0.006 260);
+
+  /* Status colors: emerald success, red expense, amber warning — clear and unambiguous next to Ocean blue. */
+  --success: oklch(0.696 0.17 162.5);
+  --success-foreground: oklch(0.99 0.006 260);
+  --expense: oklch(0.637 0.237 25.3);
+  --expense-foreground: oklch(0.99 0.006 260);
+  --warning: oklch(0.769 0.188 70.1);
+  --warning-foreground: oklch(0.32 0.06 70.1);
+  --danger: oklch(0.637 0.237 25.3);
+  --danger-foreground: oklch(0.99 0.006 260);
+
+  /* Semantic icon accents — see brief section 9. Transfer/AI/Calendar stay in-family; the rest break
+     out on purpose so a glance at an icon tells you the category. */
+  --icon-income: var(--success);
+  --icon-expense: var(--expense);
+  --icon-transfer: var(--royal);
+  --icon-savings: var(--cyan);
+  --icon-loan: var(--warning);
+  --icon-credit-card: var(--purple);
+  --icon-ai: oklch(0.685 0.169 237.3);
+  --icon-reports: oklch(0.585 0.233 277.1);
+  --icon-calendar: var(--ice);
+  --icon-settings: var(--text-secondary);
+
+  /* Layered surface scale — resting, elevated, and hero surfaces read as visually distinct depths. */
+  --surface: oklch(1 0 0);
+  --surface-elevated: oklch(0.995 0.004 254.6);
+  --surface-hero: oklch(0.488 0.243 264.4);
+  --text-primary: oklch(0.208 0.042 265.8);
+  --text-secondary: oklch(0.554 0.046 257.4);
+
+  --chart-1: oklch(0.546 0.245 262.9);
+  --chart-2: oklch(0.746 0.16 232.7);
+  --chart-3: oklch(0.696 0.17 162.5);
+  --chart-4: oklch(0.769 0.188 70.1);
+  --chart-5: oklch(0.585 0.233 277.1);
+  /* Kept non-zero (rather than 0) only so `calc(var(--radius) - 5px)` consumers (input-group.tsx)
+     resolve to a valid 0px radius instead of an invalid negative value — not a curve exception. */
+  --radius: 5px;
+  --sidebar: oklch(0.985 0.006 254.6);
+  --sidebar-foreground: oklch(0.208 0.042 265.8);
+  --sidebar-primary: oklch(0.546 0.245 262.9);
+  --sidebar-primary-foreground: oklch(0.99 0.006 260);
+  --sidebar-accent: oklch(0.93 0.03 254.6);
+  --sidebar-accent-foreground: oklch(0.379 0.146 265.5);
+  --sidebar-border: oklch(0.546 0.245 262.9 / 0.1);
+  --sidebar-ring: oklch(0.623 0.214 259.8 / 0.4);
+
+  /* Dual ambient shadow colors — soft royal-blue dark side, near-white light side. This is the single
+     lighting language every card, dialog, sidebar, search bar, and button shares (brief section 3). */
+  --shadow-tint-dark: oklch(0.546 0.245 262.9 / 0.14);
+  --shadow-tint-light: oklch(1 0 0 / 0.9);
+
+  /* Gradient system — every gradient stays inside the Ocean blue family: navy -> royal -> azure -> sky.
+     Never rainbow, never orange/pink/purple. Hero/accent gradients carry white text on top, so their
+     brightest stop stays dark enough to keep that text at a safe contrast ratio end to end. */
+  --gradient-hero: linear-gradient(120deg, oklch(0.379 0.146 265.5) 0%, oklch(0.488 0.243 264.4) 45%, oklch(0.623 0.214 259.8) 75%, oklch(0.707 0.165 254.6) 100%);
+  --gradient-accent: linear-gradient(135deg, oklch(0.488 0.243 264.4), oklch(0.623 0.214 259.8));
+  --gradient-success: linear-gradient(120deg, oklch(0.696 0.17 162.5), oklch(0.75 0.16 175));
+  --gradient-warning: linear-gradient(120deg, oklch(0.769 0.188 70.1), oklch(0.68 0.2 40));
+  --gradient-insight: linear-gradient(135deg, oklch(0.379 0.146 265.5) 0%, oklch(0.546 0.245 262.9) 100%);
+  --glow-primary: 0 8px 28px -6px oklch(0.546 0.245 262.9 / 0.45);
+  --glow-purple: 0 8px 28px -6px oklch(0.606 0.25 292.7 / 0.4);
+
+  /* Elevation escalation beyond cards — floating panels, dialogs, the command palette, and toasts each
+     step up in blur/spread/glow rather than only stacking z-index (brief section 7). */
+  --shadow-card: 0 1px 2px oklch(0.546 0.245 262.9 / 0.05), 0 8px 24px -14px oklch(0.546 0.245 262.9 / 0.16);
+  --shadow-floating: 0 12px 32px -8px oklch(0.546 0.245 262.9 / 0.18), 0 2px 10px -2px oklch(0.546 0.245 262.9 / 0.12);
+  --shadow-dialog: 0 24px 64px -12px oklch(0.379 0.146 265.5 / 0.28), 0 4px 18px -4px oklch(0.546 0.245 262.9 / 0.14);
+  --shadow-command: 0 32px 80px -16px oklch(0.379 0.146 265.5 / 0.32), 0 8px 28px -8px oklch(0.546 0.245 262.9 / 0.16);
+  --shadow-notification: 0 16px 40px -10px oklch(0.546 0.245 262.9 / 0.22);
+
+  /* Glassmorphism 2.0 — layered blur + edge highlight + faint blue glow, never fully transparent.
+     Reserved for nav, sidebar, search, floating assistant/quick-actions, dialogs, and popovers (brief
+     section 4); everything else stays a solid premium surface. */
+  --glass-bg: linear-gradient(180deg, oklch(1 0 0 / 0.72), oklch(1 0 0 / 0.52));
+  --glass-blur: 24px;
+  --glass-border: oklch(1 0 0 / 0.5);
+  --glass-highlight: inset 0 1px 0 oklch(1 0 0 / 0.85), inset 0 0 0 1px oklch(0.546 0.245 262.9 / 0.08);
+
+  /* Transaction Studio's grid lines — classic Excel-style light grey, not black. Set as a plain custom
+     property (not a Tailwind color token) and applied via inline `style`, not a utility class, so it can
+     never be dropped by a stale Tailwind build/cache: a literal inline style always paints, independent
+     of the CSS pipeline. `--grid-line` is the subtle vertical column separator; `--grid-line-strong` is a
+     visibly darker step used for horizontal row separators, so the eye reads "follow the row" more
+     strongly than "follow the column" — the header/body boundary and frozen-column edge step up again to
+     `--border` (see spreadsheet-header.tsx / transaction-row.tsx), the strongest tier of the three. */
+  --grid-line: #d4d4d4;
+  --grid-line-strong: #bfbfbf;
+}
+
+.dark {
+  --background: oklch(0.16 0.024 262);
+  --foreground: oklch(0.95 0.012 250);
+  --card: oklch(0.2 0.028 262);
+  --card-foreground: oklch(0.95 0.012 250);
+  --popover: oklch(0.2 0.028 262);
+  --popover-foreground: oklch(0.95 0.012 250);
+  --primary: oklch(0.72 0.19 262.9);
+  --primary-hover: oklch(0.65 0.22 262.9);
+  --primary-foreground: oklch(0.16 0.024 262);
+  --secondary: oklch(0.26 0.03 262);
+  --secondary-foreground: oklch(0.95 0.012 250);
+  --muted: oklch(0.25 0.026 262);
+  --muted-foreground: oklch(0.72 0.02 255);
+  --accent: oklch(0.3 0.05 260);
+  --accent-foreground: oklch(0.86 0.05 250);
+  --destructive: oklch(0.7 0.18 25.3);
+  --border: oklch(0.72 0.19 262.9 / 0.14);
+  --input: oklch(0.72 0.19 262.9 / 0.18);
+  --ring: oklch(0.72 0.19 262.9 / 0.4);
+
+  --royal: oklch(0.75 0.17 259.8);
+  --sky: oklch(0.8 0.13 254.6);
+  --ice: oklch(0.85 0.09 251.8);
+  --cyan: oklch(0.78 0.14 232.7);
+  --navy: oklch(0.45 0.14 265.5);
+
+  --purple: oklch(0.72 0.19 292.7);
+  --purple-foreground: oklch(0.16 0.024 262);
+
+  --success: oklch(0.68 0.15 162.5);
+  --success-foreground: oklch(0.16 0.024 262);
+  --expense: oklch(0.7 0.18 25.3);
+  --expense-foreground: oklch(0.16 0.024 262);
+  --warning: oklch(0.78 0.15 70.1);
+  --warning-foreground: oklch(0.26 0.06 70.1);
+  --danger: oklch(0.7 0.18 25.3);
+  --danger-foreground: oklch(0.16 0.024 262);
+
+  --icon-income: var(--success);
+  --icon-expense: var(--expense);
+  --icon-transfer: var(--royal);
+  --icon-savings: var(--cyan);
+  --icon-loan: var(--warning);
+  --icon-credit-card: var(--purple);
+  --icon-ai: oklch(0.75 0.15 237.3);
+  --icon-reports: oklch(0.68 0.19 277.1);
+  --icon-calendar: var(--ice);
+  --icon-settings: var(--text-secondary);
+
+  --surface: oklch(0.2 0.028 262);
+  --surface-elevated: oklch(0.24 0.03 262);
+  --surface-hero: oklch(0.45 0.14 265.5);
+  --text-primary: oklch(0.95 0.012 250);
+  --text-secondary: oklch(0.72 0.02 255);
+
+  --chart-1: oklch(0.72 0.19 262.9);
+  --chart-2: oklch(0.78 0.14 232.7);
+  --chart-3: oklch(0.68 0.15 162.5);
+  --chart-4: oklch(0.78 0.15 70.1);
+  --chart-5: oklch(0.68 0.19 277.1);
+  --sidebar: oklch(0.19 0.026 262);
+  --sidebar-foreground: oklch(0.95 0.012 250);
+  --sidebar-primary: oklch(0.72 0.19 262.9);
+  --sidebar-primary-foreground: oklch(0.16 0.024 262);
+  --sidebar-accent: oklch(0.3 0.05 260);
+  --sidebar-accent-foreground: oklch(0.86 0.05 250);
+  --sidebar-border: oklch(0.72 0.19 262.9 / 0.14);
+  --sidebar-ring: oklch(0.72 0.19 262.9 / 0.4);
+
+  /* Dark Ocean reads mostly through the dark-shadow side; the light side is a faint cool highlight. */
+  --shadow-tint-dark: rgba(0, 0, 0, 0.55);
+  --shadow-tint-light: oklch(0.72 0.19 262.9 / 0.06);
+
+  --gradient-hero: linear-gradient(120deg, oklch(0.32 0.1 265.5) 0%, oklch(0.42 0.17 264.4) 45%, oklch(0.55 0.19 259.8) 75%, oklch(0.66 0.15 254.6) 100%);
+  --gradient-accent: linear-gradient(135deg, oklch(0.5 0.19 264.4), oklch(0.6 0.18 259.8));
+  --gradient-success: linear-gradient(120deg, oklch(0.55 0.13 162.5), oklch(0.6 0.13 175));
+  --gradient-warning: linear-gradient(120deg, oklch(0.6 0.14 70.1), oklch(0.55 0.16 40));
+  --gradient-insight: linear-gradient(135deg, oklch(0.28 0.09 265.5) 0%, oklch(0.4 0.16 262.9) 100%);
+  --glow-primary: 0 8px 28px -6px oklch(0.72 0.19 262.9 / 0.4);
+  --glow-purple: 0 8px 28px -6px oklch(0.72 0.19 292.7 / 0.35);
+
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px -14px rgba(0, 0, 0, 0.5);
+  --shadow-floating: 0 12px 32px -8px rgba(0, 0, 0, 0.45), 0 2px 10px -2px oklch(0.72 0.19 262.9 / 0.12);
+  --shadow-dialog: 0 24px 64px -12px rgba(0, 0, 0, 0.55), 0 4px 18px -4px oklch(0.72 0.19 262.9 / 0.14);
+  --shadow-command: 0 32px 80px -16px rgba(0, 0, 0, 0.6), 0 8px 28px -8px oklch(0.72 0.19 262.9 / 0.16);
+  --shadow-notification: 0 16px 40px -10px rgba(0, 0, 0, 0.5);
+
+  --glass-bg: linear-gradient(180deg, oklch(0.28 0.03 262 / 0.65), oklch(0.22 0.028 262 / 0.55));
+  --glass-blur: 24px;
+  --glass-border: oklch(1 0 0 / 0.08);
+  --glass-highlight: inset 0 1px 0 oklch(1 0 0 / 0.06), inset 0 0 0 1px oklch(0.72 0.19 262.9 / 0.12);
+
+  --grid-line: rgba(255, 255, 255, 0.16);
+  --grid-line-strong: rgba(255, 255, 255, 0.26);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
+  }
+
+  /* Thin, rounded, blue-accented scrollbar (desktop only — touch scrollbars ignore this). */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background-color: oklch(0.546 0.245 262.9 / 0.18);
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+    transition: background-color var(--duration-fast) var(--ease-spring);
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: oklch(0.546 0.245 262.9 / 0.32);
+  }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: oklch(0.546 0.245 262.9 / 0.18) transparent;
+  }
+}
+
+@layer components {
+  /* Raised surface — default resting state for cards, panels, idle buttons. Dual-direction blue-ambient
+     lighting replaces the old warm clay pairing 1:1, so every existing .clay-raised consumer inherits the
+     new language automatically. */
+  .clay-raised {
+    background: var(--card);
+    box-shadow: var(--shadow-e2);
+  }
+  /* Pressed/inset — active nav pill, pressed button, search/input well. */
+  .clay-pressed {
+    background: var(--card);
+    box-shadow: var(--shadow-pressed);
+  }
+
+  /* Flat surface — single soft ambient shadow, thin blue-tinted border, no dual-direction lighting. */
+  .surface-flat {
+    background: var(--card);
+    box-shadow: var(--shadow-card);
+  }
+
+  /* Card hierarchy (brief section 6) — four surface roles communicating importance by weight, not by
+     rewriting layout. Hero is the spatial anchor: largest, gradient-filled, highest elevation. Primary is
+     the standard content card. Secondary is quieter — a thin border, no shadow. Tertiary is background-only,
+     for low-emphasis grouping. */
+  .surface-hero {
+    background: var(--gradient-hero);
+    color: var(--primary-foreground);
+    box-shadow: var(--shadow-dialog), var(--glow-primary);
+  }
+  .surface-primary {
+    background: var(--card);
+    box-shadow: var(--shadow-e2);
+    border: 1px solid var(--border);
+  }
+  .surface-secondary {
+    background: var(--surface);
+    border: 1px solid var(--border);
+  }
+  .surface-tertiary {
+    background: var(--muted);
+  }
+
+  /* Glassmorphism 2.0 — layered blur, edge highlight, faint blue glow. Reserved for nav, sidebar, search,
+     floating assistant/quick-actions, dialogs, popovers (brief section 4) — never a substitute for a
+     regular card surface. */
+  .glass-surface {
+    background: var(--glass-bg);
+    backdrop-filter: blur(var(--glass-blur)) saturate(160%);
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(160%);
+    border: 1px solid var(--glass-border);
+    box-shadow: var(--glass-highlight), var(--shadow-floating);
+  }
+}
+
+/* A27 — Transaction Studio's failed-optimistic-save signal: a brief red flash on the cell
+   that just rolled back, layered on top of the persistent inline-error ring so the moment
+   of failure is visible even if you looked away right when it happened. */
+@keyframes cell-error-flash {
+  0%, 100% { background-color: transparent; }
+  25% { background-color: var(--danger-flash, color-mix(in oklch, var(--danger) 25%, transparent)); }
+}
+@layer utilities {
+  .animate-cell-error-flash {
+    animation: cell-error-flash 1.4s ease-out;
+  }
+}
+
+/* Production-readiness audit: dialogs, drawers, popovers, and toasts across the app use
+   Tailwind's `animate-in`/`zoom-in`/`fade-in`/`slide-in` utilities with no `motion-reduce:`
+   variant anywhere — a user with `prefers-reduced-motion: reduce` got the same scale/fade/slide
+   as everyone else. One global override here covers every current and future use of those
+   utilities app-wide, instead of hand-adding a `motion-reduce:` variant to each of the dozens
+   of components that use them. Content still appears/disappears instantly; only the motion is
+   removed, matching the OS-level preference this media query exists to report. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
