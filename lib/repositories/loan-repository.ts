@@ -13,7 +13,7 @@ import { FirestoreCollections } from "@/lib/firestore/collections";
 import { FirestoreCrudRepository } from "@/lib/firestore/firestore-crud-repository";
 import { recordEdit, updateField } from "@/lib/firestore/soft-deletable";
 import { calculate, type InterestPeriodBreakdown } from "@/lib/engines/interest-calculator";
-import type { Loan, LoanInterest, LoanRepaymentType } from "@/lib/models/loan";
+import type { Loan, LoanCategory, LoanDirection, LoanInterest, LoanRepaymentType } from "@/lib/models/loan";
 import { nextDueDate, type Installment, type PaymentSchedule, type ScheduleType } from "@/lib/models/payment-schedule";
 import type {
   InstallmentRepository,
@@ -55,10 +55,18 @@ function installmentsPerYearFor(scheduleType: ScheduleType): number {
 }
 
 export interface CreateLoanParams {
-  personId: string;
+  personId?: string | null;
   loanAmount: number;
   loanDate: Date;
   repaymentType: LoanRepaymentType;
+  direction?: LoanDirection;
+  category?: LoanCategory;
+  institutionName?: string | null;
+  loanType?: string | null;
+  loanNumber?: string | null;
+  accountNumber?: string | null;
+  branch?: string | null;
+  payerPersonId?: string | null;
   name?: string | null;
   interest?: LoanInterest | null;
   dueDate?: Date | null;
@@ -73,10 +81,19 @@ export interface EditLoanParams {
   loanAmount?: number;
   dueDate?: Date | null;
   notes?: string;
+  institutionName?: string | null;
+  loanType?: string | null;
+  loanNumber?: string | null;
+  accountNumber?: string | null;
+  branch?: string | null;
+  payerPersonId?: string | null;
 }
 
 export interface EditLoanTermsParams {
   currentInstallments: Installment[];
+  /** Omit to leave the original principal untouched. When given, must be at least the principal already
+   *  paid down — see `editLoanTerms`'s doc comment. */
+  loanAmount?: number;
   interest?: LoanInterest | null;
   installmentFrequency?: ScheduleType | null;
   newInstallmentCount: number;
@@ -105,10 +122,18 @@ export class LoanRepository extends FirestoreCrudRepository<Loan> {
 
   async createLoan(params: CreateLoanParams): Promise<Loan> {
     const {
-      personId,
+      personId = null,
       loanAmount,
       loanDate,
       repaymentType,
+      direction = "taken",
+      category = "institutional",
+      institutionName = null,
+      loanType = null,
+      loanNumber = null,
+      accountNumber = null,
+      branch = null,
+      payerPersonId = null,
       name = null,
       interest = null,
       dueDate = null,
@@ -119,6 +144,12 @@ export class LoanRepository extends FirestoreCrudRepository<Loan> {
 
     if (loanAmount <= 0) {
       throw new Error("Loan amount must be greater than 0");
+    }
+    if (category === "personal" && (personId == null || personId.length === 0)) {
+      throw new Error("Choose a person");
+    }
+    if (category === "institutional" && (institutionName == null || institutionName.trim().length === 0)) {
+      throw new Error("Institution name is required");
     }
     if (repaymentType === "oneTime" && dueDate == null) {
       throw new Error("One-time loans need a due date");
@@ -169,10 +200,23 @@ export class LoanRepository extends FirestoreCrudRepository<Loan> {
       precomputedAmounts: precomputed,
     });
 
+    // An institutional loan is never person-linked, regardless of what's
+    // passed — structurally prevents the invalid "both" combination rather
+    // than relying on the caller/UI alone (mirrors the Flutter port).
+    const effectivePersonId = category === "personal" ? personId : null;
+
     const loan: Loan = {
       id: loanId,
-      personId,
+      personId: effectivePersonId,
       name,
+      direction,
+      category,
+      institutionName: category === "institutional" ? institutionName!.trim() : null,
+      loanType: category === "institutional" ? loanType : null,
+      loanNumber: category === "institutional" ? loanNumber : null,
+      accountNumber: category === "institutional" ? accountNumber : null,
+      branch: category === "institutional" ? branch : null,
+      payerPersonId,
       loanAmount,
       interest,
       loanDate,
@@ -202,7 +246,19 @@ export class LoanRepository extends FirestoreCrudRepository<Loan> {
    * path, so this method doesn't accept them at all.
    */
   async editLoan(loan: Loan, params: EditLoanParams): Promise<void> {
-    const { hasPayments, name, loanAmount, dueDate, notes } = params;
+    const {
+      hasPayments,
+      name,
+      loanAmount,
+      dueDate,
+      notes,
+      institutionName,
+      loanType,
+      loanNumber,
+      accountNumber,
+      branch,
+      payerPersonId,
+    } = params;
 
     if (loanAmount != null) {
       if (loanAmount <= 0) {
@@ -223,25 +279,42 @@ export class LoanRepository extends FirestoreCrudRepository<Loan> {
       loanAmount: v,
     }));
     updated = updateField(updated, "notes", updated.notes, notes, (e, v) => ({ ...e, notes: v }));
+    updated = updateField(updated, "institutionName", updated.institutionName ?? null, institutionName, (e, v) => ({
+      ...e,
+      institutionName: v,
+    }));
+    updated = updateField(updated, "loanType", updated.loanType ?? null, loanType, (e, v) => ({ ...e, loanType: v }));
+    updated = updateField(updated, "loanNumber", updated.loanNumber ?? null, loanNumber, (e, v) => ({
+      ...e,
+      loanNumber: v,
+    }));
+    updated = updateField(updated, "accountNumber", updated.accountNumber ?? null, accountNumber, (e, v) => ({
+      ...e,
+      accountNumber: v,
+    }));
+    updated = updateField(updated, "branch", updated.branch ?? null, branch, (e, v) => ({ ...e, branch: v }));
+    updated = updateField(updated, "payerPersonId", updated.payerPersonId ?? null, payerPersonId, (e, v) => ({
+      ...e,
+      payerPersonId: v,
+    }));
     await this.update(updated);
   }
 
   /**
-   * Changes `interest`/`installmentFrequency`/`installmentCount` on an
-   * installment loan that may already have payments recorded against it.
-   * Mirrors `EmiRepository.editEmiTerms` exactly: re-amortizes the
-   * *outstanding* principal (principal already paid down, via fully- or
-   * partially-paid installments, is left alone) over the new terms and
-   * regenerates only the untouched (zero-payment) tail of the schedule.
-   * One-time loans have no "terms" of this kind — the caller should never
-   * invoke this for a "oneTime" loan.
+   * Changes `loanAmount`/`interest`/`installmentFrequency`/`installmentCount` on an installment loan
+   * that may already have payments recorded against it. Mirrors `EmiRepository.editEmiTerms` exactly:
+   * re-amortizes the *outstanding* principal (principal already paid down, via fully- or partially-paid
+   * installments, is left alone) over the new terms and regenerates only the untouched (zero-payment)
+   * tail of the schedule. One-time loans have no "terms" of this kind — the caller should never invoke
+   * this for a "oneTime" loan.
    *
-   * `params.currentInstallments` must be every installment currently on
-   * `loan.scheduleId`. `params.newInstallmentCount` must be at least the
-   * number of installments that already carry a payment.
+   * `params.currentInstallments` must be every installment currently on `loan.scheduleId`.
+   * `params.newInstallmentCount` must be at least the number of installments that already carry a
+   * payment. `params.loanAmount`, if given, must be at least the principal already paid down — shrinking
+   * it below that would imply negative outstanding principal.
    */
   async editLoanTerms(loan: Loan, params: EditLoanTermsParams): Promise<void> {
-    const { currentInstallments, interest = null, installmentFrequency, newInstallmentCount } = params;
+    const { currentInstallments, loanAmount, interest = null, installmentFrequency, newInstallmentCount } = params;
 
     if (loan.repaymentType !== "installment") {
       throw new Error("Only installment loans have editable terms");
@@ -251,6 +324,9 @@ export class LoanRepository extends FirestoreCrudRepository<Loan> {
     }
     if (interest != null && interest.ratePercent < 0) {
       throw new Error("Interest rate cannot be negative");
+    }
+    if (loanAmount != null && loanAmount <= 0) {
+      throw new Error("Loan amount must be greater than 0");
     }
 
     const sorted = [...currentInstallments].sort((a, b) => a.sequenceNumber - b.sequenceNumber);
@@ -262,10 +338,23 @@ export class LoanRepository extends FirestoreCrudRepository<Loan> {
     }
 
     const principalPaid = settled.reduce((sum, i) => {
-      if (i.isSkipped && i.amountPaid === 0) return sum;
-      return sum + (i.principalPortion ?? i.amountPaid);
+      if (i.amountPaid <= 0) return sum;
+      const principalShare = i.principalPortion ?? i.amountDue;
+      // A fully-paid installment counts its whole principal share. One
+      // that's only partially paid (including a partial payment later
+      // skipped) counts only the principal fraction of what was actually
+      // paid — crediting the full share here would overstate principal
+      // paid down and understate outstandingPrincipal below.
+      if (i.amountPaid >= i.amountDue) return sum + principalShare;
+      return sum + principalShare * (i.amountPaid / i.amountDue);
     }, 0);
-    const outstandingPrincipal = clamp(loan.loanAmount - principalPaid, 0, loan.loanAmount);
+
+    if (loanAmount != null && loanAmount < principalPaid) {
+      throw new Error("Loan amount can't be less than the principal already paid off");
+    }
+
+    const effectiveLoanAmount = loanAmount ?? loan.loanAmount;
+    const outstandingPrincipal = clamp(effectiveLoanAmount - principalPaid, 0, effectiveLoanAmount);
     const remainingCount = newInstallmentCount - settled.length;
 
     const effectiveFrequency = installmentFrequency ?? loan.installmentFrequency!;
@@ -321,11 +410,12 @@ export class LoanRepository extends FirestoreCrudRepository<Loan> {
     let updated = recordEdit(
       loan,
       "loanTerms",
-      `${loan.interest?.ratePercent}/${loan.installmentFrequency ?? ""}/${loan.installmentCount}`,
-      `${interest?.ratePercent}/${effectiveFrequency}/${newInstallmentCount}`,
+      `${loan.loanAmount}/${loan.interest?.ratePercent}/${loan.installmentFrequency ?? ""}/${loan.installmentCount}`,
+      `${effectiveLoanAmount}/${interest?.ratePercent}/${effectiveFrequency}/${newInstallmentCount}`,
     );
     updated = {
       ...updated,
+      loanAmount: effectiveLoanAmount,
       interest,
       installmentFrequency: effectiveFrequency,
       installmentCount: newInstallmentCount,

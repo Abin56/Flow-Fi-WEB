@@ -19,7 +19,7 @@ import { useMemo, useState } from "react";
 import { Bar, BarChart, Cell, Pie, PieChart, ResponsiveContainer, XAxis, YAxis } from "recharts";
 import { ClayBadge } from "@/components/clay/clay-badge";
 import { ClayButton } from "@/components/clay/clay-button";
-import { ConfirmDialog, CurrencyCell, DetailDrawer, EmptyState, FinanceTable, FormDialog, type FinanceTableColumn } from "@/components/finance";
+import { ConfirmDialog, CurrencyCell, DetailDrawer, EmptyState, FinanceTable, FormDialog, SectionLabel, type FinanceTableColumn } from "@/components/finance";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -587,8 +587,17 @@ export function BudgetsWorkspace() {
         )}
       </DetailDrawer>
 
-      <FormDialog open={addOpen} onOpenChange={setAddOpen} title="New Budget" onConfirm={handleCreate} confirmLabel={saving ? "Saving…" : "Save"}>
-        <div className="flex flex-col gap-3 py-1 text-sm">
+      <FormDialog
+        open={addOpen}
+        onOpenChange={setAddOpen}
+        title="New Budget"
+        description="Set a monthly spending limit, overall or for a specific category."
+        onConfirm={handleCreate}
+        confirmLabel={saving ? "Saving…" : "Save"}
+        contentClassName="sm:max-w-lg"
+      >
+        <div className="flex flex-col gap-3 rounded-2xl bg-muted/30 p-4 text-sm">
+          <SectionLabel icon={Target}>Budget Details</SectionLabel>
           <label className="flex flex-col gap-1">
             <span className="text-xs font-medium text-muted-foreground">Category</span>
             <Select value={form.categoryId || "overall"} onValueChange={(v) => setForm((f) => ({ ...f, categoryId: v === "overall" ? "" : v }))}>
@@ -607,13 +616,16 @@ export function BudgetsWorkspace() {
           </label>
           <label className="flex flex-col gap-1">
             <span className="text-xs font-medium text-muted-foreground">Monthly Limit</span>
-            <input
-              type="number"
-              className="clay-pressed h-10 rounded-xl px-3 text-sm outline-none"
-              placeholder="0.00"
-              value={form.amount}
-              onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))}
-            />
+            <div className="relative">
+              <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary">₹</span>
+              <input
+                type="number"
+                className="clay-pressed h-10 w-full rounded-xl border border-primary/20 bg-primary/5 pl-7 text-sm font-semibold outline-none"
+                placeholder="0.00"
+                value={form.amount}
+                onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))}
+              />
+            </div>
           </label>
         </div>
       </FormDialog>
@@ -625,8 +637,10 @@ export function BudgetsWorkspace() {
         description="Only the amount can be changed for an existing budget."
         onConfirm={handleEdit}
         confirmLabel={saving ? "Saving…" : "Save Changes"}
+        contentClassName="sm:max-w-lg"
       >
-        <div className="flex flex-col gap-3 py-1 text-sm">
+        <div className="flex flex-col gap-3 rounded-2xl bg-muted/30 p-4 text-sm">
+          <SectionLabel icon={Target}>Budget Details</SectionLabel>
           <label className="flex flex-col gap-1">
             <span className="text-xs font-medium text-muted-foreground">Category</span>
             <input
@@ -637,12 +651,15 @@ export function BudgetsWorkspace() {
           </label>
           <label className="flex flex-col gap-1">
             <span className="text-xs font-medium text-muted-foreground">Monthly Limit</span>
-            <input
-              type="number"
-              className="clay-pressed h-10 rounded-xl px-3 text-sm outline-none"
-              value={form.amount}
-              onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))}
-            />
+            <div className="relative">
+              <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary">₹</span>
+              <input
+                type="number"
+                className="clay-pressed h-10 w-full rounded-xl border border-primary/20 bg-primary/5 pl-7 text-sm font-semibold outline-none"
+                value={form.amount}
+                onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))}
+              />
+            </div>
           </label>
         </div>
       </FormDialog>

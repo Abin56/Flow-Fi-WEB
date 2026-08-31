@@ -24,13 +24,17 @@ export function AccountTile({
       type="button"
       onClick={onSelect}
       className={cn(
-        "surface-flat flex flex-col gap-4 rounded-2xl border p-5 text-left transition-colors",
+        "surface-flat group relative flex flex-col gap-4 overflow-hidden rounded-2xl border p-5 text-left shadow-e1 transition-all hover:-translate-y-0.5 hover:shadow-e2",
         palette.wash,
-        active ? "border-primary/50" : "border-border/50 hover:border-border",
+        active ? "border-primary/50 ring-1 ring-primary/30" : "border-border/50 hover:border-border",
       )}
     >
+      <span className="absolute inset-x-0 top-0 h-1" style={{ background: palette.gradient }} />
       <div className="flex items-start justify-between gap-2">
-        <span className={cn("flex size-10 items-center justify-center rounded-xl", palette.icon)}>
+        <span
+          className={cn("flex size-10 items-center justify-center rounded-xl shadow-sm", palette.onGradient)}
+          style={{ background: palette.gradient }}
+        >
           <Icon className="size-4.5" />
         </span>
         {account.isPrimary ? (

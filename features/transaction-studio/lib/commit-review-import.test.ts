@@ -413,6 +413,39 @@ describe("commitReviewImport — every Action dispatches to its correct reposito
     expect(createLoan).toHaveBeenCalledWith(expect.objectContaining({ name: "Friend loan" }));
     expect(applyPayment).toHaveBeenCalled();
   });
+
+  it("create_loan: is always a personal, given loan — this commit always disburses money to a person, unlike the Loans page's institutional-loan default", async () => {
+    const createLoan = vi.fn().mockResolvedValue({ scheduleId: "sched-new" });
+    const applyPayment = vi.fn().mockResolvedValue(undefined);
+    const getAll = vi.fn().mockResolvedValue([{ dueDate: new Date("2026-08-01"), amountPaid: 0, amountDue: 100, isSkipped: false }]);
+    const createTransaction = vi.fn().mockResolvedValue({ id: "loan-txn" });
+    await commitReviewImport({
+      ...baseParams,
+      rows: [
+        row({
+          ...actionToAxesPatch("create_loan", {
+            kind: "create_loan",
+            name: "Friend loan",
+            loanAmount: 5000,
+            interestRatePercent: null,
+            months: 6,
+            startDate: new Date("2026-08-01"),
+            personId: "person-1",
+          }),
+        }),
+      ],
+      repositories: {
+        ...unreachableRepositories(),
+        loanRepository: { createLoan } as never,
+        transactionRepository: { createTransaction, createTransferPair: vi.fn() } as never,
+        installmentRepositoryFor: () => ({ getAll, applyPayment }) as never,
+      },
+      onRowCommitted: vi.fn(),
+    });
+    expect(createLoan).toHaveBeenCalledWith(
+      expect.objectContaining({ category: "personal", direction: "given", personId: "person-1" }),
+    );
+  });
 });
 
 describe("commitReviewImport — B3: atomicity, compensation, and retry safety for multi-write Actions", () => {

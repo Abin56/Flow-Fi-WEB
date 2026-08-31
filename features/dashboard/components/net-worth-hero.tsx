@@ -1,6 +1,7 @@
 "use client";
 
 import { ArrowRight, ArrowUp, Eye } from "lucide-react";
+import { Area, AreaChart, ResponsiveContainer } from "recharts";
 import { AnimatedNumber } from "@/components/foundation/animated-number";
 import { ProgressRing } from "@/components/foundation/progress-ring";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -12,6 +13,8 @@ export interface NetWorthHeroProps {
     amount: number;
     changeAmount: number;
     changePercent: number;
+    /** Cumulative net (income - expense) for each of the last 7 days, oldest first — see `use-dashboard-data.ts`. */
+    trend: number[];
   };
   isLoading?: boolean;
 }
@@ -22,6 +25,12 @@ export interface NetWorthHeroProps {
  *
  * `netWorth` comes from `calculateNetWorth` (lib/engines/net-worth.ts) via `useDashboardData`.
  * `financialHealth` has no ported engine yet (see `use-dashboard-data.ts`'s doc comment), so it stays mock.
+ *
+ * The 7-day sparkline below the headline number is a direct visual port of
+ * `NetWorthWidgetCard`'s `MiniTrendChart` (Finance_App's
+ * `net_worth_widget_card.dart`) — white-on-gradient, matching that card's own
+ * `color: Colors.white` styling, since it's a single trend line on the app's
+ * branded hero surface rather than a categorical/sequential data series.
  */
 export function NetWorthHero({ netWorth, isLoading }: NetWorthHeroProps) {
   if (isLoading) {
@@ -57,6 +66,29 @@ export function NetWorthHero({ netWorth, isLoading }: NetWorthHeroProps) {
           <ArrowUp className="size-3.5" />
           {formatCurrency(netWorth.changeAmount)} ({netWorth.changePercent}%) this month
         </p>
+        {netWorth.trend.length > 0 && (
+          <div className="h-8 w-full max-w-40">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={netWorth.trend.map((v) => ({ v }))} margin={{ top: 2, right: 0, bottom: 2, left: 0 }}>
+                <defs>
+                  <linearGradient id="net-worth-trend" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#ffffff" stopOpacity={0.4} />
+                    <stop offset="100%" stopColor="#ffffff" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <Area
+                  type="monotone"
+                  dataKey="v"
+                  stroke="#ffffff"
+                  strokeWidth={2}
+                  strokeLinecap="round"
+                  fill="url(#net-worth-trend)"
+                  isAnimationActive={false}
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        )}
         <button
           type="button"
           className="mt-2 inline-flex w-fit items-center gap-1.5 rounded-full bg-white/20 px-4 py-2 text-xs font-semibold backdrop-blur-sm transition-colors hover:bg-white/30 focus-visible:ring-2 focus-visible:ring-white/70 focus-visible:outline-none"

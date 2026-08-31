@@ -1,6 +1,6 @@
 "use client";
 
-import { Plus } from "lucide-react";
+import { CalendarClock, Plus, StickyNote, Wallet } from "lucide-react";
 import { useMemo, useState } from "react";
 import { ClayBadge } from "@/components/clay/clay-badge";
 import { ClayButton } from "@/components/clay/clay-button";
@@ -12,22 +12,20 @@ import {
   DetailDrawer,
   EmptyState,
   FormDialog,
+  SectionLabel,
   SmartToolbar,
 } from "@/components/finance";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAccounts } from "@/hooks/use-accounts";
 import { useCategories } from "@/hooks/use-categories";
-import { useTransactions } from "@/hooks/use-transactions";
 import { formatCurrency } from "@/lib/format";
 import { billOccurrenceStatus, billOccurrenceRemainingAmount, type Bill, type BillRecurrence } from "@/lib/models/bill";
 import type { Account } from "@/lib/models/account";
 import type { Category } from "@/lib/models/category";
-import type { Transaction } from "@/lib/models/transaction";
 import { Receipt } from "lucide-react";
 import { BillCard, RECURRENCE_LABEL } from "@/features/bills/components/bill-card";
 import { useBillActions, useBillRows, type BillRow } from "@/features/bills/hooks/use-bills-data";
-import { useDuplicateGuardedCreate } from "@/lib/services/duplicate-detection/use-duplicate-guarded-create";
 import { toast } from "@/store/toast-store";
 import { cn } from "@/lib/utils";
 
@@ -75,10 +73,6 @@ export function BillsWorkspace() {
   const actions = useBillActions();
   const { data: accounts = [] } = useAccounts();
   const { data: categories = [] } = useCategories();
-  const { data: transactions = [] } = useTransactions();
-  const duplicateGuard = useDuplicateGuardedCreate(
-    (transactions as Transaction[]).map((t) => ({ id: t.id, description: t.description, amount: t.amount, dateTime: t.dateTime, accountId: t.accountId, type: t.type })),
-  );
 
   const [activeRow, setActiveRow] = useState<BillRow | null>(null);
   const [addOpen, setAddOpen] = useState(false);
@@ -168,23 +162,6 @@ export function BillsWorkspace() {
 
   async function handleMarkPaid(row: BillRow) {
     if (!actions || !row.occurrence) return;
-    // Guards against the same accidental double-post a manual entry retype would trigger —
-    // e.g. clicking "Mark Paid" twice, or a bill payment that coincidentally matches a
-    // transaction already recorded some other way. Mirrors `postBillPaymentTransaction`'s own
-    // amount/date/account so the check reflects exactly what's about to be written.
-    if (row.bill.accountId) {
-      const remaining = row.occurrence.amount - row.occurrence.amountPaid;
-      const proceed = await duplicateGuard.guard({
-        description: row.bill.name,
-        amount: remaining,
-        date: new Date(),
-        direction: "debit",
-        accountId: row.bill.accountId,
-        referenceNumber: null,
-        requireDescriptionMatch: false,
-      });
-      if (!proceed) return;
-    }
     try {
       await actions.markPaid(row.bill, row.occurrence);
     } catch (e) {
@@ -354,8 +331,10 @@ export function BillsWorkspace() {
         open={addOpen}
         onOpenChange={setAddOpen}
         title="Add Bill"
+        description="Track a recurring or one-time bill and stay ahead of its due date."
         onConfirm={() => handleSave(false)}
         confirmLabel={saving ? "Saving…" : "Save"}
+        contentClassName="sm:max-w-xl"
       >
         <BillFormFields form={form} setForm={setForm} accounts={accounts} categories={categories} />
       </FormDialog>
@@ -366,6 +345,7 @@ export function BillsWorkspace() {
         title={`Edit ${activeRow?.bill.name ?? "Bill"}`}
         onConfirm={() => handleSave(true)}
         confirmLabel={saving ? "Saving…" : "Save Changes"}
+        contentClassName="sm:max-w-xl"
       >
         <BillFormFields form={form} setForm={setForm} accounts={accounts} categories={categories} />
       </FormDialog>
@@ -379,8 +359,6 @@ export function BillsWorkspace() {
         confirmLabel="Delete"
         onConfirm={handleDelete}
       />
-
-      {duplicateGuard.dialog}
     </div>
   );
 }
@@ -397,102 +375,124 @@ function BillFormFields({
   categories: Category[];
 }) {
   return (
-    <div className="flex flex-col gap-3 py-1 text-sm">
-      <label className="flex flex-col gap-1">
-        <span className="text-xs font-medium text-muted-foreground">Bill Name</span>
-        <input
-          className="clay-pressed h-10 rounded-xl px-3 text-sm outline-none"
-          placeholder="e.g. Electricity"
-          value={form.name}
-          onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-        />
-      </label>
-      <label className="flex flex-col gap-1">
-        <span className="text-xs font-medium text-muted-foreground">Amount</span>
-        <input
-          type="number"
-          className="clay-pressed h-10 rounded-xl px-3 text-sm outline-none"
-          placeholder="0.00"
-          value={form.amount}
-          onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))}
-        />
-      </label>
-      <label className="flex flex-col gap-1">
-        <span className="text-xs font-medium text-muted-foreground">Next Due Date</span>
-        <input
-          type="date"
-          className="clay-pressed h-10 rounded-xl px-3 text-sm outline-none"
-          value={form.dueDate}
-          onChange={(e) => setForm((f) => ({ ...f, dueDate: e.target.value }))}
-        />
-      </label>
-      <label className="flex flex-col gap-1">
-        <span className="text-xs font-medium text-muted-foreground">Recurrence</span>
-        <Select value={form.recurrence} onValueChange={(v) => setForm((f) => ({ ...f, recurrence: v as BillRecurrence }))}>
-          <SelectTrigger className="h-10 w-full rounded-xl">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {RECURRENCE_OPTIONS.map((r) => (
-              <SelectItem key={r} value={r}>
-                {RECURRENCE_LABEL[r]}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </label>
-      {form.recurrence === "custom" && (
+    <div className="flex flex-col gap-5 py-1 text-sm">
+      <div className="flex flex-col gap-3 rounded-2xl bg-muted/30 p-4">
+        <SectionLabel icon={Receipt}>Bill Details</SectionLabel>
         <label className="flex flex-col gap-1">
-          <span className="text-xs font-medium text-muted-foreground">Repeat Every (days)</span>
+          <span className="text-xs font-medium text-muted-foreground">Bill Name</span>
           <input
-            type="number"
             className="clay-pressed h-10 rounded-xl px-3 text-sm outline-none"
-            value={form.customIntervalDays}
-            onChange={(e) => setForm((f) => ({ ...f, customIntervalDays: e.target.value }))}
+            placeholder="e.g. Electricity"
+            value={form.name}
+            onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
           />
         </label>
-      )}
-      <label className="flex flex-col gap-1">
-        <span className="text-xs font-medium text-muted-foreground">Account (optional)</span>
-        <Select value={form.accountId || "none"} onValueChange={(v) => setForm((f) => ({ ...f, accountId: v === "none" ? "" : v }))}>
-          <SelectTrigger className="h-10 w-full rounded-xl">
-            <SelectValue placeholder="No account" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="none">No account</SelectItem>
-            {accounts.map((a) => (
-              <SelectItem key={a.id} value={a.id}>
-                {a.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </label>
-      <label className="flex flex-col gap-1">
-        <span className="text-xs font-medium text-muted-foreground">Category (optional)</span>
-        <Select value={form.categoryId || "none"} onValueChange={(v) => setForm((f) => ({ ...f, categoryId: v === "none" ? "" : v }))}>
-          <SelectTrigger className="h-10 w-full rounded-xl">
-            <SelectValue placeholder="No category" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="none">No category</SelectItem>
-            {categories.map((c) => (
-              <SelectItem key={c.id} value={c.id}>
-                {c.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </label>
-      <label className="flex flex-col gap-1">
-        <span className="text-xs font-medium text-muted-foreground">Notes</span>
-        <input
-          className="clay-pressed h-10 rounded-xl px-3 text-sm outline-none"
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-muted-foreground">Amount</span>
+            <div className="relative">
+              <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary">₹</span>
+              <input
+                type="number"
+                className="clay-pressed h-10 w-full rounded-xl border border-primary/20 bg-primary/5 pl-7 text-sm font-semibold outline-none"
+                placeholder="0.00"
+                value={form.amount}
+                onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))}
+              />
+            </div>
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-muted-foreground">Next Due Date</span>
+            <input
+              type="date"
+              className="clay-pressed h-10 rounded-xl px-3 text-sm outline-none"
+              value={form.dueDate}
+              onChange={(e) => setForm((f) => ({ ...f, dueDate: e.target.value }))}
+            />
+          </label>
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-3 rounded-2xl bg-muted/30 p-4">
+        <SectionLabel icon={CalendarClock}>Recurrence</SectionLabel>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-muted-foreground">Repeats</span>
+            <Select value={form.recurrence} onValueChange={(v) => setForm((f) => ({ ...f, recurrence: v as BillRecurrence }))}>
+              <SelectTrigger className="h-10 w-full rounded-xl">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {RECURRENCE_OPTIONS.map((r) => (
+                  <SelectItem key={r} value={r}>
+                    {RECURRENCE_LABEL[r]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </label>
+          {form.recurrence === "custom" && (
+            <label className="flex flex-col gap-1">
+              <span className="text-xs font-medium text-muted-foreground">Repeat Every (days)</span>
+              <input
+                type="number"
+                className="clay-pressed h-10 rounded-xl px-3 text-sm outline-none"
+                value={form.customIntervalDays}
+                onChange={(e) => setForm((f) => ({ ...f, customIntervalDays: e.target.value }))}
+              />
+            </label>
+          )}
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-3 rounded-2xl bg-muted/30 p-4">
+        <SectionLabel icon={Wallet}>Linked To (optional)</SectionLabel>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-muted-foreground">Account</span>
+            <Select value={form.accountId || "none"} onValueChange={(v) => setForm((f) => ({ ...f, accountId: v === "none" ? "" : v }))}>
+              <SelectTrigger className="h-10 w-full rounded-xl">
+                <SelectValue placeholder="No account" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">No account</SelectItem>
+                {accounts.map((a) => (
+                  <SelectItem key={a.id} value={a.id}>
+                    {a.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-muted-foreground">Category</span>
+            <Select value={form.categoryId || "none"} onValueChange={(v) => setForm((f) => ({ ...f, categoryId: v === "none" ? "" : v }))}>
+              <SelectTrigger className="h-10 w-full rounded-xl">
+                <SelectValue placeholder="No category" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">No category</SelectItem>
+                {categories.map((c) => (
+                  <SelectItem key={c.id} value={c.id}>
+                    {c.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </label>
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-2 rounded-2xl bg-muted/30 p-4">
+        <SectionLabel icon={StickyNote}>Notes</SectionLabel>
+        <textarea
+          className="clay-pressed min-h-20 resize-none rounded-xl px-3 py-2 text-sm outline-none"
           placeholder="Optional notes"
+          rows={3}
           value={form.notes}
           onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
         />
-      </label>
+      </div>
     </div>
   );
 }

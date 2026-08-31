@@ -15,7 +15,7 @@ import {
 import { useMemo, useState } from "react";
 import { ClayBadge } from "@/components/clay/clay-badge";
 import { ClayButton } from "@/components/clay/clay-button";
-import { ConfirmDialog, CurrencyCell, DetailDrawer, EmptyState, FormDialog } from "@/components/finance";
+import { ConfirmDialog, CurrencyCell, DetailDrawer, EmptyState, FormDialog, SectionLabel } from "@/components/finance";
 import { Skeleton } from "@/components/ui/skeleton";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { ProgressRing } from "@/components/foundation/progress-ring";
@@ -399,8 +399,17 @@ export function SavingsWorkspace() {
         )}
       </DetailDrawer>
 
-      <FormDialog open={addOpen} onOpenChange={setAddOpen} title="New Savings Goal" onConfirm={handleCreate} confirmLabel={saving ? "Saving…" : "Save"}>
-        <div className="flex flex-col gap-3 py-1 text-sm">
+      <FormDialog
+        open={addOpen}
+        onOpenChange={setAddOpen}
+        title="New Savings Goal"
+        description="Give it a name and a target, and start contributing whenever you can."
+        onConfirm={handleCreate}
+        confirmLabel={saving ? "Saving…" : "Save"}
+        contentClassName="sm:max-w-lg"
+      >
+        <div className="flex flex-col gap-3 rounded-2xl bg-muted/30 p-4 text-sm">
+          <SectionLabel icon={Target}>Goal Details</SectionLabel>
           <label className="flex flex-col gap-1">
             <span className="text-xs font-medium text-muted-foreground">Goal Name</span>
             <input
@@ -411,30 +420,35 @@ export function SavingsWorkspace() {
               onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
             />
           </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-xs font-medium text-muted-foreground">Target Amount</span>
-            <input
-              type="number"
-              className="clay-pressed h-10 rounded-xl px-3 text-sm outline-none"
-              placeholder="0.00"
-              value={form.targetAmount}
-              onChange={(e) => setForm((f) => ({ ...f, targetAmount: e.target.value }))}
-            />
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-xs font-medium text-muted-foreground">Due Date (optional)</span>
-            <input
-              type="date"
-              className="clay-pressed h-10 rounded-xl px-3 text-sm outline-none"
-              value={form.dueDate}
-              onChange={(e) => setForm((f) => ({ ...f, dueDate: e.target.value }))}
-            />
-          </label>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <label className="flex flex-col gap-1">
+              <span className="text-xs font-medium text-muted-foreground">Target Amount</span>
+              <div className="relative">
+                <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary">₹</span>
+                <input
+                  type="number"
+                  className="clay-pressed h-10 w-full rounded-xl border border-primary/20 bg-primary/5 pl-7 text-sm font-semibold outline-none"
+                  placeholder="0.00"
+                  value={form.targetAmount}
+                  onChange={(e) => setForm((f) => ({ ...f, targetAmount: e.target.value }))}
+                />
+              </div>
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-xs font-medium text-muted-foreground">Due Date (optional)</span>
+              <input
+                type="date"
+                className="clay-pressed h-10 rounded-xl px-3 text-sm outline-none"
+                value={form.dueDate}
+                onChange={(e) => setForm((f) => ({ ...f, dueDate: e.target.value }))}
+              />
+            </label>
+          </div>
           <label className="flex flex-col gap-1">
             <span className="text-xs font-medium text-muted-foreground">Notes (optional)</span>
-            <input
-              type="text"
-              className="clay-pressed h-10 rounded-xl px-3 text-sm outline-none"
+            <textarea
+              className="clay-pressed min-h-20 resize-none rounded-xl px-3 py-2 text-sm outline-none"
+              rows={3}
               value={form.notes}
               onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
             />
@@ -448,8 +462,10 @@ export function SavingsWorkspace() {
         title={`Edit ${activeRow?.goal.name ?? "Goal"}`}
         onConfirm={handleEdit}
         confirmLabel={saving ? "Saving…" : "Save Changes"}
+        contentClassName="sm:max-w-lg"
       >
-        <div className="flex flex-col gap-3 py-1 text-sm">
+        <div className="flex flex-col gap-3 rounded-2xl bg-muted/30 p-4 text-sm">
+          <SectionLabel icon={Target}>Goal Details</SectionLabel>
           <label className="flex flex-col gap-1">
             <span className="text-xs font-medium text-muted-foreground">Goal Name</span>
             <input
@@ -459,29 +475,34 @@ export function SavingsWorkspace() {
               onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
             />
           </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-xs font-medium text-muted-foreground">Target Amount</span>
-            <input
-              type="number"
-              className="clay-pressed h-10 rounded-xl px-3 text-sm outline-none"
-              value={form.targetAmount}
-              onChange={(e) => setForm((f) => ({ ...f, targetAmount: e.target.value }))}
-            />
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-xs font-medium text-muted-foreground">Due Date</span>
-            <input
-              type="date"
-              className="clay-pressed h-10 rounded-xl px-3 text-sm outline-none"
-              value={form.dueDate}
-              onChange={(e) => setForm((f) => ({ ...f, dueDate: e.target.value }))}
-            />
-          </label>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <label className="flex flex-col gap-1">
+              <span className="text-xs font-medium text-muted-foreground">Target Amount</span>
+              <div className="relative">
+                <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary">₹</span>
+                <input
+                  type="number"
+                  className="clay-pressed h-10 w-full rounded-xl border border-primary/20 bg-primary/5 pl-7 text-sm font-semibold outline-none"
+                  value={form.targetAmount}
+                  onChange={(e) => setForm((f) => ({ ...f, targetAmount: e.target.value }))}
+                />
+              </div>
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-xs font-medium text-muted-foreground">Due Date</span>
+              <input
+                type="date"
+                className="clay-pressed h-10 rounded-xl px-3 text-sm outline-none"
+                value={form.dueDate}
+                onChange={(e) => setForm((f) => ({ ...f, dueDate: e.target.value }))}
+              />
+            </label>
+          </div>
           <label className="flex flex-col gap-1">
             <span className="text-xs font-medium text-muted-foreground">Notes</span>
-            <input
-              type="text"
-              className="clay-pressed h-10 rounded-xl px-3 text-sm outline-none"
+            <textarea
+              className="clay-pressed min-h-20 resize-none rounded-xl px-3 py-2 text-sm outline-none"
+              rows={3}
               value={form.notes}
               onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
             />
@@ -499,13 +520,16 @@ export function SavingsWorkspace() {
         <div className="flex flex-col gap-3 py-1 text-sm">
           <label className="flex flex-col gap-1">
             <span className="text-xs font-medium text-muted-foreground">Contribution Amount</span>
-            <input
-              type="number"
-              className="clay-pressed h-10 rounded-xl px-3 text-sm outline-none"
-              placeholder="0.00"
-              value={contributionAmount}
-              onChange={(e) => setContributionAmount(e.target.value)}
-            />
+            <div className="relative">
+              <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary">₹</span>
+              <input
+                type="number"
+                className="clay-pressed h-10 w-full rounded-xl border border-primary/20 bg-primary/5 pl-7 text-sm font-semibold outline-none"
+                placeholder="0.00"
+                value={contributionAmount}
+                onChange={(e) => setContributionAmount(e.target.value)}
+              />
+            </div>
           </label>
         </div>
       </FormDialog>

@@ -275,6 +275,23 @@
   --grid-line-strong: #bfbfbf;
 }
 
+/* SMS Transaction Candidates list — same --grid-line mechanism as Transaction Studio's
+   spreadsheet, but scoped to just this table via a class override instead of touching the
+   shared tokens above. Two earlier attempts here both failed on the live page: `var(--border)`
+   directly (only 10% opaque — invisible), then that same token's hue at higher opacity (renders
+   as a light blue tint, since `--border` shares its hue with `--primary`, not a neutral grey/black).
+   Plain black/white at solid opacity instead — unambiguous, clearly-visible divider lines,
+   independent of whatever hue the theme's border token happens to be. */
+.candidates-grid-lines {
+  --grid-line: rgba(0, 0, 0, 0.55);
+  --grid-line-strong: rgba(0, 0, 0, 0.8);
+}
+
+.dark .candidates-grid-lines {
+  --grid-line: rgba(255, 255, 255, 0.55);
+  --grid-line-strong: rgba(255, 255, 255, 0.8);
+}
+
 .dark {
   --background: oklch(0.16 0.024 262);
   --foreground: oklch(0.95 0.012 250);

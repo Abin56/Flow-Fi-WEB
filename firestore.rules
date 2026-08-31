@@ -31,6 +31,13 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == uid;
     }
 
+    // The user's own profile document (displayName/email/photoURL/
+    // lastLoginAt/createdAt) — written by the Flutter app's
+    // UserProfileRepository.upsertOnSignIn on every sign-in. Distinct from
+    // the subcollections below, which live under this same path but were
+    // previously the only rules present here.
+    match /users/{uid} { allow read, write: if isOwner(uid); }
+
     // --- Pre-existing app collections (lib/firestore/collections.ts) ---
     // Simple owner-scoped CRUD, matching how this app has always worked —
     // there is no Cloud Functions layer in front of these today, so

@@ -36,7 +36,7 @@
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
-import { usePeople, peopleQueryKey } from "@/hooks/use-people";
+import { usePeople } from "@/hooks/use-people";
 import {
   isCreditor,
   isDebtor,
@@ -122,6 +122,8 @@ export interface PersonActivityItem {
   description: string;
   amount: number;
   date: string;
+  /** Raw `LedgerEntry.date` — for callers that need to compute their own "days since" instead of the formatted `date` string. */
+  rawDate: Date;
 }
 
 export interface PersonViewRow {
@@ -149,6 +151,7 @@ function toActivityItem(entry: LedgerEntry): PersonActivityItem {
     description: entry.note || ENTRY_TYPE_LABEL[ledgerEntryTypeFromName(entry.type)],
     amount: Math.abs(amount),
     date: formatDate(entry.date),
+    rawDate: entry.date,
   };
 }
 
@@ -298,18 +301,14 @@ export function usePeopleActions() {
 
     return {
       createPerson: async (params: CreatePersonParams) => {
-        const person = await personRepository.createPerson(params);
-        await queryClient.invalidateQueries({ queryKey: peopleQueryKey(uid) });
-        return person;
+        return personRepository.createPerson(params);
       },
       editPerson: async (person: Person, params: EditPersonParams) => {
         await personRepository.editPerson(person, params);
-        await queryClient.invalidateQueries({ queryKey: peopleQueryKey(uid) });
       },
       deletePerson: async (person: Person) => {
         const ledgerRepository = createLedgerRepository(uid, person.id, personRepository);
         await personRepository.deletePersonAndLedger(person, ledgerRepository);
-        await queryClient.invalidateQueries({ queryKey: peopleQueryKey(uid) });
         await invalidateLedger();
       },
       addLedgerEntry: async (
@@ -318,14 +317,12 @@ export function usePeopleActions() {
       ) => {
         const ledgerRepository = createLedgerRepository(uid, person.id, personRepository);
         const entry = await ledgerRepository.addEntry(person, params);
-        await queryClient.invalidateQueries({ queryKey: peopleQueryKey(uid) });
         await invalidateLedger();
         return entry;
       },
       deleteLedgerEntry: async (person: Person, entry: LedgerEntry) => {
         const ledgerRepository = createLedgerRepository(uid, person.id, personRepository);
         await ledgerRepository.softDeleteEntry(person, entry);
-        await queryClient.invalidateQueries({ queryKey: peopleQueryKey(uid) });
         await invalidateLedger();
       },
     };

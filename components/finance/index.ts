@@ -16,3 +16,4 @@ export * from "@/components/finance/section-label";
 export * from "@/components/finance/sectioned-form-dialog";
 export * from "@/components/finance/chip-row";
 export * from "@/components/finance/confirm-dialog";
+export * from "@/components/finance/destructive-delete-dialog";

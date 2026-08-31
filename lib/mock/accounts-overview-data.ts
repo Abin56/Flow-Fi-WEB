@@ -13,7 +13,19 @@ export const accountStats = {
   upcomingReminders: 3,
 };
 
-export type AccountColor = "slate" | "orange" | "blue" | "green" | "cyan" | "violet";
+export type AccountColor =
+  | "slate"
+  | "orange"
+  | "blue"
+  | "green"
+  | "cyan"
+  | "violet"
+  | "maroon"
+  | "emerald"
+  | "bronze"
+  | "charcoal"
+  | "navy"
+  | "plum";
 
 export interface AccountOverviewItem {
   id: string;

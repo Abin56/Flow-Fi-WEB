@@ -93,11 +93,23 @@ const CATEGORY_OPTIONS = [
 ];
 
 /** Compact inline dropdown used as a SettingsRow control — plain SelectTrigger, no stacked label, since the
- *  row itself already carries the label/description on the left. */
-function RowSelect({ value, onChange, options }: { value: string; onChange: (v: string) => void; options: { value: string; label: string }[] }) {
+ *  row itself already carries the label/description on the left. Defaults to a fixed `w-44` for that inline
+ *  use; pass `className="w-full"` when it's the sole control under a stacked label instead, so long option
+ *  text (a timezone name, a currency label) isn't clipped into a fixed-width box. */
+function RowSelect({
+  value,
+  onChange,
+  options,
+  className,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: { value: string; label: string }[];
+  className?: string;
+}) {
   return (
     <Select value={value} onValueChange={onChange}>
-      <SelectTrigger className="w-44">
+      <SelectTrigger className={cn("w-44", className)}>
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
@@ -124,6 +136,22 @@ function SummaryRow({ icon: Icon, iconClass, label, value, sublabel }: { icon: L
       <span className="shrink-0 font-mono text-sm font-semibold tabular-nums text-foreground">{value}</span>
       <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
     </button>
+  );
+}
+
+/** Colored icon badge + title/description — the section heading used atop every settings card, so each
+ *  card reads at a glance instead of blending into a wall of plain text headers. */
+function CardHeading({ icon: Icon, iconClass, title, description }: { icon: LucideIcon; iconClass: string; title: string; description?: string }) {
+  return (
+    <div className="flex items-start gap-3">
+      <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-xl", iconClass)}>
+        <Icon className="size-4.5" />
+      </span>
+      <div className="min-w-0">
+        <h2 className="text-sm font-semibold text-foreground">{title}</h2>
+        {description && <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>}
+      </div>
+    </div>
   );
 }
 
@@ -273,8 +301,7 @@ export function SettingsWorkspace() {
           <div className="flex flex-col gap-5">
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
               <div className="surface-flat rounded-3xl border border-border/50 p-5">
-                <h2 className="text-sm font-semibold text-foreground">Profile Information</h2>
-                <p className="mt-0.5 text-xs text-muted-foreground">Update your personal information and profile details.</p>
+                <CardHeading icon={User} iconClass="bg-primary/12 text-primary" title="Profile Information" description="Update your personal information and profile details." />
 
                 <div className="mt-4 flex items-center gap-4">
                   <div className="relative">
@@ -299,6 +326,7 @@ export function SettingsWorkspace() {
                     <RowSelect
                       value={timezone}
                       onChange={setTimezone}
+                      className="w-full"
                       options={[
                         { value: "ist", label: "(GMT+05:30) India Standard Time" },
                         { value: "utc", label: "(GMT+00:00) UTC" },
@@ -311,6 +339,7 @@ export function SettingsWorkspace() {
                     <RowSelect
                       value={currency}
                       onChange={setCurrency}
+                      className="w-full"
                       options={[
                         { value: "inr", label: "INR - Indian Rupee (₹)" },
                         { value: "usd", label: "USD - US Dollar ($)" },
@@ -326,8 +355,7 @@ export function SettingsWorkspace() {
               </div>
 
               <div className="surface-flat rounded-3xl border border-border/50 p-5">
-                <h2 className="text-sm font-semibold text-foreground">App Preferences</h2>
-                <p className="mt-0.5 text-xs text-muted-foreground">Customize the app to match your workflow.</p>
+                <CardHeading icon={SlidersHorizontal} iconClass="bg-purple/15 text-purple" title="App Preferences" description="Customize the app to match your workflow." />
 
                 <div className="mt-2 flex flex-col divide-y divide-border/60">
                   <SettingsRow
@@ -425,8 +453,7 @@ export function SettingsWorkspace() {
 
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
               <div className="surface-flat rounded-3xl border border-border/50 p-5">
-                <h2 className="text-sm font-semibold text-foreground">Security Settings</h2>
-                <p className="mt-0.5 text-xs text-muted-foreground">Manage your security and privacy preferences.</p>
+                <CardHeading icon={Shield} iconClass="bg-warning/20 text-warning-foreground" title="Security Settings" description="Manage your security and privacy preferences." />
                 <div className="mt-2 flex flex-col divide-y divide-border/60">
                   <SettingsRow
                     icon={<KeyRound className="size-4.5" />}
@@ -470,8 +497,7 @@ export function SettingsWorkspace() {
               </div>
 
               <div className="surface-flat rounded-3xl border border-border/50 p-5">
-                <h2 className="text-sm font-semibold text-foreground">Notifications</h2>
-                <p className="mt-0.5 text-xs text-muted-foreground">Choose what notifications you want to receive.</p>
+                <CardHeading icon={Bell} iconClass="bg-success/15 text-success" title="Notifications" description="Choose what notifications you want to receive." />
                 <div className="mt-2 flex flex-col divide-y divide-border/60">
                   <SettingsRow icon={<Bell className="size-4.5" />} label="Transaction Alerts" description="Get notified for new transactions" control={<Switch checked={transactionAlerts} onCheckedChange={setTransactionAlerts} />} />
                   <SettingsRow icon={<Receipt className="size-4.5" />} label="Bill Reminders" description="Reminders for upcoming bills" control={<Switch checked={billReminders} onCheckedChange={setBillReminders} />} />
@@ -482,8 +508,8 @@ export function SettingsWorkspace() {
               </div>
 
               <div className="surface-flat rounded-3xl border border-border/50 p-5">
-                <h2 className="text-sm font-semibold text-foreground">Backup & Restore</h2>
-                <p className="mt-0.5 text-xs text-muted-foreground">
+                <CardHeading icon={CloudUpload} iconClass="bg-primary/12 text-primary" title="Backup & Restore" />
+                <p className="mt-3 text-xs text-muted-foreground">
                   Your data is already saved to the cloud automatically — every account, transaction, and budget
                   syncs to FlowFi&apos;s servers in real time, so there&apos;s no separate backup step needed.
                 </p>
@@ -518,8 +544,10 @@ export function SettingsWorkspace() {
         {tab === "preferences" && (
           <div className="flex flex-col gap-4">
             <SettingsCard>
-              <h2 className="mb-3 text-sm font-semibold text-foreground">Budgeting</h2>
-              <CurrencyField label="Default monthly budget" value={monthlyBudget} onChange={setMonthlyBudget} description="Used as the starting point for new budget cycles." />
+              <CardHeading icon={Wallet} iconClass="bg-primary/12 text-primary" title="Budgeting" />
+              <div className="mt-3">
+                <CurrencyField label="Default monthly budget" value={monthlyBudget} onChange={setMonthlyBudget} description="Used as the starting point for new budget cycles." />
+              </div>
             </SettingsCard>
 
             <SettingsCard noPadding>
@@ -532,7 +560,8 @@ export function SettingsWorkspace() {
             </SettingsCard>
 
             <SettingsCard>
-              <h2 className="mb-3 text-sm font-semibold text-foreground">Theme</h2>
+              <CardHeading icon={Sun} iconClass="bg-warning/20 text-warning-foreground" title="Theme" />
+              <div className="mt-3">
               <SegmentedControl
                 value={theme}
                 onChange={setTheme}
@@ -542,16 +571,21 @@ export function SettingsWorkspace() {
                   { value: "system", label: "System" },
                 ]}
               />
+              </div>
             </SettingsCard>
 
             <SettingsCard>
-              <h2 className="mb-3 text-sm font-semibold text-foreground">Accent color</h2>
-              <ColorPicker value={accentColor} onChange={setAccentColor} />
+              <CardHeading icon={Palette} iconClass="bg-purple/15 text-purple" title="Accent color" />
+              <div className="mt-3">
+                <ColorPicker value={accentColor} onChange={setAccentColor} />
+              </div>
             </SettingsCard>
 
             <SettingsCard>
-              <h2 className="mb-3 text-sm font-semibold text-foreground">Density</h2>
-              <SliderField label="Interface density" value={density} onChange={setDensity} formatValue={(v) => (v < 33 ? "Compact" : v < 66 ? "Comfortable" : "Spacious")} />
+              <CardHeading icon={SlidersHorizontal} iconClass="bg-success/15 text-success" title="Density" />
+              <div className="mt-3">
+                <SliderField label="Interface density" value={density} onChange={setDensity} formatValue={(v) => (v < 33 ? "Compact" : v < 66 ? "Comfortable" : "Spacious")} />
+              </div>
             </SettingsCard>
           </div>
         )}
@@ -560,7 +594,7 @@ export function SettingsWorkspace() {
           <div className="flex flex-col gap-4">
             <SettingsCard noPadding>
               <div className="px-5 pt-4 pb-1">
-                <h2 className="text-sm font-semibold text-foreground">Bank & Cash Accounts</h2>
+                <CardHeading icon={Landmark} iconClass="bg-primary/12 text-primary" title="Bank & Cash Accounts" />
               </div>
               {(accounts as Account[]).map((a, i) => (
                 <div key={a.id}>
@@ -577,7 +611,7 @@ export function SettingsWorkspace() {
 
             <SettingsCard noPadding>
               <div className="px-5 pt-4 pb-1">
-                <h2 className="text-sm font-semibold text-foreground">Credit Cards</h2>
+                <CardHeading icon={CreditCard} iconClass="bg-expense/12 text-expense" title="Credit Cards" />
               </div>
               {(creditCards as CreditCardProfile[]).map((c, i) => {
                 const account = (accounts as Account[]).find((a) => a.id === c.accountId);
@@ -604,8 +638,8 @@ export function SettingsWorkspace() {
         {tab === "security" && (
           <div className="flex flex-col gap-4">
             <SettingsCard>
-              <h2 className="mb-3 text-sm font-semibold text-foreground">Change password</h2>
-              <p className="text-sm text-muted-foreground">
+              <CardHeading icon={KeyRound} iconClass="bg-primary/12 text-primary" title="Change password" />
+              <p className="mt-3 text-sm text-muted-foreground">
                 This account signs in with Google — there&apos;s no FlowFi password to change. Manage your Google
                 account&apos;s password and security directly with Google.
               </p>
@@ -655,8 +689,10 @@ export function SettingsWorkspace() {
             </SettingsCard>
 
             <SettingsCard>
-              <h2 className="mb-3 text-sm font-semibold text-foreground">Weekly digest</h2>
-              <MultiSelect label="Include in weekly email" values={digestCategories} onChange={setDigestCategories} options={CATEGORY_OPTIONS} />
+              <CardHeading icon={Megaphone} iconClass="bg-purple/15 text-purple" title="Weekly digest" />
+              <div className="mt-3">
+                <MultiSelect label="Include in weekly email" values={digestCategories} onChange={setDigestCategories} options={CATEGORY_OPTIONS} />
+              </div>
             </SettingsCard>
 
             <SettingsCard noPadding>
@@ -672,7 +708,8 @@ export function SettingsWorkspace() {
         {tab === "backup" && (
           <div className="flex flex-col gap-4">
             <SettingsCard>
-              <p className="text-sm text-muted-foreground">
+              <CardHeading icon={CloudUpload} iconClass="bg-primary/12 text-primary" title="Backup & Restore" />
+              <p className="mt-3 text-sm text-muted-foreground">
                 Your data is already saved to the cloud automatically — every account, transaction, and budget
                 syncs to FlowFi&apos;s servers in real time, so there&apos;s no separate backup step needed.
               </p>
@@ -727,7 +764,7 @@ export function SettingsWorkspace() {
 
       <div className="flex flex-col gap-5 xl:col-span-4">
         <div className="surface-flat rounded-3xl border border-border/50 p-5">
-          <h2 className="text-sm font-semibold text-foreground">Account Summary</h2>
+          <CardHeading icon={Landmark} iconClass="bg-primary/12 text-primary" title="Account Summary" />
           <div className="mt-2 flex flex-col">
             <SummaryRow icon={Landmark} iconClass="bg-primary/12 text-primary" label="Total Accounts" sublabel="Active" value={String(accounts.length)} />
             <SummaryRow icon={Wallet} iconClass="bg-success/15 text-success" label="Total Balance" sublabel="Across all accounts" value={formatCurrency(totalBalance)} />
@@ -738,7 +775,7 @@ export function SettingsWorkspace() {
         </div>
 
         <div className="surface-flat rounded-3xl border border-border/50 p-5">
-          <h2 className="text-sm font-semibold text-foreground">Data Management</h2>
+          <CardHeading icon={Database} iconClass="bg-purple/15 text-purple" title="Data Management" />
           <div className="mt-2 flex flex-col">
             <ActionRow icon={Download} iconClass="bg-primary/12 text-primary" label="Export Data" description="Download your financial data" onClick={() => toast.info("Export", "CSV export isn't wired up yet.")} />
             <ActionRow icon={Upload} iconClass="bg-purple/15 text-purple" label="Import Data" description="Import transactions from file" onClick={() => toast.info("Import", "Statement import lives in Transactions → Import Statement.")} />
@@ -747,7 +784,7 @@ export function SettingsWorkspace() {
         </div>
 
         <div className="rounded-3xl border border-expense/30 bg-expense/5 p-5">
-          <h2 className="text-sm font-semibold text-expense">Danger Zone</h2>
+          <CardHeading icon={AlertTriangle} iconClass="bg-expense/15 text-expense" title="Danger Zone" />
           <div className="mt-2 flex flex-col">
             <ActionRow icon={RotateCcw} iconClass="bg-expense/12 text-expense" label="Reset App" description="Reset app to default settings" destructive onClick={() => setResetOpen(true)} />
             <ActionRow icon={Database} iconClass="bg-expense/12 text-expense" label="Delete All Data" description="Permanently delete all your data" destructive onClick={() => setDeleteAllOpen(true)} />

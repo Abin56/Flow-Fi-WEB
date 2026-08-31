@@ -193,6 +193,7 @@ export class BillRepository extends FirestoreCrudRepository<Bill> {
     updated = { ...updated, nextDueDate: next };
     await this.update(updated);
   }
+
 }
 
 // --- LegacyBillOccurrenceState (bill_occurrence_repository.dart) ---

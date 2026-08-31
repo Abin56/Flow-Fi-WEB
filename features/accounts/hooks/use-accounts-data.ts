@@ -36,16 +36,32 @@
  */
 
 import { useMemo } from "react";
-import { useQueryClient } from "@tanstack/react-query";
-import { accountsQueryKey, useAccounts, useNetWorth } from "@/hooks/use-accounts";
+import { useAccounts, useNetWorth } from "@/hooks/use-accounts";
 import { useTransactions } from "@/hooks/use-transactions";
 import { signedAmount, type Transaction } from "@/lib/models/transaction";
 import type { Account, AccountType } from "@/lib/models/account";
 import type { AccountColor } from "@/lib/mock/accounts-overview-data";
-import { createAccountRepository, createTransactionRepository } from "@/lib/repositories/repository-factory";
-import { AccountHasTransactionsError, type CreateAccountParams, type EditAccountParams } from "@/lib/repositories/account-repository";
+import {
+  createAccountRepository,
+  createBillRepository,
+  createExpenseRepository,
+  createInstallmentRepositoryFor,
+  createLedgerRepositoryFor,
+  createPaymentScheduleRepository,
+  createPersonRepository,
+  createTransactionRepository,
+} from "@/lib/repositories/repository-factory";
+import type { CreateAccountParams, EditAccountParams } from "@/lib/repositories/account-repository";
+import {
+  permanentlyDeleteAccountHistory,
+  previewAccountDeletionImpact,
+  type AccountDeletionImpact,
+  type AccountDeletionRepos,
+} from "@/lib/repositories/account-deletion";
 import { useAuthStore } from "@/store/auth-store";
 import { toast } from "@/store/toast-store";
+
+export type { AccountDeletionImpact };
 
 const ACCOUNT_TYPE_LABEL: Record<AccountType, string> = {
   cash: "Cash on Hand",
@@ -56,7 +72,20 @@ const ACCOUNT_TYPE_LABEL: Record<AccountType, string> = {
   other: "Other Account",
 };
 
-const ACCOUNT_COLOR_CYCLE: AccountColor[] = ["slate", "orange", "blue", "green", "cyan", "violet"];
+const ACCOUNT_COLOR_CYCLE: AccountColor[] = [
+  "slate",
+  "orange",
+  "blue",
+  "green",
+  "cyan",
+  "violet",
+  "maroon",
+  "emerald",
+  "bronze",
+  "charcoal",
+  "navy",
+  "plum",
+];
 
 export interface AccountOverviewItem {
   id: string;
@@ -89,6 +118,10 @@ function toOverviewItem(account: Account, index: number): AccountOverviewItem {
     // First three accounts get the "featured" card treatment (matches the
     // reference design's mix of featured/compact tiles); purely cosmetic.
     cardStyle: index < 3 ? "featured" : "compact",
+    // Now that the Add/Edit Account dialog exposes a real color picker, this reads the account's
+    // actual stored choice again rather than deriving from list position — a picked color has to
+    // actually stick, or the picker would be pointless. New accounts default to the next unused
+    // color in the cycle (see `useAccountActions`'s create call site) so they still start distinct.
     color: accountColorForColorValue(account.colorValue),
     accountHolder: account.accountHolderName ?? "—",
     accountNumberMasked: account.accountNumberLast4 ? `•••• •••• •••• ${account.accountNumberLast4}` : null,
@@ -228,7 +261,7 @@ export function useAccountTransactions(accountId: string | undefined) {
 }
 
 /** `colorValue` is an opaque int on the ported `Account` model (see `lib/models/account.ts`) — this app's only
- *  use for it is picking one of the six `AccountColor` swatches, so the index into `ACCOUNT_COLOR_CYCLE` doubles
+ *  use for it is picking one of the twelve `AccountColor` swatches, so the index into `ACCOUNT_COLOR_CYCLE` doubles
  *  as the stored `colorValue`. */
 export function colorValueForAccountColor(color: AccountColor): number {
   return ACCOUNT_COLOR_CYCLE.indexOf(color);
@@ -243,20 +276,32 @@ export { ACCOUNT_COLOR_CYCLE };
 /** Create/edit/delete actions wired to the real account repository, scoped to the signed-in user. */
 export function useAccountActions() {
   const uid = useAuthStore((s) => s.user?.uid);
-  const queryClient = useQueryClient();
 
   return useMemo(() => {
     if (!uid) return null;
     const accountRepository = createAccountRepository(uid);
     const transactionRepository = createTransactionRepository(uid, accountRepository);
+    const billRepository = createBillRepository(uid);
+    const expenseRepository = createExpenseRepository(uid, accountRepository);
+    const personRepository = createPersonRepository(uid);
+    const paymentScheduleRepository = createPaymentScheduleRepository(uid);
 
-    const invalidate = () => queryClient.invalidateQueries({ queryKey: accountsQueryKey(uid) });
+    const deletionRepos: AccountDeletionRepos = {
+      uid,
+      transactionRepository,
+      accountRepository,
+      billRepository,
+      expenseRepository,
+      personRepository,
+      ledgerRepositoryFor: (personId) => createLedgerRepositoryFor(uid, personId, personRepository),
+      paymentScheduleRepository,
+      installmentRepositoryFor: (scheduleId) => createInstallmentRepositoryFor(uid, scheduleId),
+    };
 
     return {
       createAccount: async (params: CreateAccountParams) => {
         try {
           const account = await accountRepository.createAccount(params);
-          await invalidate();
           return account;
         } catch (error) {
           toast.error("Couldn't create account", "Please try again.");
@@ -266,30 +311,25 @@ export function useAccountActions() {
       editAccount: async (account: Account, params: EditAccountParams) => {
         try {
           await accountRepository.editAccount(account, params);
-          await invalidate();
         } catch (error) {
           toast.error("Couldn't save changes", "Please try again.");
           throw error;
         }
       },
+      /** Read-only impact preview for the type-to-confirm delete dialog — call before `deleteAccount`. */
+      previewAccountDeletion: (account: Account) => previewAccountDeletionImpact(account.id, deletionRepos),
+      /** PERMANENTLY deletes `account` and its entire linked history (transactions, transfer
+       *  siblings, split-expense ledger effects, bills) — see `lib/repositories/account-deletion.ts`.
+       *  Only ever reached after the destructive-delete dialog's type-to-confirm gate. */
       deleteAccount: async (account: Account) => {
         try {
-          const count = await transactionRepository.countActiveTransactionsForAccount(account.id);
-          if (count > 0) throw new AccountHasTransactionsError(count);
-          await accountRepository.softDelete(account);
-          await invalidate();
+          await permanentlyDeleteAccountHistory(account.id, deletionRepos);
+          await accountRepository.permanentlyDelete(account);
         } catch (error) {
-          if (error instanceof AccountHasTransactionsError) {
-            toast.error(
-              "Can't delete this account",
-              `${error.count} transaction${error.count === 1 ? "" : "s"} still reference it. Move or delete ${error.count === 1 ? "it" : "them"} first.`,
-            );
-          } else {
-            toast.error("Couldn't delete account", "Please try again.");
-          }
+          toast.error("Couldn't delete account", "Please try again.");
           throw error;
         }
       },
     };
-  }, [uid, queryClient]);
+  }, [uid]);
 }

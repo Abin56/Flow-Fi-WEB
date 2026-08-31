@@ -73,6 +73,10 @@ function isThisMonth(date: Date, now: Date): boolean {
   return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth();
 }
 
+function isSameDay(a: Date, b: Date): boolean {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+}
+
 /** Day-of-month week buckets matching the reference design's "1-7 / 8-14 / 15-21 / 22-31" bars. */
 function weekBucketLabel(dayOfMonth: number): string {
   if (dayOfMonth <= 7) return "1-7";
@@ -138,10 +142,27 @@ export function useDashboardData() {
   const now = useMemo(() => new Date(), []);
 
   // --- Net Worth (lib/engines/net-worth.ts:calculateNetWorth via useNetWorth) ---
-  const netWorth = useMemo(
-    () => ({ amount: netWorthAmount, changeAmount: 0, changePercent: 0 }),
-    [netWorthAmount],
-  );
+  // `trend`: direct port of `NetWorthWidgetCard._weeklyTrend` (Finance_App's
+  // `net_worth_widget_card.dart`) — cumulative net (income - expense) for each
+  // of the last 7 days, oldest first, over `calculableTransactions`
+  // (excludeFromCalculations filtered, transfers deliberately NOT excluded:
+  // a transfer's two legs net to zero across total net worth automatically).
+  const netWorth = useMemo(() => {
+    const calculable = (transactions as Transaction[]).filter(
+      (t) => t.deletedAt == null && !t.excludeFromCalculations,
+    );
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    let running = 0;
+    const trend: number[] = [];
+    for (let i = 6; i >= 0; i--) {
+      const day = new Date(today.getFullYear(), today.getMonth(), today.getDate() - i);
+      running += calculable
+        .filter((t) => isSameDay(t.dateTime, day))
+        .reduce((sum, t) => sum + signedAmount(t), 0);
+      trend.push(running);
+    }
+    return { amount: netWorthAmount, changeAmount: 0, changePercent: 0, trend };
+  }, [netWorthAmount, transactions, now]);
 
   // --- Cash Flow (lib/engines/cash-flow.ts:cashFlowThisMonth via useCashFlowThisMonth) ---
   const cashFlow = useMemo(() => {

@@ -22,14 +22,17 @@
  * amortization.
  *
  * Known, accepted gaps for this pass (documented, not silently faked):
- *  - `Loan.personId` is required by the ported model (`Loan` is "money lent
- *    to a Person" in the Flutter source), but this page's loans are
- *    bank/institutional debts, not person-to-person lending. Rather than add
- *    a second, parallel "lender" entity, each loan's lender is stored as a
- *    `Person` (find-by-name-or-create) in the same `users/{uid}/people`
- *    collection the Lending feature already owns — see
- *    `createPersonRepository`'s doc comment. This page never exposes that
- *    Person's ledger/balance UI; it only reads/writes its `name`.
+ *  - Institutional loans (`category: "institutional"`) store their lender
+ *    directly as `Loan.institutionName` — `Loan.personId` being nullable
+ *    (see `lib/models/loan.ts`) is what let this page drop its previous
+ *    find-or-create-a-Person-by-name hack for them. Personal loans
+ *    (`category: "personal"`) instead pick a real `Person` via `personId`,
+ *    mirroring the Flutter app's Loans feature exactly. Loans created
+ *    *before* the category field existed still have `institutionName: null`
+ *    and a real `personId` pointing at their old shadow Person — those are
+ *    left untouched (no migration) and keep resolving their `lenderName`
+ *    through that linked Person, exactly as before. See `toLoanRow`'s
+ *    `lenderName` fallback and `useLoanActions().createLoan`/`editLoan` below.
  *  - Only a settled installment's own `principalPortion`/`amountDue` counts
  *    toward `outstandingPrincipal` — a *partially* paid installment's
  *    principal/interest split for the paid fraction isn't tracked anywhere
@@ -39,21 +42,28 @@
  */
 
 import { useMemo } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { planInstallmentSettlement } from "@/lib/engines/installment-settlement";
 import {
   installmentStatus,
   type Installment,
+  type ScheduleType,
 } from "@/lib/models/payment-schedule";
-import { loanStatusGiven, type Loan, type LoanInterest, type LoanStatus } from "@/lib/models/loan";
+import {
+  loanStatusGiven,
+  type Loan,
+  type LoanCategory,
+  type LoanDirection,
+  type LoanInterest,
+  type LoanStatus,
+} from "@/lib/models/loan";
 import type { Person } from "@/lib/models/person";
 import type { CreateLoanParams, EditLoanParams } from "@/lib/repositories/loan-repository";
 import {
   createInstallmentPaymentRepositoryFor,
   createInstallmentRepositoryFor,
   createLoanRepository,
-  createPersonRepository,
 } from "@/lib/repositories/repository-factory";
-import { useAllLoanInstallments, useLoanPersons, useLoans, loansQueryKey, loanPersonsQueryKey, loanInstallmentsQueryKey } from "@/hooks/use-loans";
+import { useAllLoanInstallments, useLoanPersons, useLoans, useTrashedLoans } from "@/hooks/use-loans";
 import { useAuthStore } from "@/store/auth-store";
 
 function clamp(value: number, min: number, max: number): number {
@@ -65,6 +75,11 @@ const ACCENT_CYCLE: LoanRow["accent"][] = ["primary", "success", "warning", "pur
 export interface LoanRow {
   loan: Loan;
   lenderName: string;
+  direction: LoanDirection;
+  category: LoanCategory;
+  /** The person who actually pays this loan's installments, when set — see `Loan.payerPersonId`. */
+  payerPersonId: string | null;
+  payerName: string | null;
   /** This loan's schedule installments, sorted by sequenceNumber ascending. */
   installments: Installment[];
   status: LoanStatus;
@@ -98,7 +113,15 @@ function toLoanRow(loan: Loan, installments: Installment[], personById: Map<stri
 
   return {
     loan,
-    lenderName: personById.get(loan.personId)?.name ?? "Unknown lender",
+    // New loans resolve directly through the real `institutionName` field;
+    // legacy loans (institutionName still null) keep resolving through the
+    // find-or-create-person hack's linked Person, exactly as before — see
+    // this file's module doc comment.
+    lenderName: loan.institutionName ?? (loan.personId ? personById.get(loan.personId)?.name : undefined) ?? "Unknown lender",
+    direction: loan.direction,
+    category: loan.category,
+    payerPersonId: loan.payerPersonId ?? null,
+    payerName: loan.payerPersonId ? (personById.get(loan.payerPersonId)?.name ?? null) : null,
     installments: sorted,
     status,
     outstandingPrincipal,
@@ -132,15 +155,50 @@ export function useLoanRows(): { rows: LoanRow[]; isLoading: boolean } {
   return { rows, isLoading: loansLoading || personsLoading || installmentsLoading };
 }
 
+export interface TrashedLoanRow {
+  loan: Loan;
+  lenderName: string;
+}
+
+/** Soft-deleted loans awaiting restore or permanent deletion — the web equivalent of
+ *  `loansTrashStreamProvider`/`LoansTrashScreen`. No installments needed here (trash is a name +
+ *  deleted-date list, not a working schedule view), so this skips `useAllLoanInstallments`'s per-loan
+ *  fan-out entirely. */
+export function useTrashedLoanRows(): { rows: TrashedLoanRow[]; isLoading: boolean } {
+  const { data: loans = [], isLoading: loansLoading } = useTrashedLoans();
+  const { data: persons = [], isLoading: personsLoading } = useLoanPersons();
+
+  const rows = useMemo(() => {
+    const personById = new Map((persons as Person[]).map((p) => [p.id, p]));
+    return (loans as Loan[]).map((loan) => ({
+      loan,
+      lenderName: loan.institutionName ?? (loan.personId ? personById.get(loan.personId)?.name : undefined) ?? "Unknown lender",
+    }));
+  }, [loans, persons]);
+
+  return { rows, isLoading: loansLoading || personsLoading };
+}
+
 export interface CreateLoanFormParams {
   name: string;
+  category: LoanCategory;
+  /** Required when `category` is "personal" — the lender/counterparty. */
+  personId?: string | null;
+  /** Required when `category` is "institutional" — free-text lender name. */
   lenderName: string;
   loanAmount: number;
   loanDate: Date;
+  direction: LoanDirection;
   interest: LoanInterest | null;
   installmentFrequency: CreateLoanParams["installmentFrequency"];
   installmentCount: number;
   notes?: string;
+  loanType?: string | null;
+  loanNumber?: string | null;
+  accountNumber?: string | null;
+  branch?: string | null;
+  /** Someone other than the account owner who actually pays this loan's EMIs — see `Loan.payerPersonId`. */
+  payerPersonId?: string | null;
 }
 
 export interface EditLoanFormParams {
@@ -148,42 +206,34 @@ export interface EditLoanFormParams {
   lenderName: string;
   notes?: string;
   currentInstallments: Installment[];
+  loanType?: string | null;
+  loanNumber?: string | null;
+  accountNumber?: string | null;
+  branch?: string | null;
+  payerPersonId?: string | null;
 }
 
 /** Create/edit/delete/payment actions wired to the real repositories, scoped to the signed-in user. */
 export function useLoanActions() {
   const uid = useAuthStore((s) => s.user?.uid);
-  const queryClient = useQueryClient();
 
   return useMemo(() => {
     if (!uid) return null;
     const loanRepository = createLoanRepository(uid);
-    const personRepository = createPersonRepository(uid);
-
-    const invalidateLoans = () => queryClient.invalidateQueries({ queryKey: loansQueryKey(uid) });
-    const invalidatePersons = () => queryClient.invalidateQueries({ queryKey: loanPersonsQueryKey(uid) });
-    const invalidateInstallments = () => queryClient.invalidateQueries({ queryKey: loanInstallmentsQueryKey(uid) });
-
-    /** Finds an existing Person by case-insensitive name match, else creates one — see this file's module doc comment. */
-    async function findOrCreatePerson(name: string): Promise<Person> {
-      const trimmed = name.trim();
-      const existing = await personRepository.getAll();
-      const match = existing.find((p) => p.name.trim().toLowerCase() === trimmed.toLowerCase());
-      if (match) return match;
-      const created = await personRepository.createPerson({
-        name: trimmed,
-        avatarColorValue: 0xff607d8b,
-        openingBalance: 0,
-      });
-      await invalidatePersons();
-      return created;
-    }
 
     return {
       createLoan: async (params: CreateLoanFormParams) => {
-        const person = await findOrCreatePerson(params.lenderName);
+        // Personal: picks a real Person (`personId`), no institution fields.
+        // Institutional: no more find-or-create-person hack — the lender
+        // name goes straight into the real `institutionName` field. Legacy
+        // loans (created before the category field existed) keep resolving
+        // their lender through the linked Person, untouched — see this
+        // file's module doc comment and `toLoanRow`'s `lenderName` fallback.
         const loan = await loanRepository.createLoan({
-          personId: person.id,
+          category: params.category,
+          personId: params.category === "personal" ? params.personId : null,
+          institutionName: params.category === "institutional" ? params.lenderName.trim() : null,
+          direction: params.direction,
           loanAmount: params.loanAmount,
           loanDate: params.loanDate,
           repaymentType: "installment",
@@ -192,34 +242,90 @@ export function useLoanActions() {
           installmentFrequency: params.installmentFrequency,
           installmentCount: params.installmentCount,
           notes: params.notes ?? "",
+          loanType: params.category === "institutional" ? params.loanType : null,
+          loanNumber: params.category === "institutional" ? params.loanNumber : null,
+          accountNumber: params.category === "institutional" ? params.accountNumber : null,
+          branch: params.category === "institutional" ? params.branch : null,
+          payerPersonId: params.payerPersonId,
         });
-        await invalidateLoans();
-        await invalidateInstallments();
         return loan;
       },
       editLoan: async (loan: Loan, params: EditLoanFormParams) => {
         const hasPayments = params.currentInstallments.some((i) => i.amountPaid > 0);
-        const editParams: EditLoanParams = { hasPayments, name: params.name, notes: params.notes };
+        // `category`/`personId` are immutable after creation (mirrors the
+        // Flutter port) — only an institutional loan's free-text lender name
+        // and reference fields are ever rewritten here. A personal loan's
+        // lender is fixed at creation, same posture as Flutter's Person
+        // picker being locked once the loan exists. A legacy loan's old
+        // `personId`/shadow Person is left alone (not cleaned up, no
+        // migration — see this file's module doc comment); from this edit
+        // onward, an institutional loan's `lenderName` resolves from the
+        // real field instead.
+        const editParams: EditLoanParams =
+          loan.category === "institutional"
+            ? {
+                hasPayments,
+                name: params.name,
+                notes: params.notes,
+                institutionName: params.lenderName.trim(),
+                loanType: params.loanType,
+                loanNumber: params.loanNumber,
+                accountNumber: params.accountNumber,
+                branch: params.branch,
+                payerPersonId: params.payerPersonId,
+              }
+            : {
+                hasPayments,
+                name: params.name,
+                notes: params.notes,
+                payerPersonId: params.payerPersonId,
+              };
         await loanRepository.editLoan(loan, editParams);
-
-        const person = await findOrCreatePerson(params.lenderName);
-        if (person.id !== loan.personId) {
-          // Lender changed to a different existing/newly-created Person — repoint the loan.
-          await loanRepository.update({ ...loan, personId: person.id, name: params.name, notes: params.notes ?? loan.notes });
-        } else if (person.name.trim() !== params.lenderName.trim()) {
-          await personRepository.editPerson(person, { name: params.lenderName.trim() });
-        }
-        await invalidateLoans();
       },
+      // Wraps `LoanRepository.editLoanTerms` — the only path that can change loan amount, interest,
+      // frequency, or tenure (installment count) after creation, since those require re-amortizing the
+      // *outstanding* principal and regenerating the unpaid tail of the schedule (see that method's
+      // doc comment).
+      editLoanTerms: async (
+        loan: Loan,
+        params: {
+          currentInstallments: Installment[];
+          loanAmount?: number;
+          interest: LoanInterest | null;
+          installmentFrequency: ScheduleType;
+          newInstallmentCount: number;
+        },
+      ) => {
+        await loanRepository.editLoanTerms(loan, params);
+      },
+      // Wraps `LoanRepository.editLoanDate` — only permitted before any payment exists on the loan
+      // (the repository throws otherwise), since it regenerates the whole schedule from scratch.
+      editLoanDate: async (
+        loan: Loan,
+        params: { newLoanDate: Date; hasPayments: boolean; currentInstallments: Installment[] },
+      ) => {
+        await loanRepository.editLoanDate(loan, params);
+      },
+      // Soft-deletes to trash — mirrors `loans_screen.dart`'s swipe-to-delete (moves to trash, restorable
+      // via `restoreLoan`/the trash view), not a permanent removal. The schedule/installments are left
+      // as-is: once the loan itself is filtered out of `useLoans()`'s active list, `useAllLoanInstallments`
+      // stops fanning out to them too, so they simply go dormant until the loan is restored or purged.
       deleteLoan: async (loan: Loan) => {
-        // Cascades schedule/installments/payments, matching deleteEmi's existing
-        // permanentlyDeleteEmi behavior — softDelete alone left the schedule active.
+        await loanRepository.softDelete(loan);
+      },
+      restoreLoan: async (loan: Loan) => {
+        await loanRepository.restore(loan);
+      },
+      // Cascades schedule/installments/payments — the actual point of no return, reachable only from
+      // the trash view's "Delete Forever", matching `deleteEmi`'s existing permanentlyDeleteEmi posture.
+      permanentlyDeleteLoan: async (loan: Loan) => {
         await loanRepository.permanentlyDeleteLoan(loan);
-        await invalidateLoans();
       },
       closeLoan: async (loan: Loan) => {
         await loanRepository.closeLoan(loan);
-        await invalidateLoans();
+      },
+      reopenLoan: async (loan: Loan) => {
+        await loanRepository.reopenLoan(loan);
       },
       recordPayment: async (
         loan: Loan,
@@ -234,8 +340,29 @@ export function useLoanActions() {
           installmentRepository,
         );
         await paymentRepository.recordPayment(installment, params);
-        await invalidateInstallments();
+      },
+      // Wraps `planInstallmentSettlement` (port of `InstallmentSettlement.plan`) — fans one entered
+      // amount across the oldest unpaid installments, recording one payment per installment touched.
+      // `installments` must be sorted oldest-due-first by the caller, same contract as the ported
+      // function itself.
+      recordLumpSumSettlement: async (
+        loan: Loan,
+        installments: Installment[],
+        params: { amount: number; date: Date; note?: string },
+      ) => {
+        const plan = planInstallmentSettlement(installments, params.amount);
+        const installmentRepository = createInstallmentRepositoryFor(uid, loan.scheduleId);
+        for (const { installment, portion } of plan.portions) {
+          const paymentRepository = createInstallmentPaymentRepositoryFor(
+            uid,
+            loan.scheduleId,
+            installment.id,
+            installmentRepository,
+          );
+          await paymentRepository.recordPayment(installment, { amount: portion, date: params.date, note: params.note });
+        }
+        return plan;
       },
     };
-  }, [uid, queryClient]);
+  }, [uid]);
 }

@@ -26,10 +26,14 @@
 import { useState } from "react";
 import {
   ArrowLeftRight,
+  Banknote,
+  Briefcase,
   CalendarClock,
   Check,
+  CreditCard as CreditCardIcon,
   EyeOff,
   Info,
+  Landmark,
   ListChecks,
   Layers,
   Loader2,
@@ -42,6 +46,7 @@ import {
   TrendingUp,
   UserPlus,
   Users,
+  Wallet,
   X,
   type LucideIcon,
 } from "lucide-react";
@@ -57,7 +62,7 @@ import { cn } from "@/lib/utils";
 import { formatCurrencyPrecise } from "@/lib/format";
 import { toast } from "@/store/toast-store";
 import { isSplit, type Expense, type SplitType } from "@/lib/models/expense";
-import type { Account } from "@/lib/models/account";
+import type { Account, AccountType } from "@/lib/models/account";
 import type { Category } from "@/lib/models/category";
 import type { Person } from "@/lib/models/person";
 import type { Transaction } from "@/lib/models/transaction";
@@ -66,7 +71,12 @@ import type { EditTransactionParams } from "@/lib/repositories/transaction-repos
 import { formatMonthYear, isSameMonth, transactionFlagFor } from "@/features/transactions/lib/transaction-flag";
 import { useDuplicateGuardedCreate } from "@/lib/services/duplicate-detection/use-duplicate-guarded-create";
 import { MonthYearStepper } from "./month-year-stepper";
-import type { TransactionRow, useTransactionActions } from "@/features/transactions/hooks/use-transactions-data";
+import {
+  categoryIconFor,
+  categoryToneFor,
+  type TransactionRow,
+  type useTransactionActions,
+} from "@/features/transactions/hooks/use-transactions-data";
 
 const DATE_DISPLAY_FORMAT = new Intl.DateTimeFormat("en-IN", { day: "2-digit", month: "short", year: "numeric" });
 const FIELD_BORDER = "border-foreground/15";
@@ -76,6 +86,100 @@ const SPLIT_TYPE_OPTIONS: { value: SplitType; label: string }[] = [
   { value: "custom", label: "Custom amounts" },
   { value: "percentage", label: "By percentage" },
 ];
+
+/** Matches the icon set the Add Account dialog already uses for these types — kept visually
+ *  consistent so an account reads the same way everywhere it appears as a picker. */
+const ACCOUNT_TYPE_ICON: Record<AccountType, LucideIcon> = {
+  bank: Landmark,
+  cash: Banknote,
+  wallet: Wallet,
+  card: CreditCardIcon,
+  business: Briefcase,
+  other: Layers,
+};
+
+/** Payment-method-style chip — mirrors the mobile app's `_PaymentMethodChip`: an icon-led,
+ *  selectable pill instead of a plain text dropdown, so the account (and its type) is scannable
+ *  at a glance rather than requiring a click to even see the options. */
+function AccountChipRow({
+  accounts,
+  value,
+  onChange,
+}: {
+  accounts: Account[];
+  value: string;
+  onChange: (id: string) => void;
+}) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      {accounts.map((a) => {
+        const Icon = ACCOUNT_TYPE_ICON[a.type];
+        const selected = a.id === value;
+        return (
+          <button
+            key={a.id}
+            type="button"
+            onClick={() => onChange(a.id)}
+            className={cn(
+              "flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors",
+              selected ? "border-primary bg-primary/10 text-primary" : cn(FIELD_BORDER, "text-muted-foreground hover:bg-muted"),
+            )}
+          >
+            <Icon className="size-3.5" />
+            {a.name}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+const CATEGORY_TONE_CLASS: Record<string, string> = {
+  primary: "bg-primary/12 text-primary",
+  success: "bg-success/15 text-success",
+  warning: "bg-warning/20 text-warning-foreground",
+  purple: "bg-purple/15 text-purple",
+  expense: "bg-expense/12 text-expense",
+  neutral: "bg-muted text-muted-foreground",
+};
+
+/** Category chip — mirrors the mobile category picker's icon+color per row, condensed into a
+ *  selectable pill instead of a plain text dropdown. */
+function CategoryChipRow({
+  categories,
+  value,
+  onChange,
+}: {
+  categories: Category[];
+  value: string;
+  onChange: (id: string) => void;
+}) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      {categories.map((c) => {
+        const Icon = categoryIconFor(c.iconKey);
+        const tone = categoryToneFor(c.iconKey);
+        const selected = c.id === value;
+        return (
+          <button
+            key={c.id}
+            type="button"
+            onClick={() => onChange(c.id)}
+            className={cn(
+              "flex items-center gap-1.5 rounded-full border py-1 pr-3 pl-1 text-xs font-semibold transition-colors",
+              selected ? "border-primary bg-primary/10 text-primary" : cn(FIELD_BORDER, "text-muted-foreground hover:bg-muted"),
+            )}
+          >
+            <span className={cn("flex size-5 items-center justify-center rounded-full", CATEGORY_TONE_CLASS[tone])}>
+              <Icon className="size-3" />
+            </span>
+            {c.name}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
 type FormKind = "expense" | "income" | "transfer";
 
@@ -478,52 +582,37 @@ export function TransactionDetailsModal({
               <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} disabled={isTransferLeg} className={FIELD_BORDER} />
             </Field>
             <Field label={kind === "transfer" ? "From Account *" : "Account *"}>
-              <Select value={accountId || undefined} onValueChange={setAccountId} disabled={isTransferLeg}>
-                <SelectTrigger className={cn("w-full", FIELD_BORDER)}>
-                  <SelectValue placeholder="Select account" />
-                </SelectTrigger>
-                <SelectContent>
-                  {accounts.map((a) => (
-                    <SelectItem key={a.id} value={a.id}>
-                      {a.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              {isTransferLeg ? (
+                <div className={cn("flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-semibold text-muted-foreground", FIELD_BORDER)}>
+                  {(() => {
+                    const locked = accounts.find((a) => a.id === accountId);
+                    if (!locked) return "Unknown account";
+                    const Icon = ACCOUNT_TYPE_ICON[locked.type];
+                    return (
+                      <>
+                        <Icon className="size-3.5" />
+                        {locked.name}
+                      </>
+                    );
+                  })()}
+                </div>
+              ) : (
+                <AccountChipRow accounts={accounts} value={accountId} onChange={setAccountId} />
+              )}
             </Field>
             {kind === "transfer" ? (
               !isTransferLeg && (
                 <Field label="To Account *">
-                  <Select value={destinationAccountId || undefined} onValueChange={setDestinationAccountId}>
-                    <SelectTrigger className={cn("w-full", FIELD_BORDER)}>
-                      <SelectValue placeholder="Select account" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {accounts
-                        .filter((a) => a.id !== accountId)
-                        .map((a) => (
-                          <SelectItem key={a.id} value={a.id}>
-                            {a.name}
-                          </SelectItem>
-                        ))}
-                    </SelectContent>
-                  </Select>
+                  <AccountChipRow
+                    accounts={accounts.filter((a) => a.id !== accountId)}
+                    value={destinationAccountId}
+                    onChange={setDestinationAccountId}
+                  />
                 </Field>
               )
             ) : (
               <Field label="Category *">
-                <Select value={categoryId || undefined} onValueChange={setCategoryId}>
-                  <SelectTrigger className={cn("w-full", FIELD_BORDER)}>
-                    <SelectValue placeholder="Select category" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {filteredCategories.map((c) => (
-                      <SelectItem key={c.id} value={c.id}>
-                        {c.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <CategoryChipRow categories={filteredCategories} value={categoryId} onChange={setCategoryId} />
               </Field>
             )}
             <Field label="Notes">
