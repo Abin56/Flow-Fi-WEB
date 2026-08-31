@@ -32,6 +32,50 @@ export function loanRepaymentTypeFromName(name: string): LoanRepaymentType {
   return (LOAN_REPAYMENT_TYPES as string[]).includes(name) ? (name as LoanRepaymentType) : "oneTime";
 }
 
+// --- LoanDirection (loan_direction.dart) ---
+
+/**
+ * Which way a loan flows — "given" (money lent out, receivable) or "taken"
+ * (money borrowed, payable). Chosen at creation, immutable thereafter.
+ *
+ * NOTE — this default deliberately diverges from the Flutter app's own
+ * `LoanDirectionX.fromName` fallback (which defaults to "given", since every
+ * pre-existing Flutter loan was person-to-person lending). Every pre-existing
+ * *web* loan document is the opposite: an institutional/bank loan the user
+ * borrowed (see `loanCategoryFromName`'s doc comment below for the matching
+ * `category` divergence) — so a missing `direction` field here means
+ * "taken", not "given". Both defaults are correct for their own app's
+ * history; this is not an inconsistency to reconcile.
+ */
+export type LoanDirection = "given" | "taken";
+
+const LOAN_DIRECTIONS: LoanDirection[] = ["given", "taken"];
+
+export function loanDirectionFromName(name: string | null | undefined): LoanDirection {
+  return name != null && (LOAN_DIRECTIONS as string[]).includes(name) ? (name as LoanDirection) : "taken";
+}
+
+// --- LoanCategory (loan_category.dart) ---
+
+/**
+ * Which kind of loan this is — "personal" (linked to a `Person`) or
+ * "institutional" (a bank/lender, tracked via `institutionName` and friends,
+ * with no linked `Person`). Chosen at creation, immutable thereafter.
+ *
+ * NOTE — like `loanDirectionFromName`, this default deliberately diverges
+ * from the Flutter app's "personal" fallback: every pre-existing web loan is
+ * already institutional (see `features/loans/hooks/use-loans-data.ts`'s
+ * module doc comment on the find-or-create-person hack it replaces), so a
+ * missing `category` field here means "institutional".
+ */
+export type LoanCategory = "personal" | "institutional";
+
+const LOAN_CATEGORIES: LoanCategory[] = ["personal", "institutional"];
+
+export function loanCategoryFromName(name: string | null | undefined): LoanCategory {
+  return name != null && (LOAN_CATEGORIES as string[]).includes(name) ? (name as LoanCategory) : "institutional";
+}
+
 // --- LoanStatus (loan_status.dart) ---
 
 /**
@@ -81,8 +125,38 @@ function loanInterestToMap(interest: LoanInterest): DocumentData {
  * with optional flat or reducing-balance interest.
  */
 export interface Loan extends SoftDeletableEntity {
-  personId: string;
+  /** Required when `category` is "personal"; null for "institutional" loans. */
+  personId: string | null;
   name?: string | null;
+
+  /** Immutable after creation. See `loanDirectionFromName`'s doc comment for its web-specific default. */
+  direction: LoanDirection;
+
+  /** Immutable after creation. See `loanCategoryFromName`'s doc comment for its web-specific default. */
+  category: LoanCategory;
+
+  /**
+   * The 5 fields below are only meaningful for "institutional" loans, but —
+   * like `notes` — stay freely editable post-creation via
+   * `LoanRepository.editLoan` since they're descriptive reference data with
+   * no schedule/math impact.
+   */
+  institutionName?: string | null;
+  loanType?: string | null;
+  loanNumber?: string | null;
+  accountNumber?: string | null;
+  branch?: string | null;
+
+  /**
+   * The Person who actually pays this loan's installments, when that's
+   * someone other than the account owner — e.g. an institutional loan you
+   * took but a friend pays the EMIs for. Distinct from `personId` (the
+   * lender/counterparty on a personal loan); freely editable post-creation
+   * like `notes`, since who's responsible for paying can change and has no
+   * schedule/math impact. `null`/absent means the account owner pays it
+   * themselves (the default, unchanged).
+   */
+  payerPersonId?: string | null;
 
   /** Locked once any payment has been recorded — see `LoanRepository.editLoan`. */
   loanAmount: number;
@@ -179,8 +253,16 @@ export function loanFromFirestore(
   const data = snapshot.data();
   return {
     id: snapshot.id,
-    personId: data.personId as string,
+    personId: (data.personId as string | undefined) ?? null,
     name: (data.name as string | undefined) ?? null,
+    direction: loanDirectionFromName(data.direction as string | undefined),
+    category: loanCategoryFromName(data.category as string | undefined),
+    institutionName: (data.institutionName as string | undefined) ?? null,
+    loanType: (data.loanType as string | undefined) ?? null,
+    loanNumber: (data.loanNumber as string | undefined) ?? null,
+    accountNumber: (data.accountNumber as string | undefined) ?? null,
+    branch: (data.branch as string | undefined) ?? null,
+    payerPersonId: (data.payerPersonId as string | undefined) ?? null,
     loanAmount: data.loanAmount as number,
     interest: data.interest == null ? null : loanInterestFromMap(data.interest as Record<string, unknown>),
     loanDate: (data.loanDate as Timestamp).toDate(),
@@ -201,8 +283,16 @@ export function loanFromFirestore(
 
 export function loanToFirestore(loan: Loan): DocumentData {
   return {
-    personId: loan.personId,
+    personId: loan.personId ?? null,
     name: loan.name ?? null,
+    direction: loan.direction,
+    category: loan.category,
+    institutionName: loan.institutionName ?? null,
+    loanType: loan.loanType ?? null,
+    loanNumber: loan.loanNumber ?? null,
+    accountNumber: loan.accountNumber ?? null,
+    branch: loan.branch ?? null,
+    payerPersonId: loan.payerPersonId ?? null,
     loanAmount: loan.loanAmount,
     interest: loan.interest == null ? null : loanInterestToMap(loan.interest),
     loanDate: Timestamp.fromDate(loan.loanDate),

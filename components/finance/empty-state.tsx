@@ -21,7 +21,7 @@ export function EmptyState({ icon: Icon, title, description, actionLabel, onActi
       <p className="text-sm font-semibold text-foreground">{title}</p>
       {description && <p className="max-w-xs text-sm text-muted-foreground">{description}</p>}
       {actionLabel && onAction && (
-        <ClayButton size="sm" variant="secondary" className="mt-3" onClick={onAction}>
+        <ClayButton size="sm" variant="primary" className="mt-3" onClick={onAction}>
           {actionLabel}
         </ClayButton>
       )}

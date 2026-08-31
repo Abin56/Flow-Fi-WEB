@@ -590,6 +590,7 @@ export function TransactionCandidatesWorkspace() {
             data={visibleCandidates}
             getRowId={(c) => c.id}
             onRowClick={(c) => setDetailCandidate(c)}
+            className="candidates-grid-lines"
             gridLines
             // A possible duplicate gets a calm left accent + tint right on its row — replaces the old
             // separate "Possible duplicates" summary panel above the list, which repeated the same info

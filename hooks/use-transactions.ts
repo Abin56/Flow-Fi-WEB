@@ -9,11 +9,16 @@
  */
 
 import { useQueryClient } from "@tanstack/react-query";
+import { useMemo } from "react";
 import { useAllEmiInstallments } from "@/hooks/use-emis";
 import { useAllLoanInstallments } from "@/hooks/use-loans";
+import { useExpenseInstallmentsBySchedule, useExpenses } from "@/hooks/use-expenses";
 import { useFirestoreWatch } from "@/hooks/use-firestore-watch";
-import { cashFlowThisMonth, type CashFlowSummary } from "@/lib/engines/cash-flow";
+import { useAllBillOccurrences } from "@/features/bills/hooks/use-bill-occurrence-history";
+import { billsPaid as billsPaidInRange, type DashboardBillOccurrence } from "@/lib/engines/dashboard-aggregation";
+import { cashFlowThisMonth, moneyReceivedThisMonth as moneyReceivedInMonth, type CashFlowSummary } from "@/lib/engines/cash-flow";
 import { effectiveMonth, isTransfer, type Transaction } from "@/lib/models/transaction";
+import { isSplit, type Expense } from "@/lib/models/expense";
 import type { Installment } from "@/lib/models/payment-schedule";
 import { createAccountRepository, createTransactionRepository } from "@/lib/repositories/repository-factory";
 import { useAuthStore } from "@/store/auth-store";
@@ -55,19 +60,22 @@ function paidThisMonth(installments: Installment[], now: Date): number {
 }
 
 /**
- * This month's cash flow. EMI/Loan paid-this-month figures are now real,
- * sourced from the already-fetched installment streams. Bills paid-this-month
- * stays 0: `useBills()` only exposes Bill templates, not per-cycle
- * BillOccurrence payment history, so there is no data source to sum from yet
- * (see `hooks/use-bills.ts`'s doc comment) — wiring it needs a new
- * bill-occurrence-history hook, tracked as follow-up work rather than
- * invented here. moneyReceivedThisMonth (People/Split-Expense receivables) is
- * likewise 0 until the People-Ledger slice lands.
+ * This month's cash flow. EMI/Loan/Bills paid-this-month figures are all
+ * real now, sourced from the already-fetched installment/occurrence streams
+ * (`billsPaidThisMonth` via `useAllBillOccurrences` +
+ * `lib/engines/dashboard-aggregation.ts`'s ported `billsPaid`, bucketed by
+ * each occurrence's due date, matching `_billsPaidThisMonthProvider`).
+ * `moneyReceivedThisMonth` is real too — see `moneyReceivedForRange`'s doc
+ * comment in `lib/engines/cash-flow.ts` for why it's split-expense
+ * settlement collections, not a `receiptPurpose` transaction sum.
  */
 export function useCashFlowThisMonth(): CashFlowSummary {
   const { data: transactions } = useTransactions();
   const { data: emiInstallments } = useAllEmiInstallments();
   const { data: loanInstallments } = useAllLoanInstallments();
+  const { occurrences: billOccurrences } = useAllBillOccurrences();
+  const { data: expenses } = useExpenses();
+  const { installmentsByScheduleId } = useExpenseInstallmentsBySchedule();
 
   const now = new Date();
 
@@ -79,11 +87,39 @@ export function useCashFlowThisMonth(): CashFlowSummary {
     isTransfer: isTransfer(t),
   }));
 
+  const dashboardBillOccurrences: DashboardBillOccurrence[] = (billOccurrences ?? []).map((o) => ({
+    dueDate: o.dueDate,
+    amountPaid: o.amountPaid,
+  }));
+  const monthRange = { start: new Date(now.getFullYear(), now.getMonth(), 1), end: new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999) };
+
+  const transactionsById = useMemo(
+    () =>
+      new Map(
+        (transactions ?? []).map((t) => [
+          t.id,
+          { effectiveMonth: effectiveMonth(t), isDeleted: t.deletedAt != null, excludeFromCalculations: t.excludeFromCalculations },
+        ]),
+      ),
+    [transactions],
+  );
+
   return cashFlowThisMonth({
     transactions: cashFlowTransactions,
     emiPaidThisMonth: paidThisMonth(emiInstallments ?? [], now),
     loanPaidThisMonth: paidThisMonth(loanInstallments ?? [], now),
-    billsPaidThisMonth: 0,
-    moneyReceivedThisMonth: 0,
+    billsPaidThisMonth: billsPaidInRange(dashboardBillOccurrences, monthRange),
+    moneyReceivedThisMonth: moneyReceivedInMonth(
+      {
+        expenses: ((expenses ?? []) as Expense[]).map((e) => ({
+          isSplit: isSplit(e),
+          scheduleId: e.scheduleId,
+          transactionId: e.transactionId,
+        })),
+        transactionsById,
+        installmentsByScheduleId,
+      },
+      now,
+    ),
   });
 }

@@ -19,6 +19,7 @@ import { useState } from "react";
 import { ClayAvatar } from "@/components/clay/clay-avatar";
 import { formatCurrency } from "@/lib/format";
 import type { PersonViewRow } from "@/features/people/hooks/use-people-data";
+import { usePersonUpcomingEmi } from "@/features/people/hooks/use-person-upcoming-emi";
 import { cn } from "@/lib/utils";
 
 const TABS = ["Overview", "Timeline", "Notes", "Attachments"] as const;
@@ -62,6 +63,7 @@ export function PersonOverviewPanel({
   onDelete?: () => void;
 }) {
   const [tab, setTab] = useState<Tab>("Overview");
+  const { items: upcomingEmi } = usePersonUpcomingEmi(person.id);
   const net = person.youAreOwed - person.youOwe;
   const isOwedToYou = net >= 0;
   const role = isOwedToYou ? "Creditor" : "Debtor";
@@ -175,7 +177,33 @@ export function PersonOverviewPanel({
           <InfoRow icon={Calendar} label="First Transaction" value={person.firstTransaction} />
           <InfoRow icon={Clock} label="Last Activity" value={person.lastActivity} />
           <InfoRow icon={Users} label="Relationship" value={person.relationship} />
-          <InfoRow icon={Bell} label="Reminder" value={person.reminder ?? "Not Set"} onEdit={() => {}} />
+        </div>
+      )}
+
+      {tab === "Overview" && (
+        <div className="flex flex-col gap-2 border-t border-border/50 pt-3">
+          <span className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Bell className="size-4" />
+            Upcoming EMI
+          </span>
+          {upcomingEmi.length === 0 ? (
+            <p className="pl-6 text-sm text-muted-foreground">No upcoming EMI</p>
+          ) : (
+            <div className="flex flex-col gap-2 pl-6">
+              {upcomingEmi.slice(0, 5).map((item) => (
+                <div key={item.loanId} className="flex items-start justify-between gap-3 text-sm">
+                  <div className="flex flex-col">
+                    <span className="font-medium text-foreground">{item.label}</span>
+                    <span className="text-xs text-muted-foreground">
+                      Due {item.dueDate.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
+                      {item.isPayerOnly && " · Pays this for you"}
+                    </span>
+                  </div>
+                  <span className="font-medium text-foreground">{formatCurrency(item.amount)}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -225,7 +253,11 @@ export function PersonOverviewPanel({
         <div className="mt-1">
           <div className="flex items-center justify-between">
             <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Recent Activity</p>
-            <button type="button" className="flex items-center gap-1 text-xs font-semibold text-primary hover:underline">
+            <button
+              type="button"
+              onClick={() => setTab("Timeline")}
+              className="flex items-center gap-1 text-xs font-semibold text-primary hover:underline"
+            >
               View All
               <ArrowRight className="size-3" />
             </button>

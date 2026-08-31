@@ -3,10 +3,12 @@
 import {
   ArrowRight,
   Award,
+  CalendarClock,
   CreditCard as CreditCardIcon,
   FileText,
   Gift,
   LayoutGrid,
+  Link2,
   List,
   MoreHorizontal,
   MoreVertical,
@@ -19,27 +21,32 @@ import {
   ShieldCheck,
   ShoppingBag,
   Wallet,
+  Wifi,
   X as XIcon,
   type LucideIcon,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Cell, Pie, PieChart, ResponsiveContainer } from "recharts";
 import { ClayBadge } from "@/components/clay/clay-badge";
 import { ClayButton } from "@/components/clay/clay-button";
 import { Stagger } from "@/components/foundation/animated-container";
 import {
-  ConfirmDialog,
+  BankCombobox,
   CurrencyCell,
   DateCell,
+  DestructiveDeleteDialog,
   EmptyState,
   FinanceTable,
   SectionLabel,
+  type DestructiveDeleteImpactRow,
   type FinanceTableColumn,
 } from "@/components/finance";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAccounts } from "@/hooks/use-accounts";
+import { useSharedCreditLimits } from "@/hooks/use-credit-cards";
 import type { Account } from "@/lib/models/account";
 import type { CardNetwork } from "@/lib/models/credit-card";
 import { formatCurrency } from "@/lib/format";
@@ -50,6 +57,7 @@ import {
   useCreditCardTotals,
   useCreditCardViewItems,
   useRecentCreditCardTransactions,
+  type CreditCardDeletionImpact,
   type CreditCardViewItem,
 } from "@/features/credit-cards/hooks/use-credit-cards-data";
 import { CARD_GRADIENT, CreditCardTile } from "@/features/credit-cards/components/credit-card-tile";
@@ -58,6 +66,8 @@ import { cn } from "@/lib/utils";
 
 const CARD_NETWORK_OPTIONS: CardNetwork[] = ["visa", "mastercard", "rupay", "amex"];
 
+type LimitSource = "own" | "newShared" | "existingShared";
+
 interface CardFormState {
   name: string;
   creditLimit: string;
@@ -65,13 +75,31 @@ interface CardFormState {
   cardNetwork: CardNetwork | "";
   statementDay: string;
   paymentDueDay: string;
+  bankId: string | null;
+  limitSource: LimitSource;
+  sharedLimitName: string;
+  sharedLimitAmount: string;
+  selectedSharedLimitId: string | null;
 }
 
 function emptyCardForm(): CardFormState {
-  return { name: "", creditLimit: "", lastFourDigits: "", cardNetwork: "", statementDay: "1", paymentDueDay: "15" };
+  return {
+    name: "",
+    creditLimit: "",
+    lastFourDigits: "",
+    cardNetwork: "",
+    statementDay: "1",
+    paymentDueDay: "15",
+    bankId: null,
+    limitSource: "own",
+    sharedLimitName: "",
+    sharedLimitAmount: "",
+    selectedSharedLimitId: null,
+  };
 }
 
-function cardFormFromCard(card: CreditCardViewItem): CardFormState {
+function cardFormFromCard(card: CreditCardViewItem, accounts: Account[]): CardFormState {
+  const account = accounts.find((a) => a.id === card.card.accountId);
   return {
     name: card.name,
     creditLimit: String(card.creditLimit),
@@ -79,6 +107,11 @@ function cardFormFromCard(card: CreditCardViewItem): CardFormState {
     cardNetwork: (card.card.cardNetwork as CardNetwork | null) ?? "",
     statementDay: String(card.card.statementDay),
     paymentDueDay: String(card.card.paymentDueDay),
+    bankId: account?.bankId ?? null,
+    limitSource: card.card.sharedLimitId ? "existingShared" : "own",
+    sharedLimitName: "",
+    sharedLimitAmount: "",
+    selectedSharedLimitId: card.card.sharedLimitId ?? null,
   };
 }
 
@@ -189,6 +222,7 @@ export function CreditCardsWorkspace() {
   const { totals: engineTotals, isLoading: totalsLoading } = useCreditCardTotals();
   const { rows: recentCardTransactions, isLoading: recentLoading } = useRecentCreditCardTransactions(6);
   const { data: accounts = [] } = useAccounts();
+  const { data: sharedLimits = [] } = useSharedCreditLimits();
   const actions = useCreditCardActions();
 
   const [activeCardId, setActiveCardId] = useState<string | undefined>(undefined);
@@ -196,6 +230,8 @@ export function CreditCardsWorkspace() {
   const [addOpen, setAddOpen] = useState(false);
   const [editingCard, setEditingCard] = useState<CreditCardViewItem | null>(null);
   const [deletingCard, setDeletingCard] = useState<CreditCardViewItem | null>(null);
+  const [deletingCardBusy, setDeletingCardBusy] = useState(false);
+  const [cardDeletionImpact, setCardDeletionImpact] = useState<CreditCardDeletionImpact | null>(null);
   const [form, setForm] = useState<CardFormState>(emptyCardForm);
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -207,7 +243,7 @@ export function CreditCardsWorkspace() {
   }
 
   function openEdit(card: CreditCardViewItem) {
-    setForm(cardFormFromCard(card));
+    setForm(cardFormFromCard(card, accounts as Account[]));
     setFormError(null);
     setEditingCard(card);
   }
@@ -219,9 +255,25 @@ export function CreditCardsWorkspace() {
       setFormError("Card name is required.");
       return;
     }
-    const creditLimit = Number(form.creditLimit);
-    if (!Number.isFinite(creditLimit) || creditLimit <= 0) {
-      setFormError("Credit limit must be greater than 0.");
+    let creditLimit = 0;
+    if (form.limitSource === "own") {
+      creditLimit = Number(form.creditLimit);
+      if (!Number.isFinite(creditLimit) || creditLimit <= 0) {
+        setFormError("Credit limit must be greater than 0.");
+        return;
+      }
+    } else if (form.limitSource === "newShared") {
+      if (!form.sharedLimitName.trim()) {
+        setFormError("Enter a name for the shared credit limit.");
+        return;
+      }
+      const sharedAmount = Number(form.sharedLimitAmount);
+      if (!Number.isFinite(sharedAmount) || sharedAmount <= 0) {
+        setFormError("Shared credit limit must be greater than 0.");
+        return;
+      }
+    } else if (form.limitSource === "existingShared" && !form.selectedSharedLimitId) {
+      setFormError("Choose a shared credit limit.");
       return;
     }
     if (form.lastFourDigits && !/^\d{4}$/.test(form.lastFourDigits)) {
@@ -242,12 +294,25 @@ export function CreditCardsWorkspace() {
     setSaving(true);
     setFormError(null);
     try {
+      let sharedLimitId: string | null = null;
+      if (form.limitSource === "newShared") {
+        const sharedLimit = await actions.createSharedLimit({
+          name: form.sharedLimitName.trim(),
+          creditLimit: Number(form.sharedLimitAmount),
+        });
+        sharedLimitId = sharedLimit.id;
+      } else if (form.limitSource === "existingShared") {
+        sharedLimitId = form.selectedSharedLimitId;
+      }
+
       if (editingCard) {
         const account = (accounts as Account[]).find((a) => a.id === editingCard.card.accountId);
         await actions.editCard(editingCard.card, account, {
           name,
-          creditLimit,
+          ...(form.limitSource === "own" ? { creditLimit } : {}),
           lastFourDigits: form.lastFourDigits || null,
+          bankId: form.bankId,
+          ...(sharedLimitId ? { sharedLimitId } : { clearSharedLimitId: true }),
         });
         setEditingCard(null);
         toast.success("Card updated");
@@ -259,6 +324,8 @@ export function CreditCardsWorkspace() {
           cardNetwork: form.cardNetwork || null,
           statementDay,
           paymentDueDay,
+          bankId: form.bankId,
+          sharedLimitId,
         });
         setAddOpen(false);
         toast.success("Card added");
@@ -270,16 +337,40 @@ export function CreditCardsWorkspace() {
     }
   }
 
+  useEffect(() => {
+    if (!actions || !deletingCard) return;
+    let cancelled = false;
+    actions.previewCardDeletion(deletingCard.card).then((impact) => {
+      if (!cancelled) setCardDeletionImpact(impact);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [actions, deletingCard]);
+
+  const cardDeletionImpactRows: DestructiveDeleteImpactRow[] | null = cardDeletionImpact && [
+    { label: `${cardDeletionImpact.transactionCount} transaction${cardDeletionImpact.transactionCount === 1 ? "" : "s"}`, count: cardDeletionImpact.transactionCount },
+    { label: `${cardDeletionImpact.emiCount} linked EMI${cardDeletionImpact.emiCount === 1 ? "" : "s"}`, count: cardDeletionImpact.emiCount },
+    { label: `${cardDeletionImpact.statementCount} statement${cardDeletionImpact.statementCount === 1 ? "" : "s"}`, count: cardDeletionImpact.statementCount },
+    { label: "Shared credit limit will also be removed (no other card uses it)", count: cardDeletionImpact.sharedLimitWillBeRemoved ? 1 : 0 },
+    { label: `${cardDeletionImpact.transferSiblingCount} linked transfer${cardDeletionImpact.transferSiblingCount === 1 ? "" : "s"} on other accounts`, count: cardDeletionImpact.transferSiblingCount },
+    { label: `${cardDeletionImpact.expenseCount} shared/assigned expense${cardDeletionImpact.expenseCount === 1 ? "" : "s"}`, count: cardDeletionImpact.expenseCount },
+    { label: `${cardDeletionImpact.affectedPersonCount} person${cardDeletionImpact.affectedPersonCount === 1 ? "'s" : "s'"} balance will be recalculated`, count: cardDeletionImpact.affectedPersonCount },
+    { label: `${cardDeletionImpact.billCount} bill${cardDeletionImpact.billCount === 1 ? "" : "s"} paying from this card`, count: cardDeletionImpact.billCount },
+  ];
+
   async function handleDeleteCard() {
     if (!actions || !deletingCard) return;
-    const account = (accounts as Account[]).find((a) => a.id === deletingCard.card.accountId);
+    setDeletingCardBusy(true);
     try {
-      await actions.deleteCard(deletingCard.card, account);
+      await actions.deleteCard(deletingCard.card);
       if (activeCardId === deletingCard.id) setActiveCardId(undefined);
       setDeletingCard(null);
       toast.success("Card deleted");
     } catch (e) {
       toast.error("Could not delete card", e instanceof Error ? e.message : undefined);
+    } finally {
+      setDeletingCardBusy(false);
     }
   }
 
@@ -411,7 +502,7 @@ export function CreditCardsWorkspace() {
 
   const cardFormDialog = (
     <Dialog open={addOpen || editingCard != null} onOpenChange={(open) => !open && closeCardDialog()}>
-      <DialogContent showCloseButton={false} className="gap-0 overflow-hidden rounded-none border border-border p-0 shadow-lg ring-0 sm:max-w-2xl">
+      <DialogContent showCloseButton={false} className="flex max-h-[calc(100vh-2rem)] flex-col gap-0 overflow-hidden rounded-none border border-border p-0 shadow-lg ring-0 sm:max-w-2xl">
         <div className="h-1 w-full bg-primary" />
 
         <button
@@ -423,7 +514,7 @@ export function CreditCardsWorkspace() {
           <XIcon className="size-4" />
         </button>
 
-        <DialogHeader className="gap-1 border-b border-border bg-muted/40 px-6 py-5 text-left">
+        <DialogHeader className="shrink-0 gap-1 border-b border-border bg-muted/40 px-6 py-5 text-left">
           <DialogTitle className="font-heading text-lg font-semibold">
             {editingCard ? `Edit ${editingCard.name}` : "Add a Credit Card"}
           </DialogTitle>
@@ -432,7 +523,7 @@ export function CreditCardsWorkspace() {
           )}
         </DialogHeader>
 
-        <div className="flex flex-col gap-6 px-6 py-5 text-sm">
+        <div className="flex flex-1 flex-col gap-6 overflow-y-auto px-6 py-5 text-sm">
           <div
             style={{ background: CARD_GRADIENT[previewAccent] }}
             className="relative flex min-h-[132px] flex-col justify-between gap-5 border border-black/10 p-4 text-white shadow-e1"
@@ -451,8 +542,8 @@ export function CreditCardsWorkspace() {
             </div>
           </div>
 
-          <div className="flex flex-col gap-3">
-            <SectionLabel>Card Details</SectionLabel>
+          <div className="flex flex-col gap-3 bg-muted/30 p-4">
+            <SectionLabel icon={CreditCardIcon}>Card Details</SectionLabel>
             <label className="flex flex-col gap-1">
               <span className="text-xs font-medium text-muted-foreground">Card Name</span>
               <div className="relative">
@@ -466,19 +557,14 @@ export function CreditCardsWorkspace() {
               </div>
             </label>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <label className="flex flex-col gap-1">
-                <span className="text-xs font-medium text-muted-foreground">Credit Limit</span>
-                <div className="relative">
-                  <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm text-muted-foreground">₹</span>
-                  <input
-                    type="number"
-                    className="h-10 w-full rounded-none border border-border bg-background pr-3 pl-7 text-sm outline-none transition-colors focus:border-primary"
-                    placeholder="0.00"
-                    value={form.creditLimit}
-                    onChange={(e) => setForm((f) => ({ ...f, creditLimit: e.target.value }))}
-                  />
-                </div>
+                <span className="text-xs font-medium text-muted-foreground">Bank</span>
+                <BankCombobox
+                  value={form.bankId}
+                  onChange={(bankId) => setForm((f) => ({ ...f, bankId }))}
+                  placeholder="Search for your bank…"
+                />
               </label>
               <label className="flex flex-col gap-1">
                 <span className="text-xs font-medium text-muted-foreground">Last 4 Digits</span>
@@ -493,10 +579,109 @@ export function CreditCardsWorkspace() {
             </div>
           </div>
 
+          <div className="flex flex-col gap-3 bg-muted/30 p-4">
+            <SectionLabel icon={Wallet}>Credit Limit</SectionLabel>
+            <div className="flex flex-wrap gap-2">
+              {(
+                [
+                  { value: "own", label: "Own Limit" },
+                  { value: "newShared", label: "New Shared" },
+                  ...(sharedLimits.length > 0 ? [{ value: "existingShared", label: "Existing Shared" } as const] : []),
+                ] as { value: LimitSource; label: string }[]
+              ).map((opt) => {
+                const selected = form.limitSource === opt.value;
+                return (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => setForm((f) => ({ ...f, limitSource: opt.value }))}
+                    className={cn(
+                      "flex items-center gap-1.5 border px-3 py-1.5 text-xs font-semibold transition-colors",
+                      selected
+                        ? "border-primary bg-primary/10 text-primary"
+                        : "border-border text-muted-foreground hover:bg-muted",
+                    )}
+                  >
+                    {opt.value !== "own" && <Link2 className="size-3" />}
+                    {opt.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            {form.limitSource === "own" && (
+              <label className="flex flex-col gap-1">
+                <span className="text-xs font-medium text-muted-foreground">Credit Limit</span>
+                <div className="relative">
+                  <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary">₹</span>
+                  <input
+                    type="number"
+                    className="h-10 w-full rounded-none border border-primary/30 bg-primary/5 pr-3 pl-7 text-base font-semibold outline-none transition-colors focus:border-primary"
+                    placeholder="0.00"
+                    value={form.creditLimit}
+                    onChange={(e) => setForm((f) => ({ ...f, creditLimit: e.target.value }))}
+                  />
+                </div>
+              </label>
+            )}
+
+            {form.limitSource === "newShared" && (
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <label className="flex flex-col gap-1">
+                  <span className="text-xs font-medium text-muted-foreground">Shared Limit Name</span>
+                  <input
+                    className="h-10 w-full rounded-none border border-border bg-background px-3 text-sm outline-none transition-colors focus:border-primary"
+                    placeholder="e.g. HDFC"
+                    value={form.sharedLimitName}
+                    onChange={(e) => setForm((f) => ({ ...f, sharedLimitName: e.target.value }))}
+                  />
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="text-xs font-medium text-muted-foreground">Total Credit Limit</span>
+                  <div className="relative">
+                    <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary">₹</span>
+                    <input
+                      type="number"
+                      className="h-10 w-full rounded-none border border-primary/30 bg-primary/5 pr-3 pl-7 text-base font-semibold outline-none transition-colors focus:border-primary"
+                      placeholder="0.00"
+                      value={form.sharedLimitAmount}
+                      onChange={(e) => setForm((f) => ({ ...f, sharedLimitAmount: e.target.value }))}
+                    />
+                  </div>
+                </label>
+              </div>
+            )}
+
+            {form.limitSource === "existingShared" && (
+              <label className="flex flex-col gap-1">
+                <span className="text-xs font-medium text-muted-foreground">Shared Credit Limit</span>
+                <Select
+                  value={form.selectedSharedLimitId ?? undefined}
+                  onValueChange={(value) => setForm((f) => ({ ...f, selectedSharedLimitId: value }))}
+                >
+                  <SelectTrigger className="h-10 w-full rounded-none border-border">
+                    <SelectValue placeholder="Choose a shared limit" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {sharedLimits.map((sl) => (
+                      <SelectItem key={sl.id} value={sl.id}>
+                        {sl.name} — {formatCurrency(sl.creditLimit)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </label>
+            )}
+
+            <p className="text-[11px] text-muted-foreground">
+              A shared limit is one combined credit line two cards from the same bank draw from — each keeps its own number and bill.
+            </p>
+          </div>
+
           {!editingCard && (
             <>
-              <div className="flex flex-col gap-3 border-t border-border pt-5">
-                <SectionLabel>Network (optional)</SectionLabel>
+              <div className="flex flex-col gap-3 bg-muted/30 p-4">
+                <SectionLabel icon={Wifi}>Network (optional)</SectionLabel>
                 <div className="flex flex-wrap gap-2">
                   {CARD_NETWORK_OPTIONS.map((n) => {
                     const selected = form.cardNetwork === n;
@@ -527,9 +712,9 @@ export function CreditCardsWorkspace() {
                 </div>
               </div>
 
-              <div className="flex flex-col gap-3 border-t border-border pt-5">
-                <SectionLabel>Billing Cycle</SectionLabel>
-                <div className="grid grid-cols-2 gap-3">
+              <div className="flex flex-col gap-3 bg-muted/30 p-4">
+                <SectionLabel icon={CalendarClock}>Billing Cycle</SectionLabel>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <label className="flex flex-col gap-1">
                     <span className="text-xs font-medium text-muted-foreground">Statement Day</span>
                     <input
@@ -565,7 +750,7 @@ export function CreditCardsWorkspace() {
           )}
         </div>
 
-        <DialogFooter className="border-t border-border bg-muted/20 px-6 py-4">
+        <DialogFooter className="shrink-0 border-t border-border bg-muted/20 px-6 py-4">
           <ClayButton variant="ghost" className="rounded-none" onClick={closeCardDialog} disabled={saving}>
             Cancel
           </ClayButton>
@@ -633,7 +818,12 @@ export function CreditCardsWorkspace() {
               <FileText className="size-3.5" />
               View Statements
             </ClayButton>
-            <ClayButton variant="secondary" size="sm" className="gap-1.5" onClick={openAdd}>
+            <ClayButton
+              variant="secondary"
+              size="sm"
+              className="gap-1.5"
+              onClick={() => document.getElementById("my-credit-cards")?.scrollIntoView({ behavior: "smooth", block: "start" })}
+            >
               <Settings2 className="size-3.5" />
               Manage Cards
             </ClayButton>
@@ -658,7 +848,7 @@ export function CreditCardsWorkspace() {
           <StatCard label="This Month Spent" value={formatCurrency(totals.spentThisMonth)} icon={ShoppingBag} tone="warning" />
         </div>
 
-        <div className="flex items-center justify-between">
+        <div id="my-credit-cards" className="flex scroll-mt-4 items-center justify-between">
           <h2 className="text-sm font-semibold text-foreground">My Credit Cards ({creditCards.length})</h2>
           <div className="clay-pressed flex items-center gap-1 rounded-xl p-1">
             <button
@@ -695,7 +885,10 @@ export function CreditCardsWorkspace() {
                 active={card.id === activeCardId}
                 onClick={() => setActiveCardId(card.id)}
                 onEdit={() => openEdit(card)}
-                onDelete={() => setDeletingCard(card)}
+                onDelete={() => {
+                  setCardDeletionImpact(null);
+                  setDeletingCard(card);
+                }}
               />
             ))}
           </Stagger>
@@ -933,14 +1126,14 @@ export function CreditCardsWorkspace() {
 
       {cardFormDialog}
 
-      <ConfirmDialog
+      <DestructiveDeleteDialog
         open={deletingCard != null}
         onOpenChange={(open) => !open && setDeletingCard(null)}
-        title={`Delete ${deletingCard?.name ?? "card"}?`}
-        description="This action cannot be undone."
-        variant="destructive"
-        confirmLabel="Delete"
+        entityLabel="credit card"
+        entityName={deletingCard?.name ?? "this card"}
+        impact={cardDeletionImpactRows}
         onConfirm={handleDeleteCard}
+        confirming={deletingCardBusy}
       />
     </div>
   );

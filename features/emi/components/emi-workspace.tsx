@@ -1,6 +1,6 @@
 "use client";
 
-import { Plus } from "lucide-react";
+import { CreditCard, Percent, Plus, StickyNote } from "lucide-react";
 import { useMemo, useState } from "react";
 import { ClayBadge } from "@/components/clay/clay-badge";
 import { ClayButton } from "@/components/clay/clay-button";
@@ -360,10 +360,10 @@ export function EmiWorkspace() {
         onConfirm={handleCreate}
         confirmLabel={saving ? "Saving…" : "Add EMI"}
         loading={saving}
-        contentClassName="sm:max-w-xl"
+        contentClassName="sm:max-w-2xl"
       >
-        <div className="flex flex-col gap-3">
-          <SectionLabel>EMI Details</SectionLabel>
+        <div className="flex flex-col gap-3 bg-muted/30 p-4">
+          <SectionLabel icon={CreditCard}>EMI Details</SectionLabel>
           <label className="flex flex-col gap-1">
             <span className="text-xs font-medium text-muted-foreground">EMI Name</span>
             <input
@@ -392,16 +392,16 @@ export function EmiWorkspace() {
           </div>
         </div>
 
-        <div className="flex flex-col gap-3 border-t border-border pt-5">
-          <SectionLabel>Principal & Schedule</SectionLabel>
-          <div className="grid grid-cols-2 gap-3">
+        <div className="flex flex-col gap-3 bg-muted/30 p-4">
+          <SectionLabel icon={Percent}>Principal & Schedule</SectionLabel>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <label className="flex flex-col gap-1">
               <span className="text-xs font-medium text-muted-foreground">Principal</span>
               <div className="relative">
-                <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm text-muted-foreground">₹</span>
+                <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary">₹</span>
                 <input
                   type="number"
-                  className={cn(FLAT_INPUT, "pl-7")}
+                  className={cn(FLAT_INPUT, "border-primary/30 bg-primary/5 pl-7 text-base font-semibold focus:border-primary")}
                   placeholder="0.00"
                   value={form.principalAmount}
                   onChange={(e) => setForm((f) => ({ ...f, principalAmount: e.target.value }))}
@@ -437,8 +437,8 @@ export function EmiWorkspace() {
           </label>
         </div>
 
-        <div className="flex flex-col gap-3 border-t border-border pt-5">
-          <SectionLabel>Interest (optional)</SectionLabel>
+        <div className="flex flex-col gap-3 bg-muted/30 p-4">
+          <SectionLabel icon={Percent}>Interest (optional)</SectionLabel>
           <label className="flex items-center gap-2">
             <input
               type="checkbox"
@@ -448,7 +448,7 @@ export function EmiWorkspace() {
             <span className="text-xs font-medium text-muted-foreground">This EMI carries interest</span>
           </label>
           {form.hasInterest && (
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div className="flex flex-col gap-1.5">
                 <span className="text-xs font-medium text-muted-foreground">Interest Type</span>
                 <ChipRow
@@ -474,15 +474,16 @@ export function EmiWorkspace() {
           )}
         </div>
 
-        <label className="flex flex-col gap-1 border-t border-border pt-5">
-          <span className="text-xs font-medium text-muted-foreground">Notes</span>
-          <input
-            className={FLAT_INPUT}
+        <div className="flex flex-col gap-2 bg-muted/30 p-4">
+          <SectionLabel icon={StickyNote}>Notes</SectionLabel>
+          <textarea
+            className={cn(FLAT_INPUT, "min-h-20 resize-none py-2")}
             placeholder="Optional notes"
+            rows={3}
             value={form.notes}
             onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
           />
-        </label>
+        </div>
       </SectionedFormDialog>
 
       <FormDialog
@@ -492,27 +493,34 @@ export function EmiWorkspace() {
         description="Records against the next-due installment. GST/processing fee are tracked for your records only."
         onConfirm={handleRecordPayment}
         confirmLabel={saving ? "Saving…" : "Record"}
+        contentClassName="sm:max-w-lg"
       >
-        <div className="flex flex-col gap-3 py-1 text-sm">
-          <label className="flex flex-col gap-1">
-            <span className="text-xs font-medium text-muted-foreground">Amount</span>
-            <input
-              type="number"
-              className="clay-pressed h-10 rounded-xl px-3 text-sm outline-none"
-              value={paymentForm.amount}
-              onChange={(e) => setPaymentForm((f) => ({ ...f, amount: e.target.value }))}
-            />
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-xs font-medium text-muted-foreground">Date</span>
-            <input
-              type="date"
-              className="clay-pressed h-10 rounded-xl px-3 text-sm outline-none"
-              value={paymentForm.date}
-              onChange={(e) => setPaymentForm((f) => ({ ...f, date: e.target.value }))}
-            />
-          </label>
-          <div className="grid grid-cols-2 gap-3">
+        <div className="flex flex-col gap-3 rounded-2xl bg-muted/30 p-4 text-sm">
+          <SectionLabel icon={CreditCard}>Payment Details</SectionLabel>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <label className="flex flex-col gap-1">
+              <span className="text-xs font-medium text-muted-foreground">Amount</span>
+              <div className="relative">
+                <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary">₹</span>
+                <input
+                  type="number"
+                  className="clay-pressed h-10 w-full rounded-xl border border-primary/20 bg-primary/5 pl-7 text-sm font-semibold outline-none"
+                  value={paymentForm.amount}
+                  onChange={(e) => setPaymentForm((f) => ({ ...f, amount: e.target.value }))}
+                />
+              </div>
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-xs font-medium text-muted-foreground">Date</span>
+              <input
+                type="date"
+                className="clay-pressed h-10 rounded-xl px-3 text-sm outline-none"
+                value={paymentForm.date}
+                onChange={(e) => setPaymentForm((f) => ({ ...f, date: e.target.value }))}
+              />
+            </label>
+          </div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <label className="flex flex-col gap-1">
               <span className="text-xs font-medium text-muted-foreground">GST (optional)</span>
               <input

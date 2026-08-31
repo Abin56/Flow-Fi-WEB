@@ -58,6 +58,7 @@ import type { Budget } from "@/lib/models/budget";
 import type { Category } from "@/lib/models/category";
 import type { CreditCardProfile, Statement } from "@/lib/models/credit-card";
 import { statementRemainingAmount, statementStatus } from "@/lib/models/credit-card";
+import { unbilledSpendForCard } from "@/lib/repositories/credit-card-repository";
 import type { Emi, EmiPaymentBreakdown } from "@/lib/models/emi";
 import { effectiveMonth, isTransfer, signedAmount, type Transaction } from "@/lib/models/transaction";
 
@@ -71,6 +72,10 @@ type CategoryColor = (typeof CATEGORY_COLORS)[number] | "muted";
 
 function isThisMonth(date: Date, now: Date): boolean {
   return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth();
+}
+
+function isSameDay(a: Date, b: Date): boolean {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 }
 
 /** Day-of-month week buckets matching the reference design's "1-7 / 8-14 / 15-21 / 22-31" bars. */
@@ -138,10 +143,27 @@ export function useDashboardData() {
   const now = useMemo(() => new Date(), []);
 
   // --- Net Worth (lib/engines/net-worth.ts:calculateNetWorth via useNetWorth) ---
-  const netWorth = useMemo(
-    () => ({ amount: netWorthAmount, changeAmount: 0, changePercent: 0 }),
-    [netWorthAmount],
-  );
+  // `trend`: direct port of `NetWorthWidgetCard._weeklyTrend` (Finance_App's
+  // `net_worth_widget_card.dart`) — cumulative net (income - expense) for each
+  // of the last 7 days, oldest first, over `calculableTransactions`
+  // (excludeFromCalculations filtered, transfers deliberately NOT excluded:
+  // a transfer's two legs net to zero across total net worth automatically).
+  const netWorth = useMemo(() => {
+    const calculable = (transactions as Transaction[]).filter(
+      (t) => t.deletedAt == null && !t.excludeFromCalculations,
+    );
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    let running = 0;
+    const trend: number[] = [];
+    for (let i = 6; i >= 0; i--) {
+      const day = new Date(today.getFullYear(), today.getMonth(), today.getDate() - i);
+      running += calculable
+        .filter((t) => isSameDay(t.dateTime, day))
+        .reduce((sum, t) => sum + signedAmount(t), 0);
+      trend.push(running);
+    }
+    return { amount: netWorthAmount, changeAmount: 0, changePercent: 0, trend };
+  }, [netWorthAmount, transactions, now]);
 
   // --- Cash Flow (lib/engines/cash-flow.ts:cashFlowThisMonth via useCashFlowThisMonth) ---
   const cashFlow = useMemo(() => {
@@ -175,6 +197,7 @@ export function useDashboardData() {
       accounts: list.map((account, index) => ({
         id: account.id,
         name: account.name,
+        bankId: account.bankId,
         mask: account.accountNumberLast4,
         balance: account.currentBalance,
         accent: ACCOUNT_ACCENTS[index % ACCOUNT_ACCENTS.length] as AccountAccent,
@@ -331,6 +354,22 @@ export function useDashboardData() {
           isPaid: statementStatus(s) === "paid",
         }));
 
+    const transactionsByAccountId = new Map<string, Transaction[]>();
+    for (const t of transactions as Transaction[]) {
+      if (t.deletedAt != null) continue;
+      const list = transactionsByAccountId.get(t.accountId) ?? [];
+      list.push(t);
+      transactionsByAccountId.set(t.accountId, list);
+    }
+    // Unlike `statementsForCard` above (unpaid only, for `outstanding`'s carry-forward), the
+    // "billed through" cutoff must consider every statement — a paid one still marks that
+    // period's spend as already billed, so it must not be double-counted as unbilled again.
+    const currentCycleFor = (card: CreditCardProfile) =>
+      unbilledSpendForCard(
+        transactionsByAccountId.get(card.accountId) ?? [],
+        statementList.filter((s) => s.cardId === card.id),
+      );
+
     const standingFor = (card: CreditCardProfile): { outstanding: number; available: number } => {
       const utilCard: UtilizationCard = {
         id: card.id,
@@ -351,19 +390,19 @@ export function useDashboardData() {
           perCard: siblingCards.map((c) => ({
             card: { id: c.id, statementDay: c.statementDay, creditLimit: c.creditLimit, sharedLimitId: c.sharedLimitId },
             statements: statementsForCard(c.id),
-            currentCycleStatement: null,
+            currentCycleStatement: currentCycleFor(c),
             emis: utilizationEmis,
           })),
         });
         // Attribute this card's own outstanding share (not the pooled total) for display.
-        const ownOutstanding = cardStatements.reduce((sum, s) => sum + s.remainingAmount, 0);
+        const ownOutstanding = cardStatements.reduce((sum, s) => sum + s.remainingAmount, 0) + currentCycleFor(card).totalAmount;
         return { outstanding: ownOutstanding, available: standing.available };
       }
 
       const standing = creditCardStanding({
         card: utilCard,
         statements: cardStatements,
-        currentCycleStatement: null,
+        currentCycleStatement: currentCycleFor(card),
         emis: utilizationEmis,
       });
       return { outstanding: standing.outstanding, available: standing.available };
@@ -402,7 +441,7 @@ export function useDashboardData() {
       percent: creditUtilizationPercent(totalOutstanding, totalCreditLimit),
       cards: rows,
     };
-  }, [creditCards, sharedLimits, statements, emis, emiPaymentBreakdowns]);
+  }, [creditCards, sharedLimits, statements, emis, emiPaymentBreakdowns, transactions]);
 
   // --- Upcoming Payments (Bill.nextDueDate + unpaid Statement.dueDate, merged and sorted soonest-first) ---
   const upcomingPayments = useMemo(() => {

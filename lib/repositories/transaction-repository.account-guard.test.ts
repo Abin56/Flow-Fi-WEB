@@ -3,10 +3,11 @@ import { TransactionRepository } from "./transaction-repository";
 import type { AccountRepository } from "./account-repository";
 
 /**
- * Covers `countActiveTransactionsForAccount` — the guard `deleteAccount`/`deleteCard`
- * now call before soft-deleting, so an account/card can no longer be removed while
- * active transactions still reference it (see the Account/Credit Card delete
- * integrity fix).
+ * Covers `getAllForAccountIncludingTrash` — the query the account/credit-card permanent-delete
+ * cascade (`lib/repositories/account-deletion.ts`) uses to find every transaction (active and
+ * trashed alike) that needs to be wiped alongside a deleted account. Unlike a plain `getAll()`,
+ * this must NOT filter on `deletedAt` — a trashed transaction still needs to be swept up, not left
+ * behind as an orphan once the account itself is gone.
  */
 vi.mock("firebase/firestore", () => ({
   doc: vi.fn((_collection: unknown, id: string) => ({ id })),
@@ -22,29 +23,32 @@ function makeRepo() {
   return new TransactionRepository({ firestore: {} } as never, accountRepository);
 }
 
-describe("TransactionRepository.countActiveTransactionsForAccount", () => {
+describe("TransactionRepository.getAllForAccountIncludingTrash", () => {
   beforeEach(() => {
     vi.mocked(getDocs).mockClear();
     vi.mocked(where).mockClear();
   });
 
-  it("returns the number of active (non-deleted) transactions referencing the account", async () => {
-    vi.mocked(getDocs).mockResolvedValue({ size: 3 } as never);
+  it("queries by accountId only — no deletedAt filter — so trashed transactions are included", async () => {
+    vi.mocked(getDocs).mockResolvedValue({ docs: [] } as never);
     const repo = makeRepo();
 
-    const count = await repo.countActiveTransactionsForAccount("acc-a");
+    await repo.getAllForAccountIncludingTrash("acc-a");
 
-    expect(count).toBe(3);
     expect(where).toHaveBeenCalledWith("accountId", "==", "acc-a");
-    expect(where).toHaveBeenCalledWith("deletedAt", "==", null);
+    expect(where).toHaveBeenCalledTimes(1);
   });
 
-  it("returns 0 when no active transactions reference the account", async () => {
-    vi.mocked(getDocs).mockResolvedValue({ size: 0 } as never);
+  it("returns every matching document's data, active and trashed alike", async () => {
+    const active = { id: "tx-1", deletedAt: null };
+    const trashed = { id: "tx-2", deletedAt: new Date("2026-08-01T00:00:00Z") };
+    vi.mocked(getDocs).mockResolvedValue({
+      docs: [active, trashed].map((data) => ({ data: () => data })),
+    } as never);
     const repo = makeRepo();
 
-    const count = await repo.countActiveTransactionsForAccount("acc-empty");
+    const result = await repo.getAllForAccountIncludingTrash("acc-a");
 
-    expect(count).toBe(0);
+    expect(result).toEqual([active, trashed]);
   });
 });

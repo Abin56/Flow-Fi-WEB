@@ -37,13 +37,13 @@ export function FormDialog({
 }: FormDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className={cn(contentClassName)}>
-        <DialogHeader>
+      <DialogContent className={cn("flex max-h-[calc(100vh-2rem)] flex-col gap-4 overflow-hidden", contentClassName)}>
+        <DialogHeader className="shrink-0">
           <DialogTitle>{title}</DialogTitle>
           {description && <DialogDescription>{description}</DialogDescription>}
         </DialogHeader>
-        <div>{children}</div>
-        <DialogFooter>
+        <div className="-mx-1 min-h-0 flex-1 overflow-y-auto px-1">{children}</div>
+        <DialogFooter className="shrink-0">
           <ClayButton
             variant="ghost"
             onClick={() => {

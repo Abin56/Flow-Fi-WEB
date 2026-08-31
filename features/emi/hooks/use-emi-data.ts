@@ -24,10 +24,9 @@
  */
 
 import { useMemo } from "react";
-import { useQueryClient } from "@tanstack/react-query";
 import { useCategories } from "@/hooks/use-categories";
-import { useCreditCards, useEmis, emisQueryKey } from "@/hooks/use-credit-cards";
-import { useAllEmiInstallments, emiInstallmentsQueryKey } from "@/hooks/use-emis";
+import { useCreditCards, useEmis } from "@/hooks/use-credit-cards";
+import { useAllEmiInstallments } from "@/hooks/use-emis";
 import type { Category } from "@/lib/models/category";
 import type { CreditCardProfile } from "@/lib/models/credit-card";
 import { emiStatusGiven, type Emi, type EmiLoanType, type EmiStatus } from "@/lib/models/emi";
@@ -118,52 +117,35 @@ export interface RecordEmiPaymentParams {
 /** Create/edit/close/payment actions wired to the real EMI + payment-schedule repositories, scoped to the signed-in user. */
 export function useEmiActions() {
   const uid = useAuthStore((s) => s.user?.uid);
-  const queryClient = useQueryClient();
 
   return useMemo(() => {
     if (!uid) return null;
     const emiRepository = createEmiRepository(uid);
 
-    const invalidate = async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: emisQueryKey(uid) }),
-        queryClient.invalidateQueries({ queryKey: emiInstallmentsQueryKey(uid) }),
-      ]);
-    };
-
     return {
       createEmi: async (params: CreateEmiParams & { loanType?: EmiLoanType }) => {
-        const emi = await emiRepository.createEmi(params);
-        await invalidate();
-        return emi;
+        return emiRepository.createEmi(params);
       },
       editEmi: async (emi: Emi, params: EditEmiParams) => {
         await emiRepository.editEmi(emi, params);
-        await invalidate();
       },
       editEmiTerms: async (emi: Emi, params: EditEmiTermsParams) => {
         await emiRepository.editEmiTerms(emi, params);
-        await invalidate();
       },
       closeEmi: async (emi: Emi) => {
         await emiRepository.closeEmi(emi);
-        await invalidate();
       },
       reopenEmi: async (emi: Emi) => {
         await emiRepository.reopenEmi(emi);
-        await invalidate();
       },
       markDefaulted: async (emi: Emi) => {
         await emiRepository.markDefaulted(emi);
-        await invalidate();
       },
       clearDefaulted: async (emi: Emi) => {
         await emiRepository.clearDefaulted(emi);
-        await invalidate();
       },
       deleteEmi: async (emi: Emi) => {
         await emiRepository.permanentlyDeleteEmi(emi);
-        await invalidate();
       },
       /**
        * Records a payment against `installment` (the EMI's next-due
@@ -203,9 +185,7 @@ export function useEmiActions() {
           penalty: params.penalty,
           otherCharges: params.otherCharges,
         });
-
-        await invalidate();
       },
     };
-  }, [uid, queryClient]);
+  }, [uid]);
 }

@@ -1,4 +1,5 @@
 import { ChevronRight, Landmark, Wallet } from "lucide-react";
+import { BankLogo } from "@/components/finance/bank-logo";
 import { EmptyState } from "@/components/finance/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatCurrency } from "@/lib/format";
@@ -18,6 +19,7 @@ export interface AccountsOverviewCardProps {
     accounts: {
       id: string;
       name: string;
+      bankId: string | null;
       mask: string | null;
       balance: number;
       accent: keyof typeof ACCENTS;
@@ -60,9 +62,13 @@ export function AccountsOverviewCard({ accountsOverview, isLoading }: AccountsOv
             const Icon = account.mask ? Landmark : Wallet;
             return (
               <div key={account.id} className="flex items-center gap-3 rounded-xl px-1 py-2 transition-colors hover:bg-muted/50">
-                <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-xl", ACCENTS[account.accent])}>
-                  <Icon className="size-4" />
-                </span>
+                {account.bankId ? (
+                  <BankLogo bankId={account.bankId} size={36} shape="square" />
+                ) : (
+                  <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-xl", ACCENTS[account.accent])}>
+                    <Icon className="size-4" />
+                  </span>
+                )}
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium text-foreground">{account.name}</p>
                   {account.mask && <p className="text-xs text-muted-foreground">•••• {account.mask}</p>}

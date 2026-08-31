@@ -9,12 +9,11 @@
  * `progress()` helper, never recomputed here.
  */
 
-import { useQueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { progress, type SavingsGoal } from "@/lib/models/savings-goal";
 import { createSavingsRepository } from "@/lib/repositories/repository-factory";
 import type { CreateGoalParams, EditGoalParams } from "@/lib/repositories/savings-repository";
-import { savingsGoalsQueryKey, useSavingsGoals } from "@/hooks/use-savings";
+import { useSavingsGoals } from "@/hooks/use-savings";
 import { useAuthStore } from "@/store/auth-store";
 
 export interface SavingsGoalRow {
@@ -55,41 +54,31 @@ export function useArchivedSavingsRows(): { rows: SavingsGoalRow[]; isLoading: b
 /** Create/edit/contribute/archive/delete actions wired to the real repository, scoped to the signed-in user. */
 export function useSavingsActions() {
   const uid = useAuthStore((s) => s.user?.uid);
-  const queryClient = useQueryClient();
 
   return useMemo(() => {
     if (!uid) return null;
     const repository = createSavingsRepository(uid);
 
-    const invalidate = () => queryClient.invalidateQueries({ queryKey: savingsGoalsQueryKey(uid) });
-
     return {
       createGoal: async (params: CreateGoalParams) => {
-        const goal = await repository.createGoal(params);
-        await invalidate();
-        return goal;
+        return repository.createGoal(params);
       },
       editGoal: async (goal: SavingsGoal, params: EditGoalParams) => {
         await repository.editGoal(goal, params);
-        await invalidate();
       },
       /** Adds toward `currentAmount` — the only way that field may change; never a generic amount edit. */
       contribute: async (goal: SavingsGoal, amount: number) => {
         await repository.contribute(goal, amount);
-        await invalidate();
       },
       archive: async (goal: SavingsGoal) => {
         await repository.archive(goal);
-        await invalidate();
       },
       unarchive: async (goal: SavingsGoal) => {
         await repository.unarchive(goal);
-        await invalidate();
       },
       deleteGoal: async (goal: SavingsGoal) => {
         await repository.softDelete(goal);
-        await invalidate();
       },
     };
-  }, [uid, queryClient]);
+  }, [uid]);
 }

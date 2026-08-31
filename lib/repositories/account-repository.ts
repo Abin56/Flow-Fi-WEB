@@ -14,16 +14,6 @@ import { generateId } from "@/lib/utils/id-generator";
 
 const LAST_4_DIGITS_PATTERN = /^\d{4}$/;
 
-/** Thrown by callers (see `useAccountActions.deleteAccount`, `useCreditCardActions.deleteCard`)
- *  when deletion is blocked because active transactions still reference the account —
- *  deleting it would otherwise orphan those transactions in every income/expense/category total. */
-export class AccountHasTransactionsError extends Error {
-  constructor(public readonly count: number) {
-    super(`Cannot delete: ${count} transaction${count === 1 ? "" : "s"} still reference this account. Move or delete ${count === 1 ? "it" : "them"} first.`);
-    this.name = "AccountHasTransactionsError";
-  }
-}
-
 function validateAccountNumberLast4(accountNumberLast4: string | null | undefined): void {
   if (accountNumberLast4 != null && !LAST_4_DIGITS_PATTERN.test(accountNumberLast4)) {
     throw new Error("Account number must be exactly 4 digits");

@@ -42,7 +42,8 @@ interface LoanCardProps {
  *  This is deliberate: Loans is about progress through a fixed schedule over time, so counting installments
  *  reads more truthfully than a raw amount ratio (which reducing-balance amortization would skew early on). */
 export function LoanCard({ row, onClick }: LoanCardProps) {
-  const { loan, lenderName, totalInstallments, installmentsPaid, outstandingPrincipal, emiAmount, nextDueDate, accent } = row;
+  const { loan, lenderName, direction, totalInstallments, installmentsPaid, outstandingPrincipal, emiAmount, nextDueDate, accent } =
+    row;
   const installmentPercent = totalInstallments > 0 ? Math.round((installmentsPaid / totalInstallments) * 100) : 0;
   const remainingInstallments = totalInstallments - installmentsPaid;
 
@@ -64,7 +65,12 @@ export function LoanCard({ row, onClick }: LoanCardProps) {
               <p className="text-xs text-muted-foreground">{lenderName}</p>
             </div>
           </div>
-          {loan.interest && <ClayBadge tone="neutral">{loan.interest.ratePercent}% p.a.</ClayBadge>}
+          <div className="flex flex-col items-end gap-1">
+            {/* Virtually every loan on this page is "taken" (money borrowed) — the badge only
+             *  surfaces for the rare "given" case, so it doesn't read as ambiguous debt. */}
+            {direction === "given" && <ClayBadge tone="success">Money I Lent</ClayBadge>}
+            {loan.interest && <ClayBadge tone="neutral">{loan.interest.ratePercent}% p.a.</ClayBadge>}
+          </div>
         </div>
 
         <div className="flex flex-col gap-2">

@@ -37,6 +37,10 @@ export function loanInstallmentsQueryKey(uid: string | undefined) {
   return ["loanInstallments", uid] as const;
 }
 
+export function loansTrashQueryKey(uid: string | undefined) {
+  return ["loansTrash", uid] as const;
+}
+
 /** Live-subscribes to the signed-in user's active loans. */
 export function useLoans() {
   const uid = useAuthStore((s) => s.user?.uid);
@@ -69,6 +73,24 @@ export function useLoanPersons() {
     subscribe: (onData, onError) => {
       if (!uid) return () => {};
       return createPersonRepository(uid).watchAll(onData, onError);
+    },
+  });
+}
+
+/** Live-subscribes to the signed-in user's soft-deleted loans, awaiting restore or permanent deletion. */
+export function useTrashedLoans() {
+  const uid = useAuthStore((s) => s.user?.uid);
+  const queryClient = useQueryClient();
+
+  return useFirestoreWatch<Loan[]>({
+    queryKey: loansTrashQueryKey(uid),
+    enabled: !!uid,
+    hookName: "useTrashedLoans",
+    emptyValue: [],
+    deps: [uid, queryClient],
+    subscribe: (onData, onError) => {
+      if (!uid) return () => {};
+      return createLoanRepository(uid).watchTrash(onData, onError);
     },
   });
 }

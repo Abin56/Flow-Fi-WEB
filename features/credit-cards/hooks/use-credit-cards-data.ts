@@ -38,7 +38,6 @@
  */
 
 import { useMemo } from "react";
-import { useQueryClient } from "@tanstack/react-query";
 import {
   creditCardStanding,
   creditUtilizationPercent,
@@ -58,21 +57,40 @@ import {
 import type { Emi, EmiPaymentBreakdown } from "@/lib/models/emi";
 import type { Account } from "@/lib/models/account";
 import type { Transaction } from "@/lib/models/transaction";
-import { accountsQueryKey, useAccounts } from "@/hooks/use-accounts";
+import { unbilledSpendForCard } from "@/lib/repositories/credit-card-repository";
+import { useAccounts } from "@/hooks/use-accounts";
 import { useTransactions } from "@/hooks/use-transactions";
 import {
-  creditCardsQueryKey,
   useAllCreditCardStatements,
   useAllEmiPaymentBreakdowns,
   useCreditCards,
   useEmis,
   useSharedCreditLimits,
 } from "@/hooks/use-credit-cards";
-import { createAccountRepository, createCreditCardRepository, createTransactionRepository } from "@/lib/repositories/repository-factory";
-import { AccountHasTransactionsError } from "@/lib/repositories/account-repository";
+import {
+  createAccountRepository,
+  createBillRepository,
+  createCreditCardRepository,
+  createEmiRepository,
+  createExpenseRepository,
+  createInstallmentRepositoryFor,
+  createLedgerRepositoryFor,
+  createPaymentScheduleRepository,
+  createPersonRepository,
+  createSharedCreditLimitRepository,
+  createTransactionRepository,
+} from "@/lib/repositories/repository-factory";
 import type { CreateCardParams, EditCardParams } from "@/lib/repositories/credit-card-repository";
+import {
+  permanentlyDeleteCreditCardAndHistory,
+  previewCreditCardDeletionImpact,
+  type CreditCardDeletionImpact,
+  type CreditCardDeletionRepos,
+} from "@/lib/repositories/credit-card-deletion";
 import { useAuthStore } from "@/store/auth-store";
 import { toast } from "@/store/toast-store";
+
+export type { CreditCardDeletionImpact };
 
 /** Mirrors `Statement.remainingAmount`/`Statement.status` -> the engine's `UtilizationStatement` view projection. */
 function toUtilizationStatement(statement: Statement): UtilizationStatement {
@@ -131,12 +149,22 @@ export function useCreditCardStandings(): { standings: CreditCardStandingView[];
   const { data: statements = [], isLoading: statementsLoading } = useAllCreditCardStatements();
   const { data: emis = [], isLoading: emisLoading } = useEmis();
   const { data: breakdowns = [], isLoading: breakdownsLoading } = useAllEmiPaymentBreakdowns();
+  const { data: transactions = [], isLoading: transactionsLoading } = useTransactions();
 
   const standings = useMemo(() => {
     const cardList = cards as CreditCardProfile[];
     const statementList = statements as Statement[];
     const emiList = emis as Emi[];
     const breakdownList = breakdowns as EmiPaymentBreakdown[];
+    const transactionList = transactions as Transaction[];
+
+    const transactionsByAccountId = new Map<string, Transaction[]>();
+    for (const t of transactionList) {
+      if (t.deletedAt != null) continue;
+      const list = transactionsByAccountId.get(t.accountId) ?? [];
+      list.push(t);
+      transactionsByAccountId.set(t.accountId, list);
+    }
 
     const principalPaidByEmiId = new Map<string, number>();
     // Group EmiPaymentBreakdown.principalPaid by the owning Emi. Breakdowns
@@ -158,6 +186,14 @@ export function useCreditCardStandings(): { standings: CreditCardStandingView[];
       statementsByCardId.set(s.cardId, list);
     }
 
+    /** Every card's not-yet-billed spend since its most recent statement (or all-time, if it has none). */
+    const currentCycleByCardId = new Map(
+      cardList.map((c) => [
+        c.id,
+        unbilledSpendForCard(transactionsByAccountId.get(c.accountId) ?? [], statementsByCardId.get(c.id) ?? []),
+      ]),
+    );
+
     const cardsBySharedLimitId = new Map<string, CreditCardProfile[]>();
     for (const c of cardList) {
       if (c.sharedLimitId == null) continue;
@@ -165,15 +201,6 @@ export function useCreditCardStandings(): { standings: CreditCardStandingView[];
       list.push(c);
       cardsBySharedLimitId.set(c.sharedLimitId, list);
     }
-
-    // No live "current cycle" total is computed here — that requires each
-    // card's own account transactions filtered to the in-progress billing
-    // window (StatementRepository.currentCycleFor). This pass only has the
-    // cross-card statement list wired, so `currentCycleStatement` is passed
-    // as null (matching the engine's own documented behavior for "no live
-    // total available yet": currentCycleSpend from the live cycle is simply
-    // 0, while every already-materialized Statement still counts in full).
-    const currentCycleStatement = null;
 
     const sharedLimitById = new Map((sharedLimits as SharedCreditLimit[]).map((s) => [s.id, s]));
     const results: CreditCardStandingView[] = [];
@@ -188,7 +215,7 @@ export function useCreditCardStandings(): { standings: CreditCardStandingView[];
         const perCard = siblings.map((sibling) => ({
           card: toUtilizationCard(sibling),
           statements: (statementsByCardId.get(sibling.id) ?? []).map(toUtilizationStatement),
-          currentCycleStatement,
+          currentCycleStatement: currentCycleByCardId.get(sibling.id) ?? null,
           emis: utilizationEmis,
         }));
         const standing = sharedCreditLimitStanding({
@@ -207,7 +234,7 @@ export function useCreditCardStandings(): { standings: CreditCardStandingView[];
       const standing = creditCardStanding({
         card: toUtilizationCard(card),
         statements: cardStatements,
-        currentCycleStatement,
+        currentCycleStatement: currentCycleByCardId.get(card.id) ?? null,
         emis: utilizationEmis,
       });
       results.push({
@@ -219,11 +246,12 @@ export function useCreditCardStandings(): { standings: CreditCardStandingView[];
     }
 
     return results;
-  }, [cards, sharedLimits, statements, emis, breakdowns]);
+  }, [cards, sharedLimits, statements, emis, breakdowns, transactions]);
 
   return {
     standings,
-    isLoading: cardsLoading || sharedLimitsLoading || statementsLoading || emisLoading || breakdownsLoading,
+    isLoading:
+      cardsLoading || sharedLimitsLoading || statementsLoading || emisLoading || breakdownsLoading || transactionsLoading,
   };
 }
 
@@ -447,12 +475,17 @@ export interface CreateCreditCardFormParams {
   cardNetwork?: CreditCardProfile["cardNetwork"];
   statementDay: number;
   paymentDueDay: number;
+  bankId?: string | null;
+  sharedLimitId?: string | null;
 }
 
 export interface EditCreditCardFormParams {
   name?: string;
   creditLimit?: number;
   lastFourDigits?: string | null;
+  bankId?: string | null;
+  sharedLimitId?: string | null;
+  clearSharedLimitId?: boolean;
 }
 
 /**
@@ -464,21 +497,38 @@ export interface EditCreditCardFormParams {
  */
 export function useCreditCardActions() {
   const uid = useAuthStore((s) => s.user?.uid);
-  const queryClient = useQueryClient();
 
   return useMemo(() => {
     if (!uid) return null;
     const accountRepository = createAccountRepository(uid);
-    const cardRepository = createCreditCardRepository(uid);
+    const sharedCreditLimitRepository = createSharedCreditLimitRepository(uid);
+    const cardRepository = createCreditCardRepository(uid, sharedCreditLimitRepository);
     const transactionRepository = createTransactionRepository(uid, accountRepository);
+    const billRepository = createBillRepository(uid);
+    const expenseRepository = createExpenseRepository(uid, accountRepository);
+    const personRepository = createPersonRepository(uid);
+    const paymentScheduleRepository = createPaymentScheduleRepository(uid);
+    const emiRepository = createEmiRepository(uid);
 
-    const invalidate = () =>
-      Promise.all([
-        queryClient.invalidateQueries({ queryKey: creditCardsQueryKey(uid) }),
-        queryClient.invalidateQueries({ queryKey: accountsQueryKey(uid) }),
-      ]);
+    const deletionRepos: CreditCardDeletionRepos = {
+      uid,
+      transactionRepository,
+      accountRepository,
+      billRepository,
+      expenseRepository,
+      personRepository,
+      ledgerRepositoryFor: (personId) => createLedgerRepositoryFor(uid, personId, personRepository),
+      paymentScheduleRepository,
+      installmentRepositoryFor: (scheduleId) => createInstallmentRepositoryFor(uid, scheduleId),
+      creditCardRepository: cardRepository,
+      sharedCreditLimitRepository,
+      emiRepository,
+    };
 
     return {
+      createSharedLimit: async (params: { name: string; creditLimit: number }) => {
+        return sharedCreditLimitRepository.createSharedLimit(params);
+      },
       createCard: async (params: CreateCreditCardFormParams) => {
         const account = await accountRepository.createAccount({
           name: params.name,
@@ -486,6 +536,7 @@ export function useCreditCardActions() {
           openingBalance: 0,
           colorValue: 0,
           accountNumberLast4: params.lastFourDigits ?? null,
+          bankId: params.bankId ?? null,
         });
         const card = await cardRepository.createCard({
           accountId: account.id,
@@ -494,42 +545,41 @@ export function useCreditCardActions() {
           creditLimit: params.creditLimit,
           cardNetwork: params.cardNetwork ?? null,
           lastFourDigits: params.lastFourDigits ?? null,
+          sharedLimitId: params.sharedLimitId ?? null,
         } satisfies CreateCardParams);
-        await invalidate();
         return card;
       },
       editCard: async (card: CreditCardProfile, account: Account | undefined, params: EditCreditCardFormParams) => {
-        if (account && params.name != null && params.name !== account.name) {
-          await accountRepository.editAccount(account, { name: params.name });
+        const nameChanged = params.name != null && params.name !== account?.name;
+        const bankChanged = params.bankId !== undefined && params.bankId !== (account?.bankId ?? null);
+        if (account && (nameChanged || bankChanged)) {
+          await accountRepository.editAccount(account, {
+            ...(params.name != null ? { name: params.name } : {}),
+            ...(bankChanged ? { bankId: params.bankId, clearBankId: params.bankId == null } : {}),
+          });
         }
         const cardParams: EditCardParams = {};
         if (params.creditLimit != null) cardParams.creditLimit = params.creditLimit;
         if (params.lastFourDigits !== undefined) cardParams.lastFourDigits = params.lastFourDigits;
+        if (params.clearSharedLimitId) cardParams.clearSharedLimitId = true;
+        else if (params.sharedLimitId !== undefined) cardParams.sharedLimitId = params.sharedLimitId;
         await cardRepository.editCard(card, cardParams);
-        await invalidate();
       },
-      deleteCard: async (card: CreditCardProfile, account: Account | undefined) => {
+      /** Read-only impact preview for the type-to-confirm delete dialog — call before `deleteCard`. */
+      previewCardDeletion: (card: CreditCardProfile) => previewCreditCardDeletionImpact(card, deletionRepos),
+      /** PERMANENTLY deletes `card`, its linked `Account`, and their entire history — linked EMIs,
+       *  statements, an orphaned shared limit, transactions, bills, and split-expense ledger
+       *  effects (see `lib/repositories/credit-card-deletion.ts`). Only ever reached after the
+       *  destructive-delete dialog's type-to-confirm gate. */
+      deleteCard: async (card: CreditCardProfile) => {
         try {
-          if (account) {
-            const count = await transactionRepository.countActiveTransactionsForAccount(account.id);
-            if (count > 0) throw new AccountHasTransactionsError(count);
-          }
-          await cardRepository.softDelete(card);
-          if (account) await accountRepository.softDelete(account);
-          await invalidate();
+          await permanentlyDeleteCreditCardAndHistory(card, deletionRepos);
         } catch (error) {
-          if (error instanceof AccountHasTransactionsError) {
-            toast.error(
-              "Can't delete this card",
-              `${error.count} transaction${error.count === 1 ? "" : "s"} still reference it. Move or delete ${error.count === 1 ? "it" : "them"} first.`,
-            );
-          } else {
-            toast.error("Couldn't delete card", "Please try again.");
-          }
+          toast.error("Couldn't delete card", "Please try again.");
           throw error;
         }
       },
     };
-  }, [uid, queryClient]);
+  }, [uid]);
 }
 

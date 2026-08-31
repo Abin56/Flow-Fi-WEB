@@ -521,14 +521,12 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
     await batch.commit();
   }
 
-  /** Active (non-deleted) transaction count referencing this account — used to block
-   *  account/credit-card deletion while money movement still points at it, rather than
-   *  silently leaving those transactions orphaned in every income/expense/category total. */
-  async countActiveTransactionsForAccount(accountId: string): Promise<number> {
-    const snapshot = await getDocs(
-      query(this.collection, where("accountId", "==", accountId), where("deletedAt", "==", null)),
-    );
-    return snapshot.size;
+  /** Every transaction referencing this account, active and trashed alike — the full set the
+   *  account/credit-card permanent-delete cascade (`lib/repositories/account-deletion.ts`) needs
+   *  to wipe alongside the account itself. */
+  async getAllForAccountIncludingTrash(accountId: string): Promise<Transaction[]> {
+    const snapshot = await getDocs(query(this.collection, where("accountId", "==", accountId)));
+    return snapshot.docs.map((d) => d.data());
   }
 
   async reconcileTransfers(config: ReconciliationConfig = DEFAULT_RECONCILIATION_CONFIG): Promise<ReconciliationResult> {

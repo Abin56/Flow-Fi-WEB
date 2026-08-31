@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { User, Users } from "lucide-react";
+import { Contact, IndianRupee, StickyNote, User, Users } from "lucide-react";
 import { ConfirmDialog, FLAT_INPUT, FormDialog, SectionedFormDialog, SectionLabel } from "@/components/finance";
 import { EmptyState } from "@/components/finance/empty-state";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -320,9 +320,10 @@ export function PeopleWorkspace() {
         onConfirm={handleSavePerson}
         confirmLabel={saving ? "Saving…" : editingPerson ? "Save Changes" : "Add Person"}
         loading={saving}
+        contentClassName="sm:max-w-xl"
       >
-        <div className="flex flex-col gap-3">
-          <SectionLabel>Contact Details</SectionLabel>
+        <div className="flex flex-col gap-3 bg-muted/30 p-4">
+          <SectionLabel icon={Contact}>Contact Details</SectionLabel>
           <label className="flex flex-col gap-1">
             <span className="text-xs font-medium text-muted-foreground">Name</span>
             <div className="relative">
@@ -335,7 +336,7 @@ export function PeopleWorkspace() {
               />
             </div>
           </label>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <label className="flex flex-col gap-1">
               <span className="text-xs font-medium text-muted-foreground">Phone (optional)</span>
               <input
@@ -357,13 +358,13 @@ export function PeopleWorkspace() {
         </div>
 
         {!editingPerson && (
-          <div className="flex flex-col gap-1 border-t border-border pt-5">
-            <SectionLabel>Opening Balance</SectionLabel>
+          <div className="mt-5 flex flex-col gap-1 bg-muted/30 p-4">
+            <SectionLabel icon={IndianRupee}>Opening Balance</SectionLabel>
             <div className="relative mt-2">
-              <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm text-muted-foreground">₹</span>
+              <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary">₹</span>
               <input
                 type="number"
-                className={cn(FLAT_INPUT, "pl-7")}
+                className={cn(FLAT_INPUT, "border-primary/30 bg-primary/5 pl-7 text-base font-semibold focus:border-primary")}
                 placeholder="0.00"
                 value={personForm.openingBalance}
                 onChange={(e) => setPersonForm((f) => ({ ...f, openingBalance: e.target.value }))}
@@ -373,14 +374,15 @@ export function PeopleWorkspace() {
           </div>
         )}
 
-        <label className="flex flex-col gap-1 border-t border-border pt-5">
-          <span className="text-xs font-medium text-muted-foreground">Notes (optional)</span>
-          <input
-            className={FLAT_INPUT}
+        <div className="mt-5 flex flex-col gap-1 bg-muted/30 p-4">
+          <SectionLabel icon={StickyNote}>Notes (optional)</SectionLabel>
+          <textarea
+            className={cn(FLAT_INPUT, "min-h-20 resize-none py-2")}
+            rows={3}
             value={personForm.notes}
             onChange={(e) => setPersonForm((f) => ({ ...f, notes: e.target.value }))}
           />
-        </label>
+        </div>
 
         {personFormError && (
           <p className="flex items-center gap-1.5 border border-expense/30 bg-expense/8 px-3 py-2 text-xs font-medium text-expense">
@@ -395,8 +397,10 @@ export function PeopleWorkspace() {
         title={`Add Transaction — ${addEntryPerson?.name ?? ""}`}
         onConfirm={handleAddEntry}
         confirmLabel={saving ? "Saving…" : "Save"}
+        contentClassName="sm:max-w-lg"
       >
-        <div className="flex flex-col gap-3 py-1 text-sm">
+        <div className="flex flex-col gap-3 rounded-2xl bg-muted/30 p-4 text-sm">
+          <SectionLabel icon={IndianRupee}>Transaction Details</SectionLabel>
           <label className="flex flex-col gap-1">
             <span className="text-xs font-medium text-muted-foreground">Type</span>
             <Select value={entryForm.type} onValueChange={(v) => setEntryForm((f) => ({ ...f, type: v as LedgerEntryType }))}>
@@ -412,25 +416,30 @@ export function PeopleWorkspace() {
               </SelectContent>
             </Select>
           </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-xs font-medium text-muted-foreground">Amount</span>
-            <input
-              type="number"
-              className="clay-pressed h-10 rounded-xl px-3 text-sm outline-none"
-              placeholder="0.00"
-              value={entryForm.amount}
-              onChange={(e) => setEntryForm((f) => ({ ...f, amount: e.target.value }))}
-            />
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-xs font-medium text-muted-foreground">Date</span>
-            <input
-              type="date"
-              className="clay-pressed h-10 rounded-xl px-3 text-sm outline-none"
-              value={entryForm.date}
-              onChange={(e) => setEntryForm((f) => ({ ...f, date: e.target.value }))}
-            />
-          </label>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <label className="flex flex-col gap-1">
+              <span className="text-xs font-medium text-muted-foreground">Amount</span>
+              <div className="relative">
+                <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary">₹</span>
+                <input
+                  type="number"
+                  className="clay-pressed h-10 w-full rounded-xl border border-primary/20 bg-primary/5 pl-7 text-sm font-semibold outline-none"
+                  placeholder="0.00"
+                  value={entryForm.amount}
+                  onChange={(e) => setEntryForm((f) => ({ ...f, amount: e.target.value }))}
+                />
+              </div>
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-xs font-medium text-muted-foreground">Date</span>
+              <input
+                type="date"
+                className="clay-pressed h-10 rounded-xl px-3 text-sm outline-none"
+                value={entryForm.date}
+                onChange={(e) => setEntryForm((f) => ({ ...f, date: e.target.value }))}
+              />
+            </label>
+          </div>
           <label className="flex flex-col gap-1">
             <span className="text-xs font-medium text-muted-foreground">Note (optional)</span>
             <input

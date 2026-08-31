@@ -2,6 +2,7 @@ import {
   Banknote,
   Bot,
   Calendar,
+  CalendarRange,
   CreditCard,
   LayoutDashboard,
   Landmark,
@@ -16,6 +17,7 @@ import {
   Wallet,
   FileBarChart,
   FileStack,
+  History,
   LineChart,
 } from "lucide-react";
 
@@ -27,7 +29,9 @@ export interface NavItem {
 
 export const NAV_ITEMS: NavItem[] = [
   { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
+  { label: "Month Cycle", href: "/month-cycle", icon: CalendarRange },
   { label: "Transactions", href: "/transactions", icon: Receipt },
+  { label: "History", href: "/history", icon: History },
   { label: "Accounts", href: "/accounts", icon: Wallet },
   { label: "Credit Cards", href: "/credit-cards", icon: CreditCard },
   { label: "Statement Review", href: "/statement-review", icon: FileStack },

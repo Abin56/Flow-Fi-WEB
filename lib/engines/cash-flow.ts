@@ -29,6 +29,14 @@ function isSameMonth(a: Date, b: Date): boolean {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth();
 }
 
+function startOfMonth(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth(), 1);
+}
+
+function endOfMonth(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999);
+}
+
 /**
  * This month's cash flow. `emiPaidThisMonth`/`loanPaidThisMonth`/
  * `billsPaidThisMonth`/`moneyReceivedThisMonth` are calendar-month sums the
@@ -81,4 +89,54 @@ export function combineDueBreakdowns(rows: DueCategoryBreakdown[]): DueCategoryB
   const due = rows.reduce((sum, r) => sum + r.due, 0);
   const paid = rows.reduce((sum, r) => sum + r.paid, 0);
   return { due, paid, remaining: due - paid };
+}
+
+export interface MoneyReceivedExpense {
+  isSplit: boolean;
+  scheduleId: string | null;
+  transactionId: string;
+}
+
+export interface MoneyReceivedTransaction {
+  effectiveMonth: Date;
+  isDeleted: boolean;
+  excludeFromCalculations: boolean;
+}
+
+/**
+ * Direct port of `moneyReceivedForRangeProvider`
+ * (`lib/features/expense/presentation/providers/expense_providers.dart`) —
+ * "Money Received" is NOT income-transaction totals; it's the sum of
+ * `Installment.amountPaid` collected from split-expense participants, for
+ * every split `Expense` whose own linked `Transaction` (the fronted expense
+ * itself) falls within `[start, end]`, bucketed by that transaction's
+ * `effectiveMonth` and skipped if deleted or `excludeFromCalculations`.
+ */
+export function moneyReceivedForRange(params: {
+  expenses: MoneyReceivedExpense[];
+  transactionsById: Map<string, MoneyReceivedTransaction>;
+  installmentsByScheduleId: Record<string, { amountPaid: number }[]>;
+  start: Date;
+  end: Date;
+}): number {
+  const { expenses, transactionsById, installmentsByScheduleId, start, end } = params;
+  let total = 0;
+  for (const expense of expenses) {
+    if (!expense.isSplit || expense.scheduleId == null) continue;
+    const transaction = transactionsById.get(expense.transactionId);
+    if (!transaction || transaction.isDeleted || transaction.excludeFromCalculations) continue;
+    const t = transaction.effectiveMonth.getTime();
+    if (t < start.getTime() || t > end.getTime()) continue;
+    const installments = installmentsByScheduleId[expense.scheduleId] ?? [];
+    total += installments.reduce((sum, i) => sum + i.amountPaid, 0);
+  }
+  return total;
+}
+
+/** `moneyReceivedForRange` for the current calendar month — the figure `useCashFlowThisMonth` needs. */
+export function moneyReceivedThisMonth(
+  params: Omit<Parameters<typeof moneyReceivedForRange>[0], "start" | "end">,
+  now: Date = new Date(),
+): number {
+  return moneyReceivedForRange({ ...params, start: startOfMonth(now), end: endOfMonth(now) });
 }

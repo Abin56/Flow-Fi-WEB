@@ -8,6 +8,7 @@
 import {
   type CollectionReference,
   deleteDoc,
+  type DocumentReference,
   doc,
   getDoc,
   getDocs,
@@ -20,6 +21,15 @@ import type { SoftDeletableEntity } from "./soft-deletable";
 
 export class FirestoreCrudRepository<T extends SoftDeletableEntity> {
   constructor(protected readonly collection: CollectionReference<T>) {}
+
+  /** Public doc reference — lets a cross-repository caller (e.g. the account/credit-card
+   *  permanent-delete cascade in `lib/repositories/account-deletion.ts`) queue a `batch.set`/
+   *  `batch.delete` against this collection without needing its own single-purpose `docRef`
+   *  method (some repositories, like `AccountRepository`/`PersonRepository`, already define
+   *  their own identical one predating this — both are equivalent). */
+  docRef(id: string): DocumentReference<T> {
+    return doc(this.collection, id);
+  }
 
   /** Active (non-deleted) records. */
   async getAll(): Promise<T[]> {

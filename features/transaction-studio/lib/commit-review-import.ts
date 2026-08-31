@@ -361,6 +361,13 @@ async function commitOneRow(row: StagedRecord, categoryId: string, params: Commi
       const detail = requireDetail(row.actionDetail, "create_loan");
       if (!detail) throw new Error("Loan terms are missing — open this row's Inspector to finish setting it up.");
       const loan = await repositories.loanRepository.createLoan({
+        category: "personal",
+        // This commit always posts an "expense" transaction below (money
+        // leaving the user's account to disburse to `detail.personId`), so
+        // the loan itself is always a receivable from the app owner's point
+        // of view — "given", not the repository's institutional-loan-page
+        // default of "taken".
+        direction: "given",
         personId: detail.personId,
         name: detail.name,
         loanAmount: detail.loanAmount,
