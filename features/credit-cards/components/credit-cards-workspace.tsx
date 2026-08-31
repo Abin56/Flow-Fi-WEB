@@ -31,6 +31,7 @@ import { ClayBadge } from "@/components/clay/clay-badge";
 import { ClayButton } from "@/components/clay/clay-button";
 import { Stagger } from "@/components/foundation/animated-container";
 import {
+  BankCombobox,
   CurrencyCell,
   DateCell,
   DestructiveDeleteDialog,
@@ -42,14 +43,13 @@ import {
 } from "@/components/finance";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAccounts } from "@/hooks/use-accounts";
 import { useSharedCreditLimits } from "@/hooks/use-credit-cards";
 import type { Account } from "@/lib/models/account";
 import type { CardNetwork } from "@/lib/models/credit-card";
 import { formatCurrency } from "@/lib/format";
-import { BANKS, FREQUENT_BANKS } from "@/lib/data/bank-registry";
 import {
   ACCENT_CYCLE,
   useCardTransactions,
@@ -502,7 +502,7 @@ export function CreditCardsWorkspace() {
 
   const cardFormDialog = (
     <Dialog open={addOpen || editingCard != null} onOpenChange={(open) => !open && closeCardDialog()}>
-      <DialogContent showCloseButton={false} className="gap-0 overflow-hidden rounded-none border border-border p-0 shadow-lg ring-0 sm:max-w-2xl">
+      <DialogContent showCloseButton={false} className="flex max-h-[calc(100vh-2rem)] flex-col gap-0 overflow-hidden rounded-none border border-border p-0 shadow-lg ring-0 sm:max-w-2xl">
         <div className="h-1 w-full bg-primary" />
 
         <button
@@ -514,7 +514,7 @@ export function CreditCardsWorkspace() {
           <XIcon className="size-4" />
         </button>
 
-        <DialogHeader className="gap-1 border-b border-border bg-muted/40 px-6 py-5 text-left">
+        <DialogHeader className="shrink-0 gap-1 border-b border-border bg-muted/40 px-6 py-5 text-left">
           <DialogTitle className="font-heading text-lg font-semibold">
             {editingCard ? `Edit ${editingCard.name}` : "Add a Credit Card"}
           </DialogTitle>
@@ -523,7 +523,7 @@ export function CreditCardsWorkspace() {
           )}
         </DialogHeader>
 
-        <div className="flex flex-col gap-6 px-6 py-5 text-sm">
+        <div className="flex flex-1 flex-col gap-6 overflow-y-auto px-6 py-5 text-sm">
           <div
             style={{ background: CARD_GRADIENT[previewAccent] }}
             className="relative flex min-h-[132px] flex-col justify-between gap-5 border border-black/10 p-4 text-white shadow-e1"
@@ -560,33 +560,11 @@ export function CreditCardsWorkspace() {
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <label className="flex flex-col gap-1">
                 <span className="text-xs font-medium text-muted-foreground">Bank</span>
-                <Select
-                  value={form.bankId ?? "none"}
-                  onValueChange={(value) => setForm((f) => ({ ...f, bankId: value === "none" ? null : value }))}
-                >
-                  <SelectTrigger className="h-10 w-full rounded-none border-border">
-                    <SelectValue placeholder="Select bank (optional)" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">Not set</SelectItem>
-                    <SelectGroup>
-                      <SelectLabel>Popular</SelectLabel>
-                      {FREQUENT_BANKS.map((bank) => (
-                        <SelectItem key={bank.id} value={bank.id}>
-                          {bank.name}
-                        </SelectItem>
-                      ))}
-                    </SelectGroup>
-                    <SelectGroup>
-                      <SelectLabel>All Banks</SelectLabel>
-                      {BANKS.map((bank) => (
-                        <SelectItem key={bank.id} value={bank.id}>
-                          {bank.name}
-                        </SelectItem>
-                      ))}
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
+                <BankCombobox
+                  value={form.bankId}
+                  onChange={(bankId) => setForm((f) => ({ ...f, bankId }))}
+                  placeholder="Search for your bank…"
+                />
               </label>
               <label className="flex flex-col gap-1">
                 <span className="text-xs font-medium text-muted-foreground">Last 4 Digits</span>
@@ -772,7 +750,7 @@ export function CreditCardsWorkspace() {
           )}
         </div>
 
-        <DialogFooter className="border-t border-border bg-muted/20 px-6 py-4">
+        <DialogFooter className="shrink-0 border-t border-border bg-muted/20 px-6 py-4">
           <ClayButton variant="ghost" className="rounded-none" onClick={closeCardDialog} disabled={saving}>
             Cancel
           </ClayButton>

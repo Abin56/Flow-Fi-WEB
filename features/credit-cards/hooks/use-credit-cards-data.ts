@@ -57,6 +57,7 @@ import {
 import type { Emi, EmiPaymentBreakdown } from "@/lib/models/emi";
 import type { Account } from "@/lib/models/account";
 import type { Transaction } from "@/lib/models/transaction";
+import { unbilledSpendForCard } from "@/lib/repositories/credit-card-repository";
 import { useAccounts } from "@/hooks/use-accounts";
 import { useTransactions } from "@/hooks/use-transactions";
 import {
@@ -148,12 +149,22 @@ export function useCreditCardStandings(): { standings: CreditCardStandingView[];
   const { data: statements = [], isLoading: statementsLoading } = useAllCreditCardStatements();
   const { data: emis = [], isLoading: emisLoading } = useEmis();
   const { data: breakdowns = [], isLoading: breakdownsLoading } = useAllEmiPaymentBreakdowns();
+  const { data: transactions = [], isLoading: transactionsLoading } = useTransactions();
 
   const standings = useMemo(() => {
     const cardList = cards as CreditCardProfile[];
     const statementList = statements as Statement[];
     const emiList = emis as Emi[];
     const breakdownList = breakdowns as EmiPaymentBreakdown[];
+    const transactionList = transactions as Transaction[];
+
+    const transactionsByAccountId = new Map<string, Transaction[]>();
+    for (const t of transactionList) {
+      if (t.deletedAt != null) continue;
+      const list = transactionsByAccountId.get(t.accountId) ?? [];
+      list.push(t);
+      transactionsByAccountId.set(t.accountId, list);
+    }
 
     const principalPaidByEmiId = new Map<string, number>();
     // Group EmiPaymentBreakdown.principalPaid by the owning Emi. Breakdowns
@@ -175,6 +186,14 @@ export function useCreditCardStandings(): { standings: CreditCardStandingView[];
       statementsByCardId.set(s.cardId, list);
     }
 
+    /** Every card's not-yet-billed spend since its most recent statement (or all-time, if it has none). */
+    const currentCycleByCardId = new Map(
+      cardList.map((c) => [
+        c.id,
+        unbilledSpendForCard(transactionsByAccountId.get(c.accountId) ?? [], statementsByCardId.get(c.id) ?? []),
+      ]),
+    );
+
     const cardsBySharedLimitId = new Map<string, CreditCardProfile[]>();
     for (const c of cardList) {
       if (c.sharedLimitId == null) continue;
@@ -182,15 +201,6 @@ export function useCreditCardStandings(): { standings: CreditCardStandingView[];
       list.push(c);
       cardsBySharedLimitId.set(c.sharedLimitId, list);
     }
-
-    // No live "current cycle" total is computed here — that requires each
-    // card's own account transactions filtered to the in-progress billing
-    // window (StatementRepository.currentCycleFor). This pass only has the
-    // cross-card statement list wired, so `currentCycleStatement` is passed
-    // as null (matching the engine's own documented behavior for "no live
-    // total available yet": currentCycleSpend from the live cycle is simply
-    // 0, while every already-materialized Statement still counts in full).
-    const currentCycleStatement = null;
 
     const sharedLimitById = new Map((sharedLimits as SharedCreditLimit[]).map((s) => [s.id, s]));
     const results: CreditCardStandingView[] = [];
@@ -205,7 +215,7 @@ export function useCreditCardStandings(): { standings: CreditCardStandingView[];
         const perCard = siblings.map((sibling) => ({
           card: toUtilizationCard(sibling),
           statements: (statementsByCardId.get(sibling.id) ?? []).map(toUtilizationStatement),
-          currentCycleStatement,
+          currentCycleStatement: currentCycleByCardId.get(sibling.id) ?? null,
           emis: utilizationEmis,
         }));
         const standing = sharedCreditLimitStanding({
@@ -224,7 +234,7 @@ export function useCreditCardStandings(): { standings: CreditCardStandingView[];
       const standing = creditCardStanding({
         card: toUtilizationCard(card),
         statements: cardStatements,
-        currentCycleStatement,
+        currentCycleStatement: currentCycleByCardId.get(card.id) ?? null,
         emis: utilizationEmis,
       });
       results.push({
@@ -236,11 +246,12 @@ export function useCreditCardStandings(): { standings: CreditCardStandingView[];
     }
 
     return results;
-  }, [cards, sharedLimits, statements, emis, breakdowns]);
+  }, [cards, sharedLimits, statements, emis, breakdowns, transactions]);
 
   return {
     standings,
-    isLoading: cardsLoading || sharedLimitsLoading || statementsLoading || emisLoading || breakdownsLoading,
+    isLoading:
+      cardsLoading || sharedLimitsLoading || statementsLoading || emisLoading || breakdownsLoading || transactionsLoading,
   };
 }
 

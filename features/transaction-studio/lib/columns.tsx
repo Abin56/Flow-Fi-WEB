@@ -99,9 +99,9 @@ export function buildStudioColumns(): ColumnDef<GridRow, any>[] {
     columnHelper.display({
       id: "action",
       header: "Action",
-      size: 64,
-      minSize: 64,
-      maxSize: 64,
+      size: 84,
+      minSize: 84,
+      maxSize: 84,
       enableResizing: false,
       cell: ({ row, table }) => {
         const meta = table.options.meta as StudioTableMeta;

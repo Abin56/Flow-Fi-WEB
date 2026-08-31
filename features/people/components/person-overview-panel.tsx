@@ -253,7 +253,11 @@ export function PersonOverviewPanel({
         <div className="mt-1">
           <div className="flex items-center justify-between">
             <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Recent Activity</p>
-            <button type="button" className="flex items-center gap-1 text-xs font-semibold text-primary hover:underline">
+            <button
+              type="button"
+              onClick={() => setTab("Timeline")}
+              className="flex items-center gap-1 text-xs font-semibold text-primary hover:underline"
+            >
               View All
               <ArrowRight className="size-3" />
             </button>

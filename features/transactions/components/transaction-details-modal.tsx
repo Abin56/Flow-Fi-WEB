@@ -58,6 +58,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Field, SectionCard, StatChip, TransactionDetailsShell } from "@/components/finance/transaction-details-shell";
+import { BankLogo } from "@/components/finance/bank-logo";
 import { cn } from "@/lib/utils";
 import { formatCurrencyPrecise } from "@/lib/format";
 import { toast } from "@/store/toast-store";
@@ -125,7 +126,7 @@ function AccountChipRow({
               selected ? "border-primary bg-primary/10 text-primary" : cn(FIELD_BORDER, "text-muted-foreground hover:bg-muted"),
             )}
           >
-            <Icon className="size-3.5" />
+            {a.type === "bank" ? <BankLogo bankId={a.bankId} size={14} shape="square" /> : <Icon className="size-3.5" />}
             {a.name}
           </button>
         );
@@ -590,7 +591,7 @@ export function TransactionDetailsModal({
                     const Icon = ACCOUNT_TYPE_ICON[locked.type];
                     return (
                       <>
-                        <Icon className="size-3.5" />
+                        {locked.type === "bank" ? <BankLogo bankId={locked.bankId} size={14} shape="square" /> : <Icon className="size-3.5" />}
                         {locked.name}
                       </>
                     );

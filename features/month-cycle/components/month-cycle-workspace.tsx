@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useState } from "react";
 import {
   ArrowDownRight,
   ArrowUpRight,
@@ -22,11 +23,15 @@ import {
   Users,
   Wallet,
   Wallet2,
+  X,
 } from "lucide-react";
 import { Stagger, StaggerItem } from "@/components/foundation/animated-container";
 import { AnimatedNumber } from "@/components/foundation/animated-number";
 import { ProgressRing } from "@/components/foundation/progress-ring";
 import { EmptyState, SectionLabel } from "@/components/finance";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatCurrency } from "@/lib/format";
@@ -34,6 +39,7 @@ import { cn } from "@/lib/utils";
 import {
   useMonthCycleData,
   type MonthCycleAccountSpend,
+  type MonthCycleExpenseRow,
   type MonthCyclePersonItem,
   type MonthCycleUpcomingItem,
 } from "@/features/month-cycle/hooks/use-month-cycle-data";
@@ -167,6 +173,25 @@ function AccountSpendRow({ item, accent }: { item: MonthCycleAccountSpend; accen
   );
 }
 
+function ExpenseListRow({ row, isMine }: { row: MonthCycleExpenseRow; isMine: boolean }) {
+  const amount = isMine ? row.myAmount : row.fullAmount;
+  return (
+    <div className="flex items-center gap-3 border-b border-border/50 py-3 last:border-b-0">
+      <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-expense/12 text-expense">
+        <Receipt className="size-3.5" />
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-medium text-foreground">{row.description}</p>
+        <p className="truncate text-xs text-muted-foreground">
+          {row.category} · {row.account} · {row.date.toLocaleDateString("en-IN", { day: "2-digit", month: "short" })}
+          {row.isSplit && isMine && " · Split, your share"}
+        </p>
+      </div>
+      <span className="shrink-0 text-sm font-semibold tabular-nums text-expense">{formatCurrency(amount)}</span>
+    </div>
+  );
+}
+
 function SectionCard({
   icon,
   title,
@@ -233,6 +258,8 @@ function SummaryTile({ icon: Icon, label, value, meta, accent }: { icon: LucideI
 
 export function MonthCycleWorkspace() {
   const data = useMonthCycleData();
+  const [expenseView, setExpenseView] = useState<"combined" | "mine">("combined");
+  const [showExpenseList, setShowExpenseList] = useState(false);
 
   if (data.isLoading) {
     return (
@@ -253,7 +280,10 @@ export function MonthCycleWorkspace() {
   }
 
   const { financialView } = data;
-  const changePercent = financialView.spentChangePercent;
+  const isMine = expenseView === "mine";
+  const spent = isMine ? financialView.mySpent : financialView.spent;
+  const net = isMine ? financialView.myNet : financialView.net;
+  const changePercent = isMine ? financialView.mySpentChangePercent : financialView.spentChangePercent;
   const changeIsLess = changePercent != null && changePercent <= 0;
 
   return (
@@ -280,7 +310,11 @@ export function MonthCycleWorkspace() {
               <TooltipTrigger asChild>
                 <Info className="size-3.5 cursor-help" />
               </TooltipTrigger>
-              <TooltipContent>Cycle totals cover the current calendar month.</TooltipContent>
+              <TooltipContent>
+                {data.isCustomCycle
+                  ? `Cycle totals cover the ${data.monthCycleStartDay}th of each month through the ${data.monthCycleStartDay}th of the next — change this in Settings.`
+                  : "Cycle totals cover the current calendar month."}
+              </TooltipContent>
             </Tooltip>
           </div>
         </div>
@@ -308,12 +342,39 @@ export function MonthCycleWorkspace() {
       >
         <div className="relative grid grid-cols-2 gap-6 sm:grid-cols-3 lg:grid-cols-5 lg:divide-x lg:divide-white/15">
           <div className="flex flex-col gap-2 lg:pr-6">
-            <p className="text-[11px] font-semibold tracking-wide text-primary-foreground/75 uppercase">
-              Total Spent This Month
-            </p>
-            <span className="font-heading text-2xl font-bold tracking-tight tabular-nums sm:text-3xl">
-              <AnimatedNumber value={financialView.spent} format={formatCurrency} />
-            </span>
+            <div className="flex items-center gap-1">
+              <p className="text-[11px] font-semibold tracking-wide text-primary-foreground/75 uppercase">
+                {isMine ? "My Expenses This Month" : "Total Spent This Month"}
+              </p>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label="Choose which spend total to show"
+                    className="flex size-4 items-center justify-center rounded text-primary-foreground/60 transition-colors hover:bg-white/15 hover:text-primary-foreground"
+                  >
+                    <ChevronDown className="size-3" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start">
+                  <DropdownMenuItem onSelect={() => setExpenseView("combined")}>
+                    Combined Expenses
+                    <span className="ml-auto text-xs text-muted-foreground">Includes split shares</span>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => setExpenseView("mine")}>
+                    My Expenses
+                    <span className="ml-auto text-xs text-muted-foreground">My share only</span>
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowExpenseList(true)}
+              className="w-fit text-left font-heading text-2xl font-bold tracking-tight tabular-nums transition-opacity hover:opacity-80 sm:text-3xl"
+            >
+              <AnimatedNumber value={spent} format={formatCurrency} />
+            </button>
             {changePercent != null && (
               <p className="flex items-center gap-1 text-xs font-medium text-primary-foreground/85">
                 {changeIsLess ? <ArrowDownRight className="size-3.5" /> : <ArrowUpRight className="size-3.5" />}
@@ -333,7 +394,7 @@ export function MonthCycleWorkspace() {
           <div className="flex flex-col gap-2 lg:px-6">
             <p className="text-[11px] font-semibold tracking-wide text-primary-foreground/75 uppercase">Net Balance</p>
             <span className="font-heading text-2xl font-bold tabular-nums">
-              <AnimatedNumber value={financialView.net} format={formatCurrency} />
+              <AnimatedNumber value={net} format={formatCurrency} />
             </span>
           </div>
 
@@ -660,8 +721,92 @@ export function MonthCycleWorkspace() {
 
       <p className="flex items-center gap-1.5 px-1 text-[11px] text-muted-foreground">
         <CalendarClock className="size-3.5" />
-        Cycle totals reflect the current calendar month and update live as you record payments and transactions.
+        {data.isCustomCycle
+          ? `Cycle totals reflect your ${data.monthCycleStartDay}–${data.monthCycleStartDay} monthly cycle and update live as you record payments and transactions.`
+          : "Cycle totals reflect the current calendar month and update live as you record payments and transactions."}
       </p>
+
+      <Dialog open={showExpenseList} onOpenChange={setShowExpenseList}>
+        <DialogContent
+          showCloseButton={false}
+          className="flex max-h-[85vh] w-full flex-col gap-0 overflow-hidden rounded-3xl border-0 p-0 sm:max-w-lg"
+        >
+          <DialogTitle className="sr-only">{isMine ? "My Expenses This Month" : "Total Spent This Month"}</DialogTitle>
+
+          {/* Gradient hero header, matching the page's own hero card */}
+          <div
+            className="relative shrink-0 overflow-hidden p-6 text-primary-foreground"
+            style={{ background: "var(--gradient-hero)" }}
+          >
+            <button
+              type="button"
+              onClick={() => setShowExpenseList(false)}
+              aria-label="Close"
+              className="absolute top-4 right-4 flex size-8 items-center justify-center rounded-full text-primary-foreground/80 transition-colors hover:bg-white/15 hover:text-primary-foreground"
+            >
+              <X className="size-4" />
+            </button>
+
+            <div className="flex items-center gap-2.5">
+              <span className="flex size-10 shrink-0 items-center justify-center rounded-2xl bg-white/15">
+                <Receipt className="size-5" />
+              </span>
+              <div>
+                <p className="text-[11px] font-semibold tracking-wide text-primary-foreground/75 uppercase">
+                  {data.monthRangeLabel}
+                </p>
+                <p className="font-heading text-base font-semibold">{isMine ? "My Expenses" : "Total Spent"}</p>
+              </div>
+            </div>
+
+            <p className="mt-4 font-heading text-3xl font-bold tracking-tight tabular-nums">
+              <AnimatedNumber value={isMine ? financialView.mySpent : financialView.spent} format={formatCurrency} />
+            </p>
+            <p className="mt-1 text-xs text-primary-foreground/75">
+              {data.expenseRows.length} transaction{data.expenseRows.length === 1 ? "" : "s"} this cycle
+            </p>
+
+            {/* Combined / Mine Only segmented toggle */}
+            <div className="mt-4 inline-flex rounded-full bg-white/15 p-1 text-xs">
+              <button
+                type="button"
+                onClick={() => setExpenseView("combined")}
+                className={cn(
+                  "rounded-full px-3.5 py-1.5 font-semibold transition-colors",
+                  !isMine ? "bg-white text-primary shadow-e1" : "text-primary-foreground/80 hover:text-primary-foreground",
+                )}
+              >
+                Combined
+              </button>
+              <button
+                type="button"
+                onClick={() => setExpenseView("mine")}
+                className={cn(
+                  "rounded-full px-3.5 py-1.5 font-semibold transition-colors",
+                  isMine ? "bg-white text-primary shadow-e1" : "text-primary-foreground/80 hover:text-primary-foreground",
+                )}
+              >
+                Mine Only
+              </button>
+            </div>
+          </div>
+
+          <ScrollArea className="flex-1 bg-card">
+            <div className="px-5 py-2">
+              {data.expenseRows.length === 0 ? (
+                <EmptyState
+                  icon={Receipt}
+                  title="No expenses this cycle"
+                  description="Transactions in this cycle will appear here."
+                  className="py-10"
+                />
+              ) : (
+                data.expenseRows.map((row) => <ExpenseListRow key={row.id} row={row} isMine={isMine} />)
+              )}
+            </div>
+          </ScrollArea>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

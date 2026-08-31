@@ -91,6 +91,7 @@ export interface AccountOverviewItem {
   id: string;
   name: string;
   typeLabel: string;
+  bankId: string | null;
   mask: string | null;
   balance: number;
   balanceLabel: string;
@@ -111,6 +112,7 @@ function toOverviewItem(account: Account, index: number): AccountOverviewItem {
     id: account.id,
     name: account.name,
     typeLabel: ACCOUNT_TYPE_LABEL[account.type],
+    bankId: account.bankId,
     mask: account.accountNumberLast4,
     balance: account.currentBalance,
     balanceLabel: account.isDefault ? "Available Balance" : "Current Balance",

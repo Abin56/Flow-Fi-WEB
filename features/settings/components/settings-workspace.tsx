@@ -56,6 +56,8 @@ import { PermissionBanner } from "@/components/notifications/permission-banner";
 import { SettingsCard } from "@/components/settings/settings-card";
 import { SettingsDivider } from "@/components/settings/settings-divider";
 import { SettingsRow } from "@/components/settings/settings-row";
+import { BankLogo } from "@/components/finance/bank-logo";
+import { bankById } from "@/lib/data/bank-registry";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
@@ -206,6 +208,8 @@ export function SettingsWorkspace() {
   const setLanguage = (v: string) => update("language", v);
   const startWeekOn = preferences.startWeekOn;
   const setStartWeekOn = (v: string) => update("startWeekOn", v);
+  const monthCycleStartDay = preferences.monthCycleStartDay;
+  const setMonthCycleStartDay = (v: string) => update("monthCycleStartDay", Number(v));
 
   // Security (Profile tab quick card)
   const biometricLock = preferences.biometricLock;
@@ -447,6 +451,24 @@ export function SettingsWorkspace() {
                       />
                     }
                   />
+                  <SettingsRow
+                    icon={<CalendarClock className="size-4.5" />}
+                    label="Month Cycle Start Day"
+                    description="Day the Month Cycle page's cycle runs from — e.g. 17 means each cycle spans the 17th to the 16th of the next month"
+                    control={
+                      <RowSelect
+                        value={String(monthCycleStartDay)}
+                        onChange={setMonthCycleStartDay}
+                        options={[
+                          { value: "1", label: "1st (Calendar Month)" },
+                          ...Array.from({ length: 30 }, (_, i) => i + 2).map((day) => ({
+                            value: String(day),
+                            label: `${day}${day === 2 ? "nd" : day === 3 ? "rd" : day === 21 ? "st" : day === 22 ? "nd" : day === 23 ? "rd" : day === 31 ? "st" : "th"}`,
+                          })),
+                        ]}
+                      />
+                    }
+                  />
                 </div>
               </div>
             </div>
@@ -600,9 +622,9 @@ export function SettingsWorkspace() {
                 <div key={a.id}>
                   {i > 0 && <SettingsDivider />}
                   <SettingsRow
-                    icon={<Landmark className="size-4.5" />}
+                    icon={<BankLogo bankId={a.bankId} size={22} shape="square" />}
                     label={a.name}
-                    description={a.bankId ?? "No institution"}
+                    description={bankById(a.bankId)?.name ?? "No institution"}
                     control={<span className="font-mono text-sm font-semibold tabular-nums text-foreground">{formatCurrency(a.currentBalance)}</span>}
                   />
                 </div>

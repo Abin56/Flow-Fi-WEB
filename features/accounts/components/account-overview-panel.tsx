@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { Line, LineChart, ResponsiveContainer } from "recharts";
+import { BankLogo } from "@/components/finance/bank-logo";
 import { ACCOUNT_COLOR } from "@/features/accounts/lib/account-colors";
 import type { AccountOverviewItem } from "@/features/accounts/hooks/use-accounts-data";
 import { formatCurrency } from "@/lib/format";
@@ -89,9 +90,13 @@ export function AccountOverviewPanel({
 
       <div className="relative mt-4 overflow-hidden rounded-2xl p-4 text-white" style={{ background: palette.gradient }}>
         <div className="flex items-center gap-2.5">
-          <span className="flex size-9 items-center justify-center rounded-xl bg-white/15">
-            <Icon className="size-4.5" />
-          </span>
+          {account.bankId ? (
+            <BankLogo bankId={account.bankId} size={36} shape="square" />
+          ) : (
+            <span className="flex size-9 items-center justify-center rounded-xl bg-white/15">
+              <Icon className="size-4.5" />
+            </span>
+          )}
           <div className="min-w-0">
             <p className="truncate text-sm font-semibold">{account.name}</p>
             <p className="truncate text-xs text-white/75">

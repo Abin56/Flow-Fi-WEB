@@ -21,6 +21,10 @@ export interface UserPreferences {
   numberFormat: string;
   language: string;
   startWeekOn: string;
+  /** Day of month (1-31) the Month Cycle page's "cycle" starts on — e.g. 17 means each
+   *  cycle runs the 17th through the 16th of the next month. 1 (the default) preserves
+   *  the plain calendar month every existing user already sees. */
+  monthCycleStartDay: number;
   biometricLock: boolean;
   autoLockMinutes: string;
   privacyMode: boolean;
@@ -50,6 +54,7 @@ export const DEFAULT_PREFERENCES: UserPreferences = {
   numberFormat: "indian",
   language: "en",
   startWeekOn: "monday",
+  monthCycleStartDay: 1,
   biometricLock: true,
   autoLockMinutes: "5",
   privacyMode: false,

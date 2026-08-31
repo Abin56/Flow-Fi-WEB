@@ -1,9 +1,9 @@
 "use client";
 
-import { Landmark, Repeat, type LucideIcon } from "lucide-react";
+import { Repeat, type LucideIcon } from "lucide-react";
 import { StaggerItem } from "@/components/foundation/animated-container";
 import { ClayBadge } from "@/components/clay/clay-badge";
-import { CurrencyCell, DateCell } from "@/components/finance";
+import { BankLogo, CurrencyCell, DateCell } from "@/components/finance";
 import { billOccurrenceStatus, type BillStatus } from "@/lib/models/bill";
 import type { BillRow } from "@/features/bills/hooks/use-bills-data";
 
@@ -66,7 +66,7 @@ export function BillCard({ row, onClick }: { row: BillRow; onClick: () => void }
 
         {account && (
           <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <Landmark className="size-3.5" />
+            <BankLogo bankId={account.bankId} size={16} shape="square" />
             {account.name}
           </div>
         )}

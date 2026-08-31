@@ -466,6 +466,39 @@ function periodContains(period: StatementPeriodWindow, date: Date): boolean {
   return day.getTime() >= start.getTime() && day.getTime() <= end.getTime();
 }
 
+/**
+ * Every dollar spent on `card` since the last billed cycle, computed purely
+ * from `cardTransactions` (every `Transaction` with `accountId ===
+ * card.accountId`) and `statements` — the engine's `currentCycleStatement`
+ * input, but NOT bounded to the single in-progress statement-day window the
+ * way `StatementRepository.currentCycleFor` is.
+ *
+ * This app never calls `StatementRepository.materializeIfDue` from anywhere
+ * (no background jobs, and no UI path reaches it yet — see that method's doc
+ * comment), so a card can easily have one or more *closed* billing cycles
+ * with no `Statement` document at all. A window strictly scoped to "the
+ * cycle currently in progress" would silently drop that spend — exactly the
+ * bug this function exists to avoid: it sums every transaction dated after
+ * the most recent statement this card actually has (or every transaction
+ * ever, if it has none), so nothing spent on the card can fall through a gap
+ * between "billed" and "the current cycle" purely because a statement was
+ * never generated.
+ */
+export function unbilledSpendForCard(
+  cardTransactions: Transaction[],
+  statements: { periodEnd: Date }[],
+): { periodStart: Date; periodEnd: Date; totalAmount: number } {
+  const billedThrough = statements.reduce(
+    (latest, s) => (s.periodEnd.getTime() > latest.getTime() ? s.periodEnd : latest),
+    new Date(0),
+  );
+  const now = new Date();
+  const totalAmount = cardTransactions
+    .filter((t) => t.deletedAt == null && t.dateTime.getTime() > billedThrough.getTime())
+    .reduce((sum, t) => sum + t.amount, 0);
+  return { periodStart: billedThrough, periodEnd: now, totalAmount };
+}
+
 // --- StatementRepository (statement_repository.dart) ---
 
 export interface EditStatementParams {

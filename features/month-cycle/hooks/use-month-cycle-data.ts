@@ -38,6 +38,8 @@ import { useCreditCardTotals } from "@/features/credit-cards/hooks/use-credit-ca
 import { useEmiRows } from "@/features/emi/hooks/use-emi-data";
 import { useLoanRows } from "@/features/loans/hooks/use-loans-data";
 import { usePeopleRows, usePeopleStats } from "@/features/people/hooks/use-people-data";
+import { useUserPreferences } from "@/features/settings/hooks/use-user-preferences";
+import { CycleAnchor } from "@/lib/engines/cycle-engine";
 import {
   amountFor,
   percentChange,
@@ -62,8 +64,42 @@ import { effectiveMonth, isTransfer, type Transaction } from "@/lib/models/trans
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
-function isThisMonth(date: Date, now: Date): boolean {
-  return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth();
+/**
+ * The user's configured Month Cycle window containing `now` — a plain
+ * calendar month when `startDay` is 1 (every existing user's default,
+ * unchanged), otherwise the `startDay`-to-`startDay`-minus-a-day-next-month
+ * window built on the same `CycleAnchor` engine credit card statement cycles
+ * already use (anchored one day early, at `startDay - 1`, since the engine's
+ * anchor day is defined as the cycle's *closing* day — anchoring at
+ * `startDay - 1` makes `startDay` itself the first day of the next cycle).
+ */
+function cycleRangeFor(startDay: number, now: Date): { start: Date; end: Date } {
+  if (startDay <= 1) {
+    return {
+      start: new Date(now.getFullYear(), now.getMonth(), 1),
+      end: new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999),
+    };
+  }
+  const period = new CycleAnchor(startDay - 1).currentCycleFor(now);
+  return {
+    start: new Date(period.start.getFullYear(), period.start.getMonth(), period.start.getDate()),
+    end: new Date(period.end.getFullYear(), period.end.getMonth(), period.end.getDate(), 23, 59, 59, 999),
+  };
+}
+
+function isInCycle(date: Date, range: { start: Date; end: Date }): boolean {
+  return date.getTime() >= range.start.getTime() && date.getTime() <= range.end.getTime();
+}
+
+/**
+ * The date a transaction should be bucketed under for "this cycle" totals —
+ * `effectiveMonth` (collapsed to the 1st of its month) for the legacy
+ * calendar-month cycle, matching every pre-existing behavior exactly; a
+ * custom mid-month cycle needs the real day instead, or a transaction from
+ * the wrong half of either calendar month would leak across the boundary.
+ */
+function bucketDateFor(t: Transaction, isCustomCycle: boolean): Date {
+  return isCustomCycle ? (t.accountingMonth ?? t.dateTime) : effectiveMonth(t);
 }
 
 function daysLeftIn(date: Date, now: Date): number {
@@ -119,8 +155,26 @@ export interface MonthCycleAccountSpend {
   percentOfTotal: number;
 }
 
+/** One expense transaction backing this cycle's "Total Spent"/"My Expenses" figure. */
+export interface MonthCycleExpenseRow {
+  id: string;
+  description: string;
+  category: string;
+  account: string;
+  date: Date;
+  /** The transaction's full amount — what counts toward "Combined Expenses". */
+  fullAmount: number;
+  /** My share only (equals `fullAmount` for a non-split expense) — what counts toward "My Expenses". */
+  myAmount: number;
+  isSplit: boolean;
+}
+
 export function useMonthCycleData() {
   const now = useMemo(() => new Date(), []);
+  const { preferences } = useUserPreferences();
+  const monthCycleStartDay = preferences.monthCycleStartDay;
+  const cycleRange = useMemo(() => cycleRangeFor(monthCycleStartDay, now), [monthCycleStartDay, now]);
+  const isCustomCycle = monthCycleStartDay > 1;
 
   const { data: transactions = [], isLoading: transactionsLoading } = useTransactions();
   const { data: accounts = [], isLoading: accountsLoading } = useAccounts();
@@ -160,28 +214,30 @@ export function useMonthCycleData() {
     cardTotalsLoading ||
     accountsStatsLoading;
 
-  const monthLabel = useMemo(() => now.toLocaleDateString("en-IN", { month: "long", year: "numeric" }), [now]);
   const monthRangeLabel = useMemo(() => {
-    const start = new Date(now.getFullYear(), now.getMonth(), 1);
-    const end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
     const fmt = (d: Date) => d.toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
-    return `${fmt(start)} – ${fmt(end)}`;
-  }, [now]);
-  const daysLeftInMonth = useMemo(() => {
-    const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-    return daysLeftIn(lastDay, now);
-  }, [now]);
+    return `${fmt(cycleRange.start)} – ${fmt(cycleRange.end)}`;
+  }, [cycleRange]);
+  const monthLabel = useMemo(
+    () =>
+      isCustomCycle
+        ? monthRangeLabel
+        : cycleRange.end.toLocaleDateString("en-IN", { month: "long", year: "numeric" }),
+    [isCustomCycle, monthRangeLabel, cycleRange],
+  );
+  const daysLeftInMonth = useMemo(() => daysLeftIn(cycleRange.end, now), [cycleRange, now]);
 
   // --- This month's combined spend / income, and the % change vs last month
   //     (ported `resolveFinancialView`/`amountFor`/`percentChange` from the
   //     Financial View engine — the same figures the Reports feature uses,
   //     not a re-derived formula). ---
   const financialView = useMemo(() => {
-    const strategy: DateRangeStrategy = { kind: "reportsPeriod", isMonthGranular: true };
-    const range: DateRange = {
-      start: new Date(now.getFullYear(), now.getMonth(), 1),
-      end: new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999),
-    };
+    // `isMonthGranular` buckets transactions by `effectiveMonth` (collapsed to the 1st of
+    // their calendar month) — correct only for the plain-calendar-month cycle. A custom
+    // cycle spans parts of two calendar months, so it must bucket by the transaction's
+    // real `dateTime` instead, or spend from the wrong half of either month would leak in.
+    const strategy: DateRangeStrategy = { kind: "reportsPeriod", isMonthGranular: !isCustomCycle };
+    const range: DateRange = cycleRange;
     const previousRange = previousRangeFor(strategy, range)!;
 
     const dashboardTransactions: DashboardTransaction[] = (transactions as Transaction[]).map((t) => ({
@@ -230,10 +286,48 @@ export function useMonthCycleData() {
     const net = income - spent;
     const spentChangePercent = percentChange(spent, previousSpent);
 
-    return { spent, previousSpent, income, net, spentChangePercent };
-  }, [now, transactions, expenses, billOccurrences, emiInstallments, loanInstallments, statements]);
+    // "My Expenses" — my own share only (excludes what a split expense's other participants owe),
+    // the same `myExpenses` module `combinedExpenses` itself is built from. Computed alongside
+    // `spent` so the Month Cycle hero can offer both views without a second data pass.
+    const mySpent = amountFor("myExpenses", strategy, range, inputs);
+    const myPreviousSpent = amountFor("myExpenses", strategy, previousRange, inputs);
+    const myNet = income - mySpent;
+    const mySpentChangePercent = percentChange(mySpent, myPreviousSpent);
+
+    return { spent, previousSpent, income, net, spentChangePercent, mySpent, myPreviousSpent, myNet, mySpentChangePercent };
+  }, [isCustomCycle, cycleRange, transactions, expenses, billOccurrences, emiInstallments, loanInstallments, statements]);
 
   const savingsRatePercent = financialView.income > 0 ? Math.round((financialView.net / financialView.income) * 100) : 0;
+
+  // --- The actual transactions behind `financialView.spent`/`mySpent` — same expense-in-range
+  //     filter and Expense join `myExpenses()`/`combinedExpenses()` sum over, projected to rows
+  //     so the hero's "Total Spent"/"My Expenses" figure can be drilled into. ---
+  const expenseRows = useMemo(() => {
+    const accountById = new Map((accounts as Account[]).map((a) => [a.id, a]));
+    const expenseByTransactionId = new Map((expenses as Expense[]).map((e) => [e.transactionId, e]));
+
+    const rows: MonthCycleExpenseRow[] = [];
+    for (const t of transactions as Transaction[]) {
+      if (t.type !== "expense" || isTransfer(t) || t.deletedAt != null) continue;
+      if (!isInCycle(bucketDateFor(t, isCustomCycle), cycleRange)) continue;
+
+      const expense = expenseByTransactionId.get(t.id);
+      const split = expense != null && isSplit(expense);
+      const account = accountById.get(t.accountId);
+      rows.push({
+        id: t.id,
+        description: t.description || categoryNameFor(t.categoryId, categories as Category[]),
+        category: categoryNameFor(t.categoryId, categories as Category[]),
+        account: account?.name ?? "Unknown Account",
+        date: t.dateTime,
+        fullAmount: t.amount,
+        myAmount: expense ? myShare(expense) : t.amount,
+        isSplit: split,
+      });
+    }
+    rows.sort((a, b) => b.date.getTime() - a.date.getTime());
+    return rows;
+  }, [transactions, expenses, accounts, categories, cycleRange, isCustomCycle]);
 
   // --- Overall monthly budget (categoryId == null, type == "monthly") ---
   const budgetOverview = useMemo(() => {
@@ -257,7 +351,7 @@ export function useMonthCycleData() {
     for (const row of emiRows) {
       if (row.status === "closed" || row.status === "completed") continue;
       const due = row.nextInstallment?.dueDate;
-      if (!due || !isThisMonth(due, now)) continue;
+      if (!due || !isInCycle(due, cycleRange)) continue;
       const amount = row.nextInstallment ? row.nextInstallment.amountDue - row.nextInstallment.amountPaid : 0;
       total += amount;
       items.push({
@@ -272,7 +366,7 @@ export function useMonthCycleData() {
     }
     items.sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime());
     return { items, total, count: items.length };
-  }, [emiRows, now]);
+  }, [emiRows, now, cycleRange]);
 
   // --- Loan installments due this month ---
   const loansThisMonth = useMemo(() => {
@@ -280,7 +374,7 @@ export function useMonthCycleData() {
     let total = 0;
     for (const row of loanRows) {
       if (row.status === "closed") continue;
-      if (!row.nextDueDate || !isThisMonth(row.nextDueDate, now)) continue;
+      if (!row.nextDueDate || !isInCycle(row.nextDueDate, cycleRange)) continue;
       total += row.emiAmount;
       items.push({
         id: row.loan.id,
@@ -294,7 +388,7 @@ export function useMonthCycleData() {
     }
     items.sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime());
     return { items, total, count: items.length };
-  }, [loanRows, now]);
+  }, [loanRows, now, cycleRange]);
 
   // --- Credit card statements due this month, unpaid ---
   const cardsThisMonth = useMemo(() => {
@@ -303,7 +397,7 @@ export function useMonthCycleData() {
     let total = 0;
     for (const statement of statements as Statement[]) {
       if (statementStatus(statement) === "paid") continue;
-      if (!isThisMonth(statement.dueDate, now)) continue;
+      if (!isInCycle(statement.dueDate, cycleRange)) continue;
       const remaining = statementRemainingAmount(statement);
       total += remaining;
       const card = cardById.get(statement.cardId);
@@ -319,7 +413,7 @@ export function useMonthCycleData() {
     }
     items.sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime());
     return { items, total, count: items.length };
-  }, [creditCards, statements, now]);
+  }, [creditCards, statements, now, cycleRange]);
 
   // --- Bills & reminders due this month, unpaid ---
   const billsThisMonth = useMemo(() => {
@@ -330,7 +424,7 @@ export function useMonthCycleData() {
       if (!occurrence) continue;
       const status = billOccurrenceStatus(occurrence, now);
       if (status === "paid" || status === "skipped") continue;
-      if (!isThisMonth(occurrence.dueDate, now)) continue;
+      if (!isInCycle(occurrence.dueDate, cycleRange)) continue;
       const remaining = billOccurrenceRemainingAmount(occurrence);
       total += remaining;
       items.push({
@@ -345,7 +439,7 @@ export function useMonthCycleData() {
     }
     items.sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime());
     return { items, total, count: items.length };
-  }, [billRows, now]);
+  }, [billRows, now, cycleRange]);
 
   // --- People: who you need to give money to / whose handover to you is pending ---
   const peopleYouNeedToGive = useMemo(() => {
@@ -382,8 +476,7 @@ export function useMonthCycleData() {
     const totals = new Map<string, number>();
     for (const t of transactions as Transaction[]) {
       if (t.type !== "expense" || isTransfer(t) || t.deletedAt != null) continue;
-      const effective = effectiveMonth(t);
-      if (!isThisMonth(effective, now)) continue;
+      if (!isInCycle(bucketDateFor(t, isCustomCycle), cycleRange)) continue;
       totals.set(t.accountId, (totals.get(t.accountId) ?? 0) + t.amount);
     }
     const grandTotal = Array.from(totals.values()).reduce((sum, v) => sum + v, 0);
@@ -400,7 +493,7 @@ export function useMonthCycleData() {
       })
       .sort((a, b) => b.amount - a.amount);
     return rows;
-  }, [transactions, accounts, now]);
+  }, [transactions, accounts, cycleRange, isCustomCycle]);
 
   // --- Month summary at a glance ---
   const monthSummary = useMemo(() => {
@@ -412,8 +505,7 @@ export function useMonthCycleData() {
 
     for (const t of transactions as Transaction[]) {
       if (t.deletedAt != null || isTransfer(t)) continue;
-      const effective = effectiveMonth(t);
-      if (!isThisMonth(effective, now)) continue;
+      if (!isInCycle(bucketDateFor(t, isCustomCycle), cycleRange)) continue;
       transactionCount += 1;
       txnCountByAccount.set(t.accountId, (txnCountByAccount.get(t.accountId) ?? 0) + 1);
       if (t.type === "expense") {
@@ -429,7 +521,8 @@ export function useMonthCycleData() {
     const topAccount = topAccountEntry ? accountById.get(topAccountEntry[0]) : undefined;
     const topAccountSpend = topAccountEntry ? (accountSpends.find((a) => a.id === topAccountEntry[0])?.amount ?? 0) : 0;
 
-    const daysElapsed = Math.min(now.getDate(), new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate());
+    const cycleLengthDays = Math.round((cycleRange.end.getTime() - cycleRange.start.getTime()) / MS_PER_DAY) + 1;
+    const daysElapsed = Math.min(cycleLengthDays, Math.floor((now.getTime() - cycleRange.start.getTime()) / MS_PER_DAY) + 1);
     const avgDailySpend = daysElapsed > 0 ? financialView.spent / daysElapsed : 0;
 
     const pendingActionsCount = emiThisMonth.count + loansThisMonth.count + cardsThisMonth.count + billsThisMonth.count;
@@ -441,7 +534,20 @@ export function useMonthCycleData() {
       avgDailySpend,
       pendingActionsCount,
     };
-  }, [transactions, categories, accounts, accountSpends, now, financialView.spent, emiThisMonth.count, loansThisMonth.count, cardsThisMonth.count, billsThisMonth.count]);
+  }, [
+    transactions,
+    categories,
+    accounts,
+    accountSpends,
+    now,
+    cycleRange,
+    isCustomCycle,
+    financialView.spent,
+    emiThisMonth.count,
+    loansThisMonth.count,
+    cardsThisMonth.count,
+    billsThisMonth.count,
+  ]);
 
   return {
     isLoading,
@@ -449,8 +555,11 @@ export function useMonthCycleData() {
     monthLabel,
     monthRangeLabel,
     daysLeftInMonth,
+    isCustomCycle,
+    monthCycleStartDay,
     financialView,
     savingsRatePercent,
+    expenseRows,
     budgetOverview,
     emi: emiThisMonth,
     loans: loansThisMonth,

@@ -78,6 +78,7 @@ export const BANKS: BankInfo[] = [
 
 export function bankById(id: string | null | undefined): BankInfo | null {
   if (!id) return null;
+  if (id === GENERIC_BANK.id) return GENERIC_BANK;
   return BANKS.find((b) => b.id === id) ?? null;
 }
 

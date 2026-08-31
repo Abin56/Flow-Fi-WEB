@@ -2,6 +2,7 @@
 
 import { ChevronRight, Landmark, MoreVertical, Star, Wallet } from "lucide-react";
 import { Line, LineChart, ResponsiveContainer } from "recharts";
+import { BankLogo } from "@/components/finance/bank-logo";
 import { ACCOUNT_COLOR } from "@/features/accounts/lib/account-colors";
 import type { AccountOverviewItem } from "@/features/accounts/hooks/use-accounts-data";
 import { formatCurrency } from "@/lib/format";
@@ -31,12 +32,16 @@ export function AccountTile({
     >
       <span className="absolute inset-x-0 top-0 h-1" style={{ background: palette.gradient }} />
       <div className="flex items-start justify-between gap-2">
-        <span
-          className={cn("flex size-10 items-center justify-center rounded-xl shadow-sm", palette.onGradient)}
-          style={{ background: palette.gradient }}
-        >
-          <Icon className="size-4.5" />
-        </span>
+        {account.bankId ? (
+          <BankLogo bankId={account.bankId} size={40} shape="square" className="shadow-sm" />
+        ) : (
+          <span
+            className={cn("flex size-10 items-center justify-center rounded-xl shadow-sm", palette.onGradient)}
+            style={{ background: palette.gradient }}
+          >
+            <Icon className="size-4.5" />
+          </span>
+        )}
         {account.isPrimary ? (
           <span className="flex items-center gap-1 rounded-full bg-success/16 px-2.5 py-1 text-[11px] font-semibold text-success">
             <Star className="size-3 fill-current" />
