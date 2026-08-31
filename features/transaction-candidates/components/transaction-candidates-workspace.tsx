@@ -63,7 +63,9 @@ import {
   type CandidateTabKey,
   type DuplicatesByCandidateId,
 } from "../lib/filters";
-import { bulkImportCandidates, bulkIgnoreCandidates } from "../lib/import-candidate";
+import { scheduleDelayedDismiss } from "../lib/delayed-dismiss";
+import { bulkImportCandidates, ignoreCandidate } from "../lib/import-candidate";
+import { BulkImportDialog, type BulkImportSelection } from "./bulk-import-dialog";
 import { CandidateDetailsModal } from "./candidate-details-modal";
 import { CandidateStatusBadge } from "./candidate-status-badge";
 import { IgnoreCandidateButton } from "./ignore-candidate-button";
@@ -116,7 +118,12 @@ export function TransactionCandidatesWorkspace() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkDismissConfirmOpen, setBulkDismissConfirmOpen] = useState(false);
   const [bulkRunning, setBulkRunning] = useState(false);
-  const [bulkCategoryId, setBulkCategoryId] = useState<string | null>(null);
+  const [bulkImportDialogOpen, setBulkImportDialogOpen] = useState(false);
+  // The category/destination the user picked in `BulkImportDialog` for the batch currently being
+  // imported — kept around (rather than only threaded through a function argument) so a duplicate
+  // detected mid-batch can be retried via `handleBulkImportDuplicatesAnyway` with the same forced
+  // destination the user already chose, without reopening the dialog.
+  const [bulkSelection, setBulkSelection] = useState<BulkImportSelection | null>(null);
   // Rows `bulkImportCandidates` flagged as `duplicate_detected` on the last attempt — nothing was
   // written for these yet. Confirming past `DuplicateWarningDialog` re-runs the import for exactly
   // these candidate ids with `skipDuplicateCheck: true`; cancelling just clears this (candidates and
@@ -136,7 +143,19 @@ export function TransactionCandidatesWorkspace() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [fullscreen]);
 
-  const candidates = liveCandidates;
+  // Ids whose Dismiss is currently in its undo window (see `delayed-dismiss.ts`) — hidden from every
+  // view of the list immediately, before the real Firestore delete actually runs.
+  const [pendingDismissIds, setPendingDismissIds] = useState<Set<string>>(new Set());
+  const hideCandidate = (candidateId: string) => setPendingDismissIds((prev) => new Set(prev).add(candidateId));
+  const unhideCandidate = (candidateId: string) =>
+    setPendingDismissIds((prev) => {
+      if (!prev.has(candidateId)) return prev;
+      const next = new Set(prev);
+      next.delete(candidateId);
+      return next;
+    });
+
+  const candidates = useMemo(() => liveCandidates.filter((c) => !pendingDismissIds.has(c.id)), [liveCandidates, pendingDismissIds]);
 
   const duplicates: DuplicatesByCandidateId = useMemo(() => {
     const map = new Map<string, CandidateDuplicateResult>();
@@ -173,13 +192,26 @@ export function TransactionCandidatesWorkspace() {
     [candidates, search, filters, duplicates],
   );
 
-  const allVisibleSelected = visibleCandidates.length > 0 && visibleCandidates.every((c) => selectedIds.has(c.id));
-  const someVisibleSelected = visibleCandidates.some((c) => selectedIds.has(c.id));
+  const candidateById = useMemo(() => new Map(candidates.map((c) => [c.id, c])), [candidates]);
+  // Selection is locked to whichever direction (income/expense) the first selected row belongs to —
+  // a bulk import applies one category/account to the whole batch, which only makes sense for
+  // transactions of the same type. `null` once nothing is selected, so either direction can start a
+  // fresh selection.
+  const selectionDirection = useMemo(() => {
+    const first = candidates.find((c) => selectedIds.has(c.id));
+    return first?.direction ?? null;
+  }, [candidates, selectedIds]);
+
+  const selectableVisibleCandidates = selectionDirection
+    ? visibleCandidates.filter((c) => c.direction === selectionDirection)
+    : visibleCandidates;
+  const allVisibleSelected = selectableVisibleCandidates.length > 0 && selectableVisibleCandidates.every((c) => selectedIds.has(c.id));
+  const someVisibleSelected = selectableVisibleCandidates.some((c) => selectedIds.has(c.id));
 
   function toggleSelectAllVisible(checked: boolean) {
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      for (const c of visibleCandidates) {
+      for (const c of selectableVisibleCandidates) {
         if (checked) next.add(c.id);
         else next.delete(c.id);
       }
@@ -188,6 +220,16 @@ export function TransactionCandidatesWorkspace() {
   }
 
   function toggleRowSelected(candidateId: string, checked: boolean) {
+    if (checked && selectionDirection) {
+      const candidate = candidateById.get(candidateId);
+      if (candidate && candidate.direction !== selectionDirection) {
+        toast.error(
+          "Can't mix income and expense",
+          `Clear the current selection first — you're selecting ${selectionDirection === "credit" ? "income" : "expense"} transactions.`,
+        );
+        return;
+      }
+    }
     setSelectedIds((prev) => {
       const next = new Set(prev);
       if (checked) next.add(candidateId);
@@ -207,19 +249,21 @@ export function TransactionCandidatesWorkspace() {
    * `DuplicateWarningDialog`'s "Import anyway" — it re-imports only the previously-flagged rows, not
    * the whole original selection, so already-succeeded rows are never retried.
    */
-  async function runBulkImport(candidatesToImport: SmsTransactionCandidate[], force: boolean) {
-    if (!repositories || candidatesToImport.length === 0 || bulkCategoryId == null) return;
+  async function runBulkImport(candidatesToImport: SmsTransactionCandidate[], force: boolean, selection: BulkImportSelection) {
+    if (!repositories || candidatesToImport.length === 0) return;
     setBulkRunning(true);
     try {
       const results = await bulkImportCandidates(
         candidatesToImport,
-        bulkCategoryId,
+        selection.categoryId,
         creditCards,
         repositories.transactionRepository,
         repositories.candidateRepository,
         repositories.expenseRepository,
         existingTransactionsForDuplicateCheck,
         force,
+        { accountId: selection.accountId, matchedCard: selection.matchedCard },
+        selection.personAssignment,
       );
       const succeededIds = results.filter((r) => r.outcome.status === "success").map((r) => r.candidateId);
       const duplicateRows = results.filter(
@@ -258,33 +302,42 @@ export function TransactionCandidatesWorkspace() {
     }
   }
 
-  async function handleBulkImportSelected() {
-    if (!repositories || selectedCandidates.length === 0 || bulkCategoryId == null) return;
-    await runBulkImport(selectedCandidates, false);
+  function handleBulkImportConfirm(selection: BulkImportSelection) {
+    if (!repositories || selectedCandidates.length === 0) return;
+    setBulkSelection(selection);
+    setBulkImportDialogOpen(false);
+    void runBulkImport(selectedCandidates, false, selection);
   }
 
   function handleBulkImportDuplicatesAnyway() {
-    if (!bulkDuplicateState) return;
+    if (!bulkDuplicateState || !bulkSelection) return;
     const flaggedIds = new Set(bulkDuplicateState.candidateIds);
     const candidatesToRetry = selectedCandidates.filter((c) => flaggedIds.has(c.id));
     setBulkDuplicateState(null);
-    void runBulkImport(candidatesToRetry, true);
+    void runBulkImport(candidatesToRetry, true, bulkSelection);
   }
 
-  async function handleBulkDismissSelected() {
+  function handleBulkDismissSelected() {
     if (!repositories || selectedCandidates.length === 0) return;
-    setBulkRunning(true);
-    try {
-      const results = await bulkIgnoreCandidates(selectedCandidates, repositories.candidateRepository);
-      const failed = results.filter((r) => !r.ok).length;
-      const succeeded = results.length - failed;
-      if (failed === 0) toast.success("Dismissed", `${succeeded} candidate${succeeded === 1 ? "" : "s"} dismissed.`);
-      else toast.error("Some candidates couldn't be dismissed", `${succeeded} dismissed, ${failed} failed — still pending, try again.`);
-      setSelectedIds(new Set());
-    } finally {
-      setBulkRunning(false);
-      setBulkDismissConfirmOpen(false);
-    }
+    const candidatesToDismiss = selectedCandidates;
+    const cancels = candidatesToDismiss.map(
+      (c) =>
+        scheduleDelayedDismiss({
+          candidateId: c.id,
+          hide: hideCandidate,
+          unhide: unhideCandidate,
+          commitDelete: () => ignoreCandidate(c, repositories.candidateRepository),
+          onDeleteFailed: (error) => {
+            toast.error("Couldn't dismiss a candidate", error instanceof Error ? error.message : "Still pending, try again.");
+          },
+        }).cancel,
+    );
+    toast.success("Dismissed", `${candidatesToDismiss.length} candidate${candidatesToDismiss.length === 1 ? "" : "s"} won't show in the review queue.`, {
+      label: "Undo",
+      onClick: () => cancels.forEach((cancel) => cancel()),
+    });
+    setSelectedIds(new Set());
+    setBulkDismissConfirmOpen(false);
   }
 
   const counts = useMemo(() => {
@@ -315,14 +368,19 @@ export function TransactionCandidatesWorkspace() {
         />
       ),
       width: "36px",
-      accessor: (c) => (
-        <Checkbox
-          checked={selectedIds.has(c.id)}
-          onCheckedChange={(checked) => toggleRowSelected(c.id, checked === true)}
-          onClick={(e) => e.stopPropagation()}
-          aria-label={`Select ${c.merchant ?? c.bankName ?? "candidate"}`}
-        />
-      ),
+      accessor: (c) => {
+        const disabled = selectionDirection != null && c.direction !== selectionDirection && !selectedIds.has(c.id);
+        return (
+          <Checkbox
+            checked={selectedIds.has(c.id)}
+            disabled={disabled}
+            onCheckedChange={(checked) => toggleRowSelected(c.id, checked === true)}
+            onClick={(e) => e.stopPropagation()}
+            aria-label={`Select ${c.merchant ?? c.bankName ?? "candidate"}`}
+            title={disabled ? `Clear the current selection first — you're selecting ${selectionDirection === "credit" ? "income" : "expense"} transactions.` : undefined}
+          />
+        );
+      },
     },
     {
       id: "no",
@@ -403,7 +461,12 @@ export function TransactionCandidatesWorkspace() {
             <ClayButton variant="primary" size="sm" onClick={() => setDetailCandidate(c)}>
               Import
             </ClayButton>
-            <IgnoreCandidateButton candidate={c} candidateRepository={repositories.candidateRepository} />
+            <IgnoreCandidateButton
+              candidate={c}
+              candidateRepository={repositories.candidateRepository}
+              onHide={hideCandidate}
+              onUnhide={unhideCandidate}
+            />
           </div>
         ) : null,
     },
@@ -553,19 +616,7 @@ export function TransactionCandidatesWorkspace() {
 
       {repositories && (
         <BulkActionsBar selectionCount={selectedIds.size} onClear={() => setSelectedIds(new Set())}>
-          <Select value={bulkCategoryId ?? undefined} onValueChange={setBulkCategoryId}>
-            <SelectTrigger className="w-40">
-              <SelectValue placeholder="Category" />
-            </SelectTrigger>
-            <SelectContent>
-              {categories.map((cat) => (
-                <SelectItem key={cat.id} value={cat.id}>
-                  {cat.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <ClayButton variant="primary" size="sm" onClick={() => void handleBulkImportSelected()} disabled={bulkRunning || bulkCategoryId == null}>
+          <ClayButton variant="primary" size="sm" onClick={() => setBulkImportDialogOpen(true)} disabled={bulkRunning}>
             {bulkRunning ? "Importing…" : `Import selected (${selectedIds.size})`}
           </ClayButton>
           <ClayButton variant="secondary" size="sm" onClick={() => setBulkDismissConfirmOpen(true)} disabled={bulkRunning}>
@@ -573,6 +624,24 @@ export function TransactionCandidatesWorkspace() {
           </ClayButton>
         </BulkActionsBar>
       )}
+
+      <BulkImportDialog
+        open={bulkImportDialogOpen}
+        onOpenChange={setBulkImportDialogOpen}
+        selectedCount={selectedIds.size}
+        categories={categories}
+        accounts={accounts}
+        creditCards={creditCards}
+        people={people}
+        onCreatePerson={(name) =>
+          repositories
+            ? repositories.personRepository.createPerson({ name, avatarColorValue: 0, openingBalance: 0 })
+            : Promise.reject(new Error("Not signed in"))
+        }
+        busy={bulkRunning}
+        onConfirm={handleBulkImportConfirm}
+        direction={selectionDirection}
+      />
 
       {repositories && (
         <CandidateDetailsModal
@@ -591,6 +660,8 @@ export function TransactionCandidatesWorkspace() {
           candidateRepository={repositories.candidateRepository}
           expenseRepository={repositories.expenseRepository}
           onCreatePerson={(name) => repositories.personRepository.createPerson({ name, avatarColorValue: 0, openingBalance: 0 })}
+          onHide={hideCandidate}
+          onUnhide={unhideCandidate}
         />
       )}
 
@@ -598,11 +669,10 @@ export function TransactionCandidatesWorkspace() {
         open={bulkDismissConfirmOpen}
         onOpenChange={setBulkDismissConfirmOpen}
         title={`Dismiss ${selectedIds.size} candidate${selectedIds.size === 1 ? "" : "s"}?`}
-        description="This removes them from the review queue without creating a transaction. This can't be undone from here."
+        description="This removes them from the review queue without creating a transaction. You'll get a few seconds to undo from the confirmation toast."
         variant="destructive"
-        confirmLabel={bulkRunning ? "Dismissing…" : "Dismiss"}
-        onConfirm={() => void handleBulkDismissSelected()}
-        loading={bulkRunning}
+        confirmLabel="Dismiss"
+        onConfirm={handleBulkDismissSelected}
       />
 
       <DuplicateWarningDialog

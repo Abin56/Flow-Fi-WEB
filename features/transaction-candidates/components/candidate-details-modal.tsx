@@ -19,28 +19,11 @@
  */
 
 import { useState } from "react";
-import {
-  AlertTriangle,
-  Check,
-  Landmark,
-  Layers,
-  ListChecks,
-  Loader2,
-  MessageSquareText,
-  Plus,
-  SlidersHorizontal,
-  SplitSquareHorizontal,
-  Trash2,
-  UserPlus,
-  Users,
-  X,
-} from "lucide-react";
+import { AlertTriangle, Landmark, Layers, ListChecks, Loader2, MessageSquareText, SlidersHorizontal, Trash2, Users } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Field, SectionCard, StatChip, TransactionDetailsShell } from "@/components/finance/transaction-details-shell";
 import { cn } from "@/lib/utils";
@@ -51,10 +34,9 @@ import type { DuplicateDetectionResult, ExistingTransactionForDuplicateCheck } f
 import type { Account } from "@/lib/models/account";
 import type { Category } from "@/lib/models/category";
 import type { CreditCardProfile } from "@/lib/models/credit-card";
-import type { SplitType } from "@/lib/models/expense";
 import type { Person } from "@/lib/models/person";
 import type { Transaction } from "@/lib/models/transaction";
-import type { ExpenseParticipantInput, ExpenseRepository } from "@/lib/repositories/expense-repository";
+import type { ExpenseRepository } from "@/lib/repositories/expense-repository";
 import type { SmsTransactionCandidateRepository } from "@/lib/repositories/sms-transaction-candidate-repository";
 import type { TransactionRepository } from "@/lib/repositories/transaction-repository";
 import { smsCandidateEventTypeLabel, type SmsTransactionCandidate } from "@/lib/models/sms-transaction-candidate";
@@ -66,10 +48,13 @@ import {
   isImportReady,
   looksLikeRawReference,
   resolveImportDestination,
+  resolvePersonAssignment,
   type CandidateImportDraft,
 } from "../lib/candidate-details-view";
 import type { CandidateDuplicateResult } from "../lib/candidate-duplicate";
-import { ignoreCandidate, importCandidate, type CandidatePersonAssignment } from "../lib/import-candidate";
+import { scheduleDelayedDismiss } from "../lib/delayed-dismiss";
+import { ignoreCandidate, importCandidate } from "../lib/import-candidate";
+import { CandidatePersonSplitEditor } from "./candidate-person-split-editor";
 import { CandidateStatusBadge } from "./candidate-status-badge";
 
 const DATE_DISPLAY_FORMAT = new Intl.DateTimeFormat("en-IN", { day: "2-digit", month: "short", year: "numeric" });
@@ -77,31 +62,6 @@ const DATE_DISPLAY_FORMAT = new Intl.DateTimeFormat("en-IN", { day: "2-digit", m
 /** Same reasoning as `TransactionManageModal`'s own `FIELD_BORDER` — a low-opacity slice of
  *  `--foreground` reads as an actually-visible hairline against this dialog's white surface. */
 const FIELD_BORDER = "border-foreground/15";
-
-const SPLIT_TYPE_OPTIONS: { value: SplitType; label: string }[] = [
-  { value: "equal", label: "Split equally" },
-  { value: "custom", label: "Custom amounts" },
-  { value: "percentage", label: "By percentage" },
-];
-
-/** Same draft -> `ImportCandidateParams.personAssignment` mapping `TransactionDetailsModal`'s own
- *  save branch does for a brand-new expense — `null` when nothing was actually configured, so a
- *  plain import (no one assigned) never triggers a wasted `ExpenseRepository` round trip. */
-function resolvePersonAssignment(draft: CandidateImportDraft, people: Person[]): CandidatePersonAssignment | null {
-  if (draft.splitOpen) {
-    const named = draft.participants.filter((p) => p.name.trim() !== "" || p.personId != null);
-    if (named.length === 0) return null;
-    const participantInputs: ExpenseParticipantInput[] = named.map((p) => ({
-      personId: p.personId,
-      name: p.personId ? (people.find((person) => person.id === p.personId)?.name ?? p.name) : p.name,
-      value: draft.splitType === "equal" ? null : Number(p.value),
-    }));
-    return { kind: "split", splitType: draft.splitType, participantInputs };
-  }
-  if (draft.personId == null) return null;
-  const personName = people.find((p) => p.id === draft.personId)?.name ?? "";
-  return { kind: "assign", personId: draft.personId, personName, owesPersonToggle: draft.owesPersonToggle };
-}
 
 export function CandidateDetailsModal({
   candidate,
@@ -117,6 +77,8 @@ export function CandidateDetailsModal({
   candidateRepository,
   expenseRepository,
   onCreatePerson,
+  onHide,
+  onUnhide,
 }: {
   candidate: SmsTransactionCandidate | null;
   onOpenChange: (open: boolean) => void;
@@ -134,6 +96,10 @@ export function CandidateDetailsModal({
   candidateRepository: SmsTransactionCandidateRepository;
   expenseRepository: ExpenseRepository;
   onCreatePerson: (name: string) => Promise<Person>;
+  /** Hides this candidate from every list view right away, before the real delayed delete runs. */
+  onHide: (candidateId: string) => void;
+  /** Restores visibility — called when the toast's Undo is clicked, or if the delayed delete itself fails. */
+  onUnhide: (candidateId: string) => void;
 }) {
   // Never `null` — unlike `TransactionManageModal`'s own `draft`, this one is read unconditionally
   // in the very first render pass below (see the reset block right after `open`), and a `null`
@@ -155,11 +121,7 @@ export function CandidateDetailsModal({
   });
   const [pendingDuplicate, setPendingDuplicate] = useState<DuplicateDetectionResult | null>(null);
   const [importing, setImporting] = useState(false);
-  const [dismissing, setDismissing] = useState(false);
   const [confirmDismissOpen, setConfirmDismissOpen] = useState(false);
-  const [addingPerson, setAddingPerson] = useState(false);
-  const [newPersonName, setNewPersonName] = useState("");
-  const [addingPersonBusy, setAddingPersonBusy] = useState(false);
   // Same "reset once per open/candidate change" pattern `TransactionManageModal` uses for its own
   // draft — so switching to a different candidate (or reopening the same one) never resurrects a
   // previous, abandoned edit.
@@ -239,44 +201,22 @@ export function CandidateDetailsModal({
     }
   }
 
-  async function handleAddPerson() {
-    if (!newPersonName.trim()) return;
-    setAddingPersonBusy(true);
-    try {
-      const person = await onCreatePerson(newPersonName.trim());
-      setDraft({ ...currentDraft, personId: person.id });
-      setAddingPerson(false);
-      setNewPersonName("");
-    } catch (e) {
-      toast.error("Couldn't add person", e instanceof Error ? e.message : undefined);
-    } finally {
-      setAddingPersonBusy(false);
-    }
-  }
-
-  function updateParticipant(index: number, patch: Partial<CandidateImportDraft["participants"][number]>) {
-    setDraft({ ...currentDraft, participants: currentDraft.participants.map((p, i) => (i === index ? { ...p, ...patch } : p)) });
-  }
-  function addParticipantRow() {
-    setDraft({ ...currentDraft, participants: [...currentDraft.participants, { personId: null, name: "", value: "" }] });
-  }
-  function removeParticipantRow(index: number) {
-    setDraft({ ...currentDraft, participants: currentDraft.participants.filter((_, i) => i !== index) });
-  }
-
-  async function handleDismiss() {
-    if (dismissing) return;
-    setDismissing(true);
-    try {
-      await ignoreCandidate(currentCandidate, candidateRepository);
-      toast.success("Candidate dismissed");
-      setConfirmDismissOpen(false);
-      onOpenChange(false);
-    } catch (error) {
-      toast.error("Couldn't dismiss this candidate", error instanceof Error ? error.message : undefined);
-    } finally {
-      setDismissing(false);
-    }
+  function handleDismiss() {
+    const { cancel } = scheduleDelayedDismiss({
+      candidateId: currentCandidate.id,
+      hide: onHide,
+      unhide: onUnhide,
+      commitDelete: () => ignoreCandidate(currentCandidate, candidateRepository),
+      onDeleteFailed: (error) => {
+        toast.error("Couldn't dismiss this candidate", error instanceof Error ? error.message : undefined);
+      },
+    });
+    toast.success("Candidate dismissed", `${currentCandidate.merchant ?? currentCandidate.bankName ?? "Transaction"} won't show in the review queue.`, {
+      label: "Undo",
+      onClick: cancel,
+    });
+    setConfirmDismissOpen(false);
+    onOpenChange(false);
   }
 
   return (
@@ -284,7 +224,7 @@ export function CandidateDetailsModal({
       <TransactionDetailsShell
         open={open}
         onOpenChange={onOpenChange}
-        busy={importing || dismissing}
+        busy={importing}
         headerIcon={MessageSquareText}
         headerTitle="Transaction Details"
         headerDescription="Review this SMS-detected transaction before importing it"
@@ -395,11 +335,13 @@ export function CandidateDetailsModal({
                   <SelectValue placeholder="Select a category" />
                 </SelectTrigger>
                 <SelectContent>
-                  {categories.map((category) => (
-                    <SelectItem key={category.id} value={category.id}>
-                      {category.name}
-                    </SelectItem>
-                  ))}
+                  {categories
+                    .filter((category) => (currentCandidate.direction === "credit" ? category.type !== "expense" : category.type !== "income"))
+                    .map((category) => (
+                      <SelectItem key={category.id} value={category.id}>
+                        {category.name}
+                      </SelectItem>
+                    ))}
                 </SelectContent>
               </Select>
             </Field>
@@ -448,162 +390,12 @@ export function CandidateDetailsModal({
                   <p className="text-xs text-muted-foreground">Assigning to a person or splitting is only available for expenses.</p>
                 </div>
               ) : (
-                <div className="flex flex-col gap-3">
-                  <Field label="Assign to a person">
-                    {!addingPerson ? (
-                      <Select
-                        value={currentDraft.personId ?? "none"}
-                        onValueChange={(v) => {
-                          if (v === "add-new") {
-                            setAddingPerson(true);
-                            return;
-                          }
-                          setDraft({ ...currentDraft, personId: v === "none" ? null : v, owesPersonToggle: v === "none" ? false : currentDraft.owesPersonToggle });
-                        }}
-                      >
-                        <SelectTrigger className={cn("w-full", FIELD_BORDER)}>
-                          <SelectValue placeholder="No one" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="none">No one</SelectItem>
-                          {people.map((p) => (
-                            <SelectItem key={p.id} value={p.id}>
-                              {p.name}
-                            </SelectItem>
-                          ))}
-                          <SelectItem value="add-new">
-                            <span className="flex items-center gap-1.5">
-                              <UserPlus className="size-3.5" /> Add new person
-                            </span>
-                          </SelectItem>
-                        </SelectContent>
-                      </Select>
-                    ) : (
-                      <div className="flex items-center gap-2">
-                        <Input
-                          autoFocus
-                          placeholder="Person's name"
-                          value={newPersonName}
-                          className={FIELD_BORDER}
-                          onChange={(e) => setNewPersonName(e.target.value)}
-                          onKeyDown={(e) => e.key === "Enter" && void handleAddPerson()}
-                        />
-                        <Button size="icon-sm" onClick={() => void handleAddPerson()} disabled={addingPersonBusy || !newPersonName.trim()} aria-label="Save person">
-                          <Check className="size-4" />
-                        </Button>
-                        <Button size="icon-sm" variant="ghost" onClick={() => setAddingPerson(false)} aria-label="Cancel">
-                          <X className="size-4" />
-                        </Button>
-                      </div>
-                    )}
-                  </Field>
-
-                  {!currentDraft.splitOpen && (
-                    <button
-                      type="button"
-                      onClick={() => setDraft({ ...currentDraft, splitOpen: true })}
-                      className="inline-flex items-center gap-1.5 self-start text-xs font-medium text-primary hover:underline"
-                    >
-                      <SplitSquareHorizontal className="size-3.5" />
-                      Split with more people instead
-                    </button>
-                  )}
-
-                  {currentDraft.personId && !currentDraft.splitOpen && (
-                    <label className="flex items-start gap-2 border-t border-foreground/10 pt-3 text-sm">
-                      <Switch
-                        checked={currentDraft.owesPersonToggle}
-                        onCheckedChange={(checked) => setDraft({ ...currentDraft, owesPersonToggle: checked })}
-                        className="mt-0.5"
-                      />
-                      <span>
-                        <span className="block text-foreground">This person owes me this expense</span>
-                        <span className="block text-xs text-muted-foreground">Adds this amount to what they owe you.</span>
-                      </span>
-                    </label>
-                  )}
-
-                  {currentDraft.splitOpen && (
-                    <div className="flex flex-col gap-3 border-t border-foreground/10 pt-3">
-                      <div className="flex items-center justify-between">
-                        <p className="text-sm font-medium text-foreground">Split this expense</p>
-                        <button
-                          type="button"
-                          onClick={() => setDraft({ ...currentDraft, splitOpen: false })}
-                          className="text-xs text-muted-foreground hover:underline"
-                        >
-                          Hide split editor
-                        </button>
-                      </div>
-                      <Select value={currentDraft.splitType} onValueChange={(v) => setDraft({ ...currentDraft, splitType: v as SplitType })}>
-                        <SelectTrigger className={cn("w-full", FIELD_BORDER)}>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {SPLIT_TYPE_OPTIONS.map((o) => (
-                            <SelectItem key={o.value} value={o.value}>
-                              {o.label}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-
-                      <div className="flex flex-col gap-2">
-                        {currentDraft.participants.map((p, i) => (
-                          <div key={i} className="flex items-center gap-2">
-                            <Select
-                              value={p.personId ?? "custom"}
-                              onValueChange={(v) => {
-                                if (v === "custom") {
-                                  updateParticipant(i, { personId: null });
-                                  return;
-                                }
-                                const person = people.find((person) => person.id === v);
-                                updateParticipant(i, { personId: v, name: person?.name ?? p.name });
-                              }}
-                            >
-                              <SelectTrigger className={cn("h-9 w-32 shrink-0", FIELD_BORDER)}>
-                                <SelectValue placeholder="Person" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="custom">Custom name</SelectItem>
-                                {people.map((person) => (
-                                  <SelectItem key={person.id} value={person.id}>
-                                    {person.name}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                            {p.personId == null && (
-                              <Input placeholder="Name" value={p.name} className={cn("h-9", FIELD_BORDER)} onChange={(e) => updateParticipant(i, { name: e.target.value })} />
-                            )}
-                            {currentDraft.splitType !== "equal" && (
-                              <Input
-                                type="number"
-                                placeholder={currentDraft.splitType === "percentage" ? "%" : "Amount"}
-                                value={p.value}
-                                className={cn("h-9 w-24 shrink-0", FIELD_BORDER)}
-                                onChange={(e) => updateParticipant(i, { value: e.target.value })}
-                              />
-                            )}
-                            <button
-                              type="button"
-                              onClick={() => removeParticipantRow(i)}
-                              className="flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-expense"
-                              aria-label="Remove participant"
-                            >
-                              <Trash2 className="size-3.5" />
-                            </button>
-                          </div>
-                        ))}
-                        <Button type="button" variant="ghost" size="sm" onClick={addParticipantRow} className="w-fit gap-1.5">
-                          <Plus className="size-3.5" />
-                          Add person
-                        </Button>
-                      </div>
-                    </div>
-                  )}
-                </div>
+                <CandidatePersonSplitEditor
+                  draft={currentDraft}
+                  onChange={(patch) => setDraft({ ...currentDraft, ...patch })}
+                  people={people}
+                  onCreatePerson={onCreatePerson}
+                />
               )}
             </SectionCard>
           </>
@@ -654,16 +446,16 @@ export function CandidateDetailsModal({
             <DialogTitle>Dismiss this candidate?</DialogTitle>
             <DialogDescription>
               &ldquo;{currentCandidate.merchant ?? currentCandidate.bankName ?? "This SMS transaction"}&rdquo; (
-              {formatCurrencyPrecise(currentCandidate.amount)}) will be removed from the review queue without creating a transaction. This can&apos;t be
-              undone from here.
+              {formatCurrencyPrecise(currentCandidate.amount)}) will be removed from the review queue without creating a transaction. You&apos;ll get a
+              few seconds to undo from the confirmation toast.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setConfirmDismissOpen(false)} disabled={dismissing}>
+            <Button variant="outline" onClick={() => setConfirmDismissOpen(false)}>
               Cancel
             </Button>
-            <Button variant="destructive" onClick={() => void handleDismiss()} disabled={dismissing}>
-              {dismissing ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
+            <Button variant="destructive" onClick={handleDismiss}>
+              <Trash2 className="size-3.5" />
               Dismiss candidate
             </Button>
           </DialogFooter>

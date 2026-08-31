@@ -66,11 +66,13 @@ export function RowManagementPanel({
             <SelectValue placeholder="Uncategorized" />
           </SelectTrigger>
           <SelectContent>
-            {categories.map((category) => (
-              <SelectItem key={category.id} value={category.name}>
-                {category.name}
-              </SelectItem>
-            ))}
+            {categories
+              .filter((category) => (row.direction === "credit" ? category.type !== "expense" : category.type !== "income"))
+              .map((category) => (
+                <SelectItem key={category.id} value={category.name}>
+                  {category.name}
+                </SelectItem>
+              ))}
           </SelectContent>
         </Select>
       </div>

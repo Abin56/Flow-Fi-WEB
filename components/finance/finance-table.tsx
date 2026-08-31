@@ -75,10 +75,16 @@ export function FinanceTable<T>({
     );
   }
 
+  // Sum of every column's fixed/minimum width (plus the row's own gap-4 spacing) so the row never
+  // shrinks below its intrinsic content width — without this floor, the flex row's `flex-1` columns
+  // collapse to fit the viewport, leaving nothing for `overflow-x-auto` to actually scroll into.
+  const columnGapPx = 16;
+  const tableMinWidth = `calc(${columns.map((col) => col.width ?? col.minWidth ?? "0px").join(" + ")} + ${columnGapPx * (columns.length - 1)}px + 2rem)`;
+
   return (
     <div className={cn("w-full overflow-hidden rounded-2xl border border-border/60 bg-card", className)}>
       <div className="overflow-x-auto">
-        <div className="min-w-full">
+        <div style={{ minWidth: tableMinWidth }}>
           <div
             className={cn(
               "sticky top-0 z-10 flex items-center gap-4 border-b bg-card px-4 py-3",

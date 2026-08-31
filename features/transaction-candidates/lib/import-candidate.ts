@@ -360,19 +360,59 @@ export async function bulkImportCandidates(
   expenseRepository: ExpenseRepository,
   existingTransactions: ExistingTransactionForDuplicateCheck[] = [],
   skipDuplicateCheck = false,
+  /**
+   * When set, every candidate is imported into this single destination (picked once by the user in
+   * the bulk-import popup) instead of each candidate's own `accountId`/`cardId` — this is what lets
+   * a batch of candidates whose destination Android couldn't resolve still import in one action,
+   * rather than each falling through to `validation_failed` and forcing a one-by-one retry.
+   */
+  forcedDestination?: { accountId: string | null; matchedCard: CreditCardProfile | null },
+  /**
+   * When set, applied to every debit candidate in the batch — the bulk-import popup's own
+   * Person/Split section, same shape `CandidateDetailsModal` builds for a single candidate. Never
+   * applied to a credit candidate (income), same rule `resolvePersonAssignment` enforces there.
+   */
+  personAssignment?: CandidatePersonAssignment | null,
 ): Promise<BulkImportResult[]> {
   const results: BulkImportResult[] = [];
   for (const candidate of candidates) {
-    const matchedCard = candidate.cardId ? (creditCards.find((c) => c.id === candidate.cardId) ?? null) : null;
-    const outcome =
-      candidate.cardId != null && matchedCard == null
-        ? ({ status: "validation_failed", reason: "Matched card could not be resolved." } as ImportOutcome)
-        : await importCandidate(
-            { candidate, accountId: matchedCard ? null : candidate.accountId, matchedCard, categoryId, existingTransactions, skipDuplicateCheck },
-            transactionRepository,
-            candidateRepository,
-            expenseRepository,
-          );
+    const resolvedPersonAssignment = candidate.direction === "debit" ? (personAssignment ?? null) : null;
+    let outcome: ImportOutcome;
+    if (forcedDestination) {
+      outcome = await importCandidate(
+        {
+          candidate,
+          accountId: forcedDestination.accountId,
+          matchedCard: forcedDestination.matchedCard,
+          categoryId,
+          personAssignment: resolvedPersonAssignment,
+          existingTransactions,
+          skipDuplicateCheck,
+        },
+        transactionRepository,
+        candidateRepository,
+        expenseRepository,
+      );
+    } else {
+      const matchedCard = candidate.cardId ? (creditCards.find((c) => c.id === candidate.cardId) ?? null) : null;
+      outcome =
+        candidate.cardId != null && matchedCard == null
+          ? ({ status: "validation_failed", reason: "Matched card could not be resolved." } as ImportOutcome)
+          : await importCandidate(
+              {
+                candidate,
+                accountId: matchedCard ? null : candidate.accountId,
+                matchedCard,
+                categoryId,
+                personAssignment: resolvedPersonAssignment,
+                existingTransactions,
+                skipDuplicateCheck,
+              },
+              transactionRepository,
+              candidateRepository,
+              expenseRepository,
+            );
+    }
     results.push({ candidateId: candidate.id, outcome });
   }
   return results;
