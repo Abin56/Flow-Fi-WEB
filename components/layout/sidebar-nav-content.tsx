@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import { ClayAvatar } from "@/components/clay/clay-avatar";
 import { NAV_ITEMS } from "@/components/layout/nav-items";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useFinancialProductAvailability } from "@/hooks/use-financial-product-availability";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/store/auth-store";
 
@@ -27,6 +28,15 @@ export function SidebarNavContent({
 }) {
   const pathname = usePathname();
   const user = useAuthStore((state) => state.user);
+  const availability = useFinancialProductAvailability();
+
+  const visibleNavItems = NAV_ITEMS.filter((item) => {
+    if (!item.requiresProduct) return true;
+    if (availability.isLoading) return false;
+    if (item.requiresProduct === "accounts") return availability.hasAccounts;
+    if (item.requiresProduct === "creditCards") return availability.hasCreditCards;
+    return availability.hasLoanOrEmi;
+  });
 
   return (
     <div className="flex h-full flex-col py-5">
@@ -43,7 +53,7 @@ export function SidebarNavContent({
       </div>
 
       <nav className="mt-6 flex flex-col gap-1 px-3">
-        {NAV_ITEMS.map((item) => {
+        {visibleNavItems.map((item) => {
           const active = pathname.startsWith(item.href);
           const Icon = item.icon;
           const link = (

@@ -1,5 +1,6 @@
 import { CalendarClock, CreditCard, Receipt } from "lucide-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { EmptyState } from "@/components/finance/empty-state";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -33,6 +34,8 @@ export interface UpcomingPaymentsCardProps {
  * installments aren't joined in — no ready per-schedule "next due" read for this pass.
  */
 export function UpcomingPaymentsCard({ payments, isLoading }: UpcomingPaymentsCardProps) {
+  const router = useRouter();
+
   if (isLoading) {
     return (
       <section className="surface-flat flex h-full flex-col gap-3 rounded-3xl border border-border/50 p-5">
@@ -54,7 +57,14 @@ export function UpcomingPaymentsCard({ payments, isLoading }: UpcomingPaymentsCa
       </div>
 
       {payments.length === 0 ? (
-        <EmptyState icon={CalendarClock} title="Nothing due soon" description="Upcoming bills and statements will appear here." className="flex-1" />
+        <EmptyState
+          icon={CalendarClock}
+          title="Nothing due soon"
+          description="Upcoming bills and statements will appear here. Have a loan or EMI to track?"
+          actionLabel="Add Loan / EMI"
+          onAction={() => router.push("/loans")}
+          className="flex-1"
+        />
       ) : (
         <div className="mt-3 flex flex-1 flex-col gap-1">
           {payments.map((payment) => {

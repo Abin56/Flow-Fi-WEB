@@ -6,7 +6,10 @@ import { Popover as PopoverPrimitive } from "radix-ui"
 import { cn } from "@/lib/utils"
 
 function Popover({ ...props }: React.ComponentProps<typeof PopoverPrimitive.Root>) {
-  return <PopoverPrimitive.Root data-slot="popover" {...props} />
+  // Non-modal by default: same reasoning as Select — a modal Popover nested
+  // inside a Dialog fights the Dialog's focus trap and its content becomes
+  // unclickable. See the comment on `Select` in `select.tsx`.
+  return <PopoverPrimitive.Root data-slot="popover" modal={false} {...props} />
 }
 
 function PopoverTrigger({ ...props }: React.ComponentProps<typeof PopoverPrimitive.Trigger>) {

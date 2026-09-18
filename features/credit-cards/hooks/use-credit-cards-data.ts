@@ -470,8 +470,9 @@ export function useCreditCardViewItems(): { items: CreditCardViewItem[]; isLoadi
 
 export interface CreateCreditCardFormParams {
   name: string;
+  cardHolderName: string;
   creditLimit: number;
-  lastFourDigits?: string | null;
+  lastFourDigits: string;
   cardNetwork?: CreditCardProfile["cardNetwork"];
   statementDay: number;
   paymentDueDay: number;
@@ -481,6 +482,7 @@ export interface CreateCreditCardFormParams {
 
 export interface EditCreditCardFormParams {
   name?: string;
+  cardHolderName?: string | null;
   creditLimit?: number;
   lastFourDigits?: string | null;
   bankId?: string | null;
@@ -535,8 +537,10 @@ export function useCreditCardActions() {
           type: "card",
           openingBalance: 0,
           colorValue: 0,
-          accountNumberLast4: params.lastFourDigits ?? null,
+          accountHolderName: params.cardHolderName,
+          accountNumberLast4: params.lastFourDigits,
           bankId: params.bankId ?? null,
+          cardSubtype: "credit",
         });
         const card = await cardRepository.createCard({
           accountId: account.id,
@@ -544,7 +548,8 @@ export function useCreditCardActions() {
           paymentDueDay: params.paymentDueDay,
           creditLimit: params.creditLimit,
           cardNetwork: params.cardNetwork ?? null,
-          lastFourDigits: params.lastFourDigits ?? null,
+          cardHolderName: params.cardHolderName,
+          lastFourDigits: params.lastFourDigits,
           sharedLimitId: params.sharedLimitId ?? null,
         } satisfies CreateCardParams);
         return card;
@@ -552,15 +557,18 @@ export function useCreditCardActions() {
       editCard: async (card: CreditCardProfile, account: Account | undefined, params: EditCreditCardFormParams) => {
         const nameChanged = params.name != null && params.name !== account?.name;
         const bankChanged = params.bankId !== undefined && params.bankId !== (account?.bankId ?? null);
-        if (account && (nameChanged || bankChanged)) {
+        const holderChanged = params.cardHolderName !== undefined && params.cardHolderName !== (account?.accountHolderName ?? null);
+        if (account && (nameChanged || bankChanged || holderChanged)) {
           await accountRepository.editAccount(account, {
             ...(params.name != null ? { name: params.name } : {}),
             ...(bankChanged ? { bankId: params.bankId, clearBankId: params.bankId == null } : {}),
+            ...(holderChanged ? { accountHolderName: params.cardHolderName } : {}),
           });
         }
         const cardParams: EditCardParams = {};
         if (params.creditLimit != null) cardParams.creditLimit = params.creditLimit;
         if (params.lastFourDigits !== undefined) cardParams.lastFourDigits = params.lastFourDigits;
+        if (params.cardHolderName !== undefined) cardParams.cardHolderName = params.cardHolderName;
         if (params.clearSharedLimitId) cardParams.clearSharedLimitId = true;
         else if (params.sharedLimitId !== undefined) cardParams.sharedLimitId = params.sharedLimitId;
         await cardRepository.editCard(card, cardParams);

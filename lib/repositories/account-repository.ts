@@ -9,7 +9,7 @@
 import { type CollectionReference, doc, type DocumentReference } from "firebase/firestore";
 import { FirestoreCrudRepository } from "@/lib/firestore/firestore-crud-repository";
 import { recordEdit, updateField } from "@/lib/firestore/soft-deletable";
-import type { Account, AccountType } from "@/lib/models/account";
+import type { Account, AccountType, BankAccountSubtype, CardSubtype } from "@/lib/models/account";
 import { generateId } from "@/lib/utils/id-generator";
 
 const LAST_4_DIGITS_PATTERN = /^\d{4}$/;
@@ -30,6 +30,16 @@ export interface CreateAccountParams {
   accountHolderName?: string | null;
   notes?: string | null;
   accountNumberLast4?: string | null;
+  bankAccountSubtype?: BankAccountSubtype | null;
+  minimumBalance?: number | null;
+  interestRatePercent?: number | null;
+  maturityDate?: Date | null;
+  tenureMonths?: number | null;
+  cardSubtype?: CardSubtype | null;
+  cardProvider?: string | null;
+  linkedAccountId?: string | null;
+  reloadable?: boolean | null;
+  currency?: string | null;
 }
 
 export interface EditAccountParams {
@@ -44,6 +54,24 @@ export interface EditAccountParams {
   clearNotes?: boolean;
   accountNumberLast4?: string | null;
   clearAccountNumberLast4?: boolean;
+  bankAccountSubtype?: BankAccountSubtype | null;
+  minimumBalance?: number | null;
+  clearMinimumBalance?: boolean;
+  interestRatePercent?: number | null;
+  clearInterestRatePercent?: boolean;
+  maturityDate?: Date | null;
+  clearMaturityDate?: boolean;
+  tenureMonths?: number | null;
+  clearTenureMonths?: boolean;
+  cardSubtype?: CardSubtype | null;
+  cardProvider?: string | null;
+  clearCardProvider?: boolean;
+  linkedAccountId?: string | null;
+  clearLinkedAccountId?: boolean;
+  reloadable?: boolean | null;
+  clearReloadable?: boolean;
+  currency?: string | null;
+  clearCurrency?: boolean;
 }
 
 export class AccountRepository extends FirestoreCrudRepository<Account> {
@@ -66,6 +94,16 @@ export class AccountRepository extends FirestoreCrudRepository<Account> {
       accountHolderName: params.accountHolderName ?? null,
       notes: params.notes ?? null,
       accountNumberLast4: params.accountNumberLast4 ?? null,
+      bankAccountSubtype: params.bankAccountSubtype ?? null,
+      minimumBalance: params.minimumBalance ?? null,
+      interestRatePercent: params.interestRatePercent ?? null,
+      maturityDate: params.maturityDate ?? null,
+      tenureMonths: params.tenureMonths ?? null,
+      cardSubtype: params.cardSubtype ?? null,
+      cardProvider: params.cardProvider ?? null,
+      linkedAccountId: params.linkedAccountId ?? null,
+      reloadable: params.reloadable ?? null,
+      currency: params.currency ?? null,
       deletedAt: null,
       lastEditedAt: null,
       editHistory: [],
@@ -130,6 +168,102 @@ export class AccountRepository extends FirestoreCrudRepository<Account> {
         params.accountNumberLast4,
         (e, v) => ({ ...e, accountNumberLast4: v }),
       );
+    }
+
+    updated = updateField(
+      updated,
+      "bankAccountSubtype",
+      updated.bankAccountSubtype,
+      params.bankAccountSubtype,
+      (e, v) => ({ ...e, bankAccountSubtype: v }),
+    );
+
+    if (params.clearMinimumBalance) {
+      updated = recordEdit(updated, "minimumBalance", updated.minimumBalance?.toString() ?? "none", "none");
+      updated = { ...updated, minimumBalance: null };
+    } else {
+      updated = updateField(updated, "minimumBalance", updated.minimumBalance, params.minimumBalance, (e, v) => ({
+        ...e,
+        minimumBalance: v,
+      }));
+    }
+
+    if (params.clearInterestRatePercent) {
+      updated = recordEdit(updated, "interestRatePercent", updated.interestRatePercent?.toString() ?? "none", "none");
+      updated = { ...updated, interestRatePercent: null };
+    } else {
+      updated = updateField(
+        updated,
+        "interestRatePercent",
+        updated.interestRatePercent,
+        params.interestRatePercent,
+        (e, v) => ({ ...e, interestRatePercent: v }),
+      );
+    }
+
+    if (params.clearMaturityDate) {
+      updated = recordEdit(updated, "maturityDate", updated.maturityDate?.toISOString() ?? "none", "none");
+      updated = { ...updated, maturityDate: null };
+    } else {
+      updated = updateField(updated, "maturityDate", updated.maturityDate, params.maturityDate, (e, v) => ({
+        ...e,
+        maturityDate: v,
+      }));
+    }
+
+    if (params.clearTenureMonths) {
+      updated = recordEdit(updated, "tenureMonths", updated.tenureMonths?.toString() ?? "none", "none");
+      updated = { ...updated, tenureMonths: null };
+    } else {
+      updated = updateField(updated, "tenureMonths", updated.tenureMonths, params.tenureMonths, (e, v) => ({
+        ...e,
+        tenureMonths: v,
+      }));
+    }
+
+    updated = updateField(updated, "cardSubtype", updated.cardSubtype, params.cardSubtype, (e, v) => ({
+      ...e,
+      cardSubtype: v,
+    }));
+
+    if (params.clearCardProvider) {
+      updated = recordEdit(updated, "cardProvider", updated.cardProvider ?? "none", "none");
+      updated = { ...updated, cardProvider: null };
+    } else {
+      updated = updateField(updated, "cardProvider", updated.cardProvider, params.cardProvider, (e, v) => ({
+        ...e,
+        cardProvider: v,
+      }));
+    }
+
+    if (params.clearLinkedAccountId) {
+      updated = recordEdit(updated, "linkedAccountId", updated.linkedAccountId ?? "none", "none");
+      updated = { ...updated, linkedAccountId: null };
+    } else {
+      updated = updateField(updated, "linkedAccountId", updated.linkedAccountId, params.linkedAccountId, (e, v) => ({
+        ...e,
+        linkedAccountId: v,
+      }));
+    }
+
+    if (params.clearReloadable) {
+      updated = recordEdit(updated, "reloadable", updated.reloadable?.toString() ?? "none", "none");
+      updated = { ...updated, reloadable: null };
+    } else {
+      updated = updateField(updated, "reloadable", updated.reloadable, params.reloadable, (e, v) => ({
+        ...e,
+        reloadable: v,
+      }));
+    }
+
+    if (params.clearCurrency) {
+      updated = recordEdit(updated, "currency", updated.currency ?? "none", "none");
+      updated = { ...updated, currency: null };
+    } else {
+      updated = updateField(updated, "currency", updated.currency, params.currency, (e, v) => ({
+        ...e,
+        currency: v,
+      }));
     }
 
     await this.update(updated);
