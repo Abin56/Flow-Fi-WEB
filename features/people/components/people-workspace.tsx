@@ -1,10 +1,20 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Contact, IndianRupee, StickyNote, User, Users } from "lucide-react";
+import {
+  ArrowDownToLine,
+  ArrowUpFromLine,
+  Contact,
+  HandCoins,
+  IndianRupee,
+  StickyNote,
+  User,
+  Users,
+  Wallet,
+  type LucideIcon,
+} from "lucide-react";
 import { ConfirmDialog, FLAT_INPUT, FormDialog, SectionedFormDialog, SectionLabel } from "@/components/finance";
 import { EmptyState } from "@/components/finance/empty-state";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PeopleGrid } from "@/features/people/components/people-grid";
 import { PeopleHeader } from "@/features/people/components/people-header";
@@ -12,18 +22,28 @@ import { PeopleStats } from "@/features/people/components/people-stats";
 import { PeopleTable } from "@/features/people/components/people-table";
 import { type PeopleTab, PeopleToolbar } from "@/features/people/components/people-toolbar";
 import { PersonOverviewPanel } from "@/features/people/components/person-overview-panel";
+import { ShareExpenseDialog } from "@/features/people/components/share-expense-dialog";
+import { SettleUpDialog } from "@/features/people/components/settle-up-dialog";
 import { RecentPeopleTransactions } from "@/features/people/components/recent-people-transactions";
 import { usePeopleActions, usePeopleRows } from "@/features/people/hooks/use-people-data";
 import { usePeople } from "@/hooks/use-people";
+import { useAccounts } from "@/hooks/use-accounts";
+import { useCategories } from "@/hooks/use-categories";
 import type { LedgerEntryType, Person } from "@/lib/models/person";
 import { cn } from "@/lib/utils";
 import { toast } from "@/store/toast-store";
 
-const LEDGER_ENTRY_TYPE_OPTIONS: { value: LedgerEntryType; label: string }[] = [
-  { value: "gave", label: "I gave money (they owe me)" },
-  { value: "borrowed", label: "I borrowed money (I owe them)" },
-  { value: "repaid", label: "I paid them back" },
-  { value: "receivedBack", label: "They paid me back" },
+const LEDGER_ENTRY_TYPE_OPTIONS: {
+  value: LedgerEntryType;
+  label: string;
+  description: string;
+  icon: LucideIcon;
+  tone: "expense" | "success";
+}[] = [
+  { value: "gave", label: "I Gave", description: "They owe me", icon: ArrowUpFromLine, tone: "expense" },
+  { value: "borrowed", label: "I Borrowed", description: "I owe them", icon: ArrowDownToLine, tone: "success" },
+  { value: "repaid", label: "I Repaid", description: "Paid them back", icon: HandCoins, tone: "expense" },
+  { value: "receivedBack", label: "Received Back", description: "They paid me back", icon: Wallet, tone: "success" },
 ];
 
 interface PersonFormState {
@@ -77,6 +97,8 @@ export function PeopleWorkspace() {
   const { rows: people, isLoading } = usePeopleRows();
   const { data: rawPeople = [] } = usePeople();
   const actions = usePeopleActions();
+  const { data: accounts = [] } = useAccounts();
+  const { data: categories = [] } = useCategories();
 
   const [tab, setTab] = useState<PeopleTab>("all");
   const [search, setSearch] = useState("");
@@ -90,6 +112,8 @@ export function PeopleWorkspace() {
   const [editingPerson, setEditingPerson] = useState<Person | null>(null);
   const [deletingPerson, setDeletingPerson] = useState<Person | null>(null);
   const [addEntryPerson, setAddEntryPerson] = useState<Person | null>(null);
+  const [shareExpensePerson, setShareExpensePerson] = useState<Person | null>(null);
+  const [settleUpPerson, setSettleUpPerson] = useState<Person | null>(null);
   const [personForm, setPersonForm] = useState<PersonFormState>(emptyPersonForm);
   const [personFormError, setPersonFormError] = useState<string | null>(null);
   const [entryForm, setEntryForm] = useState<LedgerEntryFormState>(emptyLedgerEntryForm);
@@ -296,6 +320,14 @@ export function PeopleWorkspace() {
             const raw = rawPeople.find((p) => p.id === selected.id);
             if (raw) openAddEntry(raw);
           }}
+          onShareExpense={() => {
+            const raw = rawPeople.find((p) => p.id === selected.id);
+            if (raw) setShareExpensePerson(raw);
+          }}
+          onSettleUp={() => {
+            const raw = rawPeople.find((p) => p.id === selected.id);
+            if (raw) setSettleUpPerson(raw);
+          }}
           onEdit={() => {
             const raw = rawPeople.find((p) => p.id === selected.id);
             if (raw) openEditPerson(raw);
@@ -306,6 +338,26 @@ export function PeopleWorkspace() {
           }}
         />
       )}
+
+      {shareExpensePerson && (
+        <ShareExpenseDialog
+          open={shareExpensePerson != null}
+          onOpenChange={(open) => {
+            if (!open) setShareExpensePerson(null);
+          }}
+          person={shareExpensePerson}
+          accounts={accounts}
+          categories={categories}
+        />
+      )}
+
+      <SettleUpDialog
+        open={settleUpPerson != null}
+        onOpenChange={(open) => {
+          if (!open) setSettleUpPerson(null);
+        }}
+        person={settleUpPerson}
+      />
 
       <SectionedFormDialog
         open={addPersonOpen || editingPerson != null}
@@ -401,21 +453,48 @@ export function PeopleWorkspace() {
       >
         <div className="flex flex-col gap-3 rounded-2xl bg-muted/30 p-4 text-sm">
           <SectionLabel icon={IndianRupee}>Transaction Details</SectionLabel>
-          <label className="flex flex-col gap-1">
+          <div className="flex flex-col gap-1.5">
             <span className="text-xs font-medium text-muted-foreground">Type</span>
-            <Select value={entryForm.type} onValueChange={(v) => setEntryForm((f) => ({ ...f, type: v as LedgerEntryType }))}>
-              <SelectTrigger className="h-10 w-full rounded-xl">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {LEDGER_ENTRY_TYPE_OPTIONS.map((o) => (
-                  <SelectItem key={o.value} value={o.value}>
-                    {o.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </label>
+            <div className="grid grid-cols-2 gap-2">
+              {LEDGER_ENTRY_TYPE_OPTIONS.map((o) => {
+                const Icon = o.icon;
+                const active = entryForm.type === o.value;
+                return (
+                  <button
+                    key={o.value}
+                    type="button"
+                    onClick={() => setEntryForm((f) => ({ ...f, type: o.value }))}
+                    aria-pressed={active}
+                    className={cn(
+                      "flex items-center gap-2.5 rounded-xl border p-2.5 text-left transition-colors",
+                      active
+                        ? o.tone === "success"
+                          ? "border-success/40 bg-success/10"
+                          : "border-expense/40 bg-expense/10"
+                        : "border-border/50 bg-card hover:border-border",
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        "flex size-8 shrink-0 items-center justify-center rounded-full",
+                        active
+                          ? o.tone === "success"
+                            ? "bg-success/20 text-success"
+                            : "bg-expense/20 text-expense"
+                          : "bg-muted text-muted-foreground",
+                      )}
+                    >
+                      <Icon className="size-4" />
+                    </span>
+                    <div className="min-w-0">
+                      <p className={cn("truncate text-sm font-semibold", active ? "text-foreground" : "text-foreground/90")}>{o.label}</p>
+                      <p className="truncate text-xs text-muted-foreground">{o.description}</p>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <label className="flex flex-col gap-1">
               <span className="text-xs font-medium text-muted-foreground">Amount</span>

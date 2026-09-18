@@ -7,9 +7,11 @@ import {
   Bell,
   Calendar,
   Clock,
+  HandCoins,
   Paperclip,
   Pencil,
   Plus,
+  Split,
   StickyNote,
   Trash2,
   Users,
@@ -53,12 +55,16 @@ export function PersonOverviewPanel({
   person,
   onClose,
   onAddTransaction,
+  onShareExpense,
+  onSettleUp,
   onEdit,
   onDelete,
 }: {
   person: PersonViewRow;
   onClose: () => void;
   onAddTransaction?: () => void;
+  onShareExpense?: () => void;
+  onSettleUp?: () => void;
   onEdit?: () => void;
   onDelete?: () => void;
 }) {
@@ -290,16 +296,36 @@ export function PersonOverviewPanel({
         </div>
       )}
 
-      <button
-        type="button"
-        onClick={onAddTransaction}
-        disabled={!onAddTransaction}
-        className="mt-4 flex w-full items-center justify-center gap-1.5 rounded-xl py-2.5 text-sm font-semibold text-primary-foreground disabled:cursor-not-allowed disabled:opacity-50"
-        style={{ background: "var(--gradient-accent)" }}
-      >
-        <Plus className="size-4" />
-        Add Transaction
-      </button>
+      <div className="mt-4 grid grid-cols-3 gap-2">
+        <button
+          type="button"
+          onClick={onAddTransaction}
+          disabled={!onAddTransaction}
+          className="flex flex-col items-center justify-center gap-1 rounded-xl py-2.5 text-xs font-semibold text-primary-foreground disabled:cursor-not-allowed disabled:opacity-50"
+          style={{ background: "var(--gradient-accent)" }}
+        >
+          <Plus className="size-4" />
+          Add
+        </button>
+        <button
+          type="button"
+          onClick={onShareExpense}
+          disabled={!onShareExpense}
+          className="flex flex-col items-center justify-center gap-1 rounded-xl border border-border/50 py-2.5 text-xs font-semibold text-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <Split className="size-4" />
+          Share
+        </button>
+        <button
+          type="button"
+          onClick={onSettleUp}
+          disabled={!onSettleUp}
+          className="flex flex-col items-center justify-center gap-1 rounded-xl border border-border/50 py-2.5 text-xs font-semibold text-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <HandCoins className="size-4" />
+          Settle Up
+        </button>
+      </div>
     </aside>
   );
 }

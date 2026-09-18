@@ -36,6 +36,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatCurrency } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { categoryIconFor, categoryToneFor, type ToneName } from "@/features/transactions/hooks/use-transactions-data";
 import {
   useMonthCycleData,
   type MonthCycleAccountSpend,
@@ -63,6 +64,15 @@ const ACCENT_BAR: Record<Accent, string> = {
 };
 
 const ACCOUNT_BAR_CYCLE: Accent[] = ["success", "primary", "warning", "purple", "expense"];
+
+const TONE_BADGE: Record<ToneName, string> = {
+  primary: "bg-primary/10 text-primary",
+  expense: "bg-expense/10 text-expense",
+  warning: "bg-warning/15 text-warning-foreground",
+  success: "bg-success/12 text-success",
+  purple: "bg-purple/12 text-purple",
+  neutral: "bg-muted text-muted-foreground",
+};
 
 function StatTile({
   icon: Icon,
@@ -175,19 +185,42 @@ function AccountSpendRow({ item, accent }: { item: MonthCycleAccountSpend; accen
 
 function ExpenseListRow({ row, isMine }: { row: MonthCycleExpenseRow; isMine: boolean }) {
   const amount = isMine ? row.myAmount : row.fullAmount;
+  const Icon = categoryIconFor(row.categoryIconKey);
+  const tone = categoryToneFor(row.categoryIconKey);
+  const AccountIcon = row.accountType === "card" ? CreditCard : row.accountType === "bank" ? Landmark : Wallet2;
+
   return (
-    <div className="flex items-center gap-3 border-b border-border/50 py-3 last:border-b-0">
-      <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-expense/12 text-expense">
-        <Receipt className="size-3.5" />
+    <div className="group flex items-center gap-3 rounded-2xl border border-border/50 bg-card p-3 transition-colors hover:border-border hover:bg-muted/30">
+      <span className={cn("flex size-11 shrink-0 items-center justify-center rounded-2xl", TONE_BADGE[tone])}>
+        <Icon className="size-5" />
       </span>
+
       <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-medium text-foreground">{row.description}</p>
-        <p className="truncate text-xs text-muted-foreground">
-          {row.category} · {row.account} · {row.date.toLocaleDateString("en-IN", { day: "2-digit", month: "short" })}
-          {row.isSplit && isMine && " · Split, your share"}
-        </p>
+        <p className="truncate text-sm font-semibold text-foreground">{row.description}</p>
+        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+          <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-semibold", TONE_BADGE[tone])}>{row.category}</span>
+          <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
+            <AccountIcon className="size-3" />
+            {row.account}
+          </span>
+          {row.isSplit && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-purple/12 px-2 py-0.5 text-[10px] font-semibold text-purple">
+              <Users className="size-2.5" />
+              Split{isMine ? " · your share" : ""}
+            </span>
+          )}
+        </div>
       </div>
-      <span className="shrink-0 text-sm font-semibold tabular-nums text-expense">{formatCurrency(amount)}</span>
+
+      <div className="flex shrink-0 flex-col items-end gap-1 rounded-xl bg-expense/8 px-3 py-2 text-right">
+        <span className="text-base font-bold tabular-nums text-expense">−{formatCurrency(amount)}</span>
+        {row.isSplit && isMine && (
+          <span className="text-[10px] font-medium text-muted-foreground">of {formatCurrency(row.fullAmount)} total</span>
+        )}
+        <span className="text-[10px] font-medium text-muted-foreground">
+          {row.date.toLocaleDateString("en-IN", { day: "2-digit", month: "short" })}
+        </span>
+      </div>
     </div>
   );
 }
@@ -293,10 +326,34 @@ export function MonthCycleWorkspace() {
         <div className="flex flex-col gap-1.5">
           <div className="flex flex-wrap items-center gap-2.5">
             <h1 className="font-heading text-2xl font-bold tracking-tight text-foreground">Month Cycle</h1>
-            <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-3 py-1 text-xs font-semibold text-primary">
-              {data.monthLabel} Cycle
-              <ChevronDown className="size-3" />
-            </span>
+            <div className="inline-flex items-center gap-0.5 rounded-full bg-primary/10 py-1 pr-1 pl-1 text-xs font-semibold text-primary">
+              <button
+                type="button"
+                onClick={data.goToPreviousCycle}
+                aria-label="Previous cycle"
+                className="flex size-5 items-center justify-center rounded-full transition-colors hover:bg-primary/15"
+              >
+                <ChevronDown className="size-3.5 rotate-90" />
+              </button>
+              <span className="px-1">{data.monthLabel} Cycle</span>
+              <button
+                type="button"
+                onClick={data.goToNextCycle}
+                aria-label="Next cycle"
+                className="flex size-5 items-center justify-center rounded-full transition-colors hover:bg-primary/15"
+              >
+                <ChevronDown className="size-3.5 -rotate-90" />
+              </button>
+            </div>
+            {!data.isCurrentCycle && (
+              <button
+                type="button"
+                onClick={data.goToCurrentCycle}
+                className="rounded-full border border-primary/30 px-2.5 py-1 text-[11px] font-semibold text-primary transition-colors hover:bg-primary/10"
+              >
+                Jump to Today
+              </button>
+            )}
           </div>
           <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
             <span className="flex items-center gap-1.5">
@@ -304,7 +361,11 @@ export function MonthCycleWorkspace() {
               {data.monthRangeLabel}
             </span>
             <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2.5 py-1 font-medium text-foreground">
-              {data.daysLeftInMonth} day{data.daysLeftInMonth === 1 ? "" : "s"} left in cycle
+              {data.isCurrentCycle
+                ? `${data.daysLeftInMonth} day${data.daysLeftInMonth === 1 ? "" : "s"} left in cycle`
+                : data.daysLeftInMonth < 0
+                  ? "Cycle ended"
+                  : "Upcoming cycle"}
             </span>
             <Tooltip>
               <TooltipTrigger asChild>
@@ -381,6 +442,14 @@ export function MonthCycleWorkspace() {
                 {Math.abs(Math.round(changePercent * 10) / 10)}% {changeIsLess ? "less" : "more"} than last month
               </p>
             )}
+            <button
+              type="button"
+              onClick={() => setShowExpenseList(true)}
+              className="mt-1 inline-flex w-fit items-center gap-1.5 rounded-full bg-white/15 px-3 py-1.5 text-xs font-semibold text-primary-foreground transition-colors hover:bg-white/25"
+            >
+              <ListChecks className="size-3.5" />
+              View List
+            </button>
           </div>
 
           <div className="flex flex-col gap-2 lg:px-6">
@@ -729,7 +798,7 @@ export function MonthCycleWorkspace() {
       <Dialog open={showExpenseList} onOpenChange={setShowExpenseList}>
         <DialogContent
           showCloseButton={false}
-          className="flex max-h-[85vh] w-full flex-col gap-0 overflow-hidden rounded-3xl border-0 p-0 sm:max-w-lg"
+          className="flex max-h-[85vh] w-full flex-col gap-0 overflow-hidden rounded-3xl border-0 p-0 sm:max-w-2xl lg:max-w-4xl"
         >
           <DialogTitle className="sr-only">{isMine ? "My Expenses This Month" : "Total Spent This Month"}</DialogTitle>
 
@@ -791,14 +860,14 @@ export function MonthCycleWorkspace() {
             </div>
           </div>
 
-          <ScrollArea className="flex-1 bg-card">
-            <div className="px-5 py-2">
+          <ScrollArea className="flex-1 bg-muted/20">
+            <div className="grid grid-cols-1 gap-2.5 p-4 lg:grid-cols-2">
               {data.expenseRows.length === 0 ? (
                 <EmptyState
                   icon={Receipt}
                   title="No expenses this cycle"
                   description="Transactions in this cycle will appear here."
-                  className="py-10"
+                  className="col-span-full py-10"
                 />
               ) : (
                 data.expenseRows.map((row) => <ExpenseListRow key={row.id} row={row} isMine={isMine} />)

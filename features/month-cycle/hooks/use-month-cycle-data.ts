@@ -22,7 +22,7 @@
  * timestamp instead of a fabricated "due in Xd" countdown.
  */
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useAccounts } from "@/hooks/use-accounts";
 import { useAllCreditCardStatements, useCreditCards } from "@/hooks/use-credit-cards";
 import { useAllEmiInstallments } from "@/hooks/use-emis";
@@ -89,6 +89,21 @@ function cycleRangeFor(startDay: number, now: Date): { start: Date; end: Date } 
 
 function isInCycle(date: Date, range: { start: Date; end: Date }): boolean {
   return date.getTime() >= range.start.getTime() && date.getTime() <= range.end.getTime();
+}
+
+/**
+ * `date` shifted by `months` calendar months, day-of-month clamped to the target month's last
+ * valid day (so e.g. 31 Aug + 1 month lands on 30 Sep, not rolls over into October) — used to
+ * step the cycle-switcher between cycles. A fixed day-of-month shift always lands somewhere
+ * inside the target cycle's ~month-long window, since each cycle corresponds to exactly one
+ * such step regardless of `startDay`.
+ */
+function shiftMonthsClamped(date: Date, months: number): Date {
+  const targetMonthIndex = date.getMonth() + months;
+  const targetYear = date.getFullYear() + Math.floor(targetMonthIndex / 12);
+  const targetMonth = ((targetMonthIndex % 12) + 12) % 12;
+  const lastDayOfTargetMonth = new Date(targetYear, targetMonth + 1, 0).getDate();
+  return new Date(targetYear, targetMonth, Math.min(date.getDate(), lastDayOfTargetMonth));
 }
 
 /**
@@ -160,7 +175,10 @@ export interface MonthCycleExpenseRow {
   id: string;
   description: string;
   category: string;
+  /** `Category.iconKey` — resolves to a Lucide icon/tone via `categoryIconFor`/`categoryToneFor`. */
+  categoryIconKey: string;
   account: string;
+  accountType: Account["type"] | null;
   date: Date;
   /** The transaction's full amount — what counts toward "Combined Expenses". */
   fullAmount: number;
@@ -173,8 +191,20 @@ export function useMonthCycleData() {
   const now = useMemo(() => new Date(), []);
   const { preferences } = useUserPreferences();
   const monthCycleStartDay = preferences.monthCycleStartDay;
-  const cycleRange = useMemo(() => cycleRangeFor(monthCycleStartDay, now), [monthCycleStartDay, now]);
   const isCustomCycle = monthCycleStartDay > 1;
+
+  // --- Cycle switcher: 0 = the cycle containing today, negative = past, positive = future.
+  //     Every "due this cycle" figure below re-derives from `cycleRange`, so switching this is
+  //     the only state a caller needs to browse a different cycle. `daysLeftIn`/`dueInDaysLabel`
+  //     etc. still compare against the real `now`, not the browsed cycle, so a past cycle's items
+  //     correctly read as overdue rather than "days left". ---
+  const [cycleOffset, setCycleOffset] = useState(0);
+  const referenceDate = useMemo(() => shiftMonthsClamped(now, cycleOffset), [now, cycleOffset]);
+  const cycleRange = useMemo(() => cycleRangeFor(monthCycleStartDay, referenceDate), [monthCycleStartDay, referenceDate]);
+  const isCurrentCycle = cycleOffset === 0;
+  const goToPreviousCycle = () => setCycleOffset((o) => o - 1);
+  const goToNextCycle = () => setCycleOffset((o) => o + 1);
+  const goToCurrentCycle = () => setCycleOffset(0);
 
   const { data: transactions = [], isLoading: transactionsLoading } = useTransactions();
   const { data: accounts = [], isLoading: accountsLoading } = useAccounts();
@@ -304,6 +334,7 @@ export function useMonthCycleData() {
   //     so the hero's "Total Spent"/"My Expenses" figure can be drilled into. ---
   const expenseRows = useMemo(() => {
     const accountById = new Map((accounts as Account[]).map((a) => [a.id, a]));
+    const categoryById = new Map((categories as Category[]).map((c) => [c.id, c]));
     const expenseByTransactionId = new Map((expenses as Expense[]).map((e) => [e.transactionId, e]));
 
     const rows: MonthCycleExpenseRow[] = [];
@@ -314,11 +345,14 @@ export function useMonthCycleData() {
       const expense = expenseByTransactionId.get(t.id);
       const split = expense != null && isSplit(expense);
       const account = accountById.get(t.accountId);
+      const category = categoryById.get(t.categoryId);
       rows.push({
         id: t.id,
-        description: t.description || categoryNameFor(t.categoryId, categories as Category[]),
-        category: categoryNameFor(t.categoryId, categories as Category[]),
+        description: t.description || category?.name || "Uncategorized",
+        category: category?.name ?? "Uncategorized",
+        categoryIconKey: category?.iconKey ?? "other",
         account: account?.name ?? "Unknown Account",
+        accountType: account?.type ?? null,
         date: t.dateTime,
         fullAmount: t.amount,
         myAmount: expense ? myShare(expense) : t.amount,
@@ -557,6 +591,10 @@ export function useMonthCycleData() {
     daysLeftInMonth,
     isCustomCycle,
     monthCycleStartDay,
+    isCurrentCycle,
+    goToPreviousCycle,
+    goToNextCycle,
+    goToCurrentCycle,
     financialView,
     savingsRatePercent,
     expenseRows,
