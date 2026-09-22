@@ -14,7 +14,7 @@ export function ClayAvatar({ src, name, size = 32, className }: ClayAvatarProps)
   return (
     <Avatar className={cn("shrink-0", className)} style={{ width: size, height: size, boxShadow: "var(--shadow-e1)" }}>
       <AvatarImage src={src ?? undefined} alt={name ?? "User"} />
-      <AvatarFallback className="bg-primary/12 font-medium text-primary">{name?.charAt(0) ?? "U"}</AvatarFallback>
+      <AvatarFallback className="bg-primary/12 font-medium text-primary-accent-text">{name?.charAt(0) ?? "U"}</AvatarFallback>
     </Avatar>
   );
 }

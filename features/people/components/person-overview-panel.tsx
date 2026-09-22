@@ -19,12 +19,14 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { ClayAvatar } from "@/components/clay/clay-avatar";
+import { ClayButton } from "@/components/clay/clay-button";
 import { formatCurrency } from "@/lib/format";
 import type { PersonViewRow } from "@/features/people/hooks/use-people-data";
 import { usePersonUpcomingEmi } from "@/features/people/hooks/use-person-upcoming-emi";
+import { PersonTransactionHistory } from "@/features/people/components/person-transaction-history/person-transaction-history";
 import { cn } from "@/lib/utils";
 
-const TABS = ["Overview", "Timeline", "Notes", "Attachments"] as const;
+const TABS = ["Overview", "Notes", "Attachments"] as const;
 type Tab = (typeof TABS)[number];
 
 function InfoRow({ icon: Icon, label, value, onEdit }: { icon: typeof Calendar; label: string; value: string; onEdit?: () => void }) {
@@ -69,6 +71,7 @@ export function PersonOverviewPanel({
   onDelete?: () => void;
 }) {
   const [tab, setTab] = useState<Tab>("Overview");
+  const [historyOpen, setHistoryOpen] = useState(false);
   const { items: upcomingEmi } = usePersonUpcomingEmi(person.id);
   const net = person.youAreOwed - person.youOwe;
   const isOwedToYou = net >= 0;
@@ -170,7 +173,7 @@ export function PersonOverviewPanel({
             onClick={() => setTab(t)}
             className={cn(
               "border-b-2 px-2 py-2 text-xs font-medium transition-colors",
-              tab === t ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground",
+              tab === t ? "border-primary text-primary-accent-text" : "border-transparent text-muted-foreground hover:text-foreground",
             )}
           >
             {t}
@@ -213,31 +216,6 @@ export function PersonOverviewPanel({
         </div>
       )}
 
-      {tab === "Timeline" && (
-        <div className="flex flex-col gap-3 py-3">
-          {person.activity.map((item) => (
-            <div key={item.id} className="flex items-start gap-3 text-sm">
-              <span
-                className={cn(
-                  "mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full",
-                  item.type === "received" ? "bg-success/16 text-success" : "bg-expense/12 text-expense",
-                )}
-              >
-                {item.type === "received" ? <ArrowDownToLine className="size-3" /> : <ArrowUpFromLine className="size-3" />}
-              </span>
-              <div className="min-w-0 flex-1">
-                <p className="font-medium text-foreground">{item.description}</p>
-                <p className="text-xs text-muted-foreground">{item.date}</p>
-              </div>
-              <p className={cn("shrink-0 font-semibold tabular-nums", item.type === "received" ? "text-success" : "text-expense")}>
-                {item.type === "received" ? "+" : "-"}
-                {formatCurrency(item.amount)}
-              </p>
-            </div>
-          ))}
-        </div>
-      )}
-
       {tab === "Notes" &&
         (person.notes ? (
           <div className="py-3 text-sm whitespace-pre-wrap text-foreground">{person.notes}</div>
@@ -261,8 +239,8 @@ export function PersonOverviewPanel({
             <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Recent Activity</p>
             <button
               type="button"
-              onClick={() => setTab("Timeline")}
-              className="flex items-center gap-1 text-xs font-semibold text-primary hover:underline"
+              onClick={() => setHistoryOpen(true)}
+              className="flex items-center gap-1 text-xs font-semibold text-primary-accent-text hover:underline"
             >
               View All
               <ArrowRight className="size-3" />
@@ -297,35 +275,40 @@ export function PersonOverviewPanel({
       )}
 
       <div className="mt-4 grid grid-cols-3 gap-2">
-        <button
+        <ClayButton
           type="button"
+          variant="primary"
           onClick={onAddTransaction}
           disabled={!onAddTransaction}
-          className="flex flex-col items-center justify-center gap-1 rounded-xl py-2.5 text-xs font-semibold text-primary-foreground disabled:cursor-not-allowed disabled:opacity-50"
+          className="flex-col gap-1 py-2.5 text-xs"
           style={{ background: "var(--gradient-accent)" }}
         >
           <Plus className="size-4" />
           Add
-        </button>
-        <button
+        </ClayButton>
+        <ClayButton
           type="button"
+          variant="secondary"
           onClick={onShareExpense}
           disabled={!onShareExpense}
-          className="flex flex-col items-center justify-center gap-1 rounded-xl border border-border/50 py-2.5 text-xs font-semibold text-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+          className="flex-col gap-1 py-2.5 text-xs"
         >
           <Split className="size-4" />
           Share
-        </button>
-        <button
+        </ClayButton>
+        <ClayButton
           type="button"
+          variant="secondary"
           onClick={onSettleUp}
           disabled={!onSettleUp}
-          className="flex flex-col items-center justify-center gap-1 rounded-xl border border-border/50 py-2.5 text-xs font-semibold text-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+          className="flex-col gap-1 py-2.5 text-xs"
         >
           <HandCoins className="size-4" />
           Settle Up
-        </button>
+        </ClayButton>
       </div>
+
+      <PersonTransactionHistory person={person} open={historyOpen} onOpenChange={setHistoryOpen} />
     </aside>
   );
 }

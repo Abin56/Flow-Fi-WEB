@@ -36,7 +36,7 @@ export function ImportedStatementsPanel({
               doc.id === activeDocumentId && "bg-primary/10 hover:bg-primary/10",
             )}
           >
-            <FileText className={cn("mt-0.5 size-4 shrink-0", doc.id === activeDocumentId ? "text-primary" : "text-muted-foreground")} />
+            <FileText className={cn("mt-0.5 size-4 shrink-0", doc.id === activeDocumentId ? "text-primary-accent-text" : "text-muted-foreground")} />
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-medium text-foreground">{doc.documentNumber ?? "Statement"}</p>
               <p className="truncate text-xs text-muted-foreground">

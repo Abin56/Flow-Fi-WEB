@@ -15,7 +15,7 @@ export function ContextualCell({ row, onOpenInspector }: { row: GridRow; onOpenI
   const detail = row.actionDetail;
   const action = deriveRecordAction(row);
 
-  let content: React.ReactNode = <span className="text-xs text-muted-foreground/50">—</span>;
+  let content: React.ReactNode = <span className="text-xs text-tertiary-foreground">—</span>;
 
   if (action === "shared_expense" && detail?.kind === "shared_expense") {
     const names = detail.participants.map((p) => p.name);
@@ -41,24 +41,24 @@ export function ContextualCell({ row, onOpenInspector }: { row: GridRow; onOpenI
           Destination set
         </span>
       ) : (
-        <span className="text-xs text-warning">Choose destination</span>
+        <span className="text-xs text-warning-foreground">Choose destination</span>
       );
   } else if (action === "existing_emi" || action === "existing_loan" || action === "recurring_bill") {
     content =
       detail && "emiId" in detail
-        ? <span className="flex items-center gap-1 truncate text-xs"><Landmark className="size-3 shrink-0 text-warning" />Linked</span>
-        : <span className="text-xs text-warning">Choose {action === "recurring_bill" ? "bill" : action === "existing_loan" ? "loan" : "EMI"}</span>;
+        ? <span className="flex items-center gap-1 truncate text-xs"><Landmark className="size-3 shrink-0 text-warning-foreground" />Linked</span>
+        : <span className="text-xs text-warning-foreground">Choose {action === "recurring_bill" ? "bill" : action === "existing_loan" ? "loan" : "EMI"}</span>;
   } else if (action === "create_emi" && detail?.kind === "create_emi") {
     content = (
       <span className="flex items-center gap-1 truncate text-xs">
-        <CalendarClock className="size-3 shrink-0 text-warning" />
+        <CalendarClock className="size-3 shrink-0 text-warning-foreground" />
         {detail.name || "New EMI"}
       </span>
     );
   } else if (action === "create_loan" && detail?.kind === "create_loan") {
     content = (
       <span className="flex items-center gap-1 truncate text-xs">
-        <CalendarClock className="size-3 shrink-0 text-warning" />
+        <CalendarClock className="size-3 shrink-0 text-warning-foreground" />
         {detail.name || "New loan"}
       </span>
     );

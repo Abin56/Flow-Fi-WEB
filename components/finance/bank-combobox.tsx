@@ -87,7 +87,7 @@ export function BankCombobox({ value, onChange, placeholder = "Select bank", cla
                 >
                   <BankLogo bankId={bank.id} size={24} shape="square" />
                   <span className="flex-1 truncate">{bank.name}</span>
-                  {value === bank.id && <Check className="size-4 text-primary" />}
+                  {value === bank.id && <Check className="size-4 text-primary-accent-text" />}
                 </CommandItem>
               ))}
             </CommandGroup>
@@ -104,7 +104,7 @@ export function BankCombobox({ value, onChange, placeholder = "Select bank", cla
                 >
                   <BankLogo bankId={bank.id} size={24} shape="square" />
                   <span className="flex-1 truncate">{bank.name}</span>
-                  {value === bank.id && <Check className="size-4 text-primary" />}
+                  {value === bank.id && <Check className="size-4 text-primary-accent-text" />}
                 </CommandItem>
               ))}
             </CommandGroup>
@@ -119,7 +119,7 @@ export function BankCombobox({ value, onChange, placeholder = "Select bank", cla
               >
                 <BankLogo bankId={GENERIC_BANK.id} size={24} shape="square" />
                 <span className="flex-1 truncate">{GENERIC_BANK.name}</span>
-                {value === GENERIC_BANK.id && <Check className="size-4 text-primary" />}
+                {value === GENERIC_BANK.id && <Check className="size-4 text-primary-accent-text" />}
               </CommandItem>
             </CommandGroup>
           </CommandList>

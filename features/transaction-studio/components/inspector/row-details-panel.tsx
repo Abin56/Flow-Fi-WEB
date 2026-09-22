@@ -90,7 +90,7 @@ function ConfidenceField({ confidenceScores }: { confidenceScores: Record<string
   const overall = confidenceScores.overall ?? 1;
   const percent = Math.round(overall * 100);
   const tone = percent >= 90 ? "High" : percent >= 70 ? "Medium" : "Low";
-  const toneClass = percent >= 90 ? "text-success" : percent >= 70 ? "text-warning" : "text-danger";
+  const toneClass = percent >= 90 ? "text-success" : percent >= 70 ? "text-warning-foreground" : "text-danger";
   const perField = Object.entries(confidenceScores).filter(([field]) => field !== "overall");
 
   return (

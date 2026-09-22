@@ -10,11 +10,11 @@ import type { SmsTransactionCandidate } from "@/lib/models/sms-transaction-candi
 /** Same tone→class mapping as Transaction Studio's `StatusCell` (`TONE_CLASS`/`DOT_CLASS`) — small,
  *  presentational, cheap to duplicate rather than importing a component from another feature folder. */
 const TONE_CLASS: Record<RowStatusTone, string> = {
-  success: "bg-success/10 text-success",
-  warning: "bg-warning/10 text-warning",
-  danger: "bg-danger/10 text-danger",
-  royal: "bg-royal/10 text-royal",
-  purple: "bg-purple/10 text-purple",
+  success: "bg-success/20 text-success",
+  warning: "bg-warning/25 text-warning-foreground",
+  danger: "bg-danger/20 text-danger",
+  royal: "bg-royal/20 text-royal",
+  purple: "bg-purple/20 text-purple",
   muted: "bg-muted text-muted-foreground",
 };
 

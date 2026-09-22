@@ -254,14 +254,10 @@ export function AccountsWorkspace() {
             <div className="surface-flat flex flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-border py-12 text-center text-muted-foreground">
               <p className="text-sm font-medium text-foreground">No accounts yet</p>
               <p className="text-xs">Add your first bank, wallet, or cash account to get started.</p>
-              <button
-                type="button"
-                onClick={openAdd}
-                className="mt-2 flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-              >
+              <ClayButton onClick={openAdd} className="mt-2 gap-1.5">
                 <Plus className="size-4" />
                 Add New Account
-              </button>
+              </ClayButton>
             </div>
           ) : (
             <div className={view === "grid" ? "grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3" : "flex flex-col gap-3"}>
@@ -280,7 +276,7 @@ export function AccountsWorkspace() {
               <button
                 type="button"
                 onClick={openAdd}
-                className="flex flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-border py-8 text-center text-muted-foreground transition-colors hover:border-primary/50 hover:text-primary"
+                className="flex flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-border py-8 text-center text-muted-foreground transition-colors hover:border-primary/50 hover:text-primary-accent-text"
               >
                 <span className="flex size-9 items-center justify-center rounded-full border border-dashed border-current">
                   <Plus className="size-4" />
@@ -385,7 +381,7 @@ export function AccountsWorkspace() {
                         className={cn(
                           "flex items-center gap-1.5 border px-3 py-1.5 text-xs font-semibold transition-colors",
                           selected
-                            ? "border-primary bg-primary/10 text-primary"
+                            ? "border-primary bg-primary/10 text-primary-accent-text"
                             : "border-border text-muted-foreground hover:bg-muted",
                         )}
                       >
@@ -447,7 +443,7 @@ export function AccountsWorkspace() {
                 <label className="flex flex-col gap-1">
                   <span className="text-xs font-medium text-muted-foreground">Opening Balance</span>
                   <div className="relative">
-                    <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary">₹</span>
+                    <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary-accent-text">₹</span>
                     <input
                       type="number"
                       className="h-10 w-full rounded-none border border-primary/30 bg-primary/5 pr-3 pl-7 text-base font-semibold outline-none transition-colors focus:border-primary"

@@ -1,4 +1,5 @@
 import { Plus } from "lucide-react";
+import { ClayButton } from "@/components/clay/clay-button";
 
 export function PeopleHeader({ onAddPerson }: { onAddPerson?: () => void }) {
   return (
@@ -8,14 +9,10 @@ export function PeopleHeader({ onAddPerson }: { onAddPerson?: () => void }) {
         <p className="mt-1 text-sm text-muted-foreground">Track money you owe and money others owe you.</p>
       </div>
       {onAddPerson && (
-        <button
-          type="button"
-          onClick={onAddPerson}
-          className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-        >
+        <ClayButton onClick={onAddPerson} className="gap-1.5">
           <Plus className="size-4" />
           Add Person
-        </button>
+        </ClayButton>
       )}
     </div>
   );

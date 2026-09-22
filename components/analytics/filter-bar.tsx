@@ -22,7 +22,7 @@ export function FilterBar({ options, value, onChange, className }: FilterBarProp
             "rounded-full border px-3 py-1.5 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
             value === option
               ? "border-transparent bg-primary text-primary-foreground"
-              : "border-border/60 bg-card text-muted-foreground hover:text-foreground",
+              : "border-border bg-card text-muted-foreground hover:bg-muted hover:text-foreground",
           )}
         >
           {option}

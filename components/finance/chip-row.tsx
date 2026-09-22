@@ -25,7 +25,9 @@ export function ChipRow<T extends string>({
           onClick={() => onChange(o.value)}
           className={cn(
             "border px-3 py-1.5 text-xs font-semibold transition-colors",
-            value === o.value ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:bg-muted",
+            value === o.value
+              ? "border-primary bg-primary/20 text-primary-accent-text"
+              : "border-border bg-card text-muted-foreground hover:bg-muted hover:text-foreground",
           )}
         >
           {o.label}

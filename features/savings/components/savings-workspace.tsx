@@ -31,7 +31,7 @@ import {
 const STAT_TONE_CLASS = {
   purple: { card: "bg-purple/8 border-purple/20", icon: "bg-purple/20 text-purple" },
   success: { card: "bg-success/8 border-success/20", icon: "bg-success/20 text-success" },
-  primary: { card: "bg-primary/8 border-primary/20", icon: "bg-primary/20 text-primary" },
+  primary: { card: "bg-primary/8 border-primary/20", icon: "bg-primary/20 text-primary-accent-text" },
   warning: { card: "bg-warning/12 border-warning/25", icon: "bg-warning/25 text-warning-foreground" },
 } as const;
 
@@ -424,7 +424,7 @@ export function SavingsWorkspace() {
             <label className="flex flex-col gap-1">
               <span className="text-xs font-medium text-muted-foreground">Target Amount</span>
               <div className="relative">
-                <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary">₹</span>
+                <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary-accent-text">₹</span>
                 <input
                   type="number"
                   className="clay-pressed h-10 w-full rounded-xl border border-primary/20 bg-primary/5 pl-7 text-sm font-semibold outline-none"
@@ -479,7 +479,7 @@ export function SavingsWorkspace() {
             <label className="flex flex-col gap-1">
               <span className="text-xs font-medium text-muted-foreground">Target Amount</span>
               <div className="relative">
-                <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary">₹</span>
+                <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary-accent-text">₹</span>
                 <input
                   type="number"
                   className="clay-pressed h-10 w-full rounded-xl border border-primary/20 bg-primary/5 pl-7 text-sm font-semibold outline-none"
@@ -521,7 +521,7 @@ export function SavingsWorkspace() {
           <label className="flex flex-col gap-1">
             <span className="text-xs font-medium text-muted-foreground">Contribution Amount</span>
             <div className="relative">
-              <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary">₹</span>
+              <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary-accent-text">₹</span>
               <input
                 type="number"
                 className="clay-pressed h-10 w-full rounded-xl border border-primary/20 bg-primary/5 pl-7 text-sm font-semibold outline-none"

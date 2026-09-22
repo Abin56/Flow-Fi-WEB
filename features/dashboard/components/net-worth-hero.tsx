@@ -36,7 +36,7 @@ export function NetWorthHero({ netWorth, isLoading }: NetWorthHeroProps) {
   if (isLoading) {
     return (
       <section
-        className="relative flex h-full flex-col justify-between gap-6 overflow-hidden rounded-3xl p-5 text-primary-foreground sm:flex-row sm:items-center sm:p-6"
+        className="@container/hero relative flex h-full flex-col justify-between gap-6 overflow-hidden rounded-3xl p-5 text-hero-foreground @xs/hero:flex-row @xs/hero:items-center @xs/hero:p-6"
         style={{ background: "var(--gradient-hero)", boxShadow: "var(--shadow-card)" }}
       >
         <div className="flex min-w-0 flex-1 flex-col gap-3">
@@ -51,22 +51,22 @@ export function NetWorthHero({ netWorth, isLoading }: NetWorthHeroProps) {
 
   return (
     <section
-      className="relative flex h-full flex-col justify-between gap-6 overflow-hidden rounded-3xl p-5 text-primary-foreground sm:flex-row sm:items-center sm:p-6"
+      className="@container/hero relative flex h-full flex-col justify-between gap-6 overflow-hidden rounded-3xl p-5 text-hero-foreground @xs/hero:flex-row @xs/hero:items-center @xs/hero:p-6"
       style={{ background: "var(--gradient-hero)", boxShadow: "var(--shadow-card)" }}
     >
       <div className="relative flex min-w-0 flex-1 flex-col gap-3">
         <div className="flex items-center gap-1.5">
-          <p className="text-xs font-medium text-primary-foreground/75">Net Worth</p>
-          <Eye className="size-3.5 text-primary-foreground/60" />
+          <p className="text-xs font-medium text-hero-foreground/75">Net Worth</p>
+          <Eye className="size-3.5 text-hero-foreground/60" />
         </div>
         <span className="font-heading text-3xl font-bold tracking-tight tabular-nums sm:text-4xl">
           <AnimatedNumber value={netWorth.amount} format={formatCurrency} />
         </span>
-        <p className="flex items-center gap-1 text-xs font-medium text-primary-foreground/85">
+        <p className="flex items-center gap-1 text-xs font-medium text-hero-foreground/85">
           <ArrowUp className="size-3.5" />
           {formatCurrency(netWorth.changeAmount)} ({netWorth.changePercent}%) this month
         </p>
-        {netWorth.trend.length > 0 && (
+        {netWorth.trend.length > 0 && netWorth.trend.some((v) => v !== netWorth.trend[0]) && (
           <div className="h-8 w-full max-w-40">
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={netWorth.trend.map((v) => ({ v }))} margin={{ top: 2, right: 0, bottom: 2, left: 0 }}>
@@ -98,16 +98,16 @@ export function NetWorthHero({ netWorth, isLoading }: NetWorthHeroProps) {
         </button>
       </div>
 
-      <div className="relative flex shrink-0 flex-col items-center gap-2 border-white/20 pt-4 text-center sm:border-l sm:pt-0 sm:pl-6">
-        <p className="text-xs font-medium text-primary-foreground/75">Financial Health</p>
+      <div className="relative flex shrink-0 flex-col items-center gap-2 border-white/20 pt-4 text-center @xs/hero:border-l @xs/hero:pt-0 @xs/hero:pl-6">
+        <p className="text-xs font-medium text-hero-foreground/75">Financial Health</p>
         <ProgressRing value={financialHealth.score} size={92} strokeWidth={7} color="white" trackColor="rgba(255,255,255,0.25)">
           <span className="font-heading text-xl font-bold">
             {financialHealth.score}
-            <span className="text-xs font-medium text-primary-foreground/70">/100</span>
+            <span className="text-xs font-medium text-hero-foreground/70">/100</span>
           </span>
         </ProgressRing>
         <p className="text-sm font-semibold">{financialHealth.label} 🎉</p>
-        <p className="max-w-[9rem] text-[11px] leading-snug text-primary-foreground/75">{financialHealth.message}</p>
+        <p className="max-w-[9rem] text-[11px] leading-snug text-hero-foreground/75">{financialHealth.message}</p>
       </div>
     </section>
   );

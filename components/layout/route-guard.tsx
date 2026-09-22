@@ -70,7 +70,7 @@ export function RouteGuard({ children }: { children: React.ReactNode }) {
             <button
               type="button"
               onClick={() => router.replace("/login")}
-              className="text-sm font-medium text-primary underline underline-offset-2"
+              className="text-sm font-medium text-primary-accent-text underline underline-offset-2"
             >
               Go to sign in
             </button>

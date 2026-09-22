@@ -661,7 +661,7 @@ function LoanFormFields({
           <label className="flex flex-col gap-1">
             <span className="text-xs font-medium text-muted-foreground">Loan Amount</span>
             <div className="relative">
-              <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary">₹</span>
+              <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary-accent-text">₹</span>
               <input
                 type="number"
                 min={isEdit ? minLoanAmount || undefined : undefined}

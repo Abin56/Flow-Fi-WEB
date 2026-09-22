@@ -27,7 +27,7 @@ export function Timeline({ events, className }: { events: TimelineEvent[]; class
                 tone === "success" && "bg-success/12 text-success",
                 tone === "warning" && "bg-warning/15 text-warning-foreground",
                 tone === "expense" && "bg-expense/12 text-expense",
-                tone === "primary" && "bg-primary/12 text-primary",
+                tone === "primary" && "bg-primary/12 text-primary-accent-text",
               )}
             >
               <Icon className="size-4" />

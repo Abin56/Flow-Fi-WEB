@@ -48,7 +48,7 @@ import {
 type Accent = "primary" | "expense" | "warning" | "success" | "purple";
 
 const ACCENT_BG: Record<Accent, string> = {
-  primary: "bg-primary/10 text-primary",
+  primary: "bg-primary/10 text-primary-accent-text",
   expense: "bg-expense/10 text-expense",
   warning: "bg-warning/15 text-warning-foreground",
   success: "bg-success/12 text-success",
@@ -66,7 +66,7 @@ const ACCENT_BAR: Record<Accent, string> = {
 const ACCOUNT_BAR_CYCLE: Accent[] = ["success", "primary", "warning", "purple", "expense"];
 
 const TONE_BADGE: Record<ToneName, string> = {
-  primary: "bg-primary/10 text-primary",
+  primary: "bg-primary/10 text-primary-accent-text",
   expense: "bg-expense/10 text-expense",
   warning: "bg-warning/15 text-warning-foreground",
   success: "bg-success/12 text-success",
@@ -252,7 +252,7 @@ function SectionCard({
     <div className="surface-primary flex flex-col gap-1 rounded-2xl p-4" style={{ boxShadow: "var(--shadow-e1)" }}>
       <div className="flex items-center justify-between gap-3">
         <SectionLabel icon={icon}>{title}</SectionLabel>
-        <Link href={viewAllHref} className="shrink-0 text-xs font-semibold text-primary hover:underline">
+        <Link href={viewAllHref} className="shrink-0 text-xs font-semibold text-primary-accent-text hover:underline">
           View All
         </Link>
       </div>
@@ -266,7 +266,7 @@ function SectionCard({
           <div className="flex flex-col divide-y divide-border/50">{children}</div>
         )}
       </div>
-      <Link href={addHref} className="mt-2 flex items-center gap-1.5 text-xs font-semibold text-primary hover:underline">
+      <Link href={addHref} className="mt-2 flex items-center gap-1.5 text-xs font-semibold text-primary-accent-text hover:underline">
         <Plus className="size-3.5" />
         {addLabel}
       </Link>
@@ -326,7 +326,7 @@ export function MonthCycleWorkspace() {
         <div className="flex flex-col gap-1.5">
           <div className="flex flex-wrap items-center gap-2.5">
             <h1 className="font-heading text-2xl font-bold tracking-tight text-foreground">Month Cycle</h1>
-            <div className="inline-flex items-center gap-0.5 rounded-full bg-primary/10 py-1 pr-1 pl-1 text-xs font-semibold text-primary">
+            <div className="inline-flex items-center gap-0.5 rounded-full bg-primary/10 py-1 pr-1 pl-1 text-xs font-semibold text-primary-accent-text">
               <button
                 type="button"
                 onClick={data.goToPreviousCycle}
@@ -349,7 +349,7 @@ export function MonthCycleWorkspace() {
               <button
                 type="button"
                 onClick={data.goToCurrentCycle}
-                className="rounded-full border border-primary/30 px-2.5 py-1 text-[11px] font-semibold text-primary transition-colors hover:bg-primary/10"
+                className="rounded-full border border-primary/30 px-2.5 py-1 text-[11px] font-semibold text-primary-accent-text transition-colors hover:bg-primary/10"
               >
                 Jump to Today
               </button>
@@ -398,13 +398,13 @@ export function MonthCycleWorkspace() {
 
       {/* Hero */}
       <section
-        className="relative overflow-hidden rounded-3xl p-5 text-primary-foreground sm:p-7"
+        className="relative overflow-hidden rounded-3xl p-5 text-hero-foreground sm:p-7"
         style={{ background: "var(--gradient-hero)", boxShadow: "var(--shadow-dialog), var(--glow-primary)" }}
       >
         <div className="relative grid grid-cols-2 gap-6 sm:grid-cols-3 lg:grid-cols-5 lg:divide-x lg:divide-white/15">
           <div className="flex flex-col gap-2 lg:pr-6">
             <div className="flex items-center gap-1">
-              <p className="text-[11px] font-semibold tracking-wide text-primary-foreground/75 uppercase">
+              <p className="text-[11px] font-semibold tracking-wide text-hero-foreground/75 uppercase">
                 {isMine ? "My Expenses This Month" : "Total Spent This Month"}
               </p>
               <DropdownMenu>
@@ -412,7 +412,7 @@ export function MonthCycleWorkspace() {
                   <button
                     type="button"
                     aria-label="Choose which spend total to show"
-                    className="flex size-4 items-center justify-center rounded text-primary-foreground/60 transition-colors hover:bg-white/15 hover:text-primary-foreground"
+                    className="flex size-4 items-center justify-center rounded text-hero-foreground/60 transition-colors hover:bg-white/15 hover:text-hero-foreground"
                   >
                     <ChevronDown className="size-3" />
                   </button>
@@ -437,7 +437,7 @@ export function MonthCycleWorkspace() {
               <AnimatedNumber value={spent} format={formatCurrency} />
             </button>
             {changePercent != null && (
-              <p className="flex items-center gap-1 text-xs font-medium text-primary-foreground/85">
+              <p className="flex items-center gap-1 text-xs font-medium text-hero-foreground/85">
                 {changeIsLess ? <ArrowDownRight className="size-3.5" /> : <ArrowUpRight className="size-3.5" />}
                 {Math.abs(Math.round(changePercent * 10) / 10)}% {changeIsLess ? "less" : "more"} than last month
               </p>
@@ -445,7 +445,7 @@ export function MonthCycleWorkspace() {
             <button
               type="button"
               onClick={() => setShowExpenseList(true)}
-              className="mt-1 inline-flex w-fit items-center gap-1.5 rounded-full bg-white/15 px-3 py-1.5 text-xs font-semibold text-primary-foreground transition-colors hover:bg-white/25"
+              className="mt-1 inline-flex w-fit items-center gap-1.5 rounded-full bg-white/15 px-3 py-1.5 text-xs font-semibold text-hero-foreground transition-colors hover:bg-white/25"
             >
               <ListChecks className="size-3.5" />
               View List
@@ -453,15 +453,15 @@ export function MonthCycleWorkspace() {
           </div>
 
           <div className="flex flex-col gap-2 lg:px-6">
-            <p className="text-[11px] font-semibold tracking-wide text-primary-foreground/75 uppercase">Income</p>
+            <p className="text-[11px] font-semibold tracking-wide text-hero-foreground/75 uppercase">Income</p>
             <span className="flex items-center gap-2 font-heading text-2xl font-bold tabular-nums">
-              <Wallet className="size-5 text-primary-foreground/70" />
+              <Wallet className="size-5 text-hero-foreground/70" />
               <AnimatedNumber value={financialView.income} format={formatCurrency} />
             </span>
           </div>
 
           <div className="flex flex-col gap-2 lg:px-6">
-            <p className="text-[11px] font-semibold tracking-wide text-primary-foreground/75 uppercase">Net Balance</p>
+            <p className="text-[11px] font-semibold tracking-wide text-hero-foreground/75 uppercase">Net Balance</p>
             <span className="font-heading text-2xl font-bold tabular-nums">
               <AnimatedNumber value={net} format={formatCurrency} />
             </span>
@@ -479,7 +479,7 @@ export function MonthCycleWorkspace() {
                 >
                   <span className="font-heading text-base font-bold">{Math.round(data.budgetOverview.usageRatio * 100)}%</span>
                 </ProgressRing>
-                <p className="text-center text-[11px] leading-snug text-primary-foreground/75">
+                <p className="text-center text-[11px] leading-snug text-hero-foreground/75">
                   of {formatCurrency(data.budgetOverview.limit)} Budget Used
                 </p>
               </>
@@ -488,7 +488,7 @@ export function MonthCycleWorkspace() {
                 <ProgressRing value={0} size={78} strokeWidth={6} color="white" trackColor="rgba(255,255,255,0.25)">
                   <TrendingUp className="size-5" />
                 </ProgressRing>
-                <p className="text-center text-[11px] leading-snug text-primary-foreground/75">No monthly budget set</p>
+                <p className="text-center text-[11px] leading-snug text-hero-foreground/75">No monthly budget set</p>
               </>
             )}
           </div>
@@ -498,7 +498,7 @@ export function MonthCycleWorkspace() {
               <PiggyBank className="size-4.5" />
             </span>
             <p className="text-center font-heading text-lg font-bold">{data.savingsRatePercent}%</p>
-            <p className="text-center text-[11px] leading-snug text-primary-foreground/75">
+            <p className="text-center text-[11px] leading-snug text-hero-foreground/75">
               Saved of {formatCurrency(financialView.income)} in
             </p>
           </div>
@@ -618,7 +618,7 @@ export function MonthCycleWorkspace() {
                   {formatCurrency(data.peopleStats.netBalance)}
                 </p>
               </div>
-              <Link href="/people" className="shrink-0 text-xs font-semibold text-primary hover:underline">
+              <Link href="/people" className="shrink-0 text-xs font-semibold text-primary-accent-text hover:underline">
                 View All
               </Link>
             </div>
@@ -656,7 +656,7 @@ export function MonthCycleWorkspace() {
               </div>
             </div>
           )}
-          <Link href="/people" className="flex items-center gap-1.5 text-xs font-semibold text-primary hover:underline">
+          <Link href="/people" className="flex items-center gap-1.5 text-xs font-semibold text-primary-accent-text hover:underline">
             <Plus className="size-3.5" />
             Add Person
           </Link>
@@ -670,7 +670,7 @@ export function MonthCycleWorkspace() {
                 <p className="text-[10px] font-medium tracking-wide text-muted-foreground uppercase">Total</p>
                 <p className="text-sm font-bold tabular-nums text-foreground">{formatCurrency(financialView.spent)}</p>
               </div>
-              <Link href="/accounts" className="shrink-0 text-xs font-semibold text-primary hover:underline">
+              <Link href="/accounts" className="shrink-0 text-xs font-semibold text-primary-accent-text hover:underline">
                 View All
               </Link>
             </div>
@@ -769,7 +769,7 @@ export function MonthCycleWorkspace() {
                 </p>
               </div>
             </div>
-            <Link href="/budgets" className="self-start text-xs font-semibold text-primary hover:underline">
+            <Link href="/budgets" className="self-start text-xs font-semibold text-primary-accent-text hover:underline">
               Manage Budget
             </Link>
           </>
@@ -781,7 +781,7 @@ export function MonthCycleWorkspace() {
               description="Set an overall monthly budget to track usage here."
               className="py-6"
             />
-            <Link href="/budgets" className="-mt-3 text-xs font-semibold text-primary hover:underline">
+            <Link href="/budgets" className="-mt-3 text-xs font-semibold text-primary-accent-text hover:underline">
               Manage Budget
             </Link>
           </div>
@@ -804,14 +804,14 @@ export function MonthCycleWorkspace() {
 
           {/* Gradient hero header, matching the page's own hero card */}
           <div
-            className="relative shrink-0 overflow-hidden p-6 text-primary-foreground"
+            className="relative shrink-0 overflow-hidden p-6 text-hero-foreground"
             style={{ background: "var(--gradient-hero)" }}
           >
             <button
               type="button"
               onClick={() => setShowExpenseList(false)}
               aria-label="Close"
-              className="absolute top-4 right-4 flex size-8 items-center justify-center rounded-full text-primary-foreground/80 transition-colors hover:bg-white/15 hover:text-primary-foreground"
+              className="absolute top-4 right-4 flex size-8 items-center justify-center rounded-full text-hero-foreground/80 transition-colors hover:bg-white/15 hover:text-hero-foreground"
             >
               <X className="size-4" />
             </button>
@@ -821,7 +821,7 @@ export function MonthCycleWorkspace() {
                 <Receipt className="size-5" />
               </span>
               <div>
-                <p className="text-[11px] font-semibold tracking-wide text-primary-foreground/75 uppercase">
+                <p className="text-[11px] font-semibold tracking-wide text-hero-foreground/75 uppercase">
                   {data.monthRangeLabel}
                 </p>
                 <p className="font-heading text-base font-semibold">{isMine ? "My Expenses" : "Total Spent"}</p>
@@ -831,7 +831,7 @@ export function MonthCycleWorkspace() {
             <p className="mt-4 font-heading text-3xl font-bold tracking-tight tabular-nums">
               <AnimatedNumber value={isMine ? financialView.mySpent : financialView.spent} format={formatCurrency} />
             </p>
-            <p className="mt-1 text-xs text-primary-foreground/75">
+            <p className="mt-1 text-xs text-hero-foreground/75">
               {data.expenseRows.length} transaction{data.expenseRows.length === 1 ? "" : "s"} this cycle
             </p>
 
@@ -842,7 +842,7 @@ export function MonthCycleWorkspace() {
                 onClick={() => setExpenseView("combined")}
                 className={cn(
                   "rounded-full px-3.5 py-1.5 font-semibold transition-colors",
-                  !isMine ? "bg-white text-primary shadow-e1" : "text-primary-foreground/80 hover:text-primary-foreground",
+                  !isMine ? "bg-white text-primary-accent-text shadow-e1" : "text-hero-foreground/80 hover:text-hero-foreground",
                 )}
               >
                 Combined
@@ -852,7 +852,7 @@ export function MonthCycleWorkspace() {
                 onClick={() => setExpenseView("mine")}
                 className={cn(
                   "rounded-full px-3.5 py-1.5 font-semibold transition-colors",
-                  isMine ? "bg-white text-primary shadow-e1" : "text-primary-foreground/80 hover:text-primary-foreground",
+                  isMine ? "bg-white text-primary-accent-text shadow-e1" : "text-hero-foreground/80 hover:text-hero-foreground",
                 )}
               >
                 Mine Only

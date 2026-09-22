@@ -163,7 +163,7 @@ export function AccountOverviewPanel({
                 disabled={!onClick}
                 className="flex flex-col items-center gap-1.5 rounded-xl py-2 text-center transition-colors hover:bg-muted/50 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                <span className="flex size-8 items-center justify-center rounded-full bg-primary/12 text-primary">
+                <span className="flex size-8 items-center justify-center rounded-full bg-primary/12 text-primary-accent-text">
                   <ActionIcon className="size-4" />
                 </span>
                 <span className="text-[11px] font-medium text-foreground">{action.label}</span>
@@ -197,7 +197,7 @@ export function AccountOverviewPanel({
                   <ShortcutIcon className="size-3.5" />
                 </span>
                 <span className="flex-1 font-medium text-foreground">{shortcut.label}</span>
-                <ChevronRight className="size-4 shrink-0 text-muted-foreground/60" />
+                <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
               </button>
             );
           })}

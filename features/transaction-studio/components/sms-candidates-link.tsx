@@ -24,9 +24,9 @@ export function SmsCandidatesLink() {
   return (
     <Link
       href="/transaction-candidates"
-      className="surface-primary flex shrink-0 items-center gap-2 rounded-2xl px-3 py-2 text-xs font-medium text-foreground transition-colors hover:text-primary"
+      className="surface-primary flex shrink-0 items-center gap-2 rounded-2xl px-3 py-2 text-xs font-medium text-foreground transition-colors hover:text-primary-accent-text"
     >
-      <MessageSquareText className="size-4 text-primary" />
+      <MessageSquareText className="size-4 text-primary-accent-text" />
       {pendingCount} SMS candidate{pendingCount === 1 ? "" : "s"} pending review
     </Link>
   );

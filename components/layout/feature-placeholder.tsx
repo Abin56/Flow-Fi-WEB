@@ -16,7 +16,7 @@ export function FeaturePlaceholder({
       elevation={1}
       className="flex min-h-[60vh] flex-col items-center justify-center gap-1 border-dashed bg-card/60 text-center"
     >
-      <div className="mb-3 flex size-12 items-center justify-center rounded-2xl bg-primary/10 text-primary shadow-e1">
+      <div className="mb-3 flex size-12 items-center justify-center rounded-2xl bg-primary/10 text-primary-accent-text shadow-e1">
         <Icon className="size-5.5" />
       </div>
       <h1 className="font-heading text-lg font-semibold">{title}</h1>

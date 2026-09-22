@@ -31,25 +31,30 @@
   --color-accent: var(--accent);
   --color-muted-foreground: var(--muted-foreground);
   --color-muted: var(--muted);
+  --color-tertiary-foreground: var(--tertiary-foreground);
+  --color-border-subtle: var(--border-subtle);
   --color-secondary-foreground: var(--secondary-foreground);
   --color-secondary: var(--secondary);
   --color-primary-foreground: var(--primary-foreground);
   --color-primary: var(--primary);
+  --color-primary-accent-text: var(--primary-accent-text);
+  --color-hero-foreground: var(--hero-foreground);
   --color-popover-foreground: var(--popover-foreground);
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
 
-  /* Flat rectangular design language — every rounded-{name} utility app-wide resolves through
-     this single scale, so zeroing it here flattens every card, button, dialog, input, and badge
-     to sharp corners in one place, without touching component markup or logic. */
-  --radius-sm: 0px;
-  --radius-md: 0px;
-  --radius-lg: 0px;
-  --radius-xl: 0px;
-  --radius-2xl: 0px;
-  --radius-3xl: 0px;
-  --radius-4xl: 0px;
+  /* Theme V2 — Premium Neo-Fintech radius scale. Every rounded-{name} utility app-wide resolves
+     through this single scale: chips/pills stay fully round (--radius-full via --radius-4xl), cards
+     sit at 16-20, hero/dialogs at 20-24, inputs/buttons at 12-16 — see the --radius component tokens
+     below for the exact per-role mapping consumed by shadcn's calc()-based radius classes. */
+  --radius-sm: 10px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+  --radius-2xl: 24px;
+  --radius-3xl: 28px;
+  --radius-4xl: 999px;
 
   --color-success: var(--success);
   --color-success-foreground: var(--success-foreground);
@@ -102,18 +107,17 @@
   --z-index-command: var(--z-command);
 
   /*
-   * Ocean elevation: a dual directional shadow (soft blue-ambient dark side + near-white light
-   * side, single upper-left lightsource) — this is the "floating glass" read the theme brief asks
-   * for, in place of the old warm clay pairing. e1..e4 = resting to floating; -pressed is the
-   * inset/"pushed in" state for active nav items and button taps. Never gray/black — every shadow
-   * in the app resolves to this blue-tinted pair (or the floating/dialog/command escalations below).
+   * Theme V2 elevation: restrained, near-flat shadows — a faint single-direction near-black shadow,
+   * no dual-direction neumorphic/clay lighting, no colored glow. e1..e4 = resting to floating;
+   * -pressed is a very subtle inset used only for active/tapped states. Every shadow in the app
+   * resolves to --shadow-tint-dark/-light so retheming (incl. dark mode) only touches those two vars.
    */
-  --shadow-e1: 2px 2px 6px var(--shadow-tint-dark), -2px -2px 6px var(--shadow-tint-light);
-  --shadow-e2: 0 8px 20px -6px var(--shadow-tint-dark), -4px -4px 14px var(--shadow-tint-light);
-  --shadow-e3: 0 16px 36px -10px var(--shadow-tint-dark), -6px -6px 18px var(--shadow-tint-light);
-  --shadow-e4: 0 28px 56px -14px var(--shadow-tint-dark), -8px -8px 22px var(--shadow-tint-light);
-  --shadow-pressed: inset 3px 3px 7px var(--shadow-tint-dark), inset -3px -3px 7px var(--shadow-tint-light);
-  --shadow-pressed-sm: inset 2px 2px 4px var(--shadow-tint-dark), inset -2px -2px 4px var(--shadow-tint-light);
+  --shadow-e1: 0 1px 2px var(--shadow-tint-dark);
+  --shadow-e2: 0 2px 8px -2px var(--shadow-tint-dark);
+  --shadow-e3: 0 8px 20px -6px var(--shadow-tint-dark);
+  --shadow-e4: 0 16px 36px -10px var(--shadow-tint-dark);
+  --shadow-pressed: inset 0 1px 3px var(--shadow-tint-dark);
+  --shadow-pressed-sm: inset 0 1px 2px var(--shadow-tint-dark);
 
   /* Elevation scale — the single source of truth for stacking order app-wide. Every layer that needs to sit
      above another references one of these instead of an ad-hoc z-index, so a dialog is always above a hero
@@ -149,120 +153,158 @@
 }
 
 :root {
-  /* Ocean — cool, soft-white ground with a barely-there blue cast. Every component reads color from
-     these semantic tokens, never a hardcoded hex, so retheming (or dark mode) only ever touches this file. */
-  --background: oklch(0.978 0.008 247);
-  --foreground: oklch(0.208 0.042 265.8);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.208 0.042 265.8);
+  /* Theme V2 — Premium Neo-Fintech: warm off-white ground, near-black text/hero, electric lime
+     reserved for primary action/selection/highlight only. Every component reads color from these
+     semantic tokens, never a hardcoded hex, so retheming (or dark mode) only ever touches this file. */
+  --background: oklch(0.965 0.004 112);   /* Light Canvas ~#F5F6F3 */
+  --foreground: oklch(0.225 0.004 112);   /* Primary Text ~#151715 */
+  --card: oklch(1 0 0);                   /* White */
+  --card-foreground: oklch(0.225 0.004 112);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.208 0.042 265.8);
+  --popover-foreground: oklch(0.225 0.004 112);
 
-  /* Royal Blue primary — the Ocean signature. */
-  --primary: oklch(0.546 0.245 262.9);
-  --primary-hover: oklch(0.488 0.243 264.4);
-  --primary-foreground: oklch(0.99 0.006 260);
-  --secondary: oklch(0.965 0.014 254.6);
-  --secondary-foreground: oklch(0.379 0.146 265.5);
-  --muted: oklch(0.96 0.012 254.6);
-  --muted-foreground: oklch(0.554 0.046 257.4);
-  --accent: oklch(0.93 0.03 254.6);
-  --accent-foreground: oklch(0.379 0.146 265.5);
-  --destructive: oklch(0.637 0.237 25.3);
-  --border: oklch(0.546 0.245 262.9 / 0.1);
-  --input: oklch(0.546 0.245 262.9 / 0.14);
-  --ring: oklch(0.623 0.214 259.8 / 0.4);
+  /* Electric lime primary — action / selected / highlight ONLY. Paired with near-black text, never
+     white text, since lime is too light for accessible white-on-lime contrast. */
+  --primary: oklch(0.912 0.185 126);      /* Brand Lime ~#B9F65A */
+  --primary-hover: oklch(0.865 0.205 125);/* Strong Lime ~#A8EC35 */
+  --primary-foreground: oklch(0.135 0.004 112); /* Near Black text on lime */
+  /* Contrast refinement: --primary itself is ~1.25:1 against white — by design it's a BACKGROUND
+     fill for solid lime buttons/badges (paired with --primary-foreground near-black text), never a
+     text/icon color. Several components used raw `text-primary` directly on white/card surfaces
+     (active tabs, "View All" links, stat highlights) where the brand lime was nearly invisible.
+     This is that missing "lime as text" token: a darker, still-lime-hued olive-green, ~7:1 contrast,
+     for exactly those cases — legible while still reading as the brand accent, not a random new color. */
+  --primary-accent-text: oklch(0.45 0.14 126);  /* Dark olive-lime ~#3F6300 */
+  --secondary: oklch(0.955 0.006 112);    /* Muted Surface ~#F0F2EF */
+  --secondary-foreground: oklch(0.225 0.004 112);
+  --muted: oklch(0.955 0.006 112);
+  /* Contrast refinement: was oklch(0.51 .. ) ~#686C67 (contrast ~5.2:1 on canvas) — too faint at
+     normal reading distance on standard IPS displays. Darkened to ~#52534F, contrast ~7:1. */
+  --muted-foreground: oklch(0.44 0.006 112);  /* Secondary Text ~#52534F */
+  /* Dedicated tertiary text token — previously components faked "tertiary" with
+     text-muted-foreground/40-70, which is exactly the low-opacity pattern that disappears on
+     brighter/higher-gamut displays. This is a real, solid color, not an opacity trick. */
+  --tertiary-foreground: oklch(0.52 0.006 112); /* Tertiary Text ~#696965, contrast ~5:1 */
+  --accent: oklch(0.94 0.05 126 / 0.5);   /* Soft lime tint for hover/selected backgrounds */
+  --accent-foreground: oklch(0.225 0.004 112);
+  --destructive: oklch(0.63 0.22 26);
+  /* Contrast refinement: was oklch(0.906 ..) ~#E4E7E2, contrast only ~1.2:1 against the canvas —
+     effectively invisible on brighter displays. Strengthened to ~#BEBEBA (~1.7-1.9:1), which also
+     raises every `border-border/40`..`/70` utility across the app proportionally since Tailwind's
+     opacity modifier multiplies against this base color. */
+  --border: oklch(0.80 0.006 112);        /* Border ~#BEBEBA */
+  --border-subtle: oklch(0.87 0.005 112); /* Secondary/divider border — lighter than --border, still visible */
+  --input: oklch(0.78 0.007 112);         /* Slightly stronger than --border for form boundaries */
+  --ring: oklch(0.865 0.205 125 / 0.75);
 
-  /* Layered blue family. */
-  --royal: oklch(0.623 0.214 259.8);
+  /* Retired "Ocean" blue-family tokens kept as neutral/blue-info fallbacks — a handful of components
+     (charts, info badges) still reference royal/sky/ice/cyan/navy for non-brand "information" accents,
+     which the brief keeps separate from lime. */
+  --royal: oklch(0.546 0.245 262.9);
   --sky: oklch(0.707 0.165 254.6);
   --ice: oklch(0.809 0.105 251.8);
-  --cyan: oklch(0.746 0.16 232.7);
+  /* Contrast refinement: was oklch(0.746 ..), only ~2.2:1 against white — used directly as icon/text
+     color (refund amounts, savings icon), where it read as nearly invisible pale blue. Darkened to
+     ~4.5:1, still clearly a distinct cyan/teal from royal blue. */
+  --cyan: oklch(0.55 0.16 232.7);
   --navy: oklch(0.379 0.146 265.5);
 
-  /* Purple secondary accent — used sparingly (credit cards, secondary CTAs), tuned to sit next to
-     the blue family without reading as a different app. */
+  /* Purple secondary accent — used sparingly (credit cards, secondary CTAs). */
   --purple: oklch(0.606 0.25 292.7);
   --purple-foreground: oklch(0.99 0.006 260);
 
-  /* Status colors: emerald success, red expense, amber warning — clear and unambiguous next to Ocean blue. */
-  --success: oklch(0.696 0.17 162.5);
+  /* Financial semantic colors — kept deliberately separate from the lime brand color per the brief:
+     income/credit green, expense/debit red, pending/warning amber, information blue. */
+  /* Contrast refinement: was oklch(0.635 ..), only ~3.2:1 against white — too weak for financial
+     amount text per the brief ("amounts should not use low-opacity text" / must read as strong).
+     Darkened to ~4.5:1, still a clearly recognizable green, not a muddy dark tone. */
+  --success: oklch(0.55 0.155 149);       /* Income / Credit green */
   --success-foreground: oklch(0.99 0.006 260);
-  --expense: oklch(0.637 0.237 25.3);
+  --expense: oklch(0.605 0.21 25);        /* Expense / Debit red */
   --expense-foreground: oklch(0.99 0.006 260);
-  --warning: oklch(0.769 0.188 70.1);
-  --warning-foreground: oklch(0.32 0.06 70.1);
-  --danger: oklch(0.637 0.237 25.3);
+  --warning: oklch(0.77 0.16 70);         /* Pending / Warning amber */
+  --warning-foreground: oklch(0.3 0.06 70);
+  --danger: oklch(0.605 0.21 25);
   --danger-foreground: oklch(0.99 0.006 260);
 
-  /* Semantic icon accents — see brief section 9. Transfer/AI/Calendar stay in-family; the rest break
-     out on purpose so a glance at an icon tells you the category. */
+  /* Semantic icon accents. */
   --icon-income: var(--success);
   --icon-expense: var(--expense);
   --icon-transfer: var(--royal);
   --icon-savings: var(--cyan);
-  --icon-loan: var(--warning);
+  /* Contrast refinement: was var(--warning), the light raw amber (~2.1:1 against white) — same
+     "light amber can't be its own text/icon color" bug fixed for text via --warning-foreground.
+     Points at that dark-amber token instead so a loan icon rendered directly (not inside a tinted
+     circle) is actually visible. */
+  --icon-loan: var(--warning-foreground);
   --icon-credit-card: var(--purple);
-  --icon-ai: oklch(0.685 0.169 237.3);
+  /* Contrast refinement: was oklch(0.685 ..), ~2.7:1 against white. Darkened to ~4.5:1. */
+  --icon-ai: oklch(0.55 0.169 237.3);
   --icon-reports: oklch(0.585 0.233 277.1);
   --icon-calendar: var(--ice);
   --icon-settings: var(--text-secondary);
 
   /* Layered surface scale — resting, elevated, and hero surfaces read as visually distinct depths. */
   --surface: oklch(1 0 0);
-  --surface-elevated: oklch(0.995 0.004 254.6);
-  --surface-hero: oklch(0.488 0.243 264.4);
-  --text-primary: oklch(0.208 0.042 265.8);
-  --text-secondary: oklch(0.554 0.046 257.4);
+  --surface-elevated: oklch(0.98 0.004 112);
+  --surface-hero: oklch(0.135 0.004 112);   /* Near Black hero card */
+  --text-primary: oklch(0.225 0.004 112);
+  --text-secondary: oklch(0.44 0.006 112); /* kept in sync with --muted-foreground's contrast bump */
 
-  --chart-1: oklch(0.546 0.245 262.9);
-  --chart-2: oklch(0.746 0.16 232.7);
-  --chart-3: oklch(0.696 0.17 162.5);
-  --chart-4: oklch(0.769 0.188 70.1);
-  --chart-5: oklch(0.585 0.233 277.1);
-  /* Kept non-zero (rather than 0) only so `calc(var(--radius) - 5px)` consumers (input-group.tsx)
-     resolve to a valid 0px radius instead of an invalid negative value — not a curve exception. */
-  --radius: 5px;
-  --sidebar: oklch(0.985 0.006 254.6);
-  --sidebar-foreground: oklch(0.208 0.042 265.8);
-  --sidebar-primary: oklch(0.546 0.245 262.9);
-  --sidebar-primary-foreground: oklch(0.99 0.006 260);
-  --sidebar-accent: oklch(0.93 0.03 254.6);
-  --sidebar-accent-foreground: oklch(0.379 0.146 265.5);
-  --sidebar-border: oklch(0.546 0.245 262.9 / 0.1);
-  --sidebar-ring: oklch(0.623 0.214 259.8 / 0.4);
+  /* Text/icon color for content sitting ON the near-black hero/gradient surfaces (net worth hero,
+     month-cycle hero, AI insight card, credit card tiles) — deliberately its OWN token, separate
+     from --primary-foreground. --primary-foreground is near-black (correct for text on solid LIME
+     buttons/badges); this is near-white (correct for text on the near-BLACK hero background). The
+     two surfaces are both "primary-ish" but need opposite foregrounds, so they can never safely
+     share one variable. */
+  --hero-foreground: oklch(0.99 0.002 112);
 
-  /* Dual ambient shadow colors — soft royal-blue dark side, near-white light side. This is the single
-     lighting language every card, dialog, sidebar, search bar, and button shares (brief section 3). */
-  --shadow-tint-dark: oklch(0.546 0.245 262.9 / 0.14);
-  --shadow-tint-light: oklch(1 0 0 / 0.9);
+  --chart-1: oklch(0.865 0.205 125);   /* lime */
+  --chart-2: oklch(0.546 0.245 262.9); /* info blue */
+  --chart-3: oklch(0.635 0.155 149);   /* income green */
+  --chart-4: oklch(0.77 0.16 70);      /* amber */
+  --chart-5: oklch(0.605 0.21 25);     /* expense red */
+  --radius: 16px;
+  --sidebar: oklch(0.98 0.004 112);
+  --sidebar-foreground: oklch(0.225 0.004 112);
+  --sidebar-primary: oklch(0.912 0.185 126);
+  --sidebar-primary-foreground: oklch(0.135 0.004 112);
+  --sidebar-accent: oklch(0.94 0.05 126 / 0.5);
+  --sidebar-accent-foreground: oklch(0.225 0.004 112);
+  --sidebar-border: oklch(0.80 0.006 112);
+  --sidebar-ring: oklch(0.865 0.205 125 / 0.75);
 
-  /* Gradient system — every gradient stays inside the Ocean blue family: navy -> royal -> azure -> sky.
-     Never rainbow, never orange/pink/purple. Hero/accent gradients carry white text on top, so their
-     brightest stop stays dark enough to keep that text at a safe contrast ratio end to end. */
-  --gradient-hero: linear-gradient(120deg, oklch(0.379 0.146 265.5) 0%, oklch(0.488 0.243 264.4) 45%, oklch(0.623 0.214 259.8) 75%, oklch(0.707 0.165 254.6) 100%);
-  --gradient-accent: linear-gradient(135deg, oklch(0.488 0.243 264.4), oklch(0.623 0.214 259.8));
-  --gradient-success: linear-gradient(120deg, oklch(0.696 0.17 162.5), oklch(0.75 0.16 175));
-  --gradient-warning: linear-gradient(120deg, oklch(0.769 0.188 70.1), oklch(0.68 0.2 40));
-  --gradient-insight: linear-gradient(135deg, oklch(0.379 0.146 265.5) 0%, oklch(0.546 0.245 262.9) 100%);
-  --glow-primary: 0 8px 28px -6px oklch(0.546 0.245 262.9 / 0.45);
-  --glow-purple: 0 8px 28px -6px oklch(0.606 0.25 292.7 / 0.4);
+  /* Restrained shadow tint — near-black at very low opacity, no colored glow. Used sparingly per the
+     brief: default surfaces use border only; this only shows up in the elevated/floating/dialog tiers. */
+  --shadow-tint-dark: oklch(0.135 0.004 112 / 0.08);
+  --shadow-tint-light: oklch(1 0 0 / 0.6);
 
-  /* Elevation escalation beyond cards — floating panels, dialogs, the command palette, and toasts each
-     step up in blur/spread/glow rather than only stacking z-index (brief section 7). */
-  --shadow-card: 0 1px 2px oklch(0.546 0.245 262.9 / 0.05), 0 8px 24px -14px oklch(0.546 0.245 262.9 / 0.16);
-  --shadow-floating: 0 12px 32px -8px oklch(0.546 0.245 262.9 / 0.18), 0 2px 10px -2px oklch(0.546 0.245 262.9 / 0.12);
-  --shadow-dialog: 0 24px 64px -12px oklch(0.379 0.146 265.5 / 0.28), 0 4px 18px -4px oklch(0.546 0.245 262.9 / 0.14);
-  --shadow-command: 0 32px 80px -16px oklch(0.379 0.146 265.5 / 0.32), 0 8px 28px -8px oklch(0.546 0.245 262.9 / 0.16);
-  --shadow-notification: 0 16px 40px -10px oklch(0.546 0.245 262.9 / 0.22);
+  /* Gradient system — minimal per the brief. Hero stays a flat/near-flat near-black, not a bold
+     gradient; kept as a very subtle near-black gradient purely for depth, plus a lime accent gradient
+     for progress bars/highlights. */
+  --gradient-hero: linear-gradient(160deg, oklch(0.19 0.006 112) 0%, oklch(0.135 0.004 112) 100%);
+  --gradient-accent: linear-gradient(135deg, oklch(0.912 0.185 126), oklch(0.865 0.205 125));
+  --gradient-success: linear-gradient(120deg, oklch(0.635 0.155 149), oklch(0.68 0.15 155));
+  --gradient-warning: linear-gradient(120deg, oklch(0.77 0.16 70), oklch(0.7 0.18 50));
+  --gradient-insight: linear-gradient(135deg, oklch(0.19 0.006 112) 0%, oklch(0.135 0.004 112) 100%);
+  --glow-primary: 0 8px 24px -8px oklch(0.865 0.205 125 / 0.35);
+  --glow-purple: 0 8px 28px -6px oklch(0.606 0.25 292.7 / 0.35);
 
-  /* Glassmorphism 2.0 — layered blur + edge highlight + faint blue glow, never fully transparent.
-     Reserved for nav, sidebar, search, floating assistant/quick-actions, dialogs, and popovers (brief
-     section 4); everything else stays a solid premium surface. */
-  --glass-bg: linear-gradient(180deg, oklch(1 0 0 / 0.72), oklch(1 0 0 / 0.52));
-  --glass-blur: 24px;
-  --glass-border: oklch(1 0 0 / 0.5);
-  --glass-highlight: inset 0 1px 0 oklch(1 0 0 / 0.85), inset 0 0 0 1px oklch(0.546 0.245 262.9 / 0.08);
+  /* Elevation — restrained. Default surfaces rely on --border, not shadow; these tiers exist only for
+     genuinely floating/overlay content (dropdowns, dialogs, command palette, toasts). */
+  --shadow-card: 0 1px 2px oklch(0.135 0.004 112 / 0.04);
+  --shadow-floating: 0 8px 24px -8px oklch(0.135 0.004 112 / 0.12);
+  --shadow-dialog: 0 16px 40px -12px oklch(0.135 0.004 112 / 0.18);
+  --shadow-command: 0 20px 48px -14px oklch(0.135 0.004 112 / 0.22);
+  --shadow-notification: 0 10px 28px -10px oklch(0.135 0.004 112 / 0.16);
+
+  /* Glass surfaces retired in favor of solid warm-white/white panels with a subtle border — the brief
+     calls for minimal blur/gradients. Kept as a near-opaque solid so any lingering .glass-surface
+     consumer still renders as a clean flat surface instead of breaking. */
+  --glass-bg: oklch(1 0 0 / 0.96);
+  --glass-blur: 0px;
+  --glass-border: var(--border);
+  --glass-highlight: none;
 
   /* Transaction Studio's grid lines — classic Excel-style light grey, not black. Set as a plain custom
      property (not a Tailwind color token) and applied via inline `style`, not a utility class, so it can
@@ -293,42 +335,65 @@
 }
 
 .dark {
-  --background: oklch(0.16 0.024 262);
-  --foreground: oklch(0.95 0.012 250);
-  --card: oklch(0.2 0.028 262);
-  --card-foreground: oklch(0.95 0.012 250);
-  --popover: oklch(0.2 0.028 262);
-  --popover-foreground: oklch(0.95 0.012 250);
-  --primary: oklch(0.72 0.19 262.9);
-  --primary-hover: oklch(0.65 0.22 262.9);
-  --primary-foreground: oklch(0.16 0.024 262);
-  --secondary: oklch(0.26 0.03 262);
-  --secondary-foreground: oklch(0.95 0.012 250);
-  --muted: oklch(0.25 0.026 262);
-  --muted-foreground: oklch(0.72 0.02 255);
-  --accent: oklch(0.3 0.05 260);
-  --accent-foreground: oklch(0.86 0.05 250);
+  /* Dark Theme V2 — Premium Neo-Fintech Black: layered near-black neutral surfaces (not pure black,
+     not blue-tinted "Ocean"), same electric-lime brand accent as light mode, same financial semantic
+     colors retuned for dark-surface contrast. Every layer (page -> card -> elevated -> hero) is a
+     visibly distinct step, per the brief's hierarchy requirement. */
+  --background: oklch(0.145 0.004 112);   /* Page ~#0F100F */
+  --foreground: oklch(0.965 0.003 112);   /* Primary text ~#F4F5F1 */
+  --card: oklch(0.195 0.004 112);         /* Card surface ~#171817 */
+  --card-foreground: oklch(0.965 0.003 112);
+  --popover: oklch(0.225 0.004 112);      /* Elevated surface ~#1D1E1C */
+  --popover-foreground: oklch(0.965 0.003 112);
+
+  /* Brand lime stays IDENTICAL to light mode (same hue/chroma) — a dark theme still needs to read as
+     unmistakably FlowFi. Paired with the same near-black --primary-foreground: lime is light enough
+     that near-black text stays the correct, accessible pairing even against a dark page. */
+  --primary: oklch(0.912 0.185 126);
+  --primary-hover: oklch(0.865 0.205 125);
+  --primary-foreground: oklch(0.135 0.004 112);
+  /* Text-on-tint use (active tabs, "View All" links, stat highlights): light mode needs a DARKENED
+     olive-lime for contrast against a bright canvas. Dark mode is the opposite problem — the raw
+     brand lime is already ~11:1 against near-black surfaces, so it's used directly as text/icon
+     color here rather than darkened (darkening it here would just make it duller, not more legible). */
+  --primary-accent-text: oklch(0.912 0.185 126);
+  --secondary: oklch(0.24 0.004 112);     /* Secondary surface ~#222321 */
+  --secondary-foreground: oklch(0.965 0.003 112);
+  --muted: oklch(0.26 0.004 112);         /* Muted surface ~#252724 */
+  --muted-foreground: oklch(0.685 0.004 112); /* Secondary text ~#A7AAA4, ~7:1 on card */
+  --tertiary-foreground: oklch(0.62 0.004 112); /* Tertiary text ~#969B94, ~5:1 on card */
+  --accent: oklch(0.912 0.185 126 / 0.12); /* Soft lime-tinted hover/selected background */
+  --accent-foreground: oklch(0.912 0.185 126);
   --destructive: oklch(0.7 0.18 25.3);
-  --border: oklch(0.72 0.19 262.9 / 0.14);
-  --input: oklch(0.72 0.19 262.9 / 0.18);
-  --ring: oklch(0.72 0.19 262.9 / 0.4);
+  --border: oklch(0.32 0.006 112);        /* Visible border ~#30322F */
+  --border-subtle: oklch(0.32 0.006 112); /* Same step as --border in dark mode — a lighter-still
+                                              tertiary divider would drop below visible contrast on
+                                              near-black surfaces, so this deliberately does not fork
+                                              further down the way light mode's does. */
+  --input: oklch(0.215 0.004 112);        /* Input background ~#1C1D1B — distinct from --card/--secondary */
+  --ring: oklch(0.912 0.185 126 / 0.6);
 
-  --royal: oklch(0.75 0.17 259.8);
-  --sky: oklch(0.8 0.13 254.6);
-  --ice: oklch(0.85 0.09 251.8);
-  --cyan: oklch(0.78 0.14 232.7);
-  --navy: oklch(0.45 0.14 265.5);
+  /* "Information" blue family — kept as an actual blue (never replaced with lime), retuned for
+     visibility on dark surfaces instead of the old saturated "Ocean" hues. */
+  --royal: oklch(0.72 0.16 259.8);
+  --sky: oklch(0.78 0.13 254.6);
+  --ice: oklch(0.82 0.09 251.8);
+  --cyan: oklch(0.75 0.13 200);
+  --navy: oklch(0.5 0.1 265.5);
 
-  --purple: oklch(0.72 0.19 292.7);
+  --purple: oklch(0.72 0.17 292.7);
   --purple-foreground: oklch(0.16 0.024 262);
 
-  --success: oklch(0.68 0.15 162.5);
+  /* Financial semantics — same hue family as light mode, lightened for AA+ contrast against
+     --card/--popover/--secondary (#171817/#1D1E1C/#222321) instead of light mode's darkened-for-white
+     values. Never replaced by lime. */
+  --success: oklch(0.72 0.16 149);        /* Income / Credit green */
   --success-foreground: oklch(0.16 0.024 262);
-  --expense: oklch(0.7 0.18 25.3);
+  --expense: oklch(0.72 0.19 25);         /* Expense / Debit red */
   --expense-foreground: oklch(0.16 0.024 262);
-  --warning: oklch(0.78 0.15 70.1);
+  --warning: oklch(0.8 0.15 70.1);        /* Pending / Warning amber */
   --warning-foreground: oklch(0.26 0.06 70.1);
-  --danger: oklch(0.7 0.18 25.3);
+  --danger: oklch(0.72 0.19 25);
   --danger-foreground: oklch(0.16 0.024 262);
 
   --icon-income: var(--success);
@@ -338,55 +403,66 @@
   --icon-loan: var(--warning);
   --icon-credit-card: var(--purple);
   --icon-ai: oklch(0.75 0.15 237.3);
-  --icon-reports: oklch(0.68 0.19 277.1);
+  --icon-reports: oklch(0.72 0.19 277.1);
   --icon-calendar: var(--ice);
-  --icon-settings: var(--text-secondary);
+  --icon-settings: var(--muted-foreground);
 
-  --surface: oklch(0.2 0.028 262);
-  --surface-elevated: oklch(0.24 0.03 262);
-  --surface-hero: oklch(0.45 0.14 265.5);
-  --text-primary: oklch(0.95 0.012 250);
-  --text-secondary: oklch(0.72 0.02 255);
+  --surface: oklch(0.195 0.004 112);
+  --surface-elevated: oklch(0.225 0.004 112);
+  --surface-hero: oklch(0.06 0.003 112);   /* Hero ~#050605 — deeper than --card, the spatial anchor */
+  --text-primary: oklch(0.965 0.003 112);
+  --text-secondary: oklch(0.685 0.004 112);
 
-  --chart-1: oklch(0.72 0.19 262.9);
-  --chart-2: oklch(0.78 0.14 232.7);
-  --chart-3: oklch(0.68 0.15 162.5);
-  --chart-4: oklch(0.78 0.15 70.1);
-  --chart-5: oklch(0.68 0.19 277.1);
-  --sidebar: oklch(0.19 0.026 262);
-  --sidebar-foreground: oklch(0.95 0.012 250);
-  --sidebar-primary: oklch(0.72 0.19 262.9);
-  --sidebar-primary-foreground: oklch(0.16 0.024 262);
-  --sidebar-accent: oklch(0.3 0.05 260);
-  --sidebar-accent-foreground: oklch(0.86 0.05 250);
-  --sidebar-border: oklch(0.72 0.19 262.9 / 0.14);
-  --sidebar-ring: oklch(0.72 0.19 262.9 / 0.4);
+  /* Text/icon color for content on the near-black hero/gradient surfaces — white in both themes,
+     since both themes' hero background is near-black. Never --primary-foreground (near-black) here. */
+  --hero-foreground: oklch(0.99 0.002 112);
 
-  /* Dark Ocean reads mostly through the dark-shadow side; the light side is a faint cool highlight. */
-  --shadow-tint-dark: rgba(0, 0, 0, 0.55);
-  --shadow-tint-light: oklch(0.72 0.19 262.9 / 0.06);
+  --chart-1: oklch(0.912 0.185 126);   /* lime */
+  --chart-2: oklch(0.72 0.16 259.8);   /* info blue */
+  --chart-3: oklch(0.72 0.16 149);     /* income green */
+  --chart-4: oklch(0.8 0.15 70.1);     /* amber */
+  --chart-5: oklch(0.72 0.19 25);      /* expense red */
 
-  --gradient-hero: linear-gradient(120deg, oklch(0.32 0.1 265.5) 0%, oklch(0.42 0.17 264.4) 45%, oklch(0.55 0.19 259.8) 75%, oklch(0.66 0.15 254.6) 100%);
-  --gradient-accent: linear-gradient(135deg, oklch(0.5 0.19 264.4), oklch(0.6 0.18 259.8));
-  --gradient-success: linear-gradient(120deg, oklch(0.55 0.13 162.5), oklch(0.6 0.13 175));
-  --gradient-warning: linear-gradient(120deg, oklch(0.6 0.14 70.1), oklch(0.55 0.16 40));
-  --gradient-insight: linear-gradient(135deg, oklch(0.28 0.09 265.5) 0%, oklch(0.4 0.16 262.9) 100%);
-  --glow-primary: 0 8px 28px -6px oklch(0.72 0.19 262.9 / 0.4);
-  --glow-purple: 0 8px 28px -6px oklch(0.72 0.19 292.7 / 0.35);
+  /* Sidebar: one step darker than --card so the rail reads as its own layer against the page, per the
+     brief's "sidebar #121311 vs page #0F100F" distinction. */
+  --sidebar: oklch(0.165 0.004 112);
+  --sidebar-foreground: oklch(0.965 0.003 112);
+  --sidebar-primary: oklch(0.912 0.185 126);
+  --sidebar-primary-foreground: oklch(0.135 0.004 112);
+  --sidebar-accent: oklch(0.912 0.185 126 / 0.12);
+  --sidebar-accent-foreground: oklch(0.912 0.185 126);
+  --sidebar-border: oklch(0.32 0.006 112);
+  --sidebar-ring: oklch(0.912 0.185 126 / 0.6);
 
-  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px -14px rgba(0, 0, 0, 0.5);
-  --shadow-floating: 0 12px 32px -8px rgba(0, 0, 0, 0.45), 0 2px 10px -2px oklch(0.72 0.19 262.9 / 0.12);
-  --shadow-dialog: 0 24px 64px -12px rgba(0, 0, 0, 0.55), 0 4px 18px -4px oklch(0.72 0.19 262.9 / 0.14);
-  --shadow-command: 0 32px 80px -16px rgba(0, 0, 0, 0.6), 0 8px 28px -8px oklch(0.72 0.19 262.9 / 0.16);
-  --shadow-notification: 0 16px 40px -10px rgba(0, 0, 0, 0.5);
+  /* Restrained near-black shadow tint, same restrained-shadow philosophy as light mode (surfaces lean
+     on --border for separation, not heavy shadow) — just a touch stronger than light mode's since a
+     shadow needs more contrast to register against a dark page. */
+  --shadow-tint-dark: oklch(0 0 0 / 0.4);
+  --shadow-tint-light: oklch(1 0 0 / 0.03);
 
-  --glass-bg: linear-gradient(180deg, oklch(0.28 0.03 262 / 0.65), oklch(0.22 0.028 262 / 0.55));
-  --glass-blur: 24px;
-  --glass-border: oklch(1 0 0 / 0.08);
-  --glass-highlight: inset 0 1px 0 oklch(1 0 0 / 0.06), inset 0 0 0 1px oklch(0.72 0.19 262.9 / 0.12);
+  --gradient-hero: linear-gradient(160deg, oklch(0.1 0.004 112) 0%, oklch(0.06 0.003 112) 100%);
+  --gradient-accent: linear-gradient(135deg, oklch(0.912 0.185 126), oklch(0.865 0.205 125));
+  --gradient-success: linear-gradient(120deg, oklch(0.72 0.16 149), oklch(0.75 0.15 155));
+  --gradient-warning: linear-gradient(120deg, oklch(0.8 0.15 70.1), oklch(0.75 0.17 50));
+  --gradient-insight: linear-gradient(135deg, oklch(0.1 0.004 112) 0%, oklch(0.06 0.003 112) 100%);
+  --glow-primary: 0 8px 24px -8px oklch(0.912 0.185 126 / 0.25);
+  --glow-purple: 0 8px 28px -6px oklch(0.72 0.17 292.7 / 0.3);
 
-  --grid-line: rgba(255, 255, 255, 0.16);
-  --grid-line-strong: rgba(255, 255, 255, 0.26);
+  --shadow-card: 0 1px 2px oklch(0 0 0 / 0.3);
+  --shadow-floating: 0 8px 24px -8px oklch(0 0 0 / 0.45);
+  --shadow-dialog: 0 16px 40px -12px oklch(0 0 0 / 0.55);
+  --shadow-command: 0 20px 48px -14px oklch(0 0 0 / 0.6);
+  --shadow-notification: 0 10px 28px -10px oklch(0 0 0 / 0.5);
+
+  /* Glass surfaces retired the same way as light mode — a solid elevated panel, no blur, so nav/
+     dialogs/popovers stay legible instead of picking up whatever's behind them. */
+  --glass-bg: oklch(0.225 0.004 112 / 0.98);
+  --glass-blur: 0px;
+  --glass-border: var(--border);
+  --glass-highlight: none;
+
+  --grid-line: rgba(255, 255, 255, 0.14);
+  --grid-line-strong: rgba(255, 255, 255, 0.24);
 }
 
 @layer base {
@@ -400,7 +476,8 @@
     @apply font-sans;
   }
 
-  /* Thin, rounded, blue-accented scrollbar (desktop only — touch scrollbars ignore this). */
+  /* Thin, rounded, neutral scrollbar (desktop only — touch scrollbars ignore this). Near-black tint in
+     light mode, a visible light-neutral tint in dark mode — never blue in either theme. */
   ::-webkit-scrollbar {
     width: 10px;
     height: 10px;
@@ -409,54 +486,66 @@
     background: transparent;
   }
   ::-webkit-scrollbar-thumb {
-    background-color: oklch(0.546 0.245 262.9 / 0.18);
+    background-color: oklch(0.225 0.004 112 / 0.14);
     border-radius: 999px;
     border: 2px solid transparent;
     background-clip: padding-box;
     transition: background-color var(--duration-fast) var(--ease-spring);
   }
   ::-webkit-scrollbar-thumb:hover {
-    background-color: oklch(0.546 0.245 262.9 / 0.32);
+    background-color: oklch(0.225 0.004 112 / 0.26);
   }
   * {
     scrollbar-width: thin;
-    scrollbar-color: oklch(0.546 0.245 262.9 / 0.18) transparent;
+    scrollbar-color: oklch(0.225 0.004 112 / 0.14) transparent;
+  }
+
+  .dark ::-webkit-scrollbar-thumb {
+    background-color: oklch(0.965 0.003 112 / 0.16);
+  }
+  .dark ::-webkit-scrollbar-thumb:hover {
+    background-color: oklch(0.965 0.003 112 / 0.26);
+  }
+  .dark * {
+    scrollbar-color: oklch(0.965 0.003 112 / 0.16) transparent;
   }
 }
 
 @layer components {
-  /* Raised surface — default resting state for cards, panels, idle buttons. Dual-direction blue-ambient
-     lighting replaces the old warm clay pairing 1:1, so every existing .clay-raised consumer inherits the
-     new language automatically. */
+  /* Theme V2 standard card — white surface, subtle border, little/no shadow. Every existing
+     .clay-raised consumer (cards, panels, idle buttons) inherits this restrained look automatically,
+     with no markup changes required at call sites. */
   .clay-raised {
     background: var(--card);
-    box-shadow: var(--shadow-e2);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow-e1);
   }
-  /* Pressed/inset — active nav pill, pressed button, search/input well. */
+  /* Pressed/inset — active nav pill, pressed button, search/input well. Very subtle now, not deep clay. */
   .clay-pressed {
     background: var(--card);
     box-shadow: var(--shadow-pressed);
   }
 
-  /* Flat surface — single soft ambient shadow, thin blue-tinted border, no dual-direction lighting. */
+  /* Flat surface — border + a barely-there ambient shadow. */
   .surface-flat {
     background: var(--card);
+    border: 1px solid var(--border);
     box-shadow: var(--shadow-card);
   }
 
-  /* Card hierarchy (brief section 6) — four surface roles communicating importance by weight, not by
-     rewriting layout. Hero is the spatial anchor: largest, gradient-filled, highest elevation. Primary is
-     the standard content card. Secondary is quieter — a thin border, no shadow. Tertiary is background-only,
-     for low-emphasis grouping. */
+  /* Card hierarchy — four surface roles communicating importance by weight, not by rewriting layout.
+     Hero is the spatial anchor: near-black, white text, lime accent, highest elevation. Primary is the
+     standard content card: white + border, minimal shadow. Secondary is quieter — border only, no
+     shadow. Tertiary is background-only, for low-emphasis grouping. */
   .surface-hero {
     background: var(--gradient-hero);
-    color: var(--primary-foreground);
-    box-shadow: var(--shadow-dialog), var(--glow-primary);
+    color: var(--hero-foreground);
+    box-shadow: var(--shadow-dialog);
   }
   .surface-primary {
     background: var(--card);
-    box-shadow: var(--shadow-e2);
     border: 1px solid var(--border);
+    box-shadow: var(--shadow-e1);
   }
   .surface-secondary {
     background: var(--surface);
@@ -466,15 +555,13 @@
     background: var(--muted);
   }
 
-  /* Glassmorphism 2.0 — layered blur, edge highlight, faint blue glow. Reserved for nav, sidebar, search,
-     floating assistant/quick-actions, dialogs, popovers (brief section 4) — never a substitute for a
-     regular card surface. */
+  /* Glass surface retired per the brief (minimal blur/gradients) — now a plain solid white/near-opaque
+     panel with a subtle border and floating-tier shadow. Reserved for nav, dialogs, popovers, same as
+     before; just no longer translucent/blurred. */
   .glass-surface {
     background: var(--glass-bg);
-    backdrop-filter: blur(var(--glass-blur)) saturate(160%);
-    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(160%);
     border: 1px solid var(--glass-border);
-    box-shadow: var(--glass-highlight), var(--shadow-floating);
+    box-shadow: var(--shadow-floating);
   }
 }
 

@@ -28,7 +28,7 @@ export function ConfidenceCell({ value }: { value: number }) {
         className={cn(
           "shrink-0 text-[11px] font-semibold tabular-nums",
           tone === "success" && "text-success",
-          tone === "warning" && "text-warning",
+          tone === "warning" && "text-warning-foreground",
           tone === "danger" && "text-danger",
         )}
       >

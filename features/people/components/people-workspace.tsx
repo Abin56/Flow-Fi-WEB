@@ -25,6 +25,7 @@ import { PersonOverviewPanel } from "@/features/people/components/person-overvie
 import { ShareExpenseDialog } from "@/features/people/components/share-expense-dialog";
 import { SettleUpDialog } from "@/features/people/components/settle-up-dialog";
 import { RecentPeopleTransactions } from "@/features/people/components/recent-people-transactions";
+import { AllPeopleTransactionsDialog } from "@/features/people/components/all-people-transactions-dialog";
 import { usePeopleActions, usePeopleRows } from "@/features/people/hooks/use-people-data";
 import { usePeople } from "@/hooks/use-people";
 import { useAccounts } from "@/hooks/use-accounts";
@@ -114,6 +115,7 @@ export function PeopleWorkspace() {
   const [addEntryPerson, setAddEntryPerson] = useState<Person | null>(null);
   const [shareExpensePerson, setShareExpensePerson] = useState<Person | null>(null);
   const [settleUpPerson, setSettleUpPerson] = useState<Person | null>(null);
+  const [viewAllTransactionsOpen, setViewAllTransactionsOpen] = useState(false);
   const [personForm, setPersonForm] = useState<PersonFormState>(emptyPersonForm);
   const [personFormError, setPersonFormError] = useState<string | null>(null);
   const [entryForm, setEntryForm] = useState<LedgerEntryFormState>(emptyLedgerEntryForm);
@@ -309,8 +311,10 @@ export function PeopleWorkspace() {
           )}
         </div>
 
-        <RecentPeopleTransactions />
+        <RecentPeopleTransactions onViewAll={() => setViewAllTransactionsOpen(true)} />
       </div>
+
+      <AllPeopleTransactionsDialog open={viewAllTransactionsOpen} onOpenChange={setViewAllTransactionsOpen} />
 
       {overviewOpen && selected && (
         <PersonOverviewPanel
@@ -413,7 +417,7 @@ export function PeopleWorkspace() {
           <div className="mt-5 flex flex-col gap-1 bg-muted/30 p-4">
             <SectionLabel icon={IndianRupee}>Opening Balance</SectionLabel>
             <div className="relative mt-2">
-              <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary">₹</span>
+              <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary-accent-text">₹</span>
               <input
                 type="number"
                 className={cn(FLAT_INPUT, "border-primary/30 bg-primary/5 pl-7 text-base font-semibold focus:border-primary")}
@@ -499,7 +503,7 @@ export function PeopleWorkspace() {
             <label className="flex flex-col gap-1">
               <span className="text-xs font-medium text-muted-foreground">Amount</span>
               <div className="relative">
-                <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary">₹</span>
+                <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary-accent-text">₹</span>
                 <input
                   type="number"
                   className="clay-pressed h-10 w-full rounded-xl border border-primary/20 bg-primary/5 pl-7 text-sm font-semibold outline-none"

@@ -45,7 +45,7 @@ export function SectionCard({
         <span
           className={cn(
             "flex size-6 shrink-0 items-center justify-center rounded-md",
-            tone === "danger" ? "bg-danger/15 text-danger" : "bg-primary/10 text-primary",
+            tone === "danger" ? "bg-danger/15 text-danger" : "bg-primary/10 text-primary-accent-text",
           )}
         >
           <Icon className="size-3.5" />
@@ -145,7 +145,7 @@ export function TransactionDetailsShell({
 
         <DialogHeader className="shrink-0 flex-row items-center justify-between gap-3 border-b border-border px-6 py-3">
           <div className="flex items-center gap-3">
-            <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+            <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary-accent-text">
               <HeaderIcon className="size-4" />
             </span>
             <div>

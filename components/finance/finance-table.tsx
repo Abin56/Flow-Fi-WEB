@@ -61,7 +61,7 @@ export function FinanceTable<T>({
 }: FinanceTableProps<T>) {
   if (loading) {
     return (
-      <div className={cn("w-full overflow-hidden rounded-2xl border border-border/60 bg-card", className)}>
+      <div className={cn("w-full overflow-hidden rounded-2xl border border-border bg-card", className)}>
         <TableSkeleton columns={columns.length} />
       </div>
     );
@@ -69,20 +69,26 @@ export function FinanceTable<T>({
 
   if (data.length === 0 && emptyState) {
     return (
-      <div className={cn("w-full overflow-hidden rounded-2xl border border-border/60 bg-card", className)}>
+      <div className={cn("w-full overflow-hidden rounded-2xl border border-border bg-card", className)}>
         {emptyState}
       </div>
     );
   }
 
   return (
-    <div className={cn("w-full overflow-hidden rounded-2xl border border-border/60 bg-card", className)}>
-      <div className="overflow-x-auto">
-        <div className="min-w-full">
+    <div className={cn("w-full overflow-hidden rounded-2xl border border-border bg-card", className)}>
+      {/* Mobile/narrow-viewport affordance: a soft right-edge fade hints that columns keep going and
+       *  the table scrolls horizontally — otherwise a user on a small screen has no visual cue that
+       *  Amount/Actions aren't simply missing. Purely decorative (a gradient over the scroll
+       *  container, not a scroll listener), hidden once a container is wide enough that nothing is
+       *  ever clipped (sm: and up, where every column fits already on every page that uses this table). */}
+      <div className="relative">
+        <div className="overflow-x-auto">
+          <div className="min-w-full">
           <div
             className={cn(
               "sticky top-0 z-10 flex items-center gap-4 border-b bg-card px-4 py-3",
-              !gridLines && "border-border/60",
+              !gridLines && "border-border",
             )}
             style={gridLines ? { borderBottomColor: "var(--grid-line-strong)" } : undefined}
           >
@@ -124,7 +130,7 @@ export function FinanceTable<T>({
                   style={gridLines ? { borderBottomColor: "var(--grid-line-strong)" } : undefined}
                   className={cn(
                     "flex items-center gap-4 overflow-hidden border-b px-4 py-3.5 text-sm transition-[transform,background-color] duration-150 last:border-b-0",
-                    !gridLines && "border-border/60",
+                    !gridLines && "border-border",
                     onRowClick && "cursor-pointer hover:-translate-y-px hover:bg-muted/40",
                     selected && "bg-primary/5",
                     rowClassName?.(row),
@@ -154,6 +160,11 @@ export function FinanceTable<T>({
             })}
           </AnimatePresence>
         </div>
+        </div>
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-y-0 right-0 w-8 bg-gradient-to-l from-card to-transparent sm:hidden"
+        />
       </div>
     </div>
   );

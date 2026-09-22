@@ -29,7 +29,7 @@ export function UploadDropzone({ file, onFileChange, disabled }: UploadDropzoneP
     return (
       <div className="flex items-center justify-between gap-2 rounded-xl border border-border/60 bg-muted/40 px-3 py-2.5 text-sm">
         <div className="flex min-w-0 items-center gap-2">
-          <FileText className="size-4 shrink-0 text-primary" />
+          <FileText className="size-4 shrink-0 text-primary-accent-text" />
           <span className="truncate font-medium text-foreground">{file.name}</span>
           <span className="shrink-0 text-xs text-muted-foreground">{(file.size / (1024 * 1024)).toFixed(1)} MB</span>
         </div>
@@ -71,7 +71,7 @@ export function UploadDropzone({ file, onFileChange, disabled }: UploadDropzoneP
           type="button"
           disabled={disabled}
           onClick={() => inputRef.current?.click()}
-          className="font-medium text-primary underline-offset-2 hover:underline disabled:pointer-events-none disabled:opacity-50"
+          className="font-medium text-primary-accent-text underline-offset-2 hover:underline disabled:pointer-events-none disabled:opacity-50"
         >
           Choose File
         </button>

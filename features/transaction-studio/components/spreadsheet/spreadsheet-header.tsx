@@ -36,7 +36,7 @@ export function SpreadsheetHeader({ table }: { table: Table<GridRow> }) {
                   type="button"
                   className={cn(
                     "flex min-w-0 flex-1 items-center gap-1 truncate text-left text-[11px] font-bold tracking-wide text-foreground uppercase",
-                    canSort && "cursor-pointer hover:text-primary",
+                    canSort && "cursor-pointer hover:text-primary-accent-text",
                   )}
                   onClick={canSort ? header.column.getToggleSortingHandler() : undefined}
                   disabled={!canSort}

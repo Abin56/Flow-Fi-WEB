@@ -186,11 +186,11 @@ function AccountSelect({
                 value={a.id}
                 className={cn(GRID_OPTION_CLASS, isSelected ? "border-primary bg-primary/10" : FIELD_BORDER)}
               >
-                <span className={cn("flex flex-col items-center gap-1", isSelected ? "text-primary" : "text-foreground")}>
+                <span className={cn("flex flex-col items-center gap-1", isSelected ? "text-primary-accent-text" : "text-foreground")}>
                   {a.type === "bank" ? <BankLogo bankId={a.bankId} size={18} shape="square" /> : <Icon className="size-4" />}
                   <span className="line-clamp-1 text-xs font-semibold">{a.name}</span>
                 </span>
-                {isSelected && <Check className="absolute top-1.5 right-1.5 size-3 text-primary" />}
+                {isSelected && <Check className="absolute top-1.5 right-1.5 size-3 text-primary-accent-text" />}
               </SelectItem>
             );
           })}
@@ -201,7 +201,7 @@ function AccountSelect({
 }
 
 const CATEGORY_TONE_CLASS: Record<string, string> = {
-  primary: "bg-primary/12 text-primary",
+  primary: "bg-primary/12 text-primary-accent-text",
   success: "bg-success/15 text-success",
   warning: "bg-warning/20 text-warning-foreground",
   purple: "bg-purple/15 text-purple",
@@ -245,13 +245,13 @@ function CategorySelect({ categories, value, onChange }: { categories: Category[
                 value={c.id}
                 className={cn(GRID_OPTION_CLASS, isSelected ? "border-primary bg-primary/10" : FIELD_BORDER)}
               >
-                <span className={cn("flex flex-col items-center gap-1", isSelected ? "text-primary" : "text-foreground")}>
+                <span className={cn("flex flex-col items-center gap-1", isSelected ? "text-primary-accent-text" : "text-foreground")}>
                   <span className={cn("flex size-6 items-center justify-center rounded-full", CATEGORY_TONE_CLASS[tone])}>
                     <Icon className="size-3.5" />
                   </span>
                   <span className="line-clamp-1 text-xs font-semibold">{c.name}</span>
                 </span>
-                {isSelected && <Check className="absolute top-1.5 right-1.5 size-3 text-primary" />}
+                {isSelected && <Check className="absolute top-1.5 right-1.5 size-3 text-primary-accent-text" />}
               </SelectItem>
             );
           })}
@@ -274,7 +274,7 @@ const FORM_KINDS: FormKind[] = ["expense", "income", "transfer"];
 const KIND_TEXT_CLASS: Record<FormKind, string> = {
   expense: "text-expense",
   income: "text-success",
-  transfer: "text-primary",
+  transfer: "text-primary-accent-text",
 };
 /** Solid kind color + its matched foreground token — for surfaces that need real color instead of a tint. */
 const KIND_SOLID_CLASS: Record<FormKind, string> = {
@@ -988,7 +988,7 @@ export function TransactionDetailsModal({
                                 aria-label={p.locked ? `${p.name || "This person"}'s amount is manual — click to switch to auto-share` : `${p.name || "This person"}'s amount auto-shares the remainder — click to lock a manual amount`}
                                 className={cn(
                                   "flex h-9 shrink-0 items-center gap-1 rounded-lg px-2 text-[10px] font-semibold",
-                                  p.locked ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-muted",
+                                  p.locked ? "bg-primary/10 text-primary-accent-text" : "text-muted-foreground hover:bg-muted",
                                 )}
                               >
                                 {p.locked ? <Lock className="size-3" /> : null}
@@ -1044,7 +1044,7 @@ export function TransactionDetailsModal({
                                 aria-label={meLocked ? "My amount is manual — click to switch to auto-share" : "My amount auto-shares the remainder — click to lock a manual amount"}
                                 className={cn(
                                   "flex h-9 shrink-0 items-center gap-1 rounded-lg px-2 text-[10px] font-semibold",
-                                  meLocked ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-muted",
+                                  meLocked ? "bg-primary/10 text-primary-accent-text" : "text-muted-foreground hover:bg-muted",
                                 )}
                               >
                                 {meLocked ? <Lock className="size-3" /> : null}
@@ -1154,7 +1154,7 @@ export function TransactionDetailsModal({
                     }
                   }}
                   className={cn(
-                    "w-40 border-none bg-transparent text-center text-3xl font-bold tabular-nums outline-none placeholder:text-muted-foreground/30 disabled:opacity-60",
+                    "w-40 border-none bg-transparent text-center text-3xl font-bold tabular-nums outline-none placeholder:text-tertiary-foreground disabled:opacity-60",
                     KIND_TEXT_CLASS[kind],
                   )}
                 />
@@ -1307,7 +1307,7 @@ export function TransactionDetailsModal({
                       setSplitOpen(true);
                       setView("split");
                     }}
-                    className="w-fit gap-1.5 text-primary"
+                    className="w-fit gap-1.5 text-primary-accent-text"
                   >
                     <SplitSquareHorizontal className="size-3.5" />
                     Split with more people
@@ -1433,7 +1433,7 @@ export function TransactionDetailsModal({
               >
                 <ChevronDown className={cn("size-3.5 transition-transform", moreOpen && "rotate-180")} />
                 More options
-                <span className="text-muted-foreground/60">(visibility, month)</span>
+                <span className="text-tertiary-foreground">(visibility, month)</span>
               </button>
               <AnimatePresence initial={false}>
                 {moreOpen && (

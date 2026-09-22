@@ -45,20 +45,20 @@ export function CashFlowCard({ cashFlow, isLoading }: CashFlowCardProps) {
       <div className="mt-4 flex flex-1 items-center gap-4">
         <div className="flex flex-col gap-3">
           <div>
+            <p className="text-xs text-muted-foreground">Net Cash Flow</p>
+            <p className="mt-1 text-xl font-bold tabular-nums text-foreground">{formatCurrency(cashFlow.net)}</p>
+          </div>
+          <div>
             <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
               <span className="size-2 rounded-full bg-success" /> Income
             </p>
-            <p className="mt-1 text-lg font-semibold tabular-nums text-foreground">{formatCurrency(cashFlow.income)}</p>
+            <p className="mt-1 text-sm font-semibold tabular-nums text-foreground">{formatCurrency(cashFlow.income)}</p>
           </div>
           <div>
             <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
               <span className="size-2 rounded-full bg-expense" /> Expenses
             </p>
-            <p className="mt-1 text-lg font-semibold tabular-nums text-foreground">{formatCurrency(cashFlow.expenses)}</p>
-          </div>
-          <div>
-            <p className="text-xs text-muted-foreground">Net Cash Flow</p>
-            <p className="mt-1 text-lg font-semibold tabular-nums text-foreground">{formatCurrency(cashFlow.net)}</p>
+            <p className="mt-1 text-sm font-semibold tabular-nums text-foreground">{formatCurrency(cashFlow.expenses)}</p>
           </div>
         </div>
 

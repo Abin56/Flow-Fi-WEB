@@ -10,11 +10,11 @@ import { deriveRowStatus, type RowStatusTone } from "../../../lib/row-status";
  *  below), so a second colored ring around the whole pill was redundant weight; text stays the
  *  tone color for a quick scan without needing the dot at all if it's ever squinted past. */
 const TONE_CLASS: Record<RowStatusTone, string> = {
-  success: "bg-success/10 text-success",
-  warning: "bg-warning/10 text-warning",
-  danger: "bg-danger/10 text-danger",
-  royal: "bg-royal/10 text-royal",
-  purple: "bg-purple/10 text-purple",
+  success: "bg-success/20 text-success",
+  warning: "bg-warning/25 text-warning-foreground",
+  danger: "bg-danger/20 text-danger",
+  royal: "bg-royal/20 text-royal",
+  purple: "bg-purple/20 text-purple",
   muted: "bg-muted text-muted-foreground",
 };
 

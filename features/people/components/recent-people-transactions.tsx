@@ -8,14 +8,14 @@ import { useRecentPeopleTransactions } from "@/features/people/hooks/use-people-
 import { formatCurrency } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
-export function RecentPeopleTransactions() {
+export function RecentPeopleTransactions({ onViewAll }: { onViewAll?: () => void }) {
   const { rows, isLoading } = useRecentPeopleTransactions();
 
   return (
     <section className="surface-flat rounded-2xl border border-border/50 p-5">
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-semibold text-foreground">Recent Transactions</h2>
-        <button type="button" className="text-xs font-semibold text-primary hover:underline">
+        <button type="button" onClick={onViewAll} className="text-xs font-semibold text-primary-accent-text hover:underline">
           View All
         </button>
       </div>

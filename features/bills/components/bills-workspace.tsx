@@ -228,7 +228,7 @@ export function BillsWorkspace() {
         </div>
         <div className="flex flex-col gap-2 rounded-3xl border border-primary/20 bg-primary/8 p-4">
           <p className="text-xs font-medium text-muted-foreground">Upcoming</p>
-          <p className="font-mono text-xl font-semibold tabular-nums text-primary">{stats.upcomingCount}</p>
+          <p className="font-mono text-xl font-semibold tabular-nums text-primary-accent-text">{stats.upcomingCount}</p>
         </div>
       </div>
 
@@ -391,7 +391,7 @@ function BillFormFields({
           <label className="flex flex-col gap-1">
             <span className="text-xs font-medium text-muted-foreground">Amount</span>
             <div className="relative">
-              <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary">₹</span>
+              <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary-accent-text">₹</span>
               <input
                 type="number"
                 className="clay-pressed h-10 w-full rounded-xl border border-primary/20 bg-primary/5 pl-7 text-sm font-semibold outline-none"

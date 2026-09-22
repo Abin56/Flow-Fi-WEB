@@ -15,9 +15,9 @@ const COLORS = {
   danger: "bg-expense/12 text-expense",
   success: "bg-success/16 text-success",
   purple: "bg-purple/14 text-purple",
-  indigo: "bg-blue-500/12 text-blue-600 dark:text-blue-400",
+  indigo: "bg-royal/12 text-royal",
   warning: "bg-warning/25 text-warning-foreground",
-  info: "bg-primary/12 text-primary",
+  info: "bg-primary/12 text-primary-accent-text",
 } as const;
 
 export function QuickActionsGrid() {

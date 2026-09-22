@@ -27,7 +27,7 @@ export function buildAiSuggestions(row: GridRow, opts: { emiLikely?: boolean; on
 
 export function AiSuggestionCell({ suggestions }: { suggestions: AiSuggestion[] }) {
   if (suggestions.length === 0) {
-    return <div className="flex h-full w-full items-center justify-center px-2.5 text-muted-foreground/30">·</div>;
+    return <div className="flex h-full w-full items-center justify-center px-2.5 text-tertiary-foreground">·</div>;
   }
   return (
     <div className="flex h-full w-full items-center justify-center px-2.5">

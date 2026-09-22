@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import { ClayButton } from "@/components/clay/clay-button";
 
 export default function AppError({
   error,
@@ -20,16 +21,12 @@ export default function AppError({
         This page hit an unexpected error. You can try again, or head back to the dashboard.
       </p>
       <div className="flex gap-3">
-        <button
-          type="button"
-          onClick={reset}
-          className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground"
-        >
+        <ClayButton type="button" onClick={reset}>
           Try again
-        </button>
+        </ClayButton>
         <a
           href="/dashboard"
-          className="rounded-md border px-4 py-2 text-sm font-medium"
+          className="inline-flex h-10 items-center justify-center rounded-2xl border border-border bg-card px-4 text-sm font-medium text-foreground shadow-e1 transition-colors hover:bg-muted"
         >
           Go to dashboard
         </a>

@@ -14,7 +14,7 @@ export interface NotificationCardProps {
 
 const toneClass = {
   neutral: "bg-muted text-muted-foreground",
-  primary: "bg-primary/12 text-primary",
+  primary: "bg-primary/12 text-primary-accent-text",
   success: "bg-success/15 text-success",
   warning: "bg-warning/18 text-warning-foreground",
   danger: "bg-danger/12 text-danger",
@@ -34,7 +34,7 @@ export function NotificationCard({ icon: Icon, title, description, timestamp, re
           {!read && <span className="size-1.5 shrink-0 rounded-full bg-primary" aria-label="Unread" />}
         </div>
         <p className="mt-0.5 text-sm text-muted-foreground">{description}</p>
-        <p className="mt-1 text-xs text-muted-foreground/70">{timestamp}</p>
+        <p className="mt-1 text-xs text-tertiary-foreground">{timestamp}</p>
         {action && <div className="mt-2">{action}</div>}
       </div>
     </div>

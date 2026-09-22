@@ -33,7 +33,7 @@ export function AiPanel({ open, onOpenChange }: AiPanelProps) {
             className="flex h-full w-full flex-col items-center justify-start gap-3 pt-5 text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
             aria-label="Open AI assistant"
           >
-            <span className="flex size-9 items-center justify-center rounded-2xl bg-primary/12 text-primary">
+            <span className="flex size-9 items-center justify-center rounded-2xl bg-primary/12 text-primary-accent-text">
               <Sparkles className="size-4.5" />
             </span>
           </button>
@@ -41,7 +41,7 @@ export function AiPanel({ open, onOpenChange }: AiPanelProps) {
           <div className="flex h-full flex-col p-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <span className="flex size-8 items-center justify-center rounded-xl bg-primary/12 text-primary">
+                <span className="flex size-8 items-center justify-center rounded-xl bg-primary/12 text-primary-accent-text">
                   <Sparkles className="size-4" />
                 </span>
                 <h3 className="font-heading text-sm font-semibold">FlowFi Assistant</h3>
@@ -59,7 +59,7 @@ export function AiPanel({ open, onOpenChange }: AiPanelProps) {
                 className="mt-8 flex flex-1 flex-col items-center justify-center text-center"
               >
                 <div
-                  className="flex size-12 items-center justify-center rounded-2xl bg-primary/12 text-primary"
+                  className="flex size-12 items-center justify-center rounded-2xl bg-primary/12 text-primary-accent-text"
                   style={{ boxShadow: "var(--shadow-e1)" }}
                 >
                   <Sparkles className="size-5" />

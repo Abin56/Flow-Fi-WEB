@@ -16,9 +16,9 @@ const toneIcon = {
 
 const toneIconClass = {
   success: "text-success",
-  warning: "text-warning",
+  warning: "text-warning-foreground",
   danger: "text-danger",
-  info: "text-primary",
+  info: "text-primary-accent-text",
 } as const;
 
 const AUTO_DISMISS_MS = 5000;
@@ -54,7 +54,7 @@ function ToastCard({ item }: { item: ToastItem }) {
               item.action!.onClick();
               dismiss(item.id);
             }}
-            className="mt-1.5 text-sm font-semibold text-primary transition-colors hover:text-primary/80"
+            className="mt-1.5 text-sm font-semibold text-primary-accent-text transition-colors hover:text-primary-accent-text/80"
           >
             {item.action.label}
           </button>
