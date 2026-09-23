@@ -13,6 +13,7 @@ import { FirestoreCollections } from "@/lib/firestore/collections";
 import { FirestoreCrudRepository } from "@/lib/firestore/firestore-crud-repository";
 import { recordEdit, updateField } from "@/lib/firestore/soft-deletable";
 import { calculate, type InterestPeriodBreakdown } from "@/lib/engines/interest-calculator";
+import { outstandingPrincipalFor, principalPaidFor } from "@/lib/engines/loan-outstanding";
 import type { Loan, LoanCategory, LoanDirection, LoanInterest, LoanRepaymentType } from "@/lib/models/loan";
 import { nextDueDate, type Installment, type PaymentSchedule, type ScheduleType } from "@/lib/models/payment-schedule";
 import type {
@@ -21,10 +22,6 @@ import type {
   PrecomputedInstallmentAmount,
 } from "@/lib/repositories/payment-schedule-repository";
 import { generateId } from "@/lib/utils/id-generator";
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(Math.max(value, min), max);
-}
 
 function precomputedFromPeriods(periods: InterestPeriodBreakdown[]): PrecomputedInstallmentAmount[] {
   return periods.map((p) => ({
@@ -337,24 +334,14 @@ export class LoanRepository extends FirestoreCrudRepository<Loan> {
       throw new Error("Number of payments can't be less than the payments already made");
     }
 
-    const principalPaid = settled.reduce((sum, i) => {
-      if (i.amountPaid <= 0) return sum;
-      const principalShare = i.principalPortion ?? i.amountDue;
-      // A fully-paid installment counts its whole principal share. One
-      // that's only partially paid (including a partial payment later
-      // skipped) counts only the principal fraction of what was actually
-      // paid — crediting the full share here would overstate principal
-      // paid down and understate outstandingPrincipal below.
-      if (i.amountPaid >= i.amountDue) return sum + principalShare;
-      return sum + principalShare * (i.amountPaid / i.amountDue);
-    }, 0);
+    const principalPaid = principalPaidFor(settled);
 
     if (loanAmount != null && loanAmount < principalPaid) {
       throw new Error("Loan amount can't be less than the principal already paid off");
     }
 
     const effectiveLoanAmount = loanAmount ?? loan.loanAmount;
-    const outstandingPrincipal = clamp(effectiveLoanAmount - principalPaid, 0, effectiveLoanAmount);
+    const outstandingPrincipal = outstandingPrincipalFor(effectiveLoanAmount, settled);
     const remainingCount = newInstallmentCount - settled.length;
 
     const effectiveFrequency = installmentFrequency ?? loan.installmentFrequency!;

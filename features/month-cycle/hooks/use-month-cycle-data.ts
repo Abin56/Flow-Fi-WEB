@@ -277,6 +277,7 @@ export function useMonthCycleData() {
       dateTime: t.dateTime,
       effectiveMonth: effectiveMonth(t),
       isTransfer: isTransfer(t),
+      accountId: t.accountId,
     }));
     const dashboardExpenses: DashboardExpense[] = (expenses as Expense[]).map((e) => ({
       transactionId: e.transactionId,
@@ -308,6 +309,7 @@ export function useMonthCycleData() {
       emiInstallments: dashboardEmiInstallments,
       loanInstallments: dashboardLoanInstallments,
       creditCardStatements: dashboardStatements,
+      creditCardAccountIds: new Set((creditCards as CreditCardProfile[]).map((c) => c.accountId)),
     };
 
     const spent = amountFor("combinedExpenses", strategy, range, inputs);
@@ -325,7 +327,7 @@ export function useMonthCycleData() {
     const mySpentChangePercent = percentChange(mySpent, myPreviousSpent);
 
     return { spent, previousSpent, income, net, spentChangePercent, mySpent, myPreviousSpent, myNet, mySpentChangePercent };
-  }, [isCustomCycle, cycleRange, transactions, expenses, billOccurrences, emiInstallments, loanInstallments, statements]);
+  }, [isCustomCycle, cycleRange, transactions, expenses, billOccurrences, emiInstallments, loanInstallments, statements, creditCards]);
 
   const savingsRatePercent = financialView.income > 0 ? Math.round((financialView.net / financialView.income) * 100) : 0;
 

@@ -41,6 +41,7 @@ import {
   type Statement,
   type StatementPayment,
 } from "@/lib/models/credit-card";
+import { isTransfer } from "@/lib/models/transaction";
 import type { Transaction, TransactionType } from "@/lib/models/transaction";
 import { generateId } from "@/lib/utils/id-generator";
 import type { TransactionRepository } from "./transaction-repository";
@@ -533,11 +534,22 @@ export class StatementRepository extends FirestoreCrudRepository<Statement> {
    * Sums `cardTransactions` whose `dateTime` falls within `period` — the one
    * true definition of a statement period's total, used both to materialize
    * a new statement and to correct an existing one's total at read time when
-   * transactions inside it have since changed.
+   * transactions inside it have since changed. Excludes
+   * `excludeFromCalculations` and transfer legs, matching every other
+   * financial total in the app (see `dashboard-aggregation.ts`) — otherwise
+   * an excluded/reimbursement entry or a transfer leg posted to the card
+   * account would inflate the statement total while every other total in
+   * the app ignores it.
    */
   totalFor(cardTransactions: Transaction[], period: { periodStart: Date; periodEnd: Date }): number {
     return cardTransactions
-      .filter((t) => t.deletedAt == null && periodContains(period as StatementPeriodWindow, t.dateTime))
+      .filter(
+        (t) =>
+          t.deletedAt == null &&
+          !t.excludeFromCalculations &&
+          !isTransfer(t) &&
+          periodContains(period as StatementPeriodWindow, t.dateTime),
+      )
       .reduce((sum, t) => sum + t.amount, 0);
   }
 

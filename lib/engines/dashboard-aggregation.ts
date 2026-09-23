@@ -87,6 +87,8 @@ export interface DashboardTransaction {
   effectiveMonth: Date;
   /** `Transaction.isTransfer` — `transferId != null`. */
   isTransfer: boolean;
+  /** `Transaction.accountId` — needed to exclude credit-card-account transactions (see `expenseTransactionsInRange`). */
+  accountId: string;
 }
 
 /**
@@ -103,13 +105,31 @@ export function bucketDateFor(strategy: DateRangeStrategy, transaction: Dashboar
   return isMonthGranular ? transaction.effectiveMonth : transaction.dateTime;
 }
 
+/**
+ * Every expense-type transaction in `range` — the single filter both
+ * `myExpenses` and `sharedExpenses` build on, so they can never disagree
+ * about which transactions are "in range".
+ *
+ * When `creditCardAccountIds` is non-empty, transactions posted on one of
+ * those accounts are dropped. `combinedExpenses`/`netCashFlow` also add
+ * `creditCardPaid` (the card's statement payments) as a separate line item,
+ * so counting the card purchase here too would double-count the same spend
+ * once as an ordinary expense and again as a credit-card payment — mirrors
+ * `_expenseTransactionsInRange`'s `excludeCreditCardAccounts` in
+ * `expense_calculator_provider.dart`.
+ */
 function expenseTransactionsInRange(
   transactions: DashboardTransaction[],
   strategy: DateRangeStrategy,
   range: DateRange,
+  creditCardAccountIds: ReadonlySet<string> = new Set(),
 ): DashboardTransaction[] {
   return transactions.filter(
-    (t) => t.type === "expense" && !t.isTransfer && rangeContains(range, bucketDateFor(strategy, t)),
+    (t) =>
+      t.type === "expense" &&
+      !t.isTransfer &&
+      rangeContains(range, bucketDateFor(strategy, t)) &&
+      !creditCardAccountIds.has(t.accountId),
   );
 }
 
@@ -196,8 +216,9 @@ export function myExpenses(
   expenses: DashboardExpense[],
   strategy: DateRangeStrategy,
   range: DateRange,
+  creditCardAccountIds: ReadonlySet<string> = new Set(),
 ): number {
-  const inRange = expenseTransactionsInRange(transactions, strategy, range);
+  const inRange = expenseTransactionsInRange(transactions, strategy, range, creditCardAccountIds);
   return myExpenseBreakdownForTransactions(inRange, expenses).total;
 }
 
@@ -207,8 +228,9 @@ export function sharedExpenses(
   expenses: DashboardExpense[],
   strategy: DateRangeStrategy,
   range: DateRange,
+  creditCardAccountIds: ReadonlySet<string> = new Set(),
 ): number {
-  const inRange = expenseTransactionsInRange(transactions, strategy, range);
+  const inRange = expenseTransactionsInRange(transactions, strategy, range, creditCardAccountIds);
   return othersShareForTransactions(inRange, expenses);
 }
 
@@ -328,6 +350,8 @@ export interface FinancialViewInputs {
   emiInstallments: DashboardInstallment[];
   loanInstallments: DashboardInstallment[];
   creditCardStatements: DashboardStatement[];
+  /** Account IDs backing a credit card — see `expenseTransactionsInRange`. */
+  creditCardAccountIds: ReadonlySet<string>;
 }
 
 /** Port of `_amountFor`. */
@@ -337,7 +361,15 @@ export function amountFor(
   range: DateRange,
   inputs: FinancialViewInputs,
 ): number {
-  const { transactions, expenses, billOccurrences, emiInstallments, loanInstallments, creditCardStatements } = inputs;
+  const {
+    transactions,
+    expenses,
+    billOccurrences,
+    emiInstallments,
+    loanInstallments,
+    creditCardStatements,
+    creditCardAccountIds,
+  } = inputs;
 
   switch (module) {
     case "myExpenses":
@@ -346,8 +378,8 @@ export function amountFor(
       return sharedExpenses(transactions, expenses, strategy, range);
     case "combinedExpenses":
       return (
-        myExpenses(transactions, expenses, strategy, range) +
-        sharedExpenses(transactions, expenses, strategy, range) +
+        myExpenses(transactions, expenses, strategy, range, creditCardAccountIds) +
+        sharedExpenses(transactions, expenses, strategy, range, creditCardAccountIds) +
         billsPaid(billOccurrences, range) +
         emiPaid(emiInstallments, range) +
         loanPaid(loanInstallments, range) +
@@ -360,8 +392,8 @@ export function amountFor(
     case "netCashFlow": {
       const moneyIn = income(transactions, strategy, range);
       const moneyOut =
-        myExpenses(transactions, expenses, strategy, range) +
-        sharedExpenses(transactions, expenses, strategy, range) +
+        myExpenses(transactions, expenses, strategy, range, creditCardAccountIds) +
+        sharedExpenses(transactions, expenses, strategy, range, creditCardAccountIds) +
         billsPaid(billOccurrences, range) +
         emiPaid(emiInstallments, range) +
         loanPaid(loanInstallments, range) +
@@ -384,10 +416,18 @@ export function breakdownFor(
 ): Record<string, number> {
   if (module !== "combinedExpenses" && module !== "netCashFlow") return {};
 
-  const { transactions, expenses, billOccurrences, emiInstallments, loanInstallments, creditCardStatements } = inputs;
+  const {
+    transactions,
+    expenses,
+    billOccurrences,
+    emiInstallments,
+    loanInstallments,
+    creditCardStatements,
+    creditCardAccountIds,
+  } = inputs;
   const raw: Record<string, number> = {
-    "My Expenses": myExpenses(transactions, expenses, strategy, range),
-    "Shared Expenses": sharedExpenses(transactions, expenses, strategy, range),
+    "My Expenses": myExpenses(transactions, expenses, strategy, range, creditCardAccountIds),
+    "Shared Expenses": sharedExpenses(transactions, expenses, strategy, range, creditCardAccountIds),
     Bills: billsPaid(billOccurrences, range),
     EMIs: emiPaid(emiInstallments, range),
     Loans: loanPaid(loanInstallments, range),

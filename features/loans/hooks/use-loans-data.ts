@@ -13,13 +13,19 @@
  *
  * Outstanding principal is derived from installments, not a cached balance —
  * the exact same `principalPaid` computation `LoanRepository.editLoanTerms`
- * already uses internally (an installment counts as "settled" once any
- * amount has been paid toward it or it's been skipped; a settled
- * installment's principal contribution is its `principalPortion` when the
- * loan carries interest, else its full `amountDue` — non-interest
- * installments have no interest/principal split, so the whole amount IS
- * principal). This file re-expresses that formula rather than reimplementing
- * amortization.
+ * uses internally (an installment counts as "settled" once any amount has
+ * been paid toward it or it's been skipped; a fully-paid settled
+ * installment's principal contribution is its `principalPortion` — its full
+ * `amountDue` when the loan carries no interest; a *partially*-paid
+ * installment contributes only the prorated fraction,
+ * `principalShare * (amountPaid / amountDue)`, matching `editLoanTerms`
+ * exactly). This file re-expresses that formula rather than reimplementing
+ * amortization — previously it credited a partially-paid installment's
+ * *whole* principal share instead of prorating it, which overstated payoff
+ * progress and disagreed with `LoanScheduleDialog`'s separately-derived
+ * "Loan Amount Left" figure for the same loan; `LoanScheduleDialog` now
+ * reads `outstandingPrincipal` from this row instead of recomputing it, so
+ * there is exactly one implementation of this formula on the web client.
  *
  * Known, accepted gaps for this pass (documented, not silently faked):
  *  - Institutional loans (`category: "institutional"`) store their lender
@@ -33,16 +39,11 @@
  *    left untouched (no migration) and keep resolving their `lenderName`
  *    through that linked Person, exactly as before. See `toLoanRow`'s
  *    `lenderName` fallback and `useLoanActions().createLoan`/`editLoan` below.
- *  - Only a settled installment's own `principalPortion`/`amountDue` counts
- *    toward `outstandingPrincipal` — a *partially* paid installment's
- *    principal/interest split for the paid fraction isn't tracked anywhere
- *    (no `LoanPaymentBreakdown` equivalent to EMI's `EmiPaymentBreakdown`
- *    exists), so partial payments are treated the same simplified way
- *    `editLoanTerms` already treats them, not approximated further here.
  */
 
 import { useMemo } from "react";
 import { planInstallmentSettlement } from "@/lib/engines/installment-settlement";
+import { outstandingPrincipalFor } from "@/lib/engines/loan-outstanding";
 import {
   installmentStatus,
   type Installment,
@@ -65,10 +66,6 @@ import {
 } from "@/lib/repositories/repository-factory";
 import { useAllLoanInstallments, useLoanPersons, useLoans, useTrashedLoans } from "@/hooks/use-loans";
 import { useAuthStore } from "@/store/auth-store";
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(Math.max(value, min), max);
-}
 
 const ACCENT_CYCLE: LoanRow["accent"][] = ["primary", "success", "warning", "purple", "expense"];
 
@@ -96,13 +93,7 @@ function toLoanRow(loan: Loan, installments: Installment[], personById: Map<stri
   const sorted = [...installments].sort((a, b) => a.sequenceNumber - b.sequenceNumber);
   const status = loanStatusGiven(loan, sorted);
 
-  // Mirrors LoanRepository.editLoanTerms's settled/principalPaid computation exactly.
-  const settled = sorted.filter((i) => i.amountPaid > 0 || i.isSkipped);
-  const principalPaid = settled.reduce((sum, i) => {
-    if (i.isSkipped && i.amountPaid === 0) return sum;
-    return sum + (i.principalPortion ?? i.amountPaid);
-  }, 0);
-  const outstandingPrincipal = clamp(loan.loanAmount - principalPaid, 0, loan.loanAmount);
+  const outstandingPrincipal = outstandingPrincipalFor(loan.loanAmount, sorted);
 
   const installmentsPaid = sorted.filter((i) => installmentStatus(i) === "paid").length;
   const totalInstallments = sorted.length || loan.installmentCount || 1;
