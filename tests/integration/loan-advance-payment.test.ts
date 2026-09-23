@@ -93,7 +93,11 @@ async function installmentsFor(db: TestFirestore, scheduleId: string) {
     fromFirestore: installmentFromFirestore,
   });
   const snap = await getDocs(query(ref, where("deletedAt", "==", null)));
-  return snap.docs.map((d) => d.data());
+  // Firestore doesn't guarantee document order for an unordered query —
+  // every caller in this file indexes into this list assuming
+  // installments[0]/[1] are sequence 1/2, so this must sort explicitly
+  // (mirrors the repository's own always-sort-by-sequenceNumber convention).
+  return snap.docs.map((d) => d.data()).sort((a, b) => a.sequenceNumber - b.sequenceNumber);
 }
 
 async function transactionsByLoanId(db: TestFirestore, loanId: string) {
@@ -294,6 +298,96 @@ describe("LoanAdvancePaymentRepository (real emulator)", () => {
     expect(events).toHaveLength(1);
     expect(events[0].installmentCountAfter).toBeLessThan(events[0].installmentCountBefore);
   });
+
+  it(
+    "overpayment allocation choice: without includeUpcomingInstallments, overflow beyond the " +
+      "currently-due installment becomes a principal prepayment even though a future installment " +
+      "could have absorbed it",
+    async () => {
+      const db = testEnv.authenticatedContext(UID).firestore();
+      const accounts = accountRepositoryFor(db);
+      const { loanRepository } = loanRepositoryFor(db);
+      const repo = new LoanAdvancePaymentRepository(db as unknown as import("firebase/firestore").Firestore, UID);
+
+      const account = await accounts.createAccount({ name: "Wallet", type: "bank", openingBalance: 100000, colorValue: 0 });
+      const loan = await loanRepository.createLoan({
+        loanAmount: 12000,
+        loanDate: new Date("2026-01-01T00:00:00Z"),
+        repaymentType: "installment",
+        direction: "taken",
+        category: "institutional",
+        institutionName: "Bank",
+        interest: { type: "reducingBalance", ratePercent: 12, period: "yearly" },
+        installmentFrequency: "monthly",
+        installmentCount: 12,
+      });
+      const installments = await installmentsFor(db, loan.scheduleId);
+      const firstDue = installments[0].amountDue;
+      const secondDue = installments[1].amountDue;
+
+      const result = await repo.record({
+        loan,
+        scheduleInstallments: installments,
+        accountId: account.id,
+        amount: firstDue + secondDue,
+        date: new Date("2026-01-15T00:00:00Z"), // only installment 1 is "currently due"
+        idempotencyKey: "no-upcoming",
+      });
+
+      expect(result.overallAllocationType).toBe("principalPrepayment");
+      expect(result.prepaymentPrincipalAmount).toBeCloseTo(secondDue, 2);
+
+      const refreshed = await installmentsFor(db, loan.scheduleId);
+      expect(refreshed.find((i) => i.sequenceNumber === 2)?.amountPaid).toBe(0);
+    },
+  );
+
+  it(
+    "overpayment allocation choice: with includeUpcomingInstallments, the same overpayment is " +
+      "instead applied to the next upcoming installment — no prepayment, no re-amortization",
+    async () => {
+      const db = testEnv.authenticatedContext(UID).firestore();
+      const accounts = accountRepositoryFor(db);
+      const { loanRepository } = loanRepositoryFor(db);
+      const repo = new LoanAdvancePaymentRepository(db as unknown as import("firebase/firestore").Firestore, UID);
+
+      const account = await accounts.createAccount({ name: "Wallet", type: "bank", openingBalance: 100000, colorValue: 0 });
+      const loan = await loanRepository.createLoan({
+        loanAmount: 12000,
+        loanDate: new Date("2026-01-01T00:00:00Z"),
+        repaymentType: "installment",
+        direction: "taken",
+        category: "institutional",
+        institutionName: "Bank",
+        interest: { type: "reducingBalance", ratePercent: 12, period: "yearly" },
+        installmentFrequency: "monthly",
+        installmentCount: 12,
+      });
+      const installments = await installmentsFor(db, loan.scheduleId);
+      const firstDue = installments[0].amountDue;
+      const secondDue = installments[1].amountDue;
+
+      const result = await repo.record({
+        loan,
+        scheduleInstallments: installments,
+        accountId: account.id,
+        amount: firstDue + secondDue,
+        date: new Date("2026-01-15T00:00:00Z"),
+        idempotencyKey: "with-upcoming",
+        includeUpcomingInstallments: true,
+      });
+
+      expect(result.prepaymentPrincipalAmount).toBeNull();
+      expect(result.reamortization).toBeNull();
+
+      const refreshed = await installmentsFor(db, loan.scheduleId);
+      expect(refreshed.find((i) => i.sequenceNumber === 1)?.amountPaid).toBeCloseTo(firstDue, 2);
+      expect(refreshed.find((i) => i.sequenceNumber === 2)?.amountPaid).toBeCloseTo(secondDue, 2);
+
+      const refreshedAccount = await accounts.getByKey(account.id);
+      expect(refreshedAccount?.currentBalance).toBeCloseTo(100000 - firstDue - secondDue, 2);
+    },
+  );
 
   it("6. duplicate/retried payment: same idempotencyKey is a no-op the second time", async () => {
     const db = testEnv.authenticatedContext(UID).firestore();
