@@ -87,7 +87,7 @@ export function FinanceTable<T>({
           <div className="min-w-full">
           <div
             className={cn(
-              "sticky top-0 z-10 flex items-center gap-4 border-b bg-card px-4 py-3",
+              "sticky top-0 z-widget flex items-center gap-4 border-b bg-card px-4 py-3",
               !gridLines && "border-border",
             )}
             style={gridLines ? { borderBottomColor: "var(--grid-line-strong)" } : undefined}

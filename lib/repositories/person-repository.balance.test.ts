@@ -90,6 +90,7 @@ function entry(overrides: Partial<LedgerEntry> = {}): LedgerEntry {
     deletedAt: null,
     lastEditedAt: null,
     editHistory: [],
+    receivedStatus: "yetToReceive",
     ...overrides,
   };
 }

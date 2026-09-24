@@ -46,25 +46,37 @@ export function AllPeopleTransactionsDialog({ open, onOpenChange }: AllPeopleTra
             <div className="flex flex-col divide-y divide-border/50">
               {rows.map((txn) => {
                 const received = txn.type === "received";
+                const settled = txn.receivedStatus === "received";
+                const pendingReceivable = received && !settled;
                 return (
                   <div key={txn.id} className="flex flex-wrap items-center gap-3 py-3">
                     <span
                       className={cn(
                         "flex size-9 shrink-0 items-center justify-center rounded-full",
-                        received ? "bg-success/16 text-success" : "bg-expense/12 text-expense",
+                        pendingReceivable ? "bg-warning/16 text-warning-foreground" : received ? "bg-success/16 text-success" : "bg-expense/12 text-expense",
                       )}
                     >
                       {received ? <ArrowDownToLine className="size-4" /> : <ArrowUpFromLine className="size-4" />}
                     </span>
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-sm font-medium text-foreground">
-                        {received ? `Received from ${txn.personName}` : `Paid to ${txn.personName}`}
+                        {pendingReceivable
+                          ? `Yet to receive from ${txn.personName}`
+                          : received
+                            ? `Received from ${txn.personName}`
+                            : `Paid to ${txn.personName}`}
                       </p>
                       <p className="truncate text-xs text-muted-foreground">{txn.description}</p>
                     </div>
                     <span className="hidden text-xs text-muted-foreground sm:block">{txn.date}</span>
                     <Badge variant="secondary" className="hidden border-0 text-[10px] sm:inline-flex">
                       {txn.category}
+                    </Badge>
+                    <Badge
+                      variant="secondary"
+                      className={cn("hidden border-0 text-[10px] sm:inline-flex", settled ? "bg-success/16 text-success" : "bg-warning/25 text-warning-foreground")}
+                    >
+                      {settled ? "Received" : "Pending"}
                     </Badge>
                     <p className={cn("w-24 shrink-0 text-right text-sm font-semibold tabular-nums", received ? "text-success" : "text-expense")}>
                       {received ? "+" : "-"}

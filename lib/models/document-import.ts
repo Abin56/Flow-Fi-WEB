@@ -110,6 +110,8 @@ export interface SplitParticipantDraft {
   share: number;
   /** Mirrors the real `ExpenseParticipant.isMe` (lib/models/expense.ts) — the reliable way to find "my" share, rather than string-matching on `name`. */
   isMe: boolean;
+  /** Mirrors `ExpenseParticipant.receivedStatus` — carried through the staging draft so commit doesn't lose the user's choice. Optional for backward compatibility with drafts staged before this field existed; `commitOneRow` defaults a missing value to "yetToReceive" (via `ExpenseRepository.resolveShares`'s own default). */
+  receivedStatus?: "yetToReceive" | "received" | "excluded" | "notApplicable";
 }
 
 /**

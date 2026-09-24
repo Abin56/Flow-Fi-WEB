@@ -53,7 +53,7 @@ function expense(overrides: Partial<Expense> = {}): Expense {
     accountId: "acc-a",
     transactionId: "t1",
     splitType: "custom",
-    participants: [{ personId: "person-bob", name: "Bob", share: 500, installmentId: null, isMe: false }],
+    participants: [{ personId: "person-bob", name: "Bob", share: 500, installmentId: null, isMe: false, receivedStatus: "yetToReceive" }],
     scheduleId: null,
     notes: "",
     createdAt: new Date("2026-08-01T00:00:00Z"),
@@ -123,8 +123,8 @@ describe("applyOwesPersonChange rollback on transaction-stamp failure", () => {
   });
 
   it("owed -> owed, different person: reverses both the new assignment and restores the old one if the transaction stamp fails", async () => {
-    const existing = expense({ participants: [{ personId: "person-bob", name: "Bob", share: 500, installmentId: null, isMe: false }] });
-    const newExpense = expense({ id: "exp-carol", participants: [{ personId: "person-carol", name: "Carol", share: 500, installmentId: null, isMe: false }] });
+    const existing = expense({ participants: [{ personId: "person-bob", name: "Bob", share: 500, installmentId: null, isMe: false, receivedStatus: "yetToReceive" }] });
+    const newExpense = expense({ id: "exp-carol", participants: [{ personId: "person-carol", name: "Carol", share: 500, installmentId: null, isMe: false, receivedStatus: "yetToReceive" }] });
     const restoredExpense = expense({ id: "exp-bob-restored" });
 
     const expenseRepository = {

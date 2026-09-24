@@ -60,7 +60,7 @@ import type { CreditCardProfile, Statement } from "@/lib/models/credit-card";
 import { statementRemainingAmount, statementStatus } from "@/lib/models/credit-card";
 import { unbilledSpendForCard } from "@/lib/repositories/credit-card-repository";
 import type { Emi, EmiPaymentBreakdown } from "@/lib/models/emi";
-import { effectiveMonth, isTransfer, signedAmount, type Transaction } from "@/lib/models/transaction";
+import { compareTransactionsNewestFirst, effectiveMonth, isTransfer, signedAmount, type Transaction } from "@/lib/models/transaction";
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
@@ -295,7 +295,7 @@ export function useDashboardData() {
     return (transactions as Transaction[])
       .filter((t) => t.deletedAt == null)
       .slice()
-      .sort((a, b) => b.dateTime.getTime() - a.dateTime.getTime())
+      .sort(compareTransactionsNewestFirst)
       .slice(0, 5)
       .map((t) => ({
         id: t.id,

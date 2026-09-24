@@ -10,6 +10,7 @@ import { type CollectionReference, doc, type DocumentReference, getDocs, query, 
 import { FirestoreCrudRepository } from "@/lib/firestore/firestore-crud-repository";
 import { recordEdit, updateField } from "@/lib/firestore/soft-deletable";
 import { type LedgerEntry, type LedgerEntryType, type Person, signedAmount } from "@/lib/models/person";
+import type { ReceivedStatus } from "@/lib/models/expense";
 import { generateId } from "@/lib/utils/id-generator";
 
 export interface CreatePersonParams {
@@ -163,6 +164,8 @@ export class LedgerRepository extends FirestoreCrudRepository<LedgerEntry> {
       note?: string;
       transactionRef?: string | null;
       increasesBalance?: boolean;
+      /** Defaults to "yetToReceive" — a new entry is never treated as already settled. */
+      receivedStatus?: ReceivedStatus;
     },
   ): Promise<LedgerEntry> {
     if (params.amount <= 0) {
@@ -178,6 +181,7 @@ export class LedgerRepository extends FirestoreCrudRepository<LedgerEntry> {
       note: params.note ?? "",
       transactionRef: params.transactionRef ?? null,
       increasesBalance: params.increasesBalance ?? true,
+      receivedStatus: params.receivedStatus ?? "yetToReceive",
       createdAt: new Date(),
       deletedAt: null,
       lastEditedAt: null,
@@ -236,6 +240,17 @@ export class LedgerRepository extends FirestoreCrudRepository<LedgerEntry> {
       }
       tx.set(entryRef, updated);
     });
+  }
+
+  /**
+   * Flips an entry's settlement status in place. Unlike `editEntryAmount`,
+   * this never touches the person's cached balance — `receivedStatus` is
+   * purely a settlement marker, independent of the signed amount already
+   * applied when the entry was created.
+   */
+  async updateReceivedStatus(entry: LedgerEntry, receivedStatus: ReceivedStatus): Promise<void> {
+    const updated = updateField(entry, "receivedStatus", entry.receivedStatus, receivedStatus, (e, v) => ({ ...e, receivedStatus: v }));
+    await this.update(updated);
   }
 
   /**

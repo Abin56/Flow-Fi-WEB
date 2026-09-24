@@ -139,6 +139,7 @@ function ledgerEntry(overrides: Partial<LedgerEntry> = {}): LedgerEntry {
     deletedAt: null,
     lastEditedAt: null,
     editHistory: [],
+    receivedStatus: "yetToReceive",
     ...overrides,
   };
 }
@@ -153,7 +154,7 @@ function expense(overrides: Partial<Expense> = {}): Expense {
     accountId: "acc-del",
     transactionId: "tx-1",
     splitType: "custom",
-    participants: [{ personId: "person-bob", name: "Bob", share: 100, installmentId: null, isMe: false }],
+    participants: [{ personId: "person-bob", name: "Bob", share: 100, installmentId: null, isMe: false, receivedStatus: "yetToReceive" }],
     scheduleId: null,
     notes: "",
     createdAt: new Date("2026-08-01T00:00:00Z"),

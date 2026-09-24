@@ -22,6 +22,21 @@ function transaction(overrides: Partial<HistoryTransaction> = {}): HistoryTransa
     excludeFromCalculations: false,
     accountingMonth: null,
     isDeleted: false,
+    createdAt: new Date("2026-07-10T10:00:00Z"),
+    lastEditedAt: null,
+    ...overrides,
+  };
+}
+
+function payment(overrides: Partial<{ id: string; date: Date; amount: number; note: string; isDeleted: boolean; createdAt: Date; lastEditedAt: Date | null }> = {}) {
+  return {
+    id: "p1",
+    date: new Date("2026-07-05"),
+    amount: 100,
+    note: "",
+    isDeleted: false,
+    createdAt: overrides.date ?? new Date("2026-07-05"),
+    lastEditedAt: null,
     ...overrides,
   };
 }
@@ -110,19 +125,19 @@ describe("buildHistory — loan/bill/EMI payment rows", () => {
       id: "loan-1",
       name: "Car loan",
       isDeleted: false,
-      payments: [{ id: "p1", date: new Date("2026-07-05"), amount: 1000, note: "", isDeleted: false }],
+      payments: [payment({ id: "p1", date: new Date("2026-07-05"), amount: 1000 })],
     };
     const bill: HistoryBillData = {
       id: "bill-1",
       name: "Rent",
       isDeleted: false,
-      payments: [{ id: "p2", date: new Date("2026-07-06"), amount: 2000, note: "", isDeleted: false }],
+      payments: [payment({ id: "p2", date: new Date("2026-07-06"), amount: 2000 })],
     };
     const emi: HistoryEmiData = {
       id: "emi-1",
       name: "Phone EMI",
       isDeleted: false,
-      payments: [{ id: "p3", date: new Date("2026-07-07"), amount: 300, note: "", isDeleted: false }],
+      payments: [payment({ id: "p3", date: new Date("2026-07-07"), amount: 300 })],
     };
 
     const entries = buildHistory({ transactions: [], expenses: [], loans: [loan], bills: [bill], emis: [emi] });
@@ -145,7 +160,7 @@ describe("buildHistory — loan/bill/EMI payment rows", () => {
       id: "loan-1",
       name: null,
       isDeleted: false,
-      payments: [{ id: "p1", date: new Date("2026-07-01"), amount: 100, note: "", isDeleted: false }],
+      payments: [payment({ id: "p1", date: new Date("2026-07-01"), amount: 100 })],
     };
     const entries = buildHistory({
       transactions: [transaction({ id: "t1", dateTime: new Date("2026-07-15") })],
@@ -155,6 +170,52 @@ describe("buildHistory — loan/bill/EMI payment rows", () => {
       emis: [],
     });
     expect(entries.map((e) => e.id)).toEqual(["txn-t1", "loan-payment-p1"]);
+  });
+
+  it("on the same date, breaks ties by most-recently-created first", () => {
+    const older = transaction({ id: "t-older", dateTime: new Date("2026-07-10T09:00:00Z"), createdAt: new Date("2026-07-10T09:00:00Z") });
+    const newer = transaction({ id: "t-newer", dateTime: new Date("2026-07-10T09:00:00Z"), createdAt: new Date("2026-07-10T11:00:00Z") });
+    const entries = buildHistory({ transactions: [older, newer], expenses: [], loans: [], bills: [], emis: [] });
+    expect(entries.map((e) => e.id)).toEqual(["txn-t-newer", "txn-t-older"]);
+  });
+
+  it("on the same date, an edited entry ranks by its lastEditedAt, not its original createdAt", () => {
+    // t-old-edit was created first but edited most recently — it should still come out on top.
+    const oldEdit = transaction({
+      id: "t-old-edit",
+      dateTime: new Date("2026-07-10T09:00:00Z"),
+      createdAt: new Date("2026-07-10T08:00:00Z"),
+      lastEditedAt: new Date("2026-07-10T23:00:00Z"),
+    });
+    const untouchedNewer = transaction({
+      id: "t-untouched",
+      dateTime: new Date("2026-07-10T09:00:00Z"),
+      createdAt: new Date("2026-07-10T10:00:00Z"),
+      lastEditedAt: null,
+    });
+    const entries = buildHistory({ transactions: [oldEdit, untouchedNewer], expenses: [], loans: [], bills: [], emis: [] });
+    expect(entries.map((e) => e.id)).toEqual(["txn-t-old-edit", "txn-t-untouched"]);
+  });
+
+  it("date always wins over recency — an older date never outranks a newer date regardless of createdAt", () => {
+    const newerDateOldCreatedAt = transaction({
+      id: "t-newer-date",
+      dateTime: new Date("2026-07-11T00:00:00Z"),
+      createdAt: new Date("2026-01-01T00:00:00Z"),
+    });
+    const olderDateJustCreated = transaction({
+      id: "t-older-date",
+      dateTime: new Date("2026-07-10T00:00:00Z"),
+      createdAt: new Date("2026-07-12T00:00:00Z"),
+    });
+    const entries = buildHistory({
+      transactions: [olderDateJustCreated, newerDateOldCreatedAt],
+      expenses: [],
+      loans: [],
+      bills: [],
+      emis: [],
+    });
+    expect(entries.map((e) => e.id)).toEqual(["txn-t-newer-date", "txn-t-older-date"]);
   });
 });
 

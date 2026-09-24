@@ -10,6 +10,7 @@ function participant(overrides: Partial<ExpenseParticipant> = {}): ExpensePartic
     share: 100,
     installmentId: "i1",
     isMe: false,
+    receivedStatus: "yetToReceive",
     ...overrides,
   };
 }

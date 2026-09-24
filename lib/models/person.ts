@@ -9,6 +9,7 @@
 import type { DocumentData, QueryDocumentSnapshot, SnapshotOptions } from "firebase/firestore";
 import { Timestamp } from "firebase/firestore";
 import type { AuditEntry, SoftDeletableEntity } from "@/lib/firestore/soft-deletable";
+import { receivedStatusFromName, type ReceivedStatus } from "@/lib/models/expense";
 
 export type LedgerEntryType = "gave" | "borrowed" | "receivedBack" | "repaid" | "adjustment";
 
@@ -115,6 +116,13 @@ export interface LedgerEntry extends SoftDeletableEntity {
    */
   transactionRef: string | null;
   createdAt: Date;
+  /**
+   * Whether this entry has actually been settled — independent of `type`/
+   * `signedAmount`, which only carry the money's *direction*. Mirrors
+   * `ExpenseParticipant.receivedStatus`; defaults to "yetToReceive" so a
+   * newly added entry is never silently treated as already settled.
+   */
+  receivedStatus: ReceivedStatus;
 }
 
 /**
@@ -129,6 +137,22 @@ export function signedAmount(entry: LedgerEntry): number {
       ? entry.amount
       : -entry.amount
     : signFor(entry.type, entry.amount);
+}
+
+/**
+ * Newest-first: primarily by `date`, then — for two entries on the exact
+ * same `date` (e.g. a "gave" entry and its immediate "receivedBack" from a
+ * split marked already-Received, or two settlements recorded the same day)
+ * — by whichever was most recently added, via `createdAt`. `LedgerEntry` has
+ * no `lastEditedAt` (only `editEntryAmount` mutates it in place, without a
+ * tracked edit timestamp — see the type's own doc comment), so `createdAt`
+ * is the only signal available for "recently added"; there is no
+ * "recently modified" case to detect for a ledger entry beyond that.
+ */
+export function compareLedgerEntriesNewestFirst(a: LedgerEntry, b: LedgerEntry): number {
+  const dateDelta = b.date.getTime() - a.date.getTime();
+  if (dateDelta !== 0) return dateDelta;
+  return b.createdAt.getTime() - a.createdAt.getTime();
 }
 
 function auditEntryFromMap(map: Record<string, unknown>): AuditEntry {
@@ -201,6 +225,7 @@ export function ledgerEntryFromFirestore(
     transactionRef: (data.transactionRef as string | undefined) ?? null,
     increasesBalance: (data.increasesBalance as boolean) ?? true,
     createdAt: (data.createdAt as Timestamp).toDate(),
+    receivedStatus: receivedStatusFromName(data.receivedStatus as string | undefined),
     deletedAt: (data.deletedAt as Timestamp | undefined)?.toDate() ?? null,
     lastEditedAt: (data.lastEditedAt as Timestamp | undefined)?.toDate() ?? null,
     editHistory: ((data.editHistory as Record<string, unknown>[] | undefined) ?? []).map(auditEntryFromMap),
@@ -217,6 +242,7 @@ export function ledgerEntryToFirestore(entry: LedgerEntry): DocumentData {
     transactionRef: entry.transactionRef,
     increasesBalance: entry.increasesBalance,
     createdAt: Timestamp.fromDate(entry.createdAt),
+    receivedStatus: entry.receivedStatus,
     deletedAt: entry.deletedAt == null ? null : Timestamp.fromDate(entry.deletedAt),
     lastEditedAt: entry.lastEditedAt == null ? null : Timestamp.fromDate(entry.lastEditedAt),
     editHistory: entry.editHistory.map(auditEntryToMap),

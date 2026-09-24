@@ -30,6 +30,8 @@ export interface HistoryTransaction {
   excludeFromCalculations: boolean;
   accountingMonth: Date | null;
   isDeleted: boolean;
+  createdAt: Date;
+  lastEditedAt: Date | null;
 }
 
 export interface HistoryExpense {
@@ -53,6 +55,8 @@ export interface HistoryPayment {
   amount: number;
   note: string;
   isDeleted: boolean;
+  createdAt: Date;
+  lastEditedAt: Date | null;
 }
 
 export interface HistoryLoanData {
@@ -83,6 +87,8 @@ export interface HistoryStatement {
   dueDate: Date;
   totalAmount: number;
   isDeleted: boolean;
+  createdAt: Date;
+  lastEditedAt: Date | null;
 }
 
 export interface HistoryCreditCardData {
@@ -161,6 +167,8 @@ function fromTransaction(
     splitExpenseDetail: splitExpense == null ? null : splitExpenseDetailFor(splitExpense, installmentsByScheduleId),
     excludeFromCalculations: transaction.excludeFromCalculations,
     accountingMonth: transaction.accountingMonth,
+    createdAt: transaction.createdAt,
+    lastEditedAt: transaction.lastEditedAt,
   };
 }
 
@@ -181,6 +189,8 @@ function fromLoan(data: HistoryLoanData, includeDeleted: boolean): HistoryEntry[
       splitExpenseDetail: null,
       excludeFromCalculations: false,
       accountingMonth: null,
+      createdAt: payment.createdAt,
+      lastEditedAt: payment.lastEditedAt,
     }));
 }
 
@@ -201,6 +211,8 @@ function fromBill(data: HistoryBillData, includeDeleted: boolean): HistoryEntry[
       splitExpenseDetail: null,
       excludeFromCalculations: false,
       accountingMonth: null,
+      createdAt: payment.createdAt,
+      lastEditedAt: payment.lastEditedAt,
     }));
 }
 
@@ -221,6 +233,8 @@ function fromEmi(data: HistoryEmiData, includeDeleted: boolean): HistoryEntry[] 
       splitExpenseDetail: null,
       excludeFromCalculations: false,
       accountingMonth: null,
+      createdAt: payment.createdAt,
+      lastEditedAt: payment.lastEditedAt,
     }));
 }
 
@@ -248,6 +262,8 @@ function fromCreditCard(data: HistoryCreditCardData, includeDeleted: boolean): H
       splitExpenseDetail: null,
       excludeFromCalculations: false,
       accountingMonth: null,
+      createdAt: statement.createdAt,
+      lastEditedAt: statement.lastEditedAt,
     });
     const payments = data.paymentsByStatementId[statement.id] ?? [];
     for (const payment of payments) {
@@ -265,6 +281,8 @@ function fromCreditCard(data: HistoryCreditCardData, includeDeleted: boolean): H
         splitExpenseDetail: null,
         excludeFromCalculations: false,
         accountingMonth: null,
+        createdAt: payment.createdAt,
+        lastEditedAt: payment.lastEditedAt,
       });
     }
   }
@@ -295,6 +313,31 @@ export function buildHistory(params: BuildHistoryParams): HistoryEntry[] {
     ...creditCards.flatMap((c) => fromCreditCard(c, includeDeleted)),
   ];
 
-  entries.sort((a, b) => b.date.getTime() - a.date.getTime());
+  entries.sort(compareHistoryEntriesNewestFirst);
   return entries;
+}
+
+/**
+ * The single most-recent instant this entry is known to have changed —
+ * `lastEditedAt` when it's been edited since creation, `createdAt`
+ * otherwise. Used only to break ties between entries that land on the same
+ * `date` (e.g. two split-expense settlements recorded the same day); the
+ * `date` field itself always wins first.
+ */
+function lastTouchedAt(entry: Pick<HistoryEntry, "createdAt" | "lastEditedAt">): number {
+  return (entry.lastEditedAt ?? entry.createdAt).getTime();
+}
+
+/**
+ * Newest-first at every level: primarily by `date` (so date groups sort
+ * latest-first and — since bucketing preserves array order — entries stay
+ * grouped correctly), then, for two entries on the exact same `date`, by
+ * whichever was most recently added or edited (see `lastTouchedAt`) — so a
+ * just-added or just-edited entry always surfaces above an older one dated
+ * the same day, per Task "SORT TRANSACTIONS & PEOPLE LEDGER".
+ */
+export function compareHistoryEntriesNewestFirst(a: HistoryEntry, b: HistoryEntry): number {
+  const dateDelta = b.date.getTime() - a.date.getTime();
+  if (dateDelta !== 0) return dateDelta;
+  return lastTouchedAt(b) - lastTouchedAt(a);
 }

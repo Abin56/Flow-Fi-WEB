@@ -60,7 +60,7 @@ import type { Budget } from "@/lib/models/budget";
 import type { Category } from "@/lib/models/category";
 import { statementRemainingAmount, statementStatus, type CreditCardProfile, type Statement } from "@/lib/models/credit-card";
 import { isSplit, myShare, type Expense } from "@/lib/models/expense";
-import { effectiveMonth, isTransfer, type Transaction } from "@/lib/models/transaction";
+import { compareTransactionsNewestFirst, effectiveMonth, isTransfer, type Transaction } from "@/lib/models/transaction";
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
@@ -339,16 +339,17 @@ export function useMonthCycleData() {
     const categoryById = new Map((categories as Category[]).map((c) => [c.id, c]));
     const expenseByTransactionId = new Map((expenses as Expense[]).map((e) => [e.transactionId, e]));
 
-    const rows: MonthCycleExpenseRow[] = [];
-    for (const t of transactions as Transaction[]) {
-      if (t.type !== "expense" || isTransfer(t) || t.deletedAt != null) continue;
-      if (!isInCycle(bucketDateFor(t, isCustomCycle), cycleRange)) continue;
+    const inCycleTransactions = (transactions as Transaction[])
+      .filter((t) => t.type === "expense" && !isTransfer(t) && t.deletedAt == null)
+      .filter((t) => isInCycle(bucketDateFor(t, isCustomCycle), cycleRange))
+      .sort(compareTransactionsNewestFirst);
 
+    return inCycleTransactions.map((t): MonthCycleExpenseRow => {
       const expense = expenseByTransactionId.get(t.id);
       const split = expense != null && isSplit(expense);
       const account = accountById.get(t.accountId);
       const category = categoryById.get(t.categoryId);
-      rows.push({
+      return {
         id: t.id,
         description: t.description || category?.name || "Uncategorized",
         category: category?.name ?? "Uncategorized",
@@ -359,10 +360,8 @@ export function useMonthCycleData() {
         fullAmount: t.amount,
         myAmount: expense ? myShare(expense) : t.amount,
         isSplit: split,
-      });
-    }
-    rows.sort((a, b) => b.date.getTime() - a.date.getTime());
-    return rows;
+      };
+    });
   }, [transactions, expenses, accounts, categories, cycleRange, isCustomCycle]);
 
   // --- Overall monthly budget (categoryId == null, type == "monthly") ---

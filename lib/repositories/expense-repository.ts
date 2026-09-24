@@ -16,6 +16,7 @@ import {
   type Expense,
   type ExpenseParticipant,
   isSplit,
+  type ReceivedStatus,
   type SplitType,
 } from "@/lib/models/expense";
 import type { Installment } from "@/lib/models/payment-schedule";
@@ -39,6 +40,8 @@ export interface ExpenseParticipantInput {
   value?: number | null;
   /** Whether this input represents the permanent "Me" participant — see `ExpenseParticipant.isMe`. */
   isMe?: boolean;
+  /** See `ReceivedStatus`. Defaults to "yetToReceive" for a non-"Me" participant, ignored (forced "notApplicable") for "Me". */
+  receivedStatus?: ReceivedStatus;
 }
 
 function round2(v: number): number {
@@ -53,12 +56,42 @@ function requireValue(input: ExpenseParticipantInput, what: string): number {
   return value;
 }
 
+/** "Me" is never a receivable — forced to "notApplicable" regardless of what the input requested. */
+function receivedStatusFor(input: ExpenseParticipantInput): ReceivedStatus {
+  if (input.isMe) return "notApplicable";
+  return input.receivedStatus ?? "yetToReceive";
+}
+
 /**
  * Matches a participant across an edit — by `personId` when tracked as a
  * Person, otherwise by `name`. Mirrors `ExpenseRepository._participantKey`.
  */
 function participantKey(p: ExpenseParticipant): string {
   return p.personId ?? `name:${p.name}`;
+}
+
+/**
+ * Note prefix for the one "receivedBack" entry that exists purely because
+ * the participant is flagged `receivedStatus: "received"` — as opposed to
+ * the "receivedBack" entries `settleParticipant`/`settleAcrossPending` post
+ * for real, user-recorded (possibly partial) settlements, which carry
+ * "Split settlement: "/a custom note instead.
+ *
+ * Both kinds share `type === "receivedBack"` and the same `transactionRef`,
+ * so matching on type alone (as the reconciliation used to) picks up a
+ * partial-settlement entry and then either skips posting the status entry
+ * entirely, soft-deletes the user's real settlement record, or rewrites a
+ * partial payment's amount up to the full share — all silent corruption of
+ * the person's balance. This prefix is the discriminator.
+ */
+const RECEIVED_STATUS_NOTE_PREFIX = "Received: ";
+
+/**
+ * The status-driven "receivedBack" entry among `entries`, if one was posted
+ * — see `RECEIVED_STATUS_NOTE_PREFIX`. Never a settlement entry.
+ */
+function findReceivedStatusEntry(entries: LedgerEntry[]): LedgerEntry | undefined {
+  return entries.find((e) => e.type === "receivedBack" && e.note.startsWith(RECEIVED_STATUS_NOTE_PREFIX));
 }
 
 export interface CreateExpenseParams {
@@ -232,6 +265,7 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
           share: shares[i],
           installmentId: null,
           isMe: input.isMe ?? false,
+          receivedStatus: receivedStatusFor(input),
         }));
       }
 
@@ -242,6 +276,7 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
           share: requireValue(input, "a custom amount"),
           installmentId: null,
           isMe: input.isMe ?? false,
+          receivedStatus: receivedStatusFor(input),
         }));
         const sum = round2(participants.reduce((s, p) => s + p.share, 0));
         if (sum !== round2(total)) {
@@ -270,17 +305,64 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
           share: shares[i],
           installmentId: null,
           isMe: input.isMe ?? false,
+          receivedStatus: receivedStatusFor(input),
         }));
       }
     }
   }
 
   /**
+   * Promotes every "custom name" participant (`personId == null`, `!isMe`)
+   * to a real `Person` record so their share of the split appears in the
+   * People Ledger — Task 1's "custom name saved as a ledger participant".
+   * Reused, never re-created: matches an existing Person by exact
+   * case-insensitive name first (same normalization `PersonRepository.createPerson`
+   * already uses for its own dedup check), so re-submitting an edited split
+   * with the same typed name links back to the same Person and ledger
+   * instead of spawning a duplicate contact every save. Mirrors nothing in
+   * the Flutter app (web-only convenience) — the Flutter split flow requires
+   * picking an existing Person up front, so a `personId` is never null there
+   * for a real ledger-bound participant.
+   */
+  private async promoteCustomNameParticipants(participants: ExpenseParticipant[]): Promise<ExpenseParticipant[]> {
+    const needsPromotion = participants.some((p) => !p.isMe && p.personId == null && p.name.trim() !== "");
+    if (!needsPromotion) return participants;
+
+    const existingPeople = await this.personRepository.getAll();
+    const byNormalizedName = new Map(existingPeople.map((p) => [p.name.trim().toLowerCase(), p]));
+    // Also de-dupes within this same split — two custom-name rows with the
+    // same typed name resolve to the one Person created for the first.
+    const createdThisCall = new Map<string, Person>();
+
+    const resolved: ExpenseParticipant[] = [];
+    for (const participant of participants) {
+      if (participant.isMe || participant.personId != null || participant.name.trim() === "") {
+        resolved.push(participant);
+        continue;
+      }
+      const key = participant.name.trim().toLowerCase();
+      let person = byNormalizedName.get(key) ?? createdThisCall.get(key);
+      if (person == null) {
+        person = await this.personRepository.createPerson({
+          name: participant.name.trim(),
+          avatarColorValue: 0xff9e9e9e,
+          openingBalance: 0,
+        });
+        createdThisCall.set(key, person);
+      }
+      resolved.push({ ...participant, personId: person.id });
+    }
+    return resolved;
+  }
+
+  /**
    * Creates the PaymentSchedule + one Installment per non-"Me" participant
    * (nothing is ever "collected" from yourself, so Me never gets an
-   * installment), posts a LedgerEntry for each person-linked participant,
-   * and returns the full participants list with `installmentId`s filled in
-   * for everyone except Me. Shared by `createExpense` and `convertToSplit`.
+   * installment), posts a LedgerEntry for each person-linked participant
+   * (after promoting any custom-name participant to a real Person — see
+   * `promoteCustomNameParticipants`), and returns the full participants list
+   * with `installmentId`s (and, for custom names, `personId`s) filled in for
+   * everyone except Me. Shared by `createExpense` and `convertToSplit`.
    * Mirrors `ExpenseRepository._generateScheduleAndLedger`.
    */
   private async generateScheduleAndLedger(params: {
@@ -292,7 +374,8 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
     transactionId: string;
     dueDate?: Date | null;
   }): Promise<{ scheduleId: string; participants: ExpenseParticipant[] }> {
-    const { expenseId, participants, totalAmount, date, description, transactionId, dueDate } = params;
+    const { expenseId, totalAmount, date, description, transactionId, dueDate } = params;
+    const participants = await this.promoteCustomNameParticipants(params.participants);
     const collectible = participants.filter((p) => !p.isMe);
     if (collectible.length === 0) {
       throw new Error("Add at least one other person to share with");
@@ -322,13 +405,32 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
       if (participant.personId == null) continue;
       const person = await this.personRepository.getByKey(participant.personId);
       if (person == null) continue;
-      await this.ledgerRepositoryFor(person.id).addEntry(person, {
+      const ledgerRepository = this.ledgerRepositoryFor(person.id);
+      await ledgerRepository.addEntry(person, {
         type: "gave",
         amount: participant.share,
         date,
         note: `Split: ${description}`,
         transactionRef: transactionId,
+        receivedStatus: "yetToReceive",
       });
+      // "Received" is decided up front (e.g. the payer already collected cash
+      // at the table) — post the settlement immediately rather than waiting
+      // for a separate Settle Up action, so the ledger's received total is
+      // correct from the moment the split is saved. "yetToReceive"/"excluded"
+      // both leave the "gave" entry outstanding; they differ only in label/
+      // intent, not in ledger effect, per Task 2.
+      if (participant.receivedStatus === "received") {
+        const refreshedPerson = (await this.personRepository.getByKey(person.id)) ?? person;
+        await ledgerRepository.addEntry(refreshedPerson, {
+          type: "receivedBack",
+          amount: participant.share,
+          date,
+          note: `${RECEIVED_STATUS_NOTE_PREFIX}${description}`,
+          transactionRef: transactionId,
+          receivedStatus: "received",
+        });
+      }
     }
 
     return { scheduleId: schedule.id, participants: resolvedParticipants };
@@ -567,16 +669,17 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
       if (schedule != null) await this.paymentScheduleRepository.softDelete(schedule);
     }
 
-    // Reverse + soft-delete the original per-person "gave" entries so their
-    // pending balances don't double-count once the new ones are posted.
+    // Reverse + soft-delete every original per-person entry this transaction
+    // posted — both the "gave" entry and, if the participant had already
+    // been marked "received", its matching "receivedBack" entry — so
+    // pending balances and received totals don't double-count once the new
+    // split's entries are posted.
     for (const participant of expense.participants) {
       if (participant.personId == null) continue;
       const person = await this.personRepository.getByKey(participant.personId);
       if (person == null) continue;
       const ledgerRepository = this.ledgerRepositoryFor(person.id);
-      const linked = (await ledgerRepository.getByTransactionRef(expense.transactionId)).filter(
-        (e) => e.type === "gave",
-      );
+      const linked = await ledgerRepository.getByTransactionRef(expense.transactionId);
       for (const entry of linked) {
         await ledgerRepository.softDeleteEntry(person, entry);
       }
@@ -644,7 +747,7 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
       const newSplitType = params.splitType ?? expense.splitType;
       const installmentById = new Map(currentInstallments.map((i) => [i.id, i]));
 
-      const newParticipants = ExpenseRepository.resolveShares({
+      let newParticipants = ExpenseRepository.resolveShares({
         type: newSplitType,
         total: newTotal,
         inputs: params.participantInputs,
@@ -652,6 +755,12 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
       if (newParticipants.length === 0) {
         throw new Error("Choose at least one person to share with");
       }
+      // Promote any newly-typed custom name the same way `createExpense`
+      // does, and — critically for idempotency — resolve an *already*
+      // custom-name participant carried over from the prior save (matched by
+      // name below via `participantKey`) back to the very Person it was
+      // promoted to last time, never a second new one.
+      newParticipants = await this.promoteCustomNameParticipants(newParticipants);
 
       const oldByKey = new Map(expense.participants.map((p) => [participantKey(p), p]));
 
@@ -690,34 +799,130 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
         await installmentRepository.editInstallmentAmount(installment, participant.share);
 
         const delta = round2(participant.share - (old?.share ?? 0));
-        if (delta !== 0 && participant.personId != null) {
+        if (participant.personId != null) {
           const person = await this.personRepository.getByKey(participant.personId);
           if (person != null) {
             const ledgerRepository = this.ledgerRepositoryFor(person.id);
             const entries = await ledgerRepository.getByTransactionRef(expense.transactionId);
             const originalEntry: LedgerEntry | undefined = entries.find((e) => e.type === "gave");
-            if (originalEntry != null) {
-              // Corrects the same "Split: ..."/"gave" entry the person's
-              // statement already shows, so its displayed amount moves in
-              // step with the just-synced Transaction/Installment instead
-              // of staying stale next to a separate "Correct Balance" line.
-              await ledgerRepository.editEntryAmount(person, originalEntry, participant.share);
-            } else {
-              // The original entry is gone (e.g. manually deleted from the
-              // person's timeline) — fall back to a standalone correction
-              // so the balance still stays in sync.
-              await ledgerRepository.addEntry(person, {
-                type: "adjustment",
-                amount: Math.abs(delta),
-                date: params.date ?? expense.date,
-                note: `Edited: ${params.description ?? expense.description}`,
-                increasesBalance: delta >= 0,
-              });
+            if (delta !== 0) {
+              if (originalEntry != null) {
+                // Corrects the same "Split: ..."/"gave" entry the person's
+                // statement already shows, so its displayed amount moves in
+                // step with the just-synced Transaction/Installment instead
+                // of staying stale next to a separate "Correct Balance" line.
+                await ledgerRepository.editEntryAmount(person, originalEntry, participant.share);
+              } else {
+                // The original entry is gone (e.g. manually deleted from the
+                // person's timeline) — fall back to a standalone correction
+                // so the balance still stays in sync.
+                await ledgerRepository.addEntry(person, {
+                  type: "adjustment",
+                  amount: Math.abs(delta),
+                  date: params.date ?? expense.date,
+                  note: `Edited: ${params.description ?? expense.description}`,
+                  increasesBalance: delta >= 0,
+                  receivedStatus: "yetToReceive",
+                });
+              }
+            }
+
+            // Reconcile the received-status transition — idempotent by
+            // construction: it only ever posts/removes the one
+            // "receivedBack" entry already tagged with this transactionRef,
+            // never a duplicate, regardless of how many times the same
+            // status is re-saved.
+            const oldStatus = old?.receivedStatus ?? "yetToReceive";
+            // Only ever the status-driven entry — a partial/full settlement
+            // entry on the same transactionRef must never be mistaken for it.
+            const receivedEntry = findReceivedStatusEntry(entries);
+            // "Received" means the participant's whole share came back, so
+            // the status entry credits only what real settlements haven't
+            // already credited. Crediting the full share on top of a recorded
+            // partial payment would double-count that payment and drive the
+            // balance negative — the person would read as owed money they
+            // never lent.
+            const alreadySettled = round2(installment.amountPaid);
+            const statusCredit = round2(participant.share - alreadySettled);
+
+            if (participant.receivedStatus === "received" && oldStatus !== "received") {
+              if (receivedEntry == null && statusCredit > 0) {
+                const refreshedPerson = (await this.personRepository.getByKey(person.id)) ?? person;
+                await ledgerRepository.addEntry(refreshedPerson, {
+                  type: "receivedBack",
+                  amount: statusCredit,
+                  date: params.date ?? expense.date,
+                  note: `${RECEIVED_STATUS_NOTE_PREFIX}${params.description ?? expense.description}`,
+                  transactionRef: expense.transactionId,
+                  receivedStatus: "received",
+                });
+              }
+            } else if (participant.receivedStatus !== "received" && oldStatus === "received") {
+              if (receivedEntry != null) {
+                const refreshedPerson = (await this.personRepository.getByKey(person.id)) ?? person;
+                await ledgerRepository.softDeleteEntry(refreshedPerson, receivedEntry);
+              }
+            } else if (participant.receivedStatus === "received" && receivedEntry != null && delta !== 0) {
+              // Amount changed while already marked received — keep the
+              // status entry's amount matching the corrected share, still net
+              // of anything already settled separately.
+              if (statusCredit > 0) {
+                const refreshedPerson = (await this.personRepository.getByKey(person.id)) ?? person;
+                await ledgerRepository.editEntryAmount(refreshedPerson, receivedEntry, statusCredit);
+              } else {
+                // The new share is fully covered by recorded settlements —
+                // the status entry has nothing left to credit. `editEntryAmount`
+                // rejects a non-positive amount, so retire the entry instead
+                // of leaving it over-crediting at its old amount.
+                const refreshedPerson = (await this.personRepository.getByKey(person.id)) ?? person;
+                await ledgerRepository.softDeleteEntry(refreshedPerson, receivedEntry);
+              }
             }
           }
         }
 
-        resolvedParticipants.push(copyExpenseParticipant(participant, { installmentId: installment.id }));
+        resolvedParticipants.push(
+          copyExpenseParticipant(participant, { installmentId: installment.id }),
+        );
+      }
+
+      // Participants dropped from the split by this edit. Without this, their
+      // "gave" (and any status-driven "receivedBack") entry stays active and
+      // keeps inflating their `currentBalance` forever — a debt with nobody
+      // owing it, unreachable from the expense that created it since the
+      // expense no longer lists them. Their tracking installment is closed
+      // out too, so nothing keeps collecting against a share they no longer
+      // have. Mirrors `unassignFromPerson`'s per-person cleanup, scoped to
+      // just the removed participants.
+      const newKeys = new Set(newParticipants.map(participantKey));
+      for (const removed of expense.participants) {
+        if (removed.isMe || newKeys.has(participantKey(removed))) continue;
+
+        if (removed.installmentId != null) {
+          const installment = installmentById.get(removed.installmentId);
+          if (installment != null) {
+            if (installment.amountPaid > 0) {
+              throw new Error(
+                `${removed.name} has already paid ${installment.amountPaid.toFixed(2)} — ` +
+                  "remove that payment before taking them off this expense",
+              );
+            }
+            await installmentRepository.softDelete(installment);
+          }
+        }
+
+        if (removed.personId == null) continue;
+        const person = await this.personRepository.getByKey(removed.personId);
+        if (person == null) continue;
+        const ledgerRepository = this.ledgerRepositoryFor(person.id);
+        for (const entry of await ledgerRepository.getByTransactionRef(expense.transactionId)) {
+          // Re-read the person between entries: each soft-delete moves the
+          // balance, so a single stale copy would be wrong from the second
+          // entry on (the repository reads it fresh inside its own
+          // transaction regardless — this just keeps the argument honest).
+          const refreshedPerson = (await this.personRepository.getByKey(person.id)) ?? person;
+          await ledgerRepository.softDeleteEntry(refreshedPerson, entry);
+        }
       }
 
       expense = recordEdit(expense, "totalAmount", String(expense.totalAmount), String(newTotal));
@@ -755,10 +960,79 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
   }
 
   /**
+   * Flips one split participant's `receivedStatus` between "received" and
+   * "yetToReceive" without touching shares, amounts, or any other
+   * participant — the People Ledger's ✓/✕ quick-toggle. Reuses exactly the
+   * same status-reconciliation branches `editExpense` runs during a resplit
+   * (same `RECEIVED_STATUS_NOTE_PREFIX`-tagged entry, same idempotency
+   * guarantees), just without requiring a full share re-resolve. Never posts
+   * more than the one status-driven "receivedBack" entry, and never touches
+   * a real (possibly partial) settlement entry from `settleParticipant`.
+   */
+  async setParticipantReceivedStatus(
+    expense: Expense,
+    participant: ExpenseParticipant,
+    receivedStatus: ReceivedStatus,
+  ): Promise<Expense> {
+    if (participant.isMe || participant.personId == null) {
+      throw new Error("Only a person-linked participant can have a received status");
+    }
+    if (receivedStatus !== "received" && receivedStatus !== "yetToReceive") {
+      throw new Error("Only 'received' and 'yetToReceive' can be toggled here");
+    }
+    const oldStatus = participant.receivedStatus;
+    if (oldStatus === receivedStatus) return expense;
+
+    const person = await this.personRepository.getByKey(participant.personId);
+    if (person == null) throw new Error("Person not found");
+    const ledgerRepository = this.ledgerRepositoryFor(person.id);
+    const entries = await ledgerRepository.getByTransactionRef(expense.transactionId);
+    const receivedEntry = findReceivedStatusEntry(entries);
+
+    let amountPaid = 0;
+    if (participant.installmentId != null && expense.scheduleId != null) {
+      const installment = await this.installmentRepositoryFor(expense.scheduleId).getByKey(participant.installmentId);
+      amountPaid = installment?.amountPaid ?? 0;
+    }
+    const statusCredit = round2(participant.share - amountPaid);
+
+    if (receivedStatus === "received") {
+      if (receivedEntry == null && statusCredit > 0) {
+        const refreshedPerson = (await this.personRepository.getByKey(person.id)) ?? person;
+        await ledgerRepository.addEntry(refreshedPerson, {
+          type: "receivedBack",
+          amount: statusCredit,
+          date: expense.date,
+          note: `${RECEIVED_STATUS_NOTE_PREFIX}${expense.description}`,
+          transactionRef: expense.transactionId,
+          receivedStatus: "received",
+        });
+      }
+    } else if (receivedEntry != null) {
+      const refreshedPerson = (await this.personRepository.getByKey(person.id)) ?? person;
+      await ledgerRepository.softDeleteEntry(refreshedPerson, receivedEntry);
+    }
+
+    const updatedParticipants = expense.participants.map((p) =>
+      participantKey(p) === participantKey(participant) ? { ...p, receivedStatus } : p,
+    );
+    const updatedExpense = recordEdit(expense, "participants", JSON.stringify(expense.participants), JSON.stringify(updatedParticipants));
+    const finalExpense = { ...updatedExpense, participants: updatedParticipants };
+    await this.update(finalExpense);
+    return finalExpense;
+  }
+
+  /**
    * Marks one `participant` as settled: records an InstallmentPayment
    * against their tracking installment and posts a reversing LedgerEntry so
    * their pending balance drops by the settled amount. Mirrors
    * `ExpenseRepository.settleParticipant`.
+   *
+   * When this payment brings the installment's remaining balance to zero,
+   * also flips `participant.receivedStatus` to "received" on the Expense
+   * doc — otherwise a fully-settled participant still reads as "yet to
+   * receive" in the Transaction section, out of sync with the ledger entry
+   * this same call just posted with `receivedStatus: "received"`.
    */
   async settleParticipant(params: SettleParticipantParams): Promise<void> {
     const { expense, participant, installment, installmentPaymentRepository, amount, date, note, settlementMethod } =
@@ -774,6 +1048,15 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
       settlementMethod,
     });
 
+    const fullySettled = round2(installmentRemainingAmount(installment) - amount) <= 0;
+    if (fullySettled && participant.receivedStatus !== "received") {
+      const updatedParticipants = expense.participants.map((p) =>
+        participantKey(p) === participantKey(participant) ? { ...p, receivedStatus: "received" as ReceivedStatus } : p,
+      );
+      const updatedExpense = recordEdit(expense, "participants", JSON.stringify(expense.participants), JSON.stringify(updatedParticipants));
+      await this.update({ ...updatedExpense, participants: updatedParticipants });
+    }
+
     if (participant.personId == null) return;
     const person = await this.personRepository.getByKey(participant.personId);
     if (person == null) return;
@@ -783,6 +1066,7 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
       date,
       note: `Split settlement: ${expense.description}`,
       transactionRef: expense.transactionId,
+      receivedStatus: "received",
     });
   }
 
@@ -823,11 +1107,21 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
     }
 
     if (remaining > 0) {
-      await this.ledgerRepositoryFor(person.id).addEntry(person, {
-        type: isCreditor(person) ? "receivedBack" : "repaid",
+      // Re-read rather than reuse the caller's `person`: the loop above just
+      // posted a receivedBack entry per settled installment, each of which
+      // moved the balance. The remainder's direction ("receivedBack" when
+      // they still owe, "repaid" when the lump sum has overshot into you
+      // owing them) must be decided from the balance as it stands *now* —
+      // deciding it from the pre-loop copy picks the opposite sign whenever
+      // the settlements flipped who owes whom, posting the remainder in the
+      // wrong direction and doubling the error.
+      const refreshedPerson = (await this.personRepository.getByKey(person.id)) ?? person;
+      await this.ledgerRepositoryFor(person.id).addEntry(refreshedPerson, {
+        type: isCreditor(refreshedPerson) ? "receivedBack" : "repaid",
         amount: remaining,
         date,
         note: note === "" || note == null ? "Settled all" : note,
+        receivedStatus: "received",
       });
     }
   }

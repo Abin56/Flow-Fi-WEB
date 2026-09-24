@@ -56,7 +56,7 @@ import {
 } from "@/lib/models/credit-card";
 import type { Emi, EmiPaymentBreakdown } from "@/lib/models/emi";
 import type { Account } from "@/lib/models/account";
-import type { Transaction } from "@/lib/models/transaction";
+import { compareTransactionsNewestFirst, type Transaction } from "@/lib/models/transaction";
 import { unbilledSpendForCard } from "@/lib/repositories/credit-card-repository";
 import { useAccounts } from "@/hooks/use-accounts";
 import { useTransactions } from "@/hooks/use-transactions";
@@ -330,7 +330,7 @@ export function useRecentCreditCardTransactions(limit = 6): { rows: CreditCardTr
     return (transactions as Transaction[])
       .filter((t) => t.deletedAt == null && cardByAccountId.has(t.accountId))
       .slice()
-      .sort((a, b) => b.dateTime.getTime() - a.dateTime.getTime())
+      .sort(compareTransactionsNewestFirst)
       .slice(0, limit)
       .map((t) => {
         const card = cardByAccountId.get(t.accountId)!;
@@ -357,7 +357,7 @@ export function useCardTransactions(card: CreditCardProfile | undefined): { tran
     return (transactions as Transaction[])
       .filter((t) => t.deletedAt == null && t.accountId === card.accountId)
       .slice()
-      .sort((a, b) => b.dateTime.getTime() - a.dateTime.getTime());
+      .sort(compareTransactionsNewestFirst);
   }, [transactions, card]);
 
   return { transactions: rows, isLoading };

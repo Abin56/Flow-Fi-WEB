@@ -450,7 +450,7 @@ export function LoansWorkspace() {
         loading={saving}
         contentClassName="sm:max-w-2xl"
       >
-        <LoanFormFields form={form} setForm={setForm} isEdit={false} people={people} />
+        <LoanFormFields form={form} setForm={setForm} isEdit={false} people={people} onCreatePerson={actions?.createPerson} />
       </SectionedFormDialog>
 
       <SectionedFormDialog
@@ -496,6 +496,126 @@ const CATEGORY_OPTIONS: { value: LoanCategory; label: string }[] = [
   { value: "institutional", label: "Bank / Institution" },
 ];
 
+const ADD_NEW_PERSON_VALUE = "__add_new_person__";
+
+/**
+ * Person picker for a personal loan's lender/borrower — a native `<select>` (matching the People
+ * picker pattern already used elsewhere on this form, e.g. "Who actually pays the EMIs?") plus an
+ * inline "+ Add new person" option that reveals a name field and creates the Person on confirm, so
+ * choosing a lender never requires leaving the loan form first.
+ */
+function PersonPickerField({
+  label,
+  people,
+  value,
+  disabled,
+  onChange,
+  onCreatePerson,
+  lockedHint,
+}: {
+  label: string;
+  people: Person[];
+  value: string;
+  disabled: boolean;
+  onChange: (personId: string) => void;
+  onCreatePerson?: (name: string) => Promise<Person>;
+  lockedHint?: string;
+}) {
+  const [adding, setAdding] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleCreate() {
+    if (!onCreatePerson) return;
+    const name = newName.trim();
+    if (!name) {
+      setError("Name is required.");
+      return;
+    }
+    setCreating(true);
+    setError(null);
+    try {
+      const person = await onCreatePerson(name);
+      onChange(person.id);
+      setAdding(false);
+      setNewName("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't add person.");
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  if (adding) {
+    return (
+      <label className="flex flex-col gap-1">
+        <span className="text-xs font-medium text-muted-foreground">{label}</span>
+        <div className="flex items-center gap-2">
+          <input
+            autoFocus
+            className={FLAT_INPUT}
+            placeholder="Person's name"
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                void handleCreate();
+              }
+            }}
+          />
+          <ClayButton type="button" size="sm" onClick={() => void handleCreate()} disabled={creating}>
+            {creating ? "Adding…" : "Add"}
+          </ClayButton>
+          <ClayButton
+            type="button"
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              setAdding(false);
+              setNewName("");
+              setError(null);
+            }}
+          >
+            Cancel
+          </ClayButton>
+        </div>
+        {error && <span className="text-xs text-destructive">{error}</span>}
+      </label>
+    );
+  }
+
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-xs font-medium text-muted-foreground">{label}</span>
+      <select
+        className={FLAT_INPUT}
+        value={value}
+        disabled={disabled}
+        onChange={(e) => {
+          if (e.target.value === ADD_NEW_PERSON_VALUE) {
+            setAdding(true);
+            return;
+          }
+          onChange(e.target.value);
+        }}
+      >
+        <option value="" disabled>
+          Choose a person
+        </option>
+        {people.map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.name}
+          </option>
+        ))}
+        {onCreatePerson && <option value={ADD_NEW_PERSON_VALUE}>+ Add new person</option>}
+      </select>
+      {lockedHint && <span className="text-xs text-muted-foreground">{lockedHint}</span>}
+    </label>
+  );
+}
+
 function LoanFormFields({
   form,
   setForm,
@@ -504,6 +624,7 @@ function LoanFormFields({
   hasPayments = false,
   minInstallmentCount = 1,
   minLoanAmount = 0,
+  onCreatePerson,
 }: {
   form: LoanFormState;
   setForm: React.Dispatch<React.SetStateAction<LoanFormState>>;
@@ -516,6 +637,8 @@ function LoanFormFields({
   minInstallmentCount?: number;
   /** Edit mode only — the floor for Loan Amount (can't drop below principal already paid off). */
   minLoanAmount?: number;
+  /** Create-mode only — lets the person picker below add a brand-new lender/borrower inline. */
+  onCreatePerson?: (name: string) => Promise<Person>;
 }) {
   return (
     <div className="flex flex-col gap-6">
@@ -561,27 +684,15 @@ function LoanFormFields({
         )}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           {form.category === "personal" ? (
-            <label className="flex flex-col gap-1">
-              <span className="text-xs font-medium text-muted-foreground">
-                {form.direction === "given" ? "Who did you lend it to?" : "Who did you borrow it from?"}
-              </span>
-              <select
-                className={FLAT_INPUT}
-                value={form.personId}
-                disabled={isEdit}
-                onChange={(e) => setForm((f) => ({ ...f, personId: e.target.value }))}
-              >
-                <option value="" disabled>
-                  Choose a person
-                </option>
-                {people.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-              {isEdit && <span className="text-xs text-muted-foreground">Person can&apos;t be changed after the loan is created.</span>}
-            </label>
+            <PersonPickerField
+              label={form.direction === "given" ? "Who did you lend it to?" : "Who did you borrow it from?"}
+              people={people}
+              value={form.personId}
+              disabled={isEdit}
+              onChange={(personId) => setForm((f) => ({ ...f, personId }))}
+              onCreatePerson={isEdit ? undefined : onCreatePerson}
+              lockedHint={isEdit ? "Person can't be changed after the loan is created." : undefined}
+            />
           ) : (
             <label className="flex flex-col gap-1">
               <span className="text-xs font-medium text-muted-foreground">

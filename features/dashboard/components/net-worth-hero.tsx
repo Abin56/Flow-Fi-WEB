@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowRight, ArrowUp, Eye } from "lucide-react";
+import { ArrowRight, ArrowUp, Eye, EyeOff } from "lucide-react";
 import { Area, AreaChart, ResponsiveContainer } from "recharts";
 import { AnimatedNumber } from "@/components/foundation/animated-number";
 import { ProgressRing } from "@/components/foundation/progress-ring";
@@ -17,6 +17,8 @@ export interface NetWorthHeroProps {
     trend: number[];
   };
   isLoading?: boolean;
+  hideAmount?: boolean;
+  onToggleHideAmount?: () => void;
 }
 
 /**
@@ -32,7 +34,7 @@ export interface NetWorthHeroProps {
  * `color: Colors.white` styling, since it's a single trend line on the app's
  * branded hero surface rather than a categorical/sequential data series.
  */
-export function NetWorthHero({ netWorth, isLoading }: NetWorthHeroProps) {
+export function NetWorthHero({ netWorth, isLoading, hideAmount = false, onToggleHideAmount }: NetWorthHeroProps) {
   if (isLoading) {
     return (
       <section
@@ -57,16 +59,24 @@ export function NetWorthHero({ netWorth, isLoading }: NetWorthHeroProps) {
       <div className="relative flex min-w-0 flex-1 flex-col gap-3">
         <div className="flex items-center gap-1.5">
           <p className="text-xs font-medium text-hero-foreground/75">Net Worth</p>
-          <Eye className="size-3.5 text-hero-foreground/60" />
+          <button
+            type="button"
+            onClick={onToggleHideAmount}
+            aria-label={hideAmount ? "Show net worth" : "Hide net worth"}
+            aria-pressed={hideAmount}
+            className="rounded-full p-0.5 text-hero-foreground/60 transition-colors hover:text-hero-foreground focus-visible:ring-2 focus-visible:ring-white/70 focus-visible:outline-none"
+          >
+            {hideAmount ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
+          </button>
         </div>
         <span className="font-heading text-3xl font-bold tracking-tight tabular-nums sm:text-4xl">
-          <AnimatedNumber value={netWorth.amount} format={formatCurrency} />
+          {hideAmount ? "••••••" : <AnimatedNumber value={netWorth.amount} format={formatCurrency} />}
         </span>
         <p className="flex items-center gap-1 text-xs font-medium text-hero-foreground/85">
           <ArrowUp className="size-3.5" />
-          {formatCurrency(netWorth.changeAmount)} ({netWorth.changePercent}%) this month
+          {hideAmount ? "••••" : `${formatCurrency(netWorth.changeAmount)} (${netWorth.changePercent}%)`} this month
         </p>
-        {netWorth.trend.length > 0 && netWorth.trend.some((v) => v !== netWorth.trend[0]) && (
+        {!hideAmount && netWorth.trend.length > 0 && netWorth.trend.some((v) => v !== netWorth.trend[0]) && (
           <div className="h-8 w-full max-w-40">
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={netWorth.trend.map((v) => ({ v }))} margin={{ top: 2, right: 0, bottom: 2, left: 0 }}>

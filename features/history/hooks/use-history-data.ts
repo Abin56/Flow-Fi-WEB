@@ -47,8 +47,24 @@ import { installmentStatus, remainingAmount } from "@/lib/models/payment-schedul
 import type { Transaction } from "@/lib/models/transaction";
 import type { HistoryEntry } from "@/lib/models/history";
 
-function toHistoryPayment(p: { id: string; date: Date; amount: number; note: string; deletedAt: Date | null }): HistoryPayment {
-  return { id: p.id, date: p.date, amount: p.amount, note: p.note, isDeleted: p.deletedAt != null };
+function toHistoryPayment(p: {
+  id: string;
+  date: Date;
+  amount: number;
+  note: string;
+  deletedAt: Date | null;
+  createdAt: Date;
+  lastEditedAt: Date | null;
+}): HistoryPayment {
+  return {
+    id: p.id,
+    date: p.date,
+    amount: p.amount,
+    note: p.note,
+    isDeleted: p.deletedAt != null,
+    createdAt: p.createdAt,
+    lastEditedAt: p.lastEditedAt,
+  };
 }
 
 function toHistoryInstallment(i: Installment): HistoryInstallment {
@@ -108,6 +124,8 @@ export function useHistoryEntries(): { entries: HistoryEntry[]; isLoading: boole
       excludeFromCalculations: t.excludeFromCalculations,
       accountingMonth: t.accountingMonth,
       isDeleted: t.deletedAt != null,
+      createdAt: t.createdAt,
+      lastEditedAt: t.lastEditedAt,
     }));
 
     const historyExpenses: HistoryExpense[] = (expenses as Expense[]).map((e) => ({
@@ -155,6 +173,8 @@ export function useHistoryEntries(): { entries: HistoryEntry[]; isLoading: boole
           dueDate: s.dueDate,
           totalAmount: s.totalAmount,
           isDeleted: s.deletedAt != null,
+          createdAt: s.createdAt,
+          lastEditedAt: s.lastEditedAt,
         }),
       ),
       paymentsByStatementId: Object.fromEntries(
