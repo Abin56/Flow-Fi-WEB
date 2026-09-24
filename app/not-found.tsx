@@ -14,7 +14,7 @@ export default function NotFound() {
       </div>
       <Link
         href="/dashboard"
-        className="text-sm font-medium text-primary underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background rounded-sm"
+        className="text-sm font-medium text-primary-accent-text underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background rounded-sm"
       >
         Go to dashboard
       </Link>

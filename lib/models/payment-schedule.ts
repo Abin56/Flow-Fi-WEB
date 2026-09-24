@@ -70,6 +70,34 @@ function addMonths(date: Date, months: number): Date {
   return new Date(targetYear, targetMonth, targetDay, date.getHours(), date.getMinutes(), date.getSeconds());
 }
 
+// --- PaymentAllocationType (payment_allocation_type.dart) ---
+
+/**
+ * Classifies *why* a payment was recorded — computed at record time from
+ * the actual amount/date against the schedule, never chosen by the user
+ * directly. See `LoanAdvancePaymentRepository.record`'s doc comment for the
+ * exact classification rule.
+ */
+export type PaymentAllocationType = "regularEmi" | "advanceEmi" | "principalPrepayment" | "additionalDisbursement";
+
+const PAYMENT_ALLOCATION_TYPES: PaymentAllocationType[] = [
+  "regularEmi",
+  "advanceEmi",
+  "principalPrepayment",
+  "additionalDisbursement",
+];
+
+/**
+ * Old `InstallmentPayment` documents predate this field — absent always
+ * means an ordinary payment, never a prepayment/disbursement, since those
+ * concepts didn't exist yet when such a document was written.
+ */
+export function paymentAllocationTypeFromName(name: string | undefined): PaymentAllocationType {
+  return name != null && (PAYMENT_ALLOCATION_TYPES as string[]).includes(name)
+    ? (name as PaymentAllocationType)
+    : "regularEmi";
+}
+
 // --- InstallmentStatus (installment_status.dart) ---
 
 export type InstallmentStatus = "paid" | "partiallyPaid" | "skipped" | "overdue" | "upcoming";
@@ -184,6 +212,35 @@ export interface InstallmentPayment extends SoftDeletableEntity {
    * in hand.
    */
   remainingBalanceAfterPayment: number | null;
+  /** Why this payment was recorded — see `PaymentAllocationType`. */
+  allocationType: PaymentAllocationType;
+  /**
+   * The portion of `amount` that was NOT applied toward any installment's
+   * `amountDue` — only set when `allocationType` is "principalPrepayment".
+   * Null/zero for every other type. See `LoanAdvancePaymentRepository`'s
+   * doc comment for how this overflow is recorded (a ledger-only sibling
+   * payment doc attached to the schedule's last installment, never applied
+   * via `applyPayment`).
+   */
+  prepaymentPrincipalAmount: number | null;
+  /**
+   * Which re-amortization policy actually ran as a result of this payment —
+   * only set alongside `prepaymentPrincipalAmount` when a re-amortization
+   * was solved and applied. Null when the prepayment was recorded but
+   * re-amortization was skipped (unsolvable, or nothing left to
+   * re-amortize) or for non-prepayment payments.
+   */
+  prepaymentPolicyApplied: string | null;
+  /** FK to the `LoanReamortizationEvent`/`EmiReamortizationEvent` this payment triggered, when one was written. */
+  reamortizationEventId: string | null;
+  /**
+   * FK to the `Transaction` this payment moved money through — 1:1 for the
+   * first payment doc of a given user action; sibling fan-out docs from the
+   * same lump-sum/prepayment action point at the same id. Null only for
+   * payments recorded before Account/Transaction integration existed for
+   * this write path.
+   */
+  transactionId: string | null;
 }
 
 // --- Firestore converters ---
@@ -306,6 +363,11 @@ export function installmentPaymentFromFirestore(
     settlementMethod: (data.settlementMethod as string | undefined) ?? null,
     billingCycleLabel: (data.billingCycleLabel as string | undefined) ?? null,
     remainingBalanceAfterPayment: (data.remainingBalanceAfterPayment as number | undefined) ?? null,
+    allocationType: paymentAllocationTypeFromName(data.allocationType as string | undefined),
+    prepaymentPrincipalAmount: (data.prepaymentPrincipalAmount as number | undefined) ?? null,
+    prepaymentPolicyApplied: (data.prepaymentPolicyApplied as string | undefined) ?? null,
+    reamortizationEventId: (data.reamortizationEventId as string | undefined) ?? null,
+    transactionId: (data.transactionId as string | undefined) ?? null,
     deletedAt: (data.deletedAt as Timestamp | undefined)?.toDate() ?? null,
     lastEditedAt: (data.lastEditedAt as Timestamp | undefined)?.toDate() ?? null,
     editHistory: ((data.editHistory as Record<string, unknown>[] | undefined) ?? []).map(auditEntryFromMap),
@@ -325,6 +387,11 @@ export function installmentPaymentToFirestore(payment: InstallmentPayment): Docu
     settlementMethod: payment.settlementMethod,
     billingCycleLabel: payment.billingCycleLabel,
     remainingBalanceAfterPayment: payment.remainingBalanceAfterPayment,
+    allocationType: payment.allocationType,
+    prepaymentPrincipalAmount: payment.prepaymentPrincipalAmount,
+    prepaymentPolicyApplied: payment.prepaymentPolicyApplied,
+    reamortizationEventId: payment.reamortizationEventId,
+    transactionId: payment.transactionId,
     deletedAt: payment.deletedAt == null ? null : Timestamp.fromDate(payment.deletedAt),
     lastEditedAt: payment.lastEditedAt == null ? null : Timestamp.fromDate(payment.lastEditedAt),
     editHistory: payment.editHistory.map(auditEntryToMap),

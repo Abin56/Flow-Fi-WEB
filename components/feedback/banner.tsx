@@ -5,10 +5,10 @@ import { cn } from "@/lib/utils";
 export type BannerTone = "success" | "warning" | "danger" | "info";
 
 const toneConfig: Record<BannerTone, { icon: React.ElementType; classes: string; iconClasses: string }> = {
-  success: { icon: CheckCircle2Icon, classes: "bg-success/12 text-success-foreground", iconClasses: "text-success" },
-  warning: { icon: TriangleAlertIcon, classes: "bg-warning/18 text-warning-foreground", iconClasses: "text-warning" },
-  danger: { icon: AlertCircleIcon, classes: "bg-danger/12 text-danger-foreground", iconClasses: "text-danger" },
-  info: { icon: InfoIcon, classes: "bg-primary/10 text-foreground", iconClasses: "text-primary" },
+  success: { icon: CheckCircle2Icon, classes: "bg-success/18 text-success-foreground", iconClasses: "text-success" },
+  warning: { icon: TriangleAlertIcon, classes: "bg-warning/22 text-warning-foreground", iconClasses: "text-warning-foreground" },
+  danger: { icon: AlertCircleIcon, classes: "bg-danger/18 text-danger-foreground", iconClasses: "text-danger" },
+  info: { icon: InfoIcon, classes: "bg-primary/10 text-foreground", iconClasses: "text-primary-accent-text" },
 };
 
 export interface BannerProps {
@@ -29,7 +29,7 @@ export function Banner({ tone, title, description, action, onDismiss, className 
       <Icon className={cn("mt-0.5 size-4.5 shrink-0", iconClasses)} />
       <div className="min-w-0 flex-1">
         <p className="text-sm font-medium">{title}</p>
-        {description && <p className="mt-0.5 text-sm opacity-80">{description}</p>}
+        {description && <p className="mt-0.5 text-sm opacity-90">{description}</p>}
         {action && <div className="mt-2">{action}</div>}
       </div>
       {onDismiss && (

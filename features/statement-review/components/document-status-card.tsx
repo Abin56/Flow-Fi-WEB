@@ -36,7 +36,7 @@ export function DocumentStatusCard({ document }: { document: FinancialDocument }
     <div className="flex flex-col gap-3 rounded-3xl border border-border/50 bg-card p-4">
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-center gap-3">
-          <div className="flex size-9 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+          <div className="flex size-9 items-center justify-center rounded-2xl bg-primary/10 text-primary-accent-text">
             <FileText className="size-4" />
           </div>
           <div>

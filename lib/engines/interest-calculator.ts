@@ -160,7 +160,8 @@ function reducingBalance(principal: number, periodicRate: number, installmentCou
   return { principal, totalInterest: round2(totalInterest), periods };
 }
 
-function evenSplit(total: number, count: number): number[] {
+/** Splits `total` evenly across `count` shares, the last absorbing any rounding remainder. */
+export function evenSplit(total: number, count: number): number[] {
   const share = round2(total / count);
   const shares = new Array(count).fill(share);
   const remainder = round2(total - share * count);

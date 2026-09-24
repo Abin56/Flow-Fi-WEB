@@ -10,6 +10,7 @@
 import type { DocumentData, QueryDocumentSnapshot, SnapshotOptions } from "firebase/firestore";
 import { Timestamp } from "firebase/firestore";
 import type { AuditEntry, SoftDeletableEntity } from "@/lib/firestore/soft-deletable";
+import { paymentAllocationTypeFromName, type PaymentAllocationType } from "@/lib/models/payment-schedule";
 
 export type TransactionType = "income" | "expense";
 
@@ -91,6 +92,30 @@ export interface Transaction extends SoftDeletableEntity {
   isBusiness: boolean;
   /** See `TransactionSource` — null means "unknown/pre-existing," not "manual." */
   source: TransactionSource | null;
+  /**
+   * Exactly one of `loanId`/`emiId` is set when this transaction backs a
+   * loan/EMI payment recorded through `LoanAdvancePaymentRepository` (or its
+   * future EMI counterpart) — never both, since a loan and an EMI are
+   * always separate obligations. Both null for every pre-existing
+   * transaction and every non-loan transaction.
+   */
+  loanId: string | null;
+  emiId: string | null;
+  /**
+   * The specific `Installment` (and, 1:1, the `InstallmentPayment`) this
+   * transaction's money movement backs. Null for every non-loan/EMI
+   * transaction, and for the "sibling" installment-payment docs of a
+   * multi-installment fan-out that share one `installmentPaymentId`/
+   * transaction rather than getting their own.
+   */
+  installmentId: string | null;
+  installmentPaymentId: string | null;
+  /**
+   * Denormalized copy of the backing `InstallmentPayment.allocationType`,
+   * so transaction-list/report UIs can filter/label "Loan EMI" vs
+   * "Prepayment" without a join. Null for every non-loan/EMI transaction.
+   */
+  paymentAllocationType: PaymentAllocationType | null;
 }
 
 /** Set on both legs of a transfer between two of the user's own accounts. */
@@ -157,6 +182,12 @@ export function transactionFromFirestore(
     status: transactionStatusFromName(data.status as string | undefined),
     isBusiness: (data.isBusiness as boolean | undefined) ?? false,
     source: transactionSourceFromName(data.source as string | undefined),
+    loanId: (data.loanId as string | undefined) ?? null,
+    emiId: (data.emiId as string | undefined) ?? null,
+    installmentId: (data.installmentId as string | undefined) ?? null,
+    installmentPaymentId: (data.installmentPaymentId as string | undefined) ?? null,
+    paymentAllocationType:
+      data.paymentAllocationType == null ? null : paymentAllocationTypeFromName(data.paymentAllocationType as string),
     deletedAt: (data.deletedAt as Timestamp | undefined)?.toDate() ?? null,
     lastEditedAt: (data.lastEditedAt as Timestamp | undefined)?.toDate() ?? null,
     editHistory: ((data.editHistory as Record<string, unknown>[] | undefined) ?? []).map(auditEntryFromMap),
@@ -183,6 +214,11 @@ export function transactionToFirestore(transaction: Transaction): DocumentData {
     status: transaction.status,
     isBusiness: transaction.isBusiness,
     source: transaction.source,
+    loanId: transaction.loanId,
+    emiId: transaction.emiId,
+    installmentId: transaction.installmentId,
+    installmentPaymentId: transaction.installmentPaymentId,
+    paymentAllocationType: transaction.paymentAllocationType,
     deletedAt: transaction.deletedAt == null ? null : Timestamp.fromDate(transaction.deletedAt),
     lastEditedAt: transaction.lastEditedAt == null ? null : Timestamp.fromDate(transaction.lastEditedAt),
     editHistory: transaction.editHistory.map(auditEntryToMap),

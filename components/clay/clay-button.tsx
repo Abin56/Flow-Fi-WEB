@@ -11,7 +11,7 @@ const clayButtonVariants = cva(
     variants: {
       variant: {
         primary: "border-transparent bg-primary text-primary-foreground",
-        secondary: "border-border/60 bg-card text-foreground",
+        secondary: "border-border bg-card text-foreground",
         ghost: "border-transparent bg-transparent text-muted-foreground hover:text-foreground",
       },
       size: {

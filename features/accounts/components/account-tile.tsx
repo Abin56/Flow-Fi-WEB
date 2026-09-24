@@ -48,7 +48,7 @@ export function AccountTile({
             Primary
           </span>
         ) : (
-          <MoreVertical className="size-4 text-muted-foreground/60" />
+          <MoreVertical className="size-4 text-muted-foreground" />
         )}
       </div>
 

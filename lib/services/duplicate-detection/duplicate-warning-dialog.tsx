@@ -83,7 +83,7 @@ export function DuplicateWarningDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[440px]">
         <DialogHeader className="flex-row items-start gap-3 space-y-0">
-          <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-warning/15 text-warning">
+          <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-warning/22 text-warning-foreground">
             <AlertTriangle className="size-5" />
           </span>
           <div className="flex flex-col gap-0.5 pt-0.5">

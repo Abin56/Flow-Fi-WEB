@@ -18,6 +18,7 @@ export const FirestoreCollections = {
   payments: "payments", // subcollection under bills/{billId} and installments/{installmentId}
   loans: "loans",
   emis: "emis",
+  reamortizationEvents: "reamortizationEvents", // subcollection under loans/{loanId} and emis/{emiId}
   expenses: "expenses",
   paymentSchedules: "paymentSchedules",
   installments: "installments", // subcollection under paymentSchedules/{scheduleId}

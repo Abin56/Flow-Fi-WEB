@@ -96,7 +96,7 @@ export function EmiLoanInspector({
                     }
                     className="flex items-center gap-2 rounded-md border border-border px-2.5 py-2 text-left text-sm hover:border-primary hover:bg-primary/5"
                   >
-                    <Landmark className="size-3.5 shrink-0 text-warning" />
+                    <Landmark className="size-3.5 shrink-0 text-warning-foreground" />
                     <span className="truncate">{"name" in item ? item.name || displayLoanName(item as Loan, people) : ""}</span>
                   </button>
                 ))}
@@ -113,7 +113,7 @@ export function EmiLoanInspector({
                 onClick={() => onCommit("recurring_bill", { kind: "recurring_bill", billId: bill.id })}
                 className="flex items-center gap-2 rounded-md border border-border px-2.5 py-2 text-left text-sm hover:border-primary hover:bg-primary/5"
               >
-                <Landmark className="size-3.5 shrink-0 text-warning" />
+                <Landmark className="size-3.5 shrink-0 text-warning-foreground" />
                 <span className="truncate">{bill.name}</span>
               </button>
             ))}

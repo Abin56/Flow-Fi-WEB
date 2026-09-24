@@ -140,7 +140,7 @@ const CATEGORY_CHART_COLOR: Record<string, string> = {
 
 const TONE_ICON_CLASS: Record<string, string> = {
   neutral: "bg-muted text-muted-foreground",
-  primary: "bg-primary/12 text-primary",
+  primary: "bg-primary/12 text-primary-accent-text",
   success: "bg-success/15 text-success",
   expense: "bg-expense/12 text-expense",
   warning: "bg-warning/20 text-warning-foreground",
@@ -623,7 +623,7 @@ export function CreditCardsWorkspace() {
                     className={cn(
                       "flex items-center gap-1.5 border px-3 py-1.5 text-xs font-semibold transition-colors",
                       selected
-                        ? "border-primary bg-primary/10 text-primary"
+                        ? "border-primary bg-primary/10 text-primary-accent-text"
                         : "border-border text-muted-foreground hover:bg-muted",
                     )}
                   >
@@ -638,7 +638,7 @@ export function CreditCardsWorkspace() {
               <label className="flex flex-col gap-1">
                 <span className="text-xs font-medium text-muted-foreground">Credit Limit</span>
                 <div className="relative">
-                  <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary">₹</span>
+                  <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary-accent-text">₹</span>
                   <input
                     type="number"
                     className="h-10 w-full rounded-none border border-primary/30 bg-primary/5 pr-3 pl-7 text-base font-semibold outline-none transition-colors focus:border-primary"
@@ -664,7 +664,7 @@ export function CreditCardsWorkspace() {
                 <label className="flex flex-col gap-1">
                   <span className="text-xs font-medium text-muted-foreground">Total Credit Limit</span>
                   <div className="relative">
-                    <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary">₹</span>
+                    <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary-accent-text">₹</span>
                     <input
                       type="number"
                       className="h-10 w-full rounded-none border border-primary/30 bg-primary/5 pr-3 pl-7 text-base font-semibold outline-none transition-colors focus:border-primary"
@@ -718,14 +718,14 @@ export function CreditCardsWorkspace() {
                         className={cn(
                           "flex items-center gap-1.5 border px-3 py-1.5 text-xs font-semibold transition-colors",
                           selected
-                            ? "border-primary bg-primary/10 text-primary"
+                            ? "border-primary bg-primary/10 text-primary-accent-text"
                             : "border-border text-muted-foreground hover:bg-muted",
                         )}
                       >
                         <span
                           className={cn(
                             "flex h-5 items-center justify-center px-1 text-[9px] font-bold tracking-wide uppercase italic",
-                            selected ? "bg-primary/20 text-primary" : "bg-muted text-muted-foreground",
+                            selected ? "bg-primary/20 text-primary-accent-text" : "bg-muted text-muted-foreground",
                           )}
                         >
                           {n.slice(0, 2)}
@@ -963,7 +963,7 @@ export function CreditCardsWorkspace() {
         <div className="surface-flat rounded-3xl border border-border/50 p-5">
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-semibold text-foreground">Upcoming Statements</h2>
-            <button type="button" className="flex items-center gap-1 text-xs font-semibold text-primary hover:underline">
+            <button type="button" className="flex items-center gap-1 text-xs font-semibold text-primary-accent-text hover:underline">
               View All Statements
               <ArrowRight className="size-3.5" />
             </button>
@@ -976,7 +976,7 @@ export function CreditCardsWorkspace() {
         <div className="surface-flat rounded-3xl border border-border/50 p-5">
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-semibold text-foreground">Recent Card Transactions</h2>
-            <button type="button" className="text-xs font-semibold text-primary hover:underline">
+            <button type="button" className="text-xs font-semibold text-primary-accent-text hover:underline">
               View All
             </button>
           </div>
@@ -1082,7 +1082,7 @@ export function CreditCardsWorkspace() {
           <h2 className="text-sm font-semibold text-foreground">Quick Actions</h2>
           <div className="mt-4 grid grid-cols-4 gap-2">
             {[
-              { label: "Pay Bill", icon: Wallet, className: "bg-primary/12 text-primary" },
+              { label: "Pay Bill", icon: Wallet, className: "bg-primary/12 text-primary-accent-text" },
               { label: "View Statement", icon: FileText, className: "bg-purple/15 text-purple" },
               { label: "Convert to EMI", icon: RefreshCw, className: "bg-success/15 text-success" },
               { label: "Card Settings", icon: Settings, className: "bg-muted text-muted-foreground" },

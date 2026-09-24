@@ -339,7 +339,7 @@ export function StagedRecordManagerSheet({
                 <button
                   type="button"
                   onClick={() => setSplitOpen((v) => !v)}
-                  className="mt-2.5 inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:underline"
+                  className="mt-2.5 inline-flex items-center gap-1.5 text-xs font-medium text-primary-accent-text hover:underline"
                 >
                   <SplitSquareHorizontal className="size-3.5" />
                   {splitOpen ? "Hide split editor" : "Split with more people instead"}
@@ -353,7 +353,7 @@ export function StagedRecordManagerSheet({
                 icon={<UserRound className="size-4.5" />}
                 label="This is fully someone else's expense"
                 description="Adds this amount to what they owe you once this statement is imported."
-                control={<Check className="size-4 text-primary" />}
+                control={<Check className="size-4 text-primary-accent-text" />}
               />
             )}
 

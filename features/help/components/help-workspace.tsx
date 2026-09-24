@@ -23,7 +23,7 @@ export function HelpWorkspace() {
   return (
     <div className="flex flex-col gap-6 px-1">
       <div className="flex items-center gap-3">
-        <div className="flex size-10 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+        <div className="flex size-10 items-center justify-center rounded-2xl bg-primary/10 text-primary-accent-text">
           <LifeBuoy className="size-5" />
         </div>
         <div>
@@ -56,11 +56,11 @@ export function HelpWorkspace() {
               href="mailto:support@flowfi.app"
               className="flex items-center gap-3 rounded-xl border border-border/60 px-3 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-muted/60"
             >
-              <Mail className="size-4 text-primary" />
+              <Mail className="size-4 text-primary-accent-text" />
               support@flowfi.app
             </a>
             <div className="flex items-center gap-3 rounded-xl border border-border/60 px-3 py-2.5 text-sm text-muted-foreground">
-              <MessageCircle className="size-4 text-primary" />
+              <MessageCircle className="size-4 text-primary-accent-text" />
               In-app chat is coming soon.
             </div>
           </CardContent>

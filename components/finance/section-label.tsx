@@ -10,7 +10,7 @@ export function SectionLabel({
   return (
     <div className="flex items-center gap-2">
       {Icon ? (
-        <span className="flex size-5 shrink-0 items-center justify-center bg-primary/10 text-primary">
+        <span className="flex size-5 shrink-0 items-center justify-center bg-primary/10 text-primary-accent-text">
           <Icon className="size-3" />
         </span>
       ) : (

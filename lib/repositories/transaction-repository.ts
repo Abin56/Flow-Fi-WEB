@@ -6,7 +6,17 @@
  * code path should mutate a transaction's effect on a balance directly.
  */
 
-import { type CollectionReference, doc, getDocs, limit, query, runTransaction, where, writeBatch } from "firebase/firestore";
+import {
+  type CollectionReference,
+  doc,
+  getDocs,
+  limit,
+  query,
+  runTransaction,
+  type Transaction as FirestoreTransaction,
+  where,
+  writeBatch,
+} from "firebase/firestore";
 import { FirestoreCrudRepository } from "@/lib/firestore/firestore-crud-repository";
 import { recordEdit, updateField } from "@/lib/firestore/soft-deletable";
 import {
@@ -16,6 +26,7 @@ import {
   type TransactionStatus,
   type TransactionType,
 } from "@/lib/models/transaction";
+import type { PaymentAllocationType } from "@/lib/models/payment-schedule";
 import {
   DEFAULT_RECONCILIATION_CONFIG,
   reconcileTransfers as reconcileTransfersEngine,
@@ -45,6 +56,12 @@ export interface CreateTransactionParams {
   isBusiness?: boolean;
   /** SMS Transaction Intelligence — defaults to `null` ("unknown"), same as every field created before it existed. */
   source?: TransactionSource | null;
+  /** Loan/EMI payment linkage — see `Transaction.loanId`/etc.'s doc comments. Defaults to null for every non-loan/EMI transaction. */
+  loanId?: string | null;
+  emiId?: string | null;
+  installmentId?: string | null;
+  installmentPaymentId?: string | null;
+  paymentAllocationType?: PaymentAllocationType | null;
 }
 
 /**
@@ -92,7 +109,16 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
     super(collection);
   }
 
-  async createTransaction(params: CreateTransactionParams): Promise<Transaction> {
+  /**
+   * Composable form of {@link createTransaction} — builds the transaction
+   * and writes it, plus the account-balance effect, via the caller's own
+   * open `tx` instead of opening a new `runTransaction`. For callers (e.g.
+   * `LoanAdvancePaymentRepository`) that need this folded into a *larger*
+   * atomic operation — reads it needs elsewhere (installment, loan, ...)
+   * must happen before calling this, since Firestore requires every read in
+   * a transaction to precede every write, and this method writes.
+   */
+  async createTransactionInTransaction(tx: FirestoreTransaction, params: CreateTransactionParams): Promise<Transaction> {
     const transaction: Transaction = {
       id: generateId(),
       type: params.type,
@@ -113,26 +139,36 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
       status: params.status ?? "posted",
       isBusiness: params.isBusiness ?? false,
       source: params.source ?? null,
+      loanId: params.loanId ?? null,
+      emiId: params.emiId ?? null,
+      installmentId: params.installmentId ?? null,
+      installmentPaymentId: params.installmentPaymentId ?? null,
+      paymentAllocationType: params.paymentAllocationType ?? null,
       deletedAt: null,
       lastEditedAt: null,
       editHistory: [],
     };
 
-    const db = this.collection.firestore;
-    const transactionRef = doc(this.collection, transaction.id);
     const accountRef = this.accountRepository.docRef(params.accountId);
     const delta = balanceEffect(transaction);
 
-    await runTransaction(db, async (tx) => {
-      const accountSnap = await tx.get(accountRef);
-      if (!accountSnap.exists()) throw new Error("Account not found");
-      if (delta !== 0) {
-        tx.set(accountRef, this.accountRepository.applyBalanceDelta(accountSnap.data(), delta));
-      }
-      tx.set(transactionRef, transaction);
-    });
+    const accountSnap = await tx.get(accountRef);
+    if (!accountSnap.exists()) throw new Error("Account not found");
+    if (delta !== 0) {
+      tx.set(accountRef, this.accountRepository.applyBalanceDelta(accountSnap.data(), delta));
+    }
+    tx.set(doc(this.collection, transaction.id), transaction);
 
     return transaction;
+  }
+
+  async createTransaction(params: CreateTransactionParams): Promise<Transaction> {
+    const db = this.collection.firestore;
+    let result: Transaction | undefined;
+    await runTransaction(db, async (tx) => {
+      result = await this.createTransactionInTransaction(tx, params);
+    });
+    return result!;
   }
 
   /**
@@ -229,147 +265,175 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
    * a concurrent writer, rather than silently applying a delta against
    * data that's already moved on.
    */
-  async editTransaction(transaction: Transaction, params: EditTransactionParams): Promise<void> {
-    const db = this.collection.firestore;
+  /**
+   * Composable form of {@link editTransaction} — same read-fresh-inside-tx
+   * behavior, via the caller's own open `tx`. See
+   * {@link createTransactionInTransaction}'s doc comment for why this
+   * exists and the read-before-write ordering constraint on callers.
+   */
+  async editTransactionInTransaction(tx: FirestoreTransaction, transaction: Transaction, params: EditTransactionParams): Promise<void> {
     const transactionRef = doc(this.collection, transaction.id);
 
+    const freshSnap = await tx.get(transactionRef);
+    if (!freshSnap.exists()) throw new Error("Transaction not found");
+    const fresh = freshSnap.data();
+
+    if (fresh.transferId != null) {
+      const amountChanged = params.amount != null && params.amount !== fresh.amount;
+      const accountChanged = params.accountId != null && params.accountId !== fresh.accountId;
+      const dateChanged = params.dateTime != null && params.dateTime.getTime() !== fresh.dateTime.getTime();
+      if (amountChanged || accountChanged || dateChanged) {
+        throw new TransferEditRestrictedError();
+      }
+    }
+
+    const oldAccountId = fresh.accountId;
+    const oldBalanceEffect = balanceEffect(fresh);
+
+    let updated = fresh;
+    updated = updateField(updated, "type", updated.type, params.type, (e, v) => ({ ...e, type: v }));
+    updated = updateField(updated, "amount", updated.amount, params.amount, (e, v) => ({ ...e, amount: v }));
+    updated = updateField(updated, "dateTime", updated.dateTime, params.dateTime, (e, v) => ({ ...e, dateTime: v }));
+    updated = updateField(updated, "accountId", updated.accountId, params.accountId, (e, v) => ({
+      ...e,
+      accountId: v,
+    }));
+    updated = updateField(updated, "categoryId", updated.categoryId, params.categoryId, (e, v) => ({
+      ...e,
+      categoryId: v,
+    }));
+    updated = updateField(updated, "description", updated.description, params.description, (e, v) => ({
+      ...e,
+      description: v,
+    }));
+    updated = updateField(updated, "notes", updated.notes, params.notes, (e, v) => ({ ...e, notes: v }));
+    updated = updateField(
+      updated,
+      "excludeFromCalculations",
+      updated.excludeFromCalculations,
+      params.excludeFromCalculations,
+      (e, v) => ({ ...e, excludeFromCalculations: v }),
+    );
+
+    if (params.clearAccountingMonth) {
+      updated = recordEdit(updated, "accountingMonth", updated.accountingMonth?.toString() ?? "none", "none");
+      updated = { ...updated, accountingMonth: null };
+    } else {
+      updated = updateField(updated, "accountingMonth", updated.accountingMonth, params.accountingMonth, (e, v) => ({
+        ...e,
+        accountingMonth: v,
+      }));
+    }
+
+    if (params.clearLinkedPersonId) {
+      updated = recordEdit(updated, "linkedPersonId", updated.linkedPersonId ?? "none", "none");
+      updated = { ...updated, linkedPersonId: null };
+    } else {
+      updated = updateField(updated, "linkedPersonId", updated.linkedPersonId, params.linkedPersonId, (e, v) => ({
+        ...e,
+        linkedPersonId: v,
+      }));
+    }
+
+    updated = updateField(
+      updated,
+      "owesPersonToggle",
+      updated.owesPersonToggle,
+      params.owesPersonToggle,
+      (e, v) => ({ ...e, owesPersonToggle: v }),
+    );
+    updated = updateField(updated, "status", updated.status, params.status, (e, v) => ({ ...e, status: v }));
+    updated = updateField(updated, "isBusiness", updated.isBusiness, params.isBusiness, (e, v) => ({ ...e, isBusiness: v }));
+
+    // Computed after every field update above so a same-transaction toggle
+    // of excludeFromCalculations (in either direction) is captured by the
+    // delta below exactly like an amount/account change would be.
+    const newBalanceEffect = balanceEffect(updated);
+    const newAccountId = updated.accountId;
+
+    if (oldAccountId === newAccountId) {
+      const accountRef = this.accountRepository.docRef(newAccountId);
+      const accountSnap = await tx.get(accountRef);
+      if (!accountSnap.exists()) throw new Error("Account not found");
+      const delta = newBalanceEffect - oldBalanceEffect;
+      if (delta !== 0) {
+        tx.set(accountRef, this.accountRepository.applyBalanceDelta(accountSnap.data(), delta));
+      }
+    } else {
+      // Both reads must happen before either write — Firestore transactions
+      // don't allow a read after a write within the same transaction.
+      const oldAccountRef = this.accountRepository.docRef(oldAccountId);
+      const newAccountRef = this.accountRepository.docRef(newAccountId);
+      const oldAccountSnap = await tx.get(oldAccountRef);
+      const newAccountSnap = await tx.get(newAccountRef);
+      if (!oldAccountSnap.exists()) throw new Error("Account not found");
+      if (!newAccountSnap.exists()) throw new Error("Account not found");
+      if (oldBalanceEffect !== 0) {
+        tx.set(oldAccountRef, this.accountRepository.applyBalanceDelta(oldAccountSnap.data(), -oldBalanceEffect));
+      }
+      if (newBalanceEffect !== 0) {
+        tx.set(newAccountRef, this.accountRepository.applyBalanceDelta(newAccountSnap.data(), newBalanceEffect));
+      }
+    }
+    tx.set(transactionRef, updated);
+  }
+
+  async editTransaction(transaction: Transaction, params: EditTransactionParams): Promise<void> {
+    const db = this.collection.firestore;
     await runTransaction(db, async (tx) => {
-      const freshSnap = await tx.get(transactionRef);
-      if (!freshSnap.exists()) throw new Error("Transaction not found");
-      const fresh = freshSnap.data();
-
-      if (fresh.transferId != null) {
-        const amountChanged = params.amount != null && params.amount !== fresh.amount;
-        const accountChanged = params.accountId != null && params.accountId !== fresh.accountId;
-        const dateChanged = params.dateTime != null && params.dateTime.getTime() !== fresh.dateTime.getTime();
-        if (amountChanged || accountChanged || dateChanged) {
-          throw new TransferEditRestrictedError();
-        }
-      }
-
-      const oldAccountId = fresh.accountId;
-      const oldBalanceEffect = balanceEffect(fresh);
-
-      let updated = fresh;
-      updated = updateField(updated, "type", updated.type, params.type, (e, v) => ({ ...e, type: v }));
-      updated = updateField(updated, "amount", updated.amount, params.amount, (e, v) => ({ ...e, amount: v }));
-      updated = updateField(updated, "dateTime", updated.dateTime, params.dateTime, (e, v) => ({ ...e, dateTime: v }));
-      updated = updateField(updated, "accountId", updated.accountId, params.accountId, (e, v) => ({
-        ...e,
-        accountId: v,
-      }));
-      updated = updateField(updated, "categoryId", updated.categoryId, params.categoryId, (e, v) => ({
-        ...e,
-        categoryId: v,
-      }));
-      updated = updateField(updated, "description", updated.description, params.description, (e, v) => ({
-        ...e,
-        description: v,
-      }));
-      updated = updateField(updated, "notes", updated.notes, params.notes, (e, v) => ({ ...e, notes: v }));
-      updated = updateField(
-        updated,
-        "excludeFromCalculations",
-        updated.excludeFromCalculations,
-        params.excludeFromCalculations,
-        (e, v) => ({ ...e, excludeFromCalculations: v }),
-      );
-
-      if (params.clearAccountingMonth) {
-        updated = recordEdit(updated, "accountingMonth", updated.accountingMonth?.toString() ?? "none", "none");
-        updated = { ...updated, accountingMonth: null };
-      } else {
-        updated = updateField(updated, "accountingMonth", updated.accountingMonth, params.accountingMonth, (e, v) => ({
-          ...e,
-          accountingMonth: v,
-        }));
-      }
-
-      if (params.clearLinkedPersonId) {
-        updated = recordEdit(updated, "linkedPersonId", updated.linkedPersonId ?? "none", "none");
-        updated = { ...updated, linkedPersonId: null };
-      } else {
-        updated = updateField(updated, "linkedPersonId", updated.linkedPersonId, params.linkedPersonId, (e, v) => ({
-          ...e,
-          linkedPersonId: v,
-        }));
-      }
-
-      updated = updateField(
-        updated,
-        "owesPersonToggle",
-        updated.owesPersonToggle,
-        params.owesPersonToggle,
-        (e, v) => ({ ...e, owesPersonToggle: v }),
-      );
-      updated = updateField(updated, "status", updated.status, params.status, (e, v) => ({ ...e, status: v }));
-      updated = updateField(updated, "isBusiness", updated.isBusiness, params.isBusiness, (e, v) => ({ ...e, isBusiness: v }));
-
-      // Computed after every field update above so a same-transaction toggle
-      // of excludeFromCalculations (in either direction) is captured by the
-      // delta below exactly like an amount/account change would be.
-      const newBalanceEffect = balanceEffect(updated);
-      const newAccountId = updated.accountId;
-
-      if (oldAccountId === newAccountId) {
-        const accountRef = this.accountRepository.docRef(newAccountId);
-        const accountSnap = await tx.get(accountRef);
-        if (!accountSnap.exists()) throw new Error("Account not found");
-        const delta = newBalanceEffect - oldBalanceEffect;
-        if (delta !== 0) {
-          tx.set(accountRef, this.accountRepository.applyBalanceDelta(accountSnap.data(), delta));
-        }
-      } else {
-        // Both reads must happen before either write — Firestore transactions
-        // don't allow a read after a write within the same transaction.
-        const oldAccountRef = this.accountRepository.docRef(oldAccountId);
-        const newAccountRef = this.accountRepository.docRef(newAccountId);
-        const oldAccountSnap = await tx.get(oldAccountRef);
-        const newAccountSnap = await tx.get(newAccountRef);
-        if (!oldAccountSnap.exists()) throw new Error("Account not found");
-        if (!newAccountSnap.exists()) throw new Error("Account not found");
-        if (oldBalanceEffect !== 0) {
-          tx.set(oldAccountRef, this.accountRepository.applyBalanceDelta(oldAccountSnap.data(), -oldBalanceEffect));
-        }
-        if (newBalanceEffect !== 0) {
-          tx.set(newAccountRef, this.accountRepository.applyBalanceDelta(newAccountSnap.data(), newBalanceEffect));
-        }
-      }
-      tx.set(transactionRef, updated);
+      await this.editTransactionInTransaction(tx, transaction, params);
     });
+  }
+
+  /**
+   * Composable form of {@link softDeleteTransaction}. See
+   * {@link createTransactionInTransaction}'s doc comment for why this
+   * exists.
+   */
+  async softDeleteTransactionInTransaction(tx: FirestoreTransaction, transaction: Transaction): Promise<void> {
+    const transactionRef = doc(this.collection, transaction.id);
+    const accountRef = this.accountRepository.docRef(transaction.accountId);
+    const delta = -balanceEffect(transaction);
+
+    const accountSnap = await tx.get(accountRef);
+    if (!accountSnap.exists()) throw new Error("Account not found");
+    if (delta !== 0) {
+      tx.set(accountRef, this.accountRepository.applyBalanceDelta(accountSnap.data(), delta));
+    }
+    tx.set(transactionRef, { ...transaction, deletedAt: new Date() });
   }
 
   /** Soft-deletes and reverses this transaction's effect on its account's balance. */
   async softDeleteTransaction(transaction: Transaction): Promise<void> {
     const db = this.collection.firestore;
+    await runTransaction(db, async (tx) => {
+      await this.softDeleteTransactionInTransaction(tx, transaction);
+    });
+  }
+
+  /**
+   * Composable form of {@link restoreTransaction}. See
+   * {@link createTransactionInTransaction}'s doc comment for why this
+   * exists.
+   */
+  async restoreTransactionInTransaction(tx: FirestoreTransaction, transaction: Transaction): Promise<void> {
     const transactionRef = doc(this.collection, transaction.id);
     const accountRef = this.accountRepository.docRef(transaction.accountId);
-    const delta = -balanceEffect(transaction);
+    const delta = balanceEffect(transaction);
 
-    await runTransaction(db, async (tx) => {
-      const accountSnap = await tx.get(accountRef);
-      if (!accountSnap.exists()) throw new Error("Account not found");
-      if (delta !== 0) {
-        tx.set(accountRef, this.accountRepository.applyBalanceDelta(accountSnap.data(), delta));
-      }
-      tx.set(transactionRef, { ...transaction, deletedAt: new Date() });
-    });
+    const accountSnap = await tx.get(accountRef);
+    if (!accountSnap.exists()) throw new Error("Account not found");
+    if (delta !== 0) {
+      tx.set(accountRef, this.accountRepository.applyBalanceDelta(accountSnap.data(), delta));
+    }
+    tx.set(transactionRef, { ...transaction, deletedAt: null });
   }
 
   /** Restores a trashed transaction and re-applies its balance effect. */
   async restoreTransaction(transaction: Transaction): Promise<void> {
     const db = this.collection.firestore;
-    const transactionRef = doc(this.collection, transaction.id);
-    const accountRef = this.accountRepository.docRef(transaction.accountId);
-    const delta = balanceEffect(transaction);
-
     await runTransaction(db, async (tx) => {
-      const accountSnap = await tx.get(accountRef);
-      if (!accountSnap.exists()) throw new Error("Account not found");
-      if (delta !== 0) {
-        tx.set(accountRef, this.accountRepository.applyBalanceDelta(accountSnap.data(), delta));
-      }
-      tx.set(transactionRef, { ...transaction, deletedAt: null });
+      await this.restoreTransactionInTransaction(tx, transaction);
     });
   }
 

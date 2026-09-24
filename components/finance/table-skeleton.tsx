@@ -14,7 +14,7 @@ export function TableSkeleton({ rows = 6, columns = 4, className }: TableSkeleto
       {Array.from({ length: rows }).map((_, rowIndex) => (
         <div
           key={rowIndex}
-          className="flex items-center gap-4 border-b border-border/60 px-4 py-3.5 last:border-b-0"
+          className="flex items-center gap-4 border-b border-border px-4 py-3.5 last:border-b-0"
         >
           {Array.from({ length: columns }).map((_, colIndex) => (
             <Skeleton

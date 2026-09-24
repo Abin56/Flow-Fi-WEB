@@ -2,12 +2,15 @@ rules_version = '2';
 
 // FlowFi Firestore Security Rules
 //
-// This is the first firestore.rules file committed to this repository (see
-// docs/adr/ADR-002 — no rules file previously existed here to extend). It
-// covers BOTH the pre-existing app schema (accounts, transactions, budgets,
-// creditCards, ...) and the new Financial Document Intelligence Engine
-// collections (Architecture v1.0), reconciled onto this app's existing
-// users/{uid}/... convention.
+// CANONICAL COPY. This file MUST stay byte-identical between this repo
+// (flowfi-web) and Finance_App/firestore.rules. Both apps (the Flutter app
+// and this Next.js app) share a single Firebase project (financeapp-585eb)
+// and therefore a single deployed rules set — Firestore rules are
+// project-wide, not per-app. The two copies had drifted (this file had
+// gained a `pdfAnalyzerConfig` rule the Flutter copy lacked) until the
+// 2026-09-23 Mobile↔Web parity audit reconciled them; only ever deploy this
+// file (or the Finance_App copy, which must be kept equal to it) from a
+// single point of truth going forward.
 //
 // IMPORTANT — Firestore rule-matching semantics (learned the hard way, see
 // tests/rules/firestore.rules.test.ts and the emulator run that caught it):
@@ -15,8 +18,8 @@ rules_version = '2';
 // `match` blocks match a given path, access is granted if ANY of them
 // allows it (OR, not override). A single blanket `users/{uid}/{document=**}`
 // rule therefore CANNOT be safely combined with stricter per-collection
-// overrides — the blanket rule would always win for any path it also
-// matches. Every user-scoped collection is listed explicitly below instead.
+// overrides — every user-scoped collection is listed explicitly below
+// instead.
 //
 // Backlog task: M1-T1.
 
@@ -38,7 +41,8 @@ service cloud.firestore {
     // previously the only rules present here.
     match /users/{uid} { allow read, write: if isOwner(uid); }
 
-    // --- Pre-existing app collections (lib/firestore/collections.ts) ---
+    // --- Pre-existing app collections (lib/firestore/collections.ts /
+    // lib/core/constants/firestore_constants.dart) ---
     // Simple owner-scoped CRUD, matching how this app has always worked —
     // there is no Cloud Functions layer in front of these today, so
     // tightening them further here would be an unrelated, uncoordinated
@@ -65,6 +69,8 @@ service cloud.firestore {
     // a password-generation RULE — never raw personal data (DOB/PAN/etc.),
     // so client write access here carries none of the risk the Financial
     // Document Intelligence collections below are restricted against.
+    // Web-only feature today (no Flutter-side repository layer exists yet),
+    // but the rule must be present here too since rules are project-wide.
     match /users/{uid}/pdfAnalyzerConfig/{document=**} { allow read, write: if isOwner(uid); }
 
     // --- Financial Document Intelligence Engine (Architecture v1.0) ---
@@ -72,6 +78,9 @@ service cloud.firestore {
     // than the collections above, because these back the parsing pipeline's
     // integrity guarantees (Architecture §5/§29: "parsing remains
     // server-side only") rather than being plain user-entered CRUD data.
+    // Web-only feature today (no Flutter-side repository layer exists yet
+    // for these collections — see docs/firebase-backend-audit.md), but the
+    // rules must be present here too since rules are project-wide.
 
     // financialDocuments: created and status-transitioned only by the
     // ingestion/parsing Cloud Functions (backlog M2-T1, M2-T2), via the
@@ -117,10 +126,7 @@ service cloud.firestore {
       }
     }
 
-    // smsTransactionCandidates: SMS Transaction Intelligence (Phase 3).
-    // Direct match of the authoritative rule in Finance_App/firestore.rules
-    // (same Firebase project, financeapp-585eb — see docs/sms-candidate-contract.md
-    // for the full cross-repo reconciliation). Structured candidates built
+    // SMS Transaction Intelligence (Phase 3) — structured candidates built
     // entirely on-device by Android from the user's own SMS; the raw message
     // never leaves the device. Plain owner-scoped CRUD like accounts/
     // transactions above: unlike documentImports, there is no separate

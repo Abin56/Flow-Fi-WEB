@@ -1,10 +1,6 @@
 "use client";
 
 import {
-  Activity,
-  ArrowDownToLine,
-  ArrowUpRight,
-  BarChart3,
   Calendar,
   Check,
   ChevronDown,
@@ -22,7 +18,6 @@ import {
   SlidersHorizontal,
   Trash2,
   Upload,
-  type LucideIcon,
 } from "lucide-react";
 import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { ClayButton } from "@/components/clay/clay-button";
@@ -40,7 +35,6 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { formatCurrency } from "@/lib/format";
 import { usePeople } from "@/hooks/use-people";
 import { useExpenses } from "@/hooks/use-expenses";
 import type { Account } from "@/lib/models/account";
@@ -104,7 +98,7 @@ const ROWS_PER_PAGE_OPTIONS = [10, 20, 50, 100];
 
 const TONE_ICON_CLASS: Record<string, string> = {
   neutral: "bg-muted text-muted-foreground",
-  primary: "bg-primary/12 text-primary",
+  primary: "bg-primary/12 text-primary-accent-text",
   success: "bg-success/15 text-success",
   expense: "bg-expense/12 text-expense",
   warning: "bg-warning/20 text-warning-foreground",
@@ -147,38 +141,6 @@ function paginationRange(current: number, total: number): (number | "ellipsis")[
   if (right < total - 1) range.push("ellipsis");
   if (total > 1) range.push(total);
   return range;
-}
-
-const STAT_TONE_CLASS = {
-  success: { card: "bg-success/8 border-success/20", icon: "bg-success/20 text-success", trend: "text-success" },
-  expense: { card: "bg-expense/8 border-expense/20", icon: "bg-expense/20 text-expense", trend: "text-expense" },
-  purple: { card: "bg-purple/8 border-purple/20", icon: "bg-purple/20 text-purple", trend: "text-purple" },
-  warning: { card: "bg-warning/12 border-warning/25", icon: "bg-warning/25 text-warning-foreground", trend: "text-warning-foreground" },
-} as const;
-
-function StatCard({
-  label,
-  value,
-  icon: Icon,
-  tone,
-}: {
-  label: string;
-  value: string;
-  icon: LucideIcon;
-  tone: keyof typeof STAT_TONE_CLASS;
-}) {
-  const toneClass = STAT_TONE_CLASS[tone];
-  return (
-    <div className={cn("flex flex-col gap-3 rounded-3xl border p-4", toneClass.card)}>
-      <div className="flex items-start justify-between gap-2">
-        <p className="text-xs font-medium text-muted-foreground">{label}</p>
-        <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-xl", toneClass.icon)}>
-          <Icon className="size-4" />
-        </span>
-      </div>
-      <p className="font-mono text-xl font-semibold tabular-nums text-foreground">{value}</p>
-    </div>
-  );
 }
 
 type FormKind = "expense" | "income" | "transfer";
@@ -253,16 +215,6 @@ export function TransactionsWorkspace() {
   // Computed over the full, unfiltered `rows` — not `filtered` — so a duplicate is still flagged even
   // if its pair got filtered out of the current view.
   const duplicateTransactionIds = useMemo(() => findSameAmountDateDuplicateIds(rows.map((r) => r.transaction)), [rows]);
-
-  const stats = useMemo(() => {
-    let inflow = 0;
-    let outflow = 0;
-    for (const { transaction: t } of filtered) {
-      if (t.type === "income") inflow += t.amount;
-      else outflow += t.amount;
-    }
-    return { inflow, outflow, net: inflow - outflow, count: filtered.length };
-  }, [filtered]);
 
   const count = filtered.length;
   const totalPages = Math.max(1, Math.ceil(count / rowsPerPage));
@@ -568,7 +520,7 @@ export function TransactionsWorkspace() {
               "flex size-7 items-center justify-center rounded-full border transition-colors",
               active
                 ? "border-primary bg-primary text-primary-foreground"
-                : "border-border/60 text-muted-foreground hover:border-primary/50 hover:text-primary",
+                : "border-border/60 text-muted-foreground hover:border-primary/50 hover:text-primary-accent-text",
             )}
             aria-label={label}
             title={label}
@@ -606,16 +558,22 @@ export function TransactionsWorkspace() {
   if (isLoading) {
     return (
       <div className="flex flex-col gap-5 px-1">
-        <h1 className="font-heading text-2xl font-bold tracking-tight text-foreground">Transactions</h1>
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          {Array.from({ length: 4 }, (_, i) => (
-            <Skeleton key={i} className="h-24 rounded-3xl" />
-          ))}
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="flex flex-col gap-2">
+            <h1 className="font-heading text-2xl font-bold tracking-tight text-foreground">Transactions</h1>
+            <Skeleton className="h-4 w-64" />
+          </div>
+          <Skeleton className="h-10 w-40 rounded-2xl" />
         </div>
         <Skeleton className="h-10 w-full max-w-sm rounded-2xl" />
-        <div className="flex flex-col gap-2">
+        <div className="overflow-hidden rounded-2xl border border-border bg-card">
           {Array.from({ length: 8 }, (_, i) => (
-            <Skeleton key={i} className="h-12 w-full rounded-xl" />
+            <div key={i} className="flex items-center gap-4 border-b border-border px-4 py-3.5 last:border-b-0">
+              <Skeleton className="h-4 w-20" />
+              <Skeleton className="h-9 w-9 shrink-0 rounded-xl" />
+              <Skeleton className="h-4 flex-1 max-w-48" />
+              <Skeleton className="ml-auto h-4 w-24" />
+            </div>
           ))}
         </div>
       </div>
@@ -661,15 +619,8 @@ export function TransactionsWorkspace() {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <StatCard label="Total Inflow" value={formatCurrency(stats.inflow)} icon={ArrowDownToLine} tone="success" />
-        <StatCard label="Total Outflow" value={formatCurrency(stats.outflow)} icon={ArrowUpRight} tone="expense" />
-        <StatCard label="Net Flow" value={formatCurrency(stats.net)} icon={Activity} tone="purple" />
-        <StatCard label="Transactions" value={String(stats.count)} icon={BarChart3} tone="warning" />
-      </div>
-
       <div className="flex flex-wrap items-center gap-2">
-        <label className="clay-pressed flex h-10 max-w-sm flex-1 items-center gap-2 rounded-2xl px-3.5 text-sm text-muted-foreground focus-within:text-foreground">
+        <label className="flex h-10 max-w-sm flex-1 items-center gap-2 rounded-2xl border border-border bg-card px-3.5 text-sm text-muted-foreground transition-colors focus-within:border-primary focus-within:text-foreground focus-within:ring-2 focus-within:ring-ring">
           <Search className="size-4 shrink-0" />
           <input
             type="text"
@@ -798,7 +749,7 @@ export function TransactionsWorkspace() {
           }
         />
       ) : pageRows.length === 0 ? (
-        <div className="w-full overflow-hidden rounded-2xl border border-border/60 bg-card">
+        <div className="w-full overflow-hidden rounded-2xl border border-border bg-card">
           <EmptyState
             icon={Receipt}
             title="No transactions found"
@@ -822,7 +773,7 @@ export function TransactionsWorkspace() {
                   setDetailOpen(true);
                 }}
                 className={cn(
-                  "flex items-center gap-3 rounded-2xl border border-border/60 bg-card p-4 text-left transition-transform duration-150 hover:-translate-y-0.5 hover:bg-muted/30 active:scale-[0.99]",
+                  "flex items-center gap-3 rounded-2xl border border-border bg-card p-4 text-left transition-transform duration-150 hover:-translate-y-0.5 hover:bg-muted/30 active:scale-[0.99]",
                   duplicateTransactionIds.has(row.transaction.id) && "!border-danger bg-danger/5",
                 )}
               >

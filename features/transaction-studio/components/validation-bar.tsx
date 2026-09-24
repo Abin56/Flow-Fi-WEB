@@ -55,10 +55,10 @@ export function ValidationBar({
   if (attentionRowIds.size === 0 && transferMatches.visibleMatches.length === 0) return null;
 
   return (
-    <div className="rounded-xl border border-warning/30 bg-warning/5">
+    <div className="rounded-xl border border-warning/40 bg-warning/12">
       <button type="button" className="flex w-full items-center gap-2 px-3 py-2 text-left" onClick={() => setOpen((v) => !v)}>
-        <AlertTriangle className="size-4 shrink-0 text-warning" />
-        <span className="text-sm font-medium text-warning">
+        <AlertTriangle className="size-4 shrink-0 text-warning-foreground" />
+        <span className="text-sm font-medium text-warning-foreground">
           {attentionRowIds.size > 0 && (
             <>
               {attentionRowIds.size} row{attentionRowIds.size === 1 ? "" : "s"} need attention
@@ -67,7 +67,7 @@ export function ValidationBar({
           )}
           {issueTypeCount > 0 && `${issueTypeCount} issue${issueTypeCount === 1 ? "" : "s"}`}
         </span>
-        <span className="ml-auto flex items-center gap-1 text-xs font-medium text-warning">
+        <span className="ml-auto flex items-center gap-1 text-xs font-medium text-warning-foreground">
           {open ? "Collapse" : "Review issues"}
           {open ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
         </span>

@@ -25,7 +25,7 @@ function Stat({
           prominent ? "text-base font-bold" : "text-sm",
           tone === "success" && "text-success",
           tone === "expense" && "text-expense",
-          tone === "warning" && "text-warning",
+          tone === "warning" && "text-warning-foreground",
           tone === "royal" && "text-royal",
           tone === "muted" && "text-muted-foreground",
         )}

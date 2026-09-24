@@ -253,8 +253,12 @@ export interface RecentPersonTransactionRow {
   amount: number;
 }
 
-/** Most-recent ledger entries across every person — replaces `recentPeopleTransactions`. */
-export function useRecentPeopleTransactions(limit = 5): { rows: RecentPersonTransactionRow[]; isLoading: boolean } {
+/**
+ * Most-recent ledger entries across every person — replaces `recentPeopleTransactions`.
+ * Pass `limit: null` for the unbounded list (the "View All" popup); the default `5` keeps
+ * the workspace's inline preview short.
+ */
+export function useRecentPeopleTransactions(limit: number | null = 5): { rows: RecentPersonTransactionRow[]; isLoading: boolean } {
   const { data: people = [], isLoading: peopleLoading } = usePeople();
   const { entriesByPersonId, isLoading: entriesLoading } = usePeopleLedgerEntries();
 
@@ -266,9 +270,8 @@ export function useRecentPeopleTransactions(limit = 5): { rows: RecentPersonTran
       if (!person) continue;
       for (const entry of entries) all.push({ entry, personName: person.name });
     }
-    return all
-      .sort((a, b) => b.entry.date.getTime() - a.entry.date.getTime())
-      .slice(0, limit)
+    const sorted = all.sort((a, b) => b.entry.date.getTime() - a.entry.date.getTime());
+    return (limit == null ? sorted : sorted.slice(0, limit))
       .map(({ entry, personName }) => {
         const amount = signedAmount(entry);
         return {

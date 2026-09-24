@@ -22,7 +22,7 @@ const STATUS_META: Record<FinancialDocumentStatus, { label: string; tone: "muted
 
 const STATUS_TONE_CLASS: Record<"muted" | "warning" | "success", string> = {
   muted: "border-border bg-muted text-muted-foreground",
-  warning: "border-warning/30 bg-warning/10 text-warning",
+  warning: "border-warning/40 bg-warning/20 text-warning-foreground",
   success: "border-success/30 bg-success/10 text-success",
 };
 
@@ -40,7 +40,7 @@ function StatItem({ metric, active, onClick }: { metric: MetricDef; active: bool
       onClick={onClick}
       className={cn(
         "flex flex-col items-center gap-0.5 px-2.5 py-0.5 leading-none transition-colors",
-        active ? "text-primary" : "text-foreground hover:text-primary",
+        active ? "text-primary-accent-text" : "text-foreground hover:text-primary-accent-text",
       )}
     >
       <span className="text-sm font-semibold tabular-nums">{metric.value}</span>
@@ -104,7 +104,7 @@ export function StudioHeader({
   return (
     <div className="surface-primary flex flex-wrap items-center gap-3 rounded-2xl px-4 py-2.5">
       <div className="flex min-w-0 items-center gap-2.5">
-        <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+        <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary-accent-text">
           <FileText className="size-4" />
         </span>
         <div className="min-w-0">
@@ -133,7 +133,7 @@ export function StudioHeader({
               type="button"
               className={cn(
                 "flex shrink-0 items-center gap-0.5 rounded-md px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:text-foreground",
-                moreActive && "font-medium text-primary",
+                moreActive && "font-medium text-primary-accent-text",
               )}
             >
               More <ChevronDown className="size-3" />
@@ -148,7 +148,7 @@ export function StudioHeader({
                   onClick={() => selectTab(metric.key)}
                   className={cn(
                     "flex items-center justify-between rounded-md px-2 py-1.5 text-sm transition-colors hover:bg-muted",
-                    activeTab === metric.key && "bg-primary/10 text-primary",
+                    activeTab === metric.key && "bg-primary/10 text-primary-accent-text",
                   )}
                 >
                   <span>{metric.label}</span>

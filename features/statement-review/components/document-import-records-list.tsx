@@ -162,7 +162,7 @@ export function DocumentImportRecordsList({ documentId }: { documentId: string }
               "flex size-7 items-center justify-center rounded-full border transition-colors",
               active
                 ? "border-primary bg-primary text-primary-foreground"
-                : "border-border/60 text-muted-foreground hover:border-primary/50 hover:text-primary",
+                : "border-border/60 text-muted-foreground hover:border-primary/50 hover:text-primary-accent-text",
             )}
             aria-label={label}
             title={label}

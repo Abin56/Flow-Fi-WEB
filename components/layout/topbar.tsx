@@ -54,7 +54,7 @@ export function Topbar({
   }, []);
 
   return (
-    <div className="surface-flat flex h-16 shrink-0 items-center gap-2 border-b border-border/60 px-4 sm:h-18 sm:gap-3 sm:px-6 lg:px-8">
+    <div className="flex h-16 shrink-0 items-center gap-2 border-b border-border bg-background px-4 sm:h-18 sm:gap-3 sm:px-6 lg:px-8">
       <IconButton aria-label="Open navigation" onClick={onOpenMobileNav} className="md:hidden">
         <Menu className="size-4.5" />
       </IconButton>

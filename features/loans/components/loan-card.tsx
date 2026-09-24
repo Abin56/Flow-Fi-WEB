@@ -9,7 +9,7 @@ import type { LoanRow } from "@/features/loans/hooks/use-loans-data";
 import { cn } from "@/lib/utils";
 
 const ACCENT_TEXT: Record<LoanRow["accent"], string> = {
-  primary: "text-primary",
+  primary: "text-primary-accent-text",
   success: "text-success",
   warning: "text-warning-foreground",
   purple: "text-purple",

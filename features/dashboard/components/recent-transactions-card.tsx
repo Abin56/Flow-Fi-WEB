@@ -40,7 +40,7 @@ export function RecentTransactionsCard({ recentTransactions, isLoading }: Recent
     <section className="surface-flat flex h-full flex-col rounded-3xl border border-border/50 p-5">
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-semibold text-foreground">Recent Transactions</h2>
-        <Link href="/transactions" className="text-xs font-semibold text-primary hover:underline">
+        <Link href="/transactions" className="text-xs font-semibold text-primary-accent-text hover:underline">
           View All
         </Link>
       </div>
@@ -62,7 +62,7 @@ export function RecentTransactionsCard({ recentTransactions, isLoading }: Recent
                 <p className="text-xs text-muted-foreground">{txn.category}</p>
               </div>
               <div className="shrink-0 text-right">
-                <p className={cn("text-sm font-semibold tabular-nums", txn.amount > 0 ? "text-success" : "text-foreground")}>
+                <p className={cn("text-sm font-semibold tabular-nums", txn.amount > 0 ? "text-success" : "text-expense")}>
                   {txn.amount > 0 ? "+" : "-"}
                   {formatCurrency(Math.abs(txn.amount))}
                 </p>

@@ -25,33 +25,38 @@ export interface NavItem {
   label: string;
   href: string;
   icon: typeof LayoutDashboard;
-  /**
-   * Product group this item belongs to, if any. When set, the item is only
-   * shown once `useFinancialProductAvailability()` reports the user has at
-   * least one record in that group — see `sidebar-nav-content.tsx`.
-   */
-  requiresProduct?: "accounts" | "creditCards" | "loanOrEmi";
+  section: NavSection;
 }
 
+/** Section groupings for the sidebar — purely presentational (Phase 3 shell). Every route below
+ *  already existed in NAV_ITEMS; this only buckets them under muted section labels, it does not
+ *  add, remove, or rename any route. */
+export type NavSection = "Overview" | "Finance" | "Planning" | "Import" | "Insights" | "System";
+
 export const NAV_ITEMS: NavItem[] = [
-  { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-  { label: "Month Cycle", href: "/month-cycle", icon: CalendarRange },
-  { label: "Transactions", href: "/transactions", icon: Receipt },
-  { label: "History", href: "/history", icon: History },
-  { label: "Accounts", href: "/accounts", icon: Wallet, requiresProduct: "accounts" },
-  { label: "Credit Cards", href: "/credit-cards", icon: CreditCard },
-  { label: "Statement Review", href: "/statement-review", icon: FileStack, requiresProduct: "creditCards" },
-  { label: "SMS Candidates", href: "/transaction-candidates", icon: MessageSquareText },
-  { label: "Bills", href: "/bills", icon: Repeat },
-  { label: "Budgets", href: "/budgets", icon: PiggyBank },
-  { label: "Savings", href: "/savings", icon: Target },
-  { label: "EMI", href: "/emi", icon: Banknote, requiresProduct: "loanOrEmi" },
-  { label: "Loans", href: "/loans", icon: Landmark, requiresProduct: "loanOrEmi" },
-  { label: "People Ledger", href: "/people", icon: Users },
-  { label: "Calendar", href: "/calendar", icon: Calendar },
-  { label: "Reports", href: "/reports", icon: FileBarChart },
-  { label: "Analytics", href: "/analytics", icon: LineChart },
-  { label: "AI Assistant", href: "/ai-assistant", icon: Bot },
-  { label: "Settings", href: "/settings", icon: Settings },
-  { label: "Help & Support", href: "/help", icon: LifeBuoy },
+  { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard, section: "Overview" },
+  { label: "Month Cycle", href: "/month-cycle", icon: CalendarRange, section: "Overview" },
+
+  { label: "Transactions", href: "/transactions", icon: Receipt, section: "Finance" },
+  { label: "History", href: "/history", icon: History, section: "Finance" },
+  { label: "Accounts", href: "/accounts", icon: Wallet, section: "Finance" },
+  { label: "Credit Cards", href: "/credit-cards", icon: CreditCard, section: "Finance" },
+  { label: "People Ledger", href: "/people", icon: Users, section: "Finance" },
+
+  { label: "Bills", href: "/bills", icon: Repeat, section: "Planning" },
+  { label: "Budgets", href: "/budgets", icon: PiggyBank, section: "Planning" },
+  { label: "Savings", href: "/savings", icon: Target, section: "Planning" },
+  { label: "EMI", href: "/emi", icon: Banknote, section: "Planning" },
+  { label: "Loans", href: "/loans", icon: Landmark, section: "Planning" },
+  { label: "Calendar", href: "/calendar", icon: Calendar, section: "Planning" },
+
+  { label: "Statement Review", href: "/statement-review", icon: FileStack, section: "Import" },
+  { label: "SMS Candidates", href: "/transaction-candidates", icon: MessageSquareText, section: "Import" },
+
+  { label: "Reports", href: "/reports", icon: FileBarChart, section: "Insights" },
+  { label: "Analytics", href: "/analytics", icon: LineChart, section: "Insights" },
+  { label: "AI Assistant", href: "/ai-assistant", icon: Bot, section: "Insights" },
+
+  { label: "Settings", href: "/settings", icon: Settings, section: "System" },
+  { label: "Help & Support", href: "/help", icon: LifeBuoy, section: "System" },
 ];

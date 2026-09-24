@@ -41,7 +41,7 @@ import { cn } from "@/lib/utils";
 
 const TONE_ICON_CLASS: Record<string, string> = {
   neutral: "bg-muted text-muted-foreground",
-  primary: "bg-primary/12 text-primary",
+  primary: "bg-primary/12 text-primary-accent-text",
   success: "bg-success/15 text-success",
   expense: "bg-expense/12 text-expense",
   warning: "bg-warning/20 text-warning-foreground",
@@ -513,7 +513,7 @@ export function BudgetsWorkspace() {
           <h2 className="text-sm font-semibold text-foreground">Quick Actions</h2>
           <div className="mt-4 grid grid-cols-4 gap-2">
             {[
-              { label: "Create Budget", icon: Plus, className: "bg-primary/12 text-primary", onClick: openAdd },
+              { label: "Create Budget", icon: Plus, className: "bg-primary/12 text-primary-accent-text", onClick: openAdd },
               { label: "Add Category", icon: FolderPlus, className: "bg-warning/20 text-warning-foreground", onClick: openAdd },
               { label: "Set Limit", icon: Target, className: "bg-success/15 text-success", onClick: openAdd },
             ].map((action) => (
@@ -535,7 +535,7 @@ export function BudgetsWorkspace() {
         <div className="surface-flat rounded-3xl border border-border/50 p-5">
           <h2 className="text-sm font-semibold text-foreground">Helpful Tips</h2>
           <div className="mt-3 flex items-start gap-3 rounded-2xl border border-border/40 p-3">
-            <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-primary/12 text-primary">
+            <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-primary/12 text-primary-accent-text">
               <Wifi className="size-4" />
             </span>
             <div className="min-w-0">
@@ -617,7 +617,7 @@ export function BudgetsWorkspace() {
           <label className="flex flex-col gap-1">
             <span className="text-xs font-medium text-muted-foreground">Monthly Limit</span>
             <div className="relative">
-              <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary">₹</span>
+              <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary-accent-text">₹</span>
               <input
                 type="number"
                 className="clay-pressed h-10 w-full rounded-xl border border-primary/20 bg-primary/5 pl-7 text-sm font-semibold outline-none"
@@ -652,7 +652,7 @@ export function BudgetsWorkspace() {
           <label className="flex flex-col gap-1">
             <span className="text-xs font-medium text-muted-foreground">Monthly Limit</span>
             <div className="relative">
-              <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary">₹</span>
+              <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary-accent-text">₹</span>
               <input
                 type="number"
                 className="clay-pressed h-10 w-full rounded-xl border border-primary/20 bg-primary/5 pl-7 text-sm font-semibold outline-none"

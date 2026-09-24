@@ -31,7 +31,7 @@ export function PeopleToolbar({
 
   return (
     <div className="flex flex-wrap items-center justify-between gap-3">
-      <div className="surface-flat flex items-center gap-1 rounded-xl border border-border/50 p-1">
+      <div className="surface-flat flex items-center gap-1 rounded-xl border border-border p-1">
         {tabs.map((t) => (
           <button
             key={t.id}
@@ -39,7 +39,9 @@ export function PeopleToolbar({
             onClick={() => onTabChange(t.id)}
             className={cn(
               "rounded-lg px-3 py-1.5 text-sm font-medium transition-colors",
-              tab === t.id ? "bg-card text-foreground shadow-[var(--shadow-card)]" : "text-muted-foreground hover:text-foreground",
+              tab === t.id
+                ? "bg-card text-foreground shadow-[var(--shadow-card)]"
+                : "text-muted-foreground hover:bg-muted hover:text-foreground",
             )}
           >
             {t.label}
@@ -61,13 +63,13 @@ export function PeopleToolbar({
 
         <button
           type="button"
-          className="surface-flat flex h-9 items-center gap-2 rounded-xl border border-border/50 px-3 text-sm font-medium text-foreground transition-colors hover:bg-muted/50"
+          className="surface-flat flex h-9 items-center gap-2 rounded-xl border border-border px-3 text-sm font-medium text-foreground transition-colors hover:bg-muted"
         >
           <Filter className="size-4" />
           <span className="hidden sm:inline">Filter</span>
         </button>
 
-        <div className="flex items-center gap-1 rounded-xl border border-border/50 p-1">
+        <div className="flex items-center gap-1 rounded-xl border border-border p-1">
           <button
             type="button"
             aria-label="List view"

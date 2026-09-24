@@ -9,7 +9,7 @@ interface SettingsGroupProps extends React.HTMLAttributes<HTMLDivElement> {
 export function SettingsGroup({ title, className, children, ...props }: SettingsGroupProps) {
   return (
     <div className={cn("flex flex-col gap-3", className)} {...props}>
-      {title && <h3 className="text-sm font-medium text-foreground/80">{title}</h3>}
+      {title && <h3 className="text-sm font-semibold text-foreground">{title}</h3>}
       {children}
     </div>
   );

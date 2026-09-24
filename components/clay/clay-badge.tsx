@@ -2,11 +2,11 @@ import { cn } from "@/lib/utils";
 
 const toneClass = {
   neutral: "bg-muted text-muted-foreground",
-  primary: "bg-primary/12 text-primary",
-  success: "bg-success/15 text-success",
-  expense: "bg-expense/12 text-expense",
-  warning: "bg-warning/18 text-warning-foreground",
-  purple: "bg-purple/15 text-purple",
+  primary: "bg-primary/20 text-primary-accent-text",
+  success: "bg-success/22 text-success",
+  expense: "bg-expense/20 text-expense",
+  warning: "bg-warning/28 text-warning-foreground",
+  purple: "bg-purple/22 text-purple",
 } as const;
 
 export interface ClayBadgeProps extends React.HTMLAttributes<HTMLSpanElement> {

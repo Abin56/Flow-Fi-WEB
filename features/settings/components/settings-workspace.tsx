@@ -292,7 +292,7 @@ export function SettingsWorkspace() {
               onClick={() => setTab(t.id)}
               className={cn(
                 "flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2.5 text-sm font-medium transition-colors",
-                tab === t.id ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground",
+                tab === t.id ? "border-primary text-primary-accent-text" : "border-transparent text-muted-foreground hover:text-foreground",
               )}
             >
               <t.icon className="size-4" />
@@ -305,7 +305,7 @@ export function SettingsWorkspace() {
           <div className="flex flex-col gap-5">
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
               <div className="surface-flat rounded-3xl border border-border/50 p-5">
-                <CardHeading icon={User} iconClass="bg-primary/12 text-primary" title="Profile Information" description="Update your personal information and profile details." />
+                <CardHeading icon={User} iconClass="bg-primary/12 text-primary-accent-text" title="Profile Information" description="Update your personal information and profile details." />
 
                 <div className="mt-4 flex items-center gap-4">
                   <div className="relative">
@@ -530,7 +530,7 @@ export function SettingsWorkspace() {
               </div>
 
               <div className="surface-flat rounded-3xl border border-border/50 p-5">
-                <CardHeading icon={CloudUpload} iconClass="bg-primary/12 text-primary" title="Backup & Restore" />
+                <CardHeading icon={CloudUpload} iconClass="bg-primary/12 text-primary-accent-text" title="Backup & Restore" />
                 <p className="mt-3 text-xs text-muted-foreground">
                   Your data is already saved to the cloud automatically — every account, transaction, and budget
                   syncs to FlowFi&apos;s servers in real time, so there&apos;s no separate backup step needed.
@@ -566,7 +566,7 @@ export function SettingsWorkspace() {
         {tab === "preferences" && (
           <div className="flex flex-col gap-4">
             <SettingsCard>
-              <CardHeading icon={Wallet} iconClass="bg-primary/12 text-primary" title="Budgeting" />
+              <CardHeading icon={Wallet} iconClass="bg-primary/12 text-primary-accent-text" title="Budgeting" />
               <div className="mt-3">
                 <CurrencyField label="Default monthly budget" value={monthlyBudget} onChange={setMonthlyBudget} description="Used as the starting point for new budget cycles." />
               </div>
@@ -616,7 +616,7 @@ export function SettingsWorkspace() {
           <div className="flex flex-col gap-4">
             <SettingsCard noPadding>
               <div className="px-5 pt-4 pb-1">
-                <CardHeading icon={Landmark} iconClass="bg-primary/12 text-primary" title="Bank & Cash Accounts" />
+                <CardHeading icon={Landmark} iconClass="bg-primary/12 text-primary-accent-text" title="Bank & Cash Accounts" />
               </div>
               {(accounts as Account[]).map((a, i) => (
                 <div key={a.id}>
@@ -660,7 +660,7 @@ export function SettingsWorkspace() {
         {tab === "security" && (
           <div className="flex flex-col gap-4">
             <SettingsCard>
-              <CardHeading icon={KeyRound} iconClass="bg-primary/12 text-primary" title="Change password" />
+              <CardHeading icon={KeyRound} iconClass="bg-primary/12 text-primary-accent-text" title="Change password" />
               <p className="mt-3 text-sm text-muted-foreground">
                 This account signs in with Google — there&apos;s no FlowFi password to change. Manage your Google
                 account&apos;s password and security directly with Google.
@@ -730,7 +730,7 @@ export function SettingsWorkspace() {
         {tab === "backup" && (
           <div className="flex flex-col gap-4">
             <SettingsCard>
-              <CardHeading icon={CloudUpload} iconClass="bg-primary/12 text-primary" title="Backup & Restore" />
+              <CardHeading icon={CloudUpload} iconClass="bg-primary/12 text-primary-accent-text" title="Backup & Restore" />
               <p className="mt-3 text-sm text-muted-foreground">
                 Your data is already saved to the cloud automatically — every account, transaction, and budget
                 syncs to FlowFi&apos;s servers in real time, so there&apos;s no separate backup step needed.
@@ -786,9 +786,9 @@ export function SettingsWorkspace() {
 
       <div className="flex flex-col gap-5 xl:col-span-4">
         <div className="surface-flat rounded-3xl border border-border/50 p-5">
-          <CardHeading icon={Landmark} iconClass="bg-primary/12 text-primary" title="Account Summary" />
+          <CardHeading icon={Landmark} iconClass="bg-primary/12 text-primary-accent-text" title="Account Summary" />
           <div className="mt-2 flex flex-col">
-            <SummaryRow icon={Landmark} iconClass="bg-primary/12 text-primary" label="Total Accounts" sublabel="Active" value={String(accounts.length)} />
+            <SummaryRow icon={Landmark} iconClass="bg-primary/12 text-primary-accent-text" label="Total Accounts" sublabel="Active" value={String(accounts.length)} />
             <SummaryRow icon={Wallet} iconClass="bg-success/15 text-success" label="Total Balance" sublabel="Across all accounts" value={formatCurrency(totalBalance)} />
             <SummaryRow icon={CreditCard} iconClass="bg-expense/12 text-expense" label="Credit Cards" sublabel="Active cards" value={String(creditCards.length)} />
             <SummaryRow icon={HandCoins} iconClass="bg-warning/20 text-warning-foreground" label="Loans" sublabel="Active loans" value={String(loans.length)} />
@@ -799,7 +799,7 @@ export function SettingsWorkspace() {
         <div className="surface-flat rounded-3xl border border-border/50 p-5">
           <CardHeading icon={Database} iconClass="bg-purple/15 text-purple" title="Data Management" />
           <div className="mt-2 flex flex-col">
-            <ActionRow icon={Download} iconClass="bg-primary/12 text-primary" label="Export Data" description="Download your financial data" onClick={() => toast.info("Export", "CSV export isn't wired up yet.")} />
+            <ActionRow icon={Download} iconClass="bg-primary/12 text-primary-accent-text" label="Export Data" description="Download your financial data" onClick={() => toast.info("Export", "CSV export isn't wired up yet.")} />
             <ActionRow icon={Upload} iconClass="bg-purple/15 text-purple" label="Import Data" description="Import transactions from file" onClick={() => toast.info("Import", "Statement import lives in Transactions → Import Statement.")} />
             <ActionRow icon={Trash2} iconClass="bg-warning/20 text-warning-foreground" label="Clear Cache" description="Free up app storage space" onClick={() => toast.info("Clear cache", "Not applicable — data is synced live from Firestore, not cached locally.")} />
           </div>

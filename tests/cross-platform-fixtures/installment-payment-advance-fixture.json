@@ -1,0 +1,30 @@
+{
+  "_comment": "Golden fixture — a raw Firestore InstallmentPayment document as written by LoanAdvancePaymentRepository.record (principalPrepayment case). Both Finance_App (Dart) and flowfi-web (TS) must parse this identically. Dates are epoch milliseconds UTC; each platform's test converts them to its own Timestamp type before calling fromFirestore.",
+  "installmentId": "inst-last-001",
+  "scheduleId": "sched-001",
+  "ownerType": "loan",
+  "ownerId": "loan-001",
+  "amount": 5000.55,
+  "dateMillis": 1768435200000,
+  "note": "",
+  "createdAtMillis": 1768435200000,
+  "settlementMethod": null,
+  "billingCycleLabel": null,
+  "remainingBalanceAfterPayment": null,
+  "allocationType": "principalPrepayment",
+  "prepaymentPrincipalAmount": 5000.55,
+  "prepaymentPolicyApplied": "reduceTenure",
+  "reamortizationEventId": "event-001",
+  "transactionId": "adv_k1_txn",
+  "deletedAt": null,
+  "lastEditedAt": null,
+  "editHistory": [],
+  "expected": {
+    "amount": 5000.55,
+    "allocationType": "principalPrepayment",
+    "prepaymentPrincipalAmount": 5000.55,
+    "prepaymentPolicyApplied": "reduceTenure",
+    "reamortizationEventId": "event-001",
+    "transactionId": "adv_k1_txn"
+  }
+}

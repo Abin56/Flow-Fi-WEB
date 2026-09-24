@@ -17,7 +17,7 @@ export function Sidebar() {
       transition={springs.smooth}
       className="hidden shrink-0 md:block"
     >
-      <div className="surface-flat flex h-full flex-col border-r border-border/60">
+      <div className="flex h-full flex-col border-r border-border bg-sidebar">
         <div className="min-h-0 flex-1">
           <SidebarNavContent collapsed={collapsed} />
         </div>

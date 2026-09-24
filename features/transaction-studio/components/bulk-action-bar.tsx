@@ -257,7 +257,7 @@ export function BulkActionBar({
     <>
       <div className="flex items-center gap-2 rounded-xl border border-primary/30 bg-primary/5 px-3 py-2">
         <span className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
-          <CheckCheck className="size-4 text-primary" />
+          <CheckCheck className="size-4 text-primary-accent-text" />
           {count} selected
         </span>
         <div className="h-5 w-px bg-border" />

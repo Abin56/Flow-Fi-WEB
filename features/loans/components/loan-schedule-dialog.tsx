@@ -25,20 +25,10 @@ const STATUS_LABEL: Record<InstallmentStatus, string> = {
   upcoming: "Upcoming",
 };
 
-/** Remaining principal across all installments, assuming each installment's own payments settle its
- *  interest portion before its principal portion (the standard repayment convention) — display-only,
- *  port of `LoanDetailScreen._remainingPrincipal`. */
-function remainingPrincipal(installments: Installment[]): number {
-  return installments.reduce((sum, i) => {
-    const interestPortion = i.interestPortion ?? 0;
-    const principalPortion = i.principalPortion ?? i.amountDue;
-    const paidTowardPrincipal = Math.min(Math.max(i.amountPaid - interestPortion, 0), principalPortion);
-    return sum + (principalPortion - paidTowardPrincipal);
-  }, 0);
-}
-
-/** Port of `LoanDetailScreen._remainingInterest` — see `remainingPrincipal` above for the shared
- *  interest-first convention. */
+/** Port of `LoanDetailScreen._remainingInterest`. "Loan Amount Left" (the principal counterpart)
+ *  now reads `row.outstandingPrincipal` directly instead of a second, locally-recomputed formula —
+ *  see the audit-fix comment in `use-loans-data.ts`'s `toLoanRow` for why two implementations of
+ *  the same figure used to silently disagree whenever an installment was partially paid. */
 function remainingInterest(installments: Installment[]): number {
   return installments.reduce((sum, i) => {
     const interestPortion = i.interestPortion ?? 0;
@@ -180,7 +170,7 @@ export function LoanScheduleDialog({ open, onOpenChange, row, onEdit, onDelete, 
               <>
                 <div className="flex flex-col gap-0.5">
                   <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">Loan Amount Left</span>
-                  <CurrencyCell amount={remainingPrincipal(row.installments)} signed={false} />
+                  <CurrencyCell amount={row.outstandingPrincipal} signed={false} />
                 </div>
                 <div className="flex flex-col gap-0.5">
                   <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">Interest Left</span>

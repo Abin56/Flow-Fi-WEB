@@ -66,9 +66,9 @@ export function ProcessingChecklist({ isProcessing, isDone }: ProcessingChecklis
                 {done ? (
                   <CheckCircle2 className="size-4 shrink-0 text-success" />
                 ) : active ? (
-                  <Loader2 className="size-4 shrink-0 animate-spin text-primary" />
+                  <Loader2 className="size-4 shrink-0 animate-spin text-primary-accent-text" />
                 ) : (
-                  <Circle className="size-4 shrink-0 text-muted-foreground/40" />
+                  <Circle className="size-4 shrink-0 text-muted-foreground" />
                 )}
                 {step}
               </span>

@@ -59,7 +59,7 @@ export function EmiCard({ row, onClick }: EmiCardProps) {
       >
         <div className="flex items-start justify-between gap-2">
           <div className="flex items-center gap-3">
-            <div className="flex size-10 items-center justify-center rounded-2xl bg-primary/12 text-primary shadow-e1">
+            <div className="flex size-10 items-center justify-center rounded-2xl bg-primary/12 text-primary-accent-text shadow-e1">
               <Icon className="size-4.5" />
             </div>
             <div className="flex flex-col gap-0.5">

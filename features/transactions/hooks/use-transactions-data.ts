@@ -42,10 +42,16 @@ import {
   createAccountRepository,
   createCategoryRepository,
   createExpenseRepository,
+  createInstallmentPaymentRepositoryFor,
   createInstallmentRepositoryFor,
   createPersonRepository,
   createTransactionRepository,
 } from "@/lib/repositories/repository-factory";
+import type {
+  PendingSettlement,
+  SettleAcrossPendingParams,
+  SettleParticipantParams,
+} from "@/lib/repositories/expense-repository";
 import type { CreateTransactionParams, EditTransactionParams } from "@/lib/repositories/transaction-repository";
 import type { CreatePersonParams } from "@/lib/repositories/person-repository";
 import type { ExpenseParticipantInput } from "@/lib/repositories/expense-repository";
@@ -200,6 +206,34 @@ export function useTransactionActions() {
       /** Direct repository access for the Transaction Manager popup's richer split-editing UI (convertToSplit/resplitExpense/editExpense) and installment lookups. */
       expenseRepository,
       installmentRepositoryFor: (scheduleId: string) => createInstallmentRepositoryFor(uid, scheduleId),
+      /** Records a payment against one split-expense participant's installment (Settle Up's "specific expense" mode). */
+      settleParticipant: (params: Omit<SettleParticipantParams, "installmentPaymentRepository">) =>
+        withErrorToast(() => {
+          const installmentRepository = createInstallmentRepositoryFor(uid, params.installment.scheduleId);
+          const installmentPaymentRepository = createInstallmentPaymentRepositoryFor(
+            uid,
+            params.installment.scheduleId,
+            params.installment.id,
+            installmentRepository,
+          );
+          return expenseRepository.settleParticipant({ ...params, installmentPaymentRepository });
+        }, "Couldn't record settlement"),
+      /** Fans a lump sum across a person's pending split installments, oldest-due-first (Settle Up's "all pending"/"custom amount" modes). */
+      settleAcrossPending: (params: Omit<SettleAcrossPendingParams, "installmentPaymentRepositoryFor"> & { pending: PendingSettlement[] }) =>
+        withErrorToast(
+          () =>
+            expenseRepository.settleAcrossPending({
+              ...params,
+              installmentPaymentRepositoryFor: (scheduleId: string, installmentId: string) =>
+                createInstallmentPaymentRepositoryFor(
+                  uid,
+                  scheduleId,
+                  installmentId,
+                  createInstallmentRepositoryFor(uid, scheduleId),
+                ),
+            }),
+          "Couldn't record settlement",
+        ),
     };
   }, [uid]);
 }

@@ -7,7 +7,7 @@ import { formatCurrency } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 const ACCENTS = {
-  primary: "bg-primary/12 text-primary",
+  primary: "bg-primary/12 text-primary-accent-text",
   warning: "bg-warning/25 text-warning-foreground",
   success: "bg-success/16 text-success",
   info: "bg-blue-500/12 text-blue-600 dark:text-blue-400",
@@ -84,7 +84,7 @@ export function AccountsOverviewCard({ accountsOverview, isLoading }: AccountsOv
                   {account.mask && <p className="text-xs text-muted-foreground">•••• {account.mask}</p>}
                 </div>
                 <p className="shrink-0 text-sm font-semibold tabular-nums text-foreground">{formatCurrency(account.balance)}</p>
-                <ChevronRight className="size-4 shrink-0 text-muted-foreground/60" />
+                <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
               </div>
             );
           })}

@@ -48,7 +48,7 @@ export function BillCard({ row, onClick }: { row: BillRow; onClick: () => void }
       >
         <div className="flex items-start justify-between gap-2">
           <div className="flex min-w-0 items-center gap-2.5">
-            <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-primary/12 text-primary">
+            <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-primary/12 text-primary-accent-text">
               <Icon className="size-4" />
             </span>
             <div className="min-w-0">

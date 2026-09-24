@@ -55,7 +55,7 @@ export function UploadFlowPanel({ documentId, fileName, onDismiss }: UploadFlowP
             <h3 className="text-sm font-semibold text-foreground">Upload Statement</h3>
           </div>
           <div className="flex items-center gap-2 rounded-xl bg-muted/50 px-3 py-2 text-xs text-foreground">
-            <FileText className="size-4 shrink-0 text-primary" />
+            <FileText className="size-4 shrink-0 text-primary-accent-text" />
             <span className="truncate">{fileName}</span>
           </div>
         </div>

@@ -39,8 +39,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           onToggleAiPanel={() => setAiPanelOpen((v) => !v)}
           onOpenMobileNav={() => setMobileNavOpen(true)}
         />
-        <main className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto px-4 py-4 sm:px-6 sm:py-6 lg:px-8">
-          <PageTransition>{children}</PageTransition>
+        <main className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto px-4 py-4 sm:px-6 sm:py-6 lg:px-8 2xl:px-10">
+          <PageTransition>
+            <div className="mx-auto w-full max-w-[1600px]">{children}</div>
+          </PageTransition>
         </main>
       </div>
 
