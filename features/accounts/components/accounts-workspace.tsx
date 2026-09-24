@@ -1,6 +1,24 @@
 "use client";
 
-import { Banknote, Briefcase, Check, CreditCard, FileText, Landmark, Layers, Plus, User, Wallet, X as XIcon, type LucideIcon } from "lucide-react";
+import {
+  Banknote,
+  Briefcase,
+  Calendar,
+  Check,
+  CreditCard,
+  FileText,
+  Gift,
+  Globe,
+  Landmark,
+  Layers,
+  Percent,
+  Plus,
+  RefreshCw,
+  User,
+  Wallet,
+  X as XIcon,
+  type LucideIcon,
+} from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ClayButton } from "@/components/clay/clay-button";
 import { BankCombobox, DestructiveDeleteDialog, SectionLabel, type DestructiveDeleteImpactRow } from "@/components/finance";
@@ -20,12 +38,22 @@ import {
   useAccountsOverview,
   type AccountDeletionImpact,
 } from "@/features/accounts/hooks/use-accounts-data";
+import { useCreditCardActions, type CreditCardDeletionImpact } from "@/features/credit-cards/hooks/use-credit-cards-data";
 import { useAccounts } from "@/hooks/use-accounts";
+import { useCreditCards } from "@/hooks/use-credit-cards";
 import { bankById, GENERIC_BANK } from "@/lib/data/bank-registry";
-import type { Account, AccountType } from "@/lib/models/account";
+import type { Account, AccountType, BankAccountSubtype, CardSubtype } from "@/lib/models/account";
 import type { AccountColor } from "@/lib/mock/accounts-overview-data";
 import { cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  availableCredit,
+  buildSaveAction,
+  fieldVisibilityFor,
+  isDepositSubtype,
+  validateAccountForm,
+  type AccountFormInput,
+} from "@/features/accounts/lib/account-product-rules";
 
 const ACCOUNT_TYPE_OPTIONS: { value: AccountType; label: string; icon: LucideIcon }[] = [
   { value: "bank", label: "Bank", icon: Landmark },
@@ -36,11 +64,47 @@ const ACCOUNT_TYPE_OPTIONS: { value: AccountType; label: string; icon: LucideIco
   { value: "other", label: "Other", icon: Layers },
 ];
 
+const BANK_ACCOUNT_SUBTYPE_OPTIONS: { value: BankAccountSubtype; label: string }[] = [
+  { value: "savings", label: "Savings Account" },
+  { value: "current", label: "Current Account" },
+  { value: "salary", label: "Salary Account" },
+  { value: "fixedDeposit", label: "Fixed Deposit (FD)" },
+  { value: "recurringDeposit", label: "Recurring Deposit (RD)" },
+  { value: "nre", label: "NRE Account" },
+  { value: "nro", label: "NRO Account" },
+  { value: "other", label: "Other" },
+];
+
+const CARD_SUBTYPE_OPTIONS: { value: CardSubtype; label: string; icon: LucideIcon }[] = [
+  { value: "credit", label: "Credit Card", icon: CreditCard },
+  { value: "debit", label: "Debit Card", icon: Wallet },
+  { value: "prepaid", label: "Prepaid Card", icon: RefreshCw },
+  { value: "forex", label: "Forex Card", icon: Globe },
+  { value: "gift", label: "Gift Card", icon: Gift },
+  { value: "other", label: "Other Card", icon: Layers },
+];
+
+const CURRENCY_OPTIONS = ["USD", "EUR", "GBP", "AED", "SGD", "AUD", "JPY"];
+
 interface AccountFormState {
   name: string;
   type: AccountType;
   bankId: string | null;
+  bankAccountSubtype: BankAccountSubtype;
+  cardSubtype: CardSubtype;
+  cardProvider: string;
+  linkedAccountId: string | null;
+  reloadable: boolean;
+  currency: string;
   openingBalance: string;
+  creditLimit: string;
+  currentUsed: string;
+  statementDay: string;
+  paymentDueDay: string;
+  minimumBalance: string;
+  interestRatePercent: string;
+  maturityDate: string;
+  tenureMonths: string;
   accountHolderName: string;
   accountNumberLast4: string;
   notes: string;
@@ -48,7 +112,30 @@ interface AccountFormState {
 }
 
 function emptyAccountForm(color: AccountColor): AccountFormState {
-  return { name: "", type: "bank", bankId: null, openingBalance: "", accountHolderName: "", accountNumberLast4: "", notes: "", color };
+  return {
+    name: "",
+    type: "bank",
+    bankId: null,
+    bankAccountSubtype: "savings",
+    cardSubtype: "credit",
+    cardProvider: "",
+    linkedAccountId: null,
+    reloadable: true,
+    currency: "USD",
+    openingBalance: "",
+    creditLimit: "",
+    currentUsed: "",
+    statementDay: "1",
+    paymentDueDay: "15",
+    minimumBalance: "",
+    interestRatePercent: "",
+    maturityDate: "",
+    tenureMonths: "",
+    accountHolderName: "",
+    accountNumberLast4: "",
+    notes: "",
+    color,
+  };
 }
 
 function accountFormFromAccount(account: Account): AccountFormState {
@@ -56,7 +143,21 @@ function accountFormFromAccount(account: Account): AccountFormState {
     name: account.name,
     type: account.type,
     bankId: account.bankId,
+    bankAccountSubtype: account.bankAccountSubtype ?? "savings",
+    cardSubtype: account.cardSubtype ?? "credit",
+    cardProvider: account.cardProvider ?? "",
+    linkedAccountId: account.linkedAccountId,
+    reloadable: account.reloadable ?? true,
+    currency: account.currency ?? "USD",
     openingBalance: String(account.openingBalance),
+    creditLimit: "",
+    currentUsed: "",
+    statementDay: "1",
+    paymentDueDay: "15",
+    minimumBalance: account.minimumBalance != null ? String(account.minimumBalance) : "",
+    interestRatePercent: account.interestRatePercent != null ? String(account.interestRatePercent) : "",
+    maturityDate: account.maturityDate != null ? account.maturityDate.toISOString().slice(0, 10) : "",
+    tenureMonths: account.tenureMonths != null ? String(account.tenureMonths) : "",
     accountHolderName: account.accountHolderName ?? "",
     accountNumberLast4: account.accountNumberLast4 ?? "",
     notes: account.notes ?? "",
@@ -73,13 +174,15 @@ export function AccountsWorkspace() {
 
   const { items: accountsOverviewList, isLoading } = useAccountsOverview();
   const { data: rawAccounts = [] } = useAccounts();
+  const { data: creditCards = [] } = useCreditCards();
   const actions = useAccountActions();
+  const cardActions = useCreditCardActions();
 
   const [addOpen, setAddOpen] = useState(false);
   const [editingAccount, setEditingAccount] = useState<Account | null>(null);
   const [deletingAccount, setDeletingAccount] = useState<Account | null>(null);
   const [deleting, setDeleting] = useState(false);
-  const [deletionImpact, setDeletionImpact] = useState<AccountDeletionImpact | null>(null);
+  const [deletionImpact, setDeletionImpact] = useState<AccountDeletionImpact | CreditCardDeletionImpact | null>(null);
   const [form, setForm] = useState<AccountFormState>(() => emptyAccountForm("blue"));
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -107,47 +210,30 @@ export function AccountsWorkspace() {
 
   async function handleSave() {
     if (!actions) return;
-    const name = form.name.trim();
-    if (!name) {
-      setFormError("Account name is required.");
+
+    const validated = validateAccountForm(form as AccountFormInput, !!editingAccount);
+    if (!validated.ok) {
+      setFormError(validated.error);
       return;
     }
-    if (form.accountNumberLast4 && !/^\d{4}$/.test(form.accountNumberLast4)) {
-      setFormError("Account number must be exactly 4 digits.");
-      return;
-    }
+
+    const action = buildSaveAction(form as AccountFormInput, validated, !!editingAccount, {
+      colorValue: colorValueForAccountColor(form.color),
+    });
 
     setSaving(true);
     setFormError(null);
     try {
-      if (editingAccount) {
-        await actions.editAccount(editingAccount, {
-          name,
-          type: form.type,
-          bankId: form.type === "bank" ? form.bankId : null,
-          colorValue: colorValueForAccountColor(form.color),
-          accountHolderName: form.accountHolderName || null,
-          accountNumberLast4: form.accountNumberLast4 || null,
-          notes: form.notes || null,
-        });
+      if (action.kind === "editAccount") {
+        if (!editingAccount) return;
+        await actions.editAccount(editingAccount, { ...action.params, notes: form.notes || null });
         setEditingAccount(null);
+      } else if (action.kind === "createCreditCard") {
+        if (!cardActions) return;
+        await cardActions.createCard(action.params);
+        setAddOpen(false);
       } else {
-        const openingBalance = Number(form.openingBalance);
-        if (!Number.isFinite(openingBalance)) {
-          setFormError("Opening balance must be a number.");
-          setSaving(false);
-          return;
-        }
-        await actions.createAccount({
-          name,
-          type: form.type,
-          bankId: form.type === "bank" ? form.bankId : null,
-          openingBalance,
-          colorValue: colorValueForAccountColor(form.color),
-          accountHolderName: form.accountHolderName || null,
-          accountNumberLast4: form.accountNumberLast4 || null,
-          notes: form.notes || null,
-        });
+        await actions.createAccount({ ...action.params, notes: form.notes || null });
         setAddOpen(false);
       }
     } catch (e) {
@@ -157,16 +243,33 @@ export function AccountsWorkspace() {
     }
   }
 
+  // An Account of type "card" with cardSubtype "credit" always has exactly one linked
+  // CreditCardProfile (see useCreditCardActions().createCard) — deleting it must go through
+  // the credit-card-aware cascade (permanentlyDeleteCreditCardAndHistory), not the plain
+  // account cascade, or the CreditCardProfile (plus its linked EMIs/statements/shared limit)
+  // would be silently orphaned. Every other account type has no such linked record.
+  const deletingCreditCard = deletingAccount
+    ? creditCards.find((c) => c.accountId === deletingAccount.id)
+    : undefined;
+
   useEffect(() => {
-    if (!actions || !deletingAccount) return;
+    if (!deletingAccount) return;
     let cancelled = false;
-    actions.previewAccountDeletion(deletingAccount).then((impact) => {
-      if (!cancelled) setDeletionImpact(impact);
-    });
+    if (deletingCreditCard) {
+      if (!cardActions) return;
+      cardActions.previewCardDeletion(deletingCreditCard).then((impact) => {
+        if (!cancelled) setDeletionImpact(impact);
+      });
+    } else {
+      if (!actions) return;
+      actions.previewAccountDeletion(deletingAccount).then((impact) => {
+        if (!cancelled) setDeletionImpact(impact);
+      });
+    }
     return () => {
       cancelled = true;
     };
-  }, [actions, deletingAccount]);
+  }, [actions, cardActions, deletingAccount, deletingCreditCard]);
 
   const deletionImpactRows: DestructiveDeleteImpactRow[] | null = deletionImpact && [
     { label: `${deletionImpact.transactionCount} transaction${deletionImpact.transactionCount === 1 ? "" : "s"}`, count: deletionImpact.transactionCount },
@@ -174,18 +277,31 @@ export function AccountsWorkspace() {
     { label: `${deletionImpact.expenseCount} shared/assigned expense${deletionImpact.expenseCount === 1 ? "" : "s"}`, count: deletionImpact.expenseCount },
     { label: `${deletionImpact.affectedPersonCount} person${deletionImpact.affectedPersonCount === 1 ? "'s" : "s'"} balance will be recalculated`, count: deletionImpact.affectedPersonCount },
     { label: `${deletionImpact.billCount} bill${deletionImpact.billCount === 1 ? "" : "s"} paying from this account`, count: deletionImpact.billCount },
+    ...("emiCount" in deletionImpact
+      ? [
+          { label: `${deletionImpact.emiCount} linked EMI${deletionImpact.emiCount === 1 ? "" : "s"}`, count: deletionImpact.emiCount },
+          { label: `${deletionImpact.statementCount} statement${deletionImpact.statementCount === 1 ? "" : "s"}`, count: deletionImpact.statementCount },
+          { label: "Shared credit limit will also be removed (no other card uses it)", count: deletionImpact.sharedLimitWillBeRemoved ? 1 : 0 },
+        ]
+      : []),
   ];
 
   async function handleDelete() {
-    if (!actions || !deletingAccount) return;
+    if (!deletingAccount) return;
     setDeleting(true);
     try {
-      await actions.deleteAccount(deletingAccount);
+      if (deletingCreditCard) {
+        if (!cardActions) return;
+        await cardActions.deleteCard(deletingCreditCard);
+      } else {
+        if (!actions) return;
+        await actions.deleteAccount(deletingAccount);
+      }
       if (selectedId === deletingAccount.id) setSelectedId(undefined);
       setDeletingAccount(null);
     } catch {
-      // Failed — the toast from useAccountActions already explains why; keep the
-      // dialog open so the user isn't left guessing whether the delete "did nothing".
+      // Failed — the toast from useAccountActions/useCreditCardActions already explains why;
+      // keep the dialog open so the user isn't left guessing whether the delete "did nothing".
     } finally {
       setDeleting(false);
     }
@@ -199,6 +315,11 @@ export function AccountsWorkspace() {
   const selectedType = ACCOUNT_TYPE_OPTIONS.find((o) => o.value === form.type) ?? ACCOUNT_TYPE_OPTIONS[0];
   const SelectedTypeIcon = selectedType.icon;
   const selectedBank = bankById(form.bankId);
+  const formBankSubtype = form.type === "bank" ? form.bankAccountSubtype : null;
+  const formCardSubtype = form.type === "card" ? form.cardSubtype : null;
+  const formIsDeposit = isDepositSubtype(formBankSubtype);
+  const visibility = fieldVisibilityFor(form.type, formBankSubtype, formCardSubtype, !!editingAccount);
+  const linkableBankAccounts = (rawAccounts as Account[]).filter((a) => a.type === "bank");
 
   const filtered = useMemo(() => {
     return accountsOverviewList.filter((account) => {
@@ -217,17 +338,19 @@ export function AccountsWorkspace() {
 
   if (isLoading) {
     return (
-      <div className="flex flex-col gap-6">
-        <AccountsHeader />
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {Array.from({ length: 4 }, (_, i) => (
-            <Skeleton key={i} className="h-28 rounded-2xl" />
-          ))}
-        </div>
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {Array.from({ length: 3 }, (_, i) => (
-            <Skeleton key={i} className="h-44 rounded-2xl" />
-          ))}
+      <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
+        <div className="flex min-w-0 flex-1 flex-col gap-6">
+          <AccountsHeader />
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            {Array.from({ length: 4 }, (_, i) => (
+              <Skeleton key={i} className="h-28 rounded-2xl" />
+            ))}
+          </div>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {Array.from({ length: 3 }, (_, i) => (
+              <Skeleton key={i} className="h-44 rounded-2xl" />
+            ))}
+          </div>
         </div>
       </div>
     );
@@ -415,6 +538,109 @@ export function AccountsWorkspace() {
                 </label>
               )}
 
+              {form.type === "bank" && (
+                <div className="flex flex-col gap-1.5">
+                  <span className="text-xs font-medium text-muted-foreground">Bank Account Type</span>
+                  <div className="flex flex-wrap gap-2">
+                    {BANK_ACCOUNT_SUBTYPE_OPTIONS.map((o) => {
+                      const selected = form.bankAccountSubtype === o.value;
+                      return (
+                        <button
+                          key={o.value}
+                          type="button"
+                          onClick={() => setForm((f) => ({ ...f, bankAccountSubtype: o.value }))}
+                          className={cn(
+                            "flex items-center gap-1.5 border px-3 py-1.5 text-xs font-semibold transition-colors",
+                            selected
+                              ? "border-primary bg-primary/10 text-primary"
+                              : "border-border text-muted-foreground hover:bg-muted",
+                          )}
+                        >
+                          {o.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {form.type === "card" && (
+                <div className="flex flex-col gap-1.5">
+                  <span className="text-xs font-medium text-muted-foreground">What type of card is this?</span>
+                  <div className="flex flex-wrap gap-2">
+                    {CARD_SUBTYPE_OPTIONS.map((o) => {
+                      const selected = form.cardSubtype === o.value;
+                      const Icon = o.icon;
+                      return (
+                        <button
+                          key={o.value}
+                          type="button"
+                          disabled={!!editingAccount}
+                          onClick={() => setForm((f) => ({ ...f, cardSubtype: o.value }))}
+                          className={cn(
+                            "flex items-center gap-1.5 border px-3 py-1.5 text-xs font-semibold transition-colors",
+                            selected
+                              ? "border-primary bg-primary/10 text-primary"
+                              : "border-border text-muted-foreground hover:bg-muted",
+                            !!editingAccount && "cursor-not-allowed opacity-60 hover:bg-transparent",
+                          )}
+                        >
+                          <Icon className="size-3.5" />
+                          {o.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {editingAccount && (
+                    <span className="text-[11px] text-muted-foreground">Card type can&apos;t be changed after creation.</span>
+                  )}
+                </div>
+              )}
+
+              {form.type === "card" && visibility.bankCombobox && (
+                <label className="flex flex-col gap-1">
+                  <span className="text-xs font-medium text-muted-foreground">Issuing Bank / Provider</span>
+                  <BankCombobox
+                    value={form.bankId}
+                    onChange={(bankId) => setForm((f) => ({ ...f, bankId }))}
+                    placeholder="Search for your bank…"
+                  />
+                </label>
+              )}
+
+              {form.type === "card" && visibility.cardProvider && (
+                <label className="flex flex-col gap-1">
+                  <span className="text-xs font-medium text-muted-foreground">Provider</span>
+                  <input
+                    className="h-10 w-full rounded-none border border-border bg-background px-3 text-sm outline-none transition-colors focus:border-primary"
+                    placeholder="e.g. Amazon Pay, Niyo, HDFC"
+                    value={form.cardProvider}
+                    onChange={(e) => setForm((f) => ({ ...f, cardProvider: e.target.value }))}
+                  />
+                </label>
+              )}
+
+              {form.type === "card" && visibility.linkedBankAccount && (
+                <label className="flex flex-col gap-1">
+                  <span className="text-xs font-medium text-muted-foreground">Linked Bank Account</span>
+                  <select
+                    className="h-10 w-full rounded-none border border-border bg-background px-3 text-sm outline-none transition-colors focus:border-primary"
+                    value={form.linkedAccountId ?? ""}
+                    onChange={(e) => setForm((f) => ({ ...f, linkedAccountId: e.target.value || null }))}
+                  >
+                    <option value="">Select a bank account…</option>
+                    {linkableBankAccounts.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.name}
+                      </option>
+                    ))}
+                  </select>
+                  {linkableBankAccounts.length === 0 && (
+                    <span className="text-[11px] text-muted-foreground">Add a bank account first to link a debit card to it.</span>
+                  )}
+                </label>
+              )}
+
               <div className="flex flex-col gap-1.5">
                 <span className="text-xs font-medium text-muted-foreground">Color</span>
                 <div className="flex flex-wrap gap-2">
@@ -439,9 +665,11 @@ export function AccountsWorkspace() {
                 </div>
               </div>
 
-              {!editingAccount && (
+              {form.type !== "card" && visibility.openingBalance && (
                 <label className="flex flex-col gap-1">
-                  <span className="text-xs font-medium text-muted-foreground">Opening Balance</span>
+                  <span className="text-xs font-medium text-muted-foreground">
+                    {formIsDeposit ? "Deposit Amount" : "Opening Balance"}
+                  </span>
                   <div className="relative">
                     <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary-accent-text">₹</span>
                     <input
@@ -454,33 +682,217 @@ export function AccountsWorkspace() {
                   </div>
                 </label>
               )}
+
+              {form.type === "card" && visibility.creditLimit && (
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <label className="flex flex-col gap-1">
+                    <span className="text-xs font-medium text-muted-foreground">Credit Limit</span>
+                    <div className="relative">
+                      <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary">₹</span>
+                      <input
+                        type="number"
+                        className="h-10 w-full rounded-none border border-primary/30 bg-primary/5 pr-3 pl-7 text-base font-semibold outline-none transition-colors focus:border-primary"
+                        placeholder="0.00"
+                        value={form.creditLimit}
+                        onChange={(e) => setForm((f) => ({ ...f, creditLimit: e.target.value }))}
+                      />
+                    </div>
+                  </label>
+                  <label className="flex flex-col gap-1">
+                    <span className="text-xs font-medium text-muted-foreground">Current Used / Outstanding (optional)</span>
+                    <div className="relative">
+                      <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary">₹</span>
+                      <input
+                        type="number"
+                        className="h-10 w-full rounded-none border border-border bg-background pr-3 pl-7 text-sm outline-none transition-colors focus:border-primary"
+                        placeholder="0.00"
+                        value={form.currentUsed}
+                        onChange={(e) => setForm((f) => ({ ...f, currentUsed: e.target.value }))}
+                      />
+                    </div>
+                  </label>
+                  <div className="flex flex-col gap-1 sm:col-span-2">
+                    <span className="text-xs font-medium text-muted-foreground">Available / Remaining Credit</span>
+                    <p className="h-10 flex items-center border border-dashed border-border bg-background px-3 text-sm font-semibold text-foreground">
+                      ₹{availableCredit(Number(form.creditLimit) || 0, Number(form.currentUsed) || 0).toLocaleString("en-IN")}
+                    </p>
+                    <span className="text-[11px] text-muted-foreground">Calculated as Credit Limit − Current Used, never entered directly.</span>
+                  </div>
+                  <label className="flex flex-col gap-1">
+                    <span className="text-xs font-medium text-muted-foreground">Statement Date (optional)</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={31}
+                      className="h-10 w-full rounded-none border border-border bg-background px-3 text-sm outline-none transition-colors focus:border-primary"
+                      placeholder="e.g. 1"
+                      value={form.statementDay}
+                      onChange={(e) => setForm((f) => ({ ...f, statementDay: e.target.value }))}
+                    />
+                    <span className="text-[11px] text-muted-foreground">Day of month — can be changed later from Credit Cards.</span>
+                  </label>
+                  <label className="flex flex-col gap-1">
+                    <span className="text-xs font-medium text-muted-foreground">Payment Due Date (optional)</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={31}
+                      className="h-10 w-full rounded-none border border-border bg-background px-3 text-sm outline-none transition-colors focus:border-primary"
+                      placeholder="e.g. 15"
+                      value={form.paymentDueDay}
+                      onChange={(e) => setForm((f) => ({ ...f, paymentDueDay: e.target.value }))}
+                    />
+                    <span className="text-[11px] text-muted-foreground">Day of month — can be changed later from Credit Cards.</span>
+                  </label>
+                </div>
+              )}
+
+              {form.type === "card" && visibility.openingBalance && (
+                <label className="flex flex-col gap-1">
+                  <span className="text-xs font-medium text-muted-foreground">Initial Balance</span>
+                  <div className="relative">
+                    <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary">₹</span>
+                    <input
+                      type="number"
+                      className="h-10 w-full rounded-none border border-primary/30 bg-primary/5 pr-3 pl-7 text-base font-semibold outline-none transition-colors focus:border-primary"
+                      placeholder="0.00"
+                      value={form.openingBalance}
+                      onChange={(e) => setForm((f) => ({ ...f, openingBalance: e.target.value }))}
+                    />
+                  </div>
+                  <span className="text-[11px] text-muted-foreground">Current balance starts equal to this and updates as the card is used.</span>
+                </label>
+              )}
+
+              {form.type === "card" && visibility.currentBalanceReadOnly && editingAccount && (
+                <div className="flex flex-col gap-1">
+                  <span className="text-xs font-medium text-muted-foreground">Current Balance</span>
+                  <p className="flex h-10 items-center border border-dashed border-border bg-background px-3 text-sm font-semibold text-foreground">
+                    ₹{editingAccount.currentBalance.toLocaleString("en-IN")}
+                  </p>
+                  <span className="text-[11px] text-muted-foreground">Tracked automatically from this card's transactions — not editable here.</span>
+                </div>
+              )}
+
+              {form.type === "card" && visibility.reloadable && (
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    className="size-4"
+                    checked={form.reloadable}
+                    onChange={(e) => setForm((f) => ({ ...f, reloadable: e.target.checked }))}
+                  />
+                  <span className="text-xs font-medium text-muted-foreground">Reloadable (can be topped up again)</span>
+                </label>
+              )}
+
+              {form.type === "card" && visibility.currency && (
+                <label className="flex flex-col gap-1">
+                  <span className="text-xs font-medium text-muted-foreground">Currency</span>
+                  <select
+                    className="h-10 w-full rounded-none border border-border bg-background px-3 text-sm outline-none transition-colors focus:border-primary"
+                    value={form.currency}
+                    onChange={(e) => setForm((f) => ({ ...f, currency: e.target.value }))}
+                  >
+                    {CURRENCY_OPTIONS.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+
+              {form.type === "bank" && visibility.minimumBalance && (
+                <label className="flex flex-col gap-1">
+                  <span className="text-xs font-medium text-muted-foreground">Minimum Balance Requirement (optional)</span>
+                  <div className="relative">
+                    <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary">₹</span>
+                    <input
+                      type="number"
+                      className="h-10 w-full rounded-none border border-border bg-background pr-3 pl-7 text-sm outline-none transition-colors focus:border-primary"
+                      placeholder="0.00"
+                      value={form.minimumBalance}
+                      onChange={(e) => setForm((f) => ({ ...f, minimumBalance: e.target.value }))}
+                    />
+                  </div>
+                </label>
+              )}
+
+              {form.type === "bank" && visibility.depositFields && (
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <label className="flex flex-col gap-1">
+                    <span className="text-xs font-medium text-muted-foreground">Interest Rate (% p.a.)</span>
+                    <div className="relative">
+                      <Percent className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+                      <input
+                        type="number"
+                        step="0.01"
+                        className="h-10 w-full rounded-none border border-border bg-background pr-3 pl-9 text-sm outline-none transition-colors focus:border-primary"
+                        placeholder="e.g. 7.1"
+                        value={form.interestRatePercent}
+                        onChange={(e) => setForm((f) => ({ ...f, interestRatePercent: e.target.value }))}
+                      />
+                    </div>
+                  </label>
+                  <label className="flex flex-col gap-1">
+                    <span className="text-xs font-medium text-muted-foreground">Tenure (months)</span>
+                    <input
+                      type="number"
+                      className="h-10 w-full rounded-none border border-border bg-background px-3 text-sm outline-none transition-colors focus:border-primary"
+                      placeholder="e.g. 12"
+                      value={form.tenureMonths}
+                      onChange={(e) => setForm((f) => ({ ...f, tenureMonths: e.target.value }))}
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1 sm:col-span-2">
+                    <span className="text-xs font-medium text-muted-foreground">Maturity Date</span>
+                    <div className="relative">
+                      <Calendar className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+                      <input
+                        type="date"
+                        className="h-10 w-full rounded-none border border-border bg-background pr-3 pl-9 text-sm outline-none transition-colors focus:border-primary"
+                        value={form.maturityDate}
+                        onChange={(e) => setForm((f) => ({ ...f, maturityDate: e.target.value }))}
+                      />
+                    </div>
+                  </label>
+                </div>
+              )}
+
+              {visibility.accountHolderOrCardholder && (
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <label className="flex flex-col gap-1">
+                    <span className="text-xs font-medium text-muted-foreground">
+                      {form.type === "card" ? "Card Holder Name" : "Account Holder"}
+                    </span>
+                    <div className="relative">
+                      <User className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+                      <input
+                        className="h-10 w-full rounded-none border border-border bg-background pr-3 pl-9 text-sm outline-none transition-colors focus:border-primary"
+                        value={form.accountHolderName}
+                        onChange={(e) => setForm((f) => ({ ...f, accountHolderName: e.target.value }))}
+                      />
+                    </div>
+                  </label>
+                  <label className="flex flex-col gap-1">
+                    <span className="text-xs font-medium text-muted-foreground">
+                      {form.type === "card" ? "Card Number (Last 4 Digits)" : "Last 4 Digits"}
+                    </span>
+                    <input
+                      className="h-10 rounded-none border border-border bg-background px-3 font-mono text-sm tracking-widest outline-none transition-colors focus:border-primary"
+                      placeholder="4021"
+                      maxLength={4}
+                      value={form.accountNumberLast4}
+                      onChange={(e) => setForm((f) => ({ ...f, accountNumberLast4: e.target.value.replace(/\D/g, "") }))}
+                    />
+                  </label>
+                </div>
+              )}
             </div>
 
             <div className="flex flex-col gap-3 bg-muted/30 p-4">
               <SectionLabel icon={FileText}>Additional Info (optional)</SectionLabel>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <label className="flex flex-col gap-1">
-                  <span className="text-xs font-medium text-muted-foreground">Account Holder</span>
-                  <div className="relative">
-                    <User className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
-                    <input
-                      className="h-10 w-full rounded-none border border-border bg-background pr-3 pl-9 text-sm outline-none transition-colors focus:border-primary"
-                      value={form.accountHolderName}
-                      onChange={(e) => setForm((f) => ({ ...f, accountHolderName: e.target.value }))}
-                    />
-                  </div>
-                </label>
-                <label className="flex flex-col gap-1">
-                  <span className="text-xs font-medium text-muted-foreground">Last 4 Digits</span>
-                  <input
-                    className="h-10 rounded-none border border-border bg-background px-3 font-mono text-sm tracking-widest outline-none transition-colors focus:border-primary"
-                    placeholder="4021"
-                    maxLength={4}
-                    value={form.accountNumberLast4}
-                    onChange={(e) => setForm((f) => ({ ...f, accountNumberLast4: e.target.value.replace(/\D/g, "") }))}
-                  />
-                </label>
-              </div>
               <label className="flex flex-col gap-1">
                 <span className="text-xs font-medium text-muted-foreground">Notes</span>
                 <textarea

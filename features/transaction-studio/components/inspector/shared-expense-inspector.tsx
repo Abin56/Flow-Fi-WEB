@@ -15,8 +15,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { formatCurrencyPrecise } from "@/lib/format";
 import type { Person } from "@/lib/models/person";
+import type { ReceivedStatus } from "@/lib/models/expense";
 import { ExpenseRepository, type ExpenseParticipantInput } from "@/lib/repositories/expense-repository";
 import type { SplitParticipantDraft } from "@/lib/models/document-import";
 import { resolveMixedSplit } from "@/lib/split/mixed-split";
@@ -24,6 +26,13 @@ import type { GridRow } from "../../lib/grid-types";
 import { InspectorShell } from "./inspector-shell";
 
 type SplitMode = "equal" | "percentage" | "custom";
+
+/** Collectible-only statuses — "Me" never gets this control (see `ExpenseParticipant.receivedStatus`). */
+const RECEIVED_STATUS_OPTIONS: { value: Exclude<ReceivedStatus, "notApplicable">; label: string }[] = [
+  { value: "yetToReceive", label: "Yet to Receive" },
+  { value: "received", label: "Received" },
+  { value: "excluded", label: "Don't count in received" },
+];
 
 interface DraftParticipant {
   personId: string | null;
@@ -33,6 +42,8 @@ interface DraftParticipant {
   rawValue: string;
   /** "Equal" mode only: false = auto (shares whatever's left of the total equally with other auto rows); true = manually pinned to `rawValue`. */
   locked: boolean;
+  /** See `ReceivedStatus`. Always "notApplicable" for `isMe`; defaults to "yetToReceive" for everyone else. */
+  receivedStatus: ReceivedStatus;
 }
 
 function participantKey(p: { personId: string | null; name: string }): string {
@@ -46,9 +57,16 @@ function toDrafts(existing: SplitParticipantDraft[] | undefined, existingSplitTy
     // flatten a previously uneven split down to equal shares the moment the sheet opens.
     // A re-opened "equal" split is genuinely all-equal, so auto (unlocked) is correct there.
     const locked = existingSplitType === "custom";
-    return existing.map((p) => ({ personId: p.personId, name: p.name, isMe: p.isMe, rawValue: String(p.share), locked }));
+    return existing.map((p) => ({
+      personId: p.personId,
+      name: p.name,
+      isMe: p.isMe,
+      rawValue: String(p.share),
+      locked,
+      receivedStatus: p.isMe ? "notApplicable" : (p.receivedStatus ?? "yetToReceive"),
+    }));
   }
-  return [{ personId: null, name: "Me", isMe: true, rawValue: String(total), locked: false }];
+  return [{ personId: null, name: "Me", isMe: true, rawValue: String(total), locked: false, receivedStatus: "notApplicable" }];
 }
 
 export function SharedExpenseInspector({
@@ -94,6 +112,7 @@ export function SharedExpenseInspector({
         name: p.name,
         share: mixed.shares.find((s) => s.key === participantKey(p))?.share ?? 0,
         isMe: p.isMe,
+        receivedStatus: p.receivedStatus,
       }));
       return { resolved: shares, error: null as string | null };
     }
@@ -103,6 +122,7 @@ export function SharedExpenseInspector({
         name: p.name,
         value: Number(p.rawValue) || 0,
         isMe: p.isMe,
+        receivedStatus: p.receivedStatus,
       }));
       const shares = ExpenseRepository.resolveShares({ type: mode, total: row.amount, inputs });
       return { resolved: shares, error: null as string | null };
@@ -125,6 +145,7 @@ export function SharedExpenseInspector({
             name: p.name,
             share: nextMixed.shares.find((s) => s.key === participantKey(p))?.share ?? 0,
             isMe: p.isMe,
+            receivedStatus: p.receivedStatus,
           })),
           // Every row resolves to a concrete amount, so this persists identically to a
           // hand-typed "Exact Amount" split — no schema or mobile-parity change needed.
@@ -137,10 +158,11 @@ export function SharedExpenseInspector({
         name: p.name,
         value: Number(p.rawValue) || 0,
         isMe: p.isMe,
+        receivedStatus: p.receivedStatus,
       }));
       const shares = ExpenseRepository.resolveShares({ type: nextMode, total: row.amount, inputs });
       onCommit(
-        shares.map((s) => ({ personId: s.personId, name: s.name, share: s.share, isMe: s.isMe })),
+        shares.map((s) => ({ personId: s.personId, name: s.name, share: s.share, isMe: s.isMe, receivedStatus: s.receivedStatus })),
         nextMode,
       );
     } catch {
@@ -149,7 +171,10 @@ export function SharedExpenseInspector({
   }
 
   function addParticipant(person?: Person) {
-    const next = [...participants, { personId: person?.id ?? null, name: person?.name ?? "", isMe: false, rawValue: "0", locked: false }];
+    const next = [
+      ...participants,
+      { personId: person?.id ?? null, name: person?.name ?? "", isMe: false, rawValue: "0", locked: false, receivedStatus: "yetToReceive" as ReceivedStatus },
+    ];
     setParticipants(next);
     commitIfValid(next, mode);
   }
@@ -213,46 +238,68 @@ export function SharedExpenseInspector({
         <div className="flex flex-col gap-2">
           <Label className="text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">Participants</Label>
           {participants.map((p, i) => (
-            <div key={i} className="flex items-center gap-2">
-              <UserRound className="size-3.5 shrink-0 text-muted-foreground" />
-              <Input
-                value={p.name}
-                placeholder="Name"
-                disabled={p.isMe}
-                onChange={(e) => updateParticipant(i, { name: e.target.value })}
-                className="h-8 flex-1 text-sm"
-              />
-              {isMixedMode ? (
-                <>
+            <div key={i} className="flex flex-col gap-1.5 rounded-md border border-transparent px-0 py-0.5">
+              <div className="flex items-center gap-2">
+                <UserRound className="size-3.5 shrink-0 text-muted-foreground" />
+                <Input
+                  value={p.name}
+                  placeholder="Name"
+                  disabled={p.isMe}
+                  onChange={(e) => updateParticipant(i, { name: e.target.value })}
+                  className="h-8 flex-1 text-sm"
+                />
+                {isMixedMode ? (
+                  <>
+                    <Input
+                      value={p.locked ? p.rawValue : String(mixed.shares.find((s) => s.key === participantKey(p))?.share ?? 0)}
+                      onChange={(e) => editEqualAmount(i, e.target.value)}
+                      className="h-8 w-20 shrink-0 text-right text-sm tabular-nums"
+                      inputMode="decimal"
+                    />
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      className={`h-8 shrink-0 gap-1 px-1.5 text-[10px] ${p.locked ? "text-foreground" : "text-muted-foreground"}`}
+                      aria-label={p.locked ? `${p.name} amount is manual — click to switch to Equal` : `${p.name} amount is Equal — click to lock a manual amount`}
+                      onClick={() => toggleLock(i)}
+                    >
+                      {p.locked ? <Lock className="size-3" /> : null}
+                      {p.locked ? "Manual" : "Equal"}
+                    </Button>
+                  </>
+                ) : (
                   <Input
-                    value={p.locked ? p.rawValue : String(mixed.shares.find((s) => s.key === participantKey(p))?.share ?? 0)}
-                    onChange={(e) => editEqualAmount(i, e.target.value)}
+                    value={p.rawValue}
+                    onChange={(e) => updateParticipant(i, { rawValue: e.target.value })}
                     className="h-8 w-20 shrink-0 text-right text-sm tabular-nums"
                     inputMode="decimal"
                   />
-                  <Button
-                    variant="ghost"
-                    size="xs"
-                    className={`h-8 shrink-0 gap-1 px-1.5 text-[10px] ${p.locked ? "text-foreground" : "text-muted-foreground"}`}
-                    aria-label={p.locked ? `${p.name} amount is manual — click to switch to Equal` : `${p.name} amount is Equal — click to lock a manual amount`}
-                    onClick={() => toggleLock(i)}
-                  >
-                    {p.locked ? <Lock className="size-3" /> : null}
-                    {p.locked ? "Manual" : "Equal"}
+                )}
+                {!p.isMe && (
+                  <Button variant="ghost" size="icon-xs" aria-label={`Remove ${p.name}`} onClick={() => removeParticipant(i)}>
+                    <Trash2 className="size-3.5" />
                   </Button>
-                </>
-              ) : (
-                <Input
-                  value={p.rawValue}
-                  onChange={(e) => updateParticipant(i, { rawValue: e.target.value })}
-                  className="h-8 w-20 shrink-0 text-right text-sm tabular-nums"
-                  inputMode="decimal"
-                />
-              )}
+                )}
+              </div>
               {!p.isMe && (
-                <Button variant="ghost" size="icon-xs" aria-label={`Remove ${p.name}`} onClick={() => removeParticipant(i)}>
-                  <Trash2 className="size-3.5" />
-                </Button>
+                <div className="ml-5.5 flex items-center gap-1.5">
+                  <span className="text-[10px] text-muted-foreground">Payment status</span>
+                  <Select
+                    value={p.receivedStatus}
+                    onValueChange={(v) => updateParticipant(i, { receivedStatus: v as ReceivedStatus })}
+                  >
+                    <SelectTrigger className="h-7 w-42 text-xs" aria-label={`${p.name || "This person"}'s payment status`}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {RECEIVED_STATUS_OPTIONS.map((o) => (
+                        <SelectItem key={o.value} value={o.value}>
+                          {o.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
               )}
             </div>
           ))}

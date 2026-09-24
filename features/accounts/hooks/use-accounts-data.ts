@@ -38,7 +38,7 @@
 import { useMemo } from "react";
 import { useAccounts, useNetWorth } from "@/hooks/use-accounts";
 import { useTransactions } from "@/hooks/use-transactions";
-import { signedAmount, type Transaction } from "@/lib/models/transaction";
+import { compareTransactionsNewestFirst, signedAmount, type Transaction } from "@/lib/models/transaction";
 import type { Account, AccountType } from "@/lib/models/account";
 import type { AccountColor } from "@/lib/mock/accounts-overview-data";
 import {
@@ -229,7 +229,7 @@ export function useRecentAccountTransactions(limit = 5): { rows: AccountTransact
     return (transactions as Transaction[])
       .filter((t) => t.deletedAt == null)
       .slice()
-      .sort((a, b) => b.dateTime.getTime() - a.dateTime.getTime())
+      .sort(compareTransactionsNewestFirst)
       .slice(0, limit)
       .map((t) => {
         const account = accountById.get(t.accountId);
@@ -256,7 +256,7 @@ export function useAccountTransactions(accountId: string | undefined) {
     return (transactions as Transaction[])
       .filter((t) => t.deletedAt == null && t.accountId === accountId)
       .slice()
-      .sort((a, b) => b.dateTime.getTime() - a.dateTime.getTime());
+      .sort(compareTransactionsNewestFirst);
   }, [transactions, accountId]);
 
   return { transactions: rows, isLoading };

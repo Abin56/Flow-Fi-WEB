@@ -31,6 +31,7 @@ import { usePeople } from "@/hooks/use-people";
 import { useAccounts } from "@/hooks/use-accounts";
 import { useCategories } from "@/hooks/use-categories";
 import type { LedgerEntryType, Person } from "@/lib/models/person";
+import type { ReceivedStatus } from "@/lib/models/expense";
 import { cn } from "@/lib/utils";
 import { toast } from "@/store/toast-store";
 
@@ -45,6 +46,12 @@ const LEDGER_ENTRY_TYPE_OPTIONS: {
   { value: "borrowed", label: "I Borrowed", description: "I owe them", icon: ArrowDownToLine, tone: "success" },
   { value: "repaid", label: "I Repaid", description: "Paid them back", icon: HandCoins, tone: "expense" },
   { value: "receivedBack", label: "Received Back", description: "They paid me back", icon: Wallet, tone: "success" },
+];
+
+/** Mirrors `RECEIVED_STATUS_OPTIONS` in share-expense-dialog.tsx/shared-expense-inspector.tsx — "excluded" doesn't apply to a plain ledger entry, so only the two settlement states are offered here. */
+const ENTRY_RECEIVED_STATUS_OPTIONS: { value: Extract<ReceivedStatus, "yetToReceive" | "received">; label: string }[] = [
+  { value: "yetToReceive", label: "Pending" },
+  { value: "received", label: "Received" },
 ];
 
 interface PersonFormState {
@@ -74,10 +81,11 @@ interface LedgerEntryFormState {
   amount: string;
   date: string;
   note: string;
+  receivedStatus: ReceivedStatus;
 }
 
 function emptyLedgerEntryForm(): LedgerEntryFormState {
-  return { type: "gave", amount: "", date: new Date().toISOString().slice(0, 10), note: "" };
+  return { type: "gave", amount: "", date: new Date().toISOString().slice(0, 10), note: "", receivedStatus: "yetToReceive" };
 }
 
 function PeopleListSkeleton() {
@@ -209,6 +217,7 @@ export function PeopleWorkspace() {
         amount,
         date: new Date(entryForm.date),
         note: entryForm.note || undefined,
+        receivedStatus: entryForm.receivedStatus,
       });
       setAddEntryPerson(null);
     } catch (e) {
@@ -494,6 +503,28 @@ export function PeopleWorkspace() {
                       <p className={cn("truncate text-sm font-semibold", active ? "text-foreground" : "text-foreground/90")}>{o.label}</p>
                       <p className="truncate text-xs text-muted-foreground">{o.description}</p>
                     </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <span className="text-xs font-medium text-muted-foreground">Payment status</span>
+            <div className="grid grid-cols-2 gap-2">
+              {ENTRY_RECEIVED_STATUS_OPTIONS.map((o) => {
+                const active = entryForm.receivedStatus === o.value;
+                return (
+                  <button
+                    key={o.value}
+                    type="button"
+                    onClick={() => setEntryForm((f) => ({ ...f, receivedStatus: o.value }))}
+                    aria-pressed={active}
+                    className={cn(
+                      "rounded-xl border p-2.5 text-center text-sm font-medium transition-colors",
+                      active ? "border-primary/40 bg-primary/10 text-foreground" : "border-border/50 bg-card text-muted-foreground hover:border-border",
+                    )}
+                  >
+                    {o.label}
                   </button>
                 );
               })}

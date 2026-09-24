@@ -1,4 +1,5 @@
 import { CreditCard } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { EmptyState } from "@/components/finance/empty-state";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -27,6 +28,8 @@ export interface CreditUtilizationCardProps {
  * `creditUtilizationPercent`), composed in `useDashboardData`.
  */
 export function CreditUtilizationCard({ utilization, isLoading }: CreditUtilizationCardProps) {
+  const router = useRouter();
+
   if (isLoading) {
     return (
       <section className="surface-flat flex h-full flex-col gap-4 rounded-3xl border border-border/50 p-5">
@@ -43,7 +46,14 @@ export function CreditUtilizationCard({ utilization, isLoading }: CreditUtilizat
     return (
       <section className="surface-flat flex h-full flex-col rounded-3xl border border-border/50 p-5">
         <h2 className="text-sm font-semibold text-foreground">Credit Card Utilization</h2>
-        <EmptyState icon={CreditCard} title="No credit cards yet" description="Add a credit card to track utilization." className="flex-1" />
+        <EmptyState
+          icon={CreditCard}
+          title="No credit cards yet"
+          description="Add a credit card to track utilization."
+          actionLabel="Add Credit Card"
+          onAction={() => router.push("/credit-cards")}
+          className="flex-1"
+        />
       </section>
     );
   }

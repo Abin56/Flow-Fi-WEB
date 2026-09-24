@@ -38,6 +38,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { usePeople } from "@/hooks/use-people";
 import {
+  compareLedgerEntriesNewestFirst,
   isCreditor,
   isDebtor,
   ledgerEntryTypeFromName,
@@ -46,7 +47,8 @@ import {
   type LedgerEntryType,
   type Person,
 } from "@/lib/models/person";
-import { createPersonRepository } from "@/lib/repositories/repository-factory";
+import type { Expense, ExpenseParticipant, ReceivedStatus } from "@/lib/models/expense";
+import { createAccountRepository, createExpenseRepository, createPersonRepository } from "@/lib/repositories/repository-factory";
 import type { CreatePersonParams, EditPersonParams } from "@/lib/repositories/person-repository";
 import { createLedgerRepository } from "@/features/people/lib/ledger-factory";
 import { useAuthStore } from "@/store/auth-store";
@@ -118,12 +120,19 @@ function usePeopleLedgerEntries() {
 
 export interface PersonActivityItem {
   id: string;
+  /** Money direction only (derived from the entry's signed amount) — see `receivedStatus` for whether it's actually settled. */
   type: "received" | "paid";
+  /** Real settlement status — independent of `type`. */
+  receivedStatus: ReceivedStatus;
   description: string;
   amount: number;
   date: string;
   /** Raw `LedgerEntry.date` — for callers that need to compute their own "days since" instead of the formatted `date` string. */
   rawDate: Date;
+  /** The person this entry belongs to — needed to resolve the split-expense participant for the ✓/✕ status toggle. */
+  personId: string;
+  /** `LedgerEntry.transactionRef` — links back to the `Expense`/`Transaction` this entry came from, if any. */
+  transactionRef: string | null;
 }
 
 export interface PersonViewRow {
@@ -148,15 +157,18 @@ function toActivityItem(entry: LedgerEntry): PersonActivityItem {
   return {
     id: entry.id,
     type: amount >= 0 ? "received" : "paid",
+    receivedStatus: entry.receivedStatus,
     description: entry.note || ENTRY_TYPE_LABEL[ledgerEntryTypeFromName(entry.type)],
     amount: Math.abs(amount),
     date: formatDate(entry.date),
     rawDate: entry.date,
+    personId: entry.personId,
+    transactionRef: entry.transactionRef,
   };
 }
 
 function toPersonRow(person: Person, entries: LedgerEntry[]): PersonViewRow {
-  const sortedEntries = entries.slice().sort((a, b) => b.date.getTime() - a.date.getTime());
+  const sortedEntries = entries.slice().sort(compareLedgerEntriesNewestFirst);
   const now = new Date();
 
   return {
@@ -245,12 +257,18 @@ export function usePeopleStats(): { stats: PeopleStatsSummary; isLoading: boolea
 
 export interface RecentPersonTransactionRow {
   id: string;
+  /** Money direction only (derived from the entry's signed amount) — see `receivedStatus` for whether it's actually settled. */
   type: "received" | "paid";
+  /** Real settlement status — independent of `type`. */
+  receivedStatus: ReceivedStatus;
+  personId: string;
   personName: string;
   description: string;
   date: string;
   category: string;
   amount: number;
+  /** `LedgerEntry.transactionRef` — links back to the `Expense`/`Transaction` this entry came from, if any. */
+  transactionRef: string | null;
 }
 
 /**
@@ -270,19 +288,22 @@ export function useRecentPeopleTransactions(limit: number | null = 5): { rows: R
       if (!person) continue;
       for (const entry of entries) all.push({ entry, personName: person.name });
     }
-    const sorted = all.sort((a, b) => b.entry.date.getTime() - a.entry.date.getTime());
+    const sorted = all.sort((a, b) => compareLedgerEntriesNewestFirst(a.entry, b.entry));
     return (limit == null ? sorted : sorted.slice(0, limit))
       .map(({ entry, personName }) => {
         const amount = signedAmount(entry);
         return {
           id: entry.id,
           type: amount >= 0 ? ("received" as const) : ("paid" as const),
+          receivedStatus: entry.receivedStatus,
+          personId: entry.personId,
           personName,
           description: entry.note || ENTRY_TYPE_LABEL[ledgerEntryTypeFromName(entry.type)],
           date: formatDate(entry.date),
           // No spending-category field on `LedgerEntry` — see module doc comment.
           category: ENTRY_TYPE_LABEL[ledgerEntryTypeFromName(entry.type)],
           amount: Math.abs(amount),
+          transactionRef: entry.transactionRef,
         };
       });
   }, [people, entriesByPersonId, limit]);
@@ -298,6 +319,8 @@ export function usePeopleActions() {
   return useMemo(() => {
     if (!uid) return null;
     const personRepository = createPersonRepository(uid);
+    const accountRepository = createAccountRepository(uid);
+    const expenseRepository = createExpenseRepository(uid, accountRepository);
 
     const invalidateLedger = () =>
       queryClient.invalidateQueries({ queryKey: ["people-ledger-entries", uid], exact: false });
@@ -316,7 +339,14 @@ export function usePeopleActions() {
       },
       addLedgerEntry: async (
         person: Person,
-        params: { type: LedgerEntryType; amount: number; date: Date; note?: string; increasesBalance?: boolean },
+        params: {
+          type: LedgerEntryType;
+          amount: number;
+          date: Date;
+          note?: string;
+          increasesBalance?: boolean;
+          receivedStatus?: ReceivedStatus;
+        },
       ) => {
         const ledgerRepository = createLedgerRepository(uid, person.id, personRepository);
         const entry = await ledgerRepository.addEntry(person, params);
@@ -327,6 +357,12 @@ export function usePeopleActions() {
         const ledgerRepository = createLedgerRepository(uid, person.id, personRepository);
         await ledgerRepository.softDeleteEntry(person, entry);
         await invalidateLedger();
+      },
+      /** ✓/✕ quick-toggle on a split-expense ledger row — see `ExpenseRepository.setParticipantReceivedStatus`. */
+      setParticipantReceivedStatus: async (expense: Expense, participant: ExpenseParticipant, receivedStatus: ReceivedStatus) => {
+        const updated = await expenseRepository.setParticipantReceivedStatus(expense, participant, receivedStatus);
+        await invalidateLedger();
+        return updated;
       },
     };
   }, [uid, queryClient]);

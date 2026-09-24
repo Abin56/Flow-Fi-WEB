@@ -20,6 +20,7 @@ import {
   Settings2,
   ShieldCheck,
   ShoppingBag,
+  User,
   Wallet,
   Wifi,
   X as XIcon,
@@ -70,6 +71,7 @@ type LimitSource = "own" | "newShared" | "existingShared";
 
 interface CardFormState {
   name: string;
+  cardHolderName: string;
   creditLimit: string;
   lastFourDigits: string;
   cardNetwork: CardNetwork | "";
@@ -85,6 +87,7 @@ interface CardFormState {
 function emptyCardForm(): CardFormState {
   return {
     name: "",
+    cardHolderName: "",
     creditLimit: "",
     lastFourDigits: "",
     cardNetwork: "",
@@ -102,6 +105,7 @@ function cardFormFromCard(card: CreditCardViewItem, accounts: Account[]): CardFo
   const account = accounts.find((a) => a.id === card.card.accountId);
   return {
     name: card.name,
+    cardHolderName: card.card.cardHolderName ?? "",
     creditLimit: String(card.creditLimit),
     lastFourDigits: card.last4 === "----" ? "" : card.last4,
     cardNetwork: (card.card.cardNetwork as CardNetwork | null) ?? "",
@@ -255,6 +259,15 @@ export function CreditCardsWorkspace() {
       setFormError("Card name is required.");
       return;
     }
+    const cardHolderName = form.cardHolderName.trim();
+    if (!cardHolderName) {
+      setFormError("Card holder name is required.");
+      return;
+    }
+    if (!/^\d{4}$/.test(form.lastFourDigits)) {
+      setFormError("Last 4 digits are required and must be exactly 4 numbers.");
+      return;
+    }
     let creditLimit = 0;
     if (form.limitSource === "own") {
       creditLimit = Number(form.creditLimit);
@@ -274,10 +287,6 @@ export function CreditCardsWorkspace() {
       }
     } else if (form.limitSource === "existingShared" && !form.selectedSharedLimitId) {
       setFormError("Choose a shared credit limit.");
-      return;
-    }
-    if (form.lastFourDigits && !/^\d{4}$/.test(form.lastFourDigits)) {
-      setFormError("Last 4 digits must be exactly 4 numbers.");
       return;
     }
     const statementDay = Number(form.statementDay);
@@ -309,8 +318,9 @@ export function CreditCardsWorkspace() {
         const account = (accounts as Account[]).find((a) => a.id === editingCard.card.accountId);
         await actions.editCard(editingCard.card, account, {
           name,
+          cardHolderName,
           ...(form.limitSource === "own" ? { creditLimit } : {}),
-          lastFourDigits: form.lastFourDigits || null,
+          lastFourDigits: form.lastFourDigits,
           bankId: form.bankId,
           ...(sharedLimitId ? { sharedLimitId } : { clearSharedLimitId: true }),
         });
@@ -319,8 +329,9 @@ export function CreditCardsWorkspace() {
       } else {
         await actions.createCard({
           name,
+          cardHolderName,
           creditLimit,
-          lastFourDigits: form.lastFourDigits || null,
+          lastFourDigits: form.lastFourDigits,
           cardNetwork: form.cardNetwork || null,
           statementDay,
           paymentDueDay,
@@ -539,6 +550,7 @@ export function CreditCardsWorkspace() {
             <div className="flex flex-col gap-2">
               <p className="font-mono text-base tracking-[0.2em] text-white/90">•••• •••• •••• {form.lastFourDigits || "••••"}</p>
               <p className="truncate text-xs font-semibold tracking-wide text-white/80 uppercase">{form.name.trim() || "Card Name"}</p>
+              <p className="truncate text-[11px] font-medium tracking-wide text-white/70 uppercase">{form.cardHolderName.trim() || "Card Holder Name"}</p>
             </div>
           </div>
 
@@ -559,15 +571,19 @@ export function CreditCardsWorkspace() {
 
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <label className="flex flex-col gap-1">
-                <span className="text-xs font-medium text-muted-foreground">Bank</span>
-                <BankCombobox
-                  value={form.bankId}
-                  onChange={(bankId) => setForm((f) => ({ ...f, bankId }))}
-                  placeholder="Search for your bank…"
-                />
+                <span className="text-xs font-medium text-muted-foreground">Card Holder Name</span>
+                <div className="relative">
+                  <User className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+                  <input
+                    className="h-10 w-full rounded-none border border-border bg-background pr-3 pl-9 text-sm outline-none transition-colors focus:border-primary"
+                    placeholder="e.g. Abin John"
+                    value={form.cardHolderName}
+                    onChange={(e) => setForm((f) => ({ ...f, cardHolderName: e.target.value }))}
+                  />
+                </div>
               </label>
               <label className="flex flex-col gap-1">
-                <span className="text-xs font-medium text-muted-foreground">Last 4 Digits</span>
+                <span className="text-xs font-medium text-muted-foreground">Card Number (Last 4 Digits)</span>
                 <input
                   className="h-10 rounded-none border border-border bg-background px-3 font-mono text-sm tracking-widest outline-none transition-colors focus:border-primary"
                   placeholder="4021"
@@ -577,6 +593,15 @@ export function CreditCardsWorkspace() {
                 />
               </label>
             </div>
+
+            <label className="flex flex-col gap-1">
+              <span className="text-xs font-medium text-muted-foreground">Bank</span>
+              <BankCombobox
+                value={form.bankId}
+                onChange={(bankId) => setForm((f) => ({ ...f, bankId }))}
+                placeholder="Search for your bank…"
+              />
+            </label>
           </div>
 
           <div className="flex flex-col gap-3 bg-muted/30 p-4">

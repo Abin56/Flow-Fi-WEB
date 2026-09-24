@@ -42,7 +42,7 @@
  */
 
 import { useMemo } from "react";
-import { planInstallmentSettlement } from "@/lib/engines/installment-settlement";
+import { planInstallmentSettlement, totalApplied } from "@/lib/engines/installment-settlement";
 import { outstandingPrincipalFor } from "@/lib/engines/loan-outstanding";
 import {
   installmentStatus,
@@ -63,9 +63,16 @@ import {
   createInstallmentPaymentRepositoryFor,
   createInstallmentRepositoryFor,
   createLoanRepository,
+  createPersonRepository,
 } from "@/lib/repositories/repository-factory";
 import { useAllLoanInstallments, useLoanPersons, useLoans, useTrashedLoans } from "@/hooks/use-loans";
 import { useAuthStore } from "@/store/auth-store";
+import {
+  postLoanCreatedLedgerEntry,
+  postLoanPaymentLedgerEntry,
+  reverseLoanLedgerEntries,
+  restoreLoanLedgerEntries,
+} from "@/features/loans/lib/loan-ledger-sync";
 
 const ACCENT_CYCLE: LoanRow["accent"][] = ["primary", "success", "warning", "purple", "expense"];
 
@@ -211,8 +218,16 @@ export function useLoanActions() {
   return useMemo(() => {
     if (!uid) return null;
     const loanRepository = createLoanRepository(uid);
+    const personRepository = createPersonRepository(uid);
 
     return {
+      // Lets the loan form's person picker create a brand-new lender/borrower inline instead of
+      // requiring them to already exist on the People page first. Opening balance always starts at 0 —
+      // `postLoanCreatedLedgerEntry` (called right after `createLoan`) is what actually posts the loan
+      // amount onto their ledger, so seeding an opening balance here would double-count it.
+      createPerson: async (name: string) => {
+        return personRepository.createPerson({ name, avatarColorValue: 0, openingBalance: 0 });
+      },
       createLoan: async (params: CreateLoanFormParams) => {
         // Personal: picks a real Person (`personId`), no institution fields.
         // Institutional: no more find-or-create-person hack — the lender
@@ -239,6 +254,7 @@ export function useLoanActions() {
           branch: params.category === "institutional" ? params.branch : null,
           payerPersonId: params.payerPersonId,
         });
+        await postLoanCreatedLedgerEntry(uid, loan, personRepository);
         return loan;
       },
       editLoan: async (loan: Loan, params: EditLoanFormParams) => {
@@ -303,9 +319,11 @@ export function useLoanActions() {
       // stops fanning out to them too, so they simply go dormant until the loan is restored or purged.
       deleteLoan: async (loan: Loan) => {
         await loanRepository.softDelete(loan);
+        await reverseLoanLedgerEntries(uid, loan, personRepository);
       },
       restoreLoan: async (loan: Loan) => {
         await loanRepository.restore(loan);
+        await restoreLoanLedgerEntries(uid, loan, personRepository);
       },
       // Cascades schedule/installments/payments — the actual point of no return, reachable only from
       // the trash view's "Delete Forever", matching `deleteEmi`'s existing permanentlyDeleteEmi posture.
@@ -331,6 +349,7 @@ export function useLoanActions() {
           installmentRepository,
         );
         await paymentRepository.recordPayment(installment, params);
+        await postLoanPaymentLedgerEntry(uid, loan, personRepository, params);
       },
       // Wraps `planInstallmentSettlement` (port of `InstallmentSettlement.plan`) — fans one entered
       // amount across the oldest unpaid installments, recording one payment per installment touched.
@@ -351,6 +370,10 @@ export function useLoanActions() {
             installmentRepository,
           );
           await paymentRepository.recordPayment(installment, { amount: portion, date: params.date, note: params.note });
+        }
+        const appliedAmount = totalApplied(plan);
+        if (appliedAmount > 0) {
+          await postLoanPaymentLedgerEntry(uid, loan, personRepository, { ...params, amount: appliedAmount });
         }
         return plan;
       },

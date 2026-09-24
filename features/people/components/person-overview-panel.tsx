@@ -6,7 +6,6 @@ import {
   ArrowUpFromLine,
   Bell,
   Calendar,
-  Clock,
   HandCoins,
   Paperclip,
   Pencil,
@@ -184,7 +183,6 @@ export function PersonOverviewPanel({
       {tab === "Overview" && (
         <div className="divide-y divide-border/50">
           <InfoRow icon={Calendar} label="First Transaction" value={person.firstTransaction} />
-          <InfoRow icon={Clock} label="Last Activity" value={person.lastActivity} />
           <InfoRow icon={Users} label="Relationship" value={person.relationship} />
         </div>
       )}

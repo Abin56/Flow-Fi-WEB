@@ -1,4 +1,5 @@
 import { ChevronRight, Landmark, Wallet } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { BankLogo } from "@/components/finance/bank-logo";
 import { EmptyState } from "@/components/finance/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -30,6 +31,8 @@ export interface AccountsOverviewCardProps {
 
 /** `accountsOverview` comes from real Accounts + `calculateNetWorth` (lib/engines/net-worth.ts) via `useDashboardData`. */
 export function AccountsOverviewCard({ accountsOverview, isLoading }: AccountsOverviewCardProps) {
+  const router = useRouter();
+
   if (isLoading) {
     return (
       <section className="surface-flat flex h-full flex-col gap-4 rounded-3xl border border-border/50 p-5">
@@ -55,7 +58,14 @@ export function AccountsOverviewCard({ accountsOverview, isLoading }: AccountsOv
       </div>
 
       {accountsOverview.accounts.length === 0 ? (
-        <EmptyState icon={Wallet} title="No accounts yet" description="Add an account to see it here." className="flex-1" />
+        <EmptyState
+          icon={Wallet}
+          title="No accounts yet"
+          description="Add an account to see it here."
+          actionLabel="Add Account"
+          onAction={() => router.push("/accounts")}
+          className="flex-1"
+        />
       ) : (
         <div className="mt-4 flex flex-1 flex-col gap-1">
           {accountsOverview.accounts.map((account) => {
@@ -83,6 +93,7 @@ export function AccountsOverviewCard({ accountsOverview, isLoading }: AccountsOv
 
       <button
         type="button"
+        onClick={() => router.push("/accounts")}
         className="mt-4 rounded-xl bg-muted/70 py-2.5 text-xs font-semibold text-foreground transition-colors hover:bg-muted"
       >
         View All Accounts

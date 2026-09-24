@@ -25,6 +25,8 @@ export interface UserPreferences {
    *  cycle runs the 17th through the 16th of the next month. 1 (the default) preserves
    *  the plain calendar month every existing user already sees. */
   monthCycleStartDay: number;
+  /** When true, the Dashboard's Net Worth hero hides its amount behind the eye toggle. */
+  hideNetWorth: boolean;
   biometricLock: boolean;
   autoLockMinutes: string;
   privacyMode: boolean;
@@ -55,6 +57,7 @@ export const DEFAULT_PREFERENCES: UserPreferences = {
   language: "en",
   startWeekOn: "monday",
   monthCycleStartDay: 1,
+  hideNetWorth: false,
   biometricLock: true,
   autoLockMinutes: "5",
   privacyMode: false,

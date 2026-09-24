@@ -130,4 +130,18 @@ export interface HistoryEntry {
    */
   excludeFromCalculations: boolean;
   accountingMonth: Date | null;
+  /**
+   * When the underlying record was created — used only as a same-`date`
+   * tiebreaker (see `buildHistory`'s comparator), never displayed directly.
+   * Every source record has this field (`SoftDeletableEntity`), so it's
+   * always populated, unlike `lastEditedAt` below.
+   */
+  createdAt: Date;
+  /**
+   * When the underlying record was last edited, if ever — also only a
+   * same-`date` tiebreaker. Null for a record that's never been edited, or
+   * for a source (loan/bill/EMI payment via `InstallmentPayment`, statement)
+   * whichever caller didn't have this wired through.
+   */
+  lastEditedAt: Date | null;
 }

@@ -152,6 +152,14 @@ export function TransactionManageModal({
   // from a possibly-stale staging copy.
   const committedDataReady = !isCommitted || committedTransaction != null;
 
+  // Category choices are scoped to this transaction's direction — an expense only ever offers
+  // expense categories (Food, Transport, ...), income only ever offers income categories (Salary,
+  // Freelance, ...); a "both" category (Transfer, Other) fits either. Prefer the committed
+  // `Transaction.type` when it's loaded (the authoritative direction once committed); fall back to
+  // the staged row's own `direction` otherwise.
+  const transactionType = committedTransaction?.type ?? (row?.direction === "credit" ? "income" : "expense");
+  const categoriesForDirection = categories.filter((c) => (transactionType === "income" ? c.type !== "expense" : c.type !== "income"));
+
   // Reset the Details draft when the modal opens (or switches to a different row) — adjusting state
   // during render (React's documented alternative to an effect here), guarded so it only fires once
   // per open/row change instead of looping. Gated on `committedDataReady` so a committed row's
@@ -361,7 +369,7 @@ export function TransactionManageModal({
                   <SelectValue placeholder="Uncategorized" />
                 </SelectTrigger>
                 <SelectContent>
-                  {categories.map((category) => (
+                  {categoriesForDirection.map((category) => (
                     <SelectItem key={category.id} value={category.name}>
                       {category.name}
                     </SelectItem>

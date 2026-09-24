@@ -1,15 +1,38 @@
 "use client";
 
-import { ArrowDownToLine, ArrowUpFromLine, MoreHorizontal, Receipt } from "lucide-react";
+import { ArrowDownToLine, ArrowUpFromLine, Check, Receipt, Undo2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/finance/empty-state";
-import { useRecentPeopleTransactions } from "@/features/people/hooks/use-people-data";
+import { useRecentPeopleTransactions, usePeopleActions, type RecentPersonTransactionRow } from "@/features/people/hooks/use-people-data";
+import { useExpenses } from "@/hooks/use-expenses";
+import { isSplit, type Expense, type ExpenseParticipant } from "@/lib/models/expense";
 import { formatCurrency } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { toast } from "@/store/toast-store";
+
+/**
+ * Finds the split-expense participant a ledger row's Yet-to-Receive/Received toggle should act
+ * on — only "gave" entries created by a split (linked to an Expense via `transactionRef`, with a
+ * matching person-linked participant) are toggleable here; plain Borrowed/Repaid/Received Back/
+ * Adjustment entries have no participant to flip and render without the control.
+ */
+function toggleTargetFor(
+  row: RecentPersonTransactionRow,
+  expenses: Expense[],
+): { expense: Expense; participant: ExpenseParticipant } | null {
+  if (row.transactionRef == null) return null;
+  const expense = expenses.find((e) => e.transactionId === row.transactionRef);
+  if (expense == null || !isSplit(expense)) return null;
+  const participant = expense.participants.find((p) => p.personId === row.personId);
+  if (participant == null) return null;
+  return { expense, participant };
+}
 
 export function RecentPeopleTransactions({ onViewAll }: { onViewAll?: () => void }) {
   const { rows, isLoading } = useRecentPeopleTransactions();
+  const peopleActions = usePeopleActions();
+  const { data: expenses = [] } = useExpenses();
 
   return (
     <section className="surface-flat rounded-2xl border border-border/50 p-5">
@@ -41,19 +64,26 @@ export function RecentPeopleTransactions({ onViewAll }: { onViewAll?: () => void
         <div className="mt-3 flex flex-col divide-y divide-border/50">
           {rows.map((txn) => {
             const received = txn.type === "received";
+            const settled = txn.receivedStatus === "received";
+            const pendingReceivable = received && !settled;
+            const toggleTarget = toggleTargetFor(txn, expenses as Expense[]);
             return (
               <div key={txn.id} className="flex flex-wrap items-center gap-3 py-3">
                 <span
                   className={cn(
                     "flex size-9 shrink-0 items-center justify-center rounded-full",
-                    received ? "bg-success/16 text-success" : "bg-expense/12 text-expense",
+                    pendingReceivable ? "bg-warning/16 text-warning-foreground" : received ? "bg-success/16 text-success" : "bg-expense/12 text-expense",
                   )}
                 >
                   {received ? <ArrowDownToLine className="size-4" /> : <ArrowUpFromLine className="size-4" />}
                 </span>
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium text-foreground">
-                    {received ? `Received from ${txn.personName}` : `Paid to ${txn.personName}`}
+                    {pendingReceivable
+                      ? `Yet to receive from ${txn.personName}`
+                      : received
+                        ? `Received from ${txn.personName}`
+                        : `Paid to ${txn.personName}`}
                   </p>
                   <p className="truncate text-xs text-muted-foreground">{txn.description}</p>
                 </div>
@@ -61,17 +91,41 @@ export function RecentPeopleTransactions({ onViewAll }: { onViewAll?: () => void
                 <Badge variant="secondary" className="hidden border-0 text-[10px] sm:inline-flex">
                   {txn.category}
                 </Badge>
+                <Badge
+                  variant="secondary"
+                  className={cn("hidden border-0 text-[10px] sm:inline-flex", settled ? "bg-success/16 text-success" : "bg-warning/25 text-warning-foreground")}
+                >
+                  {settled ? "Received" : "Pending"}
+                </Badge>
                 <p className={cn("w-24 shrink-0 text-right text-sm font-semibold tabular-nums", received ? "text-success" : "text-expense")}>
                   {received ? "+" : "-"}
                   {formatCurrency(txn.amount)}
                 </p>
-                <button
-                  type="button"
-                  aria-label="More actions"
-                  className="flex size-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                >
-                  <MoreHorizontal className="size-4" />
-                </button>
+                {toggleTarget != null && (
+                  <button
+                    type="button"
+                    aria-label={settled ? "Mark as yet to receive" : "Mark as received"}
+                    title={settled ? "Mark as yet to receive" : "Mark as received"}
+                    onClick={async () => {
+                      if (peopleActions == null) return;
+                      try {
+                        await peopleActions.setParticipantReceivedStatus(
+                          toggleTarget.expense,
+                          toggleTarget.participant,
+                          settled ? "yetToReceive" : "received",
+                        );
+                      } catch (error) {
+                        toast.error(error instanceof Error ? error.message : "Couldn't update status");
+                      }
+                    }}
+                    className={cn(
+                      "flex size-7 shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-muted",
+                      settled ? "text-warning-foreground" : "text-success",
+                    )}
+                  >
+                    {settled ? <Undo2 className="size-4" /> : <Check className="size-4" />}
+                  </button>
+                )}
               </div>
             );
           })}

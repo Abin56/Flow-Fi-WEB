@@ -1,6 +1,7 @@
 "use client";
 
-import { FileStack, Plus } from "lucide-react";
+import { CreditCard, FileStack, Plus } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { ClayButton } from "@/components/clay/clay-button";
 import { EmptyState, SmartToolbar } from "@/components/finance";
@@ -32,6 +33,7 @@ import { UploadFlowPanel } from "@/features/statement-review/components/upload-f
  * instead of hiding it.
  */
 export function StatementReviewWorkspace() {
+  const router = useRouter();
   const uid = useAuthStore((s) => s.user?.uid);
   const { data: documents = [], isLoading: documentsLoading } = useFinancialDocuments();
   const { data: creditCards = [], isLoading: cardsLoading } = useCreditCards();
@@ -51,6 +53,8 @@ export function StatementReviewWorkspace() {
     );
   }
 
+  const hasCreditCards = creditCards.length > 0;
+
   return (
     <div className="flex flex-col gap-6 px-1">
       <SmartToolbar
@@ -61,10 +65,12 @@ export function StatementReviewWorkspace() {
           </div>
         }
         actions={
-          <ClayButton size="sm" onClick={() => setUploadOpen(true)} className="gap-1.5">
-            <Plus className="size-3.5" />
-            Upload Statement
-          </ClayButton>
+          hasCreditCards ? (
+            <ClayButton size="sm" onClick={() => setUploadOpen(true)} className="gap-1.5">
+              <Plus className="size-3.5" />
+              Upload Statement
+            </ClayButton>
+          ) : undefined
         }
       />
 
@@ -76,7 +82,15 @@ export function StatementReviewWorkspace() {
         />
       )}
 
-      {documents.length === 0 ? (
+      {!hasCreditCards ? (
+        <EmptyState
+          icon={CreditCard}
+          title="Add a credit card first"
+          description="Statements are uploaded against a specific card — add one before uploading a statement."
+          actionLabel="Add Credit Card"
+          onAction={() => router.push("/credit-cards")}
+        />
+      ) : documents.length === 0 ? (
         <EmptyState
           icon={FileStack}
           title="No statements uploaded yet"

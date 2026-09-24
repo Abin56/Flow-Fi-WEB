@@ -14,6 +14,7 @@ import { QuickActionsGrid } from "@/features/dashboard/components/quick-actions-
 import { RecentTransactionsCard } from "@/features/dashboard/components/recent-transactions-card";
 import { UpcomingPaymentsCard } from "@/features/dashboard/components/upcoming-payments-card";
 import { useDashboardData } from "@/features/dashboard/hooks/use-dashboard-data";
+import { useUserPreferences } from "@/features/settings/hooks/use-user-preferences";
 
 /**
  * Dashboard composition, ordered by information priority (1. total money, 2/3. income+expense,
@@ -36,6 +37,7 @@ import { useDashboardData } from "@/features/dashboard/hooks/use-dashboard-data"
  */
 export default function DashboardPage() {
   const data = useDashboardData();
+  const { preferences, update } = useUserPreferences();
 
   return (
     <Stagger className="flex flex-col gap-8 pb-8">
@@ -46,7 +48,12 @@ export default function DashboardPage() {
       <StaggerItem>
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-10">
           <div className="md:col-span-2 lg:col-span-4">
-            <NetWorthHero netWorth={data.netWorth} isLoading={data.isLoading} />
+            <NetWorthHero
+              netWorth={data.netWorth}
+              isLoading={data.isLoading}
+              hideAmount={preferences.hideNetWorth}
+              onToggleHideAmount={() => update("hideNetWorth", !preferences.hideNetWorth)}
+            />
           </div>
           <div className="lg:col-span-3">
             <CashFlowCard cashFlow={data.cashFlow} isLoading={data.isLoading} />

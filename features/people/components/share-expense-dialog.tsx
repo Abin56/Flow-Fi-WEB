@@ -8,7 +8,7 @@ import { Trash2, Plus } from "lucide-react";
 import type { Account } from "@/lib/models/account";
 import type { Category } from "@/lib/models/category";
 import type { Person } from "@/lib/models/person";
-import type { SplitType } from "@/lib/models/expense";
+import type { ReceivedStatus, SplitType } from "@/lib/models/expense";
 import type { ExpenseParticipantInput } from "@/lib/repositories/expense-repository";
 import { useTransactionActions } from "@/features/transactions/hooks/use-transactions-data";
 
@@ -18,9 +18,17 @@ const SPLIT_TYPE_OPTIONS: { value: SplitType; label: string }[] = [
   { value: "percentage", label: "By percentage" },
 ];
 
+/** Collectible-only statuses — see `ExpenseParticipant.receivedStatus`. */
+const RECEIVED_STATUS_OPTIONS: { value: Exclude<ReceivedStatus, "notApplicable">; label: string }[] = [
+  { value: "yetToReceive", label: "Yet to Receive" },
+  { value: "received", label: "Received" },
+  { value: "excluded", label: "Don't count in received" },
+];
+
 interface ExtraParticipant {
   name: string;
   value: string;
+  receivedStatus: ReceivedStatus;
 }
 
 /**
@@ -57,6 +65,7 @@ export function ShareExpenseDialog({
   const [includeMe, setIncludeMe] = useState(true);
   const [assignFully, setAssignFully] = useState(false);
   const [personShare, setPersonShare] = useState("");
+  const [personReceivedStatus, setPersonReceivedStatus] = useState<ReceivedStatus>("yetToReceive");
   const [extraParticipants, setExtraParticipants] = useState<ExtraParticipant[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -79,13 +88,14 @@ export function ShareExpenseDialog({
       setIncludeMe(true);
       setAssignFully(false);
       setPersonShare("");
+      setPersonReceivedStatus("yetToReceive");
       setExtraParticipants([]);
       setError(null);
     }
   }
 
   function addExtraParticipant() {
-    setExtraParticipants((p) => [...p, { name: "", value: "" }]);
+    setExtraParticipants((p) => [...p, { name: "", value: "", receivedStatus: "yetToReceive" }]);
   }
 
   function updateExtraParticipant(index: number, patch: Partial<ExtraParticipant>) {
@@ -137,16 +147,24 @@ export function ShareExpenseDialog({
 
       if (assignFully) {
         effectiveSplitType = "custom";
-        participantInputs = [{ personId: person.id, name: person.name, value: totalAmount }];
+        participantInputs = [
+          { personId: person.id, name: person.name, value: totalAmount, receivedStatus: personReceivedStatus },
+        ];
       } else {
         effectiveSplitType = splitType;
         const others = extraParticipants
           .filter((p) => p.name.trim() !== "")
-          .map((p) => ({ personId: null, name: p.name.trim(), value: splitType === "equal" ? null : Number(p.value) }));
+          .map((p) => ({
+            personId: null,
+            name: p.name.trim(),
+            value: splitType === "equal" ? null : Number(p.value),
+            receivedStatus: p.receivedStatus,
+          }));
         const personInput = {
           personId: person.id,
           name: person.name,
           value: splitType === "equal" ? null : Number(personShare),
+          receivedStatus: personReceivedStatus,
         };
         participantInputs = includeMe
           ? [
@@ -261,6 +279,24 @@ export function ShareExpenseDialog({
               Assign fully to {person.name} (they pay the whole thing)
             </label>
 
+            {assignFully && (
+              <label className="flex flex-col gap-1">
+                <span className="text-xs font-medium text-muted-foreground">Payment status</span>
+                <Select value={personReceivedStatus} onValueChange={(v) => setPersonReceivedStatus(v as ReceivedStatus)}>
+                  <SelectTrigger className="h-10 w-full rounded-xl">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {RECEIVED_STATUS_OPTIONS.map((o) => (
+                      <SelectItem key={o.value} value={o.value}>
+                        {o.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </label>
+            )}
+
             {!assignFully && (
               <>
                 <label className="flex flex-col gap-1">
@@ -291,20 +327,35 @@ export function ShareExpenseDialog({
 
                 <div className="flex flex-col gap-2">
                   <span className="text-xs font-medium text-muted-foreground">Split With</span>
-                  <div className="flex items-center gap-2">
-                    <div className="clay-pressed flex h-10 flex-1 items-center rounded-xl px-3 text-sm">{person.name}</div>
-                    {splitType !== "equal" && (
-                      <input
-                        type="number"
-                        className="clay-pressed h-10 w-24 rounded-xl px-3 text-sm outline-none"
-                        placeholder={splitType === "percentage" ? "%" : "Amount"}
-                        value={personShare}
-                        onChange={(e) => setPersonShare(e.target.value)}
-                      />
-                    )}
+                  <div className="flex flex-col gap-1">
+                    <div className="flex items-center gap-2">
+                      <div className="clay-pressed flex h-10 flex-1 items-center rounded-xl px-3 text-sm">{person.name}</div>
+                      {splitType !== "equal" && (
+                        <input
+                          type="number"
+                          className="clay-pressed h-10 w-24 rounded-xl px-3 text-sm outline-none"
+                          placeholder={splitType === "percentage" ? "%" : "Amount"}
+                          value={personShare}
+                          onChange={(e) => setPersonShare(e.target.value)}
+                        />
+                      )}
+                    </div>
+                    <Select value={personReceivedStatus} onValueChange={(v) => setPersonReceivedStatus(v as ReceivedStatus)}>
+                      <SelectTrigger className="h-8 w-48 text-xs" aria-label={`${person.name}'s payment status`}>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {RECEIVED_STATUS_OPTIONS.map((o) => (
+                          <SelectItem key={o.value} value={o.value}>
+                            {o.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
                   {extraParticipants.map((p, i) => (
-                    <div key={i} className="flex items-center gap-2">
+                    <div key={i} className="flex flex-col gap-1 border-t border-border/40 pt-2 first:border-t-0 first:pt-0">
+                      <div className="flex items-center gap-2">
                       <input
                         className="clay-pressed h-10 flex-1 rounded-xl px-3 text-sm outline-none"
                         placeholder="Name"
@@ -328,6 +379,22 @@ export function ShareExpenseDialog({
                       >
                         <Trash2 className="size-3.5" />
                       </button>
+                    </div>
+                    <Select
+                      value={p.receivedStatus}
+                      onValueChange={(v) => updateExtraParticipant(i, { receivedStatus: v as ReceivedStatus })}
+                    >
+                      <SelectTrigger className="h-8 w-48 text-xs" aria-label={`${p.name || "This person"}'s payment status`}>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {RECEIVED_STATUS_OPTIONS.map((o) => (
+                          <SelectItem key={o.value} value={o.value}>
+                            {o.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                     </div>
                   ))}
                   <ClayButton type="button" variant="ghost" size="sm" onClick={addExtraParticipant} className="self-start gap-1.5">

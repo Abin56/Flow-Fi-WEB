@@ -15,7 +15,10 @@
 import type { Account } from "@/lib/models/account";
 import type { CreditCardProfile } from "@/lib/models/credit-card";
 import type { SplitType } from "@/lib/models/expense";
+import type { Person } from "@/lib/models/person";
 import type { SmsTransactionCandidate } from "@/lib/models/sms-transaction-candidate";
+import type { ExpenseParticipantInput } from "@/lib/repositories/expense-repository";
+import type { CandidatePersonAssignment } from "./import-candidate";
 
 export interface CandidateSplitParticipantDraft {
   personId: string | null;
@@ -125,6 +128,32 @@ export function importBlockedReason(draft: CandidateImportDraft): string | null 
   if (draft.destinationKey == null) return "Select an account or card to enable import.";
   if (!isSplitReady(draft)) return "Add at least one person to the split, or hide the split editor, to enable import.";
   return null;
+}
+
+/**
+ * Maps a Person/Split draft -> `ImportCandidateParams.personAssignment` (`CandidatePersonAssignment`)
+ * — `null` when nothing was actually configured, so a plain import (no one assigned) never triggers
+ * a wasted `ExpenseRepository` round trip. Shared by `CandidateDetailsModal` (a single candidate) and
+ * `BulkImportDialog` (the whole selection) — both build the same draft shape, so both resolve it the
+ * same way rather than keeping two copies of this mapping in sync.
+ */
+export function resolvePersonAssignment(
+  draft: Pick<CandidateImportDraft, "splitOpen" | "splitType" | "participants" | "personId" | "owesPersonToggle">,
+  people: Person[],
+): CandidatePersonAssignment | null {
+  if (draft.splitOpen) {
+    const named = draft.participants.filter((p) => p.name.trim() !== "" || p.personId != null);
+    if (named.length === 0) return null;
+    const participantInputs: ExpenseParticipantInput[] = named.map((p) => ({
+      personId: p.personId,
+      name: p.personId ? (people.find((person) => person.id === p.personId)?.name ?? p.name) : p.name,
+      value: draft.splitType === "equal" ? null : Number(p.value),
+    }));
+    return { kind: "split", splitType: draft.splitType, participantInputs };
+  }
+  if (draft.personId == null) return null;
+  const personName = people.find((p) => p.id === draft.personId)?.name ?? "";
+  return { kind: "assign", personId: draft.personId, personName, owesPersonToggle: draft.owesPersonToggle };
 }
 
 /** A run of 6+ consecutive digits — long enough to be a reference/UTR/masked-account fragment rather than part of an ordinary merchant name (e.g. "Amazon", "Big Bazaar 12" still pass). */

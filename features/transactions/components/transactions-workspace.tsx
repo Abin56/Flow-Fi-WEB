@@ -41,7 +41,7 @@ import type { Account } from "@/lib/models/account";
 import type { Category } from "@/lib/models/category";
 import type { SplitType } from "@/lib/models/expense";
 import type { Person } from "@/lib/models/person";
-import type { Transaction } from "@/lib/models/transaction";
+import { compareTransactionsNewestFirst, type Transaction } from "@/lib/models/transaction";
 import { toast } from "@/store/toast-store";
 import {
   categoryIconFor,
@@ -209,7 +209,7 @@ export function TransactionsWorkspace() {
       list = list.filter((r) => r.transaction.dateTime <= to);
     }
 
-    return [...list].sort((a, b) => b.transaction.dateTime.getTime() - a.transaction.dateTime.getTime());
+    return [...list].sort((a, b) => compareTransactionsNewestFirst(a.transaction, b.transaction));
   }, [rows, deferredSearch, accountFilter, categoryFilter, typeFilter, paymentMethodFilter, dateFrom, dateTo]);
 
   // Computed over the full, unfiltered `rows` — not `filtered` — so a duplicate is still flagged even
@@ -584,7 +584,7 @@ export function TransactionsWorkspace() {
     <div
       className={cn(
         "flex flex-col gap-5",
-        fullscreen ? "fixed inset-0 z-50 overflow-y-auto bg-background p-6" : "px-1",
+        fullscreen ? "fixed inset-0 z-hero overflow-y-auto bg-background p-6" : "px-1",
       )}
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -612,7 +612,6 @@ export function TransactionsWorkspace() {
             <DropdownMenuContent align="end">
               <DropdownMenuItem onSelect={() => openAdd("expense")}>Expense</DropdownMenuItem>
               <DropdownMenuItem onSelect={() => openAdd("income")}>Income</DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => openAdd("transfer")}>Transfer</DropdownMenuItem>
               <DropdownMenuItem onSelect={openSplit}>Split Expense</DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -987,11 +986,13 @@ function SplitFormFields({
             <SelectValue placeholder="Select category" />
           </SelectTrigger>
           <SelectContent>
-            {categories.map((c) => (
-              <SelectItem key={c.id} value={c.id}>
-                {c.name}
-              </SelectItem>
-            ))}
+            {categories
+              .filter((c) => c.type === "expense" || c.type === "both")
+              .map((c) => (
+                <SelectItem key={c.id} value={c.id}>
+                  {c.name}
+                </SelectItem>
+              ))}
           </SelectContent>
         </Select>
       </label>

@@ -209,6 +209,7 @@ async function commitOneRow(row: StagedRecord, categoryId: string, params: Commi
         name: p.name,
         value: detail.splitType === "equal" ? null : p.share,
         isMe: p.isMe,
+        receivedStatus: p.receivedStatus,
       }));
       const expense = await repositories.expenseRepository.createExpense({
         description,

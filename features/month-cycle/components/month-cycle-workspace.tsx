@@ -80,15 +80,21 @@ function StatTile({
   amount,
   meta,
   accent,
+  href,
 }: {
   icon: LucideIcon;
   label: string;
   amount: number;
   meta?: string;
   accent: Accent;
+  href: string;
 }) {
   return (
-    <div className="surface-primary flex flex-col gap-3 rounded-2xl p-4" style={{ boxShadow: "var(--shadow-e1)" }}>
+    <Link
+      href={href}
+      className="surface-primary flex flex-col gap-3 rounded-2xl p-4 transition-colors hover:bg-muted/30"
+      style={{ boxShadow: "var(--shadow-e1)" }}
+    >
       <span className={cn("flex size-9 items-center justify-center rounded-xl", ACCENT_BG[accent])}>
         <Icon className="size-4.5" />
       </span>
@@ -99,7 +105,7 @@ function StatTile({
         </p>
         {meta && <p className="mt-0.5 text-[11px] text-muted-foreground">{meta}</p>}
       </div>
-    </div>
+    </Link>
   );
 }
 
@@ -508,13 +514,13 @@ export function MonthCycleWorkspace() {
       {/* Stat grid */}
       <Stagger className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         <StaggerItem>
-          <StatTile icon={Banknote} label="EMI (Total)" amount={data.emi.total} meta={`${data.emi.count} due this month`} accent="primary" />
+          <StatTile icon={Banknote} label="EMI (Total)" amount={data.emi.total} meta={`${data.emi.count} due this month`} accent="primary" href="/emi" />
         </StaggerItem>
         <StaggerItem>
-          <StatTile icon={Landmark} label="Loans (Payable)" amount={data.loans.total} meta={`${data.loans.count} active loans`} accent="purple" />
+          <StatTile icon={Landmark} label="Loans (Payable)" amount={data.loans.total} meta={`${data.loans.count} active loans`} accent="purple" href="/loans" />
         </StaggerItem>
         <StaggerItem>
-          <StatTile icon={CreditCard} label="Credit Card Bills" amount={data.cards.total} meta={`${data.cards.count} bills due`} accent="expense" />
+          <StatTile icon={CreditCard} label="Credit Card Bills" amount={data.cards.total} meta={`${data.cards.count} bills due`} accent="expense" href="/credit-cards" />
         </StaggerItem>
         <StaggerItem>
           <StatTile
@@ -523,6 +529,7 @@ export function MonthCycleWorkspace() {
             amount={data.peopleStats.totalYouOwe}
             meta={`${data.peopleStats.owingPeopleCount} people`}
             accent="warning"
+            href="/people"
           />
         </StaggerItem>
         <StaggerItem>
@@ -532,10 +539,11 @@ export function MonthCycleWorkspace() {
             amount={data.peopleStats.totalYouAreOwed}
             meta={`${data.peopleStats.owedByPeopleCount} people`}
             accent="purple"
+            href="/people"
           />
         </StaggerItem>
         <StaggerItem>
-          <StatTile icon={Receipt} label="Bills (Utility & Others)" amount={data.bills.total} meta={`${data.bills.count} bills due`} accent="success" />
+          <StatTile icon={Receipt} label="Bills (Utility & Others)" amount={data.bills.total} meta={`${data.bills.count} bills due`} accent="success" href="/bills" />
         </StaggerItem>
       </Stagger>
 

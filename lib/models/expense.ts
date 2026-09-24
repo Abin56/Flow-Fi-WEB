@@ -38,6 +38,36 @@ export function splitTypeLabel(type: SplitType): string {
 // --- ExpenseParticipant (expense_participant.dart) ---
 
 /**
+ * Web-only additive field (same pattern as `Transaction.status`/
+ * `transferMatchedAt`) — not present in the Flutter model, so it's read with
+ * a safe fallback and simply absent from documents the Flutter app writes.
+ * Tracks whether money owed *to the payer* by this participant has actually
+ * come back, independent of the settlement-installment machinery (which only
+ * tracks amount paid, not the payer's intent about counting it as received):
+ *
+ * - "yetToReceive" (default for a non-"Me" participant): outstanding, not
+ *   yet counted as received.
+ * - "received": counted as received — `ExpenseRepository` posts a matching
+ *   `receivedBack` ledger entry immediately so `LedgerEntry`/`Person.currentBalance`
+ *   (the actual received total) reflect it right away, instead of waiting on
+ *   a separate manual "Settle Up" action.
+ * - "excluded": explicitly "don't count this in received totals" — kept as a
+ *   ledger record (so history/statements still show it) but never posts a
+ *   `receivedBack` entry, same as "yetToReceive" but distinct user intent.
+ * - "notApplicable": the permanent "Me" participant, or a participant with no
+ *   receivable relationship (kept only for completeness; never set on a
+ *   collectible participant).
+ */
+export type ReceivedStatus = "yetToReceive" | "received" | "excluded" | "notApplicable";
+
+const RECEIVED_STATUSES: ReceivedStatus[] = ["yetToReceive", "received", "excluded", "notApplicable"];
+
+/** Unrecognized/missing names (older documents predating this field) fall back to "yetToReceive" for a collectible participant. */
+export function receivedStatusFromName(name: string | undefined): ReceivedStatus {
+  return name != null && (RECEIVED_STATUSES as string[]).includes(name) ? (name as ReceivedStatus) : "yetToReceive";
+}
+
+/**
  * One participant's share of a split `Expense`. Embedded directly on the
  * expense document (not its own subcollection) since this is the fixed
  * definition of who owes what — the corresponding `Installment` (via
@@ -62,15 +92,19 @@ export interface ExpenseParticipant {
    * own share (see `myShare`). Defaults to `false`.
    */
   isMe: boolean;
+  /** See `ReceivedStatus`. Always "notApplicable" for `isMe`. */
+  receivedStatus: ReceivedStatus;
 }
 
 export function expenseParticipantFromMap(map: Record<string, unknown>): ExpenseParticipant {
+  const isMe = (map.isMe as boolean | undefined) ?? false;
   return {
     personId: (map.personId as string | undefined) ?? null,
     name: map.name as string,
     share: (map.share as number),
     installmentId: (map.installmentId as string | undefined) ?? null,
-    isMe: (map.isMe as boolean | undefined) ?? false,
+    isMe,
+    receivedStatus: isMe ? "notApplicable" : receivedStatusFromName(map.receivedStatus as string | undefined),
   };
 }
 
@@ -81,6 +115,7 @@ export function expenseParticipantToMap(participant: ExpenseParticipant): Docume
     share: participant.share,
     installmentId: participant.installmentId,
     isMe: participant.isMe,
+    receivedStatus: participant.receivedStatus,
   };
 }
 

@@ -11,12 +11,14 @@ import { cn } from "@/lib/utils";
  */
 export function PersonTransactionRow({ item }: { item: PersonActivityItem }) {
   const received = item.type === "received";
+  const settled = item.receivedStatus === "received";
+  const pendingReceivable = received && !settled;
   return (
     <div className="flex items-center gap-3 px-1 py-3.5">
       <span
         className={cn(
           "flex size-9 shrink-0 items-center justify-center rounded-full",
-          received ? "bg-success/16 text-success" : "bg-expense/12 text-expense",
+          pendingReceivable ? "bg-warning/16 text-warning-foreground" : received ? "bg-success/16 text-success" : "bg-expense/12 text-expense",
         )}
         aria-hidden
       >
@@ -24,15 +26,25 @@ export function PersonTransactionRow({ item }: { item: PersonActivityItem }) {
       </span>
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-medium text-foreground">{item.description}</p>
-        {/* Color is never the only signal — the label spells out received/paid alongside the tint. */}
+        {/* Color is never the only signal — the label spells out received/yet-to-receive/paid alongside the tint. */}
         <p className="truncate text-xs text-muted-foreground">
-          {received ? "Received" : "Paid"} · {item.date}
+          {pendingReceivable ? "Yet to receive" : received ? "Received" : "Paid"} · {item.date}
         </p>
       </div>
-      <p className={cn("shrink-0 text-right text-sm font-semibold tabular-nums", received ? "text-success" : "text-expense")}>
-        {received ? "+" : "-"}
-        {formatCurrency(item.amount)}
-      </p>
+      <div className="flex shrink-0 flex-col items-end gap-1">
+        <p className={cn("text-right text-sm font-semibold tabular-nums", received ? "text-success" : "text-expense")}>
+          {received ? "+" : "-"}
+          {formatCurrency(item.amount)}
+        </p>
+        <span
+          className={cn(
+            "rounded-full px-2 py-0.5 text-[10px] font-semibold",
+            settled ? "bg-success/16 text-success" : "bg-warning/25 text-warning-foreground",
+          )}
+        >
+          {settled ? "Received" : "Pending"}
+        </span>
+      </div>
     </div>
   );
 }

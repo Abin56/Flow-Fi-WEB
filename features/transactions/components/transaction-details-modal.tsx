@@ -269,6 +269,12 @@ const KIND_META: Record<FormKind, { label: string; icon: LucideIcon }> = {
   transfer: { label: "Transfer", icon: ArrowLeftRight },
 };
 const FORM_KINDS: FormKind[] = ["expense", "income", "transfer"];
+/** Kinds offered when adding a brand-new transaction — Transfer is intentionally left off (see
+ *  `TransactionDetailsModal`'s Add-mode `KindSelector` usage): a new transfer still can't be
+ *  created from this popup, but an existing transfer transaction still opens/edits/displays
+ *  exactly as before via the Edit-mode `KindSelector` usage, which keeps showing all three so a
+ *  locked "Transfer" pill still renders correctly for it. */
+const ADD_MODE_FORM_KINDS: FormKind[] = ["expense", "income"];
 
 /** Per-kind tone used for the amount hero, the header icon, and the segmented control's active label. */
 const KIND_TEXT_CLASS: Record<FormKind, string> = {
@@ -304,10 +310,22 @@ const KIND_BORDER_CLASS: Record<FormKind, string> = {
 
 /** Segmented Expense/Income/Transfer control with a sliding active pill. Locked (but still shown,
  *  just disabled) once editing an existing transaction — its kind can't change after creation. */
-function KindSelector({ value, onChange, locked }: { value: FormKind; onChange: (k: FormKind) => void; locked: boolean }) {
+function KindSelector({
+  value,
+  onChange,
+  locked,
+  kinds = FORM_KINDS,
+}: {
+  value: FormKind;
+  onChange: (k: FormKind) => void;
+  locked: boolean;
+  /** Which kinds to render as options — defaults to all three (Edit mode, so a locked existing
+   *  transfer's pill still shows). Add mode passes `ADD_MODE_FORM_KINDS` to leave Transfer out. */
+  kinds?: FormKind[];
+}) {
   return (
-    <div className="grid grid-cols-3 gap-1 rounded-xl bg-muted p-1">
-      {FORM_KINDS.map((k) => {
+    <div className={cn("grid gap-1 rounded-xl bg-muted p-1", kinds.length === 3 ? "grid-cols-3" : "grid-cols-2")}>
+      {kinds.map((k) => {
         const meta = KIND_META[k];
         const Icon = meta.icon;
         const active = value === k;
@@ -450,12 +468,13 @@ export function TransactionDetailsModal({
       setAddingPerson(autoFocusAssign && transaction.linkedPersonId == null);
     } else {
       const firstCategory = categories.find((c) => (defaultKind === "income" ? c.type !== "expense" : c.type !== "income"));
+      const firstAccount = defaultKind === "income" ? accounts.find((a) => a.type !== "card") : accounts[0];
       setKind(defaultKind);
       setDescription("");
       setAmount("");
       setDate(toDateInputValue(new Date()));
       setNotes("");
-      setAccountId(accounts[0]?.id ?? "");
+      setAccountId(firstAccount?.id ?? "");
       setDestinationAccountId("");
       setCategoryId(firstCategory?.id ?? "");
       setExclude(false);
@@ -495,6 +514,9 @@ export function TransactionDetailsModal({
   const flag = transaction ? transactionFlagFor(transaction) : null;
   const monthChanged = transaction ? !isSameMonth(month, transaction.dateTime) : false;
   const filteredCategories = categories.filter((c) => (kind === "income" ? c.type !== "expense" : c.type !== "income"));
+  // Income can't be received into a credit card account, so it's excluded from the picker for
+  // that kind — same reasoning as `filteredCategories` above, just on the account list instead.
+  const filteredAccounts = kind === "income" ? accounts.filter((a) => a.type !== "card") : accounts;
 
   // Live running total for the percentage split editor — percentages are always hand-typed and
   // must sum to 100, so this is a simple entered-vs-target check.
@@ -1131,7 +1153,19 @@ export function TransactionDetailsModal({
               </div>
             )}
 
-            <KindSelector value={kind} onChange={setKind} locked={!!transaction} />
+            <KindSelector
+              value={kind}
+              onChange={(next) => {
+                setKind(next);
+                // Switching to Income while a credit card account is selected would otherwise leave
+                // the picker pointing at an option `filteredAccounts` no longer offers for that kind.
+                if (next === "income" && accounts.find((a) => a.id === accountId)?.type === "card") {
+                  setAccountId(accounts.find((a) => a.type !== "card")?.id ?? "");
+                }
+              }}
+              locked={!!transaction}
+              kinds={transaction ? FORM_KINDS : ADD_MODE_FORM_KINDS}
+            />
 
             <div className={cn("flex flex-col items-center gap-1 rounded-2xl border py-3 transition-colors", KIND_HERO_BG[kind], KIND_BORDER_CLASS[kind])}>
               <span className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">Amount</span>
@@ -1203,7 +1237,7 @@ export function TransactionDetailsModal({
                     })()}
                   </div>
                 ) : (
-                  <AccountSelect accounts={accounts} value={accountId} onChange={setAccountId} />
+                  <AccountSelect accounts={filteredAccounts} value={accountId} onChange={setAccountId} />
                 )}
               </FormRow>
 

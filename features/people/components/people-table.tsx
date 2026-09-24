@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronLeft, ChevronRight, MoreHorizontal } from "lucide-react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { ClayAvatar } from "@/components/clay/clay-avatar";
 import { formatCurrency } from "@/lib/format";
 import type { PersonStatus, PersonViewRow } from "@/features/people/hooks/use-people-data";
@@ -59,8 +59,6 @@ export function PeopleTable({
               <th className="px-5 py-3 font-medium">You Owe</th>
               <th className="px-5 py-3 font-medium">Net Balance</th>
               <th className="px-5 py-3 font-medium">Status</th>
-              <th className="px-5 py-3 font-medium">Last Activity</th>
-              <th className="px-5 py-3 font-medium" />
             </tr>
           </thead>
           <tbody>
@@ -106,17 +104,6 @@ export function PeopleTable({
                     <span className={cn("rounded-full px-2.5 py-1 text-[11px] font-semibold", STATUS_CLASS[person.status])}>
                       {STATUS_LABEL[person.status]}
                     </span>
-                  </td>
-                  <td className="px-5 py-3 whitespace-nowrap text-muted-foreground">{person.lastActivity}</td>
-                  <td className="px-5 py-3 text-right">
-                    <button
-                      type="button"
-                      aria-label={`More actions for ${person.name}`}
-                      onClick={(e) => e.stopPropagation()}
-                      className="flex size-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                    >
-                      <MoreHorizontal className="size-4" />
-                    </button>
                   </td>
                 </tr>
               );
