@@ -239,15 +239,15 @@ export function LoanScheduleDialog({ open, onOpenChange, row, onEdit, onDelete, 
           <div className="flex flex-wrap gap-2">
             <ClayButton variant="secondary" className="gap-1.5 rounded-none" onClick={() => onPrincipalPrepayment(row)} disabled={totalRemaining <= 0}>
               <TrendingDown className="size-3.5" />
-              Prepay Principal
+              Pay Extra Toward Balance
             </ClayButton>
             <ClayButton variant="secondary" className="gap-1.5 rounded-none" onClick={() => onAdditionalDisbursement(row)} disabled={row.status === "closed"}>
               <HandCoins className="size-3.5" />
-              Additional Disbursement
+              Add More to This Loan
             </ClayButton>
             <ClayButton variant="secondary" className="gap-1.5 rounded-none" onClick={() => onSettleLumpSum(row)} disabled={totalRemaining <= 0}>
               <Receipt className="size-3.5" />
-              Settle Lump Sum
+              Pay Off Remaining Balance
             </ClayButton>
             <ClayButton variant="secondary" className="rounded-none" onClick={() => onOpenChange(false)}>
               Close

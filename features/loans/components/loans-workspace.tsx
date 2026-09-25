@@ -129,7 +129,11 @@ export function LoansWorkspace() {
   const { data: accounts = [] } = useAccounts();
   const { data: people = [] } = useLoanPersons();
 
-  const [activeRow, setActiveRow] = useState<LoanRow | null>(null);
+  const [activeRowId, setActiveRowId] = useState<string | null>(null);
+  // Resolved live against `rows` on every render, instead of holding a snapshot of the row — `rows`
+  // comes from a live Firestore subscription (see `hooks/use-loans.ts`), so re-deriving it here is what
+  // makes edits/payments to the open loan show up in the schedule dialog without a manual refresh.
+  const activeRow = useMemo(() => rows.find((r) => r.loan.id === activeRowId) ?? null, [rows, activeRowId]);
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
@@ -161,13 +165,13 @@ export function LoansWorkspace() {
   }, [rows, search, statusFilter, directionFilter, categoryFilter]);
 
   function openAdd() {
-    setActiveRow(null);
+    setActiveRowId(null);
     setForm(emptyForm());
     setAddOpen(true);
   }
 
   function openEdit(row: LoanRow) {
-    setActiveRow(row);
+    setActiveRowId(row.loan.id);
     setForm(formFromRow(row));
     setEditOpen(true);
   }
@@ -262,7 +266,7 @@ export function LoansWorkspace() {
         });
         setAddOpen(false);
       }
-      setActiveRow(null);
+      setActiveRowId(null);
     } catch (e) {
       toast.error(isEdit ? "Couldn't save changes" : "Couldn't add loan", e instanceof Error ? e.message : "Please try again.");
     } finally {
@@ -276,7 +280,7 @@ export function LoansWorkspace() {
     if (!actions) return;
     try {
       await actions.deleteLoan(row.loan);
-      setActiveRow(null);
+      setActiveRowId(null);
       toast.success("Loan moved to trash", undefined, {
         label: "Undo",
         onClick: () => actions.restoreLoan(row.loan).catch(() => toast.error("Couldn't restore loan")),
@@ -384,7 +388,7 @@ export function LoansWorkspace() {
                   key={row.loan.id}
                   row={row}
                   onClick={() => {
-                    setActiveRow(row);
+                    setActiveRowId(row.loan.id);
                     setScheduleOpen(true);
                   }}
                 />
@@ -398,7 +402,7 @@ export function LoansWorkspace() {
         open={scheduleOpen}
         onOpenChange={(open) => {
           setScheduleOpen(open);
-          if (!open) setActiveRow(null);
+          if (!open) setActiveRowId(null);
         }}
         row={activeRow}
         onEdit={(row) => {
