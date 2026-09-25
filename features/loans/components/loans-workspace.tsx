@@ -2,6 +2,7 @@
 
 import { Building2, CalendarClock, FileText, Landmark, Percent, Plus, Search, StickyNote, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { ClayBadge } from "@/components/clay/clay-badge";
 import { ClayButton } from "@/components/clay/clay-button";
 import { Stagger } from "@/components/foundation/animated-container";
@@ -23,8 +24,10 @@ import { LoanScheduleDialog } from "@/features/loans/components/loan-schedule-di
 import { LoansSummary } from "@/features/loans/components/loans-summary";
 import { LoansTrashDialog } from "@/features/loans/components/loans-trash-dialog";
 import { RecordLoanPaymentDialog } from "@/features/loans/components/record-loan-payment-dialog";
+import { LoanAdjustmentDialog } from "@/features/loans/components/loan-adjustment-dialog";
 import { useLoanActions, useLoanRows, useTrashedLoanRows, type LoanRow } from "@/features/loans/hooks/use-loans-data";
 import { useLoanPersons } from "@/hooks/use-loans";
+import { useAccounts } from "@/hooks/use-accounts";
 import type { Person } from "@/lib/models/person";
 import { cn } from "@/lib/utils";
 import { toast } from "@/store/toast-store";
@@ -119,9 +122,11 @@ function formFromRow(row: LoanRow): LoanFormState {
 }
 
 export function LoansWorkspace() {
+  const queryClient = useQueryClient();
   const { rows, isLoading } = useLoanRows();
   const { rows: trashedRows } = useTrashedLoanRows();
   const actions = useLoanActions();
+  const { data: accounts = [] } = useAccounts();
   const { data: people = [] } = useLoanPersons();
 
   const [activeRow, setActiveRow] = useState<LoanRow | null>(null);
@@ -131,6 +136,7 @@ export function LoansWorkspace() {
   const [trashOpen, setTrashOpen] = useState(false);
   const [paymentTarget, setPaymentTarget] = useState<{ row: LoanRow; installment: Installment } | null>(null);
   const [lumpSumRow, setLumpSumRow] = useState<LoanRow | null>(null);
+  const [adjustment, setAdjustment] = useState<{ row: LoanRow; kind: "prepayment" | "disbursement" } | null>(null);
   const [form, setForm] = useState<LoanFormState>(emptyForm);
   const [saving, setSaving] = useState(false);
 
@@ -405,7 +411,33 @@ export function LoansWorkspace() {
         }}
         onRecordPayment={(row, installment) => setPaymentTarget({ row, installment })}
         onSettleLumpSum={(row) => setLumpSumRow(row)}
+        onPrincipalPrepayment={(row) => setAdjustment({ row, kind: "prepayment" })}
+        onAdditionalDisbursement={(row) => setAdjustment({ row, kind: "disbursement" })}
         onToggleClose={handleToggleClose}
+      />
+
+      <LoanAdjustmentDialog
+        key={adjustment ? `${adjustment.kind}-${adjustment.row.loan.id}` : "adjustment-closed"}
+        open={adjustment != null}
+        onOpenChange={(open) => !open && setAdjustment(null)}
+        kind={adjustment?.kind ?? "prepayment"}
+        row={adjustment?.row ?? null}
+        accounts={accounts}
+        onConfirm={async (params) => {
+          if (!actions || !adjustment) throw new Error("Not signed in");
+          if (adjustment.kind === "disbursement") {
+            const result = await actions.recordAdditionalDisbursement(adjustment.row.loan, adjustment.row.installments, params);
+            await queryClient.invalidateQueries({ queryKey: ["loan-financial-history"], exact: false });
+            return result;
+          }
+          const result = await actions.recordPayment(adjustment.row.loan, adjustment.row.installments, {
+            ...params,
+            amount: params.transactionAmount,
+            includeUpcomingInstallments: false,
+          });
+          await queryClient.invalidateQueries({ queryKey: ["loan-financial-history"], exact: false });
+          return result;
+        }}
       />
 
       <RecordLoanPaymentDialog
@@ -414,9 +446,10 @@ export function LoansWorkspace() {
         onOpenChange={(open) => !open && setPaymentTarget(null)}
         loan={paymentTarget?.row.loan ?? null}
         installment={paymentTarget?.installment ?? null}
-        onRecord={async (loan, installment, params) => {
+        accounts={accounts}
+        onRecord={async (loan, installments, params) => {
           if (!actions) return;
-          await actions.recordPayment(loan, installment, params);
+          await actions.recordPayment(loan, installments, params);
           toast.success("Payment recorded");
         }}
       />
@@ -426,6 +459,7 @@ export function LoansWorkspace() {
         open={lumpSumRow != null}
         onOpenChange={(open) => !open && setLumpSumRow(null)}
         row={lumpSumRow}
+        accounts={accounts}
         onSettle={async (loan, installments, params) => {
           if (!actions) throw new Error("Not signed in");
           return actions.recordLumpSumSettlement(loan, installments, params);

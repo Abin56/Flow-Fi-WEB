@@ -1,5 +1,5 @@
 MASTER RULE — WEB & APP FEATURE PARITY
-
+web project path = C:\Users\anjel\flowfi-web>  & mobile project path = PS C:\Users\anjel\Finance_App>
 The Web and Mobile App must have the same features, functionality, and business behavior.
 
 For every task I give you:
@@ -7,7 +7,7 @@ For every task I give you:
 1. FIRST check the Web implementation and identify what needs to be added/fixed.
 
 2. THEN check the corresponding Mobile App implementation using the provided app file/path:
-   [APP FILE/PATH]
+   [PS C:\Users\anjel\Finance_App> ]
 
 3. Compare both implementations:
    - Features

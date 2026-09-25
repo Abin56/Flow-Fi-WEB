@@ -35,8 +35,11 @@ import {
   doc,
   getDoc,
   getDocs,
+  limit,
+  query,
   runTransaction,
   updateDoc,
+  where,
   writeBatch,
 } from "firebase/firestore";
 import { FirestoreCollections } from "@/lib/firestore/collections";
@@ -69,8 +72,14 @@ import {
   type LoanReamortizationEvent,
 } from "@/lib/models/loan-reamortization-event";
 import {
+  loanAdditionalDisbursementFromFirestore,
+  loanAdditionalDisbursementToFirestore,
+  type LoanAdditionalDisbursement,
+} from "@/lib/models/loan-additional-disbursement";
+import {
   transactionFromFirestore,
   transactionToFirestore,
+  balanceEffect,
   type Transaction,
 } from "@/lib/models/transaction";
 import { evenSplit, calculate, type InterestPeriod } from "@/lib/engines/interest-calculator";
@@ -79,6 +88,11 @@ import {
   type PrepaymentReamortizationOutcome,
   type PrepaymentReamortizationPolicy,
 } from "@/lib/engines/prepayment-reamortization-policy";
+import {
+  holdTenurePolicy,
+  type DisbursementReamortizationOutcome,
+  type DisbursementReamortizationPolicy,
+} from "@/lib/engines/disbursement-reamortization-policy";
 import { planInstallmentSettlement } from "@/lib/engines/installment-settlement";
 import { generateId } from "@/lib/utils/id-generator";
 
@@ -90,11 +104,23 @@ export interface LoanAdvancePaymentResult {
    * than an error.
    */
   alreadyRecorded: boolean;
+  /**
+   * The regular fan-out payment ids, in the same order as `installmentIds`
+   * (`paymentIds[i]` was applied to `installmentIds[i]`) — does NOT include
+   * `overflowPaymentId`. Required, alongside `transactionId`, to later call
+   * `LoanAdvancePaymentRepository.reversePayment` for this action.
+   */
   paymentIds: string[];
+  /** The installment ids `paymentIds` were applied to, parallel to `paymentIds`. */
+  installmentIds: string[];
   transactionId: string;
   overallAllocationType: PaymentAllocationType;
   /** Null unless `overallAllocationType` is "principalPrepayment". */
   prepaymentPrincipalAmount: number | null;
+  /** The ledger-only overflow payment's id, when this action produced one — null otherwise. */
+  overflowPaymentId: string | null;
+  /** Which installment `overflowPaymentId` is attached to (always the schedule's last installment). */
+  overflowInstallmentId: string | null;
   /** Null when this payment did not trigger a prepayment. */
   reamortization: PrepaymentReamortizationOutcome | null;
 }
@@ -126,10 +152,100 @@ export interface RecordAdvancePaymentParams {
 interface CoreResult {
   alreadyRecorded: boolean;
   paymentIds: string[];
+  installmentIds: string[];
   overflowPaymentId: string | null;
   overflowInstallmentId: string | null;
   overallType: PaymentAllocationType;
   prepaymentPrincipalAmount: number | null;
+}
+
+/** Outcome of `LoanAdvancePaymentRepository.reversePayment`. */
+export interface PaymentReversalResult {
+  /**
+   * True when this exact transaction was already reversed (its `Transaction`
+   * document was already soft-deleted) — every other field still describes
+   * the (unchanged) current state, so a retried reversal request is a safe
+   * no-op rather than an error.
+   */
+  alreadyReversed: boolean;
+  /**
+   * True when the reversed payment had triggered a re-amortization and that
+   * schedule reshape was successfully undone. Always false for a
+   * regular/advance payment reversal.
+   */
+  scheduleRestored: boolean;
+  /**
+   * Set only when this reversal was for a principal prepayment AND the money
+   * was successfully reversed but the schedule restoration batch was
+   * skipped — e.g. a concurrent payment landed on the regenerated tail
+   * between the eligibility check and the restoration batch.
+   */
+  scheduleRestorationSkippedReason: string | null;
+}
+
+export interface ReversePaymentParams {
+  loan: Loan;
+  transactionId: string;
+  paymentIds: string[];
+  installmentIds: string[];
+  overflowPaymentId?: string | null;
+  overflowInstallmentId?: string | null;
+  /** Must be generated once per reversal action; reused verbatim on any retry. */
+  reversalIdempotencyKey: string;
+}
+
+/**
+ * Thrown when a loan/EMI payment or prepayment cannot be safely reversed —
+ * e.g. a later payment or re-amortization has already happened on the same
+ * loan. Never thrown for a merely-inconvenient case, only when reversing
+ * would silently rewrite later financial history.
+ */
+export class PaymentReversalBlockedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PaymentReversalBlockedError";
+  }
+}
+
+/** Outcome of `LoanAdvancePaymentRepository.recordAdditionalDisbursement`. */
+export interface LoanAdditionalDisbursementResult {
+  /**
+   * True when `recordAdditionalDisbursement`'s `idempotencyKey` had already
+   * been used — every other field still describes the original (not
+   * re-applied) result.
+   */
+  alreadyRecorded: boolean;
+  /**
+   * Id of the `LoanAdditionalDisbursement` audit doc this action wrote —
+   * required, alongside `transactionId`, to later call
+   * `reverseAdditionalDisbursement` for this action.
+   */
+  disbursementId: string;
+  transactionId: string;
+  /**
+   * Null when the disbursement did not trigger a re-amortization (no
+   * remaining unsettled installments to reshape). Present whenever it did.
+   */
+  reamortization: DisbursementReamortizationOutcome | null;
+}
+
+export interface RecordAdditionalDisbursementParams {
+  loan: Loan;
+  /** Every active (non-deleted) installment on `loan.scheduleId` — same fresh-read contract as `record`. */
+  scheduleInstallments: Installment[];
+  accountId: string;
+  amount: number;
+  date: Date;
+  /** Must be generated once per user action and reused verbatim on any retry. */
+  idempotencyKey: string;
+  note?: string;
+}
+
+export interface ReverseAdditionalDisbursementParams {
+  loan: Loan;
+  transactionId: string;
+  disbursementId: string;
+  reversalIdempotencyKey: string;
 }
 
 export class LoanAdvancePaymentRepository {
@@ -137,6 +253,7 @@ export class LoanAdvancePaymentRepository {
     private readonly firestore: Firestore,
     private readonly uid: string,
     private readonly policy: PrepaymentReamortizationPolicy = reduceTenurePolicy,
+    private readonly disbursementPolicy: DisbursementReamortizationPolicy = holdTenurePolicy,
   ) {}
 
   private accountRef(accountId: string): DocumentReference<Account> {
@@ -191,21 +308,29 @@ export class LoanAdvancePaymentRepository {
     ).withConverter({ toFirestore: installmentToFirestore, fromFirestore: installmentFromFirestore });
   }
 
+  private payments(scheduleId: string, installmentId: string): CollectionReference<InstallmentPayment> {
+    return collection(
+      this.installments(scheduleId),
+      installmentId,
+      FirestoreCollections.payments,
+    ).withConverter({ toFirestore: installmentPaymentToFirestore, fromFirestore: installmentPaymentFromFirestore });
+  }
+
   private paymentRef(scheduleId: string, installmentId: string, paymentId: string): DocumentReference<InstallmentPayment> {
-    return doc(
-      collection(
-        this.installments(scheduleId),
-        installmentId,
-        FirestoreCollections.payments,
-      ).withConverter({ toFirestore: installmentPaymentToFirestore, fromFirestore: installmentPaymentFromFirestore }),
-      paymentId,
-    );
+    return doc(this.payments(scheduleId, installmentId), paymentId);
   }
 
   private reamortizationEvents(loanId: string): CollectionReference<LoanReamortizationEvent> {
     return collection(this.loanRef(loanId), FirestoreCollections.reamortizationEvents).withConverter({
       toFirestore: loanReamortizationEventToFirestore,
       fromFirestore: loanReamortizationEventFromFirestore,
+    });
+  }
+
+  private disbursements(loanId: string): CollectionReference<LoanAdditionalDisbursement> {
+    return collection(this.loanRef(loanId), FirestoreCollections.additionalDisbursements).withConverter({
+      toFirestore: loanAdditionalDisbursementToFirestore,
+      fromFirestore: loanAdditionalDisbursementFromFirestore,
     });
   }
 
@@ -254,6 +379,7 @@ export class LoanAdvancePaymentRepository {
         return {
           alreadyRecorded: true,
           paymentIds: existing.installmentPaymentId != null ? [existing.installmentPaymentId] : [],
+          installmentIds: existing.installmentId != null ? [existing.installmentId] : [],
           overflowPaymentId: existingOverflow != null ? overflowPaymentId : null,
           overflowInstallmentId: existingOverflow != null ? lastKnownInstallmentId : null,
           overallType: existing.paymentAllocationType ?? "regularEmi",
@@ -286,6 +412,7 @@ export class LoanAdvancePaymentRepository {
       const overflow = plan.unallocated;
 
       const paymentIds = plan.portions.map((_, i) => `adv_${idempotencyKey}_p${i}`);
+      const installmentIds = plan.portions.map((portion) => portion.installment.id);
       const overallType: PaymentAllocationType =
         overflow > 0
           ? "principalPrepayment"
@@ -400,6 +527,7 @@ export class LoanAdvancePaymentRepository {
       return {
         alreadyRecorded: false,
         paymentIds,
+        installmentIds,
         overflowPaymentId: overflow > 0 ? overflowPaymentId : null,
         overflowInstallmentId: overflow > 0 ? lastKnownInstallmentId : null,
         overallType,
@@ -411,9 +539,12 @@ export class LoanAdvancePaymentRepository {
       return {
         alreadyRecorded: coreResult.alreadyRecorded,
         paymentIds: coreResult.paymentIds,
+        installmentIds: coreResult.installmentIds,
         transactionId,
         overallAllocationType: coreResult.overallType,
         prepaymentPrincipalAmount: coreResult.prepaymentPrincipalAmount,
+        overflowPaymentId: coreResult.overflowPaymentId,
+        overflowInstallmentId: coreResult.overflowInstallmentId,
         reamortization: null,
       };
     }
@@ -429,11 +560,531 @@ export class LoanAdvancePaymentRepository {
     return {
       alreadyRecorded: false,
       paymentIds: coreResult.paymentIds,
+      installmentIds: coreResult.installmentIds,
       transactionId,
       overallAllocationType: coreResult.overallType,
       prepaymentPrincipalAmount: coreResult.prepaymentPrincipalAmount,
+      overflowPaymentId: coreResult.overflowPaymentId,
+      overflowInstallmentId: coreResult.overflowInstallmentId,
       reamortization,
     };
+  }
+
+  /**
+   * Records an increase to `params.loan`'s principal after origination —
+   * e.g. a second tranche handed over on a loan already in progress. NOT a
+   * payment: money moves in the OPPOSITE direction of `record` — for a
+   * "given" loan (you lent money), more principal going out is an expense
+   * from `accountId`; for a "taken" loan (you borrowed), more principal
+   * coming in is income into `accountId`. Only installment loans are
+   * supported — a one-time loan's single due amount has no "outstanding
+   * tail" to re-amortize.
+   *
+   * Two-unit write shape, identical posture to `record`:
+   *  1. Fixed-size core — `LoanAdditionalDisbursement` doc, `Transaction`,
+   *     `Account.currentBalance`, `Loan.loanAmount` — one `runTransaction`.
+   *  2. Variable-length re-amortization of the untouched tail (via
+   *     `disbursementPolicy`) — one `writeBatch`, run only after unit 1
+   *     commits.
+   */
+  async recordAdditionalDisbursement(params: RecordAdditionalDisbursementParams): Promise<LoanAdditionalDisbursementResult> {
+    const { loan, accountId, amount, date, idempotencyKey, note = "" } = params;
+
+    if (amount <= 0) {
+      throw new Error("Disbursement amount must be greater than 0");
+    }
+    if (loan.repaymentType !== "installment") {
+      throw new Error("One-time loans have a single due amount — there is no additional disbursement concept for them");
+    }
+
+    const knownIds = [...params.scheduleInstallments].sort((a, b) => a.sequenceNumber - b.sequenceNumber);
+    if (knownIds.length === 0) {
+      throw new Error("This loan has no installment schedule");
+    }
+    const transactionId = `disb_${idempotencyKey}_txn`;
+    const disbursementId = `disb_${idempotencyKey}_d`;
+    // Opposite of `record()`'s `isIncome`: more principal OUT (given) is an
+    // expense; more principal IN (taken) is income.
+    const isIncome = loan.direction === "taken";
+
+    const coreResult = await runTransaction<{ alreadyRecorded: boolean; disbursementId: string }>(this.firestore, async (tx) => {
+      // --- All reads first (Firestore transaction constraint). ---
+      const sentinelSnap = await tx.get(this.transactionRef(transactionId));
+      if (sentinelSnap.exists()) {
+        const existingDisbSnap = await tx.get(doc(this.disbursements(loan.id), disbursementId));
+        return { alreadyRecorded: true, disbursementId: existingDisbSnap.exists() ? disbursementId : "" };
+      }
+
+      const accountSnap = await tx.get(this.accountRef(accountId));
+      if (!accountSnap.exists()) throw new Error("Account not found");
+      const account = accountSnap.data();
+
+      const freshLoanSnap = await tx.get(this.loanRef(loan.id));
+      if (!freshLoanSnap.exists()) throw new Error("Loan not found");
+      const freshLoan = freshLoanSnap.data();
+
+      // --- Then all writes. ---
+      const disbursement: LoanAdditionalDisbursement = {
+        id: disbursementId,
+        loanId: loan.id,
+        amount,
+        date,
+        note,
+        createdAt: new Date(),
+        transactionId,
+        reamortizationEventId: null,
+        deletedAt: null,
+        lastEditedAt: null,
+        editHistory: [],
+      };
+      tx.set(doc(this.disbursements(loan.id), disbursementId), disbursement);
+
+      const transactionDoc: Transaction = {
+        id: transactionId,
+        type: isIncome ? "income" : "expense",
+        amount,
+        dateTime: date,
+        accountId,
+        // TODO(Phase 1): point at the real seeded "Loan Disbursement" system category once that seeding mechanism exists.
+        categoryId: "loan_payment",
+        description: loan.name ? `Additional disbursement — ${loan.name}` : "Additional disbursement",
+        notes: "",
+        receiptPurpose: null,
+        transferId: null,
+        excludeFromCalculations: false,
+        accountingMonth: null,
+        linkedPersonId: null,
+        owesPersonToggle: false,
+        createdAt: new Date(),
+        transferMatchedAt: null,
+        status: "posted",
+        isBusiness: false,
+        source: null,
+        loanId: loan.id,
+        emiId: null,
+        installmentId: null,
+        installmentPaymentId: null,
+        paymentAllocationType: "additionalDisbursement",
+        deletedAt: null,
+        lastEditedAt: null,
+        editHistory: [],
+      };
+      tx.set(this.transactionRef(transactionId), transactionDoc);
+
+      const delta = isIncome ? amount : -amount;
+      const newBalance = account.currentBalance + delta;
+      let updatedAccount = recordEdit(account, "currentBalance", String(account.currentBalance), String(newBalance));
+      updatedAccount = { ...updatedAccount, currentBalance: newBalance };
+      tx.set(this.accountRef(accountId), updatedAccount);
+
+      const newLoanAmount = freshLoan.loanAmount + amount;
+      let updatedLoan = recordEdit(
+        freshLoan,
+        "loanAmount (additional disbursement)",
+        String(freshLoan.loanAmount),
+        String(newLoanAmount),
+      );
+      updatedLoan = { ...updatedLoan, loanAmount: newLoanAmount };
+      tx.set(this.loanRef(loan.id), updatedLoan);
+
+      return { alreadyRecorded: false, disbursementId };
+    });
+
+    if (coreResult.alreadyRecorded) {
+      return { alreadyRecorded: true, disbursementId: coreResult.disbursementId, transactionId, reamortization: null };
+    }
+
+    const reamortization = await this.reamortizeForDisbursement({
+      loan,
+      triggeringDisbursementId: disbursementId,
+      disbursementAmount: amount,
+      date,
+    });
+
+    return { alreadyRecorded: false, disbursementId, transactionId, reamortization };
+  }
+
+  /**
+   * Reverses a payment/prepayment action previously recorded via `record`,
+   * restoring the financial state as though it had not occurred. Safe to
+   * retry: once the linked `Transaction` is soft-deleted, a repeated call
+   * with the same `transactionId` is a no-op (`alreadyReversed: true`).
+   *
+   * `paymentIds`/`installmentIds` and `overflowPaymentId`/
+   * `overflowInstallmentId` must be exactly what `record` returned for this
+   * action — this method does not discover them independently, mirroring
+   * `record`'s own caller-supplies-known-ids, repository-re-reads-fresh
+   * contract.
+   *
+   * Eligibility (checked before any write): this action must be the most
+   * recent financial mutation on the loan — no later active payment on any
+   * of its installments, and (for a prepayment) no later re-amortization
+   * event and no payment yet recorded against the installments it
+   * generated. Reversing anything other than the latest action risks
+   * silently rewriting later financial history, so this throws
+   * `PaymentReversalBlockedError` rather than attempting it.
+   */
+  async reversePayment(params: ReversePaymentParams): Promise<PaymentReversalResult> {
+    const { loan, transactionId, paymentIds, installmentIds, reversalIdempotencyKey } = params;
+    const overflowPaymentId = params.overflowPaymentId ?? null;
+    const overflowInstallmentId = params.overflowInstallmentId ?? null;
+
+    if (paymentIds.length !== installmentIds.length) {
+      throw new Error("paymentIds and installmentIds must be the same length");
+    }
+
+    const transactionSnap = await getDoc(this.transactionRef(transactionId));
+    if (!transactionSnap.exists()) throw new Error("Transaction not found");
+    const transactionDoc = transactionSnap.data();
+    if (transactionDoc.deletedAt != null) {
+      return { alreadyReversed: true, scheduleRestored: false, scheduleRestorationSkippedReason: null };
+    }
+
+    let event: LoanReamortizationEvent | null = null;
+    if (overflowPaymentId != null) {
+      event = await this.findTriggeringEvent(loan.id, overflowPaymentId);
+      if (event == null) {
+        throw new PaymentReversalBlockedError(
+          "No re-amortization event found for this prepayment — cannot safely reverse without knowing which installments it changed",
+        );
+      }
+      if (event.reversed) {
+        return { alreadyReversed: true, scheduleRestored: false, scheduleRestorationSkippedReason: null };
+      }
+      if (event.retiredInstallmentIds.length === 0 && event.generatedInstallmentIds.length === 0) {
+        throw new PaymentReversalBlockedError(
+          "This re-amortization predates schedule-restoration tracking and cannot be safely reversed automatically — use Edit Loan Terms to adjust the schedule manually instead",
+        );
+      }
+    }
+
+    await this.assertReversible(loan, transactionDoc, event);
+
+    const alreadyReversed = await runTransaction<boolean>(this.firestore, async (tx) => {
+      // --- All reads first (Firestore transaction constraint). ---
+      const freshTransactionSnap = await tx.get(this.transactionRef(transactionId));
+      if (!freshTransactionSnap.exists()) throw new Error("Transaction not found");
+      const freshTransaction = freshTransactionSnap.data();
+      if (freshTransaction.deletedAt != null) return true; // idempotent race guard
+
+      const freshAccountSnap = await tx.get(this.accountRef(freshTransaction.accountId));
+      if (!freshAccountSnap.exists()) throw new Error("Account not found");
+      const account = freshAccountSnap.data();
+
+      const freshInstallments = new Map<string, Installment>();
+      for (const installmentId of new Set(installmentIds)) {
+        const snap = await tx.get(doc(this.installments(loan.scheduleId), installmentId));
+        if (snap.exists()) freshInstallments.set(installmentId, snap.data());
+      }
+
+      const freshPayments = new Map<string, InstallmentPayment>();
+      for (let i = 0; i < paymentIds.length; i++) {
+        const snap = await tx.get(this.paymentRef(loan.scheduleId, installmentIds[i], paymentIds[i]));
+        if (snap.exists()) freshPayments.set(paymentIds[i], snap.data());
+      }
+      let freshOverflowPayment: InstallmentPayment | null = null;
+      if (overflowPaymentId != null && overflowInstallmentId != null) {
+        const snap = await tx.get(this.paymentRef(loan.scheduleId, overflowInstallmentId, overflowPaymentId));
+        freshOverflowPayment = snap.exists() ? snap.data() : null;
+      }
+
+      // --- Then all writes. ---
+      for (let i = 0; i < paymentIds.length; i++) {
+        const paymentId = paymentIds[i];
+        const installmentId = installmentIds[i];
+        const payment = freshPayments.get(paymentId);
+        if (payment == null || payment.deletedAt != null) continue;
+
+        const fresh = freshInstallments.get(installmentId);
+        if (fresh != null) {
+          const newAmountPaid = Math.min(Math.max(fresh.amountPaid - payment.amount, 0), fresh.amountDue);
+          let updated = recordEdit(fresh, "amountPaid", String(fresh.amountPaid), String(newAmountPaid));
+          updated = { ...updated, amountPaid: newAmountPaid };
+          tx.set(doc(this.installments(loan.scheduleId), fresh.id), updated);
+        }
+
+        tx.set(this.paymentRef(loan.scheduleId, installmentId, paymentId), { ...payment, deletedAt: new Date() });
+      }
+
+      if (freshOverflowPayment != null && freshOverflowPayment.deletedAt == null) {
+        // Ledger-only — never applied to any installment's amountPaid, so
+        // nothing to reverse there, only the payment doc itself.
+        tx.set(this.paymentRef(loan.scheduleId, overflowInstallmentId!, overflowPaymentId!), {
+          ...freshOverflowPayment,
+          deletedAt: new Date(),
+        });
+      }
+
+      // Reverses the account balance and soft-deletes the Transaction —
+      // inlined rather than delegating to a composable
+      // TransactionRepository method, since Firestore requires every read in
+      // a transaction to precede every write and the installment/payment
+      // writes above must happen after this method's own reads.
+      const delta = -balanceEffect(freshTransaction);
+      const newBalance = account.currentBalance + delta;
+      let updatedAccount = recordEdit(account, "currentBalance", String(account.currentBalance), String(newBalance));
+      updatedAccount = { ...updatedAccount, currentBalance: newBalance };
+      tx.set(this.accountRef(freshTransaction.accountId), updatedAccount);
+      tx.set(this.transactionRef(transactionId), { ...freshTransaction, deletedAt: new Date() });
+
+      return false;
+    });
+
+    if (alreadyReversed) {
+      return { alreadyReversed: true, scheduleRestored: false, scheduleRestorationSkippedReason: null };
+    }
+
+    if (event == null) {
+      return { alreadyReversed: false, scheduleRestored: false, scheduleRestorationSkippedReason: null };
+    }
+
+    return this.restoreSchedule(loan, event, reversalIdempotencyKey);
+  }
+
+  /**
+   * Reverses an additional-disbursement action previously recorded via
+   * `recordAdditionalDisbursement`, restoring the financial AND schedule
+   * state as though it had not occurred. Safe to retry: once the linked
+   * `Transaction` is soft-deleted, a repeated call with the same
+   * `transactionId` is a no-op (`alreadyReversed: true`).
+   *
+   * Same eligibility rule as `reversePayment`: this must be the most recent
+   * financial mutation on the loan — no later active payment/advance/
+   * prepayment/disbursement on any of its installments, no later
+   * re-amortization event, and no payment yet recorded against the
+   * installments this disbursement's re-amortization generated. Throws
+   * `PaymentReversalBlockedError` rather than silently reconstructing
+   * history when that can't be proven safe.
+   */
+  async reverseAdditionalDisbursement(params: ReverseAdditionalDisbursementParams): Promise<PaymentReversalResult> {
+    const { loan, transactionId, disbursementId, reversalIdempotencyKey } = params;
+
+    const transactionSnap = await getDoc(this.transactionRef(transactionId));
+    if (!transactionSnap.exists()) throw new Error("Transaction not found");
+    const transactionDoc = transactionSnap.data();
+    if (transactionDoc.deletedAt != null) {
+      return { alreadyReversed: true, scheduleRestored: false, scheduleRestorationSkippedReason: null };
+    }
+
+    const event = await this.findTriggeringEvent(loan.id, disbursementId, "triggeredByDisbursementId");
+    // A disbursement doesn't always trigger a re-amortization (e.g. nothing
+    // left to reshape), so — unlike a prepayment's overflow — a missing
+    // event is not itself an error. Only the disbursement's own loanAmount
+    // bump needs reversing in that case; `event` simply stays null and the
+    // schedule-restoration step below is skipped.
+    if (event != null) {
+      if (event.reversed) {
+        return { alreadyReversed: true, scheduleRestored: false, scheduleRestorationSkippedReason: null };
+      }
+      if (event.retiredInstallmentIds.length === 0 && event.generatedInstallmentIds.length === 0) {
+        throw new PaymentReversalBlockedError(
+          "This re-amortization predates schedule-restoration tracking and cannot be safely reversed automatically — use Edit Loan Terms to adjust the schedule manually instead",
+        );
+      }
+      if (event.loanAmountBefore == null) {
+        throw new PaymentReversalBlockedError(
+          "This disbursement predates reversal tracking and cannot be safely reversed automatically",
+        );
+      }
+    }
+
+    await this.assertReversible(loan, transactionDoc, event);
+
+    const alreadyReversed = await runTransaction<boolean>(this.firestore, async (tx) => {
+      // --- All reads first. ---
+      const freshTransactionSnap = await tx.get(this.transactionRef(transactionId));
+      if (!freshTransactionSnap.exists()) throw new Error("Transaction not found");
+      const freshTransaction = freshTransactionSnap.data();
+      if (freshTransaction.deletedAt != null) return true; // idempotent race guard
+
+      const freshAccountSnap = await tx.get(this.accountRef(freshTransaction.accountId));
+      if (!freshAccountSnap.exists()) throw new Error("Account not found");
+      const account = freshAccountSnap.data();
+
+      const freshDisbursementSnap = await tx.get(doc(this.disbursements(loan.id), disbursementId));
+      const freshDisbursement = freshDisbursementSnap.exists() ? freshDisbursementSnap.data() : null;
+
+      const freshLoanSnap = await tx.get(this.loanRef(loan.id));
+      if (!freshLoanSnap.exists()) throw new Error("Loan not found");
+      const freshLoan = freshLoanSnap.data();
+
+      // --- Then all writes. ---
+      if (freshDisbursement != null && freshDisbursement.deletedAt == null) {
+        tx.set(doc(this.disbursements(loan.id), disbursementId), { ...freshDisbursement, deletedAt: new Date() });
+
+        const newLoanAmount = freshLoan.loanAmount - freshDisbursement.amount;
+        let updatedLoan = recordEdit(
+          freshLoan,
+          "loanAmount (disbursement reversal)",
+          String(freshLoan.loanAmount),
+          String(newLoanAmount),
+        );
+        updatedLoan = { ...updatedLoan, loanAmount: newLoanAmount };
+        tx.set(this.loanRef(loan.id), updatedLoan);
+      }
+
+      const delta = -balanceEffect(freshTransaction);
+      const newBalance = account.currentBalance + delta;
+      let updatedAccount = recordEdit(account, "currentBalance", String(account.currentBalance), String(newBalance));
+      updatedAccount = { ...updatedAccount, currentBalance: newBalance };
+      tx.set(this.accountRef(freshTransaction.accountId), updatedAccount);
+      tx.set(this.transactionRef(transactionId), { ...freshTransaction, deletedAt: new Date() });
+
+      return false;
+    });
+
+    if (alreadyReversed) {
+      return { alreadyReversed: true, scheduleRestored: false, scheduleRestorationSkippedReason: null };
+    }
+
+    if (event == null) {
+      return { alreadyReversed: false, scheduleRestored: false, scheduleRestorationSkippedReason: null };
+    }
+
+    return this.restoreSchedule(loan, event, reversalIdempotencyKey);
+  }
+
+  /**
+   * Finds the (at most one) non-reversed `LoanReamortizationEvent` whose
+   * `field` (`triggeredByPaymentId` or `triggeredByDisbursementId`) matches
+   * `triggerId`.
+   */
+  private async findTriggeringEvent(
+    loanId: string,
+    triggerId: string,
+    field: "triggeredByPaymentId" | "triggeredByDisbursementId" = "triggeredByPaymentId",
+  ): Promise<LoanReamortizationEvent | null> {
+    const snap = await getDocs(query(this.reamortizationEvents(loanId), where(field, "==", triggerId), limit(1)));
+    if (snap.empty) return null;
+    return snap.docs[0].data();
+  }
+
+  /**
+   * Read-only eligibility check — throws `PaymentReversalBlockedError`
+   * rather than allowing a reversal that would silently rewrite later
+   * financial history. See `reversePayment`'s doc comment for the rule.
+   */
+  private async assertReversible(
+    loan: Loan,
+    transactionDoc: Transaction,
+    event: LoanReamortizationEvent | null,
+  ): Promise<void> {
+    const allInstallments = await getDocs(this.installments(loan.scheduleId));
+    for (const installmentDoc of allInstallments.docs) {
+      const paymentsSnap = await getDocs(this.payments(loan.scheduleId, installmentDoc.id));
+      for (const paymentDoc of paymentsSnap.docs) {
+        const payment = paymentDoc.data();
+        if (payment.deletedAt != null) continue;
+        if (payment.transactionId === transactionDoc.id) continue;
+        if (!(payment.createdAt.getTime() > transactionDoc.createdAt.getTime())) continue;
+        throw new PaymentReversalBlockedError("A later payment exists on this loan — reverse it first before reversing this one");
+      }
+    }
+
+    if (event == null) return;
+
+    const laterEvents = await getDocs(query(this.reamortizationEvents(loan.id), where("reversed", "==", false)));
+    for (const otherDoc of laterEvents.docs) {
+      const other = otherDoc.data();
+      if (other.id === event.id) continue;
+      if (other.createdAt.getTime() > event.createdAt.getTime()) {
+        throw new PaymentReversalBlockedError("A later re-amortization exists on this loan — reverse it first");
+      }
+    }
+
+    for (const installmentId of event.generatedInstallmentIds) {
+      const snap = await getDoc(doc(this.installments(loan.scheduleId), installmentId));
+      if (snap.exists() && snap.data().amountPaid > 0) {
+        throw new PaymentReversalBlockedError(
+          "A payment already exists against the re-amortized schedule — reverse it first before reversing this prepayment",
+        );
+      }
+    }
+  }
+
+  /**
+   * Batch restoration of the schedule a prepayment re-amortized — the
+   * mechanical inverse of `reamortize`'s batch: restores `event`'s
+   * `retiredInstallmentIds`, retires its `generatedInstallmentIds`, reverts
+   * `Loan.installmentCount` and the schedule's cached totals, and marks the
+   * event reversed. Re-validates freshly immediately before committing — if
+   * a concurrent payment landed on the generated tail in the race window
+   * since `assertReversible` ran, this is skipped (money stays correctly
+   * reversed regardless; only the schedule reshape is left for a manual
+   * "Edit Loan Terms" correction) rather than risking a mixed/duplicated
+   * schedule.
+   */
+  private async restoreSchedule(
+    loan: Loan,
+    event: LoanReamortizationEvent,
+    reversalIdempotencyKey: string,
+  ): Promise<PaymentReversalResult> {
+    const freshEventSnap = await getDoc(doc(this.reamortizationEvents(loan.id), event.id));
+    if (!freshEventSnap.exists() || freshEventSnap.data().reversed) {
+      return { alreadyReversed: true, scheduleRestored: false, scheduleRestorationSkippedReason: null };
+    }
+    const freshEvent = freshEventSnap.data();
+
+    for (const installmentId of freshEvent.generatedInstallmentIds) {
+      const snap = await getDoc(doc(this.installments(loan.scheduleId), installmentId));
+      if (snap.exists() && snap.data().amountPaid > 0) {
+        return {
+          alreadyReversed: false,
+          scheduleRestored: false,
+          scheduleRestorationSkippedReason:
+            "A payment landed on the re-amortized schedule after this reversal was validated — the payment reversal already completed, but the schedule needs a manual Edit Loan Terms correction",
+        };
+      }
+    }
+
+    const freshLoanSnap = await getDoc(this.loanRef(loan.id));
+    if (!freshLoanSnap.exists()) {
+      return { alreadyReversed: false, scheduleRestored: false, scheduleRestorationSkippedReason: "Loan could not be found" };
+    }
+    const freshLoan = freshLoanSnap.data();
+
+    const batch = writeBatch(this.firestore);
+    for (const installmentId of freshEvent.retiredInstallmentIds) {
+      const snap = await getDoc(doc(this.installments(loan.scheduleId), installmentId));
+      if (!snap.exists()) continue;
+      batch.set(doc(this.installments(loan.scheduleId), installmentId), { ...snap.data(), deletedAt: null });
+    }
+    for (const installmentId of freshEvent.generatedInstallmentIds) {
+      const snap = await getDoc(doc(this.installments(loan.scheduleId), installmentId));
+      if (!snap.exists()) continue;
+      batch.set(doc(this.installments(loan.scheduleId), installmentId), { ...snap.data(), deletedAt: new Date() });
+    }
+
+    let updatedLoan = recordEdit(
+      freshLoan,
+      "installmentCount (reversal)",
+      String(freshLoan.installmentCount),
+      String(freshEvent.installmentCountBefore),
+    );
+    updatedLoan = { ...updatedLoan, installmentCount: freshEvent.installmentCountBefore };
+    batch.set(this.loanRef(loan.id), updatedLoan);
+
+    if (freshEvent.scheduleTotalAmountBefore != null) {
+      const scheduleSnap = await getDoc(this.scheduleRef(loan.scheduleId));
+      if (scheduleSnap.exists()) {
+        batch.set(this.scheduleRef(loan.scheduleId), {
+          ...scheduleSnap.data(),
+          installmentCount: freshEvent.installmentCountBefore,
+          totalAmount: freshEvent.scheduleTotalAmountBefore,
+        });
+      }
+    }
+
+    batch.set(doc(this.reamortizationEvents(loan.id), freshEvent.id), {
+      ...freshEvent,
+      reversed: true,
+      reversedAt: new Date(),
+      reversalId: reversalIdempotencyKey,
+    });
+
+    await batch.commit();
+
+    return { alreadyReversed: false, scheduleRestored: true, scheduleRestorationSkippedReason: null };
   }
 
   /**
@@ -471,7 +1122,16 @@ export class LoanAdvancePaymentRepository {
     }
     const freshLoan = freshLoanSnap.data();
 
-    const freshSnap = await getDocs(this.installments(loan.scheduleId));
+    // `deletedAt` must be filtered here: an EARLIER re-amortization on this
+    // same loan (a prior prepayment or disbursement) soft-deletes its own
+    // "untouched" tail when generating a new one — an unfiltered read would
+    // resurrect those already-retired documents into THIS solve's
+    // `untouched` set (they have `amountPaid === 0`/`isSkipped === false`,
+    // same as a genuinely untouched installment), inflating the count and
+    // silently duplicating the schedule. Found via the Flutter side's
+    // disbursement-after-prepayment regression test; ported here as the
+    // same latent bug existed in this method too.
+    const freshSnap = await getDocs(query(this.installments(loan.scheduleId), where("deletedAt", "==", null)));
     const fresh = freshSnap.docs.map((d) => d.data()).sort((a, b) => a.sequenceNumber - b.sequenceNumber);
 
     const settled = fresh.filter((i) => i.amountPaid > 0 || i.isSkipped);
@@ -523,6 +1183,7 @@ export class LoanAdvancePaymentRepository {
     const amounts = this.amortizedAmounts(outstandingPrincipalAfter, interest, remainingCount, freshLoan.installmentFrequency!);
 
     let newTailTotal = 0;
+    const generatedInstallmentIds: string[] = [];
     for (let i = 0; i < remainingCount; i++) {
       if (i > 0) dueDate = nextDueDate(freshLoan.installmentFrequency!, dueDate);
       const newInstallment: Installment = {
@@ -543,6 +1204,7 @@ export class LoanAdvancePaymentRepository {
         editHistory: [],
       };
       newTailTotal += amounts[i].amountDue;
+      generatedInstallmentIds.push(newInstallment.id);
       batch.set(doc(this.installments(loan.scheduleId), newInstallment.id), newInstallment);
     }
 
@@ -562,6 +1224,7 @@ export class LoanAdvancePaymentRepository {
 
     const settledTotal = settled.reduce((total, i) => total + i.amountDue, 0);
     const scheduleSnap = await getDoc(this.scheduleRef(loan.scheduleId));
+    const scheduleTotalAmountBefore = scheduleSnap.exists() ? scheduleSnap.data().totalAmount : null;
     if (scheduleSnap.exists()) {
       const schedule = scheduleSnap.data();
       batch.set(this.scheduleRef(loan.scheduleId), {
@@ -577,6 +1240,7 @@ export class LoanAdvancePaymentRepository {
       loanId: loan.id,
       triggerType: "prepayment",
       triggeredByPaymentId: triggeringPaymentId,
+      triggeredByDisbursementId: null,
       principalBefore: outstandingPrincipalAfter + triggeringPrepaymentAmount,
       principalAfter: outstandingPrincipalAfter,
       installmentCountBefore,
@@ -584,6 +1248,12 @@ export class LoanAdvancePaymentRepository {
       date,
       createdAt: new Date(),
       reversed: false,
+      retiredInstallmentIds: untouched.map((i) => i.id),
+      generatedInstallmentIds,
+      scheduleTotalAmountBefore,
+      loanAmountBefore: null,
+      reversedAt: null,
+      reversalId: null,
     };
     batch.set(doc(this.reamortizationEvents(loan.id), eventId), event);
 
@@ -599,6 +1269,174 @@ export class LoanAdvancePaymentRepository {
       }
     } catch {
       // Non-fatal — the payment and re-amortization are already correctly recorded.
+    }
+
+    return outcome;
+  }
+
+  /**
+   * Re-amortizes the untouched tail after an additional disbursement, via
+   * `disbursementPolicy` — the disbursement counterpart of `reamortize`.
+   * Holds the remaining installment COUNT constant (the opposite fixed
+   * point from `reamortize`'s `reduceTenurePolicy`, which holds the amount
+   * constant and solves for count) and recalculates the required
+   * installment amount for the new, larger outstanding principal. Same
+   * fresh-read discipline as `reamortize`.
+   */
+  private async reamortizeForDisbursement(params: {
+    loan: Loan;
+    triggeringDisbursementId: string;
+    disbursementAmount: number;
+    date: Date;
+  }): Promise<DisbursementReamortizationOutcome | null> {
+    const { loan, triggeringDisbursementId, disbursementAmount, date } = params;
+
+    const freshLoanSnap = await getDoc(this.loanRef(loan.id));
+    if (!freshLoanSnap.exists()) {
+      return { kind: "unsolvable", reason: "Loan could not be found for re-amortization" };
+    }
+    const freshLoan = freshLoanSnap.data();
+    const loanAmountBeforeDisbursement = freshLoan.loanAmount - disbursementAmount;
+
+    // `deletedAt` must be filtered — see `reamortize`'s identical filtered
+    // read for why: an earlier re-amortization on this loan soft-deletes
+    // its own "untouched" tail, and an unfiltered read would resurrect
+    // those already-retired documents into THIS solve's `untouched` set.
+    const freshSnap = await getDocs(query(this.installments(loan.scheduleId), where("deletedAt", "==", null)));
+    const fresh = freshSnap.docs.map((d) => d.data()).sort((a, b) => a.sequenceNumber - b.sequenceNumber);
+
+    const settled = fresh.filter((i) => i.amountPaid > 0 || i.isSkipped);
+    const untouched = fresh.filter((i) => i.amountPaid === 0 && !i.isSkipped);
+
+    if (untouched.length === 0) {
+      // Nothing left to reshape — every installment is already settled or
+      // skipped. The disbursement is still correctly recorded on the Loan.
+      return null;
+    }
+
+    const principalPaidViaInstallments = settled.reduce((total, i) => {
+      if (i.amountPaid <= 0) return total;
+      const principalShare = i.principalPortion ?? i.amountDue;
+      if (i.amountPaid >= i.amountDue) return total + principalShare;
+      return total + principalShare * (i.amountPaid / i.amountDue);
+    }, 0);
+    const outstandingPrincipalAfter = Math.min(
+      Math.max(freshLoan.loanAmount - principalPaidViaInstallments, 0),
+      freshLoan.loanAmount,
+    );
+
+    const interest = freshLoan.interest;
+    const outcome = this.disbursementPolicy.solve({
+      outstandingPrincipalAfter,
+      interest: interest == null ? null : { type: interest.type, ratePercent: interest.ratePercent, period: interest.period },
+      remainingInstallmentCount: untouched.length,
+      frequency: freshLoan.installmentFrequency!,
+    });
+
+    if (outcome.kind !== "solved") return outcome;
+
+    const batch = writeBatch(this.firestore);
+    for (const installment of untouched) {
+      batch.set(doc(this.installments(loan.scheduleId), installment.id), { ...installment, deletedAt: new Date() });
+    }
+
+    const remainingCount = outcome.remainingInstallmentCount;
+    const lastSettled = settled.length > 0 ? settled[settled.length - 1] : null;
+    let dueDate =
+      lastSettled == null
+        ? nextDueDate(freshLoan.installmentFrequency!, freshLoan.loanDate)
+        : nextDueDate(freshLoan.installmentFrequency!, lastSettled.dueDate);
+
+    const amounts = this.amortizedAmounts(outstandingPrincipalAfter, interest, remainingCount, freshLoan.installmentFrequency!);
+
+    let newTailTotal = 0;
+    const generatedInstallmentIds: string[] = [];
+    for (let i = 0; i < remainingCount; i++) {
+      if (i > 0) dueDate = nextDueDate(freshLoan.installmentFrequency!, dueDate);
+      const newInstallment: Installment = {
+        id: generateId(),
+        scheduleId: loan.scheduleId,
+        ownerType: untouched[0].ownerType,
+        ownerId: loan.id,
+        sequenceNumber: settled.length + i + 1,
+        dueDate,
+        amountDue: amounts[i].amountDue,
+        amountPaid: 0,
+        isSkipped: false,
+        principalPortion: amounts[i].principalPortion,
+        interestPortion: amounts[i].interestPortion,
+        createdAt: new Date(),
+        deletedAt: null,
+        lastEditedAt: null,
+        editHistory: [],
+      };
+      newTailTotal += amounts[i].amountDue;
+      generatedInstallmentIds.push(newInstallment.id);
+      batch.set(doc(this.installments(loan.scheduleId), newInstallment.id), newInstallment);
+    }
+
+    // remainingCount is held constant by definition (holdTenurePolicy), so
+    // the total installment count never changes here — unlike
+    // `reamortize`'s prepayment path, where it can shrink.
+    const newInstallmentCount = settled.length + remainingCount;
+    const installmentCountBefore = freshLoan.installmentCount ?? fresh.length;
+    let updatedLoan = freshLoan;
+    if (newInstallmentCount !== installmentCountBefore) {
+      updatedLoan = recordEdit(
+        freshLoan,
+        "installmentCount (disbursement reamortized)",
+        String(freshLoan.installmentCount),
+        String(newInstallmentCount),
+      );
+      updatedLoan = { ...updatedLoan, installmentCount: newInstallmentCount };
+    }
+    // Writes back freshLoan (already carries the disbursement's loanAmount
+    // bump from the atomic core, re-read fresh here) so a concurrently
+    // changed field is never silently regressed by this batch.
+    batch.set(this.loanRef(loan.id), updatedLoan);
+
+    const settledTotal = settled.reduce((total, i) => total + i.amountDue, 0);
+    const scheduleSnap = await getDoc(this.scheduleRef(loan.scheduleId));
+    const scheduleTotalAmountBefore = scheduleSnap.exists() ? scheduleSnap.data().totalAmount : null;
+    if (scheduleSnap.exists()) {
+      const schedule = scheduleSnap.data();
+      batch.set(this.scheduleRef(loan.scheduleId), {
+        ...schedule,
+        installmentCount: newInstallmentCount,
+        totalAmount: settledTotal + newTailTotal,
+      });
+    }
+
+    const eventId = generateId();
+    const event: LoanReamortizationEvent = {
+      id: eventId,
+      loanId: loan.id,
+      triggerType: "additionalDisbursement",
+      triggeredByPaymentId: null,
+      triggeredByDisbursementId: triggeringDisbursementId,
+      principalBefore: outstandingPrincipalAfter - disbursementAmount,
+      principalAfter: outstandingPrincipalAfter,
+      installmentCountBefore,
+      installmentCountAfter: newInstallmentCount,
+      date,
+      createdAt: new Date(),
+      reversed: false,
+      retiredInstallmentIds: untouched.map((i) => i.id),
+      generatedInstallmentIds,
+      scheduleTotalAmountBefore,
+      loanAmountBefore: loanAmountBeforeDisbursement,
+      reversedAt: null,
+      reversalId: null,
+    };
+    batch.set(doc(this.reamortizationEvents(loan.id), eventId), event);
+
+    await batch.commit();
+
+    // Best-effort metadata annotation — not balance-affecting.
+    try {
+      await updateDoc(doc(this.disbursements(loan.id), triggeringDisbursementId), { reamortizationEventId: eventId });
+    } catch {
+      // Non-fatal — the disbursement and re-amortization are already correctly recorded.
     }
 
     return outcome;

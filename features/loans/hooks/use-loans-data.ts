@@ -42,7 +42,6 @@
  */
 
 import { useMemo } from "react";
-import { planInstallmentSettlement, totalApplied } from "@/lib/engines/installment-settlement";
 import { outstandingPrincipalFor } from "@/lib/engines/loan-outstanding";
 import {
   installmentStatus,
@@ -60,11 +59,11 @@ import {
 import type { Person } from "@/lib/models/person";
 import type { CreateLoanParams, EditLoanParams } from "@/lib/repositories/loan-repository";
 import {
-  createInstallmentPaymentRepositoryFor,
-  createInstallmentRepositoryFor,
   createLoanRepository,
   createPersonRepository,
 } from "@/lib/repositories/repository-factory";
+import { LoanAdvancePaymentRepository } from "@/lib/repositories/loan-advance-payment-repository";
+import { db } from "@/lib/firebase/client";
 import { useAllLoanInstallments, useLoanPersons, useLoans, useTrashedLoans } from "@/hooks/use-loans";
 import { useAuthStore } from "@/store/auth-store";
 import {
@@ -338,18 +337,38 @@ export function useLoanActions() {
       },
       recordPayment: async (
         loan: Loan,
-        installment: Installment,
-        params: { amount: number; date: Date; note?: string },
+        scheduleInstallments: Installment[],
+        params: { accountId: string; amount: number; date: Date; note?: string; idempotencyKey: string; includeUpcomingInstallments?: boolean },
       ) => {
-        const installmentRepository = createInstallmentRepositoryFor(uid, loan.scheduleId);
-        const paymentRepository = createInstallmentPaymentRepositoryFor(
-          uid,
-          loan.scheduleId,
-          installment.id,
-          installmentRepository,
-        );
-        await paymentRepository.recordPayment(installment, params);
+        const paymentRepository = new LoanAdvancePaymentRepository(db, uid);
+        const result = await paymentRepository.record({
+          loan,
+          scheduleInstallments,
+          accountId: params.accountId,
+          amount: params.amount,
+          date: params.date,
+          note: params.note,
+          includeUpcomingInstallments: params.includeUpcomingInstallments,
+          idempotencyKey: params.idempotencyKey,
+        });
         await postLoanPaymentLedgerEntry(uid, loan, personRepository, params);
+        return result;
+      },
+      recordAdditionalDisbursement: async (
+        loan: Loan,
+        scheduleInstallments: Installment[],
+        params: { accountId: string; amount: number; date: Date; note?: string; idempotencyKey: string },
+      ) => {
+        const paymentRepository = new LoanAdvancePaymentRepository(db, uid);
+        return paymentRepository.recordAdditionalDisbursement({
+          loan,
+          scheduleInstallments,
+          accountId: params.accountId,
+          amount: params.amount,
+          date: params.date,
+          note: params.note,
+          idempotencyKey: params.idempotencyKey,
+        });
       },
       // Wraps `planInstallmentSettlement` (port of `InstallmentSettlement.plan`) — fans one entered
       // amount across the oldest unpaid installments, recording one payment per installment touched.
@@ -358,24 +377,20 @@ export function useLoanActions() {
       recordLumpSumSettlement: async (
         loan: Loan,
         installments: Installment[],
-        params: { amount: number; date: Date; note?: string },
+        params: { accountId: string; amount: number; date: Date; note?: string; idempotencyKey: string },
       ) => {
-        const plan = planInstallmentSettlement(installments, params.amount);
-        const installmentRepository = createInstallmentRepositoryFor(uid, loan.scheduleId);
-        for (const { installment, portion } of plan.portions) {
-          const paymentRepository = createInstallmentPaymentRepositoryFor(
-            uid,
-            loan.scheduleId,
-            installment.id,
-            installmentRepository,
-          );
-          await paymentRepository.recordPayment(installment, { amount: portion, date: params.date, note: params.note });
-        }
-        const appliedAmount = totalApplied(plan);
-        if (appliedAmount > 0) {
-          await postLoanPaymentLedgerEntry(uid, loan, personRepository, { ...params, amount: appliedAmount });
-        }
-        return plan;
+        const paymentRepository = new LoanAdvancePaymentRepository(db, uid);
+        await paymentRepository.record({
+          loan,
+          scheduleInstallments: installments,
+          accountId: params.accountId,
+          amount: params.amount,
+          date: params.date,
+          note: params.note,
+          includeUpcomingInstallments: true,
+          idempotencyKey: params.idempotencyKey,
+        });
+        await postLoanPaymentLedgerEntry(uid, loan, personRepository, params);
       },
     };
   }, [uid]);

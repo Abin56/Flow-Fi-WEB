@@ -2,7 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/.idea/Flow-Fi-WEB.iml" filepath="$PROJECT_DIR$/.idea/Flow-Fi-WEB.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/flowfi-web.iml" filepath="$PROJECT_DIR$/.idea/flowfi-web.iml" />
     </modules>
   </component>
 </project>

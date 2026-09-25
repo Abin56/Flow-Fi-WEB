@@ -82,6 +82,26 @@ export class TransferEditRestrictedError extends Error {
   }
 }
 
+/**
+ * Direct port of `LoanPaymentTransactionRestrictedError`
+ * (`lib/features/transactions/data/transaction_repository.dart`). A
+ * transaction backing a loan/EMI payment (`loanId`/`emiId` set) carries
+ * side effects — `Installment.amountPaid`, the linked `InstallmentPayment`,
+ * and possibly a `LoanReamortizationEvent` — that a generic soft-delete/
+ * restore knows nothing about and would leave inconsistent (the account
+ * balance reverses but the installment still shows paid, or vice versa).
+ * Use `LoanAdvancePaymentRepository.reversePayment` instead, which reverses
+ * all of that state together, atomically.
+ */
+export class LoanPaymentTransactionRestrictedError extends Error {
+  constructor() {
+    super(
+      "This transaction backs a loan/EMI payment and can't be deleted or restored directly — use the loan's payment reversal action instead.",
+    );
+    this.name = "LoanPaymentTransactionRestrictedError";
+  }
+}
+
 export interface EditTransactionParams {
   type?: TransactionType;
   amount?: number;
@@ -405,6 +425,9 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
 
   /** Soft-deletes and reverses this transaction's effect on its account's balance. */
   async softDeleteTransaction(transaction: Transaction): Promise<void> {
+    if (transaction.loanId != null || transaction.emiId != null) {
+      throw new LoanPaymentTransactionRestrictedError();
+    }
     const db = this.collection.firestore;
     await runTransaction(db, async (tx) => {
       await this.softDeleteTransactionInTransaction(tx, transaction);
@@ -431,6 +454,9 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
 
   /** Restores a trashed transaction and re-applies its balance effect. */
   async restoreTransaction(transaction: Transaction): Promise<void> {
+    if (transaction.loanId != null || transaction.emiId != null) {
+      throw new LoanPaymentTransactionRestrictedError();
+    }
     const db = this.collection.firestore;
     await runTransaction(db, async (tx) => {
       await this.restoreTransactionInTransaction(tx, transaction);

@@ -4,7 +4,9 @@ import { useState } from "react";
 import { FLAT_INPUT, FormDialog, SectionLabel } from "@/components/finance";
 import { remainingAmount, type Installment } from "@/lib/models/payment-schedule";
 import type { Loan } from "@/lib/models/loan";
+import type { Account } from "@/lib/models/account";
 import { cn } from "@/lib/utils";
+import { generateId } from "@/lib/utils/id-generator";
 import { toast } from "@/store/toast-store";
 import { CreditCard } from "lucide-react";
 
@@ -13,7 +15,8 @@ interface RecordLoanPaymentDialogProps {
   onOpenChange: (open: boolean) => void;
   loan: Loan | null;
   installment: Installment | null;
-  onRecord: (loan: Loan, installment: Installment, params: { amount: number; date: Date; note?: string }) => Promise<void>;
+  accounts: Account[];
+  onRecord: (loan: Loan, installments: Installment[], params: { accountId: string; amount: number; date: Date; note?: string; idempotencyKey: string }) => Promise<void>;
 }
 
 /** Records a payment against one installment — supports partial payments (amount less than what's
@@ -21,10 +24,12 @@ interface RecordLoanPaymentDialogProps {
  *  `RecordLoanPaymentSheet`: any positive amount up to the remaining balance and any date is accepted. */
 /** `key`d by the parent on the target installment's id, so a new target always gets a fresh mount
  *  (and fresh initial state below) instead of reusing a stale amount/date/note from the last one. */
-export function RecordLoanPaymentDialog({ open, onOpenChange, loan, installment, onRecord }: RecordLoanPaymentDialogProps) {
+export function RecordLoanPaymentDialog({ open, onOpenChange, loan, installment, accounts, onRecord }: RecordLoanPaymentDialogProps) {
   const [amount, setAmount] = useState(() => (installment ? String(remainingAmount(installment)) : ""));
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [note, setNote] = useState("");
+  const [accountId, setAccountId] = useState(() => accounts.find((account) => account.isDefault)?.id ?? accounts[0]?.id ?? "");
+  const [idempotencyKey] = useState(generateId);
   const [saving, setSaving] = useState(false);
 
   if (!loan || !installment) return null;
@@ -41,9 +46,13 @@ export function RecordLoanPaymentDialog({ open, onOpenChange, loan, installment,
       toast.error("Couldn't record payment", `Amount can't exceed the ₹${owed.toLocaleString("en-IN")} remaining on this installment.`);
       return;
     }
+    if (!accountId) {
+      toast.error("Choose an account", "Select the account that paid or received this loan payment.");
+      return;
+    }
     setSaving(true);
     try {
-      await onRecord(loan, installment, { amount: parsed, date: new Date(date), note: note || undefined });
+      await onRecord(loan, [installment], { accountId, amount: parsed, date: new Date(date), note: note || undefined, idempotencyKey });
       onOpenChange(false);
     } catch (e) {
       toast.error("Couldn't record payment", e instanceof Error ? e.message : "Please try again.");
@@ -87,6 +96,13 @@ export function RecordLoanPaymentDialog({ open, onOpenChange, loan, installment,
         <label className="flex flex-col gap-1">
           <span className="text-xs font-medium text-muted-foreground">Note (optional)</span>
           <input className={FLAT_INPUT} placeholder="Optional note" value={note} onChange={(e) => setNote(e.target.value)} />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-muted-foreground">{loan.direction === "taken" ? "Pay from" : "Receive into"}</span>
+          <select className={FLAT_INPUT} value={accountId} onChange={(e) => setAccountId(e.target.value)}>
+            <option value="">Select account</option>
+            {accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}
+          </select>
         </label>
       </div>
     </FormDialog>
