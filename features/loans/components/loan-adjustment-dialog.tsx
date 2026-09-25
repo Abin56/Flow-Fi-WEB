@@ -83,16 +83,16 @@ export function LoanAdjustmentDialog({ open, onOpenChange, kind, row, accounts, 
     <FormDialog
       open={open}
       onOpenChange={onOpenChange}
-      title={isPrepayment ? "Prepay Principal" : "Additional Disbursement"}
-      description={isPrepayment ? "Reduce principal and shorten the remaining loan schedule." : row.direction === "taken" ? "Record additional money received from this lender." : "Record additional money lent to this borrower."}
+      title={isPrepayment ? "Pay Extra Toward Balance" : "Add More to This Loan"}
+      description={isPrepayment ? "Pay extra to reduce what you owe and shorten the remaining schedule." : row.direction === "taken" ? "Record extra money received from this lender." : "Record extra money lent to this borrower."}
       onConfirm={submit}
-      confirmLabel={saving ? "Recording…" : isPrepayment && preview ? `Prepay ${money(parsed)}` : preview ? `Add ${money(parsed)}` : isPrepayment ? "Prepay" : "Add Amount"}
+      confirmLabel={saving ? "Recording…" : isPrepayment && preview ? `Pay ${money(parsed)}` : preview ? `Add ${money(parsed)}` : isPrepayment ? "Pay Extra" : "Add Amount"}
       loading={saving}
       contentClassName="sm:max-w-lg"
     >
       <div className="space-y-4">
         <div className="grid gap-3 sm:grid-cols-2">
-          <label className="space-y-1"><span className="text-xs font-medium text-muted-foreground">{isPrepayment ? "Extra principal" : "Additional amount"}</span><input aria-label={isPrepayment ? "Extra principal amount" : "Additional disbursement amount"} type="number" min="0.01" step="0.01" className={FLAT_INPUT} value={amount} onChange={(event) => setAmount(event.target.value)} autoFocus /></label>
+          <label className="space-y-1"><span className="text-xs font-medium text-muted-foreground">{isPrepayment ? "Extra amount" : "Additional amount"}</span><input aria-label={isPrepayment ? "Extra amount" : "Additional amount"} type="number" min="0.01" step="0.01" className={FLAT_INPUT} value={amount} onChange={(event) => setAmount(event.target.value)} autoFocus /></label>
           <label className="space-y-1"><span className="text-xs font-medium text-muted-foreground">Date</span><input aria-label="Operation date" type="date" className={FLAT_INPUT} value={date} onChange={(event) => setDate(event.target.value)} /></label>
         </div>
         <label className="space-y-1"><span className="text-xs font-medium text-muted-foreground">{isPrepayment || row.direction === "given" ? "From account" : "Into account"}</span><select aria-label="Payment account" className={FLAT_INPUT} value={accountId} onChange={(event) => setAccountId(event.target.value)}><option value="">Select account</option>{accounts.map((account) => <option key={account.id} value={account.id}>{account.name}{account.accountNumberLast4 ? ` ••${account.accountNumberLast4}` : ""}</option>)}</select></label>
@@ -100,7 +100,7 @@ export function LoanAdjustmentDialog({ open, onOpenChange, kind, row, accounts, 
         {preview && <div className="rounded-2xl border border-border bg-muted/25 p-4 text-sm">
           <SectionLabel icon={isPrepayment ? TrendingDown : Landmark}>Preview</SectionLabel>
           {prepaymentPreview && <PreviewRow label="Scheduled payment" before={money(prepaymentPreview.scheduledAmount)} after={money(prepaymentPreview.principalAmount)} afterLabel="Principal" />}
-          <PreviewRow label="Outstanding principal" before={money(preview.principalBefore)} after={money(preview.principalAfter)} />
+          <PreviewRow label="Balance remaining" before={money(preview.principalBefore)} after={money(preview.principalAfter)} />
           {solved && <PreviewRow label={isPrepayment ? "Remaining installments" : "Installment amount"} before={isPrepayment ? String(prepaymentPreview!.installmentCountBefore) : money(disbursementPreview?.currentInstallmentAmount ?? 0)} after={isPrepayment ? String(solved.remainingInstallmentCount) : money(solved.installmentAmount)} />}
           {selectedAccount && accountAfter != null && <PreviewRow label={selectedAccount.name} before={money(selectedAccount.currentBalance)} after={money(accountAfter)} />}
           {preview.outcome?.kind === "unsolvable" && <p className="mt-3 text-xs text-warning-foreground">Automatic schedule adjustment is unavailable. The money can still be recorded; update loan terms manually afterward.</p>}

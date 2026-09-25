@@ -74,15 +74,15 @@ export function LoanLumpSumDialog({ open, onOpenChange, row, accounts, onSettle 
     <FormDialog
       open={open}
       onOpenChange={onOpenChange}
-      title="Settle a Lump Sum"
-      description="Enter one amount — it settles the oldest unpaid installments first, in order."
+      title="Pay Off Remaining Balance"
+      description="Enter one amount — it pays off the oldest unpaid installments first, in order."
       onConfirm={handleSave}
-      confirmLabel={saving ? "Saving…" : "Settle Payment"}
+      confirmLabel={saving ? "Saving…" : "Make Payment"}
       loading={saving}
       contentClassName="sm:max-w-lg"
     >
       <div className="flex flex-col gap-3 rounded-2xl bg-muted/30 p-4 text-sm">
-        <SectionLabel icon={Receipt}>Settlement Details</SectionLabel>
+        <SectionLabel icon={Receipt}>Payment Details</SectionLabel>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <label className="flex flex-col gap-1">
             <span className="text-xs font-medium text-muted-foreground">Amount</span>
