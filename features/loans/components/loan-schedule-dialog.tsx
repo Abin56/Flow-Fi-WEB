@@ -1,12 +1,13 @@
 "use client";
 
-import { Lock, LockOpen, Pencil, Receipt, Trash2, X } from "lucide-react";
+import { HandCoins, Lock, LockOpen, Pencil, Receipt, TrendingDown, Trash2, X } from "lucide-react";
 import { ClayBadge } from "@/components/clay/clay-badge";
 import { ClayButton } from "@/components/clay/clay-button";
 import { CurrencyCell, DateCell, FinanceTable, type FinanceTableColumn } from "@/components/finance";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { installmentStatus, remainingAmount, type Installment, type InstallmentStatus } from "@/lib/models/payment-schedule";
 import type { LoanRow } from "@/features/loans/hooks/use-loans-data";
+import { LoanFinancialHistory } from "@/features/loans/components/loan-financial-history";
 import { cn } from "@/lib/utils";
 
 const STATUS_TONE: Record<InstallmentStatus, "success" | "expense" | "warning" | "neutral"> = {
@@ -45,13 +46,15 @@ interface LoanScheduleDialogProps {
   onDelete: (row: LoanRow) => void;
   onRecordPayment: (row: LoanRow, installment: Installment) => void;
   onSettleLumpSum: (row: LoanRow) => void;
+  onPrincipalPrepayment: (row: LoanRow) => void;
+  onAdditionalDisbursement: (row: LoanRow) => void;
   onToggleClose: (row: LoanRow) => void;
 }
 
 /** Centered, all-in-one loan detail popup — overview + the complete repayment schedule + Edit/Delete/
  *  Record Payment/Settle Lump Sum/Close, all in one place instead of a side drawer that only shows a
  *  6-row slice of the timeline. This is what clicking a loan card opens. */
-export function LoanScheduleDialog({ open, onOpenChange, row, onEdit, onDelete, onRecordPayment, onSettleLumpSum, onToggleClose }: LoanScheduleDialogProps) {
+export function LoanScheduleDialog({ open, onOpenChange, row, onEdit, onDelete, onRecordPayment, onSettleLumpSum, onPrincipalPrepayment, onAdditionalDisbursement, onToggleClose }: LoanScheduleDialogProps) {
   if (!row) return null;
 
   const totalReceived = row.installments.reduce((sum, i) => sum + i.amountPaid, 0);
@@ -216,6 +219,10 @@ export function LoanScheduleDialog({ open, onOpenChange, row, onEdit, onDelete, 
               rowClassName={(i) => (remainingAmount(i) <= 0 ? "cursor-default!" : undefined)}
             />
           </div>
+          <div className="border-t border-border px-6 py-5">
+            <div className="mb-3 text-xs font-medium tracking-wide text-muted-foreground uppercase">Payment & principal history</div>
+            <LoanFinancialHistory row={row} />
+          </div>
         </div>
 
         <DialogFooter className="shrink-0 flex-wrap items-center gap-2 border-t border-border bg-muted/20 px-6 py-4 sm:justify-between">
@@ -230,6 +237,14 @@ export function LoanScheduleDialog({ open, onOpenChange, row, onEdit, onDelete, 
             </ClayButton>
           </div>
           <div className="flex flex-wrap gap-2">
+            <ClayButton variant="secondary" className="gap-1.5 rounded-none" onClick={() => onPrincipalPrepayment(row)} disabled={totalRemaining <= 0}>
+              <TrendingDown className="size-3.5" />
+              Prepay Principal
+            </ClayButton>
+            <ClayButton variant="secondary" className="gap-1.5 rounded-none" onClick={() => onAdditionalDisbursement(row)} disabled={row.status === "closed"}>
+              <HandCoins className="size-3.5" />
+              Additional Disbursement
+            </ClayButton>
             <ClayButton variant="secondary" className="gap-1.5 rounded-none" onClick={() => onSettleLumpSum(row)} disabled={totalRemaining <= 0}>
               <Receipt className="size-3.5" />
               Settle Lump Sum

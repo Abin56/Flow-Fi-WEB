@@ -4,21 +4,23 @@ import { useState } from "react";
 import { Receipt } from "lucide-react";
 import { FLAT_INPUT, FormDialog, SectionLabel } from "@/components/finance";
 import { remainingAmount, type Installment } from "@/lib/models/payment-schedule";
-import type { InstallmentSettlementPlan } from "@/lib/engines/installment-settlement";
 import type { Loan } from "@/lib/models/loan";
+import type { Account } from "@/lib/models/account";
 import type { LoanRow } from "@/features/loans/hooks/use-loans-data";
 import { cn } from "@/lib/utils";
+import { generateId } from "@/lib/utils/id-generator";
 import { toast } from "@/store/toast-store";
 
 interface LoanLumpSumDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   row: LoanRow | null;
+  accounts: Account[];
   onSettle: (
     loan: Loan,
     installments: Installment[],
-    params: { amount: number; date: Date; note?: string },
-  ) => Promise<InstallmentSettlementPlan>;
+    params: { accountId: string; amount: number; date: Date; note?: string; idempotencyKey: string },
+  ) => Promise<void>;
 }
 
 /** Settles one lump-sum amount across a loan's outstanding installments, oldest-due-first — port of
@@ -28,10 +30,12 @@ const totalRemainingOf = (row: LoanRow) => row.installments.reduce((sum, i) => s
 
 /** `key`d by the parent on the target loan's id, so a new target always gets a fresh mount (and fresh
  *  initial state below) instead of reusing a stale amount/date/note from the last one. */
-export function LoanLumpSumDialog({ open, onOpenChange, row, onSettle }: LoanLumpSumDialogProps) {
+export function LoanLumpSumDialog({ open, onOpenChange, row, accounts, onSettle }: LoanLumpSumDialogProps) {
   const [amount, setAmount] = useState(() => (row ? String(totalRemainingOf(row)) : ""));
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [note, setNote] = useState("");
+  const [accountId, setAccountId] = useState(() => accounts.find((account) => account.isDefault)?.id ?? accounts[0]?.id ?? "");
+  const [idempotencyKey] = useState(generateId);
   const [saving, setSaving] = useState(false);
 
   const totalRemaining = row ? totalRemainingOf(row) : 0;
@@ -45,15 +49,19 @@ export function LoanLumpSumDialog({ open, onOpenChange, row, onSettle }: LoanLum
       toast.error("Couldn't settle payment", "Enter an amount greater than 0.");
       return;
     }
+    if (parsed > totalRemaining) {
+      toast.error("Amount exceeds upcoming EMIs", "Use the principal-prepayment flow for an amount above the scheduled outstanding balance.");
+      return;
+    }
+    if (!accountId) {
+      toast.error("Choose an account", "Select the account that paid or received this loan payment.");
+      return;
+    }
     setSaving(true);
     try {
       const outstanding = [...row.installments].filter((i) => remainingAmount(i) > 0).sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime());
-      const plan = await onSettle(row.loan, outstanding, { amount: parsed, date: new Date(date), note: note || undefined });
-      if (plan.unallocated > 0) {
-        toast.info("Settlement recorded", `₹${plan.unallocated.toLocaleString("en-IN")} couldn't be applied — it exceeded the outstanding balance.`);
-      } else {
-        toast.success("Settlement recorded", `Applied across ${plan.portions.length} installment${plan.portions.length === 1 ? "" : "s"}.`);
-      }
+      await onSettle(row.loan, outstanding, { accountId, amount: parsed, date: new Date(date), note: note || undefined, idempotencyKey });
+      toast.success("Settlement recorded", "The payment was allocated across upcoming installments.");
       onOpenChange(false);
     } catch (e) {
       toast.error("Couldn't settle payment", e instanceof Error ? e.message : "Please try again.");
@@ -96,6 +104,13 @@ export function LoanLumpSumDialog({ open, onOpenChange, row, onSettle }: LoanLum
         <label className="flex flex-col gap-1">
           <span className="text-xs font-medium text-muted-foreground">Note (optional)</span>
           <input className={FLAT_INPUT} placeholder="Optional note" value={note} onChange={(e) => setNote(e.target.value)} />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-muted-foreground">{row.loan.direction === "taken" ? "Pay from" : "Receive into"}</span>
+          <select className={FLAT_INPUT} value={accountId} onChange={(e) => setAccountId(e.target.value)}>
+            <option value="">Select account</option>
+            {accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}
+          </select>
         </label>
         <div className="flex items-center justify-between border-t border-border pt-3">
           <span className="text-xs font-medium text-muted-foreground">Total Outstanding</span>
