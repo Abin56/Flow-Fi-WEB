@@ -1,5 +1,4 @@
 import {
-  Banknote,
   Bot,
   Calendar,
   CalendarRange,
@@ -26,6 +25,12 @@ export interface NavItem {
   href: string;
   icon: typeof LayoutDashboard;
   section: NavSection;
+  /** Extra route prefixes that should also mark this item active (e.g. a legacy route folded into it). */
+  alsoActiveFor?: string[];
+}
+
+export function isNavItemActive(item: NavItem, pathname: string): boolean {
+  return [item.href, ...(item.alsoActiveFor ?? [])].some((prefix) => pathname.startsWith(prefix));
 }
 
 /** Sidebar groupings, ordered by how often each job comes up: check the month → log day-to-day money →
@@ -47,8 +52,7 @@ export const NAV_ITEMS: NavItem[] = [
   { label: "Bills", href: "/bills", icon: Repeat, section: "Plan" },
   { label: "Savings", href: "/savings", icon: Target, section: "Plan" },
 
-  { label: "Loans", href: "/loans", icon: Landmark, section: "Debt" },
-  { label: "EMI", href: "/emi", icon: Banknote, section: "Debt" },
+  { label: "Loan & EMI", href: "/loans", icon: Landmark, section: "Debt", alsoActiveFor: ["/emi"] },
 
   { label: "Statement Review", href: "/statement-review", icon: FileStack, section: "Import" },
   { label: "SMS Candidates", href: "/transaction-candidates", icon: MessageSquareText, section: "Import" },

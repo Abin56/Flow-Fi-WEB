@@ -25,6 +25,7 @@ import type { Account } from "@/lib/models/account";
 import type { Category } from "@/lib/models/category";
 import { Receipt } from "lucide-react";
 import { BillCard, RECURRENCE_LABEL } from "@/features/bills/components/bill-card";
+import { UpcomingDuesSection } from "@/features/bills/components/upcoming-dues-section";
 import { useBillActions, useBillRows, type BillRow } from "@/features/bills/hooks/use-bills-data";
 import { toast } from "@/store/toast-store";
 import { cn } from "@/lib/utils";
@@ -215,7 +216,7 @@ export function BillsWorkspace() {
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <div className="flex flex-col gap-2 rounded-3xl border border-border/50 bg-card p-4">
-          <p className="text-xs font-medium text-muted-foreground">Due This Month</p>
+          <p className="text-xs font-medium text-muted-foreground">Bills Due This Month</p>
           <p className="font-mono text-xl font-semibold tabular-nums text-foreground">{formatCurrency(stats.dueThisMonth)}</p>
         </div>
         <div className="flex flex-col gap-2 rounded-3xl border border-expense/20 bg-expense/8 p-4">
@@ -231,6 +232,8 @@ export function BillsWorkspace() {
           <p className="font-mono text-xl font-semibold tabular-nums text-primary-accent-text">{stats.upcomingCount}</p>
         </div>
       </div>
+
+      <UpcomingDuesSection />
 
       {rows.length === 0 ? (
         <EmptyState

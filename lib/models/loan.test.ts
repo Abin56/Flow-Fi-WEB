@@ -132,6 +132,22 @@ describe("Loan.payerPersonId — 'I took a bank loan, a friend pays it' (Case 1)
   });
 });
 
+describe("Loan.beneficiaryPersonId — 'For someone else'", () => {
+  it("a legacy document without the field loads as 'For me' (null)", () => {
+    expect(loanFromFirestore(fakeSnapshot(baseFirestoreData)).beneficiaryPersonId).toBeNull();
+  });
+
+  it("round-trips, independent of personId and payerPersonId", () => {
+    const loan = loanFromFirestore(
+      fakeSnapshot({ ...baseFirestoreData, personId: null, payerPersonId: "payer-1", beneficiaryPersonId: "rahul" }),
+    );
+    expect(loan.beneficiaryPersonId).toBe("rahul");
+    expect(loan.personId).toBeNull();
+    expect(loan.payerPersonId).toBe("payer-1");
+    expect(loanToFirestore(loan).beneficiaryPersonId).toBe("rahul");
+  });
+});
+
 describe("loanToFirestore — round-trips an institutional loan with null personId", () => {
   it("writes personId null and every institution field", () => {
     const loan: Loan = {

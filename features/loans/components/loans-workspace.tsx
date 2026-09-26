@@ -1,6 +1,7 @@
 "use client";
 
-import { Building2, CalendarClock, FileText, Landmark, Percent, Plus, Search, StickyNote, Trash2 } from "lucide-react";
+import { ArrowUpRight, Building2, CalendarClock, FileText, Landmark, Percent, Plus, Search, StickyNote, Trash2, Wallet } from "lucide-react";
+import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
@@ -27,12 +28,19 @@ import { LoansTrashDialog } from "@/features/loans/components/loans-trash-dialog
 import { RecordLoanPaymentDialog } from "@/features/loans/components/record-loan-payment-dialog";
 import { LoanAdjustmentDialog } from "@/features/loans/components/loan-adjustment-dialog";
 import { ReverseOriginationDialog } from "@/features/loans/components/reverse-origination-dialog";
+import {
+  WhoIsThisForField,
+  beneficiaryFromChoice,
+  ownershipError,
+  type OwnershipChoice,
+} from "@/features/loans/components/who-is-this-for-field";
 import { loanOriginationUi } from "@/features/loans/lib/loan-origination-ui";
 import { useTransactions } from "@/hooks/use-transactions";
 import { useLoanActions, useLoanRows, useTrashedLoanRows, type LoanRow } from "@/features/loans/hooks/use-loans-data";
 import { useLoanPersons } from "@/hooks/use-loans";
 import { useAccounts } from "@/hooks/use-accounts";
 import type { Person } from "@/lib/models/person";
+import type { Account } from "@/lib/models/account";
 import { friendlyLoanError } from "@/features/loans/lib/loan-live-state";
 import { cn } from "@/lib/utils";
 import { toast } from "@/store/toast-store";
@@ -80,6 +88,14 @@ interface LoanFormState {
   branch: string;
   /** Empty string means "I pay it myself" — see `Loan.payerPersonId`. */
   payerPersonId: string;
+  /** "Who is this for?" — borrowed loans only. See `Loan.beneficiaryPersonId`. */
+  ownership: OwnershipChoice;
+  beneficiaryPersonId: string;
+  /** Create-only: whether the principal really moved through one of the user's Accounts. */
+  recordMovement: boolean;
+  movementAccountId: string;
+  /** Create-only: one per Add action, so a retried save can't post the movement twice. */
+  idempotencyKey: string;
 }
 
 function emptyForm(): LoanFormState {
@@ -101,6 +117,11 @@ function emptyForm(): LoanFormState {
     accountNumber: "",
     branch: "",
     payerPersonId: "",
+    ownership: "me",
+    beneficiaryPersonId: "",
+    recordMovement: false,
+    movementAccountId: "",
+    idempotencyKey: crypto.randomUUID(),
   };
 }
 
@@ -123,10 +144,22 @@ function formFromRow(row: LoanRow): LoanFormState {
     accountNumber: row.loan.accountNumber ?? "",
     branch: row.loan.branch ?? "",
     payerPersonId: row.payerPersonId ?? "",
+    ownership: row.beneficiaryPersonId ? "someoneElse" : "me",
+    beneficiaryPersonId: row.beneficiaryPersonId ?? "",
+    recordMovement: false,
+    movementAccountId: "",
+    idempotencyKey: "",
   };
 }
 
-export function LoansWorkspace() {
+export interface LoansWorkspaceProps {
+  /** When set, "Add" buttons defer to the unified Loan & EMI chooser instead of opening the Loan form. */
+  onAddRequest?: () => void;
+  /** Incremented by the unified Loan & EMI chooser to open the Add Loan form. */
+  addSignal?: number;
+}
+
+export function LoansWorkspace({ onAddRequest, addSignal = 0 }: LoansWorkspaceProps = {}) {
   const searchParams = useSearchParams();
   const createHandoff = searchParams.get("create");
   const queryClient = useQueryClient();
@@ -186,6 +219,13 @@ export function LoansWorkspace() {
     setAddOpen(true);
   }
 
+  const [seenAddSignal, setSeenAddSignal] = useState(addSignal);
+  if (addSignal !== seenAddSignal) {
+    setSeenAddSignal(addSignal);
+    openAdd();
+  }
+  const requestAdd = onAddRequest ?? openAdd;
+
   function openEdit(row: LoanRow) {
     setActiveRowId(row.loan.id);
     setForm(formFromRow(row));
@@ -194,6 +234,13 @@ export function LoansWorkspace() {
 
   async function handleSave(isEdit: boolean) {
     if (!actions) return;
+    const forError = form.direction === "taken" ? ownershipError(form.ownership, form.beneficiaryPersonId) : null;
+    if (forError) {
+      toast.error(forError, "Pick the person this loan is for, or switch to For me.");
+      return;
+    }
+    // "Who is this for?" only applies to money borrowed; a lent loan's person is its borrower.
+    const beneficiaryPersonId = form.direction === "taken" ? beneficiaryFromChoice(form.ownership, form.beneficiaryPersonId) : null;
     setSaving(true);
     try {
       if (isEdit && activeRow) {
@@ -211,6 +258,7 @@ export function LoansWorkspace() {
           accountNumber: form.accountNumber || null,
           branch: form.branch || null,
           payerPersonId: form.payerPersonId || null,
+          beneficiaryPersonId,
         });
 
         // Loan amount/interest/frequency/tenure live outside `editLoan` — changing any of them
@@ -259,8 +307,14 @@ export function LoansWorkspace() {
         setScheduleOpen(true);
         return;
       } else {
+        if (form.recordMovement && !form.movementAccountId) {
+          toast.error("Choose an account", "Pick the account the money moved through, or turn the option off.");
+          return;
+        }
         const ratePercent = Number(form.ratePercent);
         await actions.createLoan({
+          movementAccountId: form.recordMovement ? form.movementAccountId : null,
+          idempotencyKey: form.idempotencyKey,
           name: form.name,
           category: form.category,
           personId: form.category === "personal" ? form.personId || null : null,
@@ -279,6 +333,7 @@ export function LoansWorkspace() {
           accountNumber: form.accountNumber || null,
           branch: form.branch || null,
           payerPersonId: form.payerPersonId || null,
+          beneficiaryPersonId,
         });
         setAddOpen(false);
       }
@@ -396,7 +451,7 @@ export function LoansWorkspace() {
               <Trash2 className="size-3.5" />
               Trash{trashedRows.length > 0 ? ` (${trashedRows.length})` : ""}
             </ClayButton>
-            <ClayButton size="sm" onClick={openAdd} className="gap-1.5">
+            <ClayButton size="sm" onClick={requestAdd} className="gap-1.5">
               <Plus className="size-3.5" />
               Add Loan
             </ClayButton>
@@ -412,7 +467,7 @@ export function LoansWorkspace() {
           title="No loans yet"
           description="Add a loan you've borrowed or lent to start tracking its repayment schedule."
           actionLabel="Add Loan"
-          onAction={openAdd}
+          onAction={requestAdd}
         />
       ) : (
         <>
@@ -553,7 +608,14 @@ export function LoansWorkspace() {
         loading={saving}
         contentClassName="sm:max-w-2xl"
       >
-        <LoanFormFields form={form} setForm={setForm} isEdit={false} people={people} onCreatePerson={actions?.createPerson} />
+        <LoanFormFields
+          form={form}
+          setForm={setForm}
+          isEdit={false}
+          people={people}
+          accounts={accounts}
+          onCreatePerson={actions?.createPerson}
+        />
       </SectionedFormDialog>
 
       <SectionedFormDialog
@@ -580,6 +642,19 @@ export function LoansWorkspace() {
         />
       </SectionedFormDialog>
     </div>
+  );
+}
+
+/** Small "go create it there" link — sends the user to the page that owns that record instead of an inline form. */
+export function AddElsewhereLink({ href, label }: { href: string; label: string }) {
+  return (
+    <Link
+      href={href}
+      className="inline-flex items-center gap-1 rounded-md text-xs font-semibold text-primary-accent-text outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      {label}
+      <ArrowUpRight className="size-3.5" />
+    </Link>
   );
 }
 
@@ -732,6 +807,7 @@ function LoanFormFields({
   minInstallmentCount = 1,
   minLoanAmount = 0,
   onCreatePerson,
+  accounts = [],
 }: {
   form: LoanFormState;
   setForm: React.Dispatch<React.SetStateAction<LoanFormState>>;
@@ -746,7 +822,11 @@ function LoanFormFields({
   minLoanAmount?: number;
   /** Create-mode only — lets the person picker below add a brand-new lender/borrower inline. */
   onCreatePerson?: (name: string) => Promise<Person>;
+  /** Create-mode only — the Accounts the principal may have moved through. */
+  accounts?: Account[];
 }) {
+  const movementAccounts = accounts.filter((a) => a.type !== "card" && a.deletedAt == null);
+  const received = form.direction === "taken";
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-col gap-3 bg-muted/30 p-4">
@@ -832,6 +912,15 @@ function LoanFormFields({
         </div>
       </div>
 
+      {form.direction === "taken" && (
+        <WhoIsThisForField
+          people={people}
+          choice={form.ownership}
+          personId={form.beneficiaryPersonId}
+          onChange={({ choice, personId }) => setForm((f) => ({ ...f, ownership: choice, beneficiaryPersonId: personId }))}
+        />
+      )}
+
       {form.category === "institutional" && (
         <div className="flex flex-col gap-3 bg-muted/30 p-4">
           <SectionLabel icon={Building2}>Bank Details (optional)</SectionLabel>
@@ -916,6 +1005,55 @@ function LoanFormFields({
           />
         </div>
       </div>
+
+      {!isEdit && (
+        <div className="flex flex-col gap-3 bg-muted/30 p-4">
+          <SectionLabel icon={Wallet}>Account (optional)</SectionLabel>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={form.recordMovement}
+              onChange={(e) => setForm((f) => ({ ...f, recordMovement: e.target.checked }))}
+            />
+            <span className="text-xs font-medium text-foreground/80">
+              {received ? "I received this money into an account" : "I paid this money from an account"}
+            </span>
+          </label>
+          {form.recordMovement && (
+            <>
+              <div className="flex flex-col gap-1">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-medium text-muted-foreground">{received ? "Received into" : "Paid from"}</span>
+                  <AddElsewhereLink href="/accounts" label="Add Account" />
+                </div>
+                {movementAccounts.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">No accounts yet — add one in Accounts, then come back.</p>
+                ) : (
+                  <select
+                    className={FLAT_INPUT}
+                    value={form.movementAccountId}
+                    onChange={(e) => setForm((f) => ({ ...f, movementAccountId: e.target.value }))}
+                  >
+                    <option value="">Choose account</option>
+                    {movementAccounts.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Updates this account&apos;s balance. It isn&apos;t counted as income or spending — the amount stays tracked as a
+                loan.
+              </p>
+            </>
+          )}
+          {!form.recordMovement && (
+            <p className="text-xs text-muted-foreground">Leave off if the money didn&apos;t pass through a FlowFi account — no balance changes.</p>
+          )}
+        </div>
+      )}
 
       <div className="flex flex-col gap-3 bg-muted/30 p-4">
         <SectionLabel icon={CalendarClock}>Repayment Schedule</SectionLabel>

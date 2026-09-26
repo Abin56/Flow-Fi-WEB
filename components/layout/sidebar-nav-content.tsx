@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import { ClayAvatar } from "@/components/clay/clay-avatar";
 import {
   NAV_ITEMS,
+  isNavItemActive,
   type NavItem,
   type NavSection,
 } from "@/components/layout/nav-items";
@@ -80,7 +81,7 @@ export function SidebarNavContent({
                 </p>
               )}
               {group.items.map((item) => {
-                const active = pathname.startsWith(item.href);
+                const active = isNavItemActive(item, pathname);
                 const Icon = item.icon;
                 const link = (
                   <Link

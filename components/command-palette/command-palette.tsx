@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  Banknote,
   Bot,
   Calendar,
   CreditCard,
@@ -54,8 +53,7 @@ const PAGES = [
   { label: "Bills", href: "/bills", icon: Repeat },
   { label: "Budgets", href: "/budgets", icon: PiggyBank },
   { label: "Savings", href: "/savings", icon: Target },
-  { label: "EMI", href: "/emi", icon: Banknote },
-  { label: "Loans", href: "/loans", icon: Landmark },
+  { label: "Loan & EMI", href: "/loans", icon: Landmark },
   { label: "People Ledger", href: "/people", icon: Users },
   { label: "Calendar", href: "/calendar", icon: Calendar },
   { label: "Reports", href: "/reports", icon: FileBarChart },

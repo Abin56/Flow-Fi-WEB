@@ -6,9 +6,11 @@ import { ClayButton } from "@/components/clay/clay-button";
 import { FLAT_INPUT } from "@/components/finance";
 import { PersonPickerField } from "@/features/loans/components/loans-workspace";
 import { useLoanActions } from "@/features/loans/hooks/use-loans-data";
+import { WhoIsThisForField } from "@/features/loans/components/who-is-this-for-field";
 import {
   EMPTY_UNIFIED_CREATE_FORM,
   buildUnifiedCreateRequest,
+  canBeForSomeoneElse,
   fundingLabel,
   movementChoiceLabel,
   unifiedCreateError,
@@ -142,6 +144,16 @@ export function UnifiedAgreementCreateDialog({ open, onOpenChange }: { open: boo
               </label>
             )}
 
+            {canBeForSomeoneElse(kind) && (
+              <WhoIsThisForField
+                bare
+                people={people}
+                choice={form.forSomeoneElse ? "someoneElse" : "me"}
+                personId={form.beneficiaryPersonId}
+                onChange={({ choice, personId }) => set({ forSomeoneElse: choice === "someoneElse", beneficiaryPersonId: personId })}
+              />
+            )}
+
             <div className="grid grid-cols-2 gap-3">
               <label className="grid gap-1 text-sm">
                 {kind === "installmentPurchase" ? "Purchase amount" : "Principal"}
@@ -228,6 +240,14 @@ export function UnifiedAgreementCreateDialog({ open, onOpenChange }: { open: boo
             {kind === "installmentPurchase" && <><p>Purchase: {rupees(figures.purchase)}</p><p>Down payment: {rupees(figures.down)}</p></>}
             <p>Repayment: {oneTime ? `one-time, by ${form.dueDate}` : `${form.count} monthly payments`}</p>
             <p>Funding: {fundingLabel(funding)}</p>
+            {canBeForSomeoneElse(kind) && (
+              <p>
+                For:{" "}
+                {form.forSomeoneElse
+                  ? <b>{people.find((p) => p.id === form.beneficiaryPersonId)?.name ?? "Someone else"}</b>
+                  : "Me"}
+              </p>
+            )}
             <p>
               Account movement:{" "}
               {figures.movesMoney

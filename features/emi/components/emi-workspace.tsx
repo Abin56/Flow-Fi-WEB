@@ -27,6 +27,17 @@ import { useEmiActions, useEmiRows, type EmiRow } from "@/features/emi/hooks/use
 import { installmentStatus, remainingAmount, type ScheduleType } from "@/lib/models/payment-schedule";
 import type { EmiLoanType } from "@/lib/models/emi";
 import type { InterestType } from "@/lib/engines/interest-calculator";
+import type { CreditCardProfile } from "@/lib/models/credit-card";
+import { useCreditCards } from "@/hooks/use-credit-cards";
+import { AddElsewhereLink } from "@/features/loans/components/loans-workspace";
+import { useAccounts } from "@/hooks/use-accounts";
+import { useLoanPersons } from "@/hooks/use-loans";
+import {
+  WhoIsThisForField,
+  beneficiaryFromChoice,
+  ownershipError,
+  type OwnershipChoice,
+} from "@/features/loans/components/who-is-this-for-field";
 import { toast } from "@/store/toast-store";
 import { cn } from "@/lib/utils";
 
@@ -49,6 +60,9 @@ const FREQUENCY_LABEL: Record<ScheduleType, string> = {
   oneTime: "One-time",
 };
 
+/** How a card-linked EMI came about — picks the form wording; both lock the principal against the card. */
+type CardEmiKind = "creditCardLoan" | "productPurchase";
+
 interface EmiFormState {
   name: string;
   lenderName: string;
@@ -61,6 +75,12 @@ interface EmiFormState {
   interestType: InterestType;
   ratePercent: string;
   notes: string;
+  linkToCard: boolean;
+  linkedCreditCardId: string;
+  cardEmiKind: CardEmiKind;
+  /** "Who is this for?" — see `Emi.beneficiaryPersonId`. */
+  ownership: OwnershipChoice;
+  beneficiaryPersonId: string;
 }
 
 function emptyForm(): EmiFormState {
@@ -76,6 +96,11 @@ function emptyForm(): EmiFormState {
     interestType: "reducingBalance",
     ratePercent: "",
     notes: "",
+    linkToCard: false,
+    linkedCreditCardId: "",
+    cardEmiKind: "productPurchase",
+    ownership: "me",
+    beneficiaryPersonId: "",
   };
 }
 
@@ -97,11 +122,31 @@ function emptyPaymentForm(amount: number): PaymentFormState {
   };
 }
 
-export function EmiWorkspace() {
+export interface EmiWorkspaceProps {
+  /** When set, "Add" buttons defer to the unified Loan & EMI chooser instead of opening the EMI form. */
+  onAddRequest?: () => void;
+  /** Incremented by the unified Loan & EMI chooser to open the Add EMI form. */
+  addSignal?: number;
+}
+
+export function EmiWorkspace({ onAddRequest, addSignal = 0 }: EmiWorkspaceProps = {}) {
   const searchParams = useSearchParams();
   const createHandoff = searchParams.get("create");
   const { rows, isLoading } = useEmiRows();
   const actions = useEmiActions();
+  const { data: cards = [] } = useCreditCards();
+  const { data: accounts = [] } = useAccounts();
+  const { data: people = [] } = useLoanPersons();
+  const cardOptions = useMemo(
+    () =>
+      (cards as CreditCardProfile[])
+        .filter((c) => c.status !== "closed" && c.status !== "cancelled")
+        .map((c) => {
+          const accountName = accounts.find((a) => a.id === c.accountId)?.name ?? "Credit Card";
+          return { id: c.id, label: c.lastFourDigits ? `${accountName} ••${c.lastFourDigits}` : accountName };
+        }),
+    [cards, accounts],
+  );
 
   const [activeRow, setActiveRow] = useState<EmiRow | null>(null);
   const [handoffDetailId, setHandoffDetailId] = useState<string | null>(() => searchParams.get("agreement"));
@@ -123,6 +168,13 @@ export function EmiWorkspace() {
     setAddOpen(true);
   }
 
+  const [seenAddSignal, setSeenAddSignal] = useState(addSignal);
+  if (addSignal !== seenAddSignal) {
+    setSeenAddSignal(addSignal);
+    openAdd();
+  }
+  const requestAdd = onAddRequest ?? openAdd;
+
   function openPay(row: EmiRow) {
     setPaymentForm(emptyPaymentForm(row.nextInstallment?.amountDue ?? 0));
     setPayOpen(true);
@@ -130,12 +182,25 @@ export function EmiWorkspace() {
 
   async function handleCreate() {
     if (!actions) return;
+    if (form.linkToCard && !form.linkedCreditCardId) {
+      toast.error("Select a credit card", "Choose the card this EMI is on, or turn off Link to Credit Card.");
+      return;
+    }
+    const forError = ownershipError(form.ownership, form.beneficiaryPersonId);
+    if (forError) {
+      toast.error(forError, "Pick the person this EMI is for, or switch to For me.");
+      return;
+    }
     setSaving(true);
     try {
       await actions.createEmi({
         name: form.name,
         lenderName: form.lenderName || null,
-        loanType: form.loanType,
+        loanType: form.linkToCard ? "creditCard" : form.loanType,
+        // No purchaseTransactionId: the EMI's remaining principal is what locks the card's limit.
+        linkedCreditCardId: form.linkToCard ? form.linkedCreditCardId : null,
+        // Association only — a card-linked EMI still locks the card's credit exactly as before.
+        beneficiaryPersonId: beneficiaryFromChoice(form.ownership, form.beneficiaryPersonId),
         principalAmount: Number(form.principalAmount),
         startDate: new Date(form.startDate),
         installmentFrequency: form.installmentFrequency,
@@ -216,7 +281,7 @@ export function EmiWorkspace() {
           </div>
         }
         actions={
-          <ClayButton size="sm" onClick={openAdd} className="gap-1.5">
+          <ClayButton size="sm" onClick={requestAdd} className="gap-1.5">
             <Plus className="size-3.5" />
             Add EMI
           </ClayButton>
@@ -231,7 +296,7 @@ export function EmiWorkspace() {
           title="No EMIs yet"
           description="Add an EMI to start tracking its installment schedule, remaining balance, and payments."
           actionLabel="Add EMI"
-          onAction={openAdd}
+          onAction={requestAdd}
         />
       ) : (
         <Stagger className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
@@ -331,6 +396,12 @@ export function EmiWorkspace() {
                 <span className="font-medium text-foreground">{activeRowFresh.linkedCard.lastFourDigits ?? "Card"}</span>
               </div>
             )}
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground">Who is this for?</span>
+              <span className="font-medium text-foreground">
+                {activeRowFresh.emi.beneficiaryPersonId ? (activeRowFresh.beneficiaryName ?? "Someone else") : "Me"}
+              </span>
+            </div>
 
             <div className="flex flex-col gap-2 border-t border-border/60 pt-4">
               <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Installments</span>
@@ -375,10 +446,12 @@ export function EmiWorkspace() {
         <div className="flex flex-col gap-3 bg-muted/30 p-4">
           <SectionLabel icon={CreditCard}>EMI Details</SectionLabel>
           <label className="flex flex-col gap-1">
-            <span className="text-xs font-medium text-muted-foreground">EMI Name</span>
+            <span className="text-xs font-medium text-muted-foreground">
+              {form.linkToCard && form.cardEmiKind === "productPurchase" ? "Product Purchased" : "EMI Name"}
+            </span>
             <input
               className={FLAT_INPUT}
-              placeholder="e.g. Car Loan"
+              placeholder={form.linkToCard && form.cardEmiKind === "productPurchase" ? "e.g. iPhone 16" : "e.g. Car Loan"}
               value={form.name}
               onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
             />
@@ -392,14 +465,77 @@ export function EmiWorkspace() {
               onChange={(e) => setForm((f) => ({ ...f, lenderName: e.target.value }))}
             />
           </label>
-          <div className="flex flex-col gap-1.5">
-            <span className="text-xs font-medium text-muted-foreground">Loan Type</span>
-            <ChipRow
-              options={LOAN_TYPE_OPTIONS.map((t) => ({ value: t, label: LOAN_TYPE_LABEL[t] }))}
-              value={form.loanType}
-              onChange={(v) => setForm((f) => ({ ...f, loanType: v }))}
+          {!form.linkToCard && (
+            <div className="flex flex-col gap-1.5">
+              <span className="text-xs font-medium text-muted-foreground">Loan Type</span>
+              <ChipRow
+                options={LOAN_TYPE_OPTIONS.map((t) => ({ value: t, label: LOAN_TYPE_LABEL[t] }))}
+                value={form.loanType}
+                onChange={(v) => setForm((f) => ({ ...f, loanType: v }))}
+              />
+            </div>
+          )}
+        </div>
+
+        <WhoIsThisForField
+          people={people}
+          choice={form.ownership}
+          personId={form.beneficiaryPersonId}
+          onChange={({ choice, personId }) => setForm((f) => ({ ...f, ownership: choice, beneficiaryPersonId: personId }))}
+        />
+
+        <div className="flex flex-col gap-3 bg-muted/30 p-4">
+          <SectionLabel icon={CreditCard}>Credit Card (optional)</SectionLabel>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={form.linkToCard}
+              onChange={(e) => setForm((f) => ({ ...f, linkToCard: e.target.checked }))}
             />
-          </div>
+            <span className="text-xs font-medium text-foreground/80">Link to Credit Card</span>
+          </label>
+          {form.linkToCard &&
+            (cardOptions.length === 0 ? (
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border bg-card px-3 py-2.5">
+                <p className="text-xs text-muted-foreground">No credit cards yet — add one, then come back.</p>
+                <AddElsewhereLink href="/credit-cards" label="Go to Credit Cards" />
+              </div>
+            ) : (
+              <>
+                <div className="flex flex-col gap-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-medium text-muted-foreground">Credit Card</span>
+                    <AddElsewhereLink href="/credit-cards" label="Add Credit Card" />
+                  </div>
+                  <select
+                    className={FLAT_INPUT}
+                    value={form.linkedCreditCardId}
+                    onChange={(e) => setForm((f) => ({ ...f, linkedCreditCardId: e.target.value }))}
+                  >
+                    <option value="">Select a card</option>
+                    {cardOptions.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <span className="text-xs font-medium text-muted-foreground">EMI Type</span>
+                  <ChipRow
+                    options={[
+                      { value: "creditCardLoan" as CardEmiKind, label: "Credit Card Loan" },
+                      { value: "productPurchase" as CardEmiKind, label: "Product Purchase" },
+                    ]}
+                    value={form.cardEmiKind}
+                    onChange={(v) => setForm((f) => ({ ...f, cardEmiKind: v }))}
+                  />
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  The principal is locked against this card&apos;s available credit and released as you pay it down.
+                </p>
+              </>
+            ))}
         </div>
 
         <div className="flex flex-col gap-3 bg-muted/30 p-4">

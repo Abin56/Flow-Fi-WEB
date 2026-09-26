@@ -30,6 +30,9 @@ export interface UnifiedCreateForm {
   /** The explicit opt-in — selecting an account alone never moves money. */
   recordMovement: boolean;
   movementAccountId: string;
+  /** "Who is this for?" — borrowed / installment purchase only. See `Loan.beneficiaryPersonId`. */
+  forSomeoneElse: boolean;
+  beneficiaryPersonId: string;
 }
 
 export const EMPTY_UNIFIED_CREATE_FORM: UnifiedCreateForm = {
@@ -49,7 +52,14 @@ export const EMPTY_UNIFIED_CREATE_FORM: UnifiedCreateForm = {
   purchaseId: "",
   recordMovement: false,
   movementAccountId: "",
+  forSomeoneElse: false,
+  beneficiaryPersonId: "",
 };
+
+/** Only borrowing (a Loan I took, or a purchase on installments) can be "for someone else". */
+export function canBeForSomeoneElse(kind: UnifiedCreateKind | null): boolean {
+  return kind === "borrowed" || kind === "installmentPurchase";
+}
 
 /** The checkbox label for the account movement, or null when this agreement has none to record. */
 export function movementChoiceLabel(form: Pick<UnifiedCreateForm, "kind" | "downPayment">): string | null {
@@ -103,6 +113,7 @@ export function unifiedCreateError(form: UnifiedCreateForm): string | null {
   if (!(principal > 0)) return "Nothing is left to finance";
   if (form.funding === "person" && form.personId === "") return "Choose a person";
   if (form.funding === "creditCard" && form.cardId === "") return "Choose a credit card";
+  if (canBeForSomeoneElse(form.kind) && form.forSomeoneElse && form.beneficiaryPersonId === "") return "Choose who this is for";
   const oneTime = form.kind !== "installmentPurchase" && form.repayment === "oneTime";
   if (oneTime && parseDate(form.dueDate) == null) return "Choose when it will be repaid";
   if (!oneTime && !(Number(form.count) >= 1 && Number.isInteger(Number(form.count)))) return "Enter the number of payments";
@@ -144,6 +155,7 @@ export function buildUnifiedCreateRequest(
     purchaseTransactionId: form.funding === "creditCard" && form.purchaseId !== "" ? form.purchaseId : null,
     purchaseAmount: purchasePlan ? purchase : null,
     downPayment: purchasePlan ? down : null,
+    beneficiaryPersonId: canBeForSomeoneElse(kind) && form.forSomeoneElse ? form.beneficiaryPersonId : null,
     movementAccountId: movesMoney ? form.movementAccountId : null,
   };
 }

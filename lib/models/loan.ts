@@ -168,6 +168,18 @@ export interface Loan extends SoftDeletableEntity {
    */
   payerPersonId?: string | null;
 
+  /**
+   * "Who is this for?" — the Person this borrowing was actually taken for, when that's someone
+   * other than the account owner (e.g. my card/loan, but the ₹40,000 product is for a friend).
+   * Only meaningful on a "taken" Loan. Purely an association: the liability, schedule, card
+   * exposure and Net Worth are unchanged (it stays my debt), and it is NOT a counterparty — it
+   * never feeds `person-position.ts`, so no Person receivable is created or implied. Deliberately
+   * separate from `personId` (the lender) and `payerPersonId` (who pays the installments), per
+   * docs/unified-finance-agreement-contract.md ("do not overload `personId`"). `null`/absent means
+   * "For me" (the default, and every legacy document).
+   */
+  beneficiaryPersonId?: string | null;
+
   /** Locked once any payment has been recorded — see `LoanRepository.editLoan`. */
   loanAmount: number;
 
@@ -281,6 +293,7 @@ export function loanFromFirestore(
     accountNumber: (data.accountNumber as string | undefined) ?? null,
     branch: (data.branch as string | undefined) ?? null,
     payerPersonId: (data.payerPersonId as string | undefined) ?? null,
+    beneficiaryPersonId: (data.beneficiaryPersonId as string | undefined) ?? null,
     loanAmount: data.loanAmount as number,
     interest: data.interest == null ? null : loanInterestFromMap(data.interest as Record<string, unknown>),
     loanDate: (data.loanDate as Timestamp).toDate(),
@@ -317,6 +330,7 @@ export function loanToFirestore(loan: Loan): DocumentData {
     accountNumber: loan.accountNumber ?? null,
     branch: loan.branch ?? null,
     payerPersonId: loan.payerPersonId ?? null,
+    beneficiaryPersonId: loan.beneficiaryPersonId ?? null,
     loanAmount: loan.loanAmount,
     interest: loan.interest == null ? null : loanInterestToMap(loan.interest),
     loanDate: Timestamp.fromDate(loan.loanDate),

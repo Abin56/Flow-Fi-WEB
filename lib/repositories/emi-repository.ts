@@ -98,6 +98,8 @@ export interface CreateEmiParams {
   linkedCreditCardId?: string | null;
   /** The tracked card purchase this EMI was converted from — see `Emi.purchaseTransactionId`. Requires `linkedCreditCardId`. */
   purchaseTransactionId?: string | null;
+  /** "For someone else" — see `Emi.beneficiaryPersonId`. Omit/null for "For me". */
+  beneficiaryPersonId?: string | null;
   dueDayOfMonth?: number | null;
 }
 
@@ -135,6 +137,8 @@ export interface EditEmiParams {
   clearLinkedCreditCardId?: boolean;
   purchaseTransactionId?: string | null;
   clearPurchaseTransactionId?: boolean;
+  /** "For someone else" — see `Emi.beneficiaryPersonId`. `undefined` leaves it; `null` switches back to "For me". */
+  beneficiaryPersonId?: string | null;
 }
 
 export interface EditEmiTermsParams {
@@ -198,6 +202,7 @@ export class EmiRepository extends FirestoreCrudRepository<Emi> {
       autoDebitAccount = null,
       linkedCreditCardId = null,
       purchaseTransactionId = null,
+      beneficiaryPersonId = null,
       dueDayOfMonth = null,
     } = params;
 
@@ -281,6 +286,7 @@ export class EmiRepository extends FirestoreCrudRepository<Emi> {
       isDefaulted: false,
       linkedCreditCardId,
       purchaseTransactionId,
+      beneficiaryPersonId,
       dueDayOfMonth,
       isClosed: false,
       deletedAt: null,
@@ -316,6 +322,7 @@ export class EmiRepository extends FirestoreCrudRepository<Emi> {
       clearLinkedCreditCardId = false,
       purchaseTransactionId,
       clearPurchaseTransactionId = false,
+      beneficiaryPersonId,
     } = params;
 
     if (principalAmount != null) {
@@ -419,6 +426,12 @@ export class EmiRepository extends FirestoreCrudRepository<Emi> {
         purchaseTransactionId,
         (e, v) => ({ ...e, purchaseTransactionId: v }),
       );
+    }
+    // Not via `updateField`, which ignores null — switching back to "For me" must be able to clear it.
+    const currentBeneficiary = updated.beneficiaryPersonId ?? null;
+    if (beneficiaryPersonId !== undefined && beneficiaryPersonId !== currentBeneficiary) {
+      updated = recordEdit(updated, "beneficiaryPersonId", currentBeneficiary ?? "none", beneficiaryPersonId ?? "none");
+      updated = { ...updated, beneficiaryPersonId };
     }
     await this.update(updated);
   }

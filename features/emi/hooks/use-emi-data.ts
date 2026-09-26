@@ -27,7 +27,9 @@ import { useMemo } from "react";
 import { useCategories } from "@/hooks/use-categories";
 import { useCreditCards, useEmis } from "@/hooks/use-credit-cards";
 import { useAllEmiInstallments } from "@/hooks/use-emis";
+import { useLoanPersons } from "@/hooks/use-loans";
 import type { Category } from "@/lib/models/category";
+import type { Person } from "@/lib/models/person";
 import type { CreditCardProfile } from "@/lib/models/credit-card";
 import { emiStatusGiven, type Emi, type EmiLoanType, type EmiStatus } from "@/lib/models/emi";
 import { installmentStatus, remainingAmount, type Installment } from "@/lib/models/payment-schedule";
@@ -44,6 +46,8 @@ export interface EmiRow {
   emi: Emi;
   category: Category | undefined;
   linkedCard: CreditCardProfile | undefined;
+  /** "For someone else" — resolved name of `emi.beneficiaryPersonId`, null when "For me" (or the Person no longer exists). */
+  beneficiaryName: string | null;
   installments: Installment[];
   /** Sum of `remainingAmount` across every non-skipped installment — the same derivation `InstallmentRepository.remainingAmount` performs. */
   remainingBalance: number;
@@ -59,9 +63,11 @@ export function useEmiRows(): { rows: EmiRow[]; isLoading: boolean } {
   const { data: installments = [], isLoading: installmentsLoading } = useAllEmiInstallments();
   const { data: categories = [], isLoading: categoriesLoading } = useCategories();
   const { data: cards = [], isLoading: cardsLoading } = useCreditCards();
+  const { data: persons = [] } = useLoanPersons();
 
   const rows = useMemo(() => {
     const categoryById = new Map((categories as Category[]).map((c) => [c.id, c]));
+    const personById = new Map((persons as Person[]).map((p) => [p.id, p]));
     const cardById = new Map((cards as CreditCardProfile[]).map((c) => [c.id, c]));
     const installmentsByScheduleId = new Map<string, Installment[]>();
     for (const installment of installments as Installment[]) {
@@ -84,6 +90,7 @@ export function useEmiRows(): { rows: EmiRow[]; isLoading: boolean } {
         emi,
         category: emi.categoryId ? categoryById.get(emi.categoryId) : undefined,
         linkedCard: emi.linkedCreditCardId ? cardById.get(emi.linkedCreditCardId) : undefined,
+        beneficiaryName: emi.beneficiaryPersonId ? (personById.get(emi.beneficiaryPersonId)?.name ?? null) : null,
         installments: emiInstallments,
         remainingBalance,
         nextInstallment,
@@ -91,7 +98,7 @@ export function useEmiRows(): { rows: EmiRow[]; isLoading: boolean } {
         status: emiStatusGiven(emi, emiInstallments),
       };
     });
-  }, [emis, installments, categories, cards]);
+  }, [emis, installments, categories, cards, persons]);
 
   return {
     rows,

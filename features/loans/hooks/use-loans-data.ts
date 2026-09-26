@@ -82,6 +82,10 @@ export interface LoanRow {
   /** The person who actually pays this loan's installments, when set — see `Loan.payerPersonId`. */
   payerPersonId: string | null;
   payerName: string | null;
+  /** "For someone else" — the Person this borrowing was taken for, when set. See `Loan.beneficiaryPersonId`. */
+  beneficiaryPersonId: string | null;
+  /** Resolved name, or null when "For me" (or the Person no longer exists). */
+  beneficiaryName: string | null;
   /** This loan's schedule installments, sorted by sequenceNumber ascending. */
   installments: Installment[];
   status: LoanStatus;
@@ -122,6 +126,8 @@ function toLoanRow(loan: Loan, installments: Installment[], personById: Map<stri
     category: loan.category,
     payerPersonId: loan.payerPersonId ?? null,
     payerName: loan.payerPersonId ? (personById.get(loan.payerPersonId)?.name ?? null) : null,
+    beneficiaryPersonId: loan.beneficiaryPersonId ?? null,
+    beneficiaryName: loan.beneficiaryPersonId ? (personById.get(loan.beneficiaryPersonId)?.name ?? null) : null,
     installments: sorted,
     status,
     outstandingPrincipal,
@@ -201,12 +207,22 @@ export interface CreateLoanFormParams {
   branch?: string | null;
   /** Someone other than the account owner who actually pays this loan's EMIs — see `Loan.payerPersonId`. */
   payerPersonId?: string | null;
+  /** "For someone else" — see `Loan.beneficiaryPersonId`. */
+  beneficiaryPersonId?: string | null;
   repaymentType?: CreateLoanParams["repaymentType"];
   dueDate?: Date | null;
   agreementKind?: CreateLoanParams["agreementKind"];
   fundingSource?: CreateLoanParams["fundingSource"];
   linkedCreditCardId?: string | null;
   purchaseTransactionId?: string | null;
+  /**
+   * Optional real money movement: the Account the principal arrived in (taken) or left from (given).
+   * When set, creation goes through `createAgreementWithOrigination`, whose Transaction is tagged as a
+   * Loan principal disbursement — it moves the Account balance but never counts as income or spending.
+   */
+  movementAccountId?: string | null;
+  /** Required with `movementAccountId` — one per Add action, reused on retry so it never posts twice. */
+  idempotencyKey?: string;
   purchaseAmount?: number | null;
   downPayment?: number | null;
 }
@@ -221,6 +237,8 @@ export interface EditLoanFormParams {
   accountNumber?: string | null;
   branch?: string | null;
   payerPersonId?: string | null;
+  /** `null` switches back to "For me" — see `Loan.beneficiaryPersonId`. */
+  beneficiaryPersonId?: string | null;
 }
 
 /** Create/edit/delete/payment actions wired to the real repositories, scoped to the signed-in user. */
@@ -253,7 +271,7 @@ export function useLoanActions() {
         // loans (created before the category field existed) keep resolving
         // their lender through the linked Person, untouched — see this
         // file's module doc comment and `toLoanRow`'s `lenderName` fallback.
-        const loan = await loanRepository.createLoan({
+        const createParams: CreateLoanParams = {
           agreementKind: params.agreementKind,
           fundingSource: params.fundingSource,
           linkedCreditCardId: params.linkedCreditCardId,
@@ -278,7 +296,18 @@ export function useLoanActions() {
           accountNumber: params.category === "institutional" ? params.accountNumber : null,
           branch: params.category === "institutional" ? params.branch : null,
           payerPersonId: params.payerPersonId,
-        });
+          beneficiaryPersonId: params.beneficiaryPersonId,
+        };
+        if (params.movementAccountId) {
+          if (!params.idempotencyKey) throw new Error("Missing idempotency key for an account-linked loan");
+          const result = await loanRepository.createAgreementWithOrigination({
+            ...createParams,
+            idempotencyKey: params.idempotencyKey,
+            movementAccountId: params.movementAccountId,
+          });
+          return result.loan;
+        }
+        const loan = await loanRepository.createLoan(createParams);
         // No People-ledger entry any more: People derive this Loan from its `personId`
         // (`lib/engines/person-position.ts`). Entries old versions of this form wrote carry
         // `transactionRef = loan.id` and are recognised and de-duplicated there — never deleted.
@@ -307,12 +336,14 @@ export function useLoanActions() {
                 accountNumber: params.accountNumber,
                 branch: params.branch,
                 payerPersonId: params.payerPersonId,
+                beneficiaryPersonId: params.beneficiaryPersonId,
               }
             : {
                 hasPayments,
                 name: params.name,
                 notes: params.notes,
                 payerPersonId: params.payerPersonId,
+                beneficiaryPersonId: params.beneficiaryPersonId,
               };
         return loanRepository.editLoan(loan, editParams);
       },

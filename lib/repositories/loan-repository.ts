@@ -102,6 +102,8 @@ export interface CreateLoanParams {
   accountNumber?: string | null;
   branch?: string | null;
   payerPersonId?: string | null;
+  /** "For someone else" — see `Loan.beneficiaryPersonId`. Stored null on a "given" Loan. */
+  beneficiaryPersonId?: string | null;
   name?: string | null;
   interest?: LoanInterest | null;
   dueDate?: Date | null;
@@ -122,6 +124,8 @@ export interface EditLoanParams {
   accountNumber?: string | null;
   branch?: string | null;
   payerPersonId?: string | null;
+  /** "For someone else" — see `Loan.beneficiaryPersonId`. `undefined` leaves it; `null` switches back to "For me". */
+  beneficiaryPersonId?: string | null;
 }
 
 export interface EditLoanTermsParams {
@@ -238,6 +242,7 @@ function normalizeCreateLoanParams(params: CreateLoanParams): NormalizedCreateLo
     accountNumber: params.accountNumber ?? null,
     branch: params.branch ?? null,
     payerPersonId: params.payerPersonId ?? null,
+    beneficiaryPersonId: params.beneficiaryPersonId ?? null,
     name: params.name ?? null,
     interest: params.interest ?? null,
     dueDate: params.dueDate ?? null,
@@ -343,6 +348,8 @@ function buildLoanDocument(p: NormalizedCreateLoan, loanId: string, scheduleId: 
     accountNumber: institutional ? p.accountNumber : null,
     branch: institutional ? p.branch : null,
     payerPersonId: p.payerPersonId,
+    // Only borrowing can be "for someone else"; a lent Loan's person is its borrower (`personId`).
+    beneficiaryPersonId: p.direction === "taken" ? p.beneficiaryPersonId : null,
     loanAmount: p.loanAmount,
     interest: p.interest,
     loanDate: p.loanDate,
@@ -805,6 +812,7 @@ export class LoanRepository extends FirestoreCrudRepository<Loan> {
       accountNumber,
       branch,
       payerPersonId,
+      beneficiaryPersonId,
     } = params;
 
     if (loanAmount != null) {
@@ -844,6 +852,12 @@ export class LoanRepository extends FirestoreCrudRepository<Loan> {
       ...e,
       payerPersonId: v,
     }));
+    // Not via `updateField`, which ignores null — switching back to "For me" must be able to clear it.
+    const currentBeneficiary = updated.beneficiaryPersonId ?? null;
+    if (beneficiaryPersonId !== undefined && loan.direction === "taken" && beneficiaryPersonId !== currentBeneficiary) {
+      updated = recordEdit(updated, "beneficiaryPersonId", currentBeneficiary ?? "none", beneficiaryPersonId ?? "none");
+      updated = { ...updated, beneficiaryPersonId };
+    }
     await this.update(updated);
     return updated;
   }

@@ -165,6 +165,12 @@ export function LoanScheduleDialog({ open, onOpenChange, row, onEdit, onDelete, 
                 {row.direction === "given" ? "Money I Lent" : "Money I Borrowed"}
               </ClayBadge>
             </div>
+            {row.beneficiaryPersonId && (
+              <div className="flex flex-col gap-0.5">
+                <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">For</span>
+                <span className="font-medium text-foreground">{row.beneficiaryName ?? "Someone else"}</span>
+              </div>
+            )}
             {row.payerName && (
               <div className="flex flex-col gap-0.5">
                 <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">Paid By</span>

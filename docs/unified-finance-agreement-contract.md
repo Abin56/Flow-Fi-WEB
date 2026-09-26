@@ -128,3 +128,13 @@ No purchase Transaction is ever created: a tracked card purchase is only linked 
 A Loan trashed by an older app while its money is active is recovered by the same reversal from Trash. Payment Transactions of trashed legacy Loans are outside this rule (pre-existing, unchanged).
 
 **Remaining.** Flexible repayment is still not persisted. "My tracked card used for someone else" needs a separate Person receivable relationship and remains unavailable.
+
+## "Who is this for?" — `beneficiaryPersonId` (Web)
+
+Additive, nullable field on `loans` and `emis` documents: the Person a borrowing was taken *for* when it isn't the account owner (e.g. my card EMI of ₹40,000 for a friend's phone). `null`/absent = "For me" (default and every legacy document). Stored only on borrowed Loans (`direction = taken`) and EMIs.
+
+- Separate from `personId` (lender/counterparty) and `payerPersonId` (who pays installments) — `personId` is not overloaded.
+- Association only: liability, schedule, card lock/available credit (`emiPurchaseRepresentedOnCard`), Net Worth and Person positions are unchanged. It creates no Person ledger entry or receivable; that remains the separate "Person receivable relationship" noted above.
+- Flutter does not read or write it yet. Flutter edit paths that write the whole document would drop it, like any other field an older client doesn't deserialize.
+
+**Upcoming dues (Bills page).** Credit Card statement dues, borrowed-Loan installments and EMI installments are listed with their source (`lib/engines/upcoming-dues.ts`). A card-linked Loan/EMI installment counts toward the total only when its purchase is not represented on the card (Cases B/C). In Case A it is listed as "In card bill" and not counted again.

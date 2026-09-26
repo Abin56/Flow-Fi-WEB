@@ -81,6 +81,26 @@ describe("unified wizard — request", () => {
     expect(caseB.purchaseTransactionId).toBeNull();
   });
 
+  it("'For me' is the default: no beneficiary is stored", () => {
+    expect(buildUnifiedCreateRequest(form({ kind: "borrowed" }), "k-00000008", TODAY).beneficiaryPersonId).toBeNull();
+  });
+
+  it("card EMI for someone else keeps the card link AND the person", () => {
+    const f = form({ kind: "installmentPurchase", funding: "creditCard", cardId: "card-1", amount: "40000", downPayment: "0", forSomeoneElse: true });
+    expect(unifiedCreateError(f)).toBe("Choose who this is for");
+    const request = buildUnifiedCreateRequest({ ...f, beneficiaryPersonId: "rahul" }, "k-00000009", TODAY);
+    expect([request.linkedCreditCardId, request.beneficiaryPersonId, request.loanAmount, request.direction]).toEqual(["card-1", "rahul", 40000, "taken"]);
+  });
+
+  it("money I lent can't be 'for someone else' — a stale choice is dropped", () => {
+    const request = buildUnifiedCreateRequest(
+      form({ kind: "lent", funding: "person", personId: "p1", forSomeoneElse: true, beneficiaryPersonId: "rahul" }),
+      "k-00000010",
+      TODAY,
+    );
+    expect(request.beneficiaryPersonId).toBeNull();
+  });
+
   it("person funding requires a person; card funding requires a card", () => {
     expect(unifiedCreateError(form({ kind: "lent", funding: "person" }))).toBe("Choose a person");
     expect(unifiedCreateError(form({ kind: "installmentPurchase", funding: "creditCard", amount: "100" }))).toBe("Choose a credit card");

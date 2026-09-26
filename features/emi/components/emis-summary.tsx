@@ -19,28 +19,28 @@ export function EmisSummary({ rows }: { rows: EmiRow[] }) {
   const repaidPercent = totalPrincipal > 0 ? Math.round(((totalPrincipal - totalRemaining) / totalPrincipal) * 100) : 0;
 
   return (
-    <FloatingCard interactive={false} elevation={2} className="flex flex-wrap items-center gap-8 px-7 py-6">
+    <FloatingCard interactive={false} elevation={2} className="flex flex-wrap items-center gap-x-8 gap-y-4 px-5 py-5 sm:px-7 sm:py-6">
       <div className="flex flex-col gap-1">
-        <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Total Remaining</p>
-        <span className="font-heading text-4xl font-semibold tracking-tight tabular-nums text-foreground">
+        <p className="text-xs font-semibold tracking-wide text-foreground/70 uppercase">Total Remaining</p>
+        <span className="font-heading text-3xl font-semibold sm:text-4xl tracking-tight tabular-nums text-foreground">
           <AnimatedNumber value={totalRemaining} format={formatCurrency} />
         </span>
       </div>
-      <div className="h-10 w-px bg-border/60" />
+      <div className="hidden h-10 w-px bg-border sm:block" />
       <div className="flex flex-col gap-1">
-        <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Next Installments Due</p>
+        <p className="text-xs font-semibold tracking-wide text-foreground/70 uppercase">Next Installments Due</p>
         <span className="font-heading text-2xl font-semibold tracking-tight tabular-nums text-foreground">
           <AnimatedNumber value={totalNextInstallmentOutlay} format={formatCurrency} />
         </span>
       </div>
-      <div className="h-10 w-px bg-border/60" />
+      <div className="hidden h-10 w-px bg-border sm:block" />
       <div className="flex flex-col gap-1">
-        <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Repaid So Far</p>
+        <p className="text-xs font-semibold tracking-wide text-foreground/70 uppercase">Repaid So Far</p>
         <span className="font-heading text-2xl font-semibold tracking-tight tabular-nums text-success">
           <AnimatedNumber value={repaidPercent} format={(v) => `${v}%`} />
         </span>
       </div>
-      <p className="ml-auto max-w-[16rem] text-xs text-muted-foreground">
+      <p className="w-full text-xs text-muted-foreground lg:ml-auto lg:w-auto lg:max-w-[16rem]">
         {activeRows.length} active EMI{activeRows.length === 1 ? "" : "s"} — balances tracked from real installment
         schedules, not a cached number
       </p>

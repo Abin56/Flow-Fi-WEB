@@ -150,6 +150,15 @@ export interface Emi extends SoftDeletableEntity {
    */
   purchaseTransactionId: string | null;
 
+  /**
+   * "Who is this for?" — the Person this EMI was actually taken for, when that's someone other than
+   * the account owner (e.g. a ₹40,000 card EMI for a friend's phone). Same meaning as
+   * `Loan.beneficiaryPersonId`: a pure association — the EMI stays my liability, and a card-linked
+   * EMI keeps locking/restoring its card's available credit exactly as before. Never a counterparty,
+   * never a Person receivable. `null`/absent means "For me" (the default, and every legacy document).
+   */
+  beneficiaryPersonId?: string | null;
+
   /** Locked once any payment has been recorded — see `EmiRepository.editEmi`. */
   principalAmount: number;
 
@@ -334,6 +343,7 @@ export function emiFromFirestore(
     isDefaulted: (data.isDefaulted as boolean | undefined) ?? false,
     linkedCreditCardId: (data.linkedCreditCardId as string | undefined) ?? null,
     purchaseTransactionId: (data.purchaseTransactionId as string | undefined) ?? null,
+    beneficiaryPersonId: (data.beneficiaryPersonId as string | undefined) ?? null,
     dueDayOfMonth: (data.dueDayOfMonth as number | undefined) ?? null,
     deletedAt: (data.deletedAt as Timestamp | undefined)?.toDate() ?? null,
     lastEditedAt: (data.lastEditedAt as Timestamp | undefined)?.toDate() ?? null,
@@ -372,6 +382,7 @@ export function emiToFirestore(emi: Emi): DocumentData {
     isDefaulted: emi.isDefaulted,
     linkedCreditCardId: emi.linkedCreditCardId,
     purchaseTransactionId: emi.purchaseTransactionId,
+    beneficiaryPersonId: emi.beneficiaryPersonId ?? null,
     dueDayOfMonth: emi.dueDayOfMonth,
     deletedAt: emi.deletedAt == null ? null : Timestamp.fromDate(emi.deletedAt),
     lastEditedAt: emi.lastEditedAt == null ? null : Timestamp.fromDate(emi.lastEditedAt),
