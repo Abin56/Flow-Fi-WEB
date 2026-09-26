@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowUpRight, Building2, CalendarClock, FileText, Landmark, Percent, Plus, Search, StickyNote, Trash2, Wallet } from "lucide-react";
+import { ArrowUpRight, Building2, Landmark, Search, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
@@ -14,16 +14,15 @@ import {
   FLAT_INPUT,
   SectionedFormDialog,
   SectionLabel,
-  SmartToolbar,
 } from "@/components/finance";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { InterestType } from "@/lib/engines/interest-calculator";
 import type { Loan, LoanCategory, LoanDirection } from "@/lib/models/loan";
 import type { Installment, ScheduleType } from "@/lib/models/payment-schedule";
-import { LoanCard } from "@/features/loans/components/loan-card";
+import { LoanCard, loanDisplayName } from "@/features/loans/components/loan-card";
+import { AmountInput, Field, FieldGroup, MoreOptions, RevealToggle } from "@/features/loans/components/loan-emi-ui";
 import { LoanLumpSumDialog } from "@/features/loans/components/loan-lump-sum-dialog";
 import { LoanScheduleDialog } from "@/features/loans/components/loan-schedule-dialog";
-import { LoansSummary } from "@/features/loans/components/loans-summary";
 import { LoansTrashDialog } from "@/features/loans/components/loans-trash-dialog";
 import { RecordLoanPaymentDialog } from "@/features/loans/components/record-loan-payment-dialog";
 import { LoanAdjustmentDialog } from "@/features/loans/components/loan-adjustment-dialog";
@@ -35,6 +34,7 @@ import {
   type OwnershipChoice,
 } from "@/features/loans/components/who-is-this-for-field";
 import { loanOriginationUi } from "@/features/loans/lib/loan-origination-ui";
+import { originationIdsFor, originationKeyFromLoanId } from "@/lib/engines/loan-origination";
 import { useTransactions } from "@/hooks/use-transactions";
 import { useLoanActions, useLoanRows, useTrashedLoanRows, type LoanRow } from "@/features/loans/hooks/use-loans-data";
 import { useLoanPersons } from "@/hooks/use-loans";
@@ -52,20 +52,20 @@ type CategoryFilter = "all" | LoanCategory;
 const STATUS_FILTER_OPTIONS: { value: StatusFilter; label: string }[] = [
   { value: "all", label: "All" },
   { value: "active", label: "Active" },
-  { value: "overdue", label: "Missed Payment" },
+  { value: "overdue", label: "Missed payment" },
   { value: "closed", label: "Closed" },
 ];
 
 const DIRECTION_FILTER_OPTIONS: { value: DirectionFilter; label: string }[] = [
-  { value: "all", label: "All" },
-  { value: "given", label: "I Gave" },
-  { value: "taken", label: "I Borrowed" },
+  { value: "all", label: "Borrowed & lent" },
+  { value: "taken", label: "I borrowed" },
+  { value: "given", label: "I lent" },
 ];
 
 const CATEGORY_FILTER_OPTIONS: { value: CategoryFilter; label: string }[] = [
-  { value: "all", label: "All" },
-  { value: "personal", label: "Personal" },
-  { value: "institutional", label: "Institution" },
+  { value: "all", label: "Banks & people" },
+  { value: "institutional", label: "From banks" },
+  { value: "personal", label: "From people" },
 ];
 
 interface LoanFormState {
@@ -153,13 +153,11 @@ function formFromRow(row: LoanRow): LoanFormState {
 }
 
 export interface LoansWorkspaceProps {
-  /** When set, "Add" buttons defer to the unified Loan & EMI chooser instead of opening the Loan form. */
-  onAddRequest?: () => void;
   /** Incremented by the unified Loan & EMI chooser to open the Add Loan form. */
   addSignal?: number;
 }
 
-export function LoansWorkspace({ onAddRequest, addSignal = 0 }: LoansWorkspaceProps = {}) {
+export function LoansWorkspace({ addSignal = 0 }: LoansWorkspaceProps = {}) {
   const searchParams = useSearchParams();
   const createHandoff = searchParams.get("create");
   const queryClient = useQueryClient();
@@ -171,6 +169,14 @@ export function LoansWorkspace({ onAddRequest, addSignal = 0 }: LoansWorkspacePr
   const { data: transactions = [] } = useTransactions();
   const originationUiFor = (loanId: string) =>
     loanOriginationUi(loanId, transactions, (accountId) => accounts.find((a) => a.id === accountId)?.name);
+  /** The Account a wizard-created loan's money moved through, for the details view's Linked section. */
+  const originationAccountName = (loanId: string): string | null => {
+    const key = originationKeyFromLoanId(loanId);
+    if (key == null) return null;
+    const transactionId = originationIdsFor(key).transactionId;
+    const origination = transactions.find((t) => t.id === transactionId && t.deletedAt == null);
+    return origination ? (accounts.find((a) => a.id === origination.accountId)?.name ?? null) : null;
+  };
   const [reverseTarget, setReverseTarget] = useState<{ loan: Loan; key: string; message: string } | null>(null);
   const [reversing, setReversing] = useState(false);
 
@@ -224,7 +230,6 @@ export function LoansWorkspace({ onAddRequest, addSignal = 0 }: LoansWorkspacePr
     setSeenAddSignal(addSignal);
     openAdd();
   }
-  const requestAdd = onAddRequest ?? openAdd;
 
   function openEdit(row: LoanRow) {
     setActiveRowId(row.loan.id);
@@ -424,74 +429,81 @@ export function LoansWorkspace({ onAddRequest, addSignal = 0 }: LoansWorkspacePr
 
   if (isLoading) {
     return (
-      <div className="flex flex-col gap-6 px-1">
-        <h1 className="font-heading text-xl font-semibold tracking-tight text-foreground">Loans</h1>
-        <Skeleton className="h-24 rounded-3xl" />
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
-          {Array.from({ length: 6 }, (_, i) => (
-            <Skeleton key={i} className="h-56 rounded-3xl" />
-          ))}
-        </div>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        {Array.from({ length: 3 }, (_, i) => (
+          <Skeleton key={i} className="h-48 rounded-2xl" />
+        ))}
       </div>
     );
   }
 
+  const hasLent = rows.some((r) => r.direction === "given");
+  const hasBothCategories = rows.some((r) => r.category === "personal") && rows.some((r) => r.category === "institutional");
+  const filtersActive = search !== "" || statusFilter !== "all" || directionFilter !== "all" || categoryFilter !== "all";
+
   return (
-    <div className="flex flex-col gap-6 px-1">
-      <SmartToolbar
-        left={
-          <div className="flex items-baseline gap-2">
-            <h1 className="font-heading text-xl font-semibold tracking-tight text-foreground">Loans</h1>
-            <span className="text-sm text-muted-foreground">{rows.length} loans</span>
-          </div>
-        }
-        actions={
-          <div className="flex items-center gap-2">
-            <ClayButton variant="secondary" size="sm" className="gap-1.5" onClick={() => setTrashOpen(true)}>
-              <Trash2 className="size-3.5" />
-              Trash{trashedRows.length > 0 ? ` (${trashedRows.length})` : ""}
-            </ClayButton>
-            <ClayButton size="sm" onClick={requestAdd} className="gap-1.5">
-              <Plus className="size-3.5" />
-              Add Loan
-            </ClayButton>
-          </div>
-        }
-      />
-
-      <LoansSummary rows={rows} />
-
+    <div className="flex flex-col gap-4">
       {rows.length === 0 ? (
-        <EmptyState
-          icon={Landmark}
-          title="No loans yet"
-          description="Add a loan you've borrowed or lent to start tracking its repayment schedule."
-          actionLabel="Add Loan"
-          onAction={requestAdd}
-        />
+        <div className="flex flex-col gap-2">
+          <EmptyState
+            icon={Landmark}
+            title="No loans yet"
+            description="A Loan is money borrowed from a bank, lender or person. Add one to track its installments and what's left to repay."
+            actionLabel="Add a Loan"
+            onAction={openAdd}
+          />
+          {trashedRows.length > 0 && (
+            <ClayButton variant="ghost" size="sm" className="gap-1.5 self-center" onClick={() => setTrashOpen(true)}>
+              <Trash2 className="size-3.5" />
+              Trash ({trashedRows.length})
+            </ClayButton>
+          )}
+        </div>
       ) : (
         <>
-          <div className="flex flex-col gap-3">
-            <div className="relative max-w-sm">
-              <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
-              <input
-                className={cn(FLAT_INPUT, "pl-9")}
-                placeholder="Search loans…"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-              />
+          <div className="flex flex-col gap-2.5">
+            <div className="flex flex-wrap items-center gap-2">
+              {rows.length > 4 && (
+                <div className="relative w-full sm:w-64">
+                  <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+                  <input
+                    className={cn(FLAT_INPUT, "pl-9")}
+                    placeholder="Search loans"
+                    aria-label="Search loans"
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                  />
+                </div>
+              )}
+              {rows.length > 1 && <ChipRow options={STATUS_FILTER_OPTIONS} value={statusFilter} onChange={setStatusFilter} />}
+              <ClayButton variant="ghost" size="sm" className="ml-auto gap-1.5" onClick={() => setTrashOpen(true)}>
+                <Trash2 className="size-3.5" />
+                Trash{trashedRows.length > 0 ? ` (${trashedRows.length})` : ""}
+              </ClayButton>
             </div>
-            <div className="flex flex-col gap-2">
-              <ChipRow options={CATEGORY_FILTER_OPTIONS} value={categoryFilter} onChange={setCategoryFilter} />
-              <ChipRow options={DIRECTION_FILTER_OPTIONS} value={directionFilter} onChange={setDirectionFilter} />
-              <ChipRow options={STATUS_FILTER_OPTIONS} value={statusFilter} onChange={setStatusFilter} />
-            </div>
+            {(hasLent || hasBothCategories) && (
+              <div className="flex flex-wrap gap-x-4 gap-y-2">
+                {hasLent && <ChipRow options={DIRECTION_FILTER_OPTIONS} value={directionFilter} onChange={setDirectionFilter} />}
+                {hasBothCategories && <ChipRow options={CATEGORY_FILTER_OPTIONS} value={categoryFilter} onChange={setCategoryFilter} />}
+              </div>
+            )}
           </div>
 
           {visibleRows.length === 0 ? (
-            <EmptyState icon={Search} title="No matching loans" description="Try a different search or filter." />
+            <EmptyState
+              icon={Search}
+              title="No matching loans"
+              description="Try a different search or filter."
+              actionLabel={filtersActive ? "Clear filters" : undefined}
+              onAction={() => {
+                setSearch("");
+                setStatusFilter("all");
+                setDirectionFilter("all");
+                setCategoryFilter("all");
+              }}
+            />
           ) : (
-            <Stagger className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            <Stagger className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
               {visibleRows.map((row) => (
                 <LoanCard
                   key={row.loan.id}
@@ -523,6 +535,7 @@ export function LoansWorkspace({ onAddRequest, addSignal = 0 }: LoansWorkspacePr
           handleDelete(row);
         }}
         deleteLabel={activeRow != null && originationUiFor(activeRow.loan.id).moneyActive ? "Reverse & Delete" : undefined}
+        linkedAccountName={activeRow ? originationAccountName(activeRow.loan.id) : null}
         onRecordPayment={(row, installment) => setPaymentTarget({ row, installment })}
         onSettleLumpSum={(row) => setLumpSumRow(row)}
         onPrincipalPrepayment={(row) => setAdjustment({ row, kind: "prepayment" })}
@@ -602,7 +615,7 @@ export function LoansWorkspace({ onAddRequest, addSignal = 0 }: LoansWorkspacePr
         open={addOpen}
         onOpenChange={setAddOpen}
         title="Add a Loan"
-        description="Track money you've borrowed or lent, and its repayment schedule."
+        description="Money borrowed from a bank, lender or person. Only the basics are needed — the schedule is built for you."
         onConfirm={() => handleSave(false)}
         confirmLabel={saving ? "Saving…" : "Add Loan"}
         loading={saving}
@@ -625,7 +638,7 @@ export function LoansWorkspace({ onAddRequest, addSignal = 0 }: LoansWorkspacePr
           // Cancelling an edit returns to the loan it was opened from, like saving does.
           if (!open && activeRowId) setScheduleOpen(true);
         }}
-        title={`Edit ${activeRow?.loan.name ?? "Loan"}`}
+        title={`Edit ${activeRow ? loanDisplayName(activeRow) : "Loan"}`}
         onConfirm={() => handleSave(true)}
         confirmLabel={saving ? "Saving…" : "Save Changes"}
         loading={saving}
@@ -669,13 +682,13 @@ const FREQUENCY_OPTIONS: { value: ScheduleType; label: string }[] = [
 ];
 
 const DIRECTION_OPTIONS: { value: LoanDirection; label: string }[] = [
-  { value: "taken", label: "Money I Borrowed" },
-  { value: "given", label: "Money I Lent" },
+  { value: "taken", label: "I borrowed" },
+  { value: "given", label: "I lent" },
 ];
 
 const CATEGORY_OPTIONS: { value: LoanCategory; label: string }[] = [
-  { value: "personal", label: "Personal" },
-  { value: "institutional", label: "Bank / Institution" },
+  { value: "institutional", label: "Bank / lender" },
+  { value: "personal", label: "Person" },
 ];
 
 const ADD_NEW_PERSON_VALUE = "__add_new_person__";
@@ -827,286 +840,241 @@ function LoanFormFields({
 }) {
   const movementAccounts = accounts.filter((a) => a.type !== "card" && a.deletedAt == null);
   const received = form.direction === "taken";
+  const hasRate = form.ratePercent.trim() !== "" && Number(form.ratePercent) > 0;
+  const lenderLabel = received ? "Borrowed from" : "Lent to";
   return (
-    <div className="flex flex-col gap-6">
-      <div className="flex flex-col gap-3 bg-muted/30 p-4">
-        <SectionLabel icon={FileText}>Loan Details</SectionLabel>
-        <label className="flex flex-col gap-1">
-          <span className="text-xs font-medium text-muted-foreground">Loan Name (optional)</span>
+    <div className="flex flex-col gap-5">
+      {/* 1 — what kind of loan. Decides the wording of everything below. */}
+      {!isEdit ? (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <FieldGroup label="Did you borrow or lend it?">
+            <ChipRow options={DIRECTION_OPTIONS} value={form.direction} onChange={(v) => setForm((f) => ({ ...f, direction: v }))} />
+          </FieldGroup>
+          <FieldGroup label={received ? "Borrowed from a…" : "Lent to a…"}>
+            <ChipRow options={CATEGORY_OPTIONS} value={form.category} onChange={(v) => setForm((f) => ({ ...f, category: v }))} />
+          </FieldGroup>
+        </div>
+      ) : (
+        <div className="flex items-center gap-2">
+          <ClayBadge tone="neutral">{CATEGORY_OPTIONS.find((o) => o.value === form.category)?.label}</ClayBadge>
+          <ClayBadge tone={form.direction === "given" ? "success" : "neutral"}>
+            {DIRECTION_OPTIONS.find((o) => o.value === form.direction)?.label}
+          </ClayBadge>
+        </div>
+      )}
+
+      {/* 2 — who and how much. */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        {form.category === "personal" ? (
+          <PersonPickerField
+            label={lenderLabel}
+            people={people}
+            value={form.personId}
+            disabled={isEdit}
+            onChange={(personId) => setForm((f) => ({ ...f, personId }))}
+            onCreatePerson={isEdit ? undefined : onCreatePerson}
+            lockedHint={isEdit ? "Person can't be changed after the loan is created." : undefined}
+          />
+        ) : (
+          <Field label={lenderLabel}>
+            <input
+              className={FLAT_INPUT}
+              placeholder={received ? "e.g. HDFC Bank" : "e.g. Rahul"}
+              value={form.lenderName}
+              onChange={(e) => setForm((f) => ({ ...f, lenderName: e.target.value }))}
+            />
+          </Field>
+        )}
+        <Field
+          label="Loan amount"
+          hint={
+            isEdit
+              ? `Re-amortizes the remaining balance${minLoanAmount > 0 ? ` — can't go below ₹${minLoanAmount.toLocaleString("en-IN")} already paid off` : ""}.`
+              : undefined
+          }
+        >
+          <AmountInput
+            value={form.principal}
+            min={isEdit ? minLoanAmount || undefined : undefined}
+            onChange={(v) => setForm((f) => ({ ...f, principal: v }))}
+          />
+        </Field>
+      </div>
+
+      {/* 3 — repayment terms. */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <Field
+          label="Number of installments"
+          hint={isEdit && minInstallmentCount > 0 ? `Can't go below ${minInstallmentCount} — already settled.` : undefined}
+        >
+          <input
+            type="number"
+            inputMode="numeric"
+            min={isEdit ? minInstallmentCount || 1 : 1}
+            className={FLAT_INPUT}
+            value={form.installmentCount}
+            onChange={(e) => setForm((f) => ({ ...f, installmentCount: e.target.value }))}
+          />
+        </Field>
+        <FieldGroup label="Paid">
+          <ChipRow
+            options={FREQUENCY_OPTIONS}
+            value={form.installmentFrequency}
+            onChange={(v) => setForm((f) => ({ ...f, installmentFrequency: v }))}
+          />
+        </FieldGroup>
+        <Field
+          label="Loan date"
+          hint={isEdit ? (hasPayments ? "Locked once a payment is recorded." : "Regenerates the schedule from this date.") : undefined}
+        >
+          <input
+            type="date"
+            disabled={isEdit && hasPayments}
+            className={cn(FLAT_INPUT, isEdit && hasPayments && "text-muted-foreground opacity-70")}
+            value={form.loanDate}
+            onChange={(e) => setForm((f) => ({ ...f, loanDate: e.target.value }))}
+          />
+        </Field>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <Field
+          label="Interest rate (% per year)"
+          hint={isEdit ? "Re-amortizes the remaining balance over the unpaid installments." : "Leave empty if there's no interest."}
+        >
+          <input
+            type="number"
+            inputMode="decimal"
+            className={FLAT_INPUT}
+            placeholder="e.g. 8.65"
+            value={form.ratePercent}
+            onChange={(e) => setForm((f) => ({ ...f, ratePercent: e.target.value }))}
+          />
+        </Field>
+        {hasRate && (
+          <FieldGroup label="Interest type" hint="Most bank loans use reducing balance.">
+            <ChipRow options={INTEREST_TYPE_OPTIONS} value={form.interestType} onChange={(v) => setForm((f) => ({ ...f, interestType: v }))} />
+          </FieldGroup>
+        )}
+      </div>
+
+      {/* 4 — linked Account. Its fields only appear once switched on. */}
+      {!isEdit && (
+        <RevealToggle
+          checked={form.recordMovement}
+          onChange={(checked) => setForm((f) => ({ ...f, recordMovement: checked }))}
+          title={received ? "Money came into one of my accounts" : "Money went out of one of my accounts"}
+          description="Leave off if it didn't pass through a FlowFi account — no balance changes."
+        >
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-semibold text-foreground/85">{received ? "Received into" : "Paid from"}</span>
+              <AddElsewhereLink href="/accounts" label="Add Account" />
+            </div>
+            {movementAccounts.length === 0 ? (
+              <p className="text-xs text-muted-foreground">No accounts yet — add one in Accounts, then come back.</p>
+            ) : (
+              <select
+                className={FLAT_INPUT}
+                value={form.movementAccountId}
+                onChange={(e) => setForm((f) => ({ ...f, movementAccountId: e.target.value }))}
+              >
+                <option value="">Choose account</option>
+                {movementAccounts.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Updates this account&apos;s balance. It isn&apos;t counted as income or spending — the amount stays tracked as a loan.
+          </p>
+        </RevealToggle>
+      )}
+
+      {/* 5 — everything optional. */}
+      <MoreOptions
+        defaultOpen={isEdit}
+        summary={
+          form.category === "institutional" ? "Name, who it's for, who pays, bank details, notes" : "Name, who it's for, who pays, notes"
+        }
+      >
+        <Field label="Loan name">
           <input
             className={FLAT_INPUT}
             placeholder="e.g. Home Loan"
             value={form.name}
             onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
           />
-        </label>
-        {!isEdit ? (
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div className="flex flex-col gap-1.5">
-              <span className="text-xs font-medium text-muted-foreground">Personal loan, or from a bank?</span>
-              <ChipRow
-                options={CATEGORY_OPTIONS}
-                value={form.category}
-                onChange={(v) => setForm((f) => ({ ...f, category: v }))}
-              />
+        </Field>
+
+        {form.direction === "taken" && (
+          <WhoIsThisForField
+            bare
+            labelClassName="text-xs font-semibold text-foreground/85"
+            people={people}
+            choice={form.ownership}
+            personId={form.beneficiaryPersonId}
+            onChange={({ choice, personId }) => setForm((f) => ({ ...f, ownership: choice, beneficiaryPersonId: personId }))}
+          />
+        )}
+
+        <Field label="Who pays the installments?" hint="Only if a friend or family member pays it for you.">
+          <select
+            className={FLAT_INPUT}
+            value={form.payerPersonId}
+            onChange={(e) => setForm((f) => ({ ...f, payerPersonId: e.target.value }))}
+          >
+            <option value="">I pay it myself</option>
+            {people.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+
+        {form.category === "institutional" && (
+          <div className="flex flex-col gap-3">
+            <SectionLabel icon={Building2}>Bank details</SectionLabel>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <Field label="Type of loan">
+                <input
+                  className={FLAT_INPUT}
+                  placeholder="e.g. Personal, Vehicle, Education"
+                  value={form.loanType}
+                  onChange={(e) => setForm((f) => ({ ...f, loanType: e.target.value }))}
+                />
+              </Field>
+              <Field label="Loan account number">
+                <input className={FLAT_INPUT} value={form.loanNumber} onChange={(e) => setForm((f) => ({ ...f, loanNumber: e.target.value }))} />
+              </Field>
+              <Field label="Bank account number">
+                <input
+                  className={FLAT_INPUT}
+                  value={form.accountNumber}
+                  onChange={(e) => setForm((f) => ({ ...f, accountNumber: e.target.value }))}
+                />
+              </Field>
+              <Field label="Branch">
+                <input className={FLAT_INPUT} value={form.branch} onChange={(e) => setForm((f) => ({ ...f, branch: e.target.value }))} />
+              </Field>
             </div>
-            <div className="flex flex-col gap-1.5">
-              <span className="text-xs font-medium text-muted-foreground">Which is it?</span>
-              <ChipRow
-                options={DIRECTION_OPTIONS}
-                value={form.direction}
-                onChange={(v) => setForm((f) => ({ ...f, direction: v }))}
-              />
-            </div>
-          </div>
-        ) : (
-          <div className="flex items-center gap-2">
-            <ClayBadge tone="neutral">
-              {CATEGORY_OPTIONS.find((o) => o.value === form.category)?.label}
-            </ClayBadge>
-            <ClayBadge tone={form.direction === "given" ? "success" : "neutral"}>
-              {DIRECTION_OPTIONS.find((o) => o.value === form.direction)?.label}
-            </ClayBadge>
           </div>
         )}
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          {form.category === "personal" ? (
-            <PersonPickerField
-              label={form.direction === "given" ? "Who did you lend it to?" : "Who did you borrow it from?"}
-              people={people}
-              value={form.personId}
-              disabled={isEdit}
-              onChange={(personId) => setForm((f) => ({ ...f, personId }))}
-              onCreatePerson={isEdit ? undefined : onCreatePerson}
-              lockedHint={isEdit ? "Person can't be changed after the loan is created." : undefined}
-            />
-          ) : (
-            <label className="flex flex-col gap-1">
-              <span className="text-xs font-medium text-muted-foreground">
-                {form.direction === "given" ? "Who did you lend it to?" : "Who did you borrow it from?"}
-              </span>
-              <input
-                className={FLAT_INPUT}
-                placeholder={form.direction === "given" ? "e.g. Rahul" : "e.g. HDFC Bank"}
-                value={form.lenderName}
-                onChange={(e) => setForm((f) => ({ ...f, lenderName: e.target.value }))}
-              />
-            </label>
-          )}
-          <label className="flex flex-col gap-1">
-            <span className="text-xs font-medium text-muted-foreground">Who actually pays the EMIs? (optional)</span>
-            <select
-              className={FLAT_INPUT}
-              value={form.payerPersonId}
-              onChange={(e) => setForm((f) => ({ ...f, payerPersonId: e.target.value }))}
-            >
-              <option value="">I pay it myself</option>
-              {people.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-            <span className="text-xs text-muted-foreground">Only if a friend or family member pays it for you.</span>
-          </label>
-        </div>
-      </div>
 
-      {form.direction === "taken" && (
-        <WhoIsThisForField
-          people={people}
-          choice={form.ownership}
-          personId={form.beneficiaryPersonId}
-          onChange={({ choice, personId }) => setForm((f) => ({ ...f, ownership: choice, beneficiaryPersonId: personId }))}
-        />
-      )}
-
-      {form.category === "institutional" && (
-        <div className="flex flex-col gap-3 bg-muted/30 p-4">
-          <SectionLabel icon={Building2}>Bank Details (optional)</SectionLabel>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <label className="flex flex-col gap-1">
-              <span className="text-xs font-medium text-muted-foreground">Type of Loan</span>
-              <input
-                className={FLAT_INPUT}
-                placeholder="e.g. Personal, Vehicle, Education"
-                value={form.loanType}
-                onChange={(e) => setForm((f) => ({ ...f, loanType: e.target.value }))}
-              />
-            </label>
-            <label className="flex flex-col gap-1">
-              <span className="text-xs font-medium text-muted-foreground">Loan Account Number</span>
-              <input
-                className={FLAT_INPUT}
-                value={form.loanNumber}
-                onChange={(e) => setForm((f) => ({ ...f, loanNumber: e.target.value }))}
-              />
-            </label>
-            <label className="flex flex-col gap-1">
-              <span className="text-xs font-medium text-muted-foreground">Bank Account Number</span>
-              <input
-                className={FLAT_INPUT}
-                value={form.accountNumber}
-                onChange={(e) => setForm((f) => ({ ...f, accountNumber: e.target.value }))}
-              />
-            </label>
-            <label className="flex flex-col gap-1">
-              <span className="text-xs font-medium text-muted-foreground">Branch</span>
-              <input
-                className={FLAT_INPUT}
-                value={form.branch}
-                onChange={(e) => setForm((f) => ({ ...f, branch: e.target.value }))}
-              />
-            </label>
-          </div>
-        </div>
-      )}
-
-      <div className="flex flex-col gap-3 bg-muted/30 p-4">
-        <SectionLabel icon={Percent}>Loan Amount &amp; Interest</SectionLabel>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <label className="flex flex-col gap-1">
-            <span className="text-xs font-medium text-muted-foreground">Loan Amount</span>
-            <div className="relative">
-              <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary-accent-text">₹</span>
-              <input
-                type="number"
-                min={isEdit ? minLoanAmount || undefined : undefined}
-                className={cn(FLAT_INPUT, "border-primary/30 bg-primary/5 pl-7 text-base font-semibold focus:border-primary")}
-                placeholder="0.00"
-                value={form.principal}
-                onChange={(e) => setForm((f) => ({ ...f, principal: e.target.value }))}
-              />
-            </div>
-            {isEdit && (
-              <span className="text-xs text-muted-foreground">
-                Re-amortizes the remaining balance{minLoanAmount > 0 ? ` — can't go below ₹${minLoanAmount.toLocaleString("en-IN")} already paid off` : ""}.
-              </span>
-            )}
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-xs font-medium text-muted-foreground">Interest Rate (% per year)</span>
-            <input
-              type="number"
-              className={FLAT_INPUT}
-              placeholder="e.g. 8.65"
-              value={form.ratePercent}
-              onChange={(e) => setForm((f) => ({ ...f, ratePercent: e.target.value }))}
-            />
-            {isEdit && <span className="text-xs text-muted-foreground">Re-amortizes the remaining balance over the unpaid installments.</span>}
-          </label>
-        </div>
-        <div className="flex flex-col gap-1.5">
-          <span className="text-xs font-medium text-muted-foreground">Interest Type</span>
-          <ChipRow
-            options={INTEREST_TYPE_OPTIONS}
-            value={form.interestType}
-            onChange={(v) => setForm((f) => ({ ...f, interestType: v }))}
+        <Field label="Notes">
+          <textarea
+            className={cn(FLAT_INPUT, "min-h-20 resize-none py-2")}
+            placeholder="Optional notes"
+            rows={3}
+            value={form.notes}
+            onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
           />
-        </div>
-      </div>
-
-      {!isEdit && (
-        <div className="flex flex-col gap-3 bg-muted/30 p-4">
-          <SectionLabel icon={Wallet}>Account (optional)</SectionLabel>
-          <label className="flex items-center gap-2">
-            <input
-              type="checkbox"
-              checked={form.recordMovement}
-              onChange={(e) => setForm((f) => ({ ...f, recordMovement: e.target.checked }))}
-            />
-            <span className="text-xs font-medium text-foreground/80">
-              {received ? "I received this money into an account" : "I paid this money from an account"}
-            </span>
-          </label>
-          {form.recordMovement && (
-            <>
-              <div className="flex flex-col gap-1">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs font-medium text-muted-foreground">{received ? "Received into" : "Paid from"}</span>
-                  <AddElsewhereLink href="/accounts" label="Add Account" />
-                </div>
-                {movementAccounts.length === 0 ? (
-                  <p className="text-xs text-muted-foreground">No accounts yet — add one in Accounts, then come back.</p>
-                ) : (
-                  <select
-                    className={FLAT_INPUT}
-                    value={form.movementAccountId}
-                    onChange={(e) => setForm((f) => ({ ...f, movementAccountId: e.target.value }))}
-                  >
-                    <option value="">Choose account</option>
-                    {movementAccounts.map((a) => (
-                      <option key={a.id} value={a.id}>
-                        {a.name}
-                      </option>
-                    ))}
-                  </select>
-                )}
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Updates this account&apos;s balance. It isn&apos;t counted as income or spending — the amount stays tracked as a
-                loan.
-              </p>
-            </>
-          )}
-          {!form.recordMovement && (
-            <p className="text-xs text-muted-foreground">Leave off if the money didn&apos;t pass through a FlowFi account — no balance changes.</p>
-          )}
-        </div>
-      )}
-
-      <div className="flex flex-col gap-3 bg-muted/30 p-4">
-        <SectionLabel icon={CalendarClock}>Repayment Schedule</SectionLabel>
-        <div className="flex flex-col gap-1.5">
-          <span className="text-xs font-medium text-muted-foreground">Frequency</span>
-          <ChipRow
-            options={FREQUENCY_OPTIONS}
-            value={form.installmentFrequency}
-            onChange={(v) => setForm((f) => ({ ...f, installmentFrequency: v }))}
-          />
-        </div>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <label className="flex flex-col gap-1">
-            <span className="text-xs font-medium text-muted-foreground"># Installments (Tenure)</span>
-            <input
-              type="number"
-              min={isEdit ? minInstallmentCount || 1 : 1}
-              className={FLAT_INPUT}
-              value={form.installmentCount}
-              onChange={(e) => setForm((f) => ({ ...f, installmentCount: e.target.value }))}
-            />
-            {isEdit && minInstallmentCount > 0 && (
-              <span className="text-xs text-muted-foreground">Can&apos;t go below {minInstallmentCount} — installments already settled.</span>
-            )}
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-xs font-medium text-muted-foreground">Loan Date</span>
-            <input
-              type="date"
-              disabled={isEdit && hasPayments}
-              className={cn(FLAT_INPUT, isEdit && hasPayments && "text-muted-foreground opacity-70")}
-              value={form.loanDate}
-              onChange={(e) => setForm((f) => ({ ...f, loanDate: e.target.value }))}
-            />
-            {isEdit && (
-              <span className="text-xs text-muted-foreground">
-                {hasPayments ? "Can't be changed once a payment has been recorded." : "Regenerates the full schedule from this date."}
-              </span>
-            )}
-          </label>
-        </div>
-      </div>
-
-      <div className="flex flex-col gap-2 bg-muted/30 p-4">
-        <SectionLabel icon={StickyNote}>Notes</SectionLabel>
-        <textarea
-          className={cn(FLAT_INPUT, "min-h-20 resize-none py-2")}
-          placeholder="Optional notes"
-          rows={3}
-          value={form.notes}
-          onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
-        />
-      </div>
+        </Field>
+      </MoreOptions>
     </div>
   );
 }

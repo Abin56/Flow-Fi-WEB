@@ -177,6 +177,46 @@ export function emiPurchaseRepresentedOnCard(
 }
 
 /**
+ * The Credit Card that owns a Loan's liability, or null. A borrowed Loan financed on a card (the unified
+ * wizard's `fundingSource: "creditCard"` + `linkedCreditCardId`, e.g. a ₹40,000 installment purchase) is
+ * the same obligation as a card-linked EMI: the card owns the exposure, so the Loan locks/restores that
+ * card's available credit like an EMI and is never counted again as a Loan liability
+ * (docs/loans-installments-unification-audit.md §6.5). Same rule as the unified adapter's
+ * `cardOwnedLiability`. Mirrors Flutter's `cardFundedLoanCardId` (`card_emi_ownership.dart`).
+ */
+export function cardFundedLoanCardId(loan: {
+  direction: "given" | "taken";
+  fundingSource?: string | null;
+  linkedCreditCardId?: string | null;
+}): string | null {
+  return loan.direction === "taken" && loan.fundingSource === "creditCard" && loan.linkedCreditCardId
+    ? loan.linkedCreditCardId
+    : null;
+}
+
+/**
+ * A card-funded Loan as a `UtilizationEmi`. Its principal restored is exactly the Loan's repaid principal
+ * (`loanAmount − outstandingPrincipal`, extra principal included), so the card's lock always equals the
+ * Loan's outstanding principal — never its future interest.
+ */
+export function cardFundedLoanUtilization(params: {
+  linkedCreditCardId: string;
+  isClosed: boolean;
+  loanAmount: number;
+  /** From `outstandingPrincipalAfterPrepaymentsFor`. */
+  outstandingPrincipal: number;
+  purchaseRepresented: boolean;
+}): UtilizationEmi {
+  return {
+    linkedCreditCardId: params.linkedCreditCardId,
+    isClosed: params.isClosed,
+    principalAmount: params.loanAmount,
+    principalPaid: Math.max(params.loanAmount - params.outstandingPrincipal, 0),
+    purchaseRepresented: params.purchaseRepresented,
+  };
+}
+
+/**
  * Principal repaid on one EMI — mirrors Flutter's `principalRestoredForCardProvider` per-payment
  * rule exactly: a payment's `EmiPaymentBreakdown.principalPaid` when it has one; otherwise its
  * principal share (`amount × principalPortion / amountDue`, or the whole amount for a no-interest

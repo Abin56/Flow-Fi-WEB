@@ -1,15 +1,12 @@
 "use client";
 
-import { Banknote, Briefcase, Building2, Car, CreditCard, GraduationCap, Home, User } from "lucide-react";
-import { ClayBadge } from "@/components/clay/clay-badge";
-import { FloatingCard } from "@/components/foundation/floating-card";
-import { StaggerItem } from "@/components/foundation/animated-container";
-import { CurrencyCell, DateCell } from "@/components/finance";
+import { Banknote, Briefcase, Car, CreditCard, GraduationCap, Home, User, UserRound } from "lucide-react";
+import { DebtCard, EMI_ICON, daysUntil, type DebtCardBadge } from "@/features/loans/components/loan-emi-ui";
 import type { EmiRow } from "@/features/emi/hooks/use-emi-data";
-import type { EmiLoanType, EmiStatus } from "@/lib/models/emi";
-import { cn } from "@/lib/utils";
+import type { EmiLoanType } from "@/lib/models/emi";
+import { remainingAmount } from "@/lib/models/payment-schedule";
 
-const LOAN_TYPE_ICON: Record<EmiLoanType, typeof Home> = {
+export const EMI_TYPE_ICON: Record<EmiLoanType, typeof Home> = {
   home: Home,
   personal: User,
   vehicle: Car,
@@ -17,99 +14,73 @@ const LOAN_TYPE_ICON: Record<EmiLoanType, typeof Home> = {
   gold: Banknote,
   business: Briefcase,
   creditCard: CreditCard,
-  other: Building2,
+  other: EMI_ICON,
 };
 
-const STATUS_TONE: Record<EmiStatus, "success" | "warning" | "expense" | "neutral" | "primary"> = {
-  active: "primary",
-  completed: "success",
-  overdue: "expense",
-  defaulted: "expense",
-  closed: "neutral",
+export const EMI_TYPE_LABEL: Record<EmiLoanType, string> = {
+  home: "Home",
+  personal: "Personal",
+  vehicle: "Vehicle",
+  education: "Education",
+  gold: "Gold",
+  business: "Business",
+  creditCard: "Credit Card EMI",
+  other: "Other",
 };
 
-const STATUS_LABEL: Record<EmiStatus, string> = {
-  active: "Active",
-  completed: "Completed",
-  overdue: "Overdue",
-  defaulted: "Defaulted",
-  closed: "Closed",
-};
+/** "HDFC Card ••1234" style label for an EMI's linked card, or null. */
+export function emiCardLabel(row: EmiRow): string | null {
+  if (!row.linkedCard) return row.emi.linkedCreditCardId ? "Credit card" : null;
+  return row.linkedCard.lastFourDigits ? `Card ••${row.linkedCard.lastFourDigits}` : "Credit card";
+}
+
+/** Non-routine states only; an active EMI carries no badge. */
+export function emiBadges(row: EmiRow): DebtCardBadge[] {
+  switch (row.status) {
+    case "overdue":
+      return [{ label: "Missed payment", tone: "expense" }];
+    case "defaulted":
+      return [{ label: "Defaulted", tone: "expense" }];
+    case "completed":
+      return [{ label: "Completed", tone: "success" }];
+    case "closed":
+      return [{ label: "Closed", tone: "neutral" }];
+    default:
+      return [];
+  }
+}
 
 interface EmiCardProps {
   row: EmiRow;
   onClick: () => void;
 }
 
-/** Installment-progress card — mirrors LoanCard's "N of M installments paid" posture (see that component's doc
- *  comment) rather than an amount-ratio ring, since amortized EMI balances skew early in the schedule. */
+/** Same card as LoanCard (see `DebtCard`) — installment-count progress, outstanding amount first. */
 export function EmiCard({ row, onClick }: EmiCardProps) {
-  const { emi, category, status, installmentsPaid, remainingBalance, nextInstallment } = row;
-  const Icon = LOAN_TYPE_ICON[emi.loanType];
-  const installmentPercent = emi.installmentCount > 0 ? Math.round((installmentsPaid / emi.installmentCount) * 100) : 0;
-  const remainingInstallments = emi.installmentCount - installmentsPaid;
+  const { emi, status, installmentsPaid, remainingBalance, nextInstallment } = row;
+  const cardLabel = emiCardLabel(row);
+  const source = emi.lenderName ?? cardLabel ?? row.category?.name ?? EMI_TYPE_LABEL[emi.loanType];
+  const done = status === "closed" || status === "completed";
 
   return (
-    <StaggerItem>
-      <FloatingCard
-        role="button"
-        tabIndex={0}
-        onClick={onClick}
-        className="flex h-full cursor-pointer flex-col gap-4 px-5 py-5"
-      >
-        <div className="flex items-start justify-between gap-2">
-          <div className="flex min-w-0 items-center gap-3">
-            <div className="flex size-11 shrink-0 items-center justify-center rounded-2xl bg-primary/25 text-primary-accent-text shadow-e1 ring-1 ring-primary/40">
-              <Icon className="size-5" strokeWidth={2.25} />
-            </div>
-            <div className="flex min-w-0 flex-col gap-0.5">
-              <h3 className="truncate font-heading text-base font-semibold text-foreground">{emi.name}</h3>
-              <p className="truncate text-xs text-muted-foreground">{emi.lenderName ?? category?.name ?? "EMI"}</p>
-            </div>
-          </div>
-          <div className="flex flex-col items-end gap-1">
-            <ClayBadge tone={STATUS_TONE[status]}>{STATUS_LABEL[status]}</ClayBadge>
-            {emi.beneficiaryPersonId && (
-              <ClayBadge tone="primary" className="max-w-40 truncate">
-                For {row.beneficiaryName ?? "someone else"}
-              </ClayBadge>
-            )}
-          </div>
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <div className="h-2.5 w-full overflow-hidden rounded-full bg-muted ring-1 ring-border/60" style={{ boxShadow: "var(--shadow-pressed-sm)" }}>
-            <div
-              className="h-full rounded-full bg-primary transition-[width] duration-700 ease-out"
-              style={{ width: `${installmentPercent}%` }}
-            />
-          </div>
-          <div className="flex items-center justify-between text-xs">
-            <span className="font-mono font-medium tabular-nums text-foreground">
-              {installmentsPaid} of {emi.installmentCount} installments paid
-            </span>
-            <span className="font-medium text-foreground/70">{Math.max(remainingInstallments, 0)} left</span>
-          </div>
-        </div>
-
-        <div className="flex items-center justify-between rounded-xl border border-border bg-muted/60 px-3 py-2.5">
-          <span className="text-xs font-medium text-foreground/70">Remaining Balance</span>
-          <CurrencyCell amount={remainingBalance} signed={false} className="text-lg font-semibold" />
-        </div>
-
-        <div className={cn("mt-auto flex items-end justify-between gap-2 border-t border-border/60 pt-3")}>
-          <div className="flex flex-col gap-0.5">
-            <span className="text-xs text-muted-foreground">Next EMI</span>
-            <span className="font-mono text-sm font-semibold tabular-nums text-foreground">
-              {(nextInstallment?.amountDue ?? 0).toLocaleString("en-IN")}
-            </span>
-          </div>
-          <div className="flex flex-col items-end gap-0.5">
-            <span className="text-xs text-muted-foreground">Next due</span>
-            {nextInstallment ? <DateCell date={nextInstallment.dueDate} /> : <span className="text-xs text-muted-foreground">—</span>}
-          </div>
-        </div>
-      </FloatingCard>
-    </StaggerItem>
+    <DebtCard
+      icon={EMI_TYPE_ICON[emi.loanType]}
+      name={emi.name}
+      source={source}
+      badges={emiBadges(row)}
+      outstandingLabel="Outstanding"
+      outstanding={remainingBalance}
+      nextAmount={done || !nextInstallment ? null : remainingAmount(nextInstallment)}
+      nextDate={done ? null : (nextInstallment?.dueDate ?? null)}
+      overdue={status === "overdue" || (nextInstallment != null && daysUntil(nextInstallment.dueDate) < 0)}
+      paid={installmentsPaid}
+      total={emi.installmentCount}
+      links={[
+        cardLabel && cardLabel !== source ? { icon: CreditCard, label: cardLabel } : null,
+        emi.beneficiaryPersonId ? { icon: UserRound, label: `For ${row.beneficiaryName ?? "someone else"}` } : null,
+      ].filter((l) => l != null)}
+      muted={status === "closed"}
+      onClick={onClick}
+    />
   );
 }

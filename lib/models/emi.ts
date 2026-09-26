@@ -282,6 +282,22 @@ export function emiPaymentBreakdownTotalCharges(breakdown: EmiPaymentBreakdown):
   );
 }
 
+/**
+ * The principal/interest split an EMI payment is recorded with when the user doesn't enter the bank's own
+ * figures: the installment's principal/interest ratio applied to `amount` (the whole amount is principal on
+ * a no-interest installment). Mirrors Flutter's `RecordEmiPaymentSheet` defaults and the
+ * `emiPrincipalRestored` fallback. Web used to record the whole amount as `principalPaid`, so an
+ * interest-bearing card-linked EMI released its interest as available credit too.
+ */
+export function defaultEmiPaymentSplit(
+  installment: { amountDue: number; principalPortion: number | null },
+  amount: number,
+): { principalPaid: number; interestPaid: number } {
+  if (installment.principalPortion == null || installment.amountDue <= 0) return { principalPaid: amount, interestPaid: 0 };
+  const principalPaid = Math.round(amount * (installment.principalPortion / installment.amountDue) * 100) / 100;
+  return { principalPaid, interestPaid: Math.round((amount - principalPaid) * 100) / 100 };
+}
+
 /** Mirrors `EmiPaymentBreakdown.totalAmountPaid`. */
 export function emiPaymentBreakdownTotalAmountPaid(breakdown: EmiPaymentBreakdown): number {
   return breakdown.principalPaid + breakdown.interestPaid + emiPaymentBreakdownTotalCharges(breakdown);

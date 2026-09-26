@@ -1,13 +1,17 @@
 "use client";
 
-import { ChevronDown, HandCoins, Lock, LockOpen, Pencil, Receipt, TrendingDown, Trash2, Wallet, X, type LucideIcon } from "lucide-react";
+import { ArrowUpRight, Building2, ChevronDown, HandCoins, Lock, LockOpen, Pencil, Receipt, TrendingDown, Trash2, UserRound, Wallet, X, type LucideIcon } from "lucide-react";
+import Link from "next/link";
 import { ClayBadge } from "@/components/clay/clay-badge";
 import { ClayButton } from "@/components/clay/clay-button";
 import { CurrencyCell, DateCell, FinanceTable, type FinanceTableColumn } from "@/components/finance";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { formatCurrency } from "@/lib/format";
 import { installmentStatus, remainingAmount, type Installment, type InstallmentStatus } from "@/lib/models/payment-schedule";
 import type { LoanRow } from "@/features/loans/hooks/use-loans-data";
+import { loanBadges, loanDisplayName } from "@/features/loans/components/loan-card";
+import { DetailHero, DetailSectionTitle, FactGrid, LinkedList, LinkedRow, daysUntil, dueLabel } from "@/features/loans/components/loan-emi-ui";
 import { LoanFinancialHistory } from "@/features/loans/components/loan-financial-history";
 import { additionalAmountCopy, PAY_EXTRA_PRINCIPAL, PAY_MULTIPLE_EMIS } from "@/features/loans/lib/loan-labels";
 
@@ -47,6 +51,8 @@ interface LoanScheduleDialogProps {
   onDelete: (row: LoanRow) => void;
   /** "Reverse & Delete" for a wizard-created Loan whose origination money is still active. */
   deleteLabel?: string;
+  /** Name of the Account the loan's money moved through when it was created, if any. */
+  linkedAccountName?: string | null;
   onRecordPayment: (row: LoanRow, installment: Installment) => void;
   onSettleLumpSum: (row: LoanRow) => void;
   onPrincipalPrepayment: (row: LoanRow) => void;
@@ -69,20 +75,34 @@ function PaymentOption({ icon: Icon, label, description, disabled, onSelect }: {
   );
 }
 
-/** Centered, all-in-one loan detail popup — overview + the complete repayment schedule + history, with
- *  one primary money action (Record Payment), the less common money actions grouped under "More
- *  payment options", and loan management (Edit/Close/Delete) kept visually separate. `row` is resolved
- *  live by the parent from the Firestore-backed rows, so every persisted change re-renders it in place.
- *  This is what clicking a loan card opens. */
-export function LoanScheduleDialog({ open, onOpenChange, row, onEdit, onDelete, deleteLabel = "Delete Loan", onRecordPayment, onSettleLumpSum, onPrincipalPrepayment, onAdditionalDisbursement, onToggleClose, statusBusy = false }: LoanScheduleDialogProps) {
+function GoTo({ href, label }: { href: string; label: string }) {
+  return (
+    <Link
+      href={href}
+      aria-label={label}
+      className="flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      <ArrowUpRight className="size-4" />
+    </Link>
+  );
+}
+
+/** Loan details: the outstanding balance first, then the key facts, what it's linked to, the installment
+ *  schedule and history. One primary money action (Record Payment); the less common ones sit under "More
+ *  payment options"; loan management (Edit/Close/Delete) stays visually quieter. `row` is resolved live by
+ *  the parent from Firestore-backed rows, so every persisted change re-renders it in place. */
+export function LoanScheduleDialog({ open, onOpenChange, row, onEdit, onDelete, deleteLabel = "Delete Loan", linkedAccountName, onRecordPayment, onSettleLumpSum, onPrincipalPrepayment, onAdditionalDisbursement, onToggleClose, statusBusy = false }: LoanScheduleDialogProps) {
   if (!row) return null;
 
   const totalReceived = row.installments.reduce((sum, i) => sum + i.amountPaid, 0);
   const totalRemaining = row.installments.reduce((sum, i) => sum + remainingAmount(i), 0);
   const isClosed = row.status === "closed";
+  const lent = row.direction === "given";
   // Oldest installment still owing money — what "Record Payment" pays toward.
   const nextPayable = row.installments.find((i) => !i.isSkipped && remainingAmount(i) > 0) ?? null;
+  const nextOverdue = nextPayable != null && daysUntil(nextPayable.dueDate) < 0;
   const additionalCopy = additionalAmountCopy(row.direction);
+  const interest = row.loan.interest;
 
   const columns: FinanceTableColumn<Installment>[] = [
     {
@@ -94,7 +114,7 @@ export function LoanScheduleDialog({ open, onOpenChange, row, onEdit, onDelete, 
     {
       id: "dueDate",
       header: "Due Date",
-      accessor: (i) => <DateCell date={i.dueDate} className="text-sm" />,
+      accessor: (i) => <DateCell date={i.dueDate} className="text-sm text-foreground/85" />,
       minWidth: "120px",
     },
     {
@@ -132,143 +152,141 @@ export function LoanScheduleDialog({ open, onOpenChange, row, onEdit, onDelete, 
     },
   ];
 
+  const linked = [
+    <LinkedRow
+      key="lender"
+      icon={row.category === "personal" ? UserRound : Building2}
+      label={lent ? "Lent to" : "Borrowed from"}
+      value={row.lenderName}
+      action={row.category === "personal" && row.loan.personId ? <GoTo href="/people" label="Open People" /> : undefined}
+    />,
+    linkedAccountName ? (
+      <LinkedRow
+        key="account"
+        icon={Wallet}
+        label={lent ? "Paid from account" : "Received into account"}
+        value={linkedAccountName}
+        action={<GoTo href="/accounts" label="Open Accounts" />}
+      />
+    ) : null,
+    row.beneficiaryPersonId ? (
+      <LinkedRow
+        key="for"
+        icon={UserRound}
+        label="For"
+        value={row.beneficiaryName ?? "Someone else"}
+        action={<GoTo href="/people" label="Open People" />}
+      />
+    ) : null,
+    row.payerName ? (
+      <LinkedRow key="payer" icon={HandCoins} label="Installments paid by" value={row.payerName} action={<GoTo href="/people" label="Open People" />} />
+    ) : null,
+  ].filter(Boolean);
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         showCloseButton={false}
-        className="flex max-h-[85vh] flex-col gap-0 overflow-hidden rounded-none border border-border p-0 shadow-lg ring-0 sm:max-w-3xl"
+        className="flex max-h-[88vh] flex-col gap-0 overflow-hidden rounded-none border border-border p-0 shadow-lg ring-0 sm:max-w-3xl"
       >
-        <div className="h-1 w-full shrink-0 bg-primary" />
-
         <button
           type="button"
           onClick={() => onOpenChange(false)}
           aria-label="Close"
-          className="absolute top-4 right-4 flex size-7 items-center justify-center border border-transparent text-muted-foreground transition-colors hover:border-border hover:text-foreground"
+          className="absolute top-4 right-4 flex size-8 items-center justify-center border border-transparent text-muted-foreground transition-colors hover:border-border hover:text-foreground"
         >
           <X className="size-4" />
         </button>
 
-        <DialogHeader className="shrink-0 gap-1 border-b border-border bg-muted/40 px-6 py-5 text-left">
-          <DialogTitle className="font-heading text-lg font-semibold">{row.loan.name ?? "Loan"}</DialogTitle>
-          <DialogDescription>
+        <DialogHeader className="shrink-0 gap-0.5 border-b border-border px-6 pt-5 pb-4 pr-14 text-left">
+          <span className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">Loan</span>
+          <DialogTitle className="font-heading text-lg font-semibold">{loanDisplayName(row)}</DialogTitle>
+          <DialogDescription className="text-foreground/70">
             {row.lenderName}
-            {row.loan.interest ? ` • ${row.loan.interest.ratePercent}% p.a.` : ""}
+            {interest ? ` · ${interest.ratePercent}% p.a. ${interest.type === "flat" ? "flat" : "reducing"}` : " · No interest"}
           </DialogDescription>
         </DialogHeader>
 
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <div className="grid grid-cols-2 gap-x-6 gap-y-3 border-b border-border px-6 py-5 text-sm sm:grid-cols-3">
-            <div className="flex flex-col gap-0.5">
-              <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">Direction</span>
-              <ClayBadge tone={row.direction === "given" ? "success" : "neutral"} className="w-fit">
-                {row.direction === "given" ? "Money I Lent" : "Money I Borrowed"}
-              </ClayBadge>
-            </div>
-            {row.beneficiaryPersonId && (
-              <div className="flex flex-col gap-0.5">
-                <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">For</span>
-                <span className="font-medium text-foreground">{row.beneficiaryName ?? "Someone else"}</span>
+          <div className="flex flex-col gap-5 px-6 py-5">
+            <DetailHero
+              label={lent ? "Still to receive" : "Outstanding"}
+              amount={row.outstandingPrincipal}
+              paid={row.installmentsPaid}
+              total={row.totalInstallments}
+              badges={loanBadges(row)}
+            />
+
+            {!isClosed && nextPayable && (
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-muted/50 px-4 py-3">
+                <div className="flex flex-col">
+                  <span className={nextOverdue ? "text-xs font-semibold text-expense" : "text-xs font-medium text-muted-foreground"}>
+                    Next installment · {dueLabel(nextPayable.dueDate)}
+                  </span>
+                  <span className="font-heading text-lg font-semibold text-foreground tabular-nums">
+                    {formatCurrency(remainingAmount(nextPayable))}
+                  </span>
+                </div>
+                <span className="text-xs text-muted-foreground">Installment #{nextPayable.sequenceNumber} of {row.totalInstallments}</span>
               </div>
             )}
-            {row.payerName && (
-              <div className="flex flex-col gap-0.5">
-                <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">Paid By</span>
-                <span className="font-medium text-foreground">{row.payerName}</span>
-              </div>
+
+            <FactGrid
+              facts={[
+                { label: "Original amount", value: formatCurrency(row.loan.loanAmount) },
+                { label: "Installment", value: formatCurrency(row.emiAmount), strong: true },
+                { label: lent ? "Received so far" : "Paid so far", value: formatCurrency(totalReceived) },
+                { label: "Left incl. interest", value: formatCurrency(totalRemaining) },
+                interest ? { label: "Interest left", value: formatCurrency(remainingInterest(row.installments)) } : null,
+                {
+                  label: "Next due",
+                  value: row.nextDueDate ? formatDateLong(row.nextDueDate) : "—",
+                  tone: nextOverdue ? "expense" : undefined,
+                },
+              ]}
+            />
+
+            {linked.length > 0 && (
+              <section>
+                <DetailSectionTitle>Linked</DetailSectionTitle>
+                <LinkedList>{linked}</LinkedList>
+              </section>
             )}
-            <div className="flex flex-col gap-0.5">
-              <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">Outstanding</span>
-              <CurrencyCell amount={row.outstandingPrincipal} signed={false} className="text-base font-semibold" />
-            </div>
-            <div className="flex flex-col gap-0.5">
-              <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">Original Principal</span>
-              <CurrencyCell amount={row.loan.loanAmount} signed={false} />
-            </div>
-            <div className="flex flex-col gap-0.5">
-              <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
-                {row.direction === "given" ? "Amount Received" : "Amount Paid Back"}
-              </span>
-              <CurrencyCell amount={totalReceived} signed={false} />
-            </div>
-            <div className="flex flex-col gap-0.5">
-              <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">Amount Left</span>
-              <CurrencyCell amount={totalRemaining} signed={false} />
-            </div>
-            <div className="flex flex-col gap-0.5">
-              <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">EMI Amount</span>
-              <CurrencyCell amount={row.emiAmount} signed={false} />
-            </div>
-            {row.loan.interest && (
-              <>
-                <div className="flex flex-col gap-0.5">
-                  <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">Loan Amount Left</span>
-                  <CurrencyCell amount={row.outstandingPrincipal} signed={false} />
-                </div>
-                <div className="flex flex-col gap-0.5">
-                  <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">Interest Left</span>
-                  <CurrencyCell amount={remainingInterest(row.installments)} signed={false} />
-                </div>
-                <div className="flex flex-col gap-0.5">
-                  <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">Interest Type</span>
-                  <ClayBadge tone="neutral" className="w-fit">
-                    {row.loan.interest.type === "flat" ? "Flat" : "Reducing Balance"}
-                  </ClayBadge>
-                </div>
-              </>
-            )}
-            <div className="flex flex-col gap-0.5">
-              <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">Installments Paid</span>
-              <span className="font-medium text-foreground">
-                {row.installmentsPaid} / {row.totalInstallments}
-              </span>
-            </div>
-            <div className="flex flex-col gap-0.5">
-              <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">Next Due Date</span>
-              {row.nextDueDate ? <DateCell date={row.nextDueDate} /> : <span className="text-muted-foreground">—</span>}
-            </div>
-            <div className="flex flex-col gap-0.5">
-              <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">Status</span>
-              <ClayBadge tone={row.status === "overdue" ? "expense" : row.status === "closed" ? "neutral" : "success"} className="w-fit">
-                {row.status === "overdue" ? "Missed Payment" : row.status === "closed" ? "Closed" : "Active"}
-              </ClayBadge>
-            </div>
           </div>
 
-          <div className="px-6 py-5">
-            <div className="mb-3 flex items-center justify-between">
-              <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Repayment Schedule</span>
-              {!isClosed && <span className="text-xs text-muted-foreground">Click an unpaid installment to record a payment</span>}
-            </div>
+          <div className="border-t border-border px-6 py-5">
+            <DetailSectionTitle aside={!isClosed && <span className="text-xs text-muted-foreground">Click an unpaid installment to pay it</span>}>
+              Installments
+            </DetailSectionTitle>
             <FinanceTable
               columns={columns}
               data={row.installments}
               getRowId={(i) => i.id}
-              className="rounded-2xl"
+              className="rounded-xl"
               onRowClick={(i) => !isClosed && remainingAmount(i) > 0 && onRecordPayment(row, i)}
               rowClassName={(i) => (isClosed || remainingAmount(i) <= 0 ? "cursor-default!" : undefined)}
             />
           </div>
           <div className="border-t border-border px-6 py-5">
-            <div className="mb-3 text-xs font-medium tracking-wide text-muted-foreground uppercase">Payment & principal history</div>
+            <DetailSectionTitle>Payment history</DetailSectionTitle>
             <LoanFinancialHistory row={row} />
           </div>
         </div>
 
-        <DialogFooter className="shrink-0 flex-col gap-3 border-t border-border bg-muted/20 px-6 py-4 sm:flex-col">
+        <DialogFooter className="shrink-0 flex-col gap-3 border-t border-border bg-muted/30 px-6 py-3.5 sm:flex-col">
           {isClosed && (
             <p className="text-xs text-muted-foreground">This loan is closed. Reopen it to record payments or add money.</p>
           )}
           <div className="flex w-full flex-wrap items-center gap-2 sm:justify-between">
             {/* Loan management — deliberately quieter than the money actions on the right. */}
             <div className="flex flex-wrap items-center gap-1">
-              <ClayButton variant="ghost" size="sm" className="gap-1.5 rounded-none" onClick={() => onEdit(row)} disabled={statusBusy}>
+              <ClayButton variant="ghost" size="sm" className="gap-1.5 rounded-none text-foreground/75" onClick={() => onEdit(row)} disabled={statusBusy}>
                 <Pencil className="size-3.5" />
-                Edit Loan
+                Edit
               </ClayButton>
-              <ClayButton variant="ghost" size="sm" className="gap-1.5 rounded-none" onClick={() => onToggleClose(row)} disabled={statusBusy}>
+              <ClayButton variant="ghost" size="sm" className="gap-1.5 rounded-none text-foreground/75" onClick={() => onToggleClose(row)} disabled={statusBusy}>
                 {isClosed ? <LockOpen className="size-3.5" /> : <Lock className="size-3.5" />}
-                {statusBusy ? (isClosed ? "Reopening…" : "Closing…") : isClosed ? "Reopen Loan" : "Close Loan"}
+                {statusBusy ? (isClosed ? "Reopening…" : "Closing…") : isClosed ? "Reopen" : "Close loan"}
               </ClayButton>
               <ClayButton variant="ghost" size="sm" className="gap-1.5 rounded-none text-expense hover:text-expense" onClick={() => onDelete(row)} disabled={statusBusy}>
                 <Trash2 className="size-3.5" />
@@ -323,4 +341,8 @@ export function LoanScheduleDialog({ open, onOpenChange, row, onEdit, onDelete, 
       </DialogContent>
     </Dialog>
   );
+}
+
+function formatDateLong(date: Date): string {
+  return date.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
 }

@@ -1,6 +1,7 @@
 "use client";
 
-import { CreditCard, Percent, Plus, StickyNote } from "lucide-react";
+import { ArrowUpRight, Building2, CreditCard, Lock, ShoppingBag, Trash2, UserRound, Wallet } from "lucide-react";
+import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { ClayBadge } from "@/components/clay/clay-badge";
@@ -10,20 +11,31 @@ import {
   ChipRow,
   ConfirmDialog,
   CurrencyCell,
-  DateCell,
   DetailDrawer,
   EmptyState,
   FLAT_INPUT,
   FormDialog,
   SectionedFormDialog,
   SectionLabel,
-  SmartToolbar,
 } from "@/components/finance";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Landmark } from "lucide-react";
-import { EmiCard } from "@/features/emi/components/emi-card";
-import { EmisSummary } from "@/features/emi/components/emis-summary";
+import { EMI_TYPE_LABEL, EmiCard, emiBadges, emiCardLabel } from "@/features/emi/components/emi-card";
 import { useEmiActions, useEmiRows, type EmiRow } from "@/features/emi/hooks/use-emi-data";
+import {
+  AmountInput,
+  DetailHero,
+  DetailSectionTitle,
+  FactGrid,
+  Field,
+  FieldGroup,
+  LinkedList,
+  LinkedRow,
+  MoreOptions,
+  RevealToggle,
+  daysUntil,
+  dueLabel,
+} from "@/features/loans/components/loan-emi-ui";
+import { formatCurrency } from "@/lib/format";
 import { installmentStatus, remainingAmount, type ScheduleType } from "@/lib/models/payment-schedule";
 import type { EmiLoanType } from "@/lib/models/emi";
 import type { InterestType } from "@/lib/engines/interest-calculator";
@@ -41,17 +53,7 @@ import {
 import { toast } from "@/store/toast-store";
 import { cn } from "@/lib/utils";
 
-const LOAN_TYPE_OPTIONS: EmiLoanType[] = ["home", "personal", "vehicle", "education", "gold", "business", "creditCard", "other"];
-const LOAN_TYPE_LABEL: Record<EmiLoanType, string> = {
-  home: "Home",
-  personal: "Personal",
-  vehicle: "Vehicle",
-  education: "Education",
-  gold: "Gold",
-  business: "Business",
-  creditCard: "Credit Card Conversion",
-  other: "Other",
-};
+const LOAN_TYPE_OPTIONS: EmiLoanType[] = ["other", "personal", "vehicle", "home", "education", "gold", "business", "creditCard"];
 const FREQUENCY_OPTIONS: ScheduleType[] = ["monthly", "weekly"];
 const FREQUENCY_LABEL: Record<ScheduleType, string> = {
   monthly: "Monthly",
@@ -122,14 +124,32 @@ function emptyPaymentForm(amount: number): PaymentFormState {
   };
 }
 
+const INSTALLMENT_STATUS_BADGE = {
+  paid: { label: "Paid", tone: "success" },
+  partiallyPaid: { label: "Partial", tone: "warning" },
+  overdue: { label: "Overdue", tone: "expense" },
+  skipped: { label: "Skipped", tone: "neutral" },
+  upcoming: null,
+} as const;
+
+function GoTo({ href, label }: { href: string; label: string }) {
+  return (
+    <Link
+      href={href}
+      aria-label={label}
+      className="flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      <ArrowUpRight className="size-4" />
+    </Link>
+  );
+}
+
 export interface EmiWorkspaceProps {
-  /** When set, "Add" buttons defer to the unified Loan & EMI chooser instead of opening the EMI form. */
-  onAddRequest?: () => void;
   /** Incremented by the unified Loan & EMI chooser to open the Add EMI form. */
   addSignal?: number;
 }
 
-export function EmiWorkspace({ onAddRequest, addSignal = 0 }: EmiWorkspaceProps = {}) {
+export function EmiWorkspace({ addSignal = 0 }: EmiWorkspaceProps = {}) {
   const searchParams = useSearchParams();
   const createHandoff = searchParams.get("create");
   const { rows, isLoading } = useEmiRows();
@@ -173,7 +193,6 @@ export function EmiWorkspace({ onAddRequest, addSignal = 0 }: EmiWorkspaceProps 
     setSeenAddSignal(addSignal);
     openAdd();
   }
-  const requestAdd = onAddRequest ?? openAdd;
 
   function openPay(row: EmiRow) {
     setPaymentForm(emptyPaymentForm(row.nextInstallment?.amountDue ?? 0));
@@ -183,7 +202,7 @@ export function EmiWorkspace({ onAddRequest, addSignal = 0 }: EmiWorkspaceProps 
   async function handleCreate() {
     if (!actions) return;
     if (form.linkToCard && !form.linkedCreditCardId) {
-      toast.error("Select a credit card", "Choose the card this EMI is on, or turn off Link to Credit Card.");
+      toast.error("Select a credit card", "Choose the card this EMI is on, or turn off the credit card option.");
       return;
     }
     const forError = ownershipError(form.ownership, form.beneficiaryPersonId);
@@ -259,47 +278,34 @@ export function EmiWorkspace({ onAddRequest, addSignal = 0 }: EmiWorkspaceProps 
 
   if (isLoading) {
     return (
-      <div className="flex flex-col gap-6 px-1">
-        <h1 className="font-heading text-xl font-semibold tracking-tight text-foreground">EMI</h1>
-        <Skeleton className="h-24 rounded-3xl" />
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
-          {Array.from({ length: 6 }, (_, i) => (
-            <Skeleton key={i} className="h-52 rounded-3xl" />
-          ))}
-        </div>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        {Array.from({ length: 3 }, (_, i) => (
+          <Skeleton key={i} className="h-48 rounded-2xl" />
+        ))}
       </div>
     );
   }
 
+  const detail = activeRowFresh;
+  const detailDone = detail != null && (detail.status === "closed" || detail.status === "completed");
+  const detailPaid = detail ? detail.installments.reduce((sum, i) => sum + i.amountPaid, 0) : 0;
+  const detailInstallment = detail ? (detail.nextInstallment?.amountDue ?? detail.installments[0]?.amountDue ?? 0) : 0;
+  const detailCard = detail ? emiCardLabel(detail) : null;
+  const detailOverdue = detail?.nextInstallment != null && daysUntil(detail.nextInstallment.dueDate) < 0;
+  const isProductPurchase = !form.linkToCard || form.cardEmiKind === "productPurchase";
+
   return (
-    <div className="flex flex-col gap-6 px-1">
-      <SmartToolbar
-        left={
-          <div className="flex items-baseline gap-2">
-            <h1 className="font-heading text-xl font-semibold tracking-tight text-foreground">EMI</h1>
-            <span className="text-sm text-muted-foreground">{rows.length} EMIs</span>
-          </div>
-        }
-        actions={
-          <ClayButton size="sm" onClick={requestAdd} className="gap-1.5">
-            <Plus className="size-3.5" />
-            Add EMI
-          </ClayButton>
-        }
-      />
-
-      <EmisSummary rows={rows} />
-
+    <div className="flex flex-col gap-4">
       {rows.length === 0 ? (
         <EmptyState
-          icon={Landmark}
+          icon={ShoppingBag}
           title="No EMIs yet"
-          description="Add an EMI to start tracking its installment schedule, remaining balance, and payments."
-          actionLabel="Add EMI"
-          onAction={requestAdd}
+          description="An EMI is a purchase or Credit Card EMI you pay back in fixed installments. Add one to see what's due and what's left."
+          actionLabel="Add an EMI"
+          onAction={openAdd}
         />
       ) : (
-        <Stagger className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        <Stagger className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {rows.map((row) => (
             <EmiCard key={row.emi.id} row={row} onClick={() => setActiveRow(row)} />
           ))}
@@ -307,128 +313,137 @@ export function EmiWorkspace({ onAddRequest, addSignal = 0 }: EmiWorkspaceProps 
       )}
 
       <DetailDrawer
-        open={activeRowFresh != null && !deleteOpen && !payOpen}
+        open={detail != null && !deleteOpen && !payOpen}
         onOpenChange={(open) => {
           if (!open) {
             setActiveRow(null);
             setHandoffDetailId(null);
           }
         }}
-        title={activeRowFresh?.emi.name ?? ""}
+        className="sm:max-w-lg"
+        title={detail?.emi.name ?? ""}
         description={
-          activeRowFresh
-            ? `${activeRowFresh.emi.lenderName ?? LOAN_TYPE_LABEL[activeRowFresh.emi.loanType]}${
-                activeRowFresh.emi.interest ? ` • ${activeRowFresh.emi.interest.ratePercent}% p.a.` : ""
+          detail
+            ? `EMI · ${detail.emi.lenderName ?? EMI_TYPE_LABEL[detail.emi.loanType]}${
+                detail.emi.interest ? ` · ${detail.emi.interest.ratePercent}% p.a.` : " · No interest"
               }`
             : undefined
         }
         footer={
-          activeRowFresh && (
-            <div className="flex flex-col gap-2">
+          detail && (
+            <>
+              <ClayButton className="w-full gap-1.5" disabled={!detail.nextInstallment} onClick={() => openPay(detail)}>
+                <Wallet className="size-4" />
+                Record Payment
+              </ClayButton>
               <div className="flex gap-2">
-                <ClayButton
-                  variant="secondary"
-                  className="flex-1"
-                  disabled={!activeRowFresh.nextInstallment}
-                  onClick={() => openPay(activeRowFresh)}
-                >
-                  Record Payment
-                </ClayButton>
-                <ClayButton
-                  variant="secondary"
-                  className="flex-1"
-                  disabled={activeRowFresh.status === "closed"}
-                  onClick={handleClose}
-                >
+                <ClayButton variant="ghost" size="sm" className="flex-1 gap-1.5 text-foreground/75" disabled={detail.status === "closed"} onClick={handleClose}>
+                  <Lock className="size-3.5" />
                   Close EMI
                 </ClayButton>
+                <ClayButton variant="ghost" size="sm" className="flex-1 gap-1.5 text-expense hover:text-expense" onClick={() => setDeleteOpen(true)}>
+                  <Trash2 className="size-3.5" />
+                  Delete
+                </ClayButton>
               </div>
-              <ClayButton variant="secondary" className={cn("text-expense")} onClick={() => setDeleteOpen(true)}>
-                Delete
-              </ClayButton>
-            </div>
+            </>
           )
         }
       >
-        {activeRowFresh && (
+        {detail && (
           <div className="flex flex-col gap-5 text-sm">
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">Remaining Balance</span>
-              <CurrencyCell amount={activeRowFresh.remainingBalance} signed={false} className="text-base font-semibold" />
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">Original Principal</span>
-              <CurrencyCell amount={activeRowFresh.emi.principalAmount} signed={false} />
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">Interest Terms</span>
-              <span className="font-medium text-foreground">
-                {activeRowFresh.emi.interest
-                  ? `${activeRowFresh.emi.interest.ratePercent}% ${activeRowFresh.emi.interest.period} (${
-                      activeRowFresh.emi.interest.type === "flat" ? "Flat" : "Reducing Balance"
-                    })`
-                  : "No interest"}
-              </span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">Installments Paid</span>
-              <span className="font-medium text-foreground">
-                {activeRowFresh.installmentsPaid} / {activeRowFresh.emi.installmentCount}
-              </span>
-            </div>
-            {activeRowFresh.nextInstallment && (
-              <div className="flex items-center justify-between">
-                <span className="text-muted-foreground">Next Due Date</span>
-                <DateCell date={activeRowFresh.nextInstallment.dueDate} />
-              </div>
-            )}
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">Auto-Debit</span>
-              <span className="font-medium text-foreground">
-                {activeRowFresh.emi.isAutoDebitEnabled
-                  ? activeRowFresh.emi.autoDebitAccount ?? "Enabled"
-                  : "Not set up"}
-              </span>
-            </div>
-            {activeRowFresh.linkedCard && (
-              <div className="flex items-center justify-between">
-                <span className="text-muted-foreground">Linked Credit Card</span>
-                <span className="font-medium text-foreground">{activeRowFresh.linkedCard.lastFourDigits ?? "Card"}</span>
-              </div>
-            )}
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">Who is this for?</span>
-              <span className="font-medium text-foreground">
-                {activeRowFresh.emi.beneficiaryPersonId ? (activeRowFresh.beneficiaryName ?? "Someone else") : "Me"}
-              </span>
-            </div>
+            <DetailHero
+              label="Outstanding"
+              amount={detail.remainingBalance}
+              paid={detail.installmentsPaid}
+              total={detail.emi.installmentCount}
+              badges={emiBadges(detail)}
+            />
 
-            <div className="flex flex-col gap-2 border-t border-border/60 pt-4">
-              <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Installments</span>
-              <div className="flex flex-col gap-1">
-                {activeRowFresh.installments.slice(0, 12).map((installment) => {
+            {!detailDone && detail.nextInstallment && (
+              <div className="flex items-center justify-between gap-3 rounded-xl border border-border bg-muted/50 px-4 py-3">
+                <div className="flex flex-col">
+                  <span className={cn("text-xs", detailOverdue ? "font-semibold text-expense" : "font-medium text-muted-foreground")}>
+                    Next installment · {dueLabel(detail.nextInstallment.dueDate)}
+                  </span>
+                  <span className="font-heading text-lg font-semibold text-foreground tabular-nums">
+                    {formatCurrency(remainingAmount(detail.nextInstallment))}
+                  </span>
+                </div>
+                <span className="text-xs text-muted-foreground">
+                  #{detail.nextInstallment.sequenceNumber} of {detail.emi.installmentCount}
+                </span>
+              </div>
+            )}
+
+            <FactGrid
+              className="sm:grid-cols-2"
+              facts={[
+                { label: "Original amount", value: formatCurrency(detail.emi.principalAmount) },
+                { label: "Installment", value: formatCurrency(detailInstallment), strong: true },
+                { label: "Paid so far", value: formatCurrency(detailPaid) },
+                {
+                  label: "Interest",
+                  value: detail.emi.interest
+                    ? `${detail.emi.interest.ratePercent}% ${detail.emi.interest.type === "flat" ? "flat" : "reducing"}`
+                    : "No interest",
+                },
+                detail.emi.isAutoDebitEnabled ? { label: "Auto-debit", value: detail.emi.autoDebitAccount ?? "On" } : null,
+              ]}
+            />
+
+            {(detailCard || detail.emi.beneficiaryPersonId || detail.emi.lenderName) && (
+              <section>
+                <DetailSectionTitle>Linked</DetailSectionTitle>
+                <LinkedList>
+                  {detailCard && (
+                    <LinkedRow icon={CreditCard} label="Credit card" value={detailCard} action={<GoTo href="/credit-cards" label="Open Credit Cards" />} />
+                  )}
+                  {detail.emi.lenderName && <LinkedRow icon={Building2} label="Lender" value={detail.emi.lenderName} />}
+                  {detail.emi.beneficiaryPersonId && (
+                    <LinkedRow
+                      icon={UserRound}
+                      label="For"
+                      value={detail.beneficiaryName ?? "Someone else"}
+                      action={<GoTo href="/people" label="Open People" />}
+                    />
+                  )}
+                </LinkedList>
+              </section>
+            )}
+
+            <section>
+              <DetailSectionTitle aside={<span className="text-xs text-muted-foreground tabular-nums">{detail.installments.length} total</span>}>
+                Installments
+              </DetailSectionTitle>
+              <div className="flex flex-col divide-y divide-border overflow-hidden rounded-xl border border-border">
+                {detail.installments.map((installment) => {
                   const status = installmentStatus(installment);
+                  const badge = INSTALLMENT_STATUS_BADGE[status];
+                  const isNext = installment.id === detail.nextInstallment?.id;
                   return (
-                    <div key={installment.id} className={cn("flex items-center justify-between rounded-xl px-3 py-2.5", status === "paid" ? "bg-muted/50" : "clay-pressed")}>
-                      <div className="flex flex-col gap-0.5">
-                        <span className="flex items-center gap-1.5 text-sm font-medium text-foreground">
-                          Installment #{installment.sequenceNumber}
-                          {status === "paid" && <ClayBadge tone="success">Paid</ClayBadge>}
-                          {status === "overdue" && <ClayBadge tone="expense">Overdue</ClayBadge>}
-                        </span>
-                        <DateCell date={installment.dueDate} className="text-xs" />
+                    <div
+                      key={installment.id}
+                      className={cn("flex items-center justify-between gap-3 px-3.5 py-2.5", isNext ? "bg-muted/60" : "bg-card", status === "paid" && "text-muted-foreground")}
+                    >
+                      <div className="flex min-w-0 items-center gap-3">
+                        <span className="w-6 shrink-0 font-mono text-xs text-muted-foreground tabular-nums">{installment.sequenceNumber}</span>
+                        <div className="flex min-w-0 flex-col">
+                          <span className={cn("text-sm font-medium", status === "paid" ? "text-foreground/70" : "text-foreground")}>
+                            {installment.dueDate.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
+                          </span>
+                          {isNext && <span className="text-[11px] font-semibold text-foreground/80">Next due</span>}
+                        </div>
                       </div>
-                      <div className="flex flex-col items-end gap-0.5">
+                      <div className="flex shrink-0 items-center gap-2">
+                        {badge && <ClayBadge tone={badge.tone} className="px-2 py-0.5 text-[11px]">{badge.label}</ClayBadge>}
                         <CurrencyCell amount={installment.amountDue} signed={false} className="text-sm font-semibold" />
-                        <span className="text-xs text-muted-foreground">
-                          Bal. {remainingAmount(installment).toLocaleString("en-IN")}
-                        </span>
                       </div>
                     </div>
                   );
                 })}
               </div>
-            </div>
+            </section>
           </div>
         )}
       </DetailDrawer>
@@ -437,74 +452,73 @@ export function EmiWorkspace({ onAddRequest, addSignal = 0 }: EmiWorkspaceProps 
         open={addOpen}
         onOpenChange={setAddOpen}
         title="Add an EMI"
-        description="Track an EMI's installment schedule, remaining balance, and payments."
+        description="Installments for a purchase, Credit Card EMI or store finance. Only the basics are needed — the schedule is built for you."
         onConfirm={handleCreate}
         confirmLabel={saving ? "Saving…" : "Add EMI"}
         loading={saving}
         contentClassName="sm:max-w-2xl"
       >
-        <div className="flex flex-col gap-3 bg-muted/30 p-4">
-          <SectionLabel icon={CreditCard}>EMI Details</SectionLabel>
-          <label className="flex flex-col gap-1">
-            <span className="text-xs font-medium text-muted-foreground">
-              {form.linkToCard && form.cardEmiKind === "productPurchase" ? "Product Purchased" : "EMI Name"}
-            </span>
+        <div className="flex flex-col gap-5">
+          <Field label="What's this EMI for?">
             <input
               className={FLAT_INPUT}
-              placeholder={form.linkToCard && form.cardEmiKind === "productPurchase" ? "e.g. iPhone 16" : "e.g. Car Loan"}
+              placeholder={isProductPurchase ? "e.g. iPhone 16, Sofa, Car" : "e.g. Card loan"}
               value={form.name}
               onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
             />
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-xs font-medium text-muted-foreground">Lender (optional)</span>
-            <input
-              className={FLAT_INPUT}
-              placeholder="e.g. HDFC Bank"
-              value={form.lenderName}
-              onChange={(e) => setForm((f) => ({ ...f, lenderName: e.target.value }))}
-            />
-          </label>
-          {!form.linkToCard && (
-            <div className="flex flex-col gap-1.5">
-              <span className="text-xs font-medium text-muted-foreground">Loan Type</span>
-              <ChipRow
-                options={LOAN_TYPE_OPTIONS.map((t) => ({ value: t, label: LOAN_TYPE_LABEL[t] }))}
-                value={form.loanType}
-                onChange={(v) => setForm((f) => ({ ...f, loanType: v }))}
+          </Field>
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <Field label="Amount on EMI" hint="The amount being paid off in installments.">
+              <AmountInput value={form.principalAmount} onChange={(v) => setForm((f) => ({ ...f, principalAmount: v }))} />
+            </Field>
+            <Field label="Number of installments">
+              <input
+                type="number"
+                inputMode="numeric"
+                min={1}
+                className={FLAT_INPUT}
+                value={form.installmentCount}
+                onChange={(e) => setForm((f) => ({ ...f, installmentCount: e.target.value }))}
               />
-            </div>
-          )}
-        </div>
+            </Field>
+          </div>
 
-        <WhoIsThisForField
-          people={people}
-          choice={form.ownership}
-          personId={form.beneficiaryPersonId}
-          onChange={({ choice, personId }) => setForm((f) => ({ ...f, ownership: choice, beneficiaryPersonId: personId }))}
-        />
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <Field label="First EMI date">
+              <input
+                type="date"
+                className={FLAT_INPUT}
+                value={form.startDate}
+                onChange={(e) => setForm((f) => ({ ...f, startDate: e.target.value }))}
+              />
+            </Field>
+            <FieldGroup label="Paid">
+              <ChipRow
+                options={FREQUENCY_OPTIONS.map((f) => ({ value: f, label: FREQUENCY_LABEL[f] }))}
+                value={form.installmentFrequency}
+                onChange={(v) => setForm((f) => ({ ...f, installmentFrequency: v }))}
+              />
+            </FieldGroup>
+          </div>
 
-        <div className="flex flex-col gap-3 bg-muted/30 p-4">
-          <SectionLabel icon={CreditCard}>Credit Card (optional)</SectionLabel>
-          <label className="flex items-center gap-2">
-            <input
-              type="checkbox"
-              checked={form.linkToCard}
-              onChange={(e) => setForm((f) => ({ ...f, linkToCard: e.target.checked }))}
-            />
-            <span className="text-xs font-medium text-foreground/80">Link to Credit Card</span>
-          </label>
-          {form.linkToCard &&
-            (cardOptions.length === 0 ? (
-              <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border bg-card px-3 py-2.5">
+          {/* Credit card controls stay hidden until the user says it's on a card. */}
+          <RevealToggle
+            checked={form.linkToCard}
+            onChange={(checked) => setForm((f) => ({ ...f, linkToCard: checked }))}
+            title="It's on a credit card"
+            description="Credit Card EMI — the amount is held against the card's limit and released as you pay."
+          >
+            {cardOptions.length === 0 ? (
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-xs text-muted-foreground">No credit cards yet — add one, then come back.</p>
                 <AddElsewhereLink href="/credit-cards" label="Go to Credit Cards" />
               </div>
             ) : (
               <>
-                <div className="flex flex-col gap-1">
+                <div className="flex flex-col gap-1.5">
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-medium text-muted-foreground">Credit Card</span>
+                    <span className="text-xs font-semibold text-foreground/85">Which card?</span>
                     <AddElsewhereLink href="/credit-cards" label="Add Credit Card" />
                   </div>
                   <select
@@ -520,83 +534,38 @@ export function EmiWorkspace({ onAddRequest, addSignal = 0 }: EmiWorkspaceProps 
                     ))}
                   </select>
                 </div>
-                <div className="flex flex-col gap-1.5">
-                  <span className="text-xs font-medium text-muted-foreground">EMI Type</span>
+                <FieldGroup label="What kind?">
                   <ChipRow
                     options={[
-                      { value: "creditCardLoan" as CardEmiKind, label: "Credit Card Loan" },
-                      { value: "productPurchase" as CardEmiKind, label: "Product Purchase" },
+                      { value: "productPurchase" as CardEmiKind, label: "Purchase on EMI" },
+                      { value: "creditCardLoan" as CardEmiKind, label: "Loan on card" },
                     ]}
                     value={form.cardEmiKind}
                     onChange={(v) => setForm((f) => ({ ...f, cardEmiKind: v }))}
                   />
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  The principal is locked against this card&apos;s available credit and released as you pay it down.
-                </p>
+                </FieldGroup>
               </>
-            ))}
-        </div>
+            )}
+          </RevealToggle>
 
-        <div className="flex flex-col gap-3 bg-muted/30 p-4">
-          <SectionLabel icon={Percent}>Principal & Schedule</SectionLabel>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <label className="flex flex-col gap-1">
-              <span className="text-xs font-medium text-muted-foreground">Principal</span>
-              <div className="relative">
-                <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary-accent-text">₹</span>
+          <RevealToggle
+            checked={form.hasInterest}
+            onChange={(checked) => setForm((f) => ({ ...f, hasInterest: checked }))}
+            title="It has interest"
+            description="Leave off for a no-cost EMI."
+          >
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <Field label="Interest rate (% per year)">
                 <input
                   type="number"
-                  className={cn(FLAT_INPUT, "border-primary/30 bg-primary/5 pl-7 text-base font-semibold focus:border-primary")}
-                  placeholder="0.00"
-                  value={form.principalAmount}
-                  onChange={(e) => setForm((f) => ({ ...f, principalAmount: e.target.value }))}
+                  inputMode="decimal"
+                  className={FLAT_INPUT}
+                  placeholder="e.g. 14"
+                  value={form.ratePercent}
+                  onChange={(e) => setForm((f) => ({ ...f, ratePercent: e.target.value }))}
                 />
-              </div>
-            </label>
-            <label className="flex flex-col gap-1">
-              <span className="text-xs font-medium text-muted-foreground">First EMI Date</span>
-              <input
-                type="date"
-                className={FLAT_INPUT}
-                value={form.startDate}
-                onChange={(e) => setForm((f) => ({ ...f, startDate: e.target.value }))}
-              />
-            </label>
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <span className="text-xs font-medium text-muted-foreground">Frequency</span>
-            <ChipRow
-              options={FREQUENCY_OPTIONS.map((f) => ({ value: f, label: FREQUENCY_LABEL[f] }))}
-              value={form.installmentFrequency}
-              onChange={(v) => setForm((f) => ({ ...f, installmentFrequency: v }))}
-            />
-          </div>
-          <label className="flex flex-col gap-1">
-            <span className="text-xs font-medium text-muted-foreground"># Installments</span>
-            <input
-              type="number"
-              className={FLAT_INPUT}
-              value={form.installmentCount}
-              onChange={(e) => setForm((f) => ({ ...f, installmentCount: e.target.value }))}
-            />
-          </label>
-        </div>
-
-        <div className="flex flex-col gap-3 bg-muted/30 p-4">
-          <SectionLabel icon={Percent}>Interest (optional)</SectionLabel>
-          <label className="flex items-center gap-2">
-            <input
-              type="checkbox"
-              checked={form.hasInterest}
-              onChange={(e) => setForm((f) => ({ ...f, hasInterest: e.target.checked }))}
-            />
-            <span className="text-xs font-medium text-muted-foreground">This EMI carries interest</span>
-          </label>
-          {form.hasInterest && (
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <div className="flex flex-col gap-1.5">
-                <span className="text-xs font-medium text-muted-foreground">Interest Type</span>
+              </Field>
+              <FieldGroup label="Interest type">
                 <ChipRow
                   options={[
                     { value: "reducingBalance" as InterestType, label: "Reducing Balance" },
@@ -605,103 +574,110 @@ export function EmiWorkspace({ onAddRequest, addSignal = 0 }: EmiWorkspaceProps 
                   value={form.interestType}
                   onChange={(v) => setForm((f) => ({ ...f, interestType: v }))}
                 />
-              </div>
-              <label className="flex flex-col gap-1">
-                <span className="text-xs font-medium text-muted-foreground">Rate (% p.a.)</span>
-                <input
-                  type="number"
-                  className={FLAT_INPUT}
-                  placeholder="e.g. 8.65"
-                  value={form.ratePercent}
-                  onChange={(e) => setForm((f) => ({ ...f, ratePercent: e.target.value }))}
-                />
-              </label>
+              </FieldGroup>
             </div>
-          )}
-        </div>
+          </RevealToggle>
 
-        <div className="flex flex-col gap-2 bg-muted/30 p-4">
-          <SectionLabel icon={StickyNote}>Notes</SectionLabel>
-          <textarea
-            className={cn(FLAT_INPUT, "min-h-20 resize-none py-2")}
-            placeholder="Optional notes"
-            rows={3}
-            value={form.notes}
-            onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
-          />
+          <MoreOptions summary={form.linkToCard ? "Lender, who it's for, notes" : "Lender, type, who it's for, notes"}>
+            <Field label="Lender / store">
+              <input
+                className={FLAT_INPUT}
+                placeholder="e.g. Bajaj Finance, HDFC Bank"
+                value={form.lenderName}
+                onChange={(e) => setForm((f) => ({ ...f, lenderName: e.target.value }))}
+              />
+            </Field>
+            {!form.linkToCard && (
+              <FieldGroup label="Type">
+                <ChipRow
+                  options={LOAN_TYPE_OPTIONS.map((t) => ({ value: t, label: EMI_TYPE_LABEL[t] }))}
+                  value={form.loanType}
+                  onChange={(v) => setForm((f) => ({ ...f, loanType: v }))}
+                />
+              </FieldGroup>
+            )}
+            <WhoIsThisForField
+              bare
+              labelClassName="text-xs font-semibold text-foreground/85"
+              people={people}
+              choice={form.ownership}
+              personId={form.beneficiaryPersonId}
+              onChange={({ choice, personId }) => setForm((f) => ({ ...f, ownership: choice, beneficiaryPersonId: personId }))}
+            />
+            <Field label="Notes">
+              <textarea
+                className={cn(FLAT_INPUT, "min-h-20 resize-none py-2")}
+                placeholder="Optional notes"
+                rows={3}
+                value={form.notes}
+                onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
+              />
+            </Field>
+          </MoreOptions>
         </div>
       </SectionedFormDialog>
 
       <FormDialog
         open={payOpen}
         onOpenChange={setPayOpen}
-        title={`Record Payment — ${activeRowFresh?.emi.name ?? "EMI"}`}
+        title={`Record Payment — ${detail?.emi.name ?? "EMI"}`}
         description="Records against the next-due installment. GST/processing fee are tracked for your records only."
         onConfirm={handleRecordPayment}
         confirmLabel={saving ? "Saving…" : "Record"}
         contentClassName="sm:max-w-lg"
       >
-        <div className="flex flex-col gap-3 rounded-2xl bg-muted/30 p-4 text-sm">
-          <SectionLabel icon={CreditCard}>Payment Details</SectionLabel>
+        <div className="flex flex-col gap-4 text-sm">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <label className="flex flex-col gap-1">
-              <span className="text-xs font-medium text-muted-foreground">Amount</span>
-              <div className="relative">
-                <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary-accent-text">₹</span>
-                <input
-                  type="number"
-                  className="clay-pressed h-10 w-full rounded-xl border border-primary/20 bg-primary/5 pl-7 text-sm font-semibold outline-none"
-                  value={paymentForm.amount}
-                  onChange={(e) => setPaymentForm((f) => ({ ...f, amount: e.target.value }))}
-                />
-              </div>
-            </label>
-            <label className="flex flex-col gap-1">
-              <span className="text-xs font-medium text-muted-foreground">Date</span>
+            <Field label="Amount">
+              <AmountInput value={paymentForm.amount} onChange={(v) => setPaymentForm((f) => ({ ...f, amount: v }))} autoFocus />
+            </Field>
+            <Field label="Date">
               <input
                 type="date"
-                className="clay-pressed h-10 rounded-xl px-3 text-sm outline-none"
+                className={cn(FLAT_INPUT, "h-12")}
                 value={paymentForm.date}
                 onChange={(e) => setPaymentForm((f) => ({ ...f, date: e.target.value }))}
               />
-            </label>
+            </Field>
           </div>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <label className="flex flex-col gap-1">
-              <span className="text-xs font-medium text-muted-foreground">GST (optional)</span>
+          <div className="flex flex-col gap-3 border-t border-border pt-4">
+            <SectionLabel>Optional</SectionLabel>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <Field label="GST">
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  className={FLAT_INPUT}
+                  value={paymentForm.gst}
+                  onChange={(e) => setPaymentForm((f) => ({ ...f, gst: e.target.value }))}
+                />
+              </Field>
+              <Field label="Processing fee">
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  className={FLAT_INPUT}
+                  value={paymentForm.processingFee}
+                  onChange={(e) => setPaymentForm((f) => ({ ...f, processingFee: e.target.value }))}
+                />
+              </Field>
+            </div>
+            <Field label="Note">
               <input
-                type="number"
-                className="clay-pressed h-10 rounded-xl px-3 text-sm outline-none"
-                value={paymentForm.gst}
-                onChange={(e) => setPaymentForm((f) => ({ ...f, gst: e.target.value }))}
+                className={FLAT_INPUT}
+                placeholder="Optional note"
+                value={paymentForm.note}
+                onChange={(e) => setPaymentForm((f) => ({ ...f, note: e.target.value }))}
               />
-            </label>
-            <label className="flex flex-col gap-1">
-              <span className="text-xs font-medium text-muted-foreground">Processing Fee (optional)</span>
-              <input
-                type="number"
-                className="clay-pressed h-10 rounded-xl px-3 text-sm outline-none"
-                value={paymentForm.processingFee}
-                onChange={(e) => setPaymentForm((f) => ({ ...f, processingFee: e.target.value }))}
-              />
-            </label>
+            </Field>
           </div>
-          <label className="flex flex-col gap-1">
-            <span className="text-xs font-medium text-muted-foreground">Note</span>
-            <input
-              className="clay-pressed h-10 rounded-xl px-3 text-sm outline-none"
-              placeholder="Optional note"
-              value={paymentForm.note}
-              onChange={(e) => setPaymentForm((f) => ({ ...f, note: e.target.value }))}
-            />
-          </label>
         </div>
       </FormDialog>
 
       <ConfirmDialog
         open={deleteOpen}
         onOpenChange={setDeleteOpen}
-        title={`Delete ${activeRowFresh?.emi.name ?? "EMI"}?`}
+        title={`Delete ${detail?.emi.name ?? "EMI"}?`}
         description="This permanently removes the EMI, its schedule, installments, and payment breakdowns. This action cannot be undone."
         variant="destructive"
         confirmLabel="Delete"

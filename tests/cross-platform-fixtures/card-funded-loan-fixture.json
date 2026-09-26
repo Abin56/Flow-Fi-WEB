@@ -1,0 +1,89 @@
+{
+  "description": "Card-funded Loan liability ownership. A borrowed Loan financed on a tracked Credit Card (fundingSource=creditCard + linkedCreditCardId, as the unified wizard creates an installment purchase) is the card's liability exactly like a card-linked EMI: it locks its outstanding principal against the card while no represented purchase carries it (Cases B/C), and it is never also counted as a borrowed Loan in Net Worth. flowfi-web computes each case with its credit-utilization / loan-balance-sheet engines; Finance_App builds the same state through its real repositories + Riverpod providers. Byte-identical copy in both repos. Loan: no interest, 8 monthly installments of 5,000. Installment payments are recorded on the schedule only (no Account movement), exactly like card-emi-ownership-fixture.json. Purchases are dated 'now' so they fall in the live current cycle on both platforms.",
+  "creditLimit": 80000,
+  "bankBalance": 200000,
+  "principal": 40000,
+  "installmentCount": 8,
+  "rawLoanDocWithBeneficiary": {
+    "agreementKind": "installmentPurchase",
+    "fundingSource": "creditCard",
+    "linkedCreditCardId": "card-1",
+    "purchaseTransactionId": null,
+    "purchaseAmount": 40000,
+    "downPayment": 0,
+    "personId": null,
+    "name": "Phone for Anu",
+    "direction": "taken",
+    "category": "institutional",
+    "institutionName": "HDFC Card",
+    "loanType": null,
+    "loanNumber": null,
+    "accountNumber": null,
+    "branch": null,
+    "payerPersonId": null,
+    "beneficiaryPersonId": "person-anu",
+    "loanAmount": 40000,
+    "interest": null,
+    "repaymentType": "installment",
+    "dueDate": null,
+    "installmentFrequency": "monthly",
+    "installmentCount": 8,
+    "notes": "",
+    "scheduleId": "sched-1",
+    "isClosed": false,
+    "deletedAt": null,
+    "lastEditedAt": null,
+    "editHistory": []
+  },
+  "cases": [
+    {
+      "name": "1 Case B: a 40,000 card-funded purchase locks 40,000 of an 80,000 limit and is counted once",
+      "purchase": null,
+      "paidInstallments": 0,
+      "closed": false,
+      "expected": { "outstanding": 0, "lockedEmiPrincipal": 40000, "available": 40000, "utilizationPercent": 50, "borrowedPrincipal": 0, "netWorth": 160000 }
+    },
+    {
+      "name": "2 Case B after two 5,000 installments: exactly 10,000 of credit recovers",
+      "purchase": null,
+      "paidInstallments": 2,
+      "closed": false,
+      "expected": { "outstanding": 0, "lockedEmiPrincipal": 30000, "available": 50000, "utilizationPercent": 37.5, "borrowedPrincipal": 0, "netWorth": 170000 }
+    },
+    {
+      "name": "3 Case A: the linked 40,000 card purchase owns the exposure - never 40,000 + 40,000",
+      "purchase": { "amount": 40000, "deleted": false },
+      "paidInstallments": 0,
+      "closed": false,
+      "expected": { "outstanding": 40000, "lockedEmiPrincipal": 0, "available": 40000, "utilizationPercent": 50, "borrowedPrincipal": 0, "netWorth": 160000 }
+    },
+    {
+      "name": "4 Case A after two installments: the plan payments do not re-lock or double count",
+      "purchase": { "amount": 40000, "deleted": false },
+      "paidInstallments": 2,
+      "closed": false,
+      "expected": { "outstanding": 40000, "lockedEmiPrincipal": 0, "available": 40000, "utilizationPercent": 50, "borrowedPrincipal": 0, "netWorth": 160000 }
+    },
+    {
+      "name": "5 Case C: linked purchase deleted - the Loan owns the exposure again",
+      "purchase": { "amount": 40000, "deleted": true },
+      "paidInstallments": 0,
+      "closed": false,
+      "expected": { "outstanding": 0, "lockedEmiPrincipal": 40000, "available": 40000, "utilizationPercent": 50, "borrowedPrincipal": 0, "netWorth": 160000 }
+    },
+    {
+      "name": "6 Completed: all 8 installments paid - the full limit is released",
+      "purchase": null,
+      "paidInstallments": 8,
+      "closed": false,
+      "expected": { "outstanding": 0, "lockedEmiPrincipal": 0, "available": 80000, "utilizationPercent": 0, "borrowedPrincipal": 0, "netWorth": 200000 }
+    },
+    {
+      "name": "7 Closed after two installments: closing releases the lock, like a closed card-linked EMI",
+      "purchase": null,
+      "paidInstallments": 2,
+      "closed": true,
+      "expected": { "outstanding": 0, "lockedEmiPrincipal": 0, "available": 80000, "utilizationPercent": 0, "borrowedPrincipal": 0, "netWorth": 200000 }
+    }
+  ]
+}

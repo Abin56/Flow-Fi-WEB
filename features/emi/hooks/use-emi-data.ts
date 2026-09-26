@@ -31,7 +31,7 @@ import { useLoanPersons } from "@/hooks/use-loans";
 import type { Category } from "@/lib/models/category";
 import type { Person } from "@/lib/models/person";
 import type { CreditCardProfile } from "@/lib/models/credit-card";
-import { emiStatusGiven, type Emi, type EmiLoanType, type EmiStatus } from "@/lib/models/emi";
+import { defaultEmiPaymentSplit, emiStatusGiven, type Emi, type EmiLoanType, type EmiStatus } from "@/lib/models/emi";
 import { installmentStatus, remainingAmount, type Installment } from "@/lib/models/payment-schedule";
 import {
   createEmiPaymentBreakdownRepository,
@@ -177,13 +177,16 @@ export function useEmiActions() {
           note: params.note,
         });
 
+        // Without the bank's own figures, split by the installment's principal/interest ratio (as
+        // Flutter does) — never the whole amount as principal, which restored interest as card credit.
+        const split = params.principalPaid == null ? defaultEmiPaymentSplit(installment, params.amount) : null;
         const breakdownRepository = createEmiPaymentBreakdownRepository(uid, emi.id);
         await breakdownRepository.createBreakdown({
           paymentId: payment.id,
           scheduleId: emi.scheduleId,
           installmentId: installment.id,
-          principalPaid: params.principalPaid ?? params.amount,
-          interestPaid: params.interestPaid,
+          principalPaid: split?.principalPaid ?? params.principalPaid,
+          interestPaid: split?.interestPaid ?? params.interestPaid,
           gst: params.gst,
           igst: params.igst,
           processingFee: params.processingFee,

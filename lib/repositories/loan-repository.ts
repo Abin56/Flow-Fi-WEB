@@ -456,6 +456,10 @@ export class LoanRepository extends FirestoreCrudRepository<Loan> {
 
     await this.installmentRepositoryFor(schedule.id).generateInstallments(schedule, {
       precomputedAmounts: plan.precomputed,
+      // Every monthly installment after the first lands on the loan date's day (clamped to short
+      // months), exactly like Flutter's `createLoan` and `createAgreementWithOrigination` below.
+      // Chaining month-to-month instead drifted after a short month: Jan 31 → Feb 28 → Mar 28 → …
+      dueDayOfMonth: normalized.loanDate.getDate(),
     });
 
     const loan = buildLoanDocument(normalized, loanId, schedule.id, new Date());
@@ -960,6 +964,8 @@ export class LoanRepository extends FirestoreCrudRepository<Loan> {
       newTail = await installmentRepository.generateInstallments(tailScheduleShape, {
         precomputedAmounts: precomputed,
         startingSequenceNumber: settled.length,
+        // Pinned to the loan date's day like Flutter's `editLoanTerms` — see `createLoan`.
+        dueDayOfMonth: loan.loanDate.getDate(),
       });
     }
 
@@ -1054,7 +1060,8 @@ export class LoanRepository extends FirestoreCrudRepository<Loan> {
         lastEditedAt: null,
         editHistory: [],
       },
-      { precomputedAmounts: precomputed },
+      // Pinned to the loan date's day like Flutter's `editLoanDate` — see `createLoan`.
+      { precomputedAmounts: precomputed, dueDayOfMonth: newLoanDate.getDate() },
     );
 
     let updated = recordEdit(loan, "loanDate", loan.loanDate.toISOString(), newLoanDate.toISOString());

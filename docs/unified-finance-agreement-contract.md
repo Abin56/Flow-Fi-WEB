@@ -135,6 +135,8 @@ Additive, nullable field on `loans` and `emis` documents: the Person a borrowing
 
 - Separate from `personId` (lender/counterparty) and `payerPersonId` (who pays installments) — `personId` is not overloaded.
 - Association only: liability, schedule, card lock/available credit (`emiPurchaseRepresentedOnCard`), Net Worth and Person positions are unchanged. It creates no Person ledger entry or receivable; that remains the separate "Person receivable relationship" noted above.
-- Flutter does not read or write it yet. Flutter edit paths that write the whole document would drop it, like any other field an older client doesn't deserialize.
+- Flutter has no UI for it yet, but its `Loan`/`Emi` models read and write the key unchanged, so a Flutter close/edit/trash (whole-document `set`) preserves it. Builds older than that pass-through still drop it.
+
+**Card-funded Loans.** A borrowed Loan with `fundingSource = creditCard` and a `linkedCreditCardId` (`cardFundedLoanCardId`, identical on both platforms) is owned by its card exactly like a card-linked EMI: it locks its outstanding principal against the card's available credit in Cases B/C (Case A: the represented purchase already carries it), and it is excluded from `borrowedPrincipal` whenever that card is tracked, so Net Worth and Reports count it once. Closing it releases the lock, as for EMIs. Pinned by `card-funded-loan-fixture.json` in both repos.
 
 **Upcoming dues (Bills page).** Credit Card statement dues, borrowed-Loan installments and EMI installments are listed with their source (`lib/engines/upcoming-dues.ts`). A card-linked Loan/EMI installment counts toward the total only when its purchase is not represented on the card (Cases B/C). In Case A it is listed as "In card bill" and not counted again.

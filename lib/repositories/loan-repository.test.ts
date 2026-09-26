@@ -111,3 +111,36 @@ describe("LoanRepository.createLoan — category validation", () => {
     expect(loan.institutionName).toBeNull();
   });
 });
+
+describe("LoanRepository.createLoan — monthly due dates (Web ↔ Flutter parity)", () => {
+  it("pins every installment after the first to the loan date's day, exactly like Flutter's createLoan", async () => {
+    const { InstallmentRepository } = await import("./payment-schedule-repository");
+    const generateInstallments = vi.fn().mockResolvedValue([]);
+    const paymentScheduleRepository = {
+      createSchedule: vi.fn(async (p: Record<string, unknown>) => ({ id: "sched1", ...p })),
+    } as unknown as PaymentScheduleRepository;
+    const repository = new LoanRepository(
+      { firestore: {}, parent: { id: "user1" } } as never,
+      paymentScheduleRepository,
+      () => ({ generateInstallments }) as unknown as InstallmentRepository,
+    );
+
+    await repository.createLoan({
+      institutionName: "HDFC Bank",
+      loanAmount: 60000,
+      loanDate: new Date(2027, 0, 31),
+      repaymentType: "installment",
+      installmentFrequency: "monthly",
+      installmentCount: 4,
+    });
+
+    const [schedule, options] = generateInstallments.mock.calls[0];
+    expect(options.dueDayOfMonth).toBe(31);
+    // What the real builder writes with those options: no month-to-month drift after February.
+    const dates = InstallmentRepository.buildInstallments(
+      { ...schedule, customIntervalDays: null, notes: "", createdAt: new Date(), deletedAt: null, lastEditedAt: null, editHistory: [] },
+      options,
+    ).map((i) => `${i.dueDate.getFullYear()}-${i.dueDate.getMonth() + 1}-${i.dueDate.getDate()}`);
+    expect(dates).toEqual(["2027-1-31", "2027-2-28", "2027-3-31", "2027-4-30"]);
+  });
+});

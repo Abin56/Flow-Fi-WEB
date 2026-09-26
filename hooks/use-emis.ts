@@ -37,12 +37,18 @@ export function useAllEmiInstallments() {
 
   return useFirestoreWatch<Installment[]>({
     queryKey: emiInstallmentsQueryKey(uid),
-    enabled: !!uid && !!scheduleIds,
+    // Stays enabled with zero schedules: disabling kept the last snapshot cached, so the installments of
+    // a just-trashed last Loan/EMI kept feeding Cash Flow / Month Cycle / History until a reload.
+    enabled: !!uid,
     hookName: "useAllEmiInstallments",
     emptyValue: [],
     deps: [uid, scheduleIds, queryClient],
     subscribe: (onData, onError) => {
-      if (!uid || !scheduleIds) return () => {};
+      if (!uid) return () => {};
+      if (!scheduleIds) {
+        onData([]);
+        return () => {};
+      }
       const ids = scheduleIds.split(",");
       const installmentsBySchedule = new Map<string, Installment[]>();
       let erroredOnce = false;

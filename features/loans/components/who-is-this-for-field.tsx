@@ -33,6 +33,7 @@ export function WhoIsThisForField({
   personId,
   onChange,
   bare = false,
+  labelClassName,
 }: {
   people: Person[];
   choice: OwnershipChoice;
@@ -40,6 +41,8 @@ export function WhoIsThisForField({
   onChange: (next: { choice: OwnershipChoice; personId: string }) => void;
   /** Render without the section wrapper/heading (for dialogs with their own layout). */
   bare?: boolean;
+  /** Bare mode only — style the heading to match the host form's field labels. */
+  labelClassName?: string;
 }) {
   const body = (
     <>
@@ -82,7 +85,7 @@ export function WhoIsThisForField({
   if (bare) {
     return (
       <div className="grid gap-2 text-sm">
-        <span>Who is this for?</span>
+        <span className={labelClassName}>Who is this for?</span>
         {body}
       </div>
     );
