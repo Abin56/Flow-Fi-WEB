@@ -474,7 +474,9 @@ export function AccountsWorkspace() {
             <div className="flex flex-col gap-3 bg-muted/30 p-4">
               <SectionLabel icon={Wallet}>Account Details</SectionLabel>
               <label className="flex flex-col gap-1">
-                <span className="text-xs font-medium text-muted-foreground">Account Name</span>
+                <span className="text-xs font-medium text-muted-foreground">
+                  Account Name <span className="text-expense">*</span>
+                </span>
                 <div className="relative">
                   <SelectedTypeIcon className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
                   <input
@@ -491,7 +493,9 @@ export function AccountsWorkspace() {
               </label>
 
               <div className="flex flex-col gap-1.5">
-                <span className="text-xs font-medium text-muted-foreground">Account Type</span>
+                <span className="text-xs font-medium text-muted-foreground">
+                  Account Type <span className="text-expense">*</span>
+                </span>
                 <div className="flex flex-wrap gap-2">
                   {ACCOUNT_TYPE_OPTIONS.map((o) => {
                     const selected = form.type === o.value;
@@ -864,7 +868,7 @@ export function AccountsWorkspace() {
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <label className="flex flex-col gap-1">
                     <span className="text-xs font-medium text-muted-foreground">
-                      {form.type === "card" ? "Card Holder Name" : "Account Holder"}
+                      {form.type === "card" ? "Card Holder Name" : "Account Holder"} <span className="text-expense">*</span>
                     </span>
                     <div className="relative">
                       <User className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -877,7 +881,7 @@ export function AccountsWorkspace() {
                   </label>
                   <label className="flex flex-col gap-1">
                     <span className="text-xs font-medium text-muted-foreground">
-                      {form.type === "card" ? "Card Number (Last 4 Digits)" : "Last 4 Digits"}
+                      {form.type === "card" ? "Card Number (Last 4 Digits)" : "Last 4 Digits"} <span className="text-expense">*</span>
                     </span>
                     <input
                       className="h-10 rounded-none border border-border bg-background px-3 font-mono text-sm tracking-widest outline-none transition-colors focus:border-primary"

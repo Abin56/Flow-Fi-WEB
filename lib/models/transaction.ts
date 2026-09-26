@@ -140,20 +140,21 @@ export function balanceEffect(transaction: Transaction): number {
 }
 
 /**
- * Newest-first: primarily by `dateTime`, then — for two transactions on the
- * exact same `dateTime` (e.g. several rows staged from the same statement
- * import, or an edited transaction whose `dateTime` wasn't itself changed) —
- * by whichever was most recently added or edited (`lastEditedAt` when set,
- * `createdAt` otherwise). Used everywhere a transaction list groups or
- * displays newest-first, so a just-added/just-edited transaction always
- * surfaces first among same-day entries.
+ * Newest-first: primarily by whichever was most recently added or edited
+ * (`lastEditedAt` when set, `createdAt` otherwise), then — only to break an
+ * exact tie on that touched time — by `dateTime`. A transaction list is a
+ * feed of your activity, not a calendar: the transaction you just added or
+ * just edited should always land at the top, regardless of what date you
+ * backdated/postdated it to. Sorting primarily by `dateTime` used to let an
+ * edit reshuffle the whole list around the picked date instead of just
+ * bumping the touched row to the top.
  */
 export function compareTransactionsNewestFirst(a: Transaction, b: Transaction): number {
-  const dateDelta = b.dateTime.getTime() - a.dateTime.getTime();
-  if (dateDelta !== 0) return dateDelta;
   const aTouched = (a.lastEditedAt ?? a.createdAt).getTime();
   const bTouched = (b.lastEditedAt ?? b.createdAt).getTime();
-  return bTouched - aTouched;
+  const touchedDelta = bTouched - aTouched;
+  if (touchedDelta !== 0) return touchedDelta;
+  return b.dateTime.getTime() - a.dateTime.getTime();
 }
 
 function auditEntryFromMap(map: Record<string, unknown>): AuditEntry {

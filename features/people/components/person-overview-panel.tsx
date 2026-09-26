@@ -20,7 +20,7 @@ import { useState } from "react";
 import { ClayAvatar } from "@/components/clay/clay-avatar";
 import { ClayButton } from "@/components/clay/clay-button";
 import { formatCurrency } from "@/lib/format";
-import type { PersonViewRow } from "@/features/people/hooks/use-people-data";
+import type { PersonActivityItem, PersonViewRow } from "@/features/people/hooks/use-people-data";
 import { usePersonUpcomingEmi } from "@/features/people/hooks/use-person-upcoming-emi";
 import { PersonTransactionHistory } from "@/features/people/components/person-transaction-history/person-transaction-history";
 import { cn } from "@/lib/utils";
@@ -60,6 +60,7 @@ export function PersonOverviewPanel({
   onSettleUp,
   onEdit,
   onDelete,
+  onSettleEntry,
 }: {
   person: PersonViewRow;
   onClose: () => void;
@@ -68,6 +69,7 @@ export function PersonOverviewPanel({
   onSettleUp?: () => void;
   onEdit?: () => void;
   onDelete?: () => void;
+  onSettleEntry?: (item: PersonActivityItem) => void;
 }) {
   const [tab, setTab] = useState<Tab>("Overview");
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -306,7 +308,7 @@ export function PersonOverviewPanel({
         </ClayButton>
       </div>
 
-      <PersonTransactionHistory person={person} open={historyOpen} onOpenChange={setHistoryOpen} />
+      <PersonTransactionHistory person={person} open={historyOpen} onOpenChange={setHistoryOpen} onSettleEntry={onSettleEntry} />
     </aside>
   );
 }

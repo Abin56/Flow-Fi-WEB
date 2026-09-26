@@ -30,7 +30,7 @@ function toggleTargetFor(
 }
 
 export function RecentPeopleTransactions({ onViewAll }: { onViewAll?: () => void }) {
-  const { rows, isLoading } = useRecentPeopleTransactions();
+  const { rows, isLoading } = useRecentPeopleTransactions(20);
   const peopleActions = usePeopleActions();
   const { data: expenses = [] } = useExpenses();
 
@@ -61,11 +61,11 @@ export function RecentPeopleTransactions({ onViewAll }: { onViewAll?: () => void
           <EmptyState icon={Receipt} title="No transactions yet" description="Ledger activity across all people will show up here." />
         </div>
       ) : (
-        <div className="mt-3 flex flex-col divide-y divide-border/50">
+        <div className="mt-3 flex max-h-105 flex-col divide-y divide-border/50 overflow-y-auto">
           {rows.map((txn) => {
             const received = txn.type === "received";
             const settled = txn.receivedStatus === "received";
-            const pendingReceivable = received && !settled;
+            const pendingReceivable = txn.entryType === "gave" && !settled;
             const toggleTarget = toggleTargetFor(txn, expenses as Expense[]);
             return (
               <div key={txn.id} className="flex flex-wrap items-center gap-3 py-3">

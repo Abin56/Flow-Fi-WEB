@@ -60,19 +60,47 @@ describe("account-product-rules — 1. Savings Account", () => {
   });
 
   it("minimum balance is never forced — omitting it is valid", () => {
-    const result = validateAccountForm(baseForm({ type: "bank", bankAccountSubtype: "savings", minimumBalance: "" }), false);
+    const result = validateAccountForm(
+      baseForm({ type: "bank", bankAccountSubtype: "savings", minimumBalance: "", accountHolderName: "Jane Doe", accountNumberLast4: "1234" }),
+      false,
+    );
     expectOk(result);
     expect(result.minimumBalance).toBeNull();
   });
 
   it("rejects a negative minimum balance when one is provided", () => {
-    const result = validateAccountForm(baseForm({ type: "bank", bankAccountSubtype: "savings", minimumBalance: "-5" }), false);
+    const result = validateAccountForm(
+      baseForm({ type: "bank", bankAccountSubtype: "savings", minimumBalance: "-5", accountHolderName: "Jane Doe", accountNumberLast4: "1234" }),
+      false,
+    );
     expectErr(result);
     expect(result.error).toMatch(/minimum balance/i);
   });
 
+  it("requires an account holder name and last 4 digits", () => {
+    const missingHolder = validateAccountForm(
+      baseForm({ type: "bank", bankAccountSubtype: "savings", accountHolderName: "", accountNumberLast4: "1234" }),
+      false,
+    );
+    expectErr(missingHolder);
+    expect(missingHolder.error).toMatch(/account holder/i);
+
+    const missingLast4 = validateAccountForm(
+      baseForm({ type: "bank", bankAccountSubtype: "savings", accountHolderName: "Jane Doe", accountNumberLast4: "" }),
+      false,
+    );
+    expectErr(missingLast4);
+    expect(missingLast4.error).toMatch(/last 4 digits/i);
+  });
+
   it("creates a plain Account with the savings subtype, no CreditCardProfile involved", () => {
-    const form = baseForm({ type: "bank", bankAccountSubtype: "savings", minimumBalance: "5000" });
+    const form = baseForm({
+      type: "bank",
+      bankAccountSubtype: "savings",
+      minimumBalance: "5000",
+      accountHolderName: "Jane Doe",
+      accountNumberLast4: "1234",
+    });
     const validated = validateAccountForm(form, false);
     expectOk(validated);
     const action = buildSaveAction(form, validated, false, { colorValue: 3 });
@@ -92,7 +120,13 @@ describe("account-product-rules — 2. Current Account", () => {
   });
 
   it("saves without a minimum balance when left blank", () => {
-    const form = baseForm({ type: "bank", bankAccountSubtype: "current", minimumBalance: "" });
+    const form = baseForm({
+      type: "bank",
+      bankAccountSubtype: "current",
+      minimumBalance: "",
+      accountHolderName: "Jane Doe",
+      accountNumberLast4: "1234",
+    });
     const validated = validateAccountForm(form, false);
     expectOk(validated);
     expect(validated.minimumBalance).toBeNull();
@@ -103,7 +137,13 @@ describe("account-product-rules — 3. Salary Account", () => {
   it("shows minimum balance only optionally — never required", () => {
     const v = fieldVisibilityFor("bank", "salary", "credit", false);
     expect(v.minimumBalance).toBe(true); // shown, but...
-    const form = baseForm({ type: "bank", bankAccountSubtype: "salary", minimumBalance: "" });
+    const form = baseForm({
+      type: "bank",
+      bankAccountSubtype: "salary",
+      minimumBalance: "",
+      accountHolderName: "Jane Doe",
+      accountNumberLast4: "1234",
+    });
     const validated = validateAccountForm(form, false); // ...never forced to a value
     expectOk(validated);
     expect(validated.minimumBalance).toBeNull();

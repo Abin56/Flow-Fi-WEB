@@ -47,7 +47,7 @@ export function AllPeopleTransactionsDialog({ open, onOpenChange }: AllPeopleTra
               {rows.map((txn) => {
                 const received = txn.type === "received";
                 const settled = txn.receivedStatus === "received";
-                const pendingReceivable = received && !settled;
+                const pendingReceivable = txn.entryType === "gave" && !settled;
                 return (
                   <div key={txn.id} className="flex flex-wrap items-center gap-3 py-3">
                     <span

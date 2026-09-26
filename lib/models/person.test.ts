@@ -11,6 +11,7 @@ function ledgerEntry(overrides: Partial<LedgerEntry> = {}): LedgerEntry {
     note: "",
     increasesBalance: true,
     transactionRef: null,
+    parentEntryId: null,
     createdAt: new Date("2026-07-15T00:00:00Z"),
     receivedStatus: "yetToReceive",
     deletedAt: null,
