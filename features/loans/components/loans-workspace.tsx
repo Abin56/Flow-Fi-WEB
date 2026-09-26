@@ -2,6 +2,7 @@
 
 import { Building2, CalendarClock, FileText, Landmark, Percent, Plus, Search, StickyNote, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 import { ClayBadge } from "@/components/clay/clay-badge";
 import { ClayButton } from "@/components/clay/clay-button";
@@ -25,10 +26,14 @@ import { LoansSummary } from "@/features/loans/components/loans-summary";
 import { LoansTrashDialog } from "@/features/loans/components/loans-trash-dialog";
 import { RecordLoanPaymentDialog } from "@/features/loans/components/record-loan-payment-dialog";
 import { LoanAdjustmentDialog } from "@/features/loans/components/loan-adjustment-dialog";
+import { ReverseOriginationDialog } from "@/features/loans/components/reverse-origination-dialog";
+import { loanOriginationUi } from "@/features/loans/lib/loan-origination-ui";
+import { useTransactions } from "@/hooks/use-transactions";
 import { useLoanActions, useLoanRows, useTrashedLoanRows, type LoanRow } from "@/features/loans/hooks/use-loans-data";
 import { useLoanPersons } from "@/hooks/use-loans";
 import { useAccounts } from "@/hooks/use-accounts";
 import type { Person } from "@/lib/models/person";
+import { friendlyLoanError } from "@/features/loans/lib/loan-live-state";
 import { cn } from "@/lib/utils";
 import { toast } from "@/store/toast-store";
 
@@ -122,27 +127,38 @@ function formFromRow(row: LoanRow): LoanFormState {
 }
 
 export function LoansWorkspace() {
+  const searchParams = useSearchParams();
+  const createHandoff = searchParams.get("create");
   const queryClient = useQueryClient();
   const { rows, isLoading } = useLoanRows();
   const { rows: trashedRows } = useTrashedLoanRows();
   const actions = useLoanActions();
   const { data: accounts = [] } = useAccounts();
   const { data: people = [] } = useLoanPersons();
+  const { data: transactions = [] } = useTransactions();
+  const originationUiFor = (loanId: string) =>
+    loanOriginationUi(loanId, transactions, (accountId) => accounts.find((a) => a.id === accountId)?.name);
+  const [reverseTarget, setReverseTarget] = useState<{ loan: Loan; key: string; message: string } | null>(null);
+  const [reversing, setReversing] = useState(false);
 
-  const [activeRowId, setActiveRowId] = useState<string | null>(null);
+  const [activeRowId, setActiveRowId] = useState<string | null>(() => searchParams.get("agreement"));
   // Resolved live against `rows` on every render, instead of holding a snapshot of the row — `rows`
   // comes from a live Firestore subscription (see `hooks/use-loans.ts`), so re-deriving it here is what
   // makes edits/payments to the open loan show up in the schedule dialog without a manual refresh.
   const activeRow = useMemo(() => rows.find((r) => r.loan.id === activeRowId) ?? null, [rows, activeRowId]);
-  const [scheduleOpen, setScheduleOpen] = useState(false);
-  const [addOpen, setAddOpen] = useState(false);
+  const [scheduleOpen, setScheduleOpen] = useState(() => searchParams.has("agreement"));
+  const [addOpen, setAddOpen] = useState(() => createHandoff === "borrowed" || createHandoff === "lent");
   const [editOpen, setEditOpen] = useState(false);
   const [trashOpen, setTrashOpen] = useState(false);
   const [paymentTarget, setPaymentTarget] = useState<{ row: LoanRow; installment: Installment } | null>(null);
   const [lumpSumRow, setLumpSumRow] = useState<LoanRow | null>(null);
   const [adjustment, setAdjustment] = useState<{ row: LoanRow; kind: "prepayment" | "disbursement" } | null>(null);
-  const [form, setForm] = useState<LoanFormState>(emptyForm);
+  const [form, setForm] = useState<LoanFormState>(() => ({
+    ...emptyForm(),
+    direction: createHandoff === "lent" ? "given" : "taken",
+  }));
   const [saving, setSaving] = useState(false);
+  const [statusBusy, setStatusBusy] = useState(false);
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
@@ -181,7 +197,11 @@ export function LoansWorkspace() {
     setSaving(true);
     try {
       if (isEdit && activeRow) {
-        await actions.editLoan(activeRow.loan, {
+        // Each repository edit is a whole-document write, so every step below must start from the
+        // Loan the previous step actually wrote. Passing the render-time `activeRow.loan` to a later
+        // step silently reverted the earlier one (e.g. renaming a loan while also changing its rate
+        // saved the new rate but put the old name back).
+        let current = await actions.editLoan(activeRow.loan, {
           name: form.name,
           lenderName: form.lenderName,
           notes: form.notes,
@@ -210,38 +230,34 @@ export function LoansWorkspace() {
           form.installmentFrequency !== (activeRow.loan.installmentFrequency ?? "monthly") ||
           newInstallmentCount !== activeRow.totalInstallments;
 
-        let loanForDateEdit = activeRow.loan;
         if (termsChanged) {
-          await actions.editLoanTerms(activeRow.loan, {
+          current = await actions.editLoanTerms(current, {
             currentInstallments: activeRow.installments,
             loanAmount: Number.isFinite(newLoanAmount) && newLoanAmount > 0 ? newLoanAmount : undefined,
             interest: newInterest,
             installmentFrequency: form.installmentFrequency,
             newInstallmentCount,
           });
-          loanForDateEdit = {
-            ...activeRow.loan,
-            loanAmount: Number.isFinite(newLoanAmount) && newLoanAmount > 0 ? newLoanAmount : activeRow.loan.loanAmount,
-            interest: newInterest,
-            installmentFrequency: form.installmentFrequency,
-            installmentCount: newInstallmentCount,
-          };
         }
 
         // Loan Date only moves before any payment exists — mirrors `LoanRepository.editLoanDate`'s own
-        // guard. Runs against `loanForDateEdit` so it re-amortizes with whatever terms were just saved
-        // above, not the stale pre-edit interest/frequency/count.
+        // guard. Runs against `current` so it re-amortizes with whatever terms were just saved above.
         const hasPayments = activeRow.installments.some((i) => i.amountPaid > 0);
         const originalLoanDate = activeRow.loan.loanDate.toISOString().slice(0, 10);
         if (!hasPayments && form.loanDate !== originalLoanDate) {
-          await actions.editLoanDate(loanForDateEdit, {
+          await actions.editLoanDate(current, {
             newLoanDate: new Date(form.loanDate),
             hasPayments: false,
             currentInstallments: activeRow.installments,
           });
         }
 
+        toast.success("Loan updated");
         setEditOpen(false);
+        // Back to the same loan's detail view, which re-renders from the live listener — no need to
+        // close and reopen it to see the saved values.
+        setScheduleOpen(true);
+        return;
       } else {
         const ratePercent = Number(form.ratePercent);
         await actions.createLoan({
@@ -268,7 +284,7 @@ export function LoansWorkspace() {
       }
       setActiveRowId(null);
     } catch (e) {
-      toast.error(isEdit ? "Couldn't save changes" : "Couldn't add loan", e instanceof Error ? e.message : "Please try again.");
+      toast.error(isEdit ? "Couldn't save changes" : "Couldn't add loan", friendlyLoanError(e));
     } finally {
       setSaving(false);
     }
@@ -278,6 +294,13 @@ export function LoansWorkspace() {
   // blocking confirm dialog and offers Undo on the toast instead, same UX as Flutter's snackbar.
   async function handleDelete(row: LoanRow) {
     if (!actions) return;
+    // A unified-wizard Loan whose origination money is still active is never trashed on its own (its
+    // cash would stay while the debt left Net Worth) — it goes through "Reverse & Delete".
+    const origination = originationUiFor(row.loan.id);
+    if (origination.moneyActive) {
+      setReverseTarget({ loan: row.loan, key: origination.idempotencyKey!, message: origination.message });
+      return;
+    }
     try {
       await actions.deleteLoan(row.loan);
       setActiveRowId(null);
@@ -286,20 +309,28 @@ export function LoansWorkspace() {
         onClick: () => actions.restoreLoan(row.loan).catch(() => toast.error("Couldn't restore loan")),
       });
     } catch (e) {
-      toast.error("Couldn't delete loan", e instanceof Error ? e.message : "Please try again.");
+      toast.error("Couldn't delete loan", friendlyLoanError(e));
     }
   }
 
   async function handleToggleClose(row: LoanRow) {
-    if (!actions) return;
+    if (!actions || statusBusy) return;
+    setStatusBusy(true);
     try {
+      // No local status override: the write's own snapshot (Firestore fires it immediately for local
+      // writes) flows through `rows` → `activeRow`, so the open dialog, card and Status filter all
+      // flip together from the persisted value.
       if (row.status === "closed") {
         await actions.reopenLoan(row.loan);
+        toast.success("Loan reopened");
       } else {
         await actions.closeLoan(row.loan);
+        toast.success("Loan closed");
       }
     } catch (e) {
-      toast.error("Couldn't update loan", e instanceof Error ? e.message : "Please try again.");
+      toast.error("Couldn't update loan", friendlyLoanError(e));
+    } finally {
+      setStatusBusy(false);
     }
   }
 
@@ -310,7 +341,30 @@ export function LoansWorkspace() {
 
   async function handlePermanentlyDeleteLoan(loan: Loan) {
     if (!actions) return;
+    // A Loan trashed (e.g. by an older app) while its origination money was still active must be
+    // reversed, never hard-deleted out from under its Transaction.
+    const origination = originationUiFor(loan.id);
+    if (origination.moneyActive) {
+      setTrashOpen(false);
+      setReverseTarget({ loan, key: origination.idempotencyKey!, message: origination.message });
+      return;
+    }
     await actions.permanentlyDeleteLoan(loan);
+  }
+
+  async function handleReverseOrigination() {
+    if (!actions || !reverseTarget || reversing) return;
+    setReversing(true);
+    try {
+      await actions.reverseAgreementOrigination(reverseTarget.key);
+      setActiveRowId(null);
+      setReverseTarget(null);
+      toast.success("Loan creation reversed");
+    } catch (e) {
+      toast.error("Couldn't reverse loan creation", friendlyLoanError(e));
+    } finally {
+      setReversing(false);
+    }
   }
 
   if (isLoading) {
@@ -413,11 +467,13 @@ export function LoansWorkspace() {
           setScheduleOpen(false);
           handleDelete(row);
         }}
+        deleteLabel={activeRow != null && originationUiFor(activeRow.loan.id).moneyActive ? "Reverse & Delete" : undefined}
         onRecordPayment={(row, installment) => setPaymentTarget({ row, installment })}
         onSettleLumpSum={(row) => setLumpSumRow(row)}
         onPrincipalPrepayment={(row) => setAdjustment({ row, kind: "prepayment" })}
         onAdditionalDisbursement={(row) => setAdjustment({ row, kind: "disbursement" })}
         onToggleClose={handleToggleClose}
+        statusBusy={statusBusy}
       />
 
       <LoanAdjustmentDialog
@@ -470,6 +526,15 @@ export function LoansWorkspace() {
         }}
       />
 
+      <ReverseOriginationDialog
+        open={reverseTarget != null}
+        onOpenChange={(open) => { if (!open) setReverseTarget(null); }}
+        loanName={reverseTarget?.loan.name?.trim() || "loan"}
+        message={reverseTarget?.message ?? ""}
+        busy={reversing}
+        onConfirm={handleReverseOrigination}
+      />
+
       <LoansTrashDialog
         open={trashOpen}
         onOpenChange={setTrashOpen}
@@ -493,7 +558,11 @@ export function LoansWorkspace() {
 
       <SectionedFormDialog
         open={editOpen}
-        onOpenChange={setEditOpen}
+        onOpenChange={(open) => {
+          setEditOpen(open);
+          // Cancelling an edit returns to the loan it was opened from, like saving does.
+          if (!open && activeRowId) setScheduleOpen(true);
+        }}
         title={`Edit ${activeRow?.loan.name ?? "Loan"}`}
         onConfirm={() => handleSave(true)}
         confirmLabel={saving ? "Saving…" : "Save Changes"}
@@ -542,7 +611,7 @@ const ADD_NEW_PERSON_VALUE = "__add_new_person__";
  * inline "+ Add new person" option that reveals a name field and creates the Person on confirm, so
  * choosing a lender never requires leaving the loan form first.
  */
-function PersonPickerField({
+export function PersonPickerField({
   label,
   people,
   value,

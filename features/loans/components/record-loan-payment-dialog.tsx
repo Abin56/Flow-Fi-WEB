@@ -7,6 +7,7 @@ import type { Loan } from "@/lib/models/loan";
 import type { Account } from "@/lib/models/account";
 import { cn } from "@/lib/utils";
 import { generateId } from "@/lib/utils/id-generator";
+import { friendlyLoanError } from "@/features/loans/lib/loan-live-state";
 import { toast } from "@/store/toast-store";
 import { CreditCard } from "lucide-react";
 
@@ -36,7 +37,7 @@ export function RecordLoanPaymentDialog({ open, onOpenChange, loan, installment,
   const owed = remainingAmount(installment);
 
   async function handleSave() {
-    if (!loan || !installment) return;
+    if (!loan || !installment || saving) return;
     const parsed = Number(amount);
     if (!Number.isFinite(parsed) || parsed <= 0) {
       toast.error("Couldn't record payment", "Enter an amount greater than 0.");
@@ -55,7 +56,8 @@ export function RecordLoanPaymentDialog({ open, onOpenChange, loan, installment,
       await onRecord(loan, [installment], { accountId, amount: parsed, date: new Date(date), note: note || undefined, idempotencyKey });
       onOpenChange(false);
     } catch (e) {
-      toast.error("Couldn't record payment", e instanceof Error ? e.message : "Please try again.");
+      // Stays open with the same idempotency key, so retrying can never record the payment twice.
+      toast.error("Couldn't record payment", friendlyLoanError(e));
     } finally {
       setSaving(false);
     }

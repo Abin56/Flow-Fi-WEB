@@ -25,7 +25,8 @@ export interface NetWorthHeroProps {
  * Net Worth + Financial Health, side by side in one gradient hero card — matches the reference dashboard's
  * headline widget: a big number on the left, a health ring on the right, split by a soft vertical divider.
  *
- * `netWorth` comes from `calculateNetWorth` (lib/engines/net-worth.ts) via `useDashboardData`.
+ * `netWorth` comes from `netWorthWithLoans` (lib/engines/loan-balance-sheet.ts) via `useDashboardData` —
+ * account balances plus loan principal owed to me, minus loan/EMI principal I owe.
  * `financialHealth` has no ported engine yet (see `use-dashboard-data.ts`'s doc comment), so it stays mock.
  *
  * The 7-day sparkline below the headline number is a direct visual port of

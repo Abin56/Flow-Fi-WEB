@@ -18,7 +18,7 @@ export function Sidebar() {
       className="hidden shrink-0 md:block"
     >
       <div className="flex h-full flex-col border-r border-border bg-sidebar">
-        <div className="min-h-0 flex-1">
+        <div className="min-h-0 flex-1 overflow-hidden">
           <SidebarNavContent collapsed={collapsed} />
         </div>
 
@@ -28,7 +28,11 @@ export function Sidebar() {
           aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
           className="mx-3 mb-3 flex h-9 shrink-0 items-center justify-center gap-2 rounded-xl text-xs text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
         >
-          {collapsed ? <ChevronRight className="size-4" /> : <ChevronLeft className="size-4" />}
+          {collapsed ? (
+            <ChevronRight className="size-4" />
+          ) : (
+            <ChevronLeft className="size-4" />
+          )}
         </button>
       </div>
     </motion.div>

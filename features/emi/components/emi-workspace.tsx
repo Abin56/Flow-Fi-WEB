@@ -2,6 +2,7 @@
 
 import { CreditCard, Percent, Plus, StickyNote } from "lucide-react";
 import { useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { ClayBadge } from "@/components/clay/clay-badge";
 import { ClayButton } from "@/components/clay/clay-button";
 import { Stagger } from "@/components/foundation/animated-container";
@@ -97,21 +98,25 @@ function emptyPaymentForm(amount: number): PaymentFormState {
 }
 
 export function EmiWorkspace() {
+  const searchParams = useSearchParams();
+  const createHandoff = searchParams.get("create");
   const { rows, isLoading } = useEmiRows();
   const actions = useEmiActions();
 
   const [activeRow, setActiveRow] = useState<EmiRow | null>(null);
-  const [addOpen, setAddOpen] = useState(false);
+  const [handoffDetailId, setHandoffDetailId] = useState<string | null>(() => searchParams.get("agreement"));
+  const [addOpen, setAddOpen] = useState(() => createHandoff === "installmentPurchase");
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [payOpen, setPayOpen] = useState(false);
   const [form, setForm] = useState<EmiFormState>(emptyForm);
   const [paymentForm, setPaymentForm] = useState<PaymentFormState>(() => emptyPaymentForm(0));
   const [saving, setSaving] = useState(false);
 
-  const activeRowFresh = useMemo(
-    () => (activeRow ? (rows.find((r) => r.emi.id === activeRow.emi.id) ?? activeRow) : null),
-    [rows, activeRow],
-  );
+  const activeRowFresh = useMemo(() => {
+    const id = activeRow?.emi.id ?? handoffDetailId;
+    if (!id) return null;
+    return rows.find((row) => row.emi.id === id) ?? activeRow;
+  }, [rows, activeRow, handoffDetailId]);
 
   function openAdd() {
     setForm(emptyForm());
@@ -238,7 +243,12 @@ export function EmiWorkspace() {
 
       <DetailDrawer
         open={activeRowFresh != null && !deleteOpen && !payOpen}
-        onOpenChange={(open) => !open && setActiveRow(null)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setActiveRow(null);
+            setHandoffDetailId(null);
+          }
+        }}
         title={activeRowFresh?.emi.name ?? ""}
         description={
           activeRowFresh

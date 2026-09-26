@@ -21,12 +21,11 @@
  *    fabricated history or forecast.
  *  - For the same reason, no "forecast" is exposed — a projection needs a
  *    real trend to project from, which doesn't exist yet.
- *  - `netWorth` is exactly `calculateNetWorth` (sum of every account's
- *    `currentBalance`) — it is NOT reduced by `liabilitiesBreakdown` below.
- *    Credit-card/loan/EMI debt is tracked as a separate, additional
- *    liabilities figure rather than folded into net worth, since no ported
- *    engine defines "net worth minus outstanding debt" — inventing that
- *    combined formula here would violate "no invented calculations".
+ *  - `netWorth.amount` is `netWorthWithLoans` (Decision 6): account balances
+ *    (credit-card accounts included, which already carry card debt) + principal
+ *    owed TO me on money I lent − principal I owe on loans and on EMIs not owned
+ *    by a tracked credit card. Future interest is never included.
+ *    `netWorth.accountBalances` keeps the previous account-only sum for context.
  *  - `cashFlow` reuses `useCashFlowThisMonth` as-is — EMI/loan-paid-this-month
  *    are real (sourced from installment data); bill-paid-this-month and
  *    money-received-this-month remain honestly 0 pending a bill-occurrence
@@ -36,15 +35,11 @@
  *    this replaces the mock's fabricated "Bank & Cash / Investments /
  *    Property / Other Assets" categories, which have no backing field
  *    anywhere in the `Account` model.
- *  - `liabilitiesBreakdown` sums three genuinely-computed real balances:
- *    total credit-card outstanding (`useCreditCardTotals`, the exact
- *    `creditCardStanding`/`sharedCreditLimitStanding` engine output, already
- *    deduped for shared limits), total loan outstanding principal
- *    (`useLoanRows`, the exact formula `LoanRepository.editLoanTerms` uses),
- *    and total EMI remaining balance (`useEmiRows`, the exact
- *    `remainingAmount` installment sum). The mock's "Home Loan" vs.
- *    "Personal Loan" split is dropped — nothing in the `Loan` model
- *    distinguishes loan purpose, so that split would be invented.
+ *  - `liabilitiesBreakdown` is principal owed BY me, from `loanBalanceSheet`:
+ *    credit cards (statement outstanding + locked card-linked EMI principal —
+ *    the card owns that liability, Decision 3), loans I borrowed, and EMIs not
+ *    owned by a tracked card (principal only, no future interest). Money I LENT
+ *    is `totalReceivables`, an asset — never a liability.
  *  - `categorySpending`'s `budget` is `null` when no `Budget` document
  *    targets that category — never a fabricated limit. Categories tab must
  *    treat `budget == null` as "no budget set" rather than defaulting to 0.
@@ -60,17 +55,16 @@
  */
 
 import { useMemo } from "react";
-import { useAccounts, useNetWorth } from "@/hooks/use-accounts";
+import { useAccounts } from "@/hooks/use-accounts";
+import { useLoanBalanceSheet } from "@/hooks/use-loan-balance-sheet";
 import { useBudgets } from "@/hooks/use-budgets";
 import { useCategories } from "@/hooks/use-categories";
 import { useCashFlowThisMonth, useTransactions } from "@/hooks/use-transactions";
 import { useCreditCardTotals } from "@/features/credit-cards/hooks/use-credit-cards-data";
-import { useLoanRows } from "@/features/loans/hooks/use-loans-data";
-import { useEmiRows } from "@/features/emi/hooks/use-emi-data";
 import type { Account, AccountType } from "@/lib/models/account";
 import type { Budget } from "@/lib/models/budget";
 import type { Category } from "@/lib/models/category";
-import { effectiveMonth, isTransfer, type Transaction } from "@/lib/models/transaction";
+import { effectiveMonth, isNonIncomeExpenseMovement, type Transaction } from "@/lib/models/transaction";
 
 const ACCOUNT_TYPE_LABEL: Record<AccountType, string> = {
   cash: "Cash",
@@ -119,11 +113,10 @@ export function useReportsData() {
   const { data: budgets = [], isLoading: budgetsLoading } = useBudgets();
   const { data: categories = [], isLoading: categoriesLoading } = useCategories();
 
-  const netWorthAmount = useNetWorth();
+  // Net Worth includes loan principal (Decision 6) — see `netWorthWithLoans`.
+  const { sheet: balanceSheet, accountBalances, netWorth: netWorthAmount, isLoading: balanceSheetLoading } = useLoanBalanceSheet();
   const cashFlowSummary = useCashFlowThisMonth();
   const { totals: creditCardTotals, isLoading: creditCardsLoading } = useCreditCardTotals();
-  const { rows: loanRows, isLoading: loansLoading } = useLoanRows();
-  const { rows: emiRows, isLoading: emisLoading } = useEmiRows();
 
   const isLoading =
     accountsLoading ||
@@ -131,19 +124,18 @@ export function useReportsData() {
     budgetsLoading ||
     categoriesLoading ||
     creditCardsLoading ||
-    loansLoading ||
-    emisLoading;
+    balanceSheetLoading;
 
   const now = useMemo(() => new Date(), []);
 
-  // --- Net Worth (current value only — see module doc comment) ---
-  const netWorth = useMemo(() => ({ amount: netWorthAmount }), [netWorthAmount]);
+  // --- Net Worth (current value only — see module doc comment and `netWorthWithLoans`) ---
+  const netWorth = useMemo(() => ({ amount: netWorthAmount, accountBalances }), [netWorthAmount, accountBalances]);
 
   // --- Cash Flow (this month only, real; weekly buckets mirror the dashboard's exactly) ---
   const cashFlow = useMemo(() => {
     const weekTotals = new Map<string, number>();
     for (const t of transactions as Transaction[]) {
-      if (t.type !== "expense" || isTransfer(t) || t.deletedAt != null) continue;
+      if (t.type !== "expense" || isNonIncomeExpenseMovement(t) || t.deletedAt != null) continue;
       const effective = effectiveMonth(t);
       if (!isThisMonth(effective, now)) continue;
       const label = weekBucketLabel(t.dateTime.getDate());
@@ -171,16 +163,20 @@ export function useReportsData() {
       .sort((a, b) => b.value - a.value);
   }, [accounts]);
 
-  // --- Liabilities: real credit-card outstanding + loan outstanding principal + EMI remaining balance ---
+  // --- Liabilities (principal owed BY me) — `loanBalanceSheet` classifies by direction:
+  //     money I LENT is a receivable, never a liability; EMIs count principal only (no future
+  //     interest); a card-linked EMI is owned by its tracked card and appears once, on the card line
+  //     (statement outstanding + the card's locked EMI principal), never again under EMIs. ---
   const liabilitiesBreakdown = useMemo<ReportsBreakdownItem[]>(() => {
-    const loanTotal = loanRows.reduce((sum, r) => sum + r.outstandingPrincipal, 0);
-    const emiTotal = emiRows.reduce((sum, r) => sum + r.remainingBalance, 0);
     return [
-      { name: "Credit Cards", value: creditCardTotals.utilized },
-      { name: "Loans", value: loanTotal },
-      { name: "EMIs", value: emiTotal },
+      { name: "Credit Cards", value: creditCardTotals.utilized + creditCardTotals.lockedEmiPrincipal },
+      { name: "Loans I Owe", value: balanceSheet.borrowedPrincipal },
+      { name: "EMIs", value: balanceSheet.emiPrincipal },
     ].filter((row) => row.value > 0);
-  }, [creditCardTotals, loanRows, emiRows]);
+  }, [creditCardTotals, balanceSheet]);
+
+  // --- Receivables (principal owed TO me on money I lent) — an asset. ---
+  const totalReceivables = balanceSheet.lentPrincipal;
 
   const totalLiabilities = useMemo(
     () => liabilitiesBreakdown.reduce((sum, r) => sum + r.value, 0),
@@ -193,7 +189,7 @@ export function useReportsData() {
   const categorySpending = useMemo<ReportsCategorySpending[]>(() => {
     const totals = new Map<string, { amount: number; txns: number }>();
     for (const t of transactions as Transaction[]) {
-      if (t.type !== "expense" || isTransfer(t) || t.deletedAt != null) continue;
+      if (t.type !== "expense" || isNonIncomeExpenseMovement(t) || t.deletedAt != null) continue;
       const effective = effectiveMonth(t);
       if (!isThisMonth(effective, now)) continue;
       const row = totals.get(t.categoryId) ?? { amount: 0, txns: 0 };
@@ -224,7 +220,7 @@ export function useReportsData() {
     for (const row of topCategories) grid.set(row.categoryId, [0, 0, 0, 0]);
 
     for (const t of transactions as Transaction[]) {
-      if (t.type !== "expense" || isTransfer(t) || t.deletedAt != null) continue;
+      if (t.type !== "expense" || isNonIncomeExpenseMovement(t) || t.deletedAt != null) continue;
       const effective = effectiveMonth(t);
       if (!isThisMonth(effective, now)) continue;
       const bucketValues = grid.get(t.categoryId);
@@ -247,6 +243,7 @@ export function useReportsData() {
     assetsByAccountType,
     liabilitiesBreakdown,
     totalLiabilities,
+    totalReceivables,
     categorySpending,
     spendingHeatmap,
   };

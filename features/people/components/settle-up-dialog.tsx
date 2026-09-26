@@ -5,7 +5,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { ClayButton } from "@/components/clay/clay-button";
 import { FLAT_INPUT } from "@/components/finance/chip-row";
 import { formatCurrency } from "@/lib/format";
-import { isCreditor, type Person } from "@/lib/models/person";
+import type { Person } from "@/lib/models/person";
+import { usePersonPositions } from "@/features/people/hooks/use-people-data";
 import { usePersonPendingSplitParticipants } from "@/features/people/hooks/use-person-pending-split-participants";
 import { useTransactionActions } from "@/features/transactions/hooks/use-transactions-data";
 import { cn } from "@/lib/utils";
@@ -44,8 +45,15 @@ export function SettleUpDialog({
   const [rowAmounts, setRowAmounts] = useState<Record<string, string>>({});
   const [rowSaving, setRowSaving] = useState<string | null>(null);
 
-  const totalPending = person ? Math.abs(person.currentBalance) : 0;
-  const directionLabel = person && isCreditor(person) ? "Receive money from" : "Pay money to";
+  // Settle Up settles the DIRECT Person balance only (split expenses, manual entries). Loan principal
+  // is settled from the Loan (payments / reversal), never through the ledger — so neither the amount
+  // nor its direction may include a Loan, including one an old Web Loan once mirrored into the ledger.
+  const { positionsByPersonId } = usePersonPositions();
+  const position = person ? positionsByPersonId[person.id] : undefined;
+  const directBalance = position?.directBalance ?? person?.currentBalance ?? 0;
+  const loanBalance = position ? position.loanReceivable - position.loanPayable : 0;
+  const totalPending = Math.abs(directBalance);
+  const directionLabel = directBalance > 0 ? "Receive money from" : "Pay money to";
 
   // Reset the form when the dialog transitions from closed to open, pre-filling
   // the custom amount with the pending balance (mirrors Flutter's
@@ -85,7 +93,7 @@ export function SettleUpDialog({
     setError(null);
     setSaving(true);
     try {
-      await actions.settleAcrossPending({ person, pending, amount, date: new Date() });
+      await actions.settleAcrossPending({ person, pending, amount, date: new Date(), legacyLoanLedger: position?.legacyLoanLedger ?? 0 });
       handleOpenChange(false);
     } catch {
       // toasted by withErrorToast
@@ -135,6 +143,11 @@ export function SettleUpDialog({
           <DialogTitle>Settle Up — {person.name}</DialogTitle>
           <DialogDescription>
             {directionLabel} {person.name}. Outstanding: {formatCurrency(totalPending)}
+            {loanBalance !== 0 && (
+              <span className="mt-1 block text-xs">
+                Loans ({loanBalance > 0 ? "they owe you" : "you owe"} {formatCurrency(Math.abs(loanBalance))}) aren&apos;t settled here — record Loan payments from the Loan.
+              </span>
+            )}
           </DialogDescription>
         </DialogHeader>
 

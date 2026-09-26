@@ -94,6 +94,7 @@ import {
   type DisbursementReamortizationPolicy,
 } from "@/lib/engines/disbursement-reamortization-policy";
 import { planInstallmentSettlement } from "@/lib/engines/installment-settlement";
+import { principalPrepaidFor } from "@/lib/engines/loan-outstanding";
 import { generateId } from "@/lib/utils/id-generator";
 
 export interface LoanAdvancePaymentResult {
@@ -320,6 +321,22 @@ export class LoanAdvancePaymentRepository {
     return doc(this.payments(scheduleId, installmentId), paymentId);
   }
 
+  /**
+   * Total active extra principal on `scheduleId`, derived from persisted payment records (see
+   * `principalPrepaidFor`). Reads payments under EVERY installment — retired ones included, since
+   * the extra-principal record lives under the schedule's last installment, which the re-plan that
+   * follows it usually retires. Every re-plan must subtract this: before, each re-plan subtracted
+   * only its own triggering prepayment, so a second extra-principal payment (or a Borrow More after
+   * one) silently gave the earlier extra principal back.
+   */
+  private async activePrincipalPrepaid(scheduleId: string): Promise<number> {
+    const allInstallments = await getDocs(this.installments(scheduleId));
+    const payments = await Promise.all(
+      allInstallments.docs.map(async (d) => (await getDocs(this.payments(scheduleId, d.id))).docs.map((p) => p.data())),
+    );
+    return principalPrepaidFor(payments.flat());
+  }
+
   private reamortizationEvents(loanId: string): CollectionReference<LoanReamortizationEvent> {
     return collection(this.loanRef(loanId), FirestoreCollections.reamortizationEvents).withConverter({
       toFirestore: loanReamortizationEventToFirestore,
@@ -351,11 +368,11 @@ export class LoanAdvancePaymentRepository {
     if (amount <= 0) {
       throw new Error("Payment amount must be greater than 0");
     }
-    if (loan.repaymentType !== "installment") {
-      throw new Error(
-        "One-time loans have a single due amount — pay it directly, there is no advance/prepayment concept for them",
-      );
-    }
+    // One-time loans ARE paid through this method (full or partial payments against their single
+    // installment — account movement, Transaction, idempotency and reversal exactly like an
+    // installment loan). They only refuse an overflow (see below): with no schedule to re-plan,
+    // money above what is owed has nowhere correct to go. Mirrors Flutter.
+    const isOneTime = loan.repaymentType === "oneTime";
 
     // Ids/sequence/dueDate are immutable once an installment is generated —
     // safe to use from the caller's (possibly stale) list purely to know
@@ -410,6 +427,9 @@ export class LoanAdvancePaymentRepository {
       const classificationScope = includeUpcomingInstallments ? eligible : dueNow.length > 0 ? dueNow : [eligible[0]];
       const plan = planInstallmentSettlement(classificationScope, amount);
       const overflow = plan.unallocated;
+      if (isOneTime && overflow > 0) {
+        throw new Error("Amount is more than what's still owed on this loan");
+      }
 
       const paymentIds = plan.portions.map((_, i) => `adv_${idempotencyKey}_p${i}`);
       const installmentIds = plan.portions.map((portion) => portion.installment.id);
@@ -1149,11 +1169,13 @@ export class LoanAdvancePaymentRepository {
       if (i.amountPaid >= i.amountDue) return total + principalShare;
       return total + principalShare * (i.amountPaid / i.amountDue);
     }, 0);
-    // The prepayment overflow itself is never applied to any installment's
-    // amountDue (ledger-only doc — see `record`'s doc comment), so it never
-    // shows up in settled/untouched's principal math above and must be
-    // subtracted here explicitly.
-    const principalPaid = principalPaidViaInstallments + triggeringPrepaymentAmount;
+    // Extra-principal overflows are never applied to any installment's
+    // amountDue (ledger-only docs — see `record`'s doc comment), so they never
+    // show up in settled/untouched's principal math above and must be
+    // subtracted explicitly — ALL active ones, not just this triggering one
+    // (already committed, so it is included). Subtracting only the
+    // triggering amount gave every earlier extra-principal payment back.
+    const principalPaid = principalPaidViaInstallments + (await this.activePrincipalPrepaid(loan.scheduleId));
     const outstandingPrincipalAfter = Math.min(Math.max(freshLoan.loanAmount - principalPaid, 0), freshLoan.loanAmount);
 
     const targetInstallmentAmount = untouched[0].amountDue;
@@ -1320,8 +1342,11 @@ export class LoanAdvancePaymentRepository {
       if (i.amountPaid >= i.amountDue) return total + principalShare;
       return total + principalShare * (i.amountPaid / i.amountDue);
     }, 0);
+    // Earlier extra-principal payments stay subtracted — without this, a
+    // Borrow/Lend More after an extra-principal payment gave it back.
+    const principalPrepaid = await this.activePrincipalPrepaid(loan.scheduleId);
     const outstandingPrincipalAfter = Math.min(
-      Math.max(freshLoan.loanAmount - principalPaidViaInstallments, 0),
+      Math.max(freshLoan.loanAmount - principalPaidViaInstallments - principalPrepaid, 0),
       freshLoan.loanAmount,
     );
 

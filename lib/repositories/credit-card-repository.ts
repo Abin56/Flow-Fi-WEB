@@ -542,15 +542,7 @@ export class StatementRepository extends FirestoreCrudRepository<Statement> {
    * the app ignores it.
    */
   totalFor(cardTransactions: Transaction[], period: { periodStart: Date; periodEnd: Date }): number {
-    return cardTransactions
-      .filter(
-        (t) =>
-          t.deletedAt == null &&
-          !t.excludeFromCalculations &&
-          !isTransfer(t) &&
-          periodContains(period as StatementPeriodWindow, t.dateTime),
-      )
-      .reduce((sum, t) => sum + t.amount, 0);
+    return statementPeriodTotal(cardTransactions, period);
   }
 
   /**
@@ -783,4 +775,22 @@ export class StatementPaymentRepository extends FirestoreCrudRepository<Statemen
   async permanentlyDeletePayment(payment: StatementPayment): Promise<void> {
     await this.permanentlyDelete(payment);
   }
+}
+
+/**
+ * The one definition of a statement period's total (see `StatementRepository.totalFor`, which
+ * delegates here) — exported so every standing can recompute a closed statement's LIVE total
+ * instead of trusting the stale materialized `totalAmount`. Mirrors Flutter's
+ * `StatementRepository.totalFor` / `statementsWithLiveTotalsProvider`.
+ */
+export function statementPeriodTotal(cardTransactions: Transaction[], period: { periodStart: Date; periodEnd: Date }): number {
+  return cardTransactions
+    .filter(
+      (t) =>
+        t.deletedAt == null &&
+        !t.excludeFromCalculations &&
+        !isTransfer(t) &&
+        periodContains(period as StatementPeriodWindow, t.dateTime),
+    )
+    .reduce((sum, t) => sum + t.amount, 0);
 }

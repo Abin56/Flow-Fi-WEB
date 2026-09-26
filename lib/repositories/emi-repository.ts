@@ -96,6 +96,8 @@ export interface CreateEmiParams {
   isAutoDebitEnabled?: boolean;
   autoDebitAccount?: string | null;
   linkedCreditCardId?: string | null;
+  /** The tracked card purchase this EMI was converted from — see `Emi.purchaseTransactionId`. Requires `linkedCreditCardId`. */
+  purchaseTransactionId?: string | null;
   dueDayOfMonth?: number | null;
 }
 
@@ -131,6 +133,8 @@ export interface EditEmiParams {
   autoDebitAccount?: string | null;
   linkedCreditCardId?: string | null;
   clearLinkedCreditCardId?: boolean;
+  purchaseTransactionId?: string | null;
+  clearPurchaseTransactionId?: boolean;
 }
 
 export interface EditEmiTermsParams {
@@ -193,9 +197,13 @@ export class EmiRepository extends FirestoreCrudRepository<Emi> {
       isAutoDebitEnabled = false,
       autoDebitAccount = null,
       linkedCreditCardId = null,
+      purchaseTransactionId = null,
       dueDayOfMonth = null,
     } = params;
 
+    if (purchaseTransactionId != null && linkedCreditCardId == null) {
+      throw new Error("A card purchase can only be linked to an EMI on that credit card");
+    }
     if (name.trim().length === 0) {
       throw new Error("EMI name is required");
     }
@@ -272,6 +280,7 @@ export class EmiRepository extends FirestoreCrudRepository<Emi> {
       autoDebitAccount,
       isDefaulted: false,
       linkedCreditCardId,
+      purchaseTransactionId,
       dueDayOfMonth,
       isClosed: false,
       deletedAt: null,
@@ -305,6 +314,8 @@ export class EmiRepository extends FirestoreCrudRepository<Emi> {
       autoDebitAccount,
       linkedCreditCardId,
       clearLinkedCreditCardId = false,
+      purchaseTransactionId,
+      clearPurchaseTransactionId = false,
     } = params;
 
     if (principalAmount != null) {
@@ -390,6 +401,23 @@ export class EmiRepository extends FirestoreCrudRepository<Emi> {
         updated.linkedCreditCardId,
         linkedCreditCardId,
         (e, v) => ({ ...e, linkedCreditCardId: v }),
+      );
+    }
+    // A purchase link only means anything on a card-linked EMI: unlinking the card (or explicitly
+    // clearing) drops it, so a stale link can never keep excluding this EMI from a card it no
+    // longer belongs to. Mirrors Flutter.
+    if (clearPurchaseTransactionId || updated.linkedCreditCardId == null) {
+      if (updated.purchaseTransactionId != null) {
+        updated = recordEdit(updated, "purchaseTransactionId", updated.purchaseTransactionId, "none");
+        updated = { ...updated, purchaseTransactionId: null };
+      }
+    } else {
+      updated = updateField(
+        updated,
+        "purchaseTransactionId",
+        updated.purchaseTransactionId,
+        purchaseTransactionId,
+        (e, v) => ({ ...e, purchaseTransactionId: v }),
       );
     }
     await this.update(updated);

@@ -35,6 +35,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useLoans } from "@/hooks/use-loans";
 import { usePeople } from "@/hooks/use-people";
 import { useExpenses } from "@/hooks/use-expenses";
 import type { Account } from "@/lib/models/account";
@@ -52,6 +53,7 @@ import {
 } from "@/features/transactions/hooks/use-transactions-data";
 import { TransactionDetailsModal } from "@/features/transactions/components/transaction-details-modal";
 import { transactionFlagFor } from "@/features/transactions/lib/transaction-flag";
+import { loanTransactionLabel } from "@/features/loans/lib/loan-labels";
 import { findSameAmountDateDuplicateIds } from "@/features/transactions/lib/same-amount-date-duplicates";
 import { useDuplicateGuardedCreate } from "@/lib/services/duplicate-detection/use-duplicate-guarded-create";
 import { cn } from "@/lib/utils";
@@ -151,6 +153,14 @@ export function TransactionsWorkspace() {
   const { data: people = [] } = usePeople();
   const { data: expenses = [] } = useExpenses();
   const expenseByTransactionId = useMemo(() => new Map(expenses.map((e) => [e.transactionId, e])), [expenses]);
+  // Loan-generated rows read as "Loan EMI — Home Loan" / "Extra Principal Payment — …" from their
+  // persisted loan metadata instead of the raw stored description; every other row is unchanged.
+  const { data: loans = [] } = useLoans();
+  const displayDescription = useMemo(() => {
+    const loanById = new Map(loans.map((l) => [l.id, l]));
+    return (t: Transaction) =>
+      (t.loanId != null ? loanTransactionLabel(t, loanById.get(t.loanId) ?? null) : null) ?? t.description;
+  }, [loans]);
 
   const [search, setSearch] = useState("");
   const deferredSearch = useDeferredValue(search);
@@ -190,7 +200,10 @@ export function TransactionsWorkspace() {
     if (deferredSearch.trim()) {
       const q = deferredSearch.trim().toLowerCase();
       list = list.filter(
-        (r) => r.transaction.description.toLowerCase().includes(q) || r.transaction.notes.toLowerCase().includes(q),
+        (r) =>
+          r.transaction.description.toLowerCase().includes(q) ||
+          displayDescription(r.transaction).toLowerCase().includes(q) ||
+          r.transaction.notes.toLowerCase().includes(q),
       );
     }
     if (accountFilter) list = list.filter((r) => r.transaction.accountId === accountFilter);
@@ -210,7 +223,7 @@ export function TransactionsWorkspace() {
     }
 
     return [...list].sort((a, b) => compareTransactionsNewestFirst(a.transaction, b.transaction));
-  }, [rows, deferredSearch, accountFilter, categoryFilter, typeFilter, paymentMethodFilter, dateFrom, dateTo]);
+  }, [rows, deferredSearch, accountFilter, categoryFilter, typeFilter, paymentMethodFilter, dateFrom, dateTo, displayDescription]);
 
   // Computed over the full, unfiltered `rows` — not `filtered` — so a duplicate is still flagged even
   // if its pair got filtered out of the current view.
@@ -479,7 +492,7 @@ export function TransactionsWorkspace() {
               <Icon className="size-4" />
             </span>
             <div className="min-w-0">
-              <p className="truncate font-medium text-foreground">{row.transaction.description || "(No description)"}</p>
+              <p className="truncate font-medium text-foreground">{displayDescription(row.transaction) || "(No description)"}</p>
               {flag && <p className="truncate text-xs text-warning-foreground">{flag.label}</p>}
               {isDuplicate && (
                 <span
@@ -552,7 +565,7 @@ export function TransactionsWorkspace() {
       align: "center",
     },
     ],
-    [pageRows, safePage, rowsPerPage, handleQuickToggleOwed, duplicateTransactionIds],
+    [pageRows, safePage, rowsPerPage, handleQuickToggleOwed, duplicateTransactionIds, displayDescription],
   );
 
   if (isLoading) {
@@ -780,7 +793,7 @@ export function TransactionsWorkspace() {
                   <Icon className="size-4.5" />
                 </span>
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium text-foreground">{row.transaction.description || "(No description)"}</p>
+                  <p className="truncate text-sm font-medium text-foreground">{displayDescription(row.transaction) || "(No description)"}</p>
                   <p className="truncate text-xs text-muted-foreground">
                     {formatFullDate(row.transaction.dateTime)} • {row.account?.name ?? "Unknown"}
                   </p>

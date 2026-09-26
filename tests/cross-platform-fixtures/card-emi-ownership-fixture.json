@@ -1,0 +1,90 @@
+{
+  "description": "Card-linked EMI liability ownership (purchaseTransactionId). flowfi-web computes each case with its credit-utilization / loan-balance-sheet engines; Finance_App builds the same state through its real repositories + Riverpod providers. Both must reproduce every expected figure. Byte-identical copy in both repos. Purchases are dated 'now' so they fall in the live current cycle on both platforms. EMI: no interest, 12 monthly installments of principal/12; emiPaid is one payment on installment #1 with no charge breakdown.",
+  "creditLimit": 100000,
+  "bankBalance": 200000,
+  "rawEmiDocWithLink": {
+    "name": "iPhone EMI",
+    "lenderName": null,
+    "categoryId": null,
+    "loanNumber": null,
+    "loanType": "creditCard",
+    "branch": null,
+    "customerId": null,
+    "sanctionDate": null,
+    "disbursementDate": null,
+    "processingFee": 0,
+    "insuranceAmount": 0,
+    "extraCharges": 0,
+    "foreclosureAmount": null,
+    "prepaymentCharges": null,
+    "isAutoDebitEnabled": false,
+    "autoDebitAccount": null,
+    "isDefaulted": false,
+    "linkedCreditCardId": "card-1",
+    "purchaseTransactionId": "txn-purchase-1",
+    "principalAmount": 60000,
+    "interest": null,
+    "dueDayOfMonth": null,
+    "installmentFrequency": "monthly",
+    "installmentCount": 12,
+    "notes": "",
+    "scheduleId": "sched-1",
+    "isClosed": false,
+    "deletedAt": null,
+    "lastEditedAt": null,
+    "editHistory": []
+  },
+  "cases": [
+    {
+      "name": "1 Case A: linked active purchase owns the exposure (the pinned 1,20,000 scenario)",
+      "purchases": [{ "key": "p1", "amount": 60000, "deleted": false }],
+      "emis": [{ "principal": 60000, "purchaseKey": "p1", "emiPaid": 0, "legacyNoField": false }],
+      "expected": { "outstanding": 60000, "lockedEmiPrincipal": 0, "exposure": 60000, "available": 40000, "utilizationPercent": 60, "netWorth": 140000 }
+    },
+    {
+      "name": "2 Case B: no purchaseTransactionId - the EMI owns the exposure",
+      "purchases": [],
+      "emis": [{ "principal": 60000, "purchaseKey": null, "emiPaid": 0, "legacyNoField": false }],
+      "expected": { "outstanding": 0, "lockedEmiPrincipal": 60000, "exposure": 60000, "available": 40000, "utilizationPercent": 60, "netWorth": 140000 }
+    },
+    {
+      "name": "3 Case A after 5,000 repaid: never 60,000 + 55,000",
+      "purchases": [{ "key": "p1", "amount": 60000, "deleted": false }],
+      "emis": [{ "principal": 60000, "purchaseKey": "p1", "emiPaid": 5000, "legacyNoField": false }],
+      "expected": { "outstanding": 60000, "lockedEmiPrincipal": 0, "exposure": 60000, "available": 40000, "utilizationPercent": 60, "netWorth": 140000 }
+    },
+    {
+      "name": "3b Case B after 5,000 repaid (no breakdown): 55,000 still locked",
+      "purchases": [],
+      "emis": [{ "principal": 60000, "purchaseKey": null, "emiPaid": 5000, "legacyNoField": false }],
+      "expected": { "outstanding": 0, "lockedEmiPrincipal": 55000, "exposure": 55000, "available": 45000, "utilizationPercent": 55, "netWorth": 145000 }
+    },
+    {
+      "name": "4 Case C: linked purchase deleted - no longer in card liability, the EMI owns the exposure",
+      "purchases": [{ "key": "p1", "amount": 60000, "deleted": true }],
+      "emis": [{ "principal": 60000, "purchaseKey": "p1", "emiPaid": 0, "legacyNoField": false }],
+      "expected": { "outstanding": 0, "lockedEmiPrincipal": 60000, "exposure": 60000, "available": 40000, "utilizationPercent": 60, "netWorth": 140000 }
+    },
+    {
+      "name": "5 Two independent EMI purchases on one card (one linked, one issuer-converted)",
+      "purchases": [{ "key": "p1", "amount": 60000, "deleted": false }],
+      "emis": [
+        { "principal": 60000, "purchaseKey": "p1", "emiPaid": 0, "legacyNoField": false },
+        { "principal": 30000, "purchaseKey": null, "emiPaid": 0, "legacyNoField": false }
+      ],
+      "expected": { "outstanding": 60000, "lockedEmiPrincipal": 30000, "exposure": 90000, "available": 10000, "utilizationPercent": 90, "netWorth": 110000 }
+    },
+    {
+      "name": "6 One normal card purchase plus one unrelated EMI",
+      "purchases": [{ "key": "n1", "amount": 5000, "deleted": false }],
+      "emis": [{ "principal": 20000, "purchaseKey": null, "emiPaid": 0, "legacyNoField": false }],
+      "expected": { "outstanding": 5000, "lockedEmiPrincipal": 20000, "exposure": 25000, "available": 75000, "utilizationPercent": 25, "netWorth": 175000 }
+    },
+    {
+      "name": "7 Legacy EMI (no purchaseTransactionId key) with the purchase also recorded - never auto-linked, so both count until the user links it",
+      "purchases": [{ "key": "p1", "amount": 60000, "deleted": false }],
+      "emis": [{ "principal": 60000, "purchaseKey": null, "emiPaid": 0, "legacyNoField": true }],
+      "expected": { "outstanding": 60000, "lockedEmiPrincipal": 60000, "exposure": 120000, "available": 0, "utilizationPercent": 120, "netWorth": 80000 }
+    }
+  ]
+}

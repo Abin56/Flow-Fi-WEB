@@ -70,6 +70,9 @@ export function loanDirectionFromName(name: string | null | undefined): LoanDire
  */
 export type LoanCategory = "personal" | "institutional";
 
+export type LoanAgreementKind = "loan" | "installmentPurchase";
+export type LoanFundingSource = "bank" | "financeCompany" | "creditCard" | "person" | "other";
+
 const LOAN_CATEGORIES: LoanCategory[] = ["personal", "institutional"];
 
 export function loanCategoryFromName(name: string | null | undefined): LoanCategory {
@@ -125,6 +128,13 @@ function loanInterestToMap(interest: LoanInterest): DocumentData {
  * with optional flat or reducing-balance interest.
  */
 export interface Loan extends SoftDeletableEntity {
+  /** Additive Phase 5 creation metadata. Legacy documents decode as an ordinary loan. */
+  agreementKind?: LoanAgreementKind;
+  fundingSource?: LoanFundingSource | null;
+  linkedCreditCardId?: string | null;
+  purchaseTransactionId?: string | null;
+  purchaseAmount?: number | null;
+  downPayment?: number | null;
   /** Required when `category` is "personal"; null for "institutional" loans. */
   personId: string | null;
   name?: string | null;
@@ -253,6 +263,14 @@ export function loanFromFirestore(
   const data = snapshot.data();
   return {
     id: snapshot.id,
+    agreementKind: data.agreementKind === "installmentPurchase" ? "installmentPurchase" : "loan",
+    fundingSource: (["bank", "financeCompany", "creditCard", "person", "other"] as unknown[]).includes(data.fundingSource)
+      ? (data.fundingSource as LoanFundingSource)
+      : null,
+    linkedCreditCardId: (data.linkedCreditCardId as string | undefined) ?? null,
+    purchaseTransactionId: (data.purchaseTransactionId as string | undefined) ?? null,
+    purchaseAmount: (data.purchaseAmount as number | undefined) ?? null,
+    downPayment: (data.downPayment as number | undefined) ?? null,
     personId: (data.personId as string | undefined) ?? null,
     name: (data.name as string | undefined) ?? null,
     direction: loanDirectionFromName(data.direction as string | undefined),
@@ -283,6 +301,12 @@ export function loanFromFirestore(
 
 export function loanToFirestore(loan: Loan): DocumentData {
   return {
+    agreementKind: loan.agreementKind ?? "loan",
+    fundingSource: loan.fundingSource ?? null,
+    linkedCreditCardId: loan.linkedCreditCardId ?? null,
+    purchaseTransactionId: loan.purchaseTransactionId ?? null,
+    purchaseAmount: loan.purchaseAmount ?? null,
+    downPayment: loan.downPayment ?? null,
     personId: loan.personId ?? null,
     name: loan.name ?? null,
     direction: loan.direction,

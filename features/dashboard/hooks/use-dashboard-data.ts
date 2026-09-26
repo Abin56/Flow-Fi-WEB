@@ -32,6 +32,9 @@
 
 import { useMemo } from "react";
 import { useAccounts, useNetWorth } from "@/hooks/use-accounts";
+import { useLoanBalanceSheet } from "@/hooks/use-loan-balance-sheet";
+import { useCardUtilizationEmis } from "@/hooks/use-card-utilization-emis";
+import { toLiveUtilizationStatement } from "@/features/credit-cards/hooks/use-credit-cards-data";
 import { useBills } from "@/hooks/use-bills";
 import { useBudgets } from "@/hooks/use-budgets";
 import { useCategories } from "@/hooks/use-categories";
@@ -47,6 +50,7 @@ import { computeBudgetInsight, resolveBudgetPeriod } from "@/lib/engines/budget-
 import {
   creditCardStanding,
   creditUtilizationPercent,
+  lockedEmiPrincipalFor,
   sharedCreditLimitStanding,
   type UtilizationCard,
   type UtilizationEmi,
@@ -59,8 +63,7 @@ import type { Category } from "@/lib/models/category";
 import type { CreditCardProfile, Statement } from "@/lib/models/credit-card";
 import { statementRemainingAmount, statementStatus } from "@/lib/models/credit-card";
 import { unbilledSpendForCard } from "@/lib/repositories/credit-card-repository";
-import type { Emi, EmiPaymentBreakdown } from "@/lib/models/emi";
-import { compareTransactionsNewestFirst, effectiveMonth, isTransfer, signedAmount, type Transaction } from "@/lib/models/transaction";
+import { compareTransactionsNewestFirst, effectiveMonth, isLoanPrincipalDisbursement, isNonIncomeExpenseMovement, signedAmount, type Transaction } from "@/lib/models/transaction";
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
@@ -122,10 +125,14 @@ export function useDashboardData() {
   const { data: creditCards = [], isLoading: creditCardsLoading } = useCreditCards();
   const { data: sharedLimits = [], isLoading: sharedLimitsLoading } = useSharedCreditLimits();
   const { data: statements = [], isLoading: statementsLoading } = useAllCreditCardStatements();
-  const { data: emis = [], isLoading: emisLoading } = useEmis();
-  const { data: emiPaymentBreakdowns = [], isLoading: emiBreakdownsLoading } = useAllEmiPaymentBreakdowns();
+  const { isLoading: emisLoading } = useEmis();
+  const { isLoading: emiBreakdownsLoading } = useAllEmiPaymentBreakdowns();
+  const { utilizationEmis: cardUtilizationEmis, isLoading: cardEmisLoading } = useCardUtilizationEmis();
 
-  const netWorthAmount = useNetWorth();
+  // Accounts Overview keeps the plain account-balance sum; Net Worth adds loan principal
+  // (Decision 6 — see `netWorthWithLoans`).
+  const accountBalancesTotal = useNetWorth();
+  const { netWorth: netWorthAmount, isLoading: balanceSheetLoading } = useLoanBalanceSheet();
   const cashFlowSummary = useCashFlowThisMonth();
 
   const isLoading =
@@ -138,11 +145,13 @@ export function useDashboardData() {
     sharedLimitsLoading ||
     statementsLoading ||
     emisLoading ||
-    emiBreakdownsLoading;
+    emiBreakdownsLoading ||
+    cardEmisLoading ||
+    balanceSheetLoading;
 
   const now = useMemo(() => new Date(), []);
 
-  // --- Net Worth (lib/engines/net-worth.ts:calculateNetWorth via useNetWorth) ---
+  // --- Net Worth (lib/engines/loan-balance-sheet.ts:netWorthWithLoans via useLoanBalanceSheet) ---
   // `trend`: direct port of `NetWorthWidgetCard._weeklyTrend` (Finance_App's
   // `net_worth_widget_card.dart`) — cumulative net (income - expense) for each
   // of the last 7 days, oldest first, over `calculableTransactions`
@@ -150,7 +159,7 @@ export function useDashboardData() {
   // a transfer's two legs net to zero across total net worth automatically).
   const netWorth = useMemo(() => {
     const calculable = (transactions as Transaction[]).filter(
-      (t) => t.deletedAt == null && !t.excludeFromCalculations,
+      (t) => t.deletedAt == null && !t.excludeFromCalculations && !isLoanPrincipalDisbursement(t),
     );
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     let running = 0;
@@ -169,7 +178,7 @@ export function useDashboardData() {
   const cashFlow = useMemo(() => {
     const weekTotals = new Map<string, number>();
     for (const t of transactions as Transaction[]) {
-      if (isTransfer(t) || t.deletedAt != null) continue;
+      if (isNonIncomeExpenseMovement(t) || t.deletedAt != null) continue;
       const effective = effectiveMonth(t);
       if (!isThisMonth(effective, now)) continue;
       const label = weekBucketLabel(t.dateTime.getDate());
@@ -192,7 +201,7 @@ export function useDashboardData() {
   const accountsOverview = useMemo(() => {
     const list = accounts as Account[];
     return {
-      totalBalance: netWorthAmount,
+      totalBalance: accountBalancesTotal,
       changeThisMonth: 0,
       accounts: list.map((account, index) => ({
         id: account.id,
@@ -203,13 +212,13 @@ export function useDashboardData() {
         accent: ACCOUNT_ACCENTS[index % ACCOUNT_ACCENTS.length] as AccountAccent,
       })),
     };
-  }, [accounts, netWorthAmount]);
+  }, [accounts, accountBalancesTotal]);
 
   // --- Expenses by Category (direct Transaction/Category field reads + grouping) ---
   const expensesByCategory = useMemo(() => {
     const totals = new Map<string, number>();
     for (const t of transactions as Transaction[]) {
-      if (t.type !== "expense" || isTransfer(t) || t.deletedAt != null) continue;
+      if (t.type !== "expense" || isNonIncomeExpenseMovement(t) || t.deletedAt != null) continue;
       const effective = effectiveMonth(t);
       if (!isThisMonth(effective, now)) continue;
       const name = categoryNameFor(t.categoryId, categories as Category[]);
@@ -251,7 +260,7 @@ export function useDashboardData() {
         .filter(
           (t) =>
             t.type === "expense" &&
-            !isTransfer(t) &&
+            !isNonIncomeExpenseMovement(t) &&
             t.deletedAt == null &&
             (categoryId == null || t.categoryId === categoryId) &&
             t.dateTime.getTime() >= periodStart.getTime() &&
@@ -328,31 +337,10 @@ export function useDashboardData() {
   const utilization = useMemo(() => {
     const cardList = creditCards as CreditCardProfile[];
     const statementList = statements as Statement[];
-    const emiList = emis as Emi[];
-    const breakdownList = emiPaymentBreakdowns as EmiPaymentBreakdown[];
 
-    const utilizationEmis: UtilizationEmi[] = emiList.map((emi) => ({
-      linkedCreditCardId: emi.linkedCreditCardId,
-      isClosed: emi.isClosed,
-      principalAmount: emi.principalAmount,
-      principalPaid: breakdownList
-        .filter((b) => b.scheduleId === emi.scheduleId)
-        .reduce((sum, b) => sum + b.principalPaid, 0),
-    }));
-
-    const statementsForCard = (cardId: string): UtilizationStatement[] =>
-      statementList
-        .filter((s) => s.cardId === cardId && statementStatus(s) !== "paid")
-        .map((s) => ({
-          id: s.id,
-          periodStart: s.periodStart,
-          periodEnd: s.periodEnd,
-          dueDate: s.dueDate,
-          totalAmount: s.totalAmount,
-          amountPaid: s.amountPaid,
-          remainingAmount: statementRemainingAmount(s),
-          isPaid: statementStatus(s) === "paid",
-        }));
+    // Same card-linked EMI inputs (ownership + principal restored) as the Credit Cards page —
+    // `useCardUtilizationEmis` — so the two can never disagree about locked EMI principal.
+    const utilizationEmis: UtilizationEmi[] = cardUtilizationEmis;
 
     const transactionsByAccountId = new Map<string, Transaction[]>();
     for (const t of transactions as Transaction[]) {
@@ -361,6 +349,17 @@ export function useDashboardData() {
       list.push(t);
       transactionsByAccountId.set(t.accountId, list);
     }
+
+    // Live statement totals (a deleted/edited transaction inside a closed period leaves the card's
+    // liability), unpaid only — same projection as the Credit Cards page.
+    const statementsForCard = (cardId: string): UtilizationStatement[] => {
+      const card = cardList.find((c) => c.id === cardId);
+      const cardTransactions = card ? (transactionsByAccountId.get(card.accountId) ?? []) : [];
+      return statementList
+        .filter((s) => s.cardId === cardId)
+        .map((s) => toLiveUtilizationStatement(s, cardTransactions))
+        .filter((s) => !s.isPaid);
+    };
     // Unlike `statementsForCard` above (unpaid only, for `outstanding`'s carry-forward), the
     // "billed through" cutoff must consider every statement — a paid one still marks that
     // period's spend as already billed, so it must not be double-counted as unbilled again.
@@ -411,17 +410,20 @@ export function useDashboardData() {
     const activeCards = cardList.filter((c) => c.status === "active");
     const rows = activeCards.map((card) => {
       const { outstanding } = standingFor(card);
-      const percent = creditUtilizationPercent(outstanding, card.creditLimit);
+      // Utilization is on exposure: statement outstanding + this card's locked EMI principal (Case B/C).
+      const percent = creditUtilizationPercent(outstanding + lockedEmiPrincipalFor(utilizationEmis, card.id), card.creditLimit);
       return { id: card.id, name: card.cardHolderName ?? `Card •••• ${card.lastFourDigits ?? ""}`, outstanding, creditLimit: card.creditLimit, percent };
     });
 
     // Dedupe shared-limit totals: count each shared limit's own creditLimit once, standalone cards individually.
     const seenSharedLimits = new Set<string>();
     let totalOutstanding = 0;
+    let totalLockedEmiPrincipal = 0;
     let totalCreditLimit = 0;
     for (const card of activeCards) {
       const { outstanding } = standingFor(card);
       totalOutstanding += outstanding;
+      totalLockedEmiPrincipal += lockedEmiPrincipalFor(utilizationEmis, card.id);
       if (card.sharedLimitId) {
         if (!seenSharedLimits.has(card.sharedLimitId)) {
           seenSharedLimits.add(card.sharedLimitId);
@@ -438,10 +440,10 @@ export function useDashboardData() {
     return {
       totalOutstanding,
       totalCreditLimit,
-      percent: creditUtilizationPercent(totalOutstanding, totalCreditLimit),
+      percent: creditUtilizationPercent(totalOutstanding + totalLockedEmiPrincipal, totalCreditLimit),
       cards: rows,
     };
-  }, [creditCards, sharedLimits, statements, emis, emiPaymentBreakdowns, transactions]);
+  }, [creditCards, sharedLimits, statements, cardUtilizationEmis, transactions]);
 
   // --- Upcoming Payments (Bill.nextDueDate + unpaid Statement.dueDate, merged and sorted soonest-first) ---
   const upcomingPayments = useMemo(() => {

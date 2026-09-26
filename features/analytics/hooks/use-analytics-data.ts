@@ -22,7 +22,7 @@ import { useCategories } from "@/hooks/use-categories";
 import { useTransactions } from "@/hooks/use-transactions";
 import type { Budget } from "@/lib/models/budget";
 import type { Category } from "@/lib/models/category";
-import { effectiveMonth, isTransfer, type Transaction } from "@/lib/models/transaction";
+import { effectiveMonth, isNonIncomeExpenseMovement, type Transaction } from "@/lib/models/transaction";
 
 const MONTH_LABEL = { month: "short" } as const;
 
@@ -66,7 +66,7 @@ export function useAnalyticsData() {
   const spendingTrend = useMemo(() => {
     const totals = new Map<string, number>();
     for (const t of transactions as Transaction[]) {
-      if (t.type !== "expense" || isTransfer(t) || t.deletedAt != null) continue;
+      if (t.type !== "expense" || isNonIncomeExpenseMovement(t) || t.deletedAt != null) continue;
       const effective = effectiveMonth(t);
       totals.set(monthKey(effective), (totals.get(monthKey(effective)) ?? 0) + t.amount);
     }
@@ -76,7 +76,7 @@ export function useAnalyticsData() {
   const incomeTrend = useMemo(() => {
     const totals = new Map<string, number>();
     for (const t of transactions as Transaction[]) {
-      if (t.type !== "income" || isTransfer(t) || t.deletedAt != null) continue;
+      if (t.type !== "income" || isNonIncomeExpenseMovement(t) || t.deletedAt != null) continue;
       const effective = effectiveMonth(t);
       totals.set(monthKey(effective), (totals.get(monthKey(effective)) ?? 0) + t.amount);
     }
@@ -93,7 +93,7 @@ export function useAnalyticsData() {
   const topCategories = useMemo(() => {
     const totals = new Map<string, number>();
     for (const t of transactions as Transaction[]) {
-      if (t.type !== "expense" || isTransfer(t) || t.deletedAt != null) continue;
+      if (t.type !== "expense" || isNonIncomeExpenseMovement(t) || t.deletedAt != null) continue;
       const effective = effectiveMonth(t);
       if (!isSameMonth(effective, now)) continue;
       totals.set(t.categoryId, (totals.get(t.categoryId) ?? 0) + t.amount);
@@ -117,7 +117,7 @@ export function useAnalyticsData() {
     const lastMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
 
     for (const t of transactions as Transaction[]) {
-      if (t.type !== "expense" || isTransfer(t) || t.deletedAt != null) continue;
+      if (t.type !== "expense" || isNonIncomeExpenseMovement(t) || t.deletedAt != null) continue;
       const effective = effectiveMonth(t);
       if (isSameMonth(effective, now)) {
         thisMonth.set(t.categoryId, (thisMonth.get(t.categoryId) ?? 0) + t.amount);
@@ -146,7 +146,7 @@ export function useAnalyticsData() {
     const categoryBudgets = (budgets as Budget[]).filter((b) => b.categoryId != null);
     const spentByCategory = new Map<string, number>();
     for (const t of transactions as Transaction[]) {
-      if (t.type !== "expense" || isTransfer(t) || t.deletedAt != null) continue;
+      if (t.type !== "expense" || isNonIncomeExpenseMovement(t) || t.deletedAt != null) continue;
       const effective = effectiveMonth(t);
       if (!isSameMonth(effective, now)) continue;
       spentByCategory.set(t.categoryId, (spentByCategory.get(t.categoryId) ?? 0) + t.amount);

@@ -184,7 +184,23 @@ export class InstallmentRepository extends FirestoreCrudRepository<Installment> 
     schedule: PaymentSchedule,
     options: GenerateInstallmentsOptions = {},
   ): Promise<Installment[]> {
-    const { precomputedAmounts, startingSequenceNumber = 0, dueDayOfMonth } = options;
+    const installments = InstallmentRepository.buildInstallments(schedule, options);
+    for (const installment of installments) {
+      await this.add(installment.id, installment);
+    }
+    return installments;
+  }
+
+  /**
+   * Pure — exactly the installments `generateInstallments` writes, without writing them. `idFor`
+   * defaults to a random id; `LoanRepository.createAgreementWithOrigination` passes deterministic ids
+   * so the whole origination is one atomic, idempotent Firestore transaction.
+   */
+  static buildInstallments(
+    schedule: PaymentSchedule,
+    options: GenerateInstallmentsOptions & { idFor?: (sequenceNumber: number) => string } = {},
+  ): Installment[] {
+    const { precomputedAmounts, startingSequenceNumber = 0, dueDayOfMonth, idFor } = options;
 
     const count = schedule.installmentCount;
     if (count == null || count < 1) {
@@ -194,7 +210,7 @@ export class InstallmentRepository extends FirestoreCrudRepository<Installment> 
       throw new Error("precomputedAmounts must have one entry per installment");
     }
 
-    const amounts = precomputedAmounts ?? this.evenSplit(schedule.totalAmount, count);
+    const amounts = precomputedAmounts ?? InstallmentRepository.evenSplit(schedule.totalAmount, count);
     const pinToDueDay = dueDayOfMonth != null && schedule.scheduleType === "monthly";
 
     const installments: Installment[] = [];
@@ -202,15 +218,16 @@ export class InstallmentRepository extends FirestoreCrudRepository<Installment> 
     for (let i = 0; i < count; i++) {
       if (i > 0) {
         dueDate = pinToDueDay
-          ? this.addMonthsTargetingDay(schedule.firstDueDate, i, dueDayOfMonth!)
+          ? InstallmentRepository.addMonthsTargetingDay(schedule.firstDueDate, i, dueDayOfMonth!)
           : nextDueDate(schedule.scheduleType, dueDate, schedule.customIntervalDays);
       }
+      const sequenceNumber = startingSequenceNumber + i + 1;
       const installment: Installment = {
-        id: generateId(),
+        id: idFor ? idFor(sequenceNumber) : generateId(),
         scheduleId: schedule.id,
         ownerType: schedule.ownerType,
         ownerId: schedule.ownerId,
-        sequenceNumber: startingSequenceNumber + i + 1,
+        sequenceNumber,
         dueDate,
         amountDue: amounts[i].amountDue,
         amountPaid: 0,
@@ -222,13 +239,12 @@ export class InstallmentRepository extends FirestoreCrudRepository<Installment> 
         lastEditedAt: null,
         editHistory: [],
       };
-      await this.add(installment.id, installment);
       installments.push(installment);
     }
     return installments;
   }
 
-  private addMonthsTargetingDay(firstDueDate: Date, monthsAhead: number, targetDay: number): Date {
+  private static addMonthsTargetingDay(firstDueDate: Date, monthsAhead: number, targetDay: number): Date {
     const targetMonthIndex = firstDueDate.getMonth() + monthsAhead;
     const targetYear = firstDueDate.getFullYear() + Math.trunc(targetMonthIndex / 12);
     const targetMonth = ((targetMonthIndex % 12) + 12) % 12;
@@ -244,7 +260,7 @@ export class InstallmentRepository extends FirestoreCrudRepository<Installment> 
     );
   }
 
-  private evenSplit(total: number, count: number): PrecomputedInstallmentAmount[] {
+  private static evenSplit(total: number, count: number): PrecomputedInstallmentAmount[] {
     const share = round2(total / count);
     const shares = new Array(count).fill(share);
     const remainder = round2(total - share * count);

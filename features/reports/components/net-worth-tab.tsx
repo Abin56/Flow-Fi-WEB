@@ -34,7 +34,7 @@ function BreakdownBars({ items, color, total }: { items: { name: string; value: 
 }
 
 export function NetWorthTab({ data }: { data: ReportsData }) {
-  const { netWorth, assetsByAccountType, liabilitiesBreakdown, totalLiabilities } = data;
+  const { netWorth, assetsByAccountType, liabilitiesBreakdown, totalLiabilities, totalReceivables } = data;
   const assetsTotal = assetsByAccountType.reduce((s, a) => s + a.value, 0);
 
   return (
@@ -42,12 +42,13 @@ export function NetWorthTab({ data }: { data: ReportsData }) {
       <StaggerItem>
         <KpiGrid>
           <MetricCard label="Net Worth" value={netWorth.amount} format={formatCurrencyCompact} />
+          <MetricCard label="Owed to Me" value={totalReceivables} format={formatCurrencyCompact} />
           <MetricCard label="Total Liabilities" value={totalLiabilities} format={formatCurrencyCompact} upIsGood={false} />
         </KpiGrid>
         <p className="mt-3 text-xs text-muted-foreground">
-          Net Worth is the sum of your account balances. Total Liabilities (credit cards, loans, EMIs) is tracked
-          separately — the two aren&apos;t netted against each other here since no engine in this codebase defines
-          that combined figure yet.
+          Net Worth is your account balances, plus loan principal owed to you, minus loan and EMI principal you
+          owe. Credit card debt is already inside your card account balances, and a card EMI is counted once, on
+          its card. Future interest isn&apos;t counted.
         </p>
       </StaggerItem>
 

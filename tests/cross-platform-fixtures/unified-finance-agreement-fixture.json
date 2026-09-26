@@ -1,0 +1,12 @@
+[
+  {"name":"Bank Loan","sourceType":"loan","direction":"borrowed","fundingSource":"bank","status":"dueSoon","liabilityPrincipal":1000,"receivablePrincipal":0},
+  {"name":"Personal borrowed Loan","sourceType":"loan","direction":"borrowed","fundingSource":"person","status":"dueSoon","liabilityPrincipal":1000,"receivablePrincipal":0},
+  {"name":"Money Lent Loan","sourceType":"loan","direction":"lent","fundingSource":"person","status":"dueSoon","liabilityPrincipal":0,"receivablePrincipal":1000},
+  {"name":"Standard EMI","sourceType":"emi","direction":"borrowed","fundingSource":"other","status":"active","liabilityPrincipal":1000,"receivablePrincipal":0},
+  {"name":"Card EMI Case A","sourceType":"emi","direction":"borrowed","fundingSource":"creditCard","status":"active","liabilityPrincipal":0,"receivablePrincipal":0},
+  {"name":"Card EMI Case B","sourceType":"emi","direction":"borrowed","fundingSource":"creditCard","status":"active","liabilityPrincipal":1000,"receivablePrincipal":0},
+  {"name":"Card EMI Case C","sourceType":"emi","direction":"borrowed","fundingSource":"creditCard","status":"active","liabilityPrincipal":1000,"receivablePrincipal":0},
+  {"name":"Legacy EMI","sourceType":"emi","direction":"borrowed","fundingSource":"creditCard","status":"active","liabilityPrincipal":1000,"receivablePrincipal":0},
+  {"name":"Closed Loan","sourceType":"loan","direction":"borrowed","fundingSource":"bank","status":"closed","liabilityPrincipal":0,"receivablePrincipal":0},
+  {"name":"Defaulted EMI","sourceType":"emi","direction":"borrowed","fundingSource":"other","status":"defaulted","liabilityPrincipal":1000,"receivablePrincipal":0}
+]

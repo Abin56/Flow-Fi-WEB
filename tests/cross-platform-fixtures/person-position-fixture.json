@@ -1,0 +1,129 @@
+{
+  "description": "Golden People position rule (lib/engines/person-position.ts / lib/features/people/domain/person_position.dart). Byte-identical copy in Finance_App/test/cross_platform_fixtures/person_position_fixture.json. Ledger signedAmount: + = they owe me more. Loan outstandingPrincipal is principal only (Net Worth figure).",
+  "personId": "rahul",
+  "scenarios": [
+    {
+      "name": "01 direct ledger only",
+      "currentBalance": 2000,
+      "ledgerEntries": [{ "transactionRef": null, "signedAmount": 2000, "isDeleted": false }],
+      "loans": [],
+      "expected": { "directBalance": 2000, "loanReceivable": 0, "loanPayable": 0, "legacyLoanLedger": 0, "net": 2000, "owesMe": 2000, "iOwe": 0 }
+    },
+    {
+      "name": "02 Loan I lent only (new wizard, no ledger entry)",
+      "currentBalance": 0,
+      "ledgerEntries": [],
+      "loans": [{ "id": "orig_k1-abcdefgh_loan", "personId": "rahul", "direction": "given", "outstandingPrincipal": 10000, "isDeleted": false }],
+      "expected": { "directBalance": 0, "loanReceivable": 10000, "loanPayable": 0, "legacyLoanLedger": 0, "net": 10000, "owesMe": 10000, "iOwe": 0 }
+    },
+    {
+      "name": "03 Loan I borrowed only",
+      "currentBalance": 0,
+      "ledgerEntries": [],
+      "loans": [{ "id": "L-borrow", "personId": "rahul", "direction": "taken", "outstandingPrincipal": 10000, "isDeleted": false }],
+      "expected": { "directBalance": 0, "loanReceivable": 0, "loanPayable": 10000, "legacyLoanLedger": 0, "net": -10000, "owesMe": 0, "iOwe": 10000 }
+    },
+    {
+      "name": "04 direct ledger + Loan",
+      "currentBalance": 2000,
+      "ledgerEntries": [{ "transactionRef": "txn-dinner", "signedAmount": 2000, "isDeleted": false }],
+      "loans": [{ "id": "L-lend", "personId": "rahul", "direction": "given", "outstandingPrincipal": 10000, "isDeleted": false }],
+      "expected": { "directBalance": 2000, "loanReceivable": 10000, "loanPayable": 0, "legacyLoanLedger": 0, "net": 12000, "owesMe": 12000, "iOwe": 0 }
+    },
+    {
+      "name": "05 old Web Loan with legacy creation entry counts once (not 20,000)",
+      "currentBalance": 10000,
+      "ledgerEntries": [{ "transactionRef": "L-old", "signedAmount": 10000, "isDeleted": false }],
+      "loans": [{ "id": "L-old", "personId": "rahul", "direction": "given", "outstandingPrincipal": 10000, "isDeleted": false }],
+      "expected": { "directBalance": 0, "loanReceivable": 10000, "loanPayable": 0, "legacyLoanLedger": 10000, "net": 10000, "owesMe": 10000, "iOwe": 0 }
+    },
+    {
+      "name": "05b old Web borrowed Loan with legacy entry counts once",
+      "currentBalance": -10000,
+      "ledgerEntries": [{ "transactionRef": "L-oldb", "signedAmount": -10000, "isDeleted": false }],
+      "loans": [{ "id": "L-oldb", "personId": "rahul", "direction": "taken", "outstandingPrincipal": 10000, "isDeleted": false }],
+      "expected": { "directBalance": 0, "loanReceivable": 0, "loanPayable": 10000, "legacyLoanLedger": -10000, "net": -10000, "owesMe": 0, "iOwe": 10000 }
+    },
+    {
+      "name": "06 new wizard Loan + an old-form payment entry (the -4,000 bug) is neutralised",
+      "currentBalance": -4000,
+      "ledgerEntries": [{ "transactionRef": "orig_k2-abcdefgh_loan", "signedAmount": -4000, "isDeleted": false }],
+      "loans": [{ "id": "orig_k2-abcdefgh_loan", "personId": "rahul", "direction": "given", "outstandingPrincipal": 6000, "isDeleted": false }],
+      "expected": { "directBalance": 0, "loanReceivable": 6000, "loanPayable": 0, "legacyLoanLedger": -4000, "net": 6000, "owesMe": 6000, "iOwe": 0 }
+    },
+    {
+      "name": "07 partial repayment 4,000 of 10,000",
+      "currentBalance": 0,
+      "ledgerEntries": [],
+      "loans": [{ "id": "L-part", "personId": "rahul", "direction": "given", "outstandingPrincipal": 6000, "isDeleted": false }],
+      "expected": { "directBalance": 0, "loanReceivable": 6000, "loanPayable": 0, "legacyLoanLedger": 0, "net": 6000, "owesMe": 6000, "iOwe": 0 }
+    },
+    {
+      "name": "08 principal prepayment (principal only, no future interest)",
+      "currentBalance": 0,
+      "ledgerEntries": [],
+      "loans": [{ "id": "L-prep", "personId": "rahul", "direction": "given", "outstandingPrincipal": 4969.26, "isDeleted": false }],
+      "expected": { "directBalance": 0, "loanReceivable": 4969.26, "loanPayable": 0, "legacyLoanLedger": 0, "net": 4969.26, "owesMe": 4969.26, "iOwe": 0 }
+    },
+    {
+      "name": "09 Borrow More raises what I owe",
+      "currentBalance": 0,
+      "ledgerEntries": [],
+      "loans": [{ "id": "L-more", "personId": "rahul", "direction": "taken", "outstandingPrincipal": 12000, "isDeleted": false }],
+      "expected": { "directBalance": 0, "loanReceivable": 0, "loanPayable": 12000, "legacyLoanLedger": 0, "net": -12000, "owesMe": 0, "iOwe": 12000 }
+    },
+    {
+      "name": "10 reversed origination (Loan trashed) contributes nothing",
+      "currentBalance": 0,
+      "ledgerEntries": [],
+      "loans": [{ "id": "orig_k3-abcdefgh_loan", "personId": "rahul", "direction": "given", "outstandingPrincipal": 10000, "isDeleted": true }],
+      "expected": { "directBalance": 0, "loanReceivable": 0, "loanPayable": 0, "legacyLoanLedger": 0, "net": 0, "owesMe": 0, "iOwe": 0 }
+    },
+    {
+      "name": "10b legacy Loan trashed on Flutter (legacy entry still active) contributes nothing",
+      "currentBalance": 10000,
+      "ledgerEntries": [{ "transactionRef": "L-trashed", "signedAmount": 10000, "isDeleted": false }],
+      "loans": [{ "id": "L-trashed", "personId": "rahul", "direction": "given", "outstandingPrincipal": 10000, "isDeleted": true }],
+      "expected": { "directBalance": 0, "loanReceivable": 0, "loanPayable": 0, "legacyLoanLedger": 10000, "net": 0, "owesMe": 0, "iOwe": 0 }
+    },
+    {
+      "name": "11 reversed payment restores the receivable",
+      "currentBalance": 0,
+      "ledgerEntries": [],
+      "loans": [{ "id": "L-rev", "personId": "rahul", "direction": "given", "outstandingPrincipal": 10000, "isDeleted": false }],
+      "expected": { "directBalance": 0, "loanReceivable": 10000, "loanPayable": 0, "legacyLoanLedger": 0, "net": 10000, "owesMe": 10000, "iOwe": 0 }
+    },
+    {
+      "name": "12 closed Loan keeps its outstanding principal",
+      "currentBalance": 0,
+      "ledgerEntries": [],
+      "loans": [{ "id": "L-closed", "personId": "rahul", "direction": "given", "outstandingPrincipal": 10000, "isDeleted": false }],
+      "expected": { "directBalance": 0, "loanReceivable": 10000, "loanPayable": 0, "legacyLoanLedger": 0, "net": 10000, "owesMe": 10000, "iOwe": 0 }
+    },
+    {
+      "name": "13 another person's Loan and a deleted ledger entry are ignored",
+      "currentBalance": -500,
+      "ledgerEntries": [
+        { "transactionRef": null, "signedAmount": -500, "isDeleted": false },
+        { "transactionRef": "L-other", "signedAmount": 9999, "isDeleted": true }
+      ],
+      "loans": [{ "id": "L-other", "personId": "priya", "direction": "given", "outstandingPrincipal": 7000, "isDeleted": false }],
+      "expected": { "directBalance": -500, "loanReceivable": 0, "loanPayable": 0, "legacyLoanLedger": 0, "net": -500, "owesMe": 0, "iOwe": 500 }
+    },
+    {
+      "name": "14 direct I-owe offsets a Loan they owe me (net per person)",
+      "currentBalance": -2000,
+      "ledgerEntries": [{ "transactionRef": null, "signedAmount": -2000, "isDeleted": false }],
+      "loans": [{ "id": "L-net", "personId": "rahul", "direction": "given", "outstandingPrincipal": 10000, "isDeleted": false }],
+      "expected": { "directBalance": -2000, "loanReceivable": 10000, "loanPayable": 0, "legacyLoanLedger": 0, "net": 8000, "owesMe": 8000, "iOwe": 0 }
+    }
+  ],
+  "totals": {
+    "positions": [
+      { "owesMe": 10000, "iOwe": 0 },
+      { "owesMe": 0, "iOwe": 3000 },
+      { "owesMe": 0, "iOwe": 0 }
+    ],
+    "expected": { "totalOwedToMe": 10000, "owedByCount": 1, "totalIOwe": 3000, "owingCount": 1, "net": 7000 }
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "description": "Phase 1-2 derived Loan figures. Both flowfi-web and Finance_App parse these raw Firestore payment documents with their own fromFirestore and must compute identical results. Byte-identical copy in both repos.",
+  "loanAmount": 12000,
+  "installments": [
+    { "amountDue": 1000, "amountPaid": 1000, "isSkipped": false, "principalPortion": null },
+    { "amountDue": 1000, "amountPaid": 1000, "isSkipped": false, "principalPortion": null },
+    { "amountDue": 1000, "amountPaid": 400, "isSkipped": false, "principalPortion": null },
+    { "amountDue": 1000, "amountPaid": 0, "isSkipped": false, "principalPortion": null }
+  ],
+  "payments": [
+    { "id": "adv_p1_p0", "installmentId": "i1", "amount": 1000, "allocationType": "regularEmi", "prepaymentPrincipalAmount": null, "transactionId": "adv_p1_txn", "deleted": false },
+    { "id": "adv_p1_principal", "installmentId": "i12", "amount": 3000, "allocationType": "principalPrepayment", "prepaymentPrincipalAmount": 3000, "transactionId": "adv_p1_txn", "deleted": false },
+    { "id": "adv_p2_p0", "installmentId": "i2", "amount": 1000, "allocationType": "regularEmi", "prepaymentPrincipalAmount": null, "transactionId": "adv_p2_txn", "deleted": false },
+    { "id": "adv_p2_principal", "installmentId": "i9", "amount": 2000, "allocationType": "principalPrepayment", "prepaymentPrincipalAmount": 2000, "transactionId": "adv_p2_txn", "deleted": false },
+    { "id": "adv_p3_principal", "installmentId": "i8", "amount": 1500, "allocationType": "principalPrepayment", "prepaymentPrincipalAmount": 1500, "transactionId": "adv_p3_txn", "deleted": true },
+    { "id": "legacy_1", "installmentId": "i3", "amount": 400, "allocationType": null, "prepaymentPrincipalAmount": null, "transactionId": null, "deleted": false }
+  ],
+  "accountBalances": 100000,
+  "otherLoans": [
+    { "direction": "given", "outstandingPrincipal": 25000 }
+  ],
+  "emis": [
+    { "outstandingPrincipal": 30000, "ownedByTrackedCard": false },
+    { "outstandingPrincipal": 60000, "ownedByTrackedCard": true }
+  ],
+  "expected": {
+    "principalPrepaid": 5000,
+    "outstandingPrincipal": 4600,
+    "countsFromSchedule": [false, false, false, false, false, true],
+    "borrowedPrincipal": 4600,
+    "lentPrincipal": 25000,
+    "emiPrincipal": 30000,
+    "cardOwnedEmiPrincipal": 60000,
+    "netWorth": 90400
+  }
+}

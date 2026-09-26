@@ -1,0 +1,84 @@
+{
+  "description": "Golden origination contract for LoanRepository.createAgreementWithOrigination (Web) / createAgreementWithOrigination (Flutter). Byte-identical copy lives in Finance_App/test/cross_platform_fixtures/loan_origination_fixture.json.",
+  "idempotencyKey": "wizard-7f3a9c21",
+  "ids": {
+    "loanId": "orig_wizard-7f3a9c21_loan",
+    "scheduleId": "orig_wizard-7f3a9c21_sched",
+    "transactionId": "orig_wizard-7f3a9c21_txn",
+    "installmentIds": { "1": "orig_wizard-7f3a9c21_inst_1", "12": "orig_wizard-7f3a9c21_inst_12" }
+  },
+  "invalidKeys": ["short", "has/slash", "has space in it", ""],
+  "maxAtomicInstallments": 480,
+  "loanIdKeys": [
+    { "loanId": "orig_wizard-7f3a9c21_loan", "key": "wizard-7f3a9c21" },
+    { "loanId": "3f2b8c1e-1111-4a2b-9c3d-abcdefabcdef", "key": null },
+    { "loanId": "orig_short_loan", "key": null }
+  ],
+  "reversalMessages": [
+    { "movement": { "type": "income", "paymentAllocationType": "additionalDisbursement", "amount": 50000, "accountName": "HDFC" }, "message": "This will remove the original ₹50,000 received into HDFC and reverse the loan creation." },
+    { "movement": { "type": "expense", "paymentAllocationType": "additionalDisbursement", "amount": 25000, "accountName": "SBI" }, "message": "This will restore ₹25,000 to SBI and reverse the amount lent." },
+    { "movement": { "type": "expense", "paymentAllocationType": null, "amount": 10000, "accountName": "HDFC" }, "message": "This will restore the recorded ₹10,000 down payment to HDFC and reverse the installment purchase." },
+    { "movement": { "type": "income", "paymentAllocationType": "additionalDisbursement", "amount": 150000.5, "accountName": "ICICI" }, "message": "This will remove the original ₹1,50,000.5 received into ICICI and reverse the loan creation." },
+    { "movement": null, "message": "This will reverse the creation of this agreement and move it to Trash. No account will change." }
+  ],
+  "scenarios": [
+    {
+      "name": "01 borrowed, no account movement",
+      "input": { "agreementKind": "loan", "direction": "taken", "fundingSource": "bank", "loanAmount": 50000, "downPayment": null, "movementAccountId": null, "repaymentType": "installment", "installmentFrequency": "monthly", "installmentCount": 12 },
+      "expected": { "movement": null, "schedule": { "scheduleType": "monthly", "installmentCount": 12 }, "effect": { "accountDelta": 0, "liabilityDelta": 50000, "receivableDelta": 0 } }
+    },
+    {
+      "name": "02 borrowed, record money received into HDFC",
+      "input": { "agreementKind": "loan", "direction": "taken", "fundingSource": "bank", "loanAmount": 50000, "downPayment": null, "movementAccountId": "hdfc", "repaymentType": "installment", "installmentFrequency": "monthly", "installmentCount": 12 },
+      "expected": { "movement": { "kind": "principalReceived", "transactionType": "income", "amount": 50000, "balanceDelta": 50000, "allocationType": "additionalDisbursement", "countsAsIncomeExpense": false }, "schedule": { "scheduleType": "monthly", "installmentCount": 12 }, "effect": { "accountDelta": 50000, "liabilityDelta": 50000, "receivableDelta": 0 } }
+    },
+    {
+      "name": "03 lent, no account movement",
+      "input": { "agreementKind": "loan", "direction": "given", "fundingSource": "person", "loanAmount": 25000, "downPayment": null, "movementAccountId": null, "repaymentType": "installment", "installmentFrequency": "monthly", "installmentCount": 5 },
+      "expected": { "movement": null, "schedule": { "scheduleType": "monthly", "installmentCount": 5 }, "effect": { "accountDelta": 0, "liabilityDelta": 0, "receivableDelta": 25000 } }
+    },
+    {
+      "name": "04 lent to Rahul, record money sent from SBI",
+      "input": { "agreementKind": "loan", "direction": "given", "fundingSource": "person", "loanAmount": 25000, "downPayment": null, "movementAccountId": "sbi", "repaymentType": "installment", "installmentFrequency": "monthly", "installmentCount": 5 },
+      "expected": { "movement": { "kind": "principalSent", "transactionType": "expense", "amount": 25000, "balanceDelta": -25000, "allocationType": "additionalDisbursement", "countsAsIncomeExpense": false }, "schedule": { "scheduleType": "monthly", "installmentCount": 5 }, "effect": { "accountDelta": -25000, "liabilityDelta": 0, "receivableDelta": 25000 } }
+    },
+    {
+      "name": "06 one-time borrowed, record money received",
+      "input": { "agreementKind": "loan", "direction": "taken", "fundingSource": "person", "loanAmount": 8000, "downPayment": null, "movementAccountId": "hdfc", "repaymentType": "oneTime", "installmentFrequency": null, "installmentCount": null },
+      "expected": { "movement": { "kind": "principalReceived", "transactionType": "income", "amount": 8000, "balanceDelta": 8000, "allocationType": "additionalDisbursement", "countsAsIncomeExpense": false }, "schedule": { "scheduleType": "oneTime", "installmentCount": 1 }, "effect": { "accountDelta": 8000, "liabilityDelta": 8000, "receivableDelta": 0 } }
+    },
+    {
+      "name": "08 one-time lent, no movement",
+      "input": { "agreementKind": "loan", "direction": "given", "fundingSource": "person", "loanAmount": 3000, "downPayment": null, "movementAccountId": null, "repaymentType": "oneTime", "installmentFrequency": null, "installmentCount": null },
+      "expected": { "movement": null, "schedule": { "scheduleType": "oneTime", "installmentCount": 1 }, "effect": { "accountDelta": 0, "liabilityDelta": 0, "receivableDelta": 3000 } }
+    },
+    {
+      "name": "09 installment purchase, zero down payment (bank)",
+      "input": { "agreementKind": "installmentPurchase", "direction": "taken", "fundingSource": "bank", "loanAmount": 60000, "downPayment": 0, "movementAccountId": null, "repaymentType": "installment", "installmentFrequency": "monthly", "installmentCount": 6 },
+      "expected": { "movement": null, "schedule": { "scheduleType": "monthly", "installmentCount": 6 }, "effect": { "accountDelta": 0, "liabilityDelta": 60000, "receivableDelta": 0 } }
+    },
+    {
+      "name": "10 installment purchase, down payment not recorded (finance company)",
+      "input": { "agreementKind": "installmentPurchase", "direction": "taken", "fundingSource": "financeCompany", "loanAmount": 50000, "downPayment": 10000, "movementAccountId": null, "repaymentType": "installment", "installmentFrequency": "monthly", "installmentCount": 10 },
+      "expected": { "movement": null, "schedule": { "scheduleType": "monthly", "installmentCount": 10 }, "effect": { "accountDelta": 0, "liabilityDelta": 50000, "receivableDelta": 0 } }
+    },
+    {
+      "name": "11 installment purchase, down payment recorded (60000 - 10000)",
+      "input": { "agreementKind": "installmentPurchase", "direction": "taken", "fundingSource": "financeCompany", "loanAmount": 50000, "downPayment": 10000, "movementAccountId": "hdfc", "repaymentType": "installment", "installmentFrequency": "monthly", "installmentCount": 10 },
+      "expected": { "movement": { "kind": "downPaymentPaid", "transactionType": "expense", "amount": 10000, "balanceDelta": -10000, "allocationType": null, "countsAsIncomeExpense": true }, "schedule": { "scheduleType": "monthly", "installmentCount": 10 }, "effect": { "accountDelta": -10000, "liabilityDelta": 50000, "receivableDelta": 0 } }
+    },
+    {
+      "name": "14 tracked card with purchase transaction, down payment recorded from bank",
+      "input": { "agreementKind": "installmentPurchase", "direction": "taken", "fundingSource": "creditCard", "loanAmount": 50000, "downPayment": 10000, "movementAccountId": "hdfc", "repaymentType": "installment", "installmentFrequency": "monthly", "installmentCount": 6 },
+      "expected": { "movement": { "kind": "downPaymentPaid", "transactionType": "expense", "amount": 10000, "balanceDelta": -10000, "allocationType": null, "countsAsIncomeExpense": true }, "schedule": { "scheduleType": "monthly", "installmentCount": 6 }, "effect": { "accountDelta": -10000, "liabilityDelta": 0, "receivableDelta": 0 } }
+    },
+    {
+      "name": "16 external/person-financed purchase, no movement",
+      "input": { "agreementKind": "installmentPurchase", "direction": "taken", "fundingSource": "person", "loanAmount": 20000, "downPayment": 0, "movementAccountId": null, "repaymentType": "installment", "installmentFrequency": "monthly", "installmentCount": 4 },
+      "expected": { "movement": null, "schedule": { "scheduleType": "monthly", "installmentCount": 4 }, "effect": { "accountDelta": 0, "liabilityDelta": 20000, "receivableDelta": 0 } }
+    }
+  ],
+  "rejected": [
+    { "name": "zero down payment cannot be recorded", "input": { "agreementKind": "installmentPurchase", "direction": "taken", "fundingSource": "bank", "loanAmount": 60000, "downPayment": 0, "movementAccountId": "hdfc" } }
+  ]
+}

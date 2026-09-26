@@ -2,10 +2,13 @@
  * Direct port of `cashFlowThisMonthProvider` and its supporting helpers in
  * `lib/features/cash_flow/presentation/providers/cash_flow_providers.dart`.
  *
- * EMI/Bill/Loan payments never post a Transaction (confirmed in the Flutter
+ * EMI/Bill payments never post a Transaction (confirmed in the Flutter
  * repositories' payment-recording methods), so moneyOut must add their paid
  * amounts explicitly on top of expense transactions rather than assuming
- * those payments are already included. No UI or Firebase dependency here.
+ * those payments are already included. Loan payments DO post a Transaction
+ * today (`LoanAdvancePaymentRepository`), so `loanPaidThisMonth`/
+ * `loanReceivedThisMonth` must carry only legacy schedule-only payments — see
+ * `lib/engines/loan-cash-flow.ts`. No UI or Firebase dependency here.
  */
 
 export type TransactionType = "income" | "expense" | "transfer";
@@ -50,6 +53,8 @@ export function cashFlowThisMonth(params: {
   transactions: CashFlowTransaction[];
   emiPaidThisMonth: number;
   loanPaidThisMonth: number;
+  /** Repayments received on money I lent that have no linked Transaction (legacy) — Money In. */
+  loanReceivedThisMonth?: number;
   billsPaidThisMonth: number;
   moneyReceivedThisMonth: number;
   now?: Date;
@@ -58,6 +63,7 @@ export function cashFlowThisMonth(params: {
     transactions,
     emiPaidThisMonth,
     loanPaidThisMonth,
+    loanReceivedThisMonth = 0,
     billsPaidThisMonth,
     moneyReceivedThisMonth,
     now = new Date(),
@@ -72,7 +78,7 @@ export function cashFlowThisMonth(params: {
   const income = monthTransactions.filter((t) => t.type === "income").reduce((sum, t) => sum + t.amount, 0);
   const expenses = monthTransactions.filter((t) => t.type === "expense").reduce((sum, t) => sum + t.amount, 0);
 
-  const moneyIn = income + moneyReceivedThisMonth;
+  const moneyIn = income + moneyReceivedThisMonth + loanReceivedThisMonth;
   const moneyOut = expenses + emiPaidThisMonth + loanPaidThisMonth + billsPaidThisMonth;
 
   return { moneyIn, moneyOut, net: moneyIn - moneyOut };

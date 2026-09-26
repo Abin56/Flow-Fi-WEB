@@ -163,6 +163,14 @@ export function PersonOverviewPanel({
           <p className="mt-0.5 text-sm font-semibold tabular-nums text-foreground">{person.transactionsCount}</p>
         </div>
       </div>
+      {(person.loanReceivable > 0 || person.loanPayable > 0) && (
+        <p className="mt-2 text-xs text-muted-foreground">
+          Direct balance {formatCurrency(Math.abs(person.directBalance))}
+          {person.directBalance > 0 ? " owed to you" : person.directBalance < 0 ? " you owe" : ""}
+          {person.loanReceivable > 0 && ` · Loans owed to you ${formatCurrency(person.loanReceivable)}`}
+          {person.loanPayable > 0 && ` · Loans you owe ${formatCurrency(person.loanPayable)}`}
+        </p>
+      )}
 
       <div className="mt-4 flex items-center gap-1 border-b border-border/50">
         {TABS.map((t) => (

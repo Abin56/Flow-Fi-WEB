@@ -34,13 +34,17 @@
  *    a stored field, since no "settled" flag exists on `LedgerEntry`.
  */
 
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useFirestoreWatch } from "@/hooks/use-firestore-watch";
+import { useTrashedLoans } from "@/hooks/use-loans";
+import { useTransactions } from "@/hooks/use-transactions";
+import { useLoanRows } from "@/features/loans/hooks/use-loans-data";
+import { personLoanActivity } from "@/features/people/lib/person-loan-activity";
+import { isLegacyLoanLedgerEntry, peopleTotals, personPosition, type PersonPosition } from "@/lib/engines/person-position";
+import type { Loan } from "@/lib/models/loan";
 import { useMemo } from "react";
 import { usePeople } from "@/hooks/use-people";
 import {
   compareLedgerEntriesNewestFirst,
-  isCreditor,
-  isDebtor,
   ledgerEntryTypeFromName,
   signedAmount,
   type LedgerEntry,
@@ -87,33 +91,43 @@ function ledgerEntriesQueryKey(uid: string | undefined, personIds: string[]) {
   return ["people-ledger-entries", uid, ...personIds] as const;
 }
 
-/** Fetches every (non-live) person's ledger entries once per person-id-set. */
-function usePeopleLedgerEntries() {
+/**
+ * Every person's active ledger entries, LIVE — one `watchAll` per person's ledger subcollection,
+ * shared through `useFirestoreWatch`. Live (not a one-shot fetch) because People totals now read the
+ * entries alongside the live `Person.currentBalance` to recognise legacy Loan-generated entries
+ * (`lib/engines/person-position.ts`); a stale entry list next to a fresh balance would mis-split them.
+ */
+export function usePeopleLedgerEntries() {
   const uid = useAuthStore((s) => s.user?.uid);
   const { data: people = [], isLoading: peopleLoading } = usePeople();
   const personIds = useMemo(() => (people as Person[]).map((p) => p.id).sort(), [people]);
 
-  const query = useQuery({
+  const query = useFirestoreWatch<Record<string, LedgerEntry[]>>({
     queryKey: ledgerEntriesQueryKey(uid, personIds),
-    queryFn: async () => {
-      if (!uid) return {} as Record<string, LedgerEntry[]>;
-      const personRepository = createPersonRepository(uid);
-      const entries = await Promise.all(
-        (people as Person[]).map(async (person) => {
-          const ledgerRepository = createLedgerRepository(uid, person.id, personRepository);
-          const active = await ledgerRepository.getAll();
-          return [person.id, active] as const;
-        }),
-      );
-      return Object.fromEntries(entries) as Record<string, LedgerEntry[]>;
-    },
     enabled: !!uid && personIds.length > 0,
-    staleTime: 60_000,
+    hookName: "usePeopleLedgerEntries",
+    emptyValue: {},
+    deps: [uid, personIds.join("|")],
+    subscribe: (onData, onError) => {
+      if (!uid) return () => {};
+      const personRepository = createPersonRepository(uid);
+      const byPerson: Record<string, LedgerEntry[]> = {};
+      const pending = new Set(personIds);
+      const unsubscribes = personIds.map((personId) =>
+        createLedgerRepository(uid, personId, personRepository).watchAll((entries) => {
+          byPerson[personId] = entries;
+          pending.delete(personId);
+          // Emit only once every person has reported, so totals never mix a partial set.
+          if (pending.size === 0) onData({ ...byPerson });
+        }, onError),
+      );
+      return () => unsubscribes.forEach((u) => u());
+    },
   });
 
   return {
     entriesByPersonId: query.data ?? {},
-    isLoading: peopleLoading || (personIds.length > 0 && query.isLoading),
+    isLoading: peopleLoading || (personIds.length > 0 && query.data === undefined),
     uid,
   };
 }
@@ -142,8 +156,15 @@ export interface PersonViewRow {
   email: string;
   relationship: string;
   notes: string;
+  /** Net position they owe me (direct ledger + Loans, see `lib/engines/person-position.ts`). */
   youAreOwed: number;
+  /** Net position I owe them. */
   youOwe: number;
+  /** Direct Person ledger balance only (split expenses, settlements, manual entries) — the part Settle Up settles. */
+  directBalance: number;
+  /** Outstanding Loan principal they owe me / I owe them — settled from the Loan, never from the ledger. */
+  loanReceivable: number;
+  loanPayable: number;
   status: PersonStatus;
   lastActivity: string;
   firstTransaction: string;
@@ -167,8 +188,17 @@ function toActivityItem(entry: LedgerEntry): PersonActivityItem {
   };
 }
 
-function toPersonRow(person: Person, entries: LedgerEntry[]): PersonViewRow {
-  const sortedEntries = entries.slice().sort(compareLedgerEntriesNewestFirst);
+function toPersonRow(
+  person: Person,
+  entries: LedgerEntry[],
+  position: PersonPosition,
+  loanItems: PersonActivityItem[],
+  loanIds: ReadonlySet<string>,
+): PersonViewRow {
+  // Legacy Loan-generated ledger entries are replaced by the Loan's own events (`loanItems`), so a
+  // Loan event never appears twice.
+  const sortedEntries = entries.filter((e) => !isLegacyLoanLedgerEntry(e, loanIds)).sort(compareLedgerEntriesNewestFirst);
+  const activity = [...sortedEntries.map(toActivityItem), ...loanItems].sort((a, b) => b.rawDate.getTime() - a.rawDate.getTime());
   const now = new Date();
 
   return {
@@ -180,15 +210,18 @@ function toPersonRow(person: Person, entries: LedgerEntry[]): PersonViewRow {
     // accepted-gaps list.
     relationship: "",
     notes: person.notes,
-    youAreOwed: isCreditor(person) ? person.currentBalance : 0,
-    youOwe: isDebtor(person) ? -person.currentBalance : 0,
-    status: person.currentBalance === 0 ? "settled" : "active",
-    lastActivity: sortedEntries[0] ? formatTimestamp(sortedEntries[0].date, now) : formatDate(person.createdAt),
-    firstTransaction: sortedEntries.length > 0 ? formatDate(sortedEntries[sortedEntries.length - 1].date) : formatDate(person.createdAt),
+    youAreOwed: position.owesMe,
+    youOwe: position.iOwe,
+    directBalance: position.directBalance,
+    loanReceivable: position.loanReceivable,
+    loanPayable: position.loanPayable,
+    status: position.net === 0 ? "settled" : "active",
+    lastActivity: activity[0] ? formatTimestamp(activity[0].rawDate, now) : formatDate(person.createdAt),
+    firstTransaction: activity.length > 0 ? formatDate(activity[activity.length - 1].rawDate) : formatDate(person.createdAt),
     // No reminder concept exists on `Person`/`LedgerEntry` — always null.
     reminder: null,
-    transactionsCount: entries.length,
-    activity: sortedEntries.map(toActivityItem),
+    transactionsCount: activity.length,
+    activity,
   };
 }
 
@@ -197,12 +230,76 @@ export function usePeopleRows(): { rows: PersonViewRow[]; isLoading: boolean } {
   const { data: people = [], isLoading: peopleLoading } = usePeople();
   const { entriesByPersonId, isLoading: entriesLoading } = usePeopleLedgerEntries();
 
+  const { positionsByPersonId, loans, loanIds, isLoading: positionsLoading } = usePersonPositions();
+  const { data: transactions = [] } = useTransactions();
+
   const rows = useMemo(
-    () => (people as Person[]).map((person) => toPersonRow(person, entriesByPersonId[person.id] ?? [])),
-    [people, entriesByPersonId],
+    () =>
+      (people as Person[]).map((person) => {
+        const loanItems: PersonActivityItem[] = personLoanActivity(person.id, loans, transactions).map((item) => ({
+          id: item.id,
+          type: item.signedEffect >= 0 ? "received" : "paid",
+          receivedStatus: "notApplicable",
+          description: item.description,
+          amount: item.amount,
+          date: formatDate(item.date),
+          rawDate: item.date,
+          personId: person.id,
+          transactionRef: null,
+        }));
+        return toPersonRow(person, entriesByPersonId[person.id] ?? [], positionsByPersonId[person.id], loanItems, loanIds);
+      }),
+    [people, entriesByPersonId, positionsByPersonId, loans, loanIds, transactions],
   );
 
-  return { rows, isLoading: peopleLoading || entriesLoading };
+  return { rows, isLoading: peopleLoading || entriesLoading || positionsLoading };
+}
+
+/**
+ * Live People positions — every person's direct ledger balance plus the Loans they are the
+ * counterparty on, with legacy Loan-generated ledger entries de-duplicated (see
+ * `lib/engines/person-position.ts`). Composes existing live sources only: `usePeople`
+ * (`Person.currentBalance`), the live ledger entries, and `useLoanRows` (the same
+ * `outstandingPrincipal` Net Worth reads) — so a Loan payment, prepayment, Borrow/Lend More or
+ * reversal updates People with no Person write and no refresh.
+ */
+export function usePersonPositions(): {
+  positionsByPersonId: Record<string, PersonPosition>;
+  loans: Loan[];
+  loanIds: ReadonlySet<string>;
+  isLoading: boolean;
+} {
+  const { data: people = [], isLoading: peopleLoading } = usePeople();
+  const { entriesByPersonId, isLoading: entriesLoading } = usePeopleLedgerEntries();
+  const { rows: loanRows, isLoading: loansLoading } = useLoanRows();
+  const { data: trashedLoans = [], isLoading: trashLoading } = useTrashedLoans();
+
+  return useMemo(() => {
+    const loans = loanRows.map((r) => r.loan);
+    const positionLoans = loanRows.map((r) => ({
+      id: r.loan.id,
+      personId: r.loan.personId,
+      direction: r.loan.direction,
+      outstandingPrincipal: r.outstandingPrincipal,
+      isDeleted: false,
+    }));
+    const loanIds = new Set([...loans.map((l) => l.id), ...(trashedLoans as Loan[]).map((l) => l.id)]);
+    const positionsByPersonId: Record<string, PersonPosition> = {};
+    for (const person of people as Person[]) {
+      positionsByPersonId[person.id] = personPosition({
+        personId: person.id,
+        currentBalance: person.currentBalance,
+        loans: positionLoans,
+        ledgerEntries: (entriesByPersonId[person.id] ?? []).map((e) => ({
+          transactionRef: e.transactionRef,
+          signedAmount: signedAmount(e),
+          isDeleted: e.deletedAt != null,
+        })),
+        loanIds,
+      });
+    }
+    return { positionsByPersonId, loans, loanIds, isLoading: peopleLoading || entriesLoading || loansLoading || trashLoading };
+  }, [people, entriesByPersonId, loanRows, trashedLoans, peopleLoading, entriesLoading, loansLoading, trashLoading]);
 }
 
 export interface PeopleStatsSummary {
@@ -220,12 +317,14 @@ export function usePeopleStats(): { stats: PeopleStatsSummary; isLoading: boolea
   const { data: people = [], isLoading: peopleLoading } = usePeople();
   const { entriesByPersonId, isLoading: entriesLoading } = usePeopleLedgerEntries();
 
+  const { positionsByPersonId, isLoading: positionsLoading } = usePersonPositions();
+
   const stats = useMemo(() => {
-    const list = people as Person[];
-    const totalYouAreOwed = list.filter(isCreditor).reduce((sum, p) => sum + p.currentBalance, 0);
-    const owedByPeopleCount = list.filter(isCreditor).length;
-    const totalYouOwe = list.filter(isDebtor).reduce((sum, p) => sum - p.currentBalance, 0);
-    const owingPeopleCount = list.filter(isDebtor).length;
+    const totals = peopleTotals((people as Person[]).map((p) => positionsByPersonId[p.id]).filter((p) => p != null));
+    const totalYouAreOwed = totals.totalOwedToMe;
+    const owedByPeopleCount = totals.owedByCount;
+    const totalYouOwe = totals.totalIOwe;
+    const owingPeopleCount = totals.owingCount;
 
     const now = new Date();
     let settledThisMonth = 0;
@@ -250,9 +349,9 @@ export function usePeopleStats(): { stats: PeopleStatsSummary; isLoading: boolea
       settledThisMonth,
       settledTransactionsCount,
     };
-  }, [people, entriesByPersonId]);
+  }, [people, entriesByPersonId, positionsByPersonId]);
 
-  return { stats, isLoading: peopleLoading || entriesLoading };
+  return { stats, isLoading: peopleLoading || entriesLoading || positionsLoading };
 }
 
 export interface RecentPersonTransactionRow {
@@ -314,7 +413,6 @@ export function useRecentPeopleTransactions(limit: number | null = 5): { rows: R
 /** Create/edit/delete actions wired to the real repositories, scoped to the signed-in user. */
 export function usePeopleActions() {
   const uid = useAuthStore((s) => s.user?.uid);
-  const queryClient = useQueryClient();
 
   return useMemo(() => {
     if (!uid) return null;
@@ -322,8 +420,8 @@ export function usePeopleActions() {
     const accountRepository = createAccountRepository(uid);
     const expenseRepository = createExpenseRepository(uid, accountRepository);
 
-    const invalidateLedger = () =>
-      queryClient.invalidateQueries({ queryKey: ["people-ledger-entries", uid], exact: false });
+    // No ledger invalidation: `usePeopleLedgerEntries` is a live watch, and invalidating a watch
+    // query would reset it to its empty placeholder until the next snapshot.
 
     return {
       createPerson: async (params: CreatePersonParams) => {
@@ -335,7 +433,6 @@ export function usePeopleActions() {
       deletePerson: async (person: Person) => {
         const ledgerRepository = createLedgerRepository(uid, person.id, personRepository);
         await personRepository.deletePersonAndLedger(person, ledgerRepository);
-        await invalidateLedger();
       },
       addLedgerEntry: async (
         person: Person,
@@ -350,20 +447,17 @@ export function usePeopleActions() {
       ) => {
         const ledgerRepository = createLedgerRepository(uid, person.id, personRepository);
         const entry = await ledgerRepository.addEntry(person, params);
-        await invalidateLedger();
         return entry;
       },
       deleteLedgerEntry: async (person: Person, entry: LedgerEntry) => {
         const ledgerRepository = createLedgerRepository(uid, person.id, personRepository);
         await ledgerRepository.softDeleteEntry(person, entry);
-        await invalidateLedger();
       },
       /** ✓/✕ quick-toggle on a split-expense ledger row — see `ExpenseRepository.setParticipantReceivedStatus`. */
       setParticipantReceivedStatus: async (expense: Expense, participant: ExpenseParticipant, receivedStatus: ReceivedStatus) => {
         const updated = await expenseRepository.setParticipantReceivedStatus(expense, participant, receivedStatus);
-        await invalidateLedger();
         return updated;
       },
     };
-  }, [uid, queryClient]);
+  }, [uid]);
 }

@@ -1,6 +1,6 @@
 import { holdTenurePolicy, type DisbursementReamortizationOutcome } from "@/lib/engines/disbursement-reamortization-policy";
 import { planInstallmentSettlement } from "@/lib/engines/installment-settlement";
-import { outstandingPrincipalFor } from "@/lib/engines/loan-outstanding";
+import { outstandingPrincipalAfterPrepaymentsFor } from "@/lib/engines/loan-outstanding";
 import { reduceTenurePolicy, type PrepaymentReamortizationOutcome } from "@/lib/engines/prepayment-reamortization-policy";
 import type { Loan } from "@/lib/models/loan";
 import { remainingAmount, type Installment } from "@/lib/models/payment-schedule";
@@ -20,6 +20,8 @@ export function previewPrincipalPrepayment(
   installments: Installment[],
   principalAmount: number,
   date: Date,
+  /** Active extra principal already paid (`LoanRow.principalPrepaid`). */
+  principalPrepaid = 0,
 ): PrincipalPrepaymentPreview {
   const eligible = [...installments]
     .filter((item) => item.deletedAt == null && !item.isSkipped && remainingAmount(item) > 0)
@@ -33,8 +35,8 @@ export function previewPrincipalPrepayment(
     ...item,
     amountPaid: Math.min(item.amountDue, item.amountPaid + (paidById.get(item.id) ?? 0)),
   }));
-  const principalBefore = outstandingPrincipalFor(loan.loanAmount, installments);
-  const principalAfterScheduled = outstandingPrincipalFor(loan.loanAmount, afterScheduled);
+  const principalBefore = outstandingPrincipalAfterPrepaymentsFor(loan.loanAmount, installments, principalPrepaid);
+  const principalAfterScheduled = outstandingPrincipalAfterPrepaymentsFor(loan.loanAmount, afterScheduled, principalPrepaid);
   const principalAfter = Math.max(0, principalAfterScheduled - principalAmount);
   const untouched = afterScheduled.filter((item) => item.deletedAt == null && !item.isSkipped && item.amountPaid === 0);
   const outcome = untouched.length === 0 || principalAmount <= 0 || loan.installmentFrequency == null
@@ -68,8 +70,9 @@ export function previewAdditionalDisbursement(
   loan: Loan,
   installments: Installment[],
   amount: number,
+  principalPrepaid = 0,
 ): AdditionalDisbursementPreview {
-  const principalBefore = outstandingPrincipalFor(loan.loanAmount, installments);
+  const principalBefore = outstandingPrincipalAfterPrepaymentsFor(loan.loanAmount, installments, principalPrepaid);
   const principalAfter = principalBefore + amount;
   const untouched = installments
     .filter((item) => item.deletedAt == null && !item.isSkipped && item.amountPaid === 0)

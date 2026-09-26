@@ -44,27 +44,25 @@ import {
   sharedCreditLimitStanding,
   statementCycleView,
   type UtilizationCard,
-  type UtilizationEmi,
   type UtilizationStatement,
 } from "@/lib/engines/credit-utilization";
 import {
   statementRemainingAmount,
   statementStatus,
+  statementWithLiveTotal,
   type CreditCardProfile,
   type SharedCreditLimit,
   type Statement,
 } from "@/lib/models/credit-card";
-import type { Emi, EmiPaymentBreakdown } from "@/lib/models/emi";
 import type { Account } from "@/lib/models/account";
 import { compareTransactionsNewestFirst, type Transaction } from "@/lib/models/transaction";
-import { unbilledSpendForCard } from "@/lib/repositories/credit-card-repository";
+import { statementPeriodTotal, unbilledSpendForCard } from "@/lib/repositories/credit-card-repository";
+import { useCardUtilizationEmis } from "@/hooks/use-card-utilization-emis";
 import { useAccounts } from "@/hooks/use-accounts";
 import { useTransactions } from "@/hooks/use-transactions";
 import {
   useAllCreditCardStatements,
-  useAllEmiPaymentBreakdowns,
   useCreditCards,
-  useEmis,
   useSharedCreditLimits,
 } from "@/hooks/use-credit-cards";
 import {
@@ -92,8 +90,16 @@ import { toast } from "@/store/toast-store";
 
 export type { CreditCardDeletionImpact };
 
-/** Mirrors `Statement.remainingAmount`/`Statement.status` -> the engine's `UtilizationStatement` view projection. */
-function toUtilizationStatement(statement: Statement): UtilizationStatement {
+/**
+ * The engine's `UtilizationStatement` view of `statement`, with its total recomputed LIVE from the
+ * card account's current transactions (`statementPeriodTotal`) — the materialized `totalAmount` is a
+ * snapshot that goes stale when a transaction inside the period is later deleted/edited/restored.
+ * Mirrors Flutter's `statementsWithLiveTotalsProvider`. This is also what makes a deleted linked
+ * purchase (card-EMI Case C) actually leave the card's liability.
+ */
+/** Stored-snapshot projection — only for picking which statement is due next (display), never for
+ *  exposure or available-credit totals, which must use `toLiveUtilizationStatement`. */
+function toSnapshotUtilizationStatement(statement: Statement): UtilizationStatement {
   return {
     id: statement.id,
     periodStart: statement.periodStart,
@@ -106,6 +112,21 @@ function toUtilizationStatement(statement: Statement): UtilizationStatement {
   };
 }
 
+export function toLiveUtilizationStatement(statement: Statement, cardTransactions: Transaction[]): UtilizationStatement {
+  const liveTotal = statementPeriodTotal(cardTransactions, statement);
+  const live = statementWithLiveTotal(statement, liveTotal, statement.minimumDue);
+  return {
+    id: live.id,
+    periodStart: live.periodStart,
+    periodEnd: live.periodEnd,
+    dueDate: live.dueDate,
+    totalAmount: live.totalAmount,
+    amountPaid: live.amountPaid,
+    remainingAmount: statementRemainingAmount(live),
+    isPaid: statementStatus(live) === "paid",
+  };
+}
+
 function toUtilizationCard(card: CreditCardProfile): UtilizationCard {
   return {
     id: card.id,
@@ -115,23 +136,17 @@ function toUtilizationCard(card: CreditCardProfile): UtilizationCard {
   };
 }
 
-function toUtilizationEmi(emi: Emi, principalPaidByEmiId: Map<string, number>): UtilizationEmi {
-  return {
-    linkedCreditCardId: emi.linkedCreditCardId,
-    isClosed: emi.isClosed,
-    principalAmount: emi.principalAmount,
-    principalPaid: principalPaidByEmiId.get(emi.id) ?? 0,
-  };
-}
-
 export interface CreditCardStandingView {
   card: CreditCardProfile;
   outstanding: number;
   available: number;
   currentCycleSpend: number;
+  /** Card-linked EMI principal still locked against the limit — the card owns this liability. */
+  lockedEmiPrincipal: number;
   statements: Statement[];
-  /** `creditUtilizationPercent(outstanding, effectiveLimit)` — a shared-limit card's effective
-   *  limit is the pooled `SharedCreditLimit.creditLimit`, not its own (often nominal) `creditLimit`. */
+  /** `creditUtilizationPercent(outstanding + lockedEmiPrincipal, effectiveLimit)` — exposure, so
+   *  utilization and `available` add up to the limit. A shared-limit card's effective limit is the
+   *  pooled `SharedCreditLimit.creditLimit`, not its own (often nominal) `creditLimit`. */
   utilizationPercent: number;
 }
 
@@ -147,15 +162,12 @@ export function useCreditCardStandings(): { standings: CreditCardStandingView[];
   const { data: cards = [], isLoading: cardsLoading } = useCreditCards();
   const { data: sharedLimits = [], isLoading: sharedLimitsLoading } = useSharedCreditLimits();
   const { data: statements = [], isLoading: statementsLoading } = useAllCreditCardStatements();
-  const { data: emis = [], isLoading: emisLoading } = useEmis();
-  const { data: breakdowns = [], isLoading: breakdownsLoading } = useAllEmiPaymentBreakdowns();
+  const { utilizationEmis, isLoading: emisLoading } = useCardUtilizationEmis();
   const { data: transactions = [], isLoading: transactionsLoading } = useTransactions();
 
   const standings = useMemo(() => {
     const cardList = cards as CreditCardProfile[];
     const statementList = statements as Statement[];
-    const emiList = emis as Emi[];
-    const breakdownList = breakdowns as EmiPaymentBreakdown[];
     const transactionList = transactions as Transaction[];
 
     const transactionsByAccountId = new Map<string, Transaction[]>();
@@ -165,19 +177,6 @@ export function useCreditCardStandings(): { standings: CreditCardStandingView[];
       list.push(t);
       transactionsByAccountId.set(t.accountId, list);
     }
-
-    const principalPaidByEmiId = new Map<string, number>();
-    // Group EmiPaymentBreakdown.principalPaid by the owning Emi. Breakdowns
-    // don't carry emiId directly (only scheduleId/installmentId — see
-    // lib/models/emi.ts), so this joins through Emi.scheduleId first.
-    const emiIdByScheduleId = new Map(emiList.map((e) => [e.scheduleId, e.id]));
-    for (const b of breakdownList) {
-      const emiId = emiIdByScheduleId.get(b.scheduleId);
-      if (emiId == null) continue;
-      principalPaidByEmiId.set(emiId, (principalPaidByEmiId.get(emiId) ?? 0) + b.principalPaid);
-    }
-
-    const utilizationEmis = emiList.map((e) => toUtilizationEmi(e, principalPaidByEmiId));
 
     const statementsByCardId = new Map<string, Statement[]>();
     for (const s of statementList) {
@@ -206,7 +205,9 @@ export function useCreditCardStandings(): { standings: CreditCardStandingView[];
     const results: CreditCardStandingView[] = [];
 
     for (const card of cardList) {
-      const cardStatements = (statementsByCardId.get(card.id) ?? []).map(toUtilizationStatement);
+      const cardStatements = (statementsByCardId.get(card.id) ?? []).map((s) =>
+        toLiveUtilizationStatement(s, transactionsByAccountId.get(card.accountId) ?? []),
+      );
       const rawStatements = statementsByCardId.get(card.id) ?? [];
 
       if (card.sharedLimitId != null && sharedLimitById.has(card.sharedLimitId)) {
@@ -214,7 +215,9 @@ export function useCreditCardStandings(): { standings: CreditCardStandingView[];
         const siblings = cardsBySharedLimitId.get(card.sharedLimitId) ?? [card];
         const perCard = siblings.map((sibling) => ({
           card: toUtilizationCard(sibling),
-          statements: (statementsByCardId.get(sibling.id) ?? []).map(toUtilizationStatement),
+          statements: (statementsByCardId.get(sibling.id) ?? []).map((s) =>
+            toLiveUtilizationStatement(s, transactionsByAccountId.get(sibling.accountId) ?? []),
+          ),
           currentCycleStatement: currentCycleByCardId.get(sibling.id) ?? null,
           emis: utilizationEmis,
         }));
@@ -226,7 +229,7 @@ export function useCreditCardStandings(): { standings: CreditCardStandingView[];
           card,
           ...standing,
           statements: rawStatements,
-          utilizationPercent: creditUtilizationPercent(standing.outstanding, sharedLimit.creditLimit),
+          utilizationPercent: creditUtilizationPercent(standing.outstanding + standing.lockedEmiPrincipal, sharedLimit.creditLimit),
         });
         continue;
       }
@@ -241,23 +244,25 @@ export function useCreditCardStandings(): { standings: CreditCardStandingView[];
         card,
         ...standing,
         statements: rawStatements,
-        utilizationPercent: creditUtilizationPercent(standing.outstanding, card.creditLimit),
+        utilizationPercent: creditUtilizationPercent(standing.outstanding + standing.lockedEmiPrincipal, card.creditLimit),
       });
     }
 
     return results;
-  }, [cards, sharedLimits, statements, emis, breakdowns, transactions]);
+  }, [cards, sharedLimits, statements, utilizationEmis, transactions]);
 
   return {
     standings,
     isLoading:
-      cardsLoading || sharedLimitsLoading || statementsLoading || emisLoading || breakdownsLoading || transactionsLoading,
+      cardsLoading || sharedLimitsLoading || statementsLoading || emisLoading || transactionsLoading,
   };
 }
 
 export interface CreditCardTotals {
   creditLimit: number;
   utilized: number;
+  /** Card-linked EMI principal still locked (deduped for shared limits) — card-owned liability, Decision 3. */
+  lockedEmiPrincipal: number;
   available: number;
   spentThisMonth: number;
   utilizationPercent: number;
@@ -277,6 +282,7 @@ export function useCreditCardTotals(): { totals: CreditCardTotals; isLoading: bo
     const seenSharedLimitIds = new Set<string>();
     let creditLimit = 0;
     let utilized = 0;
+    let lockedEmiPrincipal = 0;
     let available = 0;
     let spentThisMonth = 0;
 
@@ -289,15 +295,18 @@ export function useCreditCardTotals(): { totals: CreditCardTotals; isLoading: bo
       }
       creditLimit += s.card.creditLimit;
       utilized += s.outstanding;
+      lockedEmiPrincipal += s.lockedEmiPrincipal;
       available += s.available;
     }
 
     return {
       creditLimit,
       utilized,
+      lockedEmiPrincipal,
       available,
       spentThisMonth,
-      utilizationPercent: creditUtilizationPercent(utilized, creditLimit),
+      // Exposure (statement outstanding + locked card-EMI principal), matching `available`.
+      utilizationPercent: creditUtilizationPercent(utilized + lockedEmiPrincipal, creditLimit),
     };
   }, [standings]);
 
@@ -420,7 +429,7 @@ function toViewItem(
   // the most recently generated statement overall when nothing is pending.
   const cycleView = statementCycleView({
     card: { id: card.id, statementDay: card.statementDay, creditLimit: card.creditLimit, sharedLimitId: card.sharedLimitId },
-    statements: statements.map(toUtilizationStatement),
+    statements: statements.map(toSnapshotUtilizationStatement),
     currentCycleStatement: null,
   });
 

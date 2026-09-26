@@ -49,6 +49,7 @@ function emi(overrides: Partial<Emi> = {}): Emi {
     isAutoDebitEnabled: false,
     autoDebitAccount: null,
     linkedCreditCardId: null,
+    purchaseTransactionId: null,
     dueDayOfMonth: null,
     isClosed: false,
     isDefaulted: false,

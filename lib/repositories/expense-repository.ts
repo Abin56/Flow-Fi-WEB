@@ -21,7 +21,7 @@ import {
 } from "@/lib/models/expense";
 import type { Installment } from "@/lib/models/payment-schedule";
 import { remainingAmount as installmentRemainingAmount } from "@/lib/models/payment-schedule";
-import { isCreditor, type LedgerEntry, type Person } from "@/lib/models/person";
+import { type LedgerEntry, type Person } from "@/lib/models/person";
 import { generateId } from "@/lib/utils/id-generator";
 import { InstallmentPaymentRepository, InstallmentRepository, PaymentScheduleRepository } from "./payment-schedule-repository";
 import { LedgerRepository, PersonRepository } from "./person-repository";
@@ -199,6 +199,13 @@ export interface SettleAcrossPendingParams {
   installmentPaymentRepositoryFor: (scheduleId: string, installmentId: string) => InstallmentPaymentRepository;
   note?: string;
   settlementMethod?: string | null;
+  /**
+   * Signed total of this person's active legacy Loan-generated ledger entries
+   * (`PersonPosition.legacyLoanLedger`). Settle Up settles the DIRECT balance only, so the
+   * remainder's direction is decided from `currentBalance - legacyLoanLedger` — never from Loan
+   * principal an old Web Loan once mirrored into the ledger. Defaults to 0.
+   */
+  legacyLoanLedger?: number;
 }
 
 export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
@@ -1079,7 +1086,7 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
    * caller. Mirrors `ExpenseRepository.settleAcrossPending`.
    */
   async settleAcrossPending(params: SettleAcrossPendingParams): Promise<void> {
-    const { person, pending, amount, date, installmentPaymentRepositoryFor, note, settlementMethod } = params;
+    const { person, pending, amount, date, installmentPaymentRepositoryFor, note, settlementMethod, legacyLoanLedger = 0 } = params;
     if (amount <= 0) {
       throw new Error("Settlement amount must be greater than 0");
     }
@@ -1117,7 +1124,7 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
       // wrong direction and doubling the error.
       const refreshedPerson = (await this.personRepository.getByKey(person.id)) ?? person;
       await this.ledgerRepositoryFor(person.id).addEntry(refreshedPerson, {
-        type: isCreditor(refreshedPerson) ? "receivedBack" : "repaid",
+        type: refreshedPerson.currentBalance - legacyLoanLedger > 0 ? "receivedBack" : "repaid",
         amount: remaining,
         date,
         note: note === "" || note == null ? "Settled all" : note,

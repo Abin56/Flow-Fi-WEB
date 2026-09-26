@@ -139,6 +139,17 @@ export interface Emi extends SoftDeletableEntity {
    */
   linkedCreditCardId: string | null;
 
+  /**
+   * The tracked Credit Card purchase `Transaction` this EMI was converted from (only meaningful
+   * with `linkedCreditCardId`). While that purchase is still an active, calculable Transaction on
+   * the linked card's account, the card's own liability already contains it, so this EMI must NOT
+   * also lock its principal against the card (see `emiPurchaseRepresentedOnCard`). Null — the
+   * legacy default, and the "issuer converted it, no purchase recorded" case — means the EMI's
+   * remaining principal is the card exposure. Never inferred from amount/date. Same key/semantics
+   * as Flutter's `Emi.purchaseTransactionId`.
+   */
+  purchaseTransactionId: string | null;
+
   /** Locked once any payment has been recorded — see `EmiRepository.editEmi`. */
   principalAmount: number;
 
@@ -322,6 +333,7 @@ export function emiFromFirestore(
     autoDebitAccount: (data.autoDebitAccount as string | undefined) ?? null,
     isDefaulted: (data.isDefaulted as boolean | undefined) ?? false,
     linkedCreditCardId: (data.linkedCreditCardId as string | undefined) ?? null,
+    purchaseTransactionId: (data.purchaseTransactionId as string | undefined) ?? null,
     dueDayOfMonth: (data.dueDayOfMonth as number | undefined) ?? null,
     deletedAt: (data.deletedAt as Timestamp | undefined)?.toDate() ?? null,
     lastEditedAt: (data.lastEditedAt as Timestamp | undefined)?.toDate() ?? null,
@@ -359,6 +371,7 @@ export function emiToFirestore(emi: Emi): DocumentData {
     autoDebitAccount: emi.autoDebitAccount,
     isDefaulted: emi.isDefaulted,
     linkedCreditCardId: emi.linkedCreditCardId,
+    purchaseTransactionId: emi.purchaseTransactionId,
     dueDayOfMonth: emi.dueDayOfMonth,
     deletedAt: emi.deletedAt == null ? null : Timestamp.fromDate(emi.deletedAt),
     lastEditedAt: emi.lastEditedAt == null ? null : Timestamp.fromDate(emi.lastEditedAt),

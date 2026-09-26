@@ -42,7 +42,8 @@
  */
 
 import { useMemo } from "react";
-import { outstandingPrincipalFor } from "@/lib/engines/loan-outstanding";
+import { outstandingPrincipalAfterPrepaymentsFor } from "@/lib/engines/loan-outstanding";
+import { useLoanPrincipalPrepaid } from "@/hooks/use-loan-principal-prepaid";
 import {
   installmentStatus,
   type Installment,
@@ -57,7 +58,7 @@ import {
   type LoanStatus,
 } from "@/lib/models/loan";
 import type { Person } from "@/lib/models/person";
-import type { CreateLoanParams, EditLoanParams } from "@/lib/repositories/loan-repository";
+import type { CreateAgreementWithOriginationParams, CreateLoanParams, EditLoanParams } from "@/lib/repositories/loan-repository";
 import {
   createLoanRepository,
   createPersonRepository,
@@ -67,8 +68,6 @@ import { db } from "@/lib/firebase/client";
 import { useAllLoanInstallments, useLoanPersons, useLoans, useTrashedLoans } from "@/hooks/use-loans";
 import { useAuthStore } from "@/store/auth-store";
 import {
-  postLoanCreatedLedgerEntry,
-  postLoanPaymentLedgerEntry,
   reverseLoanLedgerEntries,
   restoreLoanLedgerEntries,
 } from "@/features/loans/lib/loan-ledger-sync";
@@ -87,6 +86,8 @@ export interface LoanRow {
   installments: Installment[];
   status: LoanStatus;
   outstandingPrincipal: number;
+  /** Active extra principal paid on this loan, derived from its payment records. */
+  principalPrepaid: number;
   totalInstallments: number;
   installmentsPaid: number;
   /** Next unpaid installment's amountDue, or the last installment's amountDue once fully paid. */
@@ -95,11 +96,13 @@ export interface LoanRow {
   accent: "primary" | "success" | "warning" | "purple" | "expense";
 }
 
-function toLoanRow(loan: Loan, installments: Installment[], personById: Map<string, Person>, index: number): LoanRow {
+function toLoanRow(loan: Loan, installments: Installment[], personById: Map<string, Person>, index: number, principalPrepaid: number): LoanRow {
   const sorted = [...installments].sort((a, b) => a.sequenceNumber - b.sequenceNumber);
   const status = loanStatusGiven(loan, sorted);
 
-  const outstandingPrincipal = outstandingPrincipalFor(loan.loanAmount, sorted);
+  // Extra principal is subtracted too (Decision 5: derived from the persisted payment records) —
+  // without it Outstanding never went down after "Pay Extra Principal".
+  const outstandingPrincipal = outstandingPrincipalAfterPrepaymentsFor(loan.loanAmount, sorted, principalPrepaid);
 
   const installmentsPaid = sorted.filter((i) => installmentStatus(i) === "paid").length;
   const totalInstallments = sorted.length || loan.installmentCount || 1;
@@ -122,6 +125,7 @@ function toLoanRow(loan: Loan, installments: Installment[], personById: Map<stri
     installments: sorted,
     status,
     outstandingPrincipal,
+    principalPrepaid,
     totalInstallments,
     installmentsPaid,
     emiAmount,
@@ -135,6 +139,7 @@ export function useLoanRows(): { rows: LoanRow[]; isLoading: boolean } {
   const { data: loans = [], isLoading: loansLoading } = useLoans();
   const { data: persons = [], isLoading: personsLoading } = useLoanPersons();
   const { data: installments = [], isLoading: installmentsLoading } = useAllLoanInstallments();
+  const { prepaidByLoanId, isLoading: prepaidLoading } = useLoanPrincipalPrepaid();
 
   const rows = useMemo(() => {
     const personById = new Map((persons as Person[]).map((p) => [p.id, p]));
@@ -145,11 +150,11 @@ export function useLoanRows(): { rows: LoanRow[]; isLoading: boolean } {
       installmentsByScheduleId.set(installment.scheduleId, list);
     }
     return (loans as Loan[]).map((loan, index) =>
-      toLoanRow(loan, installmentsByScheduleId.get(loan.scheduleId) ?? [], personById, index),
+      toLoanRow(loan, installmentsByScheduleId.get(loan.scheduleId) ?? [], personById, index, prepaidByLoanId.get(loan.id) ?? 0),
     );
-  }, [loans, persons, installments]);
+  }, [loans, persons, installments, prepaidByLoanId]);
 
-  return { rows, isLoading: loansLoading || personsLoading || installmentsLoading };
+  return { rows, isLoading: loansLoading || personsLoading || installmentsLoading || prepaidLoading };
 }
 
 export interface TrashedLoanRow {
@@ -196,6 +201,14 @@ export interface CreateLoanFormParams {
   branch?: string | null;
   /** Someone other than the account owner who actually pays this loan's EMIs — see `Loan.payerPersonId`. */
   payerPersonId?: string | null;
+  repaymentType?: CreateLoanParams["repaymentType"];
+  dueDate?: Date | null;
+  agreementKind?: CreateLoanParams["agreementKind"];
+  fundingSource?: CreateLoanParams["fundingSource"];
+  linkedCreditCardId?: string | null;
+  purchaseTransactionId?: string | null;
+  purchaseAmount?: number | null;
+  downPayment?: number | null;
 }
 
 export interface EditLoanFormParams {
@@ -221,12 +234,18 @@ export function useLoanActions() {
 
     return {
       // Lets the loan form's person picker create a brand-new lender/borrower inline instead of
-      // requiring them to already exist on the People page first. Opening balance always starts at 0 —
-      // `postLoanCreatedLedgerEntry` (called right after `createLoan`) is what actually posts the loan
-      // amount onto their ledger, so seeding an opening balance here would double-count it.
+      // requiring them to already exist on the People page first. Opening balance always starts at 0: a
+      // Loan reaches People through its `personId` (see `lib/engines/person-position.ts`), never through
+      // the ledger, so seeding an opening balance here would double-count it.
       createPerson: async (name: string) => {
         return personRepository.createPerson({ name, avatarColorValue: 0, openingBalance: 0 });
       },
+      // The unified Loans & Installments wizard create path — Loan + schedule + (optional) origination
+      // Transaction + Account in one atomic, idempotent repository call. Unlike the legacy `createLoan`
+      // below it posts no People-ledger entry: the Loan's `personId` is the linkage, and a separate
+      // non-atomic ledger write could double-record the same debt (see unified-finance-agreement-contract.md).
+      createAgreement: (params: CreateAgreementWithOriginationParams) => loanRepository.createAgreementWithOrigination(params),
+      reverseAgreementOrigination: (idempotencyKey: string) => loanRepository.reverseOrigination(idempotencyKey),
       createLoan: async (params: CreateLoanFormParams) => {
         // Personal: picks a real Person (`personId`), no institution fields.
         // Institutional: no more find-or-create-person hack — the lender
@@ -235,13 +254,20 @@ export function useLoanActions() {
         // their lender through the linked Person, untouched — see this
         // file's module doc comment and `toLoanRow`'s `lenderName` fallback.
         const loan = await loanRepository.createLoan({
+          agreementKind: params.agreementKind,
+          fundingSource: params.fundingSource,
+          linkedCreditCardId: params.linkedCreditCardId,
+          purchaseTransactionId: params.purchaseTransactionId,
+          purchaseAmount: params.purchaseAmount,
+          downPayment: params.downPayment,
           category: params.category,
           personId: params.category === "personal" ? params.personId : null,
           institutionName: params.category === "institutional" ? params.lenderName.trim() : null,
           direction: params.direction,
           loanAmount: params.loanAmount,
           loanDate: params.loanDate,
-          repaymentType: "installment",
+          repaymentType: params.repaymentType ?? "installment",
+          dueDate: params.dueDate,
           name: params.name,
           interest: params.interest,
           installmentFrequency: params.installmentFrequency,
@@ -253,7 +279,9 @@ export function useLoanActions() {
           branch: params.category === "institutional" ? params.branch : null,
           payerPersonId: params.payerPersonId,
         });
-        await postLoanCreatedLedgerEntry(uid, loan, personRepository);
+        // No People-ledger entry any more: People derive this Loan from its `personId`
+        // (`lib/engines/person-position.ts`). Entries old versions of this form wrote carry
+        // `transactionRef = loan.id` and are recognised and de-duplicated there — never deleted.
         return loan;
       },
       editLoan: async (loan: Loan, params: EditLoanFormParams) => {
@@ -286,7 +314,7 @@ export function useLoanActions() {
                 notes: params.notes,
                 payerPersonId: params.payerPersonId,
               };
-        await loanRepository.editLoan(loan, editParams);
+        return loanRepository.editLoan(loan, editParams);
       },
       // Wraps `LoanRepository.editLoanTerms` — the only path that can change loan amount, interest,
       // frequency, or tenure (installment count) after creation, since those require re-amortizing the
@@ -302,7 +330,7 @@ export function useLoanActions() {
           newInstallmentCount: number;
         },
       ) => {
-        await loanRepository.editLoanTerms(loan, params);
+        return loanRepository.editLoanTerms(loan, params);
       },
       // Wraps `LoanRepository.editLoanDate` — only permitted before any payment exists on the loan
       // (the repository throws otherwise), since it regenerates the whole schedule from scratch.
@@ -310,7 +338,7 @@ export function useLoanActions() {
         loan: Loan,
         params: { newLoanDate: Date; hasPayments: boolean; currentInstallments: Installment[] },
       ) => {
-        await loanRepository.editLoanDate(loan, params);
+        return loanRepository.editLoanDate(loan, params);
       },
       // Soft-deletes to trash — mirrors `loans_screen.dart`'s swipe-to-delete (moves to trash, restorable
       // via `restoreLoan`/the trash view), not a permanent removal. The schedule/installments are left
@@ -351,7 +379,7 @@ export function useLoanActions() {
           includeUpcomingInstallments: params.includeUpcomingInstallments,
           idempotencyKey: params.idempotencyKey,
         });
-        await postLoanPaymentLedgerEntry(uid, loan, personRepository, params);
+        // No People-ledger entry: the Loan payment itself lowers the Person's Loan balance.
         return result;
       },
       recordAdditionalDisbursement: async (
@@ -380,7 +408,7 @@ export function useLoanActions() {
         params: { accountId: string; amount: number; date: Date; note?: string; idempotencyKey: string },
       ) => {
         const paymentRepository = new LoanAdvancePaymentRepository(db, uid);
-        await paymentRepository.record({
+        const result = await paymentRepository.record({
           loan,
           scheduleInstallments: installments,
           accountId: params.accountId,
@@ -390,7 +418,8 @@ export function useLoanActions() {
           includeUpcomingInstallments: true,
           idempotencyKey: params.idempotencyKey,
         });
-        await postLoanPaymentLedgerEntry(uid, loan, personRepository, params);
+        // No People-ledger entry: the Loan payment itself lowers the Person's Loan balance.
+        return result;
       },
     };
   }, [uid]);

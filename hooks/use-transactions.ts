@@ -11,13 +11,14 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { useAllEmiInstallments } from "@/hooks/use-emis";
-import { useAllLoanInstallments } from "@/hooks/use-loans";
+import { useLoanScheduledPayments } from "@/hooks/use-loan-scheduled-payments";
+import { scheduleOnlyLoanFlows } from "@/lib/engines/loan-cash-flow";
 import { useExpenseInstallmentsBySchedule, useExpenses } from "@/hooks/use-expenses";
 import { useFirestoreWatch } from "@/hooks/use-firestore-watch";
 import { useAllBillOccurrences } from "@/features/bills/hooks/use-bill-occurrence-history";
 import { billsPaid as billsPaidInRange, type DashboardBillOccurrence } from "@/lib/engines/dashboard-aggregation";
 import { cashFlowThisMonth, moneyReceivedThisMonth as moneyReceivedInMonth, type CashFlowSummary } from "@/lib/engines/cash-flow";
-import { effectiveMonth, isTransfer, type Transaction } from "@/lib/models/transaction";
+import { effectiveMonth, isNonIncomeExpenseMovement, type Transaction } from "@/lib/models/transaction";
 import { isSplit, type Expense } from "@/lib/models/expense";
 import type { Installment } from "@/lib/models/payment-schedule";
 import { createAccountRepository, createTransactionRepository } from "@/lib/repositories/repository-factory";
@@ -72,7 +73,9 @@ function paidThisMonth(installments: Installment[], now: Date): number {
 export function useCashFlowThisMonth(): CashFlowSummary {
   const { data: transactions } = useTransactions();
   const { data: emiInstallments } = useAllEmiInstallments();
-  const { data: loanInstallments } = useAllLoanInstallments();
+  // Payment-level (not installment-level) so each Loan money movement counts once: payments with a
+  // linked Transaction are already in `transactions`; only legacy unlinked ones come from here.
+  const { payments: loanScheduledPayments } = useLoanScheduledPayments();
   const { occurrences: billOccurrences } = useAllBillOccurrences();
   const { data: expenses } = useExpenses();
   const { installmentsByScheduleId } = useExpenseInstallmentsBySchedule();
@@ -84,7 +87,7 @@ export function useCashFlowThisMonth(): CashFlowSummary {
     amount: t.amount,
     effectiveMonth: effectiveMonth(t),
     isDeleted: t.deletedAt != null,
-    isTransfer: isTransfer(t),
+    isTransfer: isNonIncomeExpenseMovement(t),
   }));
 
   const dashboardBillOccurrences: DashboardBillOccurrence[] = (billOccurrences ?? []).map((o) => ({
@@ -104,10 +107,14 @@ export function useCashFlowThisMonth(): CashFlowSummary {
     [transactions],
   );
 
+  // Bucketed by the real payment date, matching Flutter's Cash Flow loan lines.
+  const loanScheduleFlows = scheduleOnlyLoanFlows(loanScheduledPayments, monthRange, "paymentDate");
+
   return cashFlowThisMonth({
     transactions: cashFlowTransactions,
     emiPaidThisMonth: paidThisMonth(emiInstallments ?? [], now),
-    loanPaidThisMonth: paidThisMonth(loanInstallments ?? [], now),
+    loanPaidThisMonth: loanScheduleFlows.moneyOut,
+    loanReceivedThisMonth: loanScheduleFlows.moneyIn,
     billsPaidThisMonth: billsPaidInRange(dashboardBillOccurrences, monthRange),
     moneyReceivedThisMonth: moneyReceivedInMonth(
       {

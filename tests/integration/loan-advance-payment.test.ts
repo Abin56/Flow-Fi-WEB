@@ -548,7 +548,9 @@ describe("LoanAdvancePaymentRepository (real emulator)", () => {
     },
   );
 
-  it("validation: rejects a payment on a one-time loan", async () => {
+  // One-time loans ARE payable now (see loan-principal-and-one-time.test.ts); this still rejects
+  // because no installment is supplied.
+  it("validation: rejects a one-time loan payment when no installment is supplied", async () => {
     const db = testEnv.authenticatedContext(UID).firestore();
     const accounts = accountRepositoryFor(db);
     const { loanRepository } = loanRepositoryFor(db);

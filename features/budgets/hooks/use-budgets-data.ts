@@ -20,7 +20,7 @@ import { useTransactions } from "@/hooks/use-transactions";
 import { computeBudgetInsight, resolveBudgetPeriod, type BudgetInsightResult } from "@/lib/engines/budget-insight";
 import type { Budget } from "@/lib/models/budget";
 import type { Category } from "@/lib/models/category";
-import { effectiveMonth, type Transaction } from "@/lib/models/transaction";
+import { effectiveMonth, isNonIncomeExpenseMovement, type Transaction } from "@/lib/models/transaction";
 import { createBudgetRepository } from "@/lib/repositories/repository-factory";
 import type { CreateBudgetParams } from "@/lib/repositories/budget-repository";
 import { useAuthStore } from "@/store/auth-store";
@@ -32,7 +32,7 @@ export interface BudgetRow {
 }
 
 function isRealExpense(t: Transaction): boolean {
-  return t.type === "expense" && t.deletedAt == null && t.transferId == null && !t.excludeFromCalculations;
+  return t.type === "expense" && t.deletedAt == null && !isNonIncomeExpenseMovement(t) && !t.excludeFromCalculations;
 }
 
 /**

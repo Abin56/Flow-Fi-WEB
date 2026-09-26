@@ -123,6 +123,31 @@ export function isTransfer(transaction: Transaction): boolean {
   return transaction.transferId != null;
 }
 
+/**
+ * A Loan principal disbursement — the origination movement (`createAgreementWithOrigination`) or a
+ * later Borrow More / Lend More (`recordAdditionalDisbursement`). It really moves the Account (so it
+ * keeps `excludeFromCalculations=false`: that flag also zeroes `balanceEffect`), but the money is a
+ * liability/receivable change, not income or spending. Mirrors Flutter's
+ * `Transaction.isLoanPrincipalDisbursement`.
+ */
+export function isLoanPrincipalDisbursement(
+  transaction: Pick<Transaction, "loanId" | "paymentAllocationType">,
+): boolean {
+  return transaction.loanId != null && transaction.paymentAllocationType === "additionalDisbursement";
+}
+
+/**
+ * Whether income/expense totals (Dashboard, Cash Flow, Reports, Analytics, Budgets, Month Cycle) may
+ * count this transaction: transfer legs and Loan principal disbursements are excluded. The
+ * Transactions list and Account balances still include both. Mirrors Flutter's
+ * `calculableTransactionsProvider` exclusion set (together with `excludeFromCalculations`).
+ */
+export function isNonIncomeExpenseMovement(
+  transaction: Pick<Transaction, "transferId" | "loanId" | "paymentAllocationType">,
+): boolean {
+  return transaction.transferId != null || isLoanPrincipalDisbursement(transaction);
+}
+
 /** The signed delta this transaction applies to its account's balance. */
 export function signedAmount(transaction: Transaction): number {
   return transaction.type === "income" ? transaction.amount : -transaction.amount;

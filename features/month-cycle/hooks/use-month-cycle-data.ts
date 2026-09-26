@@ -27,7 +27,8 @@ import { useAccounts } from "@/hooks/use-accounts";
 import { useAllCreditCardStatements, useCreditCards } from "@/hooks/use-credit-cards";
 import { useAllEmiInstallments } from "@/hooks/use-emis";
 import { useExpenses } from "@/hooks/use-expenses";
-import { useAllLoanInstallments } from "@/hooks/use-loans";
+import { useLoanScheduledPayments } from "@/hooks/use-loan-scheduled-payments";
+import { dashboardLoanPaidRows } from "@/lib/engines/loan-cash-flow";
 import { useBudgets } from "@/hooks/use-budgets";
 import { useCategories } from "@/hooks/use-categories";
 import { useTransactions } from "@/hooks/use-transactions";
@@ -60,7 +61,7 @@ import type { Budget } from "@/lib/models/budget";
 import type { Category } from "@/lib/models/category";
 import { statementRemainingAmount, statementStatus, type CreditCardProfile, type Statement } from "@/lib/models/credit-card";
 import { isSplit, myShare, type Expense } from "@/lib/models/expense";
-import { compareTransactionsNewestFirst, effectiveMonth, isTransfer, type Transaction } from "@/lib/models/transaction";
+import { compareTransactionsNewestFirst, effectiveMonth, isLoanPrincipalDisbursement, isNonIncomeExpenseMovement, isTransfer, type Transaction } from "@/lib/models/transaction";
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
@@ -211,7 +212,7 @@ export function useMonthCycleData() {
   const { data: creditCards = [], isLoading: creditCardsLoading } = useCreditCards();
   const { data: statements = [], isLoading: statementsLoading } = useAllCreditCardStatements();
   const { data: emiInstallments = [], isLoading: emiInstallmentsLoading } = useAllEmiInstallments();
-  const { data: loanInstallments = [], isLoading: loanInstallmentsLoading } = useAllLoanInstallments();
+  const { payments: loanScheduledPayments, isLoading: loanInstallmentsLoading } = useLoanScheduledPayments();
   const { occurrences: billOccurrences = [], isLoading: billOccurrencesLoading } = useAllBillOccurrences();
   const { data: expenses = [], isLoading: expensesLoading } = useExpenses();
   const { data: categories = [], isLoading: categoriesLoading } = useCategories();
@@ -270,7 +271,7 @@ export function useMonthCycleData() {
     const range: DateRange = cycleRange;
     const previousRange = previousRangeFor(strategy, range)!;
 
-    const dashboardTransactions: DashboardTransaction[] = (transactions as Transaction[]).map((t) => ({
+    const dashboardTransactions: DashboardTransaction[] = (transactions as Transaction[]).filter((t) => !isLoanPrincipalDisbursement(t)).map((t) => ({
       id: t.id,
       type: t.type === "income" ? "income" : "expense",
       amount: t.amount,
@@ -293,10 +294,9 @@ export function useMonthCycleData() {
       dueDate: i.dueDate,
       amountPaid: i.amountPaid,
     }));
-    const dashboardLoanInstallments: DashboardInstallment[] = loanInstallments.map((i) => ({
-      dueDate: i.dueDate,
-      amountPaid: i.amountPaid,
-    }));
+    // Only schedule-only (legacy, unlinked) payments on money I borrowed — modern Loan payments are
+    // already counted through their linked Transaction, and lent-loan repayments are not spending.
+    const dashboardLoanInstallments: DashboardInstallment[] = dashboardLoanPaidRows(loanScheduledPayments);
     const dashboardStatements: DashboardStatement[] = (statements as Statement[]).map((s) => ({
       dueDate: s.dueDate,
       amountPaid: s.amountPaid,
@@ -327,7 +327,7 @@ export function useMonthCycleData() {
     const mySpentChangePercent = percentChange(mySpent, myPreviousSpent);
 
     return { spent, previousSpent, income, net, spentChangePercent, mySpent, myPreviousSpent, myNet, mySpentChangePercent };
-  }, [isCustomCycle, cycleRange, transactions, expenses, billOccurrences, emiInstallments, loanInstallments, statements, creditCards]);
+  }, [isCustomCycle, cycleRange, transactions, expenses, billOccurrences, emiInstallments, loanScheduledPayments, statements, creditCards]);
 
   const savingsRatePercent = financialView.income > 0 ? Math.round((financialView.net / financialView.income) * 100) : 0;
 
@@ -340,7 +340,7 @@ export function useMonthCycleData() {
     const expenseByTransactionId = new Map((expenses as Expense[]).map((e) => [e.transactionId, e]));
 
     const inCycleTransactions = (transactions as Transaction[])
-      .filter((t) => t.type === "expense" && !isTransfer(t) && t.deletedAt == null)
+      .filter((t) => t.type === "expense" && !isNonIncomeExpenseMovement(t) && t.deletedAt == null)
       .filter((t) => isInCycle(bucketDateFor(t, isCustomCycle), cycleRange))
       .sort(compareTransactionsNewestFirst);
 
@@ -510,7 +510,7 @@ export function useMonthCycleData() {
     const accountById = new Map((accounts as Account[]).map((a) => [a.id, a]));
     const totals = new Map<string, number>();
     for (const t of transactions as Transaction[]) {
-      if (t.type !== "expense" || isTransfer(t) || t.deletedAt != null) continue;
+      if (t.type !== "expense" || isNonIncomeExpenseMovement(t) || t.deletedAt != null) continue;
       if (!isInCycle(bucketDateFor(t, isCustomCycle), cycleRange)) continue;
       totals.set(t.accountId, (totals.get(t.accountId) ?? 0) + t.amount);
     }
@@ -539,7 +539,7 @@ export function useMonthCycleData() {
     const txnCountByAccount = new Map<string, number>();
 
     for (const t of transactions as Transaction[]) {
-      if (t.deletedAt != null || isTransfer(t)) continue;
+      if (t.deletedAt != null || isNonIncomeExpenseMovement(t)) continue;
       if (!isInCycle(bucketDateFor(t, isCustomCycle), cycleRange)) continue;
       transactionCount += 1;
       txnCountByAccount.set(t.accountId, (txnCountByAccount.get(t.accountId) ?? 0) + 1);

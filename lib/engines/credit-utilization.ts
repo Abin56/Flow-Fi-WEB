@@ -47,8 +47,16 @@ export interface UtilizationEmi {
    * is a computed input, not a stored document, so it was free to rename;
    * `EmiPaymentBreakdown.principalPaid` was not renamed, since that field
    * name is real cross-app Firestore parity, not just internal consistency.
+   * Build it with `emiPrincipalRestored` so it matches Flutter exactly.
    */
   principalPaid: number;
+  /**
+   * True when this EMI's `purchaseTransactionId` purchase is still represented in the card's
+   * liability (see `emiPurchaseRepresentedOnCard`) — Case A. Such an EMI never locks credit: its
+   * purchase is already inside `outstanding`. Absent/false — Cases B and C — the EMI's remaining
+   * principal IS the card exposure.
+   */
+  purchaseRepresented?: boolean;
 }
 
 export interface SharedLimitInput {
@@ -60,6 +68,12 @@ export interface CreditCardStanding {
   outstanding: number;
   available: number;
   currentCycleSpend: number;
+  /**
+   * Card-linked EMI principal still locked against the limit (`linkedEmiPrincipal − principalRestored`,
+   * floored at 0). The card is the canonical owner of this liability (Decision 3): Reports and Net
+   * Worth take card-linked EMI exposure from here, never from the EMI a second time.
+   */
+  lockedEmiPrincipal: number;
 }
 
 function toStatementCycleItem(statement: UtilizationStatement): CycleItem & { statement: UtilizationStatement } {
@@ -115,16 +129,81 @@ export function availableCredit(params: {
   return Math.min(Math.max(raw, 0), creditLimit);
 }
 
+/** Open EMIs linked to `cardId` whose exposure the card carries through the EMI lock (Cases B/C). */
+function lockingEmisFor(emis: UtilizationEmi[], cardId: string): UtilizationEmi[] {
+  return emis.filter((e) => e.linkedCreditCardId === cardId && !e.isClosed && !e.purchaseRepresented);
+}
+
 function linkedEmiPrincipalFor(emis: UtilizationEmi[], cardId: string): number {
-  return emis
-    .filter((e) => e.linkedCreditCardId === cardId && !e.isClosed)
-    .reduce((sum, e) => sum + e.principalAmount, 0);
+  return lockingEmisFor(emis, cardId).reduce((sum, e) => sum + e.principalAmount, 0);
 }
 
 function principalRestoredFor(emis: UtilizationEmi[], cardId: string): number {
-  return emis
-    .filter((e) => e.linkedCreditCardId === cardId && !e.isClosed)
-    .reduce((sum, e) => sum + e.principalPaid, 0);
+  return lockingEmisFor(emis, cardId).reduce((sum, e) => sum + e.principalPaid, 0);
+}
+
+/** Card-linked EMI principal still locked against `cardId` (Cases B/C), floored at 0. */
+export function lockedEmiPrincipalFor(emis: UtilizationEmi[], cardId: string): number {
+  return Math.max(linkedEmiPrincipalFor(emis, cardId) - principalRestoredFor(emis, cardId), 0);
+}
+
+/**
+ * Who owns a card-linked EMI's exposure — the ONE rule available credit, utilization, exposure,
+ * Reports and Net Worth all apply. Mirrors Flutter's `emiPurchaseRepresentedOnCard`
+ * (`card_emi_ownership.dart`) exactly.
+ *
+ * The card's liability is the sum of the card account's active, calculable, non-transfer
+ * Transactions (live statement totals + the current cycle). `purchase` is the EMI's
+ * `purchaseTransactionId` looked up among ACTIVE transactions (a deleted/reversed one is absent):
+ *  - Case A — represented: the purchase already carries the exposure; the EMI must not lock again.
+ *  - Case B — no link (legacy default / issuer-converted, never recorded): the EMI is the exposure.
+ *  - Case C — linked but deleted, excluded, a transfer leg, or on another account: no longer in
+ *    this card's liability, so the EMI owns the exposure like Case B.
+ * Never matched by amount/date.
+ */
+export function emiPurchaseRepresentedOnCard(
+  purchaseTransactionId: string | null | undefined,
+  purchase: { id: string; accountId: string; deletedAt: Date | null; excludeFromCalculations: boolean; transferId: string | null } | null | undefined,
+  cardAccountId: string,
+): boolean {
+  if (purchaseTransactionId == null || purchase == null) return false;
+  return (
+    purchase.id === purchaseTransactionId &&
+    purchase.deletedAt == null &&
+    !purchase.excludeFromCalculations &&
+    purchase.transferId == null &&
+    purchase.accountId === cardAccountId
+  );
+}
+
+/**
+ * Principal repaid on one EMI — mirrors Flutter's `principalRestoredForCardProvider` per-payment
+ * rule exactly: a payment's `EmiPaymentBreakdown.principalPaid` when it has one; otherwise its
+ * principal share (`amount × principalPortion / amountDue`, or the whole amount for a no-interest
+ * installment). Web used to read breakdowns only, so a payment without one restored nothing.
+ */
+export function emiPrincipalRestored(
+  installments: { id: string; amountDue: number; principalPortion: number | null }[],
+  payments: { id: string; installmentId: string; amount: number; deletedAt: Date | null }[],
+  breakdownPrincipalByPaymentId: ReadonlyMap<string, number>,
+): number {
+  const installmentById = new Map(installments.map((i) => [i.id, i]));
+  let restored = 0;
+  for (const payment of payments) {
+    if (payment.deletedAt != null) continue;
+    const fromBreakdown = breakdownPrincipalByPaymentId.get(payment.id);
+    if (fromBreakdown != null) {
+      restored += fromBreakdown;
+      continue;
+    }
+    const installment = installmentById.get(payment.installmentId);
+    if (installment == null || installment.principalPortion == null || installment.amountDue === 0) {
+      restored += payment.amount;
+    } else {
+      restored += payment.amount * (installment.principalPortion / installment.amountDue);
+    }
+  }
+  return restored;
 }
 
 /**
@@ -153,6 +232,7 @@ export function creditCardStanding(params: {
       principalRestored,
     }),
     currentCycleSpend: own.currentCycleSpend,
+    lockedEmiPrincipal: Math.max(linkedEmiPrincipal - principalRestored, 0),
   };
 }
 
@@ -194,6 +274,7 @@ export function sharedCreditLimitStanding(params: {
       principalRestored: totalPrincipalRestored,
     }),
     currentCycleSpend: totalCurrentCycleSpend,
+    lockedEmiPrincipal: Math.max(totalLinkedEmiPrincipal - totalPrincipalRestored, 0),
   };
 }
 

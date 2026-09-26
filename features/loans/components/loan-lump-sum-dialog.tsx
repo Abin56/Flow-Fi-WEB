@@ -9,6 +9,8 @@ import type { Account } from "@/lib/models/account";
 import type { LoanRow } from "@/features/loans/hooks/use-loans-data";
 import { cn } from "@/lib/utils";
 import { generateId } from "@/lib/utils/id-generator";
+import { PAY_EXTRA_PRINCIPAL, PAY_MULTIPLE_EMIS } from "@/features/loans/lib/loan-labels";
+import { friendlyLoanError } from "@/features/loans/lib/loan-live-state";
 import { toast } from "@/store/toast-store";
 
 interface LoanLumpSumDialogProps {
@@ -20,7 +22,7 @@ interface LoanLumpSumDialogProps {
     loan: Loan,
     installments: Installment[],
     params: { accountId: string; amount: number; date: Date; note?: string; idempotencyKey: string },
-  ) => Promise<void>;
+  ) => Promise<unknown>;
 }
 
 /** Settles one lump-sum amount across a loan's outstanding installments, oldest-due-first — port of
@@ -43,14 +45,14 @@ export function LoanLumpSumDialog({ open, onOpenChange, row, accounts, onSettle 
   if (!row) return null;
 
   async function handleSave() {
-    if (!row) return;
+    if (!row || saving) return;
     const parsed = Number(amount);
     if (!Number.isFinite(parsed) || parsed <= 0) {
       toast.error("Couldn't settle payment", "Enter an amount greater than 0.");
       return;
     }
     if (parsed > totalRemaining) {
-      toast.error("Amount exceeds upcoming EMIs", "Use the principal-prepayment flow for an amount above the scheduled outstanding balance.");
+      toast.error("Amount is more than the unpaid EMIs", `Use ${PAY_EXTRA_PRINCIPAL.label} to pay more than ₹${totalRemaining.toLocaleString("en-IN")}.`);
       return;
     }
     if (!accountId) {
@@ -61,10 +63,11 @@ export function LoanLumpSumDialog({ open, onOpenChange, row, accounts, onSettle 
     try {
       const outstanding = [...row.installments].filter((i) => remainingAmount(i) > 0).sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime());
       await onSettle(row.loan, outstanding, { accountId, amount: parsed, date: new Date(date), note: note || undefined, idempotencyKey });
-      toast.success("Settlement recorded", "The payment was allocated across upcoming installments.");
+      toast.success("Payment recorded", "It was applied to the oldest unpaid EMIs first.");
       onOpenChange(false);
     } catch (e) {
-      toast.error("Couldn't settle payment", e instanceof Error ? e.message : "Please try again.");
+      // Stays open with the same idempotency key, so retrying can never record the payment twice.
+      toast.error("Couldn't record payment", friendlyLoanError(e));
     } finally {
       setSaving(false);
     }
@@ -74,10 +77,10 @@ export function LoanLumpSumDialog({ open, onOpenChange, row, accounts, onSettle 
     <FormDialog
       open={open}
       onOpenChange={onOpenChange}
-      title="Pay Off Remaining Balance"
-      description="Enter one amount — it pays off the oldest unpaid installments first, in order."
+      title={PAY_MULTIPLE_EMIS.label}
+      description={`${PAY_MULTIPLE_EMIS.description} It pays the oldest unpaid EMIs first, in order.`}
       onConfirm={handleSave}
-      confirmLabel={saving ? "Saving…" : "Make Payment"}
+      confirmLabel={saving ? "Saving…" : "Record Payment"}
       loading={saving}
       contentClassName="sm:max-w-lg"
     >
@@ -113,7 +116,7 @@ export function LoanLumpSumDialog({ open, onOpenChange, row, accounts, onSettle 
           </select>
         </label>
         <div className="flex items-center justify-between border-t border-border pt-3">
-          <span className="text-xs font-medium text-muted-foreground">Total Outstanding</span>
+          <span className="text-xs font-medium text-muted-foreground">All unpaid EMIs</span>
           <span className="font-mono text-sm font-semibold tabular-nums text-foreground">₹{totalRemaining.toLocaleString("en-IN")}</span>
         </div>
       </div>
