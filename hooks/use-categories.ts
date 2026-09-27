@@ -29,7 +29,10 @@ export function useCategories() {
     deps: [uid, queryClient],
     subscribe: (onData, onError) => {
       if (!uid) return () => {};
-      return createCategoryRepository(uid).watchAll(onData, onError);
+      const repository = createCategoryRepository(uid);
+      // First launch (or everything purged): populate the starter set so pickers aren't empty.
+      void repository.seedDefaultsIfEmpty().catch((err) => onError(err));
+      return repository.watchAll(onData, onError);
     },
   });
 }

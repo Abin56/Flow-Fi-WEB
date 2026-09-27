@@ -409,9 +409,12 @@ export function FormSection({
 }) {
   return (
     <section className={cn("flex flex-col gap-4", className)}>
-      <div className="flex flex-col gap-0.5">
-        <h3 className="font-heading text-[15px] font-semibold text-foreground">{title}</h3>
-        {description && <p className="text-xs text-muted-foreground">{description}</p>}
+      <div className="flex items-start gap-3">
+        <span aria-hidden className="mt-1 h-5 w-1 rounded-full bg-primary" />
+        <div className="flex flex-col gap-0.5">
+          <h3 className="font-heading text-[15px] font-semibold tracking-tight text-foreground">{title}</h3>
+          {description && <p className="text-xs text-muted-foreground">{description}</p>}
+        </div>
       </div>
       {children}
     </section>
@@ -460,12 +463,12 @@ export function MoreOptions({
 }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
-    <div className="flex flex-col border-t border-border pt-2">
+    <div className="flex flex-col rounded-2xl border border-dashed border-border bg-card/50 px-3">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
-        className="-mx-2 flex items-center justify-between gap-3 rounded-lg px-2 py-2.5 text-left outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring"
+        className="flex items-center justify-between gap-3 rounded-xl py-3 text-left outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring"
       >
         <span className="flex min-w-0 flex-col">
           <span className="text-sm font-semibold text-foreground">More options</span>
@@ -473,7 +476,7 @@ export function MoreOptions({
         </span>
         <ChevronDown className={cn("size-4 shrink-0 text-muted-foreground transition-transform", open && "rotate-180")} />
       </button>
-      {open && <div className="flex flex-col gap-5 pt-3">{children}</div>}
+      {open && <div className="flex flex-col gap-5 border-t border-border/70 py-4">{children}</div>}
     </div>
   );
 }
@@ -482,7 +485,7 @@ export function MoreOptions({
 export function Field({ label, hint, children, className }: { label: string; hint?: React.ReactNode; children: React.ReactNode; className?: string }) {
   return (
     <label className={cn("flex min-w-0 flex-col gap-1.5", className)}>
-      <span className="text-xs font-medium text-foreground/80">{label}</span>
+      <span className="text-xs font-semibold tracking-[0.01em] text-foreground/80">{label}</span>
       {children}
       {hint && <span className="text-[11px] leading-snug text-muted-foreground">{hint}</span>}
     </label>
@@ -503,7 +506,7 @@ export function FieldGroup({
 }) {
   return (
     <div className={cn("flex min-w-0 flex-col gap-1.5", className)}>
-      <span className="text-xs font-medium text-foreground/80">{label}</span>
+      <span className="text-xs font-semibold tracking-[0.01em] text-foreground/80">{label}</span>
       {children}
       {hint && <span className="text-[11px] leading-snug text-muted-foreground">{hint}</span>}
     </div>
@@ -532,8 +535,8 @@ export function RevealToggle({
   return (
     <div
       className={cn(
-        "flex flex-col rounded-xl ring-1 transition-colors",
-        checked ? "bg-muted/50 ring-border" : "ring-border/60 hover:ring-border",
+        "flex flex-col overflow-hidden rounded-2xl border transition-all duration-200",
+        checked ? "border-primary/45 bg-primary/[0.07] shadow-[var(--shadow-e1)]" : "border-border bg-card hover:border-foreground/20 hover:shadow-[var(--shadow-e1)]",
       )}
     >
       <button
@@ -541,13 +544,13 @@ export function RevealToggle({
         role="checkbox"
         aria-checked={checked}
         onClick={() => onChange(!checked)}
-        className="group/reveal flex items-center gap-3 rounded-xl px-4 py-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="group/reveal flex items-center gap-3 px-4 py-3.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         {Icon && (
           <span
             className={cn(
               "flex size-8 shrink-0 items-center justify-center rounded-lg transition-colors",
-              checked ? "bg-card text-foreground" : "bg-muted text-muted-foreground",
+              checked ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground",
             )}
           >
             <Icon className="size-4" />
@@ -568,7 +571,7 @@ export function RevealToggle({
           inert={!checked}
         >
           <div className="overflow-hidden">
-            <div className="flex flex-col gap-3 px-4 pt-1 pb-4">{children}</div>
+            <div className="flex flex-col gap-3 border-t border-primary/15 px-4 pt-4 pb-4">{children}</div>
           </div>
         </div>
       )}
@@ -625,7 +628,7 @@ export function AmountInput({
         inputMode="decimal"
         min={min}
         autoFocus={autoFocus}
-        className="h-12 w-full rounded-lg border border-border bg-background pr-3 pl-9 font-heading text-xl font-semibold tabular-nums outline-none transition-colors placeholder:text-muted-foreground/50 focus:border-foreground/40 focus:ring-2 focus:ring-primary/30"
+        className="h-12 w-full rounded-xl border border-border bg-card pr-3 pl-9 font-heading text-xl font-semibold tabular-nums shadow-[var(--shadow-e1)] outline-none transition-colors placeholder:text-muted-foreground/50 hover:border-foreground/25 focus:border-primary-accent-text focus:ring-4 focus:ring-primary/20"
         placeholder="0"
         value={value}
         onChange={(e) => onChange(e.target.value)}
@@ -636,7 +639,7 @@ export function AmountInput({
 
 /** Rounded input class for the Loan & EMI forms. */
 export const LOAN_EMI_INPUT =
-  "h-10 w-full min-w-0 rounded-lg border border-border bg-background px-3 text-sm outline-none transition-colors focus:border-foreground/40 focus:ring-2 focus:ring-primary/30 disabled:opacity-70";
+  "h-11 w-full min-w-0 rounded-xl border border-border bg-card px-3.5 text-sm shadow-[var(--shadow-e1)] outline-none transition-colors placeholder:text-muted-foreground/60 hover:border-foreground/25 focus:border-primary-accent-text focus:ring-4 focus:ring-primary/20 disabled:opacity-70";
 
 /**
  * The focused creation/edit dialog for Loans and EMIs: sticky header, scrolling body, sticky footer with the
@@ -668,21 +671,21 @@ export function LoanEmiFormDialog({
       <DialogContent
         showCloseButton={false}
         className={cn(
-          "flex flex-col gap-0 overflow-hidden p-0 ring-1 ring-border",
+          "flex flex-col gap-0 overflow-hidden border border-border/80 bg-popover p-0 shadow-[var(--shadow-e4)]",
           // Phone: full-height sheet. Desktop: centered card.
           "top-0 left-0 h-[100dvh] max-h-[100dvh] max-w-none translate-x-0 translate-y-0 rounded-none",
-          "sm:top-1/2 sm:left-1/2 sm:h-auto sm:max-h-[min(88vh,52rem)] sm:max-w-2xl sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-2xl",
+          "sm:top-1/2 sm:left-1/2 sm:h-auto sm:max-h-[min(90vh,54rem)] sm:max-w-3xl sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-3xl",
         )}
       >
-        <div className="flex shrink-0 items-start gap-3 border-b border-border px-5 py-4 sm:px-6">
+        <div className="flex shrink-0 items-start gap-3 border-b border-border bg-card px-5 py-4 sm:px-7 sm:py-5">
           {Icon && (
-            <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted text-foreground">
-              <Icon className="size-[18px]" />
+            <span className="flex size-10 shrink-0 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-[var(--shadow-e1)]">
+              <Icon className="size-5" />
             </span>
           )}
           <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-            <DialogTitle className="font-heading text-lg font-semibold">{title}</DialogTitle>
-            <DialogDescription className={description ? "text-xs" : "sr-only"}>{description ?? title}</DialogDescription>
+            <DialogTitle className="font-heading text-xl font-semibold tracking-tight">{title}</DialogTitle>
+            <DialogDescription className={description ? "text-sm" : "sr-only"}>{description ?? title}</DialogDescription>
           </div>
           <button
             type="button"
@@ -695,13 +698,13 @@ export function LoanEmiFormDialog({
           </button>
         </div>
 
-        <div className="flex min-h-0 flex-1 flex-col gap-7 overflow-y-auto px-5 py-5 text-sm sm:px-6 sm:py-6">{children}</div>
+        <div className="flex min-h-0 flex-1 flex-col gap-8 overflow-y-auto bg-muted/35 px-5 py-6 text-sm sm:px-7 sm:py-7">{children}</div>
 
-        <div className="flex shrink-0 items-center justify-end gap-2 border-t border-border bg-card px-5 pt-3.5 pb-[max(0.875rem,env(safe-area-inset-bottom))] sm:px-6">
+        <div className="flex shrink-0 items-center justify-end gap-3 border-t border-border bg-card px-5 pt-4 pb-[max(0.875rem,env(safe-area-inset-bottom))] sm:px-7 sm:pb-5">
           <ClayButton variant="ghost" onClick={() => onOpenChange(false)} disabled={loading}>
             Cancel
           </ClayButton>
-          <ClayButton variant="primary" className="min-w-32 flex-1 sm:flex-none" onClick={onConfirm} disabled={loading}>
+          <ClayButton variant="primary" className="min-w-36 flex-1 sm:flex-none" onClick={onConfirm} disabled={loading}>
             {confirmLabel}
           </ClayButton>
         </div>

@@ -509,6 +509,12 @@ export function TransactionsWorkspace() {
       },
     },
     {
+      id: "category",
+      header: "Category",
+      accessor: (row) => <span className="truncate text-sm text-muted-foreground">{row.category?.name ?? "Uncategorized"}</span>,
+      width: "140px",
+    },
+    {
       id: "amount",
       header: "Amount",
       accessor: (row) => <CurrencyCell amount={row.transaction.type === "income" ? row.transaction.amount : -row.transaction.amount} />,
@@ -795,7 +801,7 @@ export function TransactionsWorkspace() {
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium text-foreground">{displayDescription(row.transaction) || "(No description)"}</p>
                   <p className="truncate text-xs text-muted-foreground">
-                    {formatFullDate(row.transaction.dateTime)} • {row.account?.name ?? "Unknown"}
+                    {formatFullDate(row.transaction.dateTime)} • {row.category?.name ?? "Uncategorized"} • {row.account?.name ?? "Unknown"}
                   </p>
                   {duplicateTransactionIds.has(row.transaction.id) && (
                     <span

@@ -59,6 +59,7 @@ import { cn } from "@/lib/utils";
 
 const LOAN_TYPE_OPTIONS: EmiLoanType[] = ["other", "personal", "vehicle", "home", "education", "gold", "business", "creditCard"];
 const FREQUENCY_OPTIONS: ScheduleType[] = ["monthly", "weekly"];
+const INSTALLMENT_PRESETS = [3, 6, 9, 12, 18, 24];
 const FREQUENCY_LABEL: Record<ScheduleType, string> = {
   monthly: "Monthly",
   weekly: "Weekly",
@@ -126,6 +127,23 @@ function emptyPaymentForm(amount: number): PaymentFormState {
     gst: "",
     processingFee: "",
   };
+}
+
+/** Rough per-installment figure for the Add EMI preview — the real schedule is built on save. */
+function previewInstallment(form: EmiFormState): { perInstallment: number; interest: number } | null {
+  const principal = Number(form.principalAmount);
+  const count = Math.floor(Number(form.installmentCount));
+  if (!(principal > 0) || !(count > 0)) return null;
+  const annual = form.hasInterest ? Number(form.ratePercent) / 100 : 0;
+  if (!(annual > 0)) return { perInstallment: principal / count, interest: 0 };
+  const periodsPerYear = form.installmentFrequency === "weekly" ? 52 : 12;
+  if (form.interestType === "flat") {
+    const interest = principal * annual * (count / periodsPerYear);
+    return { perInstallment: (principal + interest) / count, interest };
+  }
+  const r = annual / periodsPerYear;
+  const per = (principal * r) / (1 - Math.pow(1 + r, -count));
+  return { perInstallment: per, interest: per * count - principal };
 }
 
 const INSTALLMENT_STATUS_BADGE = {
@@ -297,6 +315,7 @@ export function EmiWorkspace({ addSignal = 0 }: EmiWorkspaceProps = {}) {
   const detailCard = detail ? emiCardLabel(detail) : null;
   const detailOverdue = detail?.nextInstallment != null && daysUntil(detail.nextInstallment.dueDate) < 0;
   const isProductPurchase = !form.linkToCard || form.cardEmiKind === "productPurchase";
+  const preview = previewInstallment(form);
 
   return (
     <div className="flex flex-col gap-4">
@@ -462,30 +481,73 @@ export function EmiWorkspace({ addSignal = 0 }: EmiWorkspaceProps = {}) {
         confirmLabel={saving ? "Saving…" : "Add EMI"}
         loading={saving}
       >
-        <FormSection title="Basics">
-          <Field label="What did you buy or finance?">
-            <input
-              className={cn(LOAN_EMI_INPUT, "h-12 text-base")}
-              placeholder={isProductPurchase ? "e.g. iPhone 16, Sofa, Car" : "e.g. Card loan"}
-              value={form.name}
-              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-            />
-          </Field>
+        {/* Hero: what + how much, with a live per-installment preview. */}
+        <section className="flex flex-col gap-4 rounded-2xl border border-border bg-gradient-to-br from-primary/10 via-card to-card p-4 sm:p-5">
+          <input
+            className="w-full border-0 bg-transparent p-0 font-heading text-lg font-semibold tracking-tight outline-none placeholder:text-muted-foreground/50"
+            placeholder={isProductPurchase ? "What did you buy? e.g. iPhone 16" : "Name this card loan"}
+            aria-label="What did you buy or finance?"
+            value={form.name}
+            onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+          />
+          <div className="flex flex-col gap-1.5">
+            <span className="text-xs font-medium text-muted-foreground">Amount being paid off</span>
+            <AmountInput value={form.principalAmount} onChange={(v) => setForm((f) => ({ ...f, principalAmount: v }))} />
+          </div>
+          <div className="flex items-center justify-between gap-3 rounded-xl bg-card/80 px-3.5 py-3 shadow-[var(--shadow-e1)]">
+            <div className="flex flex-col">
+              <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+                Per {form.installmentFrequency === "weekly" ? "week" : "month"}
+              </span>
+              <span className="font-heading text-xl font-semibold tabular-nums">
+                {preview ? `≈ ${formatCurrency(preview.perInstallment)}` : "—"}
+              </span>
+            </div>
+            <div className="flex flex-col items-end text-right text-xs text-muted-foreground">
+              <span>
+                {Number(form.installmentCount) > 0 ? `${form.installmentCount} installments` : "Set installments"}
+              </span>
+              {preview && preview.interest > 0 && <span>+ {formatCurrency(preview.interest)} interest</span>}
+              {preview && preview.interest === 0 && <span className="text-primary-accent-text">No-cost</span>}
+            </div>
+          </div>
+        </section>
 
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <Field label="Amount" hint="The amount being paid off in installments.">
-              <AmountInput value={form.principalAmount} onChange={(v) => setForm((f) => ({ ...f, principalAmount: v }))} />
-            </Field>
-            <Field label="Number of installments">
+        <FormSection title="Schedule" description="When and how often you pay.">
+          <FieldGroup label="Number of installments">
+            <div className="flex flex-wrap items-center gap-2">
+              {INSTALLMENT_PRESETS.map((n) => {
+                const active = form.installmentCount === String(n);
+                return (
+                  <button
+                    key={n}
+                    type="button"
+                    aria-pressed={active}
+                    onClick={() => setForm((f) => ({ ...f, installmentCount: String(n) }))}
+                    className={cn(
+                      "h-9 min-w-11 rounded-full border px-3 text-sm font-medium tabular-nums transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                      active
+                        ? "border-primary bg-primary text-primary-foreground"
+                        : "border-border bg-card text-foreground/80 hover:border-foreground/25",
+                    )}
+                  >
+                    {n}
+                  </button>
+                );
+              })}
               <input
                 type="number"
                 inputMode="numeric"
                 min={1}
-                className={cn(LOAN_EMI_INPUT, "h-12")}
-                value={form.installmentCount}
+                aria-label="Custom number of installments"
+                placeholder="Other"
+                className={cn(LOAN_EMI_INPUT, "h-9 w-24 rounded-full text-center")}
+                value={INSTALLMENT_PRESETS.includes(Number(form.installmentCount)) ? "" : form.installmentCount}
                 onChange={(e) => setForm((f) => ({ ...f, installmentCount: e.target.value }))}
               />
-            </Field>
+            </div>
+          </FieldGroup>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <Field label="First EMI date">
               <input
                 type="date"
@@ -507,6 +569,7 @@ export function EmiWorkspace({ addSignal = 0 }: EmiWorkspaceProps = {}) {
           </div>
         </FormSection>
 
+        <FormSection title="Details" description="Turn on only what applies.">
         <div className="flex flex-col gap-3">
           {/* Credit card controls stay hidden until the user says it's on a card. */}
           <RevealToggle
@@ -591,6 +654,7 @@ export function EmiWorkspace({ addSignal = 0 }: EmiWorkspaceProps = {}) {
             </div>
           </RevealToggle>
         </div>
+        </FormSection>
 
         <WhoIsThisForField
           variant="section"
