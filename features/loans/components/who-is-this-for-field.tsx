@@ -46,10 +46,11 @@ export function WhoIsThisForField({
   bare?: boolean;
   /** Bare mode only — style the heading to match the host form's field labels. */
   labelClassName?: string;
-  /** "section" — the Loan & EMI form pattern: its own titled section with a segmented For me | For someone else. */
-  variant?: "default" | "section";
+  /** "section" — the Loan & EMI form pattern: its own titled section with a segmented For me | For someone else.
+   *  "segmented" — the same controls without the section heading, for a host that titles it itself. */
+  variant?: "default" | "section" | "segmented";
 }) {
-  const section = variant === "section";
+  const section = variant === "section" || variant === "segmented";
   const body = (
     <>
       {section ? (
@@ -64,7 +65,7 @@ export function WhoIsThisForField({
       )}
       {choice === "someoneElse" &&
         (people.length === 0 ? (
-          <div className={cn("flex flex-wrap items-center justify-between gap-2 rounded-xl px-3 py-2.5", section ? "bg-muted/50" : "border border-border bg-card")}>
+          <div className={cn("flex flex-wrap items-center justify-between gap-2 px-3 py-2.5", section ? "rounded-[6px] border border-dashed border-border-strong bg-secondary" : "rounded-xl border border-border bg-card")}>
             <p className="text-xs text-muted-foreground">No people yet — add them in People, then come back.</p>
             <Link
               href="/people"
@@ -75,8 +76,8 @@ export function WhoIsThisForField({
             </Link>
           </div>
         ) : (
-          <label className="flex flex-col gap-1">
-            <span className="text-xs font-medium text-muted-foreground">Person</span>
+          <label className={cn("flex flex-col gap-1.5", section && "max-w-md animate-in fade-in-0 slide-in-from-top-1 duration-200")}>
+            <span className={section ? "text-xs font-semibold text-foreground" : "text-xs font-medium text-muted-foreground"}>Person</span>
             <select className={section ? LOAN_EMI_INPUT : FLAT_INPUT} value={personId} onChange={(e) => onChange({ choice, personId: e.target.value })}>
               <option value="" disabled>
                 Choose a person
@@ -96,6 +97,8 @@ export function WhoIsThisForField({
       </p>
     </>
   );
+
+  if (variant === "segmented") return <div className="flex flex-col gap-3">{body}</div>;
 
   if (section) {
     return (

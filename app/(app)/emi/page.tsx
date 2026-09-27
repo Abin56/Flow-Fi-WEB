@@ -1,7 +1,6 @@
 import { LoanEmiWorkspace } from "@/features/loans/components/loan-emi-workspace";
-import { UnifiedWorkspaceLink } from "@/features/agreements/components/unified-workspace-link";
 
-/** Kept so existing /emi links (agreement handoffs, bookmarks) land on the EMI tab of Loan & EMI. */
+/** Kept so existing /emi links (agreement handoffs, bookmarks) land on the one Loan & EMI workspace. */
 export default function EmiPage() {
-  return <><UnifiedWorkspaceLink /><LoanEmiWorkspace initialTab="emi" /></>;
+  return <LoanEmiWorkspace />;
 }

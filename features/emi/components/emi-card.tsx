@@ -52,11 +52,13 @@ export function emiBadges(row: EmiRow): DebtCardBadge[] {
 
 interface EmiCardProps {
   row: EmiRow;
+  /** Record-type tag from the unified Loan & EMI list. */
+  tag?: string;
   onClick: () => void;
 }
 
 /** Same card as LoanCard (see `DebtCard`) — installment-count progress, outstanding amount first. */
-export function EmiCard({ row, onClick }: EmiCardProps) {
+export function EmiCard({ row, tag, onClick }: EmiCardProps) {
   const { emi, status, installmentsPaid, remainingBalance, nextInstallment } = row;
   const cardLabel = emiCardLabel(row);
   const source = emi.lenderName ?? cardLabel ?? row.category?.name ?? EMI_TYPE_LABEL[emi.loanType];
@@ -67,6 +69,7 @@ export function EmiCard({ row, onClick }: EmiCardProps) {
       icon={EMI_TYPE_ICON[emi.loanType]}
       name={emi.name}
       source={source}
+      tag={tag}
       badges={emiBadges(row)}
       outstandingLabel="Outstanding"
       outstanding={remainingBalance}

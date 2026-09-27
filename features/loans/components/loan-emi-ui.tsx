@@ -1,19 +1,22 @@
 "use client";
 
-import { ChevronDown, ChevronRight, Landmark, ShoppingBag, X, type LucideIcon } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Landmark, Loader2, ShoppingBag, X, type LucideIcon } from "lucide-react";
 import { useState } from "react";
 import { ClayButton } from "@/components/clay/clay-button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { ClayBadge } from "@/components/clay/clay-badge";
-import { FloatingCard } from "@/components/foundation/floating-card";
 import { StaggerItem } from "@/components/foundation/animated-container";
-import { formatCurrency } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 /**
  * Shared presentation for the Loan & EMI section — one card, one detail hero, one fact grid and one
- * "More options" disclosure, so Loans and EMIs read as the same product. Purely visual: every figure
+ * "Optional details" disclosure, so Loans and EMIs read as the same product. Purely visual: every figure
  * passed in is already derived by `useLoanRows`/`useEmiRows`; nothing here computes money.
+ *
+ * Visibility rules (this section must survive low-contrast monitors):
+ *   - Control edges use the solid `border-strong` token, never an opacity-faded border.
+ *   - Selected = lime fill + dark olive edge + check/weight change — never a tint or underline alone.
+ *   - Radius is deliberately tighter than the app-wide scale (whose `rounded-xl` is 20px): see `LE_RADIUS`.
  *
  * Terminology (kept identical on Flutter — see `loan_emi_ui.dart`):
  *   Loan — money borrowed from a bank, lender or person.
@@ -26,6 +29,23 @@ export const KIND_COPY = {
   loan: { label: "Loan", plural: "Loans", description: "Money borrowed from a bank, lender or person." },
   emi: { label: "EMI", plural: "EMIs", description: "A purchase or borrowing repaid in installments." },
 } as const;
+
+/** Loan & EMI radius hierarchy: inputs < options < cards < panels. Literal classes so Tailwind sees them. */
+export const LE_RADIUS = {
+  input: "rounded-[6px]",
+  control: "rounded-[7px]",
+  card: "rounded-[10px]",
+  panel: "rounded-[12px]",
+} as const;
+
+/** Selected-option treatment shared by every choice control. */
+const SELECTED = "border-primary-accent-text bg-primary text-primary-foreground shadow-[inset_0_0_0_1px_var(--primary-accent-text)]";
+const UNSELECTED = "border-border-strong bg-card text-foreground hover:border-muted-foreground hover:bg-secondary";
+
+/** Border/fill/text classes for a selectable option button, selected or not. */
+export function choiceClass(active: boolean): string {
+  return active ? cn(SELECTED, "font-bold") : cn(UNSELECTED, "font-semibold");
+}
 
 /** "Mar 5" / "Mar 5, 2027" — absolute, since a due date reads better as a date than "3 days ago". */
 export function formatDueDate(date: Date): string {
@@ -53,24 +73,72 @@ export function dueLabel(date: Date): string {
   return `Due ${formatDueDate(date)}`;
 }
 
-/** Installment progress bar — dark olive on light, lime on dark (via `primary-accent-text`), so the fill
- *  stays readable on both themes instead of a pale lime on a pale track. */
+/* ───────────────────────── Money ───────────────────────── */
+
+// Same options as `formatCurrency` (lib/format.ts) — split into parts only so the ₹ and any decimals can
+// be sized separately from the digits. The rendered figure is identical to `formatCurrency(amount)`.
+const MONEY_FORMAT = new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 });
+
+/**
+ * A monetary figure in the Loan & EMI financial style: bold heading face, tabular digits, a slightly
+ * smaller solid-grey ₹ so the digits carry the weight. Inherits font size from `className`.
+ */
+export function Money({ amount, className }: { amount: number; className?: string }) {
+  const parts = MONEY_FORMAT.formatToParts(amount);
+  return (
+    <span className={cn("inline-flex items-baseline font-heading font-bold tracking-tight whitespace-nowrap tabular-nums", className)}>
+      {parts.map((p, i) =>
+        p.type === "currency" ? (
+          <span key={i} className="mr-[0.08em] text-[0.72em] font-semibold text-muted-foreground">
+            {p.value}
+          </span>
+        ) : p.type === "fraction" || p.type === "decimal" ? (
+          <span key={i} className="text-[0.7em]">
+            {p.value}
+          </span>
+        ) : (
+          <span key={i}>{p.value}</span>
+        ),
+      )}
+    </span>
+  );
+}
+
+/** The remaining-balance figure — the one number every Loan/EMI surface leads with. */
+export function AmountDisplay({ amount, size = "md", className }: { amount: number; size?: "md" | "lg"; className?: string }) {
+  return (
+    <Money
+      amount={amount}
+      className={cn("leading-none text-foreground", size === "md" ? "text-[26px]" : "text-[32px] sm:text-[38px]", className)}
+    />
+  );
+}
+
+/** Small uppercase label above a figure. */
+function FigureLabel({ children }: { children: React.ReactNode }) {
+  return <span className="text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">{children}</span>;
+}
+
+/* ───────────────────────── Progress ───────────────────────── */
+
+/** Installment progress bar — dark olive on light, lime on dark (via `primary-accent-text`), on a solid
+ *  `border`-grey track so the empty part stays visible on washed-out displays. */
 export function InstallmentProgress({ paid, total, className }: { paid: number; total: number; className?: string }) {
   const percent = total > 0 ? Math.min(100, Math.round((paid / total) * 100)) : 0;
   return (
     <div className={cn("flex flex-col gap-1.5", className)}>
       <div
-        className="h-1.5 w-full overflow-hidden rounded-full bg-muted ring-1 ring-border/70"
+        className="h-1.5 w-full overflow-hidden rounded-[2px] bg-border"
         role="progressbar"
         aria-valuemin={0}
         aria-valuemax={total}
         aria-valuenow={paid}
         aria-label={`${paid} of ${total} installments paid`}
       >
-        <div className="h-full rounded-full bg-primary-accent-text transition-[width] duration-700 ease-out" style={{ width: `${percent}%` }} />
+        <div className="h-full rounded-[2px] bg-primary-accent-text transition-[width] duration-700 ease-out" style={{ width: `${percent}%` }} />
       </div>
       <div className="flex items-center justify-between text-xs">
-        <span className="font-medium text-foreground/80 tabular-nums">
+        <span className="font-semibold text-foreground tabular-nums">
           {paid} of {total} paid
         </span>
         <span className="text-muted-foreground tabular-nums">{Math.max(total - paid, 0)} left</span>
@@ -78,6 +146,8 @@ export function InstallmentProgress({ paid, total, className }: { paid: number; 
     </div>
   );
 }
+
+/* ───────────────────────── Record card ───────────────────────── */
 
 export interface DebtCardBadge {
   label: string;
@@ -89,6 +159,8 @@ export interface DebtCardProps {
   name: string;
   /** Lender / source line under the name. */
   source: string;
+  /** Small record-type tag before the source — "Bank Loan", "Credit Card EMI", … */
+  tag?: string;
   /** Only non-routine states (Overdue, Closed, Completed, Money I Lent) — "Active" is the default and gets no badge. */
   badges?: DebtCardBadge[];
   outstandingLabel: string;
@@ -111,29 +183,15 @@ export function cadenceLabel(frequency: string | null | undefined): string | nul
   return frequency === "monthly" ? "month" : frequency === "weekly" ? "week" : null;
 }
 
-/** The remaining-balance figure — the one number every Loan/EMI surface leads with. */
-export function AmountDisplay({ amount, size = "md", className }: { amount: number; size?: "md" | "lg"; className?: string }) {
-  return (
-    <span
-      className={cn(
-        "truncate font-heading leading-none font-semibold tracking-tight text-foreground tabular-nums",
-        size === "md" ? "text-2xl" : "text-3xl sm:text-4xl",
-        className,
-      )}
-    >
-      {formatCurrency(amount)}
-    </span>
-  );
-}
-
 /**
- * The Loan/EMI list card. Name → remaining balance carry the card; "₹X / month · Next: date", progress and
- * links are secondary. Neutral surface and icon; lime only on the progress fill.
+ * The Loan/EMI list card. Icon + name + status → outstanding (largest) → "₹X / month · Due …" → progress →
+ * linked records. A defined white surface with a solid border; hover lifts the border and shadow slightly.
  */
 export function DebtCard({
   icon: Icon,
   name,
   source,
+  tag,
   badges = [],
   outstandingLabel,
   outstanding,
@@ -149,7 +207,7 @@ export function DebtCard({
 }: DebtCardProps) {
   return (
     <StaggerItem>
-      <FloatingCard
+      <div
         role="button"
         tabIndex={0}
         onClick={onClick}
@@ -159,47 +217,56 @@ export function DebtCard({
             onClick();
           }
         }}
-        elevation={1}
         className={cn(
-          "group flex h-full cursor-pointer flex-col gap-4 border-border px-4 py-4 outline-none transition-colors hover:border-foreground/20 focus-visible:ring-2 focus-visible:ring-ring sm:px-5",
-          muted && "opacity-75",
+          LE_RADIUS.card,
+          "group flex h-full cursor-pointer flex-col gap-3.5 border border-border bg-card px-4 py-4 shadow-e1 outline-none",
+          "transition-[border-color,box-shadow,transform] duration-150 ease-out hover:border-border-strong hover:shadow-e2 motion-safe:hover:-translate-y-px",
+          "focus-visible:border-primary-accent-text focus-visible:ring-2 focus-visible:ring-ring",
+          muted && "bg-secondary",
         )}
       >
-        <div className="flex items-center gap-3">
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted text-foreground/80">
-            <Icon className="size-4" strokeWidth={2} />
+        <div className="flex items-start gap-3">
+          <span className={cn(LE_RADIUS.control, "flex size-9 shrink-0 items-center justify-center border border-border bg-secondary text-foreground")}>
+            <Icon className="size-[18px]" strokeWidth={2} />
           </span>
-          <div className="flex min-w-0 flex-1 flex-col">
-            <h3 className="truncate font-heading text-[15px] leading-snug font-semibold text-foreground">{name}</h3>
-            <p className="truncate text-xs text-muted-foreground">{source}</p>
+          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+            <h3 className={cn("truncate font-heading text-[15px] leading-snug font-semibold", muted ? "text-muted-foreground" : "text-foreground")}>{name}</h3>
+            <p className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+              {tag && (
+                <span className="shrink-0 rounded-[4px] border border-border bg-secondary px-1.5 py-px text-[10.5px] font-semibold text-foreground">
+                  {tag}
+                </span>
+              )}
+              <span className="truncate">{source}</span>
+            </p>
           </div>
           {badges.length > 0 ? (
             <div className="flex shrink-0 flex-col items-end gap-1">
               {badges.map((b) => (
-                <ClayBadge key={b.label} tone={b.tone} className="px-2 py-0.5 text-[11px] font-semibold">
+                <ClayBadge key={b.label} tone={b.tone} className="rounded-[5px] px-2 py-0.5 text-[11px] font-semibold">
                   {b.label}
                 </ClayBadge>
               ))}
             </div>
           ) : (
-            <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
+            <ChevronRight className="mt-1 size-4 shrink-0 text-muted-foreground transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-foreground" />
           )}
         </div>
 
         <div className="flex flex-col gap-1.5">
-          <span className="text-[11px] font-medium text-muted-foreground">{outstandingLabel}</span>
-          <AmountDisplay amount={outstanding} />
+          <FigureLabel>{outstandingLabel}</FigureLabel>
+          <AmountDisplay amount={outstanding} className={cn(muted && "text-muted-foreground")} />
           {nextDate && nextAmount != null && (
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
-              <span className="font-semibold text-foreground/85 tabular-nums">
-                {formatCurrency(nextAmount)}
+            <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-[13px]">
+              <span className="font-semibold text-foreground">
+                <Money amount={nextAmount} />
                 {cadence ? <span className="font-normal text-muted-foreground"> / {cadence}</span> : null}
               </span>
-              <span aria-hidden className="text-muted-foreground/60">
+              <span aria-hidden className="text-muted-foreground">
                 ·
               </span>
-              <span className={cn("font-medium", overdue ? "text-expense" : "text-muted-foreground")}>
-                {overdue ? dueLabel(nextDate) : `Next: ${formatDueDate(nextDate)}`}
+              <span className={cn("font-medium", overdue ? "font-semibold text-expense" : "text-muted-foreground")}>
+                {overdue ? dueLabel(nextDate) : `Due ${formatDueDate(nextDate)}`}
               </span>
             </div>
           )}
@@ -208,19 +275,21 @@ export function DebtCard({
         {total > 1 && <InstallmentProgress paid={paid} total={total} />}
 
         {links.length > 0 && (
-          <div className="mt-auto flex flex-wrap gap-x-3 gap-y-1">
+          <div className="mt-auto flex flex-wrap gap-x-3 gap-y-1 border-t border-border pt-2.5">
             {links.map(({ icon: LinkIcon, label }) => (
-              <span key={label} className="inline-flex max-w-full items-center gap-1 text-[11px] font-medium text-muted-foreground">
-                <LinkIcon className="size-3 shrink-0" />
+              <span key={label} className="inline-flex max-w-full items-center gap-1 text-xs font-medium text-muted-foreground">
+                <LinkIcon className="size-3.5 shrink-0 text-foreground" />
                 <span className="truncate">{label}</span>
               </span>
             ))}
           </div>
         )}
-      </FloatingCard>
+      </div>
     </StaggerItem>
   );
 }
+
+/* ───────────────────────── Detail views ───────────────────────── */
 
 /** Detail-view hero: the outstanding balance first and largest, with progress right under it. */
 export function DetailHero({
@@ -239,16 +308,14 @@ export function DetailHero({
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-start justify-between gap-3">
-        <div className="flex flex-col gap-1">
-          <span className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">{label}</span>
-          <span className="font-heading text-3xl leading-none font-semibold tracking-tight text-foreground tabular-nums sm:text-4xl">
-            {formatCurrency(amount)}
-          </span>
+        <div className="flex flex-col gap-1.5">
+          <FigureLabel>{label}</FigureLabel>
+          <AmountDisplay amount={amount} size="lg" />
         </div>
         {badges.length > 0 && (
           <div className="flex flex-wrap justify-end gap-1">
             {badges.map((b) => (
-              <ClayBadge key={b.label} tone={b.tone} className="font-semibold">
+              <ClayBadge key={b.label} tone={b.tone} className="rounded-[5px] font-semibold">
                 {b.label}
               </ClayBadge>
             ))}
@@ -271,21 +338,30 @@ export interface Fact {
 /** Compact label/value grid used on both detail views. */
 export function FactGrid({ facts, className }: { facts: (Fact | null | false)[]; className?: string }) {
   const visible = facts.filter(Boolean) as Fact[];
+  // Pad the last row with blank cells so the grid's divider background never shows through as a grey block.
+  const fill2 = (2 - (visible.length % 2)) % 2;
+  const fill3 = (3 - (visible.length % 3)) % 3;
+  const fillers = Array.from({ length: Math.max(fill2, fill3) }, (_, i) =>
+    cn("bg-card", i < fill2 ? "block" : "hidden", i < fill3 ? "sm:block" : "sm:hidden"),
+  );
   return (
-    <dl className={cn("grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-border bg-border sm:grid-cols-3", className)}>
+    <dl className={cn(LE_RADIUS.card, "grid grid-cols-2 gap-px overflow-hidden border border-border bg-border sm:grid-cols-3", className)}>
       {visible.map((f) => (
         <div key={f.label} className="flex min-w-0 flex-col gap-0.5 bg-card px-3.5 py-3">
-          <dt className="truncate text-[11px] font-medium text-muted-foreground">{f.label}</dt>
+          <dt className="truncate text-[11px] font-semibold text-muted-foreground">{f.label}</dt>
           <dd
             className={cn(
-              "truncate text-sm font-medium text-foreground tabular-nums",
-              f.strong && "font-semibold",
+              "truncate text-sm font-semibold text-foreground tabular-nums",
+              f.strong && "font-heading text-base font-bold",
               f.tone === "expense" && "text-expense",
             )}
           >
             {f.value}
           </dd>
         </div>
+      ))}
+      {fillers.map((cls, i) => (
+        <div key={`filler-${i}`} aria-hidden className={cls} />
       ))}
     </dl>
   );
@@ -295,12 +371,12 @@ export function FactGrid({ facts, className }: { facts: (Fact | null | false)[];
 export function LinkedRow({ icon: Icon, label, value, action }: { icon: LucideIcon; label: string; value: string; action?: React.ReactNode }) {
   return (
     <div className="flex items-center gap-3 px-3.5 py-2.5">
-      <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-foreground ring-1 ring-border">
+      <span className={cn(LE_RADIUS.control, "flex size-8 shrink-0 items-center justify-center border border-border bg-secondary text-foreground")}>
         <Icon className="size-4" />
       </span>
       <div className="flex min-w-0 flex-1 flex-col">
-        <span className="text-[11px] font-medium text-muted-foreground">{label}</span>
-        <span className="truncate text-sm font-medium text-foreground">{value}</span>
+        <span className="text-[11px] font-semibold text-muted-foreground">{label}</span>
+        <span className="truncate text-sm font-semibold text-foreground">{value}</span>
       </div>
       {action}
     </div>
@@ -308,14 +384,14 @@ export function LinkedRow({ icon: Icon, label, value, action }: { icon: LucideIc
 }
 
 export function LinkedList({ children }: { children: React.ReactNode }) {
-  return <div className="flex flex-col divide-y divide-border overflow-hidden rounded-xl border border-border bg-card">{children}</div>;
+  return <div className={cn(LE_RADIUS.card, "flex flex-col divide-y divide-border overflow-hidden border border-border bg-card")}>{children}</div>;
 }
 
 /** Small uppercase heading for a detail-view section. */
 export function DetailSectionTitle({ children, aside }: { children: React.ReactNode; aside?: React.ReactNode }) {
   return (
     <div className="mb-2.5 flex items-center justify-between gap-2">
-      <h3 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">{children}</h3>
+      <h3 className="text-xs font-bold tracking-[0.06em] text-foreground uppercase">{children}</h3>
       {aside}
     </div>
   );
@@ -323,17 +399,40 @@ export function DetailSectionTitle({ children, aside }: { children: React.ReactN
 
 /* ───────────────────────── Form system ───────────────────────── */
 
+/** Mount transition for conditionally revealed fields — a short fade + 4px slide (none under reduced motion). */
+export function Reveal({ children, className }: { children: React.ReactNode; className?: string }) {
+  return <div className={cn("animate-in fade-in-0 slide-in-from-top-1 duration-200 ease-out", className)}>{children}</div>;
+}
+
 export interface SegmentOption<T extends string> {
   value: T;
   label: string;
   icon?: LucideIcon;
-  /** Optional trailing count (e.g. the Loans | EMIs switch). */
+  /** Optional trailing count. */
   count?: number;
 }
 
+/** Radio indicator for a choice option — hollow ring when off, dark ring with a filled centre when on. A shape
+ *  cue, so the selected option is recognisable even where fills and greys are indistinguishable. */
+export function RadioDot({ checked, className }: { checked: boolean; className?: string }) {
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        "flex size-4 shrink-0 items-center justify-center rounded-full border-2 transition-colors duration-150",
+        checked ? "border-primary-foreground bg-primary-foreground" : "border-border-strong bg-card",
+        className,
+      )}
+    >
+      {checked && <span className="size-1.5 rounded-full bg-primary" />}
+    </span>
+  );
+}
+
 /**
- * Segmented control — one neutral track, the selected segment lifted onto a card surface with a small lime
- * indicator. Used for every either/or choice in Loan & EMI (Loans | EMIs, I borrowed | I lent, For me | …).
+ * Segmented choice — separate bordered option buttons (not a tinted track), each with a radio indicator.
+ * Selected = lime fill + 2px dark edge + filled radio + bold text: four independent signals, so it still
+ * reads correctly on displays where grey and white look the same.
  */
 export function SegmentedControl<T extends string>({
   options,
@@ -354,11 +453,7 @@ export function SegmentedControl<T extends string>({
   className?: string;
 }) {
   return (
-    <div
-      role={role}
-      aria-label={ariaLabel}
-      className={cn("flex w-full gap-1 rounded-xl bg-muted p-1 ring-1 ring-border/60 sm:w-auto sm:self-start", className)}
-    >
+    <div role={role} aria-label={ariaLabel} className={cn("flex w-full gap-1.5 sm:w-auto sm:self-start", className)}>
       {options.map(({ value: v, label, icon: Icon, count }) => {
         const active = v === value;
         return (
@@ -370,24 +465,18 @@ export function SegmentedControl<T extends string>({
             aria-checked={role === "radiogroup" ? active : undefined}
             onClick={() => onChange(v)}
             className={cn(
-              "relative flex min-w-0 flex-1 items-center justify-center gap-2 rounded-lg font-semibold whitespace-nowrap transition-all outline-none focus-visible:ring-2 focus-visible:ring-ring sm:flex-none",
-              size === "md" ? "min-h-10 px-4 text-sm" : "min-h-9 px-3.5 text-[13px]",
-              active ? "bg-card text-foreground shadow-e1" : "text-muted-foreground hover:text-foreground",
+              LE_RADIUS.input,
+              "flex min-w-0 flex-1 items-center justify-center gap-2 border whitespace-nowrap transition-[background-color,border-color,color,box-shadow] duration-150 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-card sm:flex-none",
+              size === "md" ? "min-h-10 px-3.5 text-sm" : "min-h-9 px-3 text-[13px]",
+              choiceClass(active),
             )}
           >
-            {Icon && <Icon className={cn("size-4 shrink-0", active && "text-primary-accent-text")} />}
+            <RadioDot checked={active} />
+            {Icon && <Icon className="size-4 shrink-0" />}
             <span className="truncate">{label}</span>
             {count != null && (
-              <span
-                className={cn(
-                  "rounded-full px-1.5 text-[11px] tabular-nums",
-                  active ? "bg-primary/25 text-primary-accent-text" : "bg-card/70",
-                )}
-              >
-                {count}
-              </span>
+              <span className={cn("rounded-[4px] border px-1.5 text-[11px] tabular-nums", active ? "border-primary-foreground" : "border-border-strong")}>{count}</span>
             )}
-            {active && <span aria-hidden className="absolute inset-x-4 bottom-0.5 h-0.5 rounded-full bg-primary" />}
           </button>
         );
       })}
@@ -395,97 +484,120 @@ export function SegmentedControl<T extends string>({
   );
 }
 
-/** A titled group of form fields. Hierarchy comes from spacing and type, not boxes. */
+/** Wrapping chip choices (filters, types) — square-cornered buttons with the same selected treatment. */
+export function ChoiceChips<T extends string>({
+  options,
+  value,
+  onChange,
+  ariaLabel,
+}: {
+  options: { value: T; label: string }[];
+  value: T;
+  onChange: (v: T) => void;
+  ariaLabel: string;
+}) {
+  return (
+    <div role="radiogroup" aria-label={ariaLabel} className="flex flex-wrap gap-1.5">
+      {options.map((o) => {
+        const active = o.value === value;
+        return (
+          <button
+            key={o.value}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            onClick={() => onChange(o.value)}
+            className={cn(
+              LE_RADIUS.input,
+              "inline-flex h-8 items-center gap-1 border px-2.5 text-xs transition-[background-color,border-color,color] duration-150 outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              active ? cn(SELECTED, "font-bold") : cn(UNSELECTED, "font-semibold"),
+            )}
+          >
+            {active && <Check className="size-3.5" strokeWidth={3} />}
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** A titled group of form fields. Hierarchy comes from type and the dialog's section dividers, not boxes. */
 export function FormSection({
   title,
   description,
+  icon: Icon,
+  aside,
   children,
   className,
 }: {
   title: string;
   description?: string;
+  icon?: LucideIcon;
+  /** Right-aligned summary next to the title (e.g. the installment preview). */
+  aside?: React.ReactNode;
   children: React.ReactNode;
   className?: string;
 }) {
   return (
-    <section className={cn("flex flex-col gap-4", className)}>
-      <div className="flex items-start gap-3">
-        <span aria-hidden className="mt-1 h-5 w-1 rounded-full bg-primary" />
-        <div className="flex flex-col gap-0.5">
-          <h3 className="font-heading text-[15px] font-semibold tracking-tight text-foreground">{title}</h3>
-          {description && <p className="text-xs text-muted-foreground">{description}</p>}
+    <section className={cn("flex flex-col gap-3.5", className)}>
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+        <div className="flex min-w-0 items-center gap-2">
+          {Icon && <Icon className="size-4 shrink-0 text-foreground" strokeWidth={2.25} />}
+          <h3 className="font-heading text-[15px] font-bold tracking-tight text-foreground">{title}</h3>
+          {description && <span className="truncate text-xs text-muted-foreground">{description}</span>}
         </div>
+        {aside}
       </div>
       {children}
     </section>
   );
 }
 
-/** The Loan / EMI pick used by the Add chooser. */
-export function KindChoice({ kind, onSelect }: { kind: "loan" | "emi"; onSelect: () => void }) {
-  const Icon = kind === "loan" ? LOAN_ICON : EMI_ICON;
-  const copy = KIND_COPY[kind];
-  return (
-    <button
-      type="button"
-      onClick={onSelect}
-      className="group flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left outline-none transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
-    >
-      <span
-        className={cn(
-          "flex size-10 shrink-0 items-center justify-center rounded-xl ring-1 transition-colors",
-          kind === "loan" ? "bg-muted text-foreground ring-border" : "bg-primary/15 text-primary-accent-text ring-primary/25",
-        )}
-      >
-        <Icon className="size-[18px]" strokeWidth={2} />
-      </span>
-      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="font-heading text-sm font-semibold text-foreground">{copy.label}</span>
-        <span className="text-xs leading-snug text-muted-foreground">{copy.description}</span>
-      </span>
-      <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
-    </button>
-  );
-}
-
 /**
- * Progressive disclosure for genuinely secondary fields. Closed by default for a new record; the summary line
- * says what's inside before it's opened.
+ * Progressive disclosure for genuinely secondary fields. Closed by default for a new record; a bordered
+ * button (not a text link) with the contents summarised inline.
  */
 export function MoreOptions({
   summary,
+  title = "Optional details",
   defaultOpen = false,
   children,
 }: {
   summary: string;
+  title?: string;
   defaultOpen?: boolean;
   children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
-    <div className="flex flex-col rounded-2xl border border-dashed border-border bg-card/50 px-3">
+    <section className="flex flex-col gap-4">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
-        className="flex items-center justify-between gap-3 rounded-xl py-3 text-left outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring"
+        className={cn(
+          LE_RADIUS.control,
+          "group flex h-11 items-center justify-between gap-3 border px-3.5 text-left transition-[background-color,border-color] duration-150 outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          open ? "border-border-strong bg-secondary" : "border-border-strong bg-card hover:bg-secondary",
+        )}
       >
-        <span className="flex min-w-0 flex-col">
-          <span className="text-sm font-semibold text-foreground">More options</span>
+        <span className="flex min-w-0 items-baseline gap-2">
+          <span className="shrink-0 text-sm font-semibold text-foreground">{title}</span>
           <span className="truncate text-xs text-muted-foreground">{summary}</span>
         </span>
-        <ChevronDown className={cn("size-4 shrink-0 text-muted-foreground transition-transform", open && "rotate-180")} />
+        <ChevronDown className={cn("size-4 shrink-0 text-foreground transition-transform duration-200", open && "rotate-180")} />
       </button>
-      {open && <div className="flex flex-col gap-5 border-t border-border/70 py-4">{children}</div>}
-    </div>
+      {open && <Reveal className="flex flex-col gap-4">{children}</Reveal>}
+    </section>
   );
 }
 
-/** Label + input wrapper with consistent, readable label contrast. */
+/** Label + input wrapper with solid, readable label contrast. */
 export function Field({ label, hint, children, className }: { label: string; hint?: React.ReactNode; children: React.ReactNode; className?: string }) {
   return (
     <label className={cn("flex min-w-0 flex-col gap-1.5", className)}>
-      <span className="text-xs font-semibold tracking-[0.01em] text-foreground/80">{label}</span>
+      <span className="text-xs font-semibold text-foreground">{label}</span>
       {children}
       {hint && <span className="text-[11px] leading-snug text-muted-foreground">{hint}</span>}
     </label>
@@ -506,7 +618,7 @@ export function FieldGroup({
 }) {
   return (
     <div className={cn("flex min-w-0 flex-col gap-1.5", className)}>
-      <span className="text-xs font-semibold tracking-[0.01em] text-foreground/80">{label}</span>
+      <span className="text-xs font-semibold text-foreground">{label}</span>
       {children}
       {hint && <span className="text-[11px] leading-snug text-muted-foreground">{hint}</span>}
     </div>
@@ -514,8 +626,8 @@ export function FieldGroup({
 }
 
 /**
- * Optional contextual card with a switch — "Add money to an account", "Paid with a credit card", "Has interest?".
- * Off: one quiet row. On: the card lifts to a subtle surface and reveals its fields.
+ * Optional contextual block with a checkbox — "Add money to an account", "Has interest?". Off: one bordered
+ * row. On: a dark olive/lime edge and its fields revealed below — no pale lime wash.
  */
 export function RevealToggle({
   checked,
@@ -535,8 +647,9 @@ export function RevealToggle({
   return (
     <div
       className={cn(
-        "flex flex-col overflow-hidden rounded-2xl border transition-all duration-200",
-        checked ? "border-primary/45 bg-primary/[0.07] shadow-[var(--shadow-e1)]" : "border-border bg-card hover:border-foreground/20 hover:shadow-[var(--shadow-e1)]",
+        LE_RADIUS.card,
+        "flex flex-col overflow-hidden border bg-card transition-[border-color,box-shadow] duration-150",
+        checked ? "border-primary-accent-text shadow-e1" : "border-border-strong hover:bg-secondary",
       )}
     >
       <button
@@ -544,13 +657,14 @@ export function RevealToggle({
         role="checkbox"
         aria-checked={checked}
         onClick={() => onChange(!checked)}
-        className="group/reveal flex items-center gap-3 px-4 py-3.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="group/reveal flex items-center gap-3 px-3.5 py-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         {Icon && (
           <span
             className={cn(
-              "flex size-8 shrink-0 items-center justify-center rounded-lg transition-colors",
-              checked ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground",
+              LE_RADIUS.control,
+              "flex size-8 shrink-0 items-center justify-center border transition-colors duration-150",
+              checked ? "border-primary-accent-text bg-primary text-primary-foreground" : "border-border bg-secondary text-foreground",
             )}
           >
             <Icon className="size-4" />
@@ -560,53 +674,22 @@ export function RevealToggle({
           <span className="text-sm font-semibold text-foreground">{title}</span>
           {description && <span className="text-xs text-muted-foreground">{description}</span>}
         </span>
-        <AnimatedCheckbox checked={checked} />
-      </button>
-      {children && (
-        <div
+        <span
+          aria-hidden
           className={cn(
-            "grid transition-[grid-template-rows,opacity] duration-300 ease-out motion-reduce:transition-none",
-            checked ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0",
+            "flex size-5 shrink-0 items-center justify-center rounded-[5px] border-2 transition-colors duration-150",
+            checked ? "border-primary-accent-text bg-primary text-primary-foreground" : "border-border-strong bg-card",
           )}
-          inert={!checked}
         >
-          <div className="overflow-hidden">
-            <div className="flex flex-col gap-3 border-t border-primary/15 px-4 pt-4 pb-4">{children}</div>
-          </div>
-        </div>
-      )}
+          {checked && <Check className="size-3.5" strokeWidth={3} />}
+        </span>
+      </button>
+      {children && checked && <Reveal className="flex flex-col gap-3 border-t border-border px-3.5 pt-3.5 pb-3.5">{children}</Reveal>}
     </div>
   );
 }
 
-/** Rounded checkbox that pops and draws its tick when checked. Purely visual — the parent button owns state. */
-function AnimatedCheckbox({ checked }: { checked: boolean }) {
-  return (
-    <span
-      aria-hidden
-      className={cn(
-        "relative flex size-6 shrink-0 items-center justify-center rounded-lg border-2 transition-all duration-200 ease-out motion-reduce:transition-none",
-        checked ? "scale-100 border-primary bg-primary shadow-[0_0_0_4px] shadow-primary/20" : "border-foreground/25 bg-card group-hover/reveal:border-foreground/45",
-        "group-active/reveal:scale-90",
-      )}
-    >
-      <svg viewBox="0 0 16 16" fill="none" className="size-3.5 text-primary-foreground">
-        <path
-          d="M3.5 8.5l3 3 6-7"
-          stroke="currentColor"
-          strokeWidth={2.4}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          pathLength={1}
-          className="transition-[stroke-dashoffset] duration-300 ease-out motion-reduce:transition-none"
-          style={{ strokeDasharray: 1, strokeDashoffset: checked ? 0 : 1, transitionDelay: checked ? "80ms" : "0ms" }}
-        />
-      </svg>
-    </span>
-  );
-}
-
-/** Big amount input — the one field every Loan/EMI needs. Neutral surface; the figure carries the weight. */
+/** Amount input — a ₹ prefix block and a large bold tabular figure, so the money reads as the key field. */
 export function AmountInput({
   value,
   onChange,
@@ -619,8 +702,14 @@ export function AmountInput({
   autoFocus?: boolean;
 }) {
   return (
-    <div className="relative">
-      <span className="pointer-events-none absolute top-1/2 left-3.5 -translate-y-1/2 font-heading text-lg font-semibold text-muted-foreground">
+    <div
+      className={cn(
+        LE_RADIUS.input,
+        "flex h-11 w-full min-w-0 items-stretch overflow-hidden border border-border-strong bg-card transition-[border-color,box-shadow] duration-150 hover:border-muted-foreground dark:bg-input",
+        "focus-within:border-primary-accent-text focus-within:ring-2 focus-within:ring-ring",
+      )}
+    >
+      <span className="flex w-9 shrink-0 items-center justify-center border-r border-border bg-secondary font-heading text-base font-bold text-foreground">
         ₹
       </span>
       <input
@@ -628,7 +717,7 @@ export function AmountInput({
         inputMode="decimal"
         min={min}
         autoFocus={autoFocus}
-        className="h-12 w-full rounded-xl border border-border bg-card pr-3 pl-9 font-heading text-xl font-semibold tabular-nums shadow-[var(--shadow-e1)] outline-none transition-colors placeholder:text-muted-foreground/50 hover:border-foreground/25 focus:border-primary-accent-text focus:ring-4 focus:ring-primary/20"
+        className="w-full min-w-0 bg-transparent px-3 font-heading text-xl font-bold tracking-tight text-foreground tabular-nums outline-none placeholder:font-semibold placeholder:text-tertiary-foreground"
         placeholder="0"
         value={value}
         onChange={(e) => onChange(e.target.value)}
@@ -637,13 +726,14 @@ export function AmountInput({
   );
 }
 
-/** Rounded input class for the Loan & EMI forms. */
+/** Input class for the Loan & EMI forms — solid control border, small radius, clear focus edge. */
 export const LOAN_EMI_INPUT =
-  "h-11 w-full min-w-0 rounded-xl border border-border bg-card px-3.5 text-sm shadow-[var(--shadow-e1)] outline-none transition-colors placeholder:text-muted-foreground/60 hover:border-foreground/25 focus:border-primary-accent-text focus:ring-4 focus:ring-primary/20 disabled:opacity-70";
+  "h-10 w-full min-w-0 rounded-[6px] border border-border-strong bg-card px-3 text-sm text-foreground outline-none transition-[border-color,box-shadow] duration-150 placeholder:text-tertiary-foreground hover:border-muted-foreground focus:border-primary-accent-text focus:ring-2 focus:ring-ring disabled:bg-secondary disabled:text-muted-foreground dark:bg-input";
 
 /**
- * The focused creation/edit dialog for Loans and EMIs: sticky header, scrolling body, sticky footer with the
- * primary CTA. A centered card on desktop; a full-height sheet on phones.
+ * The focused creation/edit dialog for Loans and EMIs: one defined surface — header, a scrolling body whose
+ * sections are split by solid dividers, and a footer with the single primary CTA. A centered panel on
+ * desktop; a full-height sheet on phones.
  */
 export function LoanEmiFormDialog({
   open,
@@ -655,6 +745,9 @@ export function LoanEmiFormDialog({
   onConfirm,
   confirmLabel,
   loading = false,
+  confirmDisabled = false,
+  success = false,
+  size = "default",
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -665,47 +758,83 @@ export function LoanEmiFormDialog({
   onConfirm: () => void;
   confirmLabel: string;
   loading?: boolean;
+  /** Blocks the primary action (e.g. nothing valid to submit yet) without the loading state. */
+  confirmDisabled?: boolean;
+  /** Brief post-save confirmation: the primary button turns into a check + label before the dialog closes. */
+  success?: boolean;
+  /** "compact" — a narrower panel for focused actions such as Record Payment. */
+  size?: "default" | "compact";
 }) {
+  const busy = loading || success;
   return (
-    <Dialog open={open} onOpenChange={(next) => !loading && onOpenChange(next)}>
+    <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
       <DialogContent
         showCloseButton={false}
         className={cn(
-          "flex flex-col gap-0 overflow-hidden border border-border/80 bg-popover p-0 shadow-[var(--shadow-e4)]",
-          // Phone: full-height sheet. Desktop: centered card.
+          "flex flex-col gap-0 overflow-hidden border border-border-strong bg-card p-0 shadow-[var(--shadow-e4)] ring-0",
+          // Phone: full-height sheet. Desktop: centered panel.
           "top-0 left-0 h-[100dvh] max-h-[100dvh] max-w-none translate-x-0 translate-y-0 rounded-none",
-          "sm:top-1/2 sm:left-1/2 sm:h-auto sm:max-h-[min(90vh,54rem)] sm:max-w-3xl sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-3xl",
+          "sm:top-1/2 sm:left-1/2 sm:h-auto sm:max-h-[min(90vh,52rem)]",
+          size === "compact" ? "sm:max-w-lg" : "sm:max-w-2xl",
+          "sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-[12px]",
         )}
       >
-        <div className="flex shrink-0 items-start gap-3 border-b border-border bg-card px-5 py-4 sm:px-7 sm:py-5">
+        <div className="flex shrink-0 items-center gap-3 border-b border-border bg-card px-5 py-3.5 sm:px-6">
           {Icon && (
-            <span className="flex size-10 shrink-0 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-[var(--shadow-e1)]">
-              <Icon className="size-5" />
+            <span className={cn(LE_RADIUS.control, "flex size-9 shrink-0 items-center justify-center border border-primary-accent-text bg-primary text-primary-foreground")}>
+              <Icon className="size-[18px]" strokeWidth={2.25} />
             </span>
           )}
-          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-            <DialogTitle className="font-heading text-xl font-semibold tracking-tight">{title}</DialogTitle>
-            <DialogDescription className={description ? "text-sm" : "sr-only"}>{description ?? title}</DialogDescription>
+          <div className="flex min-w-0 flex-1 flex-col">
+            <DialogTitle className="font-heading text-lg leading-tight font-bold tracking-tight">{title}</DialogTitle>
+            <DialogDescription className={description ? "truncate text-xs text-muted-foreground" : "sr-only"}>{description ?? title}</DialogDescription>
           </div>
           <button
             type="button"
             onClick={() => onOpenChange(false)}
             aria-label="Close"
-            disabled={loading}
-            className="flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+            disabled={busy}
+            className={cn(
+              LE_RADIUS.control,
+              "flex size-8 shrink-0 items-center justify-center border border-border text-foreground outline-none transition-colors duration-150 hover:border-border-strong hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50",
+            )}
           >
             <X className="size-4" />
           </button>
         </div>
 
-        <div className="flex min-h-0 flex-1 flex-col gap-8 overflow-y-auto bg-muted/35 px-5 py-6 text-sm sm:px-7 sm:py-7">{children}</div>
+        <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto bg-card px-5 py-5 text-sm sm:px-6 [&>*+*]:border-t [&>*+*]:border-border [&>*+*]:pt-5">
+          {children}
+        </div>
 
-        <div className="flex shrink-0 items-center justify-end gap-3 border-t border-border bg-card px-5 pt-4 pb-[max(0.875rem,env(safe-area-inset-bottom))] sm:px-7 sm:pb-5">
-          <ClayButton variant="ghost" onClick={() => onOpenChange(false)} disabled={loading}>
+        <div className="flex shrink-0 items-center justify-end gap-2.5 border-t border-border bg-secondary px-5 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-6 sm:pb-3">
+          <ClayButton variant="secondary" className="rounded-[8px] border-border-strong font-semibold" onClick={() => onOpenChange(false)} disabled={busy}>
             Cancel
           </ClayButton>
-          <ClayButton variant="primary" className="min-w-36 flex-1 sm:flex-none" onClick={onConfirm} disabled={loading}>
-            {confirmLabel}
+          <ClayButton
+            variant="primary"
+            className={cn(
+              "min-w-32 flex-1 gap-1.5 rounded-[8px] border-primary-accent-text font-bold transition-[background-color,opacity] duration-200 sm:flex-none",
+              // Success keeps full opacity (it's a confirmation, not a disabled state).
+              success && "disabled:opacity-100",
+            )}
+            onClick={onConfirm}
+            disabled={busy || confirmDisabled}
+            aria-busy={loading}
+          >
+            {success ? (
+              <>
+                <Check className="size-4 animate-in zoom-in-50 fade-in-0 duration-200" strokeWidth={3} />
+                Done
+              </>
+            ) : loading ? (
+              <>
+                <Loader2 className="size-4 animate-spin" />
+                {confirmLabel}
+              </>
+            ) : (
+              confirmLabel
+            )}
           </ClayButton>
         </div>
       </DialogContent>

@@ -1,23 +1,16 @@
 "use client";
 
-import { ArrowUpRight, Building2, Landmark, Search, Trash2, UserRound, Wallet } from "lucide-react";
+import { ArrowUpRight, Building2, UserRound, Wallet } from "lucide-react";
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 import { ClayBadge } from "@/components/clay/clay-badge";
 import { ClayButton } from "@/components/clay/clay-button";
-import { Stagger } from "@/components/foundation/animated-container";
-import {
-  ChipRow,
-  EmptyState,
-  FLAT_INPUT,
-} from "@/components/finance";
-import { Skeleton } from "@/components/ui/skeleton";
 import type { InterestType } from "@/lib/engines/interest-calculator";
 import type { Loan, LoanCategory, LoanDirection } from "@/lib/models/loan";
-import type { Installment, ScheduleType } from "@/lib/models/payment-schedule";
-import { LoanCard, loanDisplayName } from "@/features/loans/components/loan-card";
+import type { ScheduleType } from "@/lib/models/payment-schedule";
+import { loanDisplayName } from "@/features/loans/components/loan-card";
 import {
   AmountInput,
   Field,
@@ -30,10 +23,9 @@ import {
   RevealToggle,
   SegmentedControl,
 } from "@/features/loans/components/loan-emi-ui";
-import { LoanLumpSumDialog } from "@/features/loans/components/loan-lump-sum-dialog";
 import { LoanScheduleDialog } from "@/features/loans/components/loan-schedule-dialog";
 import { LoansTrashDialog } from "@/features/loans/components/loans-trash-dialog";
-import { RecordLoanPaymentDialog } from "@/features/loans/components/record-loan-payment-dialog";
+import { RecordPaymentDialog } from "@/features/loans/components/record-payment-dialog";
 import { LoanAdjustmentDialog } from "@/features/loans/components/loan-adjustment-dialog";
 import { ReverseOriginationDialog } from "@/features/loans/components/reverse-origination-dialog";
 import {
@@ -43,6 +35,7 @@ import {
   type OwnershipChoice,
 } from "@/features/loans/components/who-is-this-for-field";
 import { loanOriginationUi } from "@/features/loans/lib/loan-origination-ui";
+import { recordKindForLoan } from "@/features/loans/lib/loan-emi-add";
 import { originationIdsFor, originationKeyFromLoanId } from "@/lib/engines/loan-origination";
 import { useTransactions } from "@/hooks/use-transactions";
 import { useLoanActions, useLoanRows, useTrashedLoanRows, type LoanRow } from "@/features/loans/hooks/use-loans-data";
@@ -53,29 +46,6 @@ import type { Account } from "@/lib/models/account";
 import { friendlyLoanError } from "@/features/loans/lib/loan-live-state";
 import { cn } from "@/lib/utils";
 import { toast } from "@/store/toast-store";
-
-type StatusFilter = "all" | "active" | "overdue" | "closed";
-type DirectionFilter = "all" | LoanDirection;
-type CategoryFilter = "all" | LoanCategory;
-
-const STATUS_FILTER_OPTIONS: { value: StatusFilter; label: string }[] = [
-  { value: "all", label: "All" },
-  { value: "active", label: "Active" },
-  { value: "overdue", label: "Missed payment" },
-  { value: "closed", label: "Closed" },
-];
-
-const DIRECTION_FILTER_OPTIONS: { value: DirectionFilter; label: string }[] = [
-  { value: "all", label: "Borrowed & lent" },
-  { value: "taken", label: "I borrowed" },
-  { value: "given", label: "I lent" },
-];
-
-const CATEGORY_FILTER_OPTIONS: { value: CategoryFilter; label: string }[] = [
-  { value: "all", label: "Banks & people" },
-  { value: "institutional", label: "From banks" },
-  { value: "personal", label: "From people" },
-];
 
 interface LoanFormState {
   name: string;
@@ -162,15 +132,20 @@ function formFromRow(row: LoanRow): LoanFormState {
 }
 
 export interface LoansWorkspaceProps {
-  /** Incremented by the unified Loan & EMI chooser to open the Add Loan form. */
-  addSignal?: number;
+  /** Opens this Loan's detail view — sent by the unified Loan & EMI list; `seq` makes repeat clicks count. */
+  openRequest?: { id: string; seq: number } | null;
+  /** Incremented to open the Loan trash. */
+  trashRequest?: number;
 }
 
-export function LoansWorkspace({ addSignal = 0 }: LoansWorkspaceProps = {}) {
+/**
+ * Every Loan dialog — details, edit, payments, adjustments, reversal, trash — for the unified Loan & EMI
+ * workspace, which owns the list and the single Add flow. Renders no list of its own.
+ */
+export function LoansWorkspace({ openRequest = null, trashRequest = 0 }: LoansWorkspaceProps = {}) {
   const searchParams = useSearchParams();
-  const createHandoff = searchParams.get("create");
   const queryClient = useQueryClient();
-  const { rows, isLoading } = useLoanRows();
+  const { rows } = useLoanRows();
   const { rows: trashedRows } = useTrashedLoanRows();
   const actions = useLoanActions();
   const { data: accounts = [] } = useAccounts();
@@ -195,49 +170,30 @@ export function LoansWorkspace({ addSignal = 0 }: LoansWorkspaceProps = {}) {
   // makes edits/payments to the open loan show up in the schedule dialog without a manual refresh.
   const activeRow = useMemo(() => rows.find((r) => r.loan.id === activeRowId) ?? null, [rows, activeRowId]);
   const [scheduleOpen, setScheduleOpen] = useState(() => searchParams.has("agreement"));
-  const [addOpen, setAddOpen] = useState(() => createHandoff === "borrowed" || createHandoff === "lent");
   const [editOpen, setEditOpen] = useState(false);
   const [trashOpen, setTrashOpen] = useState(false);
-  const [paymentTarget, setPaymentTarget] = useState<{ row: LoanRow; installment: Installment } | null>(null);
-  const [lumpSumRow, setLumpSumRow] = useState<LoanRow | null>(null);
-  const [adjustment, setAdjustment] = useState<{ row: LoanRow; kind: "prepayment" | "disbursement" } | null>(null);
-  const [form, setForm] = useState<LoanFormState>(() => ({
-    ...emptyForm(),
-    direction: createHandoff === "lent" ? "given" : "taken",
-  }));
+  // Record Payment resolves its loan live from `rows` (like `activeRow`), so the open surface shows the
+  // balance the listener just delivered; `seq` gives each open a fresh mount + idempotency key.
+  const [payment, setPayment] = useState<{ loanId: string; seq: number } | null>(null);
+  const [paymentSeq, setPaymentSeq] = useState(0);
+  const paymentRow = useMemo(() => (payment ? (rows.find((r) => r.loan.id === payment.loanId) ?? null) : null), [rows, payment]);
+  const [adjustment, setAdjustment] = useState<{ row: LoanRow; kind: "disbursement" } | null>(null);
+  const [form, setForm] = useState<LoanFormState>(emptyForm);
   const [saving, setSaving] = useState(false);
   const [statusBusy, setStatusBusy] = useState(false);
 
-  const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
-  const [directionFilter, setDirectionFilter] = useState<DirectionFilter>("all");
-  const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>("all");
-
-  const visibleRows = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    return rows.filter((row) => {
-      if (statusFilter !== "all" && row.status !== statusFilter) return false;
-      if (directionFilter !== "all" && row.direction !== directionFilter) return false;
-      if (categoryFilter !== "all" && row.category !== categoryFilter) return false;
-      if (query.length === 0) return true;
-      return (
-        (row.loan.name ?? "").toLowerCase().includes(query) ||
-        row.lenderName.toLowerCase().includes(query) ||
-        (row.loan.loanNumber ?? "").toLowerCase().includes(query)
-      );
-    });
-  }, [rows, search, statusFilter, directionFilter, categoryFilter]);
-
-  function openAdd() {
-    setActiveRowId(null);
-    setForm(emptyForm());
-    setAddOpen(true);
+  const [seenOpenRequest, setSeenOpenRequest] = useState(openRequest);
+  if (openRequest !== seenOpenRequest) {
+    setSeenOpenRequest(openRequest);
+    if (openRequest) {
+      setActiveRowId(openRequest.id);
+      setScheduleOpen(true);
+    }
   }
-
-  const [seenAddSignal, setSeenAddSignal] = useState(addSignal);
-  if (addSignal !== seenAddSignal) {
-    setSeenAddSignal(addSignal);
-    openAdd();
+  const [seenTrashRequest, setSeenTrashRequest] = useState(trashRequest);
+  if (trashRequest !== seenTrashRequest) {
+    setSeenTrashRequest(trashRequest);
+    setTrashOpen(true);
   }
 
   function openEdit(row: LoanRow) {
@@ -314,44 +270,13 @@ export function LoansWorkspace({ addSignal = 0 }: LoansWorkspaceProps = {}) {
           });
         }
 
-        toast.success("Loan updated");
+        toast.success("Loan updated successfully");
         setEditOpen(false);
         // Back to the same loan's detail view, which re-renders from the live listener — no need to
         // close and reopen it to see the saved values.
         setScheduleOpen(true);
-        return;
-      } else {
-        if (form.recordMovement && !form.movementAccountId) {
-          toast.error("Choose an account", "Pick the account the money moved through, or turn the option off.");
-          return;
-        }
-        const ratePercent = Number(form.ratePercent);
-        await actions.createLoan({
-          movementAccountId: form.recordMovement ? form.movementAccountId : null,
-          idempotencyKey: form.idempotencyKey,
-          name: form.name,
-          category: form.category,
-          personId: form.category === "personal" ? form.personId || null : null,
-          lenderName: form.lenderName,
-          direction: form.direction,
-          loanAmount: Number(form.principal),
-          loanDate: new Date(form.loanDate),
-          interest: Number.isFinite(ratePercent) && ratePercent >= 0
-            ? { type: form.interestType, ratePercent, period: "yearly" }
-            : null,
-          installmentFrequency: form.installmentFrequency,
-          installmentCount: Number(form.installmentCount) || 1,
-          notes: form.notes,
-          loanType: form.loanType || null,
-          loanNumber: form.loanNumber || null,
-          accountNumber: form.accountNumber || null,
-          branch: form.branch || null,
-          payerPersonId: form.payerPersonId || null,
-          beneficiaryPersonId,
-        });
-        setAddOpen(false);
       }
-      setActiveRowId(null);
+      // New Loans are created by the unified Add flow (`LoanEmiAddDialog`), not here.
     } catch (e) {
       toast.error(isEdit ? "Couldn't save changes" : "Couldn't add loan", friendlyLoanError(e));
     } finally {
@@ -436,98 +361,8 @@ export function LoansWorkspace({ addSignal = 0 }: LoansWorkspaceProps = {}) {
     }
   }
 
-  if (isLoading) {
-    return (
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-        {Array.from({ length: 3 }, (_, i) => (
-          <Skeleton key={i} className="h-48 rounded-2xl" />
-        ))}
-      </div>
-    );
-  }
-
-  const hasLent = rows.some((r) => r.direction === "given");
-  const hasBothCategories = rows.some((r) => r.category === "personal") && rows.some((r) => r.category === "institutional");
-  const filtersActive = search !== "" || statusFilter !== "all" || directionFilter !== "all" || categoryFilter !== "all";
-
   return (
-    <div className="flex flex-col gap-4">
-      {rows.length === 0 ? (
-        <div className="flex flex-col gap-2">
-          <EmptyState
-            icon={Landmark}
-            title="No active loans yet"
-            description="Add a loan to track installments and repayments."
-            actionLabel="Add Loan"
-            onAction={openAdd}
-          />
-          {trashedRows.length > 0 && (
-            <ClayButton variant="ghost" size="sm" className="gap-1.5 self-center" onClick={() => setTrashOpen(true)}>
-              <Trash2 className="size-3.5" />
-              Trash ({trashedRows.length})
-            </ClayButton>
-          )}
-        </div>
-      ) : (
-        <>
-          <div className="flex flex-col gap-2.5">
-            <div className="flex flex-wrap items-center gap-2">
-              {rows.length > 4 && (
-                <div className="relative w-full sm:w-64">
-                  <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
-                  <input
-                    className={cn(FLAT_INPUT, "pl-9")}
-                    placeholder="Search loans"
-                    aria-label="Search loans"
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                  />
-                </div>
-              )}
-              {rows.length > 1 && <ChipRow options={STATUS_FILTER_OPTIONS} value={statusFilter} onChange={setStatusFilter} />}
-              <ClayButton variant="ghost" size="sm" className="ml-auto gap-1.5" onClick={() => setTrashOpen(true)}>
-                <Trash2 className="size-3.5" />
-                Trash{trashedRows.length > 0 ? ` (${trashedRows.length})` : ""}
-              </ClayButton>
-            </div>
-            {(hasLent || hasBothCategories) && (
-              <div className="flex flex-wrap gap-x-4 gap-y-2">
-                {hasLent && <ChipRow options={DIRECTION_FILTER_OPTIONS} value={directionFilter} onChange={setDirectionFilter} />}
-                {hasBothCategories && <ChipRow options={CATEGORY_FILTER_OPTIONS} value={categoryFilter} onChange={setCategoryFilter} />}
-              </div>
-            )}
-          </div>
-
-          {visibleRows.length === 0 ? (
-            <EmptyState
-              icon={Search}
-              title="No matching loans"
-              description="Try a different search or filter."
-              actionLabel={filtersActive ? "Clear filters" : undefined}
-              onAction={() => {
-                setSearch("");
-                setStatusFilter("all");
-                setDirectionFilter("all");
-                setCategoryFilter("all");
-              }}
-            />
-          ) : (
-            <Stagger className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-              {visibleRows.map((row) => (
-                <LoanCard
-                  key={row.loan.id}
-                  row={row}
-                  onClick={() => {
-                    setActiveRowId(row.loan.id);
-                    setScheduleOpen(true);
-                  }}
-                />
-              ))}
-            </Stagger>
-          )}
-        </>
-      )}
-
+    <>
       <LoanScheduleDialog
         open={scheduleOpen}
         onOpenChange={(open) => {
@@ -545,9 +380,10 @@ export function LoansWorkspace({ addSignal = 0 }: LoansWorkspaceProps = {}) {
         }}
         deleteLabel={activeRow != null && originationUiFor(activeRow.loan.id).moneyActive ? "Reverse & Delete" : undefined}
         linkedAccountName={activeRow ? originationAccountName(activeRow.loan.id) : null}
-        onRecordPayment={(row, installment) => setPaymentTarget({ row, installment })}
-        onSettleLumpSum={(row) => setLumpSumRow(row)}
-        onPrincipalPrepayment={(row) => setAdjustment({ row, kind: "prepayment" })}
+        onRecordPayment={(row) => {
+          setPaymentSeq((n) => n + 1);
+          setPayment({ loanId: row.loan.id, seq: paymentSeq + 1 });
+        }}
         onAdditionalDisbursement={(row) => setAdjustment({ row, kind: "disbursement" })}
         onToggleClose={handleToggleClose}
         statusBusy={statusBusy}
@@ -557,50 +393,22 @@ export function LoansWorkspace({ addSignal = 0 }: LoansWorkspaceProps = {}) {
         key={adjustment ? `${adjustment.kind}-${adjustment.row.loan.id}` : "adjustment-closed"}
         open={adjustment != null}
         onOpenChange={(open) => !open && setAdjustment(null)}
-        kind={adjustment?.kind ?? "prepayment"}
+        kind="disbursement"
         row={adjustment?.row ?? null}
         accounts={accounts}
         onConfirm={async (params) => {
           if (!actions || !adjustment) throw new Error("Not signed in");
-          if (adjustment.kind === "disbursement") {
-            const result = await actions.recordAdditionalDisbursement(adjustment.row.loan, adjustment.row.installments, params);
-            await queryClient.invalidateQueries({ queryKey: ["loan-financial-history"], exact: false });
-            return result;
-          }
-          const result = await actions.recordPayment(adjustment.row.loan, adjustment.row.installments, {
-            ...params,
-            amount: params.transactionAmount,
-            includeUpcomingInstallments: false,
-          });
+          const result = await actions.recordAdditionalDisbursement(adjustment.row.loan, adjustment.row.installments, params);
           await queryClient.invalidateQueries({ queryKey: ["loan-financial-history"], exact: false });
           return result;
         }}
       />
 
-      <RecordLoanPaymentDialog
-        key={paymentTarget?.installment.id ?? "payment-closed"}
-        open={paymentTarget != null}
-        onOpenChange={(open) => !open && setPaymentTarget(null)}
-        loan={paymentTarget?.row.loan ?? null}
-        installment={paymentTarget?.installment ?? null}
-        accounts={accounts}
-        onRecord={async (loan, installments, params) => {
-          if (!actions) return;
-          await actions.recordPayment(loan, installments, params);
-          toast.success("Payment recorded");
-        }}
-      />
-
-      <LoanLumpSumDialog
-        key={lumpSumRow?.loan.id ?? "lumpsum-closed"}
-        open={lumpSumRow != null}
-        onOpenChange={(open) => !open && setLumpSumRow(null)}
-        row={lumpSumRow}
-        accounts={accounts}
-        onSettle={async (loan, installments, params) => {
-          if (!actions) throw new Error("Not signed in");
-          return actions.recordLumpSumSettlement(loan, installments, params);
-        }}
+      <RecordPaymentDialog
+        key={payment ? `pay-${payment.loanId}-${payment.seq}` : "pay-closed"}
+        target={paymentRow ? { kind: "loan", row: paymentRow } : null}
+        open={payment != null && paymentRow != null}
+        onOpenChange={(open) => !open && setPayment(null)}
       />
 
       <ReverseOriginationDialog
@@ -621,26 +429,6 @@ export function LoansWorkspace({ addSignal = 0 }: LoansWorkspaceProps = {}) {
       />
 
       <LoanEmiFormDialog
-        open={addOpen}
-        onOpenChange={setAddOpen}
-        icon={LOAN_ICON}
-        title="Add Loan"
-        description="The installment schedule is built for you."
-        onConfirm={() => handleSave(false)}
-        confirmLabel={saving ? "Saving…" : "Add Loan"}
-        loading={saving}
-      >
-        <LoanFormFields
-          form={form}
-          setForm={setForm}
-          isEdit={false}
-          people={people}
-          accounts={accounts}
-          onCreatePerson={actions?.createPerson}
-        />
-      </LoanEmiFormDialog>
-
-      <LoanEmiFormDialog
         open={editOpen}
         onOpenChange={(open) => {
           setEditOpen(open);
@@ -657,13 +445,14 @@ export function LoansWorkspace({ addSignal = 0 }: LoansWorkspaceProps = {}) {
           form={form}
           setForm={setForm}
           isEdit
+          kindLabel={activeRow ? recordKindForLoan(activeRow.loan).label : undefined}
           people={people}
           hasPayments={activeRow ? activeRow.installments.some((i) => i.amountPaid > 0) : false}
           minInstallmentCount={activeRow ? activeRow.installments.filter((i) => i.amountPaid > 0 || i.isSkipped).length : 0}
           minLoanAmount={activeRow ? activeRow.loan.loanAmount - activeRow.outstandingPrincipal : 0}
         />
       </LoanEmiFormDialog>
-    </div>
+    </>
   );
 }
 
@@ -754,7 +543,7 @@ export function PersonPickerField({
   if (adding) {
     return (
       <label className="flex min-w-0 flex-col gap-1.5">
-        <span className="text-xs font-medium text-foreground/80">{label}</span>
+        <span className="text-xs font-semibold text-foreground">{label}</span>
         <div className="flex items-center gap-2">
           <input
             autoFocus
@@ -792,7 +581,7 @@ export function PersonPickerField({
 
   return (
     <label className="flex min-w-0 flex-col gap-1.5">
-      <span className="text-xs font-medium text-foreground/80">{label}</span>
+      <span className="text-xs font-semibold text-foreground">{label}</span>
       <select
         className={LOAN_EMI_INPUT}
         value={value}
@@ -824,6 +613,7 @@ function LoanFormFields({
   form,
   setForm,
   isEdit,
+  kindLabel,
   people,
   hasPayments = false,
   minInstallmentCount = 1,
@@ -834,6 +624,8 @@ function LoanFormFields({
   form: LoanFormState;
   setForm: React.Dispatch<React.SetStateAction<LoanFormState>>;
   isEdit: boolean;
+  /** Edit mode only — the unified record type ("Bank Loan", "Lent", …) derived from the existing Loan. */
+  kindLabel?: string;
   people: Person[];
   /** Edit mode only — whether any installment already carries a payment. Locks the Loan Date once true
    *  (mirrors `LoanRepository.editLoanDate`'s own guard). */
@@ -879,9 +671,8 @@ function LoanFormFields({
           </div>
         ) : (
           <div className="flex items-center gap-2">
-            <ClayBadge tone="neutral">{CATEGORY_OPTIONS.find((o) => o.value === form.category)?.label}</ClayBadge>
             <ClayBadge tone={form.direction === "given" ? "success" : "neutral"}>
-              {DIRECTION_OPTIONS.find((o) => o.value === form.direction)?.label}
+              {kindLabel ?? DIRECTION_OPTIONS.find((o) => o.value === form.direction)?.label}
             </ClayBadge>
           </div>
         )}

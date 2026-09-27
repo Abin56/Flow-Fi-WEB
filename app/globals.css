@@ -33,6 +33,7 @@
   --color-muted: var(--muted);
   --color-tertiary-foreground: var(--tertiary-foreground);
   --color-border-subtle: var(--border-subtle);
+  --color-border-strong: var(--border-strong);
   --color-secondary-foreground: var(--secondary-foreground);
   --color-secondary: var(--secondary);
   --color-primary-foreground: var(--primary-foreground);
@@ -194,6 +195,9 @@
      opacity modifier multiplies against this base color. */
   --border: oklch(0.80 0.006 112);        /* Border ~#BEBEBA */
   --border-subtle: oklch(0.87 0.005 112); /* Secondary/divider border — lighter than --border, still visible */
+  /* Control boundary (inputs, selectable options) — ~3:1 against white so a clickable edge survives
+     low-contrast monitors where --border (~1.8:1) washes out. Used where the edge IS the affordance. */
+  --border-strong: oklch(0.66 0.006 112); /* ~#98998F */
   --input: oklch(0.78 0.007 112);         /* Slightly stronger than --border for form boundaries */
   --ring: oklch(0.865 0.205 125 / 0.75);
 
@@ -371,6 +375,7 @@
                                               near-black surfaces, so this deliberately does not fork
                                               further down the way light mode's does. */
   --input: oklch(0.215 0.004 112);        /* Input background ~#1C1D1B — distinct from --card/--secondary */
+  --border-strong: oklch(0.47 0.006 112); /* Control boundary ~#5C5E59 — clearly visible on --card/--popover */
   --ring: oklch(0.912 0.185 126 / 0.6);
 
   /* "Information" blue family — kept as an actual blue (never replaced with lime), retuned for

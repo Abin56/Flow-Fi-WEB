@@ -7,6 +7,8 @@ import { installmentStatus, remainingAmount } from "@/lib/models/payment-schedul
 
 interface LoanCardProps {
   row: LoanRow;
+  /** Record-type tag from the unified Loan & EMI list — replaces the generic "Bank loan" / "Money I lent" wording. */
+  tag?: string;
   onClick: () => void;
 }
 
@@ -27,15 +29,17 @@ export function loanBadges(row: LoanRow): DebtCardBadge[] {
   if (row.direction === "given") badges.push({ label: "Money I lent", tone: "success" });
   if (row.status === "overdue") badges.push({ label: "Missed payment", tone: "expense" });
   if (row.status === "closed") badges.push({ label: "Closed", tone: "neutral" });
+  // Loans have no persisted "completed" status; derived from the schedule so a settled loan reads as done.
+  else if (loanNextDueAmount(row) == null) badges.push({ label: "Fully paid", tone: "success" });
   return badges;
 }
 
 /** Installment-count progress (not an amount ratio, which reducing-balance amortization skews early on). */
-export function LoanCard({ row, onClick }: LoanCardProps) {
+export function LoanCard({ row, tag, onClick }: LoanCardProps) {
   const { loan, lenderName, outstandingPrincipal, nextDueDate, installmentsPaid, totalInstallments } = row;
   const hasOwnName = Boolean(loan.name?.trim());
   const sourceParts = [
-    hasOwnName ? lenderName : row.category === "personal" ? "Personal loan" : "Bank loan",
+    hasOwnName ? lenderName : tag ? null : row.category === "personal" ? "Personal loan" : "Bank loan",
     loan.interest ? `${loan.interest.ratePercent}% p.a.` : null,
   ].filter(Boolean);
   const isClosed = row.status === "closed";
@@ -46,7 +50,8 @@ export function LoanCard({ row, onClick }: LoanCardProps) {
       icon={LOAN_ICON}
       name={loanDisplayName(row)}
       source={sourceParts.join(" · ")}
-      badges={loanBadges(row)}
+      tag={tag}
+      badges={tag ? loanBadges(row).filter((b) => b.label !== "Money I lent") : loanBadges(row)}
       outstandingLabel={row.direction === "given" ? "Still to receive" : "Outstanding"}
       outstanding={outstandingPrincipal}
       nextAmount={isClosed ? null : loanNextDueAmount(row)}

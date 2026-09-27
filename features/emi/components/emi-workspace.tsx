@@ -1,150 +1,33 @@
 "use client";
 
-import { ArrowUpRight, Building2, CreditCard, Lock, Percent, ShoppingBag, Trash2, UserRound, Wallet } from "lucide-react";
+import { ArrowUpRight, Building2, CheckCircle2, CreditCard, Lock, Trash2, UserRound, Wallet } from "lucide-react";
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { ClayBadge } from "@/components/clay/clay-badge";
 import { ClayButton } from "@/components/clay/clay-button";
-import { Stagger } from "@/components/foundation/animated-container";
 import {
-  ChipRow,
   ConfirmDialog,
   CurrencyCell,
   DetailDrawer,
-  EmptyState,
-  FLAT_INPUT,
-  FormDialog,
-  SectionLabel,
 } from "@/components/finance";
-import { Skeleton } from "@/components/ui/skeleton";
-import { EMI_TYPE_LABEL, EmiCard, emiBadges, emiCardLabel } from "@/features/emi/components/emi-card";
+import { EMI_TYPE_LABEL, emiBadges, emiCardLabel } from "@/features/emi/components/emi-card";
 import { useEmiActions, useEmiRows, type EmiRow } from "@/features/emi/hooks/use-emi-data";
 import {
-  AmountInput,
   DetailHero,
   DetailSectionTitle,
-  EMI_ICON,
   FactGrid,
-  Field,
-  FieldGroup,
-  FormSection,
-  LOAN_EMI_INPUT,
   LinkedList,
   LinkedRow,
-  LoanEmiFormDialog,
-  MoreOptions,
-  RevealToggle,
-  SegmentedControl,
+  Money,
   daysUntil,
   dueLabel,
 } from "@/features/loans/components/loan-emi-ui";
-import { formatCurrency } from "@/lib/format";
-import { installmentStatus, remainingAmount, type ScheduleType } from "@/lib/models/payment-schedule";
-import type { EmiLoanType } from "@/lib/models/emi";
-import type { InterestType } from "@/lib/engines/interest-calculator";
-import type { CreditCardProfile } from "@/lib/models/credit-card";
-import { useCreditCards } from "@/hooks/use-credit-cards";
-import { AddElsewhereLink } from "@/features/loans/components/loans-workspace";
-import { useAccounts } from "@/hooks/use-accounts";
-import { useLoanPersons } from "@/hooks/use-loans";
-import {
-  WhoIsThisForField,
-  beneficiaryFromChoice,
-  ownershipError,
-  type OwnershipChoice,
-} from "@/features/loans/components/who-is-this-for-field";
+import { recordKindForEmi } from "@/features/loans/lib/loan-emi-add";
+import { RecordPaymentDialog } from "@/features/loans/components/record-payment-dialog";
+import { installmentStatus, remainingAmount } from "@/lib/models/payment-schedule";
 import { toast } from "@/store/toast-store";
 import { cn } from "@/lib/utils";
-
-const LOAN_TYPE_OPTIONS: EmiLoanType[] = ["other", "personal", "vehicle", "home", "education", "gold", "business", "creditCard"];
-const FREQUENCY_OPTIONS: ScheduleType[] = ["monthly", "weekly"];
-const INSTALLMENT_PRESETS = [3, 6, 9, 12, 18, 24];
-const FREQUENCY_LABEL: Record<ScheduleType, string> = {
-  monthly: "Monthly",
-  weekly: "Weekly",
-  custom: "Custom",
-  oneTime: "One-time",
-};
-
-/** How a card-linked EMI came about — picks the form wording; both lock the principal against the card. */
-type CardEmiKind = "creditCardLoan" | "productPurchase";
-
-interface EmiFormState {
-  name: string;
-  lenderName: string;
-  loanType: EmiLoanType;
-  principalAmount: string;
-  startDate: string;
-  installmentFrequency: ScheduleType;
-  installmentCount: string;
-  hasInterest: boolean;
-  interestType: InterestType;
-  ratePercent: string;
-  notes: string;
-  linkToCard: boolean;
-  linkedCreditCardId: string;
-  cardEmiKind: CardEmiKind;
-  /** "Who is this for?" — see `Emi.beneficiaryPersonId`. */
-  ownership: OwnershipChoice;
-  beneficiaryPersonId: string;
-}
-
-function emptyForm(): EmiFormState {
-  return {
-    name: "",
-    lenderName: "",
-    loanType: "other",
-    principalAmount: "",
-    startDate: new Date().toISOString().slice(0, 10),
-    installmentFrequency: "monthly",
-    installmentCount: "12",
-    hasInterest: false,
-    interestType: "reducingBalance",
-    ratePercent: "",
-    notes: "",
-    linkToCard: false,
-    linkedCreditCardId: "",
-    cardEmiKind: "productPurchase",
-    ownership: "me",
-    beneficiaryPersonId: "",
-  };
-}
-
-interface PaymentFormState {
-  amount: string;
-  date: string;
-  note: string;
-  gst: string;
-  processingFee: string;
-}
-
-function emptyPaymentForm(amount: number): PaymentFormState {
-  return {
-    amount: amount > 0 ? String(amount) : "",
-    date: new Date().toISOString().slice(0, 10),
-    note: "",
-    gst: "",
-    processingFee: "",
-  };
-}
-
-/** Rough per-installment figure for the Add EMI preview — the real schedule is built on save. */
-function previewInstallment(form: EmiFormState): { perInstallment: number; interest: number } | null {
-  const principal = Number(form.principalAmount);
-  const count = Math.floor(Number(form.installmentCount));
-  if (!(principal > 0) || !(count > 0)) return null;
-  const annual = form.hasInterest ? Number(form.ratePercent) / 100 : 0;
-  if (!(annual > 0)) return { perInstallment: principal / count, interest: 0 };
-  const periodsPerYear = form.installmentFrequency === "weekly" ? 52 : 12;
-  if (form.interestType === "flat") {
-    const interest = principal * annual * (count / periodsPerYear);
-    return { perInstallment: (principal + interest) / count, interest };
-  }
-  const r = annual / periodsPerYear;
-  const per = (principal * r) / (1 - Math.pow(1 + r, -count));
-  return { perInstallment: per, interest: per * count - principal };
-}
 
 const INSTALLMENT_STATUS_BADGE = {
   paid: { label: "Paid", tone: "success" },
@@ -167,37 +50,24 @@ function GoTo({ href, label }: { href: string; label: string }) {
 }
 
 export interface EmiWorkspaceProps {
-  /** Incremented by the unified Loan & EMI chooser to open the Add EMI form. */
-  addSignal?: number;
+  /** Opens this EMI's detail view — sent by the unified Loan & EMI list; `seq` makes repeat clicks count. */
+  openRequest?: { id: string; seq: number } | null;
 }
 
-export function EmiWorkspace({ addSignal = 0 }: EmiWorkspaceProps = {}) {
+/**
+ * Every EMI dialog — details, record payment, delete — for the unified Loan & EMI workspace, which owns
+ * the list and the single Add flow. Renders no list of its own.
+ */
+export function EmiWorkspace({ openRequest = null }: EmiWorkspaceProps = {}) {
   const searchParams = useSearchParams();
-  const createHandoff = searchParams.get("create");
-  const { rows, isLoading } = useEmiRows();
+  const { rows } = useEmiRows();
   const actions = useEmiActions();
-  const { data: cards = [] } = useCreditCards();
-  const { data: accounts = [] } = useAccounts();
-  const { data: people = [] } = useLoanPersons();
-  const cardOptions = useMemo(
-    () =>
-      (cards as CreditCardProfile[])
-        .filter((c) => c.status !== "closed" && c.status !== "cancelled")
-        .map((c) => {
-          const accountName = accounts.find((a) => a.id === c.accountId)?.name ?? "Credit Card";
-          return { id: c.id, label: c.lastFourDigits ? `${accountName} ••${c.lastFourDigits}` : accountName };
-        }),
-    [cards, accounts],
-  );
-
   const [activeRow, setActiveRow] = useState<EmiRow | null>(null);
   const [handoffDetailId, setHandoffDetailId] = useState<string | null>(() => searchParams.get("agreement"));
-  const [addOpen, setAddOpen] = useState(() => createHandoff === "installmentPurchase");
   const [deleteOpen, setDeleteOpen] = useState(false);
+  // Incremented per open so each Record Payment gets a fresh mount (clean form, new guard state).
+  const [paySeq, setPaySeq] = useState(0);
   const [payOpen, setPayOpen] = useState(false);
-  const [form, setForm] = useState<EmiFormState>(emptyForm);
-  const [paymentForm, setPaymentForm] = useState<PaymentFormState>(() => emptyPaymentForm(0));
-  const [saving, setSaving] = useState(false);
 
   const activeRowFresh = useMemo(() => {
     const id = activeRow?.emi.id ?? handoffDetailId;
@@ -205,58 +75,16 @@ export function EmiWorkspace({ addSignal = 0 }: EmiWorkspaceProps = {}) {
     return rows.find((row) => row.emi.id === id) ?? activeRow;
   }, [rows, activeRow, handoffDetailId]);
 
-  function openAdd() {
-    setForm(emptyForm());
-    setAddOpen(true);
+  const [seenOpenRequest, setSeenOpenRequest] = useState(openRequest);
+  if (openRequest !== seenOpenRequest) {
+    setSeenOpenRequest(openRequest);
+    const target = openRequest ? rows.find((r) => r.emi.id === openRequest.id) : undefined;
+    if (target) setActiveRow(target);
   }
 
-  const [seenAddSignal, setSeenAddSignal] = useState(addSignal);
-  if (addSignal !== seenAddSignal) {
-    setSeenAddSignal(addSignal);
-    openAdd();
-  }
-
-  function openPay(row: EmiRow) {
-    setPaymentForm(emptyPaymentForm(row.nextInstallment?.amountDue ?? 0));
+  function openPay() {
+    setPaySeq((n) => n + 1);
     setPayOpen(true);
-  }
-
-  async function handleCreate() {
-    if (!actions) return;
-    if (form.linkToCard && !form.linkedCreditCardId) {
-      toast.error("Select a credit card", "Choose the card this EMI is on, or turn off the credit card option.");
-      return;
-    }
-    const forError = ownershipError(form.ownership, form.beneficiaryPersonId);
-    if (forError) {
-      toast.error(forError, "Pick the person this EMI is for, or switch to For me.");
-      return;
-    }
-    setSaving(true);
-    try {
-      await actions.createEmi({
-        name: form.name,
-        lenderName: form.lenderName || null,
-        loanType: form.linkToCard ? "creditCard" : form.loanType,
-        // No purchaseTransactionId: the EMI's remaining principal is what locks the card's limit.
-        linkedCreditCardId: form.linkToCard ? form.linkedCreditCardId : null,
-        // Association only — a card-linked EMI still locks the card's credit exactly as before.
-        beneficiaryPersonId: beneficiaryFromChoice(form.ownership, form.beneficiaryPersonId),
-        principalAmount: Number(form.principalAmount),
-        startDate: new Date(form.startDate),
-        installmentFrequency: form.installmentFrequency,
-        installmentCount: Number(form.installmentCount),
-        interest: form.hasInterest
-          ? { type: form.interestType, ratePercent: Number(form.ratePercent), period: "yearly" }
-          : null,
-        notes: form.notes,
-      });
-      setAddOpen(false);
-    } catch (e) {
-      toast.error("Couldn't add EMI", e instanceof Error ? e.message : "Please try again.");
-    } finally {
-      setSaving(false);
-    }
   }
 
   async function handleDelete() {
@@ -270,25 +98,6 @@ export function EmiWorkspace({ addSignal = 0 }: EmiWorkspaceProps = {}) {
     }
   }
 
-  async function handleRecordPayment() {
-    if (!actions || !activeRowFresh?.nextInstallment) return;
-    setSaving(true);
-    try {
-      await actions.recordPayment(activeRowFresh.emi, activeRowFresh.nextInstallment, {
-        amount: Number(paymentForm.amount),
-        date: new Date(paymentForm.date),
-        note: paymentForm.note,
-        gst: paymentForm.gst ? Number(paymentForm.gst) : undefined,
-        processingFee: paymentForm.processingFee ? Number(paymentForm.processingFee) : undefined,
-      });
-      setPayOpen(false);
-    } catch (e) {
-      toast.error("Couldn't record payment", e instanceof Error ? e.message : "Please try again.");
-    } finally {
-      setSaving(false);
-    }
-  }
-
   async function handleClose() {
     if (!actions || !activeRowFresh) return;
     try {
@@ -298,43 +107,15 @@ export function EmiWorkspace({ addSignal = 0 }: EmiWorkspaceProps = {}) {
     }
   }
 
-  if (isLoading) {
-    return (
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-        {Array.from({ length: 3 }, (_, i) => (
-          <Skeleton key={i} className="h-48 rounded-2xl" />
-        ))}
-      </div>
-    );
-  }
-
   const detail = activeRowFresh;
   const detailDone = detail != null && (detail.status === "closed" || detail.status === "completed");
   const detailPaid = detail ? detail.installments.reduce((sum, i) => sum + i.amountPaid, 0) : 0;
   const detailInstallment = detail ? (detail.nextInstallment?.amountDue ?? detail.installments[0]?.amountDue ?? 0) : 0;
   const detailCard = detail ? emiCardLabel(detail) : null;
   const detailOverdue = detail?.nextInstallment != null && daysUntil(detail.nextInstallment.dueDate) < 0;
-  const isProductPurchase = !form.linkToCard || form.cardEmiKind === "productPurchase";
-  const preview = previewInstallment(form);
 
   return (
-    <div className="flex flex-col gap-4">
-      {rows.length === 0 ? (
-        <EmptyState
-          icon={ShoppingBag}
-          title="No active EMIs yet"
-          description="Track purchases, card EMIs and other installment plans."
-          actionLabel="Add EMI"
-          onAction={openAdd}
-        />
-      ) : (
-        <Stagger className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          {rows.map((row) => (
-            <EmiCard key={row.emi.id} row={row} onClick={() => setActiveRow(row)} />
-          ))}
-        </Stagger>
-      )}
-
+    <>
       <DetailDrawer
         open={detail != null && !deleteOpen && !payOpen}
         onOpenChange={(open) => {
@@ -347,7 +128,7 @@ export function EmiWorkspace({ addSignal = 0 }: EmiWorkspaceProps = {}) {
         title={detail?.emi.name ?? ""}
         description={
           detail
-            ? `EMI · ${detail.emi.lenderName ?? EMI_TYPE_LABEL[detail.emi.loanType]}${
+            ? `${recordKindForEmi(detail.emi).label} · ${detail.emi.lenderName ?? EMI_TYPE_LABEL[detail.emi.loanType]}${
                 detail.emi.interest ? ` · ${detail.emi.interest.ratePercent}% p.a.` : " · No interest"
               }`
             : undefined
@@ -355,12 +136,19 @@ export function EmiWorkspace({ addSignal = 0 }: EmiWorkspaceProps = {}) {
         footer={
           detail && (
             <>
-              <ClayButton className="w-full gap-1.5" disabled={!detail.nextInstallment} onClick={() => openPay(detail)}>
-                <Wallet className="size-4" />
-                Record Payment
-              </ClayButton>
+              {detail.nextInstallment ? (
+                <ClayButton className="w-full gap-1.5 rounded-[8px] border-primary-accent-text font-bold" disabled={detail.status === "closed"} onClick={openPay}>
+                  <Wallet className="size-4" />
+                  Record Payment
+                </ClayButton>
+              ) : (
+                <span className="flex h-10 w-full items-center justify-center gap-1.5 rounded-[8px] border-2 border-success text-sm font-bold text-success">
+                  <CheckCircle2 className="size-4" />
+                  Fully paid
+                </span>
+              )}
               <div className="flex gap-2">
-                <ClayButton variant="ghost" size="sm" className="flex-1 gap-1.5 text-foreground/75" disabled={detail.status === "closed"} onClick={handleClose}>
+                <ClayButton variant="ghost" size="sm" className="flex-1 gap-1.5 rounded-[6px] font-semibold text-foreground hover:bg-secondary" disabled={detail.status === "closed"} onClick={handleClose}>
                   <Lock className="size-3.5" />
                   Close EMI
                 </ClayButton>
@@ -384,14 +172,12 @@ export function EmiWorkspace({ addSignal = 0 }: EmiWorkspaceProps = {}) {
             />
 
             {!detailDone && detail.nextInstallment && (
-              <div className="flex items-center justify-between gap-3 rounded-xl border border-border bg-muted/50 px-4 py-3">
+              <div className="flex items-center justify-between gap-3 rounded-[10px] border border-border-strong bg-secondary px-4 py-3">
                 <div className="flex flex-col">
                   <span className={cn("text-xs", detailOverdue ? "font-semibold text-expense" : "font-medium text-muted-foreground")}>
                     Next installment · {dueLabel(detail.nextInstallment.dueDate)}
                   </span>
-                  <span className="font-heading text-lg font-semibold text-foreground tabular-nums">
-                    {formatCurrency(remainingAmount(detail.nextInstallment))}
-                  </span>
+                  <Money amount={remainingAmount(detail.nextInstallment)} className="text-xl text-foreground" />
                 </div>
                 <span className="text-xs text-muted-foreground">
                   #{detail.nextInstallment.sequenceNumber} of {detail.emi.installmentCount}
@@ -402,9 +188,9 @@ export function EmiWorkspace({ addSignal = 0 }: EmiWorkspaceProps = {}) {
             <FactGrid
               className="sm:grid-cols-2"
               facts={[
-                { label: "Original amount", value: formatCurrency(detail.emi.principalAmount) },
-                { label: "Installment", value: formatCurrency(detailInstallment), strong: true },
-                { label: "Paid so far", value: formatCurrency(detailPaid) },
+                { label: "Original amount", value: <Money amount={detail.emi.principalAmount} /> },
+                { label: "Installment", value: <Money amount={detailInstallment} />, strong: true },
+                { label: "Paid so far", value: <Money amount={detailPaid} /> },
                 {
                   label: "Interest",
                   value: detail.emi.interest
@@ -439,7 +225,7 @@ export function EmiWorkspace({ addSignal = 0 }: EmiWorkspaceProps = {}) {
               <DetailSectionTitle aside={<span className="text-xs text-muted-foreground tabular-nums">{detail.installments.length} total</span>}>
                 Installments
               </DetailSectionTitle>
-              <div className="flex flex-col divide-y divide-border overflow-hidden rounded-xl border border-border">
+              <div className="flex flex-col divide-y divide-border overflow-hidden rounded-[10px] border border-border">
                 {detail.installments.map((installment) => {
                   const status = installmentStatus(installment);
                   const badge = INSTALLMENT_STATUS_BADGE[status];
@@ -447,15 +233,15 @@ export function EmiWorkspace({ addSignal = 0 }: EmiWorkspaceProps = {}) {
                   return (
                     <div
                       key={installment.id}
-                      className={cn("flex items-center justify-between gap-3 px-3.5 py-2.5", isNext ? "bg-muted/60" : "bg-card", status === "paid" && "text-muted-foreground")}
+                      className={cn("flex items-center justify-between gap-3 px-3.5 py-2.5", isNext ? "bg-secondary shadow-[inset_3px_0_0_var(--primary-accent-text)]" : "bg-card", status === "paid" && "text-muted-foreground")}
                     >
                       <div className="flex min-w-0 items-center gap-3">
                         <span className="w-6 shrink-0 font-mono text-xs text-muted-foreground tabular-nums">{installment.sequenceNumber}</span>
                         <div className="flex min-w-0 flex-col">
-                          <span className={cn("text-sm font-medium", status === "paid" ? "text-foreground/70" : "text-foreground")}>
+                          <span className={cn("text-sm font-medium", status === "paid" ? "text-muted-foreground" : "text-foreground")}>
                             {installment.dueDate.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
                           </span>
-                          {isNext && <span className="text-[11px] font-semibold text-foreground/80">Next due</span>}
+                          {isNext && <span className="text-[11px] font-bold text-primary-accent-text">Next due</span>}
                         </div>
                       </div>
                       <div className="flex shrink-0 items-center gap-2">
@@ -471,285 +257,12 @@ export function EmiWorkspace({ addSignal = 0 }: EmiWorkspaceProps = {}) {
         )}
       </DetailDrawer>
 
-      <LoanEmiFormDialog
-        open={addOpen}
-        onOpenChange={setAddOpen}
-        icon={EMI_ICON}
-        title="Add EMI"
-        description="The installment schedule is built for you."
-        onConfirm={handleCreate}
-        confirmLabel={saving ? "Saving…" : "Add EMI"}
-        loading={saving}
-      >
-        {/* Hero: what + how much, with a live per-installment preview. */}
-        <section className="flex flex-col gap-4 rounded-2xl border border-border bg-gradient-to-br from-primary/10 via-card to-card p-4 sm:p-5">
-          <input
-            className="w-full border-0 bg-transparent p-0 font-heading text-lg font-semibold tracking-tight outline-none placeholder:text-muted-foreground/50"
-            placeholder={isProductPurchase ? "What did you buy? e.g. iPhone 16" : "Name this card loan"}
-            aria-label="What did you buy or finance?"
-            value={form.name}
-            onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-          />
-          <div className="flex flex-col gap-1.5">
-            <span className="text-xs font-medium text-muted-foreground">Amount being paid off</span>
-            <AmountInput value={form.principalAmount} onChange={(v) => setForm((f) => ({ ...f, principalAmount: v }))} />
-          </div>
-          <div className="flex items-center justify-between gap-3 rounded-xl bg-card/80 px-3.5 py-3 shadow-[var(--shadow-e1)]">
-            <div className="flex flex-col">
-              <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
-                Per {form.installmentFrequency === "weekly" ? "week" : "month"}
-              </span>
-              <span className="font-heading text-xl font-semibold tabular-nums">
-                {preview ? `≈ ${formatCurrency(preview.perInstallment)}` : "—"}
-              </span>
-            </div>
-            <div className="flex flex-col items-end text-right text-xs text-muted-foreground">
-              <span>
-                {Number(form.installmentCount) > 0 ? `${form.installmentCount} installments` : "Set installments"}
-              </span>
-              {preview && preview.interest > 0 && <span>+ {formatCurrency(preview.interest)} interest</span>}
-              {preview && preview.interest === 0 && <span className="text-primary-accent-text">No-cost</span>}
-            </div>
-          </div>
-        </section>
-
-        <FormSection title="Schedule" description="When and how often you pay.">
-          <FieldGroup label="Number of installments">
-            <div className="flex flex-wrap items-center gap-2">
-              {INSTALLMENT_PRESETS.map((n) => {
-                const active = form.installmentCount === String(n);
-                return (
-                  <button
-                    key={n}
-                    type="button"
-                    aria-pressed={active}
-                    onClick={() => setForm((f) => ({ ...f, installmentCount: String(n) }))}
-                    className={cn(
-                      "h-9 min-w-11 rounded-full border px-3 text-sm font-medium tabular-nums transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                      active
-                        ? "border-primary bg-primary text-primary-foreground"
-                        : "border-border bg-card text-foreground/80 hover:border-foreground/25",
-                    )}
-                  >
-                    {n}
-                  </button>
-                );
-              })}
-              <input
-                type="number"
-                inputMode="numeric"
-                min={1}
-                aria-label="Custom number of installments"
-                placeholder="Other"
-                className={cn(LOAN_EMI_INPUT, "h-9 w-24 rounded-full text-center")}
-                value={INSTALLMENT_PRESETS.includes(Number(form.installmentCount)) ? "" : form.installmentCount}
-                onChange={(e) => setForm((f) => ({ ...f, installmentCount: e.target.value }))}
-              />
-            </div>
-          </FieldGroup>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <Field label="First EMI date">
-              <input
-                type="date"
-                className={LOAN_EMI_INPUT}
-                value={form.startDate}
-                onChange={(e) => setForm((f) => ({ ...f, startDate: e.target.value }))}
-              />
-            </Field>
-            <FieldGroup label="Payment frequency">
-              <SegmentedControl
-                ariaLabel="Payment frequency"
-                size="sm"
-                className="sm:w-full"
-                options={FREQUENCY_OPTIONS.map((f) => ({ value: f, label: FREQUENCY_LABEL[f] }))}
-                value={form.installmentFrequency}
-                onChange={(v) => setForm((f) => ({ ...f, installmentFrequency: v }))}
-              />
-            </FieldGroup>
-          </div>
-        </FormSection>
-
-        <FormSection title="Details" description="Turn on only what applies.">
-        <div className="flex flex-col gap-3">
-          {/* Credit card controls stay hidden until the user says it's on a card. */}
-          <RevealToggle
-            icon={CreditCard}
-            checked={form.linkToCard}
-            onChange={(checked) => setForm((f) => ({ ...f, linkToCard: checked }))}
-            title="Paid with a credit card"
-            description="Link this EMI to one of your FlowFi credit cards."
-          >
-            {cardOptions.length === 0 ? (
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="text-xs text-muted-foreground">No credit cards yet — add one, then come back.</p>
-                <AddElsewhereLink href="/credit-cards" label="Go to Credit Cards" />
-              </div>
-            ) : (
-              <>
-                <div className="flex flex-col gap-1.5">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-medium text-foreground/80">Which card?</span>
-                    <AddElsewhereLink href="/credit-cards" label="Add Credit Card" />
-                  </div>
-                  <select
-                    className={LOAN_EMI_INPUT}
-                    value={form.linkedCreditCardId}
-                    onChange={(e) => setForm((f) => ({ ...f, linkedCreditCardId: e.target.value }))}
-                  >
-                    <option value="">Select a card</option>
-                    {cardOptions.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <FieldGroup label="What kind?" hint="The amount is held against the card's limit and released as you pay.">
-                  <SegmentedControl
-                    ariaLabel="Card EMI kind"
-                    size="sm"
-                    options={[
-                      { value: "productPurchase" as CardEmiKind, label: "Product purchase" },
-                      { value: "creditCardLoan" as CardEmiKind, label: "Credit card loan" },
-                    ]}
-                    value={form.cardEmiKind}
-                    onChange={(v) => setForm((f) => ({ ...f, cardEmiKind: v }))}
-                  />
-                </FieldGroup>
-              </>
-            )}
-          </RevealToggle>
-
-          <RevealToggle
-            icon={Percent}
-            checked={form.hasInterest}
-            onChange={(checked) => setForm((f) => ({ ...f, hasInterest: checked }))}
-            title="Has interest?"
-            description="Leave off for a no-cost EMI."
-          >
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <Field label="Interest rate (% per year)">
-                <input
-                  type="number"
-                  inputMode="decimal"
-                  className={LOAN_EMI_INPUT}
-                  placeholder="e.g. 14"
-                  value={form.ratePercent}
-                  onChange={(e) => setForm((f) => ({ ...f, ratePercent: e.target.value }))}
-                />
-              </Field>
-              <FieldGroup label="Interest type">
-                <SegmentedControl
-                  ariaLabel="Interest type"
-                  size="sm"
-                  className="sm:w-full"
-                  options={[
-                    { value: "reducingBalance" as InterestType, label: "Reducing" },
-                    { value: "flat" as InterestType, label: "Flat" },
-                  ]}
-                  value={form.interestType}
-                  onChange={(v) => setForm((f) => ({ ...f, interestType: v }))}
-                />
-              </FieldGroup>
-            </div>
-          </RevealToggle>
-        </div>
-        </FormSection>
-
-        <WhoIsThisForField
-          variant="section"
-          people={people}
-          choice={form.ownership}
-          personId={form.beneficiaryPersonId}
-          onChange={({ choice, personId }) => setForm((f) => ({ ...f, ownership: choice, beneficiaryPersonId: personId }))}
-        />
-
-        <MoreOptions summary={form.linkToCard ? "Lender, notes" : "Lender, type, notes"}>
-          <Field label="Lender / store">
-            <input
-              className={LOAN_EMI_INPUT}
-              placeholder="e.g. Bajaj Finance, HDFC Bank"
-              value={form.lenderName}
-              onChange={(e) => setForm((f) => ({ ...f, lenderName: e.target.value }))}
-            />
-          </Field>
-          {!form.linkToCard && (
-            <FieldGroup label="Type">
-              <ChipRow
-                options={LOAN_TYPE_OPTIONS.map((t) => ({ value: t, label: EMI_TYPE_LABEL[t] }))}
-                value={form.loanType}
-                onChange={(v) => setForm((f) => ({ ...f, loanType: v }))}
-              />
-            </FieldGroup>
-          )}
-          <Field label="Notes">
-            <textarea
-              className={cn(LOAN_EMI_INPUT, "h-auto min-h-20 resize-none py-2")}
-              placeholder="Optional notes"
-              rows={3}
-              value={form.notes}
-              onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
-            />
-          </Field>
-        </MoreOptions>
-      </LoanEmiFormDialog>
-
-      <FormDialog
-        open={payOpen}
+      <RecordPaymentDialog
+        key={`emi-pay-${paySeq}`}
+        target={payOpen && detail ? { kind: "emi", row: detail } : null}
+        open={payOpen && detail != null}
         onOpenChange={setPayOpen}
-        title={`Record Payment — ${detail?.emi.name ?? "EMI"}`}
-        description="Records against the next-due installment. GST/processing fee are tracked for your records only."
-        onConfirm={handleRecordPayment}
-        confirmLabel={saving ? "Saving…" : "Record"}
-        contentClassName="sm:max-w-lg"
-      >
-        <div className="flex flex-col gap-4 text-sm">
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <Field label="Amount">
-              <AmountInput value={paymentForm.amount} onChange={(v) => setPaymentForm((f) => ({ ...f, amount: v }))} autoFocus />
-            </Field>
-            <Field label="Date">
-              <input
-                type="date"
-                className={cn(FLAT_INPUT, "h-12")}
-                value={paymentForm.date}
-                onChange={(e) => setPaymentForm((f) => ({ ...f, date: e.target.value }))}
-              />
-            </Field>
-          </div>
-          <div className="flex flex-col gap-3 border-t border-border pt-4">
-            <SectionLabel>Optional</SectionLabel>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <Field label="GST">
-                <input
-                  type="number"
-                  inputMode="decimal"
-                  className={FLAT_INPUT}
-                  value={paymentForm.gst}
-                  onChange={(e) => setPaymentForm((f) => ({ ...f, gst: e.target.value }))}
-                />
-              </Field>
-              <Field label="Processing fee">
-                <input
-                  type="number"
-                  inputMode="decimal"
-                  className={FLAT_INPUT}
-                  value={paymentForm.processingFee}
-                  onChange={(e) => setPaymentForm((f) => ({ ...f, processingFee: e.target.value }))}
-                />
-              </Field>
-            </div>
-            <Field label="Note">
-              <input
-                className={FLAT_INPUT}
-                placeholder="Optional note"
-                value={paymentForm.note}
-                onChange={(e) => setPaymentForm((f) => ({ ...f, note: e.target.value }))}
-              />
-            </Field>
-          </div>
-        </div>
-      </FormDialog>
+      />
 
       <ConfirmDialog
         open={deleteOpen}
@@ -760,6 +273,6 @@ export function EmiWorkspace({ addSignal = 0 }: EmiWorkspaceProps = {}) {
         confirmLabel="Delete"
         onConfirm={handleDelete}
       />
-    </div>
+    </>
   );
 }
