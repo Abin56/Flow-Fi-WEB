@@ -32,7 +32,19 @@ export function useCategories() {
       const repository = createCategoryRepository(uid);
       // First launch (or everything purged): populate the starter set so pickers aren't empty.
       void repository.seedDefaultsIfEmpty().catch((err) => onError(err));
-      return repository.watchAll(onData, onError);
+      // Hide copies left behind by earlier racing seeds: same default name + type shown once.
+      return repository.watchAll((categories) => {
+        const seen = new Set<string>();
+        onData(
+          categories.filter((c) => {
+            if (!c.isDefault) return true;
+            const key = `${c.type}:${c.name.toLowerCase()}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          }),
+        );
+      }, onError);
     },
   });
 }

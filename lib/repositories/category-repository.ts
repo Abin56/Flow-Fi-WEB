@@ -78,7 +78,9 @@ export class CategoryRepository extends FirestoreCrudRepository<Category> {
 
     for (const seed of DEFAULT_CATEGORIES) {
       const category: Category = {
-        id: generateId(),
+        // Deterministic id: concurrent seeders (several hooks mounting at once) overwrite
+        // the same doc instead of each adding its own copy.
+        id: `default-${seed.type}-${seed.name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
         name: seed.name,
         type: seed.type,
         iconKey: seed.iconKey,

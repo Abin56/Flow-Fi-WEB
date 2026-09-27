@@ -103,7 +103,7 @@ export interface DefaultCategorySeed {
   colorValue: number;
 }
 
-const CATEGORY_PALETTE: number[] = [
+export const CATEGORY_PALETTE: number[] = [
   0xff5b5fef,
   0xff00c2a8,
   0xffff5b5b,

@@ -27,6 +27,18 @@ import {
   ShoppingBag,
   Zap,
   ArrowLeftRight,
+  Home,
+  GraduationCap,
+  Plane,
+  Gift,
+  ShoppingCart,
+  Smartphone,
+  Fuel,
+  PiggyBank,
+  Dumbbell,
+  PawPrint,
+  Shirt,
+  Wrench,
   type LucideIcon,
 } from "lucide-react";
 import { useAccounts } from "@/hooks/use-accounts";
@@ -70,8 +82,23 @@ const ICON_BY_KEY: Record<string, LucideIcon> = {
   movie: Film,
   health: HeartPulse,
   transfer: ArrowLeftRight,
+  home: Home,
+  education: GraduationCap,
+  travel: Plane,
+  gift: Gift,
+  grocery: ShoppingCart,
+  phone: Smartphone,
+  fuel: Fuel,
+  savings: PiggyBank,
+  fitness: Dumbbell,
+  pets: PawPrint,
+  clothing: Shirt,
+  repair: Wrench,
   other: Receipt,
 };
+
+/** Every icon key the category editor offers, in picker order. */
+export const CATEGORY_ICON_KEYS = Object.keys(ICON_BY_KEY);
 
 const TONE_BY_KEY: Record<string, ToneName> = {
   work: "success",
@@ -83,6 +110,18 @@ const TONE_BY_KEY: Record<string, ToneName> = {
   movie: "warning",
   health: "expense",
   transfer: "neutral",
+  home: "primary",
+  education: "purple",
+  travel: "primary",
+  gift: "expense",
+  grocery: "success",
+  phone: "neutral",
+  fuel: "warning",
+  savings: "success",
+  fitness: "success",
+  pets: "warning",
+  clothing: "purple",
+  repair: "neutral",
   other: "neutral",
 };
 

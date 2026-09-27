@@ -68,7 +68,7 @@ import { formatCurrencyPrecise } from "@/lib/format";
 import { toast } from "@/store/toast-store";
 import { isSplit, type Expense, type SplitType } from "@/lib/models/expense";
 import type { Account, AccountType } from "@/lib/models/account";
-import type { Category } from "@/lib/models/category";
+import type { Category, CategoryType } from "@/lib/models/category";
 import type { LedgerEntryType, Person } from "@/lib/models/person";
 import type { Transaction } from "@/lib/models/transaction";
 import type { ExpenseParticipantInput } from "@/lib/repositories/expense-repository";
@@ -78,6 +78,7 @@ import { useDuplicateGuardedCreate } from "@/lib/services/duplicate-detection/us
 import { usePeopleActions } from "@/features/people/hooks/use-people-data";
 import { resolveMixedSplit } from "@/lib/split/mixed-split";
 import { MonthYearStepper } from "./month-year-stepper";
+import { ManageCategoriesDialog } from "./manage-categories-dialog";
 import {
   categoryIconFor,
   categoryToneFor,
@@ -139,7 +140,7 @@ function FormRow({ label, children }: { label: string; children: ReactNode }) {
  *  (rounded pill border, primary tint + checkmark when selected) the old inline chip rows used,
  *  just laid out as a grid tile instead of a flow chip, and hides the default list-style
  *  checkmark-on-the-right indicator in favor of a corner badge that fits the tile shape. */
-const GRID_OPTION_CLASS = "relative flex items-center justify-center rounded-xl border py-2.5 text-center [&>span:first-child]:hidden";
+const GRID_OPTION_CLASS = "relative flex min-h-9 items-center justify-start rounded-none border px-2 py-1.5 pr-5 text-left [&>span:first-child]:hidden [&>span:last-child]:min-w-0";
 
 /** What a picker's popover shows instead of an empty grid when the underlying list has zero
  *  items — a first-time-user dead end otherwise (e.g. no accounts created yet). `onMouseDown`
@@ -154,7 +155,7 @@ function EmptyPickerOption({ label, onNavigate }: { label: string; onNavigate: (
         e.stopPropagation();
         onNavigate();
       }}
-      className="col-span-2 flex items-center justify-center gap-1.5 rounded-xl border border-dashed border-foreground/20 py-3 text-xs font-semibold text-primary-accent-text hover:bg-primary/5"
+      className="col-span-2 flex items-center justify-center gap-1.5 rounded-none border border-dashed border-foreground/20 py-1.5 text-[11px] font-semibold text-primary-accent-text hover:bg-primary/5"
     >
       <Plus className="size-3.5" />
       {label}
@@ -197,8 +198,8 @@ function AccountSelect({
           )}
         </SelectValue>
       </SelectTrigger>
-      <SelectContent className="min-w-64">
-        <div className="grid grid-cols-2 gap-1.5 p-1">
+      <SelectContent className="w-(--radix-select-trigger-width) rounded-none">
+        <div className="grid max-h-64 grid-cols-2 gap-1 overflow-y-auto p-1">
           {accounts.length === 0 && (
             <EmptyPickerOption label="Add account" onNavigate={() => router.push("/accounts")} />
           )}
@@ -209,13 +210,13 @@ function AccountSelect({
               <SelectItem
                 key={a.id}
                 value={a.id}
-                className={cn(GRID_OPTION_CLASS, isSelected ? "border-primary bg-primary/10" : FIELD_BORDER)}
+                className={cn(GRID_OPTION_CLASS, isSelected ? "border-primary bg-primary/20 ring-1 ring-primary" : FIELD_BORDER)}
               >
-                <span className={cn("flex flex-col items-center gap-1", isSelected ? "text-primary-accent-text" : "text-foreground")}>
-                  {a.type === "bank" ? <BankLogo bankId={a.bankId} size={18} shape="square" /> : <Icon className="size-4" />}
-                  <span className="line-clamp-1 text-xs font-semibold">{a.name}</span>
+                <span className={cn("flex min-w-0 items-center gap-2", isSelected ? "font-semibold text-foreground" : "text-foreground")}>
+                  {a.type === "bank" ? <BankLogo bankId={a.bankId} size={14} shape="square" /> : <Icon className="size-3.5" />}
+                  <span className="truncate text-xs font-medium">{a.name}</span>
                 </span>
-                {isSelected && <Check className="absolute top-1.5 right-1.5 size-3 text-primary-accent-text" />}
+                {isSelected && <Check className="absolute top-1/2 right-1.5 size-3 -translate-y-1/2 text-foreground" />}
               </SelectItem>
             );
           })}
@@ -237,10 +238,24 @@ const CATEGORY_TONE_CLASS: Record<string, string> = {
 /** Category picker — same reasoning as `AccountSelect`: an attractive 2-column grid of icon tiles
  *  that opens in a dropdown whose list scrolls inside its own floating popover, so a growing
  *  category list never affects the popup's own height. */
-function CategorySelect({ categories, value, onChange }: { categories: Category[]; value: string; onChange: (id: string) => void }) {
+function CategorySelect({
+  categories,
+  value,
+  onChange,
+  type,
+}: {
+  categories: Category[];
+  value: string;
+  onChange: (id: string) => void;
+  type: CategoryType;
+}) {
   const selected = categories.find((c) => c.id === value);
+  const [manageOpen, setManageOpen] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
+
   return (
-    <Select value={value || undefined} onValueChange={onChange}>
+    <>
+    <Select open={pickerOpen} onOpenChange={setPickerOpen} value={value || undefined} onValueChange={onChange}>
       <SelectTrigger className={cn("w-full", FIELD_BORDER)}>
         <SelectValue placeholder="Select category">
           {selected &&
@@ -258,8 +273,8 @@ function CategorySelect({ categories, value, onChange }: { categories: Category[
             })()}
         </SelectValue>
       </SelectTrigger>
-      <SelectContent className="min-w-64">
-        <div className="grid grid-cols-2 gap-1.5 p-1">
+      <SelectContent className="w-(--radix-select-trigger-width) rounded-none">
+        <div className="grid max-h-64 grid-cols-2 gap-1 overflow-y-auto p-1">
           {categories.map((c) => {
             const Icon = categoryIconFor(c.iconKey);
             const tone = categoryToneFor(c.iconKey);
@@ -268,21 +283,39 @@ function CategorySelect({ categories, value, onChange }: { categories: Category[
               <SelectItem
                 key={c.id}
                 value={c.id}
-                className={cn(GRID_OPTION_CLASS, isSelected ? "border-primary bg-primary/10" : FIELD_BORDER)}
+                className={cn(GRID_OPTION_CLASS, isSelected ? "border-primary bg-primary/20 ring-1 ring-primary" : FIELD_BORDER)}
               >
-                <span className={cn("flex flex-col items-center gap-1", isSelected ? "text-primary-accent-text" : "text-foreground")}>
-                  <span className={cn("flex size-6 items-center justify-center rounded-full", CATEGORY_TONE_CLASS[tone])}>
-                    <Icon className="size-3.5" />
+                <span className={cn("flex min-w-0 items-center gap-2", isSelected ? "font-semibold text-foreground" : "text-foreground")}>
+                  <span className={cn("flex size-5 items-center justify-center rounded-full", CATEGORY_TONE_CLASS[tone])}>
+                    <Icon className="size-3" />
                   </span>
-                  <span className="line-clamp-1 text-xs font-semibold">{c.name}</span>
+                  <span className="truncate text-xs font-medium">{c.name}</span>
                 </span>
-                {isSelected && <Check className="absolute top-1.5 right-1.5 size-3 text-primary-accent-text" />}
+                {isSelected && <Check className="absolute top-1/2 right-1.5 size-3 -translate-y-1/2 text-foreground" />}
               </SelectItem>
             );
           })}
+          <EmptyPickerOption
+            label="Manage categories"
+            onNavigate={() => {
+              setPickerOpen(false);
+              setManageOpen(true);
+            }}
+          />
         </div>
       </SelectContent>
     </Select>
+    <ManageCategoriesDialog
+      open={manageOpen}
+      onOpenChange={setManageOpen}
+      categories={categories}
+      type={type}
+      onCreated={onChange}
+      onDeleted={(id) => {
+        if (id === value) onChange("");
+      }}
+    />
+    </>
   );
 }
 
@@ -349,7 +382,7 @@ function KindSelector({
   kinds?: FormKind[];
 }) {
   return (
-    <div className={cn("grid gap-1 rounded-xl bg-muted p-1", kinds.length === 3 ? "grid-cols-3" : "grid-cols-2")}>
+    <div className={cn("grid gap-1 rounded-none bg-muted p-1", kinds.length === 3 ? "grid-cols-3" : "grid-cols-2")}>
       {kinds.map((k) => {
         const meta = KIND_META[k];
         const Icon = meta.icon;
@@ -361,14 +394,14 @@ function KindSelector({
             disabled={locked && !active}
             onClick={() => onChange(k)}
             className={cn(
-              "relative flex items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-semibold",
+              "relative flex items-center justify-center gap-1.5 rounded-none px-2 py-1.5 text-xs font-semibold",
               locked && !active && "opacity-40",
             )}
           >
             {active && (
               <motion.span
                 layoutId="kind-pill"
-                className={cn("absolute inset-0 rounded-lg bg-background shadow-sm ring-1", KIND_RING_CLASS[k])}
+                className={cn("absolute inset-0 rounded-none bg-background shadow-sm ring-1", KIND_RING_CLASS[k])}
                 transition={springs.snappy}
               />
             )}
@@ -902,7 +935,7 @@ export function TransactionDetailsModal({
               void handleSave();
             }
           }}
-          className="flex max-h-[94vh] w-full flex-col gap-0 overflow-hidden overflow-y-hidden rounded-2xl border border-border p-0 shadow-[var(--shadow-dialog)] sm:max-w-[640px]"
+          className="flex max-h-[94vh] w-full flex-col gap-0 overflow-hidden overflow-y-hidden rounded-none border border-border [&_input]:rounded-none [&_textarea]:rounded-none [&_[data-slot=select-trigger]]:rounded-none p-0 shadow-[var(--shadow-dialog)] sm:max-w-[640px]"
         >
           <div className={cn("h-1.5 w-full shrink-0", view === "split" ? "bg-primary" : KIND_SOLID_CLASS[kind].split(" ")[0])} />
 
@@ -1192,7 +1225,7 @@ export function TransactionDetailsModal({
               kinds={transaction ? FORM_KINDS : ADD_MODE_FORM_KINDS}
             />
 
-            <div className={cn("flex flex-col items-center gap-1 rounded-2xl border py-3 transition-colors", KIND_HERO_BG[kind], KIND_BORDER_CLASS[kind])}>
+            <div className={cn("flex flex-col items-center gap-1 rounded-none border py-3 transition-colors", KIND_HERO_BG[kind], KIND_BORDER_CLASS[kind])}>
               <span className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">Amount</span>
               <div className="flex items-center gap-1">
                 <span className={cn("text-xl font-bold", KIND_TEXT_CLASS[kind])}>{kind === "income" ? "+" : "−"}</span>
@@ -1279,7 +1312,12 @@ export function TransactionDetailsModal({
                 )
               ) : (
                 <FormRow label="Category *">
-                  <CategorySelect categories={filteredCategories} value={categoryId} onChange={setCategoryId} />
+                  <CategorySelect
+                    categories={filteredCategories}
+                    value={categoryId}
+                    onChange={setCategoryId}
+                    type={kind === "income" ? "income" : "expense"}
+                  />
                 </FormRow>
               )}
             </div>
