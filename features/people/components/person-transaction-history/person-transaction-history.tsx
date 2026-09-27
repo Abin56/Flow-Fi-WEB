@@ -4,7 +4,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { ClayAvatar } from "@/components/clay/clay-avatar";
 import { useMediaQuery } from "@/hooks/use-media-query";
-import type { PersonViewRow } from "@/features/people/hooks/use-people-data";
+import type { PersonActivityItem, PersonViewRow } from "@/features/people/hooks/use-people-data";
 import { PersonTransactionSummary } from "./person-transaction-summary";
 import { PersonTransactionList } from "./person-transaction-list";
 
@@ -14,6 +14,7 @@ interface PersonTransactionHistoryProps {
   onOpenChange: (open: boolean) => void;
   isLoading?: boolean;
   error?: string | null;
+  onSettleEntry?: (item: PersonActivityItem) => void;
 }
 
 /**
@@ -25,7 +26,7 @@ interface PersonTransactionHistoryProps {
  * The rest of `PersonOverviewPanel` (contact info, notes, attachments, EMI, actions) is untouched;
  * only the transaction-history piece moves out into this dedicated surface.
  */
-export function PersonTransactionHistory({ person, open, onOpenChange, isLoading, error }: PersonTransactionHistoryProps) {
+export function PersonTransactionHistory({ person, open, onOpenChange, isLoading, error, onSettleEntry }: PersonTransactionHistoryProps) {
   const isDesktop = useMediaQuery("(min-width: 768px)");
 
   if (!person) return null;
@@ -44,7 +45,7 @@ export function PersonTransactionHistory({ person, open, onOpenChange, isLoading
   const body = (
     <>
       <PersonTransactionSummary transactionsCount={person.transactionsCount} youAreOwed={person.youAreOwed} youOwe={person.youOwe} />
-      <PersonTransactionList activity={person.activity} isLoading={isLoading} error={error} />
+      <PersonTransactionList activity={person.activity} isLoading={isLoading} error={error} onSettleEntry={onSettleEntry} />
     </>
   );
 

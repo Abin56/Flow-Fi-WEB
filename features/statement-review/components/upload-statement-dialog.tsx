@@ -1,7 +1,9 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { FormDialog } from "@/components/finance";
+import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useAccounts } from "@/hooks/use-accounts";
 import { db } from "@/lib/firebase/client";
@@ -32,6 +34,7 @@ interface UploadStatementDialogProps {
  * `awaiting_password`) if no password is saved or it's wrong.
  */
 export function UploadStatementDialog({ open, onOpenChange, uid, creditCards, onUploaded }: UploadStatementDialogProps) {
+  const router = useRouter();
   const { data: accounts = [] } = useAccounts();
   const accountNameById = new Map(accounts.map((a) => [a.id, a.name]));
   const [cardId, setCardId] = useState("");
@@ -119,9 +122,20 @@ export function UploadStatementDialog({ open, onOpenChange, uid, creditCards, on
           <UploadDropzone file={file} onFileChange={setFile} disabled={uploading} />
         </div>
         {creditCards.length === 0 && (
-          <p className="text-xs text-muted-foreground">
-            Add a credit card first — statements are uploaded against a specific card.
-          </p>
+          <div className="flex items-center justify-between gap-2 rounded-xl border border-dashed border-foreground/20 px-3 py-2">
+            <p className="text-xs text-muted-foreground">Add a credit card first — statements upload against a specific card.</p>
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              onClick={() => {
+                onOpenChange(false);
+                router.push("/credit-cards");
+              }}
+            >
+              Add card
+            </Button>
+          </div>
         )}
         {error && <p className="text-xs text-expense">{error}</p>}
       </div>

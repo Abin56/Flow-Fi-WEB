@@ -21,6 +21,7 @@
  */
 
 import { useRef, useState, type ReactNode } from "react";
+import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   ArrowDownToLine,
@@ -34,7 +35,6 @@ import {
   ChevronDown,
   CreditCard as CreditCardIcon,
   EyeOff,
-  HandCoins,
   Info,
   Landmark,
   Layers,
@@ -103,15 +103,15 @@ const SPLIT_TYPE_OPTIONS: { value: SplitType; label: string }[] = [
 /** Same options/labels/tones as the People page's "Add Ledger Entry" picker
  *  (`LEDGER_ENTRY_TYPE_OPTIONS` in people-workspace.tsx) — kept in sync by hand since the two
  *  live in different features. Only "gave" has a real expense-assignment behind it
- *  (`applyOwesPersonChange`, unchanged); the other three record a plain reference on the
- *  transaction plus one `addLedgerEntry` call, same as the People page does. Add mode only —
- *  editing an existing transaction only exposes "gave", since reversing a previously-recorded
- *  standalone ledger entry on an edit has no existing transition logic to reuse safely. */
+ *  (`applyOwesPersonChange`, unchanged); "borrowed" records a plain reference on the
+ *  transaction plus one `addLedgerEntry` call, same as the People page does. "repaid"/
+ *  "receivedBack" are settlements against an existing "gave"/"borrowed" entry, not a starting
+ *  point for a new one, so they're not offered here. Add mode only — editing an existing
+ *  transaction only exposes "gave", since reversing a previously-recorded standalone ledger
+ *  entry on an edit has no existing transition logic to reuse safely. */
 const PERSON_ENTRY_OPTIONS: { value: LedgerEntryType; label: string; description: string; icon: LucideIcon; tone: "expense" | "success" }[] = [
   { value: "gave", label: "I Gave", description: "They owe me", icon: ArrowUpFromLine, tone: "expense" },
   { value: "borrowed", label: "I Borrowed", description: "I owe them", icon: ArrowDownToLine, tone: "success" },
-  { value: "repaid", label: "I Repaid", description: "Paid them back", icon: HandCoins, tone: "expense" },
-  { value: "receivedBack", label: "Received Back", description: "They paid me back", icon: Wallet, tone: "success" },
 ];
 
 /** Matches the icon set the Add Account dialog already uses for these types — kept visually
@@ -141,6 +141,27 @@ function FormRow({ label, children }: { label: string; children: ReactNode }) {
  *  checkmark-on-the-right indicator in favor of a corner badge that fits the tile shape. */
 const GRID_OPTION_CLASS = "relative flex items-center justify-center rounded-xl border py-2.5 text-center [&>span:first-child]:hidden";
 
+/** What a picker's popover shows instead of an empty grid when the underlying list has zero
+ *  items — a first-time-user dead end otherwise (e.g. no accounts created yet). `onMouseDown`
+ *  fires (and stops propagation) before Radix's own pointerdown-based close/select handling, so
+ *  the click reliably navigates instead of being swallowed by the closing popover. */
+function EmptyPickerOption({ label, onNavigate }: { label: string; onNavigate: () => void }) {
+  return (
+    <button
+      type="button"
+      onMouseDown={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onNavigate();
+      }}
+      className="col-span-2 flex items-center justify-center gap-1.5 rounded-xl border border-dashed border-foreground/20 py-3 text-xs font-semibold text-primary-accent-text hover:bg-primary/5"
+    >
+      <Plus className="size-3.5" />
+      {label}
+    </button>
+  );
+}
+
 /** Account picker — a real dropdown (not an inline chip row) whose options render as an attractive
  *  2-column grid of icon tiles. The list opens in its own floating, self-scrolling popover instead
  *  of ever growing the popup's own height, no matter how many accounts exist. */
@@ -156,6 +177,7 @@ function AccountSelect({
   placeholder?: string;
 }) {
   const selected = accounts.find((a) => a.id === value);
+  const router = useRouter();
   return (
     <Select value={value || undefined} onValueChange={onChange}>
       <SelectTrigger className={cn("w-full", FIELD_BORDER)}>
@@ -177,6 +199,9 @@ function AccountSelect({
       </SelectTrigger>
       <SelectContent className="min-w-64">
         <div className="grid grid-cols-2 gap-1.5 p-1">
+          {accounts.length === 0 && (
+            <EmptyPickerOption label="Add account" onNavigate={() => router.push("/accounts")} />
+          )}
           {accounts.map((a) => {
             const Icon = ACCOUNT_TYPE_ICON[a.type];
             const isSelected = a.id === value;
@@ -1329,7 +1354,7 @@ export function TransactionDetailsModal({
                 </FormRow>
 
                 {!personId && !splitOpen && (
-                  <p className="text-xs text-muted-foreground">Pick a person above to record I Gave / I Borrowed / I Repaid / Received Back.</p>
+                  <p className="text-xs text-muted-foreground">Pick a person above to record I Gave / I Borrowed.</p>
                 )}
 
                 {!splitOpen && (
@@ -1381,10 +1406,10 @@ export function TransactionDetailsModal({
                           </span>
                         </button>
                       ) : (
-                        // Add mode — same 4-option picker as the People page's "Add Ledger Entry"
-                        // dialog (`LEDGER_ENTRY_TYPE_OPTIONS`). "I Gave" goes through the same
-                        // `applyOwesPersonChange` expense-assignment path as edit mode; the other
-                        // three record a plain descriptive link on the transaction plus one
+                        // Add mode — same "I Gave"/"I Borrowed" picker as the People page's "Add
+                        // Ledger Entry" dialog (`LEDGER_ENTRY_TYPE_OPTIONS`). "I Gave" goes through
+                        // the same `applyOwesPersonChange` expense-assignment path as edit mode;
+                        // "I Borrowed" records a plain descriptive link on the transaction plus one
                         // `addLedgerEntry` call, mirroring what the People page itself does.
                         <div className="grid grid-cols-2 gap-2">
                           {PERSON_ENTRY_OPTIONS.map((o) => {

@@ -135,6 +135,7 @@ function ledgerEntry(overrides: Partial<LedgerEntry> = {}): LedgerEntry {
     note: "Split: Dinner",
     increasesBalance: true,
     transactionRef: "tx-1",
+    parentEntryId: null,
     createdAt: new Date("2026-08-01T00:00:00Z"),
     deletedAt: null,
     lastEditedAt: null,

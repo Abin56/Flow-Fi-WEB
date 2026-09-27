@@ -163,6 +163,8 @@ export class LedgerRepository extends FirestoreCrudRepository<LedgerEntry> {
       date: Date;
       note?: string;
       transactionRef?: string | null;
+      /** The "gave"/"borrowed" entry this "repaid"/"receivedBack" settlement applies against — see `LedgerEntry.parentEntryId`. */
+      parentEntryId?: string | null;
       increasesBalance?: boolean;
       /** Defaults to "yetToReceive" — a new entry is never treated as already settled. */
       receivedStatus?: ReceivedStatus;
@@ -180,6 +182,7 @@ export class LedgerRepository extends FirestoreCrudRepository<LedgerEntry> {
       date: params.date,
       note: params.note ?? "",
       transactionRef: params.transactionRef ?? null,
+      parentEntryId: params.parentEntryId ?? null,
       increasesBalance: params.increasesBalance ?? true,
       receivedStatus: params.receivedStatus ?? "yetToReceive",
       createdAt: new Date(),

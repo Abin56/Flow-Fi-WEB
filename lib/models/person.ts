@@ -115,6 +115,14 @@ export interface LedgerEntry extends SoftDeletableEntity {
    * collection in this milestone.
    */
   transactionRef: string | null;
+  /**
+   * For a "repaid"/"receivedBack" settlement entry, the id of the specific "borrowed"/"gave" entry
+   * it settles — null for every other entry, including the original "gave"/"borrowed" entry itself.
+   * Lets a settlement apply against one individual transaction (partially or fully) instead of the
+   * person's ledger as a whole. Additive field, web-only for now — see `docs/adr/ADR-002...md`'s
+   * Flutter-compatibility caveat for other additive fields on a Flutter-canonical collection.
+   */
+  parentEntryId: string | null;
   createdAt: Date;
   /**
    * Whether this entry has actually been settled — independent of `type`/
@@ -137,6 +145,34 @@ export function signedAmount(entry: LedgerEntry): number {
       ? entry.amount
       : -entry.amount
     : signFor(entry.type, entry.amount);
+}
+
+/**
+ * Which way actual cash moved for this entry — "paid" means money left your
+ * hand (a "gave"/"repaid" entry), "received" means money came to you (a
+ * "borrowed"/"receivedBack" entry). This is deliberately NOT derived from
+ * `signedAmount`'s sign: `signedAmount` tracks the *balance* effect (e.g.
+ * "gave" — you paying for a shared expense — INCREASES what the other
+ * person owes you, a positive balance delta), which is the opposite of the
+ * cash direction for "gave"/"repaid". Using the balance sign here previously
+ * mislabeled a "receivedBack" settlement (cash IN) as "Paid to <person>"
+ * since its balance delta is negative. For "adjustment", there is no fixed
+ * cash-flow direction, so it falls back to the balance sign as the least-bad
+ * guess (unchanged behavior).
+ */
+export function cashFlowDirection(entry: LedgerEntry): "paid" | "received" {
+  switch (entry.type) {
+    case "gave":
+    case "repaid":
+      return "paid";
+    case "borrowed":
+    case "receivedBack":
+      return "received";
+    case "adjustment":
+      // Balance increase behaves like "gave" (cash paid out); balance decrease behaves like
+      // "receivedBack" (cash received) — matching the two real entry types above.
+      return entry.increasesBalance ? "paid" : "received";
+  }
 }
 
 /**
@@ -223,6 +259,7 @@ export function ledgerEntryFromFirestore(
     date: (data.date as Timestamp).toDate(),
     note: (data.note as string | undefined) ?? "",
     transactionRef: (data.transactionRef as string | undefined) ?? null,
+    parentEntryId: (data.parentEntryId as string | undefined) ?? null,
     increasesBalance: (data.increasesBalance as boolean) ?? true,
     createdAt: (data.createdAt as Timestamp).toDate(),
     receivedStatus: receivedStatusFromName(data.receivedStatus as string | undefined),
@@ -240,6 +277,7 @@ export function ledgerEntryToFirestore(entry: LedgerEntry): DocumentData {
     date: Timestamp.fromDate(entry.date),
     note: entry.note,
     transactionRef: entry.transactionRef,
+    parentEntryId: entry.parentEntryId,
     increasesBalance: entry.increasesBalance,
     createdAt: Timestamp.fromDate(entry.createdAt),
     receivedStatus: entry.receivedStatus,

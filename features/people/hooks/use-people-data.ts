@@ -44,6 +44,7 @@ import type { Loan } from "@/lib/models/loan";
 import { useMemo } from "react";
 import { usePeople } from "@/hooks/use-people";
 import {
+  cashFlowDirection,
   compareLedgerEntriesNewestFirst,
   ledgerEntryTypeFromName,
   signedAmount,
@@ -82,8 +83,8 @@ function formatTimestamp(date: Date, now: Date): string {
 const ENTRY_TYPE_LABEL: Record<LedgerEntryType, string> = {
   gave: "Gave",
   borrowed: "Borrowed",
-  receivedBack: "Received Back",
-  repaid: "Repaid",
+  receivedBack: "Received",
+  repaid: "Paid",
   adjustment: "Adjustment",
 };
 
@@ -136,6 +137,9 @@ export interface PersonActivityItem {
   id: string;
   /** Money direction only (derived from the entry's signed amount) — see `receivedStatus` for whether it's actually settled. */
   type: "received" | "paid";
+  /** The raw ledger entry type — needed to tell a "gave"/"borrowed" entry (settleable) apart from a
+   *  "repaid"/"receivedBack" settlement (not itself settleable) or an "adjustment". */
+  entryType: LedgerEntryType;
   /** Real settlement status — independent of `type`. */
   receivedStatus: ReceivedStatus;
   description: string;
@@ -147,6 +151,14 @@ export interface PersonActivityItem {
   personId: string;
   /** `LedgerEntry.transactionRef` — links back to the `Expense`/`Transaction` this entry came from, if any. */
   transactionRef: string | null;
+  /** `LedgerEntry.parentEntryId` — set on a settlement entry, pointing at the "gave"/"borrowed" entry it settles. */
+  parentEntryId: string | null;
+  /**
+   * Only meaningful for a "gave"/"borrowed" entry: `amount` minus every active "repaid"/"receivedBack"
+   * entry settled against it so far, floored at 0. `null` for every other entry type (a settlement
+   * entry doesn't itself have a "remaining" amount to settle further).
+   */
+  remainingAmount: number | null;
 }
 
 export interface PersonViewRow {
@@ -173,11 +185,24 @@ export interface PersonViewRow {
   activity: PersonActivityItem[];
 }
 
-function toActivityItem(entry: LedgerEntry): PersonActivityItem {
+/** `allEntries` is the person's full active-entry list — needed to sum up settlements already
+ *  recorded against `entry` when it's a settleable "gave"/"borrowed" entry. */
+function toActivityItem(entry: LedgerEntry, allEntries: LedgerEntry[]): PersonActivityItem {
   const amount = signedAmount(entry);
+  const isSettleable = entry.type === "gave" || entry.type === "borrowed";
+  const remainingAmount = isSettleable
+    ? Math.max(
+        0,
+        entry.amount -
+          allEntries
+            .filter((e) => e.parentEntryId === entry.id && (e.type === "repaid" || e.type === "receivedBack"))
+            .reduce((sum, e) => sum + e.amount, 0),
+      )
+    : null;
   return {
     id: entry.id,
-    type: amount >= 0 ? "received" : "paid",
+    type: cashFlowDirection(entry),
+    entryType: entry.type,
     receivedStatus: entry.receivedStatus,
     description: entry.note || ENTRY_TYPE_LABEL[ledgerEntryTypeFromName(entry.type)],
     amount: Math.abs(amount),
@@ -185,6 +210,8 @@ function toActivityItem(entry: LedgerEntry): PersonActivityItem {
     rawDate: entry.date,
     personId: entry.personId,
     transactionRef: entry.transactionRef,
+    parentEntryId: entry.parentEntryId,
+    remainingAmount,
   };
 }
 
@@ -198,7 +225,7 @@ function toPersonRow(
   // Legacy Loan-generated ledger entries are replaced by the Loan's own events (`loanItems`), so a
   // Loan event never appears twice.
   const sortedEntries = entries.filter((e) => !isLegacyLoanLedgerEntry(e, loanIds)).sort(compareLedgerEntriesNewestFirst);
-  const activity = [...sortedEntries.map(toActivityItem), ...loanItems].sort((a, b) => b.rawDate.getTime() - a.rawDate.getTime());
+  const activity = [...sortedEntries.map((entry) => toActivityItem(entry, entries)), ...loanItems].sort((a, b) => b.rawDate.getTime() - a.rawDate.getTime());
   const now = new Date();
 
   return {
@@ -239,6 +266,8 @@ export function usePeopleRows(): { rows: PersonViewRow[]; isLoading: boolean } {
         const loanItems: PersonActivityItem[] = personLoanActivity(person.id, loans, transactions).map((item) => ({
           id: item.id,
           type: item.signedEffect >= 0 ? "received" : "paid",
+          // Loan events aren't ledger entries — settled from the Loan, never via Settle Up.
+          entryType: "adjustment",
           receivedStatus: "notApplicable",
           description: item.description,
           amount: item.amount,
@@ -246,6 +275,8 @@ export function usePeopleRows(): { rows: PersonViewRow[]; isLoading: boolean } {
           rawDate: item.date,
           personId: person.id,
           transactionRef: null,
+          parentEntryId: null,
+          remainingAmount: null,
         }));
         return toPersonRow(person, entriesByPersonId[person.id] ?? [], positionsByPersonId[person.id], loanItems, loanIds);
       }),
@@ -360,6 +391,9 @@ export interface RecentPersonTransactionRow {
   type: "received" | "paid";
   /** Real settlement status — independent of `type`. */
   receivedStatus: ReceivedStatus;
+  /** The raw ledger entry type — needed to tell a "gave" entry (which can be pending receipt) apart
+   *  from a "borrowed" entry (money already received, never "yet to receive"). */
+  entryType: LedgerEntryType;
   personId: string;
   personName: string;
   description: string;
@@ -393,8 +427,9 @@ export function useRecentPeopleTransactions(limit: number | null = 5): { rows: R
         const amount = signedAmount(entry);
         return {
           id: entry.id,
-          type: amount >= 0 ? ("received" as const) : ("paid" as const),
+          type: cashFlowDirection(entry),
           receivedStatus: entry.receivedStatus,
+          entryType: entry.type,
           personId: entry.personId,
           personName,
           description: entry.note || ENTRY_TYPE_LABEL[ledgerEntryTypeFromName(entry.type)],
@@ -443,6 +478,7 @@ export function usePeopleActions() {
           note?: string;
           increasesBalance?: boolean;
           receivedStatus?: ReceivedStatus;
+          parentEntryId?: string | null;
         },
       ) => {
         const ledgerRepository = createLedgerRepository(uid, person.id, personRepository);

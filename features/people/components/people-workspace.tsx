@@ -5,12 +5,10 @@ import {
   ArrowDownToLine,
   ArrowUpFromLine,
   Contact,
-  HandCoins,
   IndianRupee,
   StickyNote,
   User,
   Users,
-  Wallet,
   type LucideIcon,
 } from "lucide-react";
 import { ConfirmDialog, FLAT_INPUT, FormDialog, SectionedFormDialog, SectionLabel } from "@/components/finance";
@@ -26,17 +24,22 @@ import { ShareExpenseDialog } from "@/features/people/components/share-expense-d
 import { SettleUpDialog } from "@/features/people/components/settle-up-dialog";
 import { RecentPeopleTransactions } from "@/features/people/components/recent-people-transactions";
 import { AllPeopleTransactionsDialog } from "@/features/people/components/all-people-transactions-dialog";
-import { usePeopleActions, usePeopleRows } from "@/features/people/hooks/use-people-data";
+import { usePeopleActions, usePeopleRows, type PersonActivityItem } from "@/features/people/hooks/use-people-data";
+import { SettleEntryDialog } from "@/features/people/components/settle-entry-dialog";
 import { usePeople } from "@/hooks/use-people";
 import { useAccounts } from "@/hooks/use-accounts";
 import { useCategories } from "@/hooks/use-categories";
 import type { LedgerEntryType, Person } from "@/lib/models/person";
-import type { ReceivedStatus } from "@/lib/models/expense";
 import { cn } from "@/lib/utils";
 import { toast } from "@/store/toast-store";
 
+/**
+ * Only the two debt-opening types — "I repaid"/"Received back" are settlement actions, reachable only
+ * from an individual "gave"/"borrowed" transaction in the person's ledger (see `SettleEntryDialog`),
+ * not from the general Add Transaction flow.
+ */
 const LEDGER_ENTRY_TYPE_OPTIONS: {
-  value: LedgerEntryType;
+  value: Extract<LedgerEntryType, "gave" | "borrowed">;
   label: string;
   description: string;
   icon: LucideIcon;
@@ -44,14 +47,6 @@ const LEDGER_ENTRY_TYPE_OPTIONS: {
 }[] = [
   { value: "gave", label: "I Gave", description: "They owe me", icon: ArrowUpFromLine, tone: "expense" },
   { value: "borrowed", label: "I Borrowed", description: "I owe them", icon: ArrowDownToLine, tone: "success" },
-  { value: "repaid", label: "I Repaid", description: "Paid them back", icon: HandCoins, tone: "expense" },
-  { value: "receivedBack", label: "Received Back", description: "They paid me back", icon: Wallet, tone: "success" },
-];
-
-/** Mirrors `RECEIVED_STATUS_OPTIONS` in share-expense-dialog.tsx/shared-expense-inspector.tsx — "excluded" doesn't apply to a plain ledger entry, so only the two settlement states are offered here. */
-const ENTRY_RECEIVED_STATUS_OPTIONS: { value: Extract<ReceivedStatus, "yetToReceive" | "received">; label: string }[] = [
-  { value: "yetToReceive", label: "Pending" },
-  { value: "received", label: "Received" },
 ];
 
 interface PersonFormState {
@@ -77,15 +72,14 @@ function personFormFromPerson(person: Person): PersonFormState {
 }
 
 interface LedgerEntryFormState {
-  type: LedgerEntryType;
+  type: Extract<LedgerEntryType, "gave" | "borrowed">;
   amount: string;
   date: string;
   note: string;
-  receivedStatus: ReceivedStatus;
 }
 
 function emptyLedgerEntryForm(): LedgerEntryFormState {
-  return { type: "gave", amount: "", date: new Date().toISOString().slice(0, 10), note: "", receivedStatus: "yetToReceive" };
+  return { type: "gave", amount: "", date: new Date().toISOString().slice(0, 10), note: "" };
 }
 
 function PeopleListSkeleton() {
@@ -123,6 +117,7 @@ export function PeopleWorkspace() {
   const [addEntryPerson, setAddEntryPerson] = useState<Person | null>(null);
   const [shareExpensePerson, setShareExpensePerson] = useState<Person | null>(null);
   const [settleUpPerson, setSettleUpPerson] = useState<Person | null>(null);
+  const [settleEntry, setSettleEntry] = useState<PersonActivityItem | null>(null);
   const [viewAllTransactionsOpen, setViewAllTransactionsOpen] = useState(false);
   const [personForm, setPersonForm] = useState<PersonFormState>(emptyPersonForm);
   const [personFormError, setPersonFormError] = useState<string | null>(null);
@@ -217,7 +212,7 @@ export function PeopleWorkspace() {
         amount,
         date: new Date(entryForm.date),
         note: entryForm.note || undefined,
-        receivedStatus: entryForm.receivedStatus,
+        receivedStatus: "yetToReceive",
       });
       setAddEntryPerson(null);
     } catch (e) {
@@ -225,6 +220,19 @@ export function PeopleWorkspace() {
     } finally {
       setSaving(false);
     }
+  }
+
+  async function handleSettleEntry(params: { type: "repaid" | "receivedBack"; amount: number; date: Date; parentEntryId: string }) {
+    if (!actions) throw new Error("Not signed in");
+    const person = rawPeople.find((p) => p.id === settleEntry?.personId);
+    if (!person) throw new Error("Person not found");
+    await actions.addLedgerEntry(person, {
+      type: params.type,
+      amount: params.amount,
+      date: params.date,
+      receivedStatus: "received",
+      parentEntryId: params.parentEntryId,
+    });
   }
 
   const counts = useMemo(
@@ -349,8 +357,17 @@ export function PeopleWorkspace() {
             const raw = rawPeople.find((p) => p.id === selected.id);
             if (raw) setDeletingPerson(raw);
           }}
+          onSettleEntry={(item) => setSettleEntry(item)}
         />
       )}
+
+      <SettleEntryDialog
+        open={settleEntry != null}
+        onOpenChange={(open) => !open && setSettleEntry(null)}
+        person={rawPeople.find((p) => p.id === settleEntry?.personId) ?? null}
+        entry={settleEntry}
+        onSettle={handleSettleEntry}
+      />
 
       {shareExpensePerson && (
         <ShareExpenseDialog
@@ -503,28 +520,6 @@ export function PeopleWorkspace() {
                       <p className={cn("truncate text-sm font-semibold", active ? "text-foreground" : "text-foreground/90")}>{o.label}</p>
                       <p className="truncate text-xs text-muted-foreground">{o.description}</p>
                     </div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <span className="text-xs font-medium text-muted-foreground">Payment status</span>
-            <div className="grid grid-cols-2 gap-2">
-              {ENTRY_RECEIVED_STATUS_OPTIONS.map((o) => {
-                const active = entryForm.receivedStatus === o.value;
-                return (
-                  <button
-                    key={o.value}
-                    type="button"
-                    onClick={() => setEntryForm((f) => ({ ...f, receivedStatus: o.value }))}
-                    aria-pressed={active}
-                    className={cn(
-                      "rounded-xl border p-2.5 text-center text-sm font-medium transition-colors",
-                      active ? "border-primary/40 bg-primary/10 text-foreground" : "border-border/50 bg-card text-muted-foreground hover:border-border",
-                    )}
-                  >
-                    {o.label}
                   </button>
                 );
               })}

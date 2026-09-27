@@ -43,7 +43,23 @@ function baseTransaction(overrides: Partial<Transaction> = {}): Transaction {
 }
 
 describe("compareTransactionsNewestFirst", () => {
-  it("sorts by dateTime descending when dates differ", () => {
+  it("sorts by most-recently added/edited first, even when the picked dateTime says otherwise", () => {
+    const justAddedButBackdated = baseTransaction({
+      id: "just-added-backdated",
+      dateTime: new Date("2026-01-01T00:00:00Z"), // user picked an old date
+      createdAt: new Date("2026-07-20T00:00:00Z"), // but just added it now
+    });
+    const addedEarlierButRecentDate = baseTransaction({
+      id: "added-earlier-recent-date",
+      dateTime: new Date("2026-07-19T00:00:00Z"), // a more recent picked date
+      createdAt: new Date("2026-07-10T00:00:00Z"), // but added days ago
+    });
+    expect(
+      [addedEarlierButRecentDate, justAddedButBackdated].sort(compareTransactionsNewestFirst).map((t) => t.id),
+    ).toEqual(["just-added-backdated", "added-earlier-recent-date"]);
+  });
+
+  it("falls back to dateTime descending only when added/edited at the exact same time", () => {
     const older = baseTransaction({ id: "older", dateTime: new Date("2026-07-01T00:00:00Z") });
     const newer = baseTransaction({ id: "newer", dateTime: new Date("2026-07-15T00:00:00Z") });
     expect([older, newer].sort(compareTransactionsNewestFirst).map((t) => t.id)).toEqual(["newer", "older"]);

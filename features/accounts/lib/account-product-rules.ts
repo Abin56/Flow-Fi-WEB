@@ -230,6 +230,11 @@ export function validateAccountForm(form: AccountFormInput, isEditing: boolean):
         return { ok: false, error: "Opening balance must be a non-negative number." };
       }
     }
+  } else if (isBank && !isDeposit) {
+    if (!form.accountHolderName.trim()) return { ok: false, error: "Account holder name is required." };
+    if (!LAST_4_PATTERN.test(form.accountNumberLast4)) {
+      return { ok: false, error: "Last 4 digits are required and must be exactly 4 numbers." };
+    }
   } else if (form.accountNumberLast4 && !LAST_4_PATTERN.test(form.accountNumberLast4)) {
     return { ok: false, error: "Account number must be exactly 4 digits." };
   }

@@ -48,6 +48,7 @@ interface PersonTransactionListProps {
   activity: PersonActivityItem[];
   isLoading?: boolean;
   error?: string | null;
+  onSettleEntry?: (item: PersonActivityItem) => void;
 }
 
 /**
@@ -56,7 +57,7 @@ interface PersonTransactionListProps {
  * rendered (no new query, no server round-trip); the old implementation had no search at all, so
  * this is additive, not a replacement of existing filtering.
  */
-export function PersonTransactionList({ activity, isLoading, error }: PersonTransactionListProps) {
+export function PersonTransactionList({ activity, isLoading, error, onSettleEntry }: PersonTransactionListProps) {
   const [search, setSearch] = useState("");
 
   const filtered = useMemo(() => {
@@ -102,7 +103,7 @@ export function PersonTransactionList({ activity, isLoading, error }: PersonTran
                 </p>
                 <div className="divide-y divide-border">
                   {group.items.map((item) => (
-                    <PersonTransactionRow key={item.id} item={item} />
+                    <PersonTransactionRow key={item.id} item={item} onSettle={onSettleEntry} />
                   ))}
                 </div>
               </div>
