@@ -51,14 +51,14 @@ export function PeopleTable({
   return (
     <div className="surface-flat overflow-hidden rounded-2xl border border-border/50">
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[720px] border-collapse text-sm">
+        <table className="w-full min-w-[720px] border-separate border-spacing-y-1 text-sm">
           <thead>
             <tr className="border-b border-border/50 text-left text-xs text-muted-foreground">
-              <th className="px-5 py-3 font-medium">Person</th>
+              <th className="rounded-l-xl px-5 py-3 font-medium">Person</th>
               <th className="px-5 py-3 font-medium">You Are Owed</th>
               <th className="px-5 py-3 font-medium">You Owe</th>
               <th className="px-5 py-3 font-medium">Net Balance</th>
-              <th className="px-5 py-3 font-medium">Status</th>
+              <th className="rounded-r-xl px-5 py-3 font-medium">Status</th>
             </tr>
           </thead>
           <tbody>
@@ -70,11 +70,11 @@ export function PeopleTable({
                   key={person.id}
                   onClick={() => onSelect(person.id)}
                   className={cn(
-                    "cursor-pointer border-b border-border/40 transition-colors last:border-0 hover:bg-muted/40",
-                    selectedId === person.id && "bg-accent/40",
+                    "cursor-pointer transition-colors",
+                    selectedId === person.id ? "bg-accent/40" : "hover:bg-muted/40",
                   )}
                 >
-                  <td className="px-5 py-3">
+                  <td className="rounded-l-xl px-5 py-3">
                     <div className="flex items-center gap-3">
                       <ClayAvatar name={person.name} size={32} />
                       <div className="flex items-center gap-2 whitespace-nowrap">
@@ -100,7 +100,7 @@ export function PeopleTable({
                     {net >= 0 ? "+" : "-"}
                     {formatCurrency(Math.abs(net))}
                   </td>
-                  <td className="px-5 py-3">
+                  <td className="rounded-r-xl px-5 py-3">
                     <span className={cn("rounded-full px-2.5 py-1 text-[11px] font-semibold", STATUS_CLASS[person.status])}>
                       {STATUS_LABEL[person.status]}
                     </span>

@@ -16,7 +16,7 @@ type Mode = "all" | "custom" | "specific";
 const MODES: { value: Mode; label: string }[] = [
   { value: "all", label: "All pending" },
   { value: "custom", label: "Custom amount" },
-  { value: "specific", label: "Specific expense" },
+  { value: "specific", label: "Split expenses" },
 ];
 
 /**
