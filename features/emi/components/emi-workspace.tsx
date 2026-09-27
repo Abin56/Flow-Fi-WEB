@@ -1,47 +1,29 @@
 "use client";
 
-import { ArrowUpRight, Building2, CreditCard, Lock, Percent, ShoppingBag, Trash2, UserRound, Wallet } from "lucide-react";
-import Link from "next/link";
+import { CreditCard, Percent, ShoppingBag } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { ClayBadge } from "@/components/clay/clay-badge";
-import { ClayButton } from "@/components/clay/clay-button";
 import { Stagger } from "@/components/foundation/animated-container";
-import {
-  ChipRow,
-  ConfirmDialog,
-  CurrencyCell,
-  DetailDrawer,
-  EmptyState,
-  FLAT_INPUT,
-  FormDialog,
-  SectionLabel,
-} from "@/components/finance";
+import { ChipRow, ConfirmDialog, EmptyState, FLAT_INPUT, FormDialog, SectionLabel } from "@/components/finance";
 import { Skeleton } from "@/components/ui/skeleton";
-import { EMI_TYPE_LABEL, EmiCard, emiBadges, emiCardLabel } from "@/features/emi/components/emi-card";
+import { EMI_TYPE_LABEL, EmiCard } from "@/features/emi/components/emi-card";
+import { EmiScheduleDialog } from "@/features/emi/components/emi-schedule-dialog";
 import { useEmiActions, useEmiRows, type EmiRow } from "@/features/emi/hooks/use-emi-data";
 import {
   AmountInput,
-  DetailHero,
-  DetailSectionTitle,
   EMI_ICON,
-  FactGrid,
   Field,
   FieldGroup,
   FormSection,
   LOAN_EMI_INPUT,
-  LinkedList,
-  LinkedRow,
   LoanEmiFormDialog,
   MoreOptions,
   RevealToggle,
   SegmentedControl,
-  daysUntil,
-  dueLabel,
 } from "@/features/loans/components/loan-emi-ui";
-import { formatCurrency } from "@/lib/format";
-import { installmentStatus, remainingAmount, type ScheduleType } from "@/lib/models/payment-schedule";
+import type { Installment, ScheduleType } from "@/lib/models/payment-schedule";
 import type { EmiLoanType } from "@/lib/models/emi";
+import { formatCurrency } from "@/lib/format";
 import type { InterestType } from "@/lib/engines/interest-calculator";
 import type { CreditCardProfile } from "@/lib/models/credit-card";
 import { useCreditCards } from "@/hooks/use-credit-cards";
@@ -146,26 +128,6 @@ function previewInstallment(form: EmiFormState): { perInstallment: number; inter
   return { perInstallment: per, interest: per * count - principal };
 }
 
-const INSTALLMENT_STATUS_BADGE = {
-  paid: { label: "Paid", tone: "success" },
-  partiallyPaid: { label: "Partial", tone: "warning" },
-  overdue: { label: "Overdue", tone: "expense" },
-  skipped: { label: "Skipped", tone: "neutral" },
-  upcoming: null,
-} as const;
-
-function GoTo({ href, label }: { href: string; label: string }) {
-  return (
-    <Link
-      href={href}
-      aria-label={label}
-      className="flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-    >
-      <ArrowUpRight className="size-4" />
-    </Link>
-  );
-}
-
 export interface EmiWorkspaceProps {
   /** Incremented by the unified Loan & EMI chooser to open the Add EMI form. */
   addSignal?: number;
@@ -194,10 +156,11 @@ export function EmiWorkspace({ addSignal = 0 }: EmiWorkspaceProps = {}) {
   const [handoffDetailId, setHandoffDetailId] = useState<string | null>(() => searchParams.get("agreement"));
   const [addOpen, setAddOpen] = useState(() => createHandoff === "installmentPurchase");
   const [deleteOpen, setDeleteOpen] = useState(false);
-  const [payOpen, setPayOpen] = useState(false);
+  const [payTarget, setPayTarget] = useState<Installment | null>(null);
   const [form, setForm] = useState<EmiFormState>(emptyForm);
   const [paymentForm, setPaymentForm] = useState<PaymentFormState>(() => emptyPaymentForm(0));
   const [saving, setSaving] = useState(false);
+  const [statusBusy, setStatusBusy] = useState(false);
 
   const activeRowFresh = useMemo(() => {
     const id = activeRow?.emi.id ?? handoffDetailId;
@@ -216,9 +179,9 @@ export function EmiWorkspace({ addSignal = 0 }: EmiWorkspaceProps = {}) {
     openAdd();
   }
 
-  function openPay(row: EmiRow) {
-    setPaymentForm(emptyPaymentForm(row.nextInstallment?.amountDue ?? 0));
-    setPayOpen(true);
+  function openPay(installment: Installment) {
+    setPaymentForm(emptyPaymentForm(installment.amountDue));
+    setPayTarget(installment);
   }
 
   async function handleCreate() {
@@ -271,17 +234,17 @@ export function EmiWorkspace({ addSignal = 0 }: EmiWorkspaceProps = {}) {
   }
 
   async function handleRecordPayment() {
-    if (!actions || !activeRowFresh?.nextInstallment) return;
+    if (!actions || !activeRowFresh || !payTarget) return;
     setSaving(true);
     try {
-      await actions.recordPayment(activeRowFresh.emi, activeRowFresh.nextInstallment, {
+      await actions.recordPayment(activeRowFresh.emi, payTarget, {
         amount: Number(paymentForm.amount),
         date: new Date(paymentForm.date),
         note: paymentForm.note,
         gst: paymentForm.gst ? Number(paymentForm.gst) : undefined,
         processingFee: paymentForm.processingFee ? Number(paymentForm.processingFee) : undefined,
       });
-      setPayOpen(false);
+      setPayTarget(null);
     } catch (e) {
       toast.error("Couldn't record payment", e instanceof Error ? e.message : "Please try again.");
     } finally {
@@ -289,12 +252,19 @@ export function EmiWorkspace({ addSignal = 0 }: EmiWorkspaceProps = {}) {
     }
   }
 
-  async function handleClose() {
-    if (!actions || !activeRowFresh) return;
+  async function handleToggleClose(row: EmiRow) {
+    if (!actions) return;
+    setStatusBusy(true);
     try {
-      await actions.closeEmi(activeRowFresh.emi);
+      if (row.status === "closed") {
+        await actions.reopenEmi(row.emi);
+      } else {
+        await actions.closeEmi(row.emi);
+      }
     } catch (e) {
-      toast.error("Couldn't close EMI", e instanceof Error ? e.message : "Please try again.");
+      toast.error("Couldn't update EMI status", e instanceof Error ? e.message : "Please try again.");
+    } finally {
+      setStatusBusy(false);
     }
   }
 
@@ -309,11 +279,6 @@ export function EmiWorkspace({ addSignal = 0 }: EmiWorkspaceProps = {}) {
   }
 
   const detail = activeRowFresh;
-  const detailDone = detail != null && (detail.status === "closed" || detail.status === "completed");
-  const detailPaid = detail ? detail.installments.reduce((sum, i) => sum + i.amountPaid, 0) : 0;
-  const detailInstallment = detail ? (detail.nextInstallment?.amountDue ?? detail.installments[0]?.amountDue ?? 0) : 0;
-  const detailCard = detail ? emiCardLabel(detail) : null;
-  const detailOverdue = detail?.nextInstallment != null && daysUntil(detail.nextInstallment.dueDate) < 0;
   const isProductPurchase = !form.linkToCard || form.cardEmiKind === "productPurchase";
   const preview = previewInstallment(form);
 
@@ -335,141 +300,20 @@ export function EmiWorkspace({ addSignal = 0 }: EmiWorkspaceProps = {}) {
         </Stagger>
       )}
 
-      <DetailDrawer
-        open={detail != null && !deleteOpen && !payOpen}
+      <EmiScheduleDialog
+        open={detail != null && !deleteOpen && payTarget == null}
         onOpenChange={(open) => {
           if (!open) {
             setActiveRow(null);
             setHandoffDetailId(null);
           }
         }}
-        className="sm:max-w-lg"
-        title={detail?.emi.name ?? ""}
-        description={
-          detail
-            ? `EMI · ${detail.emi.lenderName ?? EMI_TYPE_LABEL[detail.emi.loanType]}${
-                detail.emi.interest ? ` · ${detail.emi.interest.ratePercent}% p.a.` : " · No interest"
-              }`
-            : undefined
-        }
-        footer={
-          detail && (
-            <>
-              <ClayButton className="w-full gap-1.5" disabled={!detail.nextInstallment} onClick={() => openPay(detail)}>
-                <Wallet className="size-4" />
-                Record Payment
-              </ClayButton>
-              <div className="flex gap-2">
-                <ClayButton variant="ghost" size="sm" className="flex-1 gap-1.5 text-foreground/75" disabled={detail.status === "closed"} onClick={handleClose}>
-                  <Lock className="size-3.5" />
-                  Close EMI
-                </ClayButton>
-                <ClayButton variant="ghost" size="sm" className="flex-1 gap-1.5 text-expense hover:text-expense" onClick={() => setDeleteOpen(true)}>
-                  <Trash2 className="size-3.5" />
-                  Delete
-                </ClayButton>
-              </div>
-            </>
-          )
-        }
-      >
-        {detail && (
-          <div className="flex flex-col gap-5 text-sm">
-            <DetailHero
-              label="Outstanding"
-              amount={detail.remainingBalance}
-              paid={detail.installmentsPaid}
-              total={detail.emi.installmentCount}
-              badges={emiBadges(detail)}
-            />
-
-            {!detailDone && detail.nextInstallment && (
-              <div className="flex items-center justify-between gap-3 rounded-xl border border-border bg-muted/50 px-4 py-3">
-                <div className="flex flex-col">
-                  <span className={cn("text-xs", detailOverdue ? "font-semibold text-expense" : "font-medium text-muted-foreground")}>
-                    Next installment · {dueLabel(detail.nextInstallment.dueDate)}
-                  </span>
-                  <span className="font-heading text-lg font-semibold text-foreground tabular-nums">
-                    {formatCurrency(remainingAmount(detail.nextInstallment))}
-                  </span>
-                </div>
-                <span className="text-xs text-muted-foreground">
-                  #{detail.nextInstallment.sequenceNumber} of {detail.emi.installmentCount}
-                </span>
-              </div>
-            )}
-
-            <FactGrid
-              className="sm:grid-cols-2"
-              facts={[
-                { label: "Original amount", value: formatCurrency(detail.emi.principalAmount) },
-                { label: "Installment", value: formatCurrency(detailInstallment), strong: true },
-                { label: "Paid so far", value: formatCurrency(detailPaid) },
-                {
-                  label: "Interest",
-                  value: detail.emi.interest
-                    ? `${detail.emi.interest.ratePercent}% ${detail.emi.interest.type === "flat" ? "flat" : "reducing"}`
-                    : "No interest",
-                },
-                detail.emi.isAutoDebitEnabled ? { label: "Auto-debit", value: detail.emi.autoDebitAccount ?? "On" } : null,
-              ]}
-            />
-
-            {(detailCard || detail.emi.beneficiaryPersonId || detail.emi.lenderName) && (
-              <section>
-                <DetailSectionTitle>Linked</DetailSectionTitle>
-                <LinkedList>
-                  {detailCard && (
-                    <LinkedRow icon={CreditCard} label="Credit card" value={detailCard} action={<GoTo href="/credit-cards" label="Open Credit Cards" />} />
-                  )}
-                  {detail.emi.lenderName && <LinkedRow icon={Building2} label="Lender" value={detail.emi.lenderName} />}
-                  {detail.emi.beneficiaryPersonId && (
-                    <LinkedRow
-                      icon={UserRound}
-                      label="For"
-                      value={detail.beneficiaryName ?? "Someone else"}
-                      action={<GoTo href="/people" label="Open People" />}
-                    />
-                  )}
-                </LinkedList>
-              </section>
-            )}
-
-            <section>
-              <DetailSectionTitle aside={<span className="text-xs text-muted-foreground tabular-nums">{detail.installments.length} total</span>}>
-                Installments
-              </DetailSectionTitle>
-              <div className="flex flex-col divide-y divide-border overflow-hidden rounded-xl border border-border">
-                {detail.installments.map((installment) => {
-                  const status = installmentStatus(installment);
-                  const badge = INSTALLMENT_STATUS_BADGE[status];
-                  const isNext = installment.id === detail.nextInstallment?.id;
-                  return (
-                    <div
-                      key={installment.id}
-                      className={cn("flex items-center justify-between gap-3 px-3.5 py-2.5", isNext ? "bg-muted/60" : "bg-card", status === "paid" && "text-muted-foreground")}
-                    >
-                      <div className="flex min-w-0 items-center gap-3">
-                        <span className="w-6 shrink-0 font-mono text-xs text-muted-foreground tabular-nums">{installment.sequenceNumber}</span>
-                        <div className="flex min-w-0 flex-col">
-                          <span className={cn("text-sm font-medium", status === "paid" ? "text-foreground/70" : "text-foreground")}>
-                            {installment.dueDate.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
-                          </span>
-                          {isNext && <span className="text-[11px] font-semibold text-foreground/80">Next due</span>}
-                        </div>
-                      </div>
-                      <div className="flex shrink-0 items-center gap-2">
-                        {badge && <ClayBadge tone={badge.tone} className="px-2 py-0.5 text-[11px]">{badge.label}</ClayBadge>}
-                        <CurrencyCell amount={installment.amountDue} signed={false} className="text-sm font-semibold" />
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </section>
-          </div>
-        )}
-      </DetailDrawer>
+        row={detail}
+        onDelete={() => setDeleteOpen(true)}
+        onRecordPayment={(_row, installment) => openPay(installment)}
+        onToggleClose={handleToggleClose}
+        statusBusy={statusBusy}
+      />
 
       <LoanEmiFormDialog
         open={addOpen}
@@ -695,10 +539,10 @@ export function EmiWorkspace({ addSignal = 0 }: EmiWorkspaceProps = {}) {
       </LoanEmiFormDialog>
 
       <FormDialog
-        open={payOpen}
-        onOpenChange={setPayOpen}
+        open={payTarget != null}
+        onOpenChange={(open) => !open && setPayTarget(null)}
         title={`Record Payment — ${detail?.emi.name ?? "EMI"}`}
-        description="Records against the next-due installment. GST/processing fee are tracked for your records only."
+        description="GST/processing fee are tracked for your records only."
         onConfirm={handleRecordPayment}
         confirmLabel={saving ? "Saving…" : "Record"}
         contentClassName="sm:max-w-lg"

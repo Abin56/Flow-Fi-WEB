@@ -89,11 +89,11 @@ export function loanTransactionLabel(
       case "principalPrepayment":
         return "Extra Principal Payment";
       case "advanceEmi":
-        return direction === "given" ? "Advance Repayment Received" : "Advance EMI";
+        return direction === "given" ? "Advance Repayment Received" : "Advance Loan Installment";
       case "additionalDisbursement":
         return direction === "given" ? "Lent More" : "Borrowed More";
       default:
-        return direction === "given" ? "Loan Repayment Received" : "Loan EMI";
+        return direction === "given" ? "Loan Repayment Received" : "Loan Installment";
     }
   })();
   const name = loan?.name?.trim();

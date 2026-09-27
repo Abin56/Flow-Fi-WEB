@@ -62,6 +62,7 @@ export function BankLogo({ bankId, size = 32, shape = "circle", className }: Ban
   const bank = bankById(bankId);
   const [triedPng, setTriedPng] = useState(false);
   const [imageFailed, setImageFailed] = useState(false);
+  const [imageLoaded, setImageLoaded] = useState(false);
 
   // Reset the onError fallback chain whenever the bank identity itself changes (e.g. switching
   // banks in the picker) — otherwise a previous bank's failed-image state would leak forward.
@@ -71,6 +72,7 @@ export function BankLogo({ bankId, size = 32, shape = "circle", className }: Ban
     setLastBankId(bank?.id);
     setTriedPng(false);
     setImageFailed(false);
+    setImageLoaded(false);
   }
 
   if (!bank) return <UnknownBadge size={size} shape={shape} className={className} />;
@@ -79,9 +81,17 @@ export function BankLogo({ bankId, size = 32, shape = "circle", className }: Ban
 
   return (
     <span
-      className={cn("flex shrink-0 items-center justify-center overflow-hidden bg-white p-[14%] ring-1 ring-border/60", shapeClass(shape), className)}
+      className={cn("relative flex shrink-0 items-center justify-center overflow-hidden bg-white ring-1 ring-border/60", shapeClass(shape), className)}
       style={{ width: size, height: size }}
     >
+      {/* Monogram shows immediately and stays underneath until the real logo has actually
+          finished loading — no asset exists yet for most banks, so without this the broken-image
+          box would flash at its default intrinsic size for the two failed svg/png requests. */}
+      {!imageLoaded && (
+        <span className="absolute inset-0">
+          <MonogramBadge bank={bank} size={size} shape={shape} />
+        </span>
+      )}
       {/* eslint-disable-next-line @next/next/no-img-element -- bank id set is open-ended and file
           presence is unknown at build time, so this needs a runtime onError fallback chain that
           next/image's static import pipeline doesn't support for this use case. */}
@@ -91,9 +101,9 @@ export function BankLogo({ bankId, size = 32, shape = "circle", className }: Ban
         alt={bank.name}
         width={size}
         height={size}
-        loading="lazy"
         decoding="async"
-        className="size-full object-contain"
+        className={cn("relative size-full object-contain p-[14%]", !imageLoaded && "invisible")}
+        onLoad={() => setImageLoaded(true)}
         onError={() => {
           if (!triedPng) setTriedPng(true);
           else setImageFailed(true);

@@ -7,6 +7,7 @@ import {
   ChevronRight,
   Copy,
   Download,
+  Landmark,
   LayoutGrid,
   List,
   Maximize2,
@@ -56,6 +57,19 @@ import { loanTransactionLabel } from "@/features/loans/lib/loan-labels";
 import { findSameAmountDateDuplicateIds } from "@/features/transactions/lib/same-amount-date-duplicates";
 import { useDuplicateGuardedCreate } from "@/lib/services/duplicate-detection/use-duplicate-guarded-create";
 import { cn } from "@/lib/utils";
+
+/**
+ * Corner-ribbon tag for a Loan/EMI-generated transaction card — "EMI" only for a payment tied to
+ * the standalone EMI feature (`emiId`); every Loan-generated transaction (`loanId`) is tagged
+ * "Loan" regardless of the loan's repayment type, since Loan and EMI are separate features and
+ * only an actual EMI should ever read "EMI". Returns null for anything not tied to a loan/EMI so
+ * ordinary transactions stay untagged.
+ */
+function loanTagFor(transaction: Pick<Transaction, "loanId" | "emiId">): { label: string } | null {
+  if (transaction.emiId != null) return { label: "EMI" };
+  if (transaction.loanId != null) return { label: "Loan" };
+  return null;
+}
 
 const SPLIT_TYPE_OPTIONS: { value: SplitType; label: string }[] = [
   { value: "equal", label: "Split equally" },
@@ -155,11 +169,11 @@ export function TransactionsWorkspace() {
   // Loan-generated rows read as "Loan EMI — Home Loan" / "Extra Principal Payment — …" from their
   // persisted loan metadata instead of the raw stored description; every other row is unchanged.
   const { data: loans = [] } = useLoans();
+  const loanById = useMemo(() => new Map(loans.map((l) => [l.id, l])), [loans]);
   const displayDescription = useMemo(() => {
-    const loanById = new Map(loans.map((l) => [l.id, l]));
     return (t: Transaction) =>
       (t.loanId != null ? loanTransactionLabel(t, loanById.get(t.loanId) ?? null) : null) ?? t.description;
-  }, [loans]);
+  }, [loanById]);
 
   const [search, setSearch] = useState("");
   const deferredSearch = useDeferredValue(search);
@@ -451,13 +465,22 @@ export function TransactionsWorkspace() {
         const Icon = categoryIconFor(iconKey);
         const flag = transactionFlagFor(row.transaction);
         const isDuplicate = duplicateTransactionIds.has(row.transaction.id);
+        const loanTag = loanTagFor(row.transaction);
         return (
           <div className="flex min-w-0 items-center gap-3">
             <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-xl", TONE_ICON_CLASS[categoryToneFor(iconKey)])}>
               <Icon className="size-4" />
             </span>
             <div className="min-w-0">
-              <p className="truncate font-medium text-foreground">{displayDescription(row.transaction) || "(No description)"}</p>
+              <div className="flex items-center gap-1.5">
+                {loanTag && (
+                  <span className="flex shrink-0 items-center gap-1 rounded-tl-lg rounded-br-lg bg-purple-600 px-1.5 py-1 text-[10px] font-bold tracking-wide text-white shadow-sm dark:bg-purple-500">
+                    <Landmark className="size-3" aria-hidden />
+                    {loanTag.label}
+                  </span>
+                )}
+                <p className="truncate font-medium text-foreground">{displayDescription(row.transaction) || "(No description)"}</p>
+              </div>
               {flag && <p className="truncate text-xs text-warning-foreground">{flag.label}</p>}
               {isDuplicate && (
                 <span
@@ -716,6 +739,7 @@ export function TransactionsWorkspace() {
           {pageRows.map((row) => {
             const iconKey = row.category?.iconKey ?? "other";
             const Icon = categoryIconFor(iconKey);
+            const loanTag = loanTagFor(row.transaction);
             return (
               <button
                 key={row.transaction.id}
@@ -726,10 +750,16 @@ export function TransactionsWorkspace() {
                   setDetailOpen(true);
                 }}
                 className={cn(
-                  "flex items-center gap-3 rounded-2xl border border-border bg-card p-4 text-left transition-transform duration-150 hover:-translate-y-0.5 hover:bg-muted/30 active:scale-[0.99]",
+                  "relative flex items-center gap-3 rounded-2xl border border-border bg-card p-4 pt-5 text-left transition-transform duration-150 hover:-translate-y-0.5 hover:bg-muted/30 active:scale-[0.99]",
                   duplicateTransactionIds.has(row.transaction.id) && "!border-danger bg-danger/5",
                 )}
               >
+                {loanTag && (
+                  <span className="absolute top-0 left-0 z-10 flex items-center gap-1 rounded-tl-2xl rounded-br-lg bg-purple-600 py-1 pr-2.5 pl-2 text-[10px] font-bold tracking-wide text-white shadow-md dark:bg-purple-500">
+                    <Landmark className="size-3" aria-hidden />
+                    {loanTag.label}
+                  </span>
+                )}
                 <span className={cn("flex size-10 shrink-0 items-center justify-center rounded-2xl", TONE_ICON_CLASS[categoryToneFor(iconKey)])}>
                   <Icon className="size-4.5" />
                 </span>

@@ -1,8 +1,16 @@
 import { Bike, CheckCircle2, CreditCard, Landmark, ShoppingBag } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { ProgressRing } from "@/components/foundation/progress-ring";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatCurrency } from "@/lib/format";
 import { cn } from "@/lib/utils";
+
+const CTA_HREF: Record<AttentionRowItem["type"], string> = {
+  bill: "/bills",
+  emi: "/loans",
+  budget: "/budgets",
+  goal: "/budgets",
+};
 
 const STYLES = {
   bill: { icon: CreditCard, iconClass: "bg-expense/12 text-expense", titleClass: "text-expense" },
@@ -36,6 +44,8 @@ export interface AttentionRowProps {
  * than a fixed count of four.
  */
 export function AttentionRow({ items, isLoading }: AttentionRowProps) {
+  const router = useRouter();
+
   if (isLoading) {
     return (
       <section className="surface-flat rounded-3xl border border-border/50 p-5">
@@ -90,20 +100,16 @@ export function AttentionRow({ items, isLoading }: AttentionRowProps) {
                   {item.cta === "Pay Now" ? (
                     <button
                       type="button"
-                      disabled
-                      aria-disabled="true"
-                      title="Coming soon"
-                      className="cursor-not-allowed rounded-full bg-expense/12 px-3 py-1 text-[11px] font-semibold text-expense opacity-50 transition-colors"
+                      onClick={() => router.push(CTA_HREF[item.type])}
+                      className="rounded-full bg-expense/12 px-3 py-1 text-[11px] font-semibold text-expense transition-colors hover:bg-expense/20"
                     >
                       {item.cta}
                     </button>
                   ) : (
                     <button
                       type="button"
-                      disabled
-                      aria-disabled="true"
-                      title="Coming soon"
-                      className={cn("cursor-not-allowed text-[11px] font-semibold opacity-50 transition-colors", style.titleClass)}
+                      onClick={() => router.push(CTA_HREF[item.type])}
+                      className={cn("text-[11px] font-semibold transition-colors hover:underline", style.titleClass)}
                     >
                       {item.cta}
                     </button>
