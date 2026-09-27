@@ -1,9 +1,11 @@
 "use client";
 
-import { ArrowUpRight, UserRound } from "lucide-react";
+import { ArrowUpRight, User, UserRound, Users } from "lucide-react";
 import Link from "next/link";
 import { ChipRow, FLAT_INPUT, SectionLabel } from "@/components/finance";
+import { FormSection, LOAN_EMI_INPUT, SegmentedControl } from "@/features/loans/components/loan-emi-ui";
 import type { Person } from "@/lib/models/person";
+import { cn } from "@/lib/utils";
 
 export type OwnershipChoice = "me" | "someoneElse";
 
@@ -34,6 +36,7 @@ export function WhoIsThisForField({
   onChange,
   bare = false,
   labelClassName,
+  variant = "default",
 }: {
   people: Person[];
   choice: OwnershipChoice;
@@ -43,13 +46,25 @@ export function WhoIsThisForField({
   bare?: boolean;
   /** Bare mode only — style the heading to match the host form's field labels. */
   labelClassName?: string;
+  /** "section" — the Loan & EMI form pattern: its own titled section with a segmented For me | For someone else. */
+  variant?: "default" | "section";
 }) {
+  const section = variant === "section";
   const body = (
     <>
-      <ChipRow options={OWNERSHIP_OPTIONS} value={choice} onChange={(v) => onChange({ choice: v, personId: v === "me" ? "" : personId })} />
+      {section ? (
+        <SegmentedControl
+          ariaLabel="Who is this for?"
+          options={OWNERSHIP_OPTIONS.map((o) => ({ ...o, icon: o.value === "me" ? User : Users }))}
+          value={choice}
+          onChange={(v) => onChange({ choice: v, personId: v === "me" ? "" : personId })}
+        />
+      ) : (
+        <ChipRow options={OWNERSHIP_OPTIONS} value={choice} onChange={(v) => onChange({ choice: v, personId: v === "me" ? "" : personId })} />
+      )}
       {choice === "someoneElse" &&
         (people.length === 0 ? (
-          <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border bg-card px-3 py-2.5">
+          <div className={cn("flex flex-wrap items-center justify-between gap-2 rounded-xl px-3 py-2.5", section ? "bg-muted/50" : "border border-border bg-card")}>
             <p className="text-xs text-muted-foreground">No people yet — add them in People, then come back.</p>
             <Link
               href="/people"
@@ -62,7 +77,7 @@ export function WhoIsThisForField({
         ) : (
           <label className="flex flex-col gap-1">
             <span className="text-xs font-medium text-muted-foreground">Person</span>
-            <select className={FLAT_INPUT} value={personId} onChange={(e) => onChange({ choice, personId: e.target.value })}>
+            <select className={section ? LOAN_EMI_INPUT : FLAT_INPUT} value={personId} onChange={(e) => onChange({ choice, personId: e.target.value })}>
               <option value="" disabled>
                 Choose a person
               </option>
@@ -74,13 +89,21 @@ export function WhoIsThisForField({
             </select>
           </label>
         ))}
-      <p className="text-xs text-muted-foreground">
+      <p className={cn("text-xs text-muted-foreground", section && choice === "me" && "hidden")}>
         {choice === "someoneElse"
           ? "It's still tracked as your liability — the person is linked so you know who it was for."
           : "A normal Loan/EMI of your own."}
       </p>
     </>
   );
+
+  if (section) {
+    return (
+      <FormSection title="Who is this for?">
+        <div className="flex flex-col gap-3">{body}</div>
+      </FormSection>
+    );
+  }
 
   if (bare) {
     return (

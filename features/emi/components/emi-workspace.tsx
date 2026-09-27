@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowUpRight, Building2, CreditCard, Lock, ShoppingBag, Trash2, UserRound, Wallet } from "lucide-react";
+import { ArrowUpRight, Building2, CreditCard, Lock, Percent, ShoppingBag, Trash2, UserRound, Wallet } from "lucide-react";
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
@@ -15,7 +15,6 @@ import {
   EmptyState,
   FLAT_INPUT,
   FormDialog,
-  SectionedFormDialog,
   SectionLabel,
 } from "@/components/finance";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -25,13 +24,18 @@ import {
   AmountInput,
   DetailHero,
   DetailSectionTitle,
+  EMI_ICON,
   FactGrid,
   Field,
   FieldGroup,
+  FormSection,
+  LOAN_EMI_INPUT,
   LinkedList,
   LinkedRow,
+  LoanEmiFormDialog,
   MoreOptions,
   RevealToggle,
+  SegmentedControl,
   daysUntil,
   dueLabel,
 } from "@/features/loans/components/loan-emi-ui";
@@ -299,9 +303,9 @@ export function EmiWorkspace({ addSignal = 0 }: EmiWorkspaceProps = {}) {
       {rows.length === 0 ? (
         <EmptyState
           icon={ShoppingBag}
-          title="No EMIs yet"
-          description="An EMI is a purchase or Credit Card EMI you pay back in fixed installments. Add one to see what's due and what's left."
-          actionLabel="Add an EMI"
+          title="No active EMIs yet"
+          description="Track purchases, card EMIs and other installment plans."
+          actionLabel="Add EMI"
           onAction={openAdd}
         />
       ) : (
@@ -448,20 +452,20 @@ export function EmiWorkspace({ addSignal = 0 }: EmiWorkspaceProps = {}) {
         )}
       </DetailDrawer>
 
-      <SectionedFormDialog
+      <LoanEmiFormDialog
         open={addOpen}
         onOpenChange={setAddOpen}
-        title="Add an EMI"
-        description="Installments for a purchase, Credit Card EMI or store finance. Only the basics are needed — the schedule is built for you."
+        icon={EMI_ICON}
+        title="Add EMI"
+        description="The installment schedule is built for you."
         onConfirm={handleCreate}
         confirmLabel={saving ? "Saving…" : "Add EMI"}
         loading={saving}
-        contentClassName="sm:max-w-2xl"
       >
-        <div className="flex flex-col gap-5">
-          <Field label="What's this EMI for?">
+        <FormSection title="Basics">
+          <Field label="What did you buy or finance?">
             <input
-              className={FLAT_INPUT}
+              className={cn(LOAN_EMI_INPUT, "h-12 text-base")}
               placeholder={isProductPurchase ? "e.g. iPhone 16, Sofa, Car" : "e.g. Card loan"}
               value={form.name}
               onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
@@ -469,7 +473,7 @@ export function EmiWorkspace({ addSignal = 0 }: EmiWorkspaceProps = {}) {
           </Field>
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <Field label="Amount on EMI" hint="The amount being paid off in installments.">
+            <Field label="Amount" hint="The amount being paid off in installments.">
               <AmountInput value={form.principalAmount} onChange={(v) => setForm((f) => ({ ...f, principalAmount: v }))} />
             </Field>
             <Field label="Number of installments">
@@ -477,37 +481,40 @@ export function EmiWorkspace({ addSignal = 0 }: EmiWorkspaceProps = {}) {
                 type="number"
                 inputMode="numeric"
                 min={1}
-                className={FLAT_INPUT}
+                className={cn(LOAN_EMI_INPUT, "h-12")}
                 value={form.installmentCount}
                 onChange={(e) => setForm((f) => ({ ...f, installmentCount: e.target.value }))}
               />
             </Field>
-          </div>
-
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <Field label="First EMI date">
               <input
                 type="date"
-                className={FLAT_INPUT}
+                className={LOAN_EMI_INPUT}
                 value={form.startDate}
                 onChange={(e) => setForm((f) => ({ ...f, startDate: e.target.value }))}
               />
             </Field>
-            <FieldGroup label="Paid">
-              <ChipRow
+            <FieldGroup label="Payment frequency">
+              <SegmentedControl
+                ariaLabel="Payment frequency"
+                size="sm"
+                className="sm:w-full"
                 options={FREQUENCY_OPTIONS.map((f) => ({ value: f, label: FREQUENCY_LABEL[f] }))}
                 value={form.installmentFrequency}
                 onChange={(v) => setForm((f) => ({ ...f, installmentFrequency: v }))}
               />
             </FieldGroup>
           </div>
+        </FormSection>
 
+        <div className="flex flex-col gap-3">
           {/* Credit card controls stay hidden until the user says it's on a card. */}
           <RevealToggle
+            icon={CreditCard}
             checked={form.linkToCard}
             onChange={(checked) => setForm((f) => ({ ...f, linkToCard: checked }))}
-            title="It's on a credit card"
-            description="Credit Card EMI — the amount is held against the card's limit and released as you pay."
+            title="Paid with a credit card"
+            description="Link this EMI to one of your FlowFi credit cards."
           >
             {cardOptions.length === 0 ? (
               <div className="flex flex-wrap items-center justify-between gap-2">
@@ -518,11 +525,11 @@ export function EmiWorkspace({ addSignal = 0 }: EmiWorkspaceProps = {}) {
               <>
                 <div className="flex flex-col gap-1.5">
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-semibold text-foreground/85">Which card?</span>
+                    <span className="text-xs font-medium text-foreground/80">Which card?</span>
                     <AddElsewhereLink href="/credit-cards" label="Add Credit Card" />
                   </div>
                   <select
-                    className={FLAT_INPUT}
+                    className={LOAN_EMI_INPUT}
                     value={form.linkedCreditCardId}
                     onChange={(e) => setForm((f) => ({ ...f, linkedCreditCardId: e.target.value }))}
                   >
@@ -534,11 +541,13 @@ export function EmiWorkspace({ addSignal = 0 }: EmiWorkspaceProps = {}) {
                     ))}
                   </select>
                 </div>
-                <FieldGroup label="What kind?">
-                  <ChipRow
+                <FieldGroup label="What kind?" hint="The amount is held against the card's limit and released as you pay.">
+                  <SegmentedControl
+                    ariaLabel="Card EMI kind"
+                    size="sm"
                     options={[
-                      { value: "productPurchase" as CardEmiKind, label: "Purchase on EMI" },
-                      { value: "creditCardLoan" as CardEmiKind, label: "Loan on card" },
+                      { value: "productPurchase" as CardEmiKind, label: "Product purchase" },
+                      { value: "creditCardLoan" as CardEmiKind, label: "Credit card loan" },
                     ]}
                     value={form.cardEmiKind}
                     onChange={(v) => setForm((f) => ({ ...f, cardEmiKind: v }))}
@@ -549,9 +558,10 @@ export function EmiWorkspace({ addSignal = 0 }: EmiWorkspaceProps = {}) {
           </RevealToggle>
 
           <RevealToggle
+            icon={Percent}
             checked={form.hasInterest}
             onChange={(checked) => setForm((f) => ({ ...f, hasInterest: checked }))}
-            title="It has interest"
+            title="Has interest?"
             description="Leave off for a no-cost EMI."
           >
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -559,16 +569,19 @@ export function EmiWorkspace({ addSignal = 0 }: EmiWorkspaceProps = {}) {
                 <input
                   type="number"
                   inputMode="decimal"
-                  className={FLAT_INPUT}
+                  className={LOAN_EMI_INPUT}
                   placeholder="e.g. 14"
                   value={form.ratePercent}
                   onChange={(e) => setForm((f) => ({ ...f, ratePercent: e.target.value }))}
                 />
               </Field>
               <FieldGroup label="Interest type">
-                <ChipRow
+                <SegmentedControl
+                  ariaLabel="Interest type"
+                  size="sm"
+                  className="sm:w-full"
                   options={[
-                    { value: "reducingBalance" as InterestType, label: "Reducing Balance" },
+                    { value: "reducingBalance" as InterestType, label: "Reducing" },
                     { value: "flat" as InterestType, label: "Flat" },
                   ]}
                   value={form.interestType}
@@ -577,45 +590,45 @@ export function EmiWorkspace({ addSignal = 0 }: EmiWorkspaceProps = {}) {
               </FieldGroup>
             </div>
           </RevealToggle>
-
-          <MoreOptions summary={form.linkToCard ? "Lender, who it's for, notes" : "Lender, type, who it's for, notes"}>
-            <Field label="Lender / store">
-              <input
-                className={FLAT_INPUT}
-                placeholder="e.g. Bajaj Finance, HDFC Bank"
-                value={form.lenderName}
-                onChange={(e) => setForm((f) => ({ ...f, lenderName: e.target.value }))}
-              />
-            </Field>
-            {!form.linkToCard && (
-              <FieldGroup label="Type">
-                <ChipRow
-                  options={LOAN_TYPE_OPTIONS.map((t) => ({ value: t, label: EMI_TYPE_LABEL[t] }))}
-                  value={form.loanType}
-                  onChange={(v) => setForm((f) => ({ ...f, loanType: v }))}
-                />
-              </FieldGroup>
-            )}
-            <WhoIsThisForField
-              bare
-              labelClassName="text-xs font-semibold text-foreground/85"
-              people={people}
-              choice={form.ownership}
-              personId={form.beneficiaryPersonId}
-              onChange={({ choice, personId }) => setForm((f) => ({ ...f, ownership: choice, beneficiaryPersonId: personId }))}
-            />
-            <Field label="Notes">
-              <textarea
-                className={cn(FLAT_INPUT, "min-h-20 resize-none py-2")}
-                placeholder="Optional notes"
-                rows={3}
-                value={form.notes}
-                onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
-              />
-            </Field>
-          </MoreOptions>
         </div>
-      </SectionedFormDialog>
+
+        <WhoIsThisForField
+          variant="section"
+          people={people}
+          choice={form.ownership}
+          personId={form.beneficiaryPersonId}
+          onChange={({ choice, personId }) => setForm((f) => ({ ...f, ownership: choice, beneficiaryPersonId: personId }))}
+        />
+
+        <MoreOptions summary={form.linkToCard ? "Lender, notes" : "Lender, type, notes"}>
+          <Field label="Lender / store">
+            <input
+              className={LOAN_EMI_INPUT}
+              placeholder="e.g. Bajaj Finance, HDFC Bank"
+              value={form.lenderName}
+              onChange={(e) => setForm((f) => ({ ...f, lenderName: e.target.value }))}
+            />
+          </Field>
+          {!form.linkToCard && (
+            <FieldGroup label="Type">
+              <ChipRow
+                options={LOAN_TYPE_OPTIONS.map((t) => ({ value: t, label: EMI_TYPE_LABEL[t] }))}
+                value={form.loanType}
+                onChange={(v) => setForm((f) => ({ ...f, loanType: v }))}
+              />
+            </FieldGroup>
+          )}
+          <Field label="Notes">
+            <textarea
+              className={cn(LOAN_EMI_INPUT, "h-auto min-h-20 resize-none py-2")}
+              placeholder="Optional notes"
+              rows={3}
+              value={form.notes}
+              onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
+            />
+          </Field>
+        </MoreOptions>
+      </LoanEmiFormDialog>
 
       <FormDialog
         open={payOpen}

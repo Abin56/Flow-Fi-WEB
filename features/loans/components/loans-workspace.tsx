@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowUpRight, Building2, Landmark, Search, Trash2 } from "lucide-react";
+import { ArrowUpRight, Building2, Landmark, Search, Trash2, UserRound, Wallet } from "lucide-react";
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
@@ -12,15 +12,24 @@ import {
   ChipRow,
   EmptyState,
   FLAT_INPUT,
-  SectionedFormDialog,
-  SectionLabel,
 } from "@/components/finance";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { InterestType } from "@/lib/engines/interest-calculator";
 import type { Loan, LoanCategory, LoanDirection } from "@/lib/models/loan";
 import type { Installment, ScheduleType } from "@/lib/models/payment-schedule";
 import { LoanCard, loanDisplayName } from "@/features/loans/components/loan-card";
-import { AmountInput, Field, FieldGroup, MoreOptions, RevealToggle } from "@/features/loans/components/loan-emi-ui";
+import {
+  AmountInput,
+  Field,
+  FieldGroup,
+  FormSection,
+  LOAN_EMI_INPUT,
+  LOAN_ICON,
+  LoanEmiFormDialog,
+  MoreOptions,
+  RevealToggle,
+  SegmentedControl,
+} from "@/features/loans/components/loan-emi-ui";
 import { LoanLumpSumDialog } from "@/features/loans/components/loan-lump-sum-dialog";
 import { LoanScheduleDialog } from "@/features/loans/components/loan-schedule-dialog";
 import { LoansTrashDialog } from "@/features/loans/components/loans-trash-dialog";
@@ -447,9 +456,9 @@ export function LoansWorkspace({ addSignal = 0 }: LoansWorkspaceProps = {}) {
         <div className="flex flex-col gap-2">
           <EmptyState
             icon={Landmark}
-            title="No loans yet"
-            description="A Loan is money borrowed from a bank, lender or person. Add one to track its installments and what's left to repay."
-            actionLabel="Add a Loan"
+            title="No active loans yet"
+            description="Add a loan to track installments and repayments."
+            actionLabel="Add Loan"
             onAction={openAdd}
           />
           {trashedRows.length > 0 && (
@@ -611,15 +620,15 @@ export function LoansWorkspace({ addSignal = 0 }: LoansWorkspaceProps = {}) {
         onPermanentlyDelete={handlePermanentlyDeleteLoan}
       />
 
-      <SectionedFormDialog
+      <LoanEmiFormDialog
         open={addOpen}
         onOpenChange={setAddOpen}
-        title="Add a Loan"
-        description="Money borrowed from a bank, lender or person. Only the basics are needed — the schedule is built for you."
+        icon={LOAN_ICON}
+        title="Add Loan"
+        description="The installment schedule is built for you."
         onConfirm={() => handleSave(false)}
         confirmLabel={saving ? "Saving…" : "Add Loan"}
         loading={saving}
-        contentClassName="sm:max-w-2xl"
       >
         <LoanFormFields
           form={form}
@@ -629,9 +638,9 @@ export function LoansWorkspace({ addSignal = 0 }: LoansWorkspaceProps = {}) {
           accounts={accounts}
           onCreatePerson={actions?.createPerson}
         />
-      </SectionedFormDialog>
+      </LoanEmiFormDialog>
 
-      <SectionedFormDialog
+      <LoanEmiFormDialog
         open={editOpen}
         onOpenChange={(open) => {
           setEditOpen(open);
@@ -640,9 +649,9 @@ export function LoansWorkspace({ addSignal = 0 }: LoansWorkspaceProps = {}) {
         }}
         title={`Edit ${activeRow ? loanDisplayName(activeRow) : "Loan"}`}
         onConfirm={() => handleSave(true)}
+        icon={LOAN_ICON}
         confirmLabel={saving ? "Saving…" : "Save Changes"}
         loading={saving}
-        contentClassName="sm:max-w-2xl"
       >
         <LoanFormFields
           form={form}
@@ -653,7 +662,7 @@ export function LoansWorkspace({ addSignal = 0 }: LoansWorkspaceProps = {}) {
           minInstallmentCount={activeRow ? activeRow.installments.filter((i) => i.amountPaid > 0 || i.isSkipped).length : 0}
           minLoanAmount={activeRow ? activeRow.loan.loanAmount - activeRow.outstandingPrincipal : 0}
         />
-      </SectionedFormDialog>
+      </LoanEmiFormDialog>
     </div>
   );
 }
@@ -744,12 +753,12 @@ export function PersonPickerField({
 
   if (adding) {
     return (
-      <label className="flex flex-col gap-1">
-        <span className="text-xs font-medium text-muted-foreground">{label}</span>
+      <label className="flex min-w-0 flex-col gap-1.5">
+        <span className="text-xs font-medium text-foreground/80">{label}</span>
         <div className="flex items-center gap-2">
           <input
             autoFocus
-            className={FLAT_INPUT}
+            className={LOAN_EMI_INPUT}
             placeholder="Person's name"
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
@@ -782,10 +791,10 @@ export function PersonPickerField({
   }
 
   return (
-    <label className="flex flex-col gap-1">
-      <span className="text-xs font-medium text-muted-foreground">{label}</span>
+    <label className="flex min-w-0 flex-col gap-1.5">
+      <span className="text-xs font-medium text-foreground/80">{label}</span>
       <select
-        className={FLAT_INPUT}
+        className={LOAN_EMI_INPUT}
         value={value}
         disabled={disabled}
         onChange={(e) => {
@@ -841,141 +850,168 @@ function LoanFormFields({
   const movementAccounts = accounts.filter((a) => a.type !== "card" && a.deletedAt == null);
   const received = form.direction === "taken";
   const hasRate = form.ratePercent.trim() !== "" && Number(form.ratePercent) > 0;
-  const lenderLabel = received ? "Borrowed from" : "Lent to";
   return (
-    <div className="flex flex-col gap-5">
-      {/* 1 — what kind of loan. Decides the wording of everything below. */}
-      {!isEdit ? (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <FieldGroup label="Did you borrow or lend it?">
-            <ChipRow options={DIRECTION_OPTIONS} value={form.direction} onChange={(v) => setForm((f) => ({ ...f, direction: v }))} />
-          </FieldGroup>
-          <FieldGroup label={received ? "Borrowed from a…" : "Lent to a…"}>
-            <ChipRow options={CATEGORY_OPTIONS} value={form.category} onChange={(v) => setForm((f) => ({ ...f, category: v }))} />
-          </FieldGroup>
-        </div>
-      ) : (
-        <div className="flex items-center gap-2">
-          <ClayBadge tone="neutral">{CATEGORY_OPTIONS.find((o) => o.value === form.category)?.label}</ClayBadge>
-          <ClayBadge tone={form.direction === "given" ? "success" : "neutral"}>
-            {DIRECTION_OPTIONS.find((o) => o.value === form.direction)?.label}
-          </ClayBadge>
-        </div>
-      )}
-
-      {/* 2 — who and how much. */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        {form.category === "personal" ? (
-          <PersonPickerField
-            label={lenderLabel}
-            people={people}
-            value={form.personId}
-            disabled={isEdit}
-            onChange={(personId) => setForm((f) => ({ ...f, personId }))}
-            onCreatePerson={isEdit ? undefined : onCreatePerson}
-            lockedHint={isEdit ? "Person can't be changed after the loan is created." : undefined}
-          />
+    <>
+      {/* 1 — Basics: what kind of loan, who, how much. Decides the wording of everything below. */}
+      <FormSection title="Basics">
+        {!isEdit ? (
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <FieldGroup label="What kind of loan is this?">
+              <SegmentedControl
+                ariaLabel="What kind of loan is this?"
+                size="sm"
+                className="sm:w-full"
+                options={DIRECTION_OPTIONS}
+                value={form.direction}
+                onChange={(v) => setForm((f) => ({ ...f, direction: v }))}
+              />
+            </FieldGroup>
+            <FieldGroup label={received ? "Borrowed from" : "Lent to"}>
+              <SegmentedControl
+                ariaLabel={received ? "Borrowed from" : "Lent to"}
+                size="sm"
+                className="sm:w-full"
+                options={CATEGORY_OPTIONS.map((o) => ({ ...o, icon: o.value === "institutional" ? Building2 : UserRound }))}
+                value={form.category}
+                onChange={(v) => setForm((f) => ({ ...f, category: v }))}
+              />
+            </FieldGroup>
+          </div>
         ) : (
-          <Field label={lenderLabel}>
-            <input
-              className={FLAT_INPUT}
-              placeholder={received ? "e.g. HDFC Bank" : "e.g. Rahul"}
-              value={form.lenderName}
-              onChange={(e) => setForm((f) => ({ ...f, lenderName: e.target.value }))}
+          <div className="flex items-center gap-2">
+            <ClayBadge tone="neutral">{CATEGORY_OPTIONS.find((o) => o.value === form.category)?.label}</ClayBadge>
+            <ClayBadge tone={form.direction === "given" ? "success" : "neutral"}>
+              {DIRECTION_OPTIONS.find((o) => o.value === form.direction)?.label}
+            </ClayBadge>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          {form.category === "personal" ? (
+            <PersonPickerField
+              label={received ? "Lender" : "Borrower"}
+              people={people}
+              value={form.personId}
+              disabled={isEdit}
+              onChange={(personId) => setForm((f) => ({ ...f, personId }))}
+              onCreatePerson={isEdit ? undefined : onCreatePerson}
+              lockedHint={isEdit ? "Person can't be changed after the loan is created." : undefined}
+            />
+          ) : (
+            <Field label={received ? "Lender" : "Lent to"}>
+              <input
+                className={cn(LOAN_EMI_INPUT, "h-12 text-base")}
+                placeholder={received ? "e.g. HDFC Bank" : "e.g. Rahul"}
+                value={form.lenderName}
+                onChange={(e) => setForm((f) => ({ ...f, lenderName: e.target.value }))}
+              />
+            </Field>
+          )}
+          <Field
+            label="Loan amount"
+            hint={
+              isEdit
+                ? `Re-amortizes the remaining balance${minLoanAmount > 0 ? ` — can't go below ₹${minLoanAmount.toLocaleString("en-IN")} already paid off` : ""}.`
+                : undefined
+            }
+          >
+            <AmountInput
+              value={form.principal}
+              min={isEdit ? minLoanAmount || undefined : undefined}
+              onChange={(v) => setForm((f) => ({ ...f, principal: v }))}
             />
           </Field>
-        )}
-        <Field
-          label="Loan amount"
-          hint={
-            isEdit
-              ? `Re-amortizes the remaining balance${minLoanAmount > 0 ? ` — can't go below ₹${minLoanAmount.toLocaleString("en-IN")} already paid off` : ""}.`
-              : undefined
-          }
-        >
-          <AmountInput
-            value={form.principal}
-            min={isEdit ? minLoanAmount || undefined : undefined}
-            onChange={(v) => setForm((f) => ({ ...f, principal: v }))}
-          />
-        </Field>
-      </div>
+        </div>
+      </FormSection>
 
-      {/* 3 — repayment terms. */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <Field
-          label="Number of installments"
-          hint={isEdit && minInstallmentCount > 0 ? `Can't go below ${minInstallmentCount} — already settled.` : undefined}
-        >
-          <input
-            type="number"
-            inputMode="numeric"
-            min={isEdit ? minInstallmentCount || 1 : 1}
-            className={FLAT_INPUT}
-            value={form.installmentCount}
-            onChange={(e) => setForm((f) => ({ ...f, installmentCount: e.target.value }))}
-          />
-        </Field>
-        <FieldGroup label="Paid">
-          <ChipRow
-            options={FREQUENCY_OPTIONS}
-            value={form.installmentFrequency}
-            onChange={(v) => setForm((f) => ({ ...f, installmentFrequency: v }))}
-          />
-        </FieldGroup>
-        <Field
-          label="Loan date"
-          hint={isEdit ? (hasPayments ? "Locked once a payment is recorded." : "Regenerates the schedule from this date.") : undefined}
-        >
-          <input
-            type="date"
-            disabled={isEdit && hasPayments}
-            className={cn(FLAT_INPUT, isEdit && hasPayments && "text-muted-foreground opacity-70")}
-            value={form.loanDate}
-            onChange={(e) => setForm((f) => ({ ...f, loanDate: e.target.value }))}
-          />
-        </Field>
-      </div>
-
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <Field
-          label="Interest rate (% per year)"
-          hint={isEdit ? "Re-amortizes the remaining balance over the unpaid installments." : "Leave empty if there's no interest."}
-        >
-          <input
-            type="number"
-            inputMode="decimal"
-            className={FLAT_INPUT}
-            placeholder="e.g. 8.65"
-            value={form.ratePercent}
-            onChange={(e) => setForm((f) => ({ ...f, ratePercent: e.target.value }))}
-          />
-        </Field>
-        {hasRate && (
-          <FieldGroup label="Interest type" hint="Most bank loans use reducing balance.">
-            <ChipRow options={INTEREST_TYPE_OPTIONS} value={form.interestType} onChange={(v) => setForm((f) => ({ ...f, interestType: v }))} />
+      {/* 2 — Repayment plan. */}
+      <FormSection title="Repayment plan">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <Field
+            label="Number of installments"
+            hint={isEdit && minInstallmentCount > 0 ? `Can't go below ${minInstallmentCount} — already settled.` : undefined}
+          >
+            <input
+              type="number"
+              inputMode="numeric"
+              min={isEdit ? minInstallmentCount || 1 : 1}
+              className={LOAN_EMI_INPUT}
+              value={form.installmentCount}
+              onChange={(e) => setForm((f) => ({ ...f, installmentCount: e.target.value }))}
+            />
+          </Field>
+          <FieldGroup label="Payment frequency">
+            <SegmentedControl
+              ariaLabel="Payment frequency"
+              size="sm"
+              className="sm:w-full"
+              options={FREQUENCY_OPTIONS}
+              value={form.installmentFrequency}
+              onChange={(v) => setForm((f) => ({ ...f, installmentFrequency: v }))}
+            />
           </FieldGroup>
-        )}
-      </div>
+          <Field
+            label="Interest rate (% per year)"
+            hint={isEdit ? "Re-amortizes the remaining balance over the unpaid installments." : "Leave empty if there's no interest."}
+          >
+            <input
+              type="number"
+              inputMode="decimal"
+              className={LOAN_EMI_INPUT}
+              placeholder="e.g. 8.65"
+              value={form.ratePercent}
+              onChange={(e) => setForm((f) => ({ ...f, ratePercent: e.target.value }))}
+            />
+          </Field>
+          <Field
+            label="Loan date"
+            hint={isEdit ? (hasPayments ? "Locked once a payment is recorded." : "Regenerates the schedule from this date.") : undefined}
+          >
+            <input
+              type="date"
+              disabled={isEdit && hasPayments}
+              className={cn(LOAN_EMI_INPUT, isEdit && hasPayments && "text-muted-foreground")}
+              value={form.loanDate}
+              onChange={(e) => setForm((f) => ({ ...f, loanDate: e.target.value }))}
+            />
+          </Field>
+          {hasRate && (
+            <FieldGroup label="Interest type" hint="Most bank loans use reducing balance." className="sm:col-span-2">
+              <SegmentedControl
+                ariaLabel="Interest type"
+                size="sm"
+                options={INTEREST_TYPE_OPTIONS}
+                value={form.interestType}
+                onChange={(v) => setForm((f) => ({ ...f, interestType: v }))}
+              />
+            </FieldGroup>
+          )}
+        </div>
+      </FormSection>
 
-      {/* 4 — linked Account. Its fields only appear once switched on. */}
+      {/* 3 — optional linked Account. Its fields only appear once switched on. */}
       {!isEdit && (
         <RevealToggle
+          icon={Wallet}
           checked={form.recordMovement}
           onChange={(checked) => setForm((f) => ({ ...f, recordMovement: checked }))}
-          title={received ? "Money came into one of my accounts" : "Money went out of one of my accounts"}
-          description="Leave off if it didn't pass through a FlowFi account — no balance changes."
+          title={received ? "Add money to an account" : "Take money from an account"}
+          description={
+            received
+              ? "Did the borrowed amount enter one of your FlowFi accounts?"
+              : "Did the lent amount leave one of your FlowFi accounts?"
+          }
         >
           <div className="flex flex-col gap-1.5">
             <div className="flex items-center justify-between gap-2">
-              <span className="text-xs font-semibold text-foreground/85">{received ? "Received into" : "Paid from"}</span>
-              <AddElsewhereLink href="/accounts" label="Add Account" />
+              <span className="text-xs font-medium text-foreground/80">{received ? "Received into" : "Paid from"}</span>
+              <AddElsewhereLink href="/accounts" label="Add account" />
             </div>
             {movementAccounts.length === 0 ? (
               <p className="text-xs text-muted-foreground">No accounts yet — add one in Accounts, then come back.</p>
             ) : (
               <select
-                className={FLAT_INPUT}
+                className={LOAN_EMI_INPUT}
                 value={form.movementAccountId}
                 onChange={(e) => setForm((f) => ({ ...f, movementAccountId: e.target.value }))}
               >
@@ -988,42 +1024,38 @@ function LoanFormFields({
               </select>
             )}
           </div>
-          <p className="text-xs text-muted-foreground">
-            Updates this account&apos;s balance. It isn&apos;t counted as income or spending — the amount stays tracked as a loan.
-          </p>
+          <p className="text-[11px] text-muted-foreground">This updates the account balance. It isn&apos;t treated as income.</p>
         </RevealToggle>
       )}
 
-      {/* 5 — everything optional. */}
+      {/* 4 — ownership: materially changes what the loan represents, so it's never hidden. */}
+      {form.direction === "taken" && (
+        <WhoIsThisForField
+          variant="section"
+          people={people}
+          choice={form.ownership}
+          personId={form.beneficiaryPersonId}
+          onChange={({ choice, personId }) => setForm((f) => ({ ...f, ownership: choice, beneficiaryPersonId: personId }))}
+        />
+      )}
+
+      {/* 5 — genuinely optional metadata. */}
       <MoreOptions
         defaultOpen={isEdit}
-        summary={
-          form.category === "institutional" ? "Name, who it's for, who pays, bank details, notes" : "Name, who it's for, who pays, notes"
-        }
+        summary={form.category === "institutional" ? "Name, who pays, bank details, notes" : "Name, who pays, notes"}
       >
         <Field label="Loan name">
           <input
-            className={FLAT_INPUT}
+            className={LOAN_EMI_INPUT}
             placeholder="e.g. Home Loan"
             value={form.name}
             onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
           />
         </Field>
 
-        {form.direction === "taken" && (
-          <WhoIsThisForField
-            bare
-            labelClassName="text-xs font-semibold text-foreground/85"
-            people={people}
-            choice={form.ownership}
-            personId={form.beneficiaryPersonId}
-            onChange={({ choice, personId }) => setForm((f) => ({ ...f, ownership: choice, beneficiaryPersonId: personId }))}
-          />
-        )}
-
         <Field label="Who pays the installments?" hint="Only if a friend or family member pays it for you.">
           <select
-            className={FLAT_INPUT}
+            className={LOAN_EMI_INPUT}
             value={form.payerPersonId}
             onChange={(e) => setForm((f) => ({ ...f, payerPersonId: e.target.value }))}
           >
@@ -1037,37 +1069,34 @@ function LoanFormFields({
         </Field>
 
         {form.category === "institutional" && (
-          <div className="flex flex-col gap-3">
-            <SectionLabel icon={Building2}>Bank details</SectionLabel>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <Field label="Type of loan">
-                <input
-                  className={FLAT_INPUT}
-                  placeholder="e.g. Personal, Vehicle, Education"
-                  value={form.loanType}
-                  onChange={(e) => setForm((f) => ({ ...f, loanType: e.target.value }))}
-                />
-              </Field>
-              <Field label="Loan account number">
-                <input className={FLAT_INPUT} value={form.loanNumber} onChange={(e) => setForm((f) => ({ ...f, loanNumber: e.target.value }))} />
-              </Field>
-              <Field label="Bank account number">
-                <input
-                  className={FLAT_INPUT}
-                  value={form.accountNumber}
-                  onChange={(e) => setForm((f) => ({ ...f, accountNumber: e.target.value }))}
-                />
-              </Field>
-              <Field label="Branch">
-                <input className={FLAT_INPUT} value={form.branch} onChange={(e) => setForm((f) => ({ ...f, branch: e.target.value }))} />
-              </Field>
-            </div>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <Field label="Type of loan">
+              <input
+                className={LOAN_EMI_INPUT}
+                placeholder="e.g. Personal, Vehicle, Education"
+                value={form.loanType}
+                onChange={(e) => setForm((f) => ({ ...f, loanType: e.target.value }))}
+              />
+            </Field>
+            <Field label="Loan account number">
+              <input className={LOAN_EMI_INPUT} value={form.loanNumber} onChange={(e) => setForm((f) => ({ ...f, loanNumber: e.target.value }))} />
+            </Field>
+            <Field label="Bank account number">
+              <input
+                className={LOAN_EMI_INPUT}
+                value={form.accountNumber}
+                onChange={(e) => setForm((f) => ({ ...f, accountNumber: e.target.value }))}
+              />
+            </Field>
+            <Field label="Branch">
+              <input className={LOAN_EMI_INPUT} value={form.branch} onChange={(e) => setForm((f) => ({ ...f, branch: e.target.value }))} />
+            </Field>
           </div>
         )}
 
         <Field label="Notes">
           <textarea
-            className={cn(FLAT_INPUT, "min-h-20 resize-none py-2")}
+            className={cn(LOAN_EMI_INPUT, "h-auto min-h-20 resize-none py-2")}
             placeholder="Optional notes"
             rows={3}
             value={form.notes}
@@ -1075,6 +1104,6 @@ function LoanFormFields({
           />
         </Field>
       </MoreOptions>
-    </div>
+    </>
   );
 }

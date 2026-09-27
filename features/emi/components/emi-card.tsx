@@ -1,7 +1,7 @@
 "use client";
 
 import { Banknote, Briefcase, Car, CreditCard, GraduationCap, Home, User, UserRound } from "lucide-react";
-import { DebtCard, EMI_ICON, daysUntil, type DebtCardBadge } from "@/features/loans/components/loan-emi-ui";
+import { DebtCard, EMI_ICON, cadenceLabel, daysUntil, type DebtCardBadge } from "@/features/loans/components/loan-emi-ui";
 import type { EmiRow } from "@/features/emi/hooks/use-emi-data";
 import type { EmiLoanType } from "@/lib/models/emi";
 import { remainingAmount } from "@/lib/models/payment-schedule";
@@ -72,6 +72,7 @@ export function EmiCard({ row, onClick }: EmiCardProps) {
       outstanding={remainingBalance}
       nextAmount={done || !nextInstallment ? null : remainingAmount(nextInstallment)}
       nextDate={done ? null : (nextInstallment?.dueDate ?? null)}
+      cadence={cadenceLabel(emi.installmentFrequency)}
       overdue={status === "overdue" || (nextInstallment != null && daysUntil(nextInstallment.dueDate) < 0)}
       paid={installmentsPaid}
       total={emi.installmentCount}

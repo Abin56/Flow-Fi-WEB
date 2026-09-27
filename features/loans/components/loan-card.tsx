@@ -1,7 +1,7 @@
 "use client";
 
 import { HandCoins, UserRound } from "lucide-react";
-import { DebtCard, LOAN_ICON, daysUntil, type DebtCardBadge } from "@/features/loans/components/loan-emi-ui";
+import { DebtCard, LOAN_ICON, cadenceLabel, daysUntil, type DebtCardBadge } from "@/features/loans/components/loan-emi-ui";
 import type { LoanRow } from "@/features/loans/hooks/use-loans-data";
 import { installmentStatus, remainingAmount } from "@/lib/models/payment-schedule";
 
@@ -51,6 +51,7 @@ export function LoanCard({ row, onClick }: LoanCardProps) {
       outstanding={outstandingPrincipal}
       nextAmount={isClosed ? null : loanNextDueAmount(row)}
       nextDate={isClosed ? null : nextDueDate}
+      cadence={cadenceLabel(loan.installmentFrequency)}
       overdue={overdue}
       paid={installmentsPaid}
       total={totalInstallments}
