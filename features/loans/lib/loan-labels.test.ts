@@ -51,8 +51,8 @@ describe("loanTransactionLabel", () => {
   });
 
   it("borrowed loan labels", () => {
-    expect(loanTransactionLabel({ loanId: "l1", paymentAllocationType: "regularEmi", type: "expense" }, home)).toBe("Loan EMI — Home Loan");
-    expect(loanTransactionLabel({ loanId: "l1", paymentAllocationType: "advanceEmi", type: "expense" }, home)).toBe("Advance EMI — Home Loan");
+    expect(loanTransactionLabel({ loanId: "l1", paymentAllocationType: "regularEmi", type: "expense" }, home)).toBe("Loan Installment — Home Loan");
+    expect(loanTransactionLabel({ loanId: "l1", paymentAllocationType: "advanceEmi", type: "expense" }, home)).toBe("Advance Loan Installment — Home Loan");
     expect(loanTransactionLabel({ loanId: "l1", paymentAllocationType: "principalPrepayment", type: "expense" }, home)).toBe("Extra Principal Payment — Home Loan");
     expect(loanTransactionLabel({ loanId: "l1", paymentAllocationType: "additionalDisbursement", type: "income" }, home)).toBe("Borrowed More — Home Loan");
   });
@@ -66,7 +66,7 @@ describe("loanTransactionLabel", () => {
     expect(loanTransactionLabel({ loanId: "gone", paymentAllocationType: "additionalDisbursement", type: "expense" }, null)).toBe("Lent More");
     expect(loanTransactionLabel({ loanId: "gone", paymentAllocationType: "additionalDisbursement", type: "income" }, null)).toBe("Borrowed More");
     expect(loanTransactionLabel({ loanId: "gone", paymentAllocationType: "regularEmi", type: "income" }, null)).toBe("Loan Repayment Received");
-    expect(loanTransactionLabel({ loanId: "gone", paymentAllocationType: "regularEmi", type: "expense" }, null)).toBe("Loan EMI");
+    expect(loanTransactionLabel({ loanId: "gone", paymentAllocationType: "regularEmi", type: "expense" }, null)).toBe("Loan Installment");
   });
 
   it("never exposes a raw enum name", () => {

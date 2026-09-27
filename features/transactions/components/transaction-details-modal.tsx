@@ -445,6 +445,8 @@ export function TransactionDetailsModal({
   defaultKind = "expense",
   autoFocusAssign = false,
   existingTransactions = [],
+  initialDestinationAccountId,
+  initialAmount,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -461,6 +463,10 @@ export function TransactionDetailsModal({
   autoFocusAssign?: boolean;
   /** All of the user's transactions, used only for the pre-save `DuplicateDetectionService` check in Add mode — never sent anywhere, never mutated. */
   existingTransactions?: Transaction[];
+  /** Add mode + `defaultKind: "transfer"` only — pre-fills the transfer's destination account (e.g. a credit card being paid off). */
+  initialDestinationAccountId?: string;
+  /** Add mode only — pre-fills the amount field (e.g. a statement's total due). */
+  initialAmount?: number;
 }) {
   const transaction = row?.transaction ?? null;
   const peopleActions = usePeopleActions();
@@ -529,11 +535,11 @@ export function TransactionDetailsModal({
       const firstAccount = defaultKind === "income" ? accounts.find((a) => a.type !== "card") : accounts[0];
       setKind(defaultKind);
       setDescription("");
-      setAmount("");
+      setAmount(initialAmount != null ? String(initialAmount) : "");
       setDate(toDateInputValue(new Date()));
       setNotes("");
       setAccountId(firstAccount?.id ?? "");
-      setDestinationAccountId("");
+      setDestinationAccountId(defaultKind === "transfer" ? (initialDestinationAccountId ?? "") : "");
       setCategoryId(firstCategory?.id ?? "");
       setExclude(false);
       setReassign(false);

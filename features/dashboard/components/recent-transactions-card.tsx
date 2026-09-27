@@ -48,7 +48,7 @@ export function RecentTransactionsCard({ recentTransactions, isLoading }: Recent
       {recentTransactions.length === 0 ? (
         <EmptyState icon={Receipt} title="No transactions yet" description="Your recent activity will show up here." className="flex-1" />
       ) : (
-      <div className="mt-3 flex flex-1 flex-col gap-1">
+      <div className="mt-3 flex max-h-80 flex-1 flex-col gap-1 overflow-y-auto">
         {recentTransactions.map((txn) => {
           const style = CATEGORY_STYLE[txn.category] ?? { icon: ShoppingBag, className: "bg-muted text-muted-foreground" };
           const Icon = style.icon;

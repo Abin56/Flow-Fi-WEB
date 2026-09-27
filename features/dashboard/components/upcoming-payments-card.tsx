@@ -66,7 +66,7 @@ export function UpcomingPaymentsCard({ payments, isLoading }: UpcomingPaymentsCa
           className="flex-1"
         />
       ) : (
-        <div className="mt-3 flex flex-1 flex-col gap-1">
+        <div className="mt-3 flex max-h-80 flex-1 flex-col gap-1 overflow-y-auto">
           {payments.map((payment) => {
             const Icon = payment.type === "statement" ? CreditCard : Receipt;
             return (

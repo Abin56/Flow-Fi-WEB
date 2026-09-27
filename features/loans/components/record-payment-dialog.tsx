@@ -39,13 +39,14 @@ import {
 } from "@/features/loans/lib/record-payment";
 import { useAccounts } from "@/hooks/use-accounts";
 import { defaultEmiPaymentSplit } from "@/lib/models/emi";
-import { remainingAmount } from "@/lib/models/payment-schedule";
+import { remainingAmount, type Installment } from "@/lib/models/payment-schedule";
 import { formatCurrency } from "@/lib/format";
 import { generateId } from "@/lib/utils/id-generator";
 import { cn } from "@/lib/utils";
 import { toast } from "@/store/toast-store";
 
-export type PaymentTarget = { kind: "loan"; row: LoanRow } | { kind: "emi"; row: EmiRow };
+/** An EMI target may name a specific `installment` (picked from the schedule); otherwise the next-due one. */
+export type PaymentTarget = { kind: "loan"; row: LoanRow } | { kind: "emi"; row: EmiRow; installment?: Installment | null };
 
 /** Queries derived from payment sub-collections — keyed on live installment state already; invalidated
  *  too so history / extra-principal / card-credit figures re-read at once after a write. */
@@ -143,7 +144,8 @@ export function RecordPaymentDialog({ target, open, onOpenChange }: { target: Pa
   const emiRow = target?.kind === "emi" ? target.row : null;
 
   const loanFigures = loanRow ? loanPaymentFigures(loanRow.loan, loanRow.installments, paymentDate) : null;
-  const next = loanRow ? (loanFigures?.next ?? null) : (emiRow?.nextInstallment ?? null);
+  const emiInstallment = target?.kind === "emi" ? (target.installment ?? null) : null;
+  const next = loanRow ? (loanFigures?.next ?? null) : (emiInstallment ?? emiRow?.nextInstallment ?? null);
   const options: QuickOption[] = loanRow && loanFigures ? loanQuickOptions(loanRow.loan, loanFigures) : emiQuickOptions(next);
   const effectiveChoice: PayChoice = choice === "custom" || options.some((o) => o.choice === choice) ? choice : "installment";
 
@@ -238,7 +240,7 @@ export function RecordPaymentDialog({ target, open, onOpenChange }: { target: Pa
         <ContextFigure label={lent ? "Still to receive" : "Outstanding"}>
           <Money amount={outstanding} className="text-2xl leading-none text-foreground" />
         </ContextFigure>
-        <ContextFigure label="Next installment">
+        <ContextFigure label={emiInstallment ? "Installment" : "Next installment"}>
           {next ? (
             <>
               <Money amount={remainingAmount(next)} className="text-xl leading-none text-foreground" />

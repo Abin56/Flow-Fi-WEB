@@ -1,7 +1,7 @@
 "use client";
 
 import { Check, ChevronsUpDown, Landmark } from "lucide-react";
-import { useId, useState } from "react";
+import { useCallback, useId, useState } from "react";
 import {
   Command,
   CommandEmpty,
@@ -34,6 +34,20 @@ export function BankCombobox({ value, onChange, placeholder = "Select bank", cla
   const selected = bankById(value);
   const rest = BANKS.filter((b) => !b.frequent);
 
+  // This popover isn't modal, so it portals to <body> as a sibling of whatever Dialog it's
+  // opened inside of. Radix Dialog locks page scroll via `react-remove-scroll`, which only
+  // allows wheeling inside the dialog's own DOM subtree ("shards") — anywhere else, including
+  // this portal, silently swallows the wheel event. Scrolling the list ourselves in the capture
+  // phase runs before that document-level lock sees the event, so it still works.
+  const handleListWheel = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    const atTop = e.deltaY < 0 && el.scrollTop === 0;
+    const atBottom = e.deltaY > 0 && el.scrollTop + el.clientHeight >= el.scrollHeight;
+    if (atTop || atBottom) return;
+    e.stopPropagation();
+    el.scrollTop += e.deltaY;
+  }, []);
+
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -56,7 +70,10 @@ export function BankCombobox({ value, onChange, placeholder = "Select bank", cla
       <PopoverContent id={listId} className="w-(--radix-popover-trigger-width) rounded-none border border-border p-0" align="start">
         <Command>
           <CommandInput placeholder="Search banks…" />
-          <CommandList>
+          <CommandList
+            className="max-h-80 overscroll-contain scrollbar-thin [scrollbar-color:var(--border)_transparent]"
+            onWheelCapture={handleListWheel}
+          >
             <CommandEmpty>No bank found.</CommandEmpty>
             {value && (
               <>

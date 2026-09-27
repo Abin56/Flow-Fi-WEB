@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import {
   ArrowRight,
@@ -14,6 +14,7 @@ import {
   MoreVertical,
   PieChart as PieChartIcon,
   Plane,
+  Plus,
   Receipt,
   RefreshCw,
   Settings,
@@ -27,20 +28,18 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Cell, Pie, PieChart, ResponsiveContainer } from "recharts";
 import { ClayBadge } from "@/components/clay/clay-badge";
 import { ClayButton } from "@/components/clay/clay-button";
 import { Stagger } from "@/components/foundation/animated-container";
 import {
   BankCombobox,
-  CurrencyCell,
   DateCell,
   DestructiveDeleteDialog,
   EmptyState,
-  FinanceTable,
   SectionLabel,
   type DestructiveDeleteImpactRow,
-  type FinanceTableColumn,
 } from "@/components/finance";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -62,6 +61,9 @@ import {
   type CreditCardViewItem,
 } from "@/features/credit-cards/hooks/use-credit-cards-data";
 import { CARD_GRADIENT, CreditCardTile } from "@/features/credit-cards/components/credit-card-tile";
+import { TransactionDetailsModal } from "@/features/transactions/components/transaction-details-modal";
+import { useTransactionActions, useTransactionRows } from "@/features/transactions/hooks/use-transactions-data";
+import { usePeople } from "@/hooks/use-people";
 import { toast } from "@/store/toast-store";
 import { cn } from "@/lib/utils";
 
@@ -228,6 +230,12 @@ export function CreditCardsWorkspace() {
   const { data: accounts = [] } = useAccounts();
   const { data: sharedLimits = [] } = useSharedCreditLimits();
   const actions = useCreditCardActions();
+  const router = useRouter();
+
+  const { data: people = [] } = usePeople();
+  const { rows: transactionRows, accounts: txnAccounts, categories: txnCategories } = useTransactionRows();
+  const transactionActions = useTransactionActions();
+  const [payCard, setPayCard] = useState<CreditCardViewItem | null>(null);
 
   const [activeCardId, setActiveCardId] = useState<string | undefined>(undefined);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
@@ -237,18 +245,15 @@ export function CreditCardsWorkspace() {
   const [deletingCardBusy, setDeletingCardBusy] = useState(false);
   const [cardDeletionImpact, setCardDeletionImpact] = useState<CreditCardDeletionImpact | null>(null);
   const [form, setForm] = useState<CardFormState>(emptyCardForm);
-  const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   function openAdd() {
     setForm(emptyCardForm());
-    setFormError(null);
     setAddOpen(true);
   }
 
   function openEdit(card: CreditCardViewItem) {
     setForm(cardFormFromCard(card, accounts as Account[]));
-    setFormError(null);
     setEditingCard(card);
   }
 
@@ -256,52 +261,55 @@ export function CreditCardsWorkspace() {
     if (!actions) return;
     const name = form.name.trim();
     if (!name) {
-      setFormError("Card name is required.");
+      toast.error("Card name is required.");
       return;
     }
     const cardHolderName = form.cardHolderName.trim();
     if (!cardHolderName) {
-      setFormError("Card holder name is required.");
+      toast.error("Card holder name is required.");
       return;
     }
     if (!/^\d{4}$/.test(form.lastFourDigits)) {
-      setFormError("Last 4 digits are required and must be exactly 4 numbers.");
+      toast.error("Last 4 digits are required and must be exactly 4 numbers.");
+      return;
+    }
+    if (!form.bankId) {
+      toast.error("Bank is required.");
       return;
     }
     let creditLimit = 0;
     if (form.limitSource === "own") {
       creditLimit = Number(form.creditLimit);
       if (!Number.isFinite(creditLimit) || creditLimit <= 0) {
-        setFormError("Credit limit must be greater than 0.");
+        toast.error("Credit limit must be greater than 0.");
         return;
       }
     } else if (form.limitSource === "newShared") {
       if (!form.sharedLimitName.trim()) {
-        setFormError("Enter a name for the shared credit limit.");
+        toast.error("Enter a name for the shared credit limit.");
         return;
       }
       const sharedAmount = Number(form.sharedLimitAmount);
       if (!Number.isFinite(sharedAmount) || sharedAmount <= 0) {
-        setFormError("Shared credit limit must be greater than 0.");
+        toast.error("Shared credit limit must be greater than 0.");
         return;
       }
     } else if (form.limitSource === "existingShared" && !form.selectedSharedLimitId) {
-      setFormError("Choose a shared credit limit.");
+      toast.error("Choose a shared credit limit.");
       return;
     }
     const statementDay = Number(form.statementDay);
     const paymentDueDay = Number(form.paymentDueDay);
     if (!Number.isInteger(statementDay) || statementDay < 1 || statementDay > 31) {
-      setFormError("Statement day must be between 1 and 31.");
+      toast.error("Statement day must be between 1 and 31.");
       return;
     }
     if (!Number.isInteger(paymentDueDay) || paymentDueDay < 1 || paymentDueDay > 31) {
-      setFormError("Payment due day must be between 1 and 31.");
+      toast.error("Payment due day must be between 1 and 31.");
       return;
     }
 
     setSaving(true);
-    setFormError(null);
     try {
       let sharedLimitId: string | null = null;
       if (form.limitSource === "newShared") {
@@ -342,7 +350,7 @@ export function CreditCardsWorkspace() {
         toast.success("Card added");
       }
     } catch (e) {
-      setFormError(e instanceof Error ? e.message : "Something went wrong. Please try again.");
+      toast.error(e instanceof Error ? e.message : "Something went wrong. Please try again.");
     } finally {
       setSaving(false);
     }
@@ -421,85 +429,6 @@ export function CreditCardsWorkspace() {
 
   const spendTotal = spendByCategory.reduce((s, c) => s + c.amount, 0);
 
-  const statementColumns: FinanceTableColumn<CreditCardViewItem>[] = [
-    {
-      id: "card",
-      header: "Card",
-      accessor: (card) => (
-        <div className="flex min-w-0 items-center gap-2.5">
-          <span
-            className="flex size-8 shrink-0 items-center justify-center rounded-xl text-[9px] font-bold tracking-wide text-white uppercase italic"
-            style={{ background: CARD_GRADIENT[card.accent] }}
-          >
-            {card.network.slice(0, 2)}
-          </span>
-          <span className="truncate text-sm font-medium text-foreground">{card.name}</span>
-        </div>
-      ),
-    },
-    {
-      id: "period",
-      header: "Billing Period",
-      accessor: (card) => (
-        <span className="text-sm text-muted-foreground">
-          {card.statementDate ? billingPeriodLabel(card.statementDate) : "—"}
-        </span>
-      ),
-      width: "160px",
-    },
-    {
-      id: "statementDate",
-      header: "Statement Date",
-      accessor: (card) => (
-        <span className="text-sm text-muted-foreground">
-          {card.statementDate ? formatShortDate(card.statementDate) : "—"}
-        </span>
-      ),
-      width: "150px",
-    },
-    {
-      id: "totalDue",
-      header: "Total Due",
-      accessor: (card) => <span className="font-mono text-sm font-semibold tabular-nums text-expense">{formatCurrency(card.currentBalance)}</span>,
-      numeric: true,
-      width: "130px",
-    },
-    {
-      id: "minDue",
-      header: "Minimum Due",
-      accessor: (card) => <CurrencyCell amount={card.minimumDue} signed={false} />,
-      numeric: true,
-      width: "130px",
-    },
-    {
-      id: "actions",
-      header: "Actions",
-      accessor: (card) => (
-        <div className="flex items-center gap-1.5">
-          <ClayButton size="sm" className="h-7 min-w-0 px-3 text-xs">
-            Pay Now
-          </ClayButton>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button
-                type="button"
-                className="flex size-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                aria-label="Statement actions"
-              >
-                <MoreHorizontal className="size-4" />
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem onSelect={() => setActiveCardId(card.id)}>View Details</DropdownMenuItem>
-              <DropdownMenuItem>Download Statement</DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-      ),
-      width: "150px",
-    },
-  ];
-
   const isLoading = cardsLoading || totalsLoading || recentLoading;
 
   // Preview which gradient this card will actually be assigned — accent is "index in list order"
@@ -513,7 +442,7 @@ export function CreditCardsWorkspace() {
 
   const cardFormDialog = (
     <Dialog open={addOpen || editingCard != null} onOpenChange={(open) => !open && closeCardDialog()}>
-      <DialogContent showCloseButton={false} className="flex max-h-[calc(100vh-2rem)] flex-col gap-0 overflow-hidden rounded-none border border-border p-0 shadow-lg ring-0 sm:max-w-2xl">
+      <DialogContent showCloseButton={false} className="flex max-h-[calc(100vh-2rem)] flex-col gap-0 overflow-hidden rounded-2xl border border-border p-0 shadow-lg ring-0 sm:max-w-2xl">
         <div className="h-1 w-full bg-primary" />
 
         <button
@@ -537,7 +466,7 @@ export function CreditCardsWorkspace() {
         <div className="flex flex-1 flex-col gap-6 overflow-y-auto px-6 py-5 text-sm">
           <div
             style={{ background: CARD_GRADIENT[previewAccent] }}
-            className="relative flex min-h-[132px] flex-col justify-between gap-5 border border-black/10 p-4 text-white shadow-e1"
+            className="relative flex min-h-[132px] flex-col justify-between gap-5 rounded-2xl border border-black/10 p-4 text-white shadow-e1"
           >
             <div className="flex items-start justify-between gap-2">
               <div className="h-5 w-7 border border-white/40 bg-gradient-to-br from-amber-200/90 to-amber-500/70" />
@@ -554,14 +483,14 @@ export function CreditCardsWorkspace() {
             </div>
           </div>
 
-          <div className="flex flex-col gap-3 bg-muted/30 p-4">
+          <div className="flex flex-col gap-3 rounded-2xl bg-muted/30 p-4">
             <SectionLabel icon={CreditCardIcon}>Card Details</SectionLabel>
             <label className="flex flex-col gap-1">
-              <span className="text-xs font-medium text-muted-foreground">Card Name</span>
+              <span className="text-xs font-medium text-muted-foreground">Card Name *</span>
               <div className="relative">
                 <CreditCardIcon className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
                 <input
-                  className="h-10 w-full rounded-none border border-border bg-background pr-3 pl-9 text-sm outline-none transition-colors focus:border-primary"
+                  className="h-10 w-full rounded-xl border border-border bg-background pr-3 pl-9 text-sm outline-none transition-colors focus:border-primary"
                   placeholder="e.g. HDFC Regalia"
                   value={form.name}
                   onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
@@ -571,11 +500,11 @@ export function CreditCardsWorkspace() {
 
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <label className="flex flex-col gap-1">
-                <span className="text-xs font-medium text-muted-foreground">Card Holder Name</span>
+                <span className="text-xs font-medium text-muted-foreground">Card Holder Name *</span>
                 <div className="relative">
                   <User className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
                   <input
-                    className="h-10 w-full rounded-none border border-border bg-background pr-3 pl-9 text-sm outline-none transition-colors focus:border-primary"
+                    className="h-10 w-full rounded-xl border border-border bg-background pr-3 pl-9 text-sm outline-none transition-colors focus:border-primary"
                     placeholder="e.g. Abin John"
                     value={form.cardHolderName}
                     onChange={(e) => setForm((f) => ({ ...f, cardHolderName: e.target.value }))}
@@ -583,9 +512,9 @@ export function CreditCardsWorkspace() {
                 </div>
               </label>
               <label className="flex flex-col gap-1">
-                <span className="text-xs font-medium text-muted-foreground">Card Number (Last 4 Digits)</span>
+                <span className="text-xs font-medium text-muted-foreground">Card Number (Last 4 Digits) *</span>
                 <input
-                  className="h-10 rounded-none border border-border bg-background px-3 font-mono text-sm tracking-widest outline-none transition-colors focus:border-primary"
+                  className="h-10 rounded-xl border border-border bg-background px-3 font-mono text-sm tracking-widest outline-none transition-colors focus:border-primary"
                   placeholder="4021"
                   maxLength={4}
                   value={form.lastFourDigits}
@@ -595,7 +524,7 @@ export function CreditCardsWorkspace() {
             </div>
 
             <label className="flex flex-col gap-1">
-              <span className="text-xs font-medium text-muted-foreground">Bank</span>
+              <span className="text-xs font-medium text-muted-foreground">Bank *</span>
               <BankCombobox
                 value={form.bankId}
                 onChange={(bankId) => setForm((f) => ({ ...f, bankId }))}
@@ -604,7 +533,7 @@ export function CreditCardsWorkspace() {
             </label>
           </div>
 
-          <div className="flex flex-col gap-3 bg-muted/30 p-4">
+          <div className="flex flex-col gap-3 rounded-2xl bg-muted/30 p-4">
             <SectionLabel icon={Wallet}>Credit Limit</SectionLabel>
             <div className="flex flex-wrap gap-2">
               {(
@@ -636,12 +565,12 @@ export function CreditCardsWorkspace() {
 
             {form.limitSource === "own" && (
               <label className="flex flex-col gap-1">
-                <span className="text-xs font-medium text-muted-foreground">Credit Limit</span>
+                <span className="text-xs font-medium text-muted-foreground">Credit Limit *</span>
                 <div className="relative">
                   <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary-accent-text">₹</span>
                   <input
                     type="number"
-                    className="h-10 w-full rounded-none border border-primary/30 bg-primary/5 pr-3 pl-7 text-base font-semibold outline-none transition-colors focus:border-primary"
+                    className="h-10 w-full rounded-xl border border-primary/30 bg-primary/5 pr-3 pl-7 text-base font-semibold outline-none transition-colors focus:border-primary"
                     placeholder="0.00"
                     value={form.creditLimit}
                     onChange={(e) => setForm((f) => ({ ...f, creditLimit: e.target.value }))}
@@ -655,7 +584,7 @@ export function CreditCardsWorkspace() {
                 <label className="flex flex-col gap-1">
                   <span className="text-xs font-medium text-muted-foreground">Shared Limit Name</span>
                   <input
-                    className="h-10 w-full rounded-none border border-border bg-background px-3 text-sm outline-none transition-colors focus:border-primary"
+                    className="h-10 w-full rounded-xl border border-border bg-background px-3 text-sm outline-none transition-colors focus:border-primary"
                     placeholder="e.g. HDFC"
                     value={form.sharedLimitName}
                     onChange={(e) => setForm((f) => ({ ...f, sharedLimitName: e.target.value }))}
@@ -667,7 +596,7 @@ export function CreditCardsWorkspace() {
                     <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary-accent-text">₹</span>
                     <input
                       type="number"
-                      className="h-10 w-full rounded-none border border-primary/30 bg-primary/5 pr-3 pl-7 text-base font-semibold outline-none transition-colors focus:border-primary"
+                      className="h-10 w-full rounded-xl border border-primary/30 bg-primary/5 pr-3 pl-7 text-base font-semibold outline-none transition-colors focus:border-primary"
                       placeholder="0.00"
                       value={form.sharedLimitAmount}
                       onChange={(e) => setForm((f) => ({ ...f, sharedLimitAmount: e.target.value }))}
@@ -684,7 +613,7 @@ export function CreditCardsWorkspace() {
                   value={form.selectedSharedLimitId ?? undefined}
                   onValueChange={(value) => setForm((f) => ({ ...f, selectedSharedLimitId: value }))}
                 >
-                  <SelectTrigger className="h-10 w-full rounded-none border-border">
+                  <SelectTrigger className="h-10 w-full rounded-xl border-border">
                     <SelectValue placeholder="Choose a shared limit" />
                   </SelectTrigger>
                   <SelectContent>
@@ -703,41 +632,41 @@ export function CreditCardsWorkspace() {
             </p>
           </div>
 
+          <div className="flex flex-col gap-3 rounded-2xl bg-muted/30 p-4">
+            <SectionLabel icon={Wifi}>Network (optional)</SectionLabel>
+            <div className="flex flex-wrap gap-2">
+              {CARD_NETWORK_OPTIONS.map((n) => {
+                const selected = form.cardNetwork === n;
+                return (
+                  <button
+                    key={n}
+                    type="button"
+                    onClick={() => setForm((f) => ({ ...f, cardNetwork: f.cardNetwork === n ? "" : n }))}
+                    className={cn(
+                      "flex items-center gap-1.5 border px-3 py-1.5 text-xs font-semibold transition-colors",
+                      selected
+                        ? "border-primary bg-primary/10 text-primary-accent-text"
+                        : "border-border text-muted-foreground hover:bg-muted",
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        "flex h-5 items-center justify-center px-1 text-[9px] font-bold tracking-wide uppercase italic",
+                        selected ? "bg-primary/20 text-primary-accent-text" : "bg-muted text-muted-foreground",
+                      )}
+                    >
+                      {n.slice(0, 2)}
+                    </span>
+                    {n.toUpperCase()}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
           {!editingCard && (
             <>
-              <div className="flex flex-col gap-3 bg-muted/30 p-4">
-                <SectionLabel icon={Wifi}>Network (optional)</SectionLabel>
-                <div className="flex flex-wrap gap-2">
-                  {CARD_NETWORK_OPTIONS.map((n) => {
-                    const selected = form.cardNetwork === n;
-                    return (
-                      <button
-                        key={n}
-                        type="button"
-                        onClick={() => setForm((f) => ({ ...f, cardNetwork: f.cardNetwork === n ? "" : n }))}
-                        className={cn(
-                          "flex items-center gap-1.5 border px-3 py-1.5 text-xs font-semibold transition-colors",
-                          selected
-                            ? "border-primary bg-primary/10 text-primary-accent-text"
-                            : "border-border text-muted-foreground hover:bg-muted",
-                        )}
-                      >
-                        <span
-                          className={cn(
-                            "flex h-5 items-center justify-center px-1 text-[9px] font-bold tracking-wide uppercase italic",
-                            selected ? "bg-primary/20 text-primary-accent-text" : "bg-muted text-muted-foreground",
-                          )}
-                        >
-                          {n.slice(0, 2)}
-                        </span>
-                        {n.toUpperCase()}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div className="flex flex-col gap-3 bg-muted/30 p-4">
+              <div className="flex flex-col gap-3 rounded-2xl bg-muted/30 p-4">
                 <SectionLabel icon={CalendarClock}>Billing Cycle</SectionLabel>
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <label className="flex flex-col gap-1">
@@ -746,7 +675,7 @@ export function CreditCardsWorkspace() {
                       type="number"
                       min={1}
                       max={31}
-                      className="h-10 rounded-none border border-border bg-background px-3 text-sm outline-none transition-colors focus:border-primary"
+                      className="h-10 rounded-xl border border-border bg-background px-3 text-sm outline-none transition-colors focus:border-primary"
                       value={form.statementDay}
                       onChange={(e) => setForm((f) => ({ ...f, statementDay: e.target.value }))}
                     />
@@ -757,7 +686,7 @@ export function CreditCardsWorkspace() {
                       type="number"
                       min={1}
                       max={31}
-                      className="h-10 rounded-none border border-border bg-background px-3 text-sm outline-none transition-colors focus:border-primary"
+                      className="h-10 rounded-xl border border-border bg-background px-3 text-sm outline-none transition-colors focus:border-primary"
                       value={form.paymentDueDay}
                       onChange={(e) => setForm((f) => ({ ...f, paymentDueDay: e.target.value }))}
                     />
@@ -768,18 +697,13 @@ export function CreditCardsWorkspace() {
             </>
           )}
 
-          {formError && (
-            <p className="flex items-center gap-1.5 border border-expense/30 bg-expense/8 px-3 py-2 text-xs font-medium text-expense">
-              {formError}
-            </p>
-          )}
         </div>
 
         <DialogFooter className="shrink-0 border-t border-border bg-muted/20 px-6 py-4">
-          <ClayButton variant="ghost" className="rounded-none" onClick={closeCardDialog} disabled={saving}>
+          <ClayButton variant="ghost" className="rounded-xl" onClick={closeCardDialog} disabled={saving}>
             Cancel
           </ClayButton>
-          <ClayButton variant="primary" className="rounded-none" onClick={handleSaveCard} disabled={saving}>
+          <ClayButton variant="primary" className="rounded-xl" onClick={handleSaveCard} disabled={saving}>
             {saving ? "Saving…" : editingCard ? "Save Changes" : "Add Card"}
           </ClayButton>
         </DialogFooter>
@@ -832,26 +756,21 @@ export function CreditCardsWorkspace() {
 
   return (
     <div className="grid grid-cols-1 gap-5 px-1 xl:grid-cols-12">
-      <div className="flex flex-col gap-5 xl:col-span-8">
+      <div className="flex min-w-0 flex-col gap-5 xl:col-span-8">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h1 className="font-heading text-2xl font-bold tracking-tight text-foreground">Credit Cards</h1>
             <p className="mt-1 text-sm text-muted-foreground">Manage your cards, track spending and pay bills on time</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <ClayButton variant="secondary" size="sm" className="gap-1.5">
-              <FileText className="size-3.5" />
-              View Statements
-            </ClayButton>
-            <ClayButton
-              variant="secondary"
-              size="sm"
-              className="gap-1.5"
-              onClick={() => document.getElementById("my-credit-cards")?.scrollIntoView({ behavior: "smooth", block: "start" })}
+            <button
+              type="button"
+              onClick={openAdd}
+              className="flex items-center gap-1 rounded-full bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
             >
-              <Settings2 className="size-3.5" />
-              Manage Cards
-            </ClayButton>
+              <Plus className="size-3.5" />
+              Add Card
+            </button>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <ClayButton variant="ghost" size="icon" aria-label="More options">
@@ -859,7 +778,18 @@ export function CreditCardsWorkspace() {
                 </ClayButton>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                <DropdownMenuItem onSelect={openAdd}>Add Card</DropdownMenuItem>
+                <DropdownMenuItem
+                  onSelect={() => document.getElementById("upcoming-statements")?.scrollIntoView({ behavior: "smooth", block: "start" })}
+                >
+                  <FileText className="size-4" />
+                  View Statements
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onSelect={() => document.getElementById("my-credit-cards")?.scrollIntoView({ behavior: "smooth", block: "start" })}
+                >
+                  <Settings2 className="size-4" />
+                  Manage Cards
+                </DropdownMenuItem>
                 <DropdownMenuItem>Export Statements</DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -873,31 +803,33 @@ export function CreditCardsWorkspace() {
           <StatCard label="This Month Spent" value={formatCurrency(totals.spentThisMonth)} icon={ShoppingBag} tone="warning" />
         </div>
 
-        <div id="my-credit-cards" className="flex scroll-mt-4 items-center justify-between">
+        <div id="my-credit-cards" className="flex scroll-mt-4 items-center justify-between gap-2">
           <h2 className="text-sm font-semibold text-foreground">My Credit Cards ({creditCards.length})</h2>
-          <div className="clay-pressed flex items-center gap-1 rounded-xl p-1">
-            <button
-              type="button"
-              onClick={() => setViewMode("grid")}
-              className={cn(
-                "flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors",
-                viewMode === "grid" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              <LayoutGrid className="size-3.5" />
-              Card View
-            </button>
-            <button
-              type="button"
-              onClick={() => setViewMode("list")}
-              className={cn(
-                "flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors",
-                viewMode === "list" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              <List className="size-3.5" />
-              List View
-            </button>
+          <div className="flex items-center gap-2">
+            <div className="clay-pressed flex items-center gap-1 rounded-xl p-1">
+              <button
+                type="button"
+                onClick={() => setViewMode("grid")}
+                className={cn(
+                  "flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors",
+                  viewMode === "grid" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                <LayoutGrid className="size-3.5" />
+                Card View
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewMode("list")}
+                className={cn(
+                  "flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors",
+                  viewMode === "list" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                <List className="size-3.5" />
+                List View
+              </button>
+            </div>
           </div>
         </div>
 
@@ -960,27 +892,88 @@ export function CreditCardsWorkspace() {
           </div>
         )}
 
-        <div className="surface-flat rounded-3xl border border-border/50 p-5">
-          <div className="flex items-center justify-between">
+        <div id="upcoming-statements" className="surface-flat min-w-0 scroll-mt-4 rounded-3xl border border-border/50 p-5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-sm font-semibold text-foreground">Upcoming Statements</h2>
-            <button type="button" className="flex items-center gap-1 text-xs font-semibold text-primary-accent-text hover:underline">
+            <button
+              type="button"
+              onClick={() => router.push("/transactions")}
+              className="flex items-center gap-1 text-xs font-semibold text-primary-accent-text hover:underline"
+            >
               View All Statements
               <ArrowRight className="size-3.5" />
             </button>
           </div>
-          <div className="mt-3">
-            <FinanceTable columns={statementColumns} data={creditCards} getRowId={(c) => c.id} />
+          <div className="mt-3 flex flex-col gap-3">
+            {creditCards.map((card) => (
+              <div
+                key={card.id}
+                className="flex flex-col gap-3 rounded-2xl border border-border/60 bg-card p-4 sm:flex-row sm:items-center sm:justify-between sm:gap-4"
+              >
+                <div className="flex min-w-0 items-center gap-2.5">
+                  <span
+                    className="flex size-8 shrink-0 items-center justify-center rounded-xl text-[9px] font-bold tracking-wide text-white uppercase italic"
+                    style={{ background: CARD_GRADIENT[card.accent] }}
+                  >
+                    {card.network.slice(0, 2)}
+                  </span>
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-foreground">{card.name}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {card.statementDate ? billingPeriodLabel(card.statementDate) : "—"}
+                      {" · "}
+                      {card.statementDate ? formatShortDate(card.statementDate) : "—"}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-x-5 gap-y-2 sm:shrink-0">
+                  <div className="text-left sm:text-right">
+                    <p className="text-[11px] text-muted-foreground">Total Due</p>
+                    <p className="font-mono text-sm font-semibold tabular-nums text-expense">{formatCurrency(card.currentBalance)}</p>
+                  </div>
+                  <div className="text-left sm:text-right">
+                    <p className="text-[11px] text-muted-foreground">Minimum Due</p>
+                    <p className="font-mono text-sm font-semibold tabular-nums text-foreground">{formatCurrency(card.minimumDue)}</p>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <ClayButton size="sm" className="h-7 min-w-0 px-3 text-xs" onClick={() => setPayCard(card)}>
+                      Pay Now
+                    </ClayButton>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <button
+                          type="button"
+                          className="flex size-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                          aria-label="Statement actions"
+                        >
+                          <MoreHorizontal className="size-4" />
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem onSelect={() => setActiveCardId(card.id)}>View Details</DropdownMenuItem>
+                        <DropdownMenuItem>Download Statement</DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
 
         <div className="surface-flat rounded-3xl border border-border/50 p-5">
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-semibold text-foreground">Recent Card Transactions</h2>
-            <button type="button" className="text-xs font-semibold text-primary-accent-text hover:underline">
+            <button
+              type="button"
+              onClick={() => router.push("/transactions")}
+              className="text-xs font-semibold text-primary-accent-text hover:underline"
+            >
               View All
             </button>
           </div>
-          <div className="mt-3 flex flex-col gap-1">
+          <div className="mt-3 flex max-h-80 flex-col gap-1 overflow-y-auto">
             {recentCardTransactions.length === 0 && (
               <p className="py-4 text-center text-sm text-muted-foreground">No recent card transactions.</p>
             )}
@@ -1160,6 +1153,23 @@ export function CreditCardsWorkspace() {
         onConfirm={handleDeleteCard}
         confirming={deletingCardBusy}
       />
+
+      {transactionActions && (
+        <TransactionDetailsModal
+          open={payCard != null}
+          onOpenChange={(open) => !open && setPayCard(null)}
+          row={null}
+          expense={null}
+          people={people}
+          accounts={txnAccounts}
+          categories={txnCategories}
+          actions={transactionActions}
+          defaultKind="transfer"
+          initialDestinationAccountId={payCard?.card.accountId}
+          initialAmount={payCard?.currentBalance}
+          existingTransactions={transactionRows.map((r) => r.transaction)}
+        />
+      )}
     </div>
   );
 }

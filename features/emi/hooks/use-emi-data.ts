@@ -34,10 +34,12 @@ import type { CreditCardProfile } from "@/lib/models/credit-card";
 import { defaultEmiPaymentSplit, emiStatusGiven, type Emi, type EmiLoanType, type EmiStatus } from "@/lib/models/emi";
 import { installmentStatus, remainingAmount, type Installment } from "@/lib/models/payment-schedule";
 import {
+  createAccountRepository,
   createEmiPaymentBreakdownRepository,
   createEmiRepository,
   createInstallmentPaymentRepositoryFor,
   createInstallmentRepositoryFor,
+  createTransactionRepository,
 } from "@/lib/repositories/repository-factory";
 import type { CreateEmiParams, EditEmiParams, EditEmiTermsParams } from "@/lib/repositories/emi-repository";
 import { useAuthStore } from "@/store/auth-store";
@@ -124,10 +126,14 @@ export interface RecordEmiPaymentParams {
 /** Create/edit/close/payment actions wired to the real EMI + payment-schedule repositories, scoped to the signed-in user. */
 export function useEmiActions() {
   const uid = useAuthStore((s) => s.user?.uid);
+  const { data: cards = [] } = useCreditCards();
 
   return useMemo(() => {
     if (!uid) return null;
     const emiRepository = createEmiRepository(uid);
+    const cardById = new Map((cards as CreditCardProfile[]).map((c) => [c.id, c]));
+    const accountRepository = createAccountRepository(uid);
+    const transactionRepository = createTransactionRepository(uid, accountRepository);
 
     return {
       createEmi: async (params: CreateEmiParams & { loanType?: EmiLoanType }) => {
@@ -162,6 +168,14 @@ export function useEmiActions() {
        * `EmiPaymentBreakdownRepository.createBreakdown` — mirrors exactly
        * how `EmiPaymentBreakdown` is documented to be created (see
        * `lib/models/emi.ts`).
+       *
+       * Also posts a `Transaction` on the EMI's linked credit card account
+       * (when `linkedCreditCardId` resolves to a real card) so the payment
+       * shows up in the Transactions list with an EMI tag — previously this
+       * only wrote the InstallmentPayment/breakdown, so card-linked EMI
+       * payments were invisible outside the EMI page. An EMI with no linked
+       * card has no account to post against, so no Transaction is created
+       * for it (unchanged behavior).
        */
       recordPayment: async (emi: Emi, installment: Installment, params: RecordEmiPaymentParams) => {
         const installmentRepository = createInstallmentRepositoryFor(uid, emi.scheduleId);
@@ -195,7 +209,24 @@ export function useEmiActions() {
           penalty: params.penalty,
           otherCharges: params.otherCharges,
         });
+
+        const linkedCard = emi.linkedCreditCardId ? cardById.get(emi.linkedCreditCardId) : undefined;
+        if (linkedCard) {
+          await transactionRepository.createTransaction({
+            type: "expense",
+            amount: params.amount,
+            dateTime: params.date,
+            accountId: linkedCard.accountId,
+            categoryId: emi.categoryId ?? "loan_payment",
+            description: emi.name ? `EMI payment — ${emi.name}` : "EMI payment",
+            notes: params.note ?? "",
+            emiId: emi.id,
+            installmentId: installment.id,
+            installmentPaymentId: payment.id,
+            paymentAllocationType: "regularEmi",
+          });
+        }
       },
     };
-  }, [uid]);
+  }, [uid, cards]);
 }
