@@ -55,6 +55,8 @@ import type { CreditCardProfile } from "@/lib/models/credit-card";
 import type { EmiLoanType } from "@/lib/models/emi";
 import type { LoanCategory } from "@/lib/models/loan";
 import type { ScheduleType } from "@/lib/models/payment-schedule";
+import { useOperation } from "@/components/feedback/operation-progress";
+import { SUCCESS_HOLD_MS, errorDetail } from "@/lib/operation-progress/operation-progress";
 import { cn } from "@/lib/utils";
 import { toast } from "@/store/toast-store";
 
@@ -94,13 +96,13 @@ function KindPicker({ value, onChange }: { value: AddKind | null; onChange: (kin
                 active ? "border-primary-foreground bg-primary-foreground text-primary" : "border-border bg-secondary text-foreground",
               )}
             >
-              <Icon className="size-4" strokeWidth={2.25} />
+              <Icon className="size-4" strokeWidth={1.75} />
             </span>
             <span className="flex min-w-0 flex-col">
-              <span className="truncate text-[13px] leading-tight font-bold">{label}</span>
+              <span className="truncate text-[13px] leading-tight font-semibold">{label}</span>
               <span className={cn("truncate text-[11px] leading-tight font-medium", active ? "text-primary-foreground" : "text-muted-foreground")}>{hint}</span>
             </span>
-            {active && <Check aria-hidden className="absolute top-1 right-1 size-3.5" strokeWidth={3} />}
+            {active && <Check aria-hidden className="absolute top-1 right-1 size-3.5" strokeWidth={2.5} />}
           </button>
         );
       })}
@@ -128,6 +130,7 @@ export function LoanEmiAddDialog({ open, onOpenChange, initialKind = null }: Loa
   const { data: cards = [] } = useCreditCards();
   const [form, setForm] = useState<LoanEmiAddForm>(() => emptyLoanEmiAddForm(initialKind, crypto.randomUUID()));
   const [saving, setSaving] = useState(false);
+  const operation = useOperation();
   // Synchronous double-submit guard — a second fast click can land before `saving` re-renders the button.
   const inFlight = useRef(false);
   const set = (patch: Partial<LoanEmiAddForm>) => setForm((f) => ({ ...f, ...patch }));
@@ -159,21 +162,30 @@ export function LoanEmiAddDialog({ open, onOpenChange, initialKind = null }: Loa
       return;
     }
     const request = buildLoanEmiCreateRequest(form);
+    const isLoan = request.path === "loan";
     inFlight.current = true;
     setSaving(true);
+    const op = operation.start({
+      label: isLoan ? "Creating loan" : "Creating EMI",
+      successLabel: isLoan ? "Loan added" : "EMI added",
+      errorLabel: isLoan ? "Couldn't create loan" : "Couldn't create EMI",
+      detail: "Checking details",
+    });
     try {
-      if (request.path === "loan") {
+      // One call writes the record and its installment schedule together (plus any account movement).
+      op.stage("submit", isLoan ? "Saving loan & installment schedule" : "Saving EMI & installment schedule");
+      if (isLoan) {
         if (!loanActions) throw new Error("Not signed in");
         await loanActions.createLoan(request.params);
       } else {
         if (!emiActions) throw new Error("Not signed in");
         await emiActions.createEmi(request.params);
       }
-      toast.success(request.path === "loan" ? "Loan added successfully" : "Installment plan added successfully");
-      onOpenChange(false);
+      op.succeed({ toast: { title: isLoan ? "Loan added successfully" : "Installment plan added successfully" } });
+      window.setTimeout(() => onOpenChange(false), SUCCESS_HOLD_MS);
     } catch (e) {
       // The form stays open with everything entered (and the same idempotency key for account-linked loans).
-      toast.error("Couldn't save. Please try again.", request.path === "loan" ? friendlyLoanError(e) : e instanceof Error ? e.message : undefined);
+      op.fail({ detail: isLoan ? friendlyLoanError(e) : errorDetail(e), retry: handleSave });
       inFlight.current = false;
     } finally {
       setSaving(false);
@@ -194,8 +206,10 @@ export function LoanEmiAddDialog({ open, onOpenChange, initialKind = null }: Loa
       title="Add to Loan & EMI"
       description={kindMeta ? kindMeta.fullLabel : "Choose what this is — only the fields you need will appear."}
       onConfirm={handleSave}
-      confirmLabel={saving ? "Saving…" : "Save"}
+      confirmLabel={saving ? (isEmi ? "Saving EMI…" : "Saving loan…") : "Save"}
       loading={saving}
+      success={operation.snapshot?.status === "success"}
+      operation={operation.snapshot}
     >
       <FormSection title="What is this?">
         <KindPicker value={kind} onChange={(k) => set({ kind: k })} />
@@ -231,7 +245,7 @@ export function LoanEmiAddDialog({ open, onOpenChange, initialKind = null }: Loa
                     <AddElsewhereLink href="/credit-cards" label={cardOptions.length === 0 ? "Go to Credit Cards" : "Add card"} />
                   </div>
                   {cardOptions.length === 0 ? (
-                    <p className="flex h-10 items-center rounded-[6px] border border-dashed border-border-strong bg-secondary px-3 text-xs text-muted-foreground">
+                    <p className="flex h-10 items-center rounded-[6px] border border-dashed border-border bg-secondary px-3 text-xs text-muted-foreground">
                       No credit cards yet — add one in Credit Cards.
                     </p>
                   ) : (
@@ -437,7 +451,7 @@ export function LoanEmiAddDialog({ open, onOpenChange, initialKind = null }: Loa
                   <AddElsewhereLink href="/accounts" label="Add account" />
                 </div>
                 {movementAccounts.length === 0 ? (
-                  <p className="flex h-10 items-center rounded-[6px] border border-dashed border-border-strong bg-secondary px-3 text-xs text-muted-foreground">
+                  <p className="flex h-10 items-center rounded-[6px] border border-dashed border-border bg-secondary px-3 text-xs text-muted-foreground">
                     No accounts yet — add one in Accounts.
                   </p>
                 ) : (

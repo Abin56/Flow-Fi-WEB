@@ -23,7 +23,17 @@
  * codebase's rules forbid. Documented, not silently smoothed over.
  */
 
+import { runTransaction } from "firebase/firestore";
 import { useMemo } from "react";
+import {
+  buildEmiPaymentWrites,
+  emiOverallAllocationType,
+  emiPaymentId,
+  emiScheduleFigures,
+  planEmiPaymentAllocation,
+  planEmiPaymentEdit,
+  planEmiPaymentReversal,
+} from "@/features/emi/lib/emi-payment-allocation";
 import { useCategories } from "@/hooks/use-categories";
 import { useCreditCards, useEmis } from "@/hooks/use-credit-cards";
 import { useAllEmiInstallments } from "@/hooks/use-emis";
@@ -31,8 +41,18 @@ import { useLoanPersons } from "@/hooks/use-loans";
 import type { Category } from "@/lib/models/category";
 import type { Person } from "@/lib/models/person";
 import type { CreditCardProfile } from "@/lib/models/credit-card";
-import { defaultEmiPaymentSplit, emiStatusGiven, type Emi, type EmiLoanType, type EmiStatus } from "@/lib/models/emi";
-import { installmentStatus, remainingAmount, type Installment } from "@/lib/models/payment-schedule";
+import { db } from "@/lib/firebase/client";
+import {
+  permanentlyDeleteAgreement,
+  previewAgreementDeletion,
+  type AgreementDeletionStage,
+} from "@/lib/repositories/agreement-deletion";
+import type { Account } from "@/lib/models/account";
+import { emiStatusGiven, type Emi, type EmiLoanType, type EmiPaymentBreakdown, type EmiStatus } from "@/lib/models/emi";
+import type { Installment, InstallmentPayment, PaymentAllocationType } from "@/lib/models/payment-schedule";
+import type { Transaction } from "@/lib/models/transaction";
+import { netBalanceDeltas } from "@/lib/engines/payment-correction";
+import { TransactionRepository } from "@/lib/repositories/transaction-repository";
 import {
   createAccountRepository,
   createEmiPaymentBreakdownRepository,
@@ -82,11 +102,7 @@ export function useEmiRows(): { rows: EmiRow[]; isLoading: boolean } {
       const emiInstallments = (installmentsByScheduleId.get(emi.scheduleId) ?? []).sort(
         (a, b) => a.sequenceNumber - b.sequenceNumber,
       );
-      const remainingBalance = emiInstallments
-        .filter((i) => installmentStatus(i) !== "skipped")
-        .reduce((sum, i) => sum + remainingAmount(i), 0);
-      const nextInstallment = emiInstallments.find((i) => !i.isSkipped && remainingAmount(i) > 0) ?? null;
-      const installmentsPaid = emiInstallments.filter((i) => installmentStatus(i) === "paid").length;
+      const { remainingBalance, nextInstallment, installmentsPaid } = emiScheduleFigures(emiInstallments);
 
       return {
         emi,
@@ -110,6 +126,10 @@ export function useEmiRows(): { rows: EmiRow[]; isLoading: boolean } {
 
 export interface RecordEmiPaymentParams {
   amount: number;
+  /** One per user action (generated when the payment surface opens), reused verbatim on a retry. */
+  idempotencyKey: string;
+  /** The installment the user chose to pay — filled first; defaults to the next unpaid one. */
+  targetInstallmentId?: string | null;
   date: Date;
   note?: string;
   principalPaid?: number;
@@ -121,6 +141,23 @@ export interface RecordEmiPaymentParams {
   serviceCharge?: number;
   penalty?: number;
   otherCharges?: number;
+}
+
+export interface EditEmiPaymentParams extends Omit<RecordEmiPaymentParams, "targetInstallmentId" | "principalPaid" | "interestPaid"> {
+  /** The recorded action being corrected: its payments and the installments they sit under (parallel arrays). */
+  original: { paymentIds: string[]; installmentIds: string[] };
+}
+
+export interface ReverseEmiPaymentParams {
+  /** The recorded action being undone: its payments and the installments they sit under (parallel arrays). */
+  original: { paymentIds: string[]; installmentIds: string[] };
+}
+
+export interface RecordEmiPaymentResult {
+  /** True when this `idempotencyKey` had already committed — nothing was written again. */
+  alreadyRecorded: boolean;
+  applied: number;
+  allocationType: PaymentAllocationType;
 }
 
 /** Create/edit/close/payment actions wired to the real EMI + payment-schedule repositories, scoped to the signed-in user. */
@@ -157,75 +194,246 @@ export function useEmiActions() {
       clearDefaulted: async (emi: Emi) => {
         await emiRepository.clearDefaulted(emi);
       },
-      deleteEmi: async (emi: Emi) => {
-        await emiRepository.permanentlyDeleteEmi(emi);
+      /**
+       * Permanently deletes an EMI entered by mistake and reverses everything it owns — its card charges
+       * and their card-account effect; card locked credit, dues and outstanding follow from the EMI being
+       * gone — then removes its schedule and breakdowns. See `lib/repositories/agreement-deletion.ts`.
+       */
+      deleteEmi: async (emi: Pick<Emi, "id">, opts: { onStage?: (stage: AgreementDeletionStage) => void } = {}) =>
+        permanentlyDeleteAgreement(db, uid, "emi", emi.id, opts),
+      /** Read-only: what `deleteEmi` would change — for its confirmation. */
+      previewPermanentDeletion: (emi: Pick<Emi, "id">) => previewAgreementDeletion(db, uid, "emi", emi.id),
+      /**
+       * Records one EMI payment — exact, partial, or larger than one installment (an advance payment
+       * that fills the following installments in order) — as ONE atomic, idempotent Firestore
+       * transaction: every touched installment's `amountPaid`, one `InstallmentPayment` + one
+       * `EmiPaymentBreakdown` per installment touched, and (card-linked EMIs) the card `Transaction`.
+       *
+       * Allocation comes from `planEmiPaymentAllocation`, computed from installments re-read INSIDE the
+       * transaction (only the caller's installment ids are trusted), so a stale screen or a second tab
+       * can never over-apply. The first breakdown's id is deterministic per `idempotencyKey`, so a retry
+       * of an action that already committed returns without writing anything twice.
+       *
+       * A card-linked EMI also posts a `Transaction` on the card account so the payment shows up in the
+       * Transactions list with an EMI tag. An EMI with no linked card has no account to post against,
+       * so no Transaction is created for it (unchanged behavior).
+       */
+      recordPayment: async (emi: Emi, scheduleInstallments: Installment[], params: RecordEmiPaymentParams): Promise<RecordEmiPaymentResult> => {
+        const installmentRepository = createInstallmentRepositoryFor(uid, emi.scheduleId);
+        const paymentRepositoryFor = (installmentId: string) =>
+          createInstallmentPaymentRepositoryFor(uid, emi.scheduleId, installmentId, installmentRepository);
+        const breakdownRepository = createEmiPaymentBreakdownRepository(uid, emi.id);
+        const linkedCard = emi.linkedCreditCardId ? cardById.get(emi.linkedCreditCardId) : undefined;
+        const ids = scheduleInstallments.map((i) => i.id);
+
+        return runTransaction(db, async (tx) => {
+          // --- All reads first (Firestore transaction constraint). ---
+          const sentinel = await tx.get(breakdownRepository.docRef(emiPaymentId(params.idempotencyKey, 0)));
+          if (sentinel.exists()) return { alreadyRecorded: true, applied: params.amount, allocationType: "regularEmi" };
+          const fresh: Installment[] = [];
+          for (const id of ids) {
+            const snap = await tx.get(installmentRepository.docRef(id));
+            if (snap.exists()) fresh.push(snap.data());
+          }
+
+          const allocation = planEmiPaymentAllocation({
+            installments: fresh,
+            amount: params.amount,
+            date: params.date,
+            targetInstallmentId: params.targetInstallmentId,
+          });
+          if (!allocation.ok) throw new Error(allocation.error);
+          const writes = buildEmiPaymentWrites({
+            portions: allocation.portions,
+            idempotencyKey: params.idempotencyKey,
+            date: params.date,
+            note: params.note,
+            principalPaid: params.principalPaid,
+            interestPaid: params.interestPaid,
+            charges: params,
+          });
+
+          // Reads the card account and then writes — so it runs before the writes below.
+          if (linkedCard) {
+            await transactionRepository.createTransactionInTransaction(tx, {
+              type: "expense",
+              amount: allocation.applied,
+              dateTime: params.date,
+              accountId: linkedCard.accountId,
+              categoryId: emi.categoryId ?? "loan_payment",
+              description: emi.name ? `EMI payment — ${emi.name}` : "EMI payment",
+              notes: params.note ?? "",
+              emiId: emi.id,
+              installmentId: writes.payments[0].installmentId,
+              installmentPaymentId: writes.payments[0].id,
+              paymentAllocationType: "regularEmi",
+            });
+          }
+
+          // --- Then all writes. ---
+          for (const installment of writes.installments) tx.set(installmentRepository.docRef(installment.id), installment);
+          for (const payment of writes.payments) tx.set(paymentRepositoryFor(payment.installmentId).docRef(payment.id), payment);
+          for (const breakdown of writes.breakdowns) tx.set(breakdownRepository.docRef(breakdown.id), breakdown);
+
+          return { alreadyRecorded: false, applied: allocation.applied, allocationType: emiOverallAllocationType(allocation.portions) };
+        });
       },
       /**
-       * Records a payment against `installment` (the EMI's next-due
-       * installment, in practice) via the generic
-       * `InstallmentPaymentRepository`, then persists the EMI-specific
-       * charge breakdown (GST/processing fee/etc.) via
-       * `EmiPaymentBreakdownRepository.createBreakdown` — mirrors exactly
-       * how `EmiPaymentBreakdown` is documented to be created (see
-       * `lib/models/emi.ts`).
-       *
-       * Also posts a `Transaction` on the EMI's linked credit card account
-       * (when `linkedCreditCardId` resolves to a real card) so the payment
-       * shows up in the Transactions list with an EMI tag — previously this
-       * only wrote the InstallmentPayment/breakdown, so card-linked EMI
-       * payments were invisible outside the EMI page. An EMI with no linked
-       * card has no account to post against, so no Transaction is created
-       * for it (unchanged behavior).
+       * Corrects a recorded EMI payment action as ONE atomic Firestore transaction (`planEmiPaymentEdit`):
+       * the original portions are taken back out of the schedule and soft-deleted with their breakdowns,
+       * the corrected amount is allocated from the same starting installment, and — card-linked EMIs —
+       * the original card Transaction is soft-deleted and the corrected one posted, with the card
+       * account's balance moved by the net difference only. Card available credit follows automatically:
+       * it is derived from the active payments' breakdown principal. Retrying the same `idempotencyKey`
+       * after a commit writes nothing.
        */
-      recordPayment: async (emi: Emi, installment: Installment, params: RecordEmiPaymentParams) => {
+      editPayment: async (emi: Emi, scheduleInstallments: Installment[], params: EditEmiPaymentParams): Promise<RecordEmiPaymentResult> => {
         const installmentRepository = createInstallmentRepositoryFor(uid, emi.scheduleId);
-        const installmentPaymentRepository = createInstallmentPaymentRepositoryFor(
-          uid,
-          emi.scheduleId,
-          installment.id,
-          installmentRepository,
-        );
-        const payment = await installmentPaymentRepository.recordPayment(installment, {
-          amount: params.amount,
-          date: params.date,
-          note: params.note,
-        });
-
-        // Without the bank's own figures, split by the installment's principal/interest ratio (as
-        // Flutter does) — never the whole amount as principal, which restored interest as card credit.
-        const split = params.principalPaid == null ? defaultEmiPaymentSplit(installment, params.amount) : null;
+        const paymentRepositoryFor = (installmentId: string) =>
+          createInstallmentPaymentRepositoryFor(uid, emi.scheduleId, installmentId, installmentRepository);
         const breakdownRepository = createEmiPaymentBreakdownRepository(uid, emi.id);
-        await breakdownRepository.createBreakdown({
-          paymentId: payment.id,
-          scheduleId: emi.scheduleId,
-          installmentId: installment.id,
-          principalPaid: split?.principalPaid ?? params.principalPaid,
-          interestPaid: split?.interestPaid ?? params.interestPaid,
-          gst: params.gst,
-          igst: params.igst,
-          processingFee: params.processingFee,
-          insuranceCharge: params.insuranceCharge,
-          serviceCharge: params.serviceCharge,
-          penalty: params.penalty,
-          otherCharges: params.otherCharges,
-        });
-
         const linkedCard = emi.linkedCreditCardId ? cardById.get(emi.linkedCreditCardId) : undefined;
-        if (linkedCard) {
-          await transactionRepository.createTransaction({
-            type: "expense",
+        const ids = scheduleInstallments.map((i) => i.id);
+        // Queries can't run inside a client transaction — find the original card Transaction first, re-read it inside.
+        const firstOriginalId = params.original.paymentIds[0];
+        const oldCardTransactionIds = firstOriginalId
+          ? (await transactionRepository.findByInstallmentPaymentId(firstOriginalId)).filter((t) => t.emiId === emi.id).map((t) => t.id)
+          : [];
+
+        return runTransaction(db, async (tx) => {
+          // --- All reads first. ---
+          const sentinel = await tx.get(breakdownRepository.docRef(emiPaymentId(params.idempotencyKey, 0)));
+          if (sentinel.exists()) return { alreadyRecorded: true, applied: params.amount, allocationType: "regularEmi" };
+          const fresh: Installment[] = [];
+          for (const id of ids) {
+            const snap = await tx.get(installmentRepository.docRef(id));
+            if (snap.exists()) fresh.push(snap.data());
+          }
+          const original: InstallmentPayment[] = [];
+          const originalBreakdowns: EmiPaymentBreakdown[] = [];
+          for (let i = 0; i < params.original.paymentIds.length; i++) {
+            const snap = await tx.get(paymentRepositoryFor(params.original.installmentIds[i]).docRef(params.original.paymentIds[i]));
+            if (snap.exists() && snap.data().deletedAt == null) original.push(snap.data());
+            const breakdown = await tx.get(breakdownRepository.docRef(params.original.paymentIds[i]));
+            if (breakdown.exists() && breakdown.data().deletedAt == null) originalBreakdowns.push(breakdown.data());
+          }
+          const oldCardTransactions: Transaction[] = [];
+          for (const id of oldCardTransactionIds) {
+            const snap = await tx.get(transactionRepository.docRef(id));
+            if (snap.exists() && snap.data().deletedAt == null) oldCardTransactions.push(snap.data());
+          }
+          const accountIds = new Set([...oldCardTransactions.map((t) => t.accountId), ...(linkedCard ? [linkedCard.accountId] : [])]);
+          const accounts = new Map<string, Account>();
+          for (const id of accountIds) {
+            const snap = await tx.get(accountRepository.docRef(id));
+            if (!snap.exists()) throw new Error("Account not found");
+            accounts.set(id, snap.data());
+          }
+
+          const plan = planEmiPaymentEdit({
+            installments: fresh,
+            original,
             amount: params.amount,
-            dateTime: params.date,
-            accountId: linkedCard.accountId,
-            categoryId: emi.categoryId ?? "loan_payment",
-            description: emi.name ? `EMI payment — ${emi.name}` : "EMI payment",
-            notes: params.note ?? "",
-            emiId: emi.id,
-            installmentId: installment.id,
-            installmentPaymentId: payment.id,
-            paymentAllocationType: "regularEmi",
+            date: params.date,
+            idempotencyKey: params.idempotencyKey,
+            note: params.note,
+            charges: params,
           });
-        }
+          if (!plan.ok) throw new Error(plan.error);
+
+          // --- Then all writes. ---
+          const now = new Date();
+          for (const installment of plan.writes.installments) tx.set(installmentRepository.docRef(installment.id), installment);
+          for (const payment of original) tx.set(paymentRepositoryFor(payment.installmentId).docRef(payment.id), { ...payment, deletedAt: now });
+          for (const breakdown of originalBreakdowns) tx.set(breakdownRepository.docRef(breakdown.id), { ...breakdown, deletedAt: now });
+          for (const payment of plan.writes.payments) tx.set(paymentRepositoryFor(payment.installmentId).docRef(payment.id), payment);
+          for (const breakdown of plan.writes.breakdowns) tx.set(breakdownRepository.docRef(breakdown.id), breakdown);
+
+          const corrected = linkedCard
+            ? TransactionRepository.buildTransaction({
+                type: "expense",
+                amount: plan.allocation.applied,
+                dateTime: params.date,
+                accountId: linkedCard.accountId,
+                categoryId: emi.categoryId ?? "loan_payment",
+                description: emi.name ? `EMI payment — ${emi.name}` : "EMI payment",
+                notes: params.note ?? "",
+                emiId: emi.id,
+                installmentId: plan.writes.payments[0].installmentId,
+                installmentPaymentId: plan.writes.payments[0].id,
+                paymentAllocationType: "regularEmi",
+              })
+            : null;
+          for (const old of oldCardTransactions) tx.set(transactionRepository.docRef(old.id), { ...old, deletedAt: now });
+          if (corrected) tx.set(transactionRepository.docRef(corrected.id), corrected);
+          // The card account moves by the difference only — the original movement undone, the corrected one applied.
+          for (const [id, delta] of netBalanceDeltas(oldCardTransactions, corrected ? [corrected] : [])) {
+            if (delta !== 0) tx.set(accountRepository.docRef(id), accountRepository.applyBalanceDelta(accounts.get(id)!, delta));
+          }
+
+          return { alreadyRecorded: false, applied: plan.allocation.applied, allocationType: emiOverallAllocationType(plan.allocation.portions) };
+        });
+      },
+      /**
+       * "Mark as unpaid" — undoes a recorded EMI payment action as ONE atomic Firestore transaction
+       * (`planEmiPaymentReversal`): its portions are taken back out of the installments they were applied to,
+       * its payments and breakdowns are soft-deleted, and — card-linked EMIs — its card Transaction is
+       * soft-deleted with the card account's balance moved back by exactly that spend. Card available credit
+       * follows automatically (derived from active breakdowns). Safe to retry: once the payments are
+       * soft-deleted a repeat call writes nothing (`alreadyReversed`).
+       */
+      reversePayment: async (emi: Emi, params: ReverseEmiPaymentParams): Promise<{ alreadyReversed: boolean }> => {
+        const installmentRepository = createInstallmentRepositoryFor(uid, emi.scheduleId);
+        const paymentRepositoryFor = (installmentId: string) =>
+          createInstallmentPaymentRepositoryFor(uid, emi.scheduleId, installmentId, installmentRepository);
+        const breakdownRepository = createEmiPaymentBreakdownRepository(uid, emi.id);
+        // Queries can't run inside a client transaction — find the card Transaction first, re-read it inside.
+        const firstId = params.original.paymentIds[0];
+        const cardTransactionIds = firstId
+          ? (await transactionRepository.findByInstallmentPaymentId(firstId)).filter((t) => t.emiId === emi.id).map((t) => t.id)
+          : [];
+
+        return runTransaction(db, async (tx) => {
+          // --- All reads first. ---
+          const original: InstallmentPayment[] = [];
+          const breakdowns: EmiPaymentBreakdown[] = [];
+          for (let i = 0; i < params.original.paymentIds.length; i++) {
+            const snap = await tx.get(paymentRepositoryFor(params.original.installmentIds[i]).docRef(params.original.paymentIds[i]));
+            if (snap.exists() && snap.data().deletedAt == null) original.push(snap.data());
+            const breakdown = await tx.get(breakdownRepository.docRef(params.original.paymentIds[i]));
+            if (breakdown.exists() && breakdown.data().deletedAt == null) breakdowns.push(breakdown.data());
+          }
+          const fresh: Installment[] = [];
+          for (const id of new Set(original.map((p) => p.installmentId))) {
+            const snap = await tx.get(installmentRepository.docRef(id));
+            if (snap.exists()) fresh.push(snap.data());
+          }
+          const cardTransactions: Transaction[] = [];
+          for (const id of cardTransactionIds) {
+            const snap = await tx.get(transactionRepository.docRef(id));
+            if (snap.exists() && snap.data().deletedAt == null) cardTransactions.push(snap.data());
+          }
+          const accounts = new Map<string, Account>();
+          for (const id of new Set(cardTransactions.map((t) => t.accountId))) {
+            const snap = await tx.get(accountRepository.docRef(id));
+            if (!snap.exists()) throw new Error("Account not found");
+            accounts.set(id, snap.data());
+          }
+
+          const plan = planEmiPaymentReversal({ installments: fresh, original });
+          if (plan == null) return { alreadyReversed: true };
+
+          // --- Then all writes. ---
+          const now = new Date();
+          for (const installment of plan.installments) tx.set(installmentRepository.docRef(installment.id), installment);
+          for (const payment of original) tx.set(paymentRepositoryFor(payment.installmentId).docRef(payment.id), { ...payment, deletedAt: now });
+          for (const breakdown of breakdowns) tx.set(breakdownRepository.docRef(breakdown.id), { ...breakdown, deletedAt: now });
+          for (const t of cardTransactions) tx.set(transactionRepository.docRef(t.id), { ...t, deletedAt: now });
+          for (const [id, delta] of netBalanceDeltas(cardTransactions, [])) {
+            if (delta !== 0) tx.set(accountRepository.docRef(id), accountRepository.applyBalanceDelta(accounts.get(id)!, delta));
+          }
+          return { alreadyReversed: false };
+        });
       },
     };
   }, [uid, cards]);

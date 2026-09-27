@@ -8,11 +8,18 @@
  *   - `includeUpcomingInstallments: true` lets it keep filling upcoming installments in order;
  *   - whatever is still left becomes a principal prepayment (reduce-tenure re-amortization);
  *   - one-time loans refuse anything above what is owed.
- * EMI  → `useEmiActions().recordPayment` — one installment per payment (partial allowed, never above
- *   that installment's remaining amount); a card-linked EMI's principal share restores card credit
- *   through the existing breakdown split.
+ * EMI  → `useEmiActions().recordPayment` (one atomic call) — allocated by `planEmiPaymentAllocation`:
+ *   the chosen installment first (partial allowed), anything left fills the following installments in
+ *   order (advance payment), never above what the EMI still owes (EMIs have no prepayment engine);
+ *   a card-linked EMI's principal share restores card credit through the existing breakdown split.
  */
 
+import {
+  emiTotalRemaining,
+  payableEmiInstallments,
+  planEmiPaymentAllocation,
+  type EmiPaymentAllocation,
+} from "@/features/emi/lib/emi-payment-allocation";
 import { previewPrincipalPrepayment } from "@/features/loans/lib/loan-adjustment-preview";
 import type { Loan } from "@/lib/models/loan";
 import { remainingAmount, type Installment, type PaymentAllocationType } from "@/lib/models/payment-schedule";
@@ -132,20 +139,56 @@ export function loanPaymentSuccessTitle(type: PaymentAllocationType): string {
   }
 }
 
-export type EmiPaymentPlan = { ok: true; amount: number } | { ok: false; error: string };
+export type EmiPaymentPlan = { ok: true; amount: number; allocation: Extract<EmiPaymentAllocation, { ok: true }> } | { ok: false; error: string };
 
-export function emiQuickOptions(next: Installment | null): QuickOption[] {
-  return next ? [{ choice: "installment", label: "Pay installment", hint: `#${next.sequenceNumber}`, amount: remainingAmount(next) }] : [];
+/** "Pay installment" for the chosen (else next) installment, plus "Pay all remaining" when more is owed. */
+export function emiQuickOptions(next: Installment | null, installments: Installment[] = []): QuickOption[] {
+  if (!next) return [];
+  const options: QuickOption[] = [{ choice: "installment", label: "Pay installment", hint: `#${next.sequenceNumber}`, amount: remainingAmount(next) }];
+  const payable = payableEmiInstallments(installments);
+  const total = emiTotalRemaining(installments);
+  if (payable.length > 1 && total > options[0].amount + 0.5) {
+    options.push({ choice: "remaining", label: "Pay all remaining", hint: `${payable.length} installments · settles this EMI`, amount: total });
+  }
+  return options;
 }
 
-export function planEmiPayment(next: Installment | null, choice: PayChoice, customAmount: string): EmiPaymentPlan {
+/**
+ * Validates the chosen amount by running the SAME allocation the write uses — exact, partial, or more
+ * than one installment (fills the following installments in order), never above what the EMI still owes.
+ */
+export function planEmiPayment(input: {
+  next: Installment | null;
+  installments: Installment[];
+  choice: PayChoice;
+  customAmount: string;
+  date: Date;
+}): EmiPaymentPlan {
+  const { next, installments, choice } = input;
   if (next == null) return { ok: false, error: "Nothing is left to pay on this EMI." };
-  const owed = remainingAmount(next);
-  if (choice !== "custom") return { ok: true, amount: owed };
-  const amount = Number(customAmount);
-  if (customAmount.trim() === "" || !Number.isFinite(amount) || amount <= 0) return { ok: false, error: "Enter an amount greater than 0." };
-  if (amount > owed + 1e-9) {
-    return { ok: false, error: `EMI payments apply to one installment at a time — the most you can pay now is ₹${owed.toLocaleString("en-IN")}.` };
+  let amount: number;
+  if (choice === "custom") {
+    amount = Number(input.customAmount);
+    if (input.customAmount.trim() === "" || !Number.isFinite(amount) || amount <= 0) return { ok: false, error: "Enter an amount greater than 0." };
+  } else {
+    const option = emiQuickOptions(next, installments).find((o) => o.choice === choice);
+    if (!option) return { ok: false, error: "Choose how much to pay." };
+    amount = option.amount;
   }
-  return { ok: true, amount };
+  const allocation = planEmiPaymentAllocation({ installments, amount, date: input.date, targetInstallmentId: next.id });
+  if (!allocation.ok) return allocation;
+  return { ok: true, amount: allocation.applied, allocation };
+}
+
+const rupees = (v: number) => `₹${v.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
+
+/** Success detail for an EMI payment, read off the allocation that was written. */
+export function emiPaymentOutcome(allocation: Extract<EmiPaymentAllocation, { ok: true }>): string {
+  const { portions, nextAfter } = allocation;
+  if (nextAfter == null) return "This EMI is now fully paid.";
+  const seqs = portions.map((p) => p.installment.sequenceNumber);
+  const covered = portions.filter((p) => p.remainingAfter <= 0).map((p) => `#${p.installment.sequenceNumber}`);
+  const still = `${rupees(nextAfter.remaining)} still due on installment #${nextAfter.installment.sequenceNumber}.`;
+  if (portions.length === 1) return covered.length === 1 ? `Installment #${seqs[0]} paid. Next: ${still}` : `Partial payment — ${still}`;
+  return `Covered ${covered.length > 0 ? covered.join(", ") : `#${seqs[0]}`}${covered.length < portions.length ? ` and part of #${seqs[seqs.length - 1]}` : ""}. ${still}`;
 }

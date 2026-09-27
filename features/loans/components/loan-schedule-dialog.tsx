@@ -2,32 +2,17 @@
 
 import { ArrowUpRight, Building2, CheckCircle2, HandCoins, Lock, LockOpen, Pencil, Trash2, UserRound, Wallet, X } from "lucide-react";
 import Link from "next/link";
-import { ClayBadge } from "@/components/clay/clay-badge";
 import { ClayButton } from "@/components/clay/clay-button";
-import { CurrencyCell, DateCell, FinanceTable, type FinanceTableColumn } from "@/components/finance";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { installmentStatus, remainingAmount, type Installment, type InstallmentStatus } from "@/lib/models/payment-schedule";
+import { remainingAmount, type Installment } from "@/lib/models/payment-schedule";
 import type { LoanRow } from "@/features/loans/hooks/use-loans-data";
 import { loanBadges, loanDisplayName } from "@/features/loans/components/loan-card";
 import { DetailHero, DetailSectionTitle, FactGrid, LinkedList, LinkedRow, Money, daysUntil, dueLabel } from "@/features/loans/components/loan-emi-ui";
 import { LoanFinancialHistory } from "@/features/loans/components/loan-financial-history";
+import { InstallmentList } from "@/features/loans/components/payment-rows";
+import type { LoanPaymentHistory } from "@/features/loans/hooks/use-payment-history";
+import type { RecordedPaymentAction } from "@/features/loans/lib/recorded-payments";
 import { additionalAmountCopy } from "@/features/loans/lib/loan-labels";
-
-const STATUS_TONE: Record<InstallmentStatus, "success" | "expense" | "warning" | "neutral"> = {
-  paid: "success",
-  partiallyPaid: "warning",
-  overdue: "expense",
-  skipped: "neutral",
-  upcoming: "neutral",
-};
-
-const STATUS_LABEL: Record<InstallmentStatus, string> = {
-  paid: "Paid",
-  partiallyPaid: "Partial",
-  overdue: "Overdue",
-  skipped: "Skipped",
-  upcoming: "Upcoming",
-};
 
 /** Port of `LoanDetailScreen._remainingInterest`. "Loan Amount Left" (the principal counterpart)
  *  now reads `row.outstandingPrincipal` directly instead of a second, locally-recomputed formula —
@@ -57,6 +42,12 @@ interface LoanScheduleDialogProps {
   onToggleClose: (row: LoanRow) => void;
   /** True while a Close/Reopen write is in flight — blocks a double click. */
   statusBusy?: boolean;
+  /** Recorded payments (grouped per action) and the raw history they came from. */
+  history: LoanPaymentHistory | undefined;
+  historyLoading: boolean;
+  paymentActions: RecordedPaymentAction[];
+  /** Opens a recorded payment's details (where it can be edited). */
+  onViewPayment: (action: RecordedPaymentAction) => void;
 }
 
 function GoTo({ href, label }: { href: string; label: string }) {
@@ -75,7 +66,7 @@ function GoTo({ href, label }: { href: string; label: string }) {
  *  schedule and history. One primary money action (Record Payment); the less common ones sit under "More
  *  payment options"; loan management (Edit/Close/Delete) stays visually quieter. `row` is resolved live by
  *  the parent from Firestore-backed rows, so every persisted change re-renders it in place. */
-export function LoanScheduleDialog({ open, onOpenChange, row, onEdit, onDelete, deleteLabel = "Delete Loan", linkedAccountName, onRecordPayment, onAdditionalDisbursement, onToggleClose, statusBusy = false }: LoanScheduleDialogProps) {
+export function LoanScheduleDialog({ open, onOpenChange, row, onEdit, onDelete, deleteLabel = "Delete Loan", linkedAccountName, onRecordPayment, onAdditionalDisbursement, onToggleClose, statusBusy = false, history, historyLoading, paymentActions, onViewPayment }: LoanScheduleDialogProps) {
   if (!row) return null;
 
   const totalReceived = row.installments.reduce((sum, i) => sum + i.amountPaid, 0);
@@ -87,54 +78,6 @@ export function LoanScheduleDialog({ open, onOpenChange, row, onEdit, onDelete, 
   const nextOverdue = nextPayable != null && daysUntil(nextPayable.dueDate) < 0;
   const additionalCopy = additionalAmountCopy(row.direction);
   const interest = row.loan.interest;
-
-  const columns: FinanceTableColumn<Installment>[] = [
-    {
-      id: "seq",
-      header: "#",
-      accessor: (i) => <span className="font-mono text-xs text-muted-foreground">{i.sequenceNumber}</span>,
-      width: "44px",
-    },
-    {
-      id: "dueDate",
-      header: "Due Date",
-      accessor: (i) => <DateCell date={i.dueDate} className="text-sm text-foreground" />,
-      minWidth: "120px",
-    },
-    {
-      id: "principal",
-      header: "Principal",
-      accessor: (i) => (i.principalPortion != null ? <CurrencyCell amount={i.principalPortion} signed={false} className="text-sm" /> : <span className="text-muted-foreground">—</span>),
-      numeric: true,
-      minWidth: "100px",
-      hideOnMobile: true,
-    },
-    {
-      id: "interest",
-      header: "Interest",
-      accessor: (i) => (i.interestPortion != null ? <CurrencyCell amount={i.interestPortion} signed={false} className="text-sm" /> : <span className="text-muted-foreground">—</span>),
-      numeric: true,
-      minWidth: "100px",
-      hideOnMobile: true,
-    },
-    {
-      id: "amount",
-      header: "Amount",
-      accessor: (i) => <CurrencyCell amount={i.amountDue} signed={false} className="text-sm font-semibold" />,
-      numeric: true,
-      minWidth: "110px",
-    },
-    {
-      id: "status",
-      header: "Status",
-      accessor: (i) => {
-        const status = installmentStatus(i);
-        return <ClayBadge tone={STATUS_TONE[status]}>{STATUS_LABEL[status]}</ClayBadge>;
-      },
-      width: "100px",
-      align: "right",
-    },
-  ];
 
   const linked = [
     <LinkedRow
@@ -171,7 +114,7 @@ export function LoanScheduleDialog({ open, onOpenChange, row, onEdit, onDelete, 
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         showCloseButton={false}
-        className="flex max-h-[88vh] flex-col gap-0 overflow-hidden rounded-none border border-border p-0 shadow-lg ring-0 sm:max-w-3xl"
+        className="flex max-h-[88vh] flex-col gap-0 overflow-hidden rounded-[10px] border border-border p-0 shadow-lg ring-0 sm:max-w-3xl"
       >
         <button
           type="button"
@@ -202,17 +145,17 @@ export function LoanScheduleDialog({ open, onOpenChange, row, onEdit, onDelete, 
             />
 
             {!isClosed && !nextPayable && (
-              <div className="flex items-center gap-3 rounded-[10px] border-2 border-success bg-card px-4 py-3">
-                <CheckCircle2 className="size-5 shrink-0 text-success" />
+              <div className="flex items-center gap-3 rounded-[8px] border border-success bg-card px-4 py-3">
+                <CheckCircle2 className="size-5 shrink-0 text-success" strokeWidth={1.75} />
                 <div className="flex flex-col">
-                  <span className="text-sm font-bold text-foreground">Fully paid</span>
+                  <span className="text-sm font-semibold text-foreground">Fully paid</span>
                   <span className="text-xs text-muted-foreground">Every installment is settled. Close the loan to move it out of your active list.</span>
                 </div>
               </div>
             )}
 
             {!isClosed && nextPayable && (
-              <div className="flex flex-wrap items-center justify-between gap-3 rounded-[10px] border border-border-strong bg-secondary px-4 py-3">
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-[8px] border border-border bg-secondary px-4 py-3">
                 <div className="flex flex-col">
                   <span className={nextOverdue ? "text-xs font-semibold text-expense" : "text-xs font-medium text-muted-foreground"}>
                     Next installment · {dueLabel(nextPayable.dueDate)}
@@ -247,21 +190,21 @@ export function LoanScheduleDialog({ open, onOpenChange, row, onEdit, onDelete, 
           </div>
 
           <div className="border-t border-border px-6 py-5">
-            <DetailSectionTitle aside={!isClosed && <span className="text-xs text-muted-foreground">Click an unpaid installment to pay it</span>}>
+            <DetailSectionTitle aside={<span className="text-xs text-muted-foreground">Select an installment to pay or view it</span>}>
               Installments
             </DetailSectionTitle>
-            <FinanceTable
-              columns={columns}
-              data={row.installments}
-              getRowId={(i) => i.id}
-              className="rounded-[10px] border border-border"
-              onRowClick={(i) => !isClosed && remainingAmount(i) > 0 && onRecordPayment(row)}
-              rowClassName={(i) => (isClosed || remainingAmount(i) <= 0 ? "cursor-default!" : undefined)}
+            <InstallmentList
+              installments={row.installments}
+              total={row.totalInstallments}
+              closed={isClosed}
+              actions={paymentActions}
+              onPay={() => onRecordPayment(row)}
+              onViewPayment={onViewPayment}
             />
           </div>
           <div className="border-t border-border px-6 py-5">
             <DetailSectionTitle>Payment history</DetailSectionTitle>
-            <LoanFinancialHistory row={row} />
+            <LoanFinancialHistory row={row} history={history} actions={paymentActions} isLoading={historyLoading} onOpen={onViewPayment} />
           </div>
         </div>
 
@@ -272,15 +215,15 @@ export function LoanScheduleDialog({ open, onOpenChange, row, onEdit, onDelete, 
           <div className="flex w-full flex-wrap items-center gap-2 sm:justify-between">
             {/* Loan management — deliberately quieter than the money actions on the right. */}
             <div className="flex flex-wrap items-center gap-1">
-              <ClayButton variant="ghost" size="sm" className="gap-1.5 rounded-[6px] font-semibold text-foreground hover:bg-card" onClick={() => onEdit(row)} disabled={statusBusy}>
+              <ClayButton variant="ghost" size="sm" className="gap-1.5 rounded-[6px] font-medium text-foreground hover:bg-card" onClick={() => onEdit(row)} disabled={statusBusy}>
                 <Pencil className="size-3.5" />
                 Edit
               </ClayButton>
-              <ClayButton variant="ghost" size="sm" className="gap-1.5 rounded-[6px] font-semibold text-foreground hover:bg-card" onClick={() => onToggleClose(row)} disabled={statusBusy}>
+              <ClayButton variant="ghost" size="sm" className="gap-1.5 rounded-[6px] font-medium text-foreground hover:bg-card" onClick={() => onToggleClose(row)} disabled={statusBusy}>
                 {isClosed ? <LockOpen className="size-3.5" /> : <Lock className="size-3.5" />}
                 {statusBusy ? (isClosed ? "Reopening…" : "Closing…") : isClosed ? "Reopen" : "Close loan"}
               </ClayButton>
-              <ClayButton variant="ghost" size="sm" className="gap-1.5 rounded-none text-expense hover:text-expense" onClick={() => onDelete(row)} disabled={statusBusy}>
+              <ClayButton variant="ghost" size="sm" className="gap-1.5 rounded-[6px] font-medium text-expense hover:text-expense" onClick={() => onDelete(row)} disabled={statusBusy}>
                 <Trash2 className="size-3.5" />
                 {deleteLabel}
               </ClayButton>
@@ -289,7 +232,7 @@ export function LoanScheduleDialog({ open, onOpenChange, row, onEdit, onDelete, 
             <div className="flex flex-wrap items-center gap-2">
               <ClayButton
                 variant="secondary"
-                className="gap-1.5 rounded-[8px] border-border-strong font-semibold text-foreground hover:bg-card"
+                className="gap-1.5 rounded-[6px] border-border-strong font-medium text-foreground hover:bg-card"
                 disabled={isClosed}
                 onClick={() => onAdditionalDisbursement(row)}
               >
@@ -297,14 +240,14 @@ export function LoanScheduleDialog({ open, onOpenChange, row, onEdit, onDelete, 
                 {additionalCopy.label}
               </ClayButton>
               {nextPayable == null && !isClosed ? (
-                <span className="inline-flex h-10 items-center gap-1.5 rounded-[8px] border-2 border-success px-4 text-sm font-bold text-success">
+                <span className="inline-flex h-10 items-center gap-1.5 rounded-[6px] border border-success px-4 text-sm font-semibold text-success">
                   <CheckCircle2 className="size-4" />
                   Fully paid
                 </span>
               ) : (
                 <ClayButton
                   variant="primary"
-                  className="gap-1.5 rounded-[8px] border-primary-accent-text font-bold"
+                  className="gap-1.5 rounded-[6px] border-primary-accent-text font-semibold"
                   disabled={isClosed || nextPayable == null}
                   onClick={() => onRecordPayment(row)}
                 >

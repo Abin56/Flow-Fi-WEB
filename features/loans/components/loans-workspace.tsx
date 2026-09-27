@@ -2,11 +2,14 @@
 
 import { ArrowUpRight, Building2, UserRound, Wallet } from "lucide-react";
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 import { ClayBadge } from "@/components/clay/clay-badge";
 import { ClayButton } from "@/components/clay/clay-button";
+import { useOperation } from "@/components/feedback/operation-progress";
+import { SUCCESS_HOLD_MS, type OperationHandle } from "@/lib/operation-progress/operation-progress";
+import { startOperation } from "@/store/operation-progress-store";
 import type { InterestType } from "@/lib/engines/interest-calculator";
 import type { Loan, LoanCategory, LoanDirection } from "@/lib/models/loan";
 import type { ScheduleType } from "@/lib/models/payment-schedule";
@@ -26,8 +29,12 @@ import {
 import { LoanScheduleDialog } from "@/features/loans/components/loan-schedule-dialog";
 import { LoansTrashDialog } from "@/features/loans/components/loans-trash-dialog";
 import { RecordPaymentDialog } from "@/features/loans/components/record-payment-dialog";
+import { RecordedPaymentDialog } from "@/features/loans/components/recorded-payment-dialog";
+import { useLoanPaymentHistory } from "@/features/loans/hooks/use-payment-history";
+import { groupRecordedPayments, type RecordedPaymentAction } from "@/features/loans/lib/recorded-payments";
 import { LoanAdjustmentDialog } from "@/features/loans/components/loan-adjustment-dialog";
-import { ReverseOriginationDialog } from "@/features/loans/components/reverse-origination-dialog";
+import { AgreementDeleteDialog } from "@/features/loans/components/agreement-delete-dialog";
+import { runPermanentDeletion } from "@/features/loans/lib/permanent-deletion";
 import {
   WhoIsThisForField,
   beneficiaryFromChoice,
@@ -161,8 +168,14 @@ export function LoansWorkspace({ openRequest = null, trashRequest = 0 }: LoansWo
     const origination = transactions.find((t) => t.id === transactionId && t.deletedAt == null);
     return origination ? (accounts.find((a) => a.id === origination.accountId)?.name ?? null) : null;
   };
-  const [reverseTarget, setReverseTarget] = useState<{ loan: Loan; key: string; message: string } | null>(null);
-  const [reversing, setReversing] = useState(false);
+  // The Loan being permanently deleted (the confirmation is open) and whether that deletion is running.
+  const [deleteTarget, setDeleteTarget] = useState<Loan | null>(null);
+  const [purging, setPurging] = useState(false);
+  const purgeInFlight = useRef(false);
+  // Finish any permanent Loan/EMI deletion whose cleanup was interrupted after its money step committed.
+  useEffect(() => {
+    actions?.resumePendingDeletions().catch(() => undefined);
+  }, [actions]);
 
   const [activeRowId, setActiveRowId] = useState<string | null>(() => searchParams.get("agreement"));
   // Resolved live against `rows` on every render, instead of holding a snapshot of the row — `rows`
@@ -178,8 +191,18 @@ export function LoansWorkspace({ openRequest = null, trashRequest = 0 }: LoansWo
   const [paymentSeq, setPaymentSeq] = useState(0);
   const paymentRow = useMemo(() => (payment ? (rows.find((r) => r.loan.id === payment.loanId) ?? null) : null), [rows, payment]);
   const [adjustment, setAdjustment] = useState<{ row: LoanRow; kind: "disbursement" } | null>(null);
+  // Recorded payments of the open loan, grouped per payment action — live-keyed, see `useLoanPaymentHistory`.
+  const historyQuery = useLoanPaymentHistory(activeRow);
+  const paymentActions = useMemo(
+    () => (activeRow && historyQuery.data ? groupRecordedPayments(historyQuery.data.payments, activeRow.installments, "loan") : []),
+    [activeRow, historyQuery.data],
+  );
+  // A snapshot of the payment opened (so a half-finished correction keeps its original), with a fresh mount per open.
+  const [viewPayment, setViewPayment] = useState<{ action: RecordedPaymentAction; all: RecordedPaymentAction[]; seq: number } | null>(null);
   const [form, setForm] = useState<LoanFormState>(emptyForm);
   const [saving, setSaving] = useState(false);
+  const editOperation = useOperation();
+  const saveInFlight = useRef(false);
   const [statusBusy, setStatusBusy] = useState(false);
 
   const [seenOpenRequest, setSeenOpenRequest] = useState(openRequest);
@@ -211,26 +234,13 @@ export function LoansWorkspace({ openRequest = null, trashRequest = 0 }: LoansWo
     }
     // "Who is this for?" only applies to money borrowed; a lent loan's person is its borrower.
     const beneficiaryPersonId = form.direction === "taken" ? beneficiaryFromChoice(form.ownership, form.beneficiaryPersonId) : null;
+    // Synchronous guard — `saving` is async state, so two fast clicks could both get past it.
+    if (saveInFlight.current) return;
+    saveInFlight.current = true;
     setSaving(true);
+    let op: OperationHandle | null = null;
     try {
       if (isEdit && activeRow) {
-        // Each repository edit is a whole-document write, so every step below must start from the
-        // Loan the previous step actually wrote. Passing the render-time `activeRow.loan` to a later
-        // step silently reverted the earlier one (e.g. renaming a loan while also changing its rate
-        // saved the new rate but put the old name back).
-        let current = await actions.editLoan(activeRow.loan, {
-          name: form.name,
-          lenderName: form.lenderName,
-          notes: form.notes,
-          currentInstallments: activeRow.installments,
-          loanType: form.loanType || null,
-          loanNumber: form.loanNumber || null,
-          accountNumber: form.accountNumber || null,
-          branch: form.branch || null,
-          payerPersonId: form.payerPersonId || null,
-          beneficiaryPersonId,
-        });
-
         // Loan amount/interest/frequency/tenure live outside `editLoan` — changing any of them
         // re-amortizes the outstanding balance over the unpaid installments
         // (`LoanRepository.editLoanTerms`), so this only fires when one actually changed, not on every
@@ -248,7 +258,34 @@ export function LoansWorkspace({ openRequest = null, trashRequest = 0 }: LoansWo
           form.installmentFrequency !== (activeRow.loan.installmentFrequency ?? "monthly") ||
           newInstallmentCount !== activeRow.totalInstallments;
 
+        // Loan Date only moves before any payment exists — mirrors `LoanRepository.editLoanDate`'s own
+        // guard. Runs against `current` so it re-amortizes with whatever terms were just saved above.
+        const hasPayments = activeRow.installments.some((i) => i.amountPaid > 0);
+        const originalLoanDate = activeRow.loan.loanDate.toISOString().slice(0, 10);
+        const dateChanged = !hasPayments && form.loanDate !== originalLoanDate;
+        // The real, sequential writes this save performs: details first, then any schedule re-plan / date move.
+        op = editOperation.start({ label: "Updating loan", successLabel: "Loan updated", errorLabel: "Couldn't save changes", detail: "Checking changes" });
+        op.stage("submit", "Saving details");
+
+        // Each repository edit is a whole-document write, so every step below must start from the
+        // Loan the previous step actually wrote. Passing the render-time `activeRow.loan` to a later
+        // step silently reverted the earlier one (e.g. renaming a loan while also changing its rate
+        // saved the new rate but put the old name back).
+        let current = await actions.editLoan(activeRow.loan, {
+          name: form.name,
+          lenderName: form.lenderName,
+          notes: form.notes,
+          currentInstallments: activeRow.installments,
+          loanType: form.loanType || null,
+          loanNumber: form.loanNumber || null,
+          accountNumber: form.accountNumber || null,
+          branch: form.branch || null,
+          payerPersonId: form.payerPersonId || null,
+          beneficiaryPersonId,
+        });
+
         if (termsChanged) {
+          op.stage("related", "Re-planning schedule");
           current = await actions.editLoanTerms(current, {
             currentInstallments: activeRow.installments,
             loanAmount: Number.isFinite(newLoanAmount) && newLoanAmount > 0 ? newLoanAmount : undefined,
@@ -258,11 +295,8 @@ export function LoansWorkspace({ openRequest = null, trashRequest = 0 }: LoansWo
           });
         }
 
-        // Loan Date only moves before any payment exists — mirrors `LoanRepository.editLoanDate`'s own
-        // guard. Runs against `current` so it re-amortizes with whatever terms were just saved above.
-        const hasPayments = activeRow.installments.some((i) => i.amountPaid > 0);
-        const originalLoanDate = activeRow.loan.loanDate.toISOString().slice(0, 10);
-        if (!hasPayments && form.loanDate !== originalLoanDate) {
+        if (dateChanged) {
+          op.stage("related", "Updating dates");
           await actions.editLoanDate(current, {
             newLoanDate: new Date(form.loanDate),
             hasPayments: false,
@@ -270,7 +304,8 @@ export function LoansWorkspace({ openRequest = null, trashRequest = 0 }: LoansWo
           });
         }
 
-        toast.success("Loan updated successfully");
+        op.succeed({ toast: { title: "Loan updated successfully" } });
+        await new Promise((resolve) => window.setTimeout(resolve, SUCCESS_HOLD_MS));
         setEditOpen(false);
         // Back to the same loan's detail view, which re-renders from the live listener — no need to
         // close and reopen it to see the saved values.
@@ -278,51 +313,65 @@ export function LoansWorkspace({ openRequest = null, trashRequest = 0 }: LoansWo
       }
       // New Loans are created by the unified Add flow (`LoanEmiAddDialog`), not here.
     } catch (e) {
-      toast.error(isEdit ? "Couldn't save changes" : "Couldn't add loan", friendlyLoanError(e));
+      // Stays open with everything entered; "Try again" re-runs the save.
+      if (op) op.fail({ detail: friendlyLoanError(e), retry: () => handleSave(isEdit) });
+      else toast.error(isEdit ? "Couldn't save changes" : "Couldn't add loan", friendlyLoanError(e));
     } finally {
+      saveInFlight.current = false;
       setSaving(false);
     }
   }
 
-  // Soft-deletes to trash — reversible (mirrors `loans_screen.dart`'s swipe-to-delete), so this skips a
-  // blocking confirm dialog and offers Undo on the toast instead, same UX as Flutter's snackbar.
+  // A Loan with nothing recorded against it soft-deletes to Trash — reversible (mirrors `loans_screen.dart`'s
+  // swipe-to-delete), so no blocking confirm, just Undo on the toast. A Loan with financial activity (its
+  // creation moved money, or a payment / Borrow More was recorded) can't just go to Trash — its money would
+  // stay while the debt left — so it opens the permanent delete, which reverses what the Loan owns.
   async function handleDelete(row: LoanRow) {
     if (!actions) return;
-    // A unified-wizard Loan whose origination money is still active is never trashed on its own (its
-    // cash would stay while the debt left Net Worth) — it goes through "Reverse & Delete".
-    const origination = originationUiFor(row.loan.id);
-    if (origination.moneyActive) {
-      setReverseTarget({ loan: row.loan, key: origination.idempotencyKey!, message: origination.message });
+    const history = activeRow?.loan.id === row.loan.id ? historyQuery.data : undefined;
+    const hasActivity =
+      originationUiFor(row.loan.id).moneyActive ||
+      row.installments.some((i) => i.amountPaid > 0) ||
+      (history != null && (history.payments.length > 0 || history.disbursements.length > 0));
+    if (hasActivity) {
+      setDeleteTarget(row.loan);
       return;
     }
+    const op = startOperation({ label: "Deleting loan", successLabel: "Loan moved to trash", errorLabel: "Couldn't delete loan" });
     try {
+      op.stage("submit", "Moving to trash");
       await actions.deleteLoan(row.loan);
       setActiveRowId(null);
-      toast.success("Loan moved to trash", undefined, {
-        label: "Undo",
-        onClick: () => actions.restoreLoan(row.loan).catch(() => toast.error("Couldn't restore loan")),
+      op.succeed({
+        toast: {
+          title: "Loan moved to trash",
+          action: { label: "Undo", onClick: () => actions.restoreLoan(row.loan).catch(() => toast.error("Couldn't restore loan")) },
+        },
       });
     } catch (e) {
-      toast.error("Couldn't delete loan", friendlyLoanError(e));
+      op.fail({ detail: friendlyLoanError(e), retry: () => handleDelete(row) });
     }
   }
 
   async function handleToggleClose(row: LoanRow) {
     if (!actions || statusBusy) return;
     setStatusBusy(true);
+    const reopening = row.status === "closed";
+    const op = startOperation({
+      label: reopening ? "Reopening loan" : "Closing loan",
+      successLabel: reopening ? "Loan reopened" : "Loan closed",
+      errorLabel: "Couldn't update loan",
+    });
     try {
       // No local status override: the write's own snapshot (Firestore fires it immediately for local
       // writes) flows through `rows` → `activeRow`, so the open dialog, card and Status filter all
       // flip together from the persisted value.
-      if (row.status === "closed") {
-        await actions.reopenLoan(row.loan);
-        toast.success("Loan reopened");
-      } else {
-        await actions.closeLoan(row.loan);
-        toast.success("Loan closed");
-      }
+      op.stage("submit", "Updating status");
+      if (reopening) await actions.reopenLoan(row.loan);
+      else await actions.closeLoan(row.loan);
+      op.succeed({ toast: { title: reopening ? "Loan reopened" : "Loan closed" } });
     } catch (e) {
-      toast.error("Couldn't update loan", friendlyLoanError(e));
+      op.fail({ detail: friendlyLoanError(e) });
     } finally {
       setStatusBusy(false);
     }
@@ -333,31 +382,42 @@ export function LoansWorkspace({ openRequest = null, trashRequest = 0 }: LoansWo
     await actions.restoreLoan(loan);
   }
 
+  // Trash's "Delete forever" goes through the same permanent delete, with its own risk-matched confirmation.
   async function handlePermanentlyDeleteLoan(loan: Loan) {
-    if (!actions) return;
-    // A Loan trashed (e.g. by an older app) while its origination money was still active must be
-    // reversed, never hard-deleted out from under its Transaction.
-    const origination = originationUiFor(loan.id);
-    if (origination.moneyActive) {
-      setTrashOpen(false);
-      setReverseTarget({ loan, key: origination.idempotencyKey!, message: origination.message });
-      return;
-    }
-    await actions.permanentlyDeleteLoan(loan);
+    setTrashOpen(false);
+    setDeleteTarget(loan);
   }
 
-  async function handleReverseOrigination() {
-    if (!actions || !reverseTarget || reversing) return;
-    setReversing(true);
-    try {
-      await actions.reverseAgreementOrigination(reverseTarget.key);
-      setActiveRowId(null);
-      setReverseTarget(null);
-      toast.success("Loan creation reversed");
-    } catch (e) {
-      toast.error("Couldn't reverse loan creation", friendlyLoanError(e));
-    } finally {
-      setReversing(false);
+  const deleteTargetId = deleteTarget?.id ?? null;
+  const loadDeleteImpact = useCallback(
+    () => (actions && deleteTargetId ? actions.previewPermanentDeletion({ id: deleteTargetId }) : Promise.resolve(null)),
+    [actions, deleteTargetId],
+  );
+
+  async function confirmPermanentDelete() {
+    if (!actions || !deleteTarget || purgeInFlight.current) return;
+    const loan = deleteTarget;
+    purgeInFlight.current = true;
+    setPurging(true);
+    const ok = await runPermanentDeletion({
+      kind: "loan",
+      run: (onStage) => actions.permanentlyDeleteLoan(loan, { onStage }),
+      refresh: () =>
+        Promise.all(
+          ["loan-financial-history", "loanPrincipalPrepaid", "loanScheduledPayments", "cardLinkedEmiPayments"].map((key) =>
+            queryClient.invalidateQueries({ queryKey: [key], exact: false }),
+          ),
+        ),
+      retry: () => setDeleteTarget(loan),
+    });
+    purgeInFlight.current = false;
+    setPurging(false);
+    if (ok) {
+      setDeleteTarget(null);
+      if (activeRowId === loan.id) {
+        setScheduleOpen(false);
+        setActiveRowId(null);
+      }
     }
   }
 
@@ -387,6 +447,23 @@ export function LoansWorkspace({ openRequest = null, trashRequest = 0 }: LoansWo
         onAdditionalDisbursement={(row) => setAdjustment({ row, kind: "disbursement" })}
         onToggleClose={handleToggleClose}
         statusBusy={statusBusy}
+        history={historyQuery.data}
+        historyLoading={historyQuery.isLoading}
+        paymentActions={paymentActions}
+        onViewPayment={(action) => setViewPayment({ action, all: paymentActions, seq: (viewPayment?.seq ?? 0) + 1 })}
+      />
+
+      <RecordedPaymentDialog
+        key={viewPayment ? `payment-${viewPayment.action.id}-${viewPayment.seq}` : "payment-closed"}
+        target={viewPayment && activeRow ? { source: "loan", row: activeRow, action: viewPayment.action, all: viewPayment.all } : null}
+        open={viewPayment != null && activeRow != null}
+        onOpenChange={(open) => !open && setViewPayment(null)}
+        onPayRemaining={() => {
+          if (!activeRow) return;
+          setViewPayment(null);
+          setPaymentSeq((n) => n + 1);
+          setPayment({ loanId: activeRow.loan.id, seq: paymentSeq + 1 });
+        }}
       />
 
       <LoanAdjustmentDialog
@@ -411,13 +488,14 @@ export function LoansWorkspace({ openRequest = null, trashRequest = 0 }: LoansWo
         onOpenChange={(open) => !open && setPayment(null)}
       />
 
-      <ReverseOriginationDialog
-        open={reverseTarget != null}
-        onOpenChange={(open) => { if (!open) setReverseTarget(null); }}
-        loanName={reverseTarget?.loan.name?.trim() || "loan"}
-        message={reverseTarget?.message ?? ""}
-        busy={reversing}
-        onConfirm={handleReverseOrigination}
+      <AgreementDeleteDialog
+        open={deleteTarget != null}
+        onOpenChange={(open) => { if (!open && !purging) setDeleteTarget(null); }}
+        kind="loan"
+        name={deleteTarget?.name?.trim() || "this loan"}
+        loadImpact={loadDeleteImpact}
+        onConfirm={confirmPermanentDelete}
+        busy={purging}
       />
 
       <LoansTrashDialog
@@ -438,8 +516,10 @@ export function LoansWorkspace({ openRequest = null, trashRequest = 0 }: LoansWo
         title={`Edit ${activeRow ? loanDisplayName(activeRow) : "Loan"}`}
         onConfirm={() => handleSave(true)}
         icon={LOAN_ICON}
-        confirmLabel={saving ? "Saving…" : "Save Changes"}
+        confirmLabel={saving ? "Updating loan…" : "Save Changes"}
         loading={saving}
+        success={editOperation.snapshot?.status === "success"}
+        operation={editOperation.snapshot}
       >
         <LoanFormFields
           form={form}

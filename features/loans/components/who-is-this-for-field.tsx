@@ -65,7 +65,7 @@ export function WhoIsThisForField({
       )}
       {choice === "someoneElse" &&
         (people.length === 0 ? (
-          <div className={cn("flex flex-wrap items-center justify-between gap-2 px-3 py-2.5", section ? "rounded-[6px] border border-dashed border-border-strong bg-secondary" : "rounded-xl border border-border bg-card")}>
+          <div className={cn("flex flex-wrap items-center justify-between gap-2 px-3 py-2.5", section ? "rounded-[6px] border border-dashed border-border bg-secondary" : "rounded-[8px] border border-border bg-card")}>
             <p className="text-xs text-muted-foreground">No people yet — add them in People, then come back.</p>
             <Link
               href="/people"

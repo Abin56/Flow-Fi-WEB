@@ -3,6 +3,8 @@
 import { Check, ChevronDown, ChevronRight, Landmark, Loader2, ShoppingBag, X, type LucideIcon } from "lucide-react";
 import { useState } from "react";
 import { ClayButton } from "@/components/clay/clay-button";
+import { OperationProgressView } from "@/components/feedback/operation-progress";
+import type { OperationSnapshot } from "@/lib/operation-progress/operation-progress";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { ClayBadge } from "@/components/clay/clay-badge";
 import { StaggerItem } from "@/components/foundation/animated-container";
@@ -17,6 +19,10 @@ import { cn } from "@/lib/utils";
  *   - Control edges use the solid `border-strong` token, never an opacity-faded border.
  *   - Selected = lime fill + dark olive edge + check/weight change — never a tint or underline alone.
  *   - Radius is deliberately tighter than the app-wide scale (whose `rounded-xl` is 20px): see `LE_RADIUS`.
+ *   - Weight hierarchy (high visibility without heaviness): surfaces and sections use the solid `border`
+ *     token; only interactive controls (inputs, options, toggles) use `border-strong`; nested elements use
+ *     `border` or a fill. Bold is reserved for amounts, titles and the primary action — labels are medium,
+ *     metadata regular. Icons are 1.75 stroke; only the selected/primary state gets a filled tile.
  *
  * Terminology (kept identical on Flutter — see `loan_emi_ui.dart`):
  *   Loan — money borrowed from a bank, lender or person.
@@ -33,18 +39,18 @@ export const KIND_COPY = {
 /** Loan & EMI radius hierarchy: inputs < options < cards < panels. Literal classes so Tailwind sees them. */
 export const LE_RADIUS = {
   input: "rounded-[6px]",
-  control: "rounded-[7px]",
-  card: "rounded-[10px]",
-  panel: "rounded-[12px]",
+  control: "rounded-[6px]",
+  card: "rounded-[8px]",
+  panel: "rounded-[10px]",
 } as const;
 
 /** Selected-option treatment shared by every choice control. */
-const SELECTED = "border-primary-accent-text bg-primary text-primary-foreground shadow-[inset_0_0_0_1px_var(--primary-accent-text)]";
+const SELECTED = "border-primary-accent-text bg-primary text-primary-foreground";
 const UNSELECTED = "border-border-strong bg-card text-foreground hover:border-muted-foreground hover:bg-secondary";
 
 /** Border/fill/text classes for a selectable option button, selected or not. */
 export function choiceClass(active: boolean): string {
-  return active ? cn(SELECTED, "font-bold") : cn(UNSELECTED, "font-semibold");
+  return active ? cn(SELECTED, "font-semibold") : cn(UNSELECTED, "font-medium");
 }
 
 /** "Mar 5" / "Mar 5, 2027" — absolute, since a due date reads better as a date than "3 days ago". */
@@ -116,7 +122,7 @@ export function AmountDisplay({ amount, size = "md", className }: { amount: numb
 
 /** Small uppercase label above a figure. */
 function FigureLabel({ children }: { children: React.ReactNode }) {
-  return <span className="text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">{children}</span>;
+  return <span className="text-[11px] font-medium tracking-[0.06em] text-muted-foreground uppercase">{children}</span>;
 }
 
 /* ───────────────────────── Progress ───────────────────────── */
@@ -138,7 +144,7 @@ export function InstallmentProgress({ paid, total, className }: { paid: number; 
         <div className="h-full rounded-[2px] bg-primary-accent-text transition-[width] duration-700 ease-out" style={{ width: `${percent}%` }} />
       </div>
       <div className="flex items-center justify-between text-xs">
-        <span className="font-semibold text-foreground tabular-nums">
+        <span className="font-medium text-foreground tabular-nums">
           {paid} of {total} paid
         </span>
         <span className="text-muted-foreground tabular-nums">{Math.max(total - paid, 0)} left</span>
@@ -227,13 +233,13 @@ export function DebtCard({
       >
         <div className="flex items-start gap-3">
           <span className={cn(LE_RADIUS.control, "flex size-9 shrink-0 items-center justify-center border border-border bg-secondary text-foreground")}>
-            <Icon className="size-[18px]" strokeWidth={2} />
+            <Icon className="size-[18px]" strokeWidth={1.75} />
           </span>
           <div className="flex min-w-0 flex-1 flex-col gap-0.5">
             <h3 className={cn("truncate font-heading text-[15px] leading-snug font-semibold", muted ? "text-muted-foreground" : "text-foreground")}>{name}</h3>
             <p className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
               {tag && (
-                <span className="shrink-0 rounded-[4px] border border-border bg-secondary px-1.5 py-px text-[10.5px] font-semibold text-foreground">
+                <span className="shrink-0 rounded-[4px] border border-border bg-secondary px-1.5 py-px text-[10.5px] font-medium text-foreground">
                   {tag}
                 </span>
               )}
@@ -278,7 +284,7 @@ export function DebtCard({
           <div className="mt-auto flex flex-wrap gap-x-3 gap-y-1 border-t border-border pt-2.5">
             {links.map(({ icon: LinkIcon, label }) => (
               <span key={label} className="inline-flex max-w-full items-center gap-1 text-xs font-medium text-muted-foreground">
-                <LinkIcon className="size-3.5 shrink-0 text-foreground" />
+                <LinkIcon className="size-3.5 shrink-0" strokeWidth={1.75} />
                 <span className="truncate">{label}</span>
               </span>
             ))}
@@ -348,11 +354,11 @@ export function FactGrid({ facts, className }: { facts: (Fact | null | false)[];
     <dl className={cn(LE_RADIUS.card, "grid grid-cols-2 gap-px overflow-hidden border border-border bg-border sm:grid-cols-3", className)}>
       {visible.map((f) => (
         <div key={f.label} className="flex min-w-0 flex-col gap-0.5 bg-card px-3.5 py-3">
-          <dt className="truncate text-[11px] font-semibold text-muted-foreground">{f.label}</dt>
+          <dt className="truncate text-[11px] font-medium text-muted-foreground">{f.label}</dt>
           <dd
             className={cn(
-              "truncate text-sm font-semibold text-foreground tabular-nums",
-              f.strong && "font-heading text-base font-bold",
+              "truncate text-sm font-medium text-foreground tabular-nums",
+              f.strong && "font-heading text-base font-semibold",
               f.tone === "expense" && "text-expense",
             )}
           >
@@ -371,12 +377,12 @@ export function FactGrid({ facts, className }: { facts: (Fact | null | false)[];
 export function LinkedRow({ icon: Icon, label, value, action }: { icon: LucideIcon; label: string; value: string; action?: React.ReactNode }) {
   return (
     <div className="flex items-center gap-3 px-3.5 py-2.5">
-      <span className={cn(LE_RADIUS.control, "flex size-8 shrink-0 items-center justify-center border border-border bg-secondary text-foreground")}>
-        <Icon className="size-4" />
+      <span className={cn(LE_RADIUS.control, "flex size-8 shrink-0 items-center justify-center border border-border bg-secondary text-muted-foreground")}>
+        <Icon className="size-4" strokeWidth={1.75} />
       </span>
       <div className="flex min-w-0 flex-1 flex-col">
-        <span className="text-[11px] font-semibold text-muted-foreground">{label}</span>
-        <span className="truncate text-sm font-semibold text-foreground">{value}</span>
+        <span className="text-[11px] font-medium text-muted-foreground">{label}</span>
+        <span className="truncate text-sm font-medium text-foreground">{value}</span>
       </div>
       {action}
     </div>
@@ -391,7 +397,7 @@ export function LinkedList({ children }: { children: React.ReactNode }) {
 export function DetailSectionTitle({ children, aside }: { children: React.ReactNode; aside?: React.ReactNode }) {
   return (
     <div className="mb-2.5 flex items-center justify-between gap-2">
-      <h3 className="text-xs font-bold tracking-[0.06em] text-foreground uppercase">{children}</h3>
+      <h3 className="text-xs font-semibold tracking-[0.06em] text-foreground uppercase">{children}</h3>
       {aside}
     </div>
   );
@@ -419,7 +425,7 @@ export function RadioDot({ checked, className }: { checked: boolean; className?:
     <span
       aria-hidden
       className={cn(
-        "flex size-4 shrink-0 items-center justify-center rounded-full border-2 transition-colors duration-150",
+        "flex size-4 shrink-0 items-center justify-center rounded-full border-[1.5px] transition-colors duration-150",
         checked ? "border-primary-foreground bg-primary-foreground" : "border-border-strong bg-card",
         className,
       )}
@@ -484,6 +490,51 @@ export function SegmentedControl<T extends string>({
   );
 }
 
+/**
+ * A small view filter — "All 12 · Upcoming 7 · Paid 5" — for switching a list, not making a form choice.
+ * One light track with text segments (no icons, no radio dots): the selected segment gets the lime fill,
+ * dark edge and semibold weight, so it still reads on low-contrast displays. 32px segments keep it tappable.
+ */
+export function FilterTabs<T extends string>({
+  options,
+  value,
+  onChange,
+  ariaLabel,
+  className,
+}: {
+  options: { value: T; label: string; count?: number }[];
+  value: T;
+  onChange: (v: T) => void;
+  ariaLabel: string;
+  className?: string;
+}) {
+  return (
+    <div role="tablist" aria-label={ariaLabel} className={cn("inline-flex max-w-full items-center gap-0.5 self-start rounded-[7px] border border-border bg-secondary p-0.5", className)}>
+      {options.map(({ value: v, label, count }) => {
+        const active = v === value;
+        return (
+          <button
+            key={v}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            onClick={() => onChange(v)}
+            className={cn(
+              "inline-flex h-8 min-w-0 items-center gap-1.5 rounded-[5px] border px-2.5 text-[13px] whitespace-nowrap transition-[background-color,border-color,color] duration-150 outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              active
+                ? "border-primary-accent-text bg-primary font-semibold text-primary-foreground"
+                : "border-transparent font-medium text-muted-foreground hover:bg-card hover:text-foreground",
+            )}
+          >
+            {label}
+            {count != null && <span className={cn("text-xs tabular-nums", active ? "font-semibold" : "font-normal")}>{count}</span>}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 /** Wrapping chip choices (filters, types) — square-cornered buttons with the same selected treatment. */
 export function ChoiceChips<T extends string>({
   options,
@@ -510,10 +561,10 @@ export function ChoiceChips<T extends string>({
             className={cn(
               LE_RADIUS.input,
               "inline-flex h-8 items-center gap-1 border px-2.5 text-xs transition-[background-color,border-color,color] duration-150 outline-none focus-visible:ring-2 focus-visible:ring-ring",
-              active ? cn(SELECTED, "font-bold") : cn(UNSELECTED, "font-semibold"),
+              active ? cn(SELECTED, "font-semibold") : cn(UNSELECTED, "font-medium"),
             )}
           >
-            {active && <Check className="size-3.5" strokeWidth={3} />}
+            {active && <Check className="size-3.5" strokeWidth={2.5} />}
             {o.label}
           </button>
         );
@@ -543,8 +594,8 @@ export function FormSection({
     <section className={cn("flex flex-col gap-3.5", className)}>
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
         <div className="flex min-w-0 items-center gap-2">
-          {Icon && <Icon className="size-4 shrink-0 text-foreground" strokeWidth={2.25} />}
-          <h3 className="font-heading text-[15px] font-bold tracking-tight text-foreground">{title}</h3>
+          {Icon && <Icon className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.75} />}
+          <h3 className="font-heading text-[15px] font-semibold tracking-tight text-foreground">{title}</h3>
           {description && <span className="truncate text-xs text-muted-foreground">{description}</span>}
         </div>
         {aside}
@@ -583,10 +634,10 @@ export function MoreOptions({
         )}
       >
         <span className="flex min-w-0 items-baseline gap-2">
-          <span className="shrink-0 text-sm font-semibold text-foreground">{title}</span>
+          <span className="shrink-0 text-sm font-medium text-foreground">{title}</span>
           <span className="truncate text-xs text-muted-foreground">{summary}</span>
         </span>
-        <ChevronDown className={cn("size-4 shrink-0 text-foreground transition-transform duration-200", open && "rotate-180")} />
+        <ChevronDown className={cn("size-4 shrink-0 text-muted-foreground transition-transform duration-200", open && "rotate-180")} strokeWidth={1.75} />
       </button>
       {open && <Reveal className="flex flex-col gap-4">{children}</Reveal>}
     </section>
@@ -597,7 +648,7 @@ export function MoreOptions({
 export function Field({ label, hint, children, className }: { label: string; hint?: React.ReactNode; children: React.ReactNode; className?: string }) {
   return (
     <label className={cn("flex min-w-0 flex-col gap-1.5", className)}>
-      <span className="text-xs font-semibold text-foreground">{label}</span>
+      <span className="text-xs font-medium text-foreground">{label}</span>
       {children}
       {hint && <span className="text-[11px] leading-snug text-muted-foreground">{hint}</span>}
     </label>
@@ -618,7 +669,7 @@ export function FieldGroup({
 }) {
   return (
     <div className={cn("flex min-w-0 flex-col gap-1.5", className)}>
-      <span className="text-xs font-semibold text-foreground">{label}</span>
+      <span className="text-xs font-medium text-foreground">{label}</span>
       {children}
       {hint && <span className="text-[11px] leading-snug text-muted-foreground">{hint}</span>}
     </div>
@@ -649,7 +700,7 @@ export function RevealToggle({
       className={cn(
         LE_RADIUS.card,
         "flex flex-col overflow-hidden border bg-card transition-[border-color,box-shadow] duration-150",
-        checked ? "border-primary-accent-text shadow-e1" : "border-border-strong hover:bg-secondary",
+        checked ? "border-primary-accent-text" : "border-border hover:border-border-strong hover:bg-secondary",
       )}
     >
       <button
@@ -664,24 +715,24 @@ export function RevealToggle({
             className={cn(
               LE_RADIUS.control,
               "flex size-8 shrink-0 items-center justify-center border transition-colors duration-150",
-              checked ? "border-primary-accent-text bg-primary text-primary-foreground" : "border-border bg-secondary text-foreground",
+              checked ? "border-transparent bg-primary text-primary-foreground" : "border-border bg-secondary text-muted-foreground",
             )}
           >
-            <Icon className="size-4" />
+            <Icon className="size-4" strokeWidth={1.75} />
           </span>
         )}
         <span className="flex min-w-0 flex-1 flex-col">
-          <span className="text-sm font-semibold text-foreground">{title}</span>
+          <span className="text-sm font-medium text-foreground">{title}</span>
           {description && <span className="text-xs text-muted-foreground">{description}</span>}
         </span>
         <span
           aria-hidden
           className={cn(
-            "flex size-5 shrink-0 items-center justify-center rounded-[5px] border-2 transition-colors duration-150",
+            "flex size-5 shrink-0 items-center justify-center rounded-[4px] border-[1.5px] transition-colors duration-150",
             checked ? "border-primary-accent-text bg-primary text-primary-foreground" : "border-border-strong bg-card",
           )}
         >
-          {checked && <Check className="size-3.5" strokeWidth={3} />}
+          {checked && <Check className="size-3.5" strokeWidth={2.5} />}
         </span>
       </button>
       {children && checked && <Reveal className="flex flex-col gap-3 border-t border-border px-3.5 pt-3.5 pb-3.5">{children}</Reveal>}
@@ -709,7 +760,7 @@ export function AmountInput({
         "focus-within:border-primary-accent-text focus-within:ring-2 focus-within:ring-ring",
       )}
     >
-      <span className="flex w-9 shrink-0 items-center justify-center border-r border-border bg-secondary font-heading text-base font-bold text-foreground">
+      <span className="flex w-9 shrink-0 items-center justify-center border-r border-border bg-secondary font-heading text-base font-semibold text-muted-foreground">
         ₹
       </span>
       <input
@@ -734,6 +785,10 @@ export const LOAN_EMI_INPUT =
  * The focused creation/edit dialog for Loans and EMIs: one defined surface — header, a scrolling body whose
  * sections are split by solid dividers, and a footer with the single primary CTA. A centered panel on
  * desktop; a full-height sheet on phones.
+ *
+ * While `loading`/`success` the surface locks: the body is inert (entered values are kept, not editable),
+ * Cancel/close and the primary action are disabled. `operation` (from `useOperation()`) renders the shared
+ * percentage progress next to the action; after a failure it stays, with "Try again" re-running `onConfirm`.
  */
 export function LoanEmiFormDialog({
   open,
@@ -747,6 +802,8 @@ export function LoanEmiFormDialog({
   loading = false,
   confirmDisabled = false,
   success = false,
+  operation = null,
+  cancelLabel = "Cancel",
   size = "default",
 }: {
   open: boolean;
@@ -762,6 +819,9 @@ export function LoanEmiFormDialog({
   confirmDisabled?: boolean;
   /** Brief post-save confirmation: the primary button turns into a check + label before the dialog closes. */
   success?: boolean;
+  /** The running — or just failed / succeeded — write, from `useOperation()`. */
+  operation?: OperationSnapshot | null;
+  cancelLabel?: string;
   /** "compact" — a narrower panel for focused actions such as Record Payment. */
   size?: "default" | "compact";
 }) {
@@ -771,22 +831,22 @@ export function LoanEmiFormDialog({
       <DialogContent
         showCloseButton={false}
         className={cn(
-          "flex flex-col gap-0 overflow-hidden border border-border-strong bg-card p-0 shadow-[var(--shadow-e4)] ring-0",
+          "flex flex-col gap-0 overflow-hidden border border-border bg-card p-0 shadow-[var(--shadow-e4)] ring-0",
           // Phone: full-height sheet. Desktop: centered panel.
           "top-0 left-0 h-[100dvh] max-h-[100dvh] max-w-none translate-x-0 translate-y-0 rounded-none",
           "sm:top-1/2 sm:left-1/2 sm:h-auto sm:max-h-[min(90vh,52rem)]",
           size === "compact" ? "sm:max-w-lg" : "sm:max-w-2xl",
-          "sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-[12px]",
+          "sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-[10px]",
         )}
       >
         <div className="flex shrink-0 items-center gap-3 border-b border-border bg-card px-5 py-3.5 sm:px-6">
           {Icon && (
-            <span className={cn(LE_RADIUS.control, "flex size-9 shrink-0 items-center justify-center border border-primary-accent-text bg-primary text-primary-foreground")}>
-              <Icon className="size-[18px]" strokeWidth={2.25} />
+            <span className={cn(LE_RADIUS.control, "flex size-9 shrink-0 items-center justify-center bg-primary text-primary-foreground")}>
+              <Icon className="size-[18px]" strokeWidth={2} />
             </span>
           )}
           <div className="flex min-w-0 flex-1 flex-col">
-            <DialogTitle className="font-heading text-lg leading-tight font-bold tracking-tight">{title}</DialogTitle>
+            <DialogTitle className="font-heading text-lg leading-tight font-semibold tracking-tight">{title}</DialogTitle>
             <DialogDescription className={description ? "truncate text-xs text-muted-foreground" : "sr-only"}>{description ?? title}</DialogDescription>
           </div>
           <button
@@ -796,25 +856,39 @@ export function LoanEmiFormDialog({
             disabled={busy}
             className={cn(
               LE_RADIUS.control,
-              "flex size-8 shrink-0 items-center justify-center border border-border text-foreground outline-none transition-colors duration-150 hover:border-border-strong hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50",
+              "flex size-8 shrink-0 items-center justify-center border border-transparent text-muted-foreground outline-none transition-colors duration-150 hover:border-border hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50",
             )}
           >
-            <X className="size-4" />
+            <X className="size-4" strokeWidth={1.75} />
           </button>
         </div>
 
-        <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto bg-card px-5 py-5 text-sm sm:px-6 [&>*+*]:border-t [&>*+*]:border-border [&>*+*]:pt-5">
+        <div
+          inert={busy}
+          aria-busy={busy}
+          className={cn(
+            "flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto bg-card px-5 py-5 text-sm transition-opacity duration-150 sm:px-6 [&>*+*]:border-t [&>*+*]:border-border [&>*+*]:pt-5",
+            busy && "opacity-70",
+          )}
+        >
           {children}
         </div>
 
+        {operation && (
+          <div className="shrink-0 border-t border-border bg-card px-5 py-3 animate-in fade-in-0 duration-150 sm:px-6">
+            {/* A failure's retry is the dialog's current action, so it runs with whatever is entered now. */}
+            <OperationProgressView snapshot={operation.retry ? { ...operation, retry: onConfirm } : operation} />
+          </div>
+        )}
+
         <div className="flex shrink-0 items-center justify-end gap-2.5 border-t border-border bg-secondary px-5 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-6 sm:pb-3">
-          <ClayButton variant="secondary" className="rounded-[8px] border-border-strong font-semibold" onClick={() => onOpenChange(false)} disabled={busy}>
-            Cancel
+          <ClayButton variant="secondary" className="rounded-[6px] border-border-strong font-medium" onClick={() => onOpenChange(false)} disabled={busy}>
+            {cancelLabel}
           </ClayButton>
           <ClayButton
             variant="primary"
             className={cn(
-              "min-w-32 flex-1 gap-1.5 rounded-[8px] border-primary-accent-text font-bold transition-[background-color,opacity] duration-200 sm:flex-none",
+              "min-w-32 flex-1 gap-1.5 rounded-[6px] border-primary-accent-text font-semibold transition-[background-color,opacity] duration-200 sm:flex-none",
               // Success keeps full opacity (it's a confirmation, not a disabled state).
               success && "disabled:opacity-100",
             )}

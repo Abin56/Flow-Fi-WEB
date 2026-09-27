@@ -31,8 +31,8 @@ const STATUS_OPTIONS: { value: StatusFilter; label: string }[] = [
 const CREATE_HANDOFF: Record<string, AddKind> = { borrowed: "borrowed", lent: "lent", installmentPurchase: "purchase" };
 
 /** Primary CTA in the Loan & EMI style — lime with a dark olive edge so it holds its shape on pale displays. */
-const PRIMARY_CTA = "rounded-[8px] border-primary-accent-text font-bold";
-const SECONDARY_BTN = "rounded-[8px] border-border-strong font-semibold text-foreground hover:bg-secondary";
+const PRIMARY_CTA = "rounded-[6px] border-primary-accent-text font-semibold";
+const SECONDARY_BTN = "rounded-[6px] border-border-strong font-medium text-foreground hover:bg-secondary";
 
 /** One list entry — a Loan or an EMI record, as the user sees it. Which collection it lives in stays underneath. */
 interface Entry {
@@ -171,7 +171,7 @@ export function LoanEmiWorkspace() {
           <p className="text-sm text-muted-foreground">Track what you owe, installments and repayments.</p>
         </div>
         <ClayButton className={cn(PRIMARY_CTA, "shrink-0 gap-1.5 px-4")} onClick={openAdd}>
-          <Plus className="size-4" strokeWidth={2.5} />
+          <Plus className="size-4" strokeWidth={2} />
           Add
         </ClayButton>
       </header>
@@ -186,7 +186,7 @@ export function LoanEmiWorkspace() {
           </div>
         </>
       ) : !hasAny ? (
-        <div className={cn(LE_RADIUS.panel, "flex flex-col gap-2 border border-dashed border-border-strong bg-card pb-4")}>
+        <div className={cn(LE_RADIUS.panel, "flex flex-col gap-2 border border-dashed border-border bg-card pb-4")}>
           <EmptyState
             icon={Wallet}
             title="Nothing here yet"
@@ -227,7 +227,7 @@ export function LoanEmiWorkspace() {
               </Metric>
               <Metric label="Due" icon={CalendarClock}>
                 {summary.next && nextDays != null ? (
-                  <span className={cn("font-bold", nextDays < 0 ? "text-expense" : nextDays <= 3 ? "text-warning-foreground dark:text-warning" : "text-foreground")}>
+                  <span className={cn("font-semibold", nextDays < 0 ? "text-expense" : nextDays <= 3 ? "text-warning-foreground dark:text-warning" : "text-foreground")}>
                     {dueLabel(summary.next.date)}
                   </span>
                 ) : (
@@ -235,18 +235,18 @@ export function LoanEmiWorkspace() {
                 )}
               </Metric>
               <Metric label="Active" icon={ListChecks}>
-                <span className="font-heading text-lg font-bold">{summary.activeCount}</span>
+                <span className="font-heading text-lg font-semibold">{summary.activeCount}</span>
               </Metric>
               <Metric label="Closed">
-                <span className="font-heading text-lg font-bold text-muted-foreground">{summary.closedCount}</span>
+                <span className="font-heading text-lg font-semibold text-muted-foreground">{summary.closedCount}</span>
               </Metric>
             </div>
           </section>
 
           {/* Obligations — a titled list with a solid rule under its toolbar, then the record cards. */}
           <section aria-label="Loans and EMIs" className="flex flex-col gap-3">
-            <div className="flex flex-wrap items-center gap-2 border-b border-border-strong pb-3">
-              <h2 className="mr-1 font-heading text-base font-bold text-foreground">
+            <div className="flex flex-wrap items-center gap-2 border-b border-border pb-3">
+              <h2 className="mr-1 font-heading text-base font-semibold text-foreground">
                 All obligations <span className="ml-1 text-sm font-semibold text-muted-foreground tabular-nums">{entries.length}</span>
               </h2>
               {entries.length > 4 && (
@@ -282,7 +282,7 @@ export function LoanEmiWorkspace() {
             )}
 
             {visible.length === 0 ? (
-              <div className={cn(LE_RADIUS.panel, "border border-dashed border-border-strong bg-card")}>
+              <div className={cn(LE_RADIUS.panel, "border border-dashed border-border bg-card")}>
                 <EmptyState
                   icon={Search}
                   title="No matches"

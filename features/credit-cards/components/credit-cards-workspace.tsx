@@ -65,6 +65,8 @@ import { TransactionDetailsModal } from "@/features/transactions/components/tran
 import { useTransactionActions, useTransactionRows } from "@/features/transactions/hooks/use-transactions-data";
 import { usePeople } from "@/hooks/use-people";
 import { toast } from "@/store/toast-store";
+import { startOperation } from "@/store/operation-progress-store";
+import { errorDetail } from "@/lib/operation-progress/operation-progress";
 import { cn } from "@/lib/utils";
 
 const CARD_NETWORK_OPTIONS: CardNetwork[] = ["visa", "mastercard", "rupay", "amex"];
@@ -310,9 +312,15 @@ export function CreditCardsWorkspace() {
     }
 
     setSaving(true);
+    const op = startOperation(
+      editingCard
+        ? { label: "Updating credit card", successLabel: "Card updated", errorLabel: "Couldn't update card" }
+        : { label: "Adding credit card", successLabel: "Card added", errorLabel: "Couldn't add card" },
+    );
     try {
       let sharedLimitId: string | null = null;
       if (form.limitSource === "newShared") {
+        op.stage("submit", "Creating shared limit");
         const sharedLimit = await actions.createSharedLimit({
           name: form.sharedLimitName.trim(),
           creditLimit: Number(form.sharedLimitAmount),
@@ -322,6 +330,7 @@ export function CreditCardsWorkspace() {
         sharedLimitId = form.selectedSharedLimitId;
       }
 
+      op.stage(form.limitSource === "newShared" ? "related" : "submit", editingCard ? "Saving card details" : "Saving card & account");
       if (editingCard) {
         const account = (accounts as Account[]).find((a) => a.id === editingCard.card.accountId);
         await actions.editCard(editingCard.card, account, {
@@ -333,7 +342,7 @@ export function CreditCardsWorkspace() {
           ...(sharedLimitId ? { sharedLimitId } : { clearSharedLimitId: true }),
         });
         setEditingCard(null);
-        toast.success("Card updated");
+        op.succeed({ toast: { title: "Card updated" } });
       } else {
         await actions.createCard({
           name,
@@ -347,10 +356,11 @@ export function CreditCardsWorkspace() {
           sharedLimitId,
         });
         setAddOpen(false);
-        toast.success("Card added");
+        op.succeed({ toast: { title: "Card added" } });
       }
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Something went wrong. Please try again.");
+      // The dialog stays open with everything entered.
+      op.fail({ detail: errorDetail(e) ?? "Something went wrong. Please try again.", retry: handleSaveCard });
     } finally {
       setSaving(false);
     }
@@ -381,13 +391,16 @@ export function CreditCardsWorkspace() {
   async function handleDeleteCard() {
     if (!actions || !deletingCard) return;
     setDeletingCardBusy(true);
+    const op = startOperation({ label: "Deleting credit card", successLabel: "Card deleted", errorLabel: "Couldn't delete card" });
     try {
+      // One cascade: the card, its account, transactions, EMIs and statements.
+      op.stage("submit", "Removing card & its history");
       await actions.deleteCard(deletingCard.card);
       if (activeCardId === deletingCard.id) setActiveCardId(undefined);
       setDeletingCard(null);
-      toast.success("Card deleted");
+      op.succeed({ toast: { title: "Card deleted" } });
     } catch (e) {
-      toast.error("Could not delete card", e instanceof Error ? e.message : undefined);
+      op.fail({ detail: errorDetail(e) });
     } finally {
       setDeletingCardBusy(false);
     }

@@ -1,9 +1,8 @@
 "use client";
 
-import { useState } from "react";
 import { RotateCcw, Trash2, X } from "lucide-react";
 import { ClayButton } from "@/components/clay/clay-button";
-import { ConfirmDialog, EmptyState } from "@/components/finance";
+import { EmptyState } from "@/components/finance";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import type { Loan } from "@/lib/models/loan";
 import type { TrashedLoanRow } from "@/features/loans/hooks/use-loans-data";
@@ -20,24 +19,12 @@ interface LoansTrashDialogProps {
 /** Soft-deleted loans awaiting restore or permanent deletion — centered popup equivalent of
  *  `LoansTrashScreen`. */
 export function LoansTrashDialog({ open, onOpenChange, rows, onRestore, onPermanentlyDelete }: LoansTrashDialogProps) {
-  const [confirmTarget, setConfirmTarget] = useState<Loan | null>(null);
-
   async function handleRestore(loan: Loan) {
     try {
       await onRestore(loan);
       toast.success("Loan restored");
     } catch (e) {
       toast.error("Couldn't restore loan", e instanceof Error ? e.message : "Please try again.");
-    }
-  }
-
-  async function handlePermanentlyDelete() {
-    if (!confirmTarget) return;
-    try {
-      await onPermanentlyDelete(confirmTarget);
-      setConfirmTarget(null);
-    } catch (e) {
-      toast.error("Couldn't delete loan", e instanceof Error ? e.message : "Please try again.");
     }
   }
 
@@ -87,7 +74,8 @@ export function LoansTrashDialog({ open, onOpenChange, rows, onRestore, onPerman
                       size="icon"
                       aria-label="Delete forever"
                       className="text-expense"
-                      onClick={() => setConfirmTarget(loan)}
+                      // Opens the permanent-delete confirmation, which shows exactly what the Loan owns and reverses.
+                      onClick={() => void onPermanentlyDelete(loan)}
                     >
                       <Trash2 className="size-4" />
                     </ClayButton>
@@ -98,16 +86,6 @@ export function LoansTrashDialog({ open, onOpenChange, rows, onRestore, onPerman
           </div>
         </DialogContent>
       </Dialog>
-
-      <ConfirmDialog
-        open={confirmTarget != null}
-        onOpenChange={(open) => !open && setConfirmTarget(null)}
-        title="Delete forever?"
-        description="This loan and its history will be permanently removed. This can't be undone."
-        variant="destructive"
-        confirmLabel="Delete"
-        onConfirm={handlePermanentlyDelete}
-      />
     </>
   );
 }

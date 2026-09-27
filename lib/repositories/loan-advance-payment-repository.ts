@@ -59,7 +59,6 @@ import {
   nextDueDate,
   paymentScheduleFromFirestore,
   paymentScheduleToFirestore,
-  remainingAmount,
   type Installment,
   type InstallmentPayment,
   type PaymentAllocationType,
@@ -93,7 +92,8 @@ import {
   type DisbursementReamortizationOutcome,
   type DisbursementReamortizationPolicy,
 } from "@/lib/engines/disbursement-reamortization-policy";
-import { planInstallmentSettlement } from "@/lib/engines/installment-settlement";
+import { loanTransactionId, planLoanPaymentCore } from "@/lib/engines/loan-payment-core";
+import { mergeInstallmentWrites, netBalanceDeltas, reversePaymentPortions } from "@/lib/engines/payment-correction";
 import { principalPrepaidFor } from "@/lib/engines/loan-outstanding";
 import { generateId } from "@/lib/utils/id-generator";
 
@@ -148,6 +148,8 @@ export interface RecordAdvancePaymentParams {
   note?: string;
   /** The "Apply to upcoming EMIs" allocation choice — see `record`'s doc comment. */
   includeUpcomingInstallments?: boolean;
+  /** Told when the atomic core has committed and the (prepayment-only) re-amortization write starts. */
+  onReamortizing?: () => void;
 }
 
 interface CoreResult {
@@ -194,6 +196,50 @@ export interface ReversePaymentParams {
   /** Must be generated once per reversal action; reused verbatim on any retry. */
   reversalIdempotencyKey: string;
 }
+
+export interface EditLoanPaymentParams {
+  loan: Loan;
+  /** Every active installment on the schedule — only ids are trusted (see `record`). */
+  scheduleInstallments: Installment[];
+  /** The recorded action being corrected — as `reversePayment` takes it. */
+  original: {
+    transactionId: string;
+    paymentIds: string[];
+    installmentIds: string[];
+    overflowPaymentId?: string | null;
+    overflowInstallmentId?: string | null;
+  };
+  accountId: string;
+  amount: number;
+  date: Date;
+  note?: string;
+  includeUpcomingInstallments?: boolean;
+  /** One per edit action, reused verbatim on a retry — it becomes the corrected payment's key. */
+  idempotencyKey: string;
+  onStage?: (stage: "reversing" | "recording" | "reamortizing") => void;
+}
+
+export interface EditLoanPaymentResult {
+  alreadyRecorded: boolean;
+  /** True when the whole edit committed as one Firestore transaction. */
+  atomic: boolean;
+  overallAllocationType: PaymentAllocationType;
+  reamortization: PrepaymentReamortizationOutcome | null;
+}
+
+/** An edit whose original payment is reversed but whose correction isn't recorded yet — retrying the same edit finishes it. */
+export class PaymentEditIncompleteError extends Error {
+  constructor(
+    message: string,
+    readonly cause: unknown,
+  ) {
+    super(message);
+    this.name = "PaymentEditIncompleteError";
+  }
+}
+
+/** Internal: the corrected amount has extra principal, so the one-transaction edit can't apply it. */
+class NeedsReplanError extends Error {}
 
 /**
  * Thrown when a loan/EMI payment or prepayment cannot be safely reversed —
@@ -256,6 +302,12 @@ export class LoanAdvancePaymentRepository {
     private readonly policy: PrepaymentReamortizationPolicy = reduceTenurePolicy,
     private readonly disbursementPolicy: DisbursementReamortizationPolicy = holdTenurePolicy,
   ) {}
+
+  /** `account` with `delta` applied to its running balance, audit-trailed. */
+  private withBalanceDelta(account: Account, delta: number): Account {
+    const newBalance = account.currentBalance + delta;
+    return { ...recordEdit(account, "currentBalance", String(account.currentBalance), String(newBalance)), currentBalance: newBalance };
+  }
 
   private accountRef(accountId: string): DocumentReference<Account> {
     return doc(
@@ -372,7 +424,6 @@ export class LoanAdvancePaymentRepository {
     // installment — account movement, Transaction, idempotency and reversal exactly like an
     // installment loan). They only refuse an overflow (see below): with no schedule to re-plan,
     // money above what is owed has nowhere correct to go. Mirrors Flutter.
-    const isOneTime = loan.repaymentType === "oneTime";
 
     // Ids/sequence/dueDate are immutable once an installment is generated —
     // safe to use from the caller's (possibly stale) list purely to know
@@ -382,9 +433,8 @@ export class LoanAdvancePaymentRepository {
       throw new Error("This loan has no installment schedule");
     }
     const lastKnownInstallmentId = knownIds[knownIds.length - 1].id;
-    const transactionId = `adv_${idempotencyKey}_txn`;
+    const transactionId = loanTransactionId(idempotencyKey);
     const overflowPaymentId = `adv_${idempotencyKey}_principal`;
-    const isIncome = loan.direction === "given";
 
     const coreResult = await runTransaction<CoreResult>(this.firestore, async (tx) => {
       // --- All reads first (Firestore transaction constraint). ---
@@ -414,144 +464,38 @@ export class LoanAdvancePaymentRepository {
         if (snap.exists()) freshById.set(known.id, snap.data());
       }
 
-      // --- Classification/allocation, computed from FRESH state only. ---
+      // --- Classification/allocation, computed from FRESH state only (shared with `editPayment`). ---
       const freshSorted = knownIds
         .map((k) => freshById.get(k.id))
         .filter((i): i is Installment => i != null)
         .sort((a, b) => a.sequenceNumber - b.sequenceNumber);
-      const eligible = freshSorted.filter((i) => remainingAmount(i) > 0 && !i.isSkipped);
-      if (eligible.length === 0) {
-        throw new Error("This loan is already fully paid");
-      }
-      const dueNow = eligible.filter((i) => !(i.dueDate.getTime() > date.getTime()));
-      const classificationScope = includeUpcomingInstallments ? eligible : dueNow.length > 0 ? dueNow : [eligible[0]];
-      const plan = planInstallmentSettlement(classificationScope, amount);
-      const overflow = plan.unallocated;
-      if (isOneTime && overflow > 0) {
-        throw new Error("Amount is more than what's still owed on this loan");
-      }
-
-      const paymentIds = plan.portions.map((_, i) => `adv_${idempotencyKey}_p${i}`);
-      const installmentIds = plan.portions.map((portion) => portion.installment.id);
-      const overallType: PaymentAllocationType =
-        overflow > 0
-          ? "principalPrepayment"
-          : plan.portions[0].installment.dueDate.getTime() > date.getTime()
-            ? "advanceEmi"
-            : "regularEmi";
+      const core = planLoanPaymentCore({
+        loan,
+        fresh: freshSorted,
+        lastInstallmentId: lastKnownInstallmentId,
+        accountId,
+        amount,
+        date,
+        idempotencyKey,
+        note,
+        includeUpcomingInstallments,
+      });
 
       // --- Then all writes. ---
-      for (let i = 0; i < plan.portions.length; i++) {
-        const portion = plan.portions[i];
-        const fresh = freshById.get(portion.installment.id)!;
-        const newAmountPaid = Math.min(Math.max(fresh.amountPaid + portion.portion, 0), fresh.amountDue);
-        let updated = recordEdit(fresh, "amountPaid", String(fresh.amountPaid), String(newAmountPaid));
-        updated = { ...updated, amountPaid: newAmountPaid };
-        tx.set(doc(this.installments(loan.scheduleId), fresh.id), updated);
-
-        const allocationType: PaymentAllocationType = fresh.dueDate.getTime() > date.getTime() ? "advanceEmi" : "regularEmi";
-        const payment: InstallmentPayment = {
-          id: paymentIds[i],
-          installmentId: fresh.id,
-          scheduleId: loan.scheduleId,
-          ownerType: fresh.ownerType,
-          ownerId: fresh.ownerId,
-          amount: portion.portion,
-          date,
-          note,
-          createdAt: new Date(),
-          settlementMethod: null,
-          billingCycleLabel: null,
-          remainingBalanceAfterPayment: remainingAmount(updated),
-          allocationType,
-          prepaymentPrincipalAmount: null,
-          prepaymentPolicyApplied: null,
-          reamortizationEventId: null,
-          transactionId,
-          deletedAt: null,
-          lastEditedAt: null,
-          editHistory: [],
-        };
-        tx.set(this.paymentRef(loan.scheduleId, fresh.id, payment.id), payment);
-      }
-
-      if (overflow > 0) {
-        const last = freshSorted[freshSorted.length - 1];
-        const overflowPayment: InstallmentPayment = {
-          id: overflowPaymentId,
-          installmentId: lastKnownInstallmentId,
-          scheduleId: loan.scheduleId,
-          ownerType: last.ownerType,
-          ownerId: last.ownerId,
-          amount: overflow,
-          date,
-          note,
-          createdAt: new Date(),
-          settlementMethod: null,
-          billingCycleLabel: null,
-          remainingBalanceAfterPayment: null,
-          allocationType: "principalPrepayment",
-          prepaymentPrincipalAmount: overflow,
-          prepaymentPolicyApplied: null,
-          reamortizationEventId: null,
-          transactionId,
-          deletedAt: null,
-          lastEditedAt: null,
-          editHistory: [],
-        };
-        // Ledger-only — deliberately not applied via applyPayment, since
-        // this money reduces principal directly, not this (or any)
-        // installment's own amountDue.
-        tx.set(this.paymentRef(loan.scheduleId, lastKnownInstallmentId, overflowPayment.id), overflowPayment);
-      }
-
-      const transactionDoc: Transaction = {
-        id: transactionId,
-        type: isIncome ? "income" : "expense",
-        amount,
-        dateTime: date,
-        accountId,
-        // TODO(Phase 1): point at the real seeded "Loan Payment"/"EMI
-        // Payment" system category once that seeding mechanism exists.
-        categoryId: "loan_payment",
-        description: loan.name ? `Loan payment — ${loan.name}` : "Loan payment",
-        notes: "",
-        receiptPurpose: null,
-        transferId: null,
-        excludeFromCalculations: false,
-        accountingMonth: null,
-        linkedPersonId: null,
-        owesPersonToggle: false,
-        createdAt: new Date(),
-        transferMatchedAt: null,
-        status: "posted",
-        isBusiness: false,
-        source: null,
-        loanId: loan.id,
-        emiId: null,
-        installmentId: plan.portions[0].installment.id,
-        installmentPaymentId: paymentIds[0],
-        paymentAllocationType: overallType,
-        deletedAt: null,
-        lastEditedAt: null,
-        editHistory: [],
-      };
-      tx.set(this.transactionRef(transactionId), transactionDoc);
-
-      const delta = isIncome ? amount : -amount;
-      const newBalance = account.currentBalance + delta;
-      let updatedAccount = recordEdit(account, "currentBalance", String(account.currentBalance), String(newBalance));
-      updatedAccount = { ...updatedAccount, currentBalance: newBalance };
-      tx.set(this.accountRef(accountId), updatedAccount);
+      for (const installment of core.installments) tx.set(doc(this.installments(loan.scheduleId), installment.id), installment);
+      for (const payment of core.payments) tx.set(this.paymentRef(loan.scheduleId, payment.installmentId, payment.id), payment);
+      if (core.overflowPayment) tx.set(this.paymentRef(loan.scheduleId, lastKnownInstallmentId, core.overflowPayment.id), core.overflowPayment);
+      tx.set(this.transactionRef(transactionId), core.transaction);
+      tx.set(this.accountRef(accountId), this.withBalanceDelta(account, balanceEffect(core.transaction)));
 
       return {
         alreadyRecorded: false,
-        paymentIds,
-        installmentIds,
-        overflowPaymentId: overflow > 0 ? overflowPaymentId : null,
-        overflowInstallmentId: overflow > 0 ? lastKnownInstallmentId : null,
-        overallType,
-        prepaymentPrincipalAmount: overflow > 0 ? overflow : null,
+        paymentIds: core.paymentIds,
+        installmentIds: core.installmentIds,
+        overflowPaymentId: core.overflow > 0 ? overflowPaymentId : null,
+        overflowInstallmentId: core.overflow > 0 ? lastKnownInstallmentId : null,
+        overallType: core.overallType,
+        prepaymentPrincipalAmount: core.overflow > 0 ? core.overflow : null,
       };
     });
 
@@ -569,6 +513,7 @@ export class LoanAdvancePaymentRepository {
       };
     }
 
+    params.onReamortizing?.();
     const reamortization = await this.reamortize({
       loan,
       triggeringPaymentId: coreResult.overflowPaymentId,
@@ -962,6 +907,156 @@ export class LoanAdvancePaymentRepository {
     }
 
     return this.restoreSchedule(loan, event, reversalIdempotencyKey);
+  }
+
+  /**
+   * Corrects a recorded payment action (amount, date, account, note, extra-amount treatment): the
+   * original action's effect is taken back out and the corrected one is allocated through the same
+   * core `record` uses (`planLoanPaymentCore`) — the result is what recording the corrected payment in
+   * the first place would have produced, never "old effect + new effect".
+   *
+   * Same eligibility rule as `reversePayment`: only the most recent financial action on the loan can be
+   * edited (throws `PaymentReversalBlockedError` otherwise) — editing an older one would silently
+   * rewrite later payments' history.
+   *
+   * Write shape:
+   *  - Neither the original nor the corrected payment re-plans the schedule (no extra principal): ONE
+   *    `runTransaction` — installments, old payments + Transaction soft-deleted, new payments +
+   *    Transaction, account balance(s) net — all or nothing.
+   *  - Otherwise the schedule re-plan is a separate write in this architecture, so the edit runs the
+   *    existing `reversePayment` (money atomic, then schedule restore) and then `record`. Both are
+   *    idempotent: if the second step fails, retrying this same call (same `idempotencyKey`) finishes it
+   *    — it sees the original already reversed and only records. `PaymentEditIncompleteError` says so.
+   */
+  async editPayment(params: EditLoanPaymentParams): Promise<EditLoanPaymentResult> {
+    const { loan, original, idempotencyKey, onStage } = params;
+    const newTransactionId = loanTransactionId(idempotencyKey);
+
+    const newSnap = await getDoc(this.transactionRef(newTransactionId));
+    if (newSnap.exists()) {
+      return { alreadyRecorded: true, atomic: false, overallAllocationType: newSnap.data().paymentAllocationType ?? "regularEmi", reamortization: null };
+    }
+    const oldSnap = await getDoc(this.transactionRef(original.transactionId));
+    if (!oldSnap.exists()) throw new Error("The original payment could not be found");
+    const oldTransaction = oldSnap.data();
+
+    // A previous attempt already reversed the original (re-plan path) — only the corrected payment is left.
+    if (oldTransaction.deletedAt != null) return this.recordCorrection(params, false);
+
+    if (original.overflowPaymentId == null) {
+      await this.assertReversible(loan, oldTransaction, null);
+      try {
+        onStage?.("recording");
+        const overallAllocationType = await this.editAtomically(params, oldTransaction.accountId);
+        return { alreadyRecorded: false, atomic: true, overallAllocationType, reamortization: null };
+      } catch (e) {
+        if (!(e instanceof NeedsReplanError)) throw e;
+        // The corrected amount carries extra principal — needs the two-unit path below.
+      }
+    }
+
+    onStage?.("reversing");
+    await this.reversePayment({
+      loan,
+      transactionId: original.transactionId,
+      paymentIds: original.paymentIds,
+      installmentIds: original.installmentIds,
+      overflowPaymentId: original.overflowPaymentId ?? null,
+      overflowInstallmentId: original.overflowInstallmentId ?? null,
+      reversalIdempotencyKey: `edit_${idempotencyKey}`,
+    });
+    return this.recordCorrection(params, true);
+  }
+
+  private async recordCorrection(params: EditLoanPaymentParams, justReversed: boolean): Promise<EditLoanPaymentResult> {
+    const { loan, onStage } = params;
+    onStage?.("recording");
+    try {
+      // The reversal may have restored/retired installments — read the live schedule, not the caller's list.
+      const live = (await getDocs(this.installments(loan.scheduleId))).docs.map((d) => d.data()).filter((i) => i.deletedAt == null);
+      const result = await this.record({
+        loan,
+        scheduleInstallments: live,
+        accountId: params.accountId,
+        amount: params.amount,
+        date: params.date,
+        note: params.note,
+        idempotencyKey: params.idempotencyKey,
+        includeUpcomingInstallments: params.includeUpcomingInstallments,
+        onReamortizing: () => onStage?.("reamortizing"),
+      });
+      return { alreadyRecorded: result.alreadyRecorded, atomic: false, overallAllocationType: result.overallAllocationType, reamortization: result.reamortization };
+    } catch (e) {
+      throw new PaymentEditIncompleteError(
+        justReversed
+          ? "The original payment was reversed, but the corrected one wasn't recorded. Retry to finish the correction."
+          : "The corrected payment wasn't recorded yet. Retry to finish the correction.",
+        e,
+      );
+    }
+  }
+
+  /** The one-transaction edit — see `editPayment`. Throws `NeedsReplanError` (nothing written) when the correction has extra principal. */
+  private async editAtomically(params: EditLoanPaymentParams, oldAccountId: string): Promise<PaymentAllocationType> {
+    const { loan, original } = params;
+    const knownIds = [...params.scheduleInstallments].sort((a, b) => a.sequenceNumber - b.sequenceNumber);
+    if (knownIds.length === 0) throw new Error("This loan has no installment schedule");
+    const lastKnownInstallmentId = knownIds[knownIds.length - 1].id;
+
+    return runTransaction(this.firestore, async (tx) => {
+      // --- All reads first. ---
+      const oldSnap = await tx.get(this.transactionRef(original.transactionId));
+      if (!oldSnap.exists() || oldSnap.data().deletedAt != null) throw new Error("This payment was already changed — reopen it and try again");
+      const oldTransaction = oldSnap.data();
+      const accountIds = Array.from(new Set([oldAccountId, params.accountId]));
+      const accounts = new Map<string, Account>();
+      for (const id of accountIds) {
+        const snap = await tx.get(this.accountRef(id));
+        if (!snap.exists()) throw new Error("Account not found");
+        accounts.set(id, snap.data());
+      }
+      const fresh: Installment[] = [];
+      for (const known of knownIds) {
+        const snap = await tx.get(doc(this.installments(loan.scheduleId), known.id));
+        if (snap.exists()) fresh.push(snap.data());
+      }
+      fresh.sort((a, b) => a.sequenceNumber - b.sequenceNumber);
+      const oldPayments: InstallmentPayment[] = [];
+      for (let i = 0; i < original.paymentIds.length; i++) {
+        const snap = await tx.get(this.paymentRef(loan.scheduleId, original.installmentIds[i], original.paymentIds[i]));
+        if (snap.exists() && snap.data().deletedAt == null) oldPayments.push(snap.data());
+      }
+
+      // --- Reverse, then allocate the correction through the same core as `record`. ---
+      const reversed = reversePaymentPortions(fresh, oldPayments);
+      const core = planLoanPaymentCore({
+        loan,
+        fresh: reversed,
+        lastInstallmentId: lastKnownInstallmentId,
+        accountId: params.accountId,
+        amount: params.amount,
+        date: params.date,
+        idempotencyKey: params.idempotencyKey,
+        note: params.note,
+        includeUpcomingInstallments: params.includeUpcomingInstallments,
+      });
+      if (core.overflow > 0) throw new NeedsReplanError();
+
+      // --- Then all writes. ---
+      for (const installment of mergeInstallmentWrites(fresh, reversed, core.installments)) {
+        tx.set(doc(this.installments(loan.scheduleId), installment.id), installment);
+      }
+      const now = new Date();
+      for (const payment of oldPayments) tx.set(this.paymentRef(loan.scheduleId, payment.installmentId, payment.id), { ...payment, deletedAt: now });
+      for (const payment of core.payments) tx.set(this.paymentRef(loan.scheduleId, payment.installmentId, payment.id), payment);
+      tx.set(this.transactionRef(oldTransaction.id), { ...oldTransaction, deletedAt: now });
+      tx.set(this.transactionRef(core.transactionId), core.transaction);
+      // Net account effect: the original movement undone, the corrected one applied — once each.
+      for (const [id, delta] of netBalanceDeltas([oldTransaction], [core.transaction])) {
+        if (delta !== 0) tx.set(this.accountRef(id), this.withBalanceDelta(accounts.get(id)!, delta));
+      }
+      return core.overallType;
+    });
   }
 
   /**

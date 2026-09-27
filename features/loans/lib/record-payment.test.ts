@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Loan } from "@/lib/models/loan";
 import type { Installment } from "@/lib/models/payment-schedule";
 import {
+  emiPaymentOutcome,
   emiQuickOptions,
   loanPaymentFigures,
   loanPaymentSuccessTitle,
@@ -111,15 +112,34 @@ describe("planLoanPayment → existing record() params", () => {
 });
 
 describe("EMI payment plan", () => {
-  const next = installment(2, "2026-03-01T00:00:00Z", 250);
+  // Installments of ₹1,000; #1 paid, #2 has ₹250 paid.
+  const installments = [installment(1, "2026-02-01T00:00:00Z", 1000), installment(2, "2026-03-01T00:00:00Z", 250), installment(3, "2026-04-01T00:00:00Z"), installment(4, "2026-05-01T00:00:00Z")];
+  const next = installments[1];
+  const date = new Date("2026-03-01T12:00:00Z");
+  const plan = (choice: "installment" | "remaining" | "custom", customAmount = "") => planEmiPayment({ next, installments, choice, customAmount, date });
+
   it("defaults to the installment's remaining amount and allows partial", () => {
-    expect(emiQuickOptions(next)[0].amount).toBe(750);
-    expect(planEmiPayment(next, "installment", "")).toEqual({ ok: true, amount: 750 });
-    expect(planEmiPayment(next, "custom", "300")).toEqual({ ok: true, amount: 300 });
+    expect(emiQuickOptions(next, installments).map((o) => [o.choice, o.amount])).toEqual([["installment", 750], ["remaining", 2750]]);
+    expect(plan("installment")).toMatchObject({ ok: true, amount: 750 });
+    expect(plan("custom", "300")).toMatchObject({ ok: true, amount: 300 });
   });
-  it("never exceeds one installment (the EMI backend has no prepayment)", () => {
-    expect(planEmiPayment(next, "custom", "800").ok).toBe(false);
-    expect(planEmiPayment(null, "installment", "").ok).toBe(false);
+  it("lets an amount above one installment advance into the next ones, through the same allocation the write uses", () => {
+    const result = plan("custom", "1250");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.allocation.portions.map((p) => [p.installment.sequenceNumber, p.amount])).toEqual([[2, 750], [3, 500]]);
+    expect(emiPaymentOutcome(result.allocation)).toBe("Covered #2 and part of #3. ₹500 still due on installment #3.");
+    expect(plan("remaining")).toMatchObject({ ok: true, amount: 2750 });
+  });
+  it("never exceeds what the EMI still owes", () => {
+    expect(plan("custom", "2750.5").ok).toBe(false);
+    expect(planEmiPayment({ next: null, installments, choice: "installment", customAmount: "", date }).ok).toBe(false);
+  });
+  it("describes partial and settling payments", () => {
+    const partial = plan("custom", "300");
+    expect(partial.ok && emiPaymentOutcome(partial.allocation)).toBe("Partial payment — ₹450 still due on installment #2.");
+    const settle = plan("remaining");
+    expect(settle.ok && emiPaymentOutcome(settle.allocation)).toBe("This EMI is now fully paid.");
   });
 });
 

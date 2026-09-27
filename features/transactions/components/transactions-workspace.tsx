@@ -43,7 +43,7 @@ import type { Category } from "@/lib/models/category";
 import type { SplitType } from "@/lib/models/expense";
 import type { Person } from "@/lib/models/person";
 import { compareTransactionsNewestFirst, type Transaction } from "@/lib/models/transaction";
-import { toast } from "@/store/toast-store";
+import { startOperation } from "@/store/operation-progress-store";
 import {
   categoryIconFor,
   categoryToneFor,
@@ -406,6 +406,8 @@ export function TransactionsWorkspace() {
           ]
         : otherInputs;
 
+      const op = startOperation({ label: "Adding split expense", successLabel: "Split expense added", errorLabel: "Couldn't add split expense" });
+      op.stage("submit", "Saving transaction & shares");
       await actions.createSplitTransaction({
         description: splitForm.description,
         totalAmount,
@@ -415,7 +417,11 @@ export function TransactionsWorkspace() {
         splitType: splitForm.splitType,
         participantInputs,
         notes: splitForm.notes,
+      }).catch((e: unknown) => {
+        op.dismiss();
+        throw e;
       });
+      op.succeed();
       setSplitOpen(false);
     } catch (e) {
       setSplitError(e instanceof Error ? e.message : "Could not save this split");
@@ -426,15 +432,18 @@ export function TransactionsWorkspace() {
 
   async function handleQuickDelete() {
     if (!actions || !quickDeleteRow) return;
+    const op = startOperation({ label: "Deleting transaction", successLabel: "Transaction deleted", errorLabel: "Couldn't delete transaction" });
     try {
       // actions.deleteTransaction already surfaces a failure toast (withErrorToast) — no need to
       // toast again here, only to keep the confirm dialog open on failure.
       const expense = expenseByTransactionId.get(quickDeleteRow.transaction.id) ?? null;
+      op.stage("submit", "Removing transaction & restoring balance");
       await actions.deleteTransaction(quickDeleteRow.transaction, expense);
       setQuickDeleteRow(null);
-      toast.success("Transaction deleted");
+      op.succeed({ toast: { title: "Transaction deleted" } });
     } catch {
       // Already toasted by actions.deleteTransaction.
+      op.dismiss();
     }
   }
 

@@ -45,6 +45,7 @@ import { bankById, GENERIC_BANK } from "@/lib/data/bank-registry";
 import type { Account, AccountType, BankAccountSubtype, CardSubtype } from "@/lib/models/account";
 import type { AccountColor } from "@/lib/mock/accounts-overview-data";
 import { cn } from "@/lib/utils";
+import { startOperation } from "@/store/operation-progress-store";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   availableCredit,
@@ -223,20 +224,34 @@ export function AccountsWorkspace() {
 
     setSaving(true);
     setFormError(null);
+    const op = startOperation(
+      action.kind === "editAccount"
+        ? { label: "Updating account", successLabel: "Account updated", errorLabel: "Couldn't update account" }
+        : action.kind === "createCreditCard"
+          ? { label: "Adding credit card", successLabel: "Card added", errorLabel: "Couldn't add card" }
+          : { label: "Creating account", successLabel: "Account created", errorLabel: "Couldn't create account" },
+    );
     try {
+      op.stage("submit", action.kind === "editAccount" ? "Saving account" : "Saving account & opening balance");
       if (action.kind === "editAccount") {
-        if (!editingAccount) return;
+        if (!editingAccount) return op.dismiss();
         await actions.editAccount(editingAccount, { ...action.params, notes: form.notes || null });
         setEditingAccount(null);
+        op.succeed();
       } else if (action.kind === "createCreditCard") {
-        if (!cardActions) return;
+        if (!cardActions) return op.dismiss();
         await cardActions.createCard(action.params);
         setAddOpen(false);
+        op.succeed();
       } else {
         await actions.createAccount({ ...action.params, notes: form.notes || null });
         setAddOpen(false);
+        op.succeed();
       }
     } catch (e) {
+      // The form keeps everything entered and shows why inline (the action also toasts) — the progress
+      // surface just stops and steps aside rather than repeating the same failure.
+      op.dismiss();
       setFormError(e instanceof Error ? e.message : "Something went wrong. Please try again.");
     } finally {
       setSaving(false);
@@ -289,19 +304,28 @@ export function AccountsWorkspace() {
   async function handleDelete() {
     if (!deletingAccount) return;
     setDeleting(true);
+    const op = startOperation(
+      deletingCreditCard
+        ? { label: "Deleting credit card", successLabel: "Card deleted", errorLabel: "Couldn't delete card" }
+        : { label: "Deleting account", successLabel: "Account deleted", errorLabel: "Couldn't delete account" },
+    );
     try {
+      // One cascade: the account with its transactions, linked transfers and expenses.
+      op.stage("submit", "Removing account & its history");
       if (deletingCreditCard) {
-        if (!cardActions) return;
+        if (!cardActions) return op.dismiss();
         await cardActions.deleteCard(deletingCreditCard);
       } else {
-        if (!actions) return;
+        if (!actions) return op.dismiss();
         await actions.deleteAccount(deletingAccount);
       }
       if (selectedId === deletingAccount.id) setSelectedId(undefined);
       setDeletingAccount(null);
+      op.succeed();
     } catch {
       // Failed — the toast from useAccountActions/useCreditCardActions already explains why;
       // keep the dialog open so the user isn't left guessing whether the delete "did nothing".
+      op.dismiss();
     } finally {
       setDeleting(false);
     }

@@ -138,8 +138,15 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
    * must happen before calling this, since Firestore requires every read in
    * a transaction to precede every write, and this method writes.
    */
-  async createTransactionInTransaction(tx: FirestoreTransaction, params: CreateTransactionParams): Promise<Transaction> {
-    const transaction: Transaction = {
+  /** Active Transactions that reference `installmentPaymentId` — e.g. the card Transaction of a card-linked EMI payment. */
+  async findByInstallmentPaymentId(installmentPaymentId: string): Promise<Transaction[]> {
+    const snap = await getDocs(query(this.collection, where("installmentPaymentId", "==", installmentPaymentId)));
+    return snap.docs.map((d) => d.data()).filter((t) => t.deletedAt == null);
+  }
+
+  /** The new Transaction document `createTransaction*` writes — pure, for callers that must net several balance effects in one transaction themselves. */
+  static buildTransaction(params: CreateTransactionParams): Transaction {
+    return {
       id: generateId(),
       type: params.type,
       amount: params.amount,
@@ -168,6 +175,10 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
       lastEditedAt: null,
       editHistory: [],
     };
+  }
+
+  async createTransactionInTransaction(tx: FirestoreTransaction, params: CreateTransactionParams): Promise<Transaction> {
+    const transaction = TransactionRepository.buildTransaction(params);
 
     const accountRef = this.accountRepository.docRef(params.accountId);
     const delta = balanceEffect(transaction);

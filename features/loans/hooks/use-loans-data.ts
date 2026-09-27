@@ -63,8 +63,14 @@ import {
   createLoanRepository,
   createPersonRepository,
 } from "@/lib/repositories/repository-factory";
-import { LoanAdvancePaymentRepository } from "@/lib/repositories/loan-advance-payment-repository";
+import { LoanAdvancePaymentRepository, type EditLoanPaymentParams, type ReversePaymentParams } from "@/lib/repositories/loan-advance-payment-repository";
 import { db } from "@/lib/firebase/client";
+import {
+  permanentlyDeleteAgreement,
+  previewAgreementDeletion,
+  resumePendingAgreementPurges,
+  type AgreementDeletionStage,
+} from "@/lib/repositories/agreement-deletion";
 import { useAllLoanInstallments, useLoanPersons, useLoans, useTrashedLoans } from "@/hooks/use-loans";
 import { useAuthStore } from "@/store/auth-store";
 import {
@@ -383,11 +389,17 @@ export function useLoanActions() {
         await loanRepository.restore(loan);
         await restoreLoanLedgerEntries(uid, loan, personRepository);
       },
-      // Cascades schedule/installments/payments — the actual point of no return, reachable only from
-      // the trash view's "Delete Forever", matching `deleteEmi`'s existing permanentlyDeleteEmi posture.
-      permanentlyDeleteLoan: async (loan: Loan) => {
-        await loanRepository.permanentlyDeleteLoan(loan);
-      },
+      /**
+       * Permanently deletes a Loan entered by mistake and reverses everything it owns — creation money,
+       * every payment / advance / extra principal / Borrow More movement, legacy People entries — then
+       * removes its schedule. See `lib/repositories/agreement-deletion.ts`. Reads everything fresh.
+       */
+      permanentlyDeleteLoan: async (loan: Pick<Loan, "id">, opts: { onStage?: (stage: AgreementDeletionStage) => void } = {}) =>
+        permanentlyDeleteAgreement(db, uid, "loan", loan.id, opts),
+      /** Read-only: what `permanentlyDeleteLoan` would change — for its confirmation. */
+      previewPermanentDeletion: (loan: Pick<Loan, "id">) => previewAgreementDeletion(db, uid, "loan", loan.id),
+      /** Finishes any Loan/EMI permanent deletion interrupted after its money step. Best-effort. */
+      resumePendingDeletions: () => resumePendingAgreementPurges(db, uid),
       closeLoan: async (loan: Loan) => {
         await loanRepository.closeLoan(loan);
       },
@@ -397,7 +409,15 @@ export function useLoanActions() {
       recordPayment: async (
         loan: Loan,
         scheduleInstallments: Installment[],
-        params: { accountId: string; amount: number; date: Date; note?: string; idempotencyKey: string; includeUpcomingInstallments?: boolean },
+        params: {
+          accountId: string;
+          amount: number;
+          date: Date;
+          note?: string;
+          idempotencyKey: string;
+          includeUpcomingInstallments?: boolean;
+          onReamortizing?: () => void;
+        },
       ) => {
         const paymentRepository = new LoanAdvancePaymentRepository(db, uid);
         const result = await paymentRepository.record({
@@ -409,9 +429,25 @@ export function useLoanActions() {
           note: params.note,
           includeUpcomingInstallments: params.includeUpcomingInstallments,
           idempotencyKey: params.idempotencyKey,
+          onReamortizing: params.onReamortizing,
         });
         // No People-ledger entry: the Loan payment itself lowers the Person's Loan balance.
         return result;
+      },
+      /** Corrects a recorded payment action — see `LoanAdvancePaymentRepository.editPayment`. */
+      editPayment: async (params: EditLoanPaymentParams) => {
+        const paymentRepository = new LoanAdvancePaymentRepository(db, uid);
+        // No People-ledger entry: the Person's Loan balance is derived from the corrected schedule.
+        return paymentRepository.editPayment(params);
+      },
+      /**
+       * "Mark as unpaid" — undoes the latest recorded payment action: installments, account balance and
+       * Transaction together, and a triggered re-plan restored. See `LoanAdvancePaymentRepository.reversePayment`.
+       */
+      reversePayment: async (params: ReversePaymentParams) => {
+        const paymentRepository = new LoanAdvancePaymentRepository(db, uid);
+        // No People-ledger entry: the Person's Loan balance is derived from the schedule.
+        return paymentRepository.reversePayment(params);
       },
       recordAdditionalDisbursement: async (
         loan: Loan,

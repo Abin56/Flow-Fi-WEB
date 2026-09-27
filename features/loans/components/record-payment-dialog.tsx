@@ -2,7 +2,7 @@
 
 import { ArrowRight, CalendarClock, CreditCard, Info, Wallet } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { useEmiActions, type EmiRow } from "@/features/emi/hooks/use-emi-data";
 import { emiCardLabel } from "@/features/emi/components/emi-card";
 import { loanDisplayName } from "@/features/loans/components/loan-card";
@@ -25,7 +25,9 @@ import { AddElsewhereLink } from "@/features/loans/components/loans-workspace";
 import { useLoanActions, type LoanRow } from "@/features/loans/hooks/use-loans-data";
 import { previewPrincipalPrepayment } from "@/features/loans/lib/loan-adjustment-preview";
 import { friendlyLoanError } from "@/features/loans/lib/loan-live-state";
+import { EMI_PAYMENT_HISTORY_KEY } from "@/features/loans/hooks/use-payment-history";
 import {
+  emiPaymentOutcome,
   emiQuickOptions,
   loanPaymentFigures,
   loanPaymentSuccessTitle,
@@ -37,23 +39,21 @@ import {
   type PayChoice,
   type QuickOption,
 } from "@/features/loans/lib/record-payment";
+import { createPaymentSubmission, paymentStages, stageBand } from "@/features/loans/lib/payment-submission";
+import { useOperation } from "@/components/feedback/operation-progress";
+import { SUCCESS_HOLD_MS } from "@/lib/operation-progress/operation-progress";
 import { useAccounts } from "@/hooks/use-accounts";
-import { defaultEmiPaymentSplit } from "@/lib/models/emi";
 import { remainingAmount, type Installment } from "@/lib/models/payment-schedule";
 import { formatCurrency } from "@/lib/format";
 import { generateId } from "@/lib/utils/id-generator";
 import { cn } from "@/lib/utils";
-import { toast } from "@/store/toast-store";
 
 /** An EMI target may name a specific `installment` (picked from the schedule); otherwise the next-due one. */
 export type PaymentTarget = { kind: "loan"; row: LoanRow } | { kind: "emi"; row: EmiRow; installment?: Installment | null };
 
 /** Queries derived from payment sub-collections — keyed on live installment state already; invalidated
  *  too so history / extra-principal / card-credit figures re-read at once after a write. */
-const DERIVED_QUERY_PREFIXES = ["loan-financial-history", "loanPrincipalPrepaid", "loanScheduledPayments", "cardLinkedEmiPayments"];
-
-/** How long the "Done" confirmation shows before the surface closes. */
-const SUCCESS_HOLD_MS = 700;
+const DERIVED_QUERY_PREFIXES = ["loan-financial-history", "loanPrincipalPrepaid", "loanScheduledPayments", "cardLinkedEmiPayments", EMI_PAYMENT_HISTORY_KEY];
 
 function todayInput(): string {
   const d = new Date();
@@ -87,7 +87,7 @@ function AmountChoice({ active, label, hint, amount, onSelect }: { active: boole
 function ContextFigure({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex min-w-0 flex-col gap-1">
-      <span className="text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">{label}</span>
+      <span className="text-[11px] font-medium tracking-[0.06em] text-muted-foreground uppercase">{label}</span>
       {children}
     </div>
   );
@@ -132,9 +132,10 @@ export function RecordPaymentDialog({ target, open, onOpenChange }: { target: Pa
   const [idempotencyKey] = useState(generateId);
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState(false);
+  const operation = useOperation();
   const [customTouched, setCustomTouched] = useState(false);
-  // Synchronous guard — state updates are async, so two fast clicks could both pass a `saving` check.
-  const inFlight = useRef(false);
+  // One per mount — its synchronous guard blocks a double click/double submit (state updates are async).
+  const [submission] = useState(createPaymentSubmission);
 
   // Default account until the user picks one — derived, so it also works when accounts load after mount.
   const accountId = pickedAccountId || (accounts.find((a) => a.isDefault)?.id ?? accounts[0]?.id ?? "");
@@ -146,11 +147,14 @@ export function RecordPaymentDialog({ target, open, onOpenChange }: { target: Pa
   const loanFigures = loanRow ? loanPaymentFigures(loanRow.loan, loanRow.installments, paymentDate) : null;
   const emiInstallment = target?.kind === "emi" ? (target.installment ?? null) : null;
   const next = loanRow ? (loanFigures?.next ?? null) : (emiInstallment ?? emiRow?.nextInstallment ?? null);
-  const options: QuickOption[] = loanRow && loanFigures ? loanQuickOptions(loanRow.loan, loanFigures) : emiQuickOptions(next);
+  const options: QuickOption[] = loanRow && loanFigures ? loanQuickOptions(loanRow.loan, loanFigures) : emiQuickOptions(next, emiRow?.installments ?? []);
   const effectiveChoice: PayChoice = choice === "custom" || options.some((o) => o.choice === choice) ? choice : "installment";
 
   const loanPlan = loanRow && loanFigures ? planLoanPayment({ loan: loanRow.loan, figures: loanFigures, choice: effectiveChoice, customAmount, treatment }) : null;
-  const emiPlan = emiRow ? planEmiPayment(next, effectiveChoice, customAmount) : null;
+  const emiPlan = emiRow
+    ? planEmiPayment({ next, installments: emiRow.installments, choice: effectiveChoice, customAmount, date: paymentDate })
+    : null;
+  const emiAllocation = emiPlan?.ok ? emiPlan.allocation : null;
   const plan = loanPlan ?? emiPlan;
   const planAmount = plan?.ok ? plan.amount : null;
   const extra = loanPlan?.ok ? loanPlan.extra : 0;
@@ -164,7 +168,9 @@ export function RecordPaymentDialog({ target, open, onOpenChange }: { target: Pa
   const solved = prepaymentPreview?.outcome?.kind === "solved" ? prepaymentPreview.outcome : null;
 
   const cardLabel = emiRow ? emiCardLabel(emiRow) : null;
-  const cardRelease = emiRow && cardLabel && next && planAmount != null ? defaultEmiPaymentSplit(next, planAmount).principalPaid : null;
+  // Same allocation the write uses — each installment's own principal share, summed.
+  const cardRelease = emiRow && cardLabel && emiAllocation ? emiAllocation.portions.reduce((sum, p) => sum + p.principalPaid, 0) : null;
+  const reamortizes = loanRow != null && extra > 0 && treatment === "reducePrincipal" && loanRow.loan.repaymentType !== "oneTime";
 
   if (!target) return null;
   const name = loanRow ? loanDisplayName(loanRow) : emiRow!.emi.name;
@@ -177,46 +183,75 @@ export function RecordPaymentDialog({ target, open, onOpenChange }: { target: Pa
   const blocked = next == null || error != null || (needsAccount && accountId === "");
 
   async function submit() {
-    if (inFlight.current || blocked || planAmount == null) return;
-    inFlight.current = true;
-    setSaving(true);
-    try {
-      let title = "Payment recorded successfully";
-      let description: string | undefined;
-      if (loanRow && loanPlan?.ok) {
-        if (!loanActions) throw new Error("Not signed in");
-        const result = await loanActions.recordPayment(loanRow.loan, loanRow.installments, {
-          accountId,
-          amount: loanPlan.amount,
-          date: paymentDate,
-          note: note.trim() || undefined,
-          idempotencyKey,
-          includeUpcomingInstallments: loanPlan.includeUpcomingInstallments,
-        });
-        title = loanPaymentSuccessTitle(result.overallAllocationType);
-        if (result.reamortization?.kind === "unsolvable") description = "The schedule couldn't be adjusted automatically — review the loan terms.";
-      } else if (emiRow && next) {
-        if (!emiActions) throw new Error("Not signed in");
-        await emiActions.recordPayment(emiRow.emi, next, {
-          amount: planAmount,
-          date: paymentDate,
-          note: note.trim() || undefined,
-          gst: gst ? Number(gst) : undefined,
-          processingFee: processingFee ? Number(processingFee) : undefined,
-        });
-        if (planAmount < remainingAmount(next)) description = `Partial payment — ${formatCurrency(remainingAmount(next) - planAmount)} still due on installment #${next.sequenceNumber}.`;
-      }
-      await Promise.all(DERIVED_QUERY_PREFIXES.map((key) => queryClient.invalidateQueries({ queryKey: [key], exact: false })));
-      setSuccess(true);
-      toast.success(title, description);
-      window.setTimeout(() => onOpenChange(false), SUCCESS_HOLD_MS);
-    } catch (e) {
-      // Stays open with everything entered (and, for loans, the same idempotency key — a retry can't double-post).
-      toast.error("Couldn't record payment. Please try again.", loanRow ? friendlyLoanError(e) : e instanceof Error ? e.message : undefined);
-      inFlight.current = false;
-    } finally {
-      setSaving(false);
-    }
+    if (submission.inFlight || blocked || planAmount == null) return;
+    const stages = paymentStages({ reamortizes });
+    let title = "Payment recorded successfully";
+    let description: string | undefined;
+    // A Loan extra-principal payment commits its core atomically BEFORE re-planning — past that point a
+    // failure must never be reported as "nothing was saved".
+    let coreCommitted = false;
+    const op = operation.start({
+      label: lent ? "Recording repayment" : "Recording payment",
+      successLabel: lent ? "Repayment recorded" : "Payment recorded",
+      errorLabel: lent ? "Couldn't record repayment" : "Couldn't record payment",
+      detail: "Checking the amount",
+    });
+    await submission.run(
+      {
+        label: "Recording payment…",
+        stages,
+        write: async ({ stage }) => {
+          if (loanRow && loanPlan?.ok) {
+            if (!loanActions) throw new Error("Not signed in");
+            const result = await loanActions.recordPayment(loanRow.loan, loanRow.installments, {
+              accountId,
+              amount: loanPlan.amount,
+              date: paymentDate,
+              note: note.trim() || undefined,
+              idempotencyKey,
+              includeUpcomingInstallments: loanPlan.includeUpcomingInstallments,
+              onReamortizing: () => {
+                coreCommitted = true;
+                stage(1);
+              },
+            });
+            title = loanPaymentSuccessTitle(result.overallAllocationType);
+            if (result.reamortization?.kind === "unsolvable") description = "The schedule couldn't be adjusted automatically — review the loan terms.";
+          } else if (emiRow && next && emiAllocation) {
+            if (!emiActions) throw new Error("Not signed in");
+            const result = await emiActions.recordPayment(emiRow.emi, emiRow.installments, {
+              amount: planAmount,
+              idempotencyKey,
+              targetInstallmentId: next.id,
+              date: paymentDate,
+              note: note.trim() || undefined,
+              gst: gst ? Number(gst) : undefined,
+              processingFee: processingFee ? Number(processingFee) : undefined,
+            });
+            title = result.allocationType === "advanceEmi" ? "Advance payment recorded successfully" : "Payment recorded successfully";
+            description = emiPaymentOutcome(emiAllocation);
+          }
+        },
+        refresh: () => Promise.all(DERIVED_QUERY_PREFIXES.map((key) => queryClient.invalidateQueries({ queryKey: [key], exact: false }))),
+      },
+      {
+        onPhase: (phase) => {
+          setSaving(phase === "saving");
+          setSuccess(phase === "success");
+        },
+        onProgress: (p) => op.stage(stageBand(p.current ?? 0, stages.length), stages[p.current ?? 0]),
+        onSuccess: () => {
+          op.succeed({ toast: { title, description } });
+          window.setTimeout(() => onOpenChange(false), SUCCESS_HOLD_MS);
+        },
+        // Stays open with everything entered and the same idempotency key — a retry can't double-post.
+        onError: (e) => {
+          const detail = loanRow ? friendlyLoanError(e) : e instanceof Error ? e.message : undefined;
+          if (coreCommitted) op.fail({ label: "Payment recorded — schedule not re-planned", detail: "Check the loan's schedule before paying again." });
+          else op.fail({ detail: detail ? `Nothing was saved. ${detail}` : "Nothing was saved.", retry: submit });
+        },
+      },
+    );
   }
 
   const confirmLabel = saving ? "Recording…" : planAmount != null ? `Record ${formatCurrency(planAmount)}` : "Record payment";
@@ -234,6 +269,7 @@ export function RecordPaymentDialog({ target, open, onOpenChange }: { target: Pa
       confirmDisabled={blocked}
       loading={saving}
       success={success}
+      operation={operation.snapshot}
     >
       {/* Context — what is being paid. */}
       <section className="grid grid-cols-2 gap-4">
@@ -249,7 +285,7 @@ export function RecordPaymentDialog({ target, open, onOpenChange }: { target: Pa
               </span>
             </>
           ) : (
-            <span className="text-sm font-bold text-success">Fully paid</span>
+            <span className="text-sm font-semibold text-success">Fully paid</span>
           )}
         </ContextFigure>
       </section>
@@ -262,7 +298,7 @@ export function RecordPaymentDialog({ target, open, onOpenChange }: { target: Pa
           <AmountChoice
             active={effectiveChoice === "custom"}
             label="Pay another amount"
-            hint={isLoan ? (loanRow?.loan.repaymentType === "oneTime" ? "Partial payment" : "Partial, or more than due") : "Partial payment"}
+            hint={isLoan ? (loanRow?.loan.repaymentType === "oneTime" ? "Partial payment" : "Partial, or more than due") : "Partial, or more than one installment"}
             onSelect={() => setChoice("custom")}
           />
           {effectiveChoice === "custom" && (
@@ -277,6 +313,21 @@ export function RecordPaymentDialog({ target, open, onOpenChange }: { target: Pa
                   }}
                 />
               </Field>
+              {emiAllocation && (emiAllocation.portions.length > 1 || emiAllocation.nextAfter?.installment.id === next.id) && (
+                <Reveal className={cn(LE_RADIUS.control, "flex flex-col gap-1.5 border border-border bg-secondary px-3 py-2.5")}>
+                  {emiAllocation.portions.map((p) => (
+                    <div key={p.installment.id} className="flex items-center justify-between gap-3 text-xs">
+                      <span className="text-muted-foreground">
+                        Installment #{p.installment.sequenceNumber}
+                        {p.allocationType === "advanceEmi" ? " · advance" : ""}
+                        {p.remainingAfter > 0 ? ` · ${formatCurrency(p.remainingAfter)} left` : " · paid"}
+                      </span>
+                      <Money amount={p.amount} className="text-xs text-foreground" />
+                    </div>
+                  ))}
+                  <PreviewLine label="Outstanding" before={<Money amount={emiAllocation.remainingBefore} />} after={<Money amount={emiAllocation.remainingAfter} />} />
+                </Reveal>
+              )}
               {extra > 0 && loanRow?.loan.repaymentType !== "oneTime" && (
                 <Reveal className="flex flex-col gap-2">
                   <span className="text-xs font-semibold text-foreground">
@@ -332,7 +383,7 @@ export function RecordPaymentDialog({ target, open, onOpenChange }: { target: Pa
             {accounts.length === 0 && <AddElsewhereLink href="/accounts" label="Go to Accounts" />}
           </div>
           {accounts.length === 0 ? (
-            <p className="flex h-10 items-center rounded-[6px] border border-dashed border-border-strong bg-secondary px-3 text-xs text-muted-foreground">
+            <p className="flex h-10 items-center rounded-[6px] border border-dashed border-border bg-secondary px-3 text-xs text-muted-foreground">
               Loan payments move an account balance — add an account first.
             </p>
           ) : (

@@ -65,7 +65,7 @@ import { ClayButton } from "@/components/clay/clay-button";
 import { durations, easings, springs } from "@/lib/motion/tokens";
 import { cn } from "@/lib/utils";
 import { formatCurrencyPrecise } from "@/lib/format";
-import { toast } from "@/store/toast-store";
+import { startOperation } from "@/store/operation-progress-store";
 import { isSplit, type Expense, type SplitType } from "@/lib/models/expense";
 import type { Account, AccountType } from "@/lib/models/account";
 import type { Category, CategoryType } from "@/lib/models/category";
@@ -751,7 +751,15 @@ export function TransactionDetailsModal({
     }
 
     setSaving(true);
+    const op = startOperation(
+      transaction
+        ? { label: "Updating transaction", successLabel: "Transaction updated", errorLabel: "Couldn't update transaction" }
+        : kind === "transfer"
+          ? { label: "Adding transfer", successLabel: "Transfer added", errorLabel: "Couldn't add transfer" }
+          : { label: "Adding transaction", successLabel: "Transaction added", errorLabel: "Couldn't add transaction" },
+    );
     try {
+      op.stage("submit", kind === "transfer" && !transaction ? "Saving both legs & balances" : "Saving transaction & balance");
       if (!transaction) {
         if (kind === "transfer") {
           await actions.createTransferPair({ amount: amountValue, dateTime, sourceAccountId: accountId, destinationAccountId, categoryId, description, notes });
@@ -774,6 +782,7 @@ export function TransactionDetailsModal({
           // best-effort tear it down instead, mirroring `createTransferPair`'s own
           // best-effort-rollback philosophy for its two-leg write.
           if (kind === "expense" && (personId != null || splitOpen)) {
+            op.stage("related", splitOpen ? "Splitting with people" : "Linking person");
             try {
               if (splitOpen) {
                 const inputs = buildParticipantInputs();
@@ -819,7 +828,7 @@ export function TransactionDetailsModal({
             }
           }
         }
-        toast.success("Transaction added");
+        op.succeed({ toast: { title: "Transaction added" } });
       } else {
         const transactionEdits: Omit<EditTransactionParams, "linkedPersonId" | "clearLinkedPersonId" | "owesPersonToggle"> = {
           amount: amountValue,
@@ -835,6 +844,7 @@ export function TransactionDetailsModal({
 
         if (splitOpen) {
           const inputs = buildParticipantInputs();
+          op.stage("related", "Updating split");
 
           if (expense != null && isSplit(expense)) {
             const currentInstallments = expense.scheduleId == null ? [] : await actions.installmentRepositoryFor(expense.scheduleId).getAll();
@@ -874,7 +884,7 @@ export function TransactionDetailsModal({
             transactionEdits,
           });
         }
-        toast.success("Transaction updated");
+        op.succeed({ toast: { title: "Transaction updated" } });
       }
       setJustSaved(true);
       if (!transaction) {
@@ -903,6 +913,9 @@ export function TransactionDetailsModal({
         setTimeout(() => onOpenChange(false), 260);
       }
     } catch (e) {
+      // The form keeps everything entered and shows why inline (the action also toasts) — the progress
+      // surface just stops and steps aside rather than repeating the same failure.
+      op.dismiss();
       setFormError(e instanceof Error ? e.message : "Could not save this transaction");
     } finally {
       setSaving(false);
@@ -912,15 +925,18 @@ export function TransactionDetailsModal({
   async function handleDelete() {
     if (deleting || !transaction) return;
     setDeleting(true);
+    const op = startOperation({ label: "Deleting transaction", successLabel: "Transaction deleted", errorLabel: "Couldn't delete transaction" });
     try {
       // actions.deleteTransaction already surfaces a failure toast (withErrorToast) — no need to
       // toast again here, only to stop the dialog/modal from closing on failure.
+      op.stage("submit", "Removing transaction & restoring balance");
       await actions.deleteTransaction(transaction, expense);
-      toast.success("Transaction deleted");
+      op.succeed({ toast: { title: "Transaction deleted" } });
       setConfirmDeleteOpen(false);
       onOpenChange(false);
     } catch {
       // Already toasted by actions.deleteTransaction.
+      op.dismiss();
     } finally {
       setDeleting(false);
     }

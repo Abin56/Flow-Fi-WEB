@@ -2,31 +2,15 @@
 
 import { ArrowUpRight, Building2, CreditCard, Lock, LockOpen, Trash2, UserRound, Wallet, X } from "lucide-react";
 import Link from "next/link";
-import { ClayBadge } from "@/components/clay/clay-badge";
 import { ClayButton } from "@/components/clay/clay-button";
-import { CurrencyCell, DateCell, FinanceTable, type FinanceTableColumn } from "@/components/finance";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { formatCurrency } from "@/lib/format";
-import { installmentStatus, remainingAmount, type Installment, type InstallmentStatus } from "@/lib/models/payment-schedule";
+import { remainingAmount, type Installment } from "@/lib/models/payment-schedule";
+import { InstallmentList, PaymentHistoryList } from "@/features/loans/components/payment-rows";
+import type { RecordedPaymentAction } from "@/features/loans/lib/recorded-payments";
 import type { EmiRow } from "@/features/emi/hooks/use-emi-data";
 import { EMI_TYPE_LABEL, emiBadges, emiCardLabel } from "@/features/emi/components/emi-card";
 import { DetailHero, DetailSectionTitle, FactGrid, LinkedList, LinkedRow, daysUntil, dueLabel } from "@/features/loans/components/loan-emi-ui";
-
-const STATUS_TONE: Record<InstallmentStatus, "success" | "expense" | "warning" | "neutral"> = {
-  paid: "success",
-  partiallyPaid: "warning",
-  overdue: "expense",
-  skipped: "neutral",
-  upcoming: "neutral",
-};
-
-const STATUS_LABEL: Record<InstallmentStatus, string> = {
-  paid: "Paid",
-  partiallyPaid: "Partial",
-  overdue: "Overdue",
-  skipped: "Skipped",
-  upcoming: "Upcoming",
-};
 
 interface EmiScheduleDialogProps {
   open: boolean;
@@ -37,6 +21,11 @@ interface EmiScheduleDialogProps {
   onToggleClose: (row: EmiRow) => void;
   /** True while a Close/Reopen write is in flight — blocks a double click. */
   statusBusy?: boolean;
+  /** Recorded payments, grouped per payment action. */
+  paymentActions: RecordedPaymentAction[];
+  historyLoading: boolean;
+  /** Opens a recorded payment's details (where it can be edited). */
+  onViewPayment: (action: RecordedPaymentAction) => void;
 }
 
 function GoTo({ href, label }: { href: string; label: string }) {
@@ -54,7 +43,7 @@ function GoTo({ href, label }: { href: string; label: string }) {
 /** EMI details, laid out exactly like `LoanScheduleDialog` — outstanding balance first, key facts,
  *  what it's linked to, then the installment schedule. `row` is resolved live by the parent from
  *  Firestore-backed rows, so every persisted change re-renders it in place. */
-export function EmiScheduleDialog({ open, onOpenChange, row, onDelete, onRecordPayment, onToggleClose, statusBusy = false }: EmiScheduleDialogProps) {
+export function EmiScheduleDialog({ open, onOpenChange, row, onDelete, onRecordPayment, onToggleClose, statusBusy = false, paymentActions, historyLoading, onViewPayment }: EmiScheduleDialogProps) {
   if (!row) return null;
 
   const totalPaid = row.installments.reduce((sum, i) => sum + i.amountPaid, 0);
@@ -64,54 +53,6 @@ export function EmiScheduleDialog({ open, onOpenChange, row, onDelete, onRecordP
   const cardLabel = emiCardLabel(row);
   const interest = row.emi.interest;
   const installmentAmount = nextPayable?.amountDue ?? row.installments[0]?.amountDue ?? 0;
-
-  const columns: FinanceTableColumn<Installment>[] = [
-    {
-      id: "seq",
-      header: "#",
-      accessor: (i) => <span className="font-mono text-xs text-muted-foreground">{i.sequenceNumber}</span>,
-      width: "44px",
-    },
-    {
-      id: "dueDate",
-      header: "Due Date",
-      accessor: (i) => <DateCell date={i.dueDate} className="text-sm text-foreground/85" />,
-      minWidth: "120px",
-    },
-    {
-      id: "principal",
-      header: "Principal",
-      accessor: (i) => (i.principalPortion != null ? <CurrencyCell amount={i.principalPortion} signed={false} className="text-sm" /> : <span className="text-muted-foreground">—</span>),
-      numeric: true,
-      minWidth: "100px",
-      hideOnMobile: true,
-    },
-    {
-      id: "interest",
-      header: "Interest",
-      accessor: (i) => (i.interestPortion != null ? <CurrencyCell amount={i.interestPortion} signed={false} className="text-sm" /> : <span className="text-muted-foreground">—</span>),
-      numeric: true,
-      minWidth: "100px",
-      hideOnMobile: true,
-    },
-    {
-      id: "amount",
-      header: "Amount",
-      accessor: (i) => <CurrencyCell amount={i.amountDue} signed={false} className="text-sm font-semibold" />,
-      numeric: true,
-      minWidth: "110px",
-    },
-    {
-      id: "status",
-      header: "Status",
-      accessor: (i) => {
-        const status = installmentStatus(i);
-        return <ClayBadge tone={STATUS_TONE[status]}>{STATUS_LABEL[status]}</ClayBadge>;
-      },
-      width: "100px",
-      align: "right",
-    },
-  ];
 
   const linked = [
     cardLabel ? (
@@ -127,7 +68,7 @@ export function EmiScheduleDialog({ open, onOpenChange, row, onDelete, onRecordP
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         showCloseButton={false}
-        className="flex max-h-[88vh] flex-col gap-0 overflow-hidden rounded-none border border-border p-0 shadow-lg ring-0 sm:max-w-3xl"
+        className="flex max-h-[88vh] flex-col gap-0 overflow-hidden rounded-[10px] border border-border p-0 shadow-lg ring-0 sm:max-w-3xl"
       >
         <button
           type="button"
@@ -141,7 +82,7 @@ export function EmiScheduleDialog({ open, onOpenChange, row, onDelete, onRecordP
         <DialogHeader className="shrink-0 gap-0.5 border-b border-border px-6 pt-5 pb-4 pr-14 text-left">
           <span className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">EMI</span>
           <DialogTitle className="font-heading text-lg font-semibold">{row.emi.name}</DialogTitle>
-          <DialogDescription className="text-foreground/70">
+          <DialogDescription className="text-muted-foreground">
             {row.emi.lenderName ?? EMI_TYPE_LABEL[row.emi.loanType]}
             {interest ? ` · ${interest.ratePercent}% p.a. ${interest.type === "flat" ? "flat" : "reducing"}` : " · No interest"}
           </DialogDescription>
@@ -158,7 +99,7 @@ export function EmiScheduleDialog({ open, onOpenChange, row, onDelete, onRecordP
             />
 
             {!isClosed && nextPayable && (
-              <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-muted/50 px-4 py-3">
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-[8px] border border-border bg-secondary px-4 py-3">
                 <div className="flex flex-col">
                   <span className={nextOverdue ? "text-xs font-semibold text-expense" : "text-xs font-medium text-muted-foreground"}>
                     Next installment · {dueLabel(nextPayable.dueDate)}
@@ -196,17 +137,25 @@ export function EmiScheduleDialog({ open, onOpenChange, row, onDelete, onRecordP
           </div>
 
           <div className="border-t border-border px-6 py-5">
-            <DetailSectionTitle aside={!isClosed && <span className="text-xs text-muted-foreground">Click an unpaid installment to pay it</span>}>
+            <DetailSectionTitle aside={<span className="text-xs text-muted-foreground">Select an installment to pay or view it</span>}>
               Installments
             </DetailSectionTitle>
-            <FinanceTable
-              columns={columns}
-              data={row.installments}
-              getRowId={(i) => i.id}
-              className="rounded-xl"
-              onRowClick={(i) => !isClosed && remainingAmount(i) > 0 && onRecordPayment(row, i)}
-              rowClassName={(i) => (isClosed || remainingAmount(i) <= 0 ? "cursor-default!" : undefined)}
+            <InstallmentList
+              installments={row.installments}
+              total={row.emi.installmentCount}
+              closed={isClosed}
+              actions={paymentActions}
+              onPay={(i) => onRecordPayment(row, i)}
+              onViewPayment={onViewPayment}
             />
+          </div>
+          <div className="border-t border-border px-6 py-5">
+            <DetailSectionTitle>Payment history</DetailSectionTitle>
+            {historyLoading && paymentActions.length === 0 ? (
+              <p className="text-xs text-muted-foreground">Loading history…</p>
+            ) : (
+              <PaymentHistoryList actions={paymentActions} onOpen={onViewPayment} />
+            )}
           </div>
         </div>
 
@@ -214,11 +163,11 @@ export function EmiScheduleDialog({ open, onOpenChange, row, onDelete, onRecordP
           {isClosed && <p className="text-xs text-muted-foreground">This EMI is closed. Reopen it to record payments.</p>}
           <div className="flex w-full flex-wrap items-center gap-2 sm:justify-between">
             <div className="flex flex-wrap items-center gap-1">
-              <ClayButton variant="ghost" size="sm" className="gap-1.5 rounded-none text-foreground/75" onClick={() => onToggleClose(row)} disabled={statusBusy}>
+              <ClayButton variant="ghost" size="sm" className="gap-1.5 rounded-[6px] font-medium text-foreground" onClick={() => onToggleClose(row)} disabled={statusBusy}>
                 {isClosed ? <LockOpen className="size-3.5" /> : <Lock className="size-3.5" />}
                 {statusBusy ? (isClosed ? "Reopening…" : "Closing…") : isClosed ? "Reopen" : "Close EMI"}
               </ClayButton>
-              <ClayButton variant="ghost" size="sm" className="gap-1.5 rounded-none text-expense hover:text-expense" onClick={() => onDelete(row)} disabled={statusBusy}>
+              <ClayButton variant="ghost" size="sm" className="gap-1.5 rounded-[6px] font-medium text-expense hover:text-expense" onClick={() => onDelete(row)} disabled={statusBusy}>
                 <Trash2 className="size-3.5" />
                 Delete
               </ClayButton>
@@ -226,7 +175,7 @@ export function EmiScheduleDialog({ open, onOpenChange, row, onDelete, onRecordP
 
             <ClayButton
               variant="primary"
-              className="gap-1.5 rounded-none"
+              className="gap-1.5 rounded-[6px] border-primary-accent-text font-semibold"
               disabled={isClosed || nextPayable == null}
               onClick={() => nextPayable && onRecordPayment(row, nextPayable)}
             >
