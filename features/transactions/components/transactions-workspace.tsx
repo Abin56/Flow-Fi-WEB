@@ -2,7 +2,6 @@
 
 import {
   Calendar,
-  Check,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -19,7 +18,7 @@ import {
   Trash2,
   Upload,
 } from "lucide-react";
-import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useState } from "react";
 import { ClayButton } from "@/components/clay/clay-button";
 import {
   ConfirmDialog,
@@ -425,40 +424,6 @@ export function TransactionsWorkspace() {
     }
   }
 
-  /**
-   * The tick column's quick action. With no person linked yet, there's
-   * nothing to toggle — open the full popup pre-focused on assignment
-   * instead. Otherwise flips `owesPersonToggle` in place through the same
-   * state machine the popup uses, so a person's ledger never drifts out of
-   * sync with what the table shows.
-   */
-  const handleQuickToggleOwed = useCallback(
-    async (row: TransactionRow) => {
-      if (!actions) return;
-      const { transaction } = row;
-      if (!transaction.linkedPersonId) {
-        setDetailRow(row);
-        setAutoFocusAssign(true);
-        setDetailOpen(true);
-        return;
-      }
-      const person = people.find((p) => p.id === transaction.linkedPersonId);
-      const existingExpense = expenseByTransactionId.get(transaction.id) ?? null;
-      try {
-        // actions.applyOwesPersonChange already surfaces a failure toast (withErrorToast).
-        await actions.applyOwesPersonChange({
-          transaction,
-          existingExpense,
-          target: { personId: transaction.linkedPersonId, personName: person?.name ?? "", owesPersonToggle: !transaction.owesPersonToggle },
-        });
-        toast.success(transaction.owesPersonToggle ? "Unmarked" : "Marked as owed to you");
-      } catch {
-        // Already toasted by actions.applyOwesPersonChange.
-      }
-    },
-    [actions, people, expenseByTransactionId],
-  );
-
   const columns: FinanceTableColumn<TransactionRow>[] = useMemo(
     () => [
     {
@@ -516,36 +481,6 @@ export function TransactionsWorkspace() {
       width: "130px",
     },
     {
-      id: "owed",
-      header: "",
-      accessor: (row) => {
-        const linked = row.transaction.linkedPersonId != null;
-        const active = linked && row.transaction.owesPersonToggle;
-        const label = active ? "This person owes me — tap to unmark" : linked ? "Mark as owed to you" : "Assign to a person";
-        return (
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              handleQuickToggleOwed(row);
-            }}
-            className={cn(
-              "flex size-7 items-center justify-center rounded-full border transition-colors",
-              active
-                ? "border-primary bg-primary text-primary-foreground"
-                : "border-border/60 text-muted-foreground hover:border-primary/50 hover:text-primary-accent-text",
-            )}
-            aria-label={label}
-            title={label}
-          >
-            <Check className="size-3.5" />
-          </button>
-        );
-      },
-      width: "48px",
-      align: "center",
-    },
-    {
       id: "delete",
       header: "",
       accessor: (row) => (
@@ -565,7 +500,7 @@ export function TransactionsWorkspace() {
       align: "center",
     },
     ],
-    [pageRows, safePage, rowsPerPage, handleQuickToggleOwed, duplicateTransactionIds, displayDescription],
+    [pageRows, safePage, rowsPerPage, duplicateTransactionIds, displayDescription],
   );
 
   if (isLoading) {

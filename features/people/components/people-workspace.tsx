@@ -6,7 +6,6 @@ import {
   ArrowUpFromLine,
   Contact,
   IndianRupee,
-  StickyNote,
   User,
   Users,
   type LucideIcon,
@@ -22,8 +21,6 @@ import { type PeopleTab, PeopleToolbar } from "@/features/people/components/peop
 import { PersonOverviewPanel } from "@/features/people/components/person-overview-panel";
 import { ShareExpenseDialog } from "@/features/people/components/share-expense-dialog";
 import { SettleUpDialog } from "@/features/people/components/settle-up-dialog";
-import { RecentPeopleTransactions } from "@/features/people/components/recent-people-transactions";
-import { AllPeopleTransactionsDialog } from "@/features/people/components/all-people-transactions-dialog";
 import { usePeopleActions, usePeopleRows, type PersonActivityItem } from "@/features/people/hooks/use-people-data";
 import { SettleEntryDialog } from "@/features/people/components/settle-entry-dialog";
 import { usePeople } from "@/hooks/use-people";
@@ -118,7 +115,6 @@ export function PeopleWorkspace() {
   const [shareExpensePerson, setShareExpensePerson] = useState<Person | null>(null);
   const [settleUpPerson, setSettleUpPerson] = useState<Person | null>(null);
   const [settleEntry, setSettleEntry] = useState<PersonActivityItem | null>(null);
-  const [viewAllTransactionsOpen, setViewAllTransactionsOpen] = useState(false);
   const [personForm, setPersonForm] = useState<PersonFormState>(emptyPersonForm);
   const [personFormError, setPersonFormError] = useState<string | null>(null);
   const [entryForm, setEntryForm] = useState<LedgerEntryFormState>(emptyLedgerEntryForm);
@@ -275,7 +271,7 @@ export function PeopleWorkspace() {
 
   return (
     <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
-      <div className="flex min-w-0 flex-1 flex-col gap-6">
+      <div className="flex min-w-0 flex-col gap-6 lg:flex-[1.4]">
         <PeopleHeader onAddPerson={openAddPerson} />
         <PeopleStats />
 
@@ -327,11 +323,7 @@ export function PeopleWorkspace() {
             <PeopleGrid people={filtered} selectedId={selected?.id ?? ""} onSelect={selectPerson} />
           )}
         </div>
-
-        <RecentPeopleTransactions onViewAll={() => setViewAllTransactionsOpen(true)} />
       </div>
-
-      <AllPeopleTransactionsDialog open={viewAllTransactionsOpen} onOpenChange={setViewAllTransactionsOpen} />
 
       {overviewOpen && selected && (
         <PersonOverviewPanel
@@ -378,6 +370,7 @@ export function PeopleWorkspace() {
           person={shareExpensePerson}
           accounts={accounts}
           categories={categories}
+          people={rawPeople}
         />
       )}
 
@@ -402,16 +395,16 @@ export function PeopleWorkspace() {
         onConfirm={handleSavePerson}
         confirmLabel={saving ? "Saving…" : editingPerson ? "Save Changes" : "Add Person"}
         loading={saving}
-        contentClassName="sm:max-w-xl"
+        contentClassName="sm:max-w-md rounded-3xl [&_.rounded-none]:rounded-full"
       >
-        <div className="flex flex-col gap-3 bg-muted/30 p-4">
+        <div className="flex flex-col gap-3 rounded-2xl bg-muted/30 p-4">
           <SectionLabel icon={Contact}>Contact Details</SectionLabel>
           <label className="flex flex-col gap-1">
             <span className="text-xs font-medium text-muted-foreground">Name</span>
             <div className="relative">
               <User className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
               <input
-                className={cn(FLAT_INPUT, "pl-9")}
+                className={cn(FLAT_INPUT, "rounded-xl pl-9")}
                 placeholder="e.g. Priya Sharma"
                 value={personForm.name}
                 onChange={(e) => setPersonForm((f) => ({ ...f, name: e.target.value }))}
@@ -422,7 +415,7 @@ export function PeopleWorkspace() {
             <label className="flex flex-col gap-1">
               <span className="text-xs font-medium text-muted-foreground">Phone (optional)</span>
               <input
-                className={FLAT_INPUT}
+                className={cn(FLAT_INPUT, "rounded-xl")}
                 value={personForm.phone}
                 onChange={(e) => setPersonForm((f) => ({ ...f, phone: e.target.value }))}
               />
@@ -431,7 +424,7 @@ export function PeopleWorkspace() {
               <span className="text-xs font-medium text-muted-foreground">Email (optional)</span>
               <input
                 type="email"
-                className={FLAT_INPUT}
+                className={cn(FLAT_INPUT, "rounded-xl")}
                 value={personForm.email}
                 onChange={(e) => setPersonForm((f) => ({ ...f, email: e.target.value }))}
               />
@@ -440,13 +433,13 @@ export function PeopleWorkspace() {
         </div>
 
         {!editingPerson && (
-          <div className="mt-5 flex flex-col gap-1 bg-muted/30 p-4">
+          <div className="mt-5 flex flex-col gap-1 rounded-2xl bg-muted/30 p-4">
             <SectionLabel icon={IndianRupee}>Opening Balance</SectionLabel>
             <div className="relative mt-2">
               <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary-accent-text">₹</span>
               <input
                 type="number"
-                className={cn(FLAT_INPUT, "border-primary/30 bg-primary/5 pl-7 text-base font-semibold focus:border-primary")}
+                className={cn(FLAT_INPUT, "rounded-xl border-primary/30 bg-primary/5 pl-7 text-base font-semibold focus:border-primary")}
                 placeholder="0.00"
                 value={personForm.openingBalance}
                 onChange={(e) => setPersonForm((f) => ({ ...f, openingBalance: e.target.value }))}
@@ -456,18 +449,8 @@ export function PeopleWorkspace() {
           </div>
         )}
 
-        <div className="mt-5 flex flex-col gap-1 bg-muted/30 p-4">
-          <SectionLabel icon={StickyNote}>Notes (optional)</SectionLabel>
-          <textarea
-            className={cn(FLAT_INPUT, "min-h-20 resize-none py-2")}
-            rows={3}
-            value={personForm.notes}
-            onChange={(e) => setPersonForm((f) => ({ ...f, notes: e.target.value }))}
-          />
-        </div>
-
         {personFormError && (
-          <p className="flex items-center gap-1.5 border border-expense/30 bg-expense/8 px-3 py-2 text-xs font-medium text-expense">
+          <p className="flex items-center gap-1.5 rounded-xl border border-expense/30 bg-expense/8 px-3 py-2 text-xs font-medium text-expense">
             {personFormError}
           </p>
         )}

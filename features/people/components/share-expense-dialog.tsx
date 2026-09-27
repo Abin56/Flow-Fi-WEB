@@ -5,6 +5,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { ClayButton } from "@/components/clay/clay-button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Trash2, Plus } from "lucide-react";
+import { cn } from "@/lib/utils";
 import type { Account } from "@/lib/models/account";
 import type { Category } from "@/lib/models/category";
 import type { Person } from "@/lib/models/person";
@@ -19,13 +20,13 @@ const SPLIT_TYPE_OPTIONS: { value: SplitType; label: string }[] = [
 ];
 
 /** Collectible-only statuses — see `ExpenseParticipant.receivedStatus`. */
-const RECEIVED_STATUS_OPTIONS: { value: Exclude<ReceivedStatus, "notApplicable">; label: string }[] = [
+const RECEIVED_STATUS_OPTIONS: { value: Exclude<ReceivedStatus, "notApplicable" | "excluded">; label: string }[] = [
   { value: "yetToReceive", label: "Yet to Receive" },
   { value: "received", label: "Received" },
-  { value: "excluded", label: "Don't count in received" },
 ];
 
 interface ExtraParticipant {
+  personId: string | null;
   name: string;
   value: string;
   receivedStatus: ReceivedStatus;
@@ -46,12 +47,14 @@ export function ShareExpenseDialog({
   person,
   accounts,
   categories,
+  people,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   person: Person;
   accounts: Account[];
   categories: Category[];
+  people: Person[];
 }) {
   const actions = useTransactionActions();
 
@@ -95,8 +98,10 @@ export function ShareExpenseDialog({
   }
 
   function addExtraParticipant() {
-    setExtraParticipants((p) => [...p, { name: "", value: "", receivedStatus: "yetToReceive" }]);
+    setExtraParticipants((p) => [...p, { personId: null, name: "", value: "", receivedStatus: "yetToReceive" }]);
   }
+
+  const selectablePeople = people.filter((p) => p.id !== person.id);
 
   function updateExtraParticipant(index: number, patch: Partial<ExtraParticipant>) {
     setExtraParticipants((p) => p.map((row, i) => (i === index ? { ...row, ...patch } : row)));
@@ -155,7 +160,7 @@ export function ShareExpenseDialog({
         const others = extraParticipants
           .filter((p) => p.name.trim() !== "")
           .map((p) => ({
-            personId: null,
+            personId: p.personId,
             name: p.name.trim(),
             value: splitType === "equal" ? null : Number(p.value),
             receivedStatus: p.receivedStatus,
@@ -202,7 +207,7 @@ export function ShareExpenseDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[calc(100vh-2rem)] flex-col gap-4 overflow-hidden sm:max-w-md">
+      <DialogContent className="flex max-h-[calc(100vh-2rem)] flex-col gap-4 overflow-hidden sm:max-w-lg">
         <DialogHeader className="shrink-0">
           <DialogTitle>Share Expense — {person.name}</DialogTitle>
           <DialogDescription>Split an expense with {person.name}, tracked against their balance.</DialogDescription>
@@ -356,12 +361,37 @@ export function ShareExpenseDialog({
                   {extraParticipants.map((p, i) => (
                     <div key={i} className="flex flex-col gap-1 border-t border-border/40 pt-2 first:border-t-0 first:pt-0">
                       <div className="flex items-center gap-2">
-                      <input
-                        className="clay-pressed h-10 flex-1 rounded-xl px-3 text-sm outline-none"
-                        placeholder="Name"
-                        value={p.name}
-                        onChange={(e) => updateExtraParticipant(i, { name: e.target.value })}
-                      />
+                      <Select
+                        value={p.personId ?? "custom"}
+                        onValueChange={(v) => {
+                          if (v === "custom") {
+                            updateExtraParticipant(i, { personId: null, name: "" });
+                            return;
+                          }
+                          const picked = selectablePeople.find((sp) => sp.id === v);
+                          updateExtraParticipant(i, { personId: v, name: picked?.name ?? "" });
+                        }}
+                      >
+                        <SelectTrigger className={cn("h-10 w-32 shrink-0 rounded-xl", p.personId == null && "flex-1")}>
+                          <SelectValue placeholder="Person" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="custom">Custom name</SelectItem>
+                          {selectablePeople.map((sp) => (
+                            <SelectItem key={sp.id} value={sp.id}>
+                              {sp.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      {p.personId == null && (
+                        <input
+                          className="clay-pressed h-10 flex-1 rounded-xl px-3 text-sm outline-none"
+                          placeholder="Name"
+                          value={p.name}
+                          onChange={(e) => updateExtraParticipant(i, { name: e.target.value })}
+                        />
+                      )}
                       {splitType !== "equal" && (
                         <input
                           type="number"
