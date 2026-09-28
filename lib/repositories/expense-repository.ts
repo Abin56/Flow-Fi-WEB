@@ -206,6 +206,12 @@ export interface SettleAcrossPendingParams {
    * principal an old Web Loan once mirrored into the ledger. Defaults to 0.
    */
   legacyLoanLedger?: number;
+  /**
+   * What they owe me for opted-in Person-linked EMI installments (`PersonPosition.emiReceivable`) — not
+   * in `currentBalance`, but part of what Settle Up settles, so it counts toward the remainder's
+   * direction: a lump sum against an EMI obligation is money received, not money I repay. Defaults to 0.
+   */
+  emiReceivable?: number;
 }
 
 export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
@@ -1086,7 +1092,7 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
    * caller. Mirrors `ExpenseRepository.settleAcrossPending`.
    */
   async settleAcrossPending(params: SettleAcrossPendingParams): Promise<void> {
-    const { person, pending, amount, date, installmentPaymentRepositoryFor, note, settlementMethod, legacyLoanLedger = 0 } = params;
+    const { person, pending, amount, date, installmentPaymentRepositoryFor, note, settlementMethod, legacyLoanLedger = 0, emiReceivable = 0 } = params;
     if (amount <= 0) {
       throw new Error("Settlement amount must be greater than 0");
     }
@@ -1124,7 +1130,7 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
       // wrong direction and doubling the error.
       const refreshedPerson = (await this.personRepository.getByKey(person.id)) ?? person;
       await this.ledgerRepositoryFor(person.id).addEntry(refreshedPerson, {
-        type: refreshedPerson.currentBalance - legacyLoanLedger > 0 ? "receivedBack" : "repaid",
+        type: refreshedPerson.currentBalance - legacyLoanLedger + emiReceivable > 0 ? "receivedBack" : "repaid",
         amount: remaining,
         date,
         note: note === "" || note == null ? "Settled all" : note,

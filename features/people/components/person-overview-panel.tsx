@@ -1,322 +1,402 @@
 "use client";
 
-import {
-  ArrowDownToLine,
-  ArrowRight,
-  ArrowUpFromLine,
-  Bell,
-  Calendar,
-  HandCoins,
-  Paperclip,
-  Pencil,
-  Plus,
-  Split,
-  StickyNote,
-  Trash2,
-  Users,
-  X,
-} from "lucide-react";
-import { useState } from "react";
+import { Bell, Calendar, HandCoins, Mail, MoreHorizontal, Paperclip, Pencil, Phone, Plus, Share2, Split, StickyNote, Trash2, Users, X } from "lucide-react";
+import { useRef, useState } from "react";
 import { ClayAvatar } from "@/components/clay/clay-avatar";
-import { ClayButton } from "@/components/clay/clay-button";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { useAccounts } from "@/hooks/use-accounts";
+import { useCategories } from "@/hooks/use-categories";
+import { usePeople } from "@/hooks/use-people";
 import { formatCurrency } from "@/lib/format";
+import { cycleContaining, type StatementCycle } from "@/lib/engines/person-cycle-statement";
+import type { Person } from "@/lib/models/person";
 import type { PersonActivityItem, PersonViewRow } from "@/features/people/hooks/use-people-data";
+import { usePersonCycleStatement } from "@/features/people/hooks/use-person-cycle-statement";
 import { usePersonUpcomingEmi } from "@/features/people/hooks/use-person-upcoming-emi";
-import { PersonTransactionHistory } from "@/features/people/components/person-transaction-history/person-transaction-history";
+import { PersonCycleStatementSection } from "@/features/people/components/cycle-statement/person-cycle-statement-section";
+import { PersonActivityFeed } from "@/features/people/components/person-activity-feed";
+import { AddEntryMode, type AddEntryParams, type AddEntryType } from "@/features/people/components/workspace/add-entry-mode";
+import { EditPersonMode, type EditPersonPatch } from "@/features/people/components/workspace/edit-person-mode";
+import { WsLabel } from "@/features/people/components/workspace/person-workspace-ui";
+import { SettleEntryMode, type SettleEntryParams } from "@/features/people/components/workspace/settle-entry-mode";
+import { SettleUpMode } from "@/features/people/components/workspace/settle-up-mode";
+import { ShareStatementMode } from "@/features/people/components/workspace/share-statement-mode";
+import { SplitExpenseMode } from "@/features/people/components/workspace/split-expense-mode";
 import { cn } from "@/lib/utils";
 
-const TABS = ["Overview", "Notes", "Attachments"] as const;
-type Tab = (typeof TABS)[number];
+/** The workspace's internal modes — the shell (header) stays put; only the content area changes. */
+type Mode =
+  | { kind: "overview" }
+  | { kind: "add"; type?: AddEntryType }
+  | { kind: "settle" }
+  | { kind: "settleEntry"; entry: PersonActivityItem }
+  | { kind: "split" }
+  | { kind: "share" }
+  | { kind: "edit" };
 
-function InfoRow({ icon: Icon, label, value, onEdit }: { icon: typeof Calendar; label: string; value: string; onEdit?: () => void }) {
+/** Complex modes get a wider shell; quick forms a narrower one. */
+const WIDE: Mode["kind"][] = ["overview", "split", "share"];
+
+const VIEWS = ["Activity", "Details"] as const;
+type View = (typeof VIEWS)[number];
+
+const ICON_BUTTON =
+  "flex size-8 shrink-0 items-center justify-center rounded-[6px] text-muted-foreground outline-none transition-colors hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:bg-secondary data-[state=open]:text-foreground";
+
+const SECONDARY_ACTION =
+  "flex h-9 items-center gap-1.5 rounded-[6px] px-3 text-sm font-medium text-foreground outline-none transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40 [&_svg]:text-muted-foreground hover:[&_svg]:text-foreground";
+
+function DetailRow({ icon: Icon, label, children }: { icon: typeof Calendar; label: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-center justify-between gap-3 py-2.5 text-sm">
-      <span className="flex items-center gap-2 text-muted-foreground">
-        <Icon className="size-4" />
+    <div className="flex items-start justify-between gap-4 py-2.5 text-sm">
+      <span className="flex shrink-0 items-center gap-2 text-muted-foreground">
+        <Icon className="size-4" strokeWidth={1.75} />
         {label}
       </span>
-      <div className="flex items-center gap-1.5">
-        <span className="font-medium text-foreground">{value}</span>
-        {onEdit && (
-          <button
-            type="button"
-            aria-label={`Edit ${label}`}
-            onClick={onEdit}
-            className="flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-          >
-            <Pencil className="size-3.5" />
-          </button>
-        )}
-      </div>
+      <span className="min-w-0 text-right font-medium break-words text-foreground">{children}</span>
     </div>
   );
 }
 
+function SectionTitle({ icon: Icon, children }: { icon?: typeof Calendar; children: React.ReactNode }) {
+  return (
+    <WsLabel>
+      <span className="inline-flex items-center gap-1.5">
+        {Icon && <Icon className="size-3.5" strokeWidth={1.75} />}
+        {children}
+      </span>
+    </WsLabel>
+  );
+}
+
+/**
+ * The Person Ledger workspace — one centered surface (full-height sheet on phones) that behaves like a
+ * small app: the overview (position, actions, Activity/Details) plus Add, Settle, Split, Share and Edit
+ * modes that slide in within the same shell — no second backdrop, no modal-on-modal. Same data, statement
+ * engine and repository calls as before — layout and interaction only.
+ */
 export function PersonOverviewPanel({
   person,
+  rawPerson,
+  open,
   onClose,
-  onAddTransaction,
-  onShareExpense,
-  onSettleUp,
-  onEdit,
-  onDelete,
+  onAddEntry,
   onSettleEntry,
+  onEditPerson,
+  onDelete,
 }: {
   person: PersonViewRow;
+  /** The stored `Person` record — Settle, Split and Edit act on it. */
+  rawPerson: Person | null;
+  open: boolean;
   onClose: () => void;
-  onAddTransaction?: () => void;
-  onShareExpense?: () => void;
-  onSettleUp?: () => void;
-  onEdit?: () => void;
+  /** Records a "gave"/"borrowed" entry for this person (same payload as the old Add Transaction dialog). */
+  onAddEntry?: (params: AddEntryParams) => Promise<void>;
+  /** Settles one "gave"/"borrowed" entry (same payload as the old Settle Transaction dialog). */
+  onSettleEntry?: (params: SettleEntryParams) => Promise<void>;
+  onEditPerson?: (patch: EditPersonPatch) => Promise<void>;
   onDelete?: () => void;
-  onSettleEntry?: (item: PersonActivityItem) => void;
 }) {
-  const [tab, setTab] = useState<Tab>("Overview");
-  const [historyOpen, setHistoryOpen] = useState(false);
+  const [mode, setMode] = useState<Mode>({ kind: "overview" });
+  const [direction, setDirection] = useState<"forward" | "back">("forward");
+  const [view, setView] = useState<View>("Activity");
+  const [cycle, setCycle] = useState<StatementCycle>(() => cycleContaining(new Date()));
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const { statement, isLoading, linkedEmis, setRepays } = usePersonCycleStatement(person.id, cycle);
   const { items: upcomingEmi } = usePersonUpcomingEmi(person.id);
+  const { data: accounts = [] } = useAccounts();
+  const { data: categories = [] } = useCategories();
+  const { data: people = [] } = usePeople();
   const net = person.youAreOwed - person.youOwe;
-  const isOwedToYou = net >= 0;
-  const role = isOwedToYou ? "Creditor" : "Debtor";
+  const contact = [person.phone, person.email].filter(Boolean).join(" · ");
+  const subline = [`${person.transactionsCount} ${person.transactionsCount === 1 ? "transaction" : "transactions"}`, contact]
+    .filter(Boolean)
+    .join(" · ");
+
+  const go = (next: Mode) => {
+    setDirection(next.kind === "overview" ? "back" : "forward");
+    setMode(next);
+    scrollRef.current?.scrollTo({ top: 0 });
+  };
+  const back = () => go({ kind: "overview" });
+
+  const actions = (
+    <div className="flex flex-wrap items-center gap-y-2">
+      <button
+        type="button"
+        onClick={() => go({ kind: "add" })}
+        disabled={!onAddEntry}
+        className="flex h-9 items-center gap-1.5 rounded-[6px] border border-primary-accent-text bg-primary pr-4 pl-3 text-sm font-semibold text-primary-foreground outline-none transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+      >
+        <Plus className="size-4" strokeWidth={2.25} />
+        Add
+      </button>
+      <span className="mx-2.5 h-5 w-px bg-border-strong/60" aria-hidden />
+      <div className="-ml-1 flex items-center">
+        <button type="button" onClick={() => go({ kind: "settle" })} disabled={!rawPerson} className={SECONDARY_ACTION}>
+          <HandCoins className="size-4" strokeWidth={1.75} />
+          Settle
+        </button>
+        <button type="button" onClick={() => go({ kind: "split" })} disabled={!rawPerson} className={SECONDARY_ACTION}>
+          <Split className="size-4" strokeWidth={1.75} />
+          Split
+        </button>
+        <button type="button" onClick={() => go({ kind: "share" })} disabled={statement == null} className={SECONDARY_ACTION}>
+          <Share2 className="size-4" strokeWidth={1.75} />
+          Share
+        </button>
+      </div>
+    </div>
+  );
+
+  const loansNote = (person.loanReceivable > 0 || person.loanPayable > 0) && (
+    <p className="mt-4 max-w-md text-xs leading-relaxed text-muted-foreground">
+      Loans are settled from the Loan, outside this statement. Overall incl. loans {formatCurrency(Math.abs(net))}
+      {net > 0 ? " owed to you" : net < 0 ? " you owe" : ""}
+      {" · "}Direct balance {formatCurrency(Math.abs(person.directBalance))}
+      {person.directBalance > 0 ? " owed to you" : person.directBalance < 0 ? " you owe" : ""}
+      {person.loanReceivable > 0 && ` · Loans owed to you ${formatCurrency(person.loanReceivable)}`}
+      {person.loanPayable > 0 && ` · Loans you owe ${formatCurrency(person.loanPayable)}`}
+    </p>
+  );
+
+  const overview = (
+    <>
+      <div className="shrink-0 px-4 pt-5 pb-6 sm:px-7 sm:pt-6">
+        <PersonCycleStatementSection
+          statement={statement}
+          isLoading={isLoading}
+          cycle={cycle}
+          onCycleChange={setCycle}
+          linkedEmis={linkedEmis}
+          setRepays={setRepays}
+          actions={actions}
+          footnote={loansNote}
+        />
+      </div>
+
+      <div role="tablist" aria-label="Person workspace" className="sticky top-0 z-10 flex shrink-0 gap-6 border-y border-border bg-card px-4 sm:px-7">
+        {VIEWS.map((v) => (
+          <button
+            key={v}
+            type="button"
+            role="tab"
+            aria-selected={view === v}
+            onClick={() => setView(v)}
+            className={cn(
+              "-mb-px border-b-2 py-3 text-sm transition-colors outline-none focus-visible:text-foreground",
+              view === v ? "border-primary-accent-text font-semibold text-foreground" : "border-transparent font-medium text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {v}
+          </button>
+        ))}
+      </div>
+
+      <div
+        key={view}
+        className={cn(
+          "px-4 pt-4 animate-in duration-200 fade-in-0 sm:px-7",
+          // Activity: the feed takes the remaining height and scrolls its own list (sm+); Details scrolls with the page.
+          view === "Activity" ? "flex flex-col pb-4 sm:min-h-0 sm:flex-1" : "pb-7",
+        )}
+      >
+        {view === "Activity" ? (
+          <PersonActivityFeed
+            person={person}
+            statement={statement}
+            isLoading={isLoading}
+            onSettleEntry={onSettleEntry ? (entry) => go({ kind: "settleEntry", entry }) : undefined}
+            onAdd={onAddEntry ? () => go({ kind: "add" }) : undefined}
+          />
+        ) : (
+          <div className="grid gap-x-10 gap-y-7 md:grid-cols-2">
+            <div>
+              <SectionTitle>Overview</SectionTitle>
+              <div className="mt-1 divide-y divide-border">
+                <DetailRow icon={Calendar} label="First transaction">
+                  {person.firstTransaction || "—"}
+                </DetailRow>
+                <DetailRow icon={Users} label="Relationship">
+                  {person.relationship || "—"}
+                </DetailRow>
+                {person.phone && (
+                  <DetailRow icon={Phone} label="Phone">
+                    {person.phone}
+                  </DetailRow>
+                )}
+                {person.email && (
+                  <DetailRow icon={Mail} label="Email">
+                    {person.email}
+                  </DetailRow>
+                )}
+              </div>
+            </div>
+
+            <div>
+              <SectionTitle icon={Bell}>Upcoming EMI</SectionTitle>
+              {upcomingEmi.length === 0 ? (
+                <p className="mt-2.5 text-sm text-muted-foreground">No upcoming EMI</p>
+              ) : (
+                <div className="mt-1 divide-y divide-border">
+                  {upcomingEmi.slice(0, 5).map((item) => (
+                    <div key={item.loanId} className="flex items-start justify-between gap-3 py-2.5 text-sm">
+                      <div className="flex min-w-0 flex-col">
+                        <span className="truncate font-medium text-foreground">{item.label}</span>
+                        <span className="text-xs text-muted-foreground">
+                          Due {item.dueDate.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
+                          {item.isPayerOnly && " · Pays this for you"}
+                        </span>
+                      </div>
+                      <span className="font-semibold text-foreground tabular-nums">{formatCurrency(item.amount)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div>
+              <SectionTitle icon={StickyNote}>Notes</SectionTitle>
+              {person.notes ? (
+                <p className="mt-2.5 text-sm whitespace-pre-wrap text-foreground">{person.notes}</p>
+              ) : (
+                <p className="mt-2.5 text-sm text-muted-foreground">No notes yet.</p>
+              )}
+            </div>
+
+            <div>
+              <SectionTitle icon={Paperclip}>Attachments</SectionTitle>
+              <p className="mt-2.5 text-sm text-muted-foreground">No attachments yet.</p>
+            </div>
+          </div>
+        )}
+      </div>
+    </>
+  );
+
+  let content: React.ReactNode = overview;
+  if (mode.kind === "add" && onAddEntry) {
+    content = (
+      <AddEntryMode
+        personName={person.name}
+        initialType={mode.type}
+        accounts={accounts}
+        onBack={back}
+        onSave={async (params) => {
+          await onAddEntry(params);
+          back();
+        }}
+      />
+    );
+  } else if (mode.kind === "settle" && rawPerson) {
+    content = <SettleUpMode person={rawPerson} onBack={back} onDone={back} />;
+  } else if (mode.kind === "settleEntry" && onSettleEntry) {
+    content = (
+      <SettleEntryMode
+        personName={person.name}
+        entry={mode.entry}
+        accounts={accounts}
+        onBack={back}
+        onSettle={async (params) => {
+          await onSettleEntry(params);
+          back();
+        }}
+      />
+    );
+  } else if (mode.kind === "split" && rawPerson) {
+    content = <SplitExpenseMode person={rawPerson} accounts={accounts} categories={categories} people={people} onBack={back} onDone={back} />;
+  } else if (mode.kind === "share" && statement) {
+    content = <ShareStatementMode statement={statement} phone={person.phone} onBack={back} />;
+  } else if (mode.kind === "edit" && rawPerson && onEditPerson) {
+    content = (
+      <EditPersonMode
+        person={rawPerson}
+        onBack={back}
+        onSave={async (patch) => {
+          await onEditPerson(patch);
+          back();
+        }}
+      />
+    );
+  }
 
   return (
-    <aside className="surface-flat flex h-fit w-full shrink-0 flex-col rounded-2xl border border-border/50 p-5 lg:w-104">
-      <div className="flex items-start justify-between gap-2">
-        <div className="flex items-center gap-3">
-          <ClayAvatar name={person.name} size={48} />
-          <div className="min-w-0">
-            <p className="truncate text-sm font-semibold text-foreground">{person.name}</p>
-            <p className="truncate text-xs text-muted-foreground">
-              {person.phone} · {person.email}
-            </p>
-            <span
-              className={cn(
-                "mt-1 inline-block rounded-full px-2 py-0.5 text-[11px] font-semibold",
-                isOwedToYou ? "bg-success/16 text-success" : "bg-expense/12 text-expense",
-              )}
-            >
-              {role}
-            </span>
+    <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
+      <DialogContent
+        showCloseButton={false}
+        onEscapeKeyDown={(e) => {
+          // Escape steps back out of a mode first; only closes from the overview.
+          if (mode.kind !== "overview") {
+            e.preventDefault();
+            back();
+          }
+        }}
+        className={cn(
+          "flex flex-col gap-0 overflow-hidden border border-border bg-card p-0 shadow-[var(--shadow-e4)] ring-0",
+          // Phone: full-height sheet. Desktop: centered workspace that widens for complex modes.
+          "top-0 left-0 h-[100dvh] max-h-[100dvh] max-w-none translate-x-0 translate-y-0 rounded-none",
+          "sm:top-1/2 sm:left-1/2 sm:h-auto sm:max-h-[min(92vh,60rem)] sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-[10px]",
+          "transition-[max-width] duration-200 ease-out",
+          WIDE.includes(mode.kind) ? "sm:max-w-3xl" : "sm:max-w-xl",
+        )}
+      >
+        {/* Shell header — who, always visible */}
+        <div className="flex shrink-0 items-center gap-3 border-b border-border px-4 py-3 sm:px-7">
+          <ClayAvatar name={person.name} size={36} />
+          <div className="flex min-w-0 flex-1 flex-col">
+            <DialogTitle className="truncate font-heading text-base leading-tight font-semibold tracking-tight sm:text-lg">{person.name}</DialogTitle>
+            <DialogDescription className="truncate text-xs text-muted-foreground">{subline}</DialogDescription>
+          </div>
+          <div className="flex shrink-0 items-center gap-0.5">
+            {onEditPerson && rawPerson && (
+              <button
+                type="button"
+                aria-label="Edit person"
+                aria-pressed={mode.kind === "edit"}
+                onClick={() => go({ kind: "edit" })}
+                className={cn(ICON_BUTTON, mode.kind === "edit" && "bg-secondary text-foreground")}
+              >
+                <Pencil className="size-4" strokeWidth={1.75} />
+              </button>
+            )}
+            {onDelete && (
+              <DropdownMenu modal={false}>
+                <DropdownMenuTrigger asChild>
+                  <button type="button" aria-label="More actions" className={ICON_BUTTON}>
+                    <MoreHorizontal className="size-4" strokeWidth={1.75} />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="min-w-40 rounded-[8px]">
+                  <DropdownMenuItem variant="destructive" onSelect={onDelete}>
+                    <Trash2 strokeWidth={1.75} />
+                    Delete person
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+            <span className="mx-1 h-5 w-px bg-border" aria-hidden />
+            <button type="button" aria-label="Close person view" onClick={onClose} className={ICON_BUTTON}>
+              <X className="size-[18px]" strokeWidth={1.75} />
+            </button>
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-1">
-          {onEdit && (
-            <button
-              type="button"
-              aria-label="Edit person"
-              onClick={onEdit}
-              className="flex size-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-            >
-              <Pencil className="size-3.5" />
-            </button>
-          )}
-          {onDelete && (
-            <button
-              type="button"
-              aria-label="Delete person"
-              onClick={onDelete}
-              className="flex size-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-expense/12 hover:text-expense"
-            >
-              <Trash2 className="size-3.5" />
-            </button>
-          )}
-          <button
-            type="button"
-            aria-label="Close person overview"
-            onClick={onClose}
-            className="flex size-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-          >
-            <X className="size-4" />
-          </button>
-        </div>
-      </div>
 
-      <div className={cn("mt-4 rounded-2xl p-4", isOwedToYou ? "bg-success/10" : "bg-expense/10")}>
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-xs text-muted-foreground">Net Balance</p>
-            <p className={cn("mt-1 text-2xl font-bold tabular-nums", isOwedToYou ? "text-success" : "text-expense")}>
-              {isOwedToYou ? "+" : "-"}
-              {formatCurrency(Math.abs(net))}
-            </p>
-            <p className="text-xs text-muted-foreground">{isOwedToYou ? "You are owed" : "You owe"}</p>
-          </div>
-          <span
+        {/* Mode content — slides in from the right going deeper, from the left coming back */}
+        <div ref={scrollRef} className="flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto">
+          <div
+            key={mode.kind === "settleEntry" ? `settleEntry:${mode.entry.id}` : mode.kind}
             className={cn(
-              "flex size-11 items-center justify-center rounded-full",
-              isOwedToYou ? "bg-success/20 text-success" : "bg-expense/20 text-expense",
+              "animate-in duration-200 ease-out fade-in-0",
+              // The overview's Activity view fits the workspace height so only its transaction list scrolls.
+              mode.kind === "overview" ? cn("flex flex-1 flex-col", view === "Activity" && "sm:min-h-0") : "min-h-full shrink-0",
+              direction === "forward" ? "slide-in-from-right-6" : "slide-in-from-left-6",
             )}
           >
-            {isOwedToYou ? <ArrowDownToLine className="size-5" /> : <ArrowUpFromLine className="size-5" />}
-          </span>
-        </div>
-      </div>
-
-      <div className="mt-3 grid grid-cols-3 gap-2 text-center">
-        <div className="rounded-xl border border-border/40 py-2.5">
-          <p className="text-[11px] text-muted-foreground">Total Owed to You</p>
-          <p className="mt-0.5 text-sm font-semibold tabular-nums text-success">{formatCurrency(person.youAreOwed)}</p>
-        </div>
-        <div className="rounded-xl border border-border/40 py-2.5">
-          <p className="text-[11px] text-muted-foreground">Total You Owe</p>
-          <p className="mt-0.5 text-sm font-semibold tabular-nums text-expense">{formatCurrency(person.youOwe)}</p>
-        </div>
-        <div className="rounded-xl border border-border/40 py-2.5">
-          <p className="text-[11px] text-muted-foreground">Transactions</p>
-          <p className="mt-0.5 text-sm font-semibold tabular-nums text-foreground">{person.transactionsCount}</p>
-        </div>
-      </div>
-      {(person.loanReceivable > 0 || person.loanPayable > 0) && (
-        <p className="mt-2 text-xs text-muted-foreground">
-          Direct balance {formatCurrency(Math.abs(person.directBalance))}
-          {person.directBalance > 0 ? " owed to you" : person.directBalance < 0 ? " you owe" : ""}
-          {person.loanReceivable > 0 && ` · Loans owed to you ${formatCurrency(person.loanReceivable)}`}
-          {person.loanPayable > 0 && ` · Loans you owe ${formatCurrency(person.loanPayable)}`}
-        </p>
-      )}
-
-      <div className="mt-4 flex items-center gap-1 border-b border-border/50">
-        {TABS.map((t) => (
-          <button
-            key={t}
-            type="button"
-            onClick={() => setTab(t)}
-            className={cn(
-              "border-b-2 px-2 py-2 text-xs font-medium transition-colors",
-              tab === t ? "border-primary text-primary-accent-text" : "border-transparent text-muted-foreground hover:text-foreground",
-            )}
-          >
-            {t}
-          </button>
-        ))}
-      </div>
-
-      {tab === "Overview" && (
-        <div className="divide-y divide-border/50">
-          <InfoRow icon={Calendar} label="First Transaction" value={person.firstTransaction} />
-          <InfoRow icon={Users} label="Relationship" value={person.relationship} />
-        </div>
-      )}
-
-      {tab === "Overview" && (
-        <div className="flex flex-col gap-2 border-t border-border/50 pt-3">
-          <span className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Bell className="size-4" />
-            Upcoming EMI
-          </span>
-          {upcomingEmi.length === 0 ? (
-            <p className="pl-6 text-sm text-muted-foreground">No upcoming EMI</p>
-          ) : (
-            <div className="flex flex-col gap-2 pl-6">
-              {upcomingEmi.slice(0, 5).map((item) => (
-                <div key={item.loanId} className="flex items-start justify-between gap-3 text-sm">
-                  <div className="flex flex-col">
-                    <span className="font-medium text-foreground">{item.label}</span>
-                    <span className="text-xs text-muted-foreground">
-                      Due {item.dueDate.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
-                      {item.isPayerOnly && " · Pays this for you"}
-                    </span>
-                  </div>
-                  <span className="font-medium text-foreground">{formatCurrency(item.amount)}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {tab === "Notes" &&
-        (person.notes ? (
-          <div className="py-3 text-sm whitespace-pre-wrap text-foreground">{person.notes}</div>
-        ) : (
-          <div className="flex flex-col items-center gap-2 py-8 text-center text-muted-foreground">
-            <StickyNote className="size-6" />
-            <p className="text-xs">No notes yet.</p>
-          </div>
-        ))}
-
-      {tab === "Attachments" && (
-        <div className="flex flex-col items-center gap-2 py-8 text-center text-muted-foreground">
-          <Paperclip className="size-6" />
-          <p className="text-xs">No attachments yet.</p>
-        </div>
-      )}
-
-      {tab === "Overview" && (
-        <div className="mt-1">
-          <div className="flex items-center justify-between">
-            <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Recent Activity</p>
-            <button
-              type="button"
-              onClick={() => setHistoryOpen(true)}
-              className="flex items-center gap-1 text-xs font-semibold text-primary-accent-text hover:underline"
-            >
-              View All
-              <ArrowRight className="size-3" />
-            </button>
-          </div>
-          <div className="mt-2 flex max-h-72 flex-col gap-2.5 overflow-y-auto pr-1">
-            {person.activity.slice(0, 8).map((item) => (
-              <div key={item.id} className="flex items-center gap-3 text-sm">
-                <span
-                  className={cn(
-                    "flex size-8 shrink-0 items-center justify-center rounded-full",
-                    item.type === "received" ? "bg-success/16 text-success" : "bg-expense/12 text-expense",
-                  )}
-                >
-                  {item.type === "received" ? <ArrowDownToLine className="size-3.5" /> : <ArrowUpFromLine className="size-3.5" />}
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate font-medium text-foreground">{item.type === "received" ? "I Received" : "I Paid"}</p>
-                  <p className="truncate text-xs text-muted-foreground">{item.description}</p>
-                </div>
-                <div className="shrink-0 text-right">
-                  <p className={cn("font-semibold tabular-nums", item.type === "received" ? "text-success" : "text-expense")}>
-                    {item.type === "received" ? "+" : "-"}
-                    {formatCurrency(item.amount)}
-                  </p>
-                  <p className="text-[11px] text-muted-foreground">{item.date}</p>
-                </div>
-              </div>
-            ))}
+            {content}
           </div>
         </div>
-      )}
-
-      <div className="mt-4 grid grid-cols-3 gap-2">
-        <ClayButton
-          type="button"
-          variant="primary"
-          onClick={onAddTransaction}
-          disabled={!onAddTransaction}
-          className="flex-col gap-1 py-2.5 text-xs"
-          style={{ background: "var(--gradient-accent)" }}
-        >
-          <Plus className="size-4" />
-          Add
-        </ClayButton>
-        <ClayButton
-          type="button"
-          variant="secondary"
-          onClick={onShareExpense}
-          disabled={!onShareExpense}
-          className="flex-col gap-1 py-2.5 text-xs"
-        >
-          <Split className="size-4" />
-          Share
-        </ClayButton>
-        <ClayButton
-          type="button"
-          variant="secondary"
-          onClick={onSettleUp}
-          disabled={!onSettleUp}
-          className="flex-col gap-1 py-2.5 text-xs"
-        >
-          <HandCoins className="size-4" />
-          Settle Up
-        </ClayButton>
-      </div>
-
-      <PersonTransactionHistory person={person} open={historyOpen} onOpenChange={setHistoryOpen} onSettleEntry={onSettleEntry} />
-    </aside>
+      </DialogContent>
+    </Dialog>
   );
 }

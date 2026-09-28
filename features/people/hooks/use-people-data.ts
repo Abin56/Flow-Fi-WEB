@@ -35,7 +35,13 @@
  */
 
 import { useFirestoreWatch } from "@/hooks/use-firestore-watch";
-import { useTrashedLoans } from "@/hooks/use-loans";
+import { useEmis } from "@/hooks/use-credit-cards";
+import { useAllEmiInstallments } from "@/hooks/use-emis";
+import { useAllLoanInstallments, useTrashedLoans } from "@/hooks/use-loans";
+import { cycleContaining } from "@/lib/engines/person-cycle-statement";
+import { emiReceivableThrough, personEmiObligations } from "@/lib/engines/person-emi-obligations";
+import type { Emi } from "@/lib/models/emi";
+import type { Installment } from "@/lib/models/payment-schedule";
 import { useTransactions } from "@/hooks/use-transactions";
 import { useLoanRows } from "@/features/loans/hooks/use-loans-data";
 import { personLoanActivity } from "@/features/people/lib/person-loan-activity";
@@ -311,8 +317,16 @@ export function usePersonPositions(): {
   const { entriesByPersonId, isLoading: entriesLoading } = usePeopleLedgerEntries();
   const { rows: loanRows, isLoading: loansLoading } = useLoanRows();
   const { data: trashedLoans = [], isLoading: trashLoading } = useTrashedLoans();
+  const { data: emis = [] } = useEmis();
+  const { data: emiInstallments = [] } = useAllEmiInstallments();
+  const { data: loanInstallments = [] } = useAllLoanInstallments();
 
   return useMemo(() => {
+    // Person-linked EMI installments due through the end of the current 18th → 17th cycle — the same
+    // primitive and cutoff the current-cycle statement uses, so the list and the statement agree.
+    const now = new Date();
+    const emiCutoff = cycleContaining(now).end;
+    const allInstallments = [...(emiInstallments as Installment[]), ...(loanInstallments as Installment[])];
     const loans = loanRows.map((r) => r.loan);
     const positionLoans = loanRows.map((r) => ({
       id: r.loan.id,
@@ -334,10 +348,14 @@ export function usePersonPositions(): {
           isDeleted: e.deletedAt != null,
         })),
         loanIds,
+        emiReceivable: emiReceivableThrough(
+          personEmiObligations({ personId: person.id, emis: emis as Emi[], loans, installments: allInstallments, now }),
+          emiCutoff,
+        ),
       });
     }
     return { positionsByPersonId, loans, loanIds, isLoading: peopleLoading || entriesLoading || loansLoading || trashLoading };
-  }, [people, entriesByPersonId, loanRows, trashedLoans, peopleLoading, entriesLoading, loansLoading, trashLoading]);
+  }, [people, entriesByPersonId, loanRows, trashedLoans, emis, emiInstallments, loanInstallments, peopleLoading, entriesLoading, loansLoading, trashLoading]);
 }
 
 export interface PeopleStatsSummary {

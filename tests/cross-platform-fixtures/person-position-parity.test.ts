@@ -19,15 +19,17 @@ const fixture: Fixture = JSON.parse(readFileSync("tests/cross-platform-fixtures/
 describe("person position golden fixture", () => {
   for (const s of fixture.scenarios) {
     it(s.name, () => {
-      expect(
-        personPosition({
-          personId: fixture.personId,
-          currentBalance: s.currentBalance,
-          loans: s.loans,
-          ledgerEntries: s.ledgerEntries,
-          loanIds: new Set(s.loans.map((l) => l.id)),
-        }),
-      ).toEqual(s.expected);
+      // `emiReceivable` is Web-only (Person-linked EMI opt-in); with none it is 0 and every shared
+      // figure must still match Flutter exactly.
+      const { emiReceivable, ...shared } = personPosition({
+        personId: fixture.personId,
+        currentBalance: s.currentBalance,
+        loans: s.loans,
+        ledgerEntries: s.ledgerEntries,
+        loanIds: new Set(s.loans.map((l) => l.id)),
+      });
+      expect(emiReceivable).toBe(0);
+      expect(shared).toEqual(s.expected);
     });
   }
 

@@ -39,13 +39,19 @@ export interface PositionLedgerEntry {
 export interface PersonPosition {
   /** Direct Person ledger balance with Loan-generated legacy entries taken out. */
   directBalance: number;
+  /**
+   * What they owe me for explicitly opted-in Person-linked EMI installments due so far
+   * (`emiReceivableThrough` in `person-emi-obligations.ts`). Their repayments are already in the direct
+   * ledger balance; lender payments never reduce it. 0 on Flutter, which has no such opt-in yet.
+   */
+  emiReceivable: number;
   /** Outstanding principal they owe me through Loans I lent them. */
   loanReceivable: number;
   /** Outstanding principal I owe them through Loans I borrowed from them. */
   loanPayable: number;
   /** Signed sum of this person's active legacy Loan-generated ledger entries (removed from `directBalance`). */
   legacyLoanLedger: number;
-  /** direct + receivable − payable. Positive: they owe me. */
+  /** direct + EMI receivable + Loan receivable − Loan payable. Positive: they owe me. */
   net: number;
   owesMe: number;
   iOwe: number;
@@ -68,8 +74,10 @@ export function personPosition(params: {
   loans: readonly PositionLoan[];
   ledgerEntries: readonly PositionLedgerEntry[];
   loanIds: ReadonlySet<string>;
+  /** Person-linked EMI receivable (defaults to 0 — see `PersonPosition.emiReceivable`). */
+  emiReceivable?: number;
 }): PersonPosition {
-  const { personId, currentBalance, loans, ledgerEntries, loanIds } = params;
+  const { personId, currentBalance, loans, ledgerEntries, loanIds, emiReceivable = 0 } = params;
   const legacyLoanLedger = ledgerEntries
     .filter((e) => !e.isDeleted && isLegacyLoanLedgerEntry(e, loanIds))
     .reduce((sum, e) => sum + e.signedAmount, 0);
@@ -81,9 +89,10 @@ export function personPosition(params: {
     else loanPayable += loan.outstandingPrincipal;
   }
   const directBalance = round2(currentBalance - legacyLoanLedger);
-  const net = round2(directBalance + loanReceivable - loanPayable);
+  const net = round2(directBalance + emiReceivable + loanReceivable - loanPayable);
   return {
     directBalance,
+    emiReceivable: round2(emiReceivable),
     loanReceivable: round2(loanReceivable),
     loanPayable: round2(loanPayable),
     legacyLoanLedger: round2(legacyLoanLedger),
