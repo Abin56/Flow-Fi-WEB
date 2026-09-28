@@ -89,3 +89,7 @@ Switch project if needed with `firebase use <alias-or-project-id>` — never dep
 
 - `firestore.indexes.json` is currently a minimal baseline plus the two `collectionGroup` indexes added for `statements` and `paymentBreakdowns` — confirm new composite-index requirements are added here before a page that needs them is deployed, or the query will fail in production with a missing-index error (with a console link to auto-create it, but that should not be relied on for production).
 - No CI/CD pipeline is currently defined in this repository (no `.github/workflows` observed) — deploys are manual. If that changes, update this document accordingly.
+
+## Private-access gate secret
+
+Before the first deploy of `verifyAccessPasswordCallable` / `checkAccessTokenCallable`, set the `FLOWFI_ACCESS_PASSWORD_HASH` secret. See [docs/access-gate.md](docs/access-gate.md) for the exact steps (and how to rotate it).

@@ -10,7 +10,15 @@
 
 import { HttpsError, onCall } from "firebase-functions/v2/https";
 import * as logger from "firebase-functions/logger";
+import { defineSecret } from "firebase-functions/params";
+import {
+  ACCESS_RATE_LIMIT,
+  ACCESS_RATE_LIMIT_NAMESPACE,
+  validateAccessToken,
+  verifyAccessPassword,
+} from "./access/access-gate";
 import { getDb } from "./firestore";
+import { checkAndRecordAttempt, resetRateLimit } from "./ingestion/rate-limit";
 import { attemptUnlock } from "./ingestion/decrypt-document";
 import { checkDocumentExists } from "./ingestion/check-document-exists";
 import { ingestDocument } from "./ingestion/ingest-document";
@@ -268,3 +276,64 @@ export const saveCardPasswordCallable = onCall({ secrets: [PDF_ANALYZER_VAULT_KE
 
   return { outcome: "saved" as const };
 });
+
+/**
+ * Private-access gate (Layer 1, before Google Sign-In) — see
+ * src/access/access-gate.ts. Deliberately callable WITHOUT Firebase Auth:
+ * it runs before the visitor has signed in. Only a salted scrypt hash of the
+ * password exists, in Secret Manager; the password is never returned,
+ * logged, or written anywhere. Wrong password and malformed input share one
+ * generic `permission-denied`.
+ */
+const FLOWFI_ACCESS_PASSWORD_HASH = defineSecret("FLOWFI_ACCESS_PASSWORD_HASH");
+
+function accessPasswordHash(fnName: string): string {
+  const value = FLOWFI_ACCESS_PASSWORD_HASH.value();
+  if (!value) {
+    logger.error(`${fnName}: FLOWFI_ACCESS_PASSWORD_HASH is not configured`);
+    throw new HttpsError("unavailable", "Unable to verify access right now.");
+  }
+  return value;
+}
+
+export const verifyAccessPasswordCallable = onCall(
+  { secrets: [FLOWFI_ACCESS_PASSWORD_HASH], maxInstances: 5 },
+  async (request) => {
+    const { password } = (request.data ?? {}) as { password?: unknown };
+    const db = getDb();
+
+    let result;
+    try {
+      result = await verifyAccessPassword(password, request.rawRequest.ip, {
+        storedHash: accessPasswordHash("verifyAccessPasswordCallable"),
+        checkRateLimit: (key) => checkAndRecordAttempt(db, ACCESS_RATE_LIMIT_NAMESPACE, key, ACCESS_RATE_LIMIT),
+        resetRateLimit: (key) => resetRateLimit(db, ACCESS_RATE_LIMIT_NAMESPACE, key),
+      });
+    } catch (e) {
+      // Never forward request.data here — it contains the submitted password.
+      if (e instanceof HttpsError) throw e;
+      logger.error("verifyAccessPasswordCallable: verification failed", { error: e instanceof Error ? e.message : "unknown" });
+      throw new HttpsError("unavailable", "Unable to verify access right now.");
+    }
+
+    if (result.outcome === "denied") {
+      throw new HttpsError("permission-denied", "Incorrect access password.");
+    }
+    if (result.outcome === "rate_limited") {
+      throw new HttpsError("resource-exhausted", "Too many attempts. Please try again later.", {
+        retryAfter: result.retryAfter,
+      });
+    }
+    return { token: result.token, expiresAt: result.expiresAt };
+  },
+);
+
+/** Lets the web app confirm a stored access token is still genuine and unexpired (e.g. on page reload). */
+export const checkAccessTokenCallable = onCall(
+  { secrets: [FLOWFI_ACCESS_PASSWORD_HASH], maxInstances: 5 },
+  async (request) => {
+    const { token } = (request.data ?? {}) as { token?: unknown };
+    const expiresAt = validateAccessToken(token, accessPasswordHash("checkAccessTokenCallable"));
+    return expiresAt === null ? { valid: false as const } : { valid: true as const, expiresAt };
+  },
+);
