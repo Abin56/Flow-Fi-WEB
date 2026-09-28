@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, Bell, Calendar, HandCoins, ListX, Mail, MoreHorizontal, Paperclip, Pencil, Phone, Plus, Share2, Split, StickyNote, Trash2, Users } from "lucide-react";
+import { ArrowLeft, Bell, Calendar, ChevronDown, HandCoins, ListX, Mail, MoreHorizontal, Paperclip, Pencil, Phone, Plus, Share2, Split, StickyNote, Trash2, Users } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import { ClayAvatar } from "@/components/clay/clay-avatar";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
@@ -26,7 +26,7 @@ import { AddEntryPanel, type AddEntryParams } from "@/features/people/components
 import { EditPersonMode, type EditPersonPatch } from "@/features/people/components/workspace/edit-person-mode";
 import { InlineReveal, LedgerConfirmDialog, type EntryEditValues, type EntrySettleValues } from "@/features/people/components/workspace/ledger-ui";
 import { LE_RADIUS } from "@/features/loans/components/loan-emi-ui";
-import { WsLabel } from "@/features/people/components/workspace/person-workspace-ui";
+import { WS_PRIMARY, WS_SECONDARY, WsLabel } from "@/features/people/components/workspace/person-workspace-ui";
 import { SettleUpPanel } from "@/features/people/components/workspace/settle-up-panel";
 import { ShareStatementMode } from "@/features/people/components/workspace/share-statement-mode";
 import { SplitExpenseMode } from "@/features/people/components/workspace/split-expense-mode";
@@ -58,15 +58,19 @@ const isLoanItem = (id: string) => id.startsWith("loan:") || id.startsWith("loan
 const ICON_BUTTON =
   "flex size-8 shrink-0 items-center justify-center rounded-[6px] text-muted-foreground outline-none transition-colors hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:bg-secondary data-[state=open]:text-foreground";
 
+/** Navigation, not a CTA: a tinted neutral chip with a firm border and full-contrast text + arrow. */
+const BACK_BUTTON =
+  "flex h-8 shrink-0 items-center gap-2 rounded-[6px] border border-border-strong bg-secondary pr-3 pl-2.5 text-sm font-semibold text-foreground outline-none transition-colors hover:border-foreground/40 hover:bg-border/50 focus-visible:ring-2 focus-visible:ring-ring [&_svg]:text-foreground";
+
 const HEADER_BUTTON =
   "flex h-8 shrink-0 items-center gap-1.5 rounded-[6px] border border-border-strong bg-card px-2.5 text-sm font-medium text-foreground outline-none transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring [&_svg]:text-muted-foreground";
 
-const SECONDARY_ACTION =
-  "flex h-9 items-center gap-1.5 rounded-[6px] px-3 text-sm font-medium text-foreground outline-none transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40 [&_svg]:text-muted-foreground hover:[&_svg]:text-foreground";
+/** A compact secondary Person action — quieter than Add, the same 32px height as the ledger's controls. */
+const ACTION_SECONDARY = cn(WS_SECONDARY, "h-8 gap-1.5 px-2.5 text-[13px] [&>svg]:text-muted-foreground");
 
 function DetailRow({ icon: Icon, label, children }: { icon: typeof Calendar; label: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-start justify-between gap-4 py-2.5 text-sm">
+    <div className="flex items-start justify-between gap-4 py-2 text-sm">
       <span className="flex shrink-0 items-center gap-2 text-muted-foreground">
         <Icon className="size-4" strokeWidth={1.75} />
         {label}
@@ -131,6 +135,8 @@ export function PersonDetailWorkspace({
   const [direction, setDirection] = useState<"forward" | "back">("forward");
   const [cycle, setCycle] = useState<StatementCycle>(() => initialCycle ?? cycleContaining(new Date()));
   const [inline, setInline] = useState<InlineAction>(null);
+  /** Details (contact, EMI, notes, attachments) are secondary — collapsed under Activity until asked for. */
+  const [detailsOpen, setDetailsOpen] = useState(false);
   /** The expanded ledger's own navigation (Transactions ↔ Settle / Split) — kept here so Escape can step back. */
   const [ledgerView, setLedgerView] = useState<LedgerView>("transactions");
   const [scope, setScope] = useState<LedgerScope>("cycle");
@@ -318,36 +324,34 @@ export function PersonDetailWorkspace({
     }
   }
 
-  const actionButton = (active: boolean) =>
-    cn(SECONDARY_ACTION, active && "bg-secondary text-foreground shadow-[inset_0_-2px_0_var(--color-primary-accent-text)] [&_svg]:text-foreground");
+  const secondaryAction = (active: boolean) =>
+    cn(ACTION_SECONDARY, active && "border-primary-accent-text bg-primary/10 font-semibold [&>svg]:text-foreground");
 
-  const actions = (
-    <div className="flex flex-wrap items-center gap-y-2">
+  /** The Person's actions — Add is primary; Settle, Split and Share are quieter, in one group. */
+  const actionBar = (
+    <div role="group" aria-label="Actions" className="flex flex-wrap items-center gap-2 lg:flex-col lg:items-stretch lg:gap-2.5">
       <button
         type="button"
         onClick={() => toggleInline("add")}
         disabled={!onAddEntry}
         aria-expanded={inline === "add"}
         aria-controls="person-inline-add"
-        className={cn(
-          "flex h-9 items-center gap-1.5 rounded-[6px] border border-primary-accent-text bg-primary pr-4 pl-3 text-sm font-semibold text-primary-foreground outline-none transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50",
-          inline === "add" && "ring-2 ring-primary-accent-text/40",
-        )}
+        className={cn(WS_PRIMARY, "lg:w-full", inline === "add" && "ring-2 ring-primary-accent-text/40")}
       >
         <Plus className={cn("size-4 transition-transform duration-200", inline === "add" && "rotate-45")} strokeWidth={2.25} />
-        Add
+        {inline === "add" ? "Close" : "Add transaction"}
       </button>
-      <span className="mx-2.5 h-5 w-px bg-border-strong/60" aria-hidden />
-      <div className="-ml-1 flex items-center">
+      <div className="flex flex-wrap gap-1.5 lg:grid lg:grid-cols-3">
         <button
           type="button"
           onClick={() => toggleInline("settle")}
           disabled={!rawPerson}
           aria-expanded={inline === "settle"}
           aria-controls="person-inline-settle"
-          className={actionButton(inline === "settle")}
+          title="Settle the overall balance"
+          className={secondaryAction(inline === "settle")}
         >
-          <HandCoins className="size-4" strokeWidth={1.75} />
+          <HandCoins className="size-3.5" strokeWidth={1.75} />
           Settle
         </button>
         <button
@@ -356,13 +360,14 @@ export function PersonDetailWorkspace({
           disabled={!rawPerson}
           aria-expanded={inline === "split"}
           aria-controls="person-inline-split"
-          className={actionButton(inline === "split")}
+          title="Split an expense"
+          className={secondaryAction(inline === "split")}
         >
-          <Split className="size-4" strokeWidth={1.75} />
+          <Split className="size-3.5" strokeWidth={1.75} />
           Split
         </button>
-        <button type="button" onClick={() => go({ kind: "share" })} disabled={statement == null} className={SECONDARY_ACTION}>
-          <Share2 className="size-4" strokeWidth={1.75} />
+        <button type="button" onClick={() => go({ kind: "share" })} disabled={statement == null} title="Share this cycle's statement" className={secondaryAction(false)}>
+          <Share2 className="size-3.5" strokeWidth={1.75} />
           Share
         </button>
       </div>
@@ -381,20 +386,23 @@ export function PersonDetailWorkspace({
   );
 
   const overview = (
-    <div className="flex flex-col gap-8">
+    <div className="flex flex-col gap-5">
       <div>
-        <PersonCycleStatementSection
-          statement={statement}
-          isLoading={isLoading}
-          cycle={cycle}
-          onCycleChange={setCycle}
-          linkedEmis={linkedEmis}
-          setRepays={setRepays}
-          actions={actions}
-          footnote={loansNote}
-        />
-        {/* Inline actions — expand right here, pushing the rest of the workspace down; one at a time */}
-        <div id="person-inline-add" className="max-w-3xl">
+        {/* Financial context — position (hero) · statement · actions, divided by rules, not boxes */}
+        <div className="grid gap-x-8 gap-y-4 border-b border-border-strong/75 pb-5 lg:grid-cols-[minmax(0,1fr)_15.5rem]">
+          <PersonCycleStatementSection
+            statement={statement}
+            isLoading={isLoading}
+            cycle={cycle}
+            onCycleChange={setCycle}
+            linkedEmis={linkedEmis}
+            setRepays={setRepays}
+            footnote={loansNote}
+          />
+          <div className="min-w-0 lg:border-l lg:border-border-strong/75 lg:pl-7">{actionBar}</div>
+        </div>
+        {/* Inline actions — open as a workspace state right under the position, full width; one at a time */}
+        <div id="person-inline-add">
           <InlineReveal open={inline === "add" && onAddEntry != null}>
             {onAddEntry && (
               <AddEntryPanel
@@ -405,7 +413,7 @@ export function PersonDetailWorkspace({
             )}
           </InlineReveal>
         </div>
-        <div id="person-inline-settle" className="max-w-3xl">
+        <div id="person-inline-settle">
           <InlineReveal open={inline === "settle" && rawPerson != null}>
             {rawPerson && <SettleUpPanel person={rawPerson} onCancel={() => setInline(null)} onDone={() => setInline(null)} />}
           </InlineReveal>
@@ -415,7 +423,7 @@ export function PersonDetailWorkspace({
           <DialogContent
             id="person-inline-split"
             showCloseButton={false}
-            className="flex max-h-[min(92vh,56rem)] flex-col gap-0 overflow-hidden rounded-[10px] border border-border bg-card p-0 pb-5 shadow-[var(--shadow-e4)] ring-0 sm:max-w-3xl"
+            className="flex max-h-[min(92vh,56rem)] flex-col gap-0 overflow-hidden rounded-[10px] border border-border bg-card p-0 shadow-[var(--shadow-e4)] ring-0 sm:max-w-5xl"
           >
             <DialogTitle className="sr-only">Split expense with {person.name}</DialogTitle>
             <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
@@ -425,7 +433,7 @@ export function PersonDetailWorkspace({
                   accounts={accounts}
                   categories={categories}
                   people={people}
-                  backLabel="Close"
+                  closeable
                   onBack={() => setInline(null)}
                   onDone={() => setInline(null)}
                 />
@@ -435,96 +443,118 @@ export function PersonDetailWorkspace({
         </Dialog>
       </div>
 
-      {/* Activity is the main column; the person's details support it on the right (below on narrow screens). */}
-      <div className="grid gap-x-10 gap-y-8 border-t border-border pt-6 lg:grid-cols-[minmax(0,1fr)_18rem] xl:grid-cols-[minmax(0,1fr)_20rem]">
-        <section aria-label="Activity" className="flex min-w-0 flex-col sm:max-h-[min(75vh,48rem)]">
-          <h2 className="mb-1 font-heading text-base font-semibold text-foreground">Activity</h2>
-          <PersonActivityFeed
-            personName={person.name}
-            rows={scopeRows}
-            isLoading={rowsLoading}
-            scope={scope}
-            onScopeChange={(next) => {
-              setScope(next);
-              setSettlingKey(null);
-              setEditingKey(null);
-            }}
-            counts={scopeCounts}
-            cycleLabel={cycleLabel}
-            onAdd={
-              onAddEntry
-                ? () => {
-                    setInline("add");
-                    rootRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-                  }
-                : undefined
-            }
-            onExpand={() => go({ kind: "ledger" })}
-            handlers={rowHandlers}
-            carriedForward={carriedForward}
-          />
-        </section>
+      {/* Activity — the main body, full width */}
+      <section aria-label="Activity" className="flex min-w-0 flex-col">
+        <PersonActivityFeed
+          personName={person.name}
+          rows={scopeRows}
+          isLoading={rowsLoading}
+          scope={scope}
+          onScopeChange={(next) => {
+            setScope(next);
+            setSettlingKey(null);
+            setEditingKey(null);
+          }}
+          counts={scopeCounts}
+          cycleLabel={cycleLabel}
+          onAdd={
+            onAddEntry
+              ? () => {
+                  setInline("add");
+                  rootRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+                }
+              : undefined
+          }
+          onExpand={() => go({ kind: "ledger" })}
+          handlers={rowHandlers}
+          carriedForward={carriedForward}
+        />
+      </section>
 
-        <aside aria-label="Details" className="flex min-w-0 flex-col gap-6 lg:border-l lg:border-border lg:pl-8">
-          <div>
-            <SectionTitle>Details</SectionTitle>
-            <div className="mt-1 divide-y divide-border">
-              <DetailRow icon={Calendar} label="First transaction">
-                {person.firstTransaction || "—"}
-              </DetailRow>
-              <DetailRow icon={Users} label="Relationship">
-                {person.relationship || "—"}
-              </DetailRow>
-              {person.phone && (
-                <DetailRow icon={Phone} label="Phone">
-                  {person.phone}
+      {/* Details — secondary information, one line until opened */}
+      <section aria-label="Details" className="-mt-1 border-b border-border-strong/75">
+        <button
+          type="button"
+          aria-expanded={detailsOpen}
+          aria-controls="person-details"
+          onClick={() => setDetailsOpen((o) => !o)}
+          className="flex w-full min-w-0 items-center gap-3 rounded-[6px] py-2.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <span className="shrink-0 text-sm font-semibold text-foreground">Details</span>
+          <span className="min-w-0 truncate text-xs text-muted-foreground">
+            {[
+              person.firstTransaction && `First transaction ${person.firstTransaction}`,
+              upcomingEmi.length > 0 ? `${upcomingEmi.length} upcoming EMI` : "No upcoming EMI",
+              person.notes ? "Notes" : null,
+              contact || null,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+          </span>
+          <ChevronDown className={cn("ml-auto size-4 shrink-0 text-muted-foreground transition-transform", detailsOpen && "rotate-180")} strokeWidth={1.75} />
+        </button>
+        <InlineReveal open={detailsOpen}>
+          <div id="person-details" className="grid gap-x-8 gap-y-5 pt-1 pb-5 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="min-w-0">
+              <SectionTitle icon={Users}>Person</SectionTitle>
+              <div className="mt-1 divide-y divide-border-strong/60">
+                <DetailRow icon={Calendar} label="First transaction">
+                  {person.firstTransaction || "—"}
                 </DetailRow>
-              )}
-              {person.email && (
-                <DetailRow icon={Mail} label="Email">
-                  {person.email}
+                <DetailRow icon={Users} label="Relationship">
+                  {person.relationship || "—"}
                 </DetailRow>
+                {person.phone && (
+                  <DetailRow icon={Phone} label="Phone">
+                    {person.phone}
+                  </DetailRow>
+                )}
+                {person.email && (
+                  <DetailRow icon={Mail} label="Email">
+                    {person.email}
+                  </DetailRow>
+                )}
+              </div>
+            </div>
+
+            <div className="min-w-0">
+              <SectionTitle icon={Bell}>Upcoming EMI</SectionTitle>
+              {upcomingEmi.length === 0 ? (
+                <p className="mt-2 text-sm text-muted-foreground">No upcoming EMI</p>
+              ) : (
+                <div className="mt-1 divide-y divide-border-strong/60">
+                  {upcomingEmi.slice(0, 5).map((item) => (
+                    <div key={item.loanId} className="flex items-start justify-between gap-3 py-2 text-sm">
+                      <div className="flex min-w-0 flex-col">
+                        <span className="truncate font-medium text-foreground">{item.label}</span>
+                        <span className="text-xs text-muted-foreground">
+                          Due {item.dueDate.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
+                          {item.isPayerOnly && " · Pays this for you"}
+                        </span>
+                      </div>
+                      <span className="font-semibold text-foreground tabular-nums">{formatCurrency(item.amount)}</span>
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
-          </div>
 
-          <div>
-            <SectionTitle icon={Bell}>Upcoming EMI</SectionTitle>
-            {upcomingEmi.length === 0 ? (
-              <p className="mt-2.5 text-sm text-muted-foreground">No upcoming EMI</p>
-            ) : (
-              <div className="mt-1 divide-y divide-border">
-                {upcomingEmi.slice(0, 5).map((item) => (
-                  <div key={item.loanId} className="flex items-start justify-between gap-3 py-2.5 text-sm">
-                    <div className="flex min-w-0 flex-col">
-                      <span className="truncate font-medium text-foreground">{item.label}</span>
-                      <span className="text-xs text-muted-foreground">
-                        Due {item.dueDate.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
-                        {item.isPayerOnly && " · Pays this for you"}
-                      </span>
-                    </div>
-                    <span className="font-semibold text-foreground tabular-nums">{formatCurrency(item.amount)}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+            <div className="min-w-0">
+              <SectionTitle icon={StickyNote}>Notes</SectionTitle>
+              {person.notes ? (
+                <p className="mt-2 text-sm whitespace-pre-wrap text-foreground">{person.notes}</p>
+              ) : (
+                <p className="mt-2 text-sm text-muted-foreground">No notes yet.</p>
+              )}
+            </div>
 
-          <div>
-            <SectionTitle icon={StickyNote}>Notes</SectionTitle>
-            {person.notes ? (
-              <p className="mt-2.5 text-sm whitespace-pre-wrap text-foreground">{person.notes}</p>
-            ) : (
-              <p className="mt-2.5 text-sm text-muted-foreground">No notes yet.</p>
-            )}
+            <div className="min-w-0">
+              <SectionTitle icon={Paperclip}>Attachments</SectionTitle>
+              <p className="mt-2 text-sm text-muted-foreground">No attachments yet.</p>
+            </div>
           </div>
-
-          <div>
-            <SectionTitle icon={Paperclip}>Attachments</SectionTitle>
-            <p className="mt-2.5 text-sm text-muted-foreground">No attachments yet.</p>
-          </div>
-        </aside>
-      </div>
+        </InlineReveal>
+      </section>
     </div>
   );
 
@@ -613,33 +643,22 @@ export function PersonDetailWorkspace({
   }
 
   return (
-    <div ref={rootRef} onKeyDown={onKeyDown} className="flex min-w-0 scroll-mt-6 flex-col gap-5 px-1">
-      {/* Breadcrumb + identity — who, always visible; every mode renders below it */}
-      <div className="flex flex-col gap-3">
-        <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-1.5 text-sm">
-          <button
-            type="button"
-            onClick={onBack}
-            className="-ml-2 flex h-8 shrink-0 items-center gap-1 rounded-[6px] px-2 font-medium text-muted-foreground outline-none transition-colors hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <ArrowLeft className="size-4" strokeWidth={1.75} />
-            People Ledger
-          </button>
-          <span className="text-muted-foreground/60" aria-hidden>
-            /
-          </span>
-          <span className="truncate font-medium text-foreground" aria-current="page">
-            {person.name}
-          </span>
-        </nav>
-
-        <header className="flex items-center gap-3 border-b border-border pb-4">
-          <ClayAvatar name={person.name} size={44} />
+    <div ref={rootRef} onKeyDown={onKeyDown} className="flex min-w-0 scroll-mt-6 flex-col gap-4 px-1">
+      {/* Identity — who, always visible; every mode renders below it. Navigation sits with the actions on the right. */}
+      <div>
+        <header className="flex items-center gap-3 border-b border-border-strong/75 pb-3.5">
+          <ClayAvatar name={person.name} size={40} />
           <div className="flex min-w-0 flex-1 flex-col gap-0.5">
             <h1 className="truncate font-heading text-2xl leading-tight font-bold tracking-tight text-foreground">{person.name}</h1>
             <p className="truncate text-sm text-muted-foreground">{subline}</p>
           </div>
           <div className="flex shrink-0 items-center gap-1">
+            <button type="button" onClick={onBack} title="Back to People Ledger" className={BACK_BUTTON}>
+              <ArrowLeft className="size-4" strokeWidth={2} />
+              <span className="hidden sm:inline">People Ledger</span>
+              <span className="sr-only sm:hidden">Back to People Ledger</span>
+            </button>
+            <span className="mx-1 h-5 w-px bg-border-strong/75" aria-hidden />
             {onEditPerson && rawPerson && (
               <button
                 type="button"
@@ -712,7 +731,7 @@ export function PersonDetailWorkspace({
       <Dialog open={mode.kind === "share" && statement != null} onOpenChange={(o) => !o && back()}>
         <DialogContent
           showCloseButton={false}
-          className="flex max-h-[min(92vh,60rem)] flex-col gap-0 overflow-hidden rounded-[10px] border border-border bg-card p-0 pb-5 shadow-[var(--shadow-e4)] ring-0 sm:max-w-3xl"
+          className="flex max-h-[min(92vh,60rem)] flex-col gap-0 overflow-hidden rounded-[10px] border border-border bg-card p-0 shadow-[var(--shadow-e4)] ring-0 sm:max-w-4xl"
         >
           <DialogTitle className="sr-only">Share {person.name}&apos;s statement</DialogTitle>
           <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">

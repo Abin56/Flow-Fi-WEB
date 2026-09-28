@@ -23,6 +23,9 @@ import {
   type EntryEditValues,
   InlineReveal,
   lastPaymentLine,
+  LEDGER_TD,
+  LEDGER_TH,
+  LEDGER_TYPE_SHORT,
   PaymentHistory,
   RowActionsMenu,
   type EntrySettleValues,
@@ -39,6 +42,7 @@ import {
 import { directionHeadline, directionOf, formatStatementDate, type EmiRowStatus } from "@/lib/engines/person-cycle-statement";
 import { money } from "@/lib/engines/person-cycle-statement-share";
 import { cn } from "@/lib/utils";
+import { WS_SECONDARY } from "@/features/people/components/workspace/person-workspace-ui";
 
 /**
  * One restrained direction system: the icon tile carries the direction (towards me = positive,
@@ -151,7 +155,7 @@ export type LedgerScope = "cycle" | "all";
 
 function Detail({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex min-w-0 items-baseline justify-between gap-3 border-b border-border/60 py-1">
+    <div className="flex min-w-0 items-baseline justify-between gap-3 border-b border-border py-1">
       <dt className="shrink-0 text-muted-foreground">{label}</dt>
       <dd className="min-w-0 truncate text-right font-medium text-foreground tabular-nums">{children}</dd>
     </div>
@@ -256,19 +260,19 @@ function FeedRow({
   return (
     <li
       className={cn(
-        "rounded-[6px] border-l-2 transition-colors duration-200",
-        settled ? "border-success/60" : "border-transparent",
+        "border-b border-l-2 border-b-border-strong/60 transition-colors duration-200",
+        settled ? "border-l-success/60" : "border-l-transparent",
         open ? "bg-secondary/70" : "bg-transparent",
       )}
     >
-      <div className="flex items-center gap-1 border-b border-border/70 pr-1">
+      <div className="flex items-center gap-1 pr-1">
         <button
           type="button"
           aria-expanded={expanded}
           onClick={onToggle}
           className="grid min-w-0 flex-1 grid-cols-[1.25rem_3rem_minmax(0,1fr)_auto] items-center gap-x-3 rounded-[6px] py-2.5 pl-2 text-left outline-none transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring min-[520px]:grid-cols-[1.25rem_3rem_minmax(0,1fr)_auto_8.5rem]"
         >
-          <span className="text-[11px] font-medium text-muted-foreground/70 tabular-nums" aria-label={`Transaction ${n}`}>
+          <span className="text-[11px] font-medium text-muted-foreground tabular-nums" aria-label={`Transaction ${n}`}>
             {n}
           </span>
           <span className="flex flex-col leading-tight">
@@ -333,9 +337,8 @@ export function CarriedForwardNote({ carried, className }: { carried: { amount: 
 /** Compact month separator — sticks to the top of the scrolling list on larger screens. */
 function MonthHeading({ label }: { label: string }) {
   return (
-    <li className="z-[1] flex items-center gap-2 bg-card px-2 pt-3 pb-1 text-[10.5px] font-semibold tracking-[0.1em] text-muted-foreground uppercase first:pt-0.5 sm:sticky sm:top-0">
+    <li className="z-[1] border-b border-border-strong/60 bg-secondary/70 px-4 py-1.5 text-[10.5px] font-semibold tracking-[0.1em] text-muted-foreground uppercase sm:sticky sm:top-0">
       {label}
-      <span className="h-px flex-1 bg-border/70" aria-hidden />
     </li>
   );
 }
@@ -434,60 +437,65 @@ export function PersonActivityFeed({
   const visible = filterLedgerRows(rows, "all", search);
   const groups = groupByMonth(visible, (r) => r.date);
   const firstName = personName.split(" ")[0];
-  // A floor for the scrolling list so a short window never squeezes it to nothing — only once it can scroll.
-  const longList = (isLoading ? 0 : visible.length) > 3;
 
   const changeScope = (next: LedgerScope) => {
     onScopeChange(next);
     setExpanded(null);
   };
 
+  const toggle = (row: LedgerRow) => {
+    if (handlers.settlingKey === row.key) handlers.onSettleCancel();
+    setExpanded((k) => (k === row.key ? null : row.key));
+  };
+  const rowProps = (row: LedgerRow) => ({
+    settling: handlers.settlingKey === row.key,
+    editing: handlers.editingKey === row.key,
+    onSettleStart: row.settle ? () => handlers.onSettleStart(row) : undefined,
+    onEditStart: handlers.onEditStart ? () => handlers.onEditStart!(row) : undefined,
+    onDelete: handlers.onDelete ? () => handlers.onDelete!(row) : undefined,
+    onUndo: handlers.onUndoPayment ? (payment: PaymentRecord) => handlers.onUndoPayment!(row, payment) : undefined,
+  });
+
   return (
-    <section className="flex flex-col sm:min-h-0 sm:flex-1">
-      <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-2">
-        <div className="flex items-center gap-1">
-          <h3 className="font-heading text-base font-semibold tracking-tight text-foreground">
-            Transactions <span className="font-medium text-muted-foreground tabular-nums">· {counts[scope]}</span>
-          </h3>
-          <button
-            type="button"
-            onClick={onExpand}
-            aria-label="Expand transactions"
-            title="Expand transactions"
-            className="ml-1 flex h-7 items-center gap-1 rounded-[6px] px-1.5 text-xs font-medium text-muted-foreground outline-none transition-colors hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-          >
+    <section className="flex min-w-0 flex-col">
+      {/* Header row — title and count, period scope, search, Expand (the expanded ledger's toolbar, compact) */}
+      <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 pb-2.5">
+        <h2 className="font-heading text-base font-semibold text-foreground">
+          Activity{" "}
+          <span className="text-sm font-medium text-muted-foreground tabular-nums">
+            · {counts[scope]} {counts[scope] === 1 ? "transaction" : "transactions"}
+          </span>
+        </h2>
+        <ScopeSwitch scope={scope} onScopeChange={changeScope} counts={counts} cycleLabel={cycleLabel} />
+        <div className="flex w-full items-center gap-2 sm:ml-auto sm:w-auto">
+          {rows.length > 5 && (
+            <div className="relative min-w-0 flex-1 sm:w-52 sm:flex-none">
+              <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" strokeWidth={1.75} />
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search…"
+                aria-label="Search transactions"
+                className="h-8 w-full rounded-[6px] border border-border-strong bg-card pr-3 pl-8 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-primary-accent-text"
+              />
+            </div>
+          )}
+          <button type="button" onClick={onExpand} title="Open the full transaction workspace" className={cn(WS_SECONDARY, "h-8 shrink-0 px-3")}>
             <Maximize2 className="size-3.5" strokeWidth={1.75} />
-            <span className="hidden sm:inline">Expand</span>
+            Expand
           </button>
         </div>
-        <ScopeSwitch scope={scope} onScopeChange={changeScope} counts={counts} cycleLabel={cycleLabel} />
       </div>
 
-      {rows.length > 5 && (
-        <div className="relative mt-2.5 shrink-0">
-          <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" strokeWidth={1.75} />
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search by description…"
-            aria-label="Search transactions"
-            className="h-9 w-full rounded-[6px] border border-border-strong bg-card pr-3 pl-9 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-primary-accent-text"
-          />
-        </div>
-      )}
+      {scope === "cycle" && !isLoading && <CarriedForwardNote carried={carriedForward} className="mb-2.5 shrink-0" />}
 
-      {scope === "cycle" && !isLoading && <CarriedForwardNote carried={carriedForward} className="mt-2.5 shrink-0" />}
-
-      {/* The only scrolling region of the overview on sm+ — header, position, actions and tabs stay put */}
+      {/* The ledger — sized to its rows; only a long history scrolls, inside this region (header row stays put) */}
       <div
         key={scope}
-        className={cn(
-          "-mx-2 mt-2 animate-in duration-200 fade-in-0 sm:min-h-0 sm:flex-1 sm:overflow-x-hidden sm:overflow-y-auto sm:overscroll-contain",
-          longList && "sm:min-h-40",
-        )}
+        className="animate-in overflow-x-hidden border-y border-border-strong/75 duration-200 fade-in-0 sm:max-h-[min(64vh,46rem)] sm:overflow-y-auto sm:overscroll-contain"
       >
         {isLoading ? (
-          <div className="space-y-3 px-2 py-2">
+          <div className="space-y-3 px-4 py-3">
             {Array.from({ length: 3 }, (_, i) => (
               <div key={i} className="flex items-center gap-3">
                 <Skeleton className="size-8 rounded-full" />
@@ -497,58 +505,185 @@ export function PersonActivityFeed({
             ))}
           </div>
         ) : rows.length === 0 ? (
-          <div className="px-2">
-            <div className="mt-1 flex flex-col items-start gap-3 rounded-[8px] border border-dashed border-border-strong px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <p className="text-sm font-semibold text-foreground">{scope === "cycle" ? "No activity this cycle" : "No transactions yet"}</p>
-                <p className="text-xs text-muted-foreground">Transactions with {firstName} will appear here.</p>
-              </div>
-              {onAdd && (
-                <button
-                  type="button"
-                  onClick={onAdd}
-                  className="flex h-8 items-center gap-1.5 rounded-[6px] border border-border-strong bg-card px-3 text-xs font-semibold text-foreground transition-colors hover:border-primary-accent-text hover:text-primary-accent-text"
-                >
-                  <Plus className="size-3.5" strokeWidth={2} />
-                  Add transaction
-                </button>
-              )}
+          <div className="flex flex-col items-start gap-3 px-3 py-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-semibold text-foreground">{scope === "cycle" ? "No activity this cycle" : "No transactions yet"}</p>
+              <p className="text-xs text-muted-foreground">Transactions with {firstName} will appear here.</p>
             </div>
+            {onAdd && (
+              <button
+                type="button"
+                onClick={onAdd}
+                className="flex h-8 items-center gap-1.5 rounded-[6px] border border-border-strong bg-card px-3 text-xs font-semibold text-foreground transition-colors hover:border-primary-accent-text hover:text-primary-accent-text"
+              >
+                <Plus className="size-3.5" strokeWidth={2} />
+                Add transaction
+              </button>
+            )}
           </div>
         ) : visible.length === 0 ? (
-          <p className="px-4 py-5 text-sm text-muted-foreground">No matching transactions.</p>
+          <p className="px-3 py-4 text-sm text-muted-foreground">No matching transactions.</p>
         ) : (
-          <ul className="flex flex-col">
-            {groups.map((g) => (
-              <Fragment key={g.key}>
-                {g.label && <MonthHeading label={g.label} />}
-                {g.rows.map(({ row, n }) => (
-                  <FeedRow
-                    key={row.key}
-                    n={sequence(n, visible.length)}
-                    row={row}
-                    date={rowDate(row.date, g.label != null)}
-                    expanded={expanded === row.key}
-                    onToggle={() => {
-                      if (handlers.settlingKey === row.key) handlers.onSettleCancel();
-                      setExpanded((k) => (k === row.key ? null : row.key));
-                    }}
-                    settling={handlers.settlingKey === row.key}
-                    personName={personName}
-                    onSettleStart={row.settle ? () => handlers.onSettleStart(row) : undefined}
-                    onSettleCancel={handlers.onSettleCancel}
-                    onSettleSubmit={(values) => handlers.onSettleSubmit(row, values)}
-                    editing={handlers.editingKey === row.key}
-                    onEditStart={handlers.onEditStart ? () => handlers.onEditStart!(row) : undefined}
-                    onEditCancel={() => handlers.onEditCancel?.()}
-                    onEditSubmit={(values) => handlers.onEditSubmit!(row, values)}
-                    onDelete={handlers.onDelete ? () => handlers.onDelete!(row) : undefined}
-                    onUndo={handlers.onUndoPayment ? (payment) => handlers.onUndoPayment!(row, payment) : undefined}
-                  />
+          <>
+            {/* md+: the ledger grid — same header, lines and columns as the expanded view */}
+            <table className="hidden w-full border-separate border-spacing-0 text-sm md:table">
+              <thead>
+                <tr>
+                  <th className={cn(LEDGER_TH, "w-10 pl-3 text-right")}>
+                    <span className="sr-only">Number</span>#
+                  </th>
+                  <th className={cn(LEDGER_TH, "w-[5.5rem]")}>Date</th>
+                  <th className={LEDGER_TH}>Description</th>
+                  <th className={cn(LEDGER_TH, "hidden w-24 lg:table-cell")}>Type</th>
+                  <th className={cn(LEDGER_TH, "w-28 text-right")}>Amount</th>
+                  <th className={cn(LEDGER_TH, "w-40")}>Status</th>
+                  <th className={cn(LEDGER_TH, "w-[9.5rem] pr-2")}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {groups.map((g) => (
+                  <Fragment key={g.key}>
+                    {g.label && (
+                      <tr>
+                        <td
+                          colSpan={7}
+                          className="border-b border-border-strong/60 bg-secondary/70 px-3 py-1.5 text-[10.5px] font-semibold tracking-[0.1em] text-muted-foreground uppercase"
+                        >
+                          {g.label}
+                        </td>
+                      </tr>
+                    )}
+                    {g.rows.map(({ row, n }) => {
+                      const p = rowProps(row);
+                      const open = expanded === row.key || p.settling || p.editing;
+                      const settles = row.statementRow?.settles;
+                      return (
+                        <Fragment key={row.key}>
+                          <tr onClick={() => toggle(row)} aria-expanded={open} className={cn("cursor-pointer transition-colors hover:bg-secondary/60", open && "bg-secondary/70")}>
+                            <td
+                              className={cn(
+                                LEDGER_TD,
+                                "border-l-2 pl-3 text-right text-[11px] text-muted-foreground tabular-nums",
+                                row.state === "settled" ? "border-l-success/60" : "border-l-transparent",
+                              )}
+                            >
+                              {sequence(n, visible.length)}
+                            </td>
+                            <td className={cn(LEDGER_TD, "whitespace-nowrap tabular-nums")}>
+                              <p className="text-sm leading-tight font-semibold text-foreground">{formatStatementDate(row.date)}</p>
+                              <p className="text-[11px] leading-tight text-muted-foreground">{row.date.getFullYear()}</p>
+                            </td>
+                            <td className={LEDGER_TD}>
+                              <div className="flex min-w-0 items-center gap-2.5">
+                                <RowIcon row={row} className="size-7" />
+                                <div className="min-w-0">
+                                  <p className="flex min-w-0 items-center gap-1.5 font-semibold text-foreground">
+                                    <span className="truncate">{row.title}</span>
+                                    {row.category === "emi" && <EmiBadge />}
+                                  </p>
+                                  {settles ? (
+                                    <p className="truncate text-xs text-muted-foreground">
+                                      {settles.remainingAfter > 0 ? "Against" : "Clears"} {settles.title}
+                                    </p>
+                                  ) : (
+                                    <p className={cn("truncate text-xs text-muted-foreground", !row.statementRow?.emi && "lg:hidden")}>{rowMeta(row)}</p>
+                                  )}
+                                </div>
+                              </div>
+                            </td>
+                            <td className={cn(LEDGER_TD, "hidden text-[13px] text-muted-foreground lg:table-cell")}>{LEDGER_TYPE_SHORT[row.category]}</td>
+                            <td className={cn(LEDGER_TD, "text-right font-heading text-[15px] font-bold tracking-tight whitespace-nowrap tabular-nums", amountTone(row))}>
+                              {money(row.amount)}
+                            </td>
+                            <td className={LEDGER_TD}>
+                              <StatusCell row={row} />
+                            </td>
+                            <td className={cn(LEDGER_TD, "py-1 pr-1.5 pl-2")} onClick={(e) => e.stopPropagation()}>
+                              <div className="flex items-center justify-end gap-1">
+                                {/* The row's main next step, direct; edit / delete / undo stay in ⋯ */}
+                                {p.onSettleStart && (
+                                  <button
+                                    type="button"
+                                    aria-pressed={p.settling}
+                                    onClick={() => (p.settling ? handlers.onSettleCancel() : p.onSettleStart!())}
+                                    className={cn(
+                                      "flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-xs font-semibold whitespace-nowrap outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+                                      p.settling
+                                        ? "border-primary-accent-text bg-primary/15 text-foreground"
+                                        : "border-border-strong bg-card text-foreground hover:border-primary-accent-text hover:bg-primary/10",
+                                    )}
+                                  >
+                                    <HandCoins className="size-3.5 text-primary-accent-text" strokeWidth={2} />
+                                    {row.state === "partial" ? "Settle rest" : "Settle"}
+                                  </button>
+                                )}
+                                <RowActionsMenu row={row} onSettle={p.onSettleStart} onEdit={p.onEditStart} onDelete={p.onDelete} onUndo={p.onUndo} />
+                              </div>
+                            </td>
+                          </tr>
+                          <tr aria-hidden={!open}>
+                            <td colSpan={7} className={cn("p-0", open && "border-b border-border-strong/60 bg-secondary/70")}>
+                              <InlineReveal open={open}>
+                                <div className="px-3 pt-1 pb-3 md:pl-[8.25rem]">
+                                  {p.editing ? (
+                                    <EntryEditForm row={row} onCancel={() => handlers.onEditCancel?.()} onSubmit={(values) => handlers.onEditSubmit!(row, values)} />
+                                  ) : p.settling ? (
+                                    <div className="max-w-xl">
+                                      <EntrySettleForm row={row} personName={personName} onCancel={handlers.onSettleCancel} onSubmit={(values) => handlers.onSettleSubmit(row, values)} />
+                                    </div>
+                                  ) : (
+                                    <div className="rounded-[8px] border border-border-strong/75 bg-card px-3.5 py-2.5">
+                                      <dl className="grid gap-x-6 text-xs lg:grid-cols-2">
+                                        <RowDetails row={row} />
+                                      </dl>
+                                      <PaymentHistory row={row} onUndo={p.onUndo} className="mt-2.5" />
+                                    </div>
+                                  )}
+                                </div>
+                              </InlineReveal>
+                            </td>
+                          </tr>
+                        </Fragment>
+                      );
+                    })}
+                  </Fragment>
                 ))}
-              </Fragment>
-            ))}
-          </ul>
+              </tbody>
+            </table>
+
+            {/* Below md: one structured card per transaction */}
+            <ul className="flex flex-col md:hidden">
+              {groups.map((g) => (
+                <Fragment key={g.key}>
+                  {g.label && <MonthHeading label={g.label} />}
+                  {g.rows.map(({ row, n }) => {
+                    const p = rowProps(row);
+                    return (
+                      <FeedRow
+                        key={row.key}
+                        n={sequence(n, visible.length)}
+                        row={row}
+                        date={rowDate(row.date, g.label != null)}
+                        expanded={expanded === row.key}
+                        onToggle={() => toggle(row)}
+                        settling={p.settling}
+                        personName={personName}
+                        onSettleStart={p.onSettleStart}
+                        onSettleCancel={handlers.onSettleCancel}
+                        onSettleSubmit={(values) => handlers.onSettleSubmit(row, values)}
+                        editing={p.editing}
+                        onEditStart={p.onEditStart}
+                        onEditCancel={() => handlers.onEditCancel?.()}
+                        onEditSubmit={(values) => handlers.onEditSubmit!(row, values)}
+                        onDelete={p.onDelete}
+                        onUndo={p.onUndo}
+                      />
+                    );
+                  })}
+                </Fragment>
+              ))}
+            </ul>
+          </>
         )}
       </div>
     </section>

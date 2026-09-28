@@ -1,22 +1,44 @@
 "use client";
 
-import { Check, CircleDot, HandCoins, MoreHorizontal, Pencil, Trash2, Undo2, X } from "lucide-react";
+import { Check, CircleDot, HandCoins, MoreHorizontal, Pencil, Trash2, Undo2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useAccounts } from "@/hooks/use-accounts";
 import { singleUndoablePayment, type DeleteBlock, type LedgerRow, type LedgerRowState, type PaymentRecord } from "@/features/people/lib/person-ledger-rows";
-import { formatStatementDate } from "@/lib/engines/person-cycle-statement";
+import { formatStatementDate, type StatementCategory } from "@/lib/engines/person-cycle-statement";
 import { formatCurrency } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { WS_FIELD, WS_GHOST, WS_PRIMARY, WS_SELECT_TRIGGER, WsField } from "./person-workspace-ui";
+import { WS_FIELD, WS_GHOST, WS_PRIMARY, WS_SELECT_TRIGGER, WsCloseButton, WsField } from "./person-workspace-ui";
 
 /**
  * Shared pieces of the People Ledger's inline actions and transaction management — the inline
  * reveal, the settlement-state badge, a row's ⋯ menu, the per-entry settle form and the delete
  * confirmation. Presentation only; every write goes through the callbacks the workspace passes in.
  */
+
+/**
+ * The ledger grid — one header/cell treatment for the Person workspace's Activity and the expanded
+ * transaction ledger, so both read as the same table: a solid header row, visible row lines, lighter
+ * column separators, no outer border (the surrounding frame supplies it).
+ */
+export const LEDGER_TH =
+  "sticky top-0 z-[2] border-r border-b border-r-border-strong/60 border-b-border-strong bg-secondary px-3 py-2 last:border-r-0 text-left text-[11px] font-semibold tracking-[0.06em] whitespace-nowrap text-muted-foreground uppercase";
+export const LEDGER_TD = "border-r border-b border-r-border-strong/55 border-b-border-strong/60 px-3 py-2.5 align-middle last:border-r-0";
+
+/** Compact Type — the description column already carries the long form, so this never repeats it. */
+export const LEDGER_TYPE_SHORT: Record<StatementCategory | "loan", string> = {
+  opening: "Opening",
+  split: "Split",
+  emi: "EMI",
+  gave: "Given",
+  borrowed: "Borrowed",
+  adjustment: "Adjustment",
+  received: "Settlement",
+  repaid: "Settlement",
+  loan: "Loan",
+};
 
 /**
  * Expands its content in place (height + fade, ~220ms), pushing what follows down; collapses the same
@@ -50,31 +72,27 @@ export function InlinePanel({
   onClose,
   children,
   footer,
+  className,
 }: {
   title: string;
   subtitle?: React.ReactNode;
   onClose: () => void;
   children: React.ReactNode;
   footer: React.ReactNode;
+  /** e.g. a max width, so a compact form stays compact on a wide workspace. */
+  className?: string;
 }) {
   return (
-    <div className="mt-4 rounded-[8px] border border-border-strong bg-secondary/35">
-      <div className="flex items-start justify-between gap-3 px-4 pt-3.5">
+    <div className={cn("mt-4 overflow-hidden rounded-[8px] border border-border-strong bg-card", className)}>
+      <div className="flex items-start justify-between gap-3 border-b border-border-strong/75 bg-secondary/80 px-4 py-2.5">
         <div className="min-w-0">
           <h3 className="font-heading text-[15px] leading-tight font-semibold tracking-tight text-foreground">{title}</h3>
           {subtitle && <p className="mt-0.5 text-xs text-muted-foreground">{subtitle}</p>}
         </div>
-        <button
-          type="button"
-          aria-label="Close"
-          onClick={onClose}
-          className="-mt-1 -mr-1.5 flex size-7 shrink-0 items-center justify-center rounded-[6px] text-muted-foreground outline-none transition-colors hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          <X className="size-4" strokeWidth={1.75} />
-        </button>
+        <WsCloseButton onClick={onClose} className="-my-0.5" />
       </div>
-      <div className="px-4 pt-3 pb-1">{children}</div>
-      <div className="mt-2 flex items-center justify-end gap-2 border-t border-border px-4 py-2.5">{footer}</div>
+      <div className="px-4 pt-3.5 pb-3">{children}</div>
+      <div className="flex items-center justify-end gap-2 border-t border-border-strong/60 bg-secondary/70 px-4 py-2.5">{footer}</div>
     </div>
   );
 }
@@ -477,7 +495,7 @@ export function PaymentHistory({
   return (
     <div className={className}>
       <p className="text-[11px] font-medium tracking-[0.08em] text-muted-foreground uppercase">Payment history</p>
-      <ul className="mt-1.5 divide-y divide-border/70 border-y border-border/70">
+      <ul className="mt-1.5 divide-y divide-border/70 border-y border-border">
         {row.payments.map((p) => (
           <li key={p.key} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-1.5 text-sm">
             <span className="w-24 shrink-0 font-medium text-foreground tabular-nums">{formatStatementDate(p.date, true)}</span>

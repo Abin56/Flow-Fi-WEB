@@ -103,7 +103,7 @@ export function PeopleCycleControl({
   const isCurrent = sameCycle(cycle, current);
   const navButton = cn(
     LE_RADIUS.control,
-    "flex h-9 shrink-0 cursor-pointer items-center gap-1 px-2 text-sm font-medium text-foreground outline-none transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:text-muted-foreground/60 disabled:hover:bg-transparent",
+    "flex h-9 shrink-0 cursor-pointer items-center gap-1 px-2 text-sm font-medium text-foreground outline-none transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:text-muted-foreground disabled:hover:bg-transparent",
   );
 
   return (
@@ -230,7 +230,7 @@ export function CyclePicker({
               aria-label="Next year"
               disabled={year >= maxYear}
               onClick={() => setYear((y) => y + 1)}
-              className="flex size-7 cursor-pointer items-center justify-center rounded-[6px] text-foreground outline-none hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:text-muted-foreground/50 disabled:hover:bg-transparent"
+              className="flex size-7 cursor-pointer items-center justify-center rounded-[6px] text-foreground outline-none hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:text-muted-foreground disabled:hover:bg-transparent"
             >
               <ChevronRight className="size-4" strokeWidth={1.75} />
             </button>
@@ -252,7 +252,7 @@ export function CyclePicker({
                 onClick={() => pick(target)}
                 title={formatCycleLabel(target)}
                 className={cn(
-                  "flex h-11 cursor-pointer flex-col items-center justify-center rounded-[6px] border text-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:text-muted-foreground/40",
+                  "flex h-11 cursor-pointer flex-col items-center justify-center rounded-[6px] border text-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:text-muted-foreground/70",
                   selected
                     ? "border-primary-accent-text bg-primary font-semibold text-primary-foreground"
                     : "border-transparent font-medium text-foreground hover:bg-secondary disabled:hover:bg-transparent",

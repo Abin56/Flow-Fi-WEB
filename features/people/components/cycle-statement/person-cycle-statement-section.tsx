@@ -1,25 +1,15 @@
 "use client";
 
-import { ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
+import { ArrowDownLeft, ArrowUpRight, Check, ChevronDown } from "lucide-react";
 import { useState } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { LinkedEmiSource } from "@/features/people/hooks/use-person-cycle-statement";
-import {
-  cycleContaining,
-  directionHeadline,
-  formatCycleLabel,
-  sameCycle,
-  shiftCycle,
-  type PersonCycleStatement,
-  type StatementCycle,
-} from "@/lib/engines/person-cycle-statement";
+import { CycleNavigator } from "@/features/people/components/workspace/transaction-ledger-mode";
+import { directionHeadline, type PersonCycleStatement, type StatementCycle } from "@/lib/engines/person-cycle-statement";
 import { money } from "@/lib/engines/person-cycle-statement-share";
 import { cn } from "@/lib/utils";
 import { toast } from "@/store/toast-store";
 import { EmiBadge, StatementBreakdown, StatementCalculation, StatementReconciliation } from "./statement-parts";
-
-const NAV_BUTTON =
-  "flex size-7 items-center justify-center rounded-[6px] text-muted-foreground transition-colors outline-none hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring";
 
 /**
  * The People Ledger's monthly (18th → 17th) settlement summary for one person — the balance hero, cycle
@@ -59,55 +49,35 @@ export function PersonCycleStatementSection({
       setSavingLink(null);
     }
   };
-  const isCurrent = sameCycle(cycle, cycleContaining(new Date()));
   const loading = isLoading || statement == null;
   const tone =
-    statement?.direction === "theyOwe" ? "text-success" : statement?.direction === "iOwe" ? "text-expense" : "text-foreground";
+    statement?.direction === "theyOwe" ? "text-success" : statement?.direction === "iOwe" ? "text-expense" : "text-muted-foreground";
+  const DirectionIcon = statement?.direction === "theyOwe" ? ArrowDownLeft : statement?.direction === "iOwe" ? ArrowUpRight : Check;
 
   return (
-    <section className="grid gap-x-8 gap-y-5 md:grid-cols-[minmax(0,1fr)_17rem]">
-      {/* Balance hero */}
+    <section className="grid gap-x-8 gap-y-4 md:grid-cols-[minmax(0,1fr)_minmax(15rem,20rem)]">
+      {/* Balance hero — the strongest element on the page */}
       <div className="min-w-0">
-        <p className="text-[11px] font-medium tracking-[0.08em] text-muted-foreground uppercase">Current position</p>
         {loading ? (
-          <div className="mt-2 space-y-2">
-            <Skeleton className="h-5 w-28" />
+          <div className="space-y-2">
+            <Skeleton className="h-4 w-28" />
             <Skeleton className="h-10 w-40" />
           </div>
         ) : (
           <>
-            <p className={cn("mt-2 font-heading text-lg leading-tight font-semibold tracking-tight", tone)}>{directionHeadline(statement.direction)}</p>
-            <p className="mt-0.5 font-heading text-[42px] leading-[1.05] font-bold tracking-tight text-foreground tabular-nums sm:text-[48px]">
+            <p className={cn("inline-flex items-center gap-1.5 text-xs font-bold tracking-[0.08em] uppercase", tone)}>
+              <DirectionIcon className="size-3.5" strokeWidth={2.25} aria-hidden />
+              {directionHeadline(statement.direction)}
+            </p>
+            <p className="mt-1 font-heading text-[36px] leading-none font-bold tracking-tight text-foreground tabular-nums sm:text-[40px]">
               {money(statement.amount)}
             </p>
           </>
         )}
 
-        {/* Cycle switcher — supports the balance, never competes with it */}
-        <div className="-ml-1.5 mt-3 flex items-center gap-0.5 text-muted-foreground">
-          <button type="button" aria-label="Previous cycle" onClick={() => onCycleChange(shiftCycle(cycle, -1))} className={NAV_BUTTON}>
-            <ChevronLeft className="size-4" strokeWidth={1.75} />
-          </button>
-          <span className="min-w-[9.5rem] px-1 text-center text-[13px] font-medium text-foreground tabular-nums">{formatCycleLabel(cycle)}</span>
-          <button type="button" aria-label="Next cycle" onClick={() => onCycleChange(shiftCycle(cycle, 1))} className={NAV_BUTTON}>
-            <ChevronRight className="size-4" strokeWidth={1.75} />
-          </button>
-        </div>
-        <div className="mt-0.5 h-5">
-          {isCurrent ? (
-            <span className="text-[11px] text-muted-foreground">Current cycle</span>
-          ) : (
-            <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-              Past cycle ·
-              <button
-                type="button"
-                onClick={() => onCycleChange(cycleContaining(new Date()))}
-                className="rounded-[4px] font-semibold text-primary-accent-text underline-offset-2 hover:underline"
-              >
-                Back to current
-              </button>
-            </span>
-          )}
+        {/* Cycle — the same navigator as the expanded ledger, so both read one shared cycle */}
+        <div className="-ml-1.5 mt-3">
+          <CycleNavigator cycle={cycle} onCycleChange={onCycleChange} />
         </div>
 
         {actions && <div className="mt-6">{actions}</div>}
@@ -115,7 +85,7 @@ export function PersonCycleStatementSection({
       </div>
 
       {/* Compact reconciliation */}
-      <div className="min-w-0 border-t border-border pt-5 md:border-t-0 md:border-l md:pt-1 md:pl-7">
+      <div className="min-w-0 border-t border-border-strong/75 pt-4 md:border-t-0 md:border-l md:pt-0 md:pl-7">
         {loading ? (
           <div className="space-y-2 pt-1">
             <Skeleton className="h-4 w-full" />
@@ -124,13 +94,13 @@ export function PersonCycleStatementSection({
           </div>
         ) : (
           <>
-            <p className="text-[11px] font-medium tracking-[0.08em] text-muted-foreground uppercase">This statement</p>
+            <p className="text-[13px] font-semibold text-foreground">This statement</p>
             <div className="mt-2">
               <StatementReconciliation statement={statement} highlightCarryForward />
             </div>
 
             {linkedEmis.length > 0 && (
-              <div className="mt-3 border-t border-border pt-2.5">
+              <div className="mt-3 border-t border-border-strong/75 pt-2.5">
                 <p className="text-[11px] font-medium tracking-[0.08em] text-muted-foreground uppercase">Linked EMIs</p>
                 <ul className="mt-1.5 space-y-2">
                   {linkedEmis.map((s) => (

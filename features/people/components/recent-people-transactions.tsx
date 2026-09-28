@@ -35,7 +35,7 @@ export function RecentPeopleTransactions({ onViewAll }: { onViewAll?: () => void
   const { data: expenses = [] } = useExpenses();
 
   return (
-    <section className="surface-flat rounded-2xl border border-border/50 p-5">
+    <section className="surface-flat rounded-2xl border border-border p-5">
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-semibold text-foreground">Recent Transactions</h2>
         <button type="button" onClick={onViewAll} className="text-xs font-semibold text-primary-accent-text hover:underline">

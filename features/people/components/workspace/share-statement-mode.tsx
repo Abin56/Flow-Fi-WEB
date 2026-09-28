@@ -61,6 +61,7 @@ export function ShareStatementMode({
       <ModeHeader
         backLabel="Close"
         onBack={onBack}
+        onClose={onBack}
         title="Share Statement"
         subtitle={`${statement.personName} · ${statement.cycleLabel}`}
       />
@@ -133,7 +134,7 @@ export function ShareStatementMode({
               )}
             >
               <div className="overflow-hidden">
-                <pre className="mt-1.5 max-h-72 overflow-y-auto rounded-[6px] border border-border bg-secondary/50 p-3 font-sans text-xs whitespace-pre-wrap text-foreground">
+                <pre className="mt-1.5 max-h-72 overflow-y-auto rounded-[6px] border border-border bg-secondary/80 p-3 font-sans text-xs whitespace-pre-wrap text-foreground">
                   {text}
                 </pre>
               </div>

@@ -72,7 +72,7 @@ export function AddEntryPanel({
   }
 
   return (
-    <form onSubmit={submit}>
+    <form onSubmit={submit} className="max-w-3xl">
       <InlinePanel
         title="Add transaction"
         subtitle={type === "gave" ? `${firstName} will owe you this` : type === "borrowed" ? `You will owe ${firstName} this` : `What happened with ${firstName}?`}
@@ -102,8 +102,10 @@ export function AddEntryPanel({
           ]}
           className="max-w-sm"
         />
+        {!type && <p className="mt-1.5 text-xs text-muted-foreground">Choose one to continue.</p>}
 
-        <div className="mt-3.5 grid gap-3 sm:grid-cols-[10rem_minmax(0,1fr)_10rem_12rem] sm:items-end">
+        {/* Amount · Date · Account on one row, Description full width below — no single stretched field */}
+        <div className="mt-3.5 grid gap-3 sm:grid-cols-[9rem_10rem_minmax(0,1fr)] sm:items-end">
           <WsField label="Amount">
             <CompactAmountInput
               inputRef={amountRef}
@@ -116,13 +118,13 @@ export function AddEntryPanel({
               invalid={!!error && !!type}
             />
           </WsField>
-          <WsField label="Description">
-            <input className={WS_FIELD} placeholder="e.g. Dinner, cab" value={note} onChange={(e) => setNote(e.target.value)} />
-          </WsField>
           <WsField label="Date">
             <input type="date" className={WS_FIELD} value={date} onChange={(e) => setDate(e.target.value)} />
           </WsField>
           <AccountField choice={account} />
+          <WsField label="Description" className="sm:col-span-3">
+            <input className={WS_FIELD} placeholder="e.g. Dinner, cab" value={note} onChange={(e) => setNote(e.target.value)} />
+          </WsField>
         </div>
         <p className={cn("mt-1.5 min-h-4 text-xs font-medium text-expense", !error && "invisible")} role="alert">
           {error}

@@ -22,37 +22,25 @@ import {
   formatStatementDate,
   sameCycle,
   shiftCycle,
-  type StatementCategory,
   type StatementCycle,
   type StatementDirection,
 } from "@/lib/engines/person-cycle-statement";
 import { money } from "@/lib/engines/person-cycle-statement-share";
 import { cn } from "@/lib/utils";
-import { DELETE_BLOCK_NOTE, EntryEditForm, EntrySettleForm, isEditable, InlineReveal, PaymentHistory } from "./ledger-ui";
+import { DELETE_BLOCK_NOTE, EntryEditForm, EntrySettleForm, isEditable, InlineReveal, LEDGER_TD, LEDGER_TH, LEDGER_TYPE_SHORT, PaymentHistory } from "./ledger-ui";
 import { WS_PAD, WS_PRIMARY, WS_SECONDARY, WsSegmented } from "./person-workspace-ui";
 
 /** The expanded workspace's internal navigation — the ledger, or one of the Person-level flows in its place. */
 export type LedgerView = "transactions" | "settle" | "split";
 
-const TH = "sticky top-0 z-[2] border-r border-b border-r-border-strong/40 border-b-border-strong bg-secondary px-3 py-2 last:border-r-0 text-left text-[11px] font-semibold tracking-[0.06em] whitespace-nowrap text-muted-foreground uppercase";
-const TD = "border-r border-b border-r-border-strong/30 border-b-border-strong/40 px-3 py-2.5 align-middle last:border-r-0";
+const TH = LEDGER_TH;
+const TD = LEDGER_TD;
 const COLS = 8;
 
 const NAV_BUTTON =
   "flex size-8 items-center justify-center rounded-[6px] text-muted-foreground transition-colors outline-none hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring";
 
-/** Compact Type — the description column already carries the long form, so this never repeats it. */
-const TYPE_SHORT: Record<StatementCategory | "loan", string> = {
-  opening: "Opening",
-  split: "Split",
-  emi: "EMI",
-  gave: "Given",
-  borrowed: "Borrowed",
-  adjustment: "Adjustment",
-  received: "Settlement",
-  repaid: "Settlement",
-  loan: "Loan",
-};
+const TYPE_SHORT = LEDGER_TYPE_SHORT;
 
 /** "28 Sep 2026" — used where a single line is needed (details, cards). */
 const fullDate = (d: Date) => formatStatementDate(d, true);
@@ -143,7 +131,7 @@ function RowActions({
           Delete
         </button>
       ) : blockNote ? (
-        <span title={blockNote} aria-label={blockNote} className="flex size-7 items-center justify-center text-muted-foreground/70">
+        <span title={blockNote} aria-label={blockNote} className="flex size-7 items-center justify-center text-muted-foreground">
           <Info className="size-3.5" strokeWidth={1.75} />
         </span>
       ) : null}
@@ -153,7 +141,7 @@ function RowActions({
 
 function Fact({ label, children, tone }: { label: string; children: React.ReactNode; tone?: string }) {
   return (
-    <div className="min-w-0 border-l border-border/80 pl-3">
+    <div className="min-w-0 border-l border-border pl-3">
       <dt className="text-[10.5px] font-medium tracking-[0.04em] text-muted-foreground uppercase">{label}</dt>
       <dd className={cn("truncate text-[13px] font-semibold tabular-nums", tone ?? "text-foreground")}>{children}</dd>
     </div>
@@ -396,7 +384,7 @@ export function TransactionLedgerMode({
     const content = view === "settle" ? renderSettle?.(backToTransactions) : renderSplit?.(backToTransactions);
     return (
       <div key={view} className={cn("min-h-0 flex-1 overflow-y-auto overscroll-contain", slide)}>
-        {view === "split" ? <div className="mx-auto w-full max-w-3xl">{content}</div> : content}
+        {view === "split" ? <div className="mx-auto w-full max-w-5xl">{content}</div> : content}
       </div>
     );
   }
@@ -457,7 +445,7 @@ export function TransactionLedgerMode({
       </div>
 
       {/* ── Fixed: the Transactions toolbar — search & filters on the left, Add on the right ── */}
-      <div className={cn(WS_PAD, "flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-border-strong/60 bg-secondary/50 py-2.5")}>
+      <div className={cn(WS_PAD, "flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-border-strong/75 bg-secondary/80 py-2.5")}>
         <h3 className="mr-1 font-heading text-[15px] font-semibold text-foreground">
           Transactions <span className="ml-0.5 text-sm font-semibold text-muted-foreground tabular-nums">{visible.length}</span>
         </h3>
@@ -518,7 +506,7 @@ export function TransactionLedgerMode({
         {/* Add opens at the top of the one scrolling region — no second scrollbar in the fixed header */}
         {addSection && (
           <InlineReveal open={addOpen}>
-            <div className={cn(WS_PAD, "border-b border-border-strong/60 bg-secondary/30 py-4")}>
+            <div className={cn(WS_PAD, "border-b border-border-strong/75 bg-secondary/70 py-4")}>
               <div className="max-w-4xl">{addSection}</div>
             </div>
           </InlineReveal>
@@ -556,7 +544,7 @@ export function TransactionLedgerMode({
                   <Fragment key={g.key}>
                     {g.label && (
                       <tr>
-                        <td colSpan={COLS} className="border-b border-border bg-secondary/40 px-4 py-1.5 text-[10.5px] font-semibold tracking-[0.1em] text-muted-foreground uppercase sm:px-7">
+                        <td colSpan={COLS} className="border-b border-border bg-secondary/70 px-4 py-1.5 text-[10.5px] font-semibold tracking-[0.1em] text-muted-foreground uppercase sm:px-7">
                           {g.label}
                         </td>
                       </tr>
@@ -570,7 +558,7 @@ export function TransactionLedgerMode({
                             aria-expanded={open}
                             className={cn("cursor-pointer transition-colors hover:bg-secondary/60", open && "bg-secondary/70")}
                           >
-                            <td className={cn(TD, "border-l-2 pl-4 text-right text-[11px] text-muted-foreground/60 tabular-nums sm:pl-7", row.state === "settled" ? "border-l-success/60" : "border-l-transparent")}>{sequence(n, visible.length)}</td>
+                            <td className={cn(TD, "border-l-2 pl-4 text-right text-[11px] text-muted-foreground tabular-nums sm:pl-7", row.state === "settled" ? "border-l-success/60" : "border-l-transparent")}>{sequence(n, visible.length)}</td>
                             <td className={cn(TD, "whitespace-nowrap tabular-nums")}>
                               <p className="text-sm leading-tight font-semibold text-foreground">{formatStatementDate(row.date)}</p>
                               <p className="text-[11px] leading-tight text-muted-foreground">{row.date.getFullYear()}</p>
@@ -609,7 +597,7 @@ export function TransactionLedgerMode({
                               ) : row.state === "settled" ? (
                                 <span className="text-muted-foreground">{money(0)}</span>
                               ) : (
-                                <span className="text-muted-foreground/60">—</span>
+                                <span className="text-muted-foreground">—</span>
                               )}
                             </td>
                             <td className={cn(TD, "py-1.5 pr-4 sm:pr-7")}>
@@ -655,7 +643,7 @@ export function TransactionLedgerMode({
                             </span>
                             <span className="block text-xs text-muted-foreground">
                               <span className="font-semibold text-foreground/85 tabular-nums">{fullDate(row.date)}</span> · {TYPE_SHORT[row.category]}
-                              <span className="text-muted-foreground/60 tabular-nums"> · #{sequence(n, visible.length)}</span>
+                              <span className="text-muted-foreground tabular-nums"> · #{sequence(n, visible.length)}</span>
                             </span>
                           </span>
                           <span className={cn("shrink-0 font-heading text-[15px] font-bold tracking-tight tabular-nums", amountTone(row))}>{money(row.amount)}</span>

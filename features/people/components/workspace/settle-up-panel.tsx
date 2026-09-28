@@ -141,7 +141,7 @@ export function SettleUpPanel({
         { value: "custom", label: "Custom amount", icon: PencilLine },
         { value: "specific", label: "Choose entries", icon: ListChecks, meta: pending.length > 0 ? pending.length : undefined },
       ]}
-      className={variant === "page" ? "w-full" : "w-full sm:w-auto sm:min-w-[24rem]"}
+      className={variant === "page" ? "w-full" : "w-full sm:w-auto"}
     />
   );
 
@@ -154,7 +154,7 @@ export function SettleUpPanel({
 
   /* Only the controls the selected option needs */
   const controls = (
-    <div key={mode} className="mt-3.5 animate-in duration-200 fade-in-0">
+    <div key={mode} className="mt-3 max-w-xl animate-in duration-200 fade-in-0">
       {mode === "all" && (
         <p className="text-[13px] leading-relaxed text-muted-foreground">
           {totalPending > 0
@@ -237,10 +237,10 @@ export function SettleUpPanel({
   );
 
   const positionTone = directBalance > 0 ? "text-success" : directBalance < 0 ? "text-expense" : "text-muted-foreground";
+  // What this settlement would record — the amount the existing flow is about to post, beside the outstanding it applies to.
+  const payingNow = mode === "all" ? totalPending : mode === "custom" ? Number(customAmount) || 0 : null;
 
   if (variant === "page") {
-    // What this settlement would record — the amount the existing flow is about to post, beside the outstanding it applies to.
-    const payingNow = mode === "all" ? totalPending : mode === "custom" ? Number(customAmount) || 0 : null;
     return (
       <div className="flex min-h-full flex-col">
         <ModeHeader
@@ -258,7 +258,7 @@ export function SettleUpPanel({
               {loanNote}
             </div>
 
-            <aside className="h-fit rounded-[8px] border border-border-strong bg-secondary/35 p-4 lg:sticky lg:top-4">
+            <aside className="h-fit rounded-[8px] border border-border-strong bg-secondary/70 p-4 lg:sticky lg:top-4">
               <WsLabel>Settlement summary</WsLabel>
               <dl className="mt-3 space-y-3">
                 <div>
@@ -295,17 +295,26 @@ export function SettleUpPanel({
       subtitle="Settles the overall outstanding balance. To settle one transaction, use Settle on its row."
       onClose={onCancel}
       footer={actionButtons}
+      className="max-w-[44rem]"
     >
-      {/* Position being settled */}
-      <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
+      {/* What is being settled, and who pays whom — the same figures the flow records */}
+      <dl className="grid gap-x-8 gap-y-3 sm:grid-cols-[auto_auto] sm:justify-start">
         <div>
-          <WsLabel>Outstanding</WsLabel>
-          <p className="mt-0.5 font-heading text-[26px] leading-tight font-bold tracking-tight text-foreground tabular-nums">{formatCurrency(totalPending)}</p>
-          <p className={cn("text-xs font-semibold", positionTone)}>{positionLabel}</p>
+          <dt className="text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">Outstanding</dt>
+          <dd className="font-heading text-[22px] leading-tight font-bold tracking-tight text-foreground tabular-nums">{formatCurrency(totalPending)}</dd>
+          <dd className={cn("text-xs font-semibold", positionTone)}>{positionLabel}</dd>
         </div>
-        {modePicker}
-      </div>
+        <div className="border-t border-border-strong/75 pt-3 sm:border-t-0 sm:border-l sm:pt-0 sm:pl-8">
+          <dt className="text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">Settling now</dt>
+          <dd className="font-heading text-[22px] leading-tight font-bold tracking-tight text-foreground tabular-nums">
+            {payingNow != null ? formatCurrency(payingNow) : "Per entry"}
+          </dd>
+          <dd className="text-xs text-muted-foreground">{totalPending > 0 ? effectLine : "Nothing to settle"}</dd>
+        </div>
+      </dl>
       {loanNote}
+      <WsLabel className="mt-4 border-t border-border-strong/60 pt-3">How much to settle</WsLabel>
+      <div className="mt-2">{modePicker}</div>
       {controls}
     </InlinePanel>
   );

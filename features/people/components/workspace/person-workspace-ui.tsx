@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, Check, type LucideIcon } from "lucide-react";
+import { ArrowLeft, Check, X, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 /**
@@ -25,6 +25,27 @@ export const WS_SECONDARY =
 export const WS_GHOST =
   "flex h-9 items-center justify-center gap-1.5 rounded-[6px] px-3 text-sm font-medium text-muted-foreground outline-none transition-colors hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50";
 
+/**
+ * "× Close" — the one way out of a People workflow (Add, Settle, Split, Share), always top-right. A
+ * neutral bordered button: clearly a control, never the lime of a financial action.
+ */
+export function WsCloseButton({ onClick, label = "Close", className }: { onClick: () => void; label?: string; className?: string }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={label}
+      className={cn(
+        "flex h-8 shrink-0 items-center gap-1.5 rounded-[6px] border border-border-strong bg-card px-2.5 text-[13px] font-medium text-foreground outline-none transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring",
+        className,
+      )}
+    >
+      <X className="size-4 text-muted-foreground" strokeWidth={1.75} />
+      Close
+    </button>
+  );
+}
+
 /** Content-area padding shared by every mode, so switching modes never shifts the edges. */
 export const WS_PAD = "px-4 sm:px-7";
 
@@ -33,18 +54,34 @@ export function WsLabel({ children, className }: { children: React.ReactNode; cl
   return <p className={cn("text-[11px] font-medium tracking-[0.08em] text-muted-foreground uppercase", className)}>{children}</p>;
 }
 
-/** "← Tripthee" + mode title + one line of context. */
+/**
+ * "← Tripthee" + mode title + one line of context. With `onClose` (a popup), the back link gives way to
+ * the standard "× Close" at the top-right, beside the title.
+ */
 export function ModeHeader({
   backLabel,
   onBack,
+  onClose,
   title,
   subtitle,
 }: {
   backLabel: string;
   onBack: () => void;
+  onClose?: () => void;
   title: string;
   subtitle?: React.ReactNode;
 }) {
+  if (onClose) {
+    return (
+      <div className={cn(WS_PAD, "flex items-start justify-between gap-4 border-b border-border-strong/60 pt-4 pb-3.5 sm:pt-5")}>
+        <div className="min-w-0">
+          <h2 className="font-heading text-lg leading-tight font-semibold tracking-tight text-foreground sm:text-xl">{title}</h2>
+          {subtitle && <p className="mt-0.5 text-[13px] text-muted-foreground">{subtitle}</p>}
+        </div>
+        <WsCloseButton onClick={onClose} />
+      </div>
+    );
+  }
   return (
     <div className={cn(WS_PAD, "pt-4 sm:pt-5")}>
       <button
@@ -230,7 +267,7 @@ export function MoneyInput({
         placeholder="0"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="w-full min-w-0 bg-transparent font-heading text-[28px] leading-tight font-bold tracking-tight text-foreground tabular-nums outline-none placeholder:text-muted-foreground/60 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+        className="w-full min-w-0 bg-transparent font-heading text-[28px] leading-tight font-bold tracking-tight text-foreground tabular-nums outline-none placeholder:text-muted-foreground [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
       />
     </div>
   );
