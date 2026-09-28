@@ -59,7 +59,7 @@ export function ShareStatementMode({
   return (
     <div className="flex min-h-full flex-col">
       <ModeHeader
-        backLabel={statement.personName}
+        backLabel="Close"
         onBack={onBack}
         title="Share Statement"
         subtitle={`${statement.personName} · ${statement.cycleLabel}`}

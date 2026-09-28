@@ -4,6 +4,7 @@ import {
   ArrowDownLeft,
   ArrowUpRight,
   CalendarClock,
+  Check,
   HandCoins,
   Landmark,
   Maximize2,
@@ -17,12 +18,13 @@ import { Fragment, useState } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmiBadge } from "@/features/people/components/cycle-statement/statement-parts";
 import {
+  EntryEditForm,
   EntrySettleForm,
+  type EntryEditValues,
   InlineReveal,
   lastPaymentLine,
   PaymentHistory,
   RowActionsMenu,
-  StatusBadge,
   type EntrySettleValues,
 } from "@/features/people/components/workspace/ledger-ui";
 import {
@@ -87,6 +89,54 @@ export function RowIcon({ row, className }: { row: LedgerRow; className?: string
     <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-full", TONE_TILE[tone], className)}>
       <Icon className="size-4" strokeWidth={1.75} />
     </span>
+  );
+}
+
+/**
+ * Amount colour by what the row means for the balance: receivable → the positive treatment, my debt →
+ * the expense treatment, settlements/loans neutral; a settled obligation steps back. The words next to
+ * it always carry the meaning — colour only supports it.
+ */
+export function amountTone(row: LedgerRow): string {
+  if (row.state === "settled") return "text-foreground/70";
+  if (row.direction === "theyOwe") return "text-success";
+  if (row.direction === "iOwe") return "text-expense";
+  return "text-foreground";
+}
+
+/**
+ * Human-readable state, derived only from the row's existing direction and settlement state:
+ * receivable & unsettled → "Awaiting payment", my debt & unsettled → "To pay", partly settled →
+ * "Partially settled" + what remains, settled → "Settled". Rows without a settlement state (payments,
+ * EMI, adjustments, Loans) say what they mean instead.
+ */
+function rowStatus(row: LedgerRow): { label: string; detail: string | null; dot: string; icon?: "check" } {
+  if (row.state === "settled") return { label: "Settled", detail: lastPaymentLine(row), dot: "bg-success", icon: "check" };
+  if (row.state === "partial")
+    return { label: "Partially settled", detail: `${money(row.remaining ?? 0)} remaining`, dot: row.direction === "iOwe" ? "bg-expense" : "bg-success" };
+  if (row.state === "open")
+    return row.direction === "iOwe"
+      ? { label: "To pay", detail: "You owe them", dot: "bg-expense" }
+      : { label: "Awaiting payment", detail: "They owe you", dot: "bg-success" };
+  if (row.direction === "theyPaid" || row.direction === "youPaid") return { label: DIRECTION_LABEL[row.direction], detail: "Settlement", dot: "bg-muted-foreground/50" };
+  if (row.direction === "loan") return { label: "Via loan", detail: "Settled from the Loan", dot: "bg-muted-foreground/50" };
+  return { label: DIRECTION_LABEL[row.direction], detail: null, dot: row.direction === "iOwe" ? "bg-expense" : "bg-success" };
+}
+
+export function StatusCell({ row }: { row: LedgerRow }) {
+  const s = rowStatus(row);
+  return (
+    <div className="flex min-w-0 items-start gap-2">
+      {s.icon === "check" ? (
+        <Check className="mt-0.5 size-3.5 shrink-0 text-success" strokeWidth={2.5} aria-hidden />
+      ) : (
+        <span className={cn("mt-1.5 size-2 shrink-0 rounded-full", s.dot)} aria-hidden />
+      )}
+      <div className="min-w-0">
+        <p className={cn("text-[13px] leading-tight font-semibold whitespace-nowrap", s.icon === "check" ? "text-success" : "text-foreground")}>{s.label}</p>
+        {s.detail && <p className="mt-0.5 text-xs leading-tight whitespace-nowrap text-muted-foreground">{s.detail}</p>}
+      </div>
+    </div>
   );
 }
 
@@ -177,9 +227,17 @@ function FeedRow({
   onSettleStart,
   onSettleCancel,
   onSettleSubmit,
+  editing,
+  onEditStart,
+  onEditCancel,
+  onEditSubmit,
   onDelete,
   onUndo,
 }: {
+  editing: boolean;
+  onEditStart?: () => void;
+  onEditCancel: () => void;
+  onEditSubmit: (values: EntryEditValues) => Promise<void>;
   n: string;
   row: LedgerRow;
   date: string;
@@ -193,9 +251,8 @@ function FeedRow({
   onDelete?: () => void;
   onUndo?: (payment: PaymentRecord) => void;
 }) {
-  const open = expanded || settling;
+  const open = expanded || settling || editing;
   const settled = row.state === "settled";
-  const receipt = lastPaymentLine(row);
   return (
     <li
       className={cn(
@@ -204,50 +261,46 @@ function FeedRow({
         open ? "bg-secondary/70" : "bg-transparent",
       )}
     >
-      <div className="flex items-center gap-1 pr-1">
+      <div className="flex items-center gap-1 border-b border-border/70 pr-1">
         <button
           type="button"
           aria-expanded={expanded}
           onClick={onToggle}
-          className="grid min-w-0 flex-1 grid-cols-[auto_2rem_minmax(0,1fr)_auto] items-center gap-x-2.5 rounded-[6px] py-2 pl-2 text-left outline-none transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring"
+          className="grid min-w-0 flex-1 grid-cols-[1.25rem_3rem_minmax(0,1fr)_auto] items-center gap-x-3 rounded-[6px] py-2.5 pl-2 text-left outline-none transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring min-[520px]:grid-cols-[1.25rem_3rem_minmax(0,1fr)_auto_8.5rem]"
         >
-          <span className="min-w-[1.125rem] text-right text-[11px] font-medium text-muted-foreground/70 tabular-nums" aria-label={`Transaction ${n}`}>
+          <span className="text-[11px] font-medium text-muted-foreground/70 tabular-nums" aria-label={`Transaction ${n}`}>
             {n}
           </span>
-          <RowIcon row={row} />
-          <span className="flex min-w-0 flex-col gap-0.5">
-            <span className="flex min-w-0 items-center gap-1.5 text-sm leading-snug font-semibold text-foreground">
-              <span className="truncate">{row.title}</span>
-              {row.category === "emi" && <EmiBadge />}
-            </span>
-            <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-              <span className="truncate">
-                <span className="font-medium text-foreground/80 tabular-nums">{date}</span> · {rowMeta(row)}
+          <span className="flex flex-col leading-tight">
+            <span className="text-[13px] font-semibold whitespace-nowrap text-foreground tabular-nums">{formatStatementDate(row.date, false)}</span>
+            <span className="text-[10.5px] text-muted-foreground tabular-nums">{row.date.getFullYear()}</span>
+          </span>
+          <span className="flex min-w-0 items-center gap-2.5">
+            <RowIcon row={row} className="size-7" />
+            <span className="flex min-w-0 flex-col">
+              <span className="flex min-w-0 items-center gap-1.5 text-sm leading-snug font-semibold text-foreground">
+                <span className="truncate">{row.title}</span>
+                {row.category === "emi" && <EmiBadge />}
               </span>
-              <StatusBadge row={row} compact className="hidden min-[420px]:inline-flex" />
+              <span className="truncate text-[11px] text-muted-foreground">{rowMeta(row)}</span>
             </span>
           </span>
-          <span className="flex shrink-0 flex-col items-end gap-0.5 pr-1">
-            <span className="font-heading text-[15px] leading-snug font-semibold tracking-tight text-foreground tabular-nums">{money(row.amount)}</span>
-            <span
-              className={cn(
-                "text-[11px] leading-tight font-medium whitespace-nowrap",
-                settled ? "text-success" : row.state === "partial" ? "text-foreground" : DIRECTION_TEXT[row.direction],
-              )}
-            >
-              {settled ? (receipt ?? "Settled") : row.state === "partial" ? `${money(row.remaining ?? 0)} remaining` : DIRECTION_LABEL[row.direction]}
-            </span>
+          <span className={cn("text-right font-heading text-[15px] font-bold tabular-nums", amountTone(row))}>{money(row.amount)}</span>
+          <span className="hidden min-[520px]:block">
+            <StatusCell row={row} />
           </span>
         </button>
-        <RowActionsMenu row={row} onSettle={onSettleStart} onDelete={onDelete} onUndo={onUndo} />
+        <RowActionsMenu row={row} onSettle={onSettleStart} onEdit={onEditStart} onDelete={onDelete} onUndo={onUndo} />
       </div>
       <InlineReveal open={open}>
-        <div className="px-2 pt-0.5 pb-2.5 sm:pr-11 sm:pl-[4.5rem]">
-          {settling ? (
+        <div className="px-2 pt-0.5 pb-2.5 sm:pr-11 sm:pl-[5.5rem]">
+          {editing ? (
+            <EntryEditForm row={row} onCancel={onEditCancel} onSubmit={onEditSubmit} />
+          ) : settling ? (
             <EntrySettleForm row={row} personName={personName} onCancel={onSettleCancel} onSubmit={onSettleSubmit} />
           ) : (
             <>
-              <StatusBadge row={row} className="mb-1.5 min-[420px]:hidden" />
+              <div className="mb-1.5 min-[520px]:hidden"><StatusCell row={row} /></div>
               <dl className="grid gap-x-6 text-xs sm:grid-cols-2">
                 <RowDetails row={row} />
               </dl>
@@ -333,6 +386,10 @@ export interface LedgerRowHandlers {
   onSettleStart: (row: LedgerRow) => void;
   onSettleCancel: () => void;
   onSettleSubmit: (row: LedgerRow, values: EntrySettleValues) => Promise<void>;
+  editingKey?: string | null;
+  onEditStart?: (row: LedgerRow) => void;
+  onEditCancel?: () => void;
+  onEditSubmit?: (row: LedgerRow, values: EntryEditValues) => Promise<void>;
   onDelete?: (row: LedgerRow) => void;
   /** Reverses one recorded payment (its confirmation lives in the workspace). */
   onUndoPayment?: (row: LedgerRow, payment: PaymentRecord) => void;
@@ -481,6 +538,10 @@ export function PersonActivityFeed({
                     onSettleStart={row.settle ? () => handlers.onSettleStart(row) : undefined}
                     onSettleCancel={handlers.onSettleCancel}
                     onSettleSubmit={(values) => handlers.onSettleSubmit(row, values)}
+                    editing={handlers.editingKey === row.key}
+                    onEditStart={handlers.onEditStart ? () => handlers.onEditStart!(row) : undefined}
+                    onEditCancel={() => handlers.onEditCancel?.()}
+                    onEditSubmit={(values) => handlers.onEditSubmit!(row, values)}
                     onDelete={handlers.onDelete ? () => handlers.onDelete!(row) : undefined}
                     onUndo={handlers.onUndoPayment ? (payment) => handlers.onUndoPayment!(row, payment) : undefined}
                   />

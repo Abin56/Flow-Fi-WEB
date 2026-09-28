@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, CircleDot, HandCoins, MoreHorizontal, Trash2, Undo2, X } from "lucide-react";
+import { Check, CircleDot, HandCoins, MoreHorizontal, Pencil, Trash2, Undo2, X } from "lucide-react";
 import { useState } from "react";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -162,12 +162,14 @@ export const DELETE_BLOCK_NOTE: Record<Exclude<DeleteBlock, null>, string> = {
 export function RowActionsMenu({
   row,
   onSettle,
+  onEdit,
   onDelete,
   onUndo,
   className,
 }: {
   row: LedgerRow;
   onSettle?: () => void;
+  onEdit?: () => void;
   onDelete?: () => void;
   /** Reverses a recorded payment (see `PaymentRecord.undo`). */
   onUndo?: (payment: PaymentRecord) => void;
@@ -175,9 +177,10 @@ export function RowActionsMenu({
 }) {
   const canSettle = row.settle != null && onSettle != null;
   const canDelete = row.deletable && onDelete != null;
+  const canEdit = isEditable(row) && onEdit != null;
   const undoPayment = onUndo ? singleUndoablePayment(row) : null;
   const note = row.deleteBlock ? DELETE_BLOCK_NOTE[row.deleteBlock] : null;
-  if (!canSettle && !canDelete && !undoPayment && !note) return <span className={cn("size-8 shrink-0", className)} aria-hidden />;
+  if (!canSettle && !canEdit && !canDelete && !undoPayment && !note) return <span className={cn("size-8 shrink-0", className)} aria-hidden />;
   return (
     <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
@@ -199,6 +202,12 @@ export function RowActionsMenu({
             Settle this entry
           </DropdownMenuItem>
         )}
+        {canEdit && (
+          <DropdownMenuItem onSelect={onEdit}>
+            <Pencil strokeWidth={1.75} />
+            Edit transaction
+          </DropdownMenuItem>
+        )}
         {undoPayment && (
           <DropdownMenuItem onSelect={() => onUndo!(undoPayment)}>
             <Undo2 strokeWidth={1.75} />
@@ -215,6 +224,106 @@ export function RowActionsMenu({
       </DropdownMenuContent>
     </DropdownMenu>
   );
+}
+
+/** A manual ledger entry (given/borrowed/payment/adjustment) — expense, Loan, EMI and opening rows are edited where they come from. */
+export function isEditable(row: LedgerRow): boolean {
+  return row.entryId != null && row.deletable;
+}
+
+export interface EntryEditValues {
+  amount?: number;
+  date?: Date;
+  note?: string;
+}
+
+/**
+ * Edit one transaction's amount, date and description in place. A given/borrowed amount can't drop
+ * below what has already been settled on it; a payment's amount is fixed (undo and re-record it
+ * instead) so it can never over-settle the transaction it applies to.
+ */
+export function EntryEditForm({
+  row,
+  onCancel,
+  onSubmit,
+}: {
+  row: LedgerRow;
+  onCancel: () => void;
+  onSubmit: (values: EntryEditValues) => Promise<void>;
+}) {
+  const settled = row.state != null ? row.amount - (row.remaining ?? 0) : 0;
+  const amountLocked = row.direction === "theyPaid" || row.direction === "youPaid";
+  const [amount, setAmount] = useState(() => row.amount.toFixed(2));
+  const [date, setDate] = useState(() => toDateInput(row.date));
+  const [note, setNote] = useState(row.title);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (saving) return;
+    const value = Number(amount);
+    if (!amountLocked) {
+      if (!Number.isFinite(value) || value <= 0) return setError("Enter an amount greater than 0.");
+      if (value < settled - 0.005) return setError(`Can't go below the ${formatCurrency(settled)} already settled.`);
+    }
+    if (!date) return setError("Pick a date.");
+    const nextDate = new Date(`${date}T${row.date.toTimeString().slice(0, 8)}`);
+    const patch: EntryEditValues = {};
+    if (!amountLocked && Math.abs(value - row.amount) > 0.005) patch.amount = value;
+    if (toDateInput(row.date) !== date) patch.date = nextDate;
+    if (note.trim() !== row.title) patch.note = note.trim();
+    if (Object.keys(patch).length === 0) return onCancel();
+    setError(null);
+    setSaving(true);
+    try {
+      await onSubmit(patch);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Couldn't save the changes. Please try again.");
+      setSaving(false);
+    }
+  }
+
+  return (
+    <form onSubmit={submit} className="rounded-[8px] border border-border-strong bg-card p-3">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
+        <p className="text-sm font-semibold text-foreground">Edit transaction</p>
+        <p className="text-xs text-muted-foreground">{row.typeLabel}{settled > 0 && ` · ${formatCurrency(settled)} already settled`}</p>
+      </div>
+      <div className="mt-2.5 grid gap-3 sm:grid-cols-[minmax(0,1fr)_9rem_9rem]">
+        <WsField label="Description">
+          <input className={WS_FIELD} value={note} onChange={(e) => setNote(e.target.value)} maxLength={120} autoFocus />
+        </WsField>
+        <WsField label="Amount">
+          {amountLocked ? (
+            <input className={cn(WS_FIELD, "opacity-60")} value={formatCurrency(row.amount)} disabled title="Undo the payment and record it again to change its amount" />
+          ) : (
+            <CompactAmountInput label="Amount" value={amount} onChange={setAmount} invalid={!!error} />
+          )}
+        </WsField>
+        <WsField label="Date">
+          <input type="date" className={WS_FIELD} value={date} onChange={(e) => setDate(e.target.value)} />
+        </WsField>
+      </div>
+      {error && (
+        <p className="mt-1.5 text-xs font-medium text-expense" role="alert">
+          {error}
+        </p>
+      )}
+      <div className="mt-3 flex items-center justify-end gap-2">
+        <button type="button" onClick={onCancel} disabled={saving} className={cn(WS_GHOST, "h-8")}>
+          Cancel
+        </button>
+        <button type="submit" disabled={saving} className={cn(WS_PRIMARY, "h-8")}>
+          {saving ? "Saving…" : "Save changes"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function toDateInput(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
 export interface EntrySettleValues {
@@ -275,7 +384,7 @@ export function EntrySettleForm({
           {effect} · <span className="font-medium text-foreground tabular-nums">{formatCurrency(max)}</span> open
         </p>
       </div>
-      <div className="mt-2.5 grid gap-3 sm:grid-cols-[10rem_10rem]">
+      <div className="mt-2.5 grid gap-3 sm:grid-cols-2">
         <WsField label="Amount">
           <CompactAmountInput label="Settlement amount" value={amount} onChange={setAmount} invalid={!!error} autoFocus />
         </WsField>

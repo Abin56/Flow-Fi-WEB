@@ -1,114 +1,150 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { Contact, IndianRupee, User, Users } from "lucide-react";
-import { ConfirmDialog, FLAT_INPUT, SectionedFormDialog, SectionLabel } from "@/components/finance";
-import { EmptyState } from "@/components/finance/empty-state";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { usePathname, useSearchParams } from "next/navigation";
+import { Plus, UserPlus, Users, X } from "lucide-react";
+import { ConfirmDialog } from "@/components/finance";
 import { Skeleton } from "@/components/ui/skeleton";
-import { PeopleGrid } from "@/features/people/components/people-grid";
-import { PeopleHeader } from "@/features/people/components/people-header";
-import { PeopleStats } from "@/features/people/components/people-stats";
-import { PeopleTable } from "@/features/people/components/people-table";
-import { type PeopleTab, PeopleToolbar } from "@/features/people/components/people-toolbar";
-import { PersonOverviewPanel, type SettleEntryParams } from "@/features/people/components/person-overview-panel";
+import {
+  AddPersonInline,
+  type AddPersonValues,
+} from "@/features/people/components/add-person-inline";
+import {
+  PeopleCycleControl,
+  PeopleCycleSummary,
+  PeopleCycleSummarySkeleton,
+  PeopleLedgerList,
+  PeopleLedgerListSkeleton,
+  PeopleListToolbar,
+  type PeopleFilter,
+  type PeopleLedgerRow,
+} from "@/features/people/components/people-ledger-list";
+import {
+  PersonDetailWorkspace,
+  type SettleEntryParams,
+} from "@/features/people/components/person-detail-workspace";
 import type { AddEntryParams } from "@/features/people/components/workspace/add-entry-panel";
 import type { EditPersonPatch } from "@/features/people/components/workspace/edit-person-mode";
-import { usePeopleActions, usePeopleRows } from "@/features/people/hooks/use-people-data";
+import type { EntryEditValues } from "@/features/people/components/workspace/ledger-ui";
+import { LE_RADIUS } from "@/features/loans/components/loan-emi-ui";
+import {
+  WS_PRIMARY,
+  WS_SECONDARY,
+} from "@/features/people/components/workspace/person-workspace-ui";
+import {
+  usePeopleActions,
+  usePeopleRows,
+} from "@/features/people/hooks/use-people-data";
+import { usePeopleCycleStatements } from "@/features/people/hooks/use-person-cycle-statement";
 import { usePeople } from "@/hooks/use-people";
+import {
+  cycleContaining,
+  type StatementCycle,
+} from "@/lib/engines/person-cycle-statement";
 import type { LedgerEntry, Person } from "@/lib/models/person";
 import { cn } from "@/lib/utils";
 import { toast } from "@/store/toast-store";
 
-interface PersonFormState {
-  name: string;
-  phone: string;
-  email: string;
-  openingBalance: string;
-  notes: string;
-}
-
-function emptyPersonForm(): PersonFormState {
-  return { name: "", phone: "", email: "", openingBalance: "0", notes: "" };
-}
-
-function PeopleListSkeleton() {
+/** Receivables first, then payables, largest first; settled people last, by name. */
+function byPosition(a: PeopleLedgerRow, b: PeopleLedgerRow): number {
+  const rank = (r: PeopleLedgerRow) =>
+    r.statement.direction === "theyOwe"
+      ? 0
+      : r.statement.direction === "iOwe"
+        ? 1
+        : 2;
   return (
-    <div className="surface-flat flex flex-col gap-3 rounded-2xl border border-border/50 p-5">
-      {Array.from({ length: 5 }, (_, i) => (
-        <div key={i} className="flex items-center gap-3">
-          <Skeleton className="size-8 shrink-0 rounded-full" />
-          <Skeleton className="h-4 w-40" />
-          <Skeleton className="ml-auto h-4 w-24" />
-        </div>
-      ))}
-    </div>
+    rank(a) - rank(b) ||
+    b.statement.amount - a.statement.amount ||
+    a.name.localeCompare(b.name)
   );
 }
 
 export function PeopleWorkspace() {
-  const { rows: people, isLoading } = usePeopleRows();
+  const { rows: people, isLoading: peopleLoading } = usePeopleRows();
   const { data: rawPeople = [] } = usePeople();
   const actions = usePeopleActions();
 
-  const [tab, setTab] = useState<PeopleTab>("all");
+  const [cycle, setCycleState] = useState<StatementCycle>(() =>
+    cycleContaining(new Date()),
+  );
+  const [cycleDirection, setCycleDirection] = useState<-1 | 0 | 1>(0);
+  function setCycle(next: StatementCycle) {
+    const delta = next.start.getTime() - cycle.start.getTime();
+    setCycleDirection(delta < 0 ? -1 : delta > 0 ? 1 : 0);
+    setCycleState(next);
+  }
+  const { statementsByPersonId, isLoading: statementsLoading } =
+    usePeopleCycleStatements(cycle);
+  const isLoading = peopleLoading || statementsLoading;
+
+  const [filter, setFilter] = useState<PeopleFilter>("all");
   const [search, setSearch] = useState("");
-  const [view, setView] = useState<"list" | "grid">("list");
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(8);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  // The open person lives in the URL (`?person=<id>`) via the native History API, which Next's router
+  // syncs with `useSearchParams` — so browser Back/Forward move between the list and a person. List
+  // state (cycle, search, filter) stays in this component, which never unmounts.
+  const searchParams = useSearchParams();
+  const pathname = usePathname();
+  const selectedId = searchParams.get("person");
+  /** True when this page pushed the person entry, so leaving can pop it instead of stacking another. */
+  const pushedRef = useRef(false);
+  const listScrollRef = useRef(0);
 
-  const [addPersonOpen, setAddPersonOpen] = useState(false);
-  const [deletingPerson, setDeletingPerson] = useState<Person | null>(null);
-  const [personForm, setPersonForm] = useState<PersonFormState>(emptyPersonForm);
-  const [personFormError, setPersonFormError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-
-  function openAddPerson() {
-    setPersonForm(emptyPersonForm());
-    setPersonFormError(null);
-    setAddPersonOpen(true);
+  function openPerson(id: string) {
+    listScrollRef.current = scroller()?.scrollTop ?? 0;
+    pushedRef.current = true;
+    window.history.pushState(null, "", `${pathname}?person=${encodeURIComponent(id)}`);
   }
 
-  async function handleSavePerson() {
-    if (!actions) return;
-    const name = personForm.name.trim();
-    if (!name) {
-      setPersonFormError("Name is required.");
-      return;
+  function closePerson() {
+    if (pushedRef.current) {
+      pushedRef.current = false;
+      window.history.back();
+    } else {
+      window.history.replaceState(null, "", pathname);
     }
-    const openingBalance = Number(personForm.openingBalance || "0");
-    if (!Number.isFinite(openingBalance)) {
-      setPersonFormError("Opening balance must be a number.");
-      return;
-    }
+  }
 
-    setSaving(true);
-    setPersonFormError(null);
-    try {
-      await actions.createPerson({
-        name,
-        avatarColorValue: 0,
-        openingBalance,
-        phone: personForm.phone || null,
-        email: personForm.email || null,
-        notes: personForm.notes,
-      });
-      setAddPersonOpen(false);
-    } catch (e) {
-      setPersonFormError(e instanceof Error ? e.message : "Something went wrong. Please try again.");
-    } finally {
-      setSaving(false);
+  // Detail opens at the top; the list comes back where it was left.
+  useEffect(() => {
+    const el = scroller();
+    if (!el) return;
+    if (selectedId) {
+      el.scrollTo({ top: 0 });
+    } else {
+      pushedRef.current = false;
+      const top = listScrollRef.current;
+      requestAnimationFrame(() => el.scrollTo({ top }));
     }
+  }, [selectedId]);
+  const [addPersonOpen, setAddPersonOpenState] = useState(false);
+  /** Bumped on every open so the inline form starts empty. */
+  const [addPersonKey, setAddPersonKey] = useState(0);
+  const [deletingPerson, setDeletingPerson] = useState<Person | null>(null);
+
+  function setAddPersonOpen(open: boolean) {
+    if (open && !addPersonOpen) setAddPersonKey((k) => k + 1);
+    setAddPersonOpenState(open);
+  }
+
+  async function handleAddPerson(values: AddPersonValues) {
+    if (!actions) throw new Error("Not signed in");
+    await actions.createPerson({ ...values, avatarColorValue: 0, notes: "" });
+    setAddPersonOpen(false);
+    toast.success("Person added", `${values.name} is now in your People Ledger.`);
   }
 
   async function handleDeletePerson() {
     if (!actions || !deletingPerson) return;
     try {
       await actions.deletePerson(deletingPerson);
-      if (selectedId === deletingPerson.id) setSelectedId(null);
+      if (selectedId === deletingPerson.id) closePerson();
       setDeletingPerson(null);
     } catch (e) {
-      toast.error("Couldn't delete person", e instanceof Error ? e.message : "Please try again.");
+      toast.error(
+        "Couldn't delete person",
+        e instanceof Error ? e.message : "Please try again.",
+      );
     }
   }
 
@@ -141,216 +177,254 @@ export function PeopleWorkspace() {
     });
   }
 
+  async function handleEditEntry(
+    person: Person,
+    entry: LedgerEntry,
+    patch: EntryEditValues,
+  ) {
+    if (!actions) throw new Error("Not signed in");
+    await actions.editLedgerEntry(person, entry, patch);
+  }
+
   /** Entries come from `planEntryDeletion`/`planBulkDeletion`; each is reversed out of the balance as it is soft-deleted. */
   async function handleDeleteEntries(person: Person, entries: LedgerEntry[]) {
     if (!actions) throw new Error("Not signed in");
     await actions.deleteLedgerEntries(person, entries);
   }
 
-  const counts = useMemo(
-    () => ({
-      all: people.length,
-      owed: people.filter((p) => p.youAreOwed > p.youOwe).length,
-      owe: people.filter((p) => p.youOwe > p.youAreOwed).length,
-      settled: people.filter((p) => p.status === "settled").length,
-    }),
-    [people],
+  /** One row per person for the selected cycle — the person's own statement, never a re-sum. */
+  const ledgerRows = useMemo<PeopleLedgerRow[]>(
+    () =>
+      (rawPeople as Person[])
+        .filter((p) => statementsByPersonId[p.id])
+        .map((p) => ({
+          id: p.id,
+          name: p.name,
+          statement: statementsByPersonId[p.id],
+        }))
+        .sort(byPosition),
+    [rawPeople, statementsByPersonId],
   );
 
-  const filtered = useMemo(() => {
-    return people.filter((person) => {
-      const matchesSearch =
-        person.name.toLowerCase().includes(search.toLowerCase()) ||
-        person.relationship.toLowerCase().includes(search.toLowerCase());
-      const matchesTab =
-        tab === "all" ||
-        (tab === "owed" && person.youAreOwed > person.youOwe) ||
-        (tab === "owe" && person.youOwe > person.youAreOwed) ||
-        (tab === "settled" && person.status === "settled");
-      return matchesSearch && matchesTab;
-    });
-  }, [people, search, tab]);
+  const searched = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return q
+      ? ledgerRows.filter((r) => r.name.toLowerCase().includes(q))
+      : ledgerRows;
+  }, [ledgerRows, search]);
 
-  const paged = useMemo(() => filtered.slice((page - 1) * pageSize, page * pageSize), [filtered, page, pageSize]);
+  const counts = useMemo<Record<PeopleFilter, number>>(
+    () => ({
+      all: searched.length,
+      theyOwe: searched.filter((r) => r.statement.direction === "theyOwe")
+        .length,
+      iOwe: searched.filter((r) => r.statement.direction === "iOwe").length,
+      settled: searched.filter((r) => r.statement.direction === "settled")
+        .length,
+    }),
+    [searched],
+  );
 
-  const selected = selectedId ? people.find((p) => p.id === selectedId) : undefined;
-  const selectedRaw = selected ? (rawPeople.find((p) => p.id === selected.id) ?? null) : null;
+  const visible =
+    filter === "all"
+      ? searched
+      : searched.filter((r) => r.statement.direction === filter);
 
-  function selectPerson(id: string) {
-    setSelectedId(id);
-  }
+  const selected = selectedId
+    ? people.find((p) => p.id === selectedId)
+    : undefined;
+  const selectedRaw = selected
+    ? (rawPeople.find((p) => p.id === selected.id) ?? null)
+    : null;
 
-  function changeTab(next: PeopleTab) {
-    setTab(next);
-    setPage(1);
+  const deleteDialog = (
+        <ConfirmDialog
+          open={deletingPerson != null}
+          onOpenChange={(open) => !open && setDeletingPerson(null)}
+          title={`Delete ${deletingPerson?.name ?? "person"}?`}
+          description="This permanently removes this person and their entire ledger history. This action cannot be undone."
+          variant="destructive"
+          confirmLabel="Delete"
+          onConfirm={handleDeletePerson}
+        />
+  );
+
+  // Detail state: the person replaces the list inside the same workspace (a person still loading shows a skeleton, not the list).
+  if (selectedId != null && (selected || peopleLoading)) {
+    return (
+      <div className="flex min-w-0 flex-col pb-10">
+        {selected ? (
+            <PersonDetailWorkspace
+              person={selected}
+              rawPerson={selectedRaw}
+              key={selected.id}
+              initialCycle={cycle}
+              onBack={closePerson}
+              onAddEntry={async (params) => {
+                if (!selectedRaw) throw new Error("Person not found");
+                await handleAddEntry(selectedRaw, params);
+              }}
+              onSettleEntry={async (params) => {
+                if (!selectedRaw) throw new Error("Person not found");
+                await handleSettleEntry(selectedRaw, params);
+              }}
+              onEditEntry={async (entry, patch) => {
+                if (!selectedRaw) throw new Error("Person not found");
+                await handleEditEntry(selectedRaw, entry, patch);
+              }}
+              onDeleteEntries={async (entries) => {
+                if (!selectedRaw) throw new Error("Person not found");
+                await handleDeleteEntries(selectedRaw, entries);
+              }}
+              onUndoSplitReceived={async ({ expense, participant }) => {
+                if (!actions) throw new Error("Not signed in");
+                await actions.setParticipantReceivedStatus(
+                  expense,
+                  participant,
+                  "yetToReceive",
+                );
+              }}
+              onEditPerson={async (patch) => {
+                if (!selectedRaw) throw new Error("Person not found");
+                await handleEditPerson(selectedRaw, patch);
+              }}
+              onDelete={() => {
+                if (selectedRaw) setDeletingPerson(selectedRaw);
+              }}
+            />
+        ) : (
+          <div className="flex flex-col gap-3 px-1">
+            <Skeleton className="h-5 w-40" />
+            <Skeleton className="h-11 w-64" />
+            <Skeleton className="mt-4 h-24 w-full max-w-xl" />
+          </div>
+        )}
+        {deleteDialog}
+      </div>
+    );
   }
 
   return (
-    <div className="flex flex-col gap-6">
-      <div className="flex min-w-0 flex-col gap-6">
-        <PeopleHeader onAddPerson={openAddPerson} />
-        <PeopleStats />
+    <div className="flex min-w-0 flex-col gap-5 px-1 pb-10">
+      <div className="flex flex-col">
+        <header className="flex items-center justify-between gap-3">
+          <div className="flex min-w-0 flex-col gap-0.5">
+            <h1 className="font-heading text-2xl font-bold tracking-tight text-foreground">
+              People Ledger
+            </h1>
+            <p className="text-sm text-muted-foreground">
+              Money between you and the people in your life.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setAddPersonOpen(!addPersonOpen)}
+            disabled={!actions}
+            aria-expanded={addPersonOpen}
+            className={cn(addPersonOpen ? WS_SECONDARY : WS_PRIMARY, "shrink-0 px-4")}
+          >
+            {addPersonOpen ? (
+              <X className="size-4" strokeWidth={2} />
+            ) : (
+              <UserPlus className="size-4" strokeWidth={2} />
+            )}
+            {addPersonOpen ? "Close" : "Add Person"}
+          </button>
+        </header>
 
-        <div className="flex flex-col gap-4">
-          <PeopleToolbar
-            tab={tab}
-            onTabChange={changeTab}
-            counts={counts}
-            search={search}
-            onSearchChange={(v) => {
-              setSearch(v);
-              setPage(1);
-            }}
-            view={view}
-            onViewChange={setView}
-          />
-
-          {isLoading ? (
-            <PeopleListSkeleton />
-          ) : people.length === 0 ? (
-            <div className="surface-flat rounded-2xl border border-border/50">
-              <EmptyState
-                icon={Users}
-                title="No people yet"
-                description="Add someone you lend to or borrow from to start tracking a running ledger."
-                actionLabel="Add Person"
-                onAction={openAddPerson}
-              />
-            </div>
-          ) : filtered.length === 0 ? (
-            <div className="surface-flat rounded-2xl border border-border/50">
-              <EmptyState icon={Users} title="No matching people" description="Try a different search or tab." />
-            </div>
-          ) : view === "list" ? (
-            <PeopleTable
-              people={paged}
-              selectedId={selected?.id ?? ""}
-              onSelect={selectPerson}
-              page={page}
-              pageSize={pageSize}
-              totalCount={filtered.length}
-              onPageChange={setPage}
-              onPageSizeChange={(size) => {
-                setPageSize(size);
-                setPage(1);
-              }}
-            />
-          ) : (
-            <PeopleGrid people={filtered} selectedId={selected?.id ?? ""} onSelect={selectPerson} />
-          )}
-        </div>
+        <AddPersonInline
+          open={addPersonOpen}
+          formKey={addPersonKey}
+          onCancel={() => setAddPersonOpen(false)}
+          onSubmit={handleAddPerson}
+        />
       </div>
 
-      {selected && (
-        <PersonOverviewPanel
-          person={selected}
-          rawPerson={selectedRaw}
-          open
-          onClose={() => setSelectedId(null)}
-          onAddEntry={async (params) => {
-            if (!selectedRaw) throw new Error("Person not found");
-            await handleAddEntry(selectedRaw, params);
-          }}
-          onSettleEntry={async (params) => {
-            if (!selectedRaw) throw new Error("Person not found");
-            await handleSettleEntry(selectedRaw, params);
-          }}
-          onDeleteEntries={async (entries) => {
-            if (!selectedRaw) throw new Error("Person not found");
-            await handleDeleteEntries(selectedRaw, entries);
-          }}
-          onUndoSplitReceived={async ({ expense, participant }) => {
-            if (!actions) throw new Error("Not signed in");
-            await actions.setParticipantReceivedStatus(expense, participant, "yetToReceive");
-          }}
-          onEditPerson={async (patch) => {
-            if (!selectedRaw) throw new Error("Person not found");
-            await handleEditPerson(selectedRaw, patch);
-          }}
-          onDelete={() => {
-            if (selectedRaw) setDeletingPerson(selectedRaw);
-          }}
-        />
+      <PeopleCycleControl
+        cycle={cycle}
+        onCycleChange={setCycle}
+        direction={cycleDirection}
+      />
+
+      {isLoading ? (
+        <>
+          <PeopleCycleSummarySkeleton />
+          <section className={cn(LE_RADIUS.panel, "border border-border bg-card")}>
+            <PeopleLedgerListSkeleton />
+          </section>
+        </>
+      ) : ledgerRows.length === 0 ? (
+        <section className={cn(LE_RADIUS.panel, "flex flex-col items-center gap-4 border border-dashed border-border bg-card px-6 py-12 text-center")}>
+          <span className="flex size-11 items-center justify-center rounded-full bg-secondary text-muted-foreground">
+            <Users className="size-5" strokeWidth={1.75} />
+          </span>
+          <div>
+            <p className="font-heading text-base font-semibold text-foreground">
+              No people yet
+            </p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Add someone to start tracking money between you.
+            </p>
+          </div>
+          {!addPersonOpen && (
+            <button
+              type="button"
+              onClick={() => setAddPersonOpen(true)}
+              disabled={!actions}
+              className={WS_PRIMARY}
+            >
+              <Plus className="size-4" strokeWidth={2} />
+              Add Person
+            </button>
+          )}
+        </section>
+      ) : (
+        // Keyed by cycle: the summary and list for one cycle are never shown under another's label.
+        <div
+          key={cycle.start.getTime()}
+          className="flex animate-in flex-col gap-5 fade-in duration-200"
+        >
+          <PeopleCycleSummary rows={ledgerRows} />
+
+          <section aria-label="People" className="flex flex-col gap-3">
+            <PeopleListToolbar
+              search={search}
+              onSearchChange={setSearch}
+              filter={filter}
+              onFilterChange={setFilter}
+              counts={counts}
+            />
+            <div className={cn(LE_RADIUS.panel, "overflow-hidden border border-border bg-card shadow-e1")}>
+              {visible.length === 0 ? (
+                <div className="px-6 py-12 text-center">
+                  <p className="text-sm font-semibold text-foreground">
+                    {search.trim()
+                      ? "No one matches that search"
+                      : "No one in this group for this cycle"}
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {search.trim()
+                      ? "Try a different name."
+                      : "Everyone is still listed under All — or pick another cycle."}
+                  </p>
+                </div>
+              ) : (
+                <PeopleLedgerList rows={visible} onOpen={openPerson} />
+              )}
+            </div>
+            <p className="px-1 text-xs text-muted-foreground">
+              Open a person to add, settle, split or share their statement for this cycle.
+            </p>
+          </section>
+        </div>
       )}
 
-      <SectionedFormDialog
-        open={addPersonOpen}
-        onOpenChange={(open) => {
-          if (!open) setAddPersonOpen(false);
-        }}
-        title="Add a Person"
-        description="Someone you lend to or borrow from — start tracking a running ledger."
-        onConfirm={handleSavePerson}
-        confirmLabel={saving ? "Saving…" : "Add Person"}
-        loading={saving}
-        contentClassName="sm:max-w-md rounded-3xl [&_.rounded-none]:rounded-full"
-      >
-        <div className="flex flex-col gap-3 rounded-2xl bg-muted/30 p-4">
-          <SectionLabel icon={Contact}>Contact Details</SectionLabel>
-          <label className="flex flex-col gap-1">
-            <span className="text-xs font-medium text-muted-foreground">Name</span>
-            <div className="relative">
-              <User className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
-              <input
-                className={cn(FLAT_INPUT, "rounded-xl pl-9")}
-                placeholder="e.g. Priya Sharma"
-                value={personForm.name}
-                onChange={(e) => setPersonForm((f) => ({ ...f, name: e.target.value }))}
-              />
-            </div>
-          </label>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <label className="flex flex-col gap-1">
-              <span className="text-xs font-medium text-muted-foreground">Phone (optional)</span>
-              <input
-                className={cn(FLAT_INPUT, "rounded-xl")}
-                value={personForm.phone}
-                onChange={(e) => setPersonForm((f) => ({ ...f, phone: e.target.value }))}
-              />
-            </label>
-            <label className="flex flex-col gap-1">
-              <span className="text-xs font-medium text-muted-foreground">Email (optional)</span>
-              <input
-                type="email"
-                className={cn(FLAT_INPUT, "rounded-xl")}
-                value={personForm.email}
-                onChange={(e) => setPersonForm((f) => ({ ...f, email: e.target.value }))}
-              />
-            </label>
-          </div>
-        </div>
-
-        <div className="mt-5 flex flex-col gap-1 rounded-2xl bg-muted/30 p-4">
-          <SectionLabel icon={IndianRupee}>Opening Balance</SectionLabel>
-          <div className="relative mt-2">
-            <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary-accent-text">₹</span>
-            <input
-              type="number"
-              className={cn(FLAT_INPUT, "rounded-xl border-primary/30 bg-primary/5 pl-7 text-base font-semibold focus:border-primary")}
-              placeholder="0.00"
-              value={personForm.openingBalance}
-              onChange={(e) => setPersonForm((f) => ({ ...f, openingBalance: e.target.value }))}
-            />
-          </div>
-          <span className="mt-1 text-xs text-muted-foreground">Positive if they owe you, negative if you owe them.</span>
-        </div>
-
-        {personFormError && (
-          <p className="flex items-center gap-1.5 rounded-xl border border-expense/30 bg-expense/8 px-3 py-2 text-xs font-medium text-expense">
-            {personFormError}
-          </p>
-        )}
-      </SectionedFormDialog>
-
-      <ConfirmDialog
-        open={deletingPerson != null}
-        onOpenChange={(open) => !open && setDeletingPerson(null)}
-        title={`Delete ${deletingPerson?.name ?? "person"}?`}
-        description="This permanently removes this person and their entire ledger history. This action cannot be undone."
-        variant="destructive"
-        confirmLabel="Delete"
-        onConfirm={handleDeletePerson}
-      />
+      {deleteDialog}
     </div>
   );
+}
+
+/** The app shell's scrolling `<main>` — the page scrolls there, not on the window. */
+function scroller(): HTMLElement | null {
+  return typeof document === "undefined" ? null : document.querySelector("main");
 }

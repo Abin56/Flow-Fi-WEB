@@ -249,6 +249,42 @@ export class LedgerRepository extends FirestoreCrudRepository<LedgerEntry> {
   }
 
   /**
+   * Edits a posted entry's amount, date and/or note in place (each change recorded in `editHistory`),
+   * re-syncing the person's cached balance by any amount delta — same atomic read-then-write as
+   * `editEntryAmount`. Omitted fields are left as they are.
+   */
+  async editEntry(person: Person, entry: LedgerEntry, patch: { amount?: number; date?: Date; note?: string }): Promise<void> {
+    if (patch.amount != null && patch.amount <= 0) {
+      throw new Error("Amount must be greater than 0");
+    }
+
+    const db = this.collection.firestore;
+    const entryRef = doc(this.collection, entry.id);
+    const personRef = this.personRepository.docRef(person.id);
+
+    await runTransaction(db, async (tx) => {
+      const personSnap = await tx.get(personRef);
+      const entrySnap = await tx.get(entryRef);
+      if (!personSnap.exists()) throw new Error("Person not found");
+      if (!entrySnap.exists()) throw new Error("Ledger entry not found");
+
+      const fresh = entrySnap.data();
+      let updated = updateField(fresh, "amount", fresh.amount, patch.amount, (e, v) => ({ ...e, amount: v }));
+      if (patch.date && patch.date.getTime() !== fresh.date.getTime()) {
+        updated = updateField(updated, "date", fresh.date.toISOString(), patch.date.toISOString(), (e) => ({ ...e, date: patch.date! }));
+      }
+      updated = updateField(updated, "note", fresh.note, patch.note, (e, v) => ({ ...e, note: v }));
+      if (updated === fresh) return;
+
+      const delta = signedAmount(updated) - signedAmount(fresh);
+      if (delta !== 0) {
+        tx.set(personRef, this.personRepository.applyBalanceDelta(personSnap.data(), delta));
+      }
+      tx.set(entryRef, updated);
+    });
+  }
+
+  /**
    * Flips an entry's settlement status in place. Unlike `editEntryAmount`,
    * this never touches the person's cached balance — `receivedStatus` is
    * purely a settlement marker, independent of the signed amount already

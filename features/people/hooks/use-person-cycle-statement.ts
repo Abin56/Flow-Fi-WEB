@@ -116,3 +116,46 @@ export function usePersonCycleStatement(
 
   return { statement, allTimeStatement, ledgerEntries, person, linkedEmis, setRepays, isLoading: peopleLoading || entriesLoading };
 }
+
+/**
+ * Every person's statement for one cycle — the People Ledger list. Same live sources and the same
+ * `buildPersonCycleStatement` call as `usePersonCycleStatement` (no extra reads: the ledger watch,
+ * EMIs and Loans are already shared), so a row's previous / this cycle / current pending always
+ * matches what that person's workspace shows for the same cycle.
+ */
+export function usePeopleCycleStatements(cycle: StatementCycle): {
+  statementsByPersonId: Record<string, PersonCycleStatement>;
+  isLoading: boolean;
+} {
+  const { data: people = [], isLoading: peopleLoading } = usePeople();
+  const { entriesByPersonId, isLoading: entriesLoading } = usePeopleLedgerEntries();
+  const { data: emis = [], isLoading: emisLoading } = useEmis();
+  const { data: emiInstallments = [], isLoading: emiInstallmentsLoading } = useAllEmiInstallments();
+  const { data: loans = [], isLoading: loansLoading } = useLoans();
+  const { data: loanInstallments = [], isLoading: loanInstallmentsLoading } = useAllLoanInstallments();
+  const { data: trashedLoans = [], isLoading: trashedLoading } = useTrashedLoans();
+
+  const statementsByPersonId = useMemo(() => {
+    const loanIds = new Set([...(loans as Loan[]).map((l) => l.id), ...(trashedLoans as Loan[]).map((l) => l.id)]);
+    const installments = [...(emiInstallments as Installment[]), ...(loanInstallments as Installment[])];
+    const out: Record<string, PersonCycleStatement> = {};
+    for (const person of people as Person[]) {
+      out[person.id] = buildPersonCycleStatement({
+        person: { id: person.id, name: person.name, openingBalance: person.openingBalance, createdAt: person.createdAt },
+        ledgerEntries: entriesByPersonId[person.id] ?? [],
+        loanIds,
+        emis: emis as Emi[],
+        loans: loans as Loan[],
+        installments,
+        cycle,
+      });
+    }
+    return out;
+  }, [people, entriesByPersonId, emis, loans, trashedLoans, emiInstallments, loanInstallments, cycle]);
+
+  // Every source the engine reads must have reported before a row renders: a statement built while the
+  // EMI/Loan watches are still resolving omits linked-EMI obligations, then jumps once they land.
+  const isLoading =
+    peopleLoading || entriesLoading || emisLoading || emiInstallmentsLoading || loansLoading || loanInstallmentsLoading || trashedLoading;
+  return { statementsByPersonId, isLoading };
+}

@@ -1,9 +1,9 @@
 "use client";
 
-import { Bell, Calendar, HandCoins, ListX, Mail, MoreHorizontal, Paperclip, Pencil, Phone, Plus, Share2, Split, StickyNote, Trash2, Users, X } from "lucide-react";
+import { ArrowLeft, Bell, Calendar, HandCoins, ListX, Mail, MoreHorizontal, Paperclip, Pencil, Phone, Plus, Share2, Split, StickyNote, Trash2, Users } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import { ClayAvatar } from "@/components/clay/clay-avatar";
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { useAccounts } from "@/hooks/use-accounts";
 import { useCategories } from "@/hooks/use-categories";
@@ -24,12 +24,13 @@ import { PersonCycleStatementSection } from "@/features/people/components/cycle-
 import { PersonActivityFeed, type LedgerRowHandlers, type LedgerScope } from "@/features/people/components/person-activity-feed";
 import { AddEntryPanel, type AddEntryParams } from "@/features/people/components/workspace/add-entry-panel";
 import { EditPersonMode, type EditPersonPatch } from "@/features/people/components/workspace/edit-person-mode";
-import { InlineReveal, LedgerConfirmDialog, type EntrySettleValues } from "@/features/people/components/workspace/ledger-ui";
+import { InlineReveal, LedgerConfirmDialog, type EntryEditValues, type EntrySettleValues } from "@/features/people/components/workspace/ledger-ui";
+import { LE_RADIUS } from "@/features/loans/components/loan-emi-ui";
 import { WsLabel } from "@/features/people/components/workspace/person-workspace-ui";
 import { SettleUpPanel } from "@/features/people/components/workspace/settle-up-panel";
 import { ShareStatementMode } from "@/features/people/components/workspace/share-statement-mode";
 import { SplitExpenseMode } from "@/features/people/components/workspace/split-expense-mode";
-import { BACK_TO_TRANSACTIONS, TransactionLedgerMode, type LedgerView } from "@/features/people/components/workspace/transaction-ledger-mode";
+import { TransactionLedgerMode, type LedgerView } from "@/features/people/components/workspace/transaction-ledger-mode";
 import { cn } from "@/lib/utils";
 import { toast } from "@/store/toast-store";
 
@@ -44,20 +45,19 @@ export interface SettleEntryParams {
 /** The workspace's internal modes — the shell (header) stays put; only the content area changes. */
 type Mode = { kind: "overview" } | { kind: "split" } | { kind: "share" } | { kind: "edit" } | { kind: "ledger" };
 
-/** Add and Settle expand inline in the overview (Add also in the expanded ledger) — one at a time. */
-type InlineAction = "add" | "settle" | null;
+/** Add, Settle and Split expand inline in the overview (Add also in the expanded ledger) — one at a time. */
+type InlineAction = "add" | "settle" | "split" | null;
 
-/** Complex modes get a wider shell; quick forms a narrower one. */
-const WIDE: Mode["kind"][] = ["overview", "split", "share"];
 
 /** Loan events ride in `person.activity` as `loan:`/`loan-txn:` items — listed under "All transactions". */
 const isLoanItem = (id: string) => id.startsWith("loan:") || id.startsWith("loan-txn:");
 
-const VIEWS = ["Activity", "Details"] as const;
-type View = (typeof VIEWS)[number];
 
 const ICON_BUTTON =
   "flex size-8 shrink-0 items-center justify-center rounded-[6px] text-muted-foreground outline-none transition-colors hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:bg-secondary data-[state=open]:text-foreground";
+
+const HEADER_BUTTON =
+  "flex h-8 shrink-0 items-center gap-1.5 rounded-[6px] border border-border-strong bg-card px-2.5 text-sm font-medium text-foreground outline-none transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring [&_svg]:text-muted-foreground";
 
 const SECONDARY_ACTION =
   "flex h-9 items-center gap-1.5 rounded-[6px] px-3 text-sm font-medium text-foreground outline-none transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40 [&_svg]:text-muted-foreground hover:[&_svg]:text-foreground";
@@ -86,33 +86,38 @@ function SectionTitle({ icon: Icon, children }: { icon?: typeof Calendar; childr
 }
 
 /**
- * The Person Ledger workspace — one centered surface (full-height sheet on phones) that behaves like a
- * small app: the overview (position, actions, Activity/Details) where Add and Settle expand inline,
- * plus Split, Share, Edit and the expanded transaction ledger as modes within the same shell — no
- * second backdrop, no modal-on-modal (only a destructive delete asks for confirmation). Same data,
- * statement engine and repository calls as before.
+ * The Person detail workspace — a full page inside the People Ledger (no dialog, no drawer). A fixed
+ * breadcrumb + identity header sits above one mode at a time: the overview (position, cycle, actions,
+ * Activity with Details beside it) where Add and Settle expand inline, or Split, Share, Edit and the
+ * expanded transaction ledger. Only a destructive delete asks for confirmation. Same data, statement
+ * engine and repository calls as before.
  */
-export function PersonOverviewPanel({
+export function PersonDetailWorkspace({
   person,
   rawPerson,
-  open,
-  onClose,
+  onBack,
   onAddEntry,
   onSettleEntry,
   onDeleteEntries,
+  onEditEntry,
   onUndoSplitReceived,
   onEditPerson,
   onDelete,
+  initialCycle,
 }: {
+  /** The cycle the People list was showing when this person was opened (defaults to the current one). */
+  initialCycle?: StatementCycle;
   person: PersonViewRow;
   /** The stored `Person` record — Settle, Split and Edit act on it. */
   rawPerson: Person | null;
-  open: boolean;
-  onClose: () => void;
+  /** Returns to the People list (the breadcrumb). */
+  onBack: () => void;
   /** Records a "gave"/"borrowed" entry for this person (same payload as the old Add Transaction dialog). */
   onAddEntry?: (params: AddEntryParams) => Promise<void>;
   /** Settles one "gave"/"borrowed" entry (same payload as the old Settle Transaction dialog). */
   onSettleEntry?: (params: SettleEntryParams) => Promise<void>;
+  /** Edits one manual ledger entry's amount/date/note. */
+  onEditEntry?: (entry: LedgerEntry, patch: EntryEditValues) => Promise<void>;
   /** Reverses + soft-deletes ledger entries planned by `planEntryDeletion`/`planBulkDeletion`. */
   onDeleteEntries?: (entries: LedgerEntry[]) => Promise<void>;
   /** Reverses a split share's "received" status through the existing received-status toggle. */
@@ -122,13 +127,13 @@ export function PersonOverviewPanel({
 }) {
   const [mode, setMode] = useState<Mode>({ kind: "overview" });
   const [direction, setDirection] = useState<"forward" | "back">("forward");
-  const [view, setView] = useState<View>("Activity");
-  const [cycle, setCycle] = useState<StatementCycle>(() => cycleContaining(new Date()));
+  const [cycle, setCycle] = useState<StatementCycle>(() => initialCycle ?? cycleContaining(new Date()));
   const [inline, setInline] = useState<InlineAction>(null);
   /** The expanded ledger's own navigation (Transactions ↔ Settle / Split) — kept here so Escape can step back. */
   const [ledgerView, setLedgerView] = useState<LedgerView>("transactions");
   const [scope, setScope] = useState<LedgerScope>("cycle");
   const [settlingKey, setSettlingKey] = useState<string | null>(null);
+  const [editingKey, setEditingKey] = useState<string | null>(null);
   // Delete plans are frozen when a confirmation opens, so live updates (including the delete itself) never change what it says.
   const [deleting, setDeleting] = useState<{ row: LedgerRow; plan: EntryDeletionPlan | null } | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -136,7 +141,7 @@ export function PersonOverviewPanel({
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const [undoing, setUndoing] = useState<{ row: LedgerRow; payment: PaymentRecord } | null>(null);
   const [undoOpen, setUndoOpen] = useState(false);
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
   const { statement, allTimeStatement, ledgerEntries, isLoading, linkedEmis, setRepays } = usePersonCycleStatement(person.id, cycle);
   const { pending } = usePersonPendingSplitParticipants(person.id);
   const txActions = useTransactionActions();
@@ -188,14 +193,16 @@ export function PersonOverviewPanel({
     setMode(next);
     setInline(null);
     setSettlingKey(null);
+    setEditingKey(null);
     setLedgerView("transactions");
-    scrollRef.current?.scrollTo({ top: 0 });
+    rootRef.current?.scrollIntoView({ block: "start" });
   };
   const back = () => go({ kind: "overview" });
   /** Opening one inline action collapses the other; pressing the open one again collapses it. */
   const toggleInline = (next: Exclude<InlineAction, null>) => {
     setInline((current) => (current === next ? null : next));
     setSettlingKey(null);
+    setEditingKey(null);
   };
 
   /** Add (compact or expanded): the existing `onAddEntry`, then show where the new transaction landed. */
@@ -203,7 +210,6 @@ export function PersonOverviewPanel({
     if (!onAddEntry) throw new Error("Not signed in");
     await onAddEntry(params);
     setInline(null);
-    setView("Activity");
     const next = cycleShowingNewEntry(scope, cycle, params.date);
     if (next) setCycle(next);
   }
@@ -231,14 +237,33 @@ export function PersonOverviewPanel({
       await txActions.settleParticipant({ expense, participant, installment, amount: values.amount, date: values.date });
     }
     setSettlingKey(null);
+    setEditingKey(null);
+  }
+
+  async function editRow(row: LedgerRow, values: EntryEditValues) {
+    const entry = row.entryId ? ledgerEntries.find((e) => e.id === row.entryId) : undefined;
+    if (!entry || !onEditEntry) throw new Error("This transaction can't be edited here.");
+    await onEditEntry(entry, values);
+    setEditingKey(null);
   }
 
   const rowHandlers: LedgerRowHandlers = {
     settlingKey,
     onSettleStart: (row) => {
       setInline(null);
+      setEditingKey(null);
       setSettlingKey(row.key);
     },
+    editingKey,
+    onEditStart: onEditEntry
+      ? (row) => {
+          setInline(null);
+          setSettlingKey(null);
+          setEditingKey(row.key);
+        }
+      : undefined,
+    onEditCancel: () => setEditingKey(null),
+    onEditSubmit: editRow,
     onSettleCancel: () => setSettlingKey(null),
     onSettleSubmit: settleRow,
     onDelete: onDeleteEntries
@@ -283,6 +308,7 @@ export function PersonOverviewPanel({
     try {
       await onDeleteEntries(entries);
       setSettlingKey(null);
+    setEditingKey(null);
     } catch (e) {
       toast.error(failure, e instanceof Error ? e.message : "Please try again.");
       throw e;
@@ -321,7 +347,14 @@ export function PersonOverviewPanel({
           <HandCoins className="size-4" strokeWidth={1.75} />
           Settle
         </button>
-        <button type="button" onClick={() => go({ kind: "split" })} disabled={!rawPerson} className={SECONDARY_ACTION}>
+        <button
+          type="button"
+          onClick={() => toggleInline("split")}
+          disabled={!rawPerson}
+          aria-expanded={inline === "split"}
+          aria-controls="person-inline-split"
+          className={actionButton(inline === "split")}
+        >
           <Split className="size-4" strokeWidth={1.75} />
           Split
         </button>
@@ -345,8 +378,8 @@ export function PersonOverviewPanel({
   );
 
   const overview = (
-    <>
-      <div className="shrink-0 px-4 pt-5 pb-6 sm:px-7 sm:pt-6">
+    <div className="flex flex-col gap-8">
+      <div>
         <PersonCycleStatementSection
           statement={statement}
           isLoading={isLoading}
@@ -358,7 +391,7 @@ export function PersonOverviewPanel({
           footnote={loansNote}
         />
         {/* Inline actions — expand right here, pushing the rest of the workspace down; one at a time */}
-        <div id="person-inline-add">
+        <div id="person-inline-add" className="max-w-3xl">
           <InlineReveal open={inline === "add" && onAddEntry != null}>
             {onAddEntry && (
               <AddEntryPanel
@@ -369,40 +402,40 @@ export function PersonOverviewPanel({
             )}
           </InlineReveal>
         </div>
-        <div id="person-inline-settle">
+        <div id="person-inline-settle" className="max-w-3xl">
           <InlineReveal open={inline === "settle" && rawPerson != null}>
             {rawPerson && <SettleUpPanel person={rawPerson} onCancel={() => setInline(null)} onDone={() => setInline(null)} />}
           </InlineReveal>
         </div>
-      </div>
-
-      <div role="tablist" aria-label="Person workspace" className="sticky top-0 z-10 flex shrink-0 gap-6 border-y border-border bg-card px-4 sm:px-7">
-        {VIEWS.map((v) => (
-          <button
-            key={v}
-            type="button"
-            role="tab"
-            aria-selected={view === v}
-            onClick={() => setView(v)}
-            className={cn(
-              "-mb-px border-b-2 py-3 text-sm transition-colors outline-none focus-visible:text-foreground",
-              view === v ? "border-primary-accent-text font-semibold text-foreground" : "border-transparent font-medium text-muted-foreground hover:text-foreground",
-            )}
+        {/* Split is the one focused popup — the person page stays underneath, unchanged */}
+        <Dialog open={inline === "split" && rawPerson != null} onOpenChange={(o) => !o && setInline(null)}>
+          <DialogContent
+            id="person-inline-split"
+            showCloseButton={false}
+            className="flex max-h-[min(92vh,56rem)] flex-col gap-0 overflow-hidden rounded-[10px] border border-border bg-card p-0 pb-5 shadow-[var(--shadow-e4)] ring-0 sm:max-w-3xl"
           >
-            {v}
-          </button>
-        ))}
+            <DialogTitle className="sr-only">Split expense with {person.name}</DialogTitle>
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+              {rawPerson && (
+                <SplitExpenseMode
+                  person={rawPerson}
+                  accounts={accounts}
+                  categories={categories}
+                  people={people}
+                  backLabel="Close"
+                  onBack={() => setInline(null)}
+                  onDone={() => setInline(null)}
+                />
+              )}
+            </div>
+          </DialogContent>
+        </Dialog>
       </div>
 
-      <div
-        key={view}
-        className={cn(
-          "px-4 pt-4 animate-in duration-200 fade-in-0 sm:px-7",
-          // Activity: the feed takes the remaining height and scrolls its own list (sm+); Details scrolls with the page.
-          view === "Activity" ? "flex flex-col pb-4 sm:min-h-0 sm:flex-1" : "pb-7",
-        )}
-      >
-        {view === "Activity" ? (
+      {/* Activity is the main column; the person's details support it on the right (below on narrow screens). */}
+      <div className="grid gap-x-10 gap-y-8 border-t border-border pt-6 lg:grid-cols-[minmax(0,1fr)_18rem] xl:grid-cols-[minmax(0,1fr)_20rem]">
+        <section aria-label="Activity" className="flex min-w-0 flex-col sm:max-h-[min(75vh,48rem)]">
+          <h2 className="mb-1 font-heading text-base font-semibold text-foreground">Activity</h2>
           <PersonActivityFeed
             personName={person.name}
             rows={scopeRows}
@@ -411,6 +444,7 @@ export function PersonOverviewPanel({
             onScopeChange={(next) => {
               setScope(next);
               setSettlingKey(null);
+              setEditingKey(null);
             }}
             counts={scopeCounts}
             cycleLabel={cycleLabel}
@@ -418,7 +452,7 @@ export function PersonOverviewPanel({
               onAddEntry
                 ? () => {
                     setInline("add");
-                    scrollRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+                    rootRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
                   }
                 : undefined
             }
@@ -426,69 +460,69 @@ export function PersonOverviewPanel({
             handlers={rowHandlers}
             carriedForward={carriedForward}
           />
-        ) : (
-          <div className="grid gap-x-10 gap-y-7 md:grid-cols-2">
-            <div>
-              <SectionTitle>Overview</SectionTitle>
-              <div className="mt-1 divide-y divide-border">
-                <DetailRow icon={Calendar} label="First transaction">
-                  {person.firstTransaction || "—"}
+        </section>
+
+        <aside aria-label="Details" className="flex min-w-0 flex-col gap-6 lg:border-l lg:border-border lg:pl-8">
+          <div>
+            <SectionTitle>Details</SectionTitle>
+            <div className="mt-1 divide-y divide-border">
+              <DetailRow icon={Calendar} label="First transaction">
+                {person.firstTransaction || "—"}
+              </DetailRow>
+              <DetailRow icon={Users} label="Relationship">
+                {person.relationship || "—"}
+              </DetailRow>
+              {person.phone && (
+                <DetailRow icon={Phone} label="Phone">
+                  {person.phone}
                 </DetailRow>
-                <DetailRow icon={Users} label="Relationship">
-                  {person.relationship || "—"}
+              )}
+              {person.email && (
+                <DetailRow icon={Mail} label="Email">
+                  {person.email}
                 </DetailRow>
-                {person.phone && (
-                  <DetailRow icon={Phone} label="Phone">
-                    {person.phone}
-                  </DetailRow>
-                )}
-                {person.email && (
-                  <DetailRow icon={Mail} label="Email">
-                    {person.email}
-                  </DetailRow>
-                )}
-              </div>
-            </div>
-
-            <div>
-              <SectionTitle icon={Bell}>Upcoming EMI</SectionTitle>
-              {upcomingEmi.length === 0 ? (
-                <p className="mt-2.5 text-sm text-muted-foreground">No upcoming EMI</p>
-              ) : (
-                <div className="mt-1 divide-y divide-border">
-                  {upcomingEmi.slice(0, 5).map((item) => (
-                    <div key={item.loanId} className="flex items-start justify-between gap-3 py-2.5 text-sm">
-                      <div className="flex min-w-0 flex-col">
-                        <span className="truncate font-medium text-foreground">{item.label}</span>
-                        <span className="text-xs text-muted-foreground">
-                          Due {item.dueDate.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
-                          {item.isPayerOnly && " · Pays this for you"}
-                        </span>
-                      </div>
-                      <span className="font-semibold text-foreground tabular-nums">{formatCurrency(item.amount)}</span>
-                    </div>
-                  ))}
-                </div>
               )}
-            </div>
-
-            <div>
-              <SectionTitle icon={StickyNote}>Notes</SectionTitle>
-              {person.notes ? (
-                <p className="mt-2.5 text-sm whitespace-pre-wrap text-foreground">{person.notes}</p>
-              ) : (
-                <p className="mt-2.5 text-sm text-muted-foreground">No notes yet.</p>
-              )}
-            </div>
-
-            <div>
-              <SectionTitle icon={Paperclip}>Attachments</SectionTitle>
-              <p className="mt-2.5 text-sm text-muted-foreground">No attachments yet.</p>
             </div>
           </div>
-        )}
+
+          <div>
+            <SectionTitle icon={Bell}>Upcoming EMI</SectionTitle>
+            {upcomingEmi.length === 0 ? (
+              <p className="mt-2.5 text-sm text-muted-foreground">No upcoming EMI</p>
+            ) : (
+              <div className="mt-1 divide-y divide-border">
+                {upcomingEmi.slice(0, 5).map((item) => (
+                  <div key={item.loanId} className="flex items-start justify-between gap-3 py-2.5 text-sm">
+                    <div className="flex min-w-0 flex-col">
+                      <span className="truncate font-medium text-foreground">{item.label}</span>
+                      <span className="text-xs text-muted-foreground">
+                        Due {item.dueDate.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
+                        {item.isPayerOnly && " · Pays this for you"}
+                      </span>
+                    </div>
+                    <span className="font-semibold text-foreground tabular-nums">{formatCurrency(item.amount)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div>
+            <SectionTitle icon={StickyNote}>Notes</SectionTitle>
+            {person.notes ? (
+              <p className="mt-2.5 text-sm whitespace-pre-wrap text-foreground">{person.notes}</p>
+            ) : (
+              <p className="mt-2.5 text-sm text-muted-foreground">No notes yet.</p>
+            )}
+          </div>
+
+          <div>
+            <SectionTitle icon={Paperclip}>Attachments</SectionTitle>
+            <p className="mt-2.5 text-sm text-muted-foreground">No attachments yet.</p>
+          </div>
+        </aside>
       </div>
-    </>
+    </div>
   );
 
   let content: React.ReactNode = overview;
@@ -506,12 +540,14 @@ export function PersonOverviewPanel({
         onScopeChange={(next) => {
           setScope(next);
           setSettlingKey(null);
+    setEditingKey(null);
         }}
         counts={scopeCounts}
         cycle={cycle}
         onCycleChange={(next) => {
           setCycle(next);
           setSettlingKey(null);
+    setEditingKey(null);
         }}
         balance={allTimeStatement ? { direction: allTimeStatement.direction, amount: allTimeStatement.amount } : null}
         onClose={back}
@@ -522,6 +558,7 @@ export function PersonOverviewPanel({
           setLedgerView(next);
           setInline(null);
           setSettlingKey(null);
+    setEditingKey(null);
         }}
         addSection={
           onAddEntry ? (
@@ -532,35 +569,8 @@ export function PersonOverviewPanel({
         onAddToggle={() => {
           setInline((current) => (current === "add" ? null : "add"));
           setSettlingKey(null);
+    setEditingKey(null);
         }}
-        renderSettle={
-          rawPerson
-            ? (backToTransactions) => (
-                <SettleUpPanel
-                  person={rawPerson}
-                  variant="page"
-                  backLabel={BACK_TO_TRANSACTIONS}
-                  onCancel={backToTransactions}
-                  onDone={backToTransactions}
-                />
-              )
-            : undefined
-        }
-        renderSplit={
-          rawPerson
-            ? (backToTransactions) => (
-                <SplitExpenseMode
-                  person={rawPerson}
-                  accounts={accounts}
-                  categories={categories}
-                  people={people}
-                  backLabel={BACK_TO_TRANSACTIONS}
-                  onBack={backToTransactions}
-                  onDone={backToTransactions}
-                />
-              )
-            : undefined
-        }
         deleteAllCount={bulkPlan.entries.length}
         onDeleteAll={onDeleteEntries ? openBulkDelete : undefined}
       />
@@ -582,55 +592,61 @@ export function PersonOverviewPanel({
   const dependents = rowPlan?.ok ? rowPlan.dependentSettlements : [];
   const settledParent = deletingRow?.statementRow?.settles;
 
+
+  /** Escape steps back out of a settle/edit row, an inline section, then a mode; a clean overview ignores it. */
+  function onKeyDown(e: React.KeyboardEvent) {
+    if (e.key !== "Escape" || e.defaultPrevented || mode.kind === "ledger" || mode.kind === "share") return;
+    if (settlingKey != null || editingKey != null) {
+      setSettlingKey(null);
+      setEditingKey(null);
+    } else if (inline != null) {
+      setInline(null);
+    } else if (mode.kind !== "overview") {
+      back();
+    } else {
+      return;
+    }
+    e.preventDefault();
+  }
+
   return (
-    <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
-      <DialogContent
-        showCloseButton={false}
-        onEscapeKeyDown={(e) => {
-          // Escape steps back out of a settle form, an inline section, then a mode; only closes from a clean overview.
-          if (settlingKey != null) {
-            e.preventDefault();
-            setSettlingKey(null);
-          } else if (inline != null) {
-            e.preventDefault();
-            setInline(null);
-          } else if (mode.kind === "ledger" && ledgerView !== "transactions") {
-            e.preventDefault();
-            setLedgerView("transactions");
-          } else if (mode.kind !== "overview") {
-            e.preventDefault();
-            back();
-          }
-        }}
-        className={cn(
-          "flex flex-col gap-0 overflow-hidden border border-border bg-card p-0 shadow-[var(--shadow-e4)] ring-0",
-          // Phone: full-height sheet. Desktop: centered workspace that widens for complex modes.
-          "top-0 left-0 h-[100dvh] max-h-[100dvh] max-w-none translate-x-0 translate-y-0 rounded-none",
-          "sm:top-1/2 sm:left-1/2 sm:max-h-[min(92vh,60rem)] sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-[10px]",
-          "transition-[max-width] duration-[260ms] ease-out",
-          // The expanded ledger takes most of the viewport, with a fixed height so only its table scrolls.
-          mode.kind === "ledger"
-            ? "sm:h-[min(92vh,60rem)] sm:max-w-[min(94vw,84rem)]"
-            : cn("sm:h-auto", WIDE.includes(mode.kind) ? "sm:max-w-3xl" : "sm:max-w-xl"),
-        )}
-      >
-        {/* Shell header — who, always visible */}
-        <div className="flex shrink-0 items-center gap-3 border-b border-border px-4 py-3 sm:px-7">
-          <ClayAvatar name={person.name} size={36} />
-          <div className="flex min-w-0 flex-1 flex-col">
-            <DialogTitle className="truncate font-heading text-base leading-tight font-semibold tracking-tight sm:text-lg">{person.name}</DialogTitle>
-            <DialogDescription className="truncate text-xs text-muted-foreground">{subline}</DialogDescription>
+    <div ref={rootRef} onKeyDown={onKeyDown} className="flex min-w-0 scroll-mt-6 flex-col gap-5 px-1">
+      {/* Breadcrumb + identity — who, always visible; every mode renders below it */}
+      <div className="flex flex-col gap-3">
+        <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-1.5 text-sm">
+          <button
+            type="button"
+            onClick={onBack}
+            className="-ml-2 flex h-8 shrink-0 items-center gap-1 rounded-[6px] px-2 font-medium text-muted-foreground outline-none transition-colors hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <ArrowLeft className="size-4" strokeWidth={1.75} />
+            People Ledger
+          </button>
+          <span className="text-muted-foreground/60" aria-hidden>
+            /
+          </span>
+          <span className="truncate font-medium text-foreground" aria-current="page">
+            {person.name}
+          </span>
+        </nav>
+
+        <header className="flex items-center gap-3 border-b border-border pb-4">
+          <ClayAvatar name={person.name} size={44} />
+          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+            <h1 className="truncate font-heading text-2xl leading-tight font-bold tracking-tight text-foreground">{person.name}</h1>
+            <p className="truncate text-sm text-muted-foreground">{subline}</p>
           </div>
-          <div className="flex shrink-0 items-center gap-0.5">
+          <div className="flex shrink-0 items-center gap-1">
             {onEditPerson && rawPerson && (
               <button
                 type="button"
-                aria-label="Edit person"
                 aria-pressed={mode.kind === "edit"}
-                onClick={() => go({ kind: "edit" })}
-                className={cn(ICON_BUTTON, mode.kind === "edit" && "bg-secondary text-foreground")}
+                onClick={() => go(mode.kind === "edit" ? { kind: "overview" } : { kind: "edit" })}
+                className={cn(HEADER_BUTTON, mode.kind === "edit" && "bg-secondary")}
               >
                 <Pencil className="size-4" strokeWidth={1.75} />
+                <span className="hidden sm:inline">Edit</span>
+                <span className="sr-only sm:hidden">Edit person</span>
               </button>
             )}
             {(onDelete || onDeleteEntries) && (
@@ -661,34 +677,72 @@ export function PersonOverviewPanel({
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
-            <span className="mx-1 h-5 w-px bg-border" aria-hidden />
-            <button type="button" aria-label="Close person view" onClick={onClose} className={ICON_BUTTON}>
-              <X className="size-[18px]" strokeWidth={1.75} />
-            </button>
           </div>
-        </div>
+        </header>
+      </div>
 
-        {/* Mode content — slides in from the right going deeper, from the left coming back; the ledger grows in */}
-        <div
-          ref={scrollRef}
-          className={cn("flex min-h-0 flex-1 flex-col overflow-x-hidden", mode.kind === "ledger" ? "overflow-y-hidden" : "overflow-y-auto")}
-        >
+      {/* Mode content — slides in from the right going deeper, from the left coming back */}
+      <div
+        key={mode.kind === "ledger" || mode.kind === "share" ? "overview" : mode.kind}
+        className={cn(
+          "min-w-0 animate-in duration-200 ease-out fade-in-0",
+          direction === "forward" ? "slide-in-from-right-4" : "slide-in-from-left-4",
+        )}
+      >
+        {mode.kind === "overview" || mode.kind === "ledger" || mode.kind === "share" ? (
+          overview
+        ) : (
+          // Focused tools (Split, Share, Edit) keep their own padded layout on one surface, at a readable width.
           <div
-            key={mode.kind}
             className={cn(
-              "animate-in duration-200 ease-out fade-in-0",
-              // The overview's Activity view fits the workspace height so only its transaction list scrolls.
-              mode.kind === "overview"
-                ? cn("flex flex-1 flex-col", view === "Activity" && "sm:min-h-0")
-                : mode.kind === "ledger"
-                  ? "flex min-h-0 flex-1 flex-col duration-[260ms] zoom-in-[0.98]"
-                  : "min-h-full shrink-0",
-              mode.kind !== "ledger" && (direction === "forward" ? "slide-in-from-right-6" : "slide-in-from-left-6"),
+              LE_RADIUS.panel,
+              "overflow-hidden border border-border bg-card shadow-e1",
+              mode.kind === "edit" ? "max-w-2xl" : "max-w-4xl",
             )}
           >
             {content}
           </div>
-        </div>
+        )}
+      </div>
+
+      {/* Share statement — preview, WhatsApp, copy and PDF in a focused popup over the person page */}
+      <Dialog open={mode.kind === "share" && statement != null} onOpenChange={(o) => !o && back()}>
+        <DialogContent
+          showCloseButton={false}
+          className="flex max-h-[min(92vh,60rem)] flex-col gap-0 overflow-hidden rounded-[10px] border border-border bg-card p-0 pb-5 shadow-[var(--shadow-e4)] ring-0 sm:max-w-3xl"
+        >
+          <DialogTitle className="sr-only">Share {person.name}&apos;s statement</DialogTitle>
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+            {mode.kind === "share" && content}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Expanded ledger — just the transactions, in a large focused popup over the person page */}
+      <Dialog open={mode.kind === "ledger"} onOpenChange={(o) => !o && back()}>
+        <DialogContent
+          showCloseButton={false}
+          onEscapeKeyDown={(e) => {
+            // Escape steps out of an open row form or ledger sub-view first; only then closes.
+            if (settlingKey != null || editingKey != null || inline != null || ledgerView !== "transactions") {
+              e.preventDefault();
+              setSettlingKey(null);
+              setEditingKey(null);
+              setInline(null);
+              setLedgerView("transactions");
+            }
+          }}
+          className={cn(
+            "flex flex-col gap-0 overflow-hidden border border-border bg-card p-0 shadow-[var(--shadow-e4)] ring-0",
+            // Phone: full screen. Desktop: most of the viewport, fixed height so only the table scrolls.
+            "top-0 left-0 h-[100dvh] max-h-[100dvh] max-w-none translate-x-0 translate-y-0 rounded-none",
+            "sm:top-1/2 sm:left-1/2 sm:h-[min(94vh,68rem)] sm:max-w-[min(96vw,100rem)] sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-[10px]",
+          )}
+        >
+          <DialogTitle className="sr-only">{person.name} — Transactions</DialogTitle>
+          {mode.kind === "ledger" && content}
+        </DialogContent>
+      </Dialog>
 
         <LedgerConfirmDialog
           open={undoOpen}
@@ -768,7 +822,6 @@ export function PersonOverviewPanel({
           )}
           {rawPerson && Math.abs(rawPerson.openingBalance) >= 0.005 && <p>The opening balance of {money(Math.abs(rawPerson.openingBalance))} stays.</p>}
         </LedgerConfirmDialog>
-      </DialogContent>
-    </Dialog>
+    </div>
   );
 }

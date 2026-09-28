@@ -1,12 +1,12 @@
 "use client";
 
-import { Check, ChevronLeft, ChevronRight, HandCoins, Info, ListX, Minimize2, Plus, Search, Split, Trash2, Undo2 } from "lucide-react";
+import { ArrowDownLeft, ArrowLeft, ArrowUpRight, Check, ChevronLeft, ChevronRight, HandCoins, Info, Pencil, ListX, Plus, Search, Split, Trash2, Undo2 } from "lucide-react";
 import { Fragment, useLayoutEffect, useRef, useState } from "react";
 import { EmiBadge } from "@/features/people/components/cycle-statement/statement-parts";
-import { CarriedForwardNote, EMI_STATUS, RowIcon, ScopeSwitch, type LedgerRowHandlers, type LedgerScope } from "@/features/people/components/person-activity-feed";
+import { CyclePicker } from "@/features/people/components/people-ledger-list";
+import { amountTone, CarriedForwardNote, EMI_STATUS, StatusCell, RowIcon, ScopeSwitch, type LedgerRowHandlers, type LedgerScope } from "@/features/people/components/person-activity-feed";
 import {
   countByState,
-  DIRECTION_LABEL,
   filterLedgerRows,
   groupByMonth,
   sequence,
@@ -28,14 +28,14 @@ import {
 } from "@/lib/engines/person-cycle-statement";
 import { money } from "@/lib/engines/person-cycle-statement-share";
 import { cn } from "@/lib/utils";
-import { DELETE_BLOCK_NOTE, EntrySettleForm, InlineReveal, lastPaymentLine, PaymentHistory } from "./ledger-ui";
+import { DELETE_BLOCK_NOTE, EntryEditForm, EntrySettleForm, isEditable, InlineReveal, PaymentHistory } from "./ledger-ui";
 import { WS_PAD, WS_PRIMARY, WS_SECONDARY, WsSegmented } from "./person-workspace-ui";
 
 /** The expanded workspace's internal navigation — the ledger, or one of the Person-level flows in its place. */
 export type LedgerView = "transactions" | "settle" | "split";
 
-const TH = "sticky top-0 z-[2] border-b border-border-strong bg-card px-3 py-2 text-left text-[11px] font-semibold tracking-[0.06em] whitespace-nowrap text-muted-foreground uppercase";
-const TD = "border-b border-border px-3 py-2.5 align-middle";
+const TH = "sticky top-0 z-[2] border-r border-b border-r-border-strong/40 border-b-border-strong bg-secondary px-3 py-2 last:border-r-0 text-left text-[11px] font-semibold tracking-[0.06em] whitespace-nowrap text-muted-foreground uppercase";
+const TD = "border-r border-b border-r-border-strong/30 border-b-border-strong/40 px-3 py-2.5 align-middle last:border-r-0";
 const COLS = 8;
 
 const NAV_BUTTON =
@@ -58,54 +58,6 @@ const TYPE_SHORT: Record<StatementCategory | "loan", string> = {
 const fullDate = (d: Date) => formatStatementDate(d, true);
 
 /**
- * Amount colour by what the row means for the balance: receivable → the positive treatment, my debt →
- * the expense treatment, settlements/loans neutral; a settled obligation steps back. The words next to
- * it always carry the meaning — colour only supports it.
- */
-function amountTone(row: LedgerRow): string {
-  if (row.state === "settled") return "text-foreground/70";
-  if (row.direction === "theyOwe") return "text-success";
-  if (row.direction === "iOwe") return "text-expense";
-  return "text-foreground";
-}
-
-/**
- * Human-readable state, derived only from the row's existing direction and settlement state:
- * receivable & unsettled → "Awaiting payment", my debt & unsettled → "To pay", partly settled →
- * "Partially settled" + what remains, settled → "Settled". Rows without a settlement state (payments,
- * EMI, adjustments, Loans) say what they mean instead.
- */
-function rowStatus(row: LedgerRow): { label: string; detail: string | null; dot: string; icon?: "check" } {
-  if (row.state === "settled") return { label: "Settled", detail: lastPaymentLine(row), dot: "bg-success", icon: "check" };
-  if (row.state === "partial")
-    return { label: "Partially settled", detail: `${money(row.remaining ?? 0)} remaining`, dot: row.direction === "iOwe" ? "bg-expense" : "bg-success" };
-  if (row.state === "open")
-    return row.direction === "iOwe"
-      ? { label: "To pay", detail: "You owe them", dot: "bg-expense" }
-      : { label: "Awaiting payment", detail: "They owe you", dot: "bg-success" };
-  if (row.direction === "theyPaid" || row.direction === "youPaid") return { label: DIRECTION_LABEL[row.direction], detail: "Settlement", dot: "bg-muted-foreground/50" };
-  if (row.direction === "loan") return { label: "Via loan", detail: "Settled from the Loan", dot: "bg-muted-foreground/50" };
-  return { label: DIRECTION_LABEL[row.direction], detail: null, dot: row.direction === "iOwe" ? "bg-expense" : "bg-success" };
-}
-
-function StatusCell({ row }: { row: LedgerRow }) {
-  const s = rowStatus(row);
-  return (
-    <div className="flex min-w-0 items-start gap-2">
-      {s.icon === "check" ? (
-        <Check className="mt-0.5 size-3.5 shrink-0 text-success" strokeWidth={2.5} aria-hidden />
-      ) : (
-        <span className={cn("mt-1.5 size-2 shrink-0 rounded-full", s.dot)} aria-hidden />
-      )}
-      <div className="min-w-0">
-        <p className={cn("text-[13px] leading-tight font-semibold whitespace-nowrap", s.icon === "check" ? "text-success" : "text-foreground")}>{s.label}</p>
-        {s.detail && <p className="mt-0.5 text-xs leading-tight whitespace-nowrap text-muted-foreground">{s.detail}</p>}
-      </div>
-    </div>
-  );
-}
-
-/**
  * A row's direct actions. Settle is a quiet secondary action ("Settle remaining" once partly settled)
  * shown only where the transaction can be settled on its own; a settled row shows ✓ Settled instead.
  * Delete stays visually separate and destructive, only where the safe delete path allows it.
@@ -123,6 +75,7 @@ function RowActions({
   className?: string;
 }) {
   const settling = handlers.settlingKey === row.key;
+  const editing = handlers.editingKey === row.key;
   const blockNote = !row.deletable && row.deleteBlock ? DELETE_BLOCK_NOTE[row.deleteBlock] : null;
   // A settled transaction with one reversible payment can be unsettled directly; with several, each
   // payment is reversed on its own from the payment history — never all at once.
@@ -163,6 +116,21 @@ function RowActions({
           ) : null}
         </>
       ) : null}
+      {isEditable(row) && handlers.onEditStart && (
+        <button
+          type="button"
+          aria-label={`Edit ${row.title}`}
+          title="Edit"
+          aria-pressed={editing}
+          onClick={() => (editing ? handlers.onEditCancel?.() : handlers.onEditStart!(row))}
+          className={cn(
+            "flex size-7 items-center justify-center rounded-[6px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+            editing ? "bg-primary/15 text-foreground" : "text-muted-foreground hover:bg-secondary hover:text-foreground",
+          )}
+        >
+          <Pencil className="size-3.5" strokeWidth={1.75} />
+        </button>
+      )}
       {(row.settle || row.state === "settled") && (row.deletable || blockNote) && <span className="mx-0.5 h-4 w-px bg-border" aria-hidden />}
       {row.deletable && handlers.onDelete ? (
         <button
@@ -183,11 +151,48 @@ function RowActions({
   );
 }
 
-function Fact({ label, children }: { label: string; children: React.ReactNode }) {
+function Fact({ label, children, tone }: { label: string; children: React.ReactNode; tone?: string }) {
   return (
-    <div className="min-w-0">
-      <dt className="text-[11px] font-medium text-muted-foreground">{label}</dt>
-      <dd className="mt-0.5 truncate text-sm font-medium text-foreground tabular-nums">{children}</dd>
+    <div className="min-w-0 border-l border-border/80 pl-3">
+      <dt className="text-[10.5px] font-medium tracking-[0.04em] text-muted-foreground uppercase">{label}</dt>
+      <dd className={cn("truncate text-[13px] font-semibold tabular-nums", tone ?? "text-foreground")}>{children}</dd>
+    </div>
+  );
+}
+
+/** How much of the entry has been settled — a small ring in the row's balance colour with the split beside it. */
+function SettleProgress({ row }: { row: LedgerRow }) {
+  if (row.state == null || row.amount <= 0) return null;
+  const settled = row.amount - (row.remaining ?? 0);
+  const pct = Math.min(100, Math.max(0, (settled / row.amount) * 100));
+  const stroke = row.state === "settled" || row.direction !== "iOwe" ? "stroke-success" : "stroke-expense";
+  const r = 15;
+  const c = 2 * Math.PI * r;
+  return (
+    <div className="flex shrink-0 items-center gap-2.5 pr-1">
+      <div className="relative size-10">
+        <svg viewBox="0 0 36 36" className="size-10 -rotate-90">
+          <circle cx="18" cy="18" r={r} fill="none" strokeWidth="3.5" className="stroke-secondary" />
+          <circle
+            cx="18"
+            cy="18"
+            r={r}
+            fill="none"
+            strokeWidth="3.5"
+            strokeLinecap="round"
+            strokeDasharray={c}
+            strokeDashoffset={c * (1 - pct / 100)}
+            className={cn("transition-[stroke-dashoffset]", stroke)}
+          />
+        </svg>
+        <span className="absolute inset-0 flex items-center justify-center text-[10px] font-bold text-foreground tabular-nums">{Math.round(pct)}%</span>
+      </div>
+      <div className="leading-tight">
+        <p className="text-[13px] font-semibold text-foreground tabular-nums">
+          {money(settled)} <span className="font-normal text-muted-foreground">of {money(row.amount)}</span>
+        </p>
+        <p className="text-[11px] text-muted-foreground">settled</p>
+      </div>
     </div>
   );
 }
@@ -197,20 +202,18 @@ function RowFacts({ row }: { row: LedgerRow }) {
   const s = row.statementRow;
   const after = s ? directionOf(s.runningBalance) : null;
   return (
-    <dl className="grid grid-cols-2 gap-x-6 gap-y-2.5 sm:grid-cols-4">
+    <dl className="flex min-w-0 flex-wrap items-center gap-x-5 gap-y-2">
       {row.state != null && (
-        <>
-          <Fact label="Original amount">{money(row.amount)}</Fact>
-          <Fact label="Settled so far">{money(row.amount - (row.remaining ?? 0))}</Fact>
-          <Fact label="Remaining">{row.state === "settled" ? "Nothing — settled" : money(row.remaining ?? 0)}</Fact>
-        </>
+        <Fact label="Remaining" tone={row.state === "settled" ? "text-success" : amountTone(row)}>
+          {row.state === "settled" ? "Settled" : money(row.remaining ?? 0)}
+        </Fact>
       )}
       {s?.settles && (
         <>
           <Fact label={s.settles.remainingAfter > 0 ? "Paid against" : "Cleared"}>
             {s.settles.title} ({money(s.settles.originalAmount)})
           </Fact>
-          <Fact label="Left on it after this">{money(s.settles.remainingAfter)}</Fact>
+          <Fact label="Left after this">{money(s.settles.remainingAfter)}</Fact>
         </>
       )}
       {s?.emi && (
@@ -222,7 +225,9 @@ function RowFacts({ row }: { row: LedgerRow }) {
         </>
       )}
       {s && after && (
-        <Fact label="Balance after">{after === "settled" ? "Settled" : `${directionHeadline(after)} ${money(Math.abs(s.runningBalance))}`}</Fact>
+        <Fact label="Balance after" tone={after === "theyOwe" ? "text-success" : after === "iOwe" ? "text-expense" : undefined}>
+          {after === "settled" ? "Settled" : `${directionHeadline(after)} ${money(Math.abs(s.runningBalance))}`}
+        </Fact>
       )}
       {row.entryId && row.createdAt.getTime() !== row.date.getTime() && <Fact label="Recorded">{fullDate(row.createdAt)}</Fact>}
       {row.category === "loan" && <Fact label="Settled from">The Loan</Fact>}
@@ -231,61 +236,60 @@ function RowFacts({ row }: { row: LedgerRow }) {
   );
 }
 
-/** The expansion under a row: its settle form when settling, otherwise its details. */
+/** The expansion under a row: its settle form when settling, otherwise a compact details strip. */
 function RowExpansion({ row, personName, handlers }: { row: LedgerRow; personName: string; handlers: LedgerRowHandlers }) {
+  if (handlers.editingKey === row.key) {
+    return <EntryEditForm row={row} onCancel={() => handlers.onEditCancel?.()} onSubmit={(values) => handlers.onEditSubmit!(row, values)} />;
+  }
   if (handlers.settlingKey === row.key) {
     return (
-      <div className="max-w-xl">
+      <div className="ml-auto w-full max-w-md">
         <EntrySettleForm row={row} personName={personName} onCancel={handlers.onSettleCancel} onSubmit={(values) => handlers.onSettleSubmit(row, values)} />
       </div>
     );
   }
+  const accent = row.state === "settled" ? "border-l-success" : row.direction === "iOwe" ? "border-l-expense" : row.direction === "theyOwe" ? "border-l-success" : "border-l-border-strong";
   return (
-    <div className="rounded-[8px] border border-border bg-card px-3.5 py-3">
-      <p className="text-sm font-semibold break-words text-foreground">{row.title}</p>
-      <p className="mb-3 text-xs text-muted-foreground">
-        {row.typeLabel} · {fullDate(row.date)} · {DIRECTION_LABEL[row.direction]}
-      </p>
-      <RowFacts row={row} />
+    <div className={cn("rounded-[8px] border border-l-[3px] border-border bg-card px-3.5 py-2.5 shadow-xs", accent)}>
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-2.5">
+        <SettleProgress row={row} />
+        <RowFacts row={row} />
+      </div>
       <PaymentHistory
         row={row}
         onUndo={handlers.onUndoPayment ? (payment) => handlers.onUndoPayment!(row, payment) : undefined}
-        className="mt-3"
+        className="mt-2.5"
       />
     </div>
   );
 }
 
-/**
- * Period navigator: ‹ 18 Sep – 17 Oct / 2026 · Current › — the selected cycle (the workspace's one
- * source for the cycle view). "Current" is a quiet badge, only on today's cycle; elsewhere a link
- * returns to it.
- */
-function CycleNavigator({ cycle, onCycleChange }: { cycle: StatementCycle; onCycleChange: (cycle: StatementCycle) => void }) {
-  const isCurrent = sameCycle(cycle, cycleContaining(new Date()));
-  const startYear = cycle.start.getFullYear();
-  const endYear = cycle.end.getFullYear();
+/** Previous / quick picker / Next — the same month-grid + date picker as the People list (`CyclePicker`). */
+export function CycleNavigator({ cycle, onCycleChange }: { cycle: StatementCycle; onCycleChange: (cycle: StatementCycle) => void }) {
+  const current = cycleContaining(new Date());
+  const isCurrent = sameCycle(cycle, current);
   return (
-    <div className="flex items-center gap-2">
-      <div className="flex items-center rounded-[8px] border border-border-strong bg-card p-0.5">
-        <button type="button" aria-label="Previous cycle" onClick={() => onCycleChange(shiftCycle(cycle, -1))} className={NAV_BUTTON}>
-          <ChevronLeft className="size-4" strokeWidth={1.75} />
-        </button>
-        <div className="min-w-[8.5rem] px-2 text-center" aria-live="polite">
-          <p className="font-heading text-sm leading-tight font-semibold text-foreground tabular-nums">{formatCycleLabel(cycle, false)}</p>
-          <p className="text-[11px] leading-tight text-muted-foreground tabular-nums">{startYear === endYear ? endYear : `${startYear} – ${endYear}`}</p>
-        </div>
-        <button type="button" aria-label="Next cycle" onClick={() => onCycleChange(shiftCycle(cycle, 1))} className={NAV_BUTTON}>
-          <ChevronRight className="size-4" strokeWidth={1.75} />
-        </button>
-      </div>
+    <div className="flex min-w-0 items-center gap-1">
+      <button type="button" aria-label="Previous cycle" onClick={() => onCycleChange(shiftCycle(cycle, -1))} className={NAV_BUTTON}>
+        <ChevronLeft className="size-4" strokeWidth={1.75} />
+      </button>
+      <CyclePicker cycle={cycle} current={current} onCycleChange={onCycleChange} direction={0} />
+      <button
+        type="button"
+        aria-label="Next cycle"
+        disabled={isCurrent}
+        onClick={() => onCycleChange(shiftCycle(cycle, 1))}
+        className={cn(NAV_BUTTON, "disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent")}
+      >
+        <ChevronRight className="size-4" strokeWidth={1.75} />
+      </button>
       {isCurrent ? (
-        <span className="rounded-[4px] bg-primary/20 px-1.5 py-0.5 text-[10.5px] font-semibold tracking-wide text-primary-accent-text uppercase">Current</span>
+        <span className="ml-1 rounded-[4px] bg-primary/20 px-1.5 py-0.5 text-[10.5px] font-semibold tracking-wide text-primary-accent-text uppercase">Current</span>
       ) : (
         <button
           type="button"
-          onClick={() => onCycleChange(cycleContaining(new Date()))}
-          className="rounded-[4px] text-xs font-semibold text-primary-accent-text underline-offset-2 hover:underline"
+          onClick={() => onCycleChange(current)}
+          className="ml-1 rounded-[4px] text-xs font-semibold whitespace-nowrap text-primary-accent-text underline-offset-2 hover:underline"
         >
           Back to current
         </button>
@@ -376,14 +380,15 @@ export function TransactionLedgerMode({
   const stateCounts = countByState(filterLedgerRows(rows, "all", search));
   const visible = filterLedgerRows(rows, filter, search);
   const groups = groupByMonth(visible, (r) => r.date);
-  const balanceTone = balance?.direction === "theyOwe" ? "text-success" : balance?.direction === "iOwe" ? "text-expense" : "text-foreground";
+  const balanceTone = balance?.direction === "theyOwe" ? "text-success" : balance?.direction === "iOwe" ? "text-expense" : "text-muted-foreground";
+  const BalanceIcon = balance?.direction === "theyOwe" ? ArrowDownLeft : balance?.direction === "iOwe" ? ArrowUpRight : Check;
   const firstName = personName.split(" ")[0];
 
   const toggleRow = (row: LedgerRow) => {
     if (handlers.settlingKey === row.key) handlers.onSettleCancel();
     setOpenKey((k) => (k === row.key ? null : row.key));
   };
-  const isOpen = (row: LedgerRow) => openKey === row.key || handlers.settlingKey === row.key;
+  const isOpen = (row: LedgerRow) => openKey === row.key || handlers.settlingKey === row.key || handlers.editingKey === row.key;
 
   const slide = cn("animate-in duration-[220ms] ease-out fade-in-0", direction === "forward" ? "slide-in-from-right-4" : "slide-in-from-left-4");
 
@@ -398,24 +403,32 @@ export function TransactionLedgerMode({
 
   return (
     <div key="transactions" className={cn("flex h-full min-h-0 flex-col", direction === "back" && slide)}>
-      {/* ── Fixed: title, position, period, actions, search & filters ── */}
+      {/* ── Fixed: who, current position, period ── */}
       <div className={cn(WS_PAD, "shrink-0 border-b border-border pt-4 pb-3 sm:pt-5")}>
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
-            <h2 className="truncate font-heading text-lg leading-tight font-semibold tracking-tight text-foreground sm:text-xl">{personName} — Transactions</h2>
-            {balance && (
-              <p className="mt-1 text-sm text-muted-foreground">
-                Current position ·{" "}
-                <span className={cn("font-semibold", balanceTone)}>
+            <p className="truncate text-sm font-semibold text-foreground">
+              {personName} <span className="font-normal text-muted-foreground">· Transactions</span>
+            </p>
+            {balance ? (
+              <div className="mt-2 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                <span className={cn("inline-flex items-center gap-1.5 text-xs font-bold tracking-[0.08em] uppercase", balanceTone)}>
+                  <BalanceIcon className="size-3.5" strokeWidth={2.25} aria-hidden />
                   {directionHeadline(balance.direction)}
-                  {balance.direction !== "settled" && <span className="tabular-nums"> {money(balance.amount)}</span>}
                 </span>
-              </p>
+                <span className="font-heading text-[30px] leading-none font-bold tracking-tight text-foreground tabular-nums sm:text-[34px]">
+                  {money(balance.amount)}
+                </span>
+                <span className="text-xs text-muted-foreground">overall, all cycles</span>
+              </div>
+            ) : (
+              <div className="mt-2 h-9 w-48 animate-pulse rounded-[6px] bg-secondary" />
             )}
           </div>
           <button type="button" onClick={onClose} className={cn(WS_SECONDARY, "h-8 shrink-0 px-3")}>
-            <Minimize2 className="size-4" strokeWidth={1.75} />
-            Close
+            <ArrowLeft className="size-4" strokeWidth={1.75} />
+            <span className="hidden sm:inline">Back to page</span>
+            <span className="sm:hidden">Back</span>
           </button>
         </div>
 
@@ -426,28 +439,6 @@ export function TransactionLedgerMode({
             <CycleNavigator cycle={cycle} onCycleChange={onCycleChange} />
           ) : (
             <span className="text-[13px] text-muted-foreground">Complete history with {firstName} — not limited to a cycle</span>
-          )}
-        </div>
-
-        {/* Actions: primary · secondary ··· destructive */}
-        <div className="mt-4 flex flex-wrap items-center gap-2">
-          {addSection && (
-            <button type="button" onClick={onAddToggle} aria-expanded={addOpen} className={cn(WS_PRIMARY, "h-8 px-3")}>
-              <Plus className={cn("size-4 transition-transform duration-200", addOpen && "rotate-45")} strokeWidth={2.25} />
-              Add Transaction
-            </button>
-          )}
-          {renderSettle && (
-            <button type="button" onClick={() => openFlow("settle")} title="Settle the overall outstanding balance" className={cn(WS_SECONDARY, "h-8 px-3")}>
-              <HandCoins className="size-4" strokeWidth={1.75} />
-              Settle Balance
-            </button>
-          )}
-          {renderSplit && (
-            <button type="button" onClick={() => openFlow("split")} className={cn(WS_SECONDARY, "h-8 px-3")}>
-              <Split className="size-4" strokeWidth={1.75} />
-              Split Expense
-            </button>
           )}
           {onDeleteAll && (
             <button
@@ -462,43 +453,76 @@ export function TransactionLedgerMode({
           )}
         </div>
 
-        {addSection && (
-          <InlineReveal open={addOpen}>
-            <div className="max-h-[min(52vh,32rem)] max-w-4xl overflow-y-auto overscroll-contain">{addSection}</div>
-          </InlineReveal>
-        )}
-
         {scope === "cycle" && !isLoading && <CarriedForwardNote carried={carriedForward} className="mt-3 max-w-3xl" />}
+      </div>
 
-        {/* Utility: search & status filters — within the active period */}
-        <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
-          <div className="relative w-full sm:w-72">
-            <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" strokeWidth={1.75} />
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search description or type…"
-              aria-label="Search transactions"
-              className="h-9 w-full rounded-[6px] border border-border-strong bg-card pr-3 pl-9 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-primary-accent-text"
-            />
-          </div>
-          <WsSegmented
-            label="Settlement status"
-            value={filter}
-            onChange={setFilter}
-            options={[
-              { value: "all", label: "All", meta: stateCounts.all },
-              { value: "open", label: "Unpaid", meta: stateCounts.open },
-              { value: "partial", label: "Partial", meta: stateCounts.partial },
-              { value: "settled", label: "Settled", meta: stateCounts.settled },
-            ]}
-            className="w-full sm:w-auto"
+      {/* ── Fixed: the Transactions toolbar — search & filters on the left, Add on the right ── */}
+      <div className={cn(WS_PAD, "flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-border-strong/60 bg-secondary/50 py-2.5")}>
+        <h3 className="mr-1 font-heading text-[15px] font-semibold text-foreground">
+          Transactions <span className="ml-0.5 text-sm font-semibold text-muted-foreground tabular-nums">{visible.length}</span>
+        </h3>
+        <div className="relative w-full sm:w-64">
+          <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" strokeWidth={1.75} />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search description or type…"
+            aria-label="Search transactions"
+            className="h-8 w-full rounded-[6px] border border-border-strong bg-card pr-3 pl-9 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-primary-accent-text"
           />
+        </div>
+        <WsSegmented
+          label="Settlement status"
+          value={filter}
+          onChange={setFilter}
+          options={[
+            { value: "all", label: "All", meta: stateCounts.all },
+            { value: "open", label: "Unpaid", meta: stateCounts.open },
+            { value: "partial", label: "Partial", meta: stateCounts.partial },
+            { value: "settled", label: "Settled", meta: stateCounts.settled },
+          ]}
+          className="w-full sm:w-auto"
+        />
+        <div className="flex w-full items-center justify-end gap-2 sm:ml-auto sm:w-auto">
+          {renderSettle && (
+            <button type="button" onClick={() => openFlow("settle")} title="Settle the overall outstanding balance" className={cn(WS_SECONDARY, "h-8 px-3")}>
+              <HandCoins className="size-4" strokeWidth={1.75} />
+              Settle Balance
+            </button>
+          )}
+          {renderSplit && (
+            <button type="button" onClick={() => openFlow("split")} className={cn(WS_SECONDARY, "h-8 px-3")}>
+              <Split className="size-4" strokeWidth={1.75} />
+              Split Expense
+            </button>
+          )}
+          {addSection && (
+            <button
+              type="button"
+              onClick={() => {
+                if (!addOpen) bodyRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+                onAddToggle();
+              }}
+              aria-expanded={addOpen}
+              className={cn(WS_PRIMARY, "h-8 px-3")}
+            >
+              <Plus className={cn("size-4 transition-transform duration-200", addOpen && "rotate-45")} strokeWidth={2.25} />
+              {addOpen ? "Close" : "Add transaction"}
+            </button>
+          )}
         </div>
       </div>
 
       {/* ── Scrolling: the ledger body only ── */}
       <div ref={bodyRef} className="min-h-0 flex-1 overflow-auto overscroll-contain">
+        {/* Add opens at the top of the one scrolling region — no second scrollbar in the fixed header */}
+        {addSection && (
+          <InlineReveal open={addOpen}>
+            <div className={cn(WS_PAD, "border-b border-border-strong/60 bg-secondary/30 py-4")}>
+              <div className="max-w-4xl">{addSection}</div>
+            </div>
+          </InlineReveal>
+        )}
         {isLoading ? (
           <p className={cn(WS_PAD, "py-6 text-sm text-muted-foreground")}>Loading transactions…</p>
         ) : visible.length === 0 ? (
@@ -523,7 +547,7 @@ export function TransactionLedgerMode({
                   <th className={cn(TH, "w-24")}>Type</th>
                   <th className={cn(TH, "w-28 text-right")}>Amount</th>
                   <th className={cn(TH, "w-40")}>Status</th>
-                  <th className={cn(TH, "w-28 text-right")}>Remaining</th>
+                  <th className={cn(TH, "hidden w-28 text-right lg:table-cell")}>Remaining</th>
                   <th className={cn(TH, "w-[13rem] pr-4 sm:pr-7")}>Actions</th>
                 </tr>
               </thead>
@@ -579,7 +603,7 @@ export function TransactionLedgerMode({
                             <td className={TD}>
                               <StatusCell row={row} />
                             </td>
-                            <td className={cn(TD, "text-right tabular-nums")}>
+                            <td className={cn(TD, "hidden text-right tabular-nums lg:table-cell")}>
                               {row.remaining ? (
                                 <span className="font-semibold text-foreground">{money(row.remaining)}</span>
                               ) : row.state === "settled" ? (

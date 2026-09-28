@@ -503,6 +503,11 @@ export function usePeopleActions() {
         const entry = await ledgerRepository.addEntry(person, params);
         return entry;
       },
+      /** Edits a posted entry's amount/date/note, re-syncing the balance — see `LedgerRepository.editEntry`. */
+      editLedgerEntry: async (person: Person, entry: LedgerEntry, patch: { amount?: number; date?: Date; note?: string }) => {
+        const ledgerRepository = createLedgerRepository(uid, person.id, personRepository);
+        await ledgerRepository.editEntry(person, entry, patch);
+      },
       deleteLedgerEntry: async (person: Person, entry: LedgerEntry) => {
         const ledgerRepository = createLedgerRepository(uid, person.id, personRepository);
         await ledgerRepository.softDeleteEntry(person, entry);
