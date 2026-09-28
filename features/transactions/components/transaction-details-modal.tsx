@@ -813,13 +813,18 @@ export function TransactionDetailsModal({
                 // Plain descriptive reference (no expense-owed effect) — same shape as
                 // `applyOwesPersonChange`'s own "reference-only" branch.
                 await actions.editTransaction(newTransaction, { linkedPersonId: personId, owesPersonToggle: false });
-                if (personEntryType) {
-                  // Borrowed / Repaid / Received Back — not an expense assignment, so it's recorded
-                  // as a standalone person-ledger entry instead, the same `addLedgerEntry` action
-                  // the People page's own "Add Ledger Entry" dialog uses.
+                if (personEntryType === "borrowed") {
+                  // The expense above is this transaction's own cash-out leg — "I Borrowed" is the
+                  // opposite direction (cash IN from the person), so it can't reuse that expense.
+                  // Post a separate real Income transaction for it, same as the People page's own
+                  // Borrowed entry, defaulting to the same account the expense used.
                   const person = people.find((p) => p.id === personId);
                   if (person && peopleActions) {
-                    await peopleActions.addLedgerEntry(person, { type: personEntryType, amount: amountValue, date: dateTime, note: description || undefined });
+                    await peopleActions.addLedgerEntryWithTransaction(
+                      person,
+                      { type: "borrowed", amount: amountValue, date: dateTime, note: description || undefined },
+                      accountId,
+                    );
                   }
                 }
               }
@@ -1359,7 +1364,8 @@ export function TransactionDetailsModal({
                   <Users className="size-3.5 text-muted-foreground" />
                   People &amp; Split
                 </div>
-                <FormRow label="Assign to a person">
+                {!splitOpen && (
+                  <FormRow label="Assign to a person">
                   <AnimatePresence mode="wait" initial={false}>
                     {!addingPerson ? (
                       <motion.div key="select" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: durations.fast }}>
@@ -1371,7 +1377,11 @@ export function TransactionDetailsModal({
                               return;
                             }
                             setPersonId(v === "none" ? null : v);
-                            if (v === "none") setPersonEntryType(null);
+                            if (v === "none") {
+                              setPersonEntryType(null);
+                            } else {
+                              setSplitOpen(false);
+                            }
                           }}
                         >
                           <SelectTrigger className={cn("w-full", FIELD_BORDER)}>
@@ -1412,12 +1422,13 @@ export function TransactionDetailsModal({
                     )}
                   </AnimatePresence>
                 </FormRow>
+                )}
 
                 {!personId && !splitOpen && (
                   <p className="text-xs text-muted-foreground">Pick a person above to record I Gave / I Borrowed.</p>
                 )}
 
-                {!splitOpen && (
+                {!splitOpen && !personId && (
                   <ClayButton
                     type="button"
                     variant="secondary"

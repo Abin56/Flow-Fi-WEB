@@ -75,7 +75,12 @@ describe("origination golden fixture — scenarios", () => {
       } else {
         const { countsAsIncomeExpense, ...rest } = expected.movement;
         expect(movement).toEqual(rest);
-        const counted = !isNonIncomeExpenseMovement({ transferId: null, loanId: "loan", paymentAllocationType: movement!.allocationType });
+        const counted = !isNonIncomeExpenseMovement({
+          transferId: null,
+          loanId: "loan",
+          paymentAllocationType: movement!.allocationType,
+          isPersonLedgerMovement: false,
+        });
         expect(counted).toBe(countsAsIncomeExpense);
       }
       expect(originationScheduleShape(input.repaymentType, input.installmentFrequency, input.installmentCount)).toEqual(expected.schedule);

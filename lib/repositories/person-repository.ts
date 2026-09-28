@@ -11,6 +11,8 @@ import { FirestoreCrudRepository } from "@/lib/firestore/firestore-crud-reposito
 import { recordEdit, updateField } from "@/lib/firestore/soft-deletable";
 import { type LedgerEntry, type LedgerEntryType, type Person, signedAmount } from "@/lib/models/person";
 import type { ReceivedStatus } from "@/lib/models/expense";
+import type { Transaction, TransactionType } from "@/lib/models/transaction";
+import type { TransactionRepository } from "@/lib/repositories/transaction-repository";
 import { generateId } from "@/lib/utils/id-generator";
 
 export interface CreatePersonParams {
@@ -206,6 +208,96 @@ export class LedgerRepository extends FirestoreCrudRepository<LedgerEntry> {
     });
 
     return entry;
+  }
+
+  /**
+   * `addEntry`, but also creates a real account-affecting `Transaction`
+   * alongside the ledger entry, both in the same atomic Firestore
+   * transaction — used for "Borrowed"/"Repaid"/"Received Back" entries
+   * added from the People page's Add Transaction / Settle Up dialogs, so
+   * the cash movement they represent shows up in the main Transactions
+   * list, account balances, Month Cycle, and Dashboard the same way an
+   * "I Gave" expense-assignment already does (see `applyOwesPersonChange`).
+   *
+   * `type`/`accountId`/`categoryId` describe the real cash leg: "borrowed"
+   * and "receivedBack" are cash IN (an income transaction), "gave" and
+   * "repaid" are cash OUT (an expense transaction) — the caller picks the
+   * right `type` to match `params.type`'s `cashFlowDirection`. The new
+   * transaction's id is stored as the entry's `transactionRef`.
+   */
+  async addEntryWithTransaction(
+    person: Person,
+    params: {
+      type: LedgerEntryType;
+      amount: number;
+      date: Date;
+      note?: string;
+      parentEntryId?: string | null;
+      increasesBalance?: boolean;
+      receivedStatus?: ReceivedStatus;
+    },
+    transactionParams: {
+      type: TransactionType;
+      accountId: string;
+      categoryId: string;
+      description?: string;
+    },
+    transactionRepository: TransactionRepository,
+  ): Promise<{ entry: LedgerEntry; transaction: Transaction }> {
+    if (params.amount <= 0) {
+      throw new Error("Amount must be greater than 0");
+    }
+
+    const entryId = generateId();
+    const db = this.collection.firestore;
+    const entryRef = doc(this.collection, entryId);
+    const personRef = this.personRepository.docRef(person.id);
+
+    let entry!: LedgerEntry;
+    let transaction!: Transaction;
+
+    await runTransaction(db, async (tx) => {
+      const personSnap = await tx.get(personRef);
+      if (!personSnap.exists()) throw new Error("Person not found");
+
+      transaction = await transactionRepository.createTransactionInTransaction(tx, {
+        type: transactionParams.type,
+        amount: params.amount,
+        dateTime: params.date,
+        accountId: transactionParams.accountId,
+        categoryId: transactionParams.categoryId,
+        description: transactionParams.description ?? params.note,
+        notes: params.note,
+        linkedPersonId: person.id,
+        owesPersonToggle: false,
+        isPersonLedgerMovement: true,
+      });
+
+      entry = {
+        id: entryId,
+        personId: person.id,
+        type: params.type,
+        amount: params.amount,
+        date: params.date,
+        note: params.note ?? "",
+        transactionRef: transaction.id,
+        parentEntryId: params.parentEntryId ?? null,
+        increasesBalance: params.increasesBalance ?? true,
+        receivedStatus: params.receivedStatus ?? "yetToReceive",
+        createdAt: new Date(),
+        deletedAt: null,
+        lastEditedAt: null,
+        editHistory: [],
+      };
+
+      const personDelta = signedAmount(entry);
+      if (personDelta !== 0) {
+        tx.set(personRef, this.personRepository.applyBalanceDelta(personSnap.data(), personDelta));
+      }
+      tx.set(entryRef, entry);
+    });
+
+    return { entry, transaction };
   }
 
   /**

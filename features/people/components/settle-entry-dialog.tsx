@@ -2,7 +2,9 @@
 
 import { useState } from "react";
 import { FormDialog, FLAT_INPUT } from "@/components/finance";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { formatCurrency } from "@/lib/format";
+import type { Account } from "@/lib/models/account";
 import type { LedgerEntryType, Person } from "@/lib/models/person";
 import type { PersonActivityItem } from "@/features/people/hooks/use-people-data";
 import { cn } from "@/lib/utils";
@@ -24,16 +26,19 @@ export function SettleEntryDialog({
   onOpenChange,
   person,
   entry,
+  accounts,
   onSettle,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   person: Person | null;
   entry: PersonActivityItem | null;
-  onSettle: (params: { type: "repaid" | "receivedBack"; amount: number; date: Date; parentEntryId: string }) => Promise<void>;
+  accounts: Account[];
+  onSettle: (params: { type: "repaid" | "receivedBack"; amount: number; date: Date; parentEntryId: string; accountId: string }) => Promise<void>;
 }) {
   const [amount, setAmount] = useState("");
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [accountId, setAccountId] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -43,6 +48,7 @@ export function SettleEntryDialog({
     if (open && entry?.remainingAmount != null) {
       setAmount(entry.remainingAmount.toFixed(2));
       setDate(new Date().toISOString().slice(0, 10));
+      setAccountId("");
       setError(null);
     }
   }
@@ -62,10 +68,14 @@ export function SettleEntryDialog({
       setError(`Can't exceed the remaining ${formatCurrency(entry.remainingAmount)}.`);
       return;
     }
+    if (!accountId) {
+      setError("Select an account.");
+      return;
+    }
     setError(null);
     setSaving(true);
     try {
-      await onSettle({ type: settlementTypeFor(entry.entryType), amount: value, date: new Date(date), parentEntryId: entry.id });
+      await onSettle({ type: settlementTypeFor(entry.entryType), amount: value, date: new Date(date), parentEntryId: entry.id, accountId });
       onOpenChange(false);
     } catch {
       // toasted by caller
@@ -104,6 +114,21 @@ export function SettleEntryDialog({
         <label className="flex flex-col gap-1">
           <span className="text-xs font-medium text-muted-foreground">Date</span>
           <input type="date" className={FLAT_INPUT} value={date} onChange={(e) => setDate(e.target.value)} />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-muted-foreground">Account</span>
+          <Select value={accountId} onValueChange={setAccountId}>
+            <SelectTrigger className="h-10 w-full rounded-xl">
+              <SelectValue placeholder="Select account" />
+            </SelectTrigger>
+            <SelectContent>
+              {accounts.map((a) => (
+                <SelectItem key={a.id} value={a.id}>
+                  {a.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </label>
         {error && <p className="text-xs text-expense">{error}</p>}
       </div>

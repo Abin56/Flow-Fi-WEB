@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { ConfirmDialog, FLAT_INPUT, FormDialog, SectionedFormDialog, SectionLabel } from "@/components/finance";
 import { EmptyState } from "@/components/finance/empty-state";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PeopleGrid } from "@/features/people/components/people-grid";
 import { PeopleHeader } from "@/features/people/components/people-header";
@@ -73,10 +74,11 @@ interface LedgerEntryFormState {
   amount: string;
   date: string;
   note: string;
+  accountId: string;
 }
 
 function emptyLedgerEntryForm(): LedgerEntryFormState {
-  return { type: "gave", amount: "", date: new Date().toISOString().slice(0, 10), note: "" };
+  return { type: "gave", amount: "", date: new Date().toISOString().slice(0, 10), note: "", accountId: "" };
 }
 
 function PeopleListSkeleton() {
@@ -199,17 +201,25 @@ export function PeopleWorkspace() {
       setEntryFormError("Amount must be greater than 0.");
       return;
     }
+    if (!entryForm.accountId) {
+      setEntryFormError("Select an account.");
+      return;
+    }
 
     setSaving(true);
     setEntryFormError(null);
     try {
-      await actions.addLedgerEntry(addEntryPerson, {
-        type: entryForm.type,
-        amount,
-        date: new Date(entryForm.date),
-        note: entryForm.note || undefined,
-        receivedStatus: "yetToReceive",
-      });
+      await actions.addLedgerEntryWithTransaction(
+        addEntryPerson,
+        {
+          type: entryForm.type,
+          amount,
+          date: new Date(entryForm.date),
+          note: entryForm.note || undefined,
+          receivedStatus: "yetToReceive",
+        },
+        entryForm.accountId,
+      );
       setAddEntryPerson(null);
     } catch (e) {
       setEntryFormError(e instanceof Error ? e.message : "Something went wrong. Please try again.");
@@ -218,17 +228,21 @@ export function PeopleWorkspace() {
     }
   }
 
-  async function handleSettleEntry(params: { type: "repaid" | "receivedBack"; amount: number; date: Date; parentEntryId: string }) {
+  async function handleSettleEntry(params: { type: "repaid" | "receivedBack"; amount: number; date: Date; parentEntryId: string; accountId: string }) {
     if (!actions) throw new Error("Not signed in");
     const person = rawPeople.find((p) => p.id === settleEntry?.personId);
     if (!person) throw new Error("Person not found");
-    await actions.addLedgerEntry(person, {
-      type: params.type,
-      amount: params.amount,
-      date: params.date,
-      receivedStatus: "received",
-      parentEntryId: params.parentEntryId,
-    });
+    await actions.addLedgerEntryWithTransaction(
+      person,
+      {
+        type: params.type,
+        amount: params.amount,
+        date: params.date,
+        receivedStatus: "received",
+        parentEntryId: params.parentEntryId,
+      },
+      params.accountId,
+    );
   }
 
   const counts = useMemo(
@@ -358,6 +372,7 @@ export function PeopleWorkspace() {
         onOpenChange={(open) => !open && setSettleEntry(null)}
         person={rawPeople.find((p) => p.id === settleEntry?.personId) ?? null}
         entry={settleEntry}
+        accounts={accounts}
         onSettle={handleSettleEntry}
       />
 
@@ -532,6 +547,21 @@ export function PeopleWorkspace() {
               />
             </label>
           </div>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-muted-foreground">Account</span>
+            <Select value={entryForm.accountId} onValueChange={(v) => setEntryForm((f) => ({ ...f, accountId: v }))}>
+              <SelectTrigger className="h-10 w-full rounded-xl">
+                <SelectValue placeholder="Select account" />
+              </SelectTrigger>
+              <SelectContent>
+                {accounts.map((a) => (
+                  <SelectItem key={a.id} value={a.id}>
+                    {a.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </label>
           <label className="flex flex-col gap-1">
             <span className="text-xs font-medium text-muted-foreground">Note (optional)</span>
             <input

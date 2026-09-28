@@ -127,4 +127,14 @@ export const DEFAULT_CATEGORIES: DefaultCategorySeed[] = [
   { name: "Health", type: "expense", iconKey: "health", colorValue: CATEGORY_PALETTE[1] },
   { name: "Transfer", type: "both", iconKey: "transfer", colorValue: CATEGORY_PALETTE[9] },
   { name: "Other", type: "both", iconKey: "other", colorValue: CATEGORY_PALETTE[0] },
+  { name: "Personal Loan", type: "both", iconKey: "people", colorValue: CATEGORY_PALETTE[0] },
 ];
+
+/**
+ * The system category auto-used for Borrowed/Repaid/Received Back
+ * transactions created from the People page — see
+ * `CategoryRepository.getOrCreatePersonalLoanCategory`. Kept as a constant
+ * name lookup (not a fixed id) so it matches the same deterministic-id
+ * scheme `seedDefaultsIfEmpty` already uses.
+ */
+export const PERSONAL_LOAN_CATEGORY_NAME = "Personal Loan";

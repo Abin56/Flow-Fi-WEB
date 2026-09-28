@@ -627,6 +627,7 @@ export class LoanRepository extends FirestoreCrudRepository<Loan> {
           installmentId: null,
           installmentPaymentId: null,
           paymentAllocationType: movement.allocationType,
+          isPersonLedgerMovement: false,
           deletedAt: null,
           lastEditedAt: null,
           editHistory: [],

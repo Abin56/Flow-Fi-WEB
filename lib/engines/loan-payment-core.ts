@@ -156,6 +156,7 @@ export function planLoanPaymentCore(input: LoanPaymentCoreInput): LoanPaymentCor
     installmentId: plan.portions[0].installment.id,
     installmentPaymentId: paymentIds[0],
     paymentAllocationType: overallType,
+    isPersonLedgerMovement: false,
     deletedAt: null,
     lastEditedAt: null,
     editHistory: [],

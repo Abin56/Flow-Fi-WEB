@@ -630,6 +630,7 @@ export class LoanAdvancePaymentRepository {
         installmentId: null,
         installmentPaymentId: null,
         paymentAllocationType: "additionalDisbursement",
+        isPersonLedgerMovement: false,
         deletedAt: null,
         lastEditedAt: null,
         editHistory: [],
