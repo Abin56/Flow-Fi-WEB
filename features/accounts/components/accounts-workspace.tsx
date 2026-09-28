@@ -361,31 +361,44 @@ export function AccountsWorkspace() {
 
   if (isLoading) {
     return (
-      <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
-        <div className="flex min-w-0 flex-1 flex-col gap-6">
-          <AccountsHeader />
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            {Array.from({ length: 4 }, (_, i) => (
-              <Skeleton key={i} className="h-28 rounded-2xl" />
-            ))}
-          </div>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {Array.from({ length: 3 }, (_, i) => (
-              <Skeleton key={i} className="h-44 rounded-2xl" />
-            ))}
-          </div>
+      <div className="flex min-w-0 flex-col gap-5 px-1">
+        <AccountsHeader />
+        <Skeleton className="h-24 rounded-[10px]" />
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {Array.from({ length: 3 }, (_, i) => (
+            <Skeleton key={i} className="h-36 rounded-[10px]" />
+          ))}
         </div>
       </div>
     );
   }
 
-  return (
-    <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
-      <div className="flex min-w-0 flex-1 flex-col gap-6">
-        <AccountsHeader />
-        <AccountsStats />
+  const addTile = (
+    <button
+      type="button"
+      onClick={openAdd}
+      className={cn(
+        "flex items-center justify-center gap-2.5 border-dashed border-border-strong text-muted-foreground transition-colors hover:border-primary-accent-text hover:bg-primary/10 hover:text-foreground",
+        view === "grid" ? "min-h-36 flex-col rounded-[10px] border py-6" : "border-t px-4 py-3",
+      )}
+    >
+      <span className="flex size-8 items-center justify-center rounded-full border border-dashed border-current">
+        <Plus className="size-4" />
+      </span>
+      <span className="flex flex-col text-center">
+        <span className="text-sm font-semibold">Add account</span>
+        {view === "grid" && <span className="text-xs">Bank, card, wallet or cash</span>}
+      </span>
+    </button>
+  );
 
-        <div className="flex flex-col gap-4">
+  return (
+    <div className="flex min-w-0 flex-col gap-5 px-1 lg:flex-row lg:items-start">
+      <div className="flex min-w-0 flex-1 flex-col gap-5">
+        <AccountsHeader onAdd={openAdd} />
+        <AccountsStats accountCount={accountsOverviewList.length} />
+
+        <section aria-label="My accounts" className="flex flex-col gap-3">
           <AccountsToolbar
             count={accountsOverviewList.length}
             search={search}
@@ -397,16 +410,34 @@ export function AccountsWorkspace() {
           />
 
           {accountsOverviewList.length === 0 ? (
-            <div className="surface-flat flex flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-border py-12 text-center text-muted-foreground">
-              <p className="text-sm font-medium text-foreground">No accounts yet</p>
-              <p className="text-xs">Add your first bank, wallet, or cash account to get started.</p>
-              <ClayButton onClick={openAdd} className="mt-2 gap-1.5">
-                <Plus className="size-4" />
-                Add New Account
-              </ClayButton>
+            <div className="flex flex-col items-center justify-center gap-2 rounded-[10px] border border-dashed border-border-strong bg-card py-12 text-center">
+              <p className="font-heading text-base font-semibold text-foreground">No accounts yet</p>
+              <p className="text-sm text-muted-foreground">Add your first bank, wallet or cash account to get started.</p>
+              <button
+                type="button"
+                onClick={openAdd}
+                className="mt-2 flex h-9 items-center gap-1.5 rounded-[6px] border border-primary-accent-text bg-primary px-3.5 text-sm font-semibold text-primary-foreground hover:opacity-90"
+              >
+                <Plus className="size-4" strokeWidth={2.25} />
+                Add Account
+              </button>
             </div>
-          ) : (
-            <div className={view === "grid" ? "grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3" : "flex flex-col gap-3"}>
+          ) : filtered.length === 0 ? (
+            <div className="flex flex-col items-center gap-2 rounded-[10px] border border-border-strong/60 bg-card py-10 text-center">
+              <p className="text-sm font-semibold text-foreground">No accounts match this search or type.</p>
+              <button
+                type="button"
+                onClick={() => {
+                  setSearch("");
+                  setType("All Types");
+                }}
+                className="text-sm font-semibold text-primary-accent-text hover:underline"
+              >
+                Clear filters
+              </button>
+            </div>
+          ) : view === "grid" ? (
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
               {filtered.map((account) => (
                 <AccountTile
                   key={account.id}
@@ -418,21 +449,26 @@ export function AccountsWorkspace() {
                   }}
                 />
               ))}
-
-              <button
-                type="button"
-                onClick={openAdd}
-                className="flex flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-border py-8 text-center text-muted-foreground transition-colors hover:border-primary/50 hover:text-primary-accent-text"
-              >
-                <span className="flex size-9 items-center justify-center rounded-full border border-dashed border-current">
-                  <Plus className="size-4" />
-                </span>
-                <span className="text-sm font-medium">Add New Account</span>
-                <span className="text-xs">Bank, Wallet, Cash, or UPI</span>
-              </button>
+              {addTile}
+            </div>
+          ) : (
+            <div className="flex flex-col divide-y divide-border-strong/40 overflow-hidden rounded-[10px] border border-border-strong/70 bg-card shadow-e1">
+              {filtered.map((account) => (
+                <AccountTile
+                  key={account.id}
+                  variant="list"
+                  account={account}
+                  active={account.id === effectiveId}
+                  onSelect={() => {
+                    setSelectedId(account.id);
+                    setOverviewOpen(true);
+                  }}
+                />
+              ))}
+              {addTile}
             </div>
           )}
-        </div>
+        </section>
 
         <RecentAccountTransactions />
       </div>

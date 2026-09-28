@@ -1,66 +1,56 @@
-import { ArrowDown, ArrowUp, Bell, Coins, Landmark, Wallet } from "lucide-react";
+import { Bell, Coins, Landmark, Wallet } from "lucide-react";
 import { useAccountsStats } from "@/features/accounts/hooks/use-accounts-data";
 import { formatCurrency } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
-export function AccountsStats() {
-  const { stats: accountStats } = useAccountsStats();
+const LABEL = "text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase";
+
+/**
+ * One summary panel (Loan & EMI style): Total balance leads; In banks and Cash on hand support it.
+ * The change-vs-last-month and upcoming figures aren't computed yet (`useAccountsStats` reports 0 for
+ * them), so they're shown as not tracked rather than as a real "0%" / "₹0".
+ */
+export function AccountsStats({ accountCount }: { accountCount?: number }) {
+  const { stats } = useAccountsStats();
 
   return (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-      <div className="surface-flat rounded-2xl border border-border/50 p-5">
-        <div className="flex items-start justify-between">
-          <p className="text-xs font-medium text-muted-foreground">Total Balance</p>
-          <span className="flex size-9 items-center justify-center rounded-xl bg-expense/12 text-expense">
-            <Wallet className="size-4" />
-          </span>
-        </div>
-        <p className="mt-2 text-2xl font-bold tabular-nums text-foreground">{formatCurrency(accountStats.totalBalance)}</p>
-        <ChangeLine percent={accountStats.totalBalanceChangePercent} />
+    <section aria-label="Summary" className="flex flex-col overflow-hidden rounded-[10px] border border-border-strong/60 bg-card shadow-e1 lg:flex-row lg:items-stretch">
+      <div className="flex flex-col gap-1.5 bg-gradient-to-br from-primary/15 to-transparent px-5 py-4 sm:px-6 lg:min-w-80 lg:border-r lg:border-border-strong/50 dark:from-primary/10">
+        <span className={cn(LABEL, "inline-flex items-center gap-1.5")}>
+          <Wallet className="size-3.5 text-foreground" strokeWidth={1.75} />
+          Total balance
+        </span>
+        <p className="text-[32px] leading-none font-bold tracking-tight text-foreground tabular-nums sm:text-[36px]">{formatCurrency(stats.totalBalance)}</p>
+        {accountCount != null && (
+          <p className="text-xs text-muted-foreground">
+            Across <span className="font-semibold text-foreground">{accountCount}</span> {accountCount === 1 ? "account" : "accounts"}
+          </p>
+        )}
       </div>
 
-      <div className="surface-flat rounded-2xl border border-border/50 p-5">
-        <div className="flex items-start justify-between">
-          <p className="text-xs font-medium text-muted-foreground">Total in Banks</p>
-          <span className="flex size-9 items-center justify-center rounded-xl bg-success/16 text-success">
-            <Landmark className="size-4" />
-          </span>
-        </div>
-        <p className="mt-2 text-2xl font-bold tabular-nums text-foreground">{formatCurrency(accountStats.totalInBanks)}</p>
-        <ChangeLine percent={accountStats.totalInBanksChangePercent} />
+      <div className="grid flex-1 grid-cols-1 border-t border-border-strong/50 sm:grid-cols-3 sm:divide-x sm:divide-border-strong/50 lg:border-t-0">
+        <Figure icon={Landmark} tone="bg-success/12 text-success" label="In banks" value={formatCurrency(stats.totalInBanks)} />
+        <Figure icon={Coins} tone="bg-warning/20 text-warning-foreground dark:text-warning" label="Cash on hand" value={formatCurrency(stats.cashOnHand)} />
+        <Figure icon={Bell} tone="bg-purple/12 text-purple" label="Upcoming · 7 days" value={null} />
       </div>
-
-      <div className="rounded-2xl border border-border/50 bg-warning/8 p-5">
-        <div className="flex items-start justify-between">
-          <p className="text-xs font-medium text-muted-foreground">Cash on Hand</p>
-          <span className="flex size-9 items-center justify-center rounded-xl bg-warning/25 text-warning-foreground">
-            <Coins className="size-4" />
-          </span>
-        </div>
-        <p className="mt-2 text-2xl font-bold tabular-nums text-foreground">{formatCurrency(accountStats.cashOnHand)}</p>
-        <ChangeLine percent={accountStats.cashOnHandChangePercent} />
-      </div>
-
-      <div className="surface-flat rounded-2xl border border-border/50 p-5">
-        <div className="flex items-start justify-between">
-          <p className="text-xs font-medium text-muted-foreground">Upcoming in 7 days</p>
-          <span className="flex size-9 items-center justify-center rounded-xl bg-purple/14 text-purple">
-            <Bell className="size-4" />
-          </span>
-        </div>
-        <p className="mt-2 text-2xl font-bold tabular-nums text-foreground">{formatCurrency(accountStats.upcoming7Days)}</p>
-        <p className="mt-1 text-xs font-medium text-purple">{accountStats.upcomingReminders} reminders</p>
-      </div>
-    </div>
+    </section>
   );
 }
 
-function ChangeLine({ percent }: { percent: number }) {
-  const up = percent >= 0;
+function Figure({ icon: Icon, tone, label, value }: { icon: typeof Bell; tone: string; label: string; value: string | null }) {
   return (
-    <p className={cn("mt-1 flex items-center gap-1 text-xs font-medium", up ? "text-success" : "text-expense")}>
-      {up ? <ArrowUp className="size-3" /> : <ArrowDown className="size-3" />}
-      {Math.abs(percent)}% vs last month
-    </p>
+    <div className="flex items-center gap-3 border-b border-border-strong/40 px-5 py-3.5 last:border-b-0 sm:border-b-0">
+      <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-[8px]", tone)}>
+        <Icon className="size-4" strokeWidth={1.75} />
+      </span>
+      <div className="min-w-0">
+        <p className={LABEL}>{label}</p>
+        {value != null ? (
+          <p className="mt-0.5 text-lg leading-tight font-bold text-foreground tabular-nums">{value}</p>
+        ) : (
+          <p className="mt-0.5 text-sm font-medium text-muted-foreground">Not tracked yet</p>
+        )}
+      </div>
+    </div>
   );
 }

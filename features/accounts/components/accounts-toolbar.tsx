@@ -1,10 +1,15 @@
 "use client";
 
-import { LayoutGrid, List, Search } from "lucide-react";
+import { ChevronDown, LayoutGrid, List, Search, X } from "lucide-react";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 
 const TYPES = ["All Types", "Savings Account", "Current Account", "Fixed Deposit", "Cash on Hand", "Wallet", "Business Account"];
 
+const CONTROL =
+  "flex h-9 items-center gap-1.5 rounded-[6px] border border-border-strong bg-card px-2.5 text-sm font-medium text-foreground outline-none transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:border-primary-accent-text dark:bg-input";
+
+/** "My accounts" heading with search, the type filter (same options and values) and the grid/list switch. */
 export function AccountsToolbar({
   count,
   search,
@@ -22,57 +27,71 @@ export function AccountsToolbar({
   view: "grid" | "list";
   onViewChange: (view: "grid" | "list") => void;
 }) {
+  const filtered = type !== "All Types";
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3">
-      <h2 className="text-base font-semibold text-foreground">My Accounts ({count})</h2>
+    <div className="flex flex-wrap items-center gap-2 border-b border-border-strong/50 pb-3">
+      <h2 className="mr-auto font-heading text-base font-semibold text-foreground">
+        My accounts <span className="ml-0.5 text-sm font-semibold text-muted-foreground tabular-nums">{count}</span>
+      </h2>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="flex h-9 items-center gap-2 rounded-xl bg-muted/70 px-3 text-sm text-muted-foreground">
-          <Search className="size-4 shrink-0" />
-          <input
-            value={search}
-            onChange={(e) => onSearchChange(e.target.value)}
-            placeholder="Search accounts"
-            className="w-36 bg-transparent text-foreground placeholder:text-muted-foreground focus:outline-none sm:w-44"
-          />
-        </div>
+      <label className="flex h-9 w-full items-center gap-2 rounded-[6px] border border-border-strong bg-card px-3 text-sm transition-colors focus-within:border-primary-accent-text focus-within:ring-2 focus-within:ring-ring sm:w-60 dark:bg-input">
+        <Search className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.75} />
+        <input
+          value={search}
+          onChange={(e) => onSearchChange(e.target.value)}
+          placeholder="Search accounts"
+          aria-label="Search accounts"
+          className="w-full min-w-0 bg-transparent text-foreground outline-none placeholder:text-muted-foreground"
+        />
+        {search && (
+          <button type="button" aria-label="Clear search" onClick={() => onSearchChange("")} className="-mr-1 rounded-[4px] p-0.5 text-muted-foreground hover:bg-secondary hover:text-foreground">
+            <X className="size-3.5" />
+          </button>
+        )}
+      </label>
 
-        <select
-          value={type}
-          onChange={(e) => onTypeChange(e.target.value)}
-          className="h-9 rounded-xl border border-border/50 bg-card px-3 text-sm text-foreground focus:outline-none"
-        >
-          {TYPES.map((t) => (
-            <option key={t} value={t}>
-              {t}
-            </option>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button type="button" className={cn(CONTROL, filtered && "border-primary-accent-text bg-primary/15 dark:bg-primary/10")}>
+            <span className={cn(filtered && "text-muted-foreground")}>Type</span>
+            {filtered && <span className="max-w-36 truncate font-semibold">{type}</span>}
+            <ChevronDown className="size-3.5 text-muted-foreground" strokeWidth={2} />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="min-w-48 rounded-[8px]">
+          {TYPES.map((t, i) => (
+            <div key={t}>
+              <DropdownMenuItem onSelect={() => onTypeChange(t)} className={cn(t === type && "font-semibold")}>
+                {t}
+              </DropdownMenuItem>
+              {i === 0 && <DropdownMenuSeparator />}
+            </div>
           ))}
-        </select>
+        </DropdownMenuContent>
+      </DropdownMenu>
 
-        <div className="flex items-center gap-1 rounded-xl border border-border/50 p-1">
+      <div role="radiogroup" aria-label="View" className="flex items-center rounded-[6px] border border-border-strong bg-card p-0.5">
+        {(
+          [
+            { value: "grid", icon: LayoutGrid, label: "Grid view" },
+            { value: "list", icon: List, label: "List view" },
+          ] as const
+        ).map((v) => (
           <button
+            key={v.value}
             type="button"
-            aria-label="List view"
-            onClick={() => onViewChange("list")}
+            role="radio"
+            aria-checked={view === v.value}
+            aria-label={v.label}
+            onClick={() => onViewChange(v.value)}
             className={cn(
-              "flex size-7 items-center justify-center rounded-lg transition-colors",
-              view === "list" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted/70",
+              "flex size-7 items-center justify-center rounded-[4px] transition-colors",
+              view === v.value ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-secondary hover:text-foreground",
             )}
           >
-            <List className="size-4" />
+            <v.icon className="size-4" strokeWidth={1.75} />
           </button>
-          <button
-            type="button"
-            aria-label="Grid view"
-            onClick={() => onViewChange("grid")}
-            className={cn(
-              "flex size-7 items-center justify-center rounded-lg transition-colors",
-              view === "grid" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted/70",
-            )}
-          >
-            <LayoutGrid className="size-4" />
-          </button>
-        </div>
+        ))}
       </div>
     </div>
   );

@@ -1,15 +1,14 @@
+import Link from "next/link";
 import { CreditCard } from "lucide-react";
-import { useRouter } from "next/navigation";
-import { EmptyState } from "@/components/finance/empty-state";
-import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
+import { DASH_LABEL, DashEmpty, DashPanel, DashPanelHeader } from "@/features/dashboard/components/dash-ui";
 import { formatCurrency } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
-function barClassFor(percent: number) {
-  if (percent >= 90) return "[&>div]:bg-expense";
-  if (percent >= 70) return "[&>div]:bg-warning";
-  return "[&>div]:bg-success";
+function toneFor(percent: number) {
+  if (percent >= 90) return { bar: "bg-expense", text: "text-expense" };
+  if (percent >= 70) return { bar: "bg-warning", text: "text-warning-foreground dark:text-warning" };
+  return { bar: "bg-success", text: "text-success" };
 }
 
 export interface CreditUtilizationCardProps {
@@ -22,74 +21,62 @@ export interface CreditUtilizationCardProps {
   isLoading?: boolean;
 }
 
-/**
- * `utilization` comes from active `CreditCardProfile`s, `Statement`s, and `Emi`s via
- * `lib/engines/credit-utilization.ts` (`creditCardStanding`/`sharedCreditLimitStanding`/
- * `creditUtilizationPercent`), composed in `useDashboardData`.
- */
+/** `utilization` comes from `lib/engines/credit-utilization.ts`, composed in `useDashboardData`. */
 export function CreditUtilizationCard({ utilization, isLoading }: CreditUtilizationCardProps) {
-  const router = useRouter();
-
-  if (isLoading) {
-    return (
-      <section className="surface-flat flex h-full flex-col gap-4 rounded-3xl border border-border/50 p-5">
-        <Skeleton className="h-4 w-32" />
-        <Skeleton className="h-8 w-full" />
-        {Array.from({ length: 2 }, (_, i) => (
-          <Skeleton key={i} className="h-8 w-full" />
-        ))}
-      </section>
-    );
-  }
-
-  if (utilization.cards.length === 0) {
-    return (
-      <section className="surface-flat flex h-full flex-col rounded-3xl border border-border/50 p-5">
-        <h2 className="text-sm font-semibold text-foreground">Credit Card Utilization</h2>
-        <EmptyState
-          icon={CreditCard}
+  const overall = toneFor(utilization.percent);
+  return (
+    <DashPanel label="Credit card utilization">
+      <DashPanelHeader icon={CreditCard} title="Credit card utilization" href="/credit-cards" />
+      {isLoading ? (
+        <div className="flex flex-col gap-3 p-4">
+          <Skeleton className="h-8 w-full" />
+          {Array.from({ length: 2 }, (_, i) => (
+            <Skeleton key={i} className="h-7 w-full" />
+          ))}
+        </div>
+      ) : utilization.cards.length === 0 ? (
+        <DashEmpty
           title="No credit cards yet"
           description="Add a credit card to track utilization."
-          actionLabel="Add Credit Card"
-          onAction={() => router.push("/credit-cards")}
-          className="flex-1"
+          action={
+            <Link href="/credit-cards" className="text-xs font-semibold text-primary-accent-text hover:underline">
+              Add credit card
+            </Link>
+          }
         />
-      </section>
-    );
-  }
-
-  return (
-    <section className="surface-flat flex h-full flex-col rounded-3xl border border-border/50 p-5">
-      <h2 className="text-sm font-semibold text-foreground">Credit Card Utilization</h2>
-
-      <div className="mt-3 flex items-baseline justify-between text-xs">
-        <div>
-          <p className="text-muted-foreground">Total Outstanding</p>
-          <p className="mt-0.5 text-base font-semibold text-foreground">{formatCurrency(utilization.totalOutstanding)}</p>
-        </div>
-        <div className="text-right">
-          <p className="text-muted-foreground">Total Limit</p>
-          <p className="mt-0.5 text-base font-semibold text-foreground">
-            {formatCurrency(utilization.totalCreditLimit)}{" "}
-            <span className="text-xs font-normal text-muted-foreground">({Math.round(utilization.percent)}%)</span>
-          </p>
-        </div>
-      </div>
-      <Progress value={Math.min(utilization.percent, 100)} className={cn("mt-2 h-2", barClassFor(utilization.percent))} />
-
-      <div className="mt-4 flex flex-1 flex-col gap-3">
-        {utilization.cards.map((card) => (
-          <div key={card.id}>
-            <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-xs">
-              <span className="font-medium text-foreground">{card.name}</span>
-              <span className="text-muted-foreground tabular-nums">
-                {formatCurrency(card.outstanding)} / {formatCurrency(card.creditLimit)}
-              </span>
+      ) : (
+        <div className="grid flex-1 grid-cols-1 md:grid-cols-[16rem_minmax(0,1fr)] md:divide-x md:divide-border-strong/40">
+          <div className="flex flex-col gap-2 border-b border-border-strong/40 px-4 py-3 md:border-b-0">
+            <p className={DASH_LABEL}>Outstanding</p>
+            <p className="text-[26px] leading-tight font-bold tracking-tight text-foreground tabular-nums">{formatCurrency(utilization.totalOutstanding)}</p>
+            <div className="h-2 overflow-hidden rounded-full bg-secondary">
+              <div className={cn("h-full rounded-full", overall.bar)} style={{ width: `${Math.min(utilization.percent, 100)}%` }} />
             </div>
-            <Progress value={Math.min(card.percent, 100)} className={cn("mt-1.5 h-1.5", barClassFor(card.percent))} />
+            <p className="text-xs text-muted-foreground tabular-nums">
+              <span className={cn("font-bold", overall.text)}>{Math.round(utilization.percent)}% used</span> of {formatCurrency(utilization.totalCreditLimit)}
+            </p>
           </div>
-        ))}
-      </div>
-    </section>
+          <div className="divide-y divide-border-strong/40">
+            {utilization.cards.map((card) => {
+              const tone = toneFor(card.percent);
+              return (
+                <div key={card.id} className="px-4 py-2.5">
+                  <div className="flex items-center justify-between gap-2 text-xs">
+                    <span className="truncate font-semibold text-foreground">{card.name}</span>
+                    <span className="shrink-0 text-muted-foreground tabular-nums">
+                      <span className="font-semibold text-foreground">{formatCurrency(card.outstanding)}</span> / {formatCurrency(card.creditLimit)}
+                      <span className={cn("ml-1.5 font-bold", tone.text)}>{Math.round(card.percent)}%</span>
+                    </span>
+                  </div>
+                  <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-secondary">
+                    <div className={cn("h-full rounded-full", tone.bar)} style={{ width: `${Math.min(card.percent, 100)}%` }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </DashPanel>
   );
 }

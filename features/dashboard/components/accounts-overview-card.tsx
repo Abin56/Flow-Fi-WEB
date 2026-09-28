@@ -1,15 +1,15 @@
+import Link from "next/link";
 import { ChevronRight, Landmark, Wallet } from "lucide-react";
-import { useRouter } from "next/navigation";
 import { BankLogo } from "@/components/finance/bank-logo";
-import { EmptyState } from "@/components/finance/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
+import { DASH_LABEL, DashEmpty, DashFooterLink, DashPanel, DashPanelHeader } from "@/features/dashboard/components/dash-ui";
 import { formatCurrency } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 const ACCENTS = {
-  primary: "bg-primary/12 text-primary-accent-text",
-  warning: "bg-warning/25 text-warning-foreground",
-  success: "bg-success/16 text-success",
+  primary: "bg-primary/20 text-foreground dark:text-primary-accent-text",
+  warning: "bg-warning/20 text-warning-foreground dark:text-warning",
+  success: "bg-success/12 text-success",
   info: "bg-blue-500/12 text-blue-600 dark:text-blue-400",
 } as const;
 
@@ -29,75 +29,70 @@ export interface AccountsOverviewCardProps {
   isLoading?: boolean;
 }
 
-/** `accountsOverview` comes from real Accounts + `calculateNetWorth` (lib/engines/net-worth.ts) via `useDashboardData`. */
+/**
+ * `accountsOverview` comes from real Accounts + `calculateNetWorth` via `useDashboardData`. The monthly change
+ * isn't tracked yet (reported as 0), so it's only shown when non-zero.
+ */
 export function AccountsOverviewCard({ accountsOverview, isLoading }: AccountsOverviewCardProps) {
-  const router = useRouter();
-
-  if (isLoading) {
-    return (
-      <section className="surface-flat flex h-full flex-col gap-4 rounded-3xl border border-border/50 p-5">
-        <Skeleton className="h-4 w-32" />
-        <Skeleton className="h-7 w-40" />
-        {Array.from({ length: 3 }, (_, i) => (
-          <Skeleton key={i} className="h-9 w-full rounded-xl" />
-        ))}
-      </section>
-    );
-  }
-
   return (
-    <section className="surface-flat flex h-full flex-col rounded-3xl border border-border/50 p-5">
-      <h2 className="text-sm font-semibold text-foreground">Accounts Overview</h2>
-
-      <div className="mt-3">
-        <p className="text-xs text-muted-foreground">Total Balance</p>
-        <p className="mt-1 text-2xl font-bold tabular-nums text-foreground">{formatCurrency(accountsOverview.totalBalance)}</p>
-        <p className="mt-1 text-xs font-medium text-success">
-          +{formatCurrency(accountsOverview.changeThisMonth)} this month
-        </p>
-      </div>
-
-      {accountsOverview.accounts.length === 0 ? (
-        <EmptyState
-          icon={Wallet}
-          title="No accounts yet"
-          description="Add an account to see it here."
-          actionLabel="Add Account"
-          onAction={() => router.push("/accounts")}
-          className="flex-1"
-        />
-      ) : (
-        <div className="mt-4 flex flex-1 flex-col gap-1">
-          {accountsOverview.accounts.map((account) => {
-            const Icon = account.mask ? Landmark : Wallet;
-            return (
-              <div key={account.id} className="flex items-center gap-3 rounded-xl px-1 py-2 transition-colors hover:bg-muted/50">
-                {account.bankId ? (
-                  <BankLogo bankId={account.bankId} size={36} shape="square" />
-                ) : (
-                  <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-xl", ACCENTS[account.accent])}>
-                    <Icon className="size-4" />
-                  </span>
-                )}
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium text-foreground">{account.name}</p>
-                  {account.mask && <p className="text-xs text-muted-foreground">•••• {account.mask}</p>}
-                </div>
-                <p className="shrink-0 text-sm font-semibold tabular-nums text-foreground">{formatCurrency(account.balance)}</p>
-                <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
-              </div>
-            );
-          })}
+    <DashPanel label="Accounts">
+      <DashPanelHeader icon={Wallet} title="Accounts" />
+      {isLoading ? (
+        <div className="flex flex-col gap-2 p-4">
+          <Skeleton className="h-8 w-40" />
+          {Array.from({ length: 3 }, (_, i) => (
+            <Skeleton key={i} className="h-9 w-full rounded-[6px]" />
+          ))}
         </div>
+      ) : (
+        <>
+          <div className="border-b border-border-strong/40 px-4 py-3">
+            <p className={DASH_LABEL}>Total balance</p>
+            <p className="text-[26px] leading-tight font-bold tracking-tight text-foreground tabular-nums">{formatCurrency(accountsOverview.totalBalance)}</p>
+            {accountsOverview.changeThisMonth !== 0 && (
+              <p className={cn("text-xs font-semibold", accountsOverview.changeThisMonth > 0 ? "text-success" : "text-expense")}>
+                {accountsOverview.changeThisMonth > 0 ? "+" : ""}
+                {formatCurrency(accountsOverview.changeThisMonth)} this month
+              </p>
+            )}
+          </div>
+          {accountsOverview.accounts.length === 0 ? (
+            <DashEmpty
+              title="No accounts yet"
+              description="Add an account to see it here."
+              action={
+                <Link href="/accounts" className="text-xs font-semibold text-primary-accent-text hover:underline">
+                  Add account
+                </Link>
+              }
+            />
+          ) : (
+            <div className="divide-y divide-border-strong/40">
+              {accountsOverview.accounts.map((account) => {
+                const Icon = account.mask ? Landmark : Wallet;
+                return (
+                  <Link key={account.id} href="/accounts" className="group flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-secondary/50">
+                    {account.bankId ? (
+                      <BankLogo bankId={account.bankId} size={32} shape="square" />
+                    ) : (
+                      <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-[8px]", ACCENTS[account.accent])}>
+                        <Icon className="size-4" strokeWidth={1.75} />
+                      </span>
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-semibold text-foreground">{account.name}</p>
+                      {account.mask && <p className="text-xs text-muted-foreground tabular-nums">•••• {account.mask}</p>}
+                    </div>
+                    <p className="shrink-0 text-[15px] font-bold text-foreground tabular-nums">{formatCurrency(account.balance)}</p>
+                    <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+                  </Link>
+                );
+              })}
+            </div>
+          )}
+          <DashFooterLink href="/accounts">All accounts</DashFooterLink>
+        </>
       )}
-
-      <button
-        type="button"
-        onClick={() => router.push("/accounts")}
-        className="mt-4 rounded-xl bg-muted/70 py-2.5 text-xs font-semibold text-foreground transition-colors hover:bg-muted"
-      >
-        View All Accounts
-      </button>
-    </section>
+    </DashPanel>
   );
 }

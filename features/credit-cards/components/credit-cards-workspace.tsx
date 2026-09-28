@@ -4,12 +4,12 @@ import {
   ArrowRight,
   CalendarClock,
   CreditCard as CreditCardIcon,
+  Download,
   FileText,
   LayoutGrid,
   Link2,
   List,
   MoreHorizontal,
-  MoreVertical,
   PieChart as PieChartIcon,
   Plus,
   Receipt,
@@ -27,14 +27,11 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Cell, Pie, PieChart, ResponsiveContainer } from "recharts";
-import { ClayBadge } from "@/components/clay/clay-badge";
 import { ClayButton } from "@/components/clay/clay-button";
 import { Stagger } from "@/components/foundation/animated-container";
 import {
   BankCombobox,
-  DateCell,
   DestructiveDeleteDialog,
-  EmptyState,
   SectionLabel,
   type DestructiveDeleteImpactRow,
 } from "@/components/finance";
@@ -176,38 +173,6 @@ function billingPeriodLabel(statementDate: Date): string {
   start.setDate(start.getDate() + 1);
   const fmt = (d: Date) => d.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
   return `${fmt(start)} – ${fmt(end)}`;
-}
-
-const STAT_TONE_CLASS = {
-  purple: { card: "bg-purple/8 border-purple/20", icon: "bg-purple/20 text-purple", trend: "text-purple" },
-  expense: { card: "bg-expense/8 border-expense/20", icon: "bg-expense/20 text-expense", trend: "text-expense" },
-  success: { card: "bg-success/8 border-success/20", icon: "bg-success/20 text-success", trend: "text-success" },
-  warning: { card: "bg-warning/12 border-warning/25", icon: "bg-warning/25 text-warning-foreground", trend: "text-warning-foreground" },
-} as const;
-
-function StatCard({
-  label,
-  value,
-  tone,
-  icon: Icon,
-}: {
-  label: string;
-  value: string;
-  tone: keyof typeof STAT_TONE_CLASS;
-  icon: typeof Wallet;
-}) {
-  const toneClass = STAT_TONE_CLASS[tone];
-  return (
-    <div className={cn("flex flex-col gap-3 rounded-3xl border p-4", toneClass.card)}>
-      <div className="flex items-start justify-between gap-2">
-        <p className="text-xs font-medium text-muted-foreground">{label}</p>
-        <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-xl", toneClass.icon)}>
-          <Icon className="size-4" />
-        </span>
-      </div>
-      <p className="font-mono text-xl font-semibold tabular-nums text-foreground">{value}</p>
-    </div>
-  );
 }
 
 export function CreditCardsWorkspace() {
@@ -709,21 +674,54 @@ export function CreditCardsWorkspace() {
     </Dialog>
   );
 
+  const header = (
+    <header className="flex flex-wrap items-start justify-between gap-3">
+      <div className="min-w-0">
+        <h1 className="font-heading text-2xl font-bold tracking-tight text-foreground">Credit Cards</h1>
+        <p className="mt-0.5 text-sm text-muted-foreground">Limits, spending, statements and due dates — all your cards.</p>
+      </div>
+      <div className="flex flex-wrap items-center gap-1.5">
+        {creditCards.length > 0 && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button type="button" className={CC_UTILITY}>
+                <MoreHorizontal className="size-4" strokeWidth={1.75} />
+                <span className="hidden sm:inline">More</span>
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="min-w-48 rounded-[8px]">
+              <DropdownMenuItem onSelect={() => document.getElementById("upcoming-statements")?.scrollIntoView({ behavior: "smooth", block: "start" })}>
+                <FileText strokeWidth={1.75} />
+                View statements
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => document.getElementById("my-credit-cards")?.scrollIntoView({ behavior: "smooth", block: "start" })}>
+                <Settings2 strokeWidth={1.75} />
+                Manage cards
+              </DropdownMenuItem>
+              <DropdownMenuItem disabled>
+                <Download strokeWidth={1.75} />
+                Export statements
+                <span className={cn(CC_SOON, "ml-auto")}>Soon</span>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+        <button type="button" onClick={openAdd} className={CC_PRIMARY}>
+          <Plus className="size-4" strokeWidth={2.25} />
+          Add Card
+        </button>
+      </div>
+    </header>
+  );
+
   if (isLoading) {
     return (
-      <div className="flex flex-col gap-6 px-1">
-        <div>
-          <h1 className="font-heading text-2xl font-bold tracking-tight text-foreground">Credit Cards</h1>
-          <p className="mt-1 text-sm text-muted-foreground">Manage your cards, track spending and pay bills on time</p>
-        </div>
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          {Array.from({ length: 4 }, (_, i) => (
-            <Skeleton key={i} className="h-24 rounded-3xl" />
-          ))}
-        </div>
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+      <div className="flex min-w-0 flex-col gap-5 px-1">
+        {header}
+        <Skeleton className="h-24 rounded-[10px]" />
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           {Array.from({ length: 2 }, (_, i) => (
-            <Skeleton key={i} className="h-44 rounded-3xl" />
+            <Skeleton key={i} className="h-44 rounded-[12px]" />
           ))}
         </div>
       </div>
@@ -732,19 +730,20 @@ export function CreditCardsWorkspace() {
 
   if (creditCards.length === 0) {
     return (
-      <div className="flex flex-col gap-6 px-1">
-        <div>
-          <h1 className="font-heading text-2xl font-bold tracking-tight text-foreground">Credit Cards</h1>
-          <p className="mt-1 text-sm text-muted-foreground">Manage your cards, track spending and pay bills on time</p>
-        </div>
-        <div className="surface-flat rounded-3xl border border-border/50">
-          <EmptyState
-            icon={CreditCardIcon}
-            title="No credit cards yet"
-            description="Add your first card to start tracking spending, utilization and due dates."
-            actionLabel="Add Card"
-            onAction={openAdd}
-          />
+      <div className="flex min-w-0 flex-col gap-5 px-1">
+        {header}
+        <div className="flex flex-col items-center gap-3 rounded-[10px] border border-dashed border-border-strong bg-card px-6 py-14 text-center">
+          <span className="flex size-11 items-center justify-center rounded-full bg-secondary text-muted-foreground">
+            <CreditCardIcon className="size-5" strokeWidth={1.75} />
+          </span>
+          <div>
+            <p className="font-heading text-base font-semibold text-foreground">No credit cards yet</p>
+            <p className="mt-1 text-sm text-muted-foreground">Add your first card to start tracking spending, utilization and due dates.</p>
+          </div>
+          <button type="button" onClick={openAdd} className={CC_PRIMARY}>
+            <Plus className="size-4" strokeWidth={2.25} />
+            Add Card
+          </button>
         </div>
 
         {cardFormDialog}
@@ -752,380 +751,358 @@ export function CreditCardsWorkspace() {
     );
   }
 
+  // Display-only share of the combined limit in use (same ratio the tiles show per card).
+  const totalUtilization = totals.creditLimit > 0 ? Math.min(100, Math.round((totals.utilized / totals.creditLimit) * 100)) : 0;
+
   return (
-    <div className="grid grid-cols-1 gap-5 px-1 xl:grid-cols-12">
-      <div className="flex min-w-0 flex-col gap-5 xl:col-span-8">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h1 className="font-heading text-2xl font-bold tracking-tight text-foreground">Credit Cards</h1>
-            <p className="mt-1 text-sm text-muted-foreground">Manage your cards, track spending and pay bills on time</p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={openAdd}
-              className="flex items-center gap-1 rounded-full bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
-            >
-              <Plus className="size-3.5" />
-              Add Card
-            </button>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <ClayButton variant="ghost" size="icon" aria-label="More options">
-                  <MoreVertical className="size-4" />
-                </ClayButton>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem
-                  onSelect={() => document.getElementById("upcoming-statements")?.scrollIntoView({ behavior: "smooth", block: "start" })}
-                >
-                  <FileText className="size-4" />
-                  View Statements
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onSelect={() => document.getElementById("my-credit-cards")?.scrollIntoView({ behavior: "smooth", block: "start" })}
-                >
-                  <Settings2 className="size-4" />
-                  Manage Cards
-                </DropdownMenuItem>
-                <DropdownMenuItem>Export Statements</DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-        </div>
+    <div className="flex min-w-0 flex-col gap-5 px-1">
+      {header}
 
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          <StatCard label="Total Credit Limit" value={formatCurrency(totals.creditLimit)} icon={Wallet} tone="purple" />
-          <StatCard label="Total Utilized" value={formatCurrency(totals.utilized)} icon={PieChartIcon} tone="expense" />
-          <StatCard label="Available Credit" value={formatCurrency(totals.available)} icon={ShieldCheck} tone="success" />
-          <StatCard label="This Month Spent" value={formatCurrency(totals.spentThisMonth)} icon={ShoppingBag} tone="warning" />
-        </div>
-
-        <div id="my-credit-cards" className="flex scroll-mt-4 items-center justify-between gap-2">
-          <h2 className="text-sm font-semibold text-foreground">My Credit Cards ({creditCards.length})</h2>
-          <div className="flex items-center gap-2">
-            <div className="clay-pressed flex items-center gap-1 rounded-xl p-1">
-              <button
-                type="button"
-                onClick={() => setViewMode("grid")}
-                className={cn(
-                  "flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors",
-                  viewMode === "grid" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                <LayoutGrid className="size-3.5" />
-                Card View
-              </button>
-              <button
-                type="button"
-                onClick={() => setViewMode("list")}
-                className={cn(
-                  "flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors",
-                  viewMode === "list" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                <List className="size-3.5" />
-                List View
-              </button>
+      {/* ── Summary — one panel: what's used leads, limit / available / this month support it ── */}
+      <section aria-label="Summary" className="flex flex-col overflow-hidden rounded-[10px] border border-border-strong/60 bg-card shadow-e1 lg:flex-row lg:items-stretch">
+        <div className="flex flex-col gap-2 bg-gradient-to-br from-expense/[0.08] to-transparent px-5 py-4 sm:px-6 lg:min-w-[22rem] lg:border-r lg:border-border-strong/50 dark:from-expense/[0.14]">
+          <span className={cn(CC_LABEL, "inline-flex items-center gap-1.5")}>
+            <PieChartIcon className="size-3.5 text-foreground" strokeWidth={1.75} />
+            Total outstanding
+          </span>
+          <p className="text-[32px] leading-none font-bold tracking-tight text-foreground tabular-nums sm:text-[36px]">{formatCurrency(totals.utilized)}</p>
+          <div className="flex items-center gap-2.5">
+            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-secondary">
+              <div className={cn("h-full rounded-full", totalUtilization >= 80 ? "bg-expense" : "bg-primary-accent-text")} style={{ width: `${totalUtilization}%` }} />
             </div>
+            <span className="text-xs font-semibold text-foreground tabular-nums">{totalUtilization}% used</span>
           </div>
         </div>
+        <div className="grid flex-1 grid-cols-1 border-t border-border-strong/50 sm:grid-cols-3 sm:divide-x sm:divide-border-strong/50 lg:border-t-0">
+          <SummaryFigure icon={Wallet} tone="bg-purple/12 text-purple" label="Credit limit" value={formatCurrency(totals.creditLimit)} />
+          <SummaryFigure icon={ShieldCheck} tone="bg-success/12 text-success" label="Available" value={formatCurrency(totals.available)} />
+          <SummaryFigure icon={ShoppingBag} tone="bg-warning/20 text-warning-foreground dark:text-warning" label="Spent this month" value={formatCurrency(totals.spentThisMonth)} />
+        </div>
+      </section>
 
-        {viewMode === "grid" ? (
-          <Stagger className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            {creditCards.map((card) => (
-              <CreditCardTile
-                key={card.id}
-                card={card}
-                active={card.id === activeCardId}
-                onClick={() => setActiveCardId(card.id)}
-                onEdit={() => openEdit(card)}
-                onDelete={() => {
-                  setCardDeletionImpact(null);
-                  setDeletingCard(card);
-                }}
-              />
-            ))}
-          </Stagger>
-        ) : (
-          <div className="flex flex-col gap-2">
-            {creditCards.map((card) => {
-              const util = Math.min(100, Math.round(card.utilizationPercent));
-              return (
-                <button
-                  key={card.id}
-                  type="button"
-                  onClick={() => setActiveCardId(card.id)}
-                  className={cn(
-                    "flex items-center gap-4 rounded-2xl border border-border/60 bg-card p-4 text-left transition-shadow hover:shadow-e1",
-                    card.id === activeCardId && "ring-2 ring-primary",
-                  )}
-                >
-                  <span
-                    className="flex size-10 shrink-0 items-center justify-center rounded-2xl text-[10px] font-bold tracking-wide text-white uppercase italic"
-                    style={{ background: CARD_GRADIENT[card.accent] }}
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_23rem] xl:items-start">
+        {/* ── Main column ── */}
+        <div className="flex min-w-0 flex-col gap-6">
+          <section id="my-credit-cards" aria-label="My credit cards" className="flex scroll-mt-4 flex-col gap-3">
+            <div className="flex flex-wrap items-center gap-2 border-b border-border-strong/50 pb-3">
+              <h2 className="mr-auto font-heading text-base font-semibold text-foreground">
+                My credit cards <span className="ml-0.5 text-sm font-semibold text-muted-foreground tabular-nums">{creditCards.length}</span>
+              </h2>
+              <div role="radiogroup" aria-label="View" className="flex items-center rounded-[6px] border border-border-strong bg-card p-0.5">
+                {(
+                  [
+                    { value: "grid", icon: LayoutGrid, label: "Cards" },
+                    { value: "list", icon: List, label: "List" },
+                  ] as const
+                ).map((v) => (
+                  <button
+                    key={v.value}
+                    type="button"
+                    role="radio"
+                    aria-checked={viewMode === v.value}
+                    onClick={() => setViewMode(v.value)}
+                    className={cn(
+                      "flex h-7 items-center gap-1.5 rounded-[4px] px-2.5 text-xs font-semibold transition-colors",
+                      viewMode === v.value ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-secondary hover:text-foreground",
+                    )}
                   >
-                    {card.network.slice(0, 2)}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium text-foreground">{card.name}</p>
-                    <p className="text-xs text-muted-foreground">•••• {card.last4}</p>
-                  </div>
-                  <div className="hidden shrink-0 text-right sm:block">
-                    <p className="text-xs text-muted-foreground">Outstanding</p>
-                    <p className="font-mono text-sm font-semibold tabular-nums text-foreground">{formatCurrency(card.currentBalance)}</p>
-                  </div>
-                  <div className="w-24 shrink-0 text-right">
-                    <p className="text-xs text-muted-foreground">{util}% used</p>
-                    <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-muted">
-                      <div
-                        className={cn("h-full rounded-full", util >= 80 ? "bg-expense" : "bg-primary")}
-                        style={{ width: `${util}%` }}
-                      />
-                    </div>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        )}
-
-        <div id="upcoming-statements" className="surface-flat min-w-0 scroll-mt-4 rounded-3xl border border-border/50 p-5">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h2 className="text-sm font-semibold text-foreground">Upcoming Statements</h2>
-            <button
-              type="button"
-              onClick={() => router.push("/transactions")}
-              className="flex items-center gap-1 text-xs font-semibold text-primary-accent-text hover:underline"
-            >
-              View All Statements
-              <ArrowRight className="size-3.5" />
-            </button>
-          </div>
-          <div className="mt-3 flex flex-col gap-3">
-            {creditCards.map((card) => (
-              <div
-                key={card.id}
-                className="flex flex-col gap-3 rounded-2xl border border-border/60 bg-card p-4 sm:flex-row sm:items-center sm:justify-between sm:gap-4"
-              >
-                <div className="flex min-w-0 items-center gap-2.5">
-                  <span
-                    className="flex size-8 shrink-0 items-center justify-center rounded-xl text-[9px] font-bold tracking-wide text-white uppercase italic"
-                    style={{ background: CARD_GRADIENT[card.accent] }}
-                  >
-                    {card.network.slice(0, 2)}
-                  </span>
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-medium text-foreground">{card.name}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {card.statementDate ? billingPeriodLabel(card.statementDate) : "—"}
-                      {" · "}
-                      {card.statementDate ? formatShortDate(card.statementDate) : "—"}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="flex flex-wrap items-center gap-x-5 gap-y-2 sm:shrink-0">
-                  <div className="text-left sm:text-right">
-                    <p className="text-[11px] text-muted-foreground">Total Due</p>
-                    <p className="font-mono text-sm font-semibold tabular-nums text-expense">{formatCurrency(card.currentBalance)}</p>
-                  </div>
-                  <div className="text-left sm:text-right">
-                    <p className="text-[11px] text-muted-foreground">Minimum Due</p>
-                    <p className="font-mono text-sm font-semibold tabular-nums text-foreground">{formatCurrency(card.minimumDue)}</p>
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <ClayButton size="sm" className="h-7 min-w-0 px-3 text-xs" onClick={() => setPayCard(card)}>
-                      Pay Now
-                    </ClayButton>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <button
-                          type="button"
-                          className="flex size-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                          aria-label="Statement actions"
-                        >
-                          <MoreHorizontal className="size-4" />
-                        </button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem onSelect={() => setActiveCardId(card.id)}>View Details</DropdownMenuItem>
-                        <DropdownMenuItem>Download Statement</DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="surface-flat rounded-3xl border border-border/50 p-5">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-foreground">Recent Card Transactions</h2>
-            <button
-              type="button"
-              onClick={() => router.push("/transactions")}
-              className="text-xs font-semibold text-primary-accent-text hover:underline"
-            >
-              View All
-            </button>
-          </div>
-          <div className="mt-3 flex max-h-80 flex-col gap-1 overflow-y-auto">
-            {recentCardTransactions.length === 0 && (
-              <p className="py-4 text-center text-sm text-muted-foreground">No recent card transactions.</p>
-            )}
-            {recentCardTransactions.map((txn) => {
-              const Icon = CATEGORY_ICON[txn.category] ?? Receipt;
-              const cardView = creditCards.find((c) => c.id === txn.card.id);
-              return (
-              <div key={txn.id} className="flex items-center gap-3 rounded-xl px-1 py-2 transition-colors hover:bg-muted/50">
-                <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-xl", TONE_ICON_CLASS[categoryTone(txn.category)])}>
-                  <Icon className="size-4" />
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium text-foreground">{txn.merchant}</p>
-                  <ClayBadge tone={categoryTone(txn.category)} className="mt-0.5">
-                    {txn.category}
-                  </ClayBadge>
-                </div>
-                <div className="hidden min-w-0 flex-1 sm:block">
-                  <p className="truncate text-sm text-foreground">{cardView?.name ?? "Credit Card"}</p>
-                  <p className="text-xs text-muted-foreground">•••• {cardView?.last4 ?? "----"}</p>
-                </div>
-                <div className="shrink-0 text-right">
-                  <DateCell date={txn.date} />
-                  <p className="font-mono text-sm font-semibold tabular-nums text-expense">-{formatCurrency(txn.amount)}</p>
-                </div>
-              </div>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-
-      <div className="flex flex-col gap-5 xl:col-span-4">
-        {activeCard && (
-        <div
-          style={{ background: CARD_GRADIENT[activeCard.accent] }}
-          className="flex flex-col gap-5 rounded-3xl p-5 text-white shadow-e2"
-        >
-          <div className="flex items-start justify-between gap-2">
-            <div>
-              <h3 className="font-heading text-lg font-semibold">{activeCard.name}</h3>
-              <p className="mt-0.5 font-mono text-sm tracking-widest text-white/80">•••• {activeCard.last4}</p>
-            </div>
-            <div className="flex flex-col items-end gap-2">
-              {activeCard.isPrimary && (
-                <span className="rounded-full bg-white/20 px-2.5 py-1 text-[10px] font-semibold">Primary</span>
-              )}
-              <span className="text-xs font-bold tracking-wide text-white/70 italic uppercase">{activeCard.network}</span>
-            </div>
-          </div>
-
-          <div className="flex items-center justify-between text-sm">
-            <div>
-              <p className="text-xs text-white/60">Outstanding Amount</p>
-              <p className="mt-0.5 font-mono text-lg font-semibold tabular-nums">{formatCurrency(activeCard.currentBalance)}</p>
-            </div>
-            <div className="text-right">
-              <p className="text-xs text-white/60">Available Credit</p>
-              <p className="mt-0.5 font-mono text-lg font-semibold tabular-nums">{formatCurrency(available)}</p>
-            </div>
-          </div>
-
-          <div className="flex items-center justify-between text-xs text-white/70">
-            <span>Credit Limit</span>
-            <span className="font-mono font-semibold tabular-nums text-white">{formatCurrency(activeCard.creditLimit)}</span>
-          </div>
-
-          <div>
-            <div className="flex items-center justify-between text-xs text-white/70">
-              <span>Utilization</span>
-              <span className="font-semibold text-white">{utilization}%</span>
-            </div>
-            <div className="mt-1.5 h-2 w-full overflow-hidden rounded-full bg-white/20">
-              <div
-                className={cn("h-full rounded-full", utilization >= 80 ? "bg-red-400" : "bg-white")}
-                style={{ width: `${utilization}%` }}
-              />
-            </div>
-          </div>
-
-          <div className="flex items-center justify-between border-t border-white/15 pt-3 text-xs">
-            <div>
-              <p className="text-white/60">Next Statement</p>
-              <p className="mt-0.5 font-medium text-white">
-                {activeCard.statementDate ? formatShortDate(activeCard.statementDate) : "—"}
-              </p>
-            </div>
-            <div className="text-right">
-              <p className="text-white/60">Payment Due</p>
-              <p className={cn("mt-0.5 font-medium", dueInDays != null && dueInDays <= 5 ? "text-red-300" : "text-white")}>
-                {dueInDays == null ? "No due date" : dueInDays <= 0 ? "Due today" : `${dueInDays} days left`}
-              </p>
-            </div>
-          </div>
-        </div>
-        )}
-
-        <div className="surface-flat rounded-3xl border border-border/50 p-5">
-          <h2 className="text-sm font-semibold text-foreground">Quick Actions</h2>
-          <div className="mt-4 grid grid-cols-4 gap-2">
-            {[
-              { label: "Pay Bill", icon: Wallet, className: "bg-primary/12 text-primary-accent-text" },
-              { label: "View Statement", icon: FileText, className: "bg-purple/15 text-purple" },
-              { label: "Convert to EMI", icon: RefreshCw, className: "bg-success/15 text-success" },
-              { label: "Card Settings", icon: Settings, className: "bg-muted text-muted-foreground" },
-            ].map((action) => (
-              <button
-                key={action.label}
-                type="button"
-                className="flex flex-col items-center justify-center gap-2 rounded-2xl border border-border/40 px-1 py-3 text-center transition-colors hover:bg-muted/50"
-              >
-                <span className={cn("flex size-9 items-center justify-center rounded-xl", action.className)}>
-                  <action.icon className="size-4.5" />
-                </span>
-                <span className="text-[11px] font-medium text-foreground">{action.label}</span>
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="surface-flat rounded-3xl border border-border/50 p-5">
-          <h2 className="text-sm font-semibold text-foreground">Spending Summary <span className="font-normal text-muted-foreground">(This Month)</span></h2>
-          <div className="mt-3 flex items-center gap-4">
-            <div className="relative size-28 shrink-0">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie data={spendByCategory} dataKey="amount" nameKey="category" innerRadius="68%" outerRadius="100%" paddingAngle={2} stroke="none">
-                    {spendByCategory.map((item) => (
-                      <Cell key={item.category} fill={CATEGORY_CHART_COLOR[categoryTone(item.category)]} />
-                    ))}
-                  </Pie>
-                </PieChart>
-              </ResponsiveContainer>
-              <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-                <span className="text-[9px] text-muted-foreground">Total Spent</span>
-                <span className="text-xs font-bold tabular-nums text-foreground">{formatCurrency(spendTotal)}</span>
+                    <v.icon className="size-3.5" strokeWidth={1.75} />
+                    {v.label}
+                  </button>
+                ))}
               </div>
             </div>
-            <div className="min-w-0 flex-1 space-y-2">
-              {spendByCategory.map((item) => (
-                <div key={item.category} className="flex items-center gap-2 text-xs">
-                  <span
-                    className="size-2 shrink-0 rounded-full"
-                    style={{ background: CATEGORY_CHART_COLOR[categoryTone(item.category)] }}
+
+            {viewMode === "grid" ? (
+              <Stagger className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                {creditCards.map((card) => (
+                  <CreditCardTile
+                    key={card.id}
+                    card={card}
+                    active={card.id === activeCard?.id}
+                    onClick={() => setActiveCardId(card.id)}
+                    onEdit={() => openEdit(card)}
+                    onDelete={() => {
+                      setCardDeletionImpact(null);
+                      setDeletingCard(card);
+                    }}
                   />
-                  <span className="min-w-0 flex-1 truncate text-foreground">{item.category}</span>
-                  <span className="shrink-0 font-medium tabular-nums text-foreground">{formatCurrency(item.amount)}</span>
-                  <span className="w-10 shrink-0 text-right text-muted-foreground">{item.percent}%</span>
-                </div>
-              ))}
+                ))}
+              </Stagger>
+            ) : (
+              <div className="overflow-hidden rounded-[10px] border border-border-strong/70 bg-card shadow-e1">
+                <table className="w-full border-separate border-spacing-0 text-sm">
+                  <thead>
+                    <tr>
+                      <th className={CC_TH}>Card</th>
+                      <th className={cn(CC_TH, "hidden w-36 text-right sm:table-cell")}>Outstanding</th>
+                      <th className={cn(CC_TH, "hidden w-36 text-right md:table-cell")}>Limit</th>
+                      <th className={cn(CC_TH, "w-36")}>Utilization</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {creditCards.map((card) => {
+                      const util = Math.min(100, Math.round(card.utilizationPercent));
+                      const active = card.id === activeCard?.id;
+                      return (
+                        <tr
+                          key={card.id}
+                          onClick={() => setActiveCardId(card.id)}
+                          className={cn("cursor-pointer transition-colors hover:bg-secondary/60 [&:last-child>td]:border-b-0", active && "bg-primary/10 hover:bg-primary/15")}
+                        >
+                          <td className={cn(CC_TD, "max-w-0")}>
+                            <div className="flex min-w-0 items-center gap-3">
+                              <CardChip card={card} />
+                              <div className="min-w-0">
+                                <p className="truncate font-semibold text-foreground">{card.name}</p>
+                                <p className="text-xs text-muted-foreground tabular-nums">•••• {card.last4}</p>
+                              </div>
+                            </div>
+                          </td>
+                          <td className={cn(CC_TD, "hidden text-right sm:table-cell")}>
+                            <span className="text-[16px] font-bold text-foreground tabular-nums">{formatCurrency(card.currentBalance)}</span>
+                          </td>
+                          <td className={cn(CC_TD, "hidden text-right text-foreground/85 tabular-nums md:table-cell")}>{formatCurrency(card.creditLimit)}</td>
+                          <td className={CC_TD}>
+                            <UtilizationBar percent={util} />
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+
+          {/* ── Upcoming statements ── */}
+          <section id="upcoming-statements" aria-label="Upcoming statements" className="flex scroll-mt-4 flex-col gap-3">
+            <div className="flex items-center justify-between gap-3 border-b border-border-strong/50 pb-3">
+              <h2 className="font-heading text-base font-semibold text-foreground">Upcoming statements</h2>
+              <button type="button" onClick={() => router.push("/transactions")} className={CC_LINK}>
+                View all
+                <ArrowRight className="size-3.5" strokeWidth={2} />
+              </button>
             </div>
-          </div>
+            <div className="overflow-hidden rounded-[10px] border border-border-strong/70 bg-card shadow-e1">
+              <table className="w-full border-separate border-spacing-0 text-sm">
+                <thead>
+                  <tr>
+                    <th className={CC_TH}>Card</th>
+                    <th className={cn(CC_TH, "hidden w-44 md:table-cell")}>Billing period</th>
+                    <th className={cn(CC_TH, "w-36 text-right")}>Total due</th>
+                    <th className={cn(CC_TH, "hidden w-32 text-right sm:table-cell")}>Minimum</th>
+                    <th className={cn(CC_TH, "w-[8.5rem]")}>
+                      <span className="sr-only">Actions</span>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {creditCards.map((card) => (
+                    <tr key={card.id} className="transition-colors hover:bg-secondary/40 [&:last-child>td]:border-b-0">
+                      <td className={cn(CC_TD, "max-w-0")}>
+                        <div className="flex min-w-0 items-center gap-3">
+                          <CardChip card={card} />
+                          <div className="min-w-0">
+                            <p className="truncate font-semibold text-foreground">{card.name}</p>
+                            <p className="truncate text-xs text-muted-foreground tabular-nums">
+                              Statement {card.statementDate ? formatShortDate(card.statementDate) : "—"}
+                            </p>
+                          </div>
+                        </div>
+                      </td>
+                      <td className={cn(CC_TD, "hidden text-xs font-medium text-foreground/85 tabular-nums md:table-cell")}>
+                        {card.statementDate ? billingPeriodLabel(card.statementDate) : "—"}
+                      </td>
+                      <td className={cn(CC_TD, "text-right")}>
+                        <span className="text-[17px] font-bold text-expense tabular-nums">{formatCurrency(card.currentBalance)}</span>
+                      </td>
+                      <td className={cn(CC_TD, "hidden text-right font-semibold text-foreground tabular-nums sm:table-cell")}>{formatCurrency(card.minimumDue)}</td>
+                      <td className={cn(CC_TD, "px-2")}>
+                        <div className="flex items-center justify-end gap-1">
+                          <button
+                            type="button"
+                            onClick={() => setPayCard(card)}
+                            className="flex h-7 items-center gap-1 rounded-[6px] border border-primary-accent-text bg-primary px-2.5 text-xs font-semibold text-primary-foreground hover:opacity-90"
+                          >
+                            Pay now
+                          </button>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <button type="button" aria-label="Statement actions" className="flex size-7 items-center justify-center rounded-[6px] text-muted-foreground hover:bg-secondary hover:text-foreground">
+                                <MoreHorizontal className="size-4" strokeWidth={1.75} />
+                              </button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end" className="min-w-44 rounded-[8px]">
+                              <DropdownMenuItem onSelect={() => setActiveCardId(card.id)}>View details</DropdownMenuItem>
+                              <DropdownMenuItem disabled>
+                                Download statement
+                                <span className={cn(CC_SOON, "ml-auto")}>Soon</span>
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          {/* ── Recent card transactions ── */}
+          <section aria-label="Recent card transactions" className="flex flex-col gap-3">
+            <div className="flex items-center justify-between gap-3 border-b border-border-strong/50 pb-3">
+              <h2 className="font-heading text-base font-semibold text-foreground">Recent card transactions</h2>
+              <button type="button" onClick={() => router.push("/transactions")} className={CC_LINK}>
+                View all
+                <ArrowRight className="size-3.5" strokeWidth={2} />
+              </button>
+            </div>
+            <div className="max-h-[26rem] overflow-auto overscroll-contain rounded-[10px] border border-border-strong/70 bg-card shadow-e1">
+              {recentCardTransactions.length === 0 ? (
+                <p className="px-4 py-10 text-center text-sm text-muted-foreground">No recent card transactions.</p>
+              ) : (
+                <table className="w-full border-separate border-spacing-0 text-sm">
+                  <thead>
+                    <tr>
+                      <th className={cn(CC_TH, "sticky top-0 z-[1] w-[4.5rem]")}>Date</th>
+                      <th className={cn(CC_TH, "sticky top-0 z-[1]")}>Description</th>
+                      <th className={cn(CC_TH, "sticky top-0 z-[1] hidden w-48 md:table-cell")}>Card</th>
+                      <th className={cn(CC_TH, "sticky top-0 z-[1] w-36 text-right")}>Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {recentCardTransactions.map((txn) => {
+                      const Icon = CATEGORY_ICON[txn.category] ?? Receipt;
+                      const cardView = creditCards.find((c) => c.id === txn.card.id);
+                      return (
+                        <tr key={txn.id} className="transition-colors hover:bg-secondary/40 [&:last-child>td]:border-b-0">
+                          <td className={cn(CC_TD, "whitespace-nowrap tabular-nums")}>
+                            <p className="text-sm leading-tight font-semibold text-foreground">{txn.date.toLocaleDateString("en-IN", { day: "2-digit", month: "short" })}</p>
+                            <p className="text-[11px] leading-tight text-muted-foreground">{txn.date.getFullYear()}</p>
+                          </td>
+                          <td className={cn(CC_TD, "max-w-0")}>
+                            <div className="flex min-w-0 items-center gap-2.5">
+                              <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-[8px]", TONE_ICON_CLASS[categoryTone(txn.category)])}>
+                                <Icon className="size-4" />
+                              </span>
+                              <div className="min-w-0">
+                                <p className="truncate font-semibold text-foreground">{txn.merchant}</p>
+                                <p className="truncate text-xs text-muted-foreground">
+                                  {txn.category}
+                                  <span className="md:hidden"> · {cardView?.name ?? "Credit card"}</span>
+                                </p>
+                              </div>
+                            </div>
+                          </td>
+                          <td className={cn(CC_TD, "hidden md:table-cell")}>
+                            <p className="truncate text-xs font-medium text-foreground">{cardView?.name ?? "Credit card"}</p>
+                            <p className="text-[11px] text-muted-foreground tabular-nums">•••• {cardView?.last4 ?? "----"}</p>
+                          </td>
+                          <td className={cn(CC_TD, "text-right")}>
+                            <span className="text-[17px] font-bold whitespace-nowrap text-foreground tabular-nums">−{formatCurrency(txn.amount)}</span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </section>
         </div>
 
+        {/* ── Selected card ── */}
+        <aside className="flex min-w-0 flex-col gap-5 xl:sticky xl:top-0">
+          {activeCard && (
+            <section aria-label="Selected card" className="overflow-hidden rounded-[10px] border border-border-strong/60 bg-card shadow-e1">
+              <div style={{ background: CARD_GRADIENT[activeCard.accent] }} className="flex flex-col gap-4 p-4 text-white">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <h3 className="truncate font-heading text-lg font-semibold">{activeCard.name}</h3>
+                    <p className="mt-0.5 text-sm tracking-[0.18em] text-white/80 tabular-nums">•••• {activeCard.last4}</p>
+                  </div>
+                  <div className="flex shrink-0 flex-col items-end gap-1.5">
+                    {activeCard.isPrimary && <span className="rounded-[4px] bg-white/20 px-1.5 py-0.5 text-[10px] font-semibold">Primary</span>}
+                    <span className="text-xs font-bold tracking-wide text-white/75 uppercase italic">{activeCard.network}</span>
+                  </div>
+                </div>
+                <div>
+                  <p className="text-[11px] font-semibold tracking-[0.06em] text-white/70 uppercase">Outstanding</p>
+                  <p className="text-[30px] leading-tight font-bold tracking-tight tabular-nums">{formatCurrency(activeCard.currentBalance)}</p>
+                </div>
+                <div>
+                  <div className="flex items-center justify-between text-xs text-white/75">
+                    <span>Utilization</span>
+                    <span className="font-semibold text-white">{utilization}%</span>
+                  </div>
+                  <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-white/20">
+                    <div className={cn("h-full rounded-full", utilization >= 80 ? "bg-red-400" : "bg-white")} style={{ width: `${utilization}%` }} />
+                  </div>
+                </div>
+              </div>
+
+              <dl className="grid grid-cols-2 border-b border-border-strong/40">
+                <PanelFact label="Available" value={formatCurrency(available)} tone="text-success" />
+                <PanelFact label="Credit limit" value={formatCurrency(activeCard.creditLimit)} />
+                <PanelFact label="Next statement" value={activeCard.statementDate ? formatShortDate(activeCard.statementDate) : "—"} />
+                <PanelFact
+                  label="Payment due"
+                  value={dueInDays == null ? "No due date" : dueInDays <= 0 ? "Due today" : `${dueInDays} days left`}
+                  tone={dueInDays != null && dueInDays <= 5 ? "text-expense" : undefined}
+                />
+              </dl>
+
+              <div className="grid grid-cols-4 gap-1 p-2">
+                <QuickAction icon={Wallet} label="Pay bill" tone="bg-primary/25 text-foreground dark:text-primary-accent-text" onClick={() => setPayCard(activeCard)} />
+                <QuickAction
+                  icon={FileText}
+                  label="Statement"
+                  tone="bg-purple/12 text-purple"
+                  onClick={() => document.getElementById("upcoming-statements")?.scrollIntoView({ behavior: "smooth", block: "start" })}
+                />
+                <QuickAction icon={RefreshCw} label="Convert to EMI" tone="bg-success/12 text-success" soon />
+                <QuickAction icon={Settings} label="Card settings" tone="bg-secondary text-foreground/75" onClick={() => openEdit(activeCard)} />
+              </div>
+            </section>
+          )}
+
+          <section aria-label="Spending summary" className="rounded-[10px] border border-border-strong/60 bg-card p-4 shadow-e1">
+            <div className="flex items-baseline justify-between gap-2">
+              <h2 className="font-heading text-[15px] font-semibold text-foreground">Spending summary</h2>
+              <span className="truncate text-xs text-muted-foreground">{activeCard?.name ?? "This month"}</span>
+            </div>
+            <div className="mt-3 flex items-center gap-4">
+              <div className="relative size-28 shrink-0">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie data={spendByCategory} dataKey="amount" nameKey="category" innerRadius="68%" outerRadius="100%" paddingAngle={2} stroke="none">
+                      {spendByCategory.map((item) => (
+                        <Cell key={item.category} fill={CATEGORY_CHART_COLOR[categoryTone(item.category)]} />
+                      ))}
+                    </Pie>
+                  </PieChart>
+                </ResponsiveContainer>
+                <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
+                  <span className="text-[9px] font-medium text-muted-foreground uppercase">Total</span>
+                  <span className="text-sm font-bold text-foreground tabular-nums">{formatCurrency(spendTotal)}</span>
+                </div>
+              </div>
+              <div className="min-w-0 flex-1 divide-y divide-border-strong/40">
+                {spendByCategory.length === 0 && <p className="text-xs text-muted-foreground">No spending on this card yet.</p>}
+                {spendByCategory.map((item) => (
+                  <div key={item.category} className="flex items-center gap-2 py-2 text-xs">
+                    <span className="size-2.5 shrink-0 rounded-full" style={{ background: CATEGORY_CHART_COLOR[categoryTone(item.category)] }} />
+                    <span className="min-w-0 flex-1 truncate font-medium text-foreground">{item.category}</span>
+                    <span className="shrink-0 font-bold text-foreground tabular-nums">{formatCurrency(item.amount)}</span>
+                    <span className="w-11 shrink-0 text-right text-muted-foreground tabular-nums">{item.percent}%</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </section>
+        </aside>
       </div>
 
       {cardFormDialog}
@@ -1157,5 +1134,94 @@ export function CreditCardsWorkspace() {
         />
       )}
     </div>
+  );
+}
+
+/* ───────────────────────── Page UI (visual only) ───────────────────────── */
+
+const CC_PRIMARY =
+  "flex h-9 items-center gap-1.5 rounded-[6px] border border-primary-accent-text bg-primary px-3.5 text-sm font-semibold text-primary-foreground outline-none transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring";
+const CC_UTILITY =
+  "flex h-9 items-center gap-1.5 rounded-[6px] px-2.5 text-sm font-medium text-foreground outline-none transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:bg-secondary [&_svg]:text-muted-foreground";
+const CC_LINK = "flex h-8 items-center gap-1 rounded-[6px] px-2 text-sm font-semibold text-primary-accent-text transition-colors hover:bg-primary/15";
+const CC_SOON = "rounded-[4px] bg-secondary px-1 py-px text-[10px] font-semibold tracking-wide text-muted-foreground uppercase";
+const CC_LABEL = "text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase";
+const CC_TH =
+  "border-r border-b border-r-border-strong/40 border-b-border-strong bg-secondary px-3 py-2 text-left text-[11px] font-semibold tracking-[0.06em] whitespace-nowrap text-muted-foreground uppercase last:border-r-0";
+const CC_TD = "border-r border-b border-r-border-strong/30 border-b-border-strong/40 px-3 py-2.5 align-middle last:border-r-0";
+
+function SummaryFigure({ icon: Icon, tone, label, value }: { icon: typeof Wallet; tone: string; label: string; value: string }) {
+  return (
+    <div className="flex items-center gap-3 border-b border-border-strong/40 px-5 py-3.5 last:border-b-0 sm:border-b-0">
+      <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-[8px]", tone)}>
+        <Icon className="size-4" strokeWidth={1.75} />
+      </span>
+      <div className="min-w-0">
+        <p className={CC_LABEL}>{label}</p>
+        <p className="mt-0.5 text-lg leading-tight font-bold text-foreground tabular-nums">{value}</p>
+      </div>
+    </div>
+  );
+}
+
+/** Small card-art chip — the card's own gradient with its network. */
+function CardChip({ card }: { card: CreditCardViewItem }) {
+  return (
+    <span
+      className="flex h-7 w-10 shrink-0 items-end justify-end rounded-[5px] px-1 pb-0.5 text-[8px] font-bold tracking-wide text-white/90 uppercase italic shadow-sm"
+      style={{ background: CARD_GRADIENT[card.accent] }}
+    >
+      {card.network.slice(0, 4)}
+    </span>
+  );
+}
+
+function UtilizationBar({ percent }: { percent: number }) {
+  return (
+    <div className="flex items-center gap-2">
+      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-secondary">
+        <div className={cn("h-full rounded-full", percent >= 80 ? "bg-expense" : "bg-primary-accent-text")} style={{ width: `${percent}%` }} />
+      </div>
+      <span className={cn("w-9 shrink-0 text-right text-xs font-semibold tabular-nums", percent >= 80 ? "text-expense" : "text-foreground")}>{percent}%</span>
+    </div>
+  );
+}
+
+function PanelFact({ label, value, tone }: { label: string; value: string; tone?: string }) {
+  return (
+    <div className="flex min-w-0 flex-col gap-0.5 border-r border-b border-border-strong/40 px-4 py-2.5 even:border-r-0 [&:nth-child(n+3)]:border-b-0">
+      <dt className={CC_LABEL}>{label}</dt>
+      <dd className={cn("truncate text-sm font-bold text-foreground tabular-nums", tone)}>{value}</dd>
+    </div>
+  );
+}
+
+function QuickAction({
+  icon: Icon,
+  label,
+  tone,
+  onClick,
+  soon = false,
+}: {
+  icon: typeof Wallet;
+  label: string;
+  tone: string;
+  onClick?: () => void;
+  soon?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={soon || !onClick}
+      title={soon ? "Coming soon" : undefined}
+      className="relative flex flex-col items-center gap-1.5 rounded-[8px] px-1 py-2.5 text-center transition-colors hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:bg-transparent"
+    >
+      <span className={cn("flex size-9 items-center justify-center rounded-[8px]", tone)}>
+        <Icon className="size-4" strokeWidth={1.75} />
+      </span>
+      <span className="text-[11px] leading-tight font-medium text-foreground">{label}</span>
+      {soon && <span className={cn(CC_SOON, "absolute top-1 right-1 px-0.5 text-[8.5px]")}>Soon</span>}
+    </button>
   );
 }

@@ -1,6 +1,7 @@
 "use client";
 
-import { SlidersHorizontal } from "lucide-react";
+import Link from "next/link";
+import { Plus } from "lucide-react";
 import { useAuthStore } from "@/store/auth-store";
 
 function greeting() {
@@ -13,25 +14,23 @@ function greeting() {
 export function DashboardHeader() {
   const user = useAuthStore((state) => state.user);
   const firstName = user?.displayName?.split(" ")[0] ?? "there";
+  const today = new Date().toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long" });
 
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3">
+    <header className="flex flex-wrap items-start justify-between gap-3">
       <div className="min-w-0">
-        <h1 className="font-heading text-xl font-bold tracking-tight text-foreground sm:text-2xl">
-          {greeting()}, {firstName}! 👋
+        <h1 className="font-heading text-2xl font-bold tracking-tight text-foreground">
+          {greeting()}, {firstName}
         </h1>
-        <p className="mt-1 text-sm text-muted-foreground">Here&apos;s what&apos;s happening with your finances today.</p>
+        <p className="mt-0.5 text-sm text-muted-foreground">{today} — here&apos;s where your money stands.</p>
       </div>
-      <button
-        type="button"
-        disabled
-        aria-disabled="true"
-        title="Coming soon"
-        className="surface-flat flex shrink-0 cursor-not-allowed items-center gap-2 rounded-xl border border-border/50 px-4 py-2 text-sm font-medium text-foreground opacity-50 transition-colors"
+      <Link
+        href="/transactions"
+        className="flex h-9 items-center gap-1.5 rounded-[6px] border border-primary-accent-text bg-primary px-3.5 text-sm font-semibold text-primary-foreground transition-opacity hover:opacity-90"
       >
-        <SlidersHorizontal className="size-4" />
-        Customize
-      </button>
-    </div>
+        <Plus className="size-4" strokeWidth={2.25} />
+        Add transaction
+      </Link>
+    </header>
   );
 }

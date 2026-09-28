@@ -2,7 +2,6 @@
 
 import { Stagger, StaggerItem } from "@/components/foundation/animated-container";
 import { AccountsOverviewCard } from "@/features/dashboard/components/accounts-overview-card";
-import { AiInsightCard } from "@/features/dashboard/components/ai-insight-card";
 import { AttentionRow } from "@/features/dashboard/components/attention-row";
 import { BudgetsOverviewCard } from "@/features/dashboard/components/budgets-overview-card";
 import { CashFlowCard } from "@/features/dashboard/components/cash-flow-card";
@@ -17,50 +16,33 @@ import { useDashboardData } from "@/features/dashboard/hooks/use-dashboard-data"
 import { useUserPreferences } from "@/features/settings/hooks/use-user-preferences";
 
 /**
- * Dashboard composition, ordered by information priority (1. total money, 2/3. income+expense,
- * 4. upcoming bills, 5. recent activity, 6. financial health) rather than by card inventory:
- *
- *  1. Hero row    — Total Balance + Financial Health (NetWorthHero), Cash Flow (income/expense),
- *                   AI Insight. The three things a returning user checks first, side by side.
- *  2. Attention   — anything overdue/at-risk (bills, budgets) surfaces immediately under the hero,
- *                   before any supporting detail.
- *  3. Activity    — Recent Transactions + Upcoming Payments as a matched two-column pair (this is
- *                   the "recent activity" + "upcoming bills" priority, kept side by side since
- *                   they're the two things most read together). UpcomingBillsCard was dropped here:
- *                   it duplicated a strict subset of UpcomingPaymentsCard's bills+statements feed
- *                   (see use-dashboard-data.ts), so showing both was noise, not signal.
- *  4. Composition — Accounts / Expenses by Category / Budgets: supporting breakdown once the
- *                   headline numbers and activity are already understood.
- *  5. Secondary   — Credit Utilization + Quick Actions close the page; Quick Actions' buttons are
- *                   all "coming soon" placeholders today, so it no longer competes for top-of-page
- *                   space with real, live data.
+ * Dashboard, ordered by information priority:
+ *  1. Headline — net worth beside this month's cash flow.
+ *  2. Attention — anything overdue / at risk, right under the headline.
+ *  3. Activity — recent transactions beside upcoming payments.
+ *  4. Composition — accounts, spending by category, budgets.
+ *  5. Credit utilization + shortcuts.
+ * Every figure is live (`useDashboardData`); nothing here reads mock data.
  */
 export default function DashboardPage() {
   const data = useDashboardData();
   const { preferences, update } = useUserPreferences();
 
   return (
-    <Stagger className="flex flex-col gap-8 pb-8">
+    <Stagger className="flex min-w-0 flex-col gap-5 px-1 pb-8">
       <StaggerItem>
         <DashboardHeader />
       </StaggerItem>
 
       <StaggerItem>
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-10">
-          <div className="md:col-span-2 lg:col-span-4">
-            <NetWorthHero
-              netWorth={data.netWorth}
-              isLoading={data.isLoading}
-              hideAmount={preferences.hideNetWorth}
-              onToggleHideAmount={() => update("hideNetWorth", !preferences.hideNetWorth)}
-            />
-          </div>
-          <div className="lg:col-span-3">
-            <CashFlowCard cashFlow={data.cashFlow} isLoading={data.isLoading} />
-          </div>
-          <div className="lg:col-span-3">
-            <AiInsightCard />
-          </div>
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
+          <NetWorthHero
+            netWorth={data.netWorth}
+            isLoading={data.isLoading}
+            hideAmount={preferences.hideNetWorth}
+            onToggleHideAmount={() => update("hideNetWorth", !preferences.hideNetWorth)}
+          />
+          <CashFlowCard cashFlow={data.cashFlow} isLoading={data.isLoading} />
         </div>
       </StaggerItem>
 
@@ -76,18 +58,15 @@ export default function DashboardPage() {
       </StaggerItem>
 
       <StaggerItem>
-        <div className="flex flex-col gap-3">
-          <h2 className="text-sm font-semibold text-muted-foreground">Overview</h2>
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-            <AccountsOverviewCard accountsOverview={data.accountsOverview} isLoading={data.isLoading} />
-            <ExpensesByCategoryCard expensesByCategory={data.expensesByCategory} isLoading={data.isLoading} />
-            <BudgetsOverviewCard budgetsOverview={data.budgetsOverview} isLoading={data.isLoading} />
-          </div>
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <AccountsOverviewCard accountsOverview={data.accountsOverview} isLoading={data.isLoading} />
+          <ExpensesByCategoryCard expensesByCategory={data.expensesByCategory} isLoading={data.isLoading} />
+          <BudgetsOverviewCard budgetsOverview={data.budgetsOverview} isLoading={data.isLoading} />
         </div>
       </StaggerItem>
 
       <StaggerItem>
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
           <div className="lg:col-span-2">
             <CreditUtilizationCard utilization={data.utilization} isLoading={data.isLoading} />
           </div>

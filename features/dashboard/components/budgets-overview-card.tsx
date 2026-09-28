@@ -1,15 +1,13 @@
 import { PiggyBank } from "lucide-react";
-import { EmptyState } from "@/components/finance/empty-state";
-import { Badge } from "@/components/ui/badge";
-import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
+import { DASH_LABEL, DashEmpty, DashFooterLink, DashPanel, DashPanelHeader } from "@/features/dashboard/components/dash-ui";
 import { formatCurrency } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 function statusFor(percent: number) {
-  if (percent >= 100) return { badge: "bg-expense/12 text-expense", bar: "[&>div]:bg-expense" };
-  if (percent >= 80) return { badge: "bg-warning/25 text-warning-foreground", bar: "[&>div]:bg-warning" };
-  return { badge: "bg-success/16 text-success", bar: "[&>div]:bg-success" };
+  if (percent >= 100) return { text: "text-expense", bar: "bg-expense" };
+  if (percent >= 80) return { text: "text-warning-foreground dark:text-warning", bar: "bg-warning" };
+  return { text: "text-success", bar: "bg-success" };
 }
 
 export interface BudgetsOverviewCardProps {
@@ -21,81 +19,67 @@ export interface BudgetsOverviewCardProps {
   isLoading?: boolean;
 }
 
-/**
- * `budgetsOverview` comes from real Budgets, joined to Category names, via `computeBudgetInsight`/
- * `resolveBudgetPeriod` (lib/engines/budget-insight.ts) in `useDashboardData`. No overall monthly budget or no
- * category budgets both render as empty/zero states, same as the pre-existing empty-array handling below.
- */
+/** `budgetsOverview` comes from real Budgets via `computeBudgetInsight`/`resolveBudgetPeriod` in `useDashboardData`. */
 export function BudgetsOverviewCard({ budgetsOverview, isLoading }: BudgetsOverviewCardProps) {
-  const overallPercent =
-    budgetsOverview.monthlyBudget === 0 ? 0 : Math.round((budgetsOverview.spent / budgetsOverview.monthlyBudget) * 100);
-
-  if (isLoading) {
-    return (
-      <section className="surface-flat flex h-full flex-col gap-4 rounded-3xl border border-border/50 p-5">
-        <Skeleton className="h-4 w-32" />
-        <Skeleton className="h-8 w-full" />
-        {Array.from({ length: 3 }, (_, i) => (
-          <Skeleton key={i} className="h-8 w-full" />
-        ))}
-      </section>
-    );
-  }
-
-  if (budgetsOverview.monthlyBudget === 0 && budgetsOverview.categories.length === 0) {
-    return (
-      <section className="surface-flat flex h-full flex-col rounded-3xl border border-border/50 p-5">
-        <h2 className="text-sm font-semibold text-foreground">Budgets Overview</h2>
-        <EmptyState icon={PiggyBank} title="No budgets set" description="Create a budget to track your spending." className="flex-1" />
-      </section>
-    );
-  }
+  const overallPercent = budgetsOverview.monthlyBudget === 0 ? 0 : Math.round((budgetsOverview.spent / budgetsOverview.monthlyBudget) * 100);
+  const overall = statusFor(overallPercent);
+  const empty = budgetsOverview.monthlyBudget === 0 && budgetsOverview.categories.length === 0;
 
   return (
-    <section className="surface-flat flex h-full flex-col rounded-3xl border border-border/50 p-5">
-      <h2 className="text-sm font-semibold text-foreground">Budgets Overview</h2>
-
-      <div className="mt-3 flex items-baseline justify-between text-xs">
-        <div>
-          <p className="text-muted-foreground">Monthly Budget</p>
-          <p className="mt-0.5 text-base font-semibold text-foreground">{formatCurrency(budgetsOverview.monthlyBudget)}</p>
+    <DashPanel label="Budgets">
+      <DashPanelHeader icon={PiggyBank} title="Budgets" />
+      {isLoading ? (
+        <div className="flex flex-col gap-3 p-4">
+          <Skeleton className="h-8 w-full" />
+          {Array.from({ length: 3 }, (_, i) => (
+            <Skeleton key={i} className="h-7 w-full" />
+          ))}
         </div>
-        <div className="text-right">
-          <p className="text-muted-foreground">Spent</p>
-          <p className="mt-0.5 text-base font-semibold text-foreground">
-            {formatCurrency(budgetsOverview.spent)} <span className="text-xs font-normal text-muted-foreground">({overallPercent}%)</span>
-          </p>
-        </div>
-      </div>
-      <Progress value={overallPercent} className="mt-2 h-2 [&>div]:bg-expense" />
-
-      <div className="mt-4 flex flex-1 flex-col gap-3">
-        {budgetsOverview.categories.map((budget) => {
-          const percent = budget.limit === 0 ? 0 : Math.round((budget.spent / budget.limit) * 100);
-          const status = statusFor(percent);
-          return (
-            <div key={budget.id}>
-              <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-xs">
-                <span className="font-medium text-foreground">{budget.category}</span>
-                <div className="flex items-center gap-2">
-                  <span className="text-muted-foreground tabular-nums">
-                    {formatCurrency(budget.spent)} / {formatCurrency(budget.limit)}
-                  </span>
-                  <Badge className={cn("border-0 px-1.5 text-[10px]", status.badge)}>{percent}%</Badge>
-                </div>
+      ) : empty ? (
+        <DashEmpty title="No budgets set" description="Create a budget to track your spending." />
+      ) : (
+        <>
+          <div className="border-b border-border-strong/40 px-4 py-3">
+            <div className="flex items-end justify-between gap-3">
+              <div>
+                <p className={DASH_LABEL}>Spent</p>
+                <p className="text-[22px] leading-tight font-bold text-foreground tabular-nums">{formatCurrency(budgetsOverview.spent)}</p>
               </div>
-              <Progress value={Math.min(percent, 100)} className={cn("mt-1.5 h-1.5", status.bar)} />
+              <div className="text-right">
+                <p className={DASH_LABEL}>of budget</p>
+                <p className="text-sm font-semibold text-foreground tabular-nums">
+                  {formatCurrency(budgetsOverview.monthlyBudget)} <span className={cn("font-bold", overall.text)}>· {overallPercent}%</span>
+                </p>
+              </div>
             </div>
-          );
-        })}
-      </div>
+            <div className="mt-2 h-2 overflow-hidden rounded-full bg-secondary">
+              <div className={cn("h-full rounded-full", overall.bar)} style={{ width: `${Math.min(overallPercent, 100)}%` }} />
+            </div>
+          </div>
 
-      <button
-        type="button"
-        className="mt-4 rounded-xl bg-muted/70 py-2.5 text-xs font-semibold text-foreground transition-colors hover:bg-muted"
-      >
-        Manage Budgets
-      </button>
-    </section>
+          <div className="divide-y divide-border-strong/40">
+            {budgetsOverview.categories.map((budget) => {
+              const percent = budget.limit === 0 ? 0 : Math.round((budget.spent / budget.limit) * 100);
+              const status = statusFor(percent);
+              return (
+                <div key={budget.id} className="px-4 py-2.5">
+                  <div className="flex items-center justify-between gap-2 text-xs">
+                    <span className="truncate font-semibold text-foreground">{budget.category}</span>
+                    <span className="shrink-0 text-muted-foreground tabular-nums">
+                      <span className="font-semibold text-foreground">{formatCurrency(budget.spent)}</span> / {formatCurrency(budget.limit)}
+                      <span className={cn("ml-1.5 font-bold", status.text)}>{percent}%</span>
+                    </span>
+                  </div>
+                  <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-secondary">
+                    <div className={cn("h-full rounded-full", status.bar)} style={{ width: `${Math.min(percent, 100)}%` }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+      <DashFooterLink href="/budgets">Manage budgets</DashFooterLink>
+    </DashPanel>
   );
 }

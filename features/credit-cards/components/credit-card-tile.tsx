@@ -53,50 +53,54 @@ export function CreditCardTile({ card, active, onClick, onEdit, onDelete }: Cred
         onKeyDown={(e) => e.key === "Enter" && onClick()}
         style={{ background: CARD_GRADIENT[card.accent] }}
         className={cn(
-          "relative flex h-full cursor-pointer flex-col gap-4 overflow-hidden rounded-3xl p-5 text-white shadow-e2 transition-transform outline-none",
-          active && "ring-2 ring-primary ring-offset-2 ring-offset-background",
+          "relative flex h-full cursor-pointer flex-col gap-3.5 overflow-hidden rounded-[12px] p-4 text-white shadow-e2 transition-[transform,box-shadow] duration-150 outline-none hover:-translate-y-px focus-visible:ring-2 focus-visible:ring-ring",
+          active && "ring-2 ring-primary-accent-text ring-offset-2 ring-offset-background",
         )}
       >
-        <div className="flex items-start justify-between gap-2">
-          <h3 className="truncate font-heading text-base font-semibold">{card.name}</h3>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button
-                type="button"
-                onClick={(e) => e.stopPropagation()}
-                className="flex size-6 shrink-0 items-center justify-center rounded-lg text-white/70 transition-colors hover:bg-white/15 hover:text-white"
-                aria-label="Card options"
-              >
-                <MoreVertical className="size-4" />
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem onSelect={() => onEdit?.()}>Edit</DropdownMenuItem>
-              <DropdownMenuItem className="text-expense" onSelect={() => onDelete?.()}>
-                Delete
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+        {/* soft sheen, like card stock */}
+        <span className="pointer-events-none absolute -top-16 -right-10 size-40 rounded-full bg-white/10 blur-2xl" aria-hidden />
+
+        <div className="relative flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <h3 className="truncate font-heading text-base font-semibold">{card.name}</h3>
+            <p className="mt-0.5 text-[13px] tracking-[0.18em] text-white/75 tabular-nums">•••• {card.last4}</p>
+          </div>
+          <div className="flex shrink-0 items-center gap-1.5">
+            <span className="text-[11px] font-bold tracking-wide text-white/75 italic uppercase">{card.network}</span>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  onClick={(e) => e.stopPropagation()}
+                  className="flex size-7 shrink-0 items-center justify-center rounded-[6px] text-white/75 transition-colors hover:bg-white/15 hover:text-white"
+                  aria-label="Card options"
+                >
+                  <MoreVertical className="size-4" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="rounded-[8px]">
+                <DropdownMenuItem onSelect={() => onEdit?.()}>Edit</DropdownMenuItem>
+                <DropdownMenuItem className="text-expense" onSelect={() => onDelete?.()}>
+                  Delete
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         </div>
 
-        <div className="flex items-center justify-between">
-          <span className="font-mono text-sm tracking-widest text-white/80">•••• {card.last4}</span>
-          <span className="text-xs font-bold tracking-wide text-white/70 italic uppercase">{card.network}</span>
-        </div>
-
-        <div className="flex items-center justify-between text-xs">
-          <div>
-            <p className="text-white/60">Outstanding</p>
-            <p className="mt-0.5 font-mono text-sm font-semibold tabular-nums">{formatCurrency(card.currentBalance)}</p>
+        <div className="relative flex items-end justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-[10.5px] font-semibold tracking-[0.08em] text-white/65 uppercase">Outstanding</p>
+            <p className="text-[24px] leading-tight font-bold tracking-tight tabular-nums">{formatCurrency(card.currentBalance)}</p>
           </div>
           <div className="text-right">
-            <p className="text-white/60">Credit Limit</p>
-            <p className="mt-0.5 font-mono text-sm font-semibold tabular-nums">{formatCurrency(card.creditLimit)}</p>
+            <p className="text-[10.5px] font-semibold tracking-[0.08em] text-white/65 uppercase">Limit</p>
+            <p className="text-sm font-semibold text-white/90 tabular-nums">{formatCurrency(card.creditLimit)}</p>
           </div>
         </div>
 
-        <div>
-          <div className="flex items-center justify-between text-xs text-white/70">
+        <div className="relative">
+          <div className="flex items-center justify-between text-xs text-white/75">
             <span>Utilization</span>
             <span className="font-semibold text-white">{utilization}%</span>
           </div>
@@ -108,7 +112,7 @@ export function CreditCardTile({ card, active, onClick, onEdit, onDelete }: Cred
           </div>
         </div>
 
-        <div className="mt-auto flex items-center justify-between border-t border-white/15 pt-3 text-xs">
+        <div className="relative mt-auto flex items-center justify-between border-t border-white/15 pt-3 text-xs">
           <span className="text-white/70">
             {card.dueDate ? `Due on ${formatDueDate(card.dueDate)}` : "No statement due"}
           </span>

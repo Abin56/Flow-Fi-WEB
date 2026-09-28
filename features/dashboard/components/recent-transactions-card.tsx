@@ -1,16 +1,8 @@
-import { ArrowDownToLine, Coffee, Film, Receipt, ShoppingBag } from "lucide-react";
-import Link from "next/link";
-import { EmptyState } from "@/components/finance/empty-state";
+import { ArrowDownLeft, ArrowUpRight, Receipt } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
+import { DashEmpty, DashPanel, DashPanelHeader } from "@/features/dashboard/components/dash-ui";
 import { formatCurrency } from "@/lib/format";
 import { cn } from "@/lib/utils";
-
-const CATEGORY_STYLE: Record<string, { icon: typeof Coffee; className: string }> = {
-  "Food & Dining": { icon: Coffee, className: "bg-warning/25 text-warning-foreground" },
-  Income: { icon: ArrowDownToLine, className: "bg-success/16 text-success" },
-  Shopping: { icon: ShoppingBag, className: "bg-expense/12 text-expense" },
-  Entertainment: { icon: Film, className: "bg-purple/14 text-purple" },
-};
 
 export interface RecentTransactionsCardProps {
   recentTransactions: {
@@ -25,54 +17,42 @@ export interface RecentTransactionsCardProps {
 
 /** `recentTransactions` is the real Transaction list (most recent 5), via `useDashboardData`. */
 export function RecentTransactionsCard({ recentTransactions, isLoading }: RecentTransactionsCardProps) {
-  if (isLoading) {
-    return (
-      <section className="surface-flat flex h-full flex-col gap-3 rounded-3xl border border-border/50 p-5">
-        <Skeleton className="h-4 w-40" />
-        {Array.from({ length: 5 }, (_, i) => (
-          <Skeleton key={i} className="h-9 w-full rounded-xl" />
-        ))}
-      </section>
-    );
-  }
-
   return (
-    <section className="surface-flat flex h-full flex-col rounded-3xl border border-border/50 p-5">
-      <div className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-foreground">Recent Transactions</h2>
-        <Link href="/transactions" className="text-xs font-semibold text-primary-accent-text hover:underline">
-          View All
-        </Link>
-      </div>
-
-      {recentTransactions.length === 0 ? (
-        <EmptyState icon={Receipt} title="No transactions yet" description="Your recent activity will show up here." className="flex-1" />
+    <DashPanel label="Recent transactions">
+      <DashPanelHeader icon={Receipt} title="Recent transactions" href="/transactions" />
+      {isLoading ? (
+        <div className="flex flex-col gap-2 p-4">
+          {Array.from({ length: 5 }, (_, i) => (
+            <Skeleton key={i} className="h-9 w-full rounded-[6px]" />
+          ))}
+        </div>
+      ) : recentTransactions.length === 0 ? (
+        <DashEmpty title="No transactions yet" description="Your recent activity will show up here." />
       ) : (
-      <div className="mt-3 flex max-h-80 flex-1 flex-col gap-1 overflow-y-auto">
-        {recentTransactions.map((txn) => {
-          const style = CATEGORY_STYLE[txn.category] ?? { icon: ShoppingBag, className: "bg-muted text-muted-foreground" };
-          const Icon = style.icon;
-          return (
-            <div key={txn.id} className="flex items-center gap-3 rounded-xl px-1 py-2 transition-colors hover:bg-muted/50">
-              <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-xl", style.className)}>
-                <Icon className="size-4" />
-              </span>
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium text-foreground">{txn.merchant}</p>
-                <p className="text-xs text-muted-foreground">{txn.category}</p>
-              </div>
-              <div className="shrink-0 text-right">
-                <p className={cn("text-sm font-semibold tabular-nums", txn.amount > 0 ? "text-success" : "text-expense")}>
-                  {txn.amount > 0 ? "+" : "-"}
+        <div className="divide-y divide-border-strong/40">
+          {recentTransactions.map((txn) => {
+            const incoming = txn.amount > 0;
+            const Icon = incoming ? ArrowDownLeft : ArrowUpRight;
+            return (
+              <div key={txn.id} className="flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-secondary/50">
+                <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-[8px]", incoming ? "bg-success/12 text-success" : "bg-expense/10 text-expense")}>
+                  <Icon className="size-4" strokeWidth={1.75} />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-semibold text-foreground">{txn.merchant}</p>
+                  <p className="truncate text-xs text-muted-foreground">
+                    {txn.category} · {txn.date}
+                  </p>
+                </div>
+                <p className={cn("shrink-0 text-[16px] font-bold tabular-nums", incoming ? "text-success" : "text-foreground")}>
+                  {incoming ? "+" : "−"}
                   {formatCurrency(Math.abs(txn.amount))}
                 </p>
-                <p className="text-xs text-muted-foreground">{txn.date}</p>
               </div>
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
       )}
-    </section>
+    </DashPanel>
   );
 }
