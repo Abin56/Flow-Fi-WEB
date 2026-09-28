@@ -6,7 +6,6 @@ import {
   Calendar,
   Check,
   CreditCard,
-  FileText,
   Gift,
   Globe,
   Landmark,
@@ -917,19 +916,6 @@ export function AccountsWorkspace() {
                   </label>
                 </div>
               )}
-            </div>
-
-            <div className="flex flex-col gap-3 bg-muted/30 p-4">
-              <SectionLabel icon={FileText}>Additional Info (optional)</SectionLabel>
-              <label className="flex flex-col gap-1">
-                <span className="text-xs font-medium text-muted-foreground">Notes</span>
-                <textarea
-                  className="min-h-20 resize-none rounded-none border border-border bg-background px-3 py-2 text-sm outline-none transition-colors focus:border-primary"
-                  rows={3}
-                  value={form.notes}
-                  onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
-                />
-              </label>
             </div>
 
             {formError && (

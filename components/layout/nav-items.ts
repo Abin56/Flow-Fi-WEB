@@ -1,5 +1,4 @@
 import {
-  Bot,
   Calendar,
   CalendarRange,
   CreditCard,
@@ -60,7 +59,6 @@ export const NAV_ITEMS: NavItem[] = [
   { label: "Reports", href: "/reports", icon: FileBarChart, section: "Insights" },
   { label: "Analytics", href: "/analytics", icon: LineChart, section: "Insights" },
   { label: "History", href: "/history", icon: History, section: "Insights" },
-  { label: "AI Assistant", href: "/ai-assistant", icon: Bot, section: "Insights" },
 
   { label: "Settings", href: "/settings", icon: Settings, section: "System" },
   { label: "Help & Support", href: "/help", icon: LifeBuoy, section: "System" },

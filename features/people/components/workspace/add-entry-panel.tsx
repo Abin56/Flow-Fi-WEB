@@ -4,7 +4,7 @@ import { ArrowDownLeft, ArrowUpRight } from "lucide-react";
 import { useRef, useState } from "react";
 import type { LedgerEntryType } from "@/lib/models/person";
 import { cn } from "@/lib/utils";
-import { CompactAmountInput, InlinePanel } from "./ledger-ui";
+import { AccountField, CompactAmountInput, InlinePanel, useAccountChoice } from "./ledger-ui";
 import { WS_FIELD, WS_GHOST, WS_PRIMARY, WsField, WsSegmented } from "./person-workspace-ui";
 
 export type AddEntryType = Extract<LedgerEntryType, "gave" | "borrowed">;
@@ -14,13 +14,15 @@ export interface AddEntryParams {
   amount: number;
   date: Date;
   note?: string;
+  /** The account the entry's cash leg posts to (a real Transaction — see `addLedgerEntryWithTransaction`). */
+  accountId: string;
 }
 
 /**
  * Add transaction — expands inline in the Person workspace, right under its actions. Only the two
  * debt-opening types: "I repaid"/"Received back" are settlements, reached from Settle or from an
- * individual transaction. Same validation and the same `addLedgerEntry` payload as before; only the
- * surface changed.
+ * individual transaction. Also posts a real Transaction on the chosen account, so the entry shows up in
+ * Transactions, Accounts, Month Cycle and Dashboard.
  */
 export function AddEntryPanel({
   personName,
@@ -39,6 +41,7 @@ export function AddEntryPanel({
   const [note, setNote] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const account = useAccountChoice();
   const amountRef = useRef<HTMLInputElement>(null);
   const firstName = personName.split(" ")[0];
 
@@ -54,10 +57,14 @@ export function AddEntryPanel({
       setError("Amount must be greater than 0.");
       return;
     }
+    if (!account.accountId) {
+      setError("Select an account.");
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
-      await onSave({ type, amount: value, date: new Date(date), note: note || undefined });
+      await onSave({ type, amount: value, date: new Date(date), note: note || undefined, accountId: account.accountId });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong. Please try again.");
       setSaving(false);
@@ -96,7 +103,7 @@ export function AddEntryPanel({
           className="max-w-sm"
         />
 
-        <div className="mt-3.5 grid gap-3 sm:grid-cols-[10rem_minmax(0,1fr)_10rem] sm:items-end">
+        <div className="mt-3.5 grid gap-3 sm:grid-cols-[10rem_minmax(0,1fr)_10rem_12rem] sm:items-end">
           <WsField label="Amount">
             <CompactAmountInput
               inputRef={amountRef}
@@ -115,6 +122,7 @@ export function AddEntryPanel({
           <WsField label="Date">
             <input type="date" className={WS_FIELD} value={date} onChange={(e) => setDate(e.target.value)} />
           </WsField>
+          <AccountField choice={account} />
         </div>
         <p className={cn("mt-1.5 min-h-4 text-xs font-medium text-expense", !error && "invisible")} role="alert">
           {error}

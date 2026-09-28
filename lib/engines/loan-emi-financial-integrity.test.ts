@@ -435,8 +435,12 @@ describe("month transitions — created September, first due October, paid Octob
     expect(scheduleOnlyLoanFlows(loanPayments, month(2026, 9), "paymentDate").moneyOut).toBe(5000);
     expect(scheduleOnlyLoanFlows(loanPayments, month(2026, 10), "paymentDate").moneyOut).toBe(0);
     // The ₹40,000 origination movement is a principal disbursement: excluded from income/expense.
-    expect(isNonIncomeExpenseMovement({ transferId: null, loanId: "loan-1", paymentAllocationType: "additionalDisbursement" })).toBe(true);
-    expect(isNonIncomeExpenseMovement({ transferId: null, loanId: "loan-1", paymentAllocationType: "regularEmi" })).toBe(false);
+    expect(
+      isNonIncomeExpenseMovement({ transferId: null, loanId: "loan-1", paymentAllocationType: "additionalDisbursement", isPersonLedgerMovement: false }),
+    ).toBe(true);
+    expect(
+      isNonIncomeExpenseMovement({ transferId: null, loanId: "loan-1", paymentAllocationType: "regularEmi", isPersonLedgerMovement: false }),
+    ).toBe(false);
   });
 
   it("a Loan dated the 31st keeps its due day through short months (Web now matches Flutter)", () => {

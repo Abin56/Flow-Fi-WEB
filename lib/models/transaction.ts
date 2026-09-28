@@ -116,6 +116,24 @@ export interface Transaction extends SoftDeletableEntity {
    * "Prepayment" without a join. Null for every non-loan/EMI transaction.
    */
   paymentAllocationType: PaymentAllocationType | null;
+  /**
+   * True only for the real cash-movement `Transaction` posted alongside a
+   * "Borrowed"/"Repaid"/"Received Back" `LedgerEntry` (see
+   * `LedgerRepository.addEntryWithTransaction`) — additive, web-only field
+   * (not present in the Flutter model, which never posted a Transaction for
+   * these), same pattern as `transferMatchedAt`/`status`/`isBusiness`:
+   * absent/undefined on read is treated identically to `false`, so every
+   * pre-existing transaction and every transaction the mobile app writes are
+   * unaffected. Distinct from `linkedPersonId`+`owesPersonToggle` (which
+   * already means "I Gave" — a real, counted expense) and from a
+   * reference-only `linkedPersonId` tag (an ordinary transaction just
+   * annotated with a person, also still counted) — this is the one case
+   * that must be excluded from income/expense totals despite moving real
+   * account balance: the cash is a liability/receivable change (a loan
+   * between you and this person), not earned income or personal spending.
+   * See `isNonIncomeExpenseMovement`.
+   */
+  isPersonLedgerMovement: boolean;
 }
 
 /** Set on both legs of a transfer between two of the user's own accounts. */
@@ -138,14 +156,17 @@ export function isLoanPrincipalDisbursement(
 
 /**
  * Whether income/expense totals (Dashboard, Cash Flow, Reports, Analytics, Budgets, Month Cycle) may
- * count this transaction: transfer legs and Loan principal disbursements are excluded. The
- * Transactions list and Account balances still include both. Mirrors Flutter's
- * `calculableTransactionsProvider` exclusion set (together with `excludeFromCalculations`).
+ * count this transaction: transfer legs, Loan principal disbursements, and person-ledger movements
+ * (Borrowed/Repaid/Received Back — see `Transaction.isPersonLedgerMovement`) are excluded. The
+ * Transactions list and Account balances still include all three. Mirrors Flutter's
+ * `calculableTransactionsProvider` exclusion set (together with `excludeFromCalculations`) for the
+ * first two; `isPersonLedgerMovement` is a web-only addition with no Flutter-side transaction to
+ * exclude, since the Flutter app never posted one for these entries.
  */
 export function isNonIncomeExpenseMovement(
-  transaction: Pick<Transaction, "transferId" | "loanId" | "paymentAllocationType">,
+  transaction: Pick<Transaction, "transferId" | "loanId" | "paymentAllocationType" | "isPersonLedgerMovement">,
 ): boolean {
-  return transaction.transferId != null || isLoanPrincipalDisbursement(transaction);
+  return transaction.transferId != null || isLoanPrincipalDisbursement(transaction) || transaction.isPersonLedgerMovement;
 }
 
 /** The signed delta this transaction applies to its account's balance. */
@@ -231,6 +252,7 @@ export function transactionFromFirestore(
     installmentPaymentId: (data.installmentPaymentId as string | undefined) ?? null,
     paymentAllocationType:
       data.paymentAllocationType == null ? null : paymentAllocationTypeFromName(data.paymentAllocationType as string),
+    isPersonLedgerMovement: (data.isPersonLedgerMovement as boolean | undefined) ?? false,
     deletedAt: (data.deletedAt as Timestamp | undefined)?.toDate() ?? null,
     lastEditedAt: (data.lastEditedAt as Timestamp | undefined)?.toDate() ?? null,
     editHistory: ((data.editHistory as Record<string, unknown>[] | undefined) ?? []).map(auditEntryFromMap),
@@ -262,6 +284,7 @@ export function transactionToFirestore(transaction: Transaction): DocumentData {
     installmentId: transaction.installmentId,
     installmentPaymentId: transaction.installmentPaymentId,
     paymentAllocationType: transaction.paymentAllocationType,
+    isPersonLedgerMovement: transaction.isPersonLedgerMovement,
     deletedAt: transaction.deletedAt == null ? null : Timestamp.fromDate(transaction.deletedAt),
     lastEditedAt: transaction.lastEditedAt == null ? null : Timestamp.fromDate(transaction.lastEditedAt),
     editHistory: transaction.editHistory.map(auditEntryToMap),

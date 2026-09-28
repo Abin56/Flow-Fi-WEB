@@ -682,6 +682,9 @@ export function TransactionDetailsModal({
       if (destinationAccountId === accountId) return "Source and destination accounts must differ.";
     }
     if (kind !== "transfer" && !categoryId) return "Select a category.";
+    if (!transaction && kind === "expense" && personId != null && !splitOpen && !personEntryType) {
+      return "Choose I Gave or I Borrowed for this person.";
+    }
     if (!date) return "Select a date.";
     const dateValue = new Date(date);
     const today = new Date();
@@ -810,13 +813,18 @@ export function TransactionDetailsModal({
                 // Plain descriptive reference (no expense-owed effect) — same shape as
                 // `applyOwesPersonChange`'s own "reference-only" branch.
                 await actions.editTransaction(newTransaction, { linkedPersonId: personId, owesPersonToggle: false });
-                if (personEntryType) {
-                  // Borrowed / Repaid / Received Back — not an expense assignment, so it's recorded
-                  // as a standalone person-ledger entry instead, the same `addLedgerEntry` action
-                  // the People page's own "Add Ledger Entry" dialog uses.
+                if (personEntryType === "borrowed") {
+                  // The expense above is this transaction's own cash-out leg — "I Borrowed" is the
+                  // opposite direction (cash IN from the person), so it can't reuse that expense.
+                  // Post a separate real Income transaction for it, same as the People page's own
+                  // Borrowed entry, defaulting to the same account the expense used.
                   const person = people.find((p) => p.id === personId);
                   if (person && peopleActions) {
-                    await peopleActions.addLedgerEntry(person, { type: personEntryType, amount: amountValue, date: dateTime, note: description || undefined });
+                    await peopleActions.addLedgerEntryWithTransaction(
+                      person,
+                      { type: "borrowed", amount: amountValue, date: dateTime, note: description || undefined },
+                      accountId,
+                    );
                   }
                 }
               }
@@ -1253,14 +1261,16 @@ export function TransactionDetailsModal({
                 <span className={cn("text-xl font-bold", KIND_TEXT_CLASS[kind])}>{kind === "income" ? "+" : "−"}</span>
                 <input
                   ref={amountRef}
-                  type="number"
-                  step="0.01"
-                  min="0"
+                  type="text"
                   inputMode="decimal"
+                  autoComplete="off"
                   placeholder="0.00"
                   value={amount}
                   disabled={isTransferLeg}
-                  onChange={(e) => setAmount(e.target.value)}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    if (next === "" || /^\d*\.?\d*$/.test(next)) setAmount(next);
+                  }}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && !e.shiftKey) {
                       e.preventDefault();
@@ -1348,18 +1358,14 @@ export function TransactionDetailsModal({
               <Textarea value={notes} placeholder="Add a note (optional)" className={cn("min-h-9 text-sm", FIELD_BORDER)} onChange={(e) => setNotes(e.target.value)} />
             </FormRow>
 
-            {kind !== "expense" ? (
-              <div className="flex items-start gap-2 rounded-lg border border-dashed border-foreground/15 bg-muted/30 px-3 py-2">
-                <Info className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
-                <p className="text-xs text-muted-foreground">Assigning to a person or splitting is only available for expenses.</p>
-              </div>
-            ) : (
+            {kind === "expense" && (
               <div className="flex flex-col gap-2.5 rounded-xl border border-foreground/10 p-3">
                 <div className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
                   <Users className="size-3.5 text-muted-foreground" />
                   People &amp; Split
                 </div>
-                <FormRow label="Assign to a person">
+                {!splitOpen && (
+                  <FormRow label="Assign to a person">
                   <AnimatePresence mode="wait" initial={false}>
                     {!addingPerson ? (
                       <motion.div key="select" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: durations.fast }}>
@@ -1371,7 +1377,11 @@ export function TransactionDetailsModal({
                               return;
                             }
                             setPersonId(v === "none" ? null : v);
-                            if (v === "none") setPersonEntryType(null);
+                            if (v === "none") {
+                              setPersonEntryType(null);
+                            } else {
+                              setSplitOpen(false);
+                            }
                           }}
                         >
                           <SelectTrigger className={cn("w-full", FIELD_BORDER)}>
@@ -1412,12 +1422,13 @@ export function TransactionDetailsModal({
                     )}
                   </AnimatePresence>
                 </FormRow>
+                )}
 
                 {!personId && !splitOpen && (
                   <p className="text-xs text-muted-foreground">Pick a person above to record I Gave / I Borrowed.</p>
                 )}
 
-                {!splitOpen && (
+                {!splitOpen && !personId && (
                   <ClayButton
                     type="button"
                     variant="secondary"

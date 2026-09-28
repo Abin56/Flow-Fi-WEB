@@ -98,6 +98,7 @@ function txn(overrides: Partial<Transaction> = {}): Transaction {
     installmentId: null,
     installmentPaymentId: null,
     paymentAllocationType: null,
+    isPersonLedgerMovement: false,
     status: "posted",
     isBusiness: false,
     source: null,

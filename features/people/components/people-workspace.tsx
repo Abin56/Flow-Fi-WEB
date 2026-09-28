@@ -154,27 +154,39 @@ export function PeopleWorkspace() {
     await actions.editPerson(person, patch);
   }
 
-  /** Same `addLedgerEntry` payload the old Add Transaction dialog sent; errors surface in the workspace's Add mode. */
+  /**
+   * Posts a real, account-affecting Transaction alongside the LedgerEntry (not the old ledger-only
+   * `addLedgerEntry`) — so a Borrowed/Gave entry shows up in the main Transactions list, Accounts,
+   * Month Cycle, and Dashboard the same way an "I Gave" expense-assignment already does.
+   */
   async function handleAddEntry(person: Person, params: AddEntryParams) {
     if (!actions) throw new Error("Not signed in");
-    await actions.addLedgerEntry(person, {
-      type: params.type,
-      amount: params.amount,
-      date: params.date,
-      note: params.note,
-      receivedStatus: "yetToReceive",
-    });
+    await actions.addLedgerEntryWithTransaction(
+      person,
+      {
+        type: params.type,
+        amount: params.amount,
+        date: params.date,
+        note: params.note,
+        receivedStatus: "yetToReceive",
+      },
+      params.accountId,
+    );
   }
 
   async function handleSettleEntry(person: Person, params: SettleEntryParams) {
     if (!actions) throw new Error("Not signed in");
-    await actions.addLedgerEntry(person, {
-      type: params.type,
-      amount: params.amount,
-      date: params.date,
-      receivedStatus: "received",
-      parentEntryId: params.parentEntryId,
-    });
+    await actions.addLedgerEntryWithTransaction(
+      person,
+      {
+        type: params.type,
+        amount: params.amount,
+        date: params.date,
+        receivedStatus: "received",
+        parentEntryId: params.parentEntryId,
+      },
+      params.accountId,
+    );
   }
 
   async function handleEditEntry(

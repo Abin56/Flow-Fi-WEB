@@ -59,7 +59,14 @@ import {
   type Person,
 } from "@/lib/models/person";
 import type { Expense, ExpenseParticipant, ReceivedStatus } from "@/lib/models/expense";
-import { createAccountRepository, createExpenseRepository, createPersonRepository } from "@/lib/repositories/repository-factory";
+import {
+  createAccountRepository,
+  createCategoryRepository,
+  createExpenseRepository,
+  createPersonRepository,
+  createTransactionRepository,
+} from "@/lib/repositories/repository-factory";
+import type { TransactionType } from "@/lib/models/transaction";
 import type { CreatePersonParams, EditPersonParams } from "@/lib/repositories/person-repository";
 import { createLedgerRepository } from "@/features/people/lib/ledger-factory";
 import { useAuthStore } from "@/store/auth-store";
@@ -507,6 +514,39 @@ export function usePeopleActions() {
       editLedgerEntry: async (person: Person, entry: LedgerEntry, patch: { amount?: number; date?: Date; note?: string }) => {
         const ledgerRepository = createLedgerRepository(uid, person.id, personRepository);
         await ledgerRepository.editEntry(person, entry, patch);
+      },
+      /**
+       * Same as `addLedgerEntry`, but also posts a real account-affecting
+       * `Transaction` for the cash leg — "Borrowed"/"Repaid"/"Received Back"
+       * entries added from the People page use this so they show up in the
+       * main Transactions list, Accounts, Month Cycle, and Dashboard, the
+       * same way an "I Gave" expense-assignment already does.
+       */
+      addLedgerEntryWithTransaction: async (
+        person: Person,
+        params: {
+          type: LedgerEntryType;
+          amount: number;
+          date: Date;
+          note?: string;
+          increasesBalance?: boolean;
+          receivedStatus?: ReceivedStatus;
+          parentEntryId?: string | null;
+        },
+        accountId: string,
+      ) => {
+        const ledgerRepository = createLedgerRepository(uid, person.id, personRepository);
+        const transactionRepository = createTransactionRepository(uid, accountRepository);
+        const categoryRepository = createCategoryRepository(uid);
+        const category = await categoryRepository.getOrCreatePersonalLoanCategory();
+        // "borrowed"/"receivedBack" is cash coming IN (income); "gave"/"repaid" is cash going OUT (expense).
+        const transactionType: TransactionType = params.type === "borrowed" || params.type === "receivedBack" ? "income" : "expense";
+        return ledgerRepository.addEntryWithTransaction(
+          person,
+          params,
+          { type: transactionType, accountId, categoryId: category.id, description: person.name },
+          transactionRepository,
+        );
       },
       deleteLedgerEntry: async (person: Person, entry: LedgerEntry) => {
         const ledgerRepository = createLedgerRepository(uid, person.id, personRepository);

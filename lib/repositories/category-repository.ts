@@ -9,7 +9,7 @@ import type { CollectionReference } from "firebase/firestore";
 import { FirestoreCrudRepository } from "@/lib/firestore/firestore-crud-repository";
 import { updateField } from "@/lib/firestore/soft-deletable";
 import type { Category, CategoryType } from "@/lib/models/category";
-import { DEFAULT_CATEGORIES } from "@/lib/models/category";
+import { DEFAULT_CATEGORIES, PERSONAL_LOAN_CATEGORY_NAME } from "@/lib/models/category";
 import { generateId } from "@/lib/utils/id-generator";
 
 export interface CreateCategoryParams {
@@ -94,5 +94,36 @@ export class CategoryRepository extends FirestoreCrudRepository<Category> {
       };
       await this.add(category.id, category);
     }
+  }
+
+  /**
+   * Existing users never got "Personal Loan" from `seedDefaultsIfEmpty`
+   * (their `categories` collection is already non-empty), so
+   * Borrowed/Gave/Repaid/Received-Back entries from the People page create
+   * it lazily here on first use — same deterministic id
+   * `seedDefaultsIfEmpty` would have used, so a concurrent caller (or a
+   * later fresh-seed) converges on the same doc instead of duplicating it.
+   */
+  async getOrCreatePersonalLoanCategory(): Promise<Category> {
+    const seed = DEFAULT_CATEGORIES.find((c) => c.name === PERSONAL_LOAN_CATEGORY_NAME)!;
+    const id = `default-${seed.type}-${seed.name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+    const existing = await this.getByKey(id);
+    if (existing != null) return existing;
+
+    const category: Category = {
+      id,
+      name: seed.name,
+      type: seed.type,
+      iconKey: seed.iconKey,
+      colorValue: seed.colorValue,
+      createdAt: new Date(),
+      isDefault: true,
+      isActive: true,
+      deletedAt: null,
+      lastEditedAt: null,
+      editHistory: [],
+    };
+    await this.add(category.id, category);
+    return category;
   }
 }

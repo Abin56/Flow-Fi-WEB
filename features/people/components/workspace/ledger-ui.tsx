@@ -1,14 +1,16 @@
 "use client";
 
 import { Check, CircleDot, HandCoins, MoreHorizontal, Pencil, Trash2, Undo2, X } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { useAccounts } from "@/hooks/use-accounts";
 import { singleUndoablePayment, type DeleteBlock, type LedgerRow, type LedgerRowState, type PaymentRecord } from "@/features/people/lib/person-ledger-rows";
 import { formatStatementDate } from "@/lib/engines/person-cycle-statement";
 import { formatCurrency } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { WS_FIELD, WS_GHOST, WS_PRIMARY, WsField } from "./person-workspace-ui";
+import { WS_FIELD, WS_GHOST, WS_PRIMARY, WS_SELECT_TRIGGER, WsField } from "./person-workspace-ui";
 
 /**
  * Shared pieces of the People Ledger's inline actions and transaction management — the inline
@@ -326,9 +328,50 @@ function toDateInput(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+/**
+ * The account a manual People entry's cash leg posts to — Add and per-entry Settle post a real
+ * Transaction alongside the LedgerEntry (`addLedgerEntryWithTransaction`). Until the user picks one,
+ * the default account (else the first) is used, so `useAccountChoice` also works when accounts load
+ * after mount.
+ */
+export function useAccountChoice() {
+  const { data: allAccounts = [] } = useAccounts();
+  const accounts = useMemo(() => allAccounts.filter((a) => a.deletedAt == null), [allAccounts]);
+  const [picked, setPicked] = useState("");
+  const accountId = picked || (accounts.find((a) => a.isDefault)?.id ?? accounts[0]?.id ?? "");
+  return { accounts, accountId, setAccountId: setPicked };
+}
+
+export function AccountField({
+  choice,
+  className,
+}: {
+  choice: ReturnType<typeof useAccountChoice>;
+  className?: string;
+}) {
+  return (
+    <WsField label="Account" className={className}>
+      <Select value={choice.accountId} onValueChange={choice.setAccountId}>
+        <SelectTrigger className={WS_SELECT_TRIGGER}>
+          <SelectValue placeholder="Select account" />
+        </SelectTrigger>
+        <SelectContent>
+          {choice.accounts.map((a) => (
+            <SelectItem key={a.id} value={a.id}>
+              {a.name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </WsField>
+  );
+}
+
 export interface EntrySettleValues {
   amount: number;
   date: Date;
+  /** Set when settling a manual ledger entry — the account its cash leg posts to. */
+  accountId?: string;
 }
 
 /**
@@ -351,6 +394,9 @@ export function EntrySettleForm({
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // Only a manual ledger entry posts a Transaction; a split-expense share settles through its own path.
+  const needsAccount = row.settle?.kind === "entry";
+  const account = useAccountChoice();
   const firstName = personName.split(" ")[0];
   const effect = row.direction === "iOwe" ? `Money you repay ${firstName}` : `Money ${firstName} pays you back`;
 
@@ -366,10 +412,14 @@ export function EntrySettleForm({
       setError(`Can't exceed the ${formatCurrency(max)} still open.`);
       return;
     }
+    if (needsAccount && !account.accountId) {
+      setError("Select an account.");
+      return;
+    }
     setError(null);
     setSaving(true);
     try {
-      await onSubmit({ amount: value, date: new Date(date) });
+      await onSubmit({ amount: value, date: new Date(date), accountId: needsAccount ? account.accountId : undefined });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Couldn't record the settlement. Please try again.");
       setSaving(false);
@@ -384,13 +434,14 @@ export function EntrySettleForm({
           {effect} · <span className="font-medium text-foreground tabular-nums">{formatCurrency(max)}</span> open
         </p>
       </div>
-      <div className="mt-2.5 grid gap-3 sm:grid-cols-2">
+      <div className={cn("mt-2.5 grid gap-3", needsAccount ? "sm:grid-cols-3" : "sm:grid-cols-2")}>
         <WsField label="Amount">
           <CompactAmountInput label="Settlement amount" value={amount} onChange={setAmount} invalid={!!error} autoFocus />
         </WsField>
         <WsField label="Date">
           <input type="date" className={WS_FIELD} value={date} onChange={(e) => setDate(e.target.value)} />
         </WsField>
+        {needsAccount && <AccountField choice={account} />}
       </div>
       {error && (
         <p className="mt-1.5 text-xs font-medium text-expense" role="alert">

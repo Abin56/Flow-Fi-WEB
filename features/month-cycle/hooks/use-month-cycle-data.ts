@@ -271,7 +271,7 @@ export function useMonthCycleData() {
     const range: DateRange = cycleRange;
     const previousRange = previousRangeFor(strategy, range)!;
 
-    const dashboardTransactions: DashboardTransaction[] = (transactions as Transaction[]).filter((t) => !isLoanPrincipalDisbursement(t)).map((t) => ({
+    const dashboardTransactions: DashboardTransaction[] = (transactions as Transaction[]).filter((t) => !isLoanPrincipalDisbursement(t) && !t.isPersonLedgerMovement).map((t) => ({
       id: t.id,
       type: t.type === "income" ? "income" : "expense",
       amount: t.amount,

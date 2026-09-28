@@ -29,6 +29,7 @@ function txn(id: string, o: Partial<Transaction> = {}): Transaction {
     installmentId: null,
     installmentPaymentId: null,
     paymentAllocationType: null,
+    isPersonLedgerMovement: false,
     deletedAt: null,
     lastEditedAt: null,
     editHistory: [],

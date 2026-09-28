@@ -62,6 +62,8 @@ export interface CreateTransactionParams {
   installmentId?: string | null;
   installmentPaymentId?: string | null;
   paymentAllocationType?: PaymentAllocationType | null;
+  /** See `Transaction.isPersonLedgerMovement`. Defaults to `false`, matching every other transaction. */
+  isPersonLedgerMovement?: boolean;
 }
 
 /**
@@ -171,6 +173,7 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
       installmentId: params.installmentId ?? null,
       installmentPaymentId: params.installmentPaymentId ?? null,
       paymentAllocationType: params.paymentAllocationType ?? null,
+      isPersonLedgerMovement: params.isPersonLedgerMovement ?? false,
       deletedAt: null,
       lastEditedAt: null,
       editHistory: [],

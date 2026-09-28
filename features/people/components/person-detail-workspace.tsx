@@ -40,6 +40,8 @@ export interface SettleEntryParams {
   amount: number;
   date: Date;
   parentEntryId: string;
+  /** The account the settlement's cash leg posts to. */
+  accountId: string;
 }
 
 /** The workspace's internal modes — the shell (header) stays put; only the content area changes. */
@@ -230,6 +232,7 @@ export function PersonDetailWorkspace({
         amount: values.amount,
         date: values.date,
         parentEntryId: target.entry.id,
+        accountId: values.accountId ?? "",
       });
     } else {
       if (!txActions) throw new Error("Not signed in");

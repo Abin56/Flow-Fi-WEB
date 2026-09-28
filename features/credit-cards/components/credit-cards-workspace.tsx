@@ -2,18 +2,15 @@
 
 import {
   ArrowRight,
-  Award,
   CalendarClock,
   CreditCard as CreditCardIcon,
   FileText,
-  Gift,
   LayoutGrid,
   Link2,
   List,
   MoreHorizontal,
   MoreVertical,
   PieChart as PieChartIcon,
-  Plane,
   Plus,
   Receipt,
   RefreshCw,
@@ -209,18 +206,6 @@ function StatCard({
         </span>
       </div>
       <p className="font-mono text-xl font-semibold tabular-nums text-foreground">{value}</p>
-    </div>
-  );
-}
-
-function BenefitRow({ icon: Icon, iconClass, label, value }: { icon: typeof Award; iconClass: string; label: string; value: string }) {
-  return (
-    <div className="flex items-center gap-3 py-2">
-      <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-xl", iconClass)}>
-        <Icon className="size-4" />
-      </span>
-      <span className="flex-1 text-sm text-foreground">{label}</span>
-      <span className="text-sm font-semibold tabular-nums text-foreground">{value}</span>
     </div>
   );
 }
@@ -1141,18 +1126,6 @@ export function CreditCardsWorkspace() {
           </div>
         </div>
 
-        <div className="surface-flat rounded-3xl border border-border/50 p-5">
-          <h2 className="text-sm font-semibold text-foreground">Card Benefits</h2>
-          <div className="mt-2 flex flex-col divide-y divide-border/60">
-            <BenefitRow icon={Award} iconClass="bg-warning/20 text-warning-foreground" label="Reward Points" value={`${(activeCard?.rewardPoints ?? 0).toLocaleString("en-IN")} pts`} />
-            <BenefitRow icon={Gift} iconClass="bg-success/15 text-success" label="Cashback Earned" value={formatCurrency(activeCard?.cashbackEarned ?? 0)} />
-            <BenefitRow icon={Plane} iconClass="bg-purple/15 text-purple" label="Lounge Access" value={`${activeCard?.loungeVisitsLeft ?? 0} Visits Left`} />
-          </div>
-          <button type="button" className="mt-3 flex w-full items-center justify-center gap-1 rounded-xl bg-muted/70 py-2.5 text-xs font-semibold text-foreground transition-colors hover:bg-muted">
-            View All Benefits
-            <ArrowRight className="size-3.5" />
-          </button>
-        </div>
       </div>
 
       {cardFormDialog}
