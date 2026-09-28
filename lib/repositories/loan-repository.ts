@@ -126,6 +126,8 @@ export interface EditLoanParams {
   payerPersonId?: string | null;
   /** "For someone else" — see `Loan.beneficiaryPersonId`. `undefined` leaves it; `null` switches back to "For me". */
   beneficiaryPersonId?: string | null;
+  /** See `beneficiaryRepaysInstallments` on the model. `undefined` leaves it. */
+  beneficiaryRepaysInstallments?: boolean;
 }
 
 export interface EditLoanTermsParams {
@@ -817,6 +819,7 @@ export class LoanRepository extends FirestoreCrudRepository<Loan> {
       branch,
       payerPersonId,
       beneficiaryPersonId,
+      beneficiaryRepaysInstallments,
     } = params;
 
     if (loanAmount != null) {
@@ -861,6 +864,11 @@ export class LoanRepository extends FirestoreCrudRepository<Loan> {
     if (beneficiaryPersonId !== undefined && loan.direction === "taken" && beneficiaryPersonId !== currentBeneficiary) {
       updated = recordEdit(updated, "beneficiaryPersonId", currentBeneficiary ?? "none", beneficiaryPersonId ?? "none");
       updated = { ...updated, beneficiaryPersonId };
+    }
+    const currentRepays = updated.beneficiaryRepaysInstallments === true;
+    if (beneficiaryRepaysInstallments !== undefined && beneficiaryRepaysInstallments !== currentRepays) {
+      updated = recordEdit(updated, "beneficiaryRepaysInstallments", String(currentRepays), String(beneficiaryRepaysInstallments));
+      updated = { ...updated, beneficiaryRepaysInstallments };
     }
     await this.update(updated);
     return updated;

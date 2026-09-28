@@ -492,6 +492,28 @@ describe("settleAcrossPending", () => {
     expect((await repos.personRepository.getByKey(person.id))!.currentBalance).toBe(50);
   });
 
+  it("money against a Person-linked EMI obligation is recorded as received, not as me repaying", async () => {
+    const repos = buildRepos();
+    const { expense, person, installments, participant } = await splitWith(repos, "Emi", 200);
+
+    // Split share of 100 is cleared first; the remaining 1,000 is against a 2,500 EMI obligation that
+    // lives outside `currentBalance` (`PersonPosition.emiReceivable`).
+    await repos.expenseRepository.settleAcrossPending({
+      person,
+      pending: [{ expense, participant, installment: installments[0] }],
+      amount: 1100,
+      date: new Date("2026-04-10T00:00:00Z"),
+      installmentPaymentRepositoryFor: repos.installmentPaymentRepositoryFor,
+      emiReceivable: 2500,
+    });
+
+    const remainder = (await repos.ledgerRepositoryFor(person.id).getAll()).find((e) => e.note === "Settled all")!;
+    expect(remainder.type).toBe("receivedBack");
+    expect(remainder.amount).toBe(1000);
+    // Ledger balance −1,000 + EMI receivable 2,500 = 1,500 still owed to me.
+    expect((await repos.personRepository.getByKey(person.id))!.currentBalance).toBe(-1000);
+  });
+
   it("repeated partial settlements sum to the full share without double-crediting", async () => {
     const repos = buildRepos();
     const { expense, person, installments, participant } = await splitWith(repos, "Pat", 200);

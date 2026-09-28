@@ -50,7 +50,10 @@ export function SettleUpDialog({
   // nor its direction may include a Loan, including one an old Web Loan once mirrored into the ledger.
   const { positionsByPersonId } = usePersonPositions();
   const position = person ? positionsByPersonId[person.id] : undefined;
-  const directBalance = position?.directBalance ?? person?.currentBalance ?? 0;
+  // Opted-in Person-linked EMI installments are People obligations too — repaid through this same
+  // Settle Up (a "Received back" ledger entry), never by paying the lender.
+  const emiReceivable = position?.emiReceivable ?? 0;
+  const directBalance = (position?.directBalance ?? person?.currentBalance ?? 0) + emiReceivable;
   const loanBalance = position ? position.loanReceivable - position.loanPayable : 0;
   const totalPending = Math.abs(directBalance);
   const directionLabel = directBalance > 0 ? "Receive money from" : "Pay money to";
@@ -93,7 +96,7 @@ export function SettleUpDialog({
     setError(null);
     setSaving(true);
     try {
-      await actions.settleAcrossPending({ person, pending, amount, date: new Date(), legacyLoanLedger: position?.legacyLoanLedger ?? 0 });
+      await actions.settleAcrossPending({ person, pending, amount, date: new Date(), legacyLoanLedger: position?.legacyLoanLedger ?? 0, emiReceivable });
       handleOpenChange(false);
     } catch {
       // toasted by withErrorToast

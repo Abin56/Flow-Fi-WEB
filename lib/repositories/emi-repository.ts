@@ -139,6 +139,8 @@ export interface EditEmiParams {
   clearPurchaseTransactionId?: boolean;
   /** "For someone else" — see `Emi.beneficiaryPersonId`. `undefined` leaves it; `null` switches back to "For me". */
   beneficiaryPersonId?: string | null;
+  /** See `beneficiaryRepaysInstallments` on the model. `undefined` leaves it. */
+  beneficiaryRepaysInstallments?: boolean;
 }
 
 export interface EditEmiTermsParams {
@@ -323,6 +325,7 @@ export class EmiRepository extends FirestoreCrudRepository<Emi> {
       purchaseTransactionId,
       clearPurchaseTransactionId = false,
       beneficiaryPersonId,
+      beneficiaryRepaysInstallments,
     } = params;
 
     if (principalAmount != null) {
@@ -432,6 +435,11 @@ export class EmiRepository extends FirestoreCrudRepository<Emi> {
     if (beneficiaryPersonId !== undefined && beneficiaryPersonId !== currentBeneficiary) {
       updated = recordEdit(updated, "beneficiaryPersonId", currentBeneficiary ?? "none", beneficiaryPersonId ?? "none");
       updated = { ...updated, beneficiaryPersonId };
+    }
+    const currentRepays = updated.beneficiaryRepaysInstallments === true;
+    if (beneficiaryRepaysInstallments !== undefined && beneficiaryRepaysInstallments !== currentRepays) {
+      updated = recordEdit(updated, "beneficiaryRepaysInstallments", String(currentRepays), String(beneficiaryRepaysInstallments));
+      updated = { ...updated, beneficiaryRepaysInstallments };
     }
     await this.update(updated);
   }

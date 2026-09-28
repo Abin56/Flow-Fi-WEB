@@ -176,9 +176,18 @@ export interface Loan extends SoftDeletableEntity {
    * never feeds `person-position.ts`, so no Person receivable is created or implied. Deliberately
    * separate from `personId` (the lender) and `payerPersonId` (who pays the installments), per
    * docs/unified-finance-agreement-contract.md ("do not overload `personId`"). `null`/absent means
-   * "For me" (the default, and every legacy document).
+   * "For me" (the default, and every legacy document). On its own it never creates a receivable —
+   * only together with the explicit `beneficiaryRepaysInstallments` opt-in.
    */
   beneficiaryPersonId?: string | null;
+
+  /**
+   * Explicit opt-in: the beneficiary repays me each installment, so every installment becomes a Person
+   * obligation (`lib/engines/person-emi-obligations.ts`). Only meaningful with `beneficiaryPersonId`.
+   * Absent/false — every legacy document — keeps "Who is this for?" a pure association. Paying the
+   * lender never settles it; only a Person settlement in the ledger does. Written only when true.
+   */
+  beneficiaryRepaysInstallments?: boolean;
 
   /** Locked once any payment has been recorded — see `LoanRepository.editLoan`. */
   loanAmount: number;
@@ -280,6 +289,7 @@ export function loanFromFirestore(
       ? (data.fundingSource as LoanFundingSource)
       : null,
     linkedCreditCardId: (data.linkedCreditCardId as string | undefined) ?? null,
+    beneficiaryRepaysInstallments: data.beneficiaryRepaysInstallments === true,
     purchaseTransactionId: (data.purchaseTransactionId as string | undefined) ?? null,
     purchaseAmount: (data.purchaseAmount as number | undefined) ?? null,
     downPayment: (data.downPayment as number | undefined) ?? null,
@@ -331,6 +341,7 @@ export function loanToFirestore(loan: Loan): DocumentData {
     branch: loan.branch ?? null,
     payerPersonId: loan.payerPersonId ?? null,
     beneficiaryPersonId: loan.beneficiaryPersonId ?? null,
+    ...(loan.beneficiaryRepaysInstallments === true ? { beneficiaryRepaysInstallments: true } : {}),
     loanAmount: loan.loanAmount,
     interest: loan.interest == null ? null : loanInterestToMap(loan.interest),
     loanDate: Timestamp.fromDate(loan.loanDate),

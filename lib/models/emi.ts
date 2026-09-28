@@ -155,9 +155,18 @@ export interface Emi extends SoftDeletableEntity {
    * the account owner (e.g. a ₹40,000 card EMI for a friend's phone). Same meaning as
    * `Loan.beneficiaryPersonId`: a pure association — the EMI stays my liability, and a card-linked
    * EMI keeps locking/restoring its card's available credit exactly as before. Never a counterparty,
-   * never a Person receivable. `null`/absent means "For me" (the default, and every legacy document).
+   * never a Person receivable on its own (see `beneficiaryRepaysInstallments` for the explicit opt-in).
+   * `null`/absent means "For me" (the default, and every legacy document).
    */
   beneficiaryPersonId?: string | null;
+
+  /**
+   * Explicit opt-in: the beneficiary repays me each installment, so every installment becomes a Person
+   * obligation (`lib/engines/person-emi-obligations.ts`). Only meaningful with `beneficiaryPersonId`.
+   * Absent/false — every legacy document — keeps "Who is this for?" a pure association. Paying the
+   * lender never settles it; only a Person settlement in the ledger does. Written only when true.
+   */
+  beneficiaryRepaysInstallments?: boolean;
 
   /** Locked once any payment has been recorded — see `EmiRepository.editEmi`. */
   principalAmount: number;
@@ -332,6 +341,7 @@ export function emiFromFirestore(
     id: snapshot.id,
     name: data.name as string,
     lenderName: (data.lenderName as string | undefined) ?? null,
+    beneficiaryRepaysInstallments: data.beneficiaryRepaysInstallments === true,
     categoryId: (data.categoryId as string | undefined) ?? null,
     principalAmount: data.principalAmount as number,
     interest: data.interest == null ? null : emiInterestFromMap(data.interest as Record<string, unknown>),
@@ -399,6 +409,7 @@ export function emiToFirestore(emi: Emi): DocumentData {
     linkedCreditCardId: emi.linkedCreditCardId,
     purchaseTransactionId: emi.purchaseTransactionId,
     beneficiaryPersonId: emi.beneficiaryPersonId ?? null,
+    ...(emi.beneficiaryRepaysInstallments === true ? { beneficiaryRepaysInstallments: true } : {}),
     dueDayOfMonth: emi.dueDayOfMonth,
     deletedAt: emi.deletedAt == null ? null : Timestamp.fromDate(emi.deletedAt),
     lastEditedAt: emi.lastEditedAt == null ? null : Timestamp.fromDate(emi.lastEditedAt),
