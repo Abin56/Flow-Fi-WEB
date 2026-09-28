@@ -1,16 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import {
-  ArrowDownToLine,
-  ArrowUpFromLine,
-  Contact,
-  IndianRupee,
-  User,
-  Users,
-  type LucideIcon,
-} from "lucide-react";
-import { ConfirmDialog, FLAT_INPUT, FormDialog, SectionedFormDialog, SectionLabel } from "@/components/finance";
+import { Contact, IndianRupee, User, Users } from "lucide-react";
+import { ConfirmDialog, FLAT_INPUT, SectionedFormDialog, SectionLabel } from "@/components/finance";
 import { EmptyState } from "@/components/finance/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PeopleGrid } from "@/features/people/components/people-grid";
@@ -19,32 +11,14 @@ import { PeopleStats } from "@/features/people/components/people-stats";
 import { PeopleTable } from "@/features/people/components/people-table";
 import { type PeopleTab, PeopleToolbar } from "@/features/people/components/people-toolbar";
 import { PersonOverviewPanel } from "@/features/people/components/person-overview-panel";
-import { ShareExpenseDialog } from "@/features/people/components/share-expense-dialog";
-import { SettleUpDialog } from "@/features/people/components/settle-up-dialog";
-import { usePeopleActions, usePeopleRows, type PersonActivityItem } from "@/features/people/hooks/use-people-data";
-import { SettleEntryDialog } from "@/features/people/components/settle-entry-dialog";
+import type { AddEntryParams } from "@/features/people/components/workspace/add-entry-mode";
+import type { EditPersonPatch } from "@/features/people/components/workspace/edit-person-mode";
+import type { SettleEntryParams } from "@/features/people/components/workspace/settle-entry-mode";
+import { usePeopleActions, usePeopleRows } from "@/features/people/hooks/use-people-data";
 import { usePeople } from "@/hooks/use-people";
-import { useAccounts } from "@/hooks/use-accounts";
-import { useCategories } from "@/hooks/use-categories";
-import type { LedgerEntryType, Person } from "@/lib/models/person";
+import type { Person } from "@/lib/models/person";
 import { cn } from "@/lib/utils";
 import { toast } from "@/store/toast-store";
-
-/**
- * Only the two debt-opening types — "I repaid"/"Received back" are settlement actions, reachable only
- * from an individual "gave"/"borrowed" transaction in the person's ledger (see `SettleEntryDialog`),
- * not from the general Add Transaction flow.
- */
-const LEDGER_ENTRY_TYPE_OPTIONS: {
-  value: Extract<LedgerEntryType, "gave" | "borrowed">;
-  label: string;
-  description: string;
-  icon: LucideIcon;
-  tone: "expense" | "success";
-}[] = [
-  { value: "gave", label: "I Gave", description: "They owe me", icon: ArrowUpFromLine, tone: "expense" },
-  { value: "borrowed", label: "I Borrowed", description: "I owe them", icon: ArrowDownToLine, tone: "success" },
-];
 
 interface PersonFormState {
   name: string;
@@ -56,27 +30,6 @@ interface PersonFormState {
 
 function emptyPersonForm(): PersonFormState {
   return { name: "", phone: "", email: "", openingBalance: "0", notes: "" };
-}
-
-function personFormFromPerson(person: Person): PersonFormState {
-  return {
-    name: person.name,
-    phone: person.phone ?? "",
-    email: person.email ?? "",
-    openingBalance: String(person.openingBalance),
-    notes: person.notes,
-  };
-}
-
-interface LedgerEntryFormState {
-  type: Extract<LedgerEntryType, "gave" | "borrowed">;
-  amount: string;
-  date: string;
-  note: string;
-}
-
-function emptyLedgerEntryForm(): LedgerEntryFormState {
-  return { type: "gave", amount: "", date: new Date().toISOString().slice(0, 10), note: "" };
 }
 
 function PeopleListSkeleton() {
@@ -97,8 +50,6 @@ export function PeopleWorkspace() {
   const { rows: people, isLoading } = usePeopleRows();
   const { data: rawPeople = [] } = usePeople();
   const actions = usePeopleActions();
-  const { data: accounts = [] } = useAccounts();
-  const { data: categories = [] } = useCategories();
 
   const [tab, setTab] = useState<PeopleTab>("all");
   const [search, setSearch] = useState("");
@@ -106,37 +57,17 @@ export function PeopleWorkspace() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(8);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [overviewOpen, setOverviewOpen] = useState(true);
 
   const [addPersonOpen, setAddPersonOpen] = useState(false);
-  const [editingPerson, setEditingPerson] = useState<Person | null>(null);
   const [deletingPerson, setDeletingPerson] = useState<Person | null>(null);
-  const [addEntryPerson, setAddEntryPerson] = useState<Person | null>(null);
-  const [shareExpensePerson, setShareExpensePerson] = useState<Person | null>(null);
-  const [settleUpPerson, setSettleUpPerson] = useState<Person | null>(null);
-  const [settleEntry, setSettleEntry] = useState<PersonActivityItem | null>(null);
   const [personForm, setPersonForm] = useState<PersonFormState>(emptyPersonForm);
   const [personFormError, setPersonFormError] = useState<string | null>(null);
-  const [entryForm, setEntryForm] = useState<LedgerEntryFormState>(emptyLedgerEntryForm);
-  const [entryFormError, setEntryFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   function openAddPerson() {
     setPersonForm(emptyPersonForm());
     setPersonFormError(null);
     setAddPersonOpen(true);
-  }
-
-  function openEditPerson(person: Person) {
-    setPersonForm(personFormFromPerson(person));
-    setPersonFormError(null);
-    setEditingPerson(person);
-  }
-
-  function openAddEntry(person: Person) {
-    setEntryForm(emptyLedgerEntryForm());
-    setEntryFormError(null);
-    setAddEntryPerson(person);
   }
 
   async function handleSavePerson() {
@@ -146,8 +77,8 @@ export function PeopleWorkspace() {
       setPersonFormError("Name is required.");
       return;
     }
-    const openingBalance = editingPerson ? 0 : Number(personForm.openingBalance || "0");
-    if (!editingPerson && !Number.isFinite(openingBalance)) {
+    const openingBalance = Number(personForm.openingBalance || "0");
+    if (!Number.isFinite(openingBalance)) {
       setPersonFormError("Opening balance must be a number.");
       return;
     }
@@ -155,25 +86,15 @@ export function PeopleWorkspace() {
     setSaving(true);
     setPersonFormError(null);
     try {
-      if (editingPerson) {
-        await actions.editPerson(editingPerson, {
-          name,
-          phone: personForm.phone || null,
-          email: personForm.email || null,
-          notes: personForm.notes,
-        });
-        setEditingPerson(null);
-      } else {
-        await actions.createPerson({
-          name,
-          avatarColorValue: 0,
-          openingBalance,
-          phone: personForm.phone || null,
-          email: personForm.email || null,
-          notes: personForm.notes,
-        });
-        setAddPersonOpen(false);
-      }
+      await actions.createPerson({
+        name,
+        avatarColorValue: 0,
+        openingBalance,
+        phone: personForm.phone || null,
+        email: personForm.email || null,
+        notes: personForm.notes,
+      });
+      setAddPersonOpen(false);
     } catch (e) {
       setPersonFormError(e instanceof Error ? e.message : "Something went wrong. Please try again.");
     } finally {
@@ -192,36 +113,26 @@ export function PeopleWorkspace() {
     }
   }
 
-  async function handleAddEntry() {
-    if (!actions || !addEntryPerson) return;
-    const amount = Number(entryForm.amount);
-    if (!Number.isFinite(amount) || amount <= 0) {
-      setEntryFormError("Amount must be greater than 0.");
-      return;
-    }
-
-    setSaving(true);
-    setEntryFormError(null);
-    try {
-      await actions.addLedgerEntry(addEntryPerson, {
-        type: entryForm.type,
-        amount,
-        date: new Date(entryForm.date),
-        note: entryForm.note || undefined,
-        receivedStatus: "yetToReceive",
-      });
-      setAddEntryPerson(null);
-    } catch (e) {
-      setEntryFormError(e instanceof Error ? e.message : "Something went wrong. Please try again.");
-    } finally {
-      setSaving(false);
-    }
+  /** Same `editPerson` payload the old Edit Person dialog sent; errors surface in the workspace's Edit mode. */
+  async function handleEditPerson(person: Person, patch: EditPersonPatch) {
+    if (!actions) throw new Error("Not signed in");
+    await actions.editPerson(person, patch);
   }
 
-  async function handleSettleEntry(params: { type: "repaid" | "receivedBack"; amount: number; date: Date; parentEntryId: string }) {
+  /** Same `addLedgerEntry` payload the old Add Transaction dialog sent; errors surface in the workspace's Add mode. */
+  async function handleAddEntry(person: Person, params: AddEntryParams) {
     if (!actions) throw new Error("Not signed in");
-    const person = rawPeople.find((p) => p.id === settleEntry?.personId);
-    if (!person) throw new Error("Person not found");
+    await actions.addLedgerEntry(person, {
+      type: params.type,
+      amount: params.amount,
+      date: params.date,
+      note: params.note,
+      receivedStatus: "yetToReceive",
+    });
+  }
+
+  async function handleSettleEntry(person: Person, params: SettleEntryParams) {
+    if (!actions) throw new Error("Not signed in");
     await actions.addLedgerEntry(person, {
       type: params.type,
       amount: params.amount,
@@ -257,11 +168,11 @@ export function PeopleWorkspace() {
 
   const paged = useMemo(() => filtered.slice((page - 1) * pageSize, page * pageSize), [filtered, page, pageSize]);
 
-  const selected = people.find((p) => p.id === selectedId) ?? people[0];
+  const selected = selectedId ? people.find((p) => p.id === selectedId) : undefined;
+  const selectedRaw = selected ? (rawPeople.find((p) => p.id === selected.id) ?? null) : null;
 
   function selectPerson(id: string) {
     setSelectedId(id);
-    setOverviewOpen(true);
   }
 
   function changeTab(next: PeopleTab) {
@@ -270,8 +181,8 @@ export function PeopleWorkspace() {
   }
 
   return (
-    <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
-      <div className="flex min-w-0 flex-col gap-6 lg:flex-[1.4]">
+    <div className="flex flex-col gap-6">
+      <div className="flex min-w-0 flex-col gap-6">
         <PeopleHeader onAddPerson={openAddPerson} />
         <PeopleStats />
 
@@ -325,75 +236,39 @@ export function PeopleWorkspace() {
         </div>
       </div>
 
-      {overviewOpen && selected && (
+      {selected && (
         <PersonOverviewPanel
           person={selected}
-          onClose={() => setOverviewOpen(false)}
-          onAddTransaction={() => {
-            const raw = rawPeople.find((p) => p.id === selected.id);
-            if (raw) openAddEntry(raw);
+          rawPerson={selectedRaw}
+          open
+          onClose={() => setSelectedId(null)}
+          onAddEntry={async (params) => {
+            if (!selectedRaw) throw new Error("Person not found");
+            await handleAddEntry(selectedRaw, params);
           }}
-          onShareExpense={() => {
-            const raw = rawPeople.find((p) => p.id === selected.id);
-            if (raw) setShareExpensePerson(raw);
+          onSettleEntry={async (params) => {
+            if (!selectedRaw) throw new Error("Person not found");
+            await handleSettleEntry(selectedRaw, params);
           }}
-          onSettleUp={() => {
-            const raw = rawPeople.find((p) => p.id === selected.id);
-            if (raw) setSettleUpPerson(raw);
-          }}
-          onEdit={() => {
-            const raw = rawPeople.find((p) => p.id === selected.id);
-            if (raw) openEditPerson(raw);
+          onEditPerson={async (patch) => {
+            if (!selectedRaw) throw new Error("Person not found");
+            await handleEditPerson(selectedRaw, patch);
           }}
           onDelete={() => {
-            const raw = rawPeople.find((p) => p.id === selected.id);
-            if (raw) setDeletingPerson(raw);
+            if (selectedRaw) setDeletingPerson(selectedRaw);
           }}
-          onSettleEntry={(item) => setSettleEntry(item)}
         />
       )}
-
-      <SettleEntryDialog
-        open={settleEntry != null}
-        onOpenChange={(open) => !open && setSettleEntry(null)}
-        person={rawPeople.find((p) => p.id === settleEntry?.personId) ?? null}
-        entry={settleEntry}
-        onSettle={handleSettleEntry}
-      />
-
-      {shareExpensePerson && (
-        <ShareExpenseDialog
-          open={shareExpensePerson != null}
-          onOpenChange={(open) => {
-            if (!open) setShareExpensePerson(null);
-          }}
-          person={shareExpensePerson}
-          accounts={accounts}
-          categories={categories}
-          people={rawPeople}
-        />
-      )}
-
-      <SettleUpDialog
-        open={settleUpPerson != null}
-        onOpenChange={(open) => {
-          if (!open) setSettleUpPerson(null);
-        }}
-        person={settleUpPerson}
-      />
 
       <SectionedFormDialog
-        open={addPersonOpen || editingPerson != null}
+        open={addPersonOpen}
         onOpenChange={(open) => {
-          if (!open) {
-            setAddPersonOpen(false);
-            setEditingPerson(null);
-          }
+          if (!open) setAddPersonOpen(false);
         }}
-        title={editingPerson ? `Edit ${editingPerson.name}` : "Add a Person"}
-        description={editingPerson ? undefined : "Someone you lend to or borrow from — start tracking a running ledger."}
+        title="Add a Person"
+        description="Someone you lend to or borrow from — start tracking a running ledger."
         onConfirm={handleSavePerson}
-        confirmLabel={saving ? "Saving…" : editingPerson ? "Save Changes" : "Add Person"}
+        confirmLabel={saving ? "Saving…" : "Add Person"}
         loading={saving}
         contentClassName="sm:max-w-md rounded-3xl [&_.rounded-none]:rounded-full"
       >
@@ -432,22 +307,20 @@ export function PeopleWorkspace() {
           </div>
         </div>
 
-        {!editingPerson && (
-          <div className="mt-5 flex flex-col gap-1 rounded-2xl bg-muted/30 p-4">
-            <SectionLabel icon={IndianRupee}>Opening Balance</SectionLabel>
-            <div className="relative mt-2">
-              <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary-accent-text">₹</span>
-              <input
-                type="number"
-                className={cn(FLAT_INPUT, "rounded-xl border-primary/30 bg-primary/5 pl-7 text-base font-semibold focus:border-primary")}
-                placeholder="0.00"
-                value={personForm.openingBalance}
-                onChange={(e) => setPersonForm((f) => ({ ...f, openingBalance: e.target.value }))}
-              />
-            </div>
-            <span className="mt-1 text-xs text-muted-foreground">Positive if they owe you, negative if you owe them.</span>
+        <div className="mt-5 flex flex-col gap-1 rounded-2xl bg-muted/30 p-4">
+          <SectionLabel icon={IndianRupee}>Opening Balance</SectionLabel>
+          <div className="relative mt-2">
+            <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary-accent-text">₹</span>
+            <input
+              type="number"
+              className={cn(FLAT_INPUT, "rounded-xl border-primary/30 bg-primary/5 pl-7 text-base font-semibold focus:border-primary")}
+              placeholder="0.00"
+              value={personForm.openingBalance}
+              onChange={(e) => setPersonForm((f) => ({ ...f, openingBalance: e.target.value }))}
+            />
           </div>
-        )}
+          <span className="mt-1 text-xs text-muted-foreground">Positive if they owe you, negative if you owe them.</span>
+        </div>
 
         {personFormError && (
           <p className="flex items-center gap-1.5 rounded-xl border border-expense/30 bg-expense/8 px-3 py-2 text-xs font-medium text-expense">
@@ -455,94 +328,6 @@ export function PeopleWorkspace() {
           </p>
         )}
       </SectionedFormDialog>
-
-      <FormDialog
-        open={addEntryPerson != null}
-        onOpenChange={(open) => !open && setAddEntryPerson(null)}
-        title={`Add Transaction — ${addEntryPerson?.name ?? ""}`}
-        onConfirm={handleAddEntry}
-        confirmLabel={saving ? "Saving…" : "Save"}
-        contentClassName="sm:max-w-lg"
-      >
-        <div className="flex flex-col gap-3 rounded-2xl bg-muted/30 p-4 text-sm">
-          <SectionLabel icon={IndianRupee}>Transaction Details</SectionLabel>
-          <div className="flex flex-col gap-1.5">
-            <span className="text-xs font-medium text-muted-foreground">Type</span>
-            <div className="grid grid-cols-2 gap-2">
-              {LEDGER_ENTRY_TYPE_OPTIONS.map((o) => {
-                const Icon = o.icon;
-                const active = entryForm.type === o.value;
-                return (
-                  <button
-                    key={o.value}
-                    type="button"
-                    onClick={() => setEntryForm((f) => ({ ...f, type: o.value }))}
-                    aria-pressed={active}
-                    className={cn(
-                      "flex items-center gap-2.5 rounded-xl border p-2.5 text-left transition-colors",
-                      active
-                        ? o.tone === "success"
-                          ? "border-success/40 bg-success/10"
-                          : "border-expense/40 bg-expense/10"
-                        : "border-border/50 bg-card hover:border-border",
-                    )}
-                  >
-                    <span
-                      className={cn(
-                        "flex size-8 shrink-0 items-center justify-center rounded-full",
-                        active
-                          ? o.tone === "success"
-                            ? "bg-success/20 text-success"
-                            : "bg-expense/20 text-expense"
-                          : "bg-muted text-muted-foreground",
-                      )}
-                    >
-                      <Icon className="size-4" />
-                    </span>
-                    <div className="min-w-0">
-                      <p className={cn("truncate text-sm font-semibold", active ? "text-foreground" : "text-foreground/90")}>{o.label}</p>
-                      <p className="truncate text-xs text-muted-foreground">{o.description}</p>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <label className="flex flex-col gap-1">
-              <span className="text-xs font-medium text-muted-foreground">Amount</span>
-              <div className="relative">
-                <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary-accent-text">₹</span>
-                <input
-                  type="number"
-                  className="clay-pressed h-10 w-full rounded-xl border border-primary/20 bg-primary/5 pl-7 text-sm font-semibold outline-none"
-                  placeholder="0.00"
-                  value={entryForm.amount}
-                  onChange={(e) => setEntryForm((f) => ({ ...f, amount: e.target.value }))}
-                />
-              </div>
-            </label>
-            <label className="flex flex-col gap-1">
-              <span className="text-xs font-medium text-muted-foreground">Date</span>
-              <input
-                type="date"
-                className="clay-pressed h-10 rounded-xl px-3 text-sm outline-none"
-                value={entryForm.date}
-                onChange={(e) => setEntryForm((f) => ({ ...f, date: e.target.value }))}
-              />
-            </label>
-          </div>
-          <label className="flex flex-col gap-1">
-            <span className="text-xs font-medium text-muted-foreground">Note (optional)</span>
-            <input
-              className="clay-pressed h-10 rounded-xl px-3 text-sm outline-none"
-              value={entryForm.note}
-              onChange={(e) => setEntryForm((f) => ({ ...f, note: e.target.value }))}
-            />
-          </label>
-          {entryFormError && <p className="text-xs text-expense">{entryFormError}</p>}
-        </div>
-      </FormDialog>
 
       <ConfirmDialog
         open={deletingPerson != null}

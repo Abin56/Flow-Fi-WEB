@@ -1,30 +1,55 @@
 "use client";
 
-import { ChevronDown, ChevronLeft, ChevronRight, Share2 } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
 import { useState } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
-import { usePersonCycleStatement } from "@/features/people/hooks/use-person-cycle-statement";
-import { cycleContaining, formatCycleLabel, sameCycle, shiftCycle, type StatementCycle } from "@/lib/engines/person-cycle-statement";
+import type { LinkedEmiSource } from "@/features/people/hooks/use-person-cycle-statement";
+import {
+  cycleContaining,
+  directionHeadline,
+  formatCycleLabel,
+  sameCycle,
+  shiftCycle,
+  type PersonCycleStatement,
+  type StatementCycle,
+} from "@/lib/engines/person-cycle-statement";
+import { money } from "@/lib/engines/person-cycle-statement-share";
 import { cn } from "@/lib/utils";
 import { toast } from "@/store/toast-store";
-import { StatementPreviewDialog } from "./statement-preview-dialog";
-import {
-  EmiBadge,
-  StatementActivityRow,
-  StatementBreakdown,
-  StatementCalculation,
-  StatementHeadline,
-  StatementReconciliation,
-} from "./statement-parts";
+import { EmiBadge, StatementBreakdown, StatementCalculation, StatementReconciliation } from "./statement-parts";
 
-/** The People Ledger's monthly (18th → 17th) settlement statement for one person. */
-export function PersonCycleStatementSection({ personId, phone }: { personId: string; phone?: string | null }) {
-  const [cycle, setCycle] = useState<StatementCycle>(() => cycleContaining(new Date()));
-  const [previewOpen, setPreviewOpen] = useState(false);
+const NAV_BUTTON =
+  "flex size-7 items-center justify-center rounded-[6px] text-muted-foreground transition-colors outline-none hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring";
+
+/**
+ * The People Ledger's monthly (18th → 17th) settlement summary for one person — the balance hero, cycle
+ * switcher and compact reconciliation. Presentational only: the statement comes from
+ * `usePersonCycleStatement`, owned by the Person workspace so its activity feed reads the same result.
+ */
+export function PersonCycleStatementSection({
+  statement,
+  isLoading,
+  cycle,
+  onCycleChange,
+  linkedEmis,
+  setRepays,
+  actions,
+  footnote,
+}: {
+  statement: PersonCycleStatement | null;
+  isLoading: boolean;
+  cycle: StatementCycle;
+  onCycleChange: (cycle: StatementCycle) => void;
+  linkedEmis: LinkedEmiSource[];
+  setRepays: (source: LinkedEmiSource, repays: boolean) => Promise<void>;
+  /** Rendered directly under the balance (the workspace's action bar). */
+  actions?: React.ReactNode;
+  /** Small print under the actions (e.g. the loans-outside-this-statement note). */
+  footnote?: React.ReactNode;
+}) {
   const [howOpen, setHowOpen] = useState(false);
-  const { statement, isLoading, linkedEmis, setRepays } = usePersonCycleStatement(personId, cycle);
   const [savingLink, setSavingLink] = useState<string | null>(null);
-  const toggleRepays = async (source: (typeof linkedEmis)[number]) => {
+  const toggleRepays = async (source: LinkedEmiSource) => {
     setSavingLink(source.id);
     try {
       await setRepays(source, !source.repays);
@@ -35,138 +60,127 @@ export function PersonCycleStatementSection({ personId, phone }: { personId: str
     }
   };
   const isCurrent = sameCycle(cycle, cycleContaining(new Date()));
+  const loading = isLoading || statement == null;
+  const tone =
+    statement?.direction === "theyOwe" ? "text-success" : statement?.direction === "iOwe" ? "text-expense" : "text-foreground";
 
   return (
-    <section className="mt-4 rounded-xl border border-border bg-card">
-      <div className="flex items-center justify-between gap-2 border-b border-border px-2 py-1.5">
-        <button
-          type="button"
-          aria-label="Previous cycle"
-          onClick={() => setCycle((c) => shiftCycle(c, -1))}
-          className="flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
-        >
-          <ChevronLeft className="size-4" />
-        </button>
-        <div className="text-center">
-          <p className="text-[10px] font-semibold tracking-wider text-muted-foreground uppercase">
-            {isCurrent ? "Current cycle" : "Past cycle"}
-          </p>
-          <p className="text-sm font-semibold text-foreground tabular-nums">{formatCycleLabel(cycle)}</p>
-        </div>
-        <div className="flex items-center gap-0.5">
-          {!isCurrent && (
-            <button
-              type="button"
-              onClick={() => setCycle(cycleContaining(new Date()))}
-              className="rounded-md px-1.5 py-1 text-[11px] font-semibold text-primary-accent-text hover:bg-muted"
-            >
-              Today
-            </button>
-          )}
-          <button
-            type="button"
-            aria-label="Next cycle"
-            onClick={() => setCycle((c) => shiftCycle(c, 1))}
-            className="flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
-          >
-            <ChevronRight className="size-4" />
+    <section className="grid gap-x-8 gap-y-5 md:grid-cols-[minmax(0,1fr)_17rem]">
+      {/* Balance hero */}
+      <div className="min-w-0">
+        <p className="text-[11px] font-medium tracking-[0.08em] text-muted-foreground uppercase">Current position</p>
+        {loading ? (
+          <div className="mt-2 space-y-2">
+            <Skeleton className="h-5 w-28" />
+            <Skeleton className="h-10 w-40" />
+          </div>
+        ) : (
+          <>
+            <p className={cn("mt-2 font-heading text-lg leading-tight font-semibold tracking-tight", tone)}>{directionHeadline(statement.direction)}</p>
+            <p className="mt-0.5 font-heading text-[42px] leading-[1.05] font-bold tracking-tight text-foreground tabular-nums sm:text-[48px]">
+              {money(statement.amount)}
+            </p>
+          </>
+        )}
+
+        {/* Cycle switcher — supports the balance, never competes with it */}
+        <div className="-ml-1.5 mt-3 flex items-center gap-0.5 text-muted-foreground">
+          <button type="button" aria-label="Previous cycle" onClick={() => onCycleChange(shiftCycle(cycle, -1))} className={NAV_BUTTON}>
+            <ChevronLeft className="size-4" strokeWidth={1.75} />
+          </button>
+          <span className="min-w-[9.5rem] px-1 text-center text-[13px] font-medium text-foreground tabular-nums">{formatCycleLabel(cycle)}</span>
+          <button type="button" aria-label="Next cycle" onClick={() => onCycleChange(shiftCycle(cycle, 1))} className={NAV_BUTTON}>
+            <ChevronRight className="size-4" strokeWidth={1.75} />
           </button>
         </div>
+        <div className="mt-0.5 h-5">
+          {isCurrent ? (
+            <span className="text-[11px] text-muted-foreground">Current cycle</span>
+          ) : (
+            <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+              Past cycle ·
+              <button
+                type="button"
+                onClick={() => onCycleChange(cycleContaining(new Date()))}
+                className="rounded-[4px] font-semibold text-primary-accent-text underline-offset-2 hover:underline"
+              >
+                Back to current
+              </button>
+            </span>
+          )}
+        </div>
+
+        {actions && <div className="mt-6">{actions}</div>}
+        {footnote}
       </div>
 
-      {isLoading || statement == null ? (
-        <div className="space-y-2 p-4">
-          <Skeleton className="h-4 w-24" />
-          <Skeleton className="h-8 w-36" />
-          <Skeleton className="h-20 w-full" />
-        </div>
-      ) : (
-        <div className="p-4">
-          <div className="flex items-end justify-between gap-3">
-            <StatementHeadline statement={statement} />
-            <button
-              type="button"
-              onClick={() => setPreviewOpen(true)}
-              className="flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs font-semibold text-foreground transition-colors hover:border-primary-accent-text hover:text-primary-accent-text"
-            >
-              <Share2 className="size-3.5" />
-              Share Statement
-            </button>
+      {/* Compact reconciliation */}
+      <div className="min-w-0 border-t border-border pt-5 md:border-t-0 md:border-l md:pt-1 md:pl-7">
+        {loading ? (
+          <div className="space-y-2 pt-1">
+            <Skeleton className="h-4 w-full" />
+            <Skeleton className="h-4 w-full" />
+            <Skeleton className="h-4 w-3/4" />
           </div>
-
-          <div className="mt-3">
-            <StatementReconciliation statement={statement} />
-          </div>
-
-          {statement.activityBreakdown.length > 0 && (
-            <div className="mt-3 border-t border-border pt-3">
-              <StatementBreakdown statement={statement} />
+        ) : (
+          <>
+            <p className="text-[11px] font-medium tracking-[0.08em] text-muted-foreground uppercase">This statement</p>
+            <div className="mt-2">
+              <StatementReconciliation statement={statement} />
             </div>
-          )}
 
-          <div className="mt-3 border-t border-border pt-3">
-            <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Activity</p>
-            {statement.rows.length === 0 ? (
-              <p className="py-3 text-sm text-muted-foreground">No activity in this cycle.</p>
-            ) : (
-              <ul className="mt-1 max-h-80 divide-y divide-border overflow-y-auto px-2">
-                {[...statement.rows].reverse().map((r) => (
-                  <StatementActivityRow key={r.key} statement={statement} row={r} />
-                ))}
-              </ul>
-            )}
-          </div>
-
-          {linkedEmis.length > 0 && (
-            <div className="mt-2 border-t border-border pt-2">
-              <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Linked EMIs</p>
-              <ul className="mt-1 space-y-1.5">
-                {linkedEmis.map((s) => (
-                  <li key={`${s.kind}:${s.id}`} className="flex items-center justify-between gap-2 text-xs">
-                    <span className="flex min-w-0 items-center gap-1.5">
-                      <EmiBadge />
-                      <span className="truncate text-foreground">{s.name}</span>
-                      <span className="shrink-0 text-muted-foreground">
-                        {s.repays ? `· ${statement.personName} repays you` : "· for them, not counted"}
+            {linkedEmis.length > 0 && (
+              <div className="mt-3 border-t border-border pt-2.5">
+                <p className="text-[11px] font-medium tracking-[0.08em] text-muted-foreground uppercase">Linked EMIs</p>
+                <ul className="mt-1.5 space-y-2">
+                  {linkedEmis.map((s) => (
+                    <li key={`${s.kind}:${s.id}`} className="flex flex-col gap-1 text-xs">
+                      <span className="flex min-w-0 items-center gap-1.5">
+                        <EmiBadge />
+                        <span className="truncate font-medium text-foreground">{s.name}</span>
                       </span>
-                    </span>
-                    <button
-                      type="button"
-                      disabled={savingLink === s.id}
-                      onClick={() => toggleRepays(s)}
-                      className="shrink-0 rounded-md border border-border px-2 py-0.5 font-semibold text-foreground hover:border-primary-accent-text hover:text-primary-accent-text disabled:opacity-50"
-                    >
-                      {s.repays ? "Stop counting" : `${statement.personName} repays me`}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-              <p className="mt-1 text-[11px] text-muted-foreground">
-                Paying the bank doesn&apos;t settle this — record what they pay you with Settle Up.
-              </p>
-            </div>
-          )}
-
-          <div className="mt-2 border-t border-border pt-2">
-            <button
-              type="button"
-              aria-expanded={howOpen}
-              onClick={() => setHowOpen((o) => !o)}
-              className="flex w-full items-center justify-between py-1 text-xs font-semibold text-foreground"
-            >
-              How is this calculated?
-              <ChevronDown className={cn("size-4 text-muted-foreground transition-transform", howOpen && "rotate-180")} />
-            </button>
-            {howOpen && (
-              <div className="mt-1 rounded-md bg-muted/40 p-3">
-                <StatementCalculation statement={statement} />
+                      <span className="flex items-center justify-between gap-2">
+                        <span className="text-muted-foreground">
+                          {s.repays ? `${statement.personName} repays you` : "For them, not counted"}
+                        </span>
+                        <button
+                          type="button"
+                          disabled={savingLink === s.id}
+                          onClick={() => toggleRepays(s)}
+                          className="shrink-0 rounded-[6px] border border-border-strong px-2 py-0.5 font-semibold text-foreground transition-colors hover:border-primary-accent-text hover:text-primary-accent-text disabled:opacity-50"
+                        >
+                          {s.repays ? "Stop counting" : `${statement.personName} repays me`}
+                        </button>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+                <p className="mt-1.5 text-[11px] text-muted-foreground">
+                  Paying the bank doesn&apos;t settle this — record what they pay you with Settle Up.
+                </p>
               </div>
             )}
-          </div>
 
-          <StatementPreviewDialog statement={statement} phone={phone} open={previewOpen} onOpenChange={setPreviewOpen} />
-        </div>
-      )}
+            <div className="mt-2">
+              <button
+                type="button"
+                aria-expanded={howOpen}
+                onClick={() => setHowOpen((o) => !o)}
+                className="-mx-1 flex w-[calc(100%+0.5rem)] items-center justify-between rounded-[6px] px-1 py-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+              >
+                How is this calculated?
+                <ChevronDown className={cn("size-3.5 transition-transform", howOpen && "rotate-180")} strokeWidth={1.75} />
+              </button>
+              {howOpen && (
+                <div className="mt-1.5 space-y-3 rounded-[6px] bg-secondary/60 p-3">
+                  <StatementBreakdown statement={statement} />
+                  <StatementCalculation statement={statement} />
+                </div>
+              )}
+            </div>
+          </>
+        )}
+      </div>
     </section>
   );
 }
