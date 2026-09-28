@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { AiPanel } from "@/components/ai-panel/ai-panel";
 import { CommandPalette } from "@/components/command-palette/command-palette";
 import { MobileSidebar } from "@/components/layout/mobile-sidebar";
 import { OfflineBanner } from "@/components/layout/offline-banner";
@@ -12,7 +11,6 @@ import { PageTransition } from "@/components/motion/page-transition";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const [aiPanelOpen, setAiPanelOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   useEffect(() => {
@@ -36,7 +34,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <WatcherErrorBanner />
         <Topbar
           onOpenCommandPalette={() => setPaletteOpen(true)}
-          onToggleAiPanel={() => setAiPanelOpen((v) => !v)}
           onOpenMobileNav={() => setMobileNavOpen(true)}
         />
         <main className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto px-4 py-4 sm:px-6 sm:py-6 lg:px-8 2xl:px-10">
@@ -46,7 +43,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </main>
       </div>
 
-      <AiPanel open={aiPanelOpen} onOpenChange={setAiPanelOpen} />
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
     </div>
   );

@@ -1,6 +1,6 @@
 "use client";
 
-import { Bell, Menu, Moon, Search, Sparkles, Sun } from "lucide-react";
+import { Bell, Menu, Moon, Search, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useEffect, useState } from "react";
 import { ClayAvatar } from "@/components/clay/clay-avatar";
@@ -37,11 +37,9 @@ function IconButton({
 
 export function Topbar({
   onOpenCommandPalette,
-  onToggleAiPanel,
   onOpenMobileNav,
 }: {
   onOpenCommandPalette: () => void;
-  onToggleAiPanel?: () => void;
   onOpenMobileNav: () => void;
 }) {
   const { theme, setTheme } = useTheme();
@@ -72,12 +70,6 @@ export function Topbar({
       </button>
 
       <div className="ml-auto flex items-center gap-1 sm:gap-1.5">
-        {onToggleAiPanel && (
-          <IconButton aria-label="Toggle AI assistant" onClick={onToggleAiPanel} className="hidden sm:flex">
-            <Sparkles className="size-4.5" />
-          </IconButton>
-        )}
-
         <IconButton aria-label="Notifications" disabled title="Coming soon" className="opacity-50 disabled:cursor-not-allowed">
           <Bell className="size-4.5" />
         </IconButton>

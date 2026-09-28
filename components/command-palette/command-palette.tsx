@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  Bot,
   Calendar,
   CreditCard,
   FileBarChart,
@@ -57,7 +56,6 @@ const PAGES = [
   { label: "People Ledger", href: "/people", icon: Users },
   { label: "Calendar", href: "/calendar", icon: Calendar },
   { label: "Reports", href: "/reports", icon: FileBarChart },
-  { label: "AI Assistant", href: "/ai-assistant", icon: Bot },
   { label: "Settings", href: "/settings", icon: Settings },
 ];
 

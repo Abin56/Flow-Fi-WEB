@@ -31,7 +31,7 @@ export function PersonTransactionRow({ item, onSettle }: { item: PersonActivityI
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-medium text-foreground">{item.description}</p>
         <p className="truncate text-xs text-muted-foreground">
-          {received ? "Received" : "Paid"} · {item.date}
+          {received ? "I Received" : "I Paid"} · {item.date}
           {item.remainingAmount != null && item.remainingAmount > 0 && ` · ${formatCurrency(item.remainingAmount)} remaining`}
         </p>
       </div>

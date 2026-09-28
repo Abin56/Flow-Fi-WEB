@@ -266,7 +266,7 @@ export function PersonOverviewPanel({
                   {item.type === "received" ? <ArrowDownToLine className="size-3.5" /> : <ArrowUpFromLine className="size-3.5" />}
                 </span>
                 <div className="min-w-0 flex-1">
-                  <p className="truncate font-medium text-foreground">{item.type === "received" ? "Received" : "Paid"}</p>
+                  <p className="truncate font-medium text-foreground">{item.type === "received" ? "I Received" : "I Paid"}</p>
                   <p className="truncate text-xs text-muted-foreground">{item.description}</p>
                 </div>
                 <div className="shrink-0 text-right">
