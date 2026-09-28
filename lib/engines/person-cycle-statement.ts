@@ -176,6 +176,11 @@ export interface StatementRow {
   runningBalance: number;
   /** For a settlement applied to one obligation: what it settled. */
   settles?: { title: string; originalAmount: number; remainingAfter: number };
+  /**
+   * For a settlement applied to one obligation: that obligation's row key (`ledger:{id}`) — the same
+   * link `settles` is resolved from (`parentEntryId`, or the split share's `transactionRef`).
+   */
+  settlesKey?: string;
   /** For an obligation: how much of it is still open today (settlements up to now). */
   remainingNow?: number;
   /** EMI rows only. */
@@ -424,6 +429,7 @@ export function buildPersonCycleStatement(input: PersonCycleStatementInput): Per
         original != null
           ? { title: original.title, originalAmount: original.amount, remainingAfter: remainingAfterByKey.get(e.key) ?? 0 }
           : undefined,
+      settlesKey: original != null ? e.settlesKey : undefined,
       remainingNow:
         e.kind === "obligation" && (e.category === "split" || e.category === "gave" || e.category === "borrowed" || e.category === "emi")
           ? Math.max(0, round2(e.amount - (settledSoFar.get(e.key) ?? 0)))

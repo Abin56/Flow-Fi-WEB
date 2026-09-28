@@ -10,13 +10,12 @@ import { PeopleHeader } from "@/features/people/components/people-header";
 import { PeopleStats } from "@/features/people/components/people-stats";
 import { PeopleTable } from "@/features/people/components/people-table";
 import { type PeopleTab, PeopleToolbar } from "@/features/people/components/people-toolbar";
-import { PersonOverviewPanel } from "@/features/people/components/person-overview-panel";
-import type { AddEntryParams } from "@/features/people/components/workspace/add-entry-mode";
+import { PersonOverviewPanel, type SettleEntryParams } from "@/features/people/components/person-overview-panel";
+import type { AddEntryParams } from "@/features/people/components/workspace/add-entry-panel";
 import type { EditPersonPatch } from "@/features/people/components/workspace/edit-person-mode";
-import type { SettleEntryParams } from "@/features/people/components/workspace/settle-entry-mode";
 import { usePeopleActions, usePeopleRows } from "@/features/people/hooks/use-people-data";
 import { usePeople } from "@/hooks/use-people";
-import type { Person } from "@/lib/models/person";
+import type { LedgerEntry, Person } from "@/lib/models/person";
 import { cn } from "@/lib/utils";
 import { toast } from "@/store/toast-store";
 
@@ -142,6 +141,12 @@ export function PeopleWorkspace() {
     });
   }
 
+  /** Entries come from `planEntryDeletion`/`planBulkDeletion`; each is reversed out of the balance as it is soft-deleted. */
+  async function handleDeleteEntries(person: Person, entries: LedgerEntry[]) {
+    if (!actions) throw new Error("Not signed in");
+    await actions.deleteLedgerEntries(person, entries);
+  }
+
   const counts = useMemo(
     () => ({
       all: people.length,
@@ -249,6 +254,14 @@ export function PeopleWorkspace() {
           onSettleEntry={async (params) => {
             if (!selectedRaw) throw new Error("Person not found");
             await handleSettleEntry(selectedRaw, params);
+          }}
+          onDeleteEntries={async (entries) => {
+            if (!selectedRaw) throw new Error("Person not found");
+            await handleDeleteEntries(selectedRaw, entries);
+          }}
+          onUndoSplitReceived={async ({ expense, participant }) => {
+            if (!actions) throw new Error("Not signed in");
+            await actions.setParticipantReceivedStatus(expense, participant, "yetToReceive");
           }}
           onEditPerson={async (patch) => {
             if (!selectedRaw) throw new Error("Person not found");

@@ -146,6 +146,7 @@ export function SplitExpenseMode({
   people,
   onBack,
   onDone,
+  backLabel,
 }: {
   person: Person;
   accounts: Account[];
@@ -153,6 +154,8 @@ export function SplitExpenseMode({
   people: Person[];
   onBack: () => void;
   onDone: () => void;
+  /** Label of the back link — the person's name by default ("Back to Transactions" from the expanded ledger). */
+  backLabel?: string;
 }) {
   const actions = useTransactionActions();
 
@@ -299,7 +302,7 @@ export function SplitExpenseMode({
 
   return (
     <div className="flex min-h-full flex-col">
-      <ModeHeader backLabel={person.name} onBack={onBack} title="Split expense" subtitle="Record an expense and track what each person owes." />
+      <ModeHeader backLabel={backLabel ?? person.name} onBack={onBack} title="Split expense" subtitle="Record an expense and track what each person owes." />
 
       <div className={cn(WS_PAD, "mt-5 flex-1")}>
         {/* The expense */}

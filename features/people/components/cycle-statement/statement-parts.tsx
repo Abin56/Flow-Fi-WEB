@@ -55,23 +55,35 @@ export function StatementHeadline({ statement, size = "lg" }: { statement: Perso
   );
 }
 
-/** Previous pending / This cycle / settlements / Current pending — engine values only. */
-export function StatementReconciliation({ statement }: { statement: PersonCycleStatement }) {
+/**
+ * Previous pending / This cycle / settlements / Current pending — engine values only. With
+ * `highlightCarryForward`, a non-zero Previous pending gets the pending/warning treatment and says it
+ * was carried forward, so old unpaid money never reads as this cycle's activity.
+ */
+export function StatementReconciliation({ statement, highlightCarryForward = false }: { statement: PersonCycleStatement; highlightCarryForward?: boolean }) {
   const lines = reconciliationLines(statement);
+  const carried = highlightCarryForward && Math.abs(statement.previousPending) >= 0.005;
   return (
     <dl className="text-sm">
-      {lines.map((l) => (
-        <div
-          key={l.label}
-          className={cn(
-            "flex items-baseline justify-between gap-3 py-1",
-            l.emphasis && "mt-1 border-t border-border pt-2 font-semibold text-foreground",
-          )}
-        >
-          <dt className={l.emphasis ? "text-foreground" : "text-muted-foreground"}>{l.label}</dt>
-          <dd className="tabular-nums text-foreground">{money(l.value)}</dd>
-        </div>
-      ))}
+      {lines.map((l, i) => {
+        const isCarried = carried && i === 0;
+        return (
+          <div
+            key={l.label}
+            className={cn(
+              "flex items-baseline justify-between gap-3 py-1",
+              l.emphasis && "mt-1 border-t border-border pt-2 font-semibold text-foreground",
+              isCarried && "-mx-2 mb-0.5 rounded-[6px] border-l-2 border-warning bg-warning/10 px-2",
+            )}
+          >
+            <dt className={l.emphasis || isCarried ? "text-foreground" : "text-muted-foreground"}>
+              {l.label}
+              {isCarried && <span className="block text-[11px] font-normal text-muted-foreground">Carried forward from earlier cycles</span>}
+            </dt>
+            <dd className={cn("tabular-nums text-foreground", isCarried && "font-semibold")}>{money(l.value)}</dd>
+          </div>
+        );
+      })}
     </dl>
   );
 }

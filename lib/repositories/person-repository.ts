@@ -13,6 +13,9 @@ import { type LedgerEntry, type LedgerEntryType, type Person, signedAmount } fro
 import type { ReceivedStatus } from "@/lib/models/expense";
 import { generateId } from "@/lib/utils/id-generator";
 
+/** Entries per `softDeleteEntries` transaction — 1 person + N entries, far below Firestore's 500-write cap. */
+const SOFT_DELETE_CHUNK = 200;
+
 export interface CreatePersonParams {
   name: string;
   avatarColorValue: number;
@@ -278,6 +281,47 @@ export class LedgerRepository extends FirestoreCrudRepository<LedgerEntry> {
       }
       tx.set(entryRef, { ...freshEntry, deletedAt: new Date() });
     });
+  }
+
+  /**
+   * `softDeleteEntry` for several entries at once — each entry's balance effect is reversed and the
+   * entry soft-deleted, with the person's balance written once per chunk inside the same atomic
+   * `runTransaction`. Every entry and the person are read fresh; an entry already in trash is skipped
+   * (its effect was reversed when it was deleted), so a retry never reverses anything twice. Chunked
+   * to stay well inside Firestore's per-transaction write limit; each chunk is self-consistent (its
+   * balance change matches exactly the entries it deletes).
+   */
+  async softDeleteEntries(person: Person, entries: LedgerEntry[]): Promise<void> {
+    const unique = Array.from(new Map(entries.map((e) => [e.id, e])).values());
+    const db = this.collection.firestore;
+    const personRef = this.personRepository.docRef(person.id);
+
+    for (let i = 0; i < unique.length; i += SOFT_DELETE_CHUNK) {
+      const chunk = unique.slice(i, i + SOFT_DELETE_CHUNK);
+      await runTransaction(db, async (tx) => {
+        // Every read before any write — Firestore transactions don't allow a read after a write.
+        const personSnap = await tx.get(personRef);
+        const refs = chunk.map((e) => doc(this.collection, e.id));
+        const snaps = [];
+        for (const ref of refs) snaps.push(await tx.get(ref));
+        if (!personSnap.exists()) throw new Error("Person not found");
+
+        const now = new Date();
+        let delta = 0;
+        const writes: [DocumentReference<LedgerEntry>, LedgerEntry][] = [];
+        snaps.forEach((snap, idx) => {
+          if (!snap.exists()) throw new Error("Ledger entry not found");
+          const freshEntry = snap.data();
+          if (freshEntry.deletedAt != null) return;
+          delta -= signedAmount(freshEntry);
+          writes.push([refs[idx], { ...freshEntry, deletedAt: now }]);
+        });
+        if (delta !== 0) {
+          tx.set(personRef, this.personRepository.applyBalanceDelta(personSnap.data(), delta));
+        }
+        for (const [ref, value] of writes) tx.set(ref, value);
+      });
+    }
   }
 
   /**

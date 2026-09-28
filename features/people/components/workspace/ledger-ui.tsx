@@ -1,0 +1,444 @@
+"use client";
+
+import { Check, CircleDot, HandCoins, MoreHorizontal, Trash2, Undo2, X } from "lucide-react";
+import { useState } from "react";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { singleUndoablePayment, type DeleteBlock, type LedgerRow, type LedgerRowState, type PaymentRecord } from "@/features/people/lib/person-ledger-rows";
+import { formatStatementDate } from "@/lib/engines/person-cycle-statement";
+import { formatCurrency } from "@/lib/format";
+import { cn } from "@/lib/utils";
+import { WS_FIELD, WS_GHOST, WS_PRIMARY, WsField } from "./person-workspace-ui";
+
+/**
+ * Shared pieces of the People Ledger's inline actions and transaction management — the inline
+ * reveal, the settlement-state badge, a row's ⋯ menu, the per-entry settle form and the delete
+ * confirmation. Presentation only; every write goes through the callbacks the workspace passes in.
+ */
+
+/**
+ * Expands its content in place (height + fade, ~220ms), pushing what follows down; collapses the same
+ * way. Content stays mounted while collapsing and unmounts afterwards, so a reopened form starts fresh.
+ * Reduced motion is honoured by the global `prefers-reduced-motion` override in `globals.css`.
+ */
+export function InlineReveal({ open, children, className }: { open: boolean; children: React.ReactNode; className?: string }) {
+  const [mounted, setMounted] = useState(open);
+  if (open && !mounted) setMounted(true);
+  return (
+    <div
+      className={cn(
+        "grid transition-[grid-template-rows,opacity] duration-[220ms] ease-out",
+        open ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0",
+        className,
+      )}
+      inert={!open}
+      onTransitionEnd={(e) => {
+        if (e.target === e.currentTarget && !open) setMounted(false);
+      }}
+    >
+      <div className="min-h-0 overflow-hidden">{mounted && children}</div>
+    </div>
+  );
+}
+
+/** The frame of an inline action panel — title, one line of context, a close button. */
+export function InlinePanel({
+  title,
+  subtitle,
+  onClose,
+  children,
+  footer,
+}: {
+  title: string;
+  subtitle?: React.ReactNode;
+  onClose: () => void;
+  children: React.ReactNode;
+  footer: React.ReactNode;
+}) {
+  return (
+    <div className="mt-4 rounded-[8px] border border-border-strong bg-secondary/35">
+      <div className="flex items-start justify-between gap-3 px-4 pt-3.5">
+        <div className="min-w-0">
+          <h3 className="font-heading text-[15px] leading-tight font-semibold tracking-tight text-foreground">{title}</h3>
+          {subtitle && <p className="mt-0.5 text-xs text-muted-foreground">{subtitle}</p>}
+        </div>
+        <button
+          type="button"
+          aria-label="Close"
+          onClick={onClose}
+          className="-mt-1 -mr-1.5 flex size-7 shrink-0 items-center justify-center rounded-[6px] text-muted-foreground outline-none transition-colors hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <X className="size-4" strokeWidth={1.75} />
+        </button>
+      </div>
+      <div className="px-4 pt-3 pb-1">{children}</div>
+      <div className="mt-2 flex items-center justify-end gap-2 border-t border-border px-4 py-2.5">{footer}</div>
+    </div>
+  );
+}
+
+/** A 36px "₹ 0" amount field — the compact counterpart of `MoneyInput` for inline panels. */
+export function CompactAmountInput({
+  value,
+  onChange,
+  invalid,
+  autoFocus,
+  label,
+  inputRef,
+  placeholder = "0",
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  invalid?: boolean;
+  autoFocus?: boolean;
+  label: string;
+  inputRef?: React.Ref<HTMLInputElement>;
+  placeholder?: string;
+}) {
+  return (
+    <div className="relative">
+      <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-muted-foreground">₹</span>
+      <input
+        ref={inputRef}
+        type="number"
+        inputMode="decimal"
+        step="0.01"
+        min="0"
+        aria-label={label}
+        aria-invalid={invalid || undefined}
+        autoFocus={autoFocus}
+        placeholder={placeholder}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className={cn(
+          WS_FIELD,
+          "pl-7 font-semibold tabular-nums [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none",
+        )}
+      />
+    </div>
+  );
+}
+
+const STATE_STYLE: Record<LedgerRowState, string> = {
+  open: "border-warning/40 bg-warning/10 text-foreground",
+  partial: "border-primary-accent-text/50 bg-primary/10 text-foreground",
+  settled: "border-success/35 bg-success/10 text-success",
+};
+
+/** "Pending" · "Partially settled · ₹200 left" · "Settled" — a small tag, never a coloured row. */
+export function StatusBadge({ row, compact = false, className }: { row: Pick<LedgerRow, "state" | "remaining">; compact?: boolean; className?: string }) {
+  if (row.state == null) return null;
+  const Icon = row.state === "settled" ? Check : CircleDot;
+  const label =
+    row.state === "open"
+      ? "Pending"
+      : row.state === "settled"
+        ? "Settled"
+        : compact
+          ? "Partially settled"
+          : `Partially settled · ${formatCurrency(row.remaining ?? 0)} left`;
+  return (
+    <span
+      className={cn(
+        "inline-flex h-5 shrink-0 items-center gap-1 rounded-[4px] border px-1.5 text-[10.5px] leading-none font-semibold whitespace-nowrap",
+        STATE_STYLE[row.state],
+        className,
+      )}
+    >
+      <Icon className="size-3" strokeWidth={2.25} aria-hidden />
+      {label}
+    </span>
+  );
+}
+
+export const DELETE_BLOCK_NOTE: Record<Exclude<DeleteBlock, null>, string> = {
+  expense: "Part of a split expense — change it from the expense",
+  loan: "Managed from the Loan",
+  emi: "Comes from a linked EMI",
+  opening: "Opening balance can't be deleted",
+};
+
+/** A row's ⋯ menu — offers only what this specific transaction supports. */
+export function RowActionsMenu({
+  row,
+  onSettle,
+  onDelete,
+  onUndo,
+  className,
+}: {
+  row: LedgerRow;
+  onSettle?: () => void;
+  onDelete?: () => void;
+  /** Reverses a recorded payment (see `PaymentRecord.undo`). */
+  onUndo?: (payment: PaymentRecord) => void;
+  className?: string;
+}) {
+  const canSettle = row.settle != null && onSettle != null;
+  const canDelete = row.deletable && onDelete != null;
+  const undoPayment = onUndo ? singleUndoablePayment(row) : null;
+  const note = row.deleteBlock ? DELETE_BLOCK_NOTE[row.deleteBlock] : null;
+  if (!canSettle && !canDelete && !undoPayment && !note) return <span className={cn("size-8 shrink-0", className)} aria-hidden />;
+  return (
+    <DropdownMenu modal={false}>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label={`Actions for ${row.title}`}
+          className={cn(
+            "flex size-8 shrink-0 items-center justify-center rounded-[6px] text-muted-foreground outline-none transition-colors hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:bg-secondary data-[state=open]:text-foreground",
+            className,
+          )}
+        >
+          <MoreHorizontal className="size-4" strokeWidth={1.75} />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="max-w-64 min-w-48 rounded-[8px]">
+        {canSettle && (
+          <DropdownMenuItem onSelect={onSettle}>
+            <HandCoins strokeWidth={1.75} />
+            Settle this entry
+          </DropdownMenuItem>
+        )}
+        {undoPayment && (
+          <DropdownMenuItem onSelect={() => onUndo!(undoPayment)}>
+            <Undo2 strokeWidth={1.75} />
+            Undo settlement
+          </DropdownMenuItem>
+        )}
+        {canDelete && (
+          <DropdownMenuItem variant="destructive" onSelect={onDelete}>
+            <Trash2 strokeWidth={1.75} />
+            Delete transaction
+          </DropdownMenuItem>
+        )}
+        {!canDelete && note && <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">{note}</DropdownMenuLabel>}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+export interface EntrySettleValues {
+  amount: number;
+  date: Date;
+}
+
+/**
+ * Settle one transaction — partially or in full, up to what is still open on it. Opens inside the
+ * row itself (compact list and expanded ledger alike).
+ */
+export function EntrySettleForm({
+  row,
+  personName,
+  onCancel,
+  onSubmit,
+}: {
+  row: LedgerRow;
+  personName: string;
+  onCancel: () => void;
+  onSubmit: (values: EntrySettleValues) => Promise<void>;
+}) {
+  const max = row.settle?.max ?? 0;
+  const [amount, setAmount] = useState(() => max.toFixed(2));
+  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const firstName = personName.split(" ")[0];
+  const effect = row.direction === "iOwe" ? `Money you repay ${firstName}` : `Money ${firstName} pays you back`;
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (saving) return;
+    const value = Number(amount);
+    if (!Number.isFinite(value) || value <= 0) {
+      setError("Enter an amount greater than 0.");
+      return;
+    }
+    if (value > max + 0.005) {
+      setError(`Can't exceed the ${formatCurrency(max)} still open.`);
+      return;
+    }
+    setError(null);
+    setSaving(true);
+    try {
+      await onSubmit({ amount: value, date: new Date(date) });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Couldn't record the settlement. Please try again.");
+      setSaving(false);
+    }
+  }
+
+  return (
+    <form onSubmit={submit} className="rounded-[8px] border border-border-strong bg-card p-3">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
+        <p className="text-sm font-semibold text-foreground">Settle this entry</p>
+        <p className="text-xs text-muted-foreground">
+          {effect} · <span className="font-medium text-foreground tabular-nums">{formatCurrency(max)}</span> open
+        </p>
+      </div>
+      <div className="mt-2.5 grid gap-3 sm:grid-cols-[10rem_10rem]">
+        <WsField label="Amount">
+          <CompactAmountInput label="Settlement amount" value={amount} onChange={setAmount} invalid={!!error} autoFocus />
+        </WsField>
+        <WsField label="Date">
+          <input type="date" className={WS_FIELD} value={date} onChange={(e) => setDate(e.target.value)} />
+        </WsField>
+      </div>
+      {error && (
+        <p className="mt-1.5 text-xs font-medium text-expense" role="alert">
+          {error}
+        </p>
+      )}
+      <div className="mt-3 flex items-center justify-end gap-2">
+        <button type="button" onClick={onCancel} disabled={saving} className={cn(WS_GHOST, "h-8")}>
+          Cancel
+        </button>
+        <button type="submit" disabled={saving} className={cn(WS_PRIMARY, "h-8")}>
+          {saving ? "Recording…" : "Record settlement"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+/**
+ * A transaction's payment history — each payment recorded against it (across cycles), with an Undo
+ * where the payment can be reversed through its own recording path, or the reason it can't.
+ */
+export function PaymentHistory({
+  row,
+  onUndo,
+  className,
+}: {
+  row: LedgerRow;
+  onUndo?: (payment: PaymentRecord) => void;
+  className?: string;
+}) {
+  if (row.payments.length === 0) return null;
+  return (
+    <div className={className}>
+      <p className="text-[11px] font-medium tracking-[0.08em] text-muted-foreground uppercase">Payment history</p>
+      <ul className="mt-1.5 divide-y divide-border/70 border-y border-border/70">
+        {row.payments.map((p) => (
+          <li key={p.key} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-1.5 text-sm">
+            <span className="w-24 shrink-0 font-medium text-foreground tabular-nums">{formatStatementDate(p.date, true)}</span>
+            <span className="min-w-0 flex-1 text-foreground">
+              {p.direction === "youPaid" ? "Paid" : "Received"} <span className="font-semibold tabular-nums">{formatCurrency(p.amount)}</span>
+              <span className="text-xs text-muted-foreground">
+                {" · "}
+                {p.remainingAfter > 0 ? `${formatCurrency(p.remainingAfter)} left after` : "cleared it"}
+              </span>
+            </span>
+            {p.undo && onUndo ? (
+              <button
+                type="button"
+                onClick={() => onUndo(p)}
+                className="flex h-7 items-center gap-1 rounded-[6px] px-1.5 text-xs font-medium text-muted-foreground outline-none transition-colors hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <Undo2 className="size-3.5" strokeWidth={1.75} />
+                Undo
+              </button>
+            ) : p.undoBlock ? (
+              <span className="text-xs text-muted-foreground" title={p.undoBlock}>
+                {p.undoBlock}
+              </span>
+            ) : null}
+          </li>
+        ))}
+      </ul>
+      <p className="mt-1.5 text-xs text-muted-foreground">
+        {row.state === "settled" ? (
+          <span className="font-semibold text-success">✓ Settled</span>
+        ) : (
+          <>
+            Remaining <span className="font-semibold text-foreground tabular-nums">{formatCurrency(row.remaining ?? 0)}</span>
+          </>
+        )}
+      </p>
+    </div>
+  );
+}
+
+/** "Received ₹500 · 28 Sep" — the latest payment on a transaction, for its status line. */
+export function lastPaymentLine(row: LedgerRow): string | null {
+  const last = row.payments[row.payments.length - 1];
+  if (!last) return null;
+  const total = row.payments.reduce((s, p) => s + p.amount, 0);
+  const verb = last.direction === "youPaid" ? "Paid" : "Received";
+  return `${verb} ${formatCurrency(total)} · ${formatStatementDate(last.date)}`;
+}
+
+/**
+ * Confirmation for a destructive ledger action. Guards against double submission: the confirm button
+ * is disabled while the action runs, and the dialog can't be dismissed mid-write.
+ */
+export function LedgerConfirmDialog({
+  open,
+  onOpenChange,
+  title,
+  children,
+  confirmLabel,
+  busyLabel,
+  onConfirm,
+  disabled,
+  variant = "destructive",
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  title: string;
+  children: React.ReactNode;
+  confirmLabel: string;
+  busyLabel: string;
+  onConfirm: () => Promise<void>;
+  disabled?: boolean;
+  /** "reverse": undoing a settlement — a correction, not a deletion, so it isn't styled as one. */
+  variant?: "destructive" | "reverse";
+}) {
+  const [busy, setBusy] = useState(false);
+  async function confirm() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await onConfirm();
+      onOpenChange(false);
+    } catch {
+      // The caller surfaces the error; keep the dialog open so the user can retry or cancel.
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
+      <DialogContent
+        showCloseButton={false}
+        onEscapeKeyDown={(e) => busy && e.preventDefault()}
+        onPointerDownOutside={(e) => busy && e.preventDefault()}
+        className="gap-0 rounded-[10px] border border-border bg-card p-0 ring-0 sm:max-w-md"
+      >
+        <div className="px-5 pt-5">
+          <DialogTitle className="font-heading text-lg leading-tight font-semibold tracking-tight text-foreground">{title}</DialogTitle>
+          <DialogDescription asChild>
+            <div className="mt-2 space-y-2 text-sm leading-relaxed text-muted-foreground">{children}</div>
+          </DialogDescription>
+        </div>
+        <div className="mt-5 flex items-center justify-end gap-2 border-t border-border px-5 py-3">
+          <button type="button" onClick={() => onOpenChange(false)} disabled={busy} className={WS_GHOST}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={() => void confirm()}
+            disabled={busy || disabled}
+            className={
+              variant === "destructive"
+                ? "flex h-9 items-center justify-center gap-1.5 rounded-[6px] bg-danger px-4 text-sm font-semibold text-danger-foreground outline-none transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+                : WS_PRIMARY
+            }
+          >
+            {variant === "destructive" ? <Trash2 className="size-4" strokeWidth={1.75} /> : <Undo2 className="size-4" strokeWidth={1.75} />}
+            {busy ? busyLabel : confirmLabel}
+          </button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}

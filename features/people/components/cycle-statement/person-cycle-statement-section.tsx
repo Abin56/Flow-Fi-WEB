@@ -126,7 +126,7 @@ export function PersonCycleStatementSection({
           <>
             <p className="text-[11px] font-medium tracking-[0.08em] text-muted-foreground uppercase">This statement</p>
             <div className="mt-2">
-              <StatementReconciliation statement={statement} />
+              <StatementReconciliation statement={statement} highlightCarryForward />
             </div>
 
             {linkedEmis.length > 0 && (

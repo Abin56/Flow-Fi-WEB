@@ -84,7 +84,7 @@ function participantKey(p: ExpenseParticipant): string {
  * partial payment's amount up to the full share — all silent corruption of
  * the person's balance. This prefix is the discriminator.
  */
-const RECEIVED_STATUS_NOTE_PREFIX = "Received: ";
+export const RECEIVED_STATUS_NOTE_PREFIX = "Received: ";
 
 /**
  * The status-driven "receivedBack" entry among `entries`, if one was posted

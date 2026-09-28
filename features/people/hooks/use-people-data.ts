@@ -507,6 +507,12 @@ export function usePeopleActions() {
         const ledgerRepository = createLedgerRepository(uid, person.id, personRepository);
         await ledgerRepository.softDeleteEntry(person, entry);
       },
+      /** Reverses + soft-deletes several entries (a transaction with its settlements, or "Delete all") —
+       *  the entries come from `planEntryDeletion`/`planBulkDeletion` (`lib/engines/person-ledger-deletion.ts`). */
+      deleteLedgerEntries: async (person: Person, entries: LedgerEntry[]) => {
+        const ledgerRepository = createLedgerRepository(uid, person.id, personRepository);
+        await ledgerRepository.softDeleteEntries(person, entries);
+      },
       /** ✓/✕ quick-toggle on a split-expense ledger row — see `ExpenseRepository.setParticipantReceivedStatus`. */
       setParticipantReceivedStatus: async (expense: Expense, participant: ExpenseParticipant, receivedStatus: ReceivedStatus) => {
         const updated = await expenseRepository.setParticipantReceivedStatus(expense, participant, receivedStatus);

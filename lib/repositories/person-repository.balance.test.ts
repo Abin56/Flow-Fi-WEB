@@ -231,3 +231,96 @@ describe("LedgerRepository / PersonRepository balance-affecting mutations", () =
     expect((store.get("p1") as Person).currentBalance).toBe(650);
   });
 });
+
+describe("LedgerRepository.softDeleteEntries", () => {
+  beforeEach(() => {
+    vi.mocked(runTransaction).mockClear();
+  });
+
+  it("reverses every entry's signed effect and soft-deletes them in one atomic write", async () => {
+    const gave = entry({ id: "g1", type: "gave", amount: 500 });
+    const settlement = entry({ id: "s1", type: "receivedBack", amount: 200, parentEntryId: "g1" });
+    const store = new Map<string, unknown>([
+      ["p1", person({ currentBalance: 300 })],
+      ["g1", gave],
+      ["s1", settlement],
+    ]);
+    const { ledgerRepository } = makeRepos(store);
+
+    await ledgerRepository.softDeleteEntries(person({ currentBalance: 300 }), [gave, settlement]);
+
+    // +500 given, −200 received back → removing both takes the balance back by exactly +300.
+    expect((store.get("p1") as Person).currentBalance).toBe(0);
+    expect((store.get("g1") as LedgerEntry).deletedAt).not.toBeNull();
+    expect((store.get("s1") as LedgerEntry).deletedAt).not.toBeNull();
+    expect(runTransaction).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips an entry that is already in trash, so a retry never reverses it twice", async () => {
+    const alreadyDeleted = entry({ id: "g1", type: "gave", amount: 500, deletedAt: new Date("2026-08-01T00:00:00Z") });
+    const borrowed = entry({ id: "b1", type: "borrowed", amount: 100 });
+    const store = new Map<string, unknown>([
+      ["p1", person({ currentBalance: -100 })],
+      ["g1", alreadyDeleted],
+      ["b1", borrowed],
+    ]);
+    const { ledgerRepository } = makeRepos(store);
+
+    await ledgerRepository.softDeleteEntries(person({ currentBalance: -100 }), [alreadyDeleted, borrowed]);
+
+    expect((store.get("p1") as Person).currentBalance).toBe(0);
+  });
+
+  it("reads each entry fresh rather than trusting the caller's copy", async () => {
+    const stale = entry({ id: "g1", type: "gave", amount: 100 });
+    const store = new Map<string, unknown>([
+      ["p1", person({ currentBalance: 250 })],
+      ["g1", { ...stale, amount: 250 }], // edited since the caller loaded it
+    ]);
+    const { ledgerRepository } = makeRepos(store);
+
+    await ledgerRepository.softDeleteEntries(person({ currentBalance: 250 }), [stale]);
+
+    expect((store.get("p1") as Person).currentBalance).toBe(0);
+  });
+
+  it("a missing entry aborts the whole chunk — nothing is written", async () => {
+    const present = entry({ id: "g1", type: "gave", amount: 100 });
+    const store = new Map<string, unknown>([
+      ["p1", person({ currentBalance: 100 })],
+      ["g1", present],
+    ]);
+    const { ledgerRepository } = makeRepos(store);
+
+    await expect(ledgerRepository.softDeleteEntries(person({ currentBalance: 100 }), [present, entry({ id: "missing" })])).rejects.toThrow(
+      "Ledger entry not found",
+    );
+    expect((store.get("p1") as Person).currentBalance).toBe(100);
+    expect((store.get("g1") as LedgerEntry).deletedAt).toBeNull();
+  });
+
+  it("de-duplicates entries passed twice", async () => {
+    const gave = entry({ id: "g1", type: "gave", amount: 100 });
+    const store = new Map<string, unknown>([
+      ["p1", person({ currentBalance: 100 })],
+      ["g1", gave],
+    ]);
+    const { ledgerRepository } = makeRepos(store);
+
+    await ledgerRepository.softDeleteEntries(person({ currentBalance: 100 }), [gave, gave]);
+
+    expect((store.get("p1") as Person).currentBalance).toBe(0);
+  });
+
+  it("splits a large delete into self-consistent chunks", async () => {
+    const entries = Array.from({ length: 450 }, (_, i) => entry({ id: `g${i}`, type: "gave", amount: 1 }));
+    const store = new Map<string, unknown>([["p1", person({ currentBalance: 450 })], ...entries.map((e) => [e.id, e] as [string, unknown])]);
+    const { ledgerRepository } = makeRepos(store);
+
+    await ledgerRepository.softDeleteEntries(person({ currentBalance: 450 }), entries);
+
+    expect(runTransaction).toHaveBeenCalledTimes(3);
+    expect((store.get("p1") as Person).currentBalance).toBe(0);
+    expect(entries.every((e) => (store.get(e.id) as LedgerEntry).deletedAt != null)).toBe(true);
+  });
+});

@@ -15,11 +15,16 @@ import { useAllEmiInstallments } from "@/hooks/use-emis";
 import { useAllLoanInstallments, useLoans, useTrashedLoans } from "@/hooks/use-loans";
 import { usePeople } from "@/hooks/use-people";
 import { usePeopleLedgerEntries } from "@/features/people/hooks/use-people-data";
-import { buildPersonCycleStatement, type PersonCycleStatement, type StatementCycle } from "@/lib/engines/person-cycle-statement";
+import {
+  buildPersonCycleStatement,
+  cycleContaining,
+  type PersonCycleStatement,
+  type StatementCycle,
+} from "@/lib/engines/person-cycle-statement";
 import type { Emi } from "@/lib/models/emi";
 import type { Loan } from "@/lib/models/loan";
 import type { Installment } from "@/lib/models/payment-schedule";
-import type { Person } from "@/lib/models/person";
+import type { LedgerEntry, Person } from "@/lib/models/person";
 import { createEmiRepository, createLoanRepository } from "@/lib/repositories/repository-factory";
 import { useAuthStore } from "@/store/auth-store";
 
@@ -36,6 +41,13 @@ export function usePersonCycleStatement(
   cycle: StatementCycle,
 ): {
   statement: PersonCycleStatement | null;
+  /**
+   * The same statement over the person's whole history, through the end of the current cycle (so
+   * future EMI installments aren't listed) — the "All transactions" list reads its rows.
+   */
+  allTimeStatement: PersonCycleStatement | null;
+  /** This person's raw ledger entries (active and trashed) — what deletes are planned from. */
+  ledgerEntries: LedgerEntry[];
   person: Person | null;
   linkedEmis: LinkedEmiSource[];
   setRepays: (source: LinkedEmiSource, repays: boolean) => Promise<void>;
@@ -69,19 +81,26 @@ export function usePersonCycleStatement(
     [emis, loans, personId],
   );
 
-  const statement = useMemo(() => {
+  const ledgerEntries = useMemo(() => (person ? (entriesByPersonId[person.id] ?? []) : []), [person, entriesByPersonId]);
+
+  const baseInput = useMemo(() => {
     if (person == null) return null;
     const loanIds = new Set([...(loans as Loan[]).map((l) => l.id), ...(trashedLoans as Loan[]).map((l) => l.id)]);
-    return buildPersonCycleStatement({
+    return {
       person: { id: person.id, name: person.name, openingBalance: person.openingBalance, createdAt: person.createdAt },
-      ledgerEntries: entriesByPersonId[person.id] ?? [],
+      ledgerEntries,
       loanIds,
       emis: emis as Emi[],
       loans: loans as Loan[],
       installments: [...(emiInstallments as Installment[]), ...(loanInstallments as Installment[])],
-      cycle,
-    });
-  }, [person, entriesByPersonId, emis, loans, trashedLoans, emiInstallments, loanInstallments, cycle]);
+    };
+  }, [person, ledgerEntries, emis, loans, trashedLoans, emiInstallments, loanInstallments]);
+
+  const statement = useMemo(() => (baseInput ? buildPersonCycleStatement({ ...baseInput, cycle }) : null), [baseInput, cycle]);
+  const allTimeStatement = useMemo(
+    () => (baseInput ? buildPersonCycleStatement({ ...baseInput, cycle: { start: new Date(1970, 0, 1), end: cycleContaining(new Date()).end } }) : null),
+    [baseInput],
+  );
 
   const setRepays = async (source: LinkedEmiSource, repays: boolean) => {
     if (!uid) return;
@@ -95,5 +114,5 @@ export function usePersonCycleStatement(
     }
   };
 
-  return { statement, person, linkedEmis, setRepays, isLoading: peopleLoading || entriesLoading };
+  return { statement, allTimeStatement, ledgerEntries, person, linkedEmis, setRepays, isLoading: peopleLoading || entriesLoading };
 }
