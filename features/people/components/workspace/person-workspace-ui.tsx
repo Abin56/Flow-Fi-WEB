@@ -175,7 +175,7 @@ export function WsSegmented<T extends string>({
     <div
       role="radiogroup"
       aria-label={label}
-      className={cn("grid auto-cols-fr grid-flow-col gap-1 rounded-[8px] border border-border-strong bg-secondary/60 p-[3px]", className)}
+      className={cn("grid auto-cols-fr grid-flow-col gap-1 rounded-[8px] border border-border-strong bg-card p-[3px]", className)}
     >
       {options.map((o) => {
         const active = o.value === value;
@@ -190,13 +190,13 @@ export function WsSegmented<T extends string>({
             className={cn(
               "flex h-8 min-w-0 items-center justify-center gap-1.5 rounded-[6px] px-2 text-xs whitespace-nowrap outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring sm:text-[13px]",
               active
-                ? "bg-card font-semibold text-foreground shadow-[inset_0_0_0_1.5px_var(--color-primary-accent-text)]"
-                : "font-medium text-muted-foreground hover:bg-card/60 hover:text-foreground",
+                ? "bg-primary font-semibold text-primary-foreground shadow-[inset_0_0_0_1px_var(--color-primary-accent-text)]"
+                : "font-medium text-foreground/80 hover:bg-secondary hover:text-foreground",
             )}
           >
             {Icon && (
               <Icon
-                className={cn("size-3.5 shrink-0", active ? "text-primary-accent-text" : "hidden sm:block")}
+                className={cn("size-3.5 shrink-0", active ? "text-primary-foreground" : "hidden text-foreground/70 sm:block")}
                 strokeWidth={active ? 2.5 : 1.75}
                 aria-hidden
               />

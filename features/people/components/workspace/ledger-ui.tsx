@@ -84,15 +84,15 @@ export function InlinePanel({
 }) {
   return (
     <div className={cn("mt-4 overflow-hidden rounded-[8px] border border-border-strong bg-card", className)}>
-      <div className="flex items-start justify-between gap-3 border-b border-border-strong/75 bg-secondary/80 px-4 py-2.5">
+      <div className="flex items-start justify-between gap-3 border-b border-border px-4 py-3">
         <div className="min-w-0">
           <h3 className="font-heading text-[15px] leading-tight font-semibold tracking-tight text-foreground">{title}</h3>
-          {subtitle && <p className="mt-0.5 text-xs text-muted-foreground">{subtitle}</p>}
+          {subtitle && <p className="mt-0.5 text-xs text-foreground/70">{subtitle}</p>}
         </div>
         <WsCloseButton onClick={onClose} className="-my-0.5" />
       </div>
       <div className="px-4 pt-3.5 pb-3">{children}</div>
-      <div className="flex items-center justify-end gap-2 border-t border-border-strong/60 bg-secondary/70 px-4 py-2.5">{footer}</div>
+      <div className="flex items-center justify-end gap-2 border-t border-border px-4 py-2.5">{footer}</div>
     </div>
   );
 }

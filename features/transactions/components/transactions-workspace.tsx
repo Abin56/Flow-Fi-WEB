@@ -1,37 +1,43 @@
 "use client";
 
 import {
+  ArrowDownLeft,
+  ArrowLeftRight,
+  ArrowUpRight,
   Calendar,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
   Copy,
+  CreditCard,
   Download,
   Landmark,
   LayoutGrid,
   List,
   Maximize2,
   Minimize2,
+  Pencil,
   Plus,
   Receipt,
   Search,
-  SlidersHorizontal,
+  Shapes,
+  Split,
+  StickyNote,
+  Tag,
   Trash2,
   Upload,
+  Wallet,
+  X,
 } from "lucide-react";
-import { useDeferredValue, useEffect, useMemo, useState } from "react";
+import { Fragment, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { ClayButton } from "@/components/clay/clay-button";
 import {
   ConfirmDialog,
-  CurrencyCell,
-  EmptyState,
-  FilterBar,
-  FinanceTable,
   type FilterDef,
-  type FinanceTableColumn,
   FormDialog,
 } from "@/components/finance";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { formatCurrency } from "@/lib/format";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -447,118 +453,73 @@ export function TransactionsWorkspace() {
     }
   }
 
-  const columns: FinanceTableColumn<TransactionRow>[] = useMemo(
-    () => [
-    {
-      id: "no",
-      header: "#",
-      hideOnMobile: true,
-      accessor: (row) => {
-        const index = pageRows.findIndex((r) => r.transaction.id === row.transaction.id);
-        return <span className="text-sm text-muted-foreground">{(safePage - 1) * rowsPerPage + index + 1}</span>;
-      },
-      width: "40px",
-    },
-    {
-      id: "date",
-      header: "Date",
-      accessor: (row) => <span className="text-sm text-muted-foreground">{formatFullDate(row.transaction.dateTime)}</span>,
-      width: "110px",
-    },
-    {
-      id: "merchant",
-      header: "Merchant",
-      minWidth: "200px",
-      accessor: (row) => {
-        const iconKey = row.category?.iconKey ?? "other";
-        const Icon = categoryIconFor(iconKey);
-        const flag = transactionFlagFor(row.transaction);
-        const isDuplicate = duplicateTransactionIds.has(row.transaction.id);
-        const loanTag = loanTagFor(row.transaction);
-        return (
-          <div className="flex min-w-0 items-center gap-3">
-            <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-xl", TONE_ICON_CLASS[categoryToneFor(iconKey)])}>
-              <Icon className="size-4" />
-            </span>
-            <div className="min-w-0">
-              <div className="flex items-center gap-1.5">
-                {loanTag && (
-                  <span className="flex shrink-0 items-center gap-1 rounded-tl-lg rounded-br-lg bg-purple-600 px-1.5 py-1 text-[10px] font-bold tracking-wide text-white shadow-sm dark:bg-purple-500">
-                    <Landmark className="size-3" aria-hidden />
-                    {loanTag.label}
-                  </span>
-                )}
-                <p className="truncate font-medium text-foreground">{displayDescription(row.transaction) || "(No description)"}</p>
-              </div>
-              {flag && <p className="truncate text-xs text-warning-foreground">{flag.label}</p>}
-              {isDuplicate && (
-                <span
-                  className="mt-0.5 inline-flex items-center gap-1 rounded-full bg-danger/10 px-1.5 py-0.5 text-[10px] font-medium text-danger"
-                  title="Another transaction has the same amount and date — check it isn't a duplicate."
-                >
-                  <Copy className="size-2.5" aria-hidden />
-                  Possible duplicate
-                </span>
-              )}
-            </div>
-          </div>
-        );
-      },
-    },
-    {
-      id: "category",
-      header: "Category",
-      accessor: (row) => <span className="truncate text-sm text-muted-foreground">{row.category?.name ?? "Uncategorized"}</span>,
-      width: "140px",
-    },
-    {
-      id: "amount",
-      header: "Amount",
-      accessor: (row) => <CurrencyCell amount={row.transaction.type === "income" ? row.transaction.amount : -row.transaction.amount} />,
-      numeric: true,
-      width: "130px",
-    },
-    {
-      id: "delete",
-      header: "",
-      accessor: (row) => (
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            setQuickDeleteRow(row);
-          }}
-          className="flex size-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-expense/10 hover:text-expense"
-          aria-label="Delete transaction"
-        >
-          <Trash2 className="size-3.5" />
+  function openDetails(row: TransactionRow) {
+    setDetailRow(row);
+    setAutoFocusAssign(false);
+    setDetailOpen(true);
+  }
+
+  const hasTransactions = rows.length > 0;
+  const accountName = (id: string) => accounts.find((a) => a.id === id)?.name ?? "Account";
+  const categoryName = (id: string) => categories.find((c) => c.id === id)?.name ?? "Category";
+  const activeChips: { key: string; label: string; clear: () => void }[] = [
+    ...(search.trim() ? [{ key: "search", label: `“${search.trim()}”`, clear: () => setSearch("") }] : []),
+    ...(dateFrom || dateTo
+      ? [{ key: "date", label: dateRangeLabel(dateFrom, dateTo), clear: () => (setDateFrom(""), setDateTo("")) }]
+      : []),
+    ...(typeFilter ? [{ key: "type", label: `Type: ${typeFilter === "income" ? "Income" : "Expense"}`, clear: () => setTypeFilter(null) }] : []),
+    ...(accountFilter ? [{ key: "account", label: `Account: ${accountName(accountFilter)}`, clear: () => setAccountFilter(null) }] : []),
+    ...(categoryFilter ? [{ key: "category", label: `Category: ${categoryName(categoryFilter)}`, clear: () => setCategoryFilter(null) }] : []),
+    ...(paymentMethodFilter ? [{ key: "method", label: `Method: ${paymentMethodFilter}`, clear: () => setPaymentMethodFilter(null) }] : []),
+  ];
+
+  const addMenu = (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button type="button" disabled={!actions} className={TX_PRIMARY}>
+          <Plus className="size-4" strokeWidth={2.25} />
+          Add Transaction
+          <ChevronDown className="size-3.5 opacity-80" strokeWidth={2} />
         </button>
-      ),
-      width: "44px",
-      align: "center",
-    },
-    ],
-    [pageRows, safePage, rowsPerPage, duplicateTransactionIds, displayDescription],
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-44 rounded-[8px]">
+        <DropdownMenuItem onSelect={() => openAdd("expense")}>
+          <ArrowUpRight strokeWidth={1.75} />
+          Expense
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => openAdd("income")}>
+          <ArrowDownLeft strokeWidth={1.75} />
+          Income
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={openSplit}>
+          <Split strokeWidth={1.75} />
+          Split Expense
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 
   if (isLoading) {
     return (
-      <div className="flex flex-col gap-5 px-1">
+      <div className="flex min-w-0 flex-col gap-5 px-1">
         <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="flex flex-col gap-2">
+          <div className="flex flex-col gap-1">
             <h1 className="font-heading text-2xl font-bold tracking-tight text-foreground">Transactions</h1>
             <Skeleton className="h-4 w-64" />
           </div>
-          <Skeleton className="h-10 w-40 rounded-2xl" />
+          <Skeleton className="h-9 w-44 rounded-[6px]" />
         </div>
-        <Skeleton className="h-10 w-full max-w-sm rounded-2xl" />
-        <div className="overflow-hidden rounded-2xl border border-border bg-card">
+        <Skeleton className="h-9 w-full max-w-md rounded-[6px]" />
+        <div className="overflow-hidden rounded-[10px] border border-border-strong/60 bg-card">
+          <div className="h-9 border-b border-border-strong/60 bg-secondary" />
           {Array.from({ length: 8 }, (_, i) => (
-            <div key={i} className="flex items-center gap-4 border-b border-border px-4 py-3.5 last:border-b-0">
-              <Skeleton className="h-4 w-20" />
-              <Skeleton className="h-9 w-9 shrink-0 rounded-xl" />
-              <Skeleton className="h-4 flex-1 max-w-48" />
-              <Skeleton className="ml-auto h-4 w-24" />
+            <div key={i} className="flex items-center gap-4 border-b border-border px-4 py-3 last:border-b-0">
+              <Skeleton className="h-4 w-6" />
+              <Skeleton className="h-8 w-12" />
+              <Skeleton className="size-8 shrink-0 rounded-[8px]" />
+              <Skeleton className="h-4 max-w-56 flex-1" />
+              <Skeleton className="ml-auto h-5 w-24" />
             </div>
           ))}
         </div>
@@ -569,284 +530,308 @@ export function TransactionsWorkspace() {
   return (
     <div
       className={cn(
-        "flex flex-col gap-5",
-        fullscreen ? "fixed inset-0 z-hero overflow-y-auto bg-background p-6" : "px-1",
+        "flex min-w-0 flex-col gap-4",
+        fullscreen ? "fixed inset-0 z-hero bg-background p-4 sm:p-6" : "px-1",
       )}
     >
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
+      {/* ── Header: title · utilities · primary action ── */}
+      <header className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
           <h1 className="font-heading text-2xl font-bold tracking-tight text-foreground">Transactions</h1>
-          <p className="mt-1 text-sm text-muted-foreground">Track, review and manage all your money movements</p>
+          <p className="mt-0.5 text-sm text-muted-foreground">All your money activity in one place.</p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <ClayButton variant="secondary" size="sm" className="gap-1.5">
-            <Upload className="size-3.5" />
-            Import Statement
-          </ClayButton>
-          <ClayButton variant="secondary" size="sm" className="gap-1.5">
-            <Download className="size-3.5" />
+        <div className="flex flex-wrap items-center gap-1.5">
+          {/* Not built yet — shown for discoverability, clearly marked, never a fake action */}
+          <button type="button" disabled title="Coming soon" className={TX_UTILITY}>
+            <Upload className="size-4" strokeWidth={1.75} />
+            Import statement
+            <span className={SOON}>Soon</span>
+          </button>
+          <button type="button" disabled title="Coming soon" className={TX_UTILITY}>
+            <Download className="size-4" strokeWidth={1.75} />
             Export
-          </ClayButton>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <ClayButton size="sm" className="gap-1.5 border-transparent text-primary-foreground" style={{ background: "var(--gradient-accent)" }}>
-                <Plus className="size-3.5" />
-                Add Transaction
-                <ChevronDown className="size-3.5" />
-              </ClayButton>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem onSelect={() => openAdd("expense")}>Expense</DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => openAdd("income")}>Income</DropdownMenuItem>
-              <DropdownMenuItem onSelect={openSplit}>Split Expense</DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-      </div>
-
-      <div className="flex flex-wrap items-center gap-2">
-        <label className="flex h-10 max-w-sm flex-1 items-center gap-2 rounded-2xl border border-border bg-card px-3.5 text-sm text-muted-foreground transition-colors focus-within:border-primary focus-within:text-foreground focus-within:ring-2 focus-within:ring-ring">
-          <Search className="size-4 shrink-0" />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => {
-              setSearch(e.target.value);
-              setPage(1);
-            }}
-            placeholder="Search transactions, categories, merchants..."
-            className="w-full bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
-          />
-        </label>
-        <ClayButton variant="secondary" size="sm" className="gap-1.5" onClick={setThisMonth}>
-          <Calendar className="size-3.5" />
-          This Month
-        </ClayButton>
-        <FilterBar filters={filters} onClearAll={clearFilters} />
-        <Popover>
-          <PopoverTrigger asChild>
-            <ClayButton variant="ghost" size="sm" className="gap-1.5">
-              <SlidersHorizontal className="size-3.5" />
-              More Filters
-            </ClayButton>
-          </PopoverTrigger>
-          <PopoverContent align="start" className="w-64">
-            <div className="flex flex-col gap-3 text-sm">
-              <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Date Range</p>
-              <label className="flex flex-col gap-1">
-                <span className="text-xs text-muted-foreground">From</span>
-                <input
-                  type="date"
-                  className="clay-pressed h-9 rounded-xl px-3 text-sm outline-none"
-                  value={dateFrom}
-                  onChange={(e) => {
-                    setDateFrom(e.target.value);
-                    setPage(1);
-                  }}
-                />
-              </label>
-              <label className="flex flex-col gap-1">
-                <span className="text-xs text-muted-foreground">To</span>
-                <input
-                  type="date"
-                  className="clay-pressed h-9 rounded-xl px-3 text-sm outline-none"
-                  value={dateTo}
-                  onChange={(e) => {
-                    setDateTo(e.target.value);
-                    setPage(1);
-                  }}
-                />
-              </label>
-              {(dateFrom || dateTo) && (
-                <ClayButton
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    setDateFrom("");
-                    setDateTo("");
-                  }}
-                >
-                  Clear dates
-                </ClayButton>
-              )}
-            </div>
-          </PopoverContent>
-        </Popover>
-        <div className="clay-pressed ml-auto flex items-center gap-1 rounded-xl p-1">
-          <button
-            type="button"
-            onClick={() => setViewMode("list")}
-            className={cn(
-              "flex items-center justify-center rounded-lg p-1.5 transition-colors",
-              viewMode === "list" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground",
-            )}
-            aria-label="List view"
-          >
-            <List className="size-4" />
+            <span className={SOON}>Soon</span>
           </button>
-          <button
-            type="button"
-            onClick={() => setViewMode("grid")}
-            className={cn(
-              "flex items-center justify-center rounded-lg p-1.5 transition-colors",
-              viewMode === "grid" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground",
-            )}
-            aria-label="Grid view"
-          >
-            <LayoutGrid className="size-4" />
-          </button>
+          <span className="mx-1 hidden h-5 w-px bg-border-strong/60 sm:block" aria-hidden />
+          {addMenu}
         </div>
-        <ClayButton
-          variant="secondary"
-          size="icon"
-          onClick={() => setFullscreen((v) => !v)}
-          aria-label={fullscreen ? "Exit full screen" : "Full screen"}
-          title={fullscreen ? "Exit full screen (Esc)" : "Full screen"}
-        >
-          {fullscreen ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
-        </ClayButton>
-      </div>
+      </header>
 
-      {viewMode === "list" ? (
-        <FinanceTable
-          columns={columns}
-          data={pageRows}
-          getRowId={(row) => row.transaction.id}
-          onRowClick={(row) => {
-            setDetailRow(row);
-            setAutoFocusAssign(false);
-            setDetailOpen(true);
-          }}
-          // A calm left accent + tint, not a boxed-off card — keeps the list's normal flush row rhythm
-          // instead of visually breaking the row out with a margin gap. `!` (important) forces the
-          // color/width to win over the table's own base row border, since Tailwind doesn't guarantee
-          // this className string's later position in the cascade order. The "Possible duplicate" badge
-          // in the Merchant column (below) carries the actual explanation — this is just the scan cue.
-          rowClassName={(row) => (duplicateTransactionIds.has(row.transaction.id) ? "!border-l-4 !border-l-danger bg-danger/5" : undefined)}
-          emptyState={
-            <EmptyState
-              icon={Receipt}
-              title="No transactions found"
-              description="Try adjusting your filters or search to find what you're looking for."
-              actionLabel="Clear filters"
-              onAction={clearFilters}
+      {/* ── Toolbar: search · date · filters · view ── */}
+      <div className="flex flex-col gap-2.5">
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="flex h-9 w-full min-w-0 items-center gap-2 rounded-[6px] border border-border-strong bg-card px-3 text-sm transition-colors focus-within:border-primary-accent-text focus-within:ring-2 focus-within:ring-ring sm:w-72 dark:bg-input">
+            <Search className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.75} />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => {
+                setSearch(e.target.value);
+                setPage(1);
+              }}
+              placeholder="Search description or notes…"
+              aria-label="Search transactions"
+              className="w-full min-w-0 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
             />
-          }
-        />
-      ) : pageRows.length === 0 ? (
-        <div className="w-full overflow-hidden rounded-2xl border border-border bg-card">
-          <EmptyState
-            icon={Receipt}
-            title="No transactions found"
-            description="Try adjusting your filters or search to find what you're looking for."
-            actionLabel="Clear filters"
-            onAction={clearFilters}
-          />
+            {search && (
+              <button type="button" aria-label="Clear search" onClick={() => setSearch("")} className="-mr-1 rounded-[4px] p-0.5 text-muted-foreground hover:bg-secondary hover:text-foreground">
+                <X className="size-3.5" />
+              </button>
+            )}
+          </label>
+
+          <Popover>
+            <PopoverTrigger asChild>
+              <button type="button" className={cn(TX_FILTER, (dateFrom || dateTo) && TX_FILTER_ACTIVE)}>
+                <Calendar className="size-4 text-muted-foreground" strokeWidth={1.75} />
+                {dateFrom || dateTo ? dateRangeLabel(dateFrom, dateTo) : "Date"}
+                <ChevronDown className="size-3.5 text-muted-foreground" strokeWidth={2} />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent align="start" className="w-64 rounded-[10px] p-3">
+              <div className="flex flex-col gap-3 text-sm">
+                <button type="button" onClick={setThisMonth} className={cn(TX_UTILITY, "justify-center border border-border-strong")}>
+                  This month
+                </button>
+                <label className="flex flex-col gap-1">
+                  <span className="text-[11px] font-medium text-muted-foreground">From</span>
+                  <input
+                    type="date"
+                    className={TX_INPUT}
+                    value={dateFrom}
+                    onChange={(e) => {
+                      setDateFrom(e.target.value);
+                      setPage(1);
+                    }}
+                  />
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="text-[11px] font-medium text-muted-foreground">To</span>
+                  <input
+                    type="date"
+                    className={TX_INPUT}
+                    value={dateTo}
+                    onChange={(e) => {
+                      setDateTo(e.target.value);
+                      setPage(1);
+                    }}
+                  />
+                </label>
+                {(dateFrom || dateTo) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDateFrom("");
+                      setDateTo("");
+                    }}
+                    className="self-start text-xs font-semibold text-primary-accent-text hover:underline"
+                  >
+                    Clear dates
+                  </button>
+                )}
+              </div>
+            </PopoverContent>
+          </Popover>
+
+          {filters.map((f) => (
+            <FilterMenu key={f.id} filter={f} label={FILTER_LABEL[f.id] ?? f.label} />
+          ))}
+
+          <div className="ml-auto flex items-center gap-1.5">
+            <div role="radiogroup" aria-label="View" className="flex items-center rounded-[6px] border border-border-strong bg-card p-0.5">
+              {(
+                [
+                  { value: "list", icon: List, label: "List view" },
+                  { value: "grid", icon: LayoutGrid, label: "Grid view" },
+                ] as const
+              ).map((v) => (
+                <button
+                  key={v.value}
+                  type="button"
+                  role="radio"
+                  aria-checked={viewMode === v.value}
+                  aria-label={v.label}
+                  onClick={() => setViewMode(v.value)}
+                  className={cn(
+                    "flex size-7 items-center justify-center rounded-[4px] transition-colors",
+                    viewMode === v.value ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-secondary hover:text-foreground",
+                  )}
+                >
+                  <v.icon className="size-4" strokeWidth={1.75} />
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={() => setFullscreen((v) => !v)}
+              aria-label={fullscreen ? "Exit full screen" : "Full screen"}
+              title={fullscreen ? "Exit full screen (Esc)" : "Full screen"}
+              className={cn(TX_UTILITY, "border border-border-strong bg-card")}
+            >
+              {fullscreen ? <Minimize2 className="size-4" strokeWidth={1.75} /> : <Maximize2 className="size-4" strokeWidth={1.75} />}
+              <span className="hidden lg:inline">{fullscreen ? "Exit" : "Expand"}</span>
+            </button>
+          </div>
+        </div>
+
+        {activeChips.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5">
+            {activeChips.map((c) => (
+              <span key={c.key} className="inline-flex h-7 items-center gap-1 rounded-[6px] border border-primary-accent-text/40 bg-primary/15 pr-1 pl-2 text-xs font-medium text-foreground">
+                {c.label}
+                <button
+                  type="button"
+                  aria-label={`Remove ${c.label}`}
+                  onClick={() => {
+                    c.clear();
+                    setPage(1);
+                  }}
+                  className="flex size-5 items-center justify-center rounded-[4px] text-muted-foreground hover:bg-card hover:text-foreground"
+                >
+                  <X className="size-3" strokeWidth={2} />
+                </button>
+              </span>
+            ))}
+            <button type="button" onClick={clearFilters} className="ml-1 text-xs font-semibold text-primary-accent-text hover:underline">
+              Clear filters
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* ── Ledger ── */}
+      {!hasTransactions ? (
+        <div className="flex flex-col items-center gap-3 rounded-[10px] border border-dashed border-border-strong bg-card px-6 py-14 text-center">
+          <span className="flex size-11 items-center justify-center rounded-full bg-secondary text-muted-foreground">
+            <Receipt className="size-5" strokeWidth={1.75} />
+          </span>
+          <div>
+            <p className="font-heading text-base font-semibold text-foreground">No transactions yet</p>
+            <p className="mt-1 text-sm text-muted-foreground">Add your first transaction to start tracking your money.</p>
+          </div>
+          {addMenu}
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {pageRows.map((row) => {
-            const iconKey = row.category?.iconKey ?? "other";
-            const Icon = categoryIconFor(iconKey);
-            const loanTag = loanTagFor(row.transaction);
-            return (
-              <button
-                key={row.transaction.id}
-                type="button"
-                onClick={() => {
-                  setDetailRow(row);
-                  setAutoFocusAssign(false);
-                  setDetailOpen(true);
-                }}
-                className={cn(
-                  "relative flex items-center gap-3 rounded-2xl border border-border bg-card p-4 pt-5 text-left transition-transform duration-150 hover:-translate-y-0.5 hover:bg-muted/30 active:scale-[0.99]",
-                  duplicateTransactionIds.has(row.transaction.id) && "!border-danger bg-danger/5",
-                )}
-              >
-                {loanTag && (
-                  <span className="absolute top-0 left-0 z-10 flex items-center gap-1 rounded-tl-2xl rounded-br-lg bg-purple-600 py-1 pr-2.5 pl-2 text-[10px] font-bold tracking-wide text-white shadow-md dark:bg-purple-500">
-                    <Landmark className="size-3" aria-hidden />
-                    {loanTag.label}
-                  </span>
-                )}
-                <span className={cn("flex size-10 shrink-0 items-center justify-center rounded-2xl", TONE_ICON_CLASS[categoryToneFor(iconKey)])}>
-                  <Icon className="size-4.5" />
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium text-foreground">{displayDescription(row.transaction) || "(No description)"}</p>
-                  <p className="truncate text-xs text-muted-foreground">
-                    {formatFullDate(row.transaction.dateTime)} • {row.category?.name ?? "Uncategorized"} • {row.account?.name ?? "Unknown"}
-                  </p>
-                  {duplicateTransactionIds.has(row.transaction.id) && (
-                    <span
-                      className="mt-0.5 inline-flex items-center gap-1 rounded-full bg-danger/10 px-1.5 py-0.5 text-[10px] font-medium text-danger"
-                      title="Another transaction has the same amount and date — check it isn't a duplicate."
+        <section
+          aria-label="Transactions"
+          className={cn("flex min-h-0 flex-col overflow-hidden rounded-[10px] border border-border-strong/70 bg-card shadow-e1", fullscreen && "flex-1")}
+        >
+          {count === 0 ? (
+            <div className="flex flex-col items-center gap-2 px-6 py-14 text-center">
+              <p className="text-sm font-semibold text-foreground">No transactions match these filters.</p>
+              <button type="button" onClick={clearFilters} className="text-sm font-semibold text-primary-accent-text hover:underline">
+                Clear filters
+              </button>
+            </div>
+          ) : viewMode === "list" ? (
+            <div className={cn("min-h-0 overflow-auto overscroll-contain", fullscreen ? "flex-1" : "max-h-[calc(100dvh-17rem)] min-h-[18rem]")}>
+              <LedgerTable
+                rows={pageRows}
+                offset={(safePage - 1) * rowsPerPage}
+                total={count}
+                duplicateIds={duplicateTransactionIds}
+                displayDescription={displayDescription}
+                isSplit={(id) => expenseByTransactionId.has(id)}
+                onOpen={openDetails}
+                onDelete={setQuickDeleteRow}
+              />
+            </div>
+          ) : (
+            <div className={cn("min-h-0 overflow-auto overscroll-contain p-3", fullscreen ? "flex-1" : "max-h-[calc(100dvh-17rem)]")}>
+              <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 xl:grid-cols-3">
+                {pageRows.map((row) => {
+                  const iconKey = row.category?.iconKey ?? "other";
+                  const Icon = categoryIconFor(iconKey);
+                  const t = row.transaction;
+                  const isDuplicate = duplicateTransactionIds.has(t.id);
+                  return (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => openDetails(row)}
+                      className={cn(
+                        "flex min-w-0 flex-col gap-2 rounded-[8px] border border-border-strong/60 bg-card p-3 text-left transition-colors hover:border-border-strong hover:bg-secondary/50",
+                        isDuplicate && "border-l-[3px] border-l-danger",
+                      )}
                     >
-                      <Copy className="size-2.5" aria-hidden />
-                      Possible duplicate
-                    </span>
-                  )}
-                </div>
-                <CurrencyCell amount={row.transaction.type === "income" ? row.transaction.amount : -row.transaction.amount} />
-              </button>
-            );
-          })}
-        </div>
-      )}
-
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-muted-foreground">
-          Showing {rangeStart} to {rangeEnd} of {count} transactions
-        </p>
-        <div className="flex items-center gap-1">
-          <ClayButton variant="ghost" size="icon" disabled={safePage <= 1} onClick={() => setPage(safePage - 1)} aria-label="Previous page">
-            <ChevronLeft className="size-4" />
-          </ClayButton>
-          {paginationRange(safePage, totalPages).map((entry, i) =>
-            entry === "ellipsis" ? (
-              <span key={`ellipsis-${i}`} className="px-2 text-sm text-muted-foreground">
-                …
-              </span>
-            ) : (
-              <button
-                key={entry}
-                type="button"
-                onClick={() => setPage(entry)}
-                className={cn(
-                  "flex size-8 shrink-0 items-center justify-center rounded-lg text-sm font-medium transition-colors",
-                  entry === safePage ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted",
-                )}
-              >
-                {entry}
-              </button>
-            ),
+                      <span className="flex min-w-0 items-center gap-2.5">
+                        <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-[8px]", TONE_ICON_CLASS[categoryToneFor(iconKey)])}>
+                          <Icon className="size-4" />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm font-semibold text-foreground">{displayDescription(t) || "(No description)"}</span>
+                          <span className="block truncate text-xs text-muted-foreground">
+                            {shortDate(t.dateTime)} {t.dateTime.getFullYear()} · {row.category?.name ?? "Uncategorized"} · {row.account?.name ?? "Unknown"}
+                          </span>
+                        </span>
+                        <Amount transaction={t} />
+                      </span>
+                      <TxnBadges transaction={t} isSplit={expenseByTransactionId.has(t.id)} isDuplicate={isDuplicate} />
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
           )}
-          <ClayButton variant="ghost" size="icon" disabled={safePage >= totalPages} onClick={() => setPage(safePage + 1)} aria-label="Next page">
-            <ChevronRight className="size-4" />
-          </ClayButton>
-        </div>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <ClayButton variant="secondary" size="sm" className="gap-1.5">
-              Rows per page
-              <span className="font-semibold text-foreground">{rowsPerPage}</span>
-            </ClayButton>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            {ROWS_PER_PAGE_OPTIONS.map((n) => (
-              <DropdownMenuItem
-                key={n}
-                onSelect={() => {
-                  setRowsPerPage(n);
-                  setPage(1);
-                }}
-              >
-                {n}
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
+
+          {/* ── Pagination — attached to the ledger ── */}
+          {count > 0 && (
+            <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t border-border-strong/60 bg-secondary/40 px-3 py-2 sm:px-4">
+              <p className="text-xs text-muted-foreground tabular-nums">
+                Showing <span className="font-semibold text-foreground">{rangeStart}–{rangeEnd}</span> of <span className="font-semibold text-foreground">{count}</span>
+              </p>
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-0.5">
+                  <button type="button" disabled={safePage <= 1} onClick={() => setPage(safePage - 1)} aria-label="Previous page" className={PAGE_BTN}>
+                    <ChevronLeft className="size-4" strokeWidth={1.75} />
+                  </button>
+                  {paginationRange(safePage, totalPages).map((entry, i) =>
+                    entry === "ellipsis" ? (
+                      <span key={`ellipsis-${i}`} className="px-1 text-xs text-muted-foreground">
+                        …
+                      </span>
+                    ) : (
+                      <button
+                        key={entry}
+                        type="button"
+                        onClick={() => setPage(entry)}
+                        aria-current={entry === safePage ? "page" : undefined}
+                        className={cn(PAGE_BTN, "text-xs tabular-nums", entry === safePage && "border-primary-accent-text bg-primary font-semibold text-primary-foreground hover:bg-primary")}
+                      >
+                        {entry}
+                      </button>
+                    ),
+                  )}
+                  <button type="button" disabled={safePage >= totalPages} onClick={() => setPage(safePage + 1)} aria-label="Next page" className={PAGE_BTN}>
+                    <ChevronRight className="size-4" strokeWidth={1.75} />
+                  </button>
+                </div>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button type="button" className="flex h-7 items-center gap-1 rounded-[6px] border border-border-strong bg-card px-2 text-xs text-muted-foreground hover:bg-secondary">
+                      Rows <span className="font-semibold text-foreground tabular-nums">{rowsPerPage}</span>
+                      <ChevronDown className="size-3" strokeWidth={2} />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="rounded-[8px]">
+                    {ROWS_PER_PAGE_OPTIONS.map((n) => (
+                      <DropdownMenuItem
+                        key={n}
+                        onSelect={() => {
+                          setRowsPerPage(n);
+                          setPage(1);
+                        }}
+                      >
+                        {n}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+            </div>
+          )}
+        </section>
+      )}
 
       <TransactionDetailsModal
         open={detailOpen}
@@ -1086,5 +1071,461 @@ function SplitFormFields({
 
       {error && <p className="text-xs text-expense">{error}</p>}
     </div>
+  );
+}
+
+/* ───────────────────────── Ledger UI (visual only — every value comes from the existing row data) ───────────────────────── */
+
+const TX_PRIMARY =
+  "flex h-9 items-center gap-1.5 rounded-[6px] border border-primary-accent-text bg-primary px-3.5 text-sm font-semibold text-primary-foreground outline-none transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50";
+const TX_UTILITY =
+  "flex h-9 items-center gap-1.5 rounded-[6px] px-2.5 text-sm font-medium text-foreground outline-none transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:text-muted-foreground disabled:hover:bg-transparent [&_svg]:text-muted-foreground";
+const SOON = "rounded-[4px] bg-secondary px-1 py-px text-[10px] font-semibold tracking-wide text-muted-foreground uppercase";
+const TX_FILTER =
+  "flex h-9 max-w-full min-w-0 items-center gap-1.5 rounded-[6px] border border-border-strong bg-card px-2.5 text-sm font-medium text-foreground outline-none transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:border-primary-accent-text dark:bg-input";
+const TX_FILTER_ACTIVE = "border-primary-accent-text bg-primary/15 dark:bg-primary/10";
+const TX_INPUT =
+  "h-9 rounded-[6px] border border-border-strong bg-card px-2.5 text-sm text-foreground outline-none focus:border-primary-accent-text focus:ring-2 focus:ring-ring dark:bg-input";
+const PAGE_BTN =
+  "flex h-7 min-w-7 items-center justify-center rounded-[6px] border border-transparent px-1.5 text-muted-foreground transition-colors hover:bg-card hover:text-foreground disabled:pointer-events-none disabled:opacity-40";
+
+/** Short trigger labels for the existing filter definitions (their `label` stays the "All …" option). */
+const FILTER_LABEL: Record<string, string> = {
+  account: "Account",
+  category: "Category",
+  type: "Type",
+  paymentMethod: "Payment method",
+};
+
+const TH =
+  "sticky top-0 z-[2] border-r border-b border-r-border-strong/40 border-b-border-strong bg-secondary px-3 py-2 text-left text-[11px] font-semibold tracking-[0.06em] whitespace-nowrap text-muted-foreground uppercase last:border-r-0";
+const TD = "border-r border-b border-r-border-strong/30 border-b-border-strong/40 px-3 py-2.5 align-middle last:border-r-0";
+const COLS = 7;
+
+function shortDate(d: Date): string {
+  return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
+}
+
+function dateRangeLabel(from: string, to: string): string {
+  const fmt = (v: string) => new Date(v).toLocaleDateString("en-IN", { day: "numeric", month: "short" });
+  if (from && to) return `${fmt(from)} – ${fmt(to)}`;
+  return from ? `From ${fmt(from)}` : `Until ${fmt(to)}`;
+}
+
+/** Compact dropdown for one existing `FilterDef` — same options and `onChange`; "All" resets it to null. */
+function FilterMenu({ filter, label }: { filter: FilterDef; label: string }) {
+  const active = filter.options.find((o) => o.value === filter.value);
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button type="button" className={cn(TX_FILTER, active && TX_FILTER_ACTIVE)}>
+          <span className={cn(active && "text-muted-foreground")}>{label}</span>
+          {active && <span className="max-w-32 truncate font-semibold">{active.label}</span>}
+          <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" strokeWidth={2} />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="max-h-80 min-w-44 overflow-y-auto rounded-[8px]">
+        <DropdownMenuItem onSelect={() => filter.onChange(null)} className={cn(!active && "font-semibold")}>
+          {filter.label}
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        {filter.options.map((option) => (
+          <DropdownMenuItem key={option.value} onSelect={() => filter.onChange(option.value)} className={cn(option.value === filter.value && "font-semibold")}>
+            {option.label}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+type Flow = "in" | "out" | "transfer";
+const flowOf = (t: Transaction): Flow => (t.transferId ? "transfer" : t.type === "income" ? "in" : "out");
+const FLOW_LABEL: Record<Flow, string> = { in: "Money in", out: "Money out", transfer: "Transfer" };
+const TYPE_LABEL: Record<Flow, string> = { in: "Income", out: "Expense", transfer: "Transfer" };
+
+/**
+ * The row's headline figure, read by direction — money in (green), money out (strong), transfer
+ * (neutral); `size="lg"` for the ledger's Amount column, with the "Money in / out" label beneath.
+ */
+function Amount({ transaction, withLabel = false, size = "md" }: { transaction: Transaction; withLabel?: boolean; size?: "md" | "lg" }) {
+  const flow = flowOf(transaction);
+  const Icon = flow === "in" ? ArrowDownLeft : flow === "out" ? ArrowUpRight : ArrowLeftRight;
+  return (
+    <span className="flex shrink-0 flex-col items-end gap-0.5">
+      <span
+        className={cn(
+          "font-bold tracking-tight whitespace-nowrap tabular-nums",
+          size === "lg" ? "text-[18px] leading-tight" : "text-[15px] leading-tight",
+          flow === "in" ? "text-success" : flow === "out" ? "text-foreground" : "text-muted-foreground",
+        )}
+      >
+        {flow === "in" ? "+" : flow === "out" ? "−" : ""}
+        {formatCurrency(transaction.amount)}
+      </span>
+      {withLabel && (
+        <span className={cn("inline-flex items-center gap-0.5 text-[11px] font-medium", flow === "in" ? "text-success" : flow === "out" ? "text-expense" : "text-muted-foreground")}>
+          <Icon className="size-3" strokeWidth={2} aria-hidden />
+          {FLOW_LABEL[flow]}
+        </span>
+      )}
+    </span>
+  );
+}
+
+const BADGE = "inline-flex h-[18px] shrink-0 items-center gap-1 rounded-[4px] border px-1.5 text-[10.5px] font-semibold whitespace-nowrap";
+
+/**
+ * The existing markers — Loan/EMI (`loanTagFor`), accounting flag (`transactionFlagFor`), possible
+ * duplicate — plus Split (a linked Expense) and Transfer (`transferId`) read from the same row data.
+ */
+function TxnBadges({ transaction, isSplit, isDuplicate, hideLoan = false }: { transaction: Transaction; isSplit: boolean; isDuplicate: boolean; hideLoan?: boolean }) {
+  const loanTag = hideLoan ? null : loanTagFor(transaction);
+  const flag = transactionFlagFor(transaction);
+  if (!loanTag && !flag && !isSplit && !isDuplicate && !transaction.transferId) return null;
+  return (
+    <span className="flex flex-wrap items-center gap-1">
+      {loanTag && (
+        <span className={cn(BADGE, "border-purple/35 bg-purple/12 text-purple")}>
+          <Landmark className="size-3" aria-hidden />
+          {loanTag.label}
+        </span>
+      )}
+      {isSplit && (
+        <span className={cn(BADGE, "border-primary-accent-text/40 bg-primary/20 text-foreground dark:text-primary-accent-text")}>
+          <Split className="size-3" aria-hidden />
+          Split
+        </span>
+      )}
+      {transaction.transferId && (
+        <span className={cn(BADGE, "border-border-strong bg-secondary text-foreground")}>
+          <ArrowLeftRight className="size-3" aria-hidden />
+          Transfer
+        </span>
+      )}
+      {flag && <span className={cn(BADGE, "border-warning/50 bg-warning/15 text-warning-foreground dark:text-warning")}>{flag.label}</span>}
+      {isDuplicate && (
+        <span className={cn(BADGE, "border-danger/40 bg-danger/10 text-danger")} title="Another transaction has the same amount and date — check it isn't a duplicate.">
+          <Copy className="size-2.5" aria-hidden />
+          Possible duplicate
+        </span>
+      )}
+    </span>
+  );
+}
+
+function LedgerTable({
+  rows,
+  offset,
+  total,
+  duplicateIds,
+  displayDescription,
+  isSplit,
+  onOpen,
+  onDelete,
+}: {
+  rows: TransactionRow[];
+  offset: number;
+  total: number;
+  duplicateIds: Set<string>;
+  displayDescription: (t: Transaction) => string;
+  isSplit: (transactionId: string) => boolean;
+  onOpen: (row: TransactionRow) => void;
+  onDelete: (row: TransactionRow) => void;
+}) {
+  const [openId, setOpenId] = useState<string | null>(null);
+  const pad = String(total).length < 2 ? 2 : String(total).length;
+
+  return (
+    <table className="w-full border-separate border-spacing-0 text-sm">
+      <thead>
+        <tr>
+          <th className={cn(TH, "hidden w-12 text-right sm:table-cell")}>#</th>
+          <th className={cn(TH, "w-[4.5rem]")}>Date</th>
+          <th className={TH}>Description</th>
+          <th className={cn(TH, "hidden w-28 md:table-cell")}>Type</th>
+          <th className={cn(TH, "hidden w-40 lg:table-cell")}>Account</th>
+          <th className={cn(TH, "w-36 text-right")}>Amount</th>
+          <th className={cn(TH, "w-[7.25rem]")}>
+            <span className="sr-only sm:not-sr-only">Actions</span>
+          </th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((row, i) => {
+          const t = row.transaction;
+          const open = openId === t.id;
+          const iconKey = row.category?.iconKey ?? "other";
+          const Icon = categoryIconFor(iconKey);
+          const isDuplicate = duplicateIds.has(t.id);
+          const flow = flowOf(t);
+          const loanTag = loanTagFor(t);
+          const toggle = () => setOpenId((k) => (k === t.id ? null : t.id));
+          return (
+            <Fragment key={t.id}>
+              <tr
+                onClick={toggle}
+                aria-expanded={open}
+                className={cn("group cursor-pointer transition-colors hover:bg-secondary/60", open && "bg-secondary/70", isDuplicate && "bg-danger/[0.04]")}
+              >
+                <td className={cn(TD, "hidden border-l-[3px] text-right text-[11px] text-muted-foreground tabular-nums sm:table-cell", isDuplicate ? "border-l-danger" : "border-l-transparent")}>
+                  {String(offset + i + 1).padStart(pad, "0")}
+                </td>
+                <td className={cn(TD, "whitespace-nowrap tabular-nums")}>
+                  <p className="text-sm leading-tight font-semibold text-foreground">{shortDate(t.dateTime)}</p>
+                  <p className="text-[11px] leading-tight text-muted-foreground">{t.dateTime.getFullYear()}</p>
+                </td>
+                <td className={cn(TD, "relative max-w-0", loanTag && "pr-20")}>
+                  {loanTag && <CornerTag label={loanTag.label} />}
+                  <div className="flex min-w-0 items-center gap-2.5">
+                    <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-[8px]", TONE_ICON_CLASS[categoryToneFor(iconKey)])}>
+                      <Icon className="size-4" />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate font-semibold text-foreground">{displayDescription(t) || "(No description)"}</p>
+                      <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
+                        <span className="truncate text-xs text-muted-foreground">
+                          {row.category?.name ?? "Uncategorized"}
+                          <span className="lg:hidden"> · {row.account?.name ?? "Unknown account"}</span>
+                        </span>
+                        <TxnBadges transaction={t} isSplit={isSplit(t.id)} isDuplicate={isDuplicate} hideLoan />
+                      </div>
+                    </div>
+                  </div>
+                </td>
+                <td className={cn(TD, "hidden text-xs font-medium text-foreground/85 md:table-cell")}>{TYPE_LABEL[flow]}</td>
+                <td className={cn(TD, "hidden truncate text-xs text-foreground/85 lg:table-cell")}>{row.account?.name ?? "Unknown"}</td>
+                <td className={cn(TD, "text-right")}>
+                  <Amount transaction={t} withLabel size="lg" />
+                </td>
+                <td className={cn(TD, "px-1.5")} onClick={(e) => e.stopPropagation()}>
+                  <div className="flex items-center justify-end gap-1.5">
+                    {/* Edit · Delete — one compact joined control */}
+                    <div className="flex h-7 items-stretch overflow-hidden rounded-[7px] border border-border-strong/70 bg-card shadow-[0_1px_1px_rgb(0_0_0/0.04)]">
+                      <button
+                        type="button"
+                        onClick={() => onOpen(row)}
+                        title="Edit transaction"
+                        aria-label="Edit transaction"
+                        className="flex w-8 items-center justify-center text-foreground/70 transition-colors outline-none hover:bg-primary/20 hover:text-foreground focus-visible:bg-primary/20 dark:hover:text-primary-accent-text"
+                      >
+                        <Pencil className="size-3.5" strokeWidth={1.75} />
+                      </button>
+                      <span className="w-px bg-border-strong/60" aria-hidden />
+                      <button
+                        type="button"
+                        onClick={() => onDelete(row)}
+                        title="Delete transaction"
+                        aria-label="Delete transaction"
+                        className="flex w-8 items-center justify-center text-foreground/70 transition-colors outline-none hover:bg-expense/10 hover:text-expense focus-visible:bg-expense/10"
+                      >
+                        <Trash2 className="size-3.5" strokeWidth={1.75} />
+                      </button>
+                    </div>
+                    <button
+                      type="button"
+                      aria-label={open ? "Collapse details" : "Expand details"}
+                      title={open ? "Hide details" : "Show details"}
+                      onClick={toggle}
+                      className={cn(
+                        "flex size-7 items-center justify-center rounded-full text-muted-foreground transition-colors outline-none hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
+                        open && "bg-secondary text-foreground",
+                      )}
+                    >
+                      <ChevronDown className={cn("size-4 transition-transform duration-200 motion-reduce:transition-none", open && "rotate-180")} strokeWidth={1.75} />
+                    </button>
+                  </div>
+                </td>
+              </tr>
+              <tr aria-hidden={!open}>
+                <td colSpan={COLS} className={cn("p-0", open && "border-b border-border-strong/40 bg-secondary/40")}>
+                  <div className={cn("grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none", open ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0")}>
+                    <div className="min-h-0 overflow-hidden">
+                      {open && <RowDetails
+                          row={row}
+                          displayDescription={displayDescription}
+                          onOpen={() => onOpen(row)}
+                          onDelete={() => onDelete(row)}
+                          isSplit={isSplit(t.id)}
+                          isDuplicate={isDuplicate}
+                        />}
+                    </div>
+                  </div>
+                </td>
+              </tr>
+            </Fragment>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+}
+
+const FLOW_HERO: Record<Flow, { panel: string; chip: string; amount: string; edge: string; mark: string }> = {
+  in: {
+    panel: "bg-gradient-to-br from-success/[0.10] to-success/[0.02] dark:from-success/[0.16] dark:to-success/[0.04]",
+    chip: "border-success/35 bg-success/12 text-success",
+    amount: "text-success",
+    edge: "bg-success",
+    mark: "text-success",
+  },
+  out: {
+    panel: "bg-gradient-to-br from-expense/[0.09] to-expense/[0.02] dark:from-expense/[0.16] dark:to-expense/[0.04]",
+    chip: "border-expense/30 bg-expense/10 text-expense",
+    amount: "text-foreground",
+    edge: "bg-expense",
+    mark: "text-expense",
+  },
+  transfer: {
+    panel: "bg-gradient-to-br from-secondary to-secondary/30",
+    chip: "border-border-strong bg-card text-foreground",
+    amount: "text-foreground",
+    edge: "bg-border-strong",
+    mark: "text-foreground",
+  },
+};
+
+/** Soft icon tints — one per fact, so the grid scans by colour as well as by label. */
+const FACT_TONE = {
+  purple: "bg-purple/12 text-purple",
+  lime: "bg-primary/25 text-foreground dark:text-primary-accent-text",
+  amber: "bg-warning/20 text-warning-foreground dark:text-warning",
+  green: "bg-success/12 text-success",
+  neutral: "bg-secondary text-foreground/70",
+} as const;
+
+/** One labelled fact cell — fills its grid cell and centres its content, so the grid always spans the card. */
+function Fact({
+  icon: Icon,
+  label,
+  tone,
+  children,
+}: {
+  icon: typeof Wallet;
+  label: string;
+  tone: keyof typeof FACT_TONE;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex min-w-0 items-center gap-3 border-b border-border-strong/40 px-4 py-3 last:border-b-0 sm:border-r sm:[&:nth-child(2n)]:border-r-0 sm:[&:nth-child(n+3)]:border-b-0">
+      <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-[8px]", FACT_TONE[tone])}>
+        <Icon className="size-4" strokeWidth={1.75} />
+      </span>
+      <div className="min-w-0">
+        <p className="text-[10.5px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">{label}</p>
+        <p className="mt-0.5 truncate text-sm font-semibold text-foreground">{children}</p>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Expanded row — an attached details card: the amount and what happened on a direction-tinted panel,
+ * the supporting facts in a labelled grid, and the row's Edit / Delete. Every value is existing row data.
+ */
+function RowDetails({
+  row,
+  displayDescription,
+  onOpen,
+  onDelete,
+  isSplit,
+  isDuplicate,
+}: {
+  row: TransactionRow;
+  displayDescription: (t: Transaction) => string;
+  onOpen: () => void;
+  onDelete: () => void;
+  isSplit: boolean;
+  isDuplicate: boolean;
+}) {
+  const t = row.transaction;
+  const flow = flowOf(t);
+  const hero = FLOW_HERO[flow];
+  const FlowIcon = flow === "in" ? ArrowDownLeft : flow === "out" ? ArrowUpRight : ArrowLeftRight;
+  return (
+    <div className="px-3 pt-1 pb-3.5 sm:pr-4 sm:pl-[4.25rem]">
+      <div className="flex flex-col overflow-hidden rounded-[12px] border border-border-strong/60 bg-card shadow-[0_1px_2px_rgb(0_0_0/0.05),0_6px_16px_-8px_rgb(0_0_0/0.12)] md:flex-row">
+        {/* What happened — amount first, on a direction-tinted panel with an accent edge */}
+        <div className={cn("relative flex flex-col gap-2.5 overflow-hidden border-b border-border-strong/40 py-4 pr-4 pl-5 md:w-80 md:shrink-0 md:border-r md:border-b-0", hero.panel)}>
+          <span className={cn("absolute inset-y-0 left-0 w-1", hero.edge)} aria-hidden />
+          <FlowIcon className={cn("pointer-events-none absolute -right-3 -bottom-4 size-28 opacity-[0.07]", hero.mark)} strokeWidth={1.5} aria-hidden />
+          <span className={cn("relative inline-flex w-fit items-center gap-1 rounded-[5px] border px-1.5 py-0.5 text-[11px] font-semibold", hero.chip)}>
+            <FlowIcon className="size-3" strokeWidth={2.25} aria-hidden />
+            {FLOW_LABEL[flow]}
+          </span>
+          <p className={cn("relative font-heading text-[30px] leading-none font-bold tracking-tight tabular-nums", hero.amount)}>
+            {flow === "in" ? "+" : flow === "out" ? "−" : ""}
+            {formatCurrency(t.amount)}
+          </p>
+          <div className="relative min-w-0">
+            <p className="truncate text-[15px] font-semibold text-foreground">{displayDescription(t) || "(No description)"}</p>
+            <p className="mt-1 flex items-center gap-1.5 text-xs font-medium text-foreground/70 tabular-nums">
+              <Calendar className="size-3.5" strokeWidth={1.75} aria-hidden />
+              {formatFullDate(t.dateTime, true)}
+            </p>
+          </div>
+          <div className="relative">
+            <TxnBadges transaction={t} isSplit={isSplit} isDuplicate={isDuplicate} />
+          </div>
+        </div>
+
+        {/* Supporting facts — a 2×2 grid that fills the card's height */}
+        <div className="flex min-w-0 flex-1 flex-col">
+          <div className="grid flex-1 grid-cols-1 sm:grid-cols-2">
+            <Fact icon={Tag} label="Type" tone="purple">{TYPE_LABEL[flow]}</Fact>
+            <Fact icon={Wallet} label="Account" tone="lime">{row.account?.name ?? "Unknown"}</Fact>
+            <Fact icon={Shapes} label="Category" tone="amber">{row.category?.name ?? "Uncategorized"}</Fact>
+            <Fact icon={CreditCard} label="Payment method" tone="green">{paymentMethodFor(t, row.account)}</Fact>
+          </div>
+          {t.notes.trim() && (
+            <div className="flex items-start gap-3 border-t border-border-strong/40 px-4 py-3">
+              <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-[8px]", FACT_TONE.neutral)}>
+                <StickyNote className="size-4" strokeWidth={1.75} />
+              </span>
+              <div className="min-w-0">
+                <p className="text-[11px] font-medium tracking-[0.04em] text-muted-foreground uppercase">Notes</p>
+                <p className="mt-0.5 text-sm whitespace-pre-wrap text-foreground">{t.notes}</p>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Actions */}
+        <div className="flex items-center justify-end gap-2 border-t border-border-strong/40 px-4 py-3 md:w-40 md:shrink-0 md:flex-col md:items-stretch md:justify-center md:border-t-0 md:border-l">
+          <button
+            type="button"
+            onClick={onOpen}
+            className="flex h-8 items-center justify-center gap-1.5 rounded-[6px] border border-primary-accent-text bg-primary px-3 text-sm font-semibold text-primary-foreground transition-opacity hover:opacity-90"
+          >
+            <Pencil className="size-3.5" strokeWidth={2} />
+            Edit
+          </button>
+          <button
+            type="button"
+            onClick={onDelete}
+            className="flex h-8 items-center justify-center gap-1.5 rounded-[6px] border border-border-strong bg-card px-3 text-sm font-medium text-foreground/80 transition-colors hover:border-expense/40 hover:bg-expense/10 hover:text-expense"
+          >
+            <Trash2 className="size-3.5" strokeWidth={1.75} />
+            Delete
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Loan/EMI marker — a short stacked tab hanging from the top line at the right end of the Description cell: a solid
+ * chip over a lighter, slightly larger back layer (same `loanTagFor` label as before).
+ */
+function CornerTag({ label, className }: { label: string; className?: string }) {
+  return (
+    <span className={cn("pointer-events-none absolute top-0 right-1.5 z-[1] flex", className)}>
+      {/* back layer — peeks out below and to the sides */}
+      <span className="absolute -inset-x-[4px] top-0 h-[20px] rounded-b-[6px] bg-purple/25 dark:bg-purple/35" aria-hidden />
+      <span className="relative flex h-[16px] min-w-[3.25rem] items-center justify-center rounded-b-[4px] bg-gradient-to-b from-purple to-[color-mix(in_oklch,var(--color-purple),black_12%)] px-2.5 text-[9px] leading-none font-bold tracking-[0.12em] text-white uppercase shadow-[0_1px_2px_rgb(0_0_0/0.18)]">
+        {label}
+      </span>
+    </span>
   );
 }
