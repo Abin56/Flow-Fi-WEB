@@ -184,6 +184,8 @@ export function PeopleWorkspace() {
         date: params.date,
         receivedStatus: "received",
         parentEntryId: params.parentEntryId,
+        sourceKind: params.sourceKind,
+        obligationRef: params.obligationRef,
       },
       params.accountId,
     );

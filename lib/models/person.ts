@@ -12,6 +12,8 @@ import type { AuditEntry, SoftDeletableEntity } from "@/lib/firestore/soft-delet
 import { receivedStatusFromName, type ReceivedStatus } from "@/lib/models/expense";
 
 export type LedgerEntryType = "gave" | "borrowed" | "receivedBack" | "repaid" | "adjustment";
+/** Authoritative origin for newly-created People entries. Optional for legacy documents. */
+export type LedgerSourceKind = "manual" | "splitExpense" | "assignedExpense" | "emiInstallment" | "loanInstallment";
 
 const LEDGER_ENTRY_TYPES: LedgerEntryType[] = ["gave", "borrowed", "receivedBack", "repaid", "adjustment"];
 
@@ -123,6 +125,10 @@ export interface LedgerEntry extends SoftDeletableEntity {
    * Flutter-compatibility caveat for other additive fields on a Flutter-canonical collection.
    */
   parentEntryId: string | null;
+  /** Explicit source classification. Missing legacy values deliberately stay unspecified. */
+  sourceKind?: LedgerSourceKind;
+  /** Stable obligation key settled by this entry, e.g. `emi-inst:{installmentId}`. */
+  obligationRef?: string | null;
   createdAt: Date;
   /**
    * Whether this entry has actually been settled — independent of `type`/
@@ -260,6 +266,8 @@ export function ledgerEntryFromFirestore(
     note: (data.note as string | undefined) ?? "",
     transactionRef: (data.transactionRef as string | undefined) ?? null,
     parentEntryId: (data.parentEntryId as string | undefined) ?? null,
+    sourceKind: data.sourceKind as LedgerSourceKind | undefined,
+    obligationRef: (data.obligationRef as string | undefined) ?? null,
     increasesBalance: (data.increasesBalance as boolean) ?? true,
     createdAt: (data.createdAt as Timestamp).toDate(),
     receivedStatus: receivedStatusFromName(data.receivedStatus as string | undefined),
@@ -278,6 +286,8 @@ export function ledgerEntryToFirestore(entry: LedgerEntry): DocumentData {
     note: entry.note,
     transactionRef: entry.transactionRef,
     parentEntryId: entry.parentEntryId,
+    ...(entry.sourceKind == null ? {} : { sourceKind: entry.sourceKind }),
+    ...(entry.obligationRef == null ? {} : { obligationRef: entry.obligationRef }),
     increasesBalance: entry.increasesBalance,
     createdAt: Timestamp.fromDate(entry.createdAt),
     receivedStatus: entry.receivedStatus,

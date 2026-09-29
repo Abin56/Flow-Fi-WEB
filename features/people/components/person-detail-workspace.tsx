@@ -14,6 +14,7 @@ import { cycleContaining, formatStatementDate, type StatementCycle } from "@/lib
 import { money } from "@/lib/engines/person-cycle-statement-share";
 import { planBulkDeletion, planEntryDeletion, type BulkDeletionPlan, type EntryDeletionPlan } from "@/lib/engines/person-ledger-deletion";
 import type { LedgerEntry, Person } from "@/lib/models/person";
+import type { LedgerSourceKind } from "@/lib/models/person";
 import type { PersonViewRow } from "@/features/people/hooks/use-people-data";
 import { usePersonCycleStatement } from "@/features/people/hooks/use-person-cycle-statement";
 import { usePersonPendingSplitParticipants } from "@/features/people/hooks/use-person-pending-split-participants";
@@ -39,7 +40,9 @@ export interface SettleEntryParams {
   type: "repaid" | "receivedBack";
   amount: number;
   date: Date;
-  parentEntryId: string;
+  parentEntryId?: string;
+  sourceKind?: LedgerSourceKind;
+  obligationRef?: string;
   /** The account the settlement's cash leg posts to. */
   accountId: string;
 }
@@ -234,14 +237,16 @@ export function PersonDetailWorkspace({
   async function settleRow(row: LedgerRow, values: EntrySettleValues) {
     const target = row.settle;
     if (!target) return;
-    if (target.kind === "entry") {
+    if (target.kind === "entry" || target.kind === "derivedInstallment") {
       if (!onSettleEntry) throw new Error("Not signed in");
       await onSettleEntry({
-        // "I borrowed X" settles by "I repaid"; "I gave X" settles by "Received back".
-        type: target.entry.type === "borrowed" ? "repaid" : "receivedBack",
+        // "I borrowed X" settles by "I repaid"; every derived installment is a Person receivable.
+        type: target.kind === "entry" && target.entry.type === "borrowed" ? "repaid" : "receivedBack",
         amount: values.amount,
         date: values.date,
-        parentEntryId: target.entry.id,
+        parentEntryId: target.kind === "entry" ? target.entry.id : undefined,
+        sourceKind: target.kind === "derivedInstallment" ? target.sourceKind : undefined,
+        obligationRef: target.kind === "derivedInstallment" ? target.obligationRef : undefined,
         accountId: values.accountId ?? "",
       });
     } else {

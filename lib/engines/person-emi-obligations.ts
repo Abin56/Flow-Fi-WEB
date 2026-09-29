@@ -126,7 +126,7 @@ export function personEmiObligations(params: {
     if (source.isClosed && inst.amountPaid <= 0) continue;
     seen.add(inst.id);
     result.push({
-      key: `emi-inst:${inst.id}`,
+      key: `${source.kind === "emi" ? "emi-inst" : "loan-inst"}:${inst.id}`,
       installmentId: inst.id,
       sourceKind: source.kind,
       sourceId: source.id,

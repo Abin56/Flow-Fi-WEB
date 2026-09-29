@@ -1,12 +1,10 @@
 /**
- * Landscape A4 People Ledger statement — the People Ledger's table design (bordered cells, semantic full-row
- * tints, strong running balance) translated to pdf-lib. Rendered solely from `statementPdfModel`: every
+ * Landscape A4 People Ledger statement. Rendered solely from `statementPdfModel`: every
  * amount, balance, label and direction comes from the statement engine; nothing here does arithmetic on
  * money (the only numbers computed are layout coordinates).
  *
- * Colour always supports a word: each row also states its Type and Status, the summary states the
- * direction ("They owe you" / "You owe them"), and a legend explains the tints — so the statement still
- * reads correctly when printed in low colour or viewed on a washed-out display.
+ * Colour always supports a word: each row states its Type and Status, and the position names its
+ * direction ("They owe you" / "You owe them") so it remains clear in low colour or print.
  */
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage, type RGB } from "pdf-lib";
 import type { PersonCycleStatement, StatementCategory } from "@/lib/engines/person-cycle-statement";
@@ -19,17 +17,12 @@ export function pdfSafe(text: string): string {
 // ---- Palette: the People Ledger semantic families, as PDF-safe solid colours (no transparency) ----
 const INK = rgb(0.09, 0.11, 0.15);
 const MUTED = rgb(0.36, 0.4, 0.46);
-const RULE = rgb(0.62, 0.65, 0.7); // visible thin cell borders — never near-white
-const RULE_STRONG = rgb(0.42, 0.45, 0.5);
-// Page theme: a dark FlowFi header band with the lime brand accent, and one cool slate family for every
-// structural surface (table header, summary, opening/closing rows, month labels, balance column).
-const HEADER_FILL = rgb(0.86, 0.89, 0.93); // slate — table header, Current Pending cell, closing row
-const BAND_FILL = rgb(0.945, 0.955, 0.972); // light slate — opening row, month labels
-const BALANCE_FILL = rgb(0.93, 0.945, 0.96); // the running-balance column, easy to follow down the page
-const HERO_FILL = rgb(0.1, 0.12, 0.15); // FlowFi near-black header band
-const HERO_TEXT = rgb(1, 1, 1);
-const HERO_MUTED = rgb(0.72, 0.76, 0.8);
-const LIME = rgb(0.76, 0.93, 0.25); // FlowFi brand lime (on the dark band only)
+const RULE = rgb(0.74, 0.75, 0.77);
+const RULE_STRONG = rgb(0.46, 0.48, 0.52);
+const SURFACE = rgb(0.985, 0.98, 0.965);
+const BAND_FILL = rgb(0.94, 0.945, 0.94);
+const BALANCE_FILL = rgb(0.965, 0.972, 0.965);
+const LIME = rgb(0.68, 0.84, 0.16);
 
 interface Family {
   fill: RGB;
@@ -45,7 +38,7 @@ const FAMILY = {
   //   Received back = GREEN  — money came in, done
   //   Paid back     = TEAL   — your debt reduced, done (completed like green, clearly a different hue)
   //   EMI           = AMBER  — scheduled installment
-  receivable: { fill: rgb(0.86, 0.92, 0.99), accent: rgb(0.15, 0.4, 0.82), text: rgb(0.08, 0.27, 0.6), label: "They owe you" },
+  receivable: { fill: rgb(0.89, 0.96, 0.93), accent: rgb(0.04, 0.48, 0.37), text: rgb(0.02, 0.32, 0.24), label: "They owe you" },
   debt: { fill: rgb(0.89, 0.85, 0.98), accent: rgb(0.47, 0.26, 0.8), text: rgb(0.33, 0.16, 0.6), label: "You owe them" },
   receivedBack: { fill: rgb(0.86, 0.95, 0.86), accent: rgb(0.13, 0.55, 0.24), text: rgb(0.07, 0.38, 0.15), label: "Received back" },
   paidBack: { fill: rgb(0.83, 0.94, 0.94), accent: rgb(0.05, 0.5, 0.52), text: rgb(0.02, 0.35, 0.37), label: "Paid back" },
@@ -154,49 +147,38 @@ export async function renderPersonStatementPdf(statement: PersonCycleStatement):
 
   // ---------------- Statement header (first page) ----------------
   const drawStatementHeader = () => {
-    const h = 58;
-    box(M, y - h, TABLE_W, h, HERO_FILL);
-    box(M, y - h, 5, h, LIME);
-    text("FLOWFI", M + 17, y - 17, 8.5, bold, LIME);
-    text("People Statement", M + 17, y - 36, 17, bold, HERO_TEXT);
-    text(`Generated ${GENERATED.format(new Date())}`, M + 17, y - 50, 7.2, regular, HERO_MUTED);
-    textRight(fit(model.personName, bold, 15, 330), M + TABLE_W - 16, y - 22, 15, bold, HERO_TEXT);
-    textRight(`Cycle  ${model.cycleLabel}`, M + TABLE_W - 16, y - 40, 9, regular, HERO_MUTED);
-    y -= h + 10;
+    // A quiet statement masthead: branding is an accent, not an ink-heavy banner.
+    box(M, y - 3, TABLE_W, 3, LIME);
+    text("FLOWFI", M, y - 18, 9, bold, INK);
+    text("People Statement", M, y - 36, 14.5, bold, INK);
+    text(`Generated ${GENERATED.format(new Date())}`, M, y - 49, 6.8, regular, MUTED);
+    textRight(fit(model.personName, bold, 15.5, 300), M + TABLE_W, y - 19, 15.5, bold, INK);
+    textRight(model.cycleLabel, M + TABLE_W, y - 35, 7.8, regular, MUTED);
+    textRight("Current cycle", M + TABLE_W, y - 47, 6.7, regular, MUTED);
+    y -= 59;
 
-    // Summary: one bordered strip of engine values; Current Pending dominant, direction boxed on the right.
-    const sh = 46;
-    const posW = 214;
-    const cellsW = TABLE_W - posW - 10;
-    const items = model.summary;
-    const cellW = cellsW / items.length;
-    box(M, y - sh, cellsW, sh, rgb(1, 1, 1), RULE);
+    // Hero: the reader's answer is intentionally stronger than every supporting figure.
+    const heroH = 60;
+    box(M, y - heroH, TABLE_W, heroH, position.fill, position.accent, 0.8);
+    box(M, y - heroH, 5, heroH, position.accent);
+    text("CURRENT POSITION", M + 15, y - 14, 6.8, bold, position.text);
+    text(model.positionHeadline, M + 15, y - 29, 10.5, bold, position.text);
+    text(model.positionAmount, M + 15, y - 50, 20, bold, position.text);
+    textRight(`As of ${model.closingRow.date}`, M + TABLE_W - 12, y - 47, 7.2, regular, position.text);
+    y -= heroH + 8;
+
+    // The reconciliation remains easy to scan, while clearly subordinate to the position.
+    const items = model.summary.filter((item) => item.label !== "Current Pending");
+    const stripH = 30;
+    const cellW = TABLE_W / Math.max(items.length, 1);
+    box(M, y - stripH, TABLE_W, stripH, SURFACE, RULE, 0.6);
     items.forEach((item, i) => {
       const x = M + i * cellW;
-      const last = i === items.length - 1;
-      if (last) box(x, y - sh, cellW, sh, HEADER_FILL, RULE);
-      if (i > 0) vline(x, y, y - sh);
-      text(fit(item.label.toUpperCase(), bold, 6.6, cellW - 2 * PAD - 4), x + PAD + 2, y - 14, 6.6, bold, MUTED);
-      text(item.value, x + PAD + 2, y - (last ? 35 : 33), last ? 14 : 10.5, last ? bold : regular, INK);
+      if (i > 0) vline(x, y - 5, y - stripH + 5, RULE, 0.45);
+      text(fit(item.label.toUpperCase(), bold, 6.1, cellW - 2 * PAD), x + PAD + 2, y - 11, 6.1, bold, MUTED);
+      text(item.value, x + PAD + 2, y - 24, 9.2, regular, INK);
     });
-    const px = M + TABLE_W - posW;
-    box(px, y - sh, posW, sh, position.fill, position.accent, 1);
-    box(px, y - sh, 4, sh, position.accent);
-    text(model.positionHeadline.toUpperCase(), px + 14, y - 16, 8, bold, position.text);
-    text(model.positionAmount, px + 14, y - 36, 16, bold, position.text);
-    y -= sh + 9;
-
-    // Legend — so a printed / low-colour copy still explains the tints.
-    const legend = [FAMILY.receivable, FAMILY.debt, FAMILY.receivedBack, FAMILY.paidBack, FAMILY.emi];
-    let lx = M;
-    text("ROW KEY", lx, y - 8, 6.4, bold, MUTED);
-    lx += 38;
-    for (const f of legend) {
-      box(lx, y - 10, 16, 9, f.fill, f.accent, 0.8);
-      text(f.label, lx + 21, y - 8, 7, regular, INK);
-      lx += 21 + regular.widthOfTextAtSize(f.label, 7) + 16;
-    }
-    y -= 18;
+    y -= stripH + 13;
   };
 
   // ---------------- Table header (repeated on every page) ----------------
@@ -206,15 +188,15 @@ export async function renderPersonStatementPdf(statement: PersonCycleStatement):
       textRight("continued", M + TABLE_W, y - 10, 7.5, regular, MUTED);
       y -= 18;
     }
-    const h = 20;
-    box(M, y - h, TABLE_W, h, HEADER_FILL, RULE_STRONG, 0.7);
+    const h = 17;
+    box(M, y - h, TABLE_W, h, BAND_FILL);
     let x = M;
     model.columns.forEach((label, i) => {
       const w = COL_W[i]!;
       const v = label.toUpperCase();
-      if (COLS[i]!.align === "right") textRight(v, x + w - PAD, y - 13, 6.8, bold, MUTED);
-      else text(v, x + PAD, y - 13, 6.8, bold, MUTED);
-      if (i > 0) vline(x, y, y - h, RULE_STRONG);
+      if (COLS[i]!.align === "right") textRight(v, x + w - PAD, y - 11.5, 6.2, bold, MUTED);
+      else text(v, x + PAD, y - 11.5, 6.2, bold, MUTED);
+      if (i > 0) vline(x, y - 3, y - h + 3, RULE, 0.35);
       x += w;
     });
     y -= h;
@@ -232,10 +214,10 @@ export async function renderPersonStatementPdf(statement: PersonCycleStatement):
 
   // ---------------- Rows ----------------
   const drawGroupLabel = (label: string) => {
-    const h = 15;
+    const h = 16;
     ensure(h + 25);
-    box(M, y - h, TABLE_W, h, BAND_FILL, RULE);
-    text(label.toUpperCase(), M + PAD, y - 10.5, 6.6, bold, MUTED);
+    text(label, M, y - 10, 7.5, bold, INK);
+    page.drawLine({ start: { x: M + 82, y: y - 7 }, end: { x: M + TABLE_W, y: y - 7 }, thickness: 0.6, color: RULE });
     y -= h;
   };
 
@@ -243,27 +225,27 @@ export async function renderPersonStatementPdf(statement: PersonCycleStatement):
     const strong = variant !== "row";
     const fam = strong ? FAMILY.neutral : familyOf(row, signed);
     const descW = COL_W[2]! - 2 * PAD;
-    const lines = wrap(row.description, bold, 8.6, descW);
-    const detail = row.detail ? fit(row.detail, regular, 6.8, descW) : "";
-    const h = Math.max(26, 10 + lines.length * 10.5 + (detail ? 9 : 0) + 4);
+    const lines = wrap(row.description, bold, 7.8, descW);
+    const detail = row.detail ? fit(row.detail, regular, 6.3, descW) : "";
+    const h = Math.max(22, 8 + lines.length * 9 + (detail ? 7.5 : 0) + 3);
     ensure(h);
     const top = y;
     const bottom = y - h;
-    const fill = strong ? (variant === "closing" ? HEADER_FILL : BAND_FILL) : fam.fill;
+    const fill = strong ? BAND_FILL : rgb(1, 1, 1);
 
-    // One tint for the whole logical row, then the running-balance column band, then cell borders.
+    // Information leads: a narrow semantic rail and a restrained tint replace coloured spreadsheet rows.
     box(M, bottom, TABLE_W, h, fill);
+    if (!strong && fam !== FAMILY.neutral) box(M + 3, bottom, TABLE_W - 3, h, fam.fill);
     const balX = M + COL_W.slice(0, 6).reduce((s, w) => s + w, 0);
-    if (!strong && fam === FAMILY.neutral) box(balX, bottom, COL_W[6]!, h, BALANCE_FILL);
+    box(balX, bottom, COL_W[6]!, h, strong ? BAND_FILL : BALANCE_FILL);
     box(M, bottom, 3, h, strong ? RULE_STRONG : fam.accent);
     hline(bottom, strong ? RULE_STRONG : RULE, strong ? 0.8 : 0.5);
-    vline(M, top, bottom, RULE);
-    vline(M + TABLE_W, top, bottom, RULE);
+    vline(M + TABLE_W, top, bottom, RULE, 0.35);
 
     const mid = top - h / 2 - 3;
     let x = M;
     COL_W.forEach((w, i) => {
-      if (i > 0) vline(x, top, bottom);
+      if (i > 0) vline(x, top - 4, bottom + 4, RULE, 0.3);
       const right = x + w - PAD;
       switch (i) {
         case 0:
@@ -275,10 +257,10 @@ export async function renderPersonStatementPdf(statement: PersonCycleStatement):
         case 2: {
           let ty = top - 12;
           for (const line of lines) {
-            text(line, x + PAD, ty, 8.6, bold, INK);
-            ty -= 10.5;
+            text(line, x + PAD, ty, 7.8, bold, INK);
+            ty -= 9;
           }
-          if (detail) text(detail, x + PAD, ty + 1, 6.8, regular, MUTED);
+          if (detail) text(detail, x + PAD, ty + 1, 6.3, regular, MUTED);
           break;
         }
         case 3: {
@@ -287,18 +269,18 @@ export async function renderPersonStatementPdf(statement: PersonCycleStatement):
           const bw = bold.widthOfTextAtSize(label, 7) + 8;
           const isEmi = row.isEmi;
           const badge = isEmi ? FAMILY.emi : fam === FAMILY.neutral ? null : fam;
-          if (badge) box(x + PAD, mid - 3.5, bw, 12, rgb(1, 1, 1), badge.accent, 0.8);
+          if (badge) box(x + PAD, mid - 3.5, bw, 12, badge.fill, badge.accent, 0.55);
           text(label, x + PAD + 4, mid, 7, bold, badge ? badge.text : MUTED);
           break;
         }
         case 4:
-          if (row.added) textRight(row.added, right, mid, 8.2, regular, strong ? INK : fam === FAMILY.neutral ? INK : fam.text);
+          if (row.added) textRight(row.added, right, mid, 7.6, regular, strong ? INK : fam === FAMILY.neutral ? INK : fam.text);
           break;
         case 5:
-          if (row.settled) textRight(row.settled, right, mid, 8.2, regular, strong ? INK : fam === FAMILY.neutral ? INK : fam.text);
+          if (row.settled) textRight(row.settled, right, mid, 7.6, regular, strong ? INK : fam === FAMILY.neutral ? INK : fam.text);
           break;
         case 6:
-          textRight(row.balance, right, mid, strong ? 9.4 : 8.6, bold, INK);
+          textRight(row.balance, right, mid, strong ? 8.5 : 7.9, bold, INK);
           break;
         case 7:
           if (row.status) text(fit(row.status, bold, 7.4, w - 2 * PAD), x + PAD, mid, 7.4, bold, fam === FAMILY.neutral ? MUTED : fam.text);
@@ -311,6 +293,9 @@ export async function renderPersonStatementPdf(statement: PersonCycleStatement):
 
   // ---------------- Compose ----------------
   drawStatementHeader();
+  text("ACTIVITY", M, y - 2, 8.7, bold, INK);
+  textRight(`${model.rows.length} ${model.rows.length === 1 ? "transaction" : "transactions"}`, M + TABLE_W, y - 2, 7.2, regular, MUTED);
+  y -= 8;
   drawTableHeader(false);
   drawRow(model.openingRow, "", "opening");
 
@@ -325,16 +310,26 @@ export async function renderPersonStatementPdf(statement: PersonCycleStatement):
       drawRow(row, String(i + 1).padStart(2, "0"), "row", statement.rows[i]?.signedAmount ?? null);
     });
   }
-  drawRow(model.closingRow, "", "closing");
+  // Ending position is deliberately outside the transaction table: it is a conclusion, not activity.
+  const endH = 42;
+  ensure(endH + 12);
+  y -= 12;
+  box(M, y - endH, TABLE_W, endH, position.fill, position.accent, 0.7);
+  box(M, y - endH, 4, endH, position.accent);
+  text("ENDING POSITION", M + 12, y - 13, 6.6, bold, position.text);
+  text(model.closingRow.date, M + 12, y - 25, 6.8, regular, position.text);
+  text(model.positionHeadline, M + 160, y - 18, 8.5, bold, position.text);
+  textRight(model.positionAmount, M + TABLE_W - 12, y - 24, 13.5, bold, position.text);
+  y -= endH;
 
   // ---------------- Final reconciliation (engine lines only, as a ledger block) ----------------
-  const recH = 20 + model.summary.length * 14 + 14;
+  const recH = 24 + model.summary.length * 14 + 22;
   if (y - recH - 14 < M + FOOTER_H) newPage();
   y -= 14;
-  const recW = 330;
+  const recW = 382;
   const rx = M + TABLE_W - recW;
-  text("FINAL RECONCILIATION", M, y - 10, 7.5, bold, MUTED);
-  text("Every figure comes from the People Ledger statement for this cycle.", M, y - 22, 7, regular, MUTED);
+  text("STATEMENT SUMMARY", M, y - 10, 9, bold, INK);
+  text("Cycle reconciliation", M, y - 22, 7.4, regular, MUTED);
   box(rx, y - recH, recW, recH, rgb(1, 1, 1), RULE);
   let ry = y - 16;
   model.summary.forEach((item, i) => {
@@ -347,8 +342,9 @@ export async function renderPersonStatementPdf(statement: PersonCycleStatement):
     textRight(item.value, rx + recW - PAD - 4, ry, last ? 10 : 8.4, last ? bold : regular, INK);
     ry -= 14;
   });
-  box(rx, ry - 8, recW, 18, position.fill, position.accent, 0.9);
-  text(`${model.positionHeadline.toUpperCase()}  ${pdfSafe(model.positionAmount)}`, rx + PAD + 4, ry - 2.5, 9, bold, position.text);
+  box(rx, ry - 8, recW, 20, position.fill, position.accent, 0.9);
+  text(model.positionHeadline.toUpperCase(), rx + PAD + 4, ry - 1.5, 8.1, bold, position.text);
+  textRight(model.positionAmount, rx + recW - PAD - 4, ry - 1.5, 10, bold, position.text);
 
   // ---------------- Footer ----------------
   const pages = doc.getPages();

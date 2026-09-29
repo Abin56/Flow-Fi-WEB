@@ -40,7 +40,9 @@ export type SettleTarget =
   /** A manual "I gave"/"I borrowed" entry — a "Received back"/"I repaid" entry pointing at it (`parentEntryId`). */
   | { kind: "entry"; entry: LedgerEntry; max: number }
   /** A split/assigned expense share — an installment payment through `ExpenseRepository.settleParticipant`. */
-  | { kind: "split"; pending: PendingSplitParticipant; max: number };
+  | { kind: "split"; pending: PendingSplitParticipant; max: number }
+  /** An explicitly person-repayable EMI/taken-Loan installment; never changes the lender installment. */
+  | { kind: "derivedInstallment"; obligationRef: string; sourceKind: "emiInstallment" | "loanInstallment"; max: number };
 
 /** Why a row isn't deletable from the People Ledger (null when it is). */
 export type DeleteBlock = "expense" | "loan" | "emi" | "opening" | null;
@@ -103,7 +105,7 @@ const EPSILON = 0.005;
 const NO_CASH_LEGS: ReadonlySet<string> = new Set();
 const SETTLEABLE: ReadonlySet<StatementCategory | "loan"> = new Set(["split", "gave", "borrowed"]);
 /** Rows that carry a settlement state (Loan installments are paid on the Loan, not settled here). */
-const HAS_STATE: ReadonlySet<StatementCategory | "loan"> = new Set(["split", "gave", "borrowed", "loan"]);
+const HAS_STATE: ReadonlySet<StatementCategory | "loan"> = new Set(["split", "gave", "borrowed", "emi", "loan"]);
 
 function stateOf(amount: number, remaining: number): LedgerRowState {
   if (remaining < EPSILON) return "settled";
@@ -249,10 +251,17 @@ export function buildLedgerRows({
     const state = remaining != null ? stateOf(row.amount, remaining) : null;
 
     let settle: SettleTarget | null = null;
-    if (entry && SETTLEABLE.has(row.category) && remaining != null && state !== "settled") {
+    if (row.category === "emi" && remaining != null && state !== "settled") {
+      settle = {
+        kind: "derivedInstallment",
+        obligationRef: row.key,
+        sourceKind: row.key.startsWith("loan-inst:") ? "loanInstallment" : "emiInstallment",
+        max: remaining,
+      };
+    } else if (entry && SETTLEABLE.has(row.category) && remaining != null && state !== "settled") {
       if ((entry.type === "gave" || entry.type === "borrowed") && (entry.transactionRef == null || cashLegIds.has(entry.transactionRef))) {
         settle = { kind: "entry", entry, max: remaining };
-      } else if (row.category === "split") {
+      } else if (row.category === "split" || entry.sourceKind === "assignedExpense") {
         const match = pending.find((p) => p.expense.transactionId === entry.transactionRef);
         const max = match ? Math.min(remaining, remainingAmount(match.installment)) : 0;
         if (match && max > EPSILON) settle = { kind: "split", pending: match, max };

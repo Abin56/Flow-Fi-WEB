@@ -409,13 +409,15 @@ export function useAccountChoice() {
 
 export function AccountField({
   choice,
+  label = "Account",
   className,
 }: {
   choice: ReturnType<typeof useAccountChoice>;
+  label?: string;
   className?: string;
 }) {
   return (
-    <WsField label="Account" className={className}>
+    <WsField label={label} className={className}>
       <Select value={choice.accountId} onValueChange={choice.setAccountId}>
         <SelectTrigger className={WS_SELECT_TRIGGER}>
           <SelectValue placeholder="Select account" />
@@ -459,8 +461,8 @@ export function EntrySettleForm({
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  // Only a manual ledger entry posts a Transaction; a split-expense share settles through its own path.
-  const needsAccount = row.settle?.kind === "entry";
+  // Ledger-owned and derived installment settlements post an account cash leg; split shares use their own path.
+  const needsAccount = row.settle?.kind === "entry" || row.settle?.kind === "derivedInstallment";
   const account = useAccountChoice();
   const firstName = personName.split(" ")[0];
   const effect = row.direction === "iOwe" ? `Money you repay ${firstName}` : `Money ${firstName} pays you back`;
@@ -506,7 +508,7 @@ export function EntrySettleForm({
         <WsField label="Date">
           <input type="date" className={WS_FIELD} value={date} onChange={(e) => setDate(e.target.value)} />
         </WsField>
-        {needsAccount && <AccountField choice={account} />}
+        {needsAccount && <AccountField choice={account} label={row.direction === "iOwe" ? "Paid from" : "Received into"} />}
       </div>
       {error && (
         <p className="mt-1.5 text-xs font-medium text-expense" role="alert">

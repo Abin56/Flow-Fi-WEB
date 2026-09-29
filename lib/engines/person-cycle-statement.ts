@@ -100,7 +100,7 @@ function dayIndex(d: Date): number {
 
 export type StatementLedgerEntry = Pick<
   LedgerEntry,
-  "id" | "personId" | "type" | "amount" | "date" | "note" | "increasesBalance" | "transactionRef" | "parentEntryId" | "createdAt" | "deletedAt"
+  "id" | "personId" | "type" | "amount" | "date" | "note" | "increasesBalance" | "transactionRef" | "parentEntryId" | "sourceKind" | "obligationRef" | "createdAt" | "deletedAt"
 >;
 
 export type StatementEmiSource = EmiObligationEmiSource;
@@ -278,9 +278,9 @@ interface RawEvent {
 function ledgerCategory(entry: StatementLedgerEntry): StatementCategory {
   switch (entry.type) {
     case "gave":
-      // A split/assigned expense share is the only "gave" entry posted with a transactionRef
-      // (`ExpenseRepository.generateScheduleAndLedger`); manual "I gave" entries carry none.
-      return entry.transactionRef != null ? "split" : "gave";
+      // Only explicitly-created Split Expenses earn the split label. Legacy linked entries are
+      // intentionally conservative: a transactionRef never proves a split.
+      return entry.sourceKind === "splitExpense" ? "split" : "gave";
     case "borrowed":
       return "borrowed";
     case "receivedBack":
@@ -294,7 +294,7 @@ function ledgerCategory(entry: StatementLedgerEntry): StatementCategory {
 
 function ledgerTitle(entry: StatementLedgerEntry, category: StatementCategory): string {
   const note = entry.note.trim();
-  if (category === "split") return note.replace(/^Split:\s*/, "") || "Expense share";
+  if (category === "split" || entry.sourceKind === "assignedExpense") return note.replace(/^Split:\s*/, "") || "Expense share";
   if (category === "received") {
     if (/^(Split settlement|Received):/.test(note)) return "Payment received";
     return note && note !== "Settled all" ? note : "Payment received";
@@ -341,7 +341,8 @@ export function collectStatementEvents(input: Omit<PersonCycleStatementInput, "c
     const kind: StatementRowKind = entry.type === "receivedBack" || entry.type === "repaid" ? "settlement" : "obligation";
     let settlesKey: string | undefined;
     if (kind === "settlement") {
-      if (entry.parentEntryId != null) settlesKey = `ledger:${entry.parentEntryId}`;
+      if (entry.obligationRef != null) settlesKey = entry.obligationRef;
+      else if (entry.parentEntryId != null) settlesKey = `ledger:${entry.parentEntryId}`;
       else if (entry.transactionRef != null && giveByTransactionRef.has(entry.transactionRef))
         settlesKey = `ledger:${giveByTransactionRef.get(entry.transactionRef)!.id}`;
     }

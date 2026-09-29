@@ -56,6 +56,7 @@ import {
   signedAmount,
   type LedgerEntry,
   type LedgerEntryType,
+  type LedgerSourceKind,
   type Person,
 } from "@/lib/models/person";
 import type { Expense, ExpenseParticipant, ReceivedStatus } from "@/lib/models/expense";
@@ -504,6 +505,8 @@ export function usePeopleActions() {
           increasesBalance?: boolean;
           receivedStatus?: ReceivedStatus;
           parentEntryId?: string | null;
+          sourceKind?: LedgerSourceKind;
+          obligationRef?: string | null;
         },
       ) => {
         const ledgerRepository = createLedgerRepository(uid, person.id, personRepository);
@@ -532,6 +535,8 @@ export function usePeopleActions() {
           increasesBalance?: boolean;
           receivedStatus?: ReceivedStatus;
           parentEntryId?: string | null;
+          sourceKind?: LedgerSourceKind;
+          obligationRef?: string | null;
         },
         accountId: string,
       ) => {

@@ -165,7 +165,7 @@ describe("Case F — undo settlement", () => {
   });
 
   it("a split share marked received reverses through its received-status toggle; an installment-backed split payment is not reversible here", () => {
-    const share = entry("gave", 400, d(9, 20), { transactionRef: "t1", note: "Split: Pizza" });
+    const share = entry("gave", 400, d(9, 20), { transactionRef: "t1", sourceKind: "splitExpense", note: "Split: Pizza" });
     const status = entry("receivedBack", 400, d(9, 20), { transactionRef: "t1", note: "Received: Pizza" });
     const installmentPaid = entry("receivedBack", 100, d(9, 21), { transactionRef: "t1", note: "Split settlement: Pizza" });
     const pending = [{ expense: { transactionId: "t1" }, participant: {}, installment: {} } as unknown as PendingSplitParticipant];

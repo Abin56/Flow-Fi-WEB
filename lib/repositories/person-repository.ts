@@ -9,7 +9,7 @@
 import { type CollectionReference, doc, type DocumentReference, getDocs, query, runTransaction, where } from "firebase/firestore";
 import { FirestoreCrudRepository } from "@/lib/firestore/firestore-crud-repository";
 import { recordEdit, updateField } from "@/lib/firestore/soft-deletable";
-import { type LedgerEntry, type LedgerEntryType, type Person, signedAmount } from "@/lib/models/person";
+import { type LedgerEntry, type LedgerEntryType, type LedgerSourceKind, type Person, signedAmount } from "@/lib/models/person";
 import type { ReceivedStatus } from "@/lib/models/expense";
 import type { Transaction, TransactionType } from "@/lib/models/transaction";
 import type { TransactionRepository } from "@/lib/repositories/transaction-repository";
@@ -170,6 +170,8 @@ export class LedgerRepository extends FirestoreCrudRepository<LedgerEntry> {
       transactionRef?: string | null;
       /** The "gave"/"borrowed" entry this "repaid"/"receivedBack" settlement applies against — see `LedgerEntry.parentEntryId`. */
       parentEntryId?: string | null;
+      sourceKind?: LedgerSourceKind;
+      obligationRef?: string | null;
       increasesBalance?: boolean;
       /** Defaults to "yetToReceive" — a new entry is never treated as already settled. */
       receivedStatus?: ReceivedStatus;
@@ -188,6 +190,8 @@ export class LedgerRepository extends FirestoreCrudRepository<LedgerEntry> {
       note: params.note ?? "",
       transactionRef: params.transactionRef ?? null,
       parentEntryId: params.parentEntryId ?? null,
+      sourceKind: params.sourceKind ?? "manual",
+      obligationRef: params.obligationRef ?? null,
       increasesBalance: params.increasesBalance ?? true,
       receivedStatus: params.receivedStatus ?? "yetToReceive",
       createdAt: new Date(),
@@ -236,6 +240,8 @@ export class LedgerRepository extends FirestoreCrudRepository<LedgerEntry> {
       date: Date;
       note?: string;
       parentEntryId?: string | null;
+      sourceKind?: LedgerSourceKind;
+      obligationRef?: string | null;
       increasesBalance?: boolean;
       receivedStatus?: ReceivedStatus;
     },
@@ -285,6 +291,8 @@ export class LedgerRepository extends FirestoreCrudRepository<LedgerEntry> {
         note: params.note ?? "",
         transactionRef: transaction.id,
         parentEntryId: params.parentEntryId ?? null,
+        sourceKind: params.sourceKind ?? "manual",
+        obligationRef: params.obligationRef ?? null,
         increasesBalance: params.increasesBalance ?? true,
         receivedStatus: params.receivedStatus ?? "yetToReceive",
         createdAt: new Date(),

@@ -90,8 +90,23 @@ describe("selected cycle drives the cycle view", () => {
 });
 
 describe("buildLedgerRows", () => {
+  it("settles an opted-in EMI installment by its stable key and keeps each partial payment in history", () => {
+    const repayment = entry("receivedBack", 1000, d(9, 25), { sourceKind: "emiInstallment", obligationRef: "emi-inst:i1" });
+    const statement = buildPersonCycleStatement({
+      person: { id: "A", name: "Tripthee", openingBalance: 0, createdAt: d(1, 1) },
+      ledgerEntries: [repayment], loanIds: new Set(),
+      emis: [{ id: "emi", name: "Phone", scheduleId: "s1", beneficiaryPersonId: "A", beneficiaryRepaysInstallments: true, isClosed: false, deletedAt: null }],
+      loans: [], installments: [{ id: "i1", scheduleId: "s1", sequenceNumber: 1, dueDate: d(9, 24), amountDue: 2500, amountPaid: 0, isSkipped: false, deletedAt: null, createdAt: d(1, 1) }],
+      cycle: cycleContaining(d(9, 28)),
+    });
+    const rows = buildLedgerRows({ statement, entries: [repayment], pending: [], cashLegIds: new Set(["cash"]) });
+    const emi = rows.find((r) => r.key === "emi-inst:i1")!;
+    expect(emi).toMatchObject({ state: "partial", remaining: 1500, settle: { kind: "derivedInstallment", obligationRef: "emi-inst:i1", max: 1500 } });
+    expect(emi.payments).toMatchObject([{ amount: 1000, remainingAfter: 1500 }]);
+  });
+
   it("orders newest first; a transaction just added lands on top of its day even without a time of day", () => {
-    const splitAtLunch = entry("gave", 300, d(9, 28, 14), { transactionRef: "t1", note: "Split: Pizza" });
+    const splitAtLunch = entry("gave", 300, d(9, 28, 14), { transactionRef: "t1", sourceKind: "splitExpense", note: "Split: Pizza" });
     const older = entry("gave", 100, d(9, 24), { note: "Coffee" });
     // Added afterwards with a date-only value (00:00) — earlier in the day than the split, but newer.
     const justAdded = entry("gave", 500, d(9, 28), { note: "Dinner", createdAt: new Date(Date.now()) });
@@ -131,7 +146,7 @@ describe("buildLedgerRows", () => {
 
   it("settles a manual entry against itself, and a split share through its installment", () => {
     const dinner = entry("gave", 500, d(9, 20), { note: "Dinner" });
-    const share = entry("gave", 300, d(9, 21), { transactionRef: "t1", note: "Split: Pizza" });
+    const share = entry("gave", 300, d(9, 21), { transactionRef: "t1", sourceKind: "splitExpense", note: "Split: Pizza" });
     const sharePaid = entry("receivedBack", 100, d(9, 22), { transactionRef: "t1", note: "Split settlement: Pizza" });
     const entries = [dinner, share, sharePaid];
 
@@ -147,7 +162,7 @@ describe("buildLedgerRows", () => {
   });
 
   it("offers no split settle when the expense has no outstanding installment", () => {
-    const share = entry("gave", 300, d(9, 21), { transactionRef: "t1", note: "Split: Pizza" });
+    const share = entry("gave", 300, d(9, 21), { transactionRef: "t1", sourceKind: "splitExpense", note: "Split: Pizza" });
     const rows = buildLedgerRows({ statement: statementOf([share]), entries: [share], pending: [] });
     expect(rows[0].settle).toBeNull();
   });
@@ -184,7 +199,7 @@ describe("entries added with an account (own People cash leg as transactionRef)"
     const borrowed = entry("borrowed", 1000, d(9, 20), { transactionRef: "txn-borrow", note: "Borrowed" });
     const gave = entry("gave", 2000, d(9, 21), { transactionRef: "txn-gave", note: "Dinner" });
     const gavePart = entry("receivedBack", 1500, d(9, 22), { parentEntryId: gave.id, transactionRef: "txn-gave-back" });
-    const share = entry("gave", 300, d(9, 23), { transactionRef: "t1", note: "Split: Pizza" });
+    const share = entry("gave", 300, d(9, 23), { transactionRef: "t1", sourceKind: "splitExpense", note: "Split: Pizza" });
     const entries = [borrowed, gave, gavePart, share];
     const cashLegIds = new Set(["txn-borrow", "txn-gave", "txn-gave-back"]);
 

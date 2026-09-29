@@ -21,7 +21,7 @@ import {
 } from "@/lib/models/expense";
 import type { Installment } from "@/lib/models/payment-schedule";
 import { remainingAmount as installmentRemainingAmount } from "@/lib/models/payment-schedule";
-import { type LedgerEntry, type Person } from "@/lib/models/person";
+import { type LedgerEntry, type LedgerSourceKind, type Person } from "@/lib/models/person";
 import { generateId } from "@/lib/utils/id-generator";
 import { InstallmentPaymentRepository, InstallmentRepository, PaymentScheduleRepository } from "./payment-schedule-repository";
 import { LedgerRepository, PersonRepository } from "./person-repository";
@@ -107,6 +107,8 @@ export interface CreateExpenseParams {
   excludeFromCalculations?: boolean;
   accountingMonth?: Date | null;
   isBusiness?: boolean;
+  /** Internal authoritative origin of the generated Person ledger entries. */
+  sourceKind?: Extract<LedgerSourceKind, "splitExpense" | "assignedExpense">;
 }
 
 export interface AssignToPersonParams {
@@ -136,6 +138,8 @@ export interface ConvertToSplitParams {
   splitType: SplitType;
   participantInputs: ExpenseParticipantInput[];
   dueDate?: Date | null;
+  /** Internal authoritative origin of the generated Person ledger entries. */
+  sourceKind?: Extract<LedgerSourceKind, "splitExpense" | "assignedExpense">;
 }
 
 export interface ConvertToAssignedParams {
@@ -386,8 +390,9 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
     description: string;
     transactionId: string;
     dueDate?: Date | null;
+    sourceKind: Extract<LedgerSourceKind, "splitExpense" | "assignedExpense">;
   }): Promise<{ scheduleId: string; participants: ExpenseParticipant[] }> {
-    const { expenseId, totalAmount, date, description, transactionId, dueDate } = params;
+    const { expenseId, totalAmount, date, description, transactionId, dueDate, sourceKind } = params;
     const participants = await this.promoteCustomNameParticipants(params.participants);
     const collectible = participants.filter((p) => !p.isMe);
     if (collectible.length === 0) {
@@ -425,6 +430,7 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
         date,
         note: `Split: ${description}`,
         transactionRef: transactionId,
+        sourceKind,
         receivedStatus: "yetToReceive",
       });
       // "Received" is decided up front (e.g. the payer already collected cash
@@ -441,6 +447,7 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
           date,
           note: `${RECEIVED_STATUS_NOTE_PREFIX}${description}`,
           transactionRef: transactionId,
+          sourceKind,
           receivedStatus: "received",
         });
       }
@@ -501,6 +508,7 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
           description: params.description,
           transactionId: transaction.id,
           dueDate: params.dueDate,
+          sourceKind: params.sourceKind ?? "splitExpense",
         });
         scheduleId = result.scheduleId;
         participants = result.participants;
@@ -553,6 +561,7 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
       participantInputs: [{ personId: params.personId, name: params.personName, value: params.totalAmount }],
       notes: params.notes,
       dueDate: params.dueDate,
+      sourceKind: "assignedExpense",
       excludeFromCalculations: params.excludeFromCalculations,
       accountingMonth: params.accountingMonth,
       isBusiness: params.isBusiness,
@@ -591,6 +600,7 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
       description: params.description,
       transactionId: params.transactionId,
       dueDate: params.dueDate,
+      sourceKind: params.sourceKind ?? "splitExpense",
     });
     const scheduleId = result.scheduleId;
     participants = result.participants;
@@ -647,6 +657,7 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
         { personId: params.personId, name: params.personName, value: personShare },
       ],
       dueDate: params.dueDate,
+      sourceKind: "assignedExpense",
     });
   }
 
@@ -706,6 +717,7 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
       description: expense.description,
       transactionId: expense.transactionId,
       dueDate: params.dueDate,
+      sourceKind: "splitExpense",
     });
 
     let updated = recordEdit(expense, "splitType", expense.splitType, params.splitType);

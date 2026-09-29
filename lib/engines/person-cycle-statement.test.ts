@@ -39,7 +39,7 @@ function entry(type: LedgerEntryType, amount: number, date: Date, patch: Partial
     ...patch,
   };
 }
-const split = (amount: number, date: Date, txn: string, note = "Dinner") => entry("gave", amount, date, { transactionRef: txn, note: `Split: ${note}` });
+const split = (amount: number, date: Date, txn: string, note = "Dinner") => entry("gave", amount, date, { transactionRef: txn, sourceKind: "splitExpense", note: `Split: ${note}` });
 const splitSettle = (amount: number, date: Date, txn: string) => entry("receivedBack", amount, date, { transactionRef: txn, note: "Split settlement: Dinner" });
 
 /** Linked to A AND explicitly opted in — A repays me each installment. */
@@ -141,6 +141,13 @@ describe("PersonCycleStatement", () => {
     expect(s.activityBreakdown).toEqual([{ category: "split", label: "Expense shares", signedAmount: 750 }]);
   });
 
+  it("classifies only explicit splits as Split expense", () => {
+    const assigned = entry("gave", 1000, d(9, 21), { transactionRef: "assigned", sourceKind: "assignedExpense", note: "Phone" });
+    const legacy = entry("gave", 1000, d(9, 22), { transactionRef: "legacy", note: "Old phone" });
+    const s = build({ ledgerEntries: [split(1000, d(9, 20), "split"), assigned, legacy] });
+    expect(s.rows.map((r) => r.typeLabel)).toEqual(["Split expense", "Money I Gave", "Money I Gave"]);
+  });
+
   it("7. partial split settlement — payment row carries the payment, remainder separately", () => {
     const s = build({ ledgerEntries: [split(2000, d(9, 19), "T1"), splitSettle(1500, d(9, 28), "T1")] });
     const payment = s.rows.find((r) => r.kind === "settlement")!;
@@ -192,6 +199,18 @@ describe("PersonCycleStatement", () => {
     const s = build({ emis: [phone], installments: [inst("i1", d(10, 5), 2500, 1000)], ledgerEntries: [entry("receivedBack", 1000, d(10, 6))] });
     expect(s.rows.find((r) => r.category === "emi")!.emi!.status).toBe("partial");
     expect(s.currentPending).toBe(1500);
+  });
+
+  it("settles one EMI installment by its stable reference without changing lender payment state", () => {
+    const repayment = (amount: number, date: Date) =>
+      entry("receivedBack", amount, date, { sourceKind: "emiInstallment", obligationRef: "emi-inst:i1" });
+    const emi = [phone];
+    const installments = [inst("i1", d(10, 5), 2500, 0)];
+    expect(build({ emis: emi, installments, ledgerEntries: [repayment(1000, d(10, 6))] }).rows.find((r) => r.category === "emi")?.remainingNow).toBe(1500);
+    expect(build({ emis: emi, installments, ledgerEntries: [repayment(1000, d(10, 6)), repayment(500, d(10, 7))] }).rows.find((r) => r.category === "emi")?.remainingNow).toBe(1000);
+    const final = build({ emis: emi, installments, ledgerEntries: [repayment(1000, d(10, 6)), repayment(500, d(10, 7)), repayment(1000, d(10, 8))] });
+    expect(final.rows.find((r) => r.category === "emi")).toMatchObject({ remainingNow: 0, emi: { status: "upcoming" } });
+    expect(final.currentPending).toBe(0);
   });
 
   it("14. overdue EMI from an earlier cycle carries into previous pending", () => {
