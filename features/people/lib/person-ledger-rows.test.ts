@@ -178,3 +178,28 @@ describe("buildLedgerRows", () => {
     expect(allRows[1]).toMatchObject({ category: "loan", deletable: false, deleteBlock: "loan", direction: "theyOwe" });
   });
 });
+
+describe("entries added with an account (own People cash leg as transactionRef)", () => {
+  it("keep Settle and Delete — they were hidden when every transactionRef was treated as a split/Loan link", () => {
+    const borrowed = entry("borrowed", 1000, d(9, 20), { transactionRef: "txn-borrow", note: "Borrowed" });
+    const gave = entry("gave", 2000, d(9, 21), { transactionRef: "txn-gave", note: "Dinner" });
+    const gavePart = entry("receivedBack", 1500, d(9, 22), { parentEntryId: gave.id, transactionRef: "txn-gave-back" });
+    const share = entry("gave", 300, d(9, 23), { transactionRef: "t1", note: "Split: Pizza" });
+    const entries = [borrowed, gave, gavePart, share];
+    const cashLegIds = new Set(["txn-borrow", "txn-gave", "txn-gave-back"]);
+
+    const before = buildLedgerRows({ statement: statementOf(entries), entries, pending: [pendingFor("t1", 300)] });
+    expect(before.find((r) => r.entryId === borrowed.id)).toMatchObject({ settle: null, deletable: false });
+
+    const rows = buildLedgerRows({ statement: statementOf(entries), entries, pending: [pendingFor("t1", 300)], cashLegIds });
+    const byId = (id: string) => rows.find((r) => r.entryId === id)!;
+    expect(byId(borrowed.id)).toMatchObject({ state: "open", remaining: 1000, direction: "iOwe", deletable: true, deleteBlock: null });
+    expect(byId(borrowed.id).settle).toMatchObject({ kind: "entry", max: 1000 });
+    // ₹2,000 with ₹1,500 received → Settle for the remaining ₹500; its payment can be undone here.
+    expect(byId(gave.id)).toMatchObject({ state: "partial", remaining: 500, deletable: true });
+    expect(byId(gave.id).settle).toMatchObject({ kind: "entry", max: 500 });
+    expect(byId(gave.id).payments[0]).toMatchObject({ entryId: gavePart.id, undoBlock: null });
+    // The split share is still owned by its expense.
+    expect(byId(share.id)).toMatchObject({ deletable: false, deleteBlock: "expense" });
+  });
+});

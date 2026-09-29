@@ -4,7 +4,7 @@ import { ArrowDownLeft, ArrowLeft, ArrowUpRight, Check, ChevronLeft, ChevronRigh
 import { Fragment, useLayoutEffect, useRef, useState } from "react";
 import { EmiBadge } from "@/features/people/components/cycle-statement/statement-parts";
 import { CyclePicker } from "@/features/people/components/people-ledger-list";
-import { amountTone, CarriedForwardNote, EMI_STATUS, StatusCell, RowIcon, ScopeSwitch, type LedgerRowHandlers, type LedgerScope } from "@/features/people/components/person-activity-feed";
+import { amountTone, CarriedForwardNote, DEBT_TEXT, EMI_STATUS, StatusCell, RowIcon, rowTheme, ScopeSwitch, settledTone, type LedgerRowHandlers, type LedgerScope } from "@/features/people/components/person-activity-feed";
 import {
   countByState,
   filterLedgerRows,
@@ -91,7 +91,7 @@ function RowActions({
         </button>
       ) : row.state === "settled" ? (
         <>
-          <span className="flex h-7 items-center gap-1 px-1.5 text-xs font-semibold whitespace-nowrap text-success">
+          <span className={cn("flex h-7 items-center gap-1 px-1.5 text-xs font-semibold whitespace-nowrap", settledTone(row.direction))}>
             <Check className="size-3.5" strokeWidth={2.5} />
             {row.category === "loan" ? "Paid" : "Settled"}
           </span>
@@ -156,7 +156,8 @@ function SettleProgress({ row }: { row: LedgerRow }) {
   if (row.state == null || row.amount <= 0) return null;
   const settled = row.amount - (row.remaining ?? 0);
   const pct = Math.min(100, Math.max(0, (settled / row.amount) * 100));
-  const stroke = row.state === "settled" || row.direction !== "iOwe" ? "stroke-success" : "stroke-expense";
+  // A debt I paid off completes in the calm neutral, not the green of money received.
+  const stroke = row.direction === "iOwe" ? (row.state === "settled" ? "stroke-muted-foreground" : "stroke-debt-border") : "stroke-success";
   const r = 15;
   const c = 2 * Math.PI * r;
   return (
@@ -195,7 +196,7 @@ function RowFacts({ row }: { row: LedgerRow }) {
   return (
     <dl className="flex min-w-0 flex-wrap items-center gap-x-5 gap-y-2">
       {row.state != null && (
-        <Fact label="Remaining" tone={row.state === "settled" ? "text-success" : amountTone(row)}>
+        <Fact label="Remaining" tone={row.state === "settled" ? settledTone(row.direction) : amountTone(row)}>
           {row.state === "settled" ? "Settled" : money(row.remaining ?? 0)}
         </Fact>
       )}
@@ -216,7 +217,7 @@ function RowFacts({ row }: { row: LedgerRow }) {
         </>
       )}
       {s && after && (
-        <Fact label="Balance after" tone={after === "theyOwe" ? "text-success" : after === "iOwe" ? "text-expense" : undefined}>
+        <Fact label="Balance after" tone={after === "theyOwe" ? "text-success" : after === "iOwe" ? DEBT_TEXT : undefined}>
           {after === "settled" ? "Settled" : `${directionHeadline(after)} ${money(Math.abs(s.runningBalance))}`}
         </Fact>
       )}
@@ -239,9 +240,10 @@ function RowExpansion({ row, personName, handlers }: { row: LedgerRow; personNam
       </div>
     );
   }
-  const accent = row.state === "settled" ? "border-l-success" : row.direction === "iOwe" ? "border-l-expense" : row.direction === "theyOwe" ? "border-l-success" : "border-l-border-strong";
+  // The whole tile carries the row's semantic family: surface tint + matching outline + stronger edge.
+  const theme = rowTheme(row);
   return (
-    <div className={cn("rounded-[8px] border border-l-[3px] border-border bg-card px-3.5 py-2.5 shadow-xs", accent)}>
+    <div className={cn("rounded-[8px] border border-l-[3px] border-border bg-card px-3.5 py-2.5 shadow-xs", theme.tint, theme.border, theme.edge)}>
       <div className="flex flex-wrap items-center gap-x-5 gap-y-2.5">
         <SettleProgress row={row} />
         <RowFacts row={row} />
@@ -371,7 +373,7 @@ export function TransactionLedgerMode({
   const stateCounts = countByState(filterLedgerRows(rows, "all", search));
   const visible = filterLedgerRows(rows, filter, search);
   const groups = groupByMonth(visible, (r) => r.date);
-  const balanceTone = balance?.direction === "theyOwe" ? "text-success" : balance?.direction === "iOwe" ? "text-expense" : "text-muted-foreground";
+  const balanceTone = balance?.direction === "theyOwe" ? "text-success" : balance?.direction === "iOwe" ? DEBT_TEXT : "text-muted-foreground";
   const BalanceIcon = balance?.direction === "theyOwe" ? ArrowDownLeft : balance?.direction === "iOwe" ? ArrowUpRight : Check;
   const firstName = personName.split(" ")[0];
 
@@ -554,14 +556,15 @@ export function TransactionLedgerMode({
                     )}
                     {g.rows.map(({ row, n }) => {
                       const open = isOpen(row);
+                      const theme = rowTheme(row);
                       return (
                         <Fragment key={row.key}>
                           <tr
                             onClick={() => toggleRow(row)}
                             aria-expanded={open}
-                            className={cn("cursor-pointer transition-colors hover:bg-secondary/60", open && "bg-secondary/70")}
+                            className={cn("cursor-pointer transition-colors hover:bg-secondary/60", theme.tint, open && "bg-secondary/70")}
                           >
-                            <td className={cn(TD, "border-l-2 pl-4 text-right text-[11px] text-muted-foreground tabular-nums sm:pl-7", row.state === "settled" ? "border-l-success/60" : "border-l-transparent")}>{sequence(n, visible.length)}</td>
+                            <td className={cn(TD, "border-l-[3px] pl-4 text-right text-[11px] text-muted-foreground tabular-nums sm:pl-7", theme.edge)}>{sequence(n, visible.length)}</td>
                             <td className={cn(TD, "whitespace-nowrap tabular-nums")}>
                               <p className="text-sm leading-tight font-semibold text-foreground">{formatStatementDate(row.date)}</p>
                               <p className="text-[11px] leading-tight text-muted-foreground">{row.date.getFullYear()}</p>

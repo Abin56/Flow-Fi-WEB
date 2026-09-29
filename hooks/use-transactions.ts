@@ -48,6 +48,44 @@ export function useTransactions() {
   });
 }
 
+export function transactionsTrashQueryKey(uid: string | undefined) {
+  return ["transactions", "trash", uid] as const;
+}
+
+/** Live-subscribes to the signed-in user's soft-deleted transactions. */
+export function useTrashedTransactions() {
+  const uid = useAuthStore((s) => s.user?.uid);
+  const queryClient = useQueryClient();
+
+  return useFirestoreWatch<Transaction[]>({
+    queryKey: transactionsTrashQueryKey(uid),
+    enabled: !!uid,
+    hookName: "useTrashedTransactions",
+    emptyValue: [],
+    deps: [uid, queryClient],
+    subscribe: (onData, onError) => {
+      if (!uid) return () => {};
+      const accountRepository = createAccountRepository(uid);
+      return createTransactionRepository(uid, accountRepository).watchTrash(onData, onError);
+    },
+  });
+}
+
+/**
+ * Ids of every People cash-leg Transaction (`isPersonLedgerMovement`), active and trashed — what lets the
+ * People Ledger recognise an entry's `transactionRef` as its OWN cash leg (settleable/deletable there)
+ * rather than a split-expense or Loan link. Trashed ones are included so an entry whose cash leg was
+ * deleted by an older transaction-only delete is still recognised and can be cleaned up.
+ */
+export function usePersonCashLegIds(): ReadonlySet<string> {
+  const { data: active = [] } = useTransactions();
+  const { data: trashed = [] } = useTrashedTransactions();
+  return useMemo(
+    () => new Set([...active, ...trashed].filter((t) => t.isPersonLedgerMovement).map((t) => t.id)),
+    [active, trashed],
+  );
+}
+
 function isSameCalendarMonth(a: Date, b: Date): boolean {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth();
 }

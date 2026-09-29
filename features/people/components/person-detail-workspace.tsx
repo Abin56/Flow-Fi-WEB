@@ -8,6 +8,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { useAccounts } from "@/hooks/use-accounts";
 import { useCategories } from "@/hooks/use-categories";
 import { usePeople } from "@/hooks/use-people";
+import { usePersonCashLegIds } from "@/hooks/use-transactions";
 import { formatCurrency } from "@/lib/format";
 import { cycleContaining, formatStatementDate, type StatementCycle } from "@/lib/engines/person-cycle-statement";
 import { money } from "@/lib/engines/person-cycle-statement-share";
@@ -161,10 +162,13 @@ export function PersonDetailWorkspace({
   const contact = [person.phone, person.email].filter(Boolean).join(" · ");
 
   // ---- Transactions: one row model for the compact list and the expanded ledger ----
+  // Entries added here with an account carry their own cash-leg Transaction as `transactionRef` — still
+  // ledger-owned (Settle/Delete here), unlike a split-expense or Loan link. See `planEntryDeletion`.
+  const cashLegIds = usePersonCashLegIds();
   // Cycle rows read payment history from the whole-history statement, so a transaction shows every payment against it.
   const cycleRows = useMemo(
-    () => buildLedgerRows({ statement, history: allTimeStatement, entries: ledgerEntries, pending }),
-    [statement, allTimeStatement, ledgerEntries, pending],
+    () => buildLedgerRows({ statement, history: allTimeStatement, entries: ledgerEntries, pending, cashLegIds }),
+    [statement, allTimeStatement, ledgerEntries, pending, cashLegIds],
   );
   const allRows = useMemo(
     () =>
@@ -173,8 +177,9 @@ export function PersonDetailWorkspace({
         entries: ledgerEntries,
         loanItems: person.activity.filter((a) => isLoanItem(a.id)),
         pending,
+        cashLegIds,
       }),
-    [allTimeStatement, ledgerEntries, person.activity, pending],
+    [allTimeStatement, ledgerEntries, person.activity, pending, cashLegIds],
   );
   const scopeRows = scope === "cycle" ? cycleRows : allRows;
   const scopeCounts = { cycle: cycleRows.length, all: allRows.length };
@@ -190,7 +195,7 @@ export function PersonDetailWorkspace({
   const primaryCount = allRows.length;
   const subline = [`${primaryCount} ${primaryCount === 1 ? "transaction" : "transactions"}`, contact].filter(Boolean).join(" · ");
 
-  const bulkPlan = useMemo(() => planBulkDeletion(ledgerEntries), [ledgerEntries]);
+  const bulkPlan = useMemo(() => planBulkDeletion(ledgerEntries, cashLegIds), [ledgerEntries, cashLegIds]);
   const deletingRow = deleting?.row ?? null;
   const rowPlan = deleting?.plan ?? null;
   const frozenBulk = bulkDelete ?? bulkPlan;
@@ -276,7 +281,7 @@ export function PersonDetailWorkspace({
     onSettleSubmit: settleRow,
     onDelete: onDeleteEntries
       ? (row) => {
-          setDeleting({ row, plan: row.entryId ? planEntryDeletion(row.entryId, ledgerEntries) : null });
+          setDeleting({ row, plan: row.entryId ? planEntryDeletion(row.entryId, ledgerEntries, cashLegIds) : null });
           setDeleteOpen(true);
         }
       : undefined,

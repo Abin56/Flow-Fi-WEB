@@ -34,7 +34,14 @@ import {
   type ReconciliationResult,
 } from "@/lib/engines/transfer-reconciliation-engine";
 import { generateId } from "@/lib/utils/id-generator";
+import type { Account } from "@/lib/models/account";
 import type { AccountRepository } from "./account-repository";
+
+/** Fresh reads for {@link TransactionRepository.writeSoftDeleteMany} — see {@link TransactionRepository.readSoftDeleteMany}. */
+export interface PreparedSoftDelete {
+  transactions: Transaction[];
+  accounts: Map<string, Account>;
+}
 
 export interface CreateTransactionParams {
   type: TransactionType;
@@ -435,6 +442,49 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
       tx.set(accountRef, this.accountRepository.applyBalanceDelta(accountSnap.data(), delta));
     }
     tx.set(transactionRef, { ...transaction, deletedAt: new Date() });
+  }
+
+  /**
+   * Two-phase form of {@link softDeleteTransactionInTransaction} for several transactions inside a
+   * caller's Firestore transaction, where every read must come before any write. This reads each
+   * transaction and each affected account fresh; {@link writeSoftDeleteMany} then reverses each
+   * balance effect (summed per account) and soft-deletes. Missing or already-trashed transactions are
+   * skipped (their effect was already reversed), and so is anything `accept` rejects.
+   */
+  async readSoftDeleteMany(
+    tx: FirestoreTransaction,
+    ids: readonly string[],
+    accept: (transaction: Transaction) => boolean,
+  ): Promise<PreparedSoftDelete> {
+    const transactions: Transaction[] = [];
+    for (const id of new Set(ids)) {
+      const snap = await tx.get(doc(this.collection, id));
+      if (!snap.exists()) continue;
+      const fresh = snap.data();
+      if (fresh.deletedAt != null || !accept(fresh)) continue;
+      transactions.push(fresh);
+    }
+    const accounts = new Map<string, Account>();
+    for (const accountId of new Set(transactions.map((t) => t.accountId))) {
+      const accountSnap = await tx.get(this.accountRepository.docRef(accountId));
+      if (!accountSnap.exists()) throw new Error("Account not found");
+      accounts.set(accountId, accountSnap.data());
+    }
+    return { transactions, accounts };
+  }
+
+  /** Write half of {@link readSoftDeleteMany}. */
+  writeSoftDeleteMany(tx: FirestoreTransaction, prepared: PreparedSoftDelete): void {
+    const now = new Date();
+    const deltas = new Map<string, number>();
+    for (const t of prepared.transactions) {
+      deltas.set(t.accountId, (deltas.get(t.accountId) ?? 0) - balanceEffect(t));
+      tx.set(doc(this.collection, t.id), { ...t, deletedAt: now });
+    }
+    for (const [accountId, delta] of deltas) {
+      if (delta === 0) continue;
+      tx.set(this.accountRepository.docRef(accountId), this.accountRepository.applyBalanceDelta(prepared.accounts.get(accountId)!, delta));
+    }
   }
 
   /** Soft-deletes and reverses this transaction's effect on its account's balance. */

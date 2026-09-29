@@ -12,6 +12,7 @@ import {
   Scale,
   Search,
   Split,
+  CircleCheck,
   type LucideIcon,
 } from "lucide-react";
 import { Fragment, useState } from "react";
@@ -51,22 +52,83 @@ import { WS_SECONDARY } from "@/features/people/components/workspace/person-work
  * the same in words ("They owe you" / "You owe them" / "They paid you") under its amount, so meaning
  * never depends on colour or on a +/− sign.
  */
-type Tone = "in" | "out" | "neutral" | "emi";
+type Tone = "in" | "out" | "back" | "paidBack" | "neutral" | "emi";
+
+/**
+ * Borrowed / "I owe them" (debt created) = the FlowFi violet (`--purple`), tuned for low-contrast
+ * displays: the raw token is too light for small text and faint as a 5–7% wash on white, so text/edges
+ * use a darkened mix in light mode (the token itself in dark mode, where it is already lifted) and the
+ * wash is a clearly visible ~12% (light) / ~17% (dark).
+ */
+// Theme tokens (app/globals.css `--debt-*`): solid, lower-lightness violet surfaces that stay visible on
+// low-contrast displays in both themes — shared with the Transactions page's People/Loan rows.
+export const DEBT_TEXT = "text-debt-text";
+export const DEBT_DOT = "bg-debt-border";
 
 const TONE_TILE: Record<Tone, string> = {
   in: "bg-success/12 text-success",
-  out: "bg-expense/10 text-expense",
+  out: cn("bg-debt-surface ring-1 ring-debt-border/40", DEBT_TEXT),
+  // Repayments close an obligation, so they never reuse the green/red that opens one. Direction decides
+  // the family: "Received back" (person → me) = the lime settlement accent; "Paid back" (me → person) = the
+  // amber payable/attention tone — outgoing, but not an expense (red) and not money received (green).
+  // Received back (person → me): the restrained green, as a FILLED tile — the receivable "They owe you"
+  // keeps the soft green tile, so money that has come back reads as done, not as still owed.
+  back: "bg-primary/45 text-foreground dark:bg-primary/25 dark:text-primary-accent-text",
+  // Filled amber tile (not a faint wash) so "Paid back" is recognisable at a glance on any display.
+  paidBack: "bg-success text-success-foreground",
   neutral: "bg-secondary text-muted-foreground",
   emi: "bg-primary/25 text-primary-accent-text",
 };
 
 export const DIRECTION_TEXT: Record<LedgerRowDirection, string> = {
   theyOwe: "text-success",
-  iOwe: "text-expense",
-  theyPaid: "text-muted-foreground",
-  youPaid: "text-muted-foreground",
+  iOwe: DEBT_TEXT,
+  theyPaid: "text-foreground dark:text-primary-accent-text",
+  // Deep amber in light mode (the raw token is too pale for text on white); the token itself in dark.
+  youPaid: "text-success",
   loan: "text-muted-foreground",
 };
+
+/**
+ * Semantic row theme — strong left edge + a light full-row tint (same approach as the Transactions list),
+ * from the row's existing `direction`/`state` only:
+ *   They owe you (open/partial)  → green edge + green tint
+ *   You owe them (open/partial)  → violet edge + violet tint (debt created)
+ *   Received back                → green edge + green tint, filled green icon (money returned to me)
+ *   Paid back                    → amber edge + amber tint (outgoing repayment — never green)
+ *   Settled obligation           → calm: faded direction edge, no tint
+ * Tints are set per theme (stronger alpha in dark mode) so they survive low-contrast displays.
+ */
+/**
+ * Full-tile semantic surfaces. `tint` colours the WHOLE tile/row; `border` outlines a card tile in the same
+ * family; `edge` is the stronger leading accent. Tuned for low-contrast FHD displays — a 5–12% wash read as
+ * white there, so the two tiles that must be told apart at a glance carry ~17% (light) surfaces:
+ *   Borrowed / You owe them (open, partial) → soft VIOLET tile (debt created)
+ *   Paid back (me → person)                  → soft GREEN tile, filled check icon (debt reduced)
+ *   Received back (person → me)              → soft LIME settlement tile
+ *   They owe you (open, partial)             → green edge + light green wash only (lighter than Paid back)
+ *   Settled obligation / normal              → neutral tile, faded direction edge
+ */
+export function rowTheme(row: LedgerRow): { edge: string; tint: string; border: string } {
+  if (row.category === "emi") return { edge: "border-l-primary-accent-text/70", tint: "", border: "" };
+  if (row.direction === "youPaid")
+    return { edge: "border-l-success", tint: "bg-success/[0.15] dark:bg-success/[0.16]", border: "border-success/50 dark:border-success/45" };
+  if (row.direction === "theyPaid")
+    return {
+      edge: "border-l-primary-accent-text",
+      tint: "bg-primary/[0.26] dark:bg-primary/[0.11]",
+      border: "border-primary-accent-text/40 dark:border-primary-accent-text/35",
+    };
+  if (row.state === "settled") return { edge: row.direction === "iOwe" ? "border-l-debt-border/50" : "border-l-success/50", tint: "", border: "" };
+  if (row.direction === "iOwe")
+    return {
+      edge: "border-l-debt-border",
+      tint: "bg-debt-surface",
+      border: "border-debt-border/60",
+    };
+  if (row.direction === "theyOwe") return { edge: "border-l-success", tint: "bg-success/[0.06] dark:bg-success/[0.09]", border: "" };
+  return { edge: "border-l-transparent", tint: "", border: "" };
+}
 
 export function rowVisual(row: LedgerRow): { icon: LucideIcon; tone: Tone } {
   switch (row.category) {
@@ -75,8 +137,9 @@ export function rowVisual(row: LedgerRow): { icon: LucideIcon; tone: Tone } {
     case "borrowed":
       return { icon: ArrowDownLeft, tone: "out" };
     case "received":
+      return { icon: HandCoins, tone: "back" };
     case "repaid":
-      return { icon: HandCoins, tone: "neutral" };
+      return { icon: CircleCheck, tone: "paidBack" };
     case "split":
       return { icon: Split, tone: row.direction === "iOwe" ? "out" : "in" };
     case "emi":
@@ -106,8 +169,18 @@ export function amountTone(row: LedgerRow): string {
   if (row.state === "settled") return "text-foreground/70";
   if (row.category === "loan" && row.state == null) return "text-foreground/70"; // Loan principal: context only
   if (row.direction === "theyOwe") return "text-success";
-  if (row.direction === "iOwe") return "text-expense";
+  if (row.direction === "iOwe") return DEBT_TEXT;
+  if (row.direction === "theyPaid" || row.direction === "youPaid") return DIRECTION_TEXT[row.direction];
   return "text-foreground";
+}
+
+/**
+ * The "Settled ✓" colour, by direction: an obligation they cleared (money came back TO me) is the green
+ * completed state; a debt I cleared (money went FROM me) is a calm neutral completed state — never green,
+ * which would read as money received.
+ */
+export function settledTone(direction: LedgerRow["direction"] | undefined): string {
+  return direction === "iOwe" ? "text-foreground/75" : "text-success";
 }
 
 /**
@@ -125,19 +198,20 @@ function rowStatus(row: LedgerRow): { label: string; detail: string | null; dot:
     if (row.state === "settled") return { label: "Paid", detail: lastPaymentLine(row), dot: "bg-success", icon: "check" };
     if (row.overdue)
       return { label: "Overdue", detail: row.state === "partial" ? `${money(row.remaining ?? 0)} left · ${who}` : who, dot: "bg-expense", alert: true };
-    if (row.state === "partial") return { label: "Partial", detail: `${money(row.remaining ?? 0)} left · ${who}`, dot: row.direction === "iOwe" ? "bg-expense" : "bg-success" };
-    return { label: "Pending", detail: who, dot: row.direction === "iOwe" ? "bg-expense" : "bg-success" };
+    if (row.state === "partial") return { label: "Partial", detail: `${money(row.remaining ?? 0)} left · ${who}`, dot: row.direction === "iOwe" ? DEBT_DOT : "bg-success" };
+    return { label: "Pending", detail: who, dot: row.direction === "iOwe" ? DEBT_DOT : "bg-success" };
   }
   if (row.state === "settled") return { label: "Settled", detail: lastPaymentLine(row), dot: "bg-success", icon: "check" };
   if (row.state === "partial")
-    return { label: "Partially settled", detail: `${money(row.remaining ?? 0)} remaining`, dot: row.direction === "iOwe" ? "bg-expense" : "bg-success" };
+    return { label: "Partially settled", detail: `${money(row.remaining ?? 0)} remaining`, dot: row.direction === "iOwe" ? DEBT_DOT : "bg-success" };
   if (row.state === "open")
     return row.direction === "iOwe"
-      ? { label: "To pay", detail: "You owe them", dot: "bg-expense" }
+      ? { label: "To pay", detail: "You owe them", dot: DEBT_DOT }
       : { label: "Awaiting payment", detail: "They owe you", dot: "bg-success" };
-  if (row.direction === "theyPaid" || row.direction === "youPaid") return { label: DIRECTION_LABEL[row.direction], detail: "Settlement", dot: "bg-muted-foreground/50" };
+  if (row.direction === "youPaid") return { label: DIRECTION_LABEL.youPaid, detail: "Debt reduced", dot: "bg-success" };
+  if (row.direction === "theyPaid") return { label: DIRECTION_LABEL.theyPaid, detail: "Money returned to you", dot: "bg-primary-accent-text" };
   if (row.direction === "loan") return { label: "Via loan", detail: "Settled from the Loan", dot: "bg-muted-foreground/50" };
-  return { label: DIRECTION_LABEL[row.direction], detail: null, dot: row.direction === "iOwe" ? "bg-expense" : "bg-success" };
+  return { label: DIRECTION_LABEL[row.direction], detail: null, dot: row.direction === "iOwe" ? DEBT_DOT : "bg-success" };
 }
 
 export function StatusCell({ row }: { row: LedgerRow }) {
@@ -145,7 +219,7 @@ export function StatusCell({ row }: { row: LedgerRow }) {
   return (
     <div className="flex min-w-0 items-start gap-2">
       {s.icon === "check" ? (
-        <Check className="mt-0.5 size-3.5 shrink-0 text-success" strokeWidth={2.5} aria-hidden />
+        <Check className={cn("mt-0.5 size-3.5 shrink-0", settledTone(row.direction))} strokeWidth={2.5} aria-hidden />
       ) : (
         <span className={cn("mt-1.5 size-2 shrink-0 rounded-full", s.dot)} aria-hidden />
       )}
@@ -153,7 +227,7 @@ export function StatusCell({ row }: { row: LedgerRow }) {
         <p
           className={cn(
             "text-[13px] leading-tight font-semibold whitespace-nowrap",
-            s.icon === "check" ? "text-success" : s.alert ? "text-expense uppercase tracking-wide text-[12px]" : "text-foreground",
+            s.icon === "check" ? settledTone(row.direction) : s.alert ? "text-expense uppercase tracking-wide text-[12px]" : "text-foreground",
           )}
         >
           {s.label}
@@ -281,13 +355,12 @@ function FeedRow({
   onUndo?: (payment: PaymentRecord) => void;
 }) {
   const open = expanded || settling || editing;
-  const settled = row.state === "settled";
   return (
     <li
       className={cn(
-        "border-b border-l-2 border-b-border-strong/60 transition-colors duration-200",
-        settled ? "border-l-success/60" : "border-l-transparent",
-        open ? "bg-secondary/70" : "bg-transparent",
+        "border-b border-l-[3px] border-b-border-strong/60 transition-colors duration-200",
+        rowTheme(row).edge,
+        open ? "bg-secondary/70" : rowTheme(row).tint || "bg-transparent",
       )}
     >
       <div className="flex items-center gap-1 pr-1">
@@ -583,16 +656,15 @@ export function PersonActivityFeed({
                       const p = rowProps(row);
                       const open = expanded === row.key || p.settling || p.editing;
                       const settles = row.statementRow?.settles;
+                      const theme = rowTheme(row);
                       return (
                         <Fragment key={row.key}>
-                          <tr onClick={() => toggle(row)} aria-expanded={open} className={cn("cursor-pointer transition-colors hover:bg-secondary/60", open && "bg-secondary/70")}>
-                            <td
-                              className={cn(
-                                LEDGER_TD,
-                                "border-l-2 pl-3 text-right text-[11px] text-muted-foreground tabular-nums",
-                                row.state === "settled" ? "border-l-success/60" : "border-l-transparent",
-                              )}
-                            >
+                          <tr
+                            onClick={() => toggle(row)}
+                            aria-expanded={open}
+                            className={cn("cursor-pointer transition-colors hover:bg-secondary/60", theme.tint, open && "bg-secondary/70")}
+                          >
+                            <td className={cn(LEDGER_TD, "border-l-[3px] pl-3 text-right text-[11px] text-muted-foreground tabular-nums", theme.edge)}>
                               {sequence(n, visible.length)}
                             </td>
                             <td className={cn(LEDGER_TD, "whitespace-nowrap tabular-nums")}>

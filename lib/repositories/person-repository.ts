@@ -453,6 +453,53 @@ export class LedgerRepository extends FirestoreCrudRepository<LedgerEntry> {
   }
 
   /**
+   * THE delete for People-ledger entries (People page and Transactions page alike): `softDeleteEntries`,
+   * plus each entry's own cash leg — the `isPersonLedgerMovement` Transaction `addEntryWithTransaction`
+   * posted for it (the entry's `transactionRef`) — soft-deleted with its account balance reversed, all in
+   * the same atomic `runTransaction` per chunk. A `transactionRef` that isn't this person's cash-leg
+   * Transaction (a split/assigned expense, a legacy Loan) is never touched here — `planEntryDeletion`
+   * refuses those entries up front, and this re-checks the fresh document regardless. A cash leg that
+   * is already trashed is skipped, so an entry orphaned by an earlier transaction-only delete is still
+   * cleaned up correctly (only its ledger effect is reversed).
+   */
+  async softDeleteEntriesWithCashLegs(person: Person, entries: LedgerEntry[], transactionRepository: TransactionRepository): Promise<void> {
+    const unique = Array.from(new Map(entries.map((e) => [e.id, e])).values());
+    const db = this.collection.firestore;
+    const personRef = this.personRepository.docRef(person.id);
+
+    for (let i = 0; i < unique.length; i += SOFT_DELETE_CHUNK) {
+      const chunk = unique.slice(i, i + SOFT_DELETE_CHUNK);
+      await runTransaction(db, async (tx) => {
+        // Every read before any write — Firestore transactions don't allow a read after a write.
+        const personSnap = await tx.get(personRef);
+        const refs = chunk.map((e) => doc(this.collection, e.id));
+        const snaps = [];
+        for (const ref of refs) snaps.push(await tx.get(ref));
+        if (!personSnap.exists()) throw new Error("Person not found");
+        const fresh = snaps.map((snap) => {
+          if (!snap.exists()) throw new Error("Ledger entry not found");
+          return snap.data();
+        });
+        const active = fresh.filter((e) => e.deletedAt == null);
+        const cashLegs = await transactionRepository.readSoftDeleteMany(
+          tx,
+          active.flatMap((e) => (e.transactionRef == null ? [] : [e.transactionRef])),
+          (t) => t.isPersonLedgerMovement && t.linkedPersonId === person.id,
+        );
+
+        const now = new Date();
+        let delta = 0;
+        for (const e of active) delta -= signedAmount(e);
+        if (delta !== 0) {
+          tx.set(personRef, this.personRepository.applyBalanceDelta(personSnap.data(), delta));
+        }
+        active.forEach((e) => tx.set(doc(this.collection, e.id), { ...e, deletedAt: now }));
+        transactionRepository.writeSoftDeleteMany(tx, cashLegs);
+      });
+    }
+  }
+
+  /**
    * Re-applies the entry's balance effect, then restores it, atomically —
    * mirrors `TransactionRepository.restoreTransaction`.
    */

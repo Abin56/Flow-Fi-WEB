@@ -26,8 +26,8 @@ export type LedgerRowDirection = "theyOwe" | "iOwe" | "theyPaid" | "youPaid" | "
 export const DIRECTION_LABEL: Record<LedgerRowDirection, string> = {
   theyOwe: "They owe you",
   iOwe: "You owe them",
-  theyPaid: "They paid you",
-  youPaid: "You paid them",
+  theyPaid: "Received back",
+  youPaid: "Paid back",
   loan: "Via loan",
 };
 
@@ -100,6 +100,7 @@ export interface LedgerRow {
 }
 
 const EPSILON = 0.005;
+const NO_CASH_LEGS: ReadonlySet<string> = new Set();
 const SETTLEABLE: ReadonlySet<StatementCategory | "loan"> = new Set(["split", "gave", "borrowed"]);
 /** Rows that carry a settlement state (Loan installments are paid on the Loan, not settled here). */
 const HAS_STATE: ReadonlySet<StatementCategory | "loan"> = new Set(["split", "gave", "borrowed", "loan"]);
@@ -147,9 +148,11 @@ export function undoTargetFor(
   entry: LedgerEntry,
   entries: readonly LedgerEntry[],
   pending: readonly PendingSplitParticipant[],
+  cashLegIds: ReadonlySet<string> = NO_CASH_LEGS,
 ): { undo: UndoTarget | null; undoBlock: string | null } {
-  if (entry.transactionRef == null) {
-    const plan = planEntryDeletion(entry.id, entries);
+  // Ledger-owned: no linked record, or the link is the settlement's own People cash leg (reversed with it).
+  if (entry.transactionRef == null || cashLegIds.has(entry.transactionRef)) {
+    const plan = planEntryDeletion(entry.id, entries, cashLegIds);
     return plan.ok ? { undo: { kind: "entry", entries: plan.entries }, undoBlock: null } : { undo: null, undoBlock: "Can't be reversed here" };
   }
   if (entry.note.startsWith(RECEIVED_STATUS_NOTE_PREFIX)) {
@@ -167,13 +170,14 @@ function paymentsByObligation(
   entryById: ReadonlyMap<string, LedgerEntry>,
   entries: readonly LedgerEntry[],
   pending: readonly PendingSplitParticipant[],
+  cashLegIds: ReadonlySet<string>,
 ): Map<string, PaymentRecord[]> {
   const byKey = new Map<string, PaymentRecord[]>();
   for (const row of history?.rows ?? []) {
     if (row.kind !== "settlement" || row.settlesKey == null) continue;
     const entryId = row.key.startsWith("ledger:") ? row.key.slice("ledger:".length) : null;
     const entry = entryId ? entryById.get(entryId) : undefined;
-    const { undo, undoBlock } = entry ? undoTargetFor(entry, entries, pending) : { undo: null, undoBlock: "Can't be reversed here" };
+    const { undo, undoBlock } = entry ? undoTargetFor(entry, entries, pending, cashLegIds) : { undo: null, undoBlock: "Can't be reversed here" };
     const list = byKey.get(row.settlesKey) ?? [];
     list.push({
       key: row.key,
@@ -206,6 +210,12 @@ export interface BuildLedgerRowsInput {
   pending: readonly PendingSplitParticipant[];
   /** Today — only for a Loan installment's overdue flag. */
   now?: Date;
+  /**
+   * Ids of People cash-leg Transactions (`isPersonLedgerMovement`, active and trashed). An entry whose
+   * `transactionRef` is one of these was added from the People Ledger with a real account movement — it
+   * is still a ledger-owned entry (settleable, deletable), not a split/Loan-owned one.
+   */
+  cashLegIds?: ReadonlySet<string>;
 }
 
 /**
@@ -215,9 +225,17 @@ export interface BuildLedgerRowsInput {
  * not tied to one transaction, or a payment in this cycle against a transaction from an earlier one
  * (the transaction itself stays in its own cycle; the payment is this cycle's activity).
  */
-export function buildLedgerRows({ statement, history, entries, loanItems = [], pending, now = new Date() }: BuildLedgerRowsInput): LedgerRow[] {
+export function buildLedgerRows({
+  statement,
+  history,
+  entries,
+  loanItems = [],
+  pending,
+  now = new Date(),
+  cashLegIds = NO_CASH_LEGS,
+}: BuildLedgerRowsInput): LedgerRow[] {
   const entryById = new Map(entries.map((e) => [e.id, e]));
-  const payments = paymentsByObligation(history === undefined ? statement : history, entryById, entries, pending);
+  const payments = paymentsByObligation(history === undefined ? statement : history, entryById, entries, pending, cashLegIds);
   const obligationKeys = new Set((statement?.rows ?? []).filter((r) => r.kind === "obligation").map((r) => r.key));
   const rows: LedgerRow[] = [];
 
@@ -232,7 +250,7 @@ export function buildLedgerRows({ statement, history, entries, loanItems = [], p
 
     let settle: SettleTarget | null = null;
     if (entry && SETTLEABLE.has(row.category) && remaining != null && state !== "settled") {
-      if ((entry.type === "gave" || entry.type === "borrowed") && entry.transactionRef == null) {
+      if ((entry.type === "gave" || entry.type === "borrowed") && (entry.transactionRef == null || cashLegIds.has(entry.transactionRef))) {
         settle = { kind: "entry", entry, max: remaining };
       } else if (row.category === "split") {
         const match = pending.find((p) => p.expense.transactionId === entry.transactionRef);
@@ -241,7 +259,7 @@ export function buildLedgerRows({ statement, history, entries, loanItems = [], p
       }
     }
 
-    const deletable = entryId != null && planEntryDeletion(entryId, entries).ok;
+    const deletable = entryId != null && planEntryDeletion(entryId, entries, cashLegIds).ok;
     const deleteBlock: DeleteBlock = deletable
       ? null
       : row.category === "emi"

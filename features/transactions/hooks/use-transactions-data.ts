@@ -56,9 +56,11 @@ import {
   createExpenseRepository,
   createInstallmentPaymentRepositoryFor,
   createInstallmentRepositoryFor,
+  createLedgerRepositoryFor,
   createPersonRepository,
   createTransactionRepository,
 } from "@/lib/repositories/repository-factory";
+import { deletePersonCashLegTransaction } from "@/lib/services/person-cash-leg-deletion";
 import type {
   PendingSettlement,
   SettleAcrossPendingParams,
@@ -213,7 +215,18 @@ export function useTransactionActions() {
       deleteTransaction: (transaction: Transaction, expense?: Expense | null) =>
         withErrorToast(() => {
           if (transaction.transferId != null) return transactionRepository.deleteTransferPair(transaction);
-          return expense ? expenseRepository.deleteExpense(expense) : transactionRepository.softDeleteTransaction(transaction);
+          if (expense) return expenseRepository.deleteExpense(expense);
+          // A People cash leg (Borrowed / Gave / Repaid / Received back) takes its ledger entry with it —
+          // through the same planner + atomic delete the People Ledger's own Delete uses.
+          if (transaction.isPersonLedgerMovement) {
+            return deletePersonCashLegTransaction({
+              transaction,
+              transactionRepository,
+              personRepository,
+              ledgerRepositoryFor: (personId) => createLedgerRepositoryFor(uid, personId, personRepository),
+            });
+          }
+          return transactionRepository.softDeleteTransaction(transaction);
         }, "Couldn't delete transaction"),
       /** Creates a split expense — its own Transaction plus a per-participant settlement schedule. */
       createSplitTransaction: (params: {

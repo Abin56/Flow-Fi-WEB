@@ -129,3 +129,53 @@ describe("planBulkDeletion", () => {
     expect(plan.balanceDelta).toBe(0);
   });
 });
+
+describe("People cash-leg entries (transactionRef = the entry's own isPersonLedgerMovement Transaction)", () => {
+  it("is deletable when its ref is a known cash leg; still blocked without the cash-leg set (legacy rule)", () => {
+    const borrowed = entry("borrowed", 1000, { transactionRef: "txn-borrow" });
+    const cashLegs = new Set(["txn-borrow"]);
+
+    expect(planEntryDeletion(borrowed.id, [borrowed]).ok).toBe(false);
+    const plan = planEntryDeletion(borrowed.id, [borrowed], cashLegs);
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) return;
+    // I owed them ₹1,000 (−1000); removing it moves the balance back by +1000 → owe nothing.
+    expect(plan.balanceDelta).toBe(1000);
+    expect(balance(applyDeletion([borrowed], plan.entries))).toBe(0);
+  });
+
+  it("deletes only that entry and its own settlements — other entries of the same person stay (₹1,000 / ₹500 / ₹2,000)", () => {
+    const a = entry("gave", 1000, { transactionRef: "txn-a" });
+    const b = entry("gave", 500, { transactionRef: "txn-b" });
+    const bPaid = entry("receivedBack", 200, { parentEntryId: b.id, transactionRef: "txn-b-paid" });
+    const c = entry("gave", 2000, { transactionRef: "txn-c" });
+    const all = [a, b, bPaid, c];
+    const cashLegs = new Set(["txn-a", "txn-b", "txn-b-paid", "txn-c"]);
+
+    const plan = planEntryDeletion(b.id, all, cashLegs);
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) return;
+    expect(plan.entries.map((e) => e.id)).toEqual([b.id, bPaid.id]);
+    const after = applyDeletion(all, plan.entries);
+    expect(balance(all)).toBe(3300);
+    expect(balance(after)).toBe(3000);
+    expect(after.filter((e) => e.deletedAt == null).map((e) => e.id)).toEqual([a.id, c.id]);
+  });
+
+  it("never treats a split-expense / Loan link as a cash leg", () => {
+    const share = entry("gave", 700, { transactionRef: "expense-txn", note: "Split: Dinner" });
+    const loanLegacy = entry("borrowed", 5000, { transactionRef: "loan-1" });
+    const cashLegs = new Set(["txn-other"]);
+    expect(planEntryDeletion(share.id, [share], cashLegs)).toEqual({ ok: false, reason: "linked" });
+    expect(planEntryDeletion(loanLegacy.id, [loanLegacy], cashLegs)).toEqual({ ok: false, reason: "linked" });
+    const bulk = planBulkDeletion([share, loanLegacy], cashLegs);
+    expect(bulk.entries).toEqual([]);
+    expect(bulk.keptLinked.map((e) => e.id)).toEqual([share.id, loanLegacy.id]);
+  });
+
+  it("blocks deleting a cash-leg entry whose settlement is tied to a split expense", () => {
+    const gave = entry("gave", 800, { transactionRef: "txn-gave" });
+    const splitPaid = entry("receivedBack", 300, { parentEntryId: gave.id, transactionRef: "expense-txn" });
+    expect(planEntryDeletion(gave.id, [gave, splitPaid], new Set(["txn-gave"]))).toEqual({ ok: false, reason: "linked" });
+  });
+});

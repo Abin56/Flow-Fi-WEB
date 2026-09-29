@@ -52,7 +52,7 @@ import type { Account } from "@/lib/models/account";
 import type { Category } from "@/lib/models/category";
 import { isSplit as isSplitExpense, type SplitType } from "@/lib/models/expense";
 import type { Person } from "@/lib/models/person";
-import { compareTransactionsNewestFirst, type Transaction } from "@/lib/models/transaction";
+import { compareTransactionsNewestFirst, isLoanPrincipalDisbursement, type Transaction } from "@/lib/models/transaction";
 import { startOperation } from "@/store/operation-progress-store";
 import {
   categoryIconFor,
@@ -133,7 +133,7 @@ const TONE_ICON_CLASS: Record<string, string> = {
   success: "bg-success/15 text-success",
   expense: "bg-expense/12 text-expense",
   warning: "bg-warning/20 text-warning-foreground",
-  purple: "bg-purple/15 text-purple",
+  purple: "bg-debt-surface text-debt-text",
 };
 
 function paymentMethodFor(transaction: Transaction, account?: Account): string {
@@ -1166,10 +1166,24 @@ function FilterMenu({ filter, label }: { filter: FilterDef; label: string }) {
   );
 }
 
-type Flow = "in" | "out" | "transfer";
-const flowOf = (t: Transaction): Flow => (t.transferId ? "transfer" : t.type === "income" ? "in" : "out");
-const FLOW_LABEL: Record<Flow, string> = { in: "Money in", out: "Money out", transfer: "Transfer" };
-const TYPE_LABEL: Record<Flow, string> = { in: "Income", out: "Expense", transfer: "Transfer" };
+/** "debt" = money that only moves a liability/receivable: a Loan principal disbursement or a People-ledger
+ *  cash movement (Borrowed / Repaid / Received Back). The same set `isNonIncomeExpenseMovement` already
+ *  keeps out of income/expense totals — so the list never shows borrowed cash as Income. */
+type Flow = "in" | "out" | "transfer" | "debt";
+/** Violet text that stays readable on light low-contrast screens (the raw token is light for small text):
+ *  darkened in light mode, the token itself in dark mode (already lifted there). */
+const PURPLE_TEXT = "text-debt-text";
+const flowOf = (t: Transaction): Flow =>
+  t.transferId ? "transfer" : isLoanPrincipalDisbursement(t) || t.isPersonLedgerMovement ? "debt" : t.type === "income" ? "in" : "out";
+const FLOW_LABEL: Record<Flow, string> = { in: "Money in", out: "Money out", transfer: "Transfer", debt: "Loan" };
+const TYPE_LABEL: Record<Flow, string> = { in: "Income", out: "Expense", transfer: "Transfer", debt: "Loan / People" };
+
+/** Direction wording for a "debt" row, from its stored type (income = cash in, expense = cash out). */
+function debtLabel(t: Transaction): string {
+  const incoming = t.type === "income";
+  if (isLoanPrincipalDisbursement(t)) return incoming ? "Borrowed" : "Lent";
+  return incoming ? "Received from person" : "Paid to person";
+}
 
 /** Which side of a transfer a leg is — read from the leg's stored type exactly as
  *  `TransactionRepository.createTransfer` writes it (source leg = "expense", destination = "income"). */
@@ -1184,7 +1198,8 @@ const TRANSFER_SIDE_LABEL = { sent: "Transfer sent", received: "Transfer receive
 function Amount({ transaction, withLabel = false, size = "md" }: { transaction: Transaction; withLabel?: boolean; size?: "md" | "lg" }) {
   const flow = flowOf(transaction);
   const side = flow === "transfer" ? transferSideOf(transaction) : null;
-  const Icon = flow === "in" ? ArrowDownLeft : flow === "out" ? ArrowUpRight : side === "received" ? ArrowDownLeft : ArrowUpRight;
+  const incoming = flow === "in" || side === "received" || (flow === "debt" && transaction.type === "income");
+  const Icon = incoming ? ArrowDownLeft : ArrowUpRight;
   return (
     <span className="flex shrink-0 flex-col items-end gap-0.5">
       <span
@@ -1194,13 +1209,24 @@ function Amount({ transaction, withLabel = false, size = "md" }: { transaction: 
           flow === "in" ? "text-success" : "text-foreground",
         )}
       >
-        {flow === "in" || side === "received" ? "+" : "−"}
+        {incoming ? "+" : "−"}
         {formatCurrency(transaction.amount)}
       </span>
       {withLabel && (
-        <span className={cn("inline-flex items-center gap-0.5 text-[11px] font-medium", flow === "in" ? "text-success" : flow === "out" ? "text-expense" : "text-foreground/70")}>
+        <span
+          className={cn(
+            "inline-flex items-center gap-0.5 text-[11px] font-medium",
+            flow === "in" || (flow === "debt" && transaction.type !== "income")
+              ? "text-success"
+              : flow === "out"
+                ? "text-expense"
+                : flow === "debt"
+                  ? PURPLE_TEXT
+                  : "text-foreground/70",
+          )}
+        >
           <Icon className="size-3" strokeWidth={2} aria-hidden />
-          {side ? TRANSFER_SIDE_LABEL[side] : FLOW_LABEL[flow]}
+          {side ? TRANSFER_SIDE_LABEL[side] : flow === "debt" ? debtLabel(transaction) : FLOW_LABEL[flow]}
         </span>
       )}
     </span>
@@ -1233,7 +1259,7 @@ function TxnBadges({
   return (
     <span className="flex flex-wrap items-center gap-1">
       {loanTag && (
-        <span className={cn(BADGE, "border-purple/35 bg-purple/12 text-purple")}>
+        <span className={cn(BADGE, "border-debt-border bg-debt-surface text-debt-text")}>
           <Landmark className="size-3" aria-hidden />
           {loanTag.label}
         </span>
@@ -1300,7 +1326,9 @@ function LedgerTable({
   const pairRole = (i: number): "first" | "second" | null => (pairedWithNext[i] ? "first" : i > 0 && pairedWithNext[i - 1] ? "second" : null);
 
   return (
-    <table className="w-full border-separate border-spacing-0 text-sm">
+    // `isolate` keeps the transfer centre line's z-index inside the table, so it can sit above the next
+    // row but never above dialogs/popovers opened over the page.
+    <table className="isolate w-full border-separate border-spacing-0 text-sm">
       <thead>
         <tr>
           <th className={cn(TH, "hidden w-12 text-right sm:table-cell")}>#</th>
@@ -1333,16 +1361,20 @@ function LedgerTable({
           const route = mate ? (side === "sent" ? `${ownName} → ${mateName}` : `${mateName} → ${ownName}`) : null;
           // Same rule the Add/Edit popup uses for a card bill payment: a transfer touching a card account
           // (either this leg's account or its paired leg's). Read-only account data — display only.
-          const tone: RowTone = isDuplicate
-            ? "duplicate"
-            : flow === "in"
+          // A possible duplicate keeps its row's own meaning (tint) — the warning is its badge + red edge only,
+          // so a flagged People/Income row never turns into a generic pink row.
+          const tone: RowTone = flow === "in"
               ? "income"
-              : flow === "transfer"
+              : flow === "debt"
+                ? t.type === "income"
+                  ? "debt"
+                  : "debtPaid"
+                : flow === "transfer"
                 ? row.account?.type === "card" || mate?.account?.type === "card"
                   ? "cardPayment"
                   : "transfer"
                 : "expense";
-          const edge = ROW_TONE[tone].edge;
+          const edge = isDuplicate ? ROW_TONE.duplicate.edge : ROW_TONE[tone].edge;
           return (
             <Fragment key={t.id}>
               <tr
@@ -1485,7 +1517,7 @@ function LedgerTable({
   );
 }
 
-type RowTone = "income" | "expense" | "transfer" | "cardPayment" | "duplicate";
+type RowTone = "income" | "expense" | "transfer" | "cardPayment" | "debt" | "debtPaid" | "duplicate";
 
 /**
  * Semantic row wash + leading edge. Edge = clearly visible; wash = a light tint of an existing theme
@@ -1504,6 +1536,19 @@ const ROW_TONE: Record<RowTone, { edge: string; rest: string; open: string }> = 
     edge: "border-l-muted-foreground",
     rest: "bg-foreground/[0.06] hover:bg-foreground/[0.09] dark:bg-foreground/[0.08] dark:hover:bg-foreground/[0.12]",
     open: "bg-foreground/[0.1] dark:bg-foreground/[0.13]",
+  },
+  // Loan/People cash IN (borrowed, received from person) — debt created: a clearly visible soft violet
+  // surface (the old ~11% read as white on low-contrast FHD panels), never Income green.
+  debt: {
+    edge: "border-l-debt-border",
+    rest: "bg-debt-surface hover:bg-debt-surface-hover",
+    open: "bg-debt-surface-hover",
+  },
+  // Loan/People cash OUT (paid to person, lent) — a completed payment: soft green surface.
+  debtPaid: {
+    edge: "border-l-success",
+    rest: "bg-success/[0.14] hover:bg-success/[0.2] dark:bg-success/[0.15] dark:hover:bg-success/[0.2]",
+    open: "bg-success/[0.22] dark:bg-success/[0.23]",
   },
   cardPayment: {
     edge: "border-l-primary-accent-text",
@@ -1526,6 +1571,23 @@ function TypeTag({ transaction }: { transaction: Transaction }) {
           Transfer
         </span>
         <span className="text-[11px] font-medium text-foreground/70">{side === "sent" ? "Sent" : "Received"}</span>
+      </span>
+    );
+  }
+  if (flow === "debt") {
+    return (
+      <span className="inline-flex flex-col gap-0.5">
+        <span
+          className={cn(
+            BADGE,
+            "w-fit",
+            transaction.type === "income" ? "border-debt-border bg-card text-debt-text" : "border-success/60 bg-success/15 text-success",
+          )}
+        >
+          <Landmark className="size-3" strokeWidth={2} aria-hidden />
+          {isLoanPrincipalDisbursement(transaction) ? "Loan" : "People"}
+        </span>
+        <span className="text-[11px] font-medium text-foreground/70">{debtLabel(transaction)}</span>
       </span>
     );
   }
@@ -1575,6 +1637,13 @@ const FLOW_HERO: Record<Flow, { panel: string; chip: string; amount: string; edg
     edge: "bg-expense",
     mark: "text-expense",
   },
+  debt: {
+    panel: "bg-debt-surface",
+    chip: "border-debt-border bg-card text-debt-text",
+    amount: "text-foreground",
+    edge: "bg-debt-border",
+    mark: "text-debt-text",
+  },
   transfer: {
     panel: "bg-gradient-to-br from-secondary to-secondary/30",
     chip: "border-border-strong bg-card text-foreground",
@@ -1586,7 +1655,7 @@ const FLOW_HERO: Record<Flow, { panel: string; chip: string; amount: string; edg
 
 /** Soft icon tints — one per fact, so the grid scans by colour as well as by label. */
 const FACT_TONE = {
-  purple: "bg-purple/12 text-purple",
+  purple: "bg-debt-surface text-debt-text",
   lime: "bg-primary/25 text-foreground dark:text-primary-accent-text",
   amber: "bg-warning/20 text-warning-foreground dark:text-warning",
   green: "bg-success/12 text-success",
@@ -1642,7 +1711,8 @@ function RowDetails({
   const t = row.transaction;
   const flow = flowOf(t);
   const hero = FLOW_HERO[flow];
-  const FlowIcon = flow === "in" ? ArrowDownLeft : flow === "out" ? ArrowUpRight : ArrowLeftRight;
+  const FlowIcon =
+    flow === "in" || (flow === "debt" && t.type === "income") ? ArrowDownLeft : flow === "out" || flow === "debt" ? ArrowUpRight : ArrowLeftRight;
   return (
     <div className="px-3 pt-1 pb-3.5 sm:pr-4 sm:pl-[4.25rem]">
       <div className="flex flex-col overflow-hidden rounded-[12px] border border-border-strong/60 bg-card shadow-[0_1px_2px_rgb(0_0_0/0.05),0_6px_16px_-8px_rgb(0_0_0/0.12)] md:flex-row">
@@ -1652,10 +1722,10 @@ function RowDetails({
           <FlowIcon className={cn("pointer-events-none absolute -right-3 -bottom-4 size-28 opacity-[0.07]", hero.mark)} strokeWidth={1.5} aria-hidden />
           <span className={cn("relative inline-flex w-fit items-center gap-1 rounded-[5px] border px-1.5 py-0.5 text-[11px] font-semibold", hero.chip)}>
             <FlowIcon className="size-3" strokeWidth={2.25} aria-hidden />
-            {FLOW_LABEL[flow]}
+            {flow === "debt" ? debtLabel(t) : FLOW_LABEL[flow]}
           </span>
           <p className={cn("relative font-heading text-[30px] leading-none font-bold tracking-tight tabular-nums", hero.amount)}>
-            {flow === "in" ? "+" : flow === "out" ? "−" : ""}
+            {flow === "in" || (flow === "debt" && t.type === "income") ? "+" : flow === "out" || flow === "debt" ? "−" : ""}
             {formatCurrency(t.amount)}
           </p>
           <div className="relative min-w-0">

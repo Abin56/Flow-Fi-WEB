@@ -556,7 +556,9 @@ export function usePeopleActions() {
        *  the entries come from `planEntryDeletion`/`planBulkDeletion` (`lib/engines/person-ledger-deletion.ts`). */
       deleteLedgerEntries: async (person: Person, entries: LedgerEntry[]) => {
         const ledgerRepository = createLedgerRepository(uid, person.id, personRepository);
-        await ledgerRepository.softDeleteEntries(person, entries);
+        // Same atomic path the Transactions page uses: each entry's own People cash leg (if any) is
+        // deleted with it, its account balance reversed — never an entry without its money or vice versa.
+        await ledgerRepository.softDeleteEntriesWithCashLegs(person, entries, createTransactionRepository(uid, accountRepository));
       },
       /** ✓/✕ quick-toggle on a split-expense ledger row — see `ExpenseRepository.setParticipantReceivedStatus`. */
       setParticipantReceivedStatus: async (expense: Expense, participant: ExpenseParticipant, receivedStatus: ReceivedStatus) => {

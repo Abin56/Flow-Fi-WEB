@@ -827,7 +827,7 @@ export function TransactionDetailsModal({
               description,
               amount: amountValue,
               date: dateTime,
-              direction: kind === "income" ? "credit" : "debit",
+              direction: kind === "income" || (kind === "expense" && personId != null && !splitOpen && personEntryType === "borrowed") ? "credit" : "debit",
               accountId,
               referenceNumber: null,
               requireDescriptionMatch: false,
@@ -846,7 +846,22 @@ export function TransactionDetailsModal({
     try {
       op.stage("submit", kind === "transfer" && !transaction ? "Saving both legs & balances" : "Saving transaction & balance");
       if (!transaction) {
-        if (kind === "transfer") {
+        // "Money I Borrowed" is cash coming IN from the person — it is not an expense of mine. It used to
+        // also write the expense above (SBI −X) next to the borrowed income leg (SBI +X): the two cancelled
+        // out, so the receiving account never rose, and the same event showed as Money Out + Money In with a
+        // phantom spend. Only the People path is posted now: one "borrowed" LedgerEntry (I owe them) + its
+        // `isPersonLedgerMovement` Transaction into the chosen account (moves the balance, never income).
+        const borrowOnly = kind === "expense" && personId != null && !splitOpen && personEntryType === "borrowed";
+        if (borrowOnly) {
+          const person = people.find((p) => p.id === personId);
+          if (!person || !peopleActions) throw new Error("Couldn't find this person — refresh and try again");
+          op.stage("related", "Recording money borrowed");
+          await peopleActions.addLedgerEntryWithTransaction(
+            person,
+            { type: "borrowed", amount: amountValue, date: dateTime, note: description || undefined },
+            accountId,
+          );
+        } else if (kind === "transfer") {
           await actions.createTransferPair({ amount: amountValue, dateTime, sourceAccountId: accountId, destinationAccountId, categoryId, description, notes });
         } else {
           const newTransaction = await actions.createTransaction({
@@ -893,22 +908,9 @@ export function TransactionDetailsModal({
                 });
               } else {
                 // Plain descriptive reference (no expense-owed effect) — same shape as
-                // `applyOwesPersonChange`'s own "reference-only" branch.
+                // `applyOwesPersonChange`'s own "reference-only" branch. ("Money I Borrowed" never
+                // reaches here — it is posted on its own above, without an expense.)
                 await actions.editTransaction(newTransaction, { linkedPersonId: personId, owesPersonToggle: false });
-                if (personEntryType === "borrowed") {
-                  // The expense above is this transaction's own cash-out leg — "I Borrowed" is the
-                  // opposite direction (cash IN from the person), so it can't reuse that expense.
-                  // Post a separate real Income transaction for it, same as the People page's own
-                  // Borrowed entry, defaulting to the same account the expense used.
-                  const person = people.find((p) => p.id === personId);
-                  if (person && peopleActions) {
-                    await peopleActions.addLedgerEntryWithTransaction(
-                      person,
-                      { type: "borrowed", amount: amountValue, date: dateTime, note: description || undefined },
-                      accountId,
-                    );
-                  }
-                }
               }
             } catch (assignError) {
               await actions.deleteTransaction(newTransaction).catch(() => {
@@ -1620,6 +1622,16 @@ export function TransactionDetailsModal({
                               </button>
                             );
                           })}
+                          {personEntryType === "borrowed" && (
+                            <p className="col-span-full flex items-start gap-1.5 rounded-[6px] border border-border-strong bg-secondary px-2.5 py-2 text-[11px] text-foreground/80">
+                              <Info className="mt-px size-3.5 shrink-0" strokeWidth={1.75} />
+                              <span>
+                                Saved as money received into{" "}
+                                <span className="font-semibold text-foreground">{accounts.find((a) => a.id === accountId)?.name ?? "the selected account"}</span> that you owe{" "}
+                                <span className="font-semibold text-foreground">{people.find((p) => p.id === personId)?.name ?? "this person"}</span> — not an expense, not income.
+                              </span>
+                            </p>
+                          )}
                         </div>
                       )}
                     </motion.div>

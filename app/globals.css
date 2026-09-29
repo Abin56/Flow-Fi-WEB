@@ -65,6 +65,10 @@
   --color-warning-foreground: var(--warning-foreground);
   --color-purple: var(--purple);
   --color-purple-foreground: var(--purple-foreground);
+  --color-debt-surface: var(--debt-surface);
+  --color-debt-surface-hover: var(--debt-surface-hover);
+  --color-debt-border: var(--debt-border);
+  --color-debt-text: var(--debt-text);
 
   /* Ocean semantic tokens — surfaces, accents, and gradients every component should reference instead of hex. */
   --color-surface: var(--surface);
@@ -216,6 +220,12 @@
   /* Purple secondary accent — used sparingly (credit cards, secondary CTAs). */
   --purple: oklch(0.606 0.25 292.7);
   --purple-foreground: oklch(0.99 0.006 260);
+  /* Debt / "I owe them" violet — solid, lower-lightness surfaces instead of a low-opacity wash of --purple,
+     which read as white on low-contrast FHD panels. The surface sits clearly below white/canvas lightness. */
+  --debt-surface: oklch(0.905 0.055 295);
+  --debt-surface-hover: oklch(0.875 0.07 295);
+  --debt-border: oklch(0.56 0.19 293);
+  --debt-text: oklch(0.44 0.19 293);
 
   /* Financial semantic colors — kept deliberately separate from the lime brand color per the brief:
      income/credit green, expense/debit red, pending/warning amber, information blue. */
@@ -388,6 +398,10 @@
 
   --purple: oklch(0.72 0.17 292.7);
   --purple-foreground: oklch(0.16 0.024 262);
+  --debt-surface: oklch(0.29 0.075 295);
+  --debt-surface-hover: oklch(0.33 0.09 295);
+  --debt-border: oklch(0.68 0.17 293);
+  --debt-text: oklch(0.8 0.12 293);
 
   /* Financial semantics — same hue family as light mode, lightened for AA+ contrast against
      --card/--popover/--secondary (#171817/#1D1E1C/#222321) instead of light mode's darkened-for-white

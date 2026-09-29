@@ -175,7 +175,7 @@ export function StatusBadge({
   compact = false,
   className,
 }: {
-  row: Pick<LedgerRow, "state" | "remaining"> & Partial<Pick<LedgerRow, "overdue" | "category">>;
+  row: Pick<LedgerRow, "state" | "remaining"> & Partial<Pick<LedgerRow, "overdue" | "category" | "direction">>;
   compact?: boolean;
   className?: string;
 }) {
@@ -203,7 +203,12 @@ export function StatusBadge({
     <span
       className={cn(
         "inline-flex h-5 shrink-0 items-center gap-1 rounded-[4px] border px-1.5 text-[10.5px] leading-none font-semibold whitespace-nowrap",
-        overdue ? "border-expense/40 bg-expense/10 text-expense" : STATE_STYLE[row.state],
+        overdue
+          ? "border-expense/40 bg-expense/10 text-expense"
+          : // A debt I paid off is completed, but not money received — calm neutral, never the green "settled".
+            row.state === "settled" && row.direction === "iOwe"
+            ? "border-border-strong bg-secondary text-foreground/80"
+            : STATE_STYLE[row.state],
         className,
       )}
     >
@@ -567,7 +572,7 @@ export function PaymentHistory({
       </ul>
       <p className="mt-1.5 text-xs text-muted-foreground">
         {row.state === "settled" ? (
-          <span className="font-semibold text-success">✓ Settled</span>
+          <span className={cn("font-semibold", row.direction === "iOwe" ? "text-foreground/75" : "text-success")}>✓ Settled</span>
         ) : (
           <>
             Remaining <span className="font-semibold text-foreground tabular-nums">{formatCurrency(row.remaining ?? 0)}</span>
