@@ -27,7 +27,7 @@ import {
 } from "@/lib/engines/person-cycle-statement";
 import { money } from "@/lib/engines/person-cycle-statement-share";
 import { cn } from "@/lib/utils";
-import { DELETE_BLOCK_NOTE, EntryEditForm, EntrySettleForm, isEditable, InlineReveal, LEDGER_TD, LEDGER_TH, LEDGER_TYPE_SHORT, PaymentHistory } from "./ledger-ui";
+import { DELETE_BLOCK_NOTE, EntryEditForm, EntrySettleForm, isEditable, InlineReveal, LEDGER_TD, LEDGER_TH, LEDGER_TYPE_SHORT, LoanPayLink, PaymentHistory } from "./ledger-ui";
 import { WS_PAD, WS_PRIMARY, WS_SECONDARY, WsSegmented } from "./person-workspace-ui";
 
 /** The expanded workspace's internal navigation — the ledger, or one of the Person-level flows in its place. */
@@ -71,7 +71,10 @@ function RowActions({
   const undoButton = "flex h-7 items-center gap-1 rounded-[6px] px-1.5 text-xs font-medium whitespace-nowrap text-muted-foreground outline-none transition-colors hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring";
   return (
     <div className={cn("flex items-center gap-1", className)} onClick={(e) => e.stopPropagation()}>
-      {row.settle ? (
+      {row.category === "loan" && row.loanId != null && row.state != null && row.state !== "settled" ? (
+        // A Loan installment is paid on the Loan (its existing payment flow) — never settled here.
+        <LoanPayLink loanId={row.loanId} />
+      ) : row.settle ? (
         <button
           type="button"
           aria-pressed={settling}
@@ -90,7 +93,7 @@ function RowActions({
         <>
           <span className="flex h-7 items-center gap-1 px-1.5 text-xs font-semibold whitespace-nowrap text-success">
             <Check className="size-3.5" strokeWidth={2.5} />
-            Settled
+            {row.category === "loan" ? "Paid" : "Settled"}
           </span>
           {undoPayment ? (
             <button type="button" onClick={() => handlers.onUndoPayment!(row, undoPayment)} className={undoButton}>

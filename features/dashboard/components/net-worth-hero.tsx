@@ -16,6 +16,12 @@ export interface NetWorthHeroProps {
     changePercent: number;
     /** Cumulative net (income - expense) for each of the last 7 days, oldest first — see `use-dashboard-data.ts`. */
     trend: number[];
+    /** Everything owned (accounts, money lent, what people owe you) — Net Worth + Debt. */
+    assets?: number;
+    /** Every liability once: card debt + remaining Loan/EMI principal (`liabilityTotals`). */
+    debt?: number;
+    /** The Loan/EMI part of `debt`. */
+    loanDebt?: number;
   };
   isLoading?: boolean;
   hideAmount?: boolean;
@@ -66,8 +72,23 @@ export function NetWorthHero({ netWorth, isLoading, hideAmount = false, onToggle
         <p className="mt-2 text-xs text-muted-foreground">
           {hasChange && !hideAmount
             ? `${netWorth.changeAmount > 0 ? "+" : ""}${formatCurrency(netWorth.changeAmount)} (${netWorth.changePercent}%) this month`
-            : "Accounts plus loans owed to you, minus what you owe"}
+            : "Everything you own, minus everything you owe"}
         </p>
+        {!isLoading && netWorth.assets != null && netWorth.debt != null && (
+          <dl className="mt-3 flex flex-wrap gap-x-6 gap-y-1 text-sm">
+            <div className="flex items-baseline gap-1.5">
+              <dt className="text-xs text-muted-foreground">Assets</dt>
+              <dd className="font-semibold text-foreground tabular-nums">{hideAmount ? "••••" : formatCurrency(netWorth.assets)}</dd>
+            </div>
+            <div className="flex items-baseline gap-1.5">
+              <dt className="text-xs text-muted-foreground">Debt</dt>
+              <dd className="font-semibold text-expense tabular-nums">{hideAmount ? "••••" : formatCurrency(netWorth.debt)}</dd>
+              {!hideAmount && (netWorth.loanDebt ?? 0) > 0 && (
+                <span className="text-xs text-muted-foreground">incl. {formatCurrency(netWorth.loanDebt!)} loans/EMI</span>
+              )}
+            </div>
+          </dl>
+        )}
       </div>
 
       <div className="relative flex items-end justify-between gap-4">

@@ -108,6 +108,39 @@ describe("computeUpcomingEmi", () => {
     expect(items).toHaveLength(0);
   });
 
+  it("borrowed from this person → 'youOwe'; lent to them → 'theyOwe' (direction never forced)", () => {
+    const now = new Date("2026-02-15T00:00:00.000Z");
+    const borrowed = computeUpcomingEmi(
+      [loan({ id: "b", category: "personal", personId: "p", direction: "taken", scheduleId: "sb" })],
+      [installment({ scheduleId: "sb", dueDate: new Date("2026-03-01T00:00:00.000Z") })],
+      "p",
+      { now },
+    );
+    const lent = computeUpcomingEmi(
+      [loan({ id: "g", category: "personal", personId: "p", direction: "given", scheduleId: "sg" })],
+      [installment({ scheduleId: "sg", dueDate: new Date("2026-03-01T00:00:00.000Z") })],
+      "p",
+      { now },
+    );
+    expect(borrowed[0].relation).toBe("youOwe");
+    expect(lent[0].relation).toBe("theyOwe");
+  });
+
+  it("keeps overdue separate from the next installment, uses remainders, and reports remaining principal as context", () => {
+    const items = computeUpcomingEmi(
+      [loan({ id: "l", category: "personal", personId: "p", scheduleId: "s" })],
+      [
+        installment({ id: "a", scheduleId: "s", sequenceNumber: 1, dueDate: new Date("2026-02-01T00:00:00.000Z"), amountDue: 3000, amountPaid: 0 }),
+        installment({ id: "b", scheduleId: "s", sequenceNumber: 2, dueDate: new Date("2026-03-01T00:00:00.000Z"), amountDue: 3000, amountPaid: 1000 }),
+      ],
+      "p",
+      { now: new Date("2026-02-15T00:00:00.000Z"), outstandingPrincipalByLoanId: new Map([["l", 27000]]) },
+    );
+    expect(items[0].overdueAmount).toBe(3000);
+    expect(items[0].nextUpcoming?.amount).toBe(2000);
+    expect(items[0].remainingOnLoan).toBe(27000);
+  });
+
   it("sorts multiple upcoming EMIs soonest due date first", () => {
     const items = computeUpcomingEmi(
       [

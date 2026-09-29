@@ -14,6 +14,7 @@ import { outstandingPrincipalFor } from "@/lib/engines/loan-outstanding";
 import { useLoanRows } from "@/features/loans/hooks/use-loans-data";
 import { useEmiRows } from "@/features/emi/hooks/use-emi-data";
 import { useCreditCardTotals } from "@/features/credit-cards/hooks/use-credit-cards-data";
+import { usePersonPositions } from "@/features/people/hooks/use-people-data";
 
 export function useLoanBalanceSheet(): { sheet: LoanBalanceSheet; accountBalances: number; netWorth: number; isLoading: boolean } {
   const accountBalances = useNetWorth();
@@ -23,6 +24,11 @@ export function useLoanBalanceSheet(): { sheet: LoanBalanceSheet; accountBalance
   // Card-owned EMI / card-funded Loan exposure no recorded purchase represents (Case B/C) — the same
   // figure the cards' available credit and the Reports "Credit Cards" line use.
   const { totals: cardTotals, isLoading: cardsLoading } = useCreditCardTotals();
+  const { positionsByPersonId, isLoading: peopleLoading } = usePersonPositions();
+  const peopleDirectBalance = useMemo(
+    () => Object.values(positionsByPersonId).reduce((sum, p) => sum + p.directBalance, 0),
+    [positionsByPersonId],
+  );
 
   const sheet = useMemo(() => {
     const trackedCardIds = new Set(cards.map((c) => c.id));
@@ -50,7 +56,7 @@ export function useLoanBalanceSheet(): { sheet: LoanBalanceSheet; accountBalance
   return {
     sheet,
     accountBalances,
-    netWorth: netWorthWithLoans(accountBalances, sheet),
-    isLoading: loansLoading || emisLoading || cardsLoading || cardListLoading,
+    netWorth: netWorthWithLoans(accountBalances, sheet, peopleDirectBalance),
+    isLoading: loansLoading || emisLoading || cardsLoading || cardListLoading || peopleLoading,
   };
 }

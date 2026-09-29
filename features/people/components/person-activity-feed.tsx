@@ -26,6 +26,7 @@ import {
   LEDGER_TD,
   LEDGER_TH,
   LEDGER_TYPE_SHORT,
+  LoanPayLink,
   PaymentHistory,
   RowActionsMenu,
   type EntrySettleValues,
@@ -103,6 +104,7 @@ export function RowIcon({ row, className }: { row: LedgerRow; className?: string
  */
 export function amountTone(row: LedgerRow): string {
   if (row.state === "settled") return "text-foreground/70";
+  if (row.category === "loan" && row.state == null) return "text-foreground/70"; // Loan principal: context only
   if (row.direction === "theyOwe") return "text-success";
   if (row.direction === "iOwe") return "text-expense";
   return "text-foreground";
@@ -114,7 +116,18 @@ export function amountTone(row: LedgerRow): string {
  * "Partially settled" + what remains, settled → "Settled". Rows without a settlement state (payments,
  * EMI, adjustments, Loans) say what they mean instead.
  */
-function rowStatus(row: LedgerRow): { label: string; detail: string | null; dot: string; icon?: "check" } {
+function rowStatus(row: LedgerRow): { label: string; detail: string | null; dot: string; icon?: "check"; alert?: boolean } {
+  if (row.category === "loan") {
+    // A Loan installment's state comes straight from its schedule installment (paid/partial/unpaid,
+    // overdue by due date). The Loan's creation row is context only — its principal is never "due".
+    if (row.state == null) return { label: row.direction === "theyOwe" ? "Loan given" : "Loan taken", detail: "Repaid via installments", dot: "bg-muted-foreground/50" };
+    const who = row.direction === "iOwe" ? "You owe them" : "They owe you";
+    if (row.state === "settled") return { label: "Paid", detail: lastPaymentLine(row), dot: "bg-success", icon: "check" };
+    if (row.overdue)
+      return { label: "Overdue", detail: row.state === "partial" ? `${money(row.remaining ?? 0)} left · ${who}` : who, dot: "bg-expense", alert: true };
+    if (row.state === "partial") return { label: "Partial", detail: `${money(row.remaining ?? 0)} left · ${who}`, dot: row.direction === "iOwe" ? "bg-expense" : "bg-success" };
+    return { label: "Pending", detail: who, dot: row.direction === "iOwe" ? "bg-expense" : "bg-success" };
+  }
   if (row.state === "settled") return { label: "Settled", detail: lastPaymentLine(row), dot: "bg-success", icon: "check" };
   if (row.state === "partial")
     return { label: "Partially settled", detail: `${money(row.remaining ?? 0)} remaining`, dot: row.direction === "iOwe" ? "bg-expense" : "bg-success" };
@@ -137,7 +150,14 @@ export function StatusCell({ row }: { row: LedgerRow }) {
         <span className={cn("mt-1.5 size-2 shrink-0 rounded-full", s.dot)} aria-hidden />
       )}
       <div className="min-w-0">
-        <p className={cn("text-[13px] leading-tight font-semibold whitespace-nowrap", s.icon === "check" ? "text-success" : "text-foreground")}>{s.label}</p>
+        <p
+          className={cn(
+            "text-[13px] leading-tight font-semibold whitespace-nowrap",
+            s.icon === "check" ? "text-success" : s.alert ? "text-expense uppercase tracking-wide text-[12px]" : "text-foreground",
+          )}
+        >
+          {s.label}
+        </p>
         {s.detail && <p className="mt-0.5 text-xs leading-tight whitespace-nowrap text-muted-foreground">{s.detail}</p>}
       </div>
     </div>
@@ -201,6 +221,11 @@ export function RowDetails({ row }: { row: LedgerRow }) {
 
 /** Row meta line: "28 Sep · Money given" (+ EMI bank status). */
 export function rowMeta(row: LedgerRow): string {
+  const loan = row.statementRow?.loan;
+  if (loan && row.statementRow?.kind === "obligation") {
+    const month = loan.dueDate.toLocaleDateString("en-IN", { month: "long" });
+    return `${month} installment · ${loan.installmentNumber} of ${loan.installmentCount}`;
+  }
   const emi = row.statementRow?.emi;
   return `${row.typeLabel}${emi ? ` · Bank: ${EMI_STATUS[emi.status].toLowerCase()}` : ""}`;
 }
@@ -294,6 +319,7 @@ function FeedRow({
             <StatusCell row={row} />
           </span>
         </button>
+        {row.category === "loan" && row.loanId != null && row.state != null && row.state !== "settled" && <LoanPayLink loanId={row.loanId} />}
         <RowActionsMenu row={row} onSettle={onSettleStart} onEdit={onEditStart} onDelete={onDelete} onUndo={onUndo} />
       </div>
       <InlineReveal open={open}>
@@ -601,6 +627,7 @@ export function PersonActivityFeed({
                             <td className={cn(LEDGER_TD, "py-1 pr-1.5 pl-2")} onClick={(e) => e.stopPropagation()}>
                               <div className="flex items-center justify-end gap-1">
                                 {/* The row's main next step, direct; edit / delete / undo stay in ⋯ */}
+                                {row.category === "loan" && row.loanId != null && row.state != null && row.state !== "settled" && <LoanPayLink loanId={row.loanId} />}
                                 {p.onSettleStart && (
                                   <button
                                     type="button"

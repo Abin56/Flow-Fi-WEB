@@ -14,6 +14,7 @@ import { useEmis } from "@/hooks/use-credit-cards";
 import { useAllEmiInstallments } from "@/hooks/use-emis";
 import { useAllLoanInstallments, useLoans, useTrashedLoans } from "@/hooks/use-loans";
 import { usePeople } from "@/hooks/use-people";
+import { useLoanScheduledPayments } from "@/hooks/use-loan-scheduled-payments";
 import { usePeopleLedgerEntries } from "@/features/people/hooks/use-people-data";
 import {
   buildPersonCycleStatement,
@@ -61,6 +62,7 @@ export function usePersonCycleStatement(
   const { data: loans = [] } = useLoans();
   const { data: loanInstallments = [] } = useAllLoanInstallments();
   const { data: trashedLoans = [] } = useTrashedLoans();
+  const { payments: loanPayments } = useLoanScheduledPayments();
 
   const person = useMemo(() => (people as Person[]).find((p) => p.id === personId) ?? null, [people, personId]);
 
@@ -93,8 +95,9 @@ export function usePersonCycleStatement(
       emis: emis as Emi[],
       loans: loans as Loan[],
       installments: [...(emiInstallments as Installment[]), ...(loanInstallments as Installment[])],
+      loanPayments,
     };
-  }, [person, ledgerEntries, emis, loans, trashedLoans, emiInstallments, loanInstallments]);
+  }, [person, ledgerEntries, emis, loans, trashedLoans, emiInstallments, loanInstallments, loanPayments]);
 
   const statement = useMemo(() => (baseInput ? buildPersonCycleStatement({ ...baseInput, cycle }) : null), [baseInput, cycle]);
   const allTimeStatement = useMemo(
@@ -134,6 +137,7 @@ export function usePeopleCycleStatements(cycle: StatementCycle): {
   const { data: loans = [], isLoading: loansLoading } = useLoans();
   const { data: loanInstallments = [], isLoading: loanInstallmentsLoading } = useAllLoanInstallments();
   const { data: trashedLoans = [], isLoading: trashedLoading } = useTrashedLoans();
+  const { payments: loanPayments } = useLoanScheduledPayments();
 
   const statementsByPersonId = useMemo(() => {
     const loanIds = new Set([...(loans as Loan[]).map((l) => l.id), ...(trashedLoans as Loan[]).map((l) => l.id)]);
@@ -147,11 +151,12 @@ export function usePeopleCycleStatements(cycle: StatementCycle): {
         emis: emis as Emi[],
         loans: loans as Loan[],
         installments,
+        loanPayments,
         cycle,
       });
     }
     return out;
-  }, [people, entriesByPersonId, emis, loans, trashedLoans, emiInstallments, loanInstallments, cycle]);
+  }, [people, entriesByPersonId, emis, loans, trashedLoans, emiInstallments, loanInstallments, loanPayments, cycle]);
 
   // Every source the engine reads must have reported before a row renders: a statement built while the
   // EMI/Loan watches are still resolving omits linked-EMI obligations, then jumps once they land.

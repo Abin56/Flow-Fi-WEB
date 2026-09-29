@@ -93,10 +93,16 @@ export interface LedgerRow {
   deleteBlock: DeleteBlock;
   /** Every payment recorded against this transaction, across all cycles, oldest first. */
   payments: PaymentRecord[];
+  /** Person-Loan installment rows: the Loan it belongs to (paid from the Loan, never settled here). */
+  loanId: string | null;
+  /** Unpaid past its due date (Loan installments only — the other sources carry no due date). */
+  overdue: boolean;
 }
 
 const EPSILON = 0.005;
 const SETTLEABLE: ReadonlySet<StatementCategory | "loan"> = new Set(["split", "gave", "borrowed"]);
+/** Rows that carry a settlement state (Loan installments are paid on the Loan, not settled here). */
+const HAS_STATE: ReadonlySet<StatementCategory | "loan"> = new Set(["split", "gave", "borrowed", "loan"]);
 
 function stateOf(amount: number, remaining: number): LedgerRowState {
   if (remaining < EPSILON) return "settled";
@@ -198,6 +204,8 @@ export interface BuildLedgerRowsInput {
   loanItems?: readonly PersonActivityItem[];
   /** The person's outstanding split installments — the only way a split share is settled on its own. */
   pending: readonly PendingSplitParticipant[];
+  /** Today — only for a Loan installment's overdue flag. */
+  now?: Date;
 }
 
 /**
@@ -207,7 +215,7 @@ export interface BuildLedgerRowsInput {
  * not tied to one transaction, or a payment in this cycle against a transaction from an earlier one
  * (the transaction itself stays in its own cycle; the payment is this cycle's activity).
  */
-export function buildLedgerRows({ statement, history, entries, loanItems = [], pending }: BuildLedgerRowsInput): LedgerRow[] {
+export function buildLedgerRows({ statement, history, entries, loanItems = [], pending, now = new Date() }: BuildLedgerRowsInput): LedgerRow[] {
   const entryById = new Map(entries.map((e) => [e.id, e]));
   const payments = paymentsByObligation(history === undefined ? statement : history, entryById, entries, pending);
   const obligationKeys = new Set((statement?.rows ?? []).filter((r) => r.kind === "obligation").map((r) => r.key));
@@ -218,12 +226,12 @@ export function buildLedgerRows({ statement, history, entries, loanItems = [], p
 
     const entryId = row.key.startsWith("ledger:") ? row.key.slice("ledger:".length) : null;
     const entry = entryId ? entryById.get(entryId) : undefined;
-    const settleable = SETTLEABLE.has(row.category) && row.remainingNow != null;
-    const remaining = settleable ? row.remainingNow! : null;
+    const hasState = HAS_STATE.has(row.category) && row.remainingNow != null;
+    const remaining = hasState ? row.remainingNow! : null;
     const state = remaining != null ? stateOf(row.amount, remaining) : null;
 
     let settle: SettleTarget | null = null;
-    if (entry && remaining != null && state !== "settled") {
+    if (entry && SETTLEABLE.has(row.category) && remaining != null && state !== "settled") {
       if ((entry.type === "gave" || entry.type === "borrowed") && entry.transactionRef == null) {
         settle = { kind: "entry", entry, max: remaining };
       } else if (row.category === "split") {
@@ -238,6 +246,8 @@ export function buildLedgerRows({ statement, history, entries, loanItems = [], p
       ? null
       : row.category === "emi"
         ? "emi"
+        : row.category === "loan"
+          ? "loan"
         : row.category === "opening"
           ? "opening"
           : "expense";
@@ -259,10 +269,15 @@ export function buildLedgerRows({ statement, history, entries, loanItems = [], p
       deletable,
       deleteBlock,
       payments: row.kind === "obligation" ? (payments.get(row.key) ?? []) : [],
+      loanId: row.loan?.loanId ?? null,
+      overdue: row.category === "loan" && state !== "settled" && dayIndex(row.date) < dayIndex(now),
     });
   }
 
+  // Loan payments (`loan-txn:`) are already each installment row's payment history above — listing
+  // them again would show the same money twice. The Loan's creation (`loan:`) stays as context only.
   for (const item of loanItems) {
+    if (item.id.startsWith("loan-txn:")) continue;
     rows.push({
       key: item.id,
       entryId: null,
@@ -281,6 +296,8 @@ export function buildLedgerRows({ statement, history, entries, loanItems = [], p
       deletable: false,
       deleteBlock: "loan",
       payments: [],
+      loanId: item.id.startsWith("loan:") ? item.id.slice("loan:".length) : null,
+      overdue: false,
     });
   }
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { Check, ChevronDown, ChevronRight, Landmark, Loader2, ShoppingBag, X, type LucideIcon } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ClayButton } from "@/components/clay/clay-button";
 import { OperationProgressView } from "@/components/feedback/operation-progress";
 import type { OperationSnapshot } from "@/lib/operation-progress/operation-progress";
@@ -621,11 +621,24 @@ export function MoreOptions({
   children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  // Only a user click scrolls — a form that opens pre-expanded (edit mode) must not jump.
+  const scrollOnOpen = useRef(false);
+  const sectionRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (!open || !scrollOnOpen.current) return;
+    scrollOnOpen.current = false;
+    // Wait a frame so the revealed fields have laid out inside the dialog's scroll area.
+    const id = requestAnimationFrame(() => sectionRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" }));
+    return () => cancelAnimationFrame(id);
+  }, [open]);
   return (
-    <section className="flex flex-col gap-4">
+    <section ref={sectionRef} className="flex flex-col gap-4">
       <button
         type="button"
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => {
+          scrollOnOpen.current = !open;
+          setOpen((o) => !o);
+        }}
         aria-expanded={open}
         className={cn(
           LE_RADIUS.control,

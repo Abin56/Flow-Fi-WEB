@@ -553,7 +553,11 @@ export function MonthCycleWorkspace() {
       {/* ── Obligations this cycle — every figure opens its workspace ── */}
       <section aria-label="Obligations" className={cn(PANEL, "grid grid-cols-2 divide-border-strong/40 sm:grid-cols-3 xl:grid-cols-6 [&>*]:border-border-strong/40 [&>*]:border-b xl:[&>*]:border-b-0 [&>*:not(:last-child)]:border-r")}>
         <StatCell icon={Banknote} label="EMI (total)" amount={data.emi.total} meta={`${data.emi.count} due this month`} accent="primary" href="/emi" />
-        <StatCell icon={Landmark} label="Loans (payable)" amount={data.loans.total} meta={`${data.loans.count} active loans`} accent="purple" href="/loans" />
+        <StatCell icon={Landmark} label="Loans (payable)" amount={data.loans.total} meta={
+            data.loans.carriedOverdue > 0
+              ? `${formatCurrency(data.loans.dueThisCycle)} this cycle · ${formatCurrency(data.loans.carriedOverdue)} overdue`
+              : `${data.loans.count} installment${data.loans.count === 1 ? "" : "s"} due`
+          } accent="purple" href="/loans" />
         <StatCell icon={CreditCard} label="Credit card bills" amount={data.cards.total} meta={`${data.cards.count} bills due`} accent="expense" href="/credit-cards" />
         <StatCell icon={Users} label="You need to give" amount={data.peopleStats.totalYouOwe} meta={`${data.peopleStats.owingPeopleCount} people`} accent="warning" href="/people" />
         <StatCell icon={Users} label="Handover pending" amount={data.peopleStats.totalYouAreOwed} meta={`${data.peopleStats.owedByPeopleCount} people`} accent="success" href="/people" />

@@ -25,6 +25,9 @@ export interface LoanScheduledPayment {
   date: Date;
   transactionId: string | null;
   deletedAt: Date | null;
+  /** The owning installment — lets a payment be dated against its installment (People statement). */
+  installmentId?: string;
+  scheduleId?: string;
 }
 
 /** True when the schedule is the only record of this payment's money movement (legacy, unlinked). */

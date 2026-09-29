@@ -38,6 +38,8 @@ import { useAccountsStats } from "@/features/accounts/hooks/use-accounts-data";
 import { useCreditCardTotals } from "@/features/credit-cards/hooks/use-credit-cards-data";
 import { useEmiRows } from "@/features/emi/hooks/use-emi-data";
 import { useLoanRows } from "@/features/loans/hooks/use-loans-data";
+import { loanCycleDues, loanCycleDueTotals, type LoanCycleDue } from "@/lib/engines/loan-cycle-dues";
+import { formatCurrency } from "@/lib/format";
 import { usePeopleRows, usePeopleStats } from "@/features/people/hooks/use-people-data";
 import { useUserPreferences } from "@/features/settings/hooks/use-user-preferences";
 import { CycleAnchor } from "@/lib/engines/cycle-engine";
@@ -403,26 +405,35 @@ export function useMonthCycleData() {
     return { items, total, count: items.length };
   }, [emiRows, now, cycleRange]);
 
-  // --- Loan installments due this month ---
+  // --- Loan installments owed this cycle (payable = money I borrowed) — per installment from the
+  //     Loan's own schedule (`loanCycleDues`): each installment lands in the cycle of its due date,
+  //     at its unpaid remainder, and an unpaid installment from an earlier cycle is carried as its own
+  //     overdue row instead of disappearing. A lent Loan's installments are receivables, not dues. ---
   const loansThisMonth = useMemo(() => {
     const items: MonthCycleUpcomingItem[] = [];
-    let total = 0;
+    const allDues: LoanCycleDue[] = [];
     for (const row of loanRows) {
-      if (row.status === "closed") continue;
-      if (!row.nextDueDate || !isInCycle(row.nextDueDate, cycleRange)) continue;
-      total += row.emiAmount;
-      items.push({
-        id: row.loan.id,
-        title: row.loan.name ?? row.lenderName,
-        subtitle: row.lenderName,
-        amount: row.emiAmount,
-        dueDate: row.nextDueDate,
-        daysLeft: daysLeftIn(row.nextDueDate, now),
-        metaLabel: `Next EMI on ${formatShortDate(row.nextDueDate)}`,
-      });
+      if (row.direction !== "taken") continue;
+      const dues = loanCycleDues({ id: row.loan.id, isClosed: row.loan.isClosed, installments: row.installments }, cycleRange, now);
+      allDues.push(...dues);
+      for (const due of dues) {
+        const paidNote = due.isPartiallyPaid ? ` · ${formatCurrency(due.amountPaid)} of ${formatCurrency(due.amountDue)} paid` : "";
+        items.push({
+          id: `${row.loan.id}:${due.installmentId}`,
+          title: row.loan.name?.trim() || row.lenderName,
+          subtitle: `${row.lenderName} · Installment ${due.sequenceNumber} of ${due.installmentCount}${paidNote}`,
+          amount: due.remaining,
+          dueDate: due.dueDate,
+          daysLeft: daysLeftIn(due.dueDate, now),
+          metaLabel: due.carriedForward
+            ? `Overdue · due ${formatShortDate(due.dueDate)}`
+            : `${due.overdue ? "Overdue · due" : "Due"} ${formatShortDate(due.dueDate)}`,
+        });
+      }
     }
     items.sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime());
-    return { items, total, count: items.length };
+    const { dueThisCycle, carriedOverdue, total } = loanCycleDueTotals(allDues);
+    return { items, total, dueThisCycle, carriedOverdue, count: items.length };
   }, [loanRows, now, cycleRange]);
 
   // --- Credit card statements due this month, unpaid ---

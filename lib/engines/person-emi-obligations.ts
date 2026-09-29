@@ -36,6 +36,8 @@ export interface EmiObligationLoanSource {
   institutionName?: string | null;
   scheduleId: string;
   direction: "given" | "taken";
+  /** The Loan's counterparty (lender for "taken", borrower for "given") — read by the People statement. */
+  personId?: string | null;
   beneficiaryPersonId?: string | null;
   beneficiaryRepaysInstallments?: boolean;
   isClosed: boolean;

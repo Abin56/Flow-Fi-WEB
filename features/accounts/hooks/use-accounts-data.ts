@@ -36,7 +36,8 @@
  */
 
 import { useMemo } from "react";
-import { useAccounts, useNetWorth } from "@/hooks/use-accounts";
+import { useAccounts } from "@/hooks/use-accounts";
+import { useCreditCards } from "@/hooks/use-credit-cards";
 import { useTransactions } from "@/hooks/use-transactions";
 import { compareTransactionsNewestFirst, signedAmount, type Transaction } from "@/lib/models/transaction";
 import type { Account, AccountType } from "@/lib/models/account";
@@ -164,11 +165,16 @@ export interface AccountsStatsSummary {
  * gaps.
  */
 export function useAccountsStats(): { stats: AccountsStatsSummary; isLoading: boolean } {
-  const { data: accounts = [], isLoading } = useAccounts();
-  const totalBalance = useNetWorth();
+  const { data: accounts = [], isLoading: accountsLoading } = useAccounts();
+  const { data: creditCards = [], isLoading: creditCardsLoading } = useCreditCards();
+  const isLoading = accountsLoading || creditCardsLoading;
 
   const stats = useMemo(() => {
-    const list = accounts as Account[];
+    // Card accounts hold a liability (negative balance), not money — keep them out of every
+    // "money you have" figure; the liability is counted in Net Worth and card outstanding.
+    const cardAccountIds = new Set(creditCards.map((c) => c.accountId));
+    const list = (accounts as Account[]).filter((a) => !cardAccountIds.has(a.id));
+    const totalBalance = list.reduce((sum, a) => sum + a.currentBalance, 0);
     const totalInBanks = list
       .filter((a) => a.type === "bank" || a.type === "business")
       .reduce((sum, a) => sum + a.currentBalance, 0);
@@ -184,7 +190,7 @@ export function useAccountsStats(): { stats: AccountsStatsSummary; isLoading: bo
       upcoming7Days: 0,
       upcomingReminders: 0,
     };
-  }, [accounts, totalBalance]);
+  }, [accounts, creditCards]);
 
   return { stats, isLoading };
 }

@@ -13,7 +13,10 @@
  *    those dated entries as-is, so a ₹2,000 share with ₹1,500 received is +2,000 then −1,500 = ₹500 —
  *    never the share again, and never the split's tracking installment (which mirrors the same money).
  *  - Legacy Loan-generated ledger entries (`transactionRef` = a Loan id) are excluded exactly as
- *    `person-position.ts` does — Loans are settled from the Loan, not this statement.
+ *    `person-position.ts` does — Loans are settled from the Loan, not the ledger.
+ *  - Loans with this person as counterparty (`Loan.personId`) → each schedule Installment's `amountDue`
+ *    on its due date (never the principal), settled by its own `amountPaid` (dated by its payments).
+ *    Borrowed from them → I owe them; lent to them → they owe me.
  *  - Person-linked EMI → `personEmiObligations` (`person-emi-obligations.ts`), the same primitive the
  *    People list uses: each opted-in installment adds its `amountDue` once on its due date (never the
  *    financed principal). Paying the lender does NOT settle the Person — only an explicit Person
@@ -116,6 +119,19 @@ export interface PersonCycleStatementInput {
   cycle: StatementCycle;
   /** Only used for the lender-side EMI status shown next to a row (never for amounts). */
   now?: Date;
+  /**
+   * Dated payments on Loan installments — used only to DATE a person-Loan installment's settlements.
+   * The installment's own `amountPaid` stays the amount authority; any part not covered by a dated
+   * payment (payments still loading, legacy data) is dated on the installment's due date.
+   */
+  loanPayments?: readonly StatementLoanPayment[];
+}
+
+export interface StatementLoanPayment {
+  installmentId?: string;
+  amount: number;
+  date: Date;
+  deletedAt: Date | null;
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -126,6 +142,7 @@ export type StatementCategory =
   | "opening"
   | "split"
   | "emi"
+  | "loan"
   | "gave"
   | "borrowed"
   | "adjustment"
@@ -138,6 +155,7 @@ export const CATEGORY_LABEL: Record<StatementCategory, string> = {
   opening: "Opening balance",
   split: "Expense shares",
   emi: "EMI",
+  loan: "Loan installments",
   gave: "Money given",
   borrowed: "Money borrowed",
   adjustment: "Adjustments",
@@ -150,6 +168,7 @@ export const CATEGORY_TYPE_LABEL: Record<StatementCategory, string> = {
   opening: "Opening balance",
   split: "Split expense",
   emi: "EMI",
+  loan: "Loan EMI",
   gave: "Money given",
   borrowed: "Borrowed",
   adjustment: "Adjustment",
@@ -185,6 +204,8 @@ export interface StatementRow {
   remainingNow?: number;
   /** EMI rows only. */
   emi?: { sourceName: string; installmentNumber: number; status: EmiRowStatus };
+  /** Person-Loan installment rows (and their payments): the Loan it belongs to. */
+  loan?: { loanId: string; installmentNumber: number; installmentCount: number; dueDate: Date };
 }
 
 export type StatementDirection = "theyOwe" | "iOwe" | "settled";
@@ -251,6 +272,7 @@ interface RawEvent {
   /** Key of the obligation a settlement applies to. */
   settlesKey?: string;
   emi?: StatementRow["emi"];
+  loan?: StatementRow["loan"];
 }
 
 function ledgerCategory(entry: StatementLedgerEntry): StatementCategory {
@@ -354,6 +376,73 @@ export function collectStatementEvents(input: Omit<PersonCycleStatementInput, "c
     });
   }
 
+  // Loans where this person is the counterparty (`personId`): each installment is a dated obligation
+  // (never the principal), and what has been paid on it is the settlement — the same Installment
+  // documents Loan & EMI, Bills and Month Cycle read, so a payment updates every view at once.
+  // Direction follows the Loan: borrowed from them → I owe them; lent to them → they owe me.
+  // Legacy Loan-generated ledger entries are excluded above, so nothing is counted twice.
+  const paymentsByInstallment = new Map<string, StatementLoanPayment[]>();
+  for (const p of input.loanPayments ?? []) {
+    if (p.deletedAt != null || p.installmentId == null || p.amount <= 0) continue;
+    const list = paymentsByInstallment.get(p.installmentId) ?? [];
+    list.push(p);
+    paymentsByInstallment.set(p.installmentId, list);
+  }
+  for (const loan of loans) {
+    if (loan.deletedAt != null || loan.personId !== person.id) continue;
+    const sign = loan.direction === "taken" ? -1 : 1;
+    const name = loan.name?.trim() || "Loan";
+    const scheduled = installments
+      .filter((i) => i.scheduleId === loan.scheduleId && i.deletedAt == null && !i.isSkipped)
+      .sort((a, b) => a.sequenceNumber - b.sequenceNumber);
+    for (const inst of scheduled) {
+      // A closed (e.g. foreclosed) Loan's never-paid tail was never charged.
+      if (loan.isClosed && inst.amountPaid <= 0) continue;
+      const obligationKey = `loan-inst:${inst.id}`;
+      const loanInfo = { loanId: loan.id, installmentNumber: inst.sequenceNumber, installmentCount: scheduled.length, dueDate: inst.dueDate };
+      push({
+        key: obligationKey,
+        date: inst.dueDate,
+        createdAt: inst.createdAt,
+        order: 1,
+        kind: "obligation",
+        category: "loan",
+        title: name,
+        amount: inst.amountDue,
+        signedAmount: sign * inst.amountDue,
+        loan: loanInfo,
+      });
+      const paid = round2(Math.min(inst.amountPaid, inst.amountDue));
+      if (paid <= 0) continue;
+      // Date the paid amount by its real payments (oldest first), capped at `amountPaid`.
+      let left = paid;
+      const dated = [...(paymentsByInstallment.get(inst.id) ?? [])].sort((a, b) => a.date.getTime() - b.date.getTime());
+      const parts: { amount: number; date: Date }[] = [];
+      for (const p of dated) {
+        if (left <= 0) break;
+        const amount = round2(Math.min(p.amount, left));
+        parts.push({ amount, date: p.date });
+        left = round2(left - amount);
+      }
+      if (left > 0) parts.push({ amount: left, date: inst.dueDate });
+      parts.forEach((part, n) =>
+        push({
+          key: `loan-pay:${inst.id}:${n}`,
+          date: part.date,
+          createdAt: part.date,
+          order: 2,
+          kind: "settlement",
+          category: loan.direction === "taken" ? "repaid" : "received",
+          title: loan.direction === "taken" ? `Paid · ${name}` : `Received · ${name}`,
+          amount: part.amount,
+          signedAmount: -sign * part.amount,
+          settlesKey: obligationKey,
+          loan: loanInfo,
+        }),
+      );
+    }
+  }
+
 
   return events;
 }
@@ -372,7 +461,7 @@ function compareEvents(a: RawEvent, b: RawEvent): number {
 // Statement
 // ---------------------------------------------------------------------------------------------------
 
-const ACTIVITY_ORDER: StatementCategory[] = ["opening", "split", "emi", "gave", "borrowed", "adjustment"];
+const ACTIVITY_ORDER: StatementCategory[] = ["opening", "split", "emi", "loan", "gave", "borrowed", "adjustment"];
 const SETTLEMENT_ORDER: StatementCategory[] = ["received", "repaid"];
 
 function breakdown(rows: StatementRow[], order: StatementCategory[]): BreakdownLine[] {
@@ -431,10 +520,11 @@ export function buildPersonCycleStatement(input: PersonCycleStatementInput): Per
           : undefined,
       settlesKey: original != null ? e.settlesKey : undefined,
       remainingNow:
-        e.kind === "obligation" && (e.category === "split" || e.category === "gave" || e.category === "borrowed" || e.category === "emi")
+        e.kind === "obligation" && (e.category === "split" || e.category === "gave" || e.category === "borrowed" || e.category === "emi" || e.category === "loan")
           ? Math.max(0, round2(e.amount - (settledSoFar.get(e.key) ?? 0)))
           : undefined,
       emi: e.emi,
+      loan: e.loan,
     });
   }
 

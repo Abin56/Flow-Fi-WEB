@@ -20,6 +20,13 @@ export interface CashFlowTransaction {
   effectiveMonth: Date;
   isDeleted: boolean;
   isTransfer: boolean;
+  /**
+   * Posted on a credit-card account. A card purchase/refund moves the card's liability, not cash —
+   * cash only moves when the card is paid (a transfer INTO the card account; see `cashFlowThisMonth`).
+   */
+  isCreditCardAccount?: boolean;
+  /** The cash-side (outgoing) leg of a transfer from a non-card account INTO a credit-card account — a card bill payment. */
+  isCreditCardPayment?: boolean;
 }
 
 export interface CashFlowSummary {
@@ -71,15 +78,20 @@ export function cashFlowThisMonth(params: {
 
   // Transfers between the user's own accounts aren't real income/expense —
   // excluded so a transfer's two legs don't inflate both Money In and Out.
-  const monthTransactions = transactions.filter(
-    (t) => isSameMonth(t.effectiveMonth, now) && !t.isDeleted && !t.isTransfer,
-  );
+  const inMonth = transactions.filter((t) => isSameMonth(t.effectiveMonth, now) && !t.isDeleted);
+  // Card-account purchases/refunds only change the card's liability — cash is untouched until
+  // the card is paid, so they're excluded here (they still count in spending analytics).
+  const monthTransactions = inMonth.filter((t) => !t.isTransfer && !t.isCreditCardAccount);
 
   const income = monthTransactions.filter((t) => t.type === "income").reduce((sum, t) => sum + t.amount, 0);
   const expenses = monthTransactions.filter((t) => t.type === "expense").reduce((sum, t) => sum + t.amount, 0);
+  // A card bill payment is a transfer into the card account: that's when cash actually leaves.
+  const creditCardPayments = inMonth
+    .filter((t) => t.isCreditCardPayment && t.type === "expense")
+    .reduce((sum, t) => sum + t.amount, 0);
 
   const moneyIn = income + moneyReceivedThisMonth + loanReceivedThisMonth;
-  const moneyOut = expenses + emiPaidThisMonth + loanPaidThisMonth + billsPaidThisMonth;
+  const moneyOut = expenses + creditCardPayments + emiPaidThisMonth + loanPaidThisMonth + billsPaidThisMonth;
 
   return { moneyIn, moneyOut, net: moneyIn - moneyOut };
 }

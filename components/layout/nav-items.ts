@@ -1,5 +1,4 @@
 import {
-  Calendar,
   CalendarRange,
   CreditCard,
   LayoutDashboard,
@@ -40,7 +39,6 @@ export type NavSection = "Overview" | "Daily Money" | "Plan" | "Debt" | "Import"
 export const NAV_ITEMS: NavItem[] = [
   { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard, section: "Overview" },
   { label: "Month Cycle", href: "/month-cycle", icon: CalendarRange, section: "Overview" },
-  { label: "Calendar", href: "/calendar", icon: Calendar, section: "Overview" },
 
   { label: "Transactions", href: "/transactions", icon: Receipt, section: "Daily Money" },
   { label: "Accounts", href: "/accounts", icon: Wallet, section: "Daily Money" },

@@ -31,8 +31,9 @@
  */
 
 import { useMemo } from "react";
-import { useAccounts, useNetWorth } from "@/hooks/use-accounts";
+import { useAccounts } from "@/hooks/use-accounts";
 import { useLoanBalanceSheet } from "@/hooks/use-loan-balance-sheet";
+import { liabilityTotals } from "@/lib/engines/loan-balance-sheet";
 import { useCardUtilizationEmis } from "@/hooks/use-card-utilization-emis";
 import { toLiveUtilizationStatement } from "@/features/credit-cards/hooks/use-credit-cards-data";
 import { useBills } from "@/hooks/use-bills";
@@ -60,6 +61,8 @@ import type { Account } from "@/lib/models/account";
 import type { Bill } from "@/lib/models/bill";
 import type { Budget } from "@/lib/models/budget";
 import type { Category } from "@/lib/models/category";
+import { myShare, type Expense } from "@/lib/models/expense";
+import { useExpenses } from "@/hooks/use-expenses";
 import type { CreditCardProfile, Statement } from "@/lib/models/credit-card";
 import { statementRemainingAmount, statementStatus } from "@/lib/models/credit-card";
 import { unbilledSpendForCard } from "@/lib/repositories/credit-card-repository";
@@ -122,6 +125,7 @@ export function useDashboardData() {
   const { data: budgets = [], isLoading: budgetsLoading } = useBudgets();
   const { data: bills = [], isLoading: billsLoading } = useBills();
   const { data: categories = [], isLoading: categoriesLoading } = useCategories();
+  const { data: expenses = [], isLoading: expensesLoading } = useExpenses();
   const { data: creditCards = [], isLoading: creditCardsLoading } = useCreditCards();
   const { data: sharedLimits = [], isLoading: sharedLimitsLoading } = useSharedCreditLimits();
   const { data: statements = [], isLoading: statementsLoading } = useAllCreditCardStatements();
@@ -129,10 +133,8 @@ export function useDashboardData() {
   const { isLoading: emiBreakdownsLoading } = useAllEmiPaymentBreakdowns();
   const { utilizationEmis: cardUtilizationEmis, isLoading: cardEmisLoading } = useCardUtilizationEmis();
 
-  // Accounts Overview keeps the plain account-balance sum; Net Worth adds loan principal
-  // (Decision 6 — see `netWorthWithLoans`).
-  const accountBalancesTotal = useNetWorth();
-  const { netWorth: netWorthAmount, isLoading: balanceSheetLoading } = useLoanBalanceSheet();
+  // Net Worth adds loan principal to account balances (Decision 6 — see `netWorthWithLoans`).
+  const { netWorth: netWorthAmount, sheet: balanceSheet, isLoading: balanceSheetLoading } = useLoanBalanceSheet();
   const cashFlowSummary = useCashFlowThisMonth();
 
   const isLoading =
@@ -141,6 +143,7 @@ export function useDashboardData() {
     budgetsLoading ||
     billsLoading ||
     categoriesLoading ||
+    expensesLoading ||
     creditCardsLoading ||
     sharedLimitsLoading ||
     statementsLoading ||
@@ -150,6 +153,17 @@ export function useDashboardData() {
     balanceSheetLoading;
 
   const now = useMemo(() => new Date(), []);
+
+  // Personal-spending figures (category split, budgets) count only MY share of an expense: an
+  // expense paid for someone else (split, or fully assigned to a person) is a People receivable,
+  // not my consumption. Unlinked transactions count in full.
+  const personalAmount = useMemo(() => {
+    const byTransactionId = new Map((expenses as Expense[]).filter((e) => e.deletedAt == null).map((e) => [e.transactionId, e]));
+    return (t: Transaction) => {
+      const expense = byTransactionId.get(t.id);
+      return expense ? myShare(expense) : t.amount;
+    };
+  }, [expenses]);
 
   // --- Net Worth (lib/engines/loan-balance-sheet.ts:netWorthWithLoans via useLoanBalanceSheet) ---
   // `trend`: direct port of `NetWorthWidgetCard._weeklyTrend` (Finance_App's
@@ -171,14 +185,39 @@ export function useDashboardData() {
         .reduce((sum, t) => sum + signedAmount(t), 0);
       trend.push(running);
     }
-    return { amount: netWorthAmount, changeAmount: 0, changePercent: 0, trend };
-  }, [netWorthAmount, transactions, now]);
+    // Assets / Debt so borrowing is visible even when Net Worth doesn't move (borrowed money in the bank
+    // raises assets and debt together). Debt is the shared `liabilityTotals` (remaining principal, card
+    // debt counted once); the card part is the card accounts' own balances — the same figure Net Worth
+    // already includes — so Assets − Debt always equals the headline exactly.
+    const cardAccountIds = new Set((creditCards as CreditCardProfile[]).map((c) => c.accountId));
+    const cardDebt = -(accounts as Account[]).filter((a) => cardAccountIds.has(a.id)).reduce((s, a) => s + a.currentBalance, 0);
+    const debt = liabilityTotals(balanceSheet, cardDebt);
+    return {
+      amount: netWorthAmount,
+      changeAmount: 0,
+      changePercent: 0,
+      trend,
+      assets: netWorthAmount + debt.total,
+      debt: debt.total,
+      loanDebt: debt.loanDebt,
+    };
+  }, [netWorthAmount, balanceSheet, accounts, creditCards, transactions, now]);
 
   // --- Cash Flow (lib/engines/cash-flow.ts:cashFlowThisMonth via useCashFlowThisMonth) ---
   const cashFlow = useMemo(() => {
+    // Same cash boundary as `cashFlowThisMonth`: card purchases don't move cash; a transfer
+    // paying a card does (counted on its non-card, outgoing leg).
+    const cardAccountIds = new Set((creditCards as CreditCardProfile[]).map((c) => c.accountId));
+    const cardPaymentTransferIds = new Set(
+      (transactions as Transaction[])
+        .filter((t) => t.transferId != null && t.type === "income" && cardAccountIds.has(t.accountId))
+        .map((t) => t.transferId as string),
+    );
     const weekTotals = new Map<string, number>();
     for (const t of transactions as Transaction[]) {
-      if (isNonIncomeExpenseMovement(t) || t.deletedAt != null) continue;
+      if (t.deletedAt != null || cardAccountIds.has(t.accountId)) continue;
+      const isCardPayment = t.transferId != null && t.type === "expense" && cardPaymentTransferIds.has(t.transferId);
+      if (isNonIncomeExpenseMovement(t) && !isCardPayment) continue;
       const effective = effectiveMonth(t);
       if (!isThisMonth(effective, now)) continue;
       const label = weekBucketLabel(t.dateTime.getDate());
@@ -195,13 +234,17 @@ export function useDashboardData() {
       net: cashFlowSummary.net,
       weeks,
     };
-  }, [transactions, now, cashFlowSummary]);
+  }, [transactions, creditCards, now, cashFlowSummary]);
 
   // --- Accounts Overview (direct Account field reads + calculateNetWorth) ---
   const accountsOverview = useMemo(() => {
     const list = accounts as Account[];
+    // Money actually held: card accounts carry a liability (negative balance), not cash — that
+    // liability belongs in Net Worth and Credit Card outstanding, not in "Total balance".
+    const cardAccountIds = new Set((creditCards as CreditCardProfile[]).map((c) => c.accountId));
+    const cashTotal = list.filter((a) => !cardAccountIds.has(a.id)).reduce((sum, a) => sum + a.currentBalance, 0);
     return {
-      totalBalance: accountBalancesTotal,
+      totalBalance: cashTotal,
       changeThisMonth: 0,
       accounts: list.map((account, index) => ({
         id: account.id,
@@ -212,7 +255,7 @@ export function useDashboardData() {
         accent: ACCOUNT_ACCENTS[index % ACCOUNT_ACCENTS.length] as AccountAccent,
       })),
     };
-  }, [accounts, accountBalancesTotal]);
+  }, [accounts, creditCards]);
 
   // --- Expenses by Category (direct Transaction/Category field reads + grouping) ---
   const expensesByCategory = useMemo(() => {
@@ -221,8 +264,10 @@ export function useDashboardData() {
       if (t.type !== "expense" || isNonIncomeExpenseMovement(t) || t.deletedAt != null) continue;
       const effective = effectiveMonth(t);
       if (!isThisMonth(effective, now)) continue;
+      const amount = personalAmount(t);
+      if (amount === 0) continue; // fully someone else's — not my spending
       const name = categoryNameFor(t.categoryId, categories as Category[]);
-      totals.set(name, (totals.get(name) ?? 0) + t.amount);
+      totals.set(name, (totals.get(name) ?? 0) + amount);
     }
     const sorted = Array.from(totals.entries())
       .map(([category, amount]) => ({ category, amount }))
@@ -248,7 +293,7 @@ export function useDashboardData() {
     }
 
     return { total, items };
-  }, [transactions, categories, now]);
+  }, [transactions, categories, now, personalAmount]);
 
   // --- Budgets Overview (lib/engines/budget-insight.ts:resolveBudgetPeriod/computeBudgetInsight) ---
   const budgetsOverview = useMemo(() => {
@@ -266,7 +311,7 @@ export function useDashboardData() {
             t.dateTime.getTime() >= periodStart.getTime() &&
             t.dateTime.getTime() <= periodEnd.getTime(),
         )
-        .reduce((sum, t) => sum + t.amount, 0);
+        .reduce((sum, t) => sum + personalAmount(t), 0);
 
     let monthlyBudget = 0;
     let spent = 0;
@@ -297,7 +342,7 @@ export function useDashboardData() {
     });
 
     return { monthlyBudget, spent, categories: categoryRows };
-  }, [budgets, transactions, categories, now]);
+  }, [budgets, transactions, categories, now, personalAmount]);
 
   // --- Recent Transactions (direct Transaction field reads; signedAmount matches mock's +income/-expense convention) ---
   const recentTransactions = useMemo(() => {

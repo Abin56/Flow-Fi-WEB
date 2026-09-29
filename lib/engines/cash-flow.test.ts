@@ -45,6 +45,36 @@ describe("cashFlowThisMonth", () => {
     expect(summary.moneyIn).toBe(1150);
     expect(summary.moneyOut).toBe(775);
   });
+
+  const noSchedules = { emiPaidThisMonth: 0, loanPaidThisMonth: 0, billsPaidThisMonth: 0, moneyReceivedThisMonth: 0, now: new Date("2026-07-15") };
+
+  it("a credit-card purchase does not reduce cash — it's card liability only", () => {
+    const summary = cashFlowThisMonth({
+      ...noSchedules,
+      transactions: [
+        transaction({ type: "income", amount: 7000 }),
+        transaction({ type: "expense", amount: 1000, isCreditCardAccount: true }),
+      ],
+    });
+    expect(summary.moneyIn).toBe(7000);
+    expect(summary.moneyOut).toBe(0);
+    expect(summary.net).toBe(7000);
+  });
+
+  it("paying the card from a bank is the cash outflow, counted once", () => {
+    const summary = cashFlowThisMonth({
+      ...noSchedules,
+      transactions: [
+        transaction({ type: "income", amount: 7000 }),
+        transaction({ type: "expense", amount: 1000, isCreditCardAccount: true }),
+        // bank → card transfer: bank-side outgoing leg + card-side incoming leg
+        transaction({ type: "expense", amount: 1000, isTransfer: true, isCreditCardPayment: true }),
+        transaction({ type: "income", amount: 1000, isTransfer: true, isCreditCardAccount: true }),
+      ],
+    });
+    expect(summary.moneyOut).toBe(1000);
+    expect(summary.net).toBe(6000);
+  });
 });
 
 describe("moneyReceivedForRange", () => {

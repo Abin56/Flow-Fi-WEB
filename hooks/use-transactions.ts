@@ -10,6 +10,7 @@
 
 import { useQueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
+import { useCreditCards } from "@/hooks/use-credit-cards";
 import { useAllEmiInstallments } from "@/hooks/use-emis";
 import { useLoanScheduledPayments } from "@/hooks/use-loan-scheduled-payments";
 import { scheduleOnlyLoanFlows } from "@/lib/engines/loan-cash-flow";
@@ -80,15 +81,29 @@ export function useCashFlowThisMonth(): CashFlowSummary {
   const { data: expenses } = useExpenses();
   const { installmentsByScheduleId } = useExpenseInstallmentsBySchedule();
 
+  const { data: creditCards } = useCreditCards();
+
   const now = new Date();
 
-  const cashFlowTransactions = (transactions ?? []).map((t) => ({
-    type: t.type,
-    amount: t.amount,
-    effectiveMonth: effectiveMonth(t),
-    isDeleted: t.deletedAt != null,
-    isTransfer: isNonIncomeExpenseMovement(t),
-  }));
+  const creditCardAccountIds = new Set((creditCards ?? []).map((c) => c.accountId));
+  // Transfers whose incoming leg lands on a card account — i.e. card bill payments.
+  const cardPaymentTransferIds = new Set(
+    (transactions ?? [])
+      .filter((t) => t.transferId != null && t.type === "income" && creditCardAccountIds.has(t.accountId))
+      .map((t) => t.transferId as string),
+  );
+  const cashFlowTransactions = (transactions ?? []).map((t) => {
+    const isCreditCardAccount = creditCardAccountIds.has(t.accountId);
+    return {
+      type: t.type,
+      amount: t.amount,
+      effectiveMonth: effectiveMonth(t),
+      isDeleted: t.deletedAt != null,
+      isTransfer: isNonIncomeExpenseMovement(t),
+      isCreditCardAccount,
+      isCreditCardPayment: t.transferId != null && !isCreditCardAccount && cardPaymentTransferIds.has(t.transferId),
+    };
+  });
 
   const dashboardBillOccurrences: DashboardBillOccurrence[] = (billOccurrences ?? []).map((o) => ({
     dueDate: o.dueDate,

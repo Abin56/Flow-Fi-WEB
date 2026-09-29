@@ -1,6 +1,7 @@
 "use client";
 
-import { Check, CircleDot, HandCoins, MoreHorizontal, Pencil, Trash2, Undo2 } from "lucide-react";
+import { AlertCircle, Check, CircleDot, HandCoins, Landmark, MoreHorizontal, Pencil, Trash2, Undo2 } from "lucide-react";
+import Link from "next/link";
 import { useMemo, useState } from "react";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -37,8 +38,28 @@ export const LEDGER_TYPE_SHORT: Record<StatementCategory | "loan", string> = {
   adjustment: "Adjustment",
   received: "Settlement",
   repaid: "Settlement",
-  loan: "Loan",
+  loan: "Loan EMI",
 };
+
+/**
+ * A Loan installment's action — opens that Loan, where its existing payment flow lives. People never
+ * records a Loan payment itself (one payment path, so every view reads the same installment state).
+ */
+export function LoanPayLink({ loanId, className }: { loanId: string; className?: string }) {
+  return (
+    <Link
+      href={`/loans?agreement=${encodeURIComponent(loanId)}`}
+      onClick={(e) => e.stopPropagation()}
+      className={cn(
+        "flex h-7 items-center gap-1.5 rounded-full border border-border-strong bg-card px-2.5 text-xs font-semibold whitespace-nowrap text-foreground outline-none transition-colors hover:border-primary-accent-text hover:bg-primary/10 focus-visible:ring-2 focus-visible:ring-ring",
+        className,
+      )}
+    >
+      <Landmark className="size-3.5 text-primary-accent-text" strokeWidth={2} />
+      Pay
+    </Link>
+  );
+}
 
 /**
  * Expands its content in place (height + fade, ~220ms), pushing what follows down; collapses the same
@@ -145,23 +166,44 @@ const STATE_STYLE: Record<LedgerRowState, string> = {
   settled: "border-success/35 bg-success/10 text-success",
 };
 
-/** "Pending" · "Partially settled · ₹200 left" · "Settled" — a small tag, never a coloured row. */
-export function StatusBadge({ row, compact = false, className }: { row: Pick<LedgerRow, "state" | "remaining">; compact?: boolean; className?: string }) {
+/**
+ * "Pending" · "Partially settled · ₹200 left" · "Settled" — a small tag, never a coloured row. A Loan
+ * installment reads "Overdue" when unpaid past its due date, "Partial" and "Paid" for its payment state.
+ */
+export function StatusBadge({
+  row,
+  compact = false,
+  className,
+}: {
+  row: Pick<LedgerRow, "state" | "remaining"> & Partial<Pick<LedgerRow, "overdue" | "category">>;
+  compact?: boolean;
+  className?: string;
+}) {
   if (row.state == null) return null;
-  const Icon = row.state === "settled" ? Check : CircleDot;
-  const label =
-    row.state === "open"
+  const isLoan = row.category === "loan";
+  const overdue = row.overdue === true && row.state !== "settled";
+  const Icon = row.state === "settled" ? Check : overdue ? AlertCircle : CircleDot;
+  const left = formatCurrency(row.remaining ?? 0);
+  const label = overdue
+    ? row.state === "partial" && !compact
+      ? `Overdue · ${left} left`
+      : "Overdue"
+    : row.state === "open"
       ? "Pending"
       : row.state === "settled"
-        ? "Settled"
+        ? isLoan
+          ? "Paid"
+          : "Settled"
         : compact
-          ? "Partially settled"
-          : `Partially settled · ${formatCurrency(row.remaining ?? 0)} left`;
+          ? isLoan
+            ? "Partial"
+            : "Partially settled"
+          : `${isLoan ? "Partial" : "Partially settled"} · ${left} left`;
   return (
     <span
       className={cn(
         "inline-flex h-5 shrink-0 items-center gap-1 rounded-[4px] border px-1.5 text-[10.5px] leading-none font-semibold whitespace-nowrap",
-        STATE_STYLE[row.state],
+        overdue ? "border-expense/40 bg-expense/10 text-expense" : STATE_STYLE[row.state],
         className,
       )}
     >

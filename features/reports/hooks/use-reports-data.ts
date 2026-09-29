@@ -57,6 +57,8 @@
 import { useMemo } from "react";
 import { useAccounts } from "@/hooks/use-accounts";
 import { useLoanBalanceSheet } from "@/hooks/use-loan-balance-sheet";
+import { useCreditCards } from "@/hooks/use-credit-cards";
+import { liabilityTotals } from "@/lib/engines/loan-balance-sheet";
 import { useBudgets } from "@/hooks/use-budgets";
 import { useCategories } from "@/hooks/use-categories";
 import { useCashFlowThisMonth, useTransactions } from "@/hooks/use-transactions";
@@ -152,36 +154,41 @@ export function useReportsData() {
   }, [transactions, now, cashFlowSummary]);
 
   // --- Assets by real Account.type (replaces the mock's fabricated asset categories) ---
+  // Card accounts are left out: their (negative) balance is card debt, already on the liabilities'
+  // "Credit Cards" line — listing it here too showed the same debt on both sides.
+  const { data: creditCards = [] } = useCreditCards();
   const assetsByAccountType = useMemo<ReportsBreakdownItem[]>(() => {
+    const cardAccountIds = new Set(creditCards.map((c) => c.accountId));
     const totals = new Map<AccountType, number>();
     for (const a of accounts as Account[]) {
+      if (cardAccountIds.has(a.id)) continue;
       totals.set(a.type, (totals.get(a.type) ?? 0) + a.currentBalance);
     }
     return Array.from(totals.entries())
       .map(([type, value]) => ({ name: ACCOUNT_TYPE_LABEL[type], value }))
       .filter((row) => row.value !== 0)
       .sort((a, b) => b.value - a.value);
-  }, [accounts]);
+  }, [accounts, creditCards]);
 
   // --- Liabilities (principal owed BY me) — `loanBalanceSheet` classifies by direction:
   //     money I LENT is a receivable, never a liability; EMIs count principal only (no future
   //     interest); a card-linked EMI is owned by its tracked card and appears once, on the card line
   //     (statement outstanding + the card's locked EMI principal), never again under EMIs. ---
+  // `balanceSheet.cardLockedEmiPrincipal` is the same figure as `creditCardTotals.lockedEmiPrincipal`
+  // (useLoanBalanceSheet feeds it from there), so the card line stays exactly as before.
+  const liabilities = useMemo(() => liabilityTotals(balanceSheet, creditCardTotals.utilized), [balanceSheet, creditCardTotals.utilized]);
   const liabilitiesBreakdown = useMemo<ReportsBreakdownItem[]>(() => {
     return [
-      { name: "Credit Cards", value: creditCardTotals.utilized + creditCardTotals.lockedEmiPrincipal },
-      { name: "Loans I Owe", value: balanceSheet.borrowedPrincipal },
-      { name: "EMIs", value: balanceSheet.emiPrincipal },
+      { name: "Credit Cards", value: liabilities.creditCards },
+      { name: "Loans I Owe", value: liabilities.loans },
+      { name: "EMIs", value: liabilities.emis },
     ].filter((row) => row.value > 0);
-  }, [creditCardTotals, balanceSheet]);
+  }, [liabilities]);
 
   // --- Receivables (principal owed TO me on money I lent) — an asset. ---
   const totalReceivables = balanceSheet.lentPrincipal;
 
-  const totalLiabilities = useMemo(
-    () => liabilitiesBreakdown.reduce((sum, r) => sum + r.value, 0),
-    [liabilitiesBreakdown],
-  );
+  const totalLiabilities = liabilities.total;
 
   // --- Category spending: this month's real expense Transactions, grouped by real Category,
   //     joined with a matching Budget when one exists (mirrors use-dashboard-data.ts's expensesByCategory

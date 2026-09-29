@@ -64,6 +64,8 @@ export function useLoanScheduledPayments(): { payments: LoanScheduledPayment[]; 
               date: p.date,
               transactionId: p.transactionId ?? null,
               deletedAt: p.deletedAt,
+              installmentId: installment.id,
+              scheduleId: installment.scheduleId,
             }),
           );
         }),
