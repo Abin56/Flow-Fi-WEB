@@ -11,6 +11,7 @@ import {
   perspectiveAmount,
   reconciliationLines,
   type PersonCycleStatement,
+  type StatementCategory,
 } from "@/lib/engines/person-cycle-statement";
 
 /** "₹4,750", keeping paise when present. */
@@ -54,6 +55,10 @@ export interface StatementPdfRow {
   description: string;
   type: string;
   isEmi: boolean;
+  /** Display-only metadata from the authoritative statement row; never used for arithmetic. */
+  category?: StatementCategory;
+  status?: string;
+  detail?: string;
   /** Amount that increased the reading-perspective balance, or "". */
   added: string;
   /** Amount that reduced it, or "". */
@@ -90,7 +95,7 @@ export function statementPdfModel(s: PersonCycleStatement): StatementPdfModel {
     summary: rec.map((l) => ({ label: summaryLabels[l.label] ?? l.label, value: money(l.value) })),
     positionHeadline: directionHeadline(s.direction),
     positionAmount: money(s.amount),
-    columns: ["Date", "Description", "Type", "Added", "Settled", "Balance"],
+    columns: ["No.", "Date", "Description", "Type", "Added", "Settled", "Balance", "Status"],
     openingRow: {
       date: shortDate(s.cycle.start),
       description: "Previous pending (brought forward)",
@@ -105,9 +110,12 @@ export function statementPdfModel(s: PersonCycleStatement): StatementPdfModel {
       const detail = r.emi ? ` · Installment #${r.emi.installmentNumber}` : r.settles ? ` · against ${r.settles.title}` : "";
       return {
         date: shortDate(r.date),
-        description: `${r.title}${detail}`,
+        description: r.title,
+        detail: detail.trim().replace(/^·\s*/, ""),
         type: r.typeLabel,
         isEmi: r.category === "emi",
+        category: r.category,
+        status: r.emi ? `Bank: ${r.emi.status}` : r.kind === "settlement" ? "Settled" : "Open",
         added: v > 0 ? money(v) : "",
         settled: v < 0 ? money(-v) : "",
         balance: money(perspectiveAmount(s, r.runningBalance)),

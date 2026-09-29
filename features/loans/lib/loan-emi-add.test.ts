@@ -85,3 +85,35 @@ describe("record classification", () => {
     expect(recordKindForEmi({ loanType: "home", linkedCreditCardId: null }).label).toBe("Home Loan");
   });
 });
+
+describe("'They repay me each installment' opt-in at creation", () => {
+  const cardEmi = (patch: Partial<LoanEmiAddForm>) =>
+    buildLoanEmiCreateRequest(form({ kind: "creditCard", cardId: "c1", name: "Phone", amount: "12000", count: "12", ownership: "someoneElse", beneficiaryPersonId: "pA", ...patch }));
+
+  it("is off by default — the person is only 'who this is for' (no People obligation)", () => {
+    const req = cardEmi({});
+    expect(req.path).toBe("emi");
+    if (req.path !== "emi") return;
+    expect(req.params).toMatchObject({ linkedCreditCardId: "c1", beneficiaryPersonId: "pA", beneficiaryRepaysInstallments: false, principalAmount: 12000, installmentCount: 12 });
+  });
+
+  it("sets beneficiaryRepaysInstallments on a card-funded EMI when ticked", () => {
+    const req = cardEmi({ beneficiaryRepays: true });
+    if (req.path !== "emi") throw new Error("expected EMI");
+    expect(req.params).toMatchObject({ beneficiaryPersonId: "pA", beneficiaryRepaysInstallments: true });
+  });
+
+  it("never sends the opt-in without a beneficiary ('For me')", () => {
+    const req = cardEmi({ ownership: "me", beneficiaryRepays: true });
+    if (req.path !== "emi") throw new Error("expected EMI");
+    expect(req.params).toMatchObject({ beneficiaryPersonId: null, beneficiaryRepaysInstallments: false });
+  });
+
+  it("carries through a borrowed Loan taken for someone else", () => {
+    const req = buildLoanEmiCreateRequest(
+      form({ kind: "borrowed", borrowedFrom: "institutional", lenderName: "HDFC", amount: "12000", ownership: "someoneElse", beneficiaryPersonId: "pA", beneficiaryRepays: true }),
+    );
+    if (req.path !== "loan") throw new Error("expected loan");
+    expect(req.params).toMatchObject({ beneficiaryPersonId: "pA", beneficiaryRepaysInstallments: true });
+  });
+});

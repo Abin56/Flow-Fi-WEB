@@ -100,6 +100,11 @@ export interface CreateEmiParams {
   purchaseTransactionId?: string | null;
   /** "For someone else" — see `Emi.beneficiaryPersonId`. Omit/null for "For me". */
   beneficiaryPersonId?: string | null;
+  /**
+   * The explicit "that person repays me each installment" opt-in (`Emi.beneficiaryRepaysInstallments`),
+   * settable at creation. Only kept with a beneficiary; absent/false = association only.
+   */
+  beneficiaryRepaysInstallments?: boolean;
   dueDayOfMonth?: number | null;
 }
 
@@ -205,6 +210,7 @@ export class EmiRepository extends FirestoreCrudRepository<Emi> {
       linkedCreditCardId = null,
       purchaseTransactionId = null,
       beneficiaryPersonId = null,
+      beneficiaryRepaysInstallments = false,
       dueDayOfMonth = null,
     } = params;
 
@@ -289,6 +295,8 @@ export class EmiRepository extends FirestoreCrudRepository<Emi> {
       linkedCreditCardId,
       purchaseTransactionId,
       beneficiaryPersonId,
+      // Written only when true, like the model's own serializer — association-only EMIs stay flag-free.
+      ...(beneficiaryPersonId != null && beneficiaryRepaysInstallments ? { beneficiaryRepaysInstallments: true } : {}),
       dueDayOfMonth,
       isClosed: false,
       deletedAt: null,

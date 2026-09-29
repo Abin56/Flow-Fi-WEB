@@ -447,6 +447,7 @@ export function SegmentedControl<T extends string>({
   ariaLabel,
   role = "radiogroup",
   size = "md",
+  fullWidth = false,
   className,
 }: {
   options: SegmentOption<T>[];
@@ -456,10 +457,12 @@ export function SegmentedControl<T extends string>({
   /** "tablist" when it switches views, "radiogroup" when it's a form choice. */
   role?: "radiogroup" | "tablist";
   size?: "sm" | "md";
+  /** Keep each option within the available field width instead of sizing to its label. */
+  fullWidth?: boolean;
   className?: string;
 }) {
   return (
-    <div role={role} aria-label={ariaLabel} className={cn("flex w-full gap-1.5 sm:w-auto sm:self-start", className)}>
+    <div role={role} aria-label={ariaLabel} className={cn("flex w-full gap-1.5 sm:self-start", fullWidth ? "sm:w-full" : "sm:w-auto", className)}>
       {options.map(({ value: v, label, icon: Icon, count }) => {
         const active = v === value;
         return (
@@ -472,7 +475,8 @@ export function SegmentedControl<T extends string>({
             onClick={() => onChange(v)}
             className={cn(
               LE_RADIUS.input,
-              "flex min-w-0 flex-1 items-center justify-center gap-2 border whitespace-nowrap transition-[background-color,border-color,color,box-shadow] duration-150 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-card sm:flex-none",
+              "flex min-w-0 flex-1 items-center justify-center gap-2 border whitespace-nowrap transition-[background-color,border-color,color,box-shadow] duration-150 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-card",
+              fullWidth ? "sm:flex-1" : "sm:flex-none",
               size === "md" ? "min-h-10 px-3.5 text-sm" : "min-h-9 px-3 text-[13px]",
               choiceClass(active),
             )}

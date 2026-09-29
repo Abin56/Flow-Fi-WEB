@@ -39,7 +39,9 @@ interface CreditCardTileProps {
 /** Card-stack-style tile styled after real bank card art — a solid gradient face (not a clay surface) so it
  *  reads as "a card" sitting on the page, with the utilization bar flipping to red once usage crosses 80%. */
 export function CreditCardTile({ card, active, onClick, onEdit, onDelete }: CreditCardTileProps) {
-  const utilization = card.creditLimit === 0 ? 0 : Math.min(100, Math.round((card.currentBalance / card.creditLimit) * 100));
+  // The engine's exposure ratio (outstanding + locked card-EMI principal) — recomputing from the account
+  // balance alone hid a card-linked EMI's lock, so the tile disagreed with Available.
+  const utilization = Math.min(100, Math.round(card.utilizationPercent));
   const dueInDays = card.dueDate ? daysUntil(card.dueDate) : null;
   const urgent = dueInDays != null && dueInDays <= 5;
   const highUtilization = utilization >= 80;
@@ -90,8 +92,11 @@ export function CreditCardTile({ card, active, onClick, onEdit, onDelete }: Cred
 
         <div className="relative flex items-end justify-between gap-3">
           <div className="min-w-0">
-            <p className="text-[10.5px] font-semibold tracking-[0.08em] text-white/65 uppercase">Outstanding</p>
-            <p className="text-[24px] leading-tight font-bold tracking-tight tabular-nums">{formatCurrency(card.currentBalance)}</p>
+            <p className="text-[10.5px] font-semibold tracking-[0.08em] text-white/65 uppercase">Credit used</p>
+            <p className="text-[24px] leading-tight font-bold tracking-tight tabular-nums">{formatCurrency(card.usedCredit)}</p>
+            {card.lockedEmiPrincipal > 0 && (
+              <p className="text-[11px] text-white/75 tabular-nums">incl. {formatCurrency(card.lockedEmiPrincipal)} EMI locked</p>
+            )}
           </div>
           <div className="text-right">
             <p className="text-[10.5px] font-semibold tracking-[0.08em] text-white/65 uppercase">Limit</p>

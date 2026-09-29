@@ -366,6 +366,9 @@ export function CreditCardsWorkspace() {
   const totals = {
     creditLimit: engineTotals.creditLimit,
     utilized: engineTotals.utilized,
+    usedCredit: engineTotals.usedCredit,
+    lockedEmiPrincipal: engineTotals.lockedEmiPrincipal,
+    utilizationPercent: engineTotals.utilizationPercent,
     available: engineTotals.available,
     spentThisMonth: engineTotals.spentThisMonth,
   };
@@ -751,8 +754,9 @@ export function CreditCardsWorkspace() {
     );
   }
 
-  // Display-only share of the combined limit in use (same ratio the tiles show per card).
-  const totalUtilization = totals.creditLimit > 0 ? Math.min(100, Math.round((totals.utilized / totals.creditLimit) * 100)) : 0;
+  // The engine's exposure ratio (outstanding + locked card-EMI principal) — the same one `available` uses,
+  // so "used" and "available" always add up to the limit. Rounded/capped for display only.
+  const totalUtilization = Math.min(100, Math.round(totals.utilizationPercent));
 
   return (
     <div className="flex min-w-0 flex-col gap-5 px-1">
@@ -763,9 +767,15 @@ export function CreditCardsWorkspace() {
         <div className="flex flex-col gap-2 bg-gradient-to-br from-expense/[0.08] to-transparent px-5 py-4 sm:px-6 lg:min-w-[22rem] lg:border-r lg:border-border-strong/50 dark:from-expense/[0.14]">
           <span className={cn(CC_LABEL, "inline-flex items-center gap-1.5")}>
             <PieChartIcon className="size-3.5 text-foreground" strokeWidth={1.75} />
-            Total outstanding
+            Credit used
           </span>
-          <p className="text-[32px] leading-none font-bold tracking-tight text-foreground tabular-nums sm:text-[36px]">{formatCurrency(totals.utilized)}</p>
+          <p className="text-[32px] leading-none font-bold tracking-tight text-foreground tabular-nums sm:text-[36px]">{formatCurrency(totals.usedCredit)}</p>
+          {totals.lockedEmiPrincipal > 0 && (
+            <p className="text-xs text-muted-foreground tabular-nums">
+              Outstanding <span className="font-semibold text-foreground">{formatCurrency(totals.utilized)}</span> · EMI locked{" "}
+              <span className="font-semibold text-foreground">{formatCurrency(totals.lockedEmiPrincipal)}</span>
+            </p>
+          )}
           <div className="flex items-center gap-2.5">
             <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-secondary">
               <div className={cn("h-full rounded-full", totalUtilization >= 80 ? "bg-expense" : "bg-primary-accent-text")} style={{ width: `${totalUtilization}%` }} />
@@ -835,7 +845,7 @@ export function CreditCardsWorkspace() {
                   <thead>
                     <tr>
                       <th className={CC_TH}>Card</th>
-                      <th className={cn(CC_TH, "hidden w-36 text-right sm:table-cell")}>Outstanding</th>
+                      <th className={cn(CC_TH, "hidden w-36 text-right sm:table-cell")}>Used</th>
                       <th className={cn(CC_TH, "hidden w-36 text-right md:table-cell")}>Limit</th>
                       <th className={cn(CC_TH, "w-36")}>Utilization</th>
                     </tr>
@@ -860,7 +870,10 @@ export function CreditCardsWorkspace() {
                             </div>
                           </td>
                           <td className={cn(CC_TD, "hidden text-right sm:table-cell")}>
-                            <span className="text-[16px] font-bold text-foreground tabular-nums">{formatCurrency(card.currentBalance)}</span>
+                            <span className="text-[16px] font-bold text-foreground tabular-nums">{formatCurrency(card.usedCredit)}</span>
+                            {card.lockedEmiPrincipal > 0 && (
+                              <span className="block text-[11px] text-muted-foreground tabular-nums">incl. {formatCurrency(card.lockedEmiPrincipal)} EMI</span>
+                            )}
                           </td>
                           <td className={cn(CC_TD, "hidden text-right text-foreground/85 tabular-nums md:table-cell")}>{formatCurrency(card.creditLimit)}</td>
                           <td className={CC_TD}>
@@ -1029,8 +1042,13 @@ export function CreditCardsWorkspace() {
                   </div>
                 </div>
                 <div>
-                  <p className="text-[11px] font-semibold tracking-[0.06em] text-white/70 uppercase">Outstanding</p>
-                  <p className="text-[30px] leading-tight font-bold tracking-tight tabular-nums">{formatCurrency(activeCard.currentBalance)}</p>
+                  <p className="text-[11px] font-semibold tracking-[0.06em] text-white/70 uppercase">Credit used</p>
+                  <p className="text-[30px] leading-tight font-bold tracking-tight tabular-nums">{formatCurrency(activeCard.usedCredit)}</p>
+                  {activeCard.lockedEmiPrincipal > 0 && (
+                    <p className="text-xs text-white/80 tabular-nums">
+                      Outstanding {formatCurrency(activeCard.currentBalance)} · EMI locked {formatCurrency(activeCard.lockedEmiPrincipal)}
+                    </p>
+                  )}
                 </div>
                 <div>
                   <div className="flex items-center justify-between text-xs text-white/75">

@@ -105,6 +105,11 @@ export interface CreateLoanParams {
   payerPersonId?: string | null;
   /** "For someone else" — see `Loan.beneficiaryPersonId`. Stored null on a "given" Loan. */
   beneficiaryPersonId?: string | null;
+  /**
+   * The explicit "that person repays me each installment" opt-in (`Loan.beneficiaryRepaysInstallments`),
+   * settable at creation. Only kept on a taken Loan that has a beneficiary; absent/false = association only.
+   */
+  beneficiaryRepaysInstallments?: boolean;
   name?: string | null;
   interest?: LoanInterest | null;
   dueDate?: Date | null;
@@ -254,6 +259,7 @@ function normalizeCreateLoanParams(params: CreateLoanParams): NormalizedCreateLo
     branch: params.branch ?? null,
     payerPersonId: params.payerPersonId ?? null,
     beneficiaryPersonId: params.beneficiaryPersonId ?? null,
+    beneficiaryRepaysInstallments: params.beneficiaryRepaysInstallments === true,
     name: params.name ?? null,
     interest: params.interest ?? null,
     dueDate: params.dueDate ?? null,
@@ -361,6 +367,8 @@ function buildLoanDocument(p: NormalizedCreateLoan, loanId: string, scheduleId: 
     payerPersonId: p.payerPersonId,
     // Only borrowing can be "for someone else"; a lent Loan's person is its borrower (`personId`).
     beneficiaryPersonId: p.direction === "taken" ? p.beneficiaryPersonId : null,
+    // Written only when true, like the model's own serializer — legacy/association-only Loans stay flag-free.
+    ...(p.direction === "taken" && p.beneficiaryPersonId != null && p.beneficiaryRepaysInstallments ? { beneficiaryRepaysInstallments: true } : {}),
     loanAmount: p.loanAmount,
     interest: p.interest,
     loanDate: p.loanDate,

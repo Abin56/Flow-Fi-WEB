@@ -263,7 +263,7 @@ export function LoanEmiAddDialog({ open, onOpenChange, initialKind = null }: Loa
                   <SegmentedControl<CardEmiKind>
                     ariaLabel="Card EMI kind"
                     size="sm"
-                    className="sm:w-full"
+                    fullWidth
                     options={[
                       { value: "productPurchase", label: "Purchase" },
                       { value: "creditCardLoan", label: "Card loan" },
@@ -481,6 +481,25 @@ export function LoanEmiAddDialog({ open, onOpenChange, initialKind = null }: Loa
               personId={form.beneficiaryPersonId}
               onChange={({ choice, personId }) => set({ ownership: choice, beneficiaryPersonId: personId })}
             />
+            {form.ownership === "someoneElse" && form.beneficiaryPersonId !== "" && (
+              // The explicit opt-in — without it the person is only "who this was for" and owes nothing.
+              <label className="mt-2 flex cursor-pointer items-start gap-2.5 rounded-[6px] border border-border-strong bg-card px-3 py-2.5">
+                <input
+                  type="checkbox"
+                  checked={form.beneficiaryRepays}
+                  onChange={(e) => set({ beneficiaryRepays: e.target.checked })}
+                  className="mt-0.5 size-4 shrink-0 accent-[var(--color-primary-accent-text)]"
+                />
+                <span className="min-w-0">
+                  <span className="block text-sm font-medium text-foreground">
+                    {people.find((p) => p.id === form.beneficiaryPersonId)?.name ?? "They"} repay me each installment
+                  </span>
+                  <span className="block text-xs text-muted-foreground">
+                    Each installment is added to their People Ledger on its due date — never the full amount at once.
+                  </span>
+                </span>
+              </label>
+            )}
           </FormSection>
         </Reveal>
       )}

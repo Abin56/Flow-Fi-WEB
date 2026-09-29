@@ -59,6 +59,11 @@ export interface LoanEmiAddForm {
   accountId: string;
   ownership: OwnershipChoice;
   beneficiaryPersonId: string;
+  /**
+   * "They repay me each installment" — the explicit opt-in (`beneficiaryRepaysInstallments`) that makes
+   * each installment a People obligation on its due date. Off = "who is this for" association only.
+   */
+  beneficiaryRepays: boolean;
   /** Borrowed only — someone else who pays the installments. */
   payerPersonId: string;
   /** Bank borrowing only — reference fields. */
@@ -94,6 +99,7 @@ export function emptyLoanEmiAddForm(kind: AddKind | null = null, idempotencyKey 
     accountId: "",
     ownership: "me",
     beneficiaryPersonId: "",
+    beneficiaryRepays: false,
     payerPersonId: "",
     loanType: "",
     loanNumber: "",
@@ -223,6 +229,7 @@ export function buildLoanEmiCreateRequest(form: LoanEmiAddForm): LoanEmiCreateRe
         branch: institutional ? form.branch.trim() || null : null,
         payerPersonId: kind === "borrowed" ? form.payerPersonId || null : null,
         beneficiaryPersonId: beneficiaryOf(form),
+        beneficiaryRepaysInstallments: kind === "borrowed" && beneficiaryOf(form) != null && form.beneficiaryRepays,
         movementAccountId: movesMoney ? form.accountId : null,
         idempotencyKey: movesMoney ? form.idempotencyKey : undefined,
       },
@@ -238,6 +245,7 @@ export function buildLoanEmiCreateRequest(form: LoanEmiAddForm): LoanEmiCreateRe
       loanType: card ? "creditCard" : form.emiType,
       linkedCreditCardId: card ? form.cardId : null,
       beneficiaryPersonId: beneficiaryOf(form),
+      beneficiaryRepaysInstallments: beneficiaryOf(form) != null && form.beneficiaryRepays,
       principalAmount: Number(form.amount),
       startDate: firstEmiDate,
       installmentFrequency: form.frequency,

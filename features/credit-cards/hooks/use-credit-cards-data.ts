@@ -274,7 +274,14 @@ export function useCreditCardStandings(): { standings: CreditCardStandingView[];
 
 export interface CreditCardTotals {
   creditLimit: number;
+  /** Statement/card-account outstanding only (what gets billed). */
   utilized: number;
+  /**
+   * Credit in use = `utilized + lockedEmiPrincipal` — the same exposure `utilizationPercent` and
+   * `available` already use, so Used + Available = Limit. A card-linked EMI with no recorded purchase
+   * (Case B/C) is in here through its lock, never as a purchase transaction.
+   */
+  usedCredit: number;
   /** Card-linked EMI principal still locked (deduped for shared limits) — card-owned liability, Decision 3. */
   lockedEmiPrincipal: number;
   available: number;
@@ -316,6 +323,7 @@ export function useCreditCardTotals(): { totals: CreditCardTotals; isLoading: bo
     return {
       creditLimit,
       utilized,
+      usedCredit: utilized + lockedEmiPrincipal,
       lockedEmiPrincipal,
       available,
       spentThisMonth,
@@ -407,7 +415,12 @@ export interface CreditCardViewItem {
   network: string;
   last4: string;
   creditLimit: number;
+  /** Card-account outstanding (statement liability) — what gets billed. */
   currentBalance: number;
+  /** Card-linked EMI principal still locked against this card's limit (engine `lockedEmiPrincipal`). */
+  lockedEmiPrincipal: number;
+  /** Credit in use = `currentBalance + lockedEmiPrincipal` — pairs with `available` / `utilizationPercent`. */
+  usedCredit: number;
   /** Engine-computed via `availableCredit()` — accounts for EMI-locked principal, unlike creditLimit - currentBalance. */
   available: number;
   /** Engine-computed via `creditUtilizationPercent()` — the shared source of truth every screen should read instead of hand-rolling outstanding/creditLimit. */
@@ -463,6 +476,8 @@ function toViewItem(
     last4: card.lastFourDigits ?? "----",
     creditLimit: card.creditLimit,
     currentBalance: standing.outstanding,
+    lockedEmiPrincipal: standing.lockedEmiPrincipal,
+    usedCredit: standing.outstanding + standing.lockedEmiPrincipal,
     available: standing.available,
     utilizationPercent: standing.utilizationPercent,
     statementDate: nextDueStatement ? nextDueStatement.periodEnd : null,

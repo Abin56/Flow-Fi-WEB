@@ -216,6 +216,8 @@ export interface CreateLoanFormParams {
   payerPersonId?: string | null;
   /** "For someone else" — see `Loan.beneficiaryPersonId`. */
   beneficiaryPersonId?: string | null;
+  /** That person repays me each installment — see `Loan.beneficiaryRepaysInstallments`. */
+  beneficiaryRepaysInstallments?: boolean;
   repaymentType?: CreateLoanParams["repaymentType"];
   dueDate?: Date | null;
   agreementKind?: CreateLoanParams["agreementKind"];
@@ -305,6 +307,7 @@ export function useLoanActions() {
           branch: params.category === "institutional" ? params.branch : null,
           payerPersonId: params.payerPersonId,
           beneficiaryPersonId: params.beneficiaryPersonId,
+          beneficiaryRepaysInstallments: params.beneficiaryRepaysInstallments,
         };
         if (params.movementAccountId) {
           if (!params.idempotencyKey) throw new Error("Missing idempotency key for an account-linked loan");
