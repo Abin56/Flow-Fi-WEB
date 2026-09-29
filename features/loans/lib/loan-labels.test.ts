@@ -12,8 +12,8 @@ describe("Loan action copy", () => {
   });
 
   it("additional-amount wording follows the loan direction", () => {
-    expect(additionalAmountCopy("taken")).toEqual({ label: "Borrow More", description: "Add more money received under this loan." });
-    expect(additionalAmountCopy("given")).toEqual({ label: "Lend More", description: "Add more money given under this loan." });
+    expect(additionalAmountCopy("taken")).toEqual({ label: "Receive More Money", description: "Add more money you received under this loan." });
+    expect(additionalAmountCopy("given")).toEqual({ label: "Give More Money", description: "Add more money you gave under this loan." });
   });
 });
 
@@ -35,9 +35,9 @@ describe("historyEntryTitle", () => {
     expect(historyEntryTitle({ kind: "payment", allocationType: "advanceEmi", partial: false }, "taken")).toBe("Advance EMI");
     expect(historyEntryTitle({ kind: "payment", allocationType: "principalPrepayment", partial: false }, "taken")).toBe("Extra principal payment");
   });
-  it("additional amounts read as Borrowed more / Lent more", () => {
-    expect(historyEntryTitle({ kind: "additionalAmount" }, "taken")).toBe("Borrowed more");
-    expect(historyEntryTitle({ kind: "additionalAmount" }, "given")).toBe("Lent more");
+  it("additional amounts make the money direction explicit", () => {
+    expect(historyEntryTitle({ kind: "additionalAmount" }, "taken")).toBe("Additional money received");
+    expect(historyEntryTitle({ kind: "additionalAmount" }, "given")).toBe("Additional money given");
   });
 });
 
@@ -50,21 +50,21 @@ describe("loanTransactionLabel", () => {
     expect(loanTransactionLabel({ loanId: "l1", paymentAllocationType: null, type: "expense" }, home)).toBeNull();
   });
 
-  it("borrowed loan labels", () => {
+  it("loan I took labels", () => {
     expect(loanTransactionLabel({ loanId: "l1", paymentAllocationType: "regularEmi", type: "expense" }, home)).toBe("Loan Installment — Home Loan");
     expect(loanTransactionLabel({ loanId: "l1", paymentAllocationType: "advanceEmi", type: "expense" }, home)).toBe("Advance Loan Installment — Home Loan");
     expect(loanTransactionLabel({ loanId: "l1", paymentAllocationType: "principalPrepayment", type: "expense" }, home)).toBe("Extra Principal Payment — Home Loan");
-    expect(loanTransactionLabel({ loanId: "l1", paymentAllocationType: "additionalDisbursement", type: "income" }, home)).toBe("Borrowed More — Home Loan");
+    expect(loanTransactionLabel({ loanId: "l1", paymentAllocationType: "additionalDisbursement", type: "income" }, home)).toBe("Additional Money Received — Home Loan");
   });
 
-  it("lent loan labels", () => {
+  it("loan I gave labels", () => {
     expect(loanTransactionLabel({ loanId: "l2", paymentAllocationType: "regularEmi", type: "income" }, rahul)).toBe("Loan Repayment Received — Rahul Loan");
-    expect(loanTransactionLabel({ loanId: "l2", paymentAllocationType: "additionalDisbursement", type: "expense" }, rahul)).toBe("Lent More — Rahul Loan");
+    expect(loanTransactionLabel({ loanId: "l2", paymentAllocationType: "additionalDisbursement", type: "expense" }, rahul)).toBe("Additional Money Given — Rahul Loan");
   });
 
   it("falls back to the stored transaction type for direction when the loan is gone, without a name", () => {
-    expect(loanTransactionLabel({ loanId: "gone", paymentAllocationType: "additionalDisbursement", type: "expense" }, null)).toBe("Lent More");
-    expect(loanTransactionLabel({ loanId: "gone", paymentAllocationType: "additionalDisbursement", type: "income" }, null)).toBe("Borrowed More");
+    expect(loanTransactionLabel({ loanId: "gone", paymentAllocationType: "additionalDisbursement", type: "expense" }, null)).toBe("Additional Money Given");
+    expect(loanTransactionLabel({ loanId: "gone", paymentAllocationType: "additionalDisbursement", type: "income" }, null)).toBe("Additional Money Received");
     expect(loanTransactionLabel({ loanId: "gone", paymentAllocationType: "regularEmi", type: "income" }, null)).toBe("Loan Repayment Received");
     expect(loanTransactionLabel({ loanId: "gone", paymentAllocationType: "regularEmi", type: "expense" }, null)).toBe("Loan Installment");
   });

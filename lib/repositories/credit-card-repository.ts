@@ -494,10 +494,53 @@ export function unbilledSpendForCard(
     new Date(0),
   );
   const now = new Date();
+  // Incoming transfer legs are bill payments (see `isCardBillPaymentLeg`) — they settle the
+  // liability via `settleCardPayments`, never add to it as spend.
   const totalAmount = cardTransactions
-    .filter((t) => t.deletedAt == null && t.dateTime.getTime() > billedThrough.getTime())
+    .filter((t) => t.deletedAt == null && !isCardBillPaymentLeg(t) && t.dateTime.getTime() > billedThrough.getTime())
     .reduce((sum, t) => sum + t.amount, 0);
   return { periodStart: billedThrough, periodEnd: now, totalAmount };
+}
+
+/**
+ * The card-side (income) leg of a transfer INTO the card account — i.e. a bill payment from a
+ * bank/cash account (`createTransferPair` with the card as destination). Its cash-side twin is the
+ * expense leg `cash-flow.ts` counts as `isCreditCardPayment`.
+ */
+export function isCardBillPaymentLeg(t: Transaction): boolean {
+  return t.type === "income" && isTransfer(t);
+}
+
+/** Sum of every live bill payment received on a card account. */
+export function cardPaymentTotal(cardTransactions: Transaction[]): number {
+  return cardTransactions
+    .filter((t) => t.deletedAt == null && isCardBillPaymentLeg(t))
+    .reduce((sum, t) => sum + t.amount, 0);
+}
+
+/**
+ * Reconciles `paymentTotal` against the card's liability: settles statements oldest-due first
+ * (raising each one's `amountPaid` up to its total), then applies whatever is left to the unbilled
+ * spend (floored at 0). Returns the adjusted statements (same order as given) and unbilled total —
+ * `statementStatus`/`statementRemainingAmount` then yield Paid/Partial/remaining as usual.
+ */
+export function settleCardPayments<S extends { dueDate: Date; totalAmount: number; amountPaid: number }>(
+  statements: S[],
+  unbilledTotal: number,
+  paymentTotal: number,
+): { statements: S[]; unbilledTotal: number } {
+  let left = Math.max(paymentTotal, 0);
+  const extraById = new Map<S, number>();
+  for (const s of [...statements].sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime())) {
+    if (left <= 0) break;
+    const applied = Math.min(Math.max(s.totalAmount - s.amountPaid, 0), left);
+    if (applied > 0) extraById.set(s, applied);
+    left -= applied;
+  }
+  return {
+    statements: statements.map((s) => (extraById.has(s) ? { ...s, amountPaid: s.amountPaid + extraById.get(s)! } : s)),
+    unbilledTotal: Math.max(unbilledTotal - left, 0),
+  };
 }
 
 // --- StatementRepository (statement_repository.dart) ---

@@ -30,8 +30,8 @@ describe("unified workspace model", () => {
   it("summarizes borrowed and lent principal separately", () => expect(summarizeUnifiedAgreements(agreements)).toMatchObject({ liabilityPrincipal: 92000, receivablePrincipal: 25000 }));
   it("does not inflate liability for a card-owned EMI plan", () => expect(summarizeUnifiedAgreements([emi]).liabilityPrincipal).toBe(0));
   it("presents borrowed, lent, standard EMI, and card EMI relationships plainly", () => {
-    expect(agreementCardPresentation(base).relationship).toBe("Money I Borrowed");
-    expect(agreementCardPresentation(lent).relationship).toBe("Money I Lent");
+    expect(agreementCardPresentation(base).relationship).toBe("Loan I Took");
+    expect(agreementCardPresentation(lent).relationship).toBe("Loan I Gave");
     expect(agreementCardPresentation({ ...emi, fundingSource: "other", creditCardId: null }).relationship).toBe("Installment Purchase · Other");
     expect(agreementCardPresentation(emi)).toMatchObject({ relationship: "Installment Purchase · Credit Card", representedOnCard: true });
   });

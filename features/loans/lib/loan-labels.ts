@@ -31,8 +31,8 @@ export const PAY_MULTIPLE_EMIS = {
 
 export function additionalAmountCopy(direction: LoanDirection): { label: string; description: string } {
   return direction === "given"
-    ? { label: "Lend More", description: "Add more money given under this loan." }
-    : { label: "Borrow More", description: "Add more money received under this loan." };
+    ? { label: "Give More Money", description: "Add more money you gave under this loan." }
+    : { label: "Receive More Money", description: "Add more money you received under this loan." };
 }
 
 /** Whether money comes INTO the user's account for this loan operation — decided by the loan's
@@ -46,14 +46,14 @@ export function historyEntryTitle(
   entry: { kind: "payment"; allocationType: PaymentAllocationType; partial: boolean } | { kind: "additionalAmount" },
   direction: LoanDirection,
 ): string {
-  if (entry.kind === "additionalAmount") return direction === "given" ? "Lent more" : "Borrowed more";
+  if (entry.kind === "additionalAmount") return direction === "given" ? "Additional money given" : "Additional money received";
   switch (entry.allocationType) {
     case "principalPrepayment":
       return "Extra principal payment";
     case "advanceEmi":
       return "Advance EMI";
     case "additionalDisbursement":
-      return direction === "given" ? "Lent more" : "Borrowed more";
+      return direction === "given" ? "Additional money given" : "Additional money received";
     default:
       return entry.partial ? "Partial EMI" : "EMI payment";
   }
@@ -74,7 +74,7 @@ export function loanTransactionLabel(
   if (transaction.id != null && isOriginationTransactionId(transaction.id)) {
     const base = transaction.paymentAllocationType == null
       ? "Down Payment"
-      : transaction.type === "income" ? "Loan Received" : "Money Lent";
+      : transaction.type === "income" ? "Loan I Took" : "Loan I Gave";
     const name = loan?.name?.trim();
     return name ? `${base} — ${name}` : base;
   }
@@ -91,7 +91,7 @@ export function loanTransactionLabel(
       case "advanceEmi":
         return direction === "given" ? "Advance Repayment Received" : "Advance Loan Installment";
       case "additionalDisbursement":
-        return direction === "given" ? "Lent More" : "Borrowed More";
+        return direction === "given" ? "Additional Money Given" : "Additional Money Received";
       default:
         return direction === "given" ? "Loan Repayment Received" : "Loan Installment";
     }

@@ -3,6 +3,9 @@
 import {
   ArrowDownLeft,
   ArrowLeftRight,
+  ArrowLeft,
+  ArrowRight,
+  ArrowUpDown,
   ArrowUpRight,
   Calendar,
   ChevronDown,
@@ -25,6 +28,7 @@ import {
   StickyNote,
   Tag,
   Trash2,
+  User,
   Upload,
   Wallet,
   X,
@@ -46,7 +50,7 @@ import { usePeople } from "@/hooks/use-people";
 import { useExpenses } from "@/hooks/use-expenses";
 import type { Account } from "@/lib/models/account";
 import type { Category } from "@/lib/models/category";
-import type { SplitType } from "@/lib/models/expense";
+import { isSplit as isSplitExpense, type SplitType } from "@/lib/models/expense";
 import type { Person } from "@/lib/models/person";
 import { compareTransactionsNewestFirst, type Transaction } from "@/lib/models/transaction";
 import { startOperation } from "@/store/operation-progress-store";
@@ -71,6 +75,12 @@ import { cn } from "@/lib/utils";
  * only an actual EMI should ever read "EMI". Returns null for anything not tied to a loan/EMI so
  * ordinary transactions stay untagged.
  */
+/** "Assign to a person" — same rule as `isOwed` in `owes-person-transition.ts`: an expense whose
+ *  `linkedPersonId` is set with `owesPersonToggle` on. A reference-only link (toggle off) is not one. */
+function isAssignedToPerson(transaction: Pick<Transaction, "type" | "linkedPersonId" | "owesPersonToggle">): boolean {
+  return transaction.type === "expense" && transaction.linkedPersonId != null && transaction.owesPersonToggle;
+}
+
 function loanTagFor(transaction: Pick<Transaction, "loanId" | "emiId">): { label: string } | null {
   if (transaction.emiId != null) return { label: "EMI" };
   if (transaction.loanId != null) return { label: "Loan" };
@@ -172,6 +182,22 @@ export function TransactionsWorkspace() {
   const { data: people = [] } = usePeople();
   const { data: expenses = [] } = useExpenses();
   const expenseByTransactionId = useMemo(() => new Map(expenses.map((e) => [e.transactionId, e])), [expenses]);
+  // "Assign to a person" also creates an `Expense` (via `convertToAssigned`), so having an Expense is
+  // not what makes a row a split. The authoritative assignment marker is the one `applyOwesPersonChange`
+  // uses (`isOwed`): an expense transaction with `linkedPersonId` AND `owesPersonToggle`. A row is a Split
+  // only when its Expense is a real split (`isSplit`) and it is NOT such an assignment.
+  const personNameById = useMemo(() => new Map(people.map((p) => [p.id, p.name])), [people]);
+  const splitTransactionIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const r of rows) {
+      const t = r.transaction;
+      const expense = expenseByTransactionId.get(t.id);
+      if (expense && isSplitExpense(expense) && !isAssignedToPerson(t)) ids.add(t.id);
+    }
+    return ids;
+  }, [rows, expenseByTransactionId]);
+  const assigneeFor = (t: Transaction): string | null =>
+    isAssignedToPerson(t) ? (personNameById.get(t.linkedPersonId!) ?? "a person") : null;
   // Loan-generated rows read as "Loan EMI — Home Loan" / "Extra Principal Payment — …" from their
   // persisted loan metadata instead of the raw stored description; every other row is unchanged.
   const { data: loans = [] } = useLoans();
@@ -731,7 +757,8 @@ export function TransactionsWorkspace() {
                 total={count}
                 duplicateIds={duplicateTransactionIds}
                 displayDescription={displayDescription}
-                isSplit={(id) => expenseByTransactionId.has(id)}
+                isSplit={(id) => splitTransactionIds.has(id)}
+                assigneeFor={assigneeFor}
                 onOpen={openDetails}
                 onDelete={setQuickDeleteRow}
               />
@@ -759,14 +786,14 @@ export function TransactionsWorkspace() {
                           <Icon className="size-4" />
                         </span>
                         <span className="min-w-0 flex-1">
-                          <span className="block truncate text-sm font-semibold text-foreground">{displayDescription(t) || "(No description)"}</span>
+                          <span className="block truncate text-sm font-semibold text-foreground">{displayDescription(t) || (t.transferId ? TRANSFER_SIDE_LABEL[transferSideOf(t)] : "(No description)")}</span>
                           <span className="block truncate text-xs text-muted-foreground">
                             {shortDate(t.dateTime)} {t.dateTime.getFullYear()} · {row.category?.name ?? "Uncategorized"} · {row.account?.name ?? "Unknown"}
                           </span>
                         </span>
                         <Amount transaction={t} />
                       </span>
-                      <TxnBadges transaction={t} isSplit={expenseByTransactionId.has(t.id)} isDuplicate={isDuplicate} />
+                      <TxnBadges transaction={t} isSplit={splitTransactionIds.has(t.id)} assignedTo={assigneeFor(t)} isDuplicate={isDuplicate} />
                     </button>
                   );
                 })}
@@ -1144,29 +1171,36 @@ const flowOf = (t: Transaction): Flow => (t.transferId ? "transfer" : t.type ===
 const FLOW_LABEL: Record<Flow, string> = { in: "Money in", out: "Money out", transfer: "Transfer" };
 const TYPE_LABEL: Record<Flow, string> = { in: "Income", out: "Expense", transfer: "Transfer" };
 
+/** Which side of a transfer a leg is — read from the leg's stored type exactly as
+ *  `TransactionRepository.createTransfer` writes it (source leg = "expense", destination = "income"). */
+const transferSideOf = (t: Transaction): "sent" | "received" => (t.type === "income" ? "received" : "sent");
+const TRANSFER_SIDE_LABEL = { sent: "Transfer sent", received: "Transfer received" } as const;
+
 /**
  * The row's headline figure, read by direction — money in (green), money out (strong), transfer
- * (neutral); `size="lg"` for the ledger's Amount column, with the "Money in / out" label beneath.
+ * (neutral, signed by side but never green/red — moving your own money isn't income or spending);
+ * `size="lg"` for the ledger's Amount column, with the direction label beneath.
  */
 function Amount({ transaction, withLabel = false, size = "md" }: { transaction: Transaction; withLabel?: boolean; size?: "md" | "lg" }) {
   const flow = flowOf(transaction);
-  const Icon = flow === "in" ? ArrowDownLeft : flow === "out" ? ArrowUpRight : ArrowLeftRight;
+  const side = flow === "transfer" ? transferSideOf(transaction) : null;
+  const Icon = flow === "in" ? ArrowDownLeft : flow === "out" ? ArrowUpRight : side === "received" ? ArrowDownLeft : ArrowUpRight;
   return (
     <span className="flex shrink-0 flex-col items-end gap-0.5">
       <span
         className={cn(
           "font-bold tracking-tight whitespace-nowrap tabular-nums",
           size === "lg" ? "text-[18px] leading-tight" : "text-[15px] leading-tight",
-          flow === "in" ? "text-success" : flow === "out" ? "text-foreground" : "text-muted-foreground",
+          flow === "in" ? "text-success" : "text-foreground",
         )}
       >
-        {flow === "in" ? "+" : flow === "out" ? "−" : ""}
+        {flow === "in" || side === "received" ? "+" : "−"}
         {formatCurrency(transaction.amount)}
       </span>
       {withLabel && (
-        <span className={cn("inline-flex items-center gap-0.5 text-[11px] font-medium", flow === "in" ? "text-success" : flow === "out" ? "text-expense" : "text-muted-foreground")}>
+        <span className={cn("inline-flex items-center gap-0.5 text-[11px] font-medium", flow === "in" ? "text-success" : flow === "out" ? "text-expense" : "text-foreground/70")}>
           <Icon className="size-3" strokeWidth={2} aria-hidden />
-          {FLOW_LABEL[flow]}
+          {side ? TRANSFER_SIDE_LABEL[side] : FLOW_LABEL[flow]}
         </span>
       )}
     </span>
@@ -1179,10 +1213,23 @@ const BADGE = "inline-flex h-[18px] shrink-0 items-center gap-1 rounded-[4px] bo
  * The existing markers — Loan/EMI (`loanTagFor`), accounting flag (`transactionFlagFor`), possible
  * duplicate — plus Split (a linked Expense) and Transfer (`transferId`) read from the same row data.
  */
-function TxnBadges({ transaction, isSplit, isDuplicate, hideLoan = false }: { transaction: Transaction; isSplit: boolean; isDuplicate: boolean; hideLoan?: boolean }) {
+function TxnBadges({
+  transaction,
+  isSplit,
+  assignedTo = null,
+  isDuplicate,
+  hideLoan = false,
+}: {
+  transaction: Transaction;
+  isSplit: boolean;
+  /** Person name when the expense was assigned to one person ("Assign to a person") — never a split. */
+  assignedTo?: string | null;
+  isDuplicate: boolean;
+  hideLoan?: boolean;
+}) {
   const loanTag = hideLoan ? null : loanTagFor(transaction);
   const flag = transactionFlagFor(transaction);
-  if (!loanTag && !flag && !isSplit && !isDuplicate && !transaction.transferId) return null;
+  if (!loanTag && !flag && !isSplit && !assignedTo && !isDuplicate && !transaction.transferId) return null;
   return (
     <span className="flex flex-wrap items-center gap-1">
       {loanTag && (
@@ -1195,6 +1242,12 @@ function TxnBadges({ transaction, isSplit, isDuplicate, hideLoan = false }: { tr
         <span className={cn(BADGE, "border-primary-accent-text/40 bg-primary/20 text-foreground dark:text-primary-accent-text")}>
           <Split className="size-3" aria-hidden />
           Split
+        </span>
+      )}
+      {assignedTo && (
+        <span className={cn(BADGE, "max-w-40 border-border-strong bg-card text-foreground")} title={`Assigned to ${assignedTo} — they owe you this amount`}>
+          <User className="size-3 shrink-0" aria-hidden />
+          <span className="truncate">For {assignedTo}</span>
         </span>
       )}
       {transaction.transferId && (
@@ -1221,6 +1274,7 @@ function LedgerTable({
   duplicateIds,
   displayDescription,
   isSplit,
+  assigneeFor,
   onOpen,
   onDelete,
 }: {
@@ -1230,11 +1284,20 @@ function LedgerTable({
   duplicateIds: Set<string>;
   displayDescription: (t: Transaction) => string;
   isSplit: (transactionId: string) => boolean;
+  assigneeFor: (t: Transaction) => string | null;
   onOpen: (row: TransactionRow) => void;
   onDelete: (row: TransactionRow) => void;
 }) {
   const [openId, setOpenId] = useState<string | null>(null);
   const pad = String(total).length < 2 ? 2 : String(total).length;
+  // Two legs are drawn as one connected transfer only when they share the same stored `transferId`
+  // AND sit next to each other on this page — never inferred from amount/date/description. A leg whose
+  // partner is on another page or filtered out keeps its "Transfer sent/received" identity, unconnected.
+  const pairedWithNext = rows.map((r, i) => {
+    const next = rows[i + 1];
+    return r.transaction.transferId != null && next != null && next.transaction.id !== r.transaction.id && next.transaction.transferId === r.transaction.transferId;
+  });
+  const pairRole = (i: number): "first" | "second" | null => (pairedWithNext[i] ? "first" : i > 0 && pairedWithNext[i - 1] ? "second" : null);
 
   return (
     <table className="w-full border-separate border-spacing-0 text-sm">
@@ -1261,17 +1324,58 @@ function LedgerTable({
           const flow = flowOf(t);
           const loanTag = loanTagFor(t);
           const toggle = () => setOpenId((k) => (k === t.id ? null : t.id));
+          const role = pairRole(i);
+          const mate = role === "first" ? rows[i + 1] : role === "second" ? rows[i - 1] : null;
+          const side = flow === "transfer" ? transferSideOf(t) : null;
+          const mateName = mate?.account?.name ?? "Unknown account";
+          const ownName = row.account?.name ?? "Unknown account";
+          // Direction from each leg's stored side — never from row order (sort can put "received" first).
+          const route = mate ? (side === "sent" ? `${ownName} → ${mateName}` : `${mateName} → ${ownName}`) : null;
+          // Same rule the Add/Edit popup uses for a card bill payment: a transfer touching a card account
+          // (either this leg's account or its paired leg's). Read-only account data — display only.
+          const tone: RowTone = isDuplicate
+            ? "duplicate"
+            : flow === "in"
+              ? "income"
+              : flow === "transfer"
+                ? row.account?.type === "card" || mate?.account?.type === "card"
+                  ? "cardPayment"
+                  : "transfer"
+                : "expense";
+          const edge = ROW_TONE[tone].edge;
           return (
             <Fragment key={t.id}>
               <tr
                 onClick={toggle}
                 aria-expanded={open}
-                className={cn("group cursor-pointer transition-colors hover:bg-secondary/60", open && "bg-secondary/70", isDuplicate && "bg-danger/[0.04]")}
+                className={cn(
+                  "group relative cursor-pointer transition-colors",
+                  // One wash on the <tr> (cells are transparent), so the tint reads as a single row/group.
+                  open ? ROW_TONE[tone].open : ROW_TONE[tone].rest,
+                  // One combined outline around both legs: strong top on the first, strong bottom on the
+                  // second, strong right edge on both, rounded outer corners, no rule between them.
+                  role && "[&>td:last-child]:border-r [&>td:last-child]:border-r-border-strong",
+                  role === "first" && "[&>td]:border-t [&>td]:border-t-border-strong [&>td]:border-b-transparent",
+                  role === "second" && "[&>td]:border-b-border-strong",
+                )}
               >
-                <td className={cn(TD, "hidden border-l-[3px] text-right text-[11px] text-muted-foreground tabular-nums sm:table-cell", isDuplicate ? "border-l-danger" : "border-l-transparent")}>
+                <td
+                  className={cn(
+                    TD,
+                    "hidden border-l-[3px] text-right text-[11px] text-muted-foreground tabular-nums sm:table-cell",
+                    edge,
+                  )}
+                >
                   {String(offset + i + 1).padStart(pad, "0")}
                 </td>
-                <td className={cn(TD, "whitespace-nowrap tabular-nums")}>
+                <td
+                  className={cn(
+                    TD,
+                    "border-l-[3px] whitespace-nowrap tabular-nums sm:border-l-0",
+                    edge,
+                  )}
+                >
+                  {role === "first" && route && <TransferCenterLine route={route} />}
                   <p className="text-sm leading-tight font-semibold text-foreground">{shortDate(t.dateTime)}</p>
                   <p className="text-[11px] leading-tight text-muted-foreground">{t.dateTime.getFullYear()}</p>
                 </td>
@@ -1282,19 +1386,38 @@ function LedgerTable({
                       <Icon className="size-4" />
                     </span>
                     <div className="min-w-0 flex-1">
-                      <p className="truncate font-semibold text-foreground">{displayDescription(t) || "(No description)"}</p>
+                      <p className="truncate font-semibold text-foreground">
+                        {displayDescription(t) ||
+                          (side
+                            ? mate
+                              ? `Transfer ${side === "sent" ? "to" : "from"} ${mateName}`
+                              : TRANSFER_SIDE_LABEL[side]
+                            : "(No description)")}
+                      </p>
                       <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
                         <span className="truncate text-xs text-muted-foreground">
                           {row.category?.name ?? "Uncategorized"}
                           <span className="lg:hidden"> · {row.account?.name ?? "Unknown account"}</span>
                         </span>
-                        <TxnBadges transaction={t} isSplit={isSplit(t.id)} isDuplicate={isDuplicate} hideLoan />
+                        <TxnBadges transaction={t} isSplit={isSplit(t.id)} assignedTo={assigneeFor(t)} isDuplicate={isDuplicate} hideLoan />
                       </div>
                     </div>
                   </div>
                 </td>
-                <td className={cn(TD, "hidden text-xs font-medium text-foreground/85 md:table-cell")}>{TYPE_LABEL[flow]}</td>
-                <td className={cn(TD, "hidden truncate text-xs text-foreground/85 lg:table-cell")}>{row.account?.name ?? "Unknown"}</td>
+                <td className={cn(TD, "hidden md:table-cell")}>
+                  <TypeTag transaction={t} />
+                </td>
+                <td className={cn(TD, "hidden max-w-0 lg:table-cell")}>
+                  <p className="truncate text-xs text-foreground/85">{row.account?.name ?? "Unknown"}</p>
+                  {mate && (
+                    <p className="mt-0.5 flex min-w-0 items-center gap-1 text-[11px] text-muted-foreground" title={route ?? undefined}>
+                      {side === "sent" ? <ArrowRight className="size-3 shrink-0" strokeWidth={2} /> : <ArrowLeft className="size-3 shrink-0" strokeWidth={2} />}
+                      <span className="truncate">
+                        {side === "sent" ? "to" : "from"} <span className="font-medium text-foreground/80">{mateName}</span>
+                      </span>
+                    </p>
+                  )}
+                </td>
                 <td className={cn(TD, "text-right")}>
                   <Amount transaction={t} withLabel size="lg" />
                 </td>
@@ -1347,6 +1470,7 @@ function LedgerTable({
                           onOpen={() => onOpen(row)}
                           onDelete={() => onDelete(row)}
                           isSplit={isSplit(t.id)}
+                          assignedTo={assigneeFor(t)}
                           isDuplicate={isDuplicate}
                         />}
                     </div>
@@ -1358,6 +1482,81 @@ function LedgerTable({
         })}
       </tbody>
     </table>
+  );
+}
+
+type RowTone = "income" | "expense" | "transfer" | "cardPayment" | "duplicate";
+
+/**
+ * Semantic row wash + leading edge. Edge = clearly visible; wash = a light tint of an existing theme
+ * token (stronger alpha in dark mode, where the same tint reads fainter). Income is green, a card/bill
+ * payment is the lime "settlement" accent, a transfer is a neutral grey — so a transfer received never
+ * looks like income and a card payment never looks like new money. Expense keeps its existing plain row.
+ */
+const ROW_TONE: Record<RowTone, { edge: string; rest: string; open: string }> = {
+  income: {
+    edge: "border-l-success",
+    rest: "bg-success/[0.12] hover:bg-success/[0.18] dark:bg-success/[0.16] dark:hover:bg-success/[0.22]",
+    open: "bg-success/[0.2] dark:bg-success/[0.24]",
+  },
+  expense: { edge: "border-l-transparent", rest: "hover:bg-secondary/70", open: "bg-secondary" },
+  transfer: {
+    edge: "border-l-muted-foreground",
+    rest: "bg-foreground/[0.06] hover:bg-foreground/[0.09] dark:bg-foreground/[0.08] dark:hover:bg-foreground/[0.12]",
+    open: "bg-foreground/[0.1] dark:bg-foreground/[0.13]",
+  },
+  cardPayment: {
+    edge: "border-l-primary-accent-text",
+    rest: "bg-primary/[0.2] hover:bg-primary/[0.28] dark:bg-primary/[0.12] dark:hover:bg-primary/[0.17]",
+    open: "bg-primary/[0.3] dark:bg-primary/[0.2]",
+  },
+  duplicate: { edge: "border-l-danger", rest: "bg-danger/[0.08] hover:bg-danger/[0.12]", open: "bg-danger/[0.14]" },
+};
+
+/** Type column tag — label + icon + tone, so meaning never rests on colour alone. Transfer legs read as
+ *  "Sent"/"Received" in the neutral transfer tone, never as Income/Expense. */
+function TypeTag({ transaction }: { transaction: Transaction }) {
+  const flow = flowOf(transaction);
+  if (flow === "transfer") {
+    const side = transferSideOf(transaction);
+    return (
+      <span className="inline-flex flex-col gap-0.5">
+        <span className={cn(BADGE, "w-fit border-border-strong bg-secondary text-foreground")}>
+          <ArrowLeftRight className="size-3" strokeWidth={2} aria-hidden />
+          Transfer
+        </span>
+        <span className="text-[11px] font-medium text-foreground/70">{side === "sent" ? "Sent" : "Received"}</span>
+      </span>
+    );
+  }
+  if (flow === "in") {
+    return (
+      <span className={cn(BADGE, "border-success/50 bg-success/12 text-success")}>
+        <ArrowDownLeft className="size-3" strokeWidth={2.25} aria-hidden />
+        Income
+      </span>
+    );
+  }
+  return <span className="text-xs font-medium text-foreground/85">{TYPE_LABEL[flow]}</span>;
+}
+
+/**
+ * Links two adjacent legs of one transfer (same `transferId`) with a dashed line drawn exactly on the
+ * border between them and a "⇅ Transfer · From → To" badge in its centre. Rendered inside the first
+ * row but positioned against the (relative) `<tr>`, zero-height, so it adds no row height and never
+ * blocks clicks. Presentation only — each leg stays its own clickable row with its own actions.
+ */
+function TransferCenterLine({ route }: { route: string }) {
+  return (
+    <span aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex h-0 items-center gap-2 px-3">
+      <span className="flex-1 border-t border-dashed border-border-strong" />
+      <span className="inline-flex h-5 min-w-0 items-center gap-1.5 border border-border-strong bg-card px-2 text-[10.5px] font-medium whitespace-nowrap text-foreground/85">
+        <ArrowUpDown className="size-3 shrink-0" strokeWidth={1.75} />
+        Transfer
+        <span className="hidden text-muted-foreground sm:inline">· {route}</span>
+      </span>
+      <span className="flex-1 border-t border-dashed border-border-strong" />
+    </span>
   );
 }
 
@@ -1429,6 +1628,7 @@ function RowDetails({
   onOpen,
   onDelete,
   isSplit,
+  assignedTo,
   isDuplicate,
 }: {
   row: TransactionRow;
@@ -1436,6 +1636,7 @@ function RowDetails({
   onOpen: () => void;
   onDelete: () => void;
   isSplit: boolean;
+  assignedTo: string | null;
   isDuplicate: boolean;
 }) {
   const t = row.transaction;
@@ -1458,14 +1659,14 @@ function RowDetails({
             {formatCurrency(t.amount)}
           </p>
           <div className="relative min-w-0">
-            <p className="truncate text-[15px] font-semibold text-foreground">{displayDescription(t) || "(No description)"}</p>
+            <p className="truncate text-[15px] font-semibold text-foreground">{displayDescription(t) || (t.transferId ? TRANSFER_SIDE_LABEL[transferSideOf(t)] : "(No description)")}</p>
             <p className="mt-1 flex items-center gap-1.5 text-xs font-medium text-foreground/70 tabular-nums">
               <Calendar className="size-3.5" strokeWidth={1.75} aria-hidden />
               {formatFullDate(t.dateTime, true)}
             </p>
           </div>
           <div className="relative">
-            <TxnBadges transaction={t} isSplit={isSplit} isDuplicate={isDuplicate} />
+            <TxnBadges transaction={t} isSplit={isSplit} assignedTo={assignedTo} isDuplicate={isDuplicate} />
           </div>
         </div>
 

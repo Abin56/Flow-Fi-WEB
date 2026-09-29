@@ -110,10 +110,10 @@ export function agreementCardPresentation(agreement: UnifiedFinanceAgreement) {
   return {
     relationship:
       agreement.direction === "lent"
-        ? "Money I Lent"
+        ? "Loan I Gave"
         : agreement.agreementKind === "installmentPurchase"
           ? `Installment Purchase · ${FUNDING_LABEL[agreement.fundingSource]}`
-          : "Money I Borrowed",
+          : "Loan I Took",
     remainingLabel: agreement.direction === "lent" ? "Principal owed to me" : "Principal remaining",
     repaymentLabel:
       agreement.repaymentType === "flexible"

@@ -156,8 +156,8 @@ export const CATEGORY_LABEL: Record<StatementCategory, string> = {
   split: "Expense shares",
   emi: "EMI",
   loan: "Loan installments",
-  gave: "Money given",
-  borrowed: "Money borrowed",
+  gave: "Money I Gave",
+  borrowed: "Money I Borrowed",
   adjustment: "Adjustments",
   received: "Received",
   repaid: "Paid",
@@ -169,8 +169,8 @@ export const CATEGORY_TYPE_LABEL: Record<StatementCategory, string> = {
   split: "Split expense",
   emi: "EMI",
   loan: "Loan EMI",
-  gave: "Money given",
-  borrowed: "Borrowed",
+  gave: "Money I Gave",
+  borrowed: "Money I Borrowed",
   adjustment: "Adjustment",
   received: "Settlement",
   repaid: "Settlement",
@@ -301,7 +301,7 @@ function ledgerTitle(entry: StatementLedgerEntry, category: StatementCategory): 
   }
   if (category === "repaid") return note && note !== "Settled all" ? note : "Payment made";
   if (note) return note;
-  return category === "gave" ? "Money given" : category === "borrowed" ? "Money borrowed" : "Adjustment";
+  return category === "gave" ? "Money I Gave" : category === "borrowed" ? "Money I Borrowed" : "Adjustment";
 }
 
 /** Every dated event for this person, each real obligation/payment exactly once. */

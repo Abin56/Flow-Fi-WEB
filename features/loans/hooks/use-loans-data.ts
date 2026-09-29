@@ -202,6 +202,7 @@ export interface CreateLoanFormParams {
   lenderName: string;
   loanAmount: number;
   loanDate: Date;
+  firstDueDate?: Date | null;
   direction: LoanDirection;
   interest: LoanInterest | null;
   installmentFrequency: CreateLoanParams["installmentFrequency"];
@@ -290,6 +291,7 @@ export function useLoanActions() {
           direction: params.direction,
           loanAmount: params.loanAmount,
           loanDate: params.loanDate,
+          firstDueDate: params.firstDueDate,
           repaymentType: params.repaymentType ?? "installment",
           dueDate: params.dueDate,
           name: params.name,
@@ -377,6 +379,10 @@ export function useLoanActions() {
       ) => {
         return loanRepository.editLoanDate(loan, params);
       },
+      editFirstDueDate: async (
+        loan: Loan,
+        params: { newFirstDueDate: Date; hasPayments: boolean; currentInstallments: Installment[] },
+      ) => loanRepository.editFirstDueDate(loan, params),
       // Soft-deletes to trash — mirrors `loans_screen.dart`'s swipe-to-delete (moves to trash, restorable
       // via `restoreLoan`/the trash view), not a permanent removal. The schedule/installments are left
       // as-is: once the loan itself is filtered out of `useLoans()`'s active list, `useAllLoanInstallments`

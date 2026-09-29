@@ -311,3 +311,21 @@ describe("checkForDuplicates — amount+date-only fallback (SMS/PDF, ignores des
     expect(smsResult.bestMatch?.confidence).toBe(pdfResult.bestMatch?.confidence);
   });
 });
+
+describe("checkForDuplicates — ignoreAccountIds (card bill payment vs the purchase it pays off)", () => {
+  const purchase = { id: "card-purchase", description: "Amazon", amount: 1000, dateTime: new Date("2026-09-29T00:00:00.000Z"), accountId: "card", type: "expense" as const };
+  const payment = { description: "", amount: 1000, date: new Date("2026-09-29T00:00:00.000Z"), direction: "debit" as const, accountId: "sbi", referenceNumber: null, source: "manual" as const, requireDescriptionMatch: false };
+
+  it("flags the same-day same-amount card purchase without it", () => {
+    expect(checkForDuplicates(payment, [purchase]).status).toBe("duplicate_candidate");
+  });
+
+  it("ignores transactions on the ignored account", () => {
+    expect(checkForDuplicates({ ...payment, ignoreAccountIds: ["card"] }, [purchase]).status).toBe("unique");
+  });
+
+  it("still flags a real duplicate payment on the source account", () => {
+    const priorPayment = { ...purchase, id: "prior", accountId: "sbi" };
+    expect(checkForDuplicates({ ...payment, ignoreAccountIds: ["card"] }, [purchase, priorPayment]).bestMatch?.transactionId).toBe("prior");
+  });
+});

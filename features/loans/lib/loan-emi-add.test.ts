@@ -9,7 +9,7 @@ import {
   type LoanEmiAddForm,
 } from "@/features/loans/lib/loan-emi-add";
 
-const form = (patch: Partial<LoanEmiAddForm>): LoanEmiAddForm => ({ ...emptyLoanEmiAddForm(null, "key-1"), date: "2026-09-27", ...patch });
+const form = (patch: Partial<LoanEmiAddForm>): LoanEmiAddForm => ({ ...emptyLoanEmiAddForm(null, "key-1"), date: "2026-09-27", firstEmiDate: "2026-10-05", ...patch });
 
 describe("buildLoanEmiCreateRequest", () => {
   it("Borrowed + Bank → existing createLoan (taken, institutional) with account movement", () => {
@@ -24,6 +24,8 @@ describe("buildLoanEmiCreateRequest", () => {
       lenderName: "HDFC",
       personId: null,
       loanAmount: 500000,
+      loanDate: new Date(2026, 8, 27),
+      firstDueDate: new Date(2026, 9, 5),
       installmentCount: 24,
       interest: { type: "reducingBalance", ratePercent: 9, period: "yearly" },
       movementAccountId: "acc",
@@ -76,7 +78,7 @@ describe("record classification", () => {
     const base = { direction: "taken" as const, category: "institutional" as const, agreementKind: "loan" as const, fundingSource: null, linkedCreditCardId: null };
     expect(recordKindForLoan(base).label).toBe("Bank Loan");
     expect(recordKindForLoan({ ...base, category: "personal" }).label).toBe("Personal Loan");
-    expect(recordKindForLoan({ ...base, direction: "given" }).label).toBe("Lent");
+    expect(recordKindForLoan({ ...base, direction: "given" }).label).toBe("Loan I Gave");
     expect(recordKindForLoan({ ...base, agreementKind: "installmentPurchase" }).label).toBe("Purchase Finance");
     expect(recordKindForEmi({ loanType: "other", linkedCreditCardId: "c" }).label).toBe("Credit Card EMI");
     expect(recordKindForEmi({ loanType: "other", linkedCreditCardId: null }).label).toBe("Purchase Finance");

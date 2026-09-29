@@ -28,7 +28,7 @@ const AGREEMENT_OPTIONS: { value: AgreementFilter; label: string }[] = [
   { value: "all", label: "All" }, { value: "loan", label: "Loans" }, { value: "installmentPurchase", label: "Installment Purchases" },
 ];
 const DIRECTION_OPTIONS: { value: DirectionFilter; label: string }[] = [
-  { value: "all", label: "All" }, { value: "borrowed", label: "I Borrowed" }, { value: "lent", label: "I Lent" },
+  { value: "all", label: "All" }, { value: "borrowed", label: "Loan I Took" }, { value: "lent", label: "Loan I Gave" },
 ];
 const FUNDING_OPTIONS: { value: FundingFilter; label: string }[] = [
   { value: "all", label: "All" }, { value: "bank", label: "Bank" }, { value: "financeCompany", label: "Finance Company" },
@@ -69,7 +69,7 @@ export function UnifiedAgreementsWorkspace() {
       <UnifiedAgreementSummaryStrip summary={summary} />
 
       {workspaceState === "empty" ? (
-        <EmptyState icon={WalletCards} title="No agreements yet" description="Add money you've borrowed or lent, or a purchase you're paying in installments." actionLabel="Add Agreement" onAction={() => setAddOpen(true)} />
+        <EmptyState icon={WalletCards} title="No agreements yet" description="Add a loan you took, a loan you gave, or a purchase you're paying in installments." actionLabel="Add Agreement" onAction={() => setAddOpen(true)} />
       ) : (
         <>
           <section aria-label="Search and filter agreements" className="flex flex-col gap-3">

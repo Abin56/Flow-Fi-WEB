@@ -61,10 +61,10 @@ import { cn } from "@/lib/utils";
 import { toast } from "@/store/toast-store";
 
 const KIND_OPTIONS: { value: AddKind; label: string; fullLabel: string; hint: string; icon: LucideIcon }[] = [
-  { value: "borrowed", label: "Borrowed", fullLabel: "Borrowed Money", hint: "Bank or person", icon: Landmark },
+  { value: "borrowed", label: "Loan I Took", fullLabel: "Loan I Took — I need to pay it back", hint: "I received money and need to pay it back", icon: Landmark },
   { value: "purchase", label: "Purchase", fullLabel: "Purchase / Finance", hint: "On installments", icon: ShoppingBag },
   { value: "creditCard", label: "Credit Card", fullLabel: "Credit Card", hint: "Card EMI or loan", icon: CreditCard },
-  { value: "lent", label: "Lent", fullLabel: "Money I Lent", hint: "To a person", icon: HandCoins },
+  { value: "lent", label: "Loan I Gave", fullLabel: "Loan I Gave — they need to pay me back", hint: "I gave money and need to get it back", icon: HandCoins },
 ];
 
 const INSTALLMENT_PRESETS = [3, 6, 12, 24];
@@ -193,7 +193,7 @@ export function LoanEmiAddDialog({ open, onOpenChange, initialKind = null }: Loa
   }
 
   const amountField = (
-    <Field label={isEmi ? "Amount financed" : kind === "lent" ? "Amount lent" : "Amount borrowed"}>
+    <Field label={isEmi ? "Amount financed" : kind === "lent" ? "Amount I gave" : "Amount I received"}>
       <AmountInput value={form.amount} onChange={(amount) => set({ amount })} />
     </Field>
   );
@@ -220,9 +220,9 @@ export function LoanEmiAddDialog({ open, onOpenChange, initialKind = null }: Loa
         <Reveal key={`basics-${kind}`}>
           <FormSection title="Basics" icon={FileText}>
             {kind === "borrowed" && (
-              <FieldGroup label="Borrowed from">
+              <FieldGroup label="Loan taken from">
                 <SegmentedControl<LoanCategory>
-                  ariaLabel="Borrowed from"
+                  ariaLabel="Loan taken from"
                   size="sm"
                   options={[
                     { value: "institutional", label: "Bank / Lender", icon: Building2 },
@@ -283,7 +283,7 @@ export function LoanEmiAddDialog({ open, onOpenChange, initialKind = null }: Loa
               )}
               {s.person && (
                 <PersonPickerField
-                  label={kind === "lent" ? "Lent to" : "Borrowed from"}
+                  label={kind === "lent" ? "Loan given to" : "Loan taken from"}
                   people={people}
                   value={form.personId}
                   disabled={false}
@@ -308,7 +308,7 @@ export function LoanEmiAddDialog({ open, onOpenChange, initialKind = null }: Loa
               )}
               {amountField}
               {!isEmi && (
-                <Field label={kind === "lent" ? "Lent on" : "Borrowed on"}>
+                <Field label={kind === "lent" ? "Loan given on" : "Loan taken on"}>
                   <input type="date" className={LOAN_EMI_INPUT} value={form.date} onChange={(e) => set({ date: e.target.value })} />
                 </Field>
               )}
@@ -382,8 +382,8 @@ export function LoanEmiAddDialog({ open, onOpenChange, initialKind = null }: Loa
                 />
               </FieldGroup>
               {s.firstPaymentDate && (
-                <Field label="First EMI date">
-                  <input type="date" className={LOAN_EMI_INPUT} value={form.date} onChange={(e) => set({ date: e.target.value })} />
+                <Field label="First EMI Date">
+                  <input type="date" className={LOAN_EMI_INPUT} value={form.firstEmiDate} onChange={(e) => set({ firstEmiDate: e.target.value })} />
                 </Field>
               )}
               <FieldGroup label="Interest">

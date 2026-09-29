@@ -49,7 +49,7 @@ export function AddEntryPanel({
     e.preventDefault();
     if (saving) return;
     if (!type) {
-      setError("Choose “I gave” or “I borrowed”.");
+      setError("Choose “Money I Gave” or “Money I Borrowed”.");
       return;
     }
     const value = Number(amount);
@@ -97,8 +97,8 @@ export function AddEntryPanel({
             requestAnimationFrame(() => amountRef.current?.focus());
           }}
           options={[
-            { value: "gave", label: "I gave", icon: ArrowUpRight },
-            { value: "borrowed", label: "I borrowed", icon: ArrowDownLeft },
+            { value: "gave", label: "Money I Gave", icon: ArrowUpRight },
+            { value: "borrowed", label: "Money I Borrowed", icon: ArrowDownLeft },
           ]}
           className="max-w-sm"
         />

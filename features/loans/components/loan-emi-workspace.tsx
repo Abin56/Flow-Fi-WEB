@@ -190,7 +190,7 @@ export function LoanEmiWorkspace() {
           <EmptyState
             icon={Wallet}
             title="Nothing here yet"
-            description="Add money you borrowed or lent, a purchase on installments, or a credit card EMI."
+            description="Add a loan you took, a loan you gave, a purchase on installments, or a credit card EMI."
             actionLabel="Add"
             onAction={openAdd}
           />
@@ -210,7 +210,7 @@ export function LoanEmiWorkspace() {
               <AmountDisplay amount={summary.owed} size="lg" />
               {summary.toReceive > 0 && (
                 <span className="flex items-baseline gap-1 text-xs text-muted-foreground">
-                  + <Money amount={summary.toReceive} className="text-sm text-success" /> lent, still to receive
+                  + <Money amount={summary.toReceive} className="text-sm text-success" /> to receive from loans you gave
                 </span>
               )}
             </div>

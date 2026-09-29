@@ -94,8 +94,8 @@ function formatTimestamp(date: Date, now: Date): string {
 }
 
 const ENTRY_TYPE_LABEL: Record<LedgerEntryType, string> = {
-  gave: "Gave",
-  borrowed: "Borrowed",
+  gave: "Money I Gave",
+  borrowed: "Money I Borrowed",
   receivedBack: "Received",
   repaid: "Paid",
   adjustment: "Adjustment",

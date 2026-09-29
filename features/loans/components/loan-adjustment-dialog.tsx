@@ -67,7 +67,7 @@ export function LoanAdjustmentDialog({ open, onOpenChange, kind, row, accounts, 
       if (result.reamortization?.kind === "unsolvable") {
         toast.info("Money recorded", "The schedule could not be adjusted automatically. Review the loan terms manually.");
       } else {
-        toast.success(isPrepayment ? "Extra principal paid" : row!.direction === "given" ? "Lent more recorded" : "Borrowed more recorded");
+        toast.success(isPrepayment ? "Extra principal paid" : row!.direction === "given" ? "Additional money given recorded" : "Additional money received recorded");
       }
       onOpenChange(false);
     } catch (error) {
@@ -92,7 +92,7 @@ export function LoanAdjustmentDialog({ open, onOpenChange, kind, row, accounts, 
     >
       <div className="space-y-4">
         <div className="grid gap-3 sm:grid-cols-2">
-          <label className="space-y-1"><span className="text-xs font-medium text-muted-foreground">{isPrepayment ? "Extra principal" : row.direction === "given" ? "Amount lent" : "Amount borrowed"}</span><input aria-label={isPrepayment ? "Extra principal" : "Additional amount"} type="number" min="0.01" step="0.01" className={FLAT_INPUT} value={amount} onChange={(event) => setAmount(event.target.value)} autoFocus /></label>
+          <label className="space-y-1"><span className="text-xs font-medium text-muted-foreground">{isPrepayment ? "Extra principal" : row.direction === "given" ? "Additional amount I gave" : "Additional amount I received"}</span><input aria-label={isPrepayment ? "Extra principal" : "Additional amount"} type="number" min="0.01" step="0.01" className={FLAT_INPUT} value={amount} onChange={(event) => setAmount(event.target.value)} autoFocus /></label>
           <label className="space-y-1"><span className="text-xs font-medium text-muted-foreground">Date</span><input aria-label="Operation date" type="date" className={FLAT_INPUT} value={date} onChange={(event) => setDate(event.target.value)} /></label>
         </div>
         <label className="space-y-1"><span className="text-xs font-medium text-muted-foreground">{moneyIn ? "Into account" : "From account"}</span><select aria-label="Payment account" className={FLAT_INPUT} value={accountId} onChange={(event) => setAccountId(event.target.value)}><option value="">Select account</option>{accounts.map((account) => <option key={account.id} value={account.id}>{account.name}{account.accountNumberLast4 ? ` ••${account.accountNumberLast4}` : ""}</option>)}</select></label>

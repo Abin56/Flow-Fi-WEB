@@ -93,6 +93,7 @@ export interface CreateLoanParams {
   personId?: string | null;
   loanAmount: number;
   loanDate: Date;
+  firstDueDate?: Date | null;
   repaymentType: LoanRepaymentType;
   direction?: LoanDirection;
   category?: LoanCategory;
@@ -142,6 +143,12 @@ export interface EditLoanTermsParams {
 
 export interface EditLoanDateParams {
   newLoanDate: Date;
+  hasPayments: boolean;
+  currentInstallments: Installment[];
+}
+
+export interface EditFirstDueDateParams {
+  newFirstDueDate: Date;
   hasPayments: boolean;
   currentInstallments: Installment[];
 }
@@ -217,9 +224,10 @@ export class OriginationConflictError extends Error {
   }
 }
 
-type NormalizedCreateLoan = Required<Omit<CreateLoanParams, "interest" | "dueDate" | "installmentFrequency" | "installmentCount">> & {
+type NormalizedCreateLoan = Required<Omit<CreateLoanParams, "interest" | "dueDate" | "installmentFrequency" | "installmentCount" | "firstDueDate">> & {
   interest: LoanInterest | null;
   dueDate: Date | null;
+  firstDueDate: Date;
   installmentFrequency: ScheduleType | null;
   installmentCount: number | null;
 };
@@ -235,6 +243,7 @@ function normalizeCreateLoanParams(params: CreateLoanParams): NormalizedCreateLo
     personId: params.personId ?? null,
     loanAmount: params.loanAmount,
     loanDate: params.loanDate,
+    firstDueDate: params.firstDueDate ?? params.loanDate,
     repaymentType: params.repaymentType,
     direction: params.direction ?? "taken",
     category: params.category ?? "institutional",
@@ -321,7 +330,7 @@ function planLoanSchedule(p: NormalizedCreateLoan): LoanSchedulePlan {
   return {
     installmentCount,
     scheduleType,
-    firstDueDate: p.repaymentType === "oneTime" ? p.dueDate! : p.loanDate,
+    firstDueDate: p.repaymentType === "oneTime" ? p.dueDate! : p.firstDueDate,
     precomputed,
     totalAmount,
   };
@@ -461,7 +470,7 @@ export class LoanRepository extends FirestoreCrudRepository<Loan> {
       // Every monthly installment after the first lands on the loan date's day (clamped to short
       // months), exactly like Flutter's `createLoan` and `createAgreementWithOrigination` below.
       // Chaining month-to-month instead drifted after a short month: Jan 31 → Feb 28 → Mar 28 → …
-      dueDayOfMonth: normalized.loanDate.getDate(),
+      dueDayOfMonth: plan.firstDueDate.getDate(),
     });
 
     const loan = buildLoanDocument(normalized, loanId, schedule.id, new Date());
@@ -595,7 +604,7 @@ export class LoanRepository extends FirestoreCrudRepository<Loan> {
       hooks.beforeWrite?.("installments");
       const installments = InstallmentRepository.buildInstallments(schedule, {
         precomputedAmounts: plan.precomputed,
-        dueDayOfMonth: normalized.loanDate.getDate(),
+        dueDayOfMonth: plan.firstDueDate.getDate(),
         idFor: ids.installmentId,
       });
       for (const installment of installments) {
@@ -1015,6 +1024,7 @@ export class LoanRepository extends FirestoreCrudRepository<Loan> {
    */
   async editLoanDate(loan: Loan, params: EditLoanDateParams): Promise<Loan> {
     const { newLoanDate, hasPayments, currentInstallments } = params;
+    const firstDueDate = currentInstallments[0]?.dueDate ?? loan.loanDate;
 
     if (loan.repaymentType !== "installment") {
       throw new Error("Only installment loans have an editable loan date");
@@ -1022,6 +1032,13 @@ export class LoanRepository extends FirestoreCrudRepository<Loan> {
     if (hasPayments) {
       throw new Error("Loan date can't be changed after a payment has been recorded");
     }
+
+    // Loan-taken date is informational for an installment loan. The linked
+    // PaymentSchedule owns its separate first due date and must not move.
+    let updatedLoanDate = recordEdit(loan, "loanDate", loan.loanDate.toISOString(), newLoanDate.toISOString());
+    updatedLoanDate = { ...updatedLoanDate, loanDate: newLoanDate };
+    await this.update(updatedLoanDate);
+    return updatedLoanDate;
 
     const installmentRepository = this.installmentRepositoryFor(loan.scheduleId);
     for (const installment of currentInstallments) {
@@ -1049,7 +1066,7 @@ export class LoanRepository extends FirestoreCrudRepository<Loan> {
     if (schedule != null) {
       await this.paymentScheduleRepository.editSchedule(schedule, {
         totalAmount,
-        firstDueDate: newLoanDate,
+        firstDueDate,
       });
     }
 
@@ -1060,7 +1077,7 @@ export class LoanRepository extends FirestoreCrudRepository<Loan> {
         ownerId: loan.id,
         totalAmount,
         scheduleType: loan.installmentFrequency!,
-        firstDueDate: newLoanDate,
+        firstDueDate,
         customIntervalDays: null,
         installmentCount: loan.installmentCount!,
         notes: "",
@@ -1070,13 +1087,33 @@ export class LoanRepository extends FirestoreCrudRepository<Loan> {
         editHistory: [],
       },
       // Pinned to the loan date's day like Flutter's `editLoanDate` — see `createLoan`.
-      { precomputedAmounts: precomputed, dueDayOfMonth: newLoanDate.getDate() },
+      { precomputedAmounts: precomputed, dueDayOfMonth: firstDueDate.getDate() },
     );
 
     let updated = recordEdit(loan, "loanDate", loan.loanDate.toISOString(), newLoanDate.toISOString());
     updated = { ...updated, loanDate: newLoanDate };
     await this.update(updated);
     return updated;
+  }
+
+  /** Changes only the schedule anchor; the loan-taken date stays untouched. */
+  async editFirstDueDate(loan: Loan, params: EditFirstDueDateParams): Promise<void> {
+    const { newFirstDueDate, hasPayments, currentInstallments } = params;
+    if (loan.repaymentType !== "installment") throw new Error("Only installment loans have an editable first EMI date");
+    if (hasPayments) throw new Error("First EMI Date can't be changed after a payment has been recorded");
+
+    const installmentRepository = this.installmentRepositoryFor(loan.scheduleId);
+    for (const installment of currentInstallments) await installmentRepository.softDelete(installment);
+
+    let precomputed: PrecomputedInstallmentAmount[] | undefined;
+    if (loan.interest != null) {
+      const breakdown = calculate({ principal: loan.loanAmount, type: loan.interest.type, ratePercent: loan.interest.ratePercent, period: loan.interest.period, installmentCount: loan.installmentCount!, installmentFrequency: "monthly", installmentsPerYear: installmentsPerYearFor(loan.installmentFrequency!) });
+      precomputed = precomputedFromPeriods(breakdown.periods);
+    }
+    const totalAmount = precomputed == null ? loan.loanAmount : precomputed.reduce((sum, p) => sum + p.amountDue, 0);
+    const schedule = await this.paymentScheduleRepository.getByKey(loan.scheduleId);
+    if (schedule != null) await this.paymentScheduleRepository.editSchedule(schedule, { totalAmount, firstDueDate: newFirstDueDate });
+    await installmentRepository.generateInstallments({ id: loan.scheduleId, ownerType: "loan", ownerId: loan.id, totalAmount, scheduleType: loan.installmentFrequency!, firstDueDate: newFirstDueDate, customIntervalDays: null, installmentCount: loan.installmentCount!, notes: "", createdAt: loan.createdAt, deletedAt: null, lastEditedAt: null, editHistory: [] }, { precomputedAmounts: precomputed, dueDayOfMonth: newFirstDueDate.getDate() });
   }
 
   async closeLoan(loan: Loan): Promise<void> {

@@ -26,7 +26,7 @@ export function loanNextDueAmount(row: LoanRow): number | null {
 /** Non-routine states only; an active borrowed loan carries no badge. */
 export function loanBadges(row: LoanRow): DebtCardBadge[] {
   const badges: DebtCardBadge[] = [];
-  if (row.direction === "given") badges.push({ label: "Money I lent", tone: "success" });
+  if (row.direction === "given") badges.push({ label: "Loan I Gave", tone: "success" });
   if (row.status === "overdue") badges.push({ label: "Missed payment", tone: "expense" });
   if (row.status === "closed") badges.push({ label: "Closed", tone: "neutral" });
   // Loans have no persisted "completed" status; derived from the schedule so a settled loan reads as done.
@@ -51,7 +51,7 @@ export function LoanCard({ row, tag, onClick }: LoanCardProps) {
       name={loanDisplayName(row)}
       source={sourceParts.join(" · ")}
       tag={tag}
-      badges={tag ? loanBadges(row).filter((b) => b.label !== "Money I lent") : loanBadges(row)}
+      badges={tag ? loanBadges(row).filter((b) => b.label !== "Loan I Gave") : loanBadges(row)}
       outstandingLabel={row.direction === "given" ? "Still to receive" : "Outstanding"}
       outstanding={outstandingPrincipal}
       nextAmount={isClosed ? null : loanNextDueAmount(row)}

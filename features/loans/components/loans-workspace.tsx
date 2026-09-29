@@ -67,6 +67,7 @@ interface LoanFormState {
   installmentFrequency: ScheduleType;
   installmentCount: string;
   loanDate: string;
+  firstEmiDate: string;
   notes: string;
   loanType: string;
   loanNumber: string;
@@ -97,6 +98,7 @@ function emptyForm(): LoanFormState {
     installmentFrequency: "monthly",
     installmentCount: "12",
     loanDate: new Date().toISOString().slice(0, 10),
+    firstEmiDate: new Date().toISOString().slice(0, 10),
     notes: "",
     loanType: "",
     loanNumber: "",
@@ -124,6 +126,7 @@ function formFromRow(row: LoanRow): LoanFormState {
     installmentFrequency: row.loan.installmentFrequency ?? "monthly",
     installmentCount: String(row.loan.installmentCount ?? row.totalInstallments),
     loanDate: row.loan.loanDate.toISOString().slice(0, 10),
+    firstEmiDate: (row.installments[0]?.dueDate ?? row.loan.loanDate).toISOString().slice(0, 10),
     notes: row.loan.notes,
     loanType: row.loan.loanType ?? "",
     loanNumber: row.loan.loanNumber ?? "",
@@ -263,6 +266,8 @@ export function LoansWorkspace({ openRequest = null, trashRequest = 0 }: LoansWo
         const hasPayments = activeRow.installments.some((i) => i.amountPaid > 0);
         const originalLoanDate = activeRow.loan.loanDate.toISOString().slice(0, 10);
         const dateChanged = !hasPayments && form.loanDate !== originalLoanDate;
+        const originalFirstEmiDate = (activeRow.installments[0]?.dueDate ?? activeRow.loan.loanDate).toISOString().slice(0, 10);
+        const firstEmiDateChanged = !hasPayments && form.firstEmiDate !== originalFirstEmiDate;
         // The real, sequential writes this save performs: details first, then any schedule re-plan / date move.
         op = editOperation.start({ label: "Updating loan", successLabel: "Loan updated", errorLabel: "Couldn't save changes", detail: "Checking changes" });
         op.stage("submit", "Saving details");
@@ -297,8 +302,17 @@ export function LoansWorkspace({ openRequest = null, trashRequest = 0 }: LoansWo
 
         if (dateChanged) {
           op.stage("related", "Updating dates");
-          await actions.editLoanDate(current, {
+          current = await actions.editLoanDate(current, {
             newLoanDate: new Date(form.loanDate),
+            hasPayments: false,
+            currentInstallments: activeRow.installments,
+          });
+        }
+
+        if (firstEmiDateChanged) {
+          op.stage("related", "Updating repayment schedule");
+          await actions.editFirstDueDate(current, {
+            newFirstDueDate: new Date(form.firstEmiDate),
             hasPayments: false,
             currentInstallments: activeRow.installments,
           });
@@ -560,8 +574,8 @@ const FREQUENCY_OPTIONS: { value: ScheduleType; label: string }[] = [
 ];
 
 const DIRECTION_OPTIONS: { value: LoanDirection; label: string }[] = [
-  { value: "taken", label: "I borrowed" },
-  { value: "given", label: "I lent" },
+  { value: "taken", label: "Loan I Took" },
+  { value: "given", label: "Loan I Gave" },
 ];
 
 const CATEGORY_OPTIONS: { value: LoanCategory; label: string }[] = [
@@ -738,9 +752,9 @@ function LoanFormFields({
                 onChange={(v) => setForm((f) => ({ ...f, direction: v }))}
               />
             </FieldGroup>
-            <FieldGroup label={received ? "Borrowed from" : "Lent to"}>
+            <FieldGroup label={received ? "Loan taken from" : "Loan given to"}>
               <SegmentedControl
-                ariaLabel={received ? "Borrowed from" : "Lent to"}
+                ariaLabel={received ? "Loan taken from" : "Loan given to"}
                 size="sm"
                 className="sm:w-full"
                 options={CATEGORY_OPTIONS.map((o) => ({ ...o, icon: o.value === "institutional" ? Building2 : UserRound }))}
@@ -769,7 +783,7 @@ function LoanFormFields({
               lockedHint={isEdit ? "Person can't be changed after the loan is created." : undefined}
             />
           ) : (
-            <Field label={received ? "Lender" : "Lent to"}>
+            <Field label={received ? "Lender" : "Loan given to"}>
               <input
                 className={cn(LOAN_EMI_INPUT, "h-12 text-base")}
                 placeholder={received ? "e.g. HDFC Bank" : "e.g. Rahul"}
@@ -835,8 +849,8 @@ function LoanFormFields({
             />
           </Field>
           <Field
-            label="Loan date"
-            hint={isEdit ? (hasPayments ? "Locked once a payment is recorded." : "Regenerates the schedule from this date.") : undefined}
+            label="Loan taken on"
+            hint={isEdit ? (hasPayments ? "Locked once a payment is recorded." : "Does not change the repayment schedule.") : undefined}
           >
             <input
               type="date"
@@ -844,6 +858,18 @@ function LoanFormFields({
               className={cn(LOAN_EMI_INPUT, isEdit && hasPayments && "text-muted-foreground")}
               value={form.loanDate}
               onChange={(e) => setForm((f) => ({ ...f, loanDate: e.target.value }))}
+            />
+          </Field>
+          <Field
+            label="First EMI Date"
+            hint={isEdit ? (hasPayments ? "Locked once a payment is recorded." : "Regenerates the repayment schedule from this date.") : undefined}
+          >
+            <input
+              type="date"
+              disabled={isEdit && hasPayments}
+              className={cn(LOAN_EMI_INPUT, isEdit && hasPayments && "text-muted-foreground")}
+              value={form.firstEmiDate}
+              onChange={(e) => setForm((f) => ({ ...f, firstEmiDate: e.target.value }))}
             />
           </Field>
           {hasRate && (
@@ -869,8 +895,8 @@ function LoanFormFields({
           title={received ? "Add money to an account" : "Take money from an account"}
           description={
             received
-              ? "Did the borrowed amount enter one of your FlowFi accounts?"
-              : "Did the lent amount leave one of your FlowFi accounts?"
+              ? "Did the money you received enter one of your FlowFi accounts?"
+              : "Did the money you gave leave one of your FlowFi accounts?"
           }
         >
           <div className="flex flex-col gap-1.5">

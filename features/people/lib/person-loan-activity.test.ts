@@ -21,7 +21,7 @@ describe("personLoanActivity", () => {
       ["loan-txn:pay-1", 4000, -4000],
       ["loan:L1", 10000, 10000],
     ]);
-    expect(items[2].description).toBe("Lent — Rahul");
+    expect(items[2].description).toBe("Loan I Gave — Rahul");
   });
 
   it("borrowed Loan: my repayment raises 'they owe me' (I owe less)", () => {

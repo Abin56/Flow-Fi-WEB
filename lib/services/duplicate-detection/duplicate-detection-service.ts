@@ -106,6 +106,12 @@ export interface DuplicateCandidateInput {
    * transaction within a day of it."
    */
   requireDescriptionMatch?: boolean;
+  /**
+   * Existing transactions on these accounts are never treated as duplicates of this candidate — e.g.
+   * a credit-card bill payment's source leg vs the very card purchases it is paying off (same amount,
+   * same day, but the other side of a different financial event).
+   */
+  ignoreAccountIds?: string[];
 }
 
 export interface ExistingTransactionForDuplicateCheck {
@@ -180,7 +186,9 @@ function directionMatchesType(direction: DuplicateCandidateInput["direction"], t
  * pass above didn't already catch, at `AMOUNT_DATE_FALLBACK_CONFIDENCE` —
  * regardless of description, account, reference number, or even direction.
  */
-export function checkForDuplicates(candidate: DuplicateCandidateInput, existingTransactions: ExistingTransactionForDuplicateCheck[]): DuplicateDetectionResult {
+export function checkForDuplicates(candidate: DuplicateCandidateInput, allExistingTransactions: ExistingTransactionForDuplicateCheck[]): DuplicateDetectionResult {
+  const ignored = candidate.ignoreAccountIds;
+  const existingTransactions = ignored?.length ? allExistingTransactions.filter((t) => !ignored.includes(t.accountId)) : allExistingTransactions;
   const requireDescriptionMatch = candidate.requireDescriptionMatch ?? true;
   const candidateText = normalizeText(candidate.description);
 

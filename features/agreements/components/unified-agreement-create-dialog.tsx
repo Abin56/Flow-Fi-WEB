@@ -99,7 +99,7 @@ export function UnifiedAgreementCreateDialog({ open, onOpenChange }: { open: boo
                 onClick={() => set({ kind: value, funding: value === "lent" ? "person" : "bank", repayment: "scheduled", recordMovement: false, movementAccountId: "" })}
                 className={`rounded-2xl border p-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${kind === value ? "border-primary bg-primary/10" : "border-border"}`}
               >
-                <b>{value === "borrowed" ? "Money I Borrowed" : value === "lent" ? "Money I Lent" : "Purchase on Installments"}</b>
+                <b>{value === "borrowed" ? "Loan I Took — I need to pay it back" : value === "lent" ? "Loan I Gave — they need to pay me back" : "Purchase on Installments"}</b>
               </button>
             ))}
           </div>
@@ -236,7 +236,7 @@ export function UnifiedAgreementCreateDialog({ open, onOpenChange }: { open: boo
         {step === 2 && kind && (
           <div className="space-y-3 rounded-2xl border border-border p-4 text-sm">
             <h3 className="text-lg font-semibold">{form.name}</h3>
-            <p>Principal {kind === "installmentPurchase" ? "financed" : kind === "lent" ? "lent" : "borrowed"}: <b>{rupees(figures.principal)}</b></p>
+            <p>Principal {kind === "installmentPurchase" ? "financed" : kind === "lent" ? "I gave" : "I received"}: <b>{rupees(figures.principal)}</b></p>
             {kind === "installmentPurchase" && <><p>Purchase: {rupees(figures.purchase)}</p><p>Down payment: {rupees(figures.down)}</p></>}
             <p>Repayment: {oneTime ? `one-time, by ${form.dueDate}` : `${form.count} monthly payments`}</p>
             <p>Funding: {fundingLabel(funding)}</p>

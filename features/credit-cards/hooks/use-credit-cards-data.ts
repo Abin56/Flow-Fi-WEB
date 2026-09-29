@@ -56,7 +56,12 @@ import {
 } from "@/lib/models/credit-card";
 import type { Account } from "@/lib/models/account";
 import { compareTransactionsNewestFirst, type Transaction } from "@/lib/models/transaction";
-import { statementPeriodTotal, unbilledSpendForCard } from "@/lib/repositories/credit-card-repository";
+import {
+  cardPaymentTotal,
+  settleCardPayments,
+  statementPeriodTotal,
+  unbilledSpendForCard,
+} from "@/lib/repositories/credit-card-repository";
 import { useCardUtilizationEmis } from "@/hooks/use-card-utilization-emis";
 import { useAccounts } from "@/hooks/use-accounts";
 import { useTransactions } from "@/hooks/use-transactions";
@@ -185,13 +190,26 @@ export function useCreditCardStandings(): { standings: CreditCardStandingView[];
       statementsByCardId.set(s.cardId, list);
     }
 
-    /** Every card's not-yet-billed spend since its most recent statement (or all-time, if it has none). */
-    const currentCycleByCardId = new Map(
-      cardList.map((c) => [
-        c.id,
-        unbilledSpendForCard(transactionsByAccountId.get(c.accountId) ?? [], statementsByCardId.get(c.id) ?? []),
-      ]),
+    /**
+     * Every card's statements (live totals) and not-yet-billed spend since its most recent statement
+     * (or all-time, if it has none), with the card's bill payments (transfers into the card account)
+     * reconciled against them — oldest statement first, then the unbilled spend.
+     */
+    const settledByCardId = new Map(
+      cardList.map((c) => {
+        const cardTransactions = transactionsByAccountId.get(c.accountId) ?? [];
+        const cardStatements = statementsByCardId.get(c.id) ?? [];
+        const unbilled = unbilledSpendForCard(cardTransactions, cardStatements);
+        const live = cardStatements.map((s) =>
+          statementWithLiveTotal(s, statementPeriodTotal(cardTransactions, s), s.minimumDue),
+        );
+        const settled = settleCardPayments(live, unbilled.totalAmount, cardPaymentTotal(cardTransactions));
+        return [c.id, { statements: settled.statements, currentCycle: { ...unbilled, totalAmount: settled.unbilledTotal } }] as const;
+      }),
     );
+    const currentCycleByCardId = new Map([...settledByCardId].map(([id, s]) => [id, s.currentCycle]));
+    const utilizationStatementsFor = (cardId: string) =>
+      (settledByCardId.get(cardId)?.statements ?? []).map(toSnapshotUtilizationStatement);
 
     const cardsBySharedLimitId = new Map<string, CreditCardProfile[]>();
     for (const c of cardList) {
@@ -205,19 +223,15 @@ export function useCreditCardStandings(): { standings: CreditCardStandingView[];
     const results: CreditCardStandingView[] = [];
 
     for (const card of cardList) {
-      const cardStatements = (statementsByCardId.get(card.id) ?? []).map((s) =>
-        toLiveUtilizationStatement(s, transactionsByAccountId.get(card.accountId) ?? []),
-      );
-      const rawStatements = statementsByCardId.get(card.id) ?? [];
+      const cardStatements = utilizationStatementsFor(card.id);
+      const rawStatements = settledByCardId.get(card.id)?.statements ?? [];
 
       if (card.sharedLimitId != null && sharedLimitById.has(card.sharedLimitId)) {
         const sharedLimit = sharedLimitById.get(card.sharedLimitId)!;
         const siblings = cardsBySharedLimitId.get(card.sharedLimitId) ?? [card];
         const perCard = siblings.map((sibling) => ({
           card: toUtilizationCard(sibling),
-          statements: (statementsByCardId.get(sibling.id) ?? []).map((s) =>
-            toLiveUtilizationStatement(s, transactionsByAccountId.get(sibling.accountId) ?? []),
-          ),
+          statements: utilizationStatementsFor(sibling.id),
           currentCycleStatement: currentCycleByCardId.get(sibling.id) ?? null,
           emis: utilizationEmis,
         }));

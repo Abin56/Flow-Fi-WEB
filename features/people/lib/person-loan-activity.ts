@@ -38,7 +38,7 @@ export function personLoanActivity(
   const items: PersonLoanActivity[] = mine.map((loan) => {
     const name = loan.name?.trim();
     const original = loan.loanAmount - (disbursedByLoan.get(loan.id) ?? 0);
-    const base = loan.direction === "given" ? "Lent" : "Borrowed";
+    const base = loan.direction === "given" ? "Loan I Gave" : "Loan I Took";
     return {
       id: `loan:${loan.id}`,
       loanId: loan.id,

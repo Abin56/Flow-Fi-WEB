@@ -83,7 +83,7 @@ export function LoanScheduleDialog({ open, onOpenChange, row, onEdit, onDelete, 
     <LinkedRow
       key="lender"
       icon={row.category === "personal" ? UserRound : Building2}
-      label={lent ? "Lent to" : "Borrowed from"}
+      label={lent ? "Loan given to" : "Loan taken from"}
       value={row.lenderName}
       action={row.category === "personal" && row.loan.personId ? <GoTo href="/people" label="Open People" /> : undefined}
     />,

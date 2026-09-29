@@ -42,6 +42,7 @@ export interface LoanEmiAddForm {
   amount: string;
   /** yyyy-mm-dd — the loan date for Loans, the first EMI date for EMIs (each path's existing meaning). */
   date: string;
+  firstEmiDate: string;
   frequency: ScheduleType;
   count: string;
   hasInterest: boolean;
@@ -79,6 +80,7 @@ export function emptyLoanEmiAddForm(kind: AddKind | null = null, idempotencyKey 
     name: "",
     amount: "",
     date: toDateInput(new Date()),
+    firstEmiDate: toDateInput(new Date()),
     frequency: "monthly",
     count: "12",
     hasInterest: false,
@@ -136,7 +138,7 @@ export function addSections(form: Pick<LoanEmiAddForm, "kind" | "borrowedFrom">)
   return {
     details: kind != null,
     repayment: kind != null,
-    firstPaymentDate: kind === "purchase" || kind === "creditCard",
+    firstPaymentDate: kind != null,
     bankLender: borrowed && form.borrowedFrom === "institutional",
     person: (borrowed && form.borrowedFrom === "personal") || kind === "lent",
     purchase: kind === "purchase",
@@ -160,6 +162,7 @@ export function loanEmiAddError(form: LoanEmiAddForm): string | null {
   }
   if (!(Number(form.amount) > 0)) return "Enter an amount";
   if (parseDateInput(form.date) == null) return "Choose a date";
+  if (parseDateInput(form.firstEmiDate) == null) return "Choose the first EMI date";
   const count = Number(form.count);
   if (!(Number.isInteger(count) && count >= 1)) return "Enter the number of installments";
   if (form.hasInterest && !(form.ratePercent.trim() !== "" && Number(form.ratePercent) >= 0)) return "Enter the interest rate";
@@ -193,6 +196,7 @@ export function buildLoanEmiCreateRequest(form: LoanEmiAddForm): LoanEmiCreateRe
   if (error != null) throw new Error(error);
   const kind = form.kind!;
   const date = parseDateInput(form.date)!;
+  const firstEmiDate = parseDateInput(form.firstEmiDate)!;
 
   if (createPathFor(kind) === "loan") {
     const category: LoanCategory = kind === "lent" ? "personal" : form.borrowedFrom;
@@ -208,6 +212,7 @@ export function buildLoanEmiCreateRequest(form: LoanEmiAddForm): LoanEmiCreateRe
         direction: kind === "lent" ? "given" : "taken",
         loanAmount: Number(form.amount),
         loanDate: date,
+        firstDueDate: firstEmiDate,
         interest: interestOf(form),
         installmentFrequency: form.frequency,
         installmentCount: Number(form.count),
@@ -234,7 +239,7 @@ export function buildLoanEmiCreateRequest(form: LoanEmiAddForm): LoanEmiCreateRe
       linkedCreditCardId: card ? form.cardId : null,
       beneficiaryPersonId: beneficiaryOf(form),
       principalAmount: Number(form.amount),
-      startDate: date,
+      startDate: firstEmiDate,
       installmentFrequency: form.frequency,
       installmentCount: Number(form.count),
       interest: interestOf(form),
@@ -282,7 +287,7 @@ const EMI_LOAN_LABEL: Partial<Record<EmiLoanType, string>> = {
 export function recordKindForLoan(
   loan: Pick<Loan, "direction" | "category" | "agreementKind" | "fundingSource" | "linkedCreditCardId">,
 ): RecordKind {
-  if (loan.direction === "given") return { kind: "lent", label: "Lent" };
+  if (loan.direction === "given") return { kind: "lent", label: "Loan I Gave" };
   if (loan.linkedCreditCardId || loan.fundingSource === "creditCard") return { kind: "creditCard", label: "Credit Card EMI" };
   if (loan.agreementKind === "installmentPurchase") return { kind: "purchase", label: "Purchase Finance" };
   return loan.category === "personal" ? { kind: "borrowed", label: "Personal Loan" } : { kind: "borrowed", label: "Bank Loan" };

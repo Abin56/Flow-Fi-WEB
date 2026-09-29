@@ -32,7 +32,7 @@ export const LOAN_ICON: LucideIcon = Landmark;
 export const EMI_ICON: LucideIcon = ShoppingBag;
 
 export const KIND_COPY = {
-  loan: { label: "Loan", plural: "Loans", description: "Money borrowed from a bank, lender or person." },
+  loan: { label: "Loan", plural: "Loans", description: "A loan you took or gave to someone." },
   emi: { label: "EMI", plural: "EMIs", description: "A purchase or borrowing repaid in installments." },
 } as const;
 

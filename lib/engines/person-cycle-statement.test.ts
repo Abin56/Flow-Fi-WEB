@@ -105,7 +105,7 @@ describe("PersonCycleStatement", () => {
   it("2. I gave", () => {
     const s = build({ ledgerEntries: [entry("gave", 500, d(9, 20))] });
     expect(s.cycleActivity).toBe(500);
-    expect(s.activityBreakdown).toEqual([{ category: "gave", label: "Money given", signedAmount: 500 }]);
+    expect(s.activityBreakdown).toEqual([{ category: "gave", label: "Money I Gave", signedAmount: 500 }]);
     expect(s.amount).toBe(500);
     expect(s.direction).toBe("theyOwe");
   });
@@ -123,7 +123,7 @@ describe("PersonCycleStatement", () => {
     expect(s.previousPending).toBe(1000);
     expect(s.cycleSettlements).toBe(-600);
     expect(s.currentPending).toBe(400);
-    expect(s.rows[0].settles).toEqual({ title: "Money given", originalAmount: 1000, remainingAfter: 400 });
+    expect(s.rows[0].settles).toEqual({ title: "Money I Gave", originalAmount: 1000, remainingAfter: 400 });
   });
 
   it("5. I repaid", () => {
@@ -218,7 +218,7 @@ describe("PersonCycleStatement", () => {
     expect(s.cycleActivity).toBe(4250);
     expect(s.cycleSettlements).toBe(-1500);
     expect(s.currentPending).toBe(4750);
-    expect(s.activityBreakdown.map((b) => [b.label, b.signedAmount])).toEqual([["Expense shares", 1250], ["EMI", 2500], ["Money given", 500]]);
+    expect(s.activityBreakdown.map((b) => [b.label, b.signedAmount])).toEqual([["Expense shares", 1250], ["EMI", 2500], ["Money I Gave", 500]]);
     expect(reconciliationLines(s).map((l) => [l.label, l.value])).toEqual([
       ["Previous pending", 2000], ["This cycle", 4250], ["Received", -1500], ["Current pending", 4750],
     ]);

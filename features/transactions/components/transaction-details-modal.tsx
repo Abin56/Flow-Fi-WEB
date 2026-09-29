@@ -40,8 +40,10 @@ import {
   Layers,
   Loader2,
   Lock,
+  NotebookPen,
   Plus,
   Save,
+  Shapes,
   SplitSquareHorizontal,
   Trash2,
   TrendingDown,
@@ -77,6 +79,8 @@ import { formatMonthYear, isSameMonth, transactionFlagFor } from "@/features/tra
 import { useDuplicateGuardedCreate } from "@/lib/services/duplicate-detection/use-duplicate-guarded-create";
 import { usePeopleActions } from "@/features/people/hooks/use-people-data";
 import { resolveMixedSplit } from "@/lib/split/mixed-split";
+import { WS_FIELD, WS_GHOST, WS_PRIMARY, WS_SECONDARY, WS_SELECT_TRIGGER } from "@/features/people/components/workspace/person-workspace-ui";
+import { choiceClass } from "@/features/loans/components/loan-emi-ui";
 import { MonthYearStepper } from "./month-year-stepper";
 import { ManageCategoriesDialog } from "./manage-categories-dialog";
 import {
@@ -87,7 +91,9 @@ import {
 } from "@/features/transactions/hooks/use-transactions-data";
 
 const DATE_DISPLAY_FORMAT = new Intl.DateTimeFormat("en-IN", { day: "2-digit", month: "short", year: "numeric" });
-const FIELD_BORDER = "border-foreground/15";
+/** Solid `border-strong` edge (People Ledger / Loan & EMI rule) — never an opacity-faded border that
+ *  washes out on low-contrast displays. */
+const FIELD_BORDER = "border-border-strong";
 
 /** Matches `ExpenseRepository`'s own rounding — only used here for the live split running-total
  *  preview, never for the values actually sent to save. */
@@ -111,8 +117,8 @@ const SPLIT_TYPE_OPTIONS: { value: SplitType; label: string }[] = [
  *  transaction only exposes "gave", since reversing a previously-recorded standalone ledger
  *  entry on an edit has no existing transition logic to reuse safely. */
 const PERSON_ENTRY_OPTIONS: { value: LedgerEntryType; label: string; description: string; icon: LucideIcon; tone: "expense" | "success" }[] = [
-  { value: "gave", label: "I Gave", description: "They owe me", icon: ArrowUpFromLine, tone: "expense" },
-  { value: "borrowed", label: "I Borrowed", description: "I owe them", icon: ArrowDownToLine, tone: "success" },
+  { value: "gave", label: "Money I Gave", description: "They owe me", icon: ArrowUpFromLine, tone: "expense" },
+  { value: "borrowed", label: "Money I Borrowed", description: "I owe them", icon: ArrowDownToLine, tone: "success" },
 ];
 
 /** Matches the icon set the Add Account dialog already uses for these types — kept visually
@@ -129,18 +135,79 @@ const ACCOUNT_TYPE_ICON: Record<AccountType, LucideIcon> = {
 /** One label-above-control row — the single field pattern this popup uses throughout. */
 function FormRow({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="flex flex-col gap-1.5">
-      <span className="text-xs font-medium text-muted-foreground">{label}</span>
+    <div className="flex min-w-0 flex-col gap-1.5">
+      <span className="text-xs font-medium text-foreground/80">{label}</span>
       {children}
     </div>
   );
 }
 
+/** One titled section of the form — flat, separated from the previous section by a solid divider
+ *  (no nested cards), with a small uppercase label + lightweight icon, same as People Ledger's `WsLabel`. */
+function FormSection({ icon: Icon, title, aside, children }: { icon: LucideIcon; title: string; aside?: ReactNode; children: ReactNode }) {
+  return (
+    <section className="flex flex-col gap-3 border-t border-border px-4 py-4 sm:px-5">
+      <div className="flex min-h-6 items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className="flex size-6 shrink-0 items-center justify-center rounded-[6px] border border-border bg-secondary text-foreground/75">
+            <Icon className="size-3.5" strokeWidth={1.75} aria-hidden />
+          </span>
+          <h3 className="font-heading text-[13px] font-semibold tracking-tight text-foreground">{title}</h3>
+        </div>
+        {aside}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+/** Add-mode footer recap of what's about to be saved — "−₹450 · Food · HDFC". Display only: reads the
+ *  same form state the save handler reads, never feeds anything back. Hidden on phones. */
+function FooterSummary({ kind, amount, category, account }: { kind: FormKind; amount: string; category?: Category; account?: Account }) {
+  const value = Number(amount);
+  const hasAmount = amount.trim() !== "" && !Number.isNaN(value) && value > 0;
+  return (
+    <div className="hidden min-w-0 items-center gap-2 text-xs text-muted-foreground sm:flex">
+      <span className={cn("font-heading text-sm font-bold tabular-nums", hasAmount ? KIND_TEXT_CLASS[kind] : "text-muted-foreground")}>
+        {kind === "income" ? "+" : "−"}
+        {hasAmount ? formatCurrencyPrecise(value) : "₹0"}
+      </span>
+      {category && (
+        <>
+          <span aria-hidden>·</span>
+          <span className="flex min-w-0 items-center gap-1 text-foreground/80">
+            {(() => {
+              const Icon = categoryIconFor(category.iconKey);
+              return <Icon className="size-3 shrink-0" strokeWidth={2} />;
+            })()}
+            <span className="truncate">{category.name}</span>
+          </span>
+        </>
+      )}
+      {account && (
+        <>
+          <span aria-hidden>·</span>
+          <span className="truncate text-foreground/80">{account.name}</span>
+        </>
+      )}
+    </div>
+  );
+}
+
+const ACCOUNT_TYPE_LABEL: Record<AccountType, string> = {
+  bank: "Bank account",
+  cash: "Cash",
+  wallet: "Wallet",
+  card: "Credit card",
+  business: "Business",
+  other: "Other",
+};
+
 /** Shared tile look for a 2-column grid option inside a dropdown popover — same visual language
  *  (rounded pill border, primary tint + checkmark when selected) the old inline chip rows used,
  *  just laid out as a grid tile instead of a flow chip, and hides the default list-style
  *  checkmark-on-the-right indicator in favor of a corner badge that fits the tile shape. */
-const GRID_OPTION_CLASS = "relative flex min-h-9 items-center justify-start rounded-none border px-2 py-1.5 pr-5 text-left [&>span:first-child]:hidden [&>span:last-child]:min-w-0";
+const GRID_OPTION_CLASS = "relative flex min-h-9 items-center justify-start rounded-[6px] border px-2 py-1.5 pr-5 text-left [&>span:first-child]:hidden [&>span:last-child]:min-w-0";
 
 /** What a picker's popover shows instead of an empty grid when the underlying list has zero
  *  items — a first-time-user dead end otherwise (e.g. no accounts created yet). `onMouseDown`
@@ -155,7 +222,7 @@ function EmptyPickerOption({ label, onNavigate }: { label: string; onNavigate: (
         e.stopPropagation();
         onNavigate();
       }}
-      className="col-span-2 flex items-center justify-center gap-1.5 rounded-none border border-dashed border-foreground/20 py-1.5 text-[11px] font-semibold text-primary-accent-text hover:bg-primary/5"
+      className="col-span-2 flex items-center justify-center gap-1.5 rounded-[6px] border border-dashed border-border-strong py-1.5 text-[11px] font-semibold text-primary-accent-text hover:bg-primary/5"
     >
       <Plus className="size-3.5" />
       {label}
@@ -181,7 +248,7 @@ function AccountSelect({
   const router = useRouter();
   return (
     <Select value={value || undefined} onValueChange={onChange}>
-      <SelectTrigger className={cn("w-full", FIELD_BORDER)}>
+      <SelectTrigger className={WS_SELECT_TRIGGER}>
         <SelectValue placeholder={placeholder}>
           {selected && (
             <span className="flex items-center gap-2">
@@ -193,12 +260,13 @@ function AccountSelect({
                   return <Icon className="size-3.5 text-muted-foreground" />;
                 })()
               )}
-              {selected.name}
+              <span className="truncate">{selected.name}</span>
+              <span className="shrink-0 text-xs text-muted-foreground">· {ACCOUNT_TYPE_LABEL[selected.type]}</span>
             </span>
           )}
         </SelectValue>
       </SelectTrigger>
-      <SelectContent className="w-(--radix-select-trigger-width) rounded-none">
+      <SelectContent className="w-(--radix-select-trigger-width) rounded-[8px] border-border-strong">
         <div className="grid max-h-64 grid-cols-2 gap-1 overflow-y-auto p-1">
           {accounts.length === 0 && (
             <EmptyPickerOption label="Add account" onNavigate={() => router.push("/accounts")} />
@@ -210,13 +278,13 @@ function AccountSelect({
               <SelectItem
                 key={a.id}
                 value={a.id}
-                className={cn(GRID_OPTION_CLASS, isSelected ? "border-primary bg-primary/20 ring-1 ring-primary" : FIELD_BORDER)}
+                className={cn(GRID_OPTION_CLASS, choiceClass(isSelected))}
               >
-                <span className={cn("flex min-w-0 items-center gap-2", isSelected ? "font-semibold text-foreground" : "text-foreground")}>
+                <span className="flex min-w-0 items-center gap-2">
                   {a.type === "bank" ? <BankLogo bankId={a.bankId} size={14} shape="square" /> : <Icon className="size-3.5" />}
                   <span className="truncate text-xs font-medium">{a.name}</span>
                 </span>
-                {isSelected && <Check className="absolute top-1/2 right-1.5 size-3 -translate-y-1/2 text-foreground" />}
+                {isSelected && <Check className="absolute top-1/2 right-1.5 size-3 -translate-y-1/2" strokeWidth={2.5} />}
               </SelectItem>
             );
           })}
@@ -256,7 +324,7 @@ function CategorySelect({
   return (
     <>
     <Select open={pickerOpen} onOpenChange={setPickerOpen} value={value || undefined} onValueChange={onChange}>
-      <SelectTrigger className={cn("w-full", FIELD_BORDER)}>
+      <SelectTrigger className={WS_SELECT_TRIGGER}>
         <SelectValue placeholder="Select category">
           {selected &&
             (() => {
@@ -264,16 +332,16 @@ function CategorySelect({
               const tone = categoryToneFor(selected.iconKey);
               return (
                 <span className="flex items-center gap-2">
-                  <span className={cn("flex size-5 items-center justify-center rounded-full", CATEGORY_TONE_CLASS[tone])}>
-                    <Icon className="size-3" />
+                  <span className={cn("flex size-5 items-center justify-center rounded-[4px]", CATEGORY_TONE_CLASS[tone])}>
+                    <Icon className="size-3" strokeWidth={2} />
                   </span>
-                  {selected.name}
+                  <span className="truncate font-medium">{selected.name}</span>
                 </span>
               );
             })()}
         </SelectValue>
       </SelectTrigger>
-      <SelectContent className="w-(--radix-select-trigger-width) rounded-none">
+      <SelectContent className="w-(--radix-select-trigger-width) rounded-[8px] border-border-strong">
         <div className="grid max-h-64 grid-cols-2 gap-1 overflow-y-auto p-1">
           {categories.map((c) => {
             const Icon = categoryIconFor(c.iconKey);
@@ -283,15 +351,15 @@ function CategorySelect({
               <SelectItem
                 key={c.id}
                 value={c.id}
-                className={cn(GRID_OPTION_CLASS, isSelected ? "border-primary bg-primary/20 ring-1 ring-primary" : FIELD_BORDER)}
+                className={cn(GRID_OPTION_CLASS, choiceClass(isSelected))}
               >
-                <span className={cn("flex min-w-0 items-center gap-2", isSelected ? "font-semibold text-foreground" : "text-foreground")}>
-                  <span className={cn("flex size-5 items-center justify-center rounded-full", CATEGORY_TONE_CLASS[tone])}>
+                <span className="flex min-w-0 items-center gap-2">
+                  <span className={cn("flex size-5 shrink-0 items-center justify-center rounded-[4px]", CATEGORY_TONE_CLASS[tone])}>
                     <Icon className="size-3" />
                   </span>
                   <span className="truncate text-xs font-medium">{c.name}</span>
                 </span>
-                {isSelected && <Check className="absolute top-1/2 right-1.5 size-3 -translate-y-1/2 text-foreground" />}
+                {isSelected && <Check className="absolute top-1/2 right-1.5 size-3 -translate-y-1/2" strokeWidth={2.5} />}
               </SelectItem>
             );
           })}
@@ -346,24 +414,25 @@ const KIND_SOLID_CLASS: Record<FormKind, string> = {
   income: "bg-success text-success-foreground",
   transfer: "bg-primary text-primary-foreground",
 };
-/** Soft radial wash behind the amount hero — colored to match the selected kind. */
+/** Faint kind-coloured fill behind the amount field — paired with a solid left edge
+ *  (`KIND_BORDER_CLASS`) so the kind still reads on displays that wash out tints. */
 const KIND_HERO_BG: Record<FormKind, string> = {
-  expense: "bg-gradient-to-br from-expense/12 via-expense/5 to-transparent",
-  income: "bg-gradient-to-br from-success/12 via-success/5 to-transparent",
-  transfer: "bg-gradient-to-br from-primary/12 via-primary/5 to-transparent",
+  expense: "bg-expense/6",
+  income: "bg-success/8",
+  transfer: "bg-primary/10",
 };
 /** Ring tint for the segmented control's sliding active pill, and the hero card's border — written
  *  as full literal class names (never built via string concatenation) so Tailwind's JIT scanner,
  *  which only finds classes that appear verbatim in the source text, can pick them up. */
 const KIND_RING_CLASS: Record<FormKind, string> = {
-  expense: "ring-expense/25",
-  income: "ring-success/25",
-  transfer: "ring-primary/25",
+  expense: "ring-expense/70",
+  income: "ring-success/70",
+  transfer: "ring-primary-accent-text/70",
 };
 const KIND_BORDER_CLASS: Record<FormKind, string> = {
-  expense: "border-expense/20",
-  income: "border-success/20",
-  transfer: "border-primary/20",
+  expense: "border-l-expense",
+  income: "border-l-success",
+  transfer: "border-l-primary-accent-text",
 };
 
 /** Segmented Expense/Income/Transfer control with a sliding active pill. Locked (but still shown,
@@ -382,7 +451,7 @@ function KindSelector({
   kinds?: FormKind[];
 }) {
   return (
-    <div className={cn("grid gap-1 rounded-none bg-muted p-1", kinds.length === 3 ? "grid-cols-3" : "grid-cols-2")}>
+    <div className={cn("grid gap-1 rounded-[8px] border border-border bg-secondary p-1", kinds.length === 3 ? "grid-cols-3" : "grid-cols-2")}>
       {kinds.map((k) => {
         const meta = KIND_META[k];
         const Icon = meta.icon;
@@ -394,19 +463,20 @@ function KindSelector({
             disabled={locked && !active}
             onClick={() => onChange(k)}
             className={cn(
-              "relative flex items-center justify-center gap-1.5 rounded-none px-2 py-1.5 text-xs font-semibold",
+              "relative flex h-8 items-center justify-center gap-1.5 rounded-[6px] px-2 text-xs font-semibold transition-colors",
+              !active && !locked && "hover:bg-card/60",
               locked && !active && "opacity-40",
             )}
           >
             {active && (
               <motion.span
                 layoutId="kind-pill"
-                className={cn("absolute inset-0 rounded-none bg-background shadow-sm ring-1", KIND_RING_CLASS[k])}
+                className={cn("absolute inset-0 rounded-[6px] bg-card shadow-sm ring-1", KIND_RING_CLASS[k])}
                 transition={springs.snappy}
               />
             )}
-            <span className={cn("relative z-10 flex items-center gap-1.5", active ? KIND_TEXT_CLASS[k] : "text-muted-foreground")}>
-              <Icon className="size-3.5" />
+            <span className={cn("relative z-10 flex items-center gap-1.5", active ? KIND_TEXT_CLASS[k] : "text-foreground/70")}>
+              <Icon className="size-3.5" strokeWidth={2} />
               {meta.label}
             </span>
           </button>
@@ -683,7 +753,7 @@ export function TransactionDetailsModal({
     }
     if (kind !== "transfer" && !categoryId) return "Select a category.";
     if (!transaction && kind === "expense" && personId != null && !splitOpen && !personEntryType) {
-      return "Choose I Gave or I Borrowed for this person.";
+      return "Choose Money I Gave or Money I Borrowed for this person.";
     }
     if (!date) return "Select a date.";
     const dateValue = new Date(date);
@@ -735,10 +805,22 @@ export function TransactionDetailsModal({
     // savings sweep) are a legitimate everyday pattern, but the user should still see the
     // warning and decide for themselves each time, exactly like every other creation path.
     if (!transaction) {
+      // Paying a card bill: the source leg naturally shares amount/date with the card purchases
+      // being paid off — those are the other side of the liability, not duplicates of this payment.
+      const isCardBillPayment = kind === "transfer" && accounts.some((a) => a.id === destinationAccountId && a.type === "card");
       const proceed =
         kind === "transfer"
           ? await duplicateGuard.guardBatch([
-              { description, amount: amountValue, date: dateTime, direction: "debit", accountId, referenceNumber: null, requireDescriptionMatch: false },
+              {
+                description,
+                amount: amountValue,
+                date: dateTime,
+                direction: "debit",
+                accountId,
+                referenceNumber: null,
+                requireDescriptionMatch: false,
+                ignoreAccountIds: isCardBillPayment ? [destinationAccountId] : undefined,
+              },
               { description, amount: amountValue, date: dateTime, direction: "credit", accountId: destinationAccountId, referenceNumber: null, requireDescriptionMatch: false },
             ])
           : await duplicateGuard.guard({
@@ -965,11 +1047,11 @@ export function TransactionDetailsModal({
               void handleSave();
             }
           }}
-          className="flex max-h-[94vh] w-full flex-col gap-0 overflow-hidden overflow-y-hidden rounded-none border border-border [&_input]:rounded-none [&_textarea]:rounded-none [&_[data-slot=select-trigger]]:rounded-none p-0 shadow-[var(--shadow-dialog)] sm:max-w-[640px]"
+          className="flex max-h-[94dvh] w-[calc(100%-1.5rem)] flex-col gap-0 overflow-hidden rounded-[10px] border border-border-strong p-0 shadow-[var(--shadow-dialog)] sm:max-w-[600px]"
         >
-          <div className={cn("h-1.5 w-full shrink-0", view === "split" ? "bg-primary" : KIND_SOLID_CLASS[kind].split(" ")[0])} />
+          <div className={cn("h-1 w-full shrink-0 transition-colors", view === "split" ? "bg-primary" : KIND_SOLID_CLASS[kind].split(" ")[0])} />
 
-          <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border px-5 py-2.5">
+          <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border px-4 py-2.5 sm:px-5">
             {view === "split" ? (
               <div className="flex min-w-0 items-center gap-3">
                 <Button variant="ghost" size="icon-sm" aria-label="Back to transaction" onClick={() => setView("form")}>
@@ -982,14 +1064,16 @@ export function TransactionDetailsModal({
               </div>
             ) : (
               <div className="flex min-w-0 items-center gap-3">
-                <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-xl shadow-[var(--shadow-e1)]", KIND_SOLID_CLASS[kind])}>
+                <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-[6px] transition-colors", KIND_SOLID_CLASS[kind])}>
                   {(() => {
                     const HeaderIcon = KIND_META[kind].icon;
-                    return <HeaderIcon className="size-4" />;
+                    return <HeaderIcon className="size-4" strokeWidth={2} />;
                   })()}
                 </span>
                 <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold text-foreground">{transaction ? "Transaction Details" : "Add Transaction"}</p>
+                  <p className="truncate font-heading text-[15px] font-semibold tracking-tight text-foreground">
+                    {transaction ? "Transaction Details" : `Add ${KIND_META[kind].label}`}
+                  </p>
                   <p className="truncate text-xs text-muted-foreground">
                     {transaction ? `${DATE_DISPLAY_FORMAT.format(transaction.dateTime)} · ${row?.account?.name ?? "Unknown"}` : "⌘/Ctrl + Enter to save"}
                   </p>
@@ -1220,20 +1304,23 @@ export function TransactionDetailsModal({
                   animate={{ opacity: 1, x: 0 }}
                   exit={{ opacity: 0, x: -16 }}
                   transition={{ duration: durations.fast, ease: easings.out }}
-                  className="flex flex-col gap-3.5 px-5 py-4"
+                  className="flex flex-col"
                 >
+            <div className={cn("flex flex-col gap-3 px-4 pt-4 pb-4 transition-colors sm:px-5", KIND_HERO_BG[kind])}>
             {formError && (
               <motion.p
                 initial={{ opacity: 0, y: -4 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: durations.fast, ease: easings.out }}
-                className="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger"
+                role="alert"
+                className="flex items-start gap-2 rounded-[6px] border border-danger/50 bg-danger/10 px-3 py-2 text-xs font-medium text-danger"
               >
+                <Info className="mt-px size-3.5 shrink-0" strokeWidth={2} />
                 {formError}
               </motion.p>
             )}
             {isTransferLeg && (
-              <div className="flex items-start gap-2 rounded-lg border border-dashed border-foreground/15 bg-muted/30 px-3 py-2.5">
+              <div className="flex items-start gap-2 rounded-[6px] border border-dashed border-border-strong bg-secondary px-3 py-2.5">
                 <Info className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
                 <p className="text-xs text-muted-foreground">
                   This is one leg of a transfer. Amount, account, and date are locked so the two linked transactions can&apos;t drift out of sync — delete the transfer and create a new one to change them.
@@ -1255,11 +1342,25 @@ export function TransactionDetailsModal({
               kinds={transaction ? FORM_KINDS : ADD_MODE_FORM_KINDS}
             />
 
-            <div className={cn("flex flex-col items-center gap-1 rounded-none border py-3 transition-colors", KIND_HERO_BG[kind], KIND_BORDER_CLASS[kind])}>
-              <span className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">Amount</span>
-              <div className="flex items-center gap-1">
-                <span className={cn("text-xl font-bold", KIND_TEXT_CLASS[kind])}>{kind === "income" ? "+" : "−"}</span>
+            <div
+              className={cn(
+                "flex flex-col gap-1 rounded-[8px] border border-l-[4px] border-border-strong bg-card px-4 py-3 shadow-sm transition-colors focus-within:border-primary-accent-text",
+                KIND_BORDER_CLASS[kind],
+              )}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <label htmlFor="txn-amount" className="text-[11px] font-medium tracking-[0.08em] text-foreground/75 uppercase">
+                  Amount *
+                </label>
+                <span className="truncate text-xs text-muted-foreground tabular-nums">
+                  {amount.trim() && !Number.isNaN(Number(amount)) ? formatCurrencyPrecise(Number(amount)) : "Enter an amount"}
+                </span>
+              </div>
+              <div className="flex min-w-0 items-baseline gap-1.5">
+                <span className={cn("font-heading text-[26px] font-bold", KIND_TEXT_CLASS[kind])}>{kind === "income" ? "+" : "−"}</span>
+                <span className="font-heading text-[22px] font-semibold text-muted-foreground">₹</span>
                 <input
+                  id="txn-amount"
                   ref={amountRef}
                   type="text"
                   inputMode="decimal"
@@ -1278,17 +1379,13 @@ export function TransactionDetailsModal({
                     }
                   }}
                   className={cn(
-                    "w-40 border-none bg-transparent text-center text-3xl font-bold tabular-nums outline-none placeholder:text-tertiary-foreground disabled:opacity-60",
+                    "min-w-0 flex-1 border-none bg-transparent font-heading text-[34px] leading-tight font-bold tracking-tight tabular-nums outline-none placeholder:text-muted-foreground/60 disabled:opacity-60",
                     KIND_TEXT_CLASS[kind],
                   )}
                 />
               </div>
-              <span className="text-xs text-muted-foreground">
-                {amount.trim() && !Number.isNaN(Number(amount)) ? formatCurrencyPrecise(Number(amount)) : "Enter an amount"}
-              </span>
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
               <FormRow label={kind === "transfer" ? "Description" : "Description *"}>
                 <Input
                   ref={descriptionRef}
@@ -1300,20 +1397,43 @@ export function TransactionDetailsModal({
                       dateRef.current?.focus();
                     }
                   }}
-                  placeholder="e.g. Blue Tokai Coffee"
-                  className={FIELD_BORDER}
+                  placeholder={kind === "income" ? "e.g. Salary, Freelance payment" : "e.g. Blue Tokai Coffee"}
+                  className={cn(WS_FIELD, "bg-card")}
                 />
-              </FormRow>
-
-              <FormRow label="Date *">
-                <Input ref={dateRef} type="date" value={date} onChange={(e) => setDate(e.target.value)} disabled={isTransferLeg} className={FIELD_BORDER} />
               </FormRow>
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
+            <FormSection icon={Shapes} title="Details">
+              <div className={cn("grid grid-cols-1 gap-3", kind !== "transfer" && "sm:grid-cols-2")}>
+                {kind !== "transfer" && (
+                  <FormRow label="Category *">
+                    <CategorySelect
+                      categories={filteredCategories}
+                      value={categoryId}
+                      onChange={setCategoryId}
+                      type={kind === "income" ? "income" : "expense"}
+                    />
+                  </FormRow>
+                )}
+                <FormRow label="Date *">
+                  <Input
+                    ref={dateRef}
+                    type="date"
+                    value={date}
+                    onChange={(e) => setDate(e.target.value)}
+                    disabled={isTransferLeg}
+                    className={cn(WS_FIELD, "disabled:opacity-60 dark:[color-scheme:dark]")}
+                  />
+                </FormRow>
+              </div>
+            </FormSection>
+
+            <FormSection icon={kind === "income" ? ArrowDownToLine : Wallet} title={kind === "income" ? "Received in" : kind === "transfer" ? "Accounts" : "Paid from"}>
+            <div className={cn("grid grid-cols-1 gap-3", kind === "transfer" && !isTransferLeg && "sm:grid-cols-2")}>
               <FormRow label={kind === "transfer" ? "From Account *" : "Account *"}>
                 {isTransferLeg ? (
-                  <div className={cn("flex w-fit items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-semibold text-muted-foreground", FIELD_BORDER)}>
+                  <div className={cn("flex h-9 w-full items-center gap-1.5 rounded-[6px] border bg-secondary px-3 text-sm font-medium text-foreground/80", FIELD_BORDER)}>
+                    <Lock className="size-3.5 text-muted-foreground" strokeWidth={1.75} />
                     {(() => {
                       const locked = accounts.find((a) => a.id === accountId);
                       if (!locked) return "Unknown account";
@@ -1331,39 +1451,25 @@ export function TransactionDetailsModal({
                 )}
               </FormRow>
 
-              {kind === "transfer" ? (
-                !isTransferLeg && (
-                  <FormRow label="To Account *">
-                    <AccountSelect
-                      accounts={accounts.filter((a) => a.id !== accountId)}
-                      value={destinationAccountId}
-                      onChange={setDestinationAccountId}
-                      placeholder="Select destination account"
-                    />
-                  </FormRow>
-                )
-              ) : (
-                <FormRow label="Category *">
-                  <CategorySelect
-                    categories={filteredCategories}
-                    value={categoryId}
-                    onChange={setCategoryId}
-                    type={kind === "income" ? "income" : "expense"}
+              {kind === "transfer" && !isTransferLeg && (
+                <FormRow label="To Account *">
+                  <AccountSelect
+                    accounts={accounts.filter((a) => a.id !== accountId)}
+                    value={destinationAccountId}
+                    onChange={setDestinationAccountId}
+                    placeholder="Select destination account"
                   />
                 </FormRow>
               )}
             </div>
-
-            <FormRow label="Notes">
-              <Textarea value={notes} placeholder="Add a note (optional)" className={cn("min-h-9 text-sm", FIELD_BORDER)} onChange={(e) => setNotes(e.target.value)} />
-            </FormRow>
+            </FormSection>
 
             {kind === "expense" && (
-              <div className="flex flex-col gap-2.5 rounded-xl border border-foreground/10 p-3">
-                <div className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
-                  <Users className="size-3.5 text-muted-foreground" />
-                  People &amp; Split
-                </div>
+              <FormSection
+                icon={Users}
+                title="People & Split"
+                aside={<span className="text-[11px] text-muted-foreground">Optional</span>}
+              >
                 {!splitOpen && (
                   <FormRow label="Assign to a person">
                   <AnimatePresence mode="wait" initial={false}>
@@ -1384,7 +1490,7 @@ export function TransactionDetailsModal({
                             }
                           }}
                         >
-                          <SelectTrigger className={cn("w-full", FIELD_BORDER)}>
+                          <SelectTrigger className={WS_SELECT_TRIGGER}>
                             <SelectValue placeholder="No one" />
                           </SelectTrigger>
                           <SelectContent>
@@ -1408,7 +1514,7 @@ export function TransactionDetailsModal({
                           autoFocus
                           placeholder="Person's name"
                           value={newPersonName}
-                          className={cn("min-w-0", FIELD_BORDER)}
+                          className={cn(WS_FIELD, "min-w-0")}
                           onChange={(e) => setNewPersonName(e.target.value)}
                           onKeyDown={(e) => e.key === "Enter" && void handleAddPerson()}
                         />
@@ -1425,23 +1531,21 @@ export function TransactionDetailsModal({
                 )}
 
                 {!personId && !splitOpen && (
-                  <p className="text-xs text-muted-foreground">Pick a person above to record I Gave / I Borrowed.</p>
+                  <p className="text-xs text-muted-foreground">Pick a person above to record Money I Gave or Money I Borrowed.</p>
                 )}
 
                 {!splitOpen && !personId && (
-                  <ClayButton
+                  <button
                     type="button"
-                    variant="secondary"
-                    size="sm"
                     onClick={() => {
                       setSplitOpen(true);
                       setView("split");
                     }}
-                    className="w-fit gap-1.5 text-primary-accent-text"
+                    className={cn(WS_SECONDARY, "h-8 w-fit px-3 text-xs")}
                   >
-                    <SplitSquareHorizontal className="size-3.5" />
+                    <SplitSquareHorizontal className="size-3.5" strokeWidth={1.75} />
                     Split with more people
-                  </ClayButton>
+                  </button>
                 )}
 
                 <AnimatePresence initial={false}>
@@ -1451,7 +1555,7 @@ export function TransactionDetailsModal({
                       animate={{ opacity: 1, height: "auto" }}
                       exit={{ opacity: 0, height: 0 }}
                       transition={{ duration: durations.fast, ease: easings.out }}
-                      className="overflow-hidden border-t border-foreground/10 pt-3"
+                      className="overflow-hidden"
                     >
                       {transaction ? (
                         // Edit mode only ever offers "I Gave" — reversing a previously-recorded
@@ -1464,15 +1568,15 @@ export function TransactionDetailsModal({
                           onClick={() => setPersonEntryType((t) => (t === "gave" ? null : "gave"))}
                           aria-pressed={personEntryType === "gave"}
                           className={cn(
-                            "flex w-full items-center gap-2.5 rounded-xl border p-2.5 text-left transition-colors",
-                            personEntryType === "gave" ? "border-expense/40 bg-expense/10" : "border-border/50 bg-card hover:border-border",
+                            "flex w-full items-center gap-2.5 rounded-[6px] border p-2.5 text-left transition-colors",
+                            personEntryType === "gave" ? "border-expense bg-expense/10 ring-1 ring-expense" : "border-border-strong bg-card hover:border-muted-foreground hover:bg-secondary",
                           )}
                         >
-                          <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-full", personEntryType === "gave" ? "bg-expense/20 text-expense" : "bg-muted text-muted-foreground")}>
-                            <ArrowUpFromLine className="size-4" />
+                          <span className={cn("flex size-7 shrink-0 items-center justify-center rounded-[4px]", personEntryType === "gave" ? "bg-expense text-expense-foreground" : "bg-secondary text-muted-foreground")}>
+                            <ArrowUpFromLine className="size-3.5" strokeWidth={2} />
                           </span>
                           <span className="min-w-0">
-                            <p className="truncate text-sm font-semibold text-foreground">I Gave</p>
+                            <p className="truncate text-sm font-semibold text-foreground">Money I Gave</p>
                             <p className="truncate text-xs text-muted-foreground">They owe me — adds this amount to what they owe you.</p>
                           </span>
                         </button>
@@ -1482,7 +1586,7 @@ export function TransactionDetailsModal({
                         // the same `applyOwesPersonChange` expense-assignment path as edit mode;
                         // "I Borrowed" records a plain descriptive link on the transaction plus one
                         // `addLedgerEntry` call, mirroring what the People page itself does.
-                        <div className="grid grid-cols-2 gap-2">
+                        <div className="grid grid-cols-1 gap-2 min-[420px]:grid-cols-2">
                           {PERSON_ENTRY_OPTIONS.map((o) => {
                             const Icon = o.icon;
                             const active = personEntryType === o.value;
@@ -1493,21 +1597,21 @@ export function TransactionDetailsModal({
                                 onClick={() => setPersonEntryType((t) => (t === o.value ? null : o.value))}
                                 aria-pressed={active}
                                 className={cn(
-                                  "flex items-center gap-2 rounded-xl border p-2 text-left transition-colors",
+                                  "flex items-center gap-2 rounded-[6px] border p-2 text-left transition-colors",
                                   active
                                     ? o.tone === "success"
-                                      ? "border-success/40 bg-success/10"
-                                      : "border-expense/40 bg-expense/10"
-                                    : "border-border/50 bg-card hover:border-border",
+                                      ? "border-success bg-success/10 ring-1 ring-success"
+                                      : "border-expense bg-expense/10 ring-1 ring-expense"
+                                    : "border-border-strong bg-card hover:border-muted-foreground hover:bg-secondary",
                                 )}
                               >
                                 <span
                                   className={cn(
-                                    "flex size-7 shrink-0 items-center justify-center rounded-full",
-                                    active ? (o.tone === "success" ? "bg-success/20 text-success" : "bg-expense/20 text-expense") : "bg-muted text-muted-foreground",
+                                    "flex size-7 shrink-0 items-center justify-center rounded-[4px]",
+                                    active ? (o.tone === "success" ? "bg-success text-success-foreground" : "bg-expense text-expense-foreground") : "bg-secondary text-muted-foreground",
                                   )}
                                 >
-                                  <Icon className="size-3.5" />
+                                  <Icon className="size-3.5" strokeWidth={2} />
                                 </span>
                                 <span className="min-w-0">
                                   <p className="truncate text-xs font-semibold text-foreground">{o.label}</p>
@@ -1529,8 +1633,9 @@ export function TransactionDetailsModal({
                       animate={{ opacity: 1, height: "auto" }}
                       exit={{ opacity: 0, height: 0 }}
                       transition={{ duration: durations.fast, ease: easings.out }}
-                      className="flex items-center justify-between gap-2 overflow-hidden border-t border-foreground/10 pt-3"
+                      className="overflow-hidden"
                     >
+                      <div className="flex items-center justify-between gap-2 rounded-[6px] border border-primary-accent-text/60 bg-primary/10 px-3 py-2">
                       <div className="min-w-0">
                         <p className="truncate text-sm font-medium text-foreground">
                           {(() => {
@@ -1542,28 +1647,39 @@ export function TransactionDetailsModal({
                         <p className="truncate text-xs text-muted-foreground">Edit to change who&apos;s included or the amounts.</p>
                       </div>
                       <div className="flex shrink-0 items-center gap-1.5">
-                        <Button type="button" variant="outline" size="sm" onClick={() => setView("split")}>
+                        <Button type="button" variant="outline" size="sm" className="rounded-[6px] border-border-strong bg-card" onClick={() => setView("split")}>
                           Edit
                         </Button>
                         <Button type="button" variant="ghost" size="icon-sm" aria-label="Remove split" onClick={() => setSplitOpen(false)}>
                           <X className="size-4" />
                         </Button>
                       </div>
+                      </div>
                     </motion.div>
                   )}
                 </AnimatePresence>
-              </div>
+              </FormSection>
             )}
+
+            <FormSection icon={NotebookPen} title="Notes & options">
+              <Textarea
+                value={notes}
+                placeholder="Add a note (optional)"
+                aria-label="Notes"
+                className={cn(WS_FIELD, "h-auto min-h-16 resize-y py-2")}
+                onChange={(e) => setNotes(e.target.value)}
+              />
 
             <div className="flex flex-col gap-1">
               <button
                 type="button"
                 onClick={() => setMoreOpen((v) => !v)}
-                className="flex items-center gap-1.5 self-start text-xs font-medium text-muted-foreground hover:text-foreground"
+                aria-expanded={moreOpen}
+                className="-mx-1 flex h-7 items-center gap-1.5 self-start rounded-[6px] px-1 text-xs font-medium text-foreground/75 transition-colors hover:bg-secondary hover:text-foreground"
               >
-                <ChevronDown className={cn("size-3.5 transition-transform", moreOpen && "rotate-180")} />
+                <ChevronDown className={cn("size-3.5 transition-transform", moreOpen && "rotate-180")} strokeWidth={2} />
                 More options
-                <span className="text-tertiary-foreground">(visibility, month)</span>
+                <span className="text-muted-foreground">(visibility, month)</span>
               </button>
               <AnimatePresence initial={false}>
                 {moreOpen && (
@@ -1578,7 +1694,7 @@ export function TransactionDetailsModal({
                       <p className="text-xs text-muted-foreground">Visibility and month reassignment aren&apos;t applicable for transfers.</p>
                     ) : (
                       <>
-                        <label className="flex items-start gap-2 border-t border-foreground/10 pt-2.5 text-sm">
+                        <label className="flex items-start gap-2 border-t border-border pt-2.5 text-sm">
                           <Switch checked={exclude} onCheckedChange={setExclude} className="mt-0.5" />
                           <span>
                             <span className="flex items-center gap-1.5 text-foreground">
@@ -1615,7 +1731,7 @@ export function TransactionDetailsModal({
                             >
                               <MonthYearStepper value={month} onChange={setMonth} />
                               {monthChanged && (
-                                <div className="flex items-start gap-2 rounded-lg bg-warning/12 px-3 py-2.5 text-xs text-warning-foreground">
+                                <div className="flex items-start gap-2 rounded-[6px] border border-warning/50 bg-warning/12 px-3 py-2.5 text-xs text-warning-foreground">
                                   <Info className="mt-0.5 size-3.5 shrink-0" />
                                   <p>This won&apos;t count in this month&apos;s totals — instead it&apos;ll count in {formatMonthYear(month)}&apos;s Budget, Cash Flow, and Reports.</p>
                                 </div>
@@ -1629,12 +1745,13 @@ export function TransactionDetailsModal({
                 )}
               </AnimatePresence>
             </div>
+            </FormSection>
                 </motion.div>
               )}
             </AnimatePresence>
           </div>
 
-          <DialogFooter className="shrink-0 flex-row items-center justify-between border-t border-border px-5 py-3 sm:justify-between">
+          <DialogFooter className="shrink-0 flex-row items-center justify-between gap-2 border-t border-border-strong bg-secondary/60 px-4 py-3 sm:justify-between sm:px-5">
             {view === "split" ? (
               <>
                 <ClayButton
@@ -1665,13 +1782,23 @@ export function TransactionDetailsModal({
                     <Trash2 className="size-3.5" /> {isTransferLeg ? "Delete Transfer" : "Delete"}
                   </Button>
                 ) : (
-                  <span />
+                  <FooterSummary
+                    kind={kind}
+                    amount={amount}
+                    category={kind === "transfer" ? undefined : filteredCategories.find((c) => c.id === categoryId)}
+                    account={accounts.find((a) => a.id === accountId)}
+                  />
                 )}
-                <div className="flex items-center gap-2">
-                  <ClayButton type="button" variant="ghost" size="sm" onClick={() => onOpenChange(false)} disabled={saving}>
+                <div className="flex min-w-0 flex-1 items-center justify-end gap-2">
+                  <button type="button" className={WS_GHOST} onClick={() => onOpenChange(false)} disabled={saving}>
                     Cancel
-                  </ClayButton>
-                  <ClayButton type="button" size="sm" onClick={() => void handleSave()} disabled={saving || justSaved}>
+                  </button>
+                  <button
+                    type="button"
+                    className={cn(WS_PRIMARY, "min-w-0 flex-1 sm:flex-none sm:min-w-36", (saving || justSaved) && "disabled:opacity-80")}
+                    onClick={() => void handleSave()}
+                    disabled={saving || justSaved}
+                  >
                     <AnimatePresence mode="wait" initial={false}>
                       <motion.span
                         key={justSaved ? "saved" : saving ? "saving" : "idle"}
@@ -1684,8 +1811,8 @@ export function TransactionDetailsModal({
                         {justSaved ? <Check className="size-3.5" /> : saving ? <Loader2 className="size-3.5 animate-spin" /> : <Save className="size-3.5" />}
                       </motion.span>
                     </AnimatePresence>
-                    {justSaved ? "Saved" : saving ? "Saving…" : transaction ? "Save changes" : "Add transaction"}
-                  </ClayButton>
+                    <span className="truncate">{justSaved ? "Saved" : saving ? "Saving…" : transaction ? "Save changes" : `Add ${KIND_META[kind].label}`}</span>
+                  </button>
                 </div>
               </>
             )}

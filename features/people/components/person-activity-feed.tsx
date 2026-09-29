@@ -120,7 +120,7 @@ function rowStatus(row: LedgerRow): { label: string; detail: string | null; dot:
   if (row.category === "loan") {
     // A Loan installment's state comes straight from its schedule installment (paid/partial/unpaid,
     // overdue by due date). The Loan's creation row is context only — its principal is never "due".
-    if (row.state == null) return { label: row.direction === "theyOwe" ? "Loan given" : "Loan taken", detail: "Repaid via installments", dot: "bg-muted-foreground/50" };
+    if (row.state == null) return { label: row.direction === "theyOwe" ? "Loan I Gave" : "Loan I Took", detail: "Repaid via installments", dot: "bg-muted-foreground/50" };
     const who = row.direction === "iOwe" ? "You owe them" : "They owe you";
     if (row.state === "settled") return { label: "Paid", detail: lastPaymentLine(row), dot: "bg-success", icon: "check" };
     if (row.overdue)
