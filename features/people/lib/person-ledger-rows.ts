@@ -16,7 +16,7 @@ import {
   type StatementCycle,
   type StatementRow,
 } from "@/lib/engines/person-cycle-statement";
-import type { LedgerEntry } from "@/lib/models/person";
+import type { AdvanceApplication, LedgerEntry } from "@/lib/models/person";
 import { remainingAmount } from "@/lib/models/payment-schedule";
 import { RECEIVED_STATUS_NOTE_PREFIX } from "@/lib/repositories/expense-repository";
 
@@ -40,19 +40,32 @@ export type SettleTarget =
   /** A manual "I gave"/"I borrowed" entry — a "Received back"/"I repaid" entry pointing at it (`parentEntryId`). */
   | { kind: "entry"; entry: LedgerEntry; max: number }
   /** A split/assigned expense share — an installment payment through `ExpenseRepository.settleParticipant`. */
-  | { kind: "split"; pending: PendingSplitParticipant; max: number }
+  | {
+      kind: "split";
+      pending: PendingSplitParticipant;
+      max: number;
+      /** The share's own ledger entry (the obligation row). */
+      parentEntryId: string;
+      sourceKind: "splitExpense" | "assignedExpense";
+    }
   /** An explicitly person-repayable EMI/taken-Loan installment; never changes the lender installment. */
-  | { kind: "derivedInstallment"; obligationRef: string; sourceKind: "emiInstallment" | "loanInstallment"; max: number };
+  | { kind: "derivedInstallment"; obligationRef: string; sourceKind: "emiInstallment" | "loanInstallment"; max: number }
+  /** The person's opening balance (previous pending from before FlowFi) — a settlement with `obligationRef` = its key. */
+  | { kind: "opening"; obligationRef: string; max: number };
 
 /** Why a row isn't deletable from the People Ledger (null when it is). */
-export type DeleteBlock = "expense" | "loan" | "emi" | "opening" | null;
+export type DeleteBlock = "expense" | "loan" | "emi" | "opening" | "payment" | null;
 
 /** How one recorded payment can be reversed — through the path that recorded it. */
 export type UndoTarget =
   /** A standalone settlement entry: reversed out of the balance and soft-deleted (`planEntryDeletion`). */
   | { kind: "entry"; entries: LedgerEntry[] }
   /** A split share marked "received": the existing received-status toggle back to "yet to receive". */
-  | { kind: "splitStatus"; pending: PendingSplitParticipant };
+  | { kind: "splitStatus"; pending: PendingSplitParticipant }
+  /** Part of a Record Payment: the whole payment is reverted (cash, every allocation, any advance). */
+  | { kind: "payment"; paymentId: string }
+  /** Advance applied to this obligation: un-applied (the advance becomes available again). */
+  | { kind: "advanceApplication"; applicationId: string };
 
 /**
  * One payment recorded against a transaction — its receipt, shown as that transaction's payment
@@ -65,6 +78,10 @@ export interface PaymentRecord {
   date: Date;
   amount: number;
   direction: "theyPaid" | "youPaid";
+  /** "advance": settled from advance already held, no new money. */
+  source: "cash" | "advance";
+  /** The Record Payment it belongs to, if any (edit / revert act on the whole payment). */
+  paymentId: string | null;
   /** What was left on the transaction right after this payment (engine value). */
   remainingAfter: number;
   undo: UndoTarget | null;
@@ -88,6 +105,12 @@ export interface LedgerRow {
   state: LedgerRowState | null;
   /** What is still open today (engine's `remainingNow`) — null when the row has no settlement state. */
   remaining: number | null;
+  /** How much of it has been paid so far (amount − remaining) — null when the row has no settlement state. */
+  paid: number | null;
+  /** A standalone payment row (a payment in this cycle against an older obligation, or an advance): the payment it belongs to. */
+  paymentId: string | null;
+  /** An advance row: how much of it is still available to apply. */
+  advanceRemaining: number | null;
   /** The statement row behind it (null for Loan events). */
   statementRow: StatementRow | null;
   settle: SettleTarget | null;
@@ -105,7 +128,7 @@ const EPSILON = 0.005;
 const NO_CASH_LEGS: ReadonlySet<string> = new Set();
 const SETTLEABLE: ReadonlySet<StatementCategory | "loan"> = new Set(["split", "gave", "borrowed"]);
 /** Rows that carry a settlement state (Loan installments are paid on the Loan, not settled here). */
-const HAS_STATE: ReadonlySet<StatementCategory | "loan"> = new Set(["split", "gave", "borrowed", "emi", "loan"]);
+const HAS_STATE: ReadonlySet<StatementCategory | "loan"> = new Set(["opening", "split", "gave", "borrowed", "emi", "loan"]);
 
 function stateOf(amount: number, remaining: number): LedgerRowState {
   if (remaining < EPSILON) return "settled";
@@ -113,6 +136,7 @@ function stateOf(amount: number, remaining: number): LedgerRowState {
 }
 
 function directionOf(row: StatementRow): LedgerRowDirection {
+  if (row.category === "advance") return row.advanceDelta > 0 ? "youPaid" : "theyPaid";
   if (row.kind === "settlement") return row.category === "repaid" ? "youPaid" : "theyPaid";
   return row.signedAmount < 0 ? "iOwe" : "theyOwe";
 }
@@ -152,6 +176,7 @@ export function undoTargetFor(
   pending: readonly PendingSplitParticipant[],
   cashLegIds: ReadonlySet<string> = NO_CASH_LEGS,
 ): { undo: UndoTarget | null; undoBlock: string | null } {
+  if (entry.paymentId != null) return { undo: { kind: "payment", paymentId: entry.paymentId }, undoBlock: null };
   // Ledger-owned: no linked record, or the link is the settlement's own People cash leg (reversed with it).
   if (entry.transactionRef == null || cashLegIds.has(entry.transactionRef)) {
     const plan = planEntryDeletion(entry.id, entries, cashLegIds);
@@ -179,14 +204,21 @@ function paymentsByObligation(
     if (row.kind !== "settlement" || row.settlesKey == null) continue;
     const entryId = row.key.startsWith("ledger:") ? row.key.slice("ledger:".length) : null;
     const entry = entryId ? entryById.get(entryId) : undefined;
-    const { undo, undoBlock } = entry ? undoTargetFor(entry, entries, pending, cashLegIds) : { undo: null, undoBlock: "Can't be reversed here" };
+    const applicationId = row.key.startsWith("adv-app:") ? row.key.slice("adv-app:".length) : null;
+    const { undo, undoBlock } = entry
+      ? undoTargetFor(entry, entries, pending, cashLegIds)
+      : applicationId
+        ? { undo: { kind: "advanceApplication" as const, applicationId }, undoBlock: null }
+        : { undo: null, undoBlock: "Can't be reversed here" };
     const list = byKey.get(row.settlesKey) ?? [];
     list.push({
       key: row.key,
       entryId,
       date: row.date,
       amount: row.amount,
-      direction: row.category === "repaid" ? "youPaid" : "theyPaid",
+      direction: row.category === "repaid" || (row.category === "advanceApplied" && row.signedAmount > 0) ? "youPaid" : "theyPaid",
+      source: row.category === "advanceApplied" ? "advance" : "cash",
+      paymentId: entry?.paymentId ?? null,
       remainingAfter: row.settles?.remainingAfter ?? 0,
       undo,
       undoBlock,
@@ -218,6 +250,14 @@ export interface BuildLedgerRowsInput {
    * is still a ledger-owned entry (settleable, deletable), not a split/Loan-owned one.
    */
   cashLegIds?: ReadonlySet<string>;
+  /** Advance applications — only to show how much of each advance row is still available. */
+  advanceApplications?: readonly AdvanceApplication[];
+  /**
+   * `transactionRef`s of expenses whose share for this person is tracked by an expense installment (any
+   * status). A split/assigned share NOT in this set has no expense-side tracking, so it settles as a plain
+   * ledger settlement. Omitted = unknown: such a share is conservatively not settleable here.
+   */
+  trackedShareRefs?: ReadonlySet<string> | null;
 }
 
 /**
@@ -235,7 +275,13 @@ export function buildLedgerRows({
   pending,
   now = new Date(),
   cashLegIds = NO_CASH_LEGS,
+  advanceApplications = [],
+  trackedShareRefs = null,
 }: BuildLedgerRowsInput): LedgerRow[] {
+  const appliedByAdvance = new Map<string, number>();
+  for (const a of advanceApplications) {
+    if (a.deletedAt == null) appliedByAdvance.set(a.advanceEntryId, (appliedByAdvance.get(a.advanceEntryId) ?? 0) + a.amount);
+  }
   const entryById = new Map(entries.map((e) => [e.id, e]));
   const payments = paymentsByObligation(history === undefined ? statement : history, entryById, entries, pending, cashLegIds);
   const obligationKeys = new Set((statement?.rows ?? []).filter((r) => r.kind === "obligation").map((r) => r.key));
@@ -258,19 +304,33 @@ export function buildLedgerRows({
         sourceKind: row.key.startsWith("loan-inst:") ? "loanInstallment" : "emiInstallment",
         max: remaining,
       };
+    } else if (row.category === "opening" && remaining != null && state !== "settled") {
+      settle = { kind: "opening", obligationRef: row.key, max: remaining };
     } else if (entry && SETTLEABLE.has(row.category) && remaining != null && state !== "settled") {
-      if ((entry.type === "gave" || entry.type === "borrowed") && (entry.transactionRef == null || cashLegIds.has(entry.transactionRef))) {
+      const isShare = row.category === "split" || entry.sourceKind === "assignedExpense" || entry.sourceKind === "splitExpense";
+      if (!isShare && (entry.type === "gave" || entry.type === "borrowed")) {
+        // Ledger-owned, or a legacy person-linked transaction: the settlement is a ledger entry pointing at
+        // this one (`parentEntryId`) — the linked transaction itself is never changed.
         settle = { kind: "entry", entry, max: remaining };
-      } else if (row.category === "split" || entry.sourceKind === "assignedExpense") {
+      } else if (isShare) {
         const match = pending.find((p) => p.expense.transactionId === entry.transactionRef);
+        const sourceKind = entry.sourceKind === "assignedExpense" ? ("assignedExpense" as const) : ("splitExpense" as const);
         const max = match ? Math.min(remaining, remainingAmount(match.installment)) : 0;
-        if (match && max > EPSILON) settle = { kind: "split", pending: match, max };
+        if (match && max > EPSILON) {
+          settle = { kind: "split", pending: match, max, parentEntryId: entry.id, sourceKind };
+        } else if (!match && trackedShareRefs != null && entry.transactionRef != null && !trackedShareRefs.has(entry.transactionRef)) {
+          // No expense installment tracks this share (e.g. created before shares were scheduled): the ledger is its only record.
+          settle = { kind: "entry", entry, max: remaining };
+        }
       }
     }
 
-    const deletable = entryId != null && planEntryDeletion(entryId, entries, cashLegIds).ok;
+    const plan = entryId != null ? planEntryDeletion(entryId, entries, cashLegIds) : null;
+    const deletable = plan?.ok === true;
     const deleteBlock: DeleteBlock = deletable
       ? null
+      : plan?.ok === false && plan.reason === "payment"
+        ? "payment"
       : row.category === "emi"
         ? "emi"
         : row.category === "loan"
@@ -291,6 +351,10 @@ export function buildLedgerRows({
       direction: directionOf(row),
       state,
       remaining: state == null ? null : state === "settled" ? 0 : remaining,
+      paid: state == null ? null : Math.round((row.amount - (state === "settled" ? 0 : remaining!)) * 100) / 100,
+      paymentId: row.kind === "settlement" ? (entry?.paymentId ?? null) : null,
+      advanceRemaining:
+        row.category === "advance" && entryId != null ? Math.max(0, Math.round((row.amount - (appliedByAdvance.get(entryId) ?? 0)) * 100) / 100) : null,
       statementRow: row,
       settle,
       deletable,
@@ -318,6 +382,9 @@ export function buildLedgerRows({
       direction: item.id.startsWith("loan-txn:") ? "loan" : item.type === "received" ? "theyOwe" : "iOwe",
       state: null,
       remaining: null,
+      paid: null,
+      paymentId: null,
+      advanceRemaining: null,
       statementRow: null,
       settle: null,
       deletable: false,

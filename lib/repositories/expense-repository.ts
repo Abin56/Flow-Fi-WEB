@@ -66,7 +66,7 @@ function receivedStatusFor(input: ExpenseParticipantInput): ReceivedStatus {
  * Matches a participant across an edit — by `personId` when tracked as a
  * Person, otherwise by `name`. Mirrors `ExpenseRepository._participantKey`.
  */
-function participantKey(p: ExpenseParticipant): string {
+export function participantKey(p: ExpenseParticipant): string {
   return p.personId ?? `name:${p.name}`;
 }
 

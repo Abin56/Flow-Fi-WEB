@@ -1,45 +1,20 @@
 "use client";
 
-import { AlertCircle, Check, CircleDot, HandCoins, Landmark, MoreHorizontal, Pencil, Trash2, Undo2 } from "lucide-react";
+import { Landmark, Trash2, Undo2 } from "lucide-react";
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useAccounts } from "@/hooks/use-accounts";
-import { singleUndoablePayment, type DeleteBlock, type LedgerRow, type LedgerRowState, type PaymentRecord } from "@/features/people/lib/person-ledger-rows";
-import { formatStatementDate, type StatementCategory } from "@/lib/engines/person-cycle-statement";
+import type { DeleteBlock, LedgerRow } from "@/features/people/lib/person-ledger-rows";
 import { formatCurrency } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { WS_FIELD, WS_GHOST, WS_PRIMARY, WS_SELECT_TRIGGER, WsCloseButton, WsField } from "./person-workspace-ui";
 
 /**
  * Shared pieces of the People Ledger's inline actions and transaction management — the inline
- * reveal, the settlement-state badge, a row's ⋯ menu, the per-entry settle form and the delete
- * confirmation. Presentation only; every write goes through the callbacks the workspace passes in.
+ * reveal, the per-entry record-payment and edit forms, and the delete confirmation. Presentation only; every write goes through the callbacks the workspace passes in.
  */
-
-/**
- * The ledger grid — one header/cell treatment for the Person workspace's Activity and the expanded
- * transaction ledger, so both read as the same table: a solid header row, visible row lines, lighter
- * column separators, no outer border (the surrounding frame supplies it).
- */
-export const LEDGER_TH =
-  "sticky top-0 z-[2] border-r border-b border-r-border-strong/60 border-b-border-strong bg-secondary px-3 py-2 last:border-r-0 text-left text-[11px] font-semibold tracking-[0.06em] whitespace-nowrap text-muted-foreground uppercase";
-export const LEDGER_TD = "border-r border-b border-r-border-strong/55 border-b-border-strong/60 px-3 py-2.5 align-middle last:border-r-0";
-
-/** Compact Type — the description column already carries the long form, so this never repeats it. */
-export const LEDGER_TYPE_SHORT: Record<StatementCategory | "loan", string> = {
-  opening: "Opening",
-  split: "Split",
-  emi: "EMI",
-  gave: "Money I Gave",
-  borrowed: "Money I Borrowed",
-  adjustment: "Adjustment",
-  received: "Settlement",
-  repaid: "Settlement",
-  loan: "Loan EMI",
-};
 
 /**
  * A Loan installment's action — opens that Loan, where its existing payment flow lives. People never
@@ -160,138 +135,13 @@ export function CompactAmountInput({
   );
 }
 
-const STATE_STYLE: Record<LedgerRowState, string> = {
-  open: "border-warning/40 bg-warning/10 text-foreground",
-  partial: "border-primary-accent-text/50 bg-primary/10 text-foreground",
-  settled: "border-success/35 bg-success/10 text-success",
-};
-
-/**
- * "Pending" · "Partially settled · ₹200 left" · "Settled" — a small tag, never a coloured row. A Loan
- * installment reads "Overdue" when unpaid past its due date, "Partial" and "Paid" for its payment state.
- */
-export function StatusBadge({
-  row,
-  compact = false,
-  className,
-}: {
-  row: Pick<LedgerRow, "state" | "remaining"> & Partial<Pick<LedgerRow, "overdue" | "category" | "direction">>;
-  compact?: boolean;
-  className?: string;
-}) {
-  if (row.state == null) return null;
-  const isLoan = row.category === "loan";
-  const overdue = row.overdue === true && row.state !== "settled";
-  const Icon = row.state === "settled" ? Check : overdue ? AlertCircle : CircleDot;
-  const left = formatCurrency(row.remaining ?? 0);
-  const label = overdue
-    ? row.state === "partial" && !compact
-      ? `Overdue · ${left} left`
-      : "Overdue"
-    : row.state === "open"
-      ? "Pending"
-      : row.state === "settled"
-        ? isLoan
-          ? "Paid"
-          : "Settled"
-        : compact
-          ? isLoan
-            ? "Partial"
-            : "Partially settled"
-          : `${isLoan ? "Partial" : "Partially settled"} · ${left} left`;
-  return (
-    <span
-      className={cn(
-        "inline-flex h-5 shrink-0 items-center gap-1 rounded-[4px] border px-1.5 text-[10.5px] leading-none font-semibold whitespace-nowrap",
-        overdue
-          ? "border-expense/40 bg-expense/10 text-expense"
-          : // A debt I paid off is completed, but not money received — calm neutral, never the green "settled".
-            row.state === "settled" && row.direction === "iOwe"
-            ? "border-border-strong bg-secondary text-foreground/80"
-            : STATE_STYLE[row.state],
-        className,
-      )}
-    >
-      <Icon className="size-3" strokeWidth={2.25} aria-hidden />
-      {label}
-    </span>
-  );
-}
-
 export const DELETE_BLOCK_NOTE: Record<Exclude<DeleteBlock, null>, string> = {
   expense: "Part of a split expense — change it from the expense",
   loan: "Managed from the Loan",
   emi: "Comes from a linked EMI",
   opening: "Opening balance can't be deleted",
+  payment: "Paid by a recorded payment — revert that payment first",
 };
-
-/** A row's ⋯ menu — offers only what this specific transaction supports. */
-export function RowActionsMenu({
-  row,
-  onSettle,
-  onEdit,
-  onDelete,
-  onUndo,
-  className,
-}: {
-  row: LedgerRow;
-  onSettle?: () => void;
-  onEdit?: () => void;
-  onDelete?: () => void;
-  /** Reverses a recorded payment (see `PaymentRecord.undo`). */
-  onUndo?: (payment: PaymentRecord) => void;
-  className?: string;
-}) {
-  const canSettle = row.settle != null && onSettle != null;
-  const canDelete = row.deletable && onDelete != null;
-  const canEdit = isEditable(row) && onEdit != null;
-  const undoPayment = onUndo ? singleUndoablePayment(row) : null;
-  const note = row.deleteBlock ? DELETE_BLOCK_NOTE[row.deleteBlock] : null;
-  if (!canSettle && !canEdit && !canDelete && !undoPayment && !note) return <span className={cn("size-8 shrink-0", className)} aria-hidden />;
-  return (
-    <DropdownMenu modal={false}>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          aria-label={`Actions for ${row.title}`}
-          className={cn(
-            "flex size-8 shrink-0 items-center justify-center rounded-[6px] text-muted-foreground outline-none transition-colors hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:bg-secondary data-[state=open]:text-foreground",
-            className,
-          )}
-        >
-          <MoreHorizontal className="size-4" strokeWidth={1.75} />
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="max-w-64 min-w-48 rounded-[8px]">
-        {canSettle && (
-          <DropdownMenuItem onSelect={onSettle}>
-            <HandCoins strokeWidth={1.75} />
-            Settle this entry
-          </DropdownMenuItem>
-        )}
-        {canEdit && (
-          <DropdownMenuItem onSelect={onEdit}>
-            <Pencil strokeWidth={1.75} />
-            Edit transaction
-          </DropdownMenuItem>
-        )}
-        {undoPayment && (
-          <DropdownMenuItem onSelect={() => onUndo!(undoPayment)}>
-            <Undo2 strokeWidth={1.75} />
-            Undo settlement
-          </DropdownMenuItem>
-        )}
-        {canDelete && (
-          <DropdownMenuItem variant="destructive" onSelect={onDelete}>
-            <Trash2 strokeWidth={1.75} />
-            Delete transaction
-          </DropdownMenuItem>
-        )}
-        {!canDelete && note && <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">{note}</DropdownMenuLabel>}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
 
 /** A manual ledger entry (given/borrowed/payment/adjustment) — expense, Loan, EMI and opening rows are edited where they come from. */
 export function isEditable(row: LedgerRow): boolean {
@@ -399,10 +249,10 @@ function toDateInput(d: Date): string {
  * the default account (else the first) is used, so `useAccountChoice` also works when accounts load
  * after mount.
  */
-export function useAccountChoice() {
+export function useAccountChoice(initialAccountId?: string | null) {
   const { data: allAccounts = [] } = useAccounts();
   const accounts = useMemo(() => allAccounts.filter((a) => a.deletedAt == null), [allAccounts]);
-  const [picked, setPicked] = useState("");
+  const [picked, setPicked] = useState(initialAccountId ?? "");
   const accountId = picked || (accounts.find((a) => a.isDefault)?.id ?? accounts[0]?.id ?? "");
   return { accounts, accountId, setAccountId: setPicked };
 }
@@ -465,7 +315,7 @@ export function EntrySettleForm({
   const needsAccount = row.settle?.kind === "entry" || row.settle?.kind === "derivedInstallment";
   const account = useAccountChoice();
   const firstName = personName.split(" ")[0];
-  const effect = row.direction === "iOwe" ? `Money you repay ${firstName}` : `Money ${firstName} pays you back`;
+  const effect = row.direction === "iOwe" ? `You pay ${firstName}` : `${firstName} pays you`;
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -496,9 +346,9 @@ export function EntrySettleForm({
   return (
     <form onSubmit={submit} className="rounded-[8px] border border-border-strong bg-card p-3">
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
-        <p className="text-sm font-semibold text-foreground">Settle this entry</p>
+        <p className="text-sm font-semibold text-foreground">Record payment</p>
         <p className="text-xs text-muted-foreground">
-          {effect} · <span className="font-medium text-foreground tabular-nums">{formatCurrency(max)}</span> open
+          {effect} · <span className="font-medium text-foreground tabular-nums">{formatCurrency(max)}</span> remaining
         </p>
       </div>
       <div className={cn("mt-2.5 grid gap-3", needsAccount ? "sm:grid-cols-3" : "sm:grid-cols-2")}>
@@ -520,78 +370,11 @@ export function EntrySettleForm({
           Cancel
         </button>
         <button type="submit" disabled={saving} className={cn(WS_PRIMARY, "h-8")}>
-          {saving ? "Recording…" : "Record settlement"}
+          {saving ? "Recording…" : "Record payment"}
         </button>
       </div>
     </form>
   );
-}
-
-/**
- * A transaction's payment history — each payment recorded against it (across cycles), with an Undo
- * where the payment can be reversed through its own recording path, or the reason it can't.
- */
-export function PaymentHistory({
-  row,
-  onUndo,
-  className,
-}: {
-  row: LedgerRow;
-  onUndo?: (payment: PaymentRecord) => void;
-  className?: string;
-}) {
-  if (row.payments.length === 0) return null;
-  return (
-    <div className={className}>
-      <p className="text-[11px] font-medium tracking-[0.08em] text-muted-foreground uppercase">Payment history</p>
-      <ul className="mt-1.5 divide-y divide-border/70 border-y border-border">
-        {row.payments.map((p) => (
-          <li key={p.key} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-1.5 text-sm">
-            <span className="w-24 shrink-0 font-medium text-foreground tabular-nums">{formatStatementDate(p.date, true)}</span>
-            <span className="min-w-0 flex-1 text-foreground">
-              {p.direction === "youPaid" ? "Paid" : "Received"} <span className="font-semibold tabular-nums">{formatCurrency(p.amount)}</span>
-              <span className="text-xs text-muted-foreground">
-                {" · "}
-                {p.remainingAfter > 0 ? `${formatCurrency(p.remainingAfter)} left after` : "cleared it"}
-              </span>
-            </span>
-            {p.undo && onUndo ? (
-              <button
-                type="button"
-                onClick={() => onUndo(p)}
-                className="flex h-7 items-center gap-1 rounded-[6px] px-1.5 text-xs font-medium text-muted-foreground outline-none transition-colors hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <Undo2 className="size-3.5" strokeWidth={1.75} />
-                Undo
-              </button>
-            ) : p.undoBlock ? (
-              <span className="text-xs text-muted-foreground" title={p.undoBlock}>
-                {p.undoBlock}
-              </span>
-            ) : null}
-          </li>
-        ))}
-      </ul>
-      <p className="mt-1.5 text-xs text-muted-foreground">
-        {row.state === "settled" ? (
-          <span className={cn("font-semibold", row.direction === "iOwe" ? "text-foreground/75" : "text-success")}>✓ Settled</span>
-        ) : (
-          <>
-            Remaining <span className="font-semibold text-foreground tabular-nums">{formatCurrency(row.remaining ?? 0)}</span>
-          </>
-        )}
-      </p>
-    </div>
-  );
-}
-
-/** "Received ₹500 · 28 Sep" — the latest payment on a transaction, for its status line. */
-export function lastPaymentLine(row: LedgerRow): string | null {
-  const last = row.payments[row.payments.length - 1];
-  if (!last) return null;
-  const total = row.payments.reduce((s, p) => s + p.amount, 0);
-  const verb = last.direction === "youPaid" ? "Paid" : "Received";
-  return `${verb} ${formatCurrency(total)} · ${formatStatementDate(last.date)}`;
 }
 
 /**

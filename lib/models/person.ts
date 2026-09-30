@@ -13,7 +13,7 @@ import { receivedStatusFromName, type ReceivedStatus } from "@/lib/models/expens
 
 export type LedgerEntryType = "gave" | "borrowed" | "receivedBack" | "repaid" | "adjustment";
 /** Authoritative origin for newly-created People entries. Optional for legacy documents. */
-export type LedgerSourceKind = "manual" | "splitExpense" | "assignedExpense" | "emiInstallment" | "loanInstallment";
+export type LedgerSourceKind = "manual" | "splitExpense" | "assignedExpense" | "emiInstallment" | "loanInstallment" | "advance";
 
 const LEDGER_ENTRY_TYPES: LedgerEntryType[] = ["gave", "borrowed", "receivedBack", "repaid", "adjustment"];
 
@@ -129,6 +129,18 @@ export interface LedgerEntry extends SoftDeletableEntity {
   sourceKind?: LedgerSourceKind;
   /** Stable obligation key settled by this entry, e.g. `emi-inst:{installmentId}`. */
   obligationRef?: string | null;
+  /**
+   * Groups every entry written by one Record Payment (`PersonPaymentRepository`) — one real payment,
+   * possibly allocated across several obligations plus an advance. Edit / revert act on the whole group.
+   */
+  paymentId?: string | null;
+  /**
+   * For a payment allocated to a split/assigned-expense share: the tracking `InstallmentPayment` it
+   * wrote, as `{scheduleId}/{installmentId}/{paymentId}` — so reverting the payment reverses exactly it.
+   */
+  installmentPaymentRef?: string | null;
+  /** When part of the payment was recorded as separate income: that Income `Transaction`'s id. */
+  incomeTransactionRef?: string | null;
   createdAt: Date;
   /**
    * Whether this entry has actually been settled — independent of `type`/
@@ -268,6 +280,9 @@ export function ledgerEntryFromFirestore(
     parentEntryId: (data.parentEntryId as string | undefined) ?? null,
     sourceKind: data.sourceKind as LedgerSourceKind | undefined,
     obligationRef: (data.obligationRef as string | undefined) ?? null,
+    paymentId: (data.paymentId as string | undefined) ?? null,
+    installmentPaymentRef: (data.installmentPaymentRef as string | undefined) ?? null,
+    incomeTransactionRef: (data.incomeTransactionRef as string | undefined) ?? null,
     increasesBalance: (data.increasesBalance as boolean) ?? true,
     createdAt: (data.createdAt as Timestamp).toDate(),
     receivedStatus: receivedStatusFromName(data.receivedStatus as string | undefined),
@@ -288,11 +303,60 @@ export function ledgerEntryToFirestore(entry: LedgerEntry): DocumentData {
     parentEntryId: entry.parentEntryId,
     ...(entry.sourceKind == null ? {} : { sourceKind: entry.sourceKind }),
     ...(entry.obligationRef == null ? {} : { obligationRef: entry.obligationRef }),
+    ...(entry.paymentId == null ? {} : { paymentId: entry.paymentId }),
+    ...(entry.installmentPaymentRef == null ? {} : { installmentPaymentRef: entry.installmentPaymentRef }),
+    ...(entry.incomeTransactionRef == null ? {} : { incomeTransactionRef: entry.incomeTransactionRef }),
     increasesBalance: entry.increasesBalance,
     createdAt: Timestamp.fromDate(entry.createdAt),
     receivedStatus: entry.receivedStatus,
     deletedAt: entry.deletedAt == null ? null : Timestamp.fromDate(entry.deletedAt),
     lastEditedAt: entry.lastEditedAt == null ? null : Timestamp.fromDate(entry.lastEditedAt),
     editHistory: entry.editHistory.map(auditEntryToMap),
+  };
+}
+
+/**
+ * Applying part of a person's advance (a `sourceKind: "advance"` settlement entry) to one obligation.
+ * Stored in `users/{uid}/people/{personId}/advanceApplications` — a separate subcollection, never a
+ * ledger entry, because it moves neither cash nor the person's balance (the advance already moved the
+ * balance when it was received): it only says which obligation that money now settles. Older app
+ * builds never read it, so they can never count it as money.
+ */
+export interface AdvanceApplication {
+  id: string;
+  personId: string;
+  /** The advance ledger entry the money comes from. */
+  advanceEntryId: string;
+  /** Statement key of the obligation it settles — `ledger:{id}`, `emi-inst:{id}`. */
+  obligationKey: string;
+  amount: number;
+  date: Date;
+  createdAt: Date;
+  deletedAt: Date | null;
+}
+
+export function advanceApplicationFromFirestore(snapshot: QueryDocumentSnapshot<DocumentData>, _options?: SnapshotOptions): AdvanceApplication {
+  const data = snapshot.data();
+  return {
+    id: snapshot.id,
+    personId: data.personId as string,
+    advanceEntryId: data.advanceEntryId as string,
+    obligationKey: data.obligationKey as string,
+    amount: (data.amount as number) ?? 0,
+    date: (data.date as Timestamp).toDate(),
+    createdAt: (data.createdAt as Timestamp).toDate(),
+    deletedAt: (data.deletedAt as Timestamp | undefined)?.toDate() ?? null,
+  };
+}
+
+export function advanceApplicationToFirestore(a: AdvanceApplication): DocumentData {
+  return {
+    personId: a.personId,
+    advanceEntryId: a.advanceEntryId,
+    obligationKey: a.obligationKey,
+    amount: a.amount,
+    date: Timestamp.fromDate(a.date),
+    createdAt: Timestamp.fromDate(a.createdAt),
+    deletedAt: a.deletedAt == null ? null : Timestamp.fromDate(a.deletedAt),
   };
 }

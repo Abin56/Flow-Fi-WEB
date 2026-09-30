@@ -1,0 +1,462 @@
+/**
+ * People settlement presentation — turns the authoritative ledger rows (`buildLedgerRows`, itself read
+ * from `buildPersonCycleStatement`) into human wording: what kind of obligation a row is, who owes whom,
+ * and its settlement status. Pure and presentation-only: every amount is an engine value passed through
+ * unchanged; nothing here decides a balance, a settlement or an allocation.
+ */
+
+import type { LedgerRow } from "@/features/people/lib/person-ledger-rows";
+import { formatStatementDate, type PersonCycleStatement, type StatementRow } from "@/lib/engines/person-cycle-statement";
+import type { Expense } from "@/lib/models/expense";
+import type { LedgerEntry } from "@/lib/models/person";
+
+/** What the row IS — its real source, never collapsed into a generic "transaction". */
+export type SettlementKind =
+  | "emi"
+  | "loanEmi"
+  | "loanInstallment"
+  | "loan"
+  | "moneyGiven"
+  | "moneyReceived"
+  | "assigned"
+  | "split"
+  | "paymentReceived"
+  | "paymentMade"
+  | "opening"
+  | "adjustment"
+  | "advance"
+  | "advanceApplied";
+
+/** The colour family a row carries — see the `--settle-*` tokens in `app/globals.css`. */
+export type SettlementTone =
+  | "receivable"
+  | "payable"
+  | "emi"
+  | "loan"
+  | "split"
+  | "assigned"
+  | "received"
+  | "paid"
+  | "advance"
+  | "neutral";
+
+/** The row's person-side settlement status (never the lender's EMI status). */
+export type SettlementStatusTone = "due" | "payable" | "partial" | "settled" | "overdue" | "upcoming" | "received" | "paid" | "neutral";
+
+export interface SettlementStatus {
+  label: string;
+  detail: string | null;
+  tone: SettlementStatusTone;
+}
+
+export const KIND_LABEL: Record<SettlementKind, string> = {
+  emi: "EMI",
+  loanEmi: "Loan EMI",
+  loanInstallment: "Loan installment",
+  loan: "Loan",
+  moneyGiven: "Money given",
+  moneyReceived: "Money received",
+  assigned: "Assigned expense",
+  split: "Split expense",
+  paymentReceived: "Payment received",
+  paymentMade: "Payment made",
+  opening: "Opening balance",
+  adjustment: "Adjustment",
+  advance: "Advance",
+  advanceApplied: "Advance applied",
+};
+
+/** Type-filter groups offered in the table toolbar. */
+export type SettlementTypeFilter = "all" | "emi" | "loan" | "assigned" | "split" | "manual" | "payments";
+
+export const TYPE_FILTER_LABEL: Record<SettlementTypeFilter, string> = {
+  all: "All types",
+  emi: "EMI",
+  loan: "Loan",
+  assigned: "Assigned",
+  split: "Split",
+  manual: "Manual",
+  payments: "Payments",
+};
+
+const TYPE_FILTER_KINDS: Record<Exclude<SettlementTypeFilter, "all">, readonly SettlementKind[]> = {
+  emi: ["emi", "loanEmi"],
+  loan: ["loanInstallment", "loan"],
+  assigned: ["assigned"],
+  split: ["split"],
+  manual: ["moneyGiven", "moneyReceived", "adjustment", "opening"],
+  payments: ["paymentReceived", "paymentMade", "advance", "advanceApplied"],
+};
+
+export function matchesTypeFilter(kind: SettlementKind, filter: SettlementTypeFilter): boolean {
+  return filter === "all" || TYPE_FILTER_KINDS[filter].includes(kind);
+}
+
+/**
+ * Lookups the presentation needs beyond the row itself — all read-only views of stored records:
+ * the ledger entry behind a row (its `sourceKind`), and the Expense behind a split/assigned share.
+ */
+export interface SettlementLookups {
+  entriesById: ReadonlyMap<string, Pick<LedgerEntry, "sourceKind" | "transactionRef">>;
+  expenseByTransactionId: ReadonlyMap<string, Expense>;
+}
+
+export const NO_LOOKUPS: SettlementLookups = { entriesById: new Map(), expenseByTransactionId: new Map() };
+
+/** The Expense behind a split/assigned row, if it is one. */
+export function linkedExpense(row: LedgerRow, lookups: SettlementLookups): Expense | null {
+  const entry = row.entryId ? lookups.entriesById.get(row.entryId) : undefined;
+  return entry?.transactionRef ? (lookups.expenseByTransactionId.get(entry.transactionRef) ?? null) : null;
+}
+
+/**
+ * Assigned vs split for a linked expense that carries no explicit `sourceKind` (legacy): the Expense's
+ * own participants decide — one other person carrying the whole bill with no share of mine is an
+ * assignment, anything else is a genuine split.
+ */
+function expenseIsAssignment(expense: Expense): boolean {
+  const others = expense.participants.filter((p) => !p.isMe && p.share > 0);
+  const mine = expense.participants.filter((p) => p.isMe).reduce((s, p) => s + p.share, 0);
+  return others.length === 1 && mine < 0.005;
+}
+
+export function settlementKind(row: LedgerRow, lookups: SettlementLookups = NO_LOOKUPS): SettlementKind {
+  const entry = row.entryId ? lookups.entriesById.get(row.entryId) : undefined;
+  switch (row.category) {
+    case "emi":
+      return row.key.startsWith("loan-inst:") ? "loanEmi" : "emi";
+    case "loan":
+      return row.state == null ? "loan" : "loanInstallment";
+    case "split":
+      return entry?.sourceKind === "assignedExpense" ? "assigned" : "split";
+    case "gave": {
+      if (entry?.sourceKind === "assignedExpense") return "assigned";
+      if (entry?.sourceKind === "splitExpense") return "split";
+      const expense = linkedExpense(row, lookups);
+      if (expense) return expenseIsAssignment(expense) ? "assigned" : "split";
+      return "moneyGiven";
+    }
+    case "borrowed":
+      return "moneyReceived";
+    case "received":
+      return "paymentReceived";
+    case "repaid":
+      return "paymentMade";
+    case "opening":
+      return "opening";
+    case "advance":
+      return "advance";
+    case "advanceApplied":
+      return "advanceApplied";
+    default:
+      return "adjustment";
+  }
+}
+
+/** The row's colour family: its SOURCE for obligations, its direction for plain money movements. */
+export function settlementTone(row: LedgerRow, kind: SettlementKind): SettlementTone {
+  switch (kind) {
+    case "emi":
+    case "loanEmi":
+      return "emi";
+    case "loanInstallment":
+    case "loan":
+      return "loan";
+    case "split":
+      return "split";
+    case "assigned":
+      return "assigned";
+    case "paymentReceived":
+      return "received";
+    case "paymentMade":
+      return "paid";
+    case "advance":
+    case "advanceApplied":
+      return "advance";
+    default:
+      return row.direction === "theyOwe" ? "receivable" : row.direction === "iOwe" ? "payable" : "neutral";
+  }
+}
+
+const firstNameOf = (name: string) => name.trim().split(/\s+/)[0] || name;
+
+/** Default titles the engine uses when a manual entry has no note — replaced by person-aware wording. */
+const GENERIC_TITLES = new Set(["Money I Gave", "Money I Borrowed", "Payment received", "Payment made", "Adjustment"]);
+
+/**
+ * The row's main line. A note the user wrote is kept; a generic engine title becomes a person-aware one
+ * ("Money given to Amma"), so the direction never depends on whose ledger is open.
+ */
+export function settlementTitle(row: LedgerRow, kind: SettlementKind, personName: string): string {
+  const name = firstNameOf(personName);
+  if (!GENERIC_TITLES.has(row.title)) return row.title;
+  switch (kind) {
+    case "moneyGiven":
+      return `Money given to ${name}`;
+    case "moneyReceived":
+      return `Money received from ${name}`;
+    case "paymentReceived":
+      return `Payment from ${name}`;
+    case "paymentMade":
+      return `Payment to ${name}`;
+    case "adjustment":
+      return "Balance correction";
+    default:
+      return row.title;
+  }
+}
+
+/**
+ * One plain sentence that states who owes whom (or who paid whom) — the relationship line under the
+ * title. `money` formats an amount.
+ */
+export function relationLine(row: LedgerRow, kind: SettlementKind, personName: string, money: (n: number) => string): string {
+  const name = firstNameOf(personName);
+  const amount = money(row.amount);
+  const s = row.statementRow;
+  switch (kind) {
+    case "moneyGiven":
+      return `You gave ${name} ${amount}`;
+    case "moneyReceived":
+      return `${name} gave you ${amount}`;
+    case "assigned":
+      return row.direction === "iOwe" ? `Assigned to you · you pay ${amount}` : `Assigned to ${name} · ${name} pays ${amount}`;
+    case "split":
+      return row.direction === "iOwe" ? `Your share of a split with ${name}` : `${name}'s share of a split expense`;
+    case "emi":
+    case "loanEmi":
+      return s?.emi ? `Installment #${s.emi.installmentNumber} · ${name} repays you` : `${name} repays you`;
+    case "loanInstallment": {
+      const loan = s?.loan;
+      const which = loan ? `Installment ${loan.installmentNumber} of ${loan.installmentCount}` : "Installment";
+      return `${which} · ${row.direction === "iOwe" ? `you repay ${name}` : `${name} repays you`}`;
+    }
+    case "loan":
+      return row.direction === "theyOwe" ? `You lent ${name} ${amount} · repaid in installments` : `${name} lent you ${amount} · repaid in installments`;
+    case "paymentReceived":
+      return s?.settles ? `You received ${amount} from ${name} · for ${s.settles.title}` : `You received ${amount} from ${name}`;
+    case "paymentMade":
+      return s?.settles ? `You paid ${name} ${amount} · for ${s.settles.title}` : `You paid ${name} ${amount}`;
+    case "opening":
+      return row.direction === "iOwe" ? `You owed ${name} ${amount} when tracking began` : `${name} owed you ${amount} when tracking began`;
+    case "adjustment":
+      return row.direction === "iOwe" ? `Correction · you owe ${name} ${amount} more` : `Correction · ${name} owes you ${amount} more`;
+    case "advance":
+      return (s?.advanceDelta ?? 0) > 0 ? `You paid ${name} ${amount} ahead · held as advance` : `${name} paid you ${amount} ahead · held as advance`;
+    case "advanceApplied":
+      return s?.settles ? `${amount} of advance used for ${s.settles.title}` : `${amount} of advance used`;
+  }
+}
+
+function dayIndex(d: Date): number {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+}
+
+/**
+ * The PERSON's settlement status, from the row's existing state/direction/overdue flag and due date only.
+ * EMI rows never read the lender's status here — that is shown separately as the bank's status.
+ */
+export function settlementStatus(
+  row: LedgerRow,
+  kind: SettlementKind,
+  personName: string,
+  money: (n: number) => string,
+  now: Date = new Date(),
+): SettlementStatus {
+  const name = firstNameOf(personName);
+  const left = money(row.remaining ?? 0);
+  if (kind === "paymentReceived") return { label: "Received", detail: `From ${name}`, tone: "received" };
+  if (kind === "paymentMade") return { label: "Paid", detail: `To ${name}`, tone: "paid" };
+  if (kind === "advance") return { label: "Advance available", detail: "Not yet applied to anything", tone: "received" };
+  if (kind === "advanceApplied") return { label: "Advance used", detail: "No new money moved", tone: "paid" };
+  if (kind === "loan") return { label: "Repaid in installments", detail: "Settled from the Loan", tone: "neutral" };
+  if (row.state == null) {
+    return row.direction === "iOwe"
+      ? { label: "You owe", detail: `Part of your balance with ${name}`, tone: "payable" }
+      : { label: `${name} owes`, detail: `Part of ${name}'s balance`, tone: "due" };
+  }
+  if (row.state === "settled") {
+    return row.direction === "iOwe"
+      ? { label: "Paid in full", detail: `You paid ${money(row.amount)}`, tone: "settled" }
+      : { label: "Paid in full", detail: `${name} paid ${money(row.amount)}`, tone: "settled" };
+  }
+  if (row.overdue) {
+    return row.direction === "iOwe"
+      ? { label: "Overdue", detail: `You still owe ${name} ${left}`, tone: "overdue" }
+      : { label: "Overdue", detail: `${name} still owes you ${left}`, tone: "overdue" };
+  }
+  if (row.state === "partial") {
+    return row.direction === "iOwe"
+      ? { label: "Partially paid", detail: `You still owe ${left}`, tone: "partial" }
+      : { label: "Partially paid", detail: `${name} still owes ${left}`, tone: "partial" };
+  }
+  // Open. An installment whose due date hasn't arrived yet is upcoming, not due.
+  const isInstallment = kind === "emi" || kind === "loanEmi" || kind === "loanInstallment";
+  if (isInstallment && dayIndex(row.date) > dayIndex(now)) {
+    return { label: kind === "loanInstallment" ? "Upcoming installment" : "Upcoming EMI", detail: `Due ${formatStatementDate(row.date)}`, tone: "upcoming" };
+  }
+  return row.direction === "iOwe"
+    ? { label: "You need to pay", detail: `You owe ${name} ${left}`, tone: "payable" }
+    : { label: "Payment due", detail: `${name} owes you ${left}`, tone: "due" };
+}
+
+/** What was paid against the row so far (engine: original − remaining); null for rows with no settlement state. */
+export function paidSoFar(row: LedgerRow): number | null {
+  if (row.state == null) return null;
+  if (typeof row.paid === "number") return row.paid;
+  return Math.max(0, Math.round((row.amount - (row.remaining ?? 0)) * 100) / 100);
+}
+
+/** Filters by the person-side status the table shows. */
+export type SettlementStatusFilter = "all" | "pending" | "partial" | "paid" | "overdue";
+
+export function matchesStatusFilter(row: LedgerRow, filter: SettlementStatusFilter): boolean {
+  switch (filter) {
+    case "all":
+      return true;
+    case "pending":
+      return row.state === "open" && !row.overdue;
+    case "partial":
+      return row.state === "partial";
+    case "paid":
+      return row.state === "settled";
+    case "overdue":
+      return row.overdue && row.state !== "settled";
+  }
+}
+
+export interface SplitShareLine {
+  label: string;
+  amount: number;
+  /** The share of the person whose ledger is open. */
+  highlight: boolean;
+}
+
+/**
+ * How a split/assigned share was derived — straight from the Expense's stored participant shares.
+ * Null when the Expense isn't available.
+ */
+export function shareBreakdown(expense: Expense | null, personId: string, personName: string): { total: number; lines: SplitShareLine[] } | null {
+  if (!expense) return null;
+  const lines: SplitShareLine[] = [];
+  const mine = expense.participants.filter((p) => p.isMe).reduce((s, p) => s + p.share, 0);
+  lines.push({ label: "Your share", amount: mine, highlight: false });
+  for (const p of expense.participants) {
+    if (p.isMe) continue;
+    const isThem = p.personId === personId;
+    lines.push({ label: `${isThem ? firstNameOf(personName) : firstNameOf(p.name)}'s share`, amount: p.share, highlight: isThem });
+  }
+  return { total: expense.totalAmount, lines };
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Cycle position (header + reconciliation strip) — engine values, read in words
+// ---------------------------------------------------------------------------------------------------
+
+export interface CyclePosition {
+  /** "Amma owes you" / "You owe Amma" / "All settled" — never a bare sign. */
+  headline: string;
+  direction: PersonCycleStatement["direction"];
+  amount: number;
+  /**
+   * The reconciliation, each line an engine total read in words: previous + added − applied payments =
+   * current. `signed` keeps the FlowFi sign (+ = they owe me) so a line on the other side can say so.
+   */
+  lines: { key: "previous" | "added" | "received" | "paid" | "advanceApplied" | "current"; label: string; value: number; signed: number }[];
+  /** Real money that changed hands this cycle (payments and advances; never an advance application). */
+  cashReceived: number;
+  cashPaid: number;
+  /**
+   * Advance held at the cycle end (engine `advanceBalance`, never part of pending). `from` says whose
+   * money it is: "them" = they paid ahead (credit held for them), "you" = you paid them ahead.
+   */
+  advance: { amount: number; from: "them" | "you" } | null;
+}
+
+const round2 = (v: number) => Math.round(v * 100) / 100;
+
+/** The cycle's reconciliation in plain words, from `PersonCycleStatement` totals only. */
+export function cyclePosition(statement: PersonCycleStatement, personName: string): CyclePosition {
+  const name = firstNameOf(personName);
+  const sum = (c: string) => statement.settlementBreakdown.find((b) => b.category === c)?.signedAmount ?? 0;
+  const received = sum("received"); // ≤ 0
+  const paid = sum("repaid"); // ≥ 0
+  const applied = sum("advanceApplied");
+  const headline = statement.direction === "theyOwe" ? `${name} owes you` : statement.direction === "iOwe" ? `You owe ${name}` : "All settled";
+  const lines: CyclePosition["lines"] = [
+    { key: "previous", label: "Previous pending", value: Math.abs(statement.previousPending), signed: statement.previousPending },
+    { key: "added", label: "Added this cycle", value: Math.abs(statement.cycleActivity), signed: statement.cycleActivity },
+  ];
+  if (Math.abs(received) >= 0.005 || Math.abs(paid) < 0.005) lines.push({ key: "received", label: `Received from ${name}`, value: Math.abs(received), signed: received });
+  if (Math.abs(paid) >= 0.005) lines.push({ key: "paid", label: `Paid to ${name}`, value: Math.abs(paid), signed: paid });
+  if (Math.abs(applied) >= 0.005) lines.push({ key: "advanceApplied", label: "Covered by advance", value: Math.abs(applied), signed: applied });
+  lines.push({ key: "current", label: "Current pending", value: statement.amount, signed: statement.currentPending });
+  const adv = statement.advanceBalance ?? 0;
+  return {
+    headline,
+    direction: statement.direction,
+    amount: statement.amount,
+    lines,
+    cashReceived: statement.cashReceived ?? 0,
+    cashPaid: statement.cashPaid ?? 0,
+    advance: Math.abs(adv) >= 0.005 ? { amount: round2(Math.abs(adv)), from: adv < 0 ? "them" : "you" } : null,
+  };
+}
+
+/** "Amma owes you" / "You owe Amma" for a signed FlowFi balance (+ = they owe me). */
+export function signedSideLabel(signed: number, personName: string): string | null {
+  if (Math.abs(signed) < 0.005) return null;
+  const name = firstNameOf(personName);
+  return signed > 0 ? `${name} owes you` : `You owe ${name}`;
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Payment history — shared by the workspace, the share preview and the PDF
+// ---------------------------------------------------------------------------------------------------
+
+/** Real money in from the person (a payment, or an advance they paid ahead). */
+export function isInboundPayment(r: StatementRow): boolean {
+  return r.category === "received" || (r.category === "advance" && r.advanceDelta < 0);
+}
+
+/**
+ * The cycle's payments, newest first, grouped by the Record Payment each row belongs to (engine
+ * `paymentId`) so one real payment split across obligations reads as one payment with its allocation.
+ * Rows without a `paymentId` stand alone. Grouping only — no amounts are derived.
+ */
+export function paymentGroups(statement: PersonCycleStatement): StatementRow[][] {
+  const payments = statement.rows.filter((r) => r.kind === "settlement" || r.category === "advance");
+  const groups: StatementRow[][] = [];
+  const byPayment = new Map<string, StatementRow[]>();
+  for (const r of [...payments].reverse()) {
+    if (!r.paymentId) {
+      groups.push([r]);
+      continue;
+    }
+    const existing = byPayment.get(r.paymentId);
+    if (existing) existing.push(r);
+    else {
+      const fresh = [r];
+      byPayment.set(r.paymentId, fresh);
+      groups.push(fresh);
+    }
+  }
+  return groups;
+}
+
+/** Where one payment row's money went, in words. */
+export function allocationLine(r: StatementRow, money: (n: number) => string): string {
+  if (r.category === "advance") return "Held as advance — for the next obligations";
+  if (r.category === "advanceApplied") return r.settles ? `Advance used for ${r.settles.title}` : "Advance used";
+  if (r.settles) return `Applied to ${r.settles.title}${r.settles.remainingAfter > 0 ? ` · ${money(r.settles.remainingAfter)} left on it` : " · cleared it"}`;
+  return "Not applied to one item · reduces the overall balance";
+}
+
+/** "Received from Amma" / "Amma paid" / "Paid to Amma" / "Advance applied" for a payment group's head row. */
+export function paymentGroupLabel(rows: readonly StatementRow[], personName: string): string {
+  const first = firstNameOf(personName);
+  const head = rows[0];
+  if (head.category === "advanceApplied") return "Advance applied";
+  if (isInboundPayment(head)) return rows.length > 1 ? `${first} paid` : `Received from ${first}`;
+  return rows.length > 1 ? `You paid ${first}` : `Paid to ${first}`;
+}

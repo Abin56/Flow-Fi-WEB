@@ -37,7 +37,7 @@ import {
   type EmiObligationLoanSource,
   type LenderInstallmentStatus,
 } from "@/lib/engines/person-emi-obligations";
-import type { LedgerEntry } from "@/lib/models/person";
+import type { AdvanceApplication, LedgerEntry } from "@/lib/models/person";
 import { signedAmount } from "@/lib/models/person";
 
 // ---------------------------------------------------------------------------------------------------
@@ -101,7 +101,11 @@ function dayIndex(d: Date): number {
 export type StatementLedgerEntry = Pick<
   LedgerEntry,
   "id" | "personId" | "type" | "amount" | "date" | "note" | "increasesBalance" | "transactionRef" | "parentEntryId" | "sourceKind" | "obligationRef" | "createdAt" | "deletedAt"
->;
+> &
+  Partial<Pick<LedgerEntry, "paymentId">>;
+
+/** An advance applied to one obligation — see `AdvanceApplication` in `lib/models/person.ts`. */
+export type StatementAdvanceApplication = Pick<AdvanceApplication, "id" | "advanceEntryId" | "obligationKey" | "amount" | "date" | "createdAt" | "deletedAt">;
 
 export type StatementEmiSource = EmiObligationEmiSource;
 export type StatementLoanSource = EmiObligationLoanSource;
@@ -125,6 +129,12 @@ export interface PersonCycleStatementInput {
    * payment (payments still loading, legacy data) is dated on the installment's due date.
    */
   loanPayments?: readonly StatementLoanPayment[];
+  /**
+   * Advances applied to obligations. Each one settles its obligation and uses up advance — no cash and
+   * no ledger balance moves (the advance moved both when it was received). Ignored when its advance
+   * entry or its obligation no longer exists, so deleting either can never strand the money.
+   */
+  advanceApplications?: readonly StatementAdvanceApplication[];
 }
 
 export interface StatementLoanPayment {
@@ -147,7 +157,11 @@ export type StatementCategory =
   | "borrowed"
   | "adjustment"
   | "received"
-  | "repaid";
+  | "repaid"
+  /** Money received from / paid to the person ahead of any obligation — held as advance, not pending. */
+  | "advance"
+  /** Part of an advance applied to an obligation — settles it without new cash. */
+  | "advanceApplied";
 
 export type StatementRowKind = "obligation" | "settlement";
 
@@ -161,6 +175,8 @@ export const CATEGORY_LABEL: Record<StatementCategory, string> = {
   adjustment: "Adjustments",
   received: "Received",
   repaid: "Paid",
+  advance: "Advance",
+  advanceApplied: "Advance applied",
 };
 
 /** Short type label shown under a row's title ("05 Oct · EMI"). */
@@ -174,6 +190,8 @@ export const CATEGORY_TYPE_LABEL: Record<StatementCategory, string> = {
   adjustment: "Adjustment",
   received: "Settlement",
   repaid: "Settlement",
+  advance: "Advance",
+  advanceApplied: "Advance applied",
 };
 
 /** Lender-side status of the underlying installment — context only, never a Person settlement. */
@@ -189,8 +207,12 @@ export interface StatementRow {
   typeLabel: string;
   /** Always positive — the event's own amount (a payment row carries the PAYMENT, not the remainder). */
   amount: number;
-  /** Effect on the balance: + they owe me more, − less. */
+  /** Effect on the pending balance: + they owe me more, − less. 0 for an advance (see `advanceDelta`). */
   signedAmount: number;
+  /** Effect on the advance balance (FlowFi sign: − = they paid me ahead, + = I paid them ahead). */
+  advanceDelta: number;
+  /** The Record Payment this row belongs to (ledger rows only). */
+  paymentId?: string;
   /** Signed balance after this row (statement order). */
   runningBalance: number;
   /** For a settlement applied to one obligation: what it settled. */
@@ -203,7 +225,8 @@ export interface StatementRow {
   /** For an obligation: how much of it is still open today (settlements up to now). */
   remainingNow?: number;
   /** EMI rows only. */
-  emi?: { sourceName: string; installmentNumber: number; status: EmiRowStatus };
+  /** `sourceKind`/`sourceId`: the EMI or taken Loan the installment belongs to — where it is edited. */
+  emi?: { sourceName: string; installmentNumber: number; status: EmiRowStatus; sourceKind?: "emi" | "loan"; sourceId?: string };
   /** Person-Loan installment rows (and their payments): the Loan it belongs to. */
   loan?: { loanId: string; installmentNumber: number; installmentCount: number; dueDate: Date };
 }
@@ -230,6 +253,16 @@ export interface PersonCycleStatement {
   cycleSettlements: number;
   /** previousPending + cycleActivity + cycleSettlements. */
   currentPending: number;
+  /**
+   * Advance held at the cycle start / end — money paid ahead of any obligation, not yet applied.
+   * FlowFi sign: negative = they paid me ahead (I hold their money), positive = I paid them ahead.
+   * Never part of pending: the ledger balance (`Person.currentBalance`) = pending + advance.
+   */
+  previousAdvance: number;
+  advanceBalance: number;
+  /** Real money that changed hands this cycle — every settlement and advance, never an advance application. */
+  cashReceived: number;
+  cashPaid: number;
   direction: StatementDirection;
   /** |currentPending|. */
   amount: number;
@@ -271,6 +304,8 @@ interface RawEvent {
   signedAmount: number;
   /** Key of the obligation a settlement applies to. */
   settlesKey?: string;
+  advanceDelta?: number;
+  paymentId?: string;
   emi?: StatementRow["emi"];
   loan?: StatementRow["loan"];
 }
@@ -284,9 +319,9 @@ function ledgerCategory(entry: StatementLedgerEntry): StatementCategory {
     case "borrowed":
       return "borrowed";
     case "receivedBack":
-      return "received";
+      return entry.sourceKind === "advance" ? "advance" : "received";
     case "repaid":
-      return "repaid";
+      return entry.sourceKind === "advance" ? "advance" : "repaid";
     case "adjustment":
       return "adjustment";
   }
@@ -300,6 +335,7 @@ function ledgerTitle(entry: StatementLedgerEntry, category: StatementCategory): 
     return note && note !== "Settled all" ? note : "Payment received";
   }
   if (category === "repaid") return note && note !== "Settled all" ? note : "Payment made";
+  if (category === "advance") return note || (entry.type === "receivedBack" ? "Advance received" : "Advance paid");
   if (note) return note;
   return category === "gave" ? "Money I Gave" : category === "borrowed" ? "Money I Borrowed" : "Adjustment";
 }
@@ -355,8 +391,11 @@ export function collectStatementEvents(input: Omit<PersonCycleStatementInput, "c
       category,
       title: ledgerTitle(entry, category),
       amount: entry.amount,
-      signedAmount: signedAmount(entry as LedgerEntry),
-      settlesKey,
+      // An advance settles nothing yet: it moves the advance balance, not pending.
+      signedAmount: category === "advance" ? 0 : signedAmount(entry as LedgerEntry),
+      advanceDelta: category === "advance" ? signedAmount(entry as LedgerEntry) : 0,
+      settlesKey: category === "advance" ? undefined : settlesKey,
+      paymentId: entry.paymentId ?? undefined,
     });
   }
 
@@ -373,7 +412,7 @@ export function collectStatementEvents(input: Omit<PersonCycleStatementInput, "c
       title: o.sourceName,
       amount: o.amount,
       signedAmount: o.amount,
-      emi: { sourceName: o.sourceName, installmentNumber: o.installmentNumber, status: o.lenderStatus },
+      emi: { sourceName: o.sourceName, installmentNumber: o.installmentNumber, status: o.lenderStatus, sourceKind: o.sourceKind, sourceId: o.sourceId },
     });
   }
 
@@ -444,6 +483,34 @@ export function collectStatementEvents(input: Omit<PersonCycleStatementInput, "c
     }
   }
 
+  // Advance applications — only against an advance entry and an obligation that both still exist, and
+  // only in the direction the advance can cover (their advance settles what they owe me, and vice versa).
+  const advanceSignById = new Map<string, number>();
+  for (const e of events) {
+    if (e.category === "advance" && e.key.startsWith("ledger:")) advanceSignById.set(e.key.slice("ledger:".length), Math.sign(e.advanceDelta ?? 0));
+  }
+  const obligations = new Map(events.filter((e) => e.kind === "obligation").map((e) => [e.key, e]));
+  for (const app of input.advanceApplications ?? []) {
+    if (app.deletedAt != null || app.amount <= 0) continue;
+    const advanceSign = advanceSignById.get(app.advanceEntryId);
+    const obligation = obligations.get(app.obligationKey);
+    if (advanceSign == null || obligation == null) continue;
+    const obligationSign = Math.sign(obligation.signedAmount);
+    if (obligationSign === 0 || advanceSign !== -obligationSign) continue;
+    push({
+      key: `adv-app:${app.id}`,
+      date: app.date,
+      createdAt: app.createdAt,
+      order: 2,
+      kind: "settlement",
+      category: "advanceApplied",
+      title: "Advance applied",
+      amount: app.amount,
+      signedAmount: -obligationSign * app.amount,
+      advanceDelta: obligationSign * app.amount,
+      settlesKey: app.obligationKey,
+    });
+  }
 
   return events;
 }
@@ -463,7 +530,7 @@ function compareEvents(a: RawEvent, b: RawEvent): number {
 // ---------------------------------------------------------------------------------------------------
 
 const ACTIVITY_ORDER: StatementCategory[] = ["opening", "split", "emi", "loan", "gave", "borrowed", "adjustment"];
-const SETTLEMENT_ORDER: StatementCategory[] = ["received", "repaid"];
+const SETTLEMENT_ORDER: StatementCategory[] = ["received", "repaid", "advanceApplied"];
 
 function breakdown(rows: StatementRow[], order: StatementCategory[]): BreakdownLine[] {
   const sums = new Map<StatementCategory, number>();
@@ -493,15 +560,20 @@ export function buildPersonCycleStatement(input: PersonCycleStatementInput): Per
   }
 
   let previousPending = 0;
+  let previousAdvance = 0;
+  let advanceBalance = 0;
   let running = 0;
   const rows: StatementRow[] = [];
   for (const e of events) {
     const d = dayIndex(e.date);
     if (d < startIdx) {
       previousPending = round2(previousPending + e.signedAmount);
+      previousAdvance = round2(previousAdvance + (e.advanceDelta ?? 0));
       continue;
     }
     if (d > endIdx) continue;
+    if (rows.length === 0) advanceBalance = previousAdvance;
+    advanceBalance = round2(advanceBalance + (e.advanceDelta ?? 0));
     if (rows.length === 0) running = previousPending;
     running = round2(running + e.signedAmount);
     const original = e.settlesKey != null ? obligationByKey.get(e.settlesKey) : undefined;
@@ -514,6 +586,8 @@ export function buildPersonCycleStatement(input: PersonCycleStatementInput): Per
       typeLabel: CATEGORY_TYPE_LABEL[e.category],
       amount: e.amount,
       signedAmount: e.signedAmount,
+      advanceDelta: e.advanceDelta ?? 0,
+      paymentId: e.paymentId,
       runningBalance: running,
       settles:
         original != null
@@ -521,7 +595,7 @@ export function buildPersonCycleStatement(input: PersonCycleStatementInput): Per
           : undefined,
       settlesKey: original != null ? e.settlesKey : undefined,
       remainingNow:
-        e.kind === "obligation" && (e.category === "split" || e.category === "gave" || e.category === "borrowed" || e.category === "emi" || e.category === "loan")
+        e.kind === "obligation" && (e.category === "opening" || e.category === "split" || e.category === "gave" || e.category === "borrowed" || e.category === "emi" || e.category === "loan")
           ? Math.max(0, round2(e.amount - (settledSoFar.get(e.key) ?? 0)))
           : undefined,
       emi: e.emi,
@@ -535,6 +609,13 @@ export function buildPersonCycleStatement(input: PersonCycleStatementInput): Per
   const cycleSettlements = round2(settlements.reduce((s, r) => s + r.signedAmount, 0));
   const currentPending = round2(previousPending + cycleActivity + cycleSettlements);
   const direction = directionOf(currentPending);
+  if (rows.length === 0) advanceBalance = previousAdvance;
+  let cashReceived = 0;
+  let cashPaid = 0;
+  for (const r of rows) {
+    if (r.category === "received" || (r.category === "advance" && r.advanceDelta < 0)) cashReceived = round2(cashReceived + r.amount);
+    else if (r.category === "repaid" || (r.category === "advance" && r.advanceDelta > 0)) cashPaid = round2(cashPaid + r.amount);
+  }
 
   return {
     personId: person.id,
@@ -545,6 +626,10 @@ export function buildPersonCycleStatement(input: PersonCycleStatementInput): Per
     cycleActivity,
     cycleSettlements,
     currentPending: direction === "settled" ? 0 : currentPending,
+    previousAdvance: Math.abs(previousAdvance) < EPSILON ? 0 : previousAdvance,
+    advanceBalance: Math.abs(advanceBalance) < EPSILON ? 0 : advanceBalance,
+    cashReceived,
+    cashPaid,
     direction,
     amount: direction === "settled" ? 0 : Math.abs(currentPending),
     rows,

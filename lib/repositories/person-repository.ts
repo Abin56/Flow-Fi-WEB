@@ -552,6 +552,12 @@ export class LedgerRepository extends FirestoreCrudRepository<LedgerEntry> {
     return snapshot.docs.map((d) => d.data());
   }
 
+  /** Every entry (active and trashed) written by one Record Payment — see `LedgerEntry.paymentId`. */
+  async getByPaymentId(paymentId: string): Promise<LedgerEntry[]> {
+    const snapshot = await getDocs(query(this.collection, where("paymentId", "==", paymentId)));
+    return snapshot.docs.map((d) => d.data());
+  }
+
   /** `getByTransactionRef`, but over trashed entries — mirrors `getTrash` vs `getAll`. */
   async getTrashByTransactionRef(transactionId: string): Promise<LedgerEntry[]> {
     const snapshot = await getDocs(

@@ -15,7 +15,7 @@ import { useAllEmiInstallments } from "@/hooks/use-emis";
 import { useAllLoanInstallments, useLoans, useTrashedLoans } from "@/hooks/use-loans";
 import { usePeople } from "@/hooks/use-people";
 import { useLoanScheduledPayments } from "@/hooks/use-loan-scheduled-payments";
-import { usePeopleLedgerEntries } from "@/features/people/hooks/use-people-data";
+import { usePeopleAdvanceApplications, usePeopleLedgerEntries } from "@/features/people/hooks/use-people-data";
 import {
   buildPersonCycleStatement,
   cycleContaining,
@@ -25,7 +25,7 @@ import {
 import type { Emi } from "@/lib/models/emi";
 import type { Loan } from "@/lib/models/loan";
 import type { Installment } from "@/lib/models/payment-schedule";
-import type { LedgerEntry, Person } from "@/lib/models/person";
+import type { AdvanceApplication, LedgerEntry, Person } from "@/lib/models/person";
 import { createEmiRepository, createLoanRepository } from "@/lib/repositories/repository-factory";
 import { useAuthStore } from "@/store/auth-store";
 
@@ -49,6 +49,8 @@ export function usePersonCycleStatement(
   allTimeStatement: PersonCycleStatement | null;
   /** This person's raw ledger entries (active and trashed) — what deletes are planned from. */
   ledgerEntries: LedgerEntry[];
+  /** This person's active advance applications. */
+  advanceApplications: AdvanceApplication[];
   person: Person | null;
   linkedEmis: LinkedEmiSource[];
   setRepays: (source: LinkedEmiSource, repays: boolean) => Promise<void>;
@@ -57,6 +59,7 @@ export function usePersonCycleStatement(
   const uid = useAuthStore((s) => s.user?.uid);
   const { data: people = [], isLoading: peopleLoading } = usePeople();
   const { entriesByPersonId, isLoading: entriesLoading } = usePeopleLedgerEntries();
+  const { applicationsByPersonId, isLoading: applicationsLoading } = usePeopleAdvanceApplications();
   const { data: emis = [] } = useEmis();
   const { data: emiInstallments = [] } = useAllEmiInstallments();
   const { data: loans = [] } = useLoans();
@@ -84,6 +87,7 @@ export function usePersonCycleStatement(
   );
 
   const ledgerEntries = useMemo(() => (person ? (entriesByPersonId[person.id] ?? []) : []), [person, entriesByPersonId]);
+  const advanceApplications = useMemo(() => (person ? (applicationsByPersonId[person.id] ?? []) : []), [person, applicationsByPersonId]);
 
   const baseInput = useMemo(() => {
     if (person == null) return null;
@@ -96,8 +100,9 @@ export function usePersonCycleStatement(
       loans: loans as Loan[],
       installments: [...(emiInstallments as Installment[]), ...(loanInstallments as Installment[])],
       loanPayments,
+      advanceApplications,
     };
-  }, [person, ledgerEntries, emis, loans, trashedLoans, emiInstallments, loanInstallments, loanPayments]);
+  }, [person, ledgerEntries, advanceApplications, emis, loans, trashedLoans, emiInstallments, loanInstallments, loanPayments]);
 
   const statement = useMemo(() => (baseInput ? buildPersonCycleStatement({ ...baseInput, cycle }) : null), [baseInput, cycle]);
   const allTimeStatement = useMemo(
@@ -117,7 +122,16 @@ export function usePersonCycleStatement(
     }
   };
 
-  return { statement, allTimeStatement, ledgerEntries, person, linkedEmis, setRepays, isLoading: peopleLoading || entriesLoading };
+  return {
+    statement,
+    allTimeStatement,
+    ledgerEntries,
+    advanceApplications,
+    person,
+    linkedEmis,
+    setRepays,
+    isLoading: peopleLoading || entriesLoading || applicationsLoading,
+  };
 }
 
 /**
@@ -132,6 +146,7 @@ export function usePeopleCycleStatements(cycle: StatementCycle): {
 } {
   const { data: people = [], isLoading: peopleLoading } = usePeople();
   const { entriesByPersonId, isLoading: entriesLoading } = usePeopleLedgerEntries();
+  const { applicationsByPersonId, isLoading: applicationsLoading } = usePeopleAdvanceApplications();
   const { data: emis = [], isLoading: emisLoading } = useEmis();
   const { data: emiInstallments = [], isLoading: emiInstallmentsLoading } = useAllEmiInstallments();
   const { data: loans = [], isLoading: loansLoading } = useLoans();
@@ -152,15 +167,16 @@ export function usePeopleCycleStatements(cycle: StatementCycle): {
         loans: loans as Loan[],
         installments,
         loanPayments,
+        advanceApplications: applicationsByPersonId[person.id] ?? [],
         cycle,
       });
     }
     return out;
-  }, [people, entriesByPersonId, emis, loans, trashedLoans, emiInstallments, loanInstallments, loanPayments, cycle]);
+  }, [people, entriesByPersonId, applicationsByPersonId, emis, loans, trashedLoans, emiInstallments, loanInstallments, loanPayments, cycle]);
 
   // Every source the engine reads must have reported before a row renders: a statement built while the
   // EMI/Loan watches are still resolving omits linked-EMI obligations, then jumps once they land.
   const isLoading =
-    peopleLoading || entriesLoading || emisLoading || emiInstallmentsLoading || loansLoading || loanInstallmentsLoading || trashedLoading;
+    peopleLoading || entriesLoading || applicationsLoading || emisLoading || emiInstallmentsLoading || loansLoading || loanInstallmentsLoading || trashedLoading;
   return { statementsByPersonId, isLoading };
 }

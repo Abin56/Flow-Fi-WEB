@@ -1,0 +1,73 @@
+{
+  "description": "Golden People Ledger payment / advance rule (lib/engines/person-cycle-statement.ts + lib/engines/person-payment.ts / lib/features/people/domain/person_cycle_statement.dart + person_payment.dart). Byte-identical copy in Finance_App/test/cross_platform_fixtures/person_payment_fixture.json. Dates are local calendar days. Sign: + = they owe me. advanceBalance: - = they paid me ahead. Scenario: AMMA, KSEB 1000 (29 Sep) + opted-in EMI installment 2000 (30 Sep); next cycle EMI installment 1200 (30 Oct).",
+  "person": { "id": "amma", "openingBalance": 0, "createdAt": "2026-01-01" },
+  "emis": [{ "id": "emi1", "name": "Phone EMI", "scheduleId": "sch", "beneficiaryPersonId": "amma", "beneficiaryRepaysInstallments": true }],
+  "installments": {
+    "i1": { "id": "i1", "scheduleId": "sch", "sequenceNumber": 1, "dueDate": "2026-09-30", "amountDue": 2000, "amountPaid": 0, "createdAt": "2026-09-01" },
+    "i2": { "id": "i2", "scheduleId": "sch", "sequenceNumber": 2, "dueDate": "2026-10-30", "amountDue": 1200, "amountPaid": 0, "createdAt": "2026-09-01" }
+  },
+  "ledger": {
+    "kseb": { "id": "kseb", "type": "gave", "amount": 1000, "date": "2026-09-29", "createdAt": "2026-09-29", "note": "KSEB bill", "sourceKind": "manual" },
+    "payKsebFull": { "id": "payKsebFull", "type": "receivedBack", "amount": 1000, "date": "2026-10-02", "createdAt": "2026-10-02", "parentEntryId": "kseb", "sourceKind": "manual", "paymentId": "p1", "transactionRef": "cash1" },
+    "payEmiPartial": { "id": "payEmiPartial", "type": "receivedBack", "amount": 1500, "date": "2026-10-02", "createdAt": "2026-10-02", "obligationRef": "emi-inst:i1", "sourceKind": "emiInstallment", "paymentId": "p1", "transactionRef": "cash1" },
+    "payEmiFull": { "id": "payEmiFull", "type": "receivedBack", "amount": 2000, "date": "2026-10-02", "createdAt": "2026-10-02", "obligationRef": "emi-inst:i1", "sourceKind": "emiInstallment", "paymentId": "p2", "transactionRef": "cash2" },
+    "advance": { "id": "advance", "type": "receivedBack", "amount": 2000, "date": "2026-10-02", "createdAt": "2026-10-02", "sourceKind": "advance", "paymentId": "p2", "transactionRef": "cash2" }
+  },
+  "applications": {
+    "a1": { "id": "a1", "advanceEntryId": "advance", "obligationKey": "emi-inst:i2", "amount": 1200, "date": "2026-10-30", "createdAt": "2026-10-30" },
+    "aOrphan": { "id": "aOrphan", "advanceEntryId": "advance", "obligationKey": "emi-inst:gone", "amount": 500, "date": "2026-10-30", "createdAt": "2026-10-30" }
+  },
+  "cycles": {
+    "SEP": { "start": "2026-09-18", "end": "2026-10-17" },
+    "OCT": { "start": "2026-10-18", "end": "2026-11-17" }
+  },
+  "statementCases": [
+    {
+      "name": "no payment yet",
+      "ledger": ["kseb"], "installments": ["i1"], "applications": [],
+      "expect": {
+        "SEP": { "previousPending": 0, "cycleActivity": 3000, "cycleSettlements": 0, "currentPending": 3000, "previousAdvance": 0, "advanceBalance": 0, "cashReceived": 0, "cashPaid": 0, "remainingNow": { "ledger:kseb": 1000, "emi-inst:i1": 2000 } }
+      }
+    },
+    {
+      "name": "Case A — paid 3000 (full)",
+      "ledger": ["kseb", "payKsebFull", "payEmiFull"], "installments": ["i1"], "applications": [],
+      "expect": {
+        "SEP": { "previousPending": 0, "cycleActivity": 3000, "cycleSettlements": -3000, "currentPending": 0, "previousAdvance": 0, "advanceBalance": 0, "cashReceived": 3000, "cashPaid": 0, "remainingNow": { "ledger:kseb": 0, "emi-inst:i1": 0 } }
+      }
+    },
+    {
+      "name": "Case B — paid 2500 (partial, oldest first), 500 carried forward",
+      "ledger": ["kseb", "payKsebFull", "payEmiPartial"], "installments": ["i1"], "applications": [],
+      "expect": {
+        "SEP": { "previousPending": 0, "cycleActivity": 3000, "cycleSettlements": -2500, "currentPending": 500, "previousAdvance": 0, "advanceBalance": 0, "cashReceived": 2500, "cashPaid": 0, "remainingNow": { "ledger:kseb": 0, "emi-inst:i1": 500 } },
+        "OCT": { "previousPending": 500, "cycleActivity": 0, "cycleSettlements": 0, "currentPending": 500, "previousAdvance": 0, "advanceBalance": 0, "cashReceived": 0, "cashPaid": 0, "remainingNow": {} }
+      }
+    },
+    {
+      "name": "Case C — paid 5000, extra 2000 kept as advance; next cycle 1200 not yet applied",
+      "ledger": ["kseb", "payKsebFull", "payEmiFull", "advance"], "installments": ["i1", "i2"], "applications": [],
+      "expect": {
+        "SEP": { "previousPending": 0, "cycleActivity": 3000, "cycleSettlements": -3000, "currentPending": 0, "previousAdvance": 0, "advanceBalance": -2000, "cashReceived": 5000, "cashPaid": 0, "remainingNow": { "ledger:kseb": 0, "emi-inst:i1": 0 } },
+        "OCT": { "previousPending": 0, "cycleActivity": 1200, "cycleSettlements": 0, "currentPending": 1200, "previousAdvance": -2000, "advanceBalance": -2000, "cashReceived": 0, "cashPaid": 0, "remainingNow": { "emi-inst:i2": 1200 } }
+      }
+    },
+    {
+      "name": "Case C — 1200 advance applied; orphan application ignored",
+      "ledger": ["kseb", "payKsebFull", "payEmiFull", "advance"], "installments": ["i1", "i2"], "applications": ["a1", "aOrphan"],
+      "expect": {
+        "OCT": { "previousPending": 0, "cycleActivity": 1200, "cycleSettlements": -1200, "currentPending": 0, "previousAdvance": -2000, "advanceBalance": -800, "cashReceived": 0, "cashPaid": 0, "remainingNow": { "emi-inst:i2": 0 } }
+      }
+    }
+  ],
+  "allocationCases": [
+    { "name": "exact", "amount": 3000, "expect": { "lines": [["ledger:kseb", 1000], ["emi-inst:i1", 2000]], "selectedTotal": 3000, "allocated": 3000, "extra": 0, "unpaid": 0, "outcome": "full" } },
+    { "name": "partial", "amount": 2500, "expect": { "lines": [["ledger:kseb", 1000], ["emi-inst:i1", 1500]], "selectedTotal": 3000, "allocated": 2500, "extra": 0, "unpaid": 500, "outcome": "partial" } },
+    { "name": "over", "amount": 5000, "expect": { "lines": [["ledger:kseb", 1000], ["emi-inst:i1", 2000]], "selectedTotal": 3000, "allocated": 3000, "extra": 2000, "unpaid": 0, "outcome": "over" } },
+    { "name": "manual", "amount": 2500, "manual": { "ledger:kseb": 500, "emi-inst:i1": 2000 }, "expect": { "lines": [["ledger:kseb", 500], ["emi-inst:i1", 2000]], "selectedTotal": 3000, "allocated": 2500, "extra": 0, "unpaid": 500, "outcome": "partial" } }
+  ],
+  "allocationObligations": [
+    { "key": "emi-inst:i1", "title": "Phone EMI", "date": "2026-09-30", "createdAt": "2026-09-01", "amount": 2000, "outstanding": 2000, "side": "theyOwe" },
+    { "key": "ledger:kseb", "title": "KSEB bill", "date": "2026-09-29", "createdAt": "2026-09-29", "amount": 1000, "outstanding": 1000, "side": "theyOwe" }
+  ]
+}

@@ -6,6 +6,7 @@ import {
   CalendarClock,
   HandCoins,
   Landmark,
+  PiggyBank,
   Scale,
   Split,
   type LucideIcon,
@@ -33,6 +34,8 @@ const CATEGORY_ICON: Record<StatementCategory, LucideIcon> = {
   adjustment: Scale,
   received: HandCoins,
   repaid: HandCoins,
+  advance: PiggyBank,
+  advanceApplied: PiggyBank,
 };
 
 /** The lender-side installment state — context only. Paying the bank never settles the Person. */

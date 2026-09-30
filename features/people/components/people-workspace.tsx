@@ -298,6 +298,23 @@ export function PeopleWorkspace() {
                   "yetToReceive",
                 );
               }}
+              onRecordPayment={async (input, paymentId) => {
+                if (!selectedRaw || !actions) throw new Error("Not signed in");
+                if (paymentId) await actions.editPersonPayment(selectedRaw, paymentId, input);
+                else await actions.recordPersonPayment(selectedRaw, input);
+              }}
+              onApplyAdvance={async (params) => {
+                if (!selectedRaw || !actions) throw new Error("Not signed in");
+                await actions.applyPersonAdvance(selectedRaw, params);
+              }}
+              onRevertPayment={async (paymentId) => {
+                if (!selectedRaw || !actions) throw new Error("Not signed in");
+                await actions.revertPersonPayment(selectedRaw, paymentId);
+              }}
+              onRemoveAdvanceApplications={async (applications) => {
+                if (!selectedRaw || !actions) throw new Error("Not signed in");
+                await actions.removePersonAdvanceApplications(selectedRaw, applications);
+              }}
               onEditPerson={async (patch) => {
                 if (!selectedRaw) throw new Error("Person not found");
                 await handleEditPerson(selectedRaw, patch);

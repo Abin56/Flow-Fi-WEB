@@ -49,7 +49,17 @@ import {
   type PaymentSchedule,
 } from "@/lib/models/payment-schedule";
 import { loanFromFirestore, loanToFirestore, type Loan } from "@/lib/models/loan";
-import { ledgerEntryFromFirestore, ledgerEntryToFirestore, personFromFirestore, personToFirestore, type LedgerEntry, type Person } from "@/lib/models/person";
+import {
+  advanceApplicationFromFirestore,
+  advanceApplicationToFirestore,
+  ledgerEntryFromFirestore,
+  ledgerEntryToFirestore,
+  personFromFirestore,
+  personToFirestore,
+  type AdvanceApplication,
+  type LedgerEntry,
+  type Person,
+} from "@/lib/models/person";
 import { expenseFromFirestore, expenseToFirestore, type Expense } from "@/lib/models/expense";
 import { transactionFromFirestore, transactionToFirestore, type Transaction } from "@/lib/models/transaction";
 import { stagedRecordFromFirestore, stagedRecordToFirestore, type StagedRecord } from "@/lib/models/document-import";
@@ -74,6 +84,7 @@ import { EmiPaymentBreakdownRepository, EmiRepository } from "./emi-repository";
 import { ExpenseRepository } from "./expense-repository";
 import { LoanRepository } from "./loan-repository";
 import { LedgerRepository, PersonRepository } from "./person-repository";
+import { PersonPaymentRepository } from "./person-payment-repository";
 import { SavingsRepository } from "./savings-repository";
 import { InstallmentPaymentRepository, InstallmentRepository, PaymentScheduleRepository } from "./payment-schedule-repository";
 import { TransactionRepository } from "./transaction-repository";
@@ -519,4 +530,43 @@ export function createExpenseRepository(uid: string, accountRepository: AccountR
     (scheduleId) => createInstallmentRepositoryFor(uid, scheduleId),
     (personId) => createLedgerRepositoryFor(uid, personId, personRepository),
   );
+}
+
+const advanceApplicationConverter: FirestoreDataConverter<AdvanceApplication> = {
+  toFirestore: advanceApplicationToFirestore,
+  fromFirestore: advanceApplicationFromFirestore,
+};
+
+/** `AdvanceApplication`s live in a per-person `people/{personId}/advanceApplications` subcollection. */
+export function createAdvanceApplicationsCollection(uid: string, personId: string) {
+  return collection(
+    db,
+    FirestoreCollections.users,
+    uid,
+    FirestoreCollections.people,
+    personId,
+    FirestoreCollections.advanceApplications,
+  ).withConverter(advanceApplicationConverter);
+}
+
+/**
+ * Record Payment for one person — wires the ledger, the cash-leg Transaction repository, the expense
+ * and its split tracking installments, and the advance applications into one atomic writer.
+ * `cashLegCategoryId`: the People cash-leg category (`CategoryRepository.getOrCreatePersonalLoanCategory`).
+ */
+export function createPersonPaymentRepository(uid: string, personId: string, cashLegCategoryId: string): PersonPaymentRepository {
+  const accountRepository = createAccountRepository(uid);
+  const personRepository = createPersonRepository(uid);
+  const expenseRepository = createExpenseRepository(uid, accountRepository);
+  return new PersonPaymentRepository({
+    personRepository,
+    ledgerRepository: createLedgerRepositoryFor(uid, personId, personRepository),
+    transactionRepository: createTransactionRepository(uid, accountRepository),
+    advanceApplications: createAdvanceApplicationsCollection(uid, personId),
+    expenseDocRef: (expenseId) => expenseRepository.docRef(expenseId),
+    installmentDocRef: (scheduleId, installmentId) => createInstallmentRepositoryFor(uid, scheduleId).docRef(installmentId),
+    installmentPaymentDocRef: (scheduleId, installmentId, paymentId) =>
+      createInstallmentPaymentRepositoryFor(uid, scheduleId, installmentId, createInstallmentRepositoryFor(uid, scheduleId)).docRef(paymentId),
+    cashLegCategoryId,
+  });
 }

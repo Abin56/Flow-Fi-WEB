@@ -1,0 +1,261 @@
+"use client";
+
+import { PiggyBank } from "lucide-react";
+import { useState } from "react";
+import { paymentInitialFor, type RecordPaymentInitial } from "@/features/people/components/workspace/record-payment-panel";
+import { obligationSourceLabel, type PayableObligation } from "@/features/people/lib/person-payment-obligations";
+import { formatStatementDate } from "@/lib/engines/person-cycle-statement";
+import { money } from "@/lib/engines/person-cycle-statement-share";
+import { planAdvanceApplication, round2, type AdvanceSource, type AdvanceUse } from "@/lib/engines/person-payment";
+import { cn } from "@/lib/utils";
+import { WS_FIELD, WS_GHOST, WS_PRIMARY } from "./person-workspace-ui";
+
+type PaymentEntry = Parameters<typeof paymentInitialFor>[1][number];
+
+/**
+ * Inside the revert confirmation: what this ONE payment did — every obligation it paid and any advance —
+ * so the user sees the whole financial effect, plus "Edit instead" where the payment can be edited.
+ */
+export function PaymentRevertDetails({
+  paymentId,
+  entries,
+  firstName,
+  onEdit,
+  accountIdOf,
+}: {
+  paymentId: string;
+  entries: readonly PaymentEntry[];
+  firstName: string;
+  onEdit?: (initial: RecordPaymentInitial) => void;
+  accountIdOf: (transactionId: string) => string | null;
+}) {
+  const group = entries.filter((e) => e.deletedAt == null && e.paymentId === paymentId);
+  const total = round2(group.reduce((s, e) => s + e.amount, 0));
+  const advance = round2(group.filter((e) => e.sourceKind === "advance").reduce((s, e) => s + e.amount, 0));
+  const obligationCount = group.filter((e) => e.sourceKind !== "advance").length;
+  const received = group[0]?.type !== "repaid";
+  const initial = paymentInitialFor(paymentId, entries, accountIdOf);
+  return (
+    <>
+      <p>
+        This reverts the whole payment of <span className="font-semibold text-foreground">{money(total)}</span> {received ? "received from" : "paid to"}{" "}
+        {firstName}: the account movement is reversed, and {obligationCount === 1 ? "the obligation" : `each of the ${obligationCount} obligations`} it paid
+        becomes unpaid again by exactly what it received.
+      </p>
+      {advance > 0 && <p>{money(advance)} held as advance goes too — anything applied from it to later obligations is un-applied.</p>}
+      {group.some((e) => e.incomeTransactionRef) && <p>The part recorded as separate income is removed with it.</p>}
+      {onEdit && initial && (
+        <p>
+          Only the amount or allocation was wrong?{" "}
+          <button type="button" onClick={() => onEdit(initial)} className="font-semibold text-foreground underline underline-offset-2">
+            Edit the payment instead
+          </button>
+          .
+        </p>
+      )}
+    </>
+  );
+}
+
+function Figure({ label, value, tone, strong }: { label: string; value: string; tone?: string; strong?: boolean }) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-[11px] font-semibold tracking-[0.05em] text-foreground/70 uppercase">{label}</dt>
+      <dd className={cn("tabular-nums", strong ? "font-heading text-[16px] font-bold" : "text-[14px] font-semibold", tone ?? "text-foreground")}>{value}</dd>
+    </div>
+  );
+}
+
+/**
+ * Advance held for this person — what is available, what is open on the same side, and what would be
+ * left after applying it. Nothing is consumed until the user opens it, picks the obligations and
+ * confirms: a new cycle never uses advance on its own. Applying moves no money (the advance already did).
+ */
+export function ApplyAdvancePanel({
+  personName,
+  side,
+  available,
+  obligations,
+  open,
+  onOpenChange,
+  onConfirm,
+}: {
+  personName: string;
+  side: "theyOwe" | "iOwe";
+  available: readonly (AdvanceSource & { remaining: number })[];
+  /** Every open obligation (either side) — only this side's are offered. */
+  obligations: readonly PayableObligation[];
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onConfirm: (targets: { obligationKey: string; uses: AdvanceUse[] }[]) => Promise<void>;
+}) {
+  const first = personName.split(" ")[0];
+  const options = obligations.filter((o) => o.side === side);
+  const [selected, setSelected] = useState<Set<string>>(() => new Set(options.map((o) => o.key)));
+  const [manual, setManual] = useState<Record<string, string> | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const plan = planAdvanceApplication({
+    available,
+    obligations: options,
+    side,
+    selectedKeys: [...selected],
+    manual: manual ? Object.fromEntries(Object.entries(manual).map(([k, v]) => [k, Number(v) || 0])) : null,
+  });
+  const openTotal = round2(options.reduce((s, o) => s + o.outstanding, 0));
+  const lineByKey = new Map(plan.allocation.lines.map((l) => [l.key, l]));
+  const applying = plan.allocation.allocated;
+  const toggle = (key: string) => {
+    setManual(null);
+    setSelected((s) => {
+      const next = new Set(s);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  return (
+    <div className="mt-4 overflow-hidden rounded-[8px] border border-settle-advance-edge/70 bg-card">
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-2 border-l-[4px] border-settle-advance-edge bg-settle-advance-tint px-4 py-2.5">
+        <p className="flex items-center gap-1.5 text-[12px] font-bold tracking-[0.07em] text-settle-advance-text uppercase">
+          <PiggyBank className="size-4" strokeWidth={2.25} aria-hidden />
+          {side === "theyOwe" ? `Advance from ${first}` : `Advance you paid ${first}`}
+        </p>
+        <dl className="flex flex-1 flex-wrap gap-x-6 gap-y-1">
+          <Figure label="Advance available" value={money(plan.availableTotal)} tone="text-settle-advance-text" strong />
+          <Figure label={side === "theyOwe" ? `${first} owes you` : `You owe ${first}`} value={money(openTotal)} />
+          <Figure label="Remaining after advance" value={money(Math.max(0, round2(openTotal - plan.availableTotal)))} strong />
+        </dl>
+        {!open && options.length > 0 && (
+          <button type="button" onClick={() => onOpenChange(true)} className={cn(WS_PRIMARY, "h-8 px-3")}>
+            Apply advance
+          </button>
+        )}
+      </div>
+      {options.length === 0 && (
+        <p className="px-4 py-2 text-xs font-medium text-foreground/75">
+          Nothing is open on this side right now — the advance stays available until you apply it or revert the payment it came from.
+        </p>
+      )}
+      {open && options.length > 0 && (
+        <div className="px-4 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs font-semibold text-foreground/80">Choose what the advance pays — oldest first unless you change an amount.</p>
+            {manual && (
+              <button
+                type="button"
+                onClick={() => setManual(null)}
+                className="h-7 rounded-[6px] px-2 text-xs font-semibold text-foreground/80 hover:bg-secondary"
+              >
+                Allocate automatically
+              </button>
+            )}
+          </div>
+          <div className="mt-2 overflow-x-auto rounded-[6px] border border-border-strong">
+            <table className="w-full min-w-[34rem] border-collapse text-sm">
+              <thead>
+                <tr className="bg-secondary text-left text-[11px] font-semibold tracking-[0.05em] text-foreground/75 uppercase">
+                  <th className="w-9 border-b border-border-strong px-2 py-1.5" />
+                  <th className="border-b border-border-strong px-2 py-1.5">Obligation</th>
+                  <th className="border-b border-border-strong px-2 py-1.5 text-right">Due</th>
+                  <th className="border-b border-border-strong px-2 py-1.5 text-right">From advance</th>
+                  <th className="border-b border-border-strong px-2 py-1.5 text-right">Remaining</th>
+                </tr>
+              </thead>
+              <tbody>
+                {options.map((o) => {
+                  const on = selected.has(o.key);
+                  const line = lineByKey.get(o.key);
+                  const after = on ? (line?.remainingAfter ?? o.outstanding) : o.outstanding;
+                  return (
+                    <tr key={o.key} className={cn(on ? "bg-settle-advance-tint/60" : "hover:bg-secondary/60")}>
+                      <td className="border-b border-border px-2 py-1.5 text-center">
+                        <input
+                          type="checkbox"
+                          checked={on}
+                          onChange={() => toggle(o.key)}
+                          aria-label={`Apply advance to ${o.title}`}
+                          className="size-4 accent-[var(--color-settle-advance-edge)]"
+                        />
+                      </td>
+                      <td className="border-b border-border px-2 py-1.5">
+                        <span className="block font-semibold text-foreground">{o.title}</span>
+                        <span className="text-xs text-foreground/70">
+                          {formatStatementDate(o.date, true)} · {obligationSourceLabel(o, first)}
+                        </span>
+                      </td>
+                      <td className="border-b border-border px-2 py-1.5 text-right font-semibold tabular-nums">{money(o.outstanding)}</td>
+                      <td className="border-b border-border px-2 py-1.5 text-right tabular-nums">
+                        {on ? (
+                          <input
+                            type="number"
+                            inputMode="decimal"
+                            aria-label={`Advance for ${o.title}`}
+                            value={manual ? (manual[o.key] ?? "") : String(line?.amount ?? 0)}
+                            onChange={(e) =>
+                              setManual((m) => ({
+                                ...(m ?? Object.fromEntries(plan.allocation.lines.map((l) => [l.key, String(l.amount)]))),
+                                [o.key]: e.target.value,
+                              }))
+                            }
+                            className={cn(WS_FIELD, "h-8 w-28 text-right tabular-nums")}
+                          />
+                        ) : (
+                          <span className="text-foreground/55">—</span>
+                        )}
+                      </td>
+                      <td className="border-b border-border px-2 py-1.5 text-right font-semibold tabular-nums">
+                        {on && after <= 0.005 ? (
+                          <span className="text-success">Paid in full</span>
+                        ) : (
+                          <span className={on && line ? "text-warning" : "text-foreground"}>{money(after)}</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div className="mt-3 grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
+            <dl className="grid grid-cols-2 gap-x-6 gap-y-1 sm:grid-cols-3">
+              <Figure label="Applying now" value={money(applying)} tone="text-settle-advance-text" strong />
+              <Figure label="Advance left" value={money(round2(plan.availableTotal - applying))} />
+              <Figure label="Still due after" value={money(Math.max(0, round2(openTotal - applying)))} strong />
+            </dl>
+            <div className="flex items-center gap-2">
+              <button type="button" onClick={() => onOpenChange(false)} disabled={busy} className={WS_GHOST}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={busy || !!plan.error || plan.targets.length === 0}
+                onClick={async () => {
+                  setBusy(true);
+                  setErr(null);
+                  try {
+                    await onConfirm(plan.targets);
+                    onOpenChange(false);
+                  } catch (e) {
+                    setErr(e instanceof Error ? e.message : "Couldn't apply the advance.");
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+                className={WS_PRIMARY}
+              >
+                {busy ? "Applying…" : `Apply ${money(applying)} of advance`}
+              </button>
+            </div>
+            {(err || plan.error) && <p className="text-xs font-medium text-expense sm:col-span-2">{err ?? plan.error}</p>}
+            <p className="text-[11.5px] text-foreground/70 sm:col-span-2">
+              No money moves and nothing becomes income — the advance was already received. Each application stays linked to the payment it came from and can be
+              undone.
+            </p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

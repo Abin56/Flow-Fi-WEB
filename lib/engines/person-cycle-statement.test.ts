@@ -11,7 +11,8 @@ import {
   type StatementLedgerEntry,
   type StatementLoanSource,
 } from "@/lib/engines/person-cycle-statement";
-import { money, statementPdfModel, statementShareText } from "@/lib/engines/person-cycle-statement-share";
+import { money, statementShareText } from "@/lib/engines/person-cycle-statement-share";
+import { statementView } from "@/features/people/lib/person-statement-pdf-model";
 import { renderPersonStatementPdf } from "@/features/people/lib/person-statement-pdf";
 import type { LedgerEntryType } from "@/lib/models/person";
 import { emiReceivableThrough, personEmiObligations } from "@/lib/engines/person-emi-obligations";
@@ -402,13 +403,14 @@ describe("outputs share the engine total", () => {
   });
 
   it("25. PDF total = engine total", async () => {
-    const model = statementPdfModel(s);
-    expect(model.currentPending).toBe(4750);
-    expect(model.closingRow.balance).toBe(money(4750));
-    expect(model.rows.at(-1)!.balance).toBe(money(4750));
-    expect(model.summary.at(-1)).toEqual({ label: "Current Pending", value: money(4750) });
-    expect(model.positionHeadline).toBe("They owe you");
-    expect(model.rows.find((r) => r.isEmi)).toMatchObject({ type: "EMI", added: money(2500) });
+    const view = statementView(s);
+    expect(view.currentPending).toBe(4750);
+    expect(view.current).toEqual({ label: "Current pending", value: money(4750) });
+    expect(view.amount).toBe(money(4750));
+    expect(view.headline).toBe(`${s.personName.split(" ")[0]} owes you`);
+    expect(view.rows.find((r) => r.kind === "emi")).toMatchObject({ typeLabel: "EMI", original: money(2500), remaining: money(2500) });
+    // The received payment is listed in the cycle's payment history.
+    expect(view.payments.some((p) => p.amount === money(1500) && p.inbound)).toBe(true);
     const bytes = await renderPersonStatementPdf(s);
     expect(new TextDecoder().decode(bytes.slice(0, 5))).toBe("%PDF-");
   });

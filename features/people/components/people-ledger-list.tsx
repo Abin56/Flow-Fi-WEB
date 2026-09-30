@@ -14,6 +14,7 @@ import {
   X,
 } from "lucide-react";
 import { ClayAvatar } from "@/components/clay/clay-avatar";
+import { cyclePosition } from "@/features/people/lib/settlement-presentation";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
 import { FilterTabs, LE_RADIUS, Money } from "@/features/loans/components/loan-emi-ui";
@@ -476,7 +477,23 @@ function Figure({
 }
 
 /** Shared desktop column template — the header row and every person row use it. */
-const ROW_GRID = "md:grid-cols-[minmax(0,1fr)_7rem_8rem_10rem_1rem] md:gap-x-5";
+const ROW_GRID = "md:grid-cols-[minmax(0,1fr)_7rem_8rem_8rem_10rem_1rem] md:gap-x-5";
+
+/**
+ * The cycle's payment status in the shared settlement wording (`settlement-presentation.ts`), from engine
+ * values only: paid something but still pending → partial; pending with nothing paid → due; nothing
+ * pending after activity or a payment → paid in full.
+ */
+function cycleStatus(s: PeopleLedgerRow["statement"], moved: number): { label: string; className: string } | null {
+  if (s.direction !== "settled") {
+    if (moved > 0.005) return { label: "Partially paid", className: "border-warning/60 bg-warning/10 text-foreground" };
+    return s.direction === "theyOwe"
+      ? { label: "Payment due", className: "border-success/50 bg-success/10 text-foreground" }
+      : { label: "You need to pay", className: "border-expense/50 bg-expense/10 text-foreground" };
+  }
+  if (moved > 0.005 || Math.abs(s.cycleActivity) >= 0.005) return { label: "Paid in full", className: "border-border-strong bg-secondary text-foreground" };
+  return null;
+}
 
 function PersonRow({
   row,
@@ -492,11 +509,16 @@ function PersonRow({
   const DirIcon = tone.icon;
   const previous = perspectiveAmount(s, s.previousPending);
   const activity = perspectiveAmount(s, s.cycleActivity);
-  const settled = perspectiveAmount(s, s.cycleSettlements);
   const n = s.rows.length;
   const isSettled = s.direction === "settled";
   const activityText = hasValue(activity) ? signed(activity) : money(0);
-  const settledText = hasValue(settled) ? `Settled ${signed(settled)}` : null;
+  // Real money this cycle and advance held apart from pending — engine values via `cyclePosition`.
+  const pos = cyclePosition(s, row.name);
+  const moved = pos.cashReceived > 0 ? pos.cashReceived : pos.cashPaid;
+  const movedText = pos.cashReceived > 0 ? money(pos.cashReceived) : pos.cashPaid > 0 ? `Paid ${money(pos.cashPaid)}` : money(0);
+  const status = cycleStatus(s, moved);
+  const firstName = row.name.split(" ")[0];
+  const advanceText = pos.advance ? `Advance ${money(pos.advance.amount)} ${pos.advance.from === "them" ? `from ${firstName}` : "paid ahead"}` : null;
 
   return (
     <li
@@ -519,8 +541,12 @@ function PersonRow({
           <ClayAvatar name={row.name} size={36} />
           <span className="flex min-w-0 flex-col">
             <span className="truncate font-heading text-[15px] leading-tight font-semibold text-foreground">{row.name}</span>
-            <span className="text-xs text-muted-foreground">
-              {n === 0 ? "No activity" : `${n} ${n === 1 ? "activity" : "activities"}`}
+            <span className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted-foreground">
+              {status && (
+                <span className={cn("rounded-[4px] border px-1.5 py-px text-[11px] font-semibold", status.className)}>{status.label}</span>
+              )}
+              {advanceText && <span className="rounded-[4px] border border-primary-accent-text/50 bg-primary/10 px-1.5 py-px text-[11px] font-semibold text-foreground">{advanceText}</span>}
+              {!status && !advanceText && (n === 0 ? "No activity" : `${n} ${n === 1 ? "activity" : "activities"}`)}
             </span>
           </span>
         </span>
@@ -530,7 +556,10 @@ function PersonRow({
           <Figure label="Previous" value={money(previous)} muted={!hasValue(previous)} />
         </span>
         <span className="hidden md:block">
-          <Figure label="This cycle" value={activityText} sub={settledText} muted={!hasValue(activity)} />
+          <Figure label="This cycle" value={activityText} muted={!hasValue(activity)} />
+        </span>
+        <span className="hidden md:block">
+          <Figure label={pos.cashPaid > 0 && pos.cashReceived <= 0 ? "Paid" : "Received"} value={movedText} muted={moved <= 0} />
         </span>
 
         {/* Current pending + who owes whom */}
@@ -565,12 +594,10 @@ function PersonRow({
           <span>
             This cycle <span className="font-semibold text-foreground">{activityText}</span>
           </span>
-          {settledText && (
-            <>
-              <span aria-hidden>·</span>
-              <span className="font-semibold text-foreground">{settledText}</span>
-            </>
-          )}
+          <span aria-hidden>·</span>
+          <span>
+            {pos.cashPaid > 0 && pos.cashReceived <= 0 ? "Paid" : "Received"} <span className="font-semibold text-foreground">{movedText.replace(/^Paid /, "")}</span>
+          </span>
         </span>
       </button>
     </li>
@@ -590,6 +617,7 @@ export function PeopleLedgerList({
         <span className={LABEL}>Person</span>
         <span className={cn(LABEL, "text-right")}>Previous</span>
         <span className={cn(LABEL, "text-right")}>This cycle</span>
+        <span className={cn(LABEL, "text-right")}>Received / paid</span>
         <span className={cn(LABEL, "text-right")}>Current pending</span>
         <span />
       </div>

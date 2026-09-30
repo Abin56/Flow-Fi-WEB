@@ -12,13 +12,14 @@
  */
 
 import { planEntryDeletion } from "@/lib/engines/person-ledger-deletion";
+import type { Person } from "@/lib/models/person";
 import type { Transaction } from "@/lib/models/transaction";
 import type { LedgerRepository, PersonRepository } from "@/lib/repositories/person-repository";
 import type { TransactionRepository } from "@/lib/repositories/transaction-repository";
 
 export class PersonCashLegDeleteBlockedError extends Error {
-  constructor() {
-    super("A payment on this entry belongs to a split expense — reverse that payment from the expense first");
+  constructor(message = "A payment on this entry belongs to a split expense — reverse that payment from the expense first") {
+    super(message);
     this.name = "PersonCashLegDeleteBlockedError";
   }
 }
@@ -28,8 +29,13 @@ export async function deletePersonCashLegTransaction(params: {
   transactionRepository: TransactionRepository;
   personRepository: PersonRepository;
   ledgerRepositoryFor: (personId: string) => LedgerRepository;
+  /**
+   * A cash leg written by Record Payment is shared by every allocation of that payment — deleting it
+   * reverts the whole payment (`PersonPaymentRepository.revertPayment`), never one allocation.
+   */
+  revertPayment?: (person: Person, paymentId: string) => Promise<void>;
 }): Promise<void> {
-  const { transaction, transactionRepository, personRepository, ledgerRepositoryFor } = params;
+  const { transaction, transactionRepository, personRepository, ledgerRepositoryFor, revertPayment } = params;
   const personId = transaction.linkedPersonId;
   const person = personId == null ? null : await personRepository.getByKey(personId);
   // No person / no entry pointing at this transaction (a person deleted since, or a record from before
@@ -40,6 +46,10 @@ export async function deletePersonCashLegTransaction(params: {
   const entries = await ledgerRepository.getAll();
   const entry = entries.find((e) => e.transactionRef === transaction.id);
   if (entry == null) return transactionRepository.softDeleteTransaction(transaction);
+  if (entry.paymentId != null) {
+    if (!revertPayment) throw new PersonCashLegDeleteBlockedError("This is a recorded payment — revert it from the People Ledger");
+    return revertPayment(person, entry.paymentId);
+  }
 
   // Which of the affected entries' links are People cash legs — read from the linked Transaction itself.
   const cashLegIds = new Set<string>([transaction.id]);

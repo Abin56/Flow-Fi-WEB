@@ -5,11 +5,13 @@ import { useState } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { LinkedEmiSource } from "@/features/people/hooks/use-person-cycle-statement";
 import { CycleNavigator } from "@/features/people/components/workspace/transaction-ledger-mode";
-import { directionHeadline, type PersonCycleStatement, type StatementCycle } from "@/lib/engines/person-cycle-statement";
+import { formatCycleLabel, type PersonCycleStatement, type StatementCycle } from "@/lib/engines/person-cycle-statement";
 import { money } from "@/lib/engines/person-cycle-statement-share";
 import { cn } from "@/lib/utils";
 import { toast } from "@/store/toast-store";
-import { EmiBadge, StatementBreakdown, StatementCalculation, StatementReconciliation } from "./statement-parts";
+import { CycleReconciliation } from "@/features/people/components/workspace/settlement-summary";
+import { cyclePosition } from "@/features/people/lib/settlement-presentation";
+import { EmiBadge, StatementBreakdown, StatementCalculation } from "./statement-parts";
 
 /**
  * The People Ledger's monthly (18th → 17th) settlement summary for one person — the balance hero, cycle
@@ -51,7 +53,9 @@ export function PersonCycleStatementSection({
   };
   const loading = isLoading || statement == null;
   const tone =
-    statement?.direction === "theyOwe" ? "text-success" : statement?.direction === "iOwe" ? "text-expense" : "text-muted-foreground";
+    statement?.direction === "theyOwe" ? "text-settle-receivable-text" : statement?.direction === "iOwe" ? "text-settle-payable-text" : "text-success";
+  const edge =
+    statement?.direction === "theyOwe" ? "border-l-settle-receivable-edge" : statement?.direction === "iOwe" ? "border-l-settle-payable-edge" : "border-l-success";
   const DirectionIcon = statement?.direction === "theyOwe" ? ArrowDownLeft : statement?.direction === "iOwe" ? ArrowUpRight : Check;
 
   return (
@@ -65,18 +69,21 @@ export function PersonCycleStatementSection({
           </div>
         ) : (
           <>
-            <p className={cn("inline-flex items-center gap-1.5 text-xs font-bold tracking-[0.08em] uppercase", tone)}>
-              <DirectionIcon className="size-3.5" strokeWidth={2.25} aria-hidden />
-              {directionHeadline(statement.direction)}
-            </p>
-            <p className="mt-1 font-heading text-[36px] leading-none font-bold tracking-tight text-foreground tabular-nums sm:text-[40px]">
-              {money(statement.amount)}
-            </p>
+            <p className="text-[11.5px] font-semibold tracking-[0.04em] text-foreground/70">Settlement · {formatCycleLabel(cycle)}</p>
+            <div className={cn("mt-1.5 border-l-[4px] pl-3", edge)}>
+              <p className={cn("inline-flex items-center gap-1.5 text-[13px] font-bold tracking-[0.08em] uppercase", tone)}>
+                <DirectionIcon className="size-4" strokeWidth={2.5} aria-hidden />
+                {cyclePosition(statement, statement.personName).headline}
+              </p>
+              <p className={cn("mt-0.5 font-heading text-[34px] leading-none font-bold tracking-tight tabular-nums sm:text-[38px]", statement.direction === "settled" ? "text-foreground" : tone)}>
+                {money(statement.amount)}
+              </p>
+            </div>
           </>
         )}
 
         {/* Cycle — the same navigator as the expanded ledger, so both read one shared cycle */}
-        <div className="-ml-1.5 mt-3">
+        <div className="-ml-1.5 mt-2.5">
           <CycleNavigator cycle={cycle} onCycleChange={onCycleChange} />
         </div>
 
@@ -94,10 +101,8 @@ export function PersonCycleStatementSection({
           </div>
         ) : (
           <>
-            <p className="text-[13px] font-semibold text-foreground">This statement</p>
-            <div className="mt-2">
-              <StatementReconciliation statement={statement} highlightCarryForward />
-            </div>
+            <p className="text-[11px] font-bold tracking-[0.08em] text-foreground/75 uppercase">This cycle</p>
+            <CycleReconciliation statement={statement} personName={statement.personName} className="mt-1" />
 
             {linkedEmis.length > 0 && (
               <div className="mt-3 border-t border-border-strong/75 pt-2.5">

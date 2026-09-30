@@ -54,6 +54,7 @@ import {
   compareLedgerEntriesNewestFirst,
   ledgerEntryTypeFromName,
   signedAmount,
+  type AdvanceApplication,
   type LedgerEntry,
   type LedgerEntryType,
   type LedgerSourceKind,
@@ -62,11 +63,16 @@ import {
 import type { Expense, ExpenseParticipant, ReceivedStatus } from "@/lib/models/expense";
 import {
   createAccountRepository,
+  createAdvanceApplicationsCollection,
   createCategoryRepository,
   createExpenseRepository,
+  createPersonPaymentRepository,
   createPersonRepository,
   createTransactionRepository,
 } from "@/lib/repositories/repository-factory";
+import { onSnapshot } from "firebase/firestore";
+import type { AdvanceUse } from "@/lib/engines/person-payment";
+import type { RecordPaymentInput } from "@/lib/repositories/person-payment-repository";
 import type { TransactionType } from "@/lib/models/transaction";
 import type { CreatePersonParams, EditPersonParams } from "@/lib/repositories/person-repository";
 import { createLedgerRepository } from "@/features/people/lib/ledger-factory";
@@ -144,6 +150,46 @@ export function usePeopleLedgerEntries() {
     entriesByPersonId: query.data ?? {},
     isLoading: peopleLoading || (personIds.length > 0 && query.data === undefined),
     uid,
+  };
+}
+
+/**
+ * Every person's advance applications (`people/{personId}/advanceApplications`), LIVE — the statement
+ * engine reads them to settle obligations from advance. Emits once every person has reported.
+ */
+export function usePeopleAdvanceApplications() {
+  const uid = useAuthStore((s) => s.user?.uid);
+  const { data: people = [], isLoading: peopleLoading } = usePeople();
+  const personIds = useMemo(() => (people as Person[]).map((p) => p.id).sort(), [people]);
+
+  const query = useFirestoreWatch<Record<string, AdvanceApplication[]>>({
+    queryKey: ["people-advance-applications", uid, ...personIds] as const,
+    enabled: !!uid && personIds.length > 0,
+    hookName: "usePeopleAdvanceApplications",
+    emptyValue: {},
+    deps: [uid, personIds.join("|")],
+    subscribe: (onData, onError) => {
+      if (!uid) return () => {};
+      const byPerson: Record<string, AdvanceApplication[]> = {};
+      const pending = new Set(personIds);
+      const unsubscribes = personIds.map((personId) =>
+        onSnapshot(
+          createAdvanceApplicationsCollection(uid, personId),
+          (snapshot) => {
+            byPerson[personId] = snapshot.docs.map((d) => d.data()).filter((a) => a.deletedAt == null);
+            pending.delete(personId);
+            if (pending.size === 0) onData({ ...byPerson });
+          },
+          onError,
+        ),
+      );
+      return () => unsubscribes.forEach((u) => u());
+    },
+  });
+
+  return {
+    applicationsByPersonId: query.data ?? {},
+    isLoading: peopleLoading || (personIds.length > 0 && query.data === undefined),
   };
 }
 
@@ -564,6 +610,27 @@ export function usePeopleActions() {
         // Same atomic path the Transactions page uses: each entry's own People cash leg (if any) is
         // deleted with it, its account balance reversed — never an entry without its money or vice versa.
         await ledgerRepository.softDeleteEntriesWithCashLegs(person, entries, createTransactionRepository(uid, accountRepository));
+      },
+      /** Record Payment — one real payment, allocated and written atomically (`PersonPaymentRepository`). */
+      recordPersonPayment: async (person: Person, input: RecordPaymentInput) => {
+        const category = await createCategoryRepository(uid).getOrCreatePersonalLoanCategory();
+        return createPersonPaymentRepository(uid, person.id, category.id).recordPayment(person, input);
+      },
+      editPersonPayment: async (person: Person, paymentId: string, input: RecordPaymentInput) => {
+        const category = await createCategoryRepository(uid).getOrCreatePersonalLoanCategory();
+        return createPersonPaymentRepository(uid, person.id, category.id).editPayment(person, paymentId, input);
+      },
+      revertPersonPayment: async (person: Person, paymentId: string) => {
+        const category = await createCategoryRepository(uid).getOrCreatePersonalLoanCategory();
+        await createPersonPaymentRepository(uid, person.id, category.id).revertPayment(person, paymentId);
+      },
+      applyPersonAdvance: async (person: Person, params: { targets: { obligationKey: string; uses: AdvanceUse[] }[]; date: Date }) => {
+        const category = await createCategoryRepository(uid).getOrCreatePersonalLoanCategory();
+        await createPersonPaymentRepository(uid, person.id, category.id).applyAdvance(person, params);
+      },
+      removePersonAdvanceApplications: async (person: Person, applications: AdvanceApplication[]) => {
+        const category = await createCategoryRepository(uid).getOrCreatePersonalLoanCategory();
+        await createPersonPaymentRepository(uid, person.id, category.id).removeAdvanceApplications(applications);
       },
       /** ✓/✕ quick-toggle on a split-expense ledger row — see `ExpenseRepository.setParticipantReceivedStatus`. */
       setParticipantReceivedStatus: async (expense: Expense, participant: ExpenseParticipant, receivedStatus: ReceivedStatus) => {

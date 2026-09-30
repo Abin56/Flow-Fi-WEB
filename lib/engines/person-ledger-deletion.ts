@@ -20,7 +20,8 @@
 
 import { type LedgerEntry, signedAmount } from "@/lib/models/person";
 
-export type EntryDeletionBlock = "notFound" | "linked";
+/** "payment": part of a Record Payment — reverted as one payment (`PersonPaymentRepository.revertPayment`), never piecemeal. */
+export type EntryDeletionBlock = "notFound" | "linked" | "payment";
 
 export type EntryDeletionPlan =
   | {
@@ -39,7 +40,9 @@ const NO_CASH_LEGS: ReadonlySet<string> = new Set();
 
 const isActive = (e: LedgerEntry) => e.deletedAt == null;
 /** Owned by the ledger itself: no linked record, or the link is the entry's own People cash leg. */
-const isStandalone = (e: LedgerEntry, cashLegIds: ReadonlySet<string>) => e.transactionRef == null || cashLegIds.has(e.transactionRef);
+const isStandalone = (e: LedgerEntry, cashLegIds: ReadonlySet<string>) => e.paymentId == null && (e.transactionRef == null || cashLegIds.has(e.transactionRef));
+/** Written by Record Payment: one cash leg shared by several entries, possibly split-installment tracking too. */
+const isGroupedPayment = (e: LedgerEntry) => e.paymentId != null;
 
 function balanceDeltaOf(entries: LedgerEntry[]): number {
   return round2(-entries.reduce((sum, e) => sum + signedAmount(e), 0)) || 0;
@@ -54,8 +57,11 @@ export function planEntryDeletion(entryId: string, allEntries: readonly LedgerEn
   const active = allEntries.filter(isActive);
   const entry = active.find((e) => e.id === entryId);
   if (entry == null) return { ok: false, reason: "notFound" };
+  if (isGroupedPayment(entry)) return { ok: false, reason: "payment" };
   if (!isStandalone(entry, cashLegIds)) return { ok: false, reason: "linked" };
   const dependentSettlements = active.filter((e) => e.id !== entry.id && e.parentEntryId === entry.id);
+  // Paid by a recorded payment: revert that payment first, so its cash and allocations go back together.
+  if (dependentSettlements.some(isGroupedPayment)) return { ok: false, reason: "payment" };
   // A settlement that is itself tied to another record can't be removed from here — so neither can its parent.
   if (dependentSettlements.some((e) => !isStandalone(e, cashLegIds))) return { ok: false, reason: "linked" };
   const entries = [entry, ...dependentSettlements];
@@ -82,8 +88,10 @@ export interface BulkDeletionPlan {
  */
 export function planBulkDeletion(allEntries: readonly LedgerEntry[], cashLegIds: ReadonlySet<string> = NO_CASH_LEGS): BulkDeletionPlan {
   const active = allEntries.filter(isActive);
-  const standalone = active.filter((e) => isStandalone(e, cashLegIds));
-  const keptLinked = active.filter((e) => !isStandalone(e, cashLegIds));
+  // An obligation paid by a recorded payment stays with that payment (revert the payment to remove it).
+  const paidByPayment = new Set(active.filter((e) => isGroupedPayment(e) && e.parentEntryId != null).map((e) => e.parentEntryId!));
+  const standalone = active.filter((e) => isStandalone(e, cashLegIds) && !paidByPayment.has(e.id));
+  const keptLinked = active.filter((e) => !isStandalone(e, cashLegIds) || paidByPayment.has(e.id));
 
   // Keep each parent next to its settlements so a chunked write never separates them needlessly.
   const byParent = new Map<string, LedgerEntry[]>();

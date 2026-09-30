@@ -1,18 +1,25 @@
 "use client";
 
-import { ChevronDown, Copy, FileDown, MessageCircle } from "lucide-react";
-import { useState } from "react";
-import { directionHeadline, type PersonCycleStatement } from "@/lib/engines/person-cycle-statement";
-import { money, sharedPositionLine, statementShareText, whatsAppShareUrl } from "@/lib/engines/person-cycle-statement-share";
+import { ArrowDownLeft, ArrowUpRight, Check, ChevronDown, Copy, FileDown, MessageCircle } from "lucide-react";
+import { useMemo, useState } from "react";
+import { usePersonCycleStatement } from "@/features/people/hooks/use-person-cycle-statement";
+import { usePersonPendingSplitParticipants } from "@/features/people/hooks/use-person-pending-split-participants";
+import { useSettlementLookups } from "@/features/people/hooks/use-settlement-lookups";
 import { renderPersonStatementPdf } from "@/features/people/lib/person-statement-pdf";
-import { toast } from "@/store/toast-store";
+import { statementView, type StatementViewOptions } from "@/features/people/lib/person-statement-pdf-model";
+import type { PersonCycleStatement } from "@/lib/engines/person-cycle-statement";
+import { sharedPositionLine, statementShareText, whatsAppShareUrl } from "@/lib/engines/person-cycle-statement-share";
 import { cn } from "@/lib/utils";
-import { StatementActivityRow, StatementBreakdown, StatementCalculation, StatementReconciliation } from "../cycle-statement/statement-parts";
+import { toast } from "@/store/toast-store";
+import { StatementCalculation } from "../cycle-statement/statement-parts";
 import { ModeFooter, ModeHeader, WS_PAD, WS_PRIMARY, WS_SECONDARY, WsLabel } from "./person-workspace-ui";
+import { CyclePaymentHistory, CycleReconciliation } from "./settlement-summary";
+import { FAMILY, StatusPill, TONE_FAMILY, TypeBadge } from "./settlement-table";
 
 /**
- * Share mode — the cycle statement preview plus WhatsApp / Copy / PDF, inside the Person workspace.
- * The shared text, WhatsApp link and PDF are the same engine outputs the old preview dialog used.
+ * Share mode — a preview of exactly what the PDF contains (position, the cycle's reconciliation, every
+ * item with original / paid / remaining and its status, and the payment history), plus WhatsApp / Copy /
+ * PDF. The preview and the PDF read one `statementView`; the text message is the engine's summary.
  */
 export function ShareStatementMode({
   statement,
@@ -25,9 +32,22 @@ export function ShareStatementMode({
 }) {
   const [pdfBusy, setPdfBusy] = useState(false);
   const [messageOpen, setMessageOpen] = useState(false);
+  // Read-only context that sharpens the wording (assigned vs split, later payments, accounts) — never a figure.
+  const { allTimeStatement, ledgerEntries } = usePersonCycleStatement(statement.personId, statement.cycle);
+  const { pending } = usePersonPendingSplitParticipants(statement.personId);
+  const lookups = useSettlementLookups(ledgerEntries, pending);
+  const options = useMemo<StatementViewOptions>(
+    () => ({ entries: ledgerEntries, history: allTimeStatement, lookups, accountForEntry: lookups.accountForEntry }),
+    [ledgerEntries, allTimeStatement, lookups],
+  );
+  const view = useMemo(() => statementView(statement, options), [statement, options]);
   const text = statementShareText(statement);
+  const first = statement.personName.split(" ")[0];
   const tone =
-    statement.direction === "theyOwe" ? "text-success" : statement.direction === "iOwe" ? "text-expense" : "text-foreground";
+    statement.direction === "theyOwe" ? "text-settle-receivable-text" : statement.direction === "iOwe" ? "text-settle-payable-text" : "text-success";
+  const edge =
+    statement.direction === "theyOwe" ? "border-l-settle-receivable-edge" : statement.direction === "iOwe" ? "border-l-settle-payable-edge" : "border-l-success";
+  const DirectionIcon = statement.direction === "theyOwe" ? ArrowDownLeft : statement.direction === "iOwe" ? ArrowUpRight : Check;
 
   const copyText = async () => {
     try {
@@ -41,7 +61,7 @@ export function ShareStatementMode({
   const downloadPdf = async () => {
     setPdfBusy(true);
     try {
-      const bytes = await renderPersonStatementPdf(statement);
+      const bytes = await renderPersonStatementPdf(statement, options);
       const blob = new Blob([bytes as BlobPart], { type: "application/pdf" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -58,54 +78,77 @@ export function ShareStatementMode({
 
   return (
     <div className="flex min-h-full flex-col">
-      <ModeHeader
-        backLabel="Close"
-        onBack={onBack}
-        onClose={onBack}
-        title="Share Statement"
-        subtitle={`${statement.personName} · ${statement.cycleLabel}`}
-      />
+      <ModeHeader backLabel="Close" onBack={onBack} onClose={onBack} title="Share Statement" subtitle={`${statement.personName} · ${statement.cycleLabel}`} />
 
-      <div className={cn(WS_PAD, "mt-6 flex-1")}>
-        <div className="grid gap-x-10 gap-y-6 md:grid-cols-[minmax(0,1fr)_17rem]">
-          {/* The statement */}
+      <div className={cn(WS_PAD, "mt-5 flex-1")}>
+        <div className="grid gap-x-8 gap-y-6 lg:grid-cols-[minmax(0,1fr)_16rem]">
+          {/* The statement — the same content as the PDF */}
           <div className="min-w-0">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className={cn("text-[11px] font-semibold tracking-[0.08em] uppercase", tone)}>{directionHeadline(statement.direction)}</p>
-                <p className="font-heading text-[32px] leading-tight font-bold tracking-tight text-foreground tabular-nums">{money(statement.amount)}</p>
+            <div className="grid gap-x-6 gap-y-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,19rem)]">
+              <div className="min-w-0">
+                <p className="text-[11.5px] font-semibold text-foreground/70">Settlement · {statement.cycleLabel}</p>
+                <div className={cn("mt-1.5 border-l-[4px] pl-3", edge)}>
+                  <p className={cn("inline-flex items-center gap-1.5 text-[13px] font-bold tracking-[0.08em] uppercase", tone)}>
+                    <DirectionIcon className="size-4" strokeWidth={2.5} aria-hidden />
+                    {view.headline}
+                  </p>
+                  <p className={cn("font-heading text-[32px] leading-tight font-bold tracking-tight tabular-nums", statement.direction === "settled" ? "text-foreground" : tone)}>
+                    {view.amount}
+                  </p>
+                </div>
               </div>
-              <p className="pt-1 text-right text-[11px] leading-tight text-muted-foreground">
-                FlowFi
-                <br />
-                Cycle Statement
-              </p>
+              <CycleReconciliation statement={statement} personName={statement.personName} />
             </div>
 
-            <div className="mt-4 max-w-sm">
-              <StatementReconciliation statement={statement} />
+            <div className="mt-5 flex items-baseline justify-between gap-3">
+              <WsLabel>Items · {view.rows.length}</WsLabel>
+              <span className="text-[11px] font-medium text-foreground/60">Paid and remaining as of {view.asOf}</span>
             </div>
-
-            {statement.activityBreakdown.length > 0 && (
-              <div className="mt-5 max-w-sm">
-                <StatementBreakdown statement={statement} />
-              </div>
+            {view.rows.length === 0 ? (
+              <p className="mt-1 border-y border-border-strong/70 py-3 text-sm font-medium text-foreground/75">No activity with {first} in this cycle.</p>
+            ) : (
+              <ul className="mt-1 max-h-[22rem] overflow-y-auto rounded-[6px] border border-border-strong/80">
+                {view.rows.map((r) => {
+                  const fam = TONE_FAMILY[r.tone];
+                  return (
+                    <li key={r.no} className={cn("grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-1 border-b border-l-[4px] border-b-border-strong/50 px-2.5 py-2 last:border-b-0", FAMILY[fam].tint, FAMILY[fam].edge)}>
+                      <div className="min-w-0">
+                        <p className="flex min-w-0 items-center gap-1.5">
+                          <span className="text-[11px] font-semibold text-foreground/55 tabular-nums">{r.no}</span>
+                          <span className="truncate text-[13px] font-semibold text-foreground">{r.title}</span>
+                        </p>
+                        <p className="truncate text-[11.5px] font-medium text-foreground/70">
+                          {r.date} · {r.relation}
+                        </p>
+                      </div>
+                      <div className="flex items-start justify-end">
+                        <TypeBadge kind={r.kind} family={fam} />
+                      </div>
+                      <dl className="flex flex-wrap gap-x-4 text-[11.5px]">
+                        {r.original && (
+                          <div className="flex gap-1"><dt className="text-foreground/60">Original</dt><dd className="font-semibold text-foreground tabular-nums">{r.original}</dd></div>
+                        )}
+                        {r.paid && (
+                          <div className="flex gap-1"><dt className="text-foreground/60">Paid</dt><dd className="font-semibold text-success tabular-nums">{r.paid}</dd></div>
+                        )}
+                        {r.remaining && (
+                          <div className="flex gap-1"><dt className="text-foreground/60">Remaining</dt><dd className="font-bold text-foreground tabular-nums">{r.remaining}</dd></div>
+                        )}
+                      </dl>
+                      <div className="flex justify-end">
+                        <StatusPill status={{ label: r.status, detail: null, tone: r.statusTone }} compact />
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
             )}
 
-            {statement.rows.length > 0 && (
-              <>
-                <WsLabel className="mt-6">Activity</WsLabel>
-                <ul className="mt-1 max-h-64 divide-y divide-border overflow-y-auto border-y border-border px-2">
-                  {statement.rows.map((r) => (
-                    <StatementActivityRow key={r.key} statement={statement} row={r} />
-                  ))}
-                </ul>
-              </>
-            )}
+            <CyclePaymentHistory statement={statement} personName={statement.personName} accountForEntry={lookups.accountForEntry} incomeForEntry={lookups.incomeForEntry} className="mt-4" />
 
             <details className="group mt-3">
-              <summary className="flex cursor-pointer list-none items-center justify-between py-1 text-xs font-medium text-muted-foreground hover:text-foreground">
-                Calculation
+              <summary className="flex cursor-pointer list-none items-center justify-between py-1 text-xs font-medium text-foreground/70 hover:text-foreground">
+                Running calculation
                 <ChevronDown className="size-3.5 transition-transform group-open:rotate-180" strokeWidth={1.75} />
               </summary>
               <div className="mt-1.5 rounded-[6px] bg-secondary/60 p-3">
@@ -115,21 +158,24 @@ export function ShareStatementMode({
           </div>
 
           {/* What gets sent */}
-          <div className="min-w-0 md:border-l md:border-border md:pl-6">
+          <div className="min-w-0 lg:border-l lg:border-border lg:pl-6">
             <WsLabel>Sent as</WsLabel>
             <p className="mt-1.5 text-sm font-medium text-foreground">“{sharedPositionLine(statement)}”</p>
+            <p className="mt-2 text-xs text-foreground/70">
+              The PDF contains everything on the left. The WhatsApp / text message is a short summary.
+            </p>
             <button
               type="button"
               aria-expanded={messageOpen}
               onClick={() => setMessageOpen((o) => !o)}
-              className="mt-3 flex w-full items-center justify-between py-1 text-xs font-medium text-muted-foreground hover:text-foreground"
+              className="mt-3 flex w-full items-center justify-between py-1 text-xs font-medium text-foreground/70 hover:text-foreground"
             >
               Message preview
               <ChevronDown className={cn("size-3.5 transition-transform", messageOpen && "rotate-180")} strokeWidth={1.75} />
             </button>
             <div
               className={cn(
-                "grid transition-[grid-template-rows,opacity] duration-200 ease-out md:grid-rows-[1fr] md:opacity-100",
+                "grid transition-[grid-template-rows,opacity] duration-200 ease-out lg:grid-rows-[1fr] lg:opacity-100",
                 messageOpen ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0",
               )}
             >

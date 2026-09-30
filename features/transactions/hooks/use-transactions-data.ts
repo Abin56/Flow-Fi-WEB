@@ -57,6 +57,7 @@ import {
   createInstallmentPaymentRepositoryFor,
   createInstallmentRepositoryFor,
   createLedgerRepositoryFor,
+  createPersonPaymentRepository,
   createPersonRepository,
   createTransactionRepository,
 } from "@/lib/repositories/repository-factory";
@@ -224,6 +225,10 @@ export function useTransactionActions() {
               transactionRepository,
               personRepository,
               ledgerRepositoryFor: (personId) => createLedgerRepositoryFor(uid, personId, personRepository),
+              revertPayment: async (person, paymentId) => {
+                const category = await createCategoryRepository(uid).getOrCreatePersonalLoanCategory();
+                await createPersonPaymentRepository(uid, person.id, category.id).revertPayment(person, paymentId);
+              },
             });
           }
           return transactionRepository.softDeleteTransaction(transaction);

@@ -8,17 +8,19 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { useAccounts } from "@/hooks/use-accounts";
 import { useCategories } from "@/hooks/use-categories";
 import { usePeople } from "@/hooks/use-people";
-import { usePersonCashLegIds } from "@/hooks/use-transactions";
+import { usePersonCashLegIds, useTransactions } from "@/hooks/use-transactions";
 import { formatCurrency } from "@/lib/format";
-import { cycleContaining, formatStatementDate, type StatementCycle } from "@/lib/engines/person-cycle-statement";
+import { cycleContaining, formatCycleLabel, formatStatementDate, type StatementCycle } from "@/lib/engines/person-cycle-statement";
 import { money } from "@/lib/engines/person-cycle-statement-share";
 import { planBulkDeletion, planEntryDeletion, type BulkDeletionPlan, type EntryDeletionPlan } from "@/lib/engines/person-ledger-deletion";
-import type { LedgerEntry, Person } from "@/lib/models/person";
+import type { AdvanceApplication, LedgerEntry, Person } from "@/lib/models/person";
 import type { LedgerSourceKind } from "@/lib/models/person";
 import type { PersonViewRow } from "@/features/people/hooks/use-people-data";
 import { usePersonCycleStatement } from "@/features/people/hooks/use-person-cycle-statement";
 import { usePersonPendingSplitParticipants } from "@/features/people/hooks/use-person-pending-split-participants";
-import { usePersonUpcomingEmi } from "@/features/people/hooks/use-person-upcoming-emi";import { buildLedgerRows, cycleShowingNewEntry, type LedgerRow, type PaymentRecord } from "@/features/people/lib/person-ledger-rows";
+import { usePersonUpcomingEmi } from "@/features/people/hooks/use-person-upcoming-emi";
+import { useSettlementLookups } from "@/features/people/hooks/use-settlement-lookups";
+import { buildLedgerRows, cycleShowingNewEntry, type LedgerRow, type PaymentRecord } from "@/features/people/lib/person-ledger-rows";
 import type { PendingSplitParticipant } from "@/lib/engines/person-pending-split-participants";
 import { useTransactionActions } from "@/features/transactions/hooks/use-transactions-data";
 import { PersonCycleStatementSection } from "@/features/people/components/cycle-statement/person-cycle-statement-section";
@@ -28,7 +30,11 @@ import { EditPersonMode, type EditPersonPatch } from "@/features/people/componen
 import { InlineReveal, LedgerConfirmDialog, type EntryEditValues, type EntrySettleValues } from "@/features/people/components/workspace/ledger-ui";
 import { LE_RADIUS } from "@/features/loans/components/loan-emi-ui";
 import { WS_PRIMARY, WS_SECONDARY, WsLabel } from "@/features/people/components/workspace/person-workspace-ui";
-import { SettleUpPanel } from "@/features/people/components/workspace/settle-up-panel";
+import { RecordPaymentPanel, type RecordPaymentInitial } from "@/features/people/components/workspace/record-payment-panel";
+import { ApplyAdvancePanel, PaymentRevertDetails } from "@/features/people/components/workspace/payment-extras";
+import { advanceSources, payableObligations } from "@/features/people/lib/person-payment-obligations";
+import { advanceRemaining, type AdvanceUse } from "@/lib/engines/person-payment";
+import type { RecordPaymentInput } from "@/lib/repositories/person-payment-repository";
 import { ShareStatementMode } from "@/features/people/components/workspace/share-statement-mode";
 import { SplitExpenseMode } from "@/features/people/components/workspace/split-expense-mode";
 import { TransactionLedgerMode, type LedgerView } from "@/features/people/components/workspace/transaction-ledger-mode";
@@ -101,6 +107,11 @@ function SectionTitle({ icon: Icon, children }: { icon?: typeof Calendar; childr
  * expanded transaction ledger. Only a destructive delete asks for confirmation. Same data, statement
  * engine and repository calls as before.
  */
+/** The sides on which this person has advance held right now (their advance, or advance I paid them). */
+function advanceSides(available: ReturnType<typeof advanceRemaining>): ("theyOwe" | "iOwe")[] {
+  return (["theyOwe", "iOwe"] as const).filter((side) => available.filter((a) => a.side === side).reduce((s, a) => s + a.remaining, 0) > 0.005);
+}
+
 export function PersonDetailWorkspace({
   person,
   rawPerson,
@@ -110,6 +121,10 @@ export function PersonDetailWorkspace({
   onDeleteEntries,
   onEditEntry,
   onUndoSplitReceived,
+  onRevertPayment,
+  onRemoveAdvanceApplications,
+  onRecordPayment,
+  onApplyAdvance,
   onEditPerson,
   onDelete,
   initialCycle,
@@ -131,6 +146,14 @@ export function PersonDetailWorkspace({
   onDeleteEntries?: (entries: LedgerEntry[]) => Promise<void>;
   /** Reverses a split share's "received" status through the existing received-status toggle. */
   onUndoSplitReceived?: (pending: PendingSplitParticipant) => Promise<void>;
+  /** Reverts one recorded payment as a whole (every obligation line, its cash leg and any advance). */
+  onRevertPayment?: (paymentId: string) => Promise<void>;
+  /** Un-applies advance from an obligation — the advance becomes available again. */
+  onRemoveAdvanceApplications?: (applications: AdvanceApplication[]) => Promise<void>;
+  /** Record payment — records (paymentId null) or edits one real payment (`PersonPaymentRepository`). */
+  onRecordPayment?: (input: RecordPaymentInput, paymentId: string | null) => Promise<void>;
+  /** Applies advance to one obligation — no cash, no balance move. */
+  onApplyAdvance?: (params: { targets: { obligationKey: string; uses: AdvanceUse[] }[]; date: Date }) => Promise<void>;
   onEditPerson?: (patch: EditPersonPatch) => Promise<void>;
   onDelete?: () => void;
 }) {
@@ -152,8 +175,11 @@ export function PersonDetailWorkspace({
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const [undoing, setUndoing] = useState<{ row: LedgerRow; payment: PaymentRecord } | null>(null);
   const [undoOpen, setUndoOpen] = useState(false);
+  /** The Record payment workspace: which obligation it opened for, or the payment being edited. */
+  const [paying, setPaying] = useState<{ preselectKey?: string | null; initial?: RecordPaymentInitial | null } | null>(null);
+  const [advanceOpen, setAdvanceOpen] = useState<"theyOwe" | "iOwe" | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
-  const { statement, allTimeStatement, ledgerEntries, isLoading, linkedEmis, setRepays } = usePersonCycleStatement(person.id, cycle);
+  const { statement, allTimeStatement, ledgerEntries, isLoading, linkedEmis, setRepays, advanceApplications } = usePersonCycleStatement(person.id, cycle);
   const { pending } = usePersonPendingSplitParticipants(person.id);
   const txActions = useTransactionActions();
   const { items: upcomingEmi } = usePersonUpcomingEmi(person.id);
@@ -185,6 +211,14 @@ export function PersonDetailWorkspace({
     [allTimeStatement, ledgerEntries, person.activity, pending, cashLegIds],
   );
   const scopeRows = scope === "cycle" ? cycleRows : allRows;
+  const lookups = useSettlementLookups(ledgerEntries, pending);
+  // Obligations dated before the selected cycle that are still open today — listed as "Brought forward"
+  // with their source, so carried money never reads as a new expense. Engine rows, nothing recomputed.
+  const carriedRows = useMemo(() => {
+    const start = new Date(cycle.start.getFullYear(), cycle.start.getMonth(), cycle.start.getDate()).getTime();
+    return allRows.filter((r) => r.statementRow?.kind === "obligation" && r.date.getTime() < start && (r.state === "open" || r.state === "partial"));
+  }, [allRows, cycle]);
+  const cycleLabelOf = (d: Date) => `${formatCycleLabel(cycleContaining(d), false)} cycle`;
   const scopeCounts = { cycle: cycleRows.length, all: allRows.length };
   // The cycle view is always the cycle picked with ‹ › (shared by the statement, the list and the expanded ledger).
   const cycleLabel = "Selected cycle";
@@ -199,6 +233,45 @@ export function PersonDetailWorkspace({
   const subline = [`${primaryCount} ${primaryCount === 1 ? "transaction" : "transactions"}`, contact].filter(Boolean).join(" · ");
 
   const bulkPlan = useMemo(() => planBulkDeletion(ledgerEntries, cashLegIds), [ledgerEntries, cashLegIds]);
+  const { data: allTransactions = [] } = useTransactions();
+
+  /** Record payment opens in place: inline on the page, or as the expanded ledger's own view. */
+  function openPayment(next: { preselectKey?: string | null; initial?: RecordPaymentInitial | null }) {
+    setPaying(next);
+    setSettlingKey(null);
+    setEditingKey(null);
+    if (mode.kind === "ledger") setLedgerView("settle");
+    else {
+      setInline("settle");
+      rootRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }
+  const closePayment = () => {
+    setPaying(null);
+    setInline(null);
+    setLedgerView("transactions");
+  };
+  const paymentPanel =
+    onRecordPayment != null ? (
+      <RecordPaymentPanel
+        key={`${paying?.preselectKey ?? ""}|${paying?.initial?.paymentId ?? ""}`}
+        personName={person.name}
+        rows={allRows}
+        preselectKey={paying?.preselectKey}
+        initial={paying?.initial}
+        onCancel={closePayment}
+        onSubmit={async (input, paymentId) => {
+          await onRecordPayment(input, paymentId);
+          toast.success(paymentId ? "Payment updated" : "Payment recorded");
+          closePayment();
+        }}
+      />
+    ) : null;
+
+  // Advance held for / by this person, and the oldest obligation it could settle right now.
+  const advanceAvailable = useMemo(() => advanceRemaining(advanceSources(ledgerEntries), advanceApplications), [ledgerEntries, advanceApplications]);
+  const openObligations = useMemo(() => payableObligations(allRows), [allRows]);
+  const heldSides = advanceSides(advanceAvailable);
   const deletingRow = deleting?.row ?? null;
   const rowPlan = deleting?.plan ?? null;
   const frozenBulk = bulkDelete ?? bulkPlan;
@@ -268,9 +341,13 @@ export function PersonDetailWorkspace({
   const rowHandlers: LedgerRowHandlers = {
     settlingKey,
     onSettleStart: (row) => {
-      setInline(null);
-      setEditingKey(null);
-      setSettlingKey(row.key);
+      // One Record payment flow for every obligation — with this row preselected.
+      if (onRecordPayment) openPayment({ preselectKey: row.key });
+      else {
+        setInline(null);
+        setEditingKey(null);
+        setSettlingKey(row.key);
+      }
     },
     editingKey,
     onEditStart: onEditEntry
@@ -291,7 +368,7 @@ export function PersonDetailWorkspace({
         }
       : undefined,
     onUndoPayment:
-      onDeleteEntries || onUndoSplitReceived
+      onDeleteEntries || onUndoSplitReceived || onRevertPayment || onRemoveAdvanceApplications
         ? (row, payment) => {
             setUndoing({ row, payment });
             setUndoOpen(true);
@@ -311,6 +388,14 @@ export function PersonDetailWorkspace({
       if (target.kind === "entry") {
         if (!onDeleteEntries) throw new Error("Not signed in");
         await onDeleteEntries(target.entries);
+      } else if (target.kind === "payment") {
+        if (!onRevertPayment) throw new Error("Not signed in");
+        await onRevertPayment(target.paymentId);
+      } else if (target.kind === "advanceApplication") {
+        if (!onRemoveAdvanceApplications) throw new Error("Not signed in");
+        const applications = advanceApplications.filter((a) => a.id === target.applicationId);
+        if (applications.length === 0) throw new Error("That advance application no longer exists.");
+        await onRemoveAdvanceApplications(applications);
       } else {
         if (!onUndoSplitReceived) throw new Error("Not signed in");
         await onUndoSplitReceived(target.pending);
@@ -341,27 +426,28 @@ export function PersonDetailWorkspace({
     <div role="group" aria-label="Actions" className="flex flex-wrap items-center gap-2 lg:flex-col lg:items-stretch lg:gap-2.5">
       <button
         type="button"
-        onClick={() => toggleInline("add")}
-        disabled={!onAddEntry}
-        aria-expanded={inline === "add"}
-        aria-controls="person-inline-add"
-        className={cn(WS_PRIMARY, "lg:w-full", inline === "add" && "ring-2 ring-primary-accent-text/40")}
+        onClick={() => (inline === "settle" ? closePayment() : openPayment({}))}
+        disabled={!rawPerson || !onRecordPayment}
+        aria-expanded={inline === "settle"}
+        aria-controls="person-inline-settle"
+        title="Record money received from, or paid to, this person"
+        className={cn(WS_PRIMARY, "lg:w-full", inline === "settle" && "ring-2 ring-primary-accent-text/40")}
       >
-        <Plus className={cn("size-4 transition-transform duration-200", inline === "add" && "rotate-45")} strokeWidth={2.25} />
-        {inline === "add" ? "Close" : "Add transaction"}
+        <HandCoins className="size-4" strokeWidth={2} />
+        {inline === "settle" ? "Close" : "Record payment"}
       </button>
       <div className="flex flex-wrap gap-1.5 lg:grid lg:grid-cols-3">
         <button
           type="button"
-          onClick={() => toggleInline("settle")}
-          disabled={!rawPerson}
-          aria-expanded={inline === "settle"}
-          aria-controls="person-inline-settle"
-          title="Settle the overall balance"
-          className={secondaryAction(inline === "settle")}
+          onClick={() => toggleInline("add")}
+          disabled={!onAddEntry}
+          aria-expanded={inline === "add"}
+          aria-controls="person-inline-add"
+          title="Add a transaction"
+          className={secondaryAction(inline === "add")}
         >
-          <HandCoins className="size-3.5" strokeWidth={1.75} />
-          Settle
+          <Plus className={cn("size-3.5 transition-transform duration-200", inline === "add" && "rotate-45")} strokeWidth={2} />
+          Add
         </button>
         <button
           type="button"
@@ -422,9 +508,25 @@ export function PersonDetailWorkspace({
             )}
           </InlineReveal>
         </div>
+        {onApplyAdvance &&
+          heldSides.map((side) => (
+            <ApplyAdvancePanel
+              key={side}
+              personName={person.name}
+              side={side}
+              available={advanceAvailable}
+              obligations={openObligations}
+              open={advanceOpen === side}
+              onOpenChange={(o) => setAdvanceOpen(o ? side : null)}
+              onConfirm={async (targets) => {
+                await onApplyAdvance({ targets, date: new Date() });
+                toast.success("Advance applied");
+              }}
+            />
+          ))}
         <div id="person-inline-settle">
           <InlineReveal open={inline === "settle" && rawPerson != null}>
-            {rawPerson && <SettleUpPanel person={rawPerson} onCancel={() => setInline(null)} onDone={() => setInline(null)} />}
+            {rawPerson && inline === "settle" && paymentPanel}
           </InlineReveal>
         </div>
         {/* Split is the one focused popup — the person page stays underneath, unchanged */}
@@ -455,8 +557,13 @@ export function PersonDetailWorkspace({
       {/* Activity — the main body, full width */}
       <section aria-label="Activity" className="flex min-w-0 flex-col">
         <PersonActivityFeed
+          personId={person.id}
           personName={person.name}
           rows={scopeRows}
+          carriedRows={carriedRows}
+          lookups={lookups}
+          statement={statement}
+          cycleLabelOf={cycleLabelOf}
           isLoading={rowsLoading}
           scope={scope}
           onScopeChange={(next) => {
@@ -575,8 +682,13 @@ export function PersonDetailWorkspace({
   } else if (mode.kind === "ledger") {
     content = (
       <TransactionLedgerMode
+        personId={person.id}
         personName={person.name}
         rows={scopeRows}
+        carriedRows={carriedRows}
+        statement={statement}
+        lookups={lookups}
+        cycleLabelOf={cycleLabelOf}
         isLoading={rowsLoading}
         scope={scope}
         onScopeChange={(next) => {
@@ -615,6 +727,7 @@ export function PersonDetailWorkspace({
         }}
         deleteAllCount={bulkPlan.entries.length}
         onDeleteAll={onDeleteEntries ? openBulkDelete : undefined}
+        renderSettle={paymentPanel ? () => <div className="mx-auto w-full max-w-6xl px-4 pb-6 sm:px-7">{paymentPanel}</div> : undefined}
       />
     );
   } else if (mode.kind === "edit" && rawPerson && onEditPerson) {
@@ -779,8 +892,8 @@ export function PersonDetailWorkspace({
           open={undoOpen}
           onOpenChange={setUndoOpen}
           variant="reverse"
-          title="Undo this settlement?"
-          confirmLabel="Undo settlement"
+          title={undoing?.payment.undo?.kind === "payment" ? "Revert this payment?" : "Undo this settlement?"}
+          confirmLabel={undoing?.payment.undo?.kind === "payment" ? "Revert payment" : "Undo settlement"}
           busyLabel="Undoing…"
           disabled={undoing?.payment.undo == null}
           onConfirm={async () => {
@@ -797,7 +910,24 @@ export function PersonDetailWorkspace({
                 {money(undoing.payment.amount)} will become outstanding again and the People Ledger balance will be updated —{" "}
                 {undoing.row.direction === "iOwe" ? `you'll owe ${firstName}` : `${firstName} will owe you`} that amount on this transaction.
               </p>
-              {undoing.row.payments.length > 1 && <p>Only this payment is reversed; the other payments on this transaction stay as they are.</p>}
+              {undoing.payment.undo?.kind === "payment" ? (
+                <PaymentRevertDetails
+                  paymentId={undoing.payment.undo.paymentId}
+                  entries={ledgerEntries}
+                  firstName={firstName}
+                  onEdit={
+                    onRecordPayment
+                      ? (initial) => {
+                          setUndoOpen(false);
+                          openPayment({ initial });
+                        }
+                      : undefined
+                  }
+                  accountIdOf={(id) => allTransactions.find((t) => t.id === id)?.accountId ?? null}
+                />
+              ) : (
+                undoing.row.payments.length > 1 && <p>Only this payment is reversed; the other payments on this transaction stay as they are.</p>
+              )}
             </>
           )}
         </LedgerConfirmDialog>
