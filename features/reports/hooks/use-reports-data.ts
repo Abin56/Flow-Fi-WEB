@@ -67,6 +67,9 @@ import type { Account, AccountType } from "@/lib/models/account";
 import type { Budget } from "@/lib/models/budget";
 import type { Category } from "@/lib/models/category";
 import { effectiveMonth, isNonIncomeExpenseMovement, type Transaction } from "@/lib/models/transaction";
+import { useMySpendContext } from "@/hooks/use-my-spend-context";
+import { myConsumptionAmount } from "@/lib/engines/my-spend";
+
 
 const ACCOUNT_TYPE_LABEL: Record<AccountType, string> = {
   cash: "Cash",
@@ -129,6 +132,8 @@ export function useReportsData() {
     balanceSheetLoading;
 
   const now = useMemo(() => new Date(), []);
+  // Category spending is MY spend (shared classifier) — my share of split/assigned expenses only.
+  const { ctx: mySpendCtx } = useMySpendContext();
 
   // --- Net Worth (current value only — see module doc comment and `netWorthWithLoans`) ---
   const netWorth = useMemo(() => ({ amount: netWorthAmount, accountBalances }), [netWorthAmount, accountBalances]);
@@ -196,11 +201,12 @@ export function useReportsData() {
   const categorySpending = useMemo<ReportsCategorySpending[]>(() => {
     const totals = new Map<string, { amount: number; txns: number }>();
     for (const t of transactions as Transaction[]) {
-      if (t.type !== "expense" || isNonIncomeExpenseMovement(t) || t.deletedAt != null) continue;
+      const mine = myConsumptionAmount(t, mySpendCtx);
+      if (mine === 0) continue;
       const effective = effectiveMonth(t);
       if (!isThisMonth(effective, now)) continue;
       const row = totals.get(t.categoryId) ?? { amount: 0, txns: 0 };
-      row.amount += t.amount;
+      row.amount += mine;
       row.txns += 1;
       totals.set(t.categoryId, row);
     }
@@ -218,7 +224,7 @@ export function useReportsData() {
         return { categoryId, category: categoryNameFor(categoryId, categories as Category[]), amount, budget, txns };
       })
       .sort((a, b) => b.amount - a.amount);
-  }, [transactions, budgets, categories, now]);
+  }, [transactions, budgets, categories, now, mySpendCtx]);
 
   // --- Spending heatmap: category x day-of-month week-bucket, real this-month expense Transactions ---
   const spendingHeatmap = useMemo(() => {
@@ -227,13 +233,14 @@ export function useReportsData() {
     for (const row of topCategories) grid.set(row.categoryId, [0, 0, 0, 0]);
 
     for (const t of transactions as Transaction[]) {
-      if (t.type !== "expense" || isNonIncomeExpenseMovement(t) || t.deletedAt != null) continue;
+      const mine = myConsumptionAmount(t, mySpendCtx);
+      if (mine === 0) continue;
       const effective = effectiveMonth(t);
       if (!isThisMonth(effective, now)) continue;
       const bucketValues = grid.get(t.categoryId);
       if (!bucketValues) continue;
       const bucketIndex = WEEK_BUCKETS.indexOf(weekBucketLabel(t.dateTime.getDate()));
-      bucketValues[bucketIndex] += t.amount;
+      bucketValues[bucketIndex] += mine;
     }
 
     return {
@@ -241,7 +248,7 @@ export function useReportsData() {
       weeks: [...WEEK_BUCKETS],
       values: topCategories.map((c) => grid.get(c.categoryId) ?? [0, 0, 0, 0]),
     };
-  }, [categorySpending, transactions, now]);
+  }, [categorySpending, transactions, now, mySpendCtx]);
 
   return {
     isLoading,

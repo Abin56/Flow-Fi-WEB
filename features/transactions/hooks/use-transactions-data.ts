@@ -49,7 +49,8 @@ import { withErrorToast } from "@/features/transactions/lib/error-toast";
 import type { Account } from "@/lib/models/account";
 import type { Category } from "@/lib/models/category";
 import type { Expense, SplitType } from "@/lib/models/expense";
-import type { Transaction, TransactionType } from "@/lib/models/transaction";
+import { isPersonFunded, type Transaction, type TransactionType } from "@/lib/models/transaction";
+import type { Person } from "@/lib/models/person";
 import {
   createAccountRepository,
   createCategoryRepository,
@@ -59,16 +60,19 @@ import {
   createLedgerRepositoryFor,
   createPersonPaymentRepository,
   createPersonRepository,
+  createPurposeFundsCollection,
   createTransactionRepository,
 } from "@/lib/repositories/repository-factory";
+import { getDocs, query, where } from "firebase/firestore";
 import { deletePersonCashLegTransaction } from "@/lib/services/person-cash-leg-deletion";
+import { deleteTransactionWithLinkedEffects } from "@/lib/services/transaction-deletion";
 import type {
   PendingSettlement,
   SettleAcrossPendingParams,
   SettleParticipantParams,
 } from "@/lib/repositories/expense-repository";
 import type { CreateTransactionParams, EditTransactionParams } from "@/lib/repositories/transaction-repository";
-import type { CreatePersonParams } from "@/lib/repositories/person-repository";
+import type { CreatePersonParams, LedgerRepository } from "@/lib/repositories/person-repository";
 import type { ExpenseParticipantInput } from "@/lib/repositories/expense-repository";
 import { useAuthStore } from "@/store/auth-store";
 
@@ -173,6 +177,9 @@ export function useTransactionRows(): {
   };
 }
 
+export type FundingTarget = { kind: "account"; accountId: string } | { kind: "person"; personId: string };
+export type FundingEdits = Parameters<LedgerRepository["changeExpenseFunding"]>[0]["edits"];
+
 /** Create/edit/delete actions wired to the real repositories, scoped to the signed-in user. */
 export function useTransactionActions() {
   const uid = useAuthStore((s) => s.user?.uid);
@@ -185,6 +192,72 @@ export function useTransactionActions() {
     const personRepository = createPersonRepository(uid);
     const expenseRepository = createExpenseRepository(uid, accountRepository);
     void categoryRepository;
+
+    /** Resolves both sides of a funding change and runs it atomically (see `LedgerRepository.changeExpenseFunding`). */
+    const changeFunding = async (transaction: Transaction, to: FundingTarget, edits?: FundingEdits) => {
+      const ledgerFor = (personId: string) => createLedgerRepositoryFor(uid, personId, personRepository);
+      const loadPerson = async (personId: string) => {
+        const person = await personRepository.getByKey(personId);
+        if (person == null) throw new Error("Couldn't find this person — refresh and try again");
+        return person;
+      };
+      let from: Parameters<LedgerRepository["changeExpenseFunding"]>[0]["from"] = null;
+      if (transaction.fundedByPersonId != null) {
+        const person = await loadPerson(transaction.fundedByPersonId);
+        const ledger = ledgerFor(person.id);
+        const entries = await ledger.getAll();
+        const entry = entries.find((e) => e.transactionRef === transaction.id && e.sourceKind === "personFundedExpense");
+        if (entry == null) throw new Error("The People entry for this expense is missing — refresh and try again");
+        from = { person, ledger, entry, hasSettlements: entries.some((e) => e.parentEntryId === entry.id) };
+      }
+      const target =
+        to.kind === "account"
+          ? to
+          : { kind: "person" as const, person: await loadPerson(to.personId), ledger: ledgerFor(to.personId) };
+      const ledger = from?.ledger ?? (target.kind === "person" ? target.ledger : null);
+      // Account → account is an ordinary edit, never a funding change.
+      if (ledger == null) return transactionRepository.editTransaction(transaction, { ...edits, accountId: to.kind === "account" ? to.accountId : undefined });
+      await ledger.changeExpenseFunding({
+        transaction,
+        from,
+        to: target,
+        edits,
+        transactionRepository,
+      });
+    };
+
+    /**
+     * A transaction's People / Expense effects go with it — one routing for every screen
+     * (`deleteTransactionWithLinkedEffects`). A People cash leg (Borrowed / Gave / Repaid / Received back)
+     * or a person-funded expense takes its ledger entry with it through the same planner + atomic delete
+     * the People Ledger's own Delete uses; a split/assigned expense cascades through `deleteExpense`.
+     */
+    const deleteWithLinkedEffects = (transaction: Transaction, expense?: Expense | null) =>
+      deleteTransactionWithLinkedEffects(
+        transaction,
+        {
+          transactionRepository,
+          findExpense: async (transactionId) =>
+            (await expenseRepository.getAll()).find((e) => e.transactionId === transactionId && e.deletedAt == null) ?? null,
+          deleteExpense: (e) => expenseRepository.deleteExpense(e),
+          deletePersonLinked: (t) =>
+            deletePersonCashLegTransaction({
+              transaction: t,
+              transactionRepository,
+              personRepository,
+              ledgerRepositoryFor: (personId) => createLedgerRepositoryFor(uid, personId, personRepository),
+              revertPayment: async (person, paymentId) => {
+                const category = await createCategoryRepository(uid).getOrCreatePersonalLoanCategory();
+                await createPersonPaymentRepository(uid, person.id, category.id).revertPayment(person, paymentId);
+              },
+              purposePaymentIdFor: async (personId, transactionId) => {
+                const snap = await getDocs(query(createPurposeFundsCollection(uid, personId), where("receiptTransactionRef", "==", transactionId)));
+                return snap.docs.map((d) => d.data()).find((f) => f.deletedAt == null)?.paymentId ?? null;
+              },
+            }),
+        },
+        expense,
+      );
 
     return {
       createTransaction: (params: CreateTransactionParams) =>
@@ -205,6 +278,11 @@ export function useTransactionActions() {
           // account alone, which would leave People, Month Cycle and Net Worth on the old amount.
           const amountChanged = params.amount != null && params.amount !== transaction.amount;
           const dateChanged = params.dateTime != null && params.dateTime.getTime() !== transaction.dateTime.getTime();
+          // A person-funded expense's amount/date IS its People obligation's — kept in step atomically.
+          if (isPersonFunded(transaction) && (amountChanged || dateChanged || params.accountId != null)) {
+            const { amount, dateTime, accountId: _ignored, linkedPersonId: _l, clearLinkedPersonId: _c, owesPersonToggle: _o, type: _t, ...rest } = params;
+            return changeFunding(transaction, { kind: "person", personId: transaction.fundedByPersonId! }, { ...rest, amount, dateTime });
+          }
           if (transaction.isPersonLedgerMovement && transaction.linkedPersonId != null && (amountChanged || dateChanged)) {
             const personId = transaction.linkedPersonId;
             const person = await personRepository.getByKey(personId);
@@ -240,25 +318,15 @@ export function useTransactionActions() {
        * balances atomically, instead of orphaning the sibling leg.
        */
       deleteTransaction: (transaction: Transaction, expense?: Expense | null) =>
-        withErrorToast(() => {
-          if (transaction.transferId != null) return transactionRepository.deleteTransferPair(transaction);
-          if (expense) return expenseRepository.deleteExpense(expense);
-          // A People cash leg (Borrowed / Gave / Repaid / Received back) takes its ledger entry with it —
-          // through the same planner + atomic delete the People Ledger's own Delete uses.
-          if (transaction.isPersonLedgerMovement) {
-            return deletePersonCashLegTransaction({
-              transaction,
-              transactionRepository,
-              personRepository,
-              ledgerRepositoryFor: (personId) => createLedgerRepositoryFor(uid, personId, personRepository),
-              revertPayment: async (person, paymentId) => {
-                const category = await createCategoryRepository(uid).getOrCreatePersonalLoanCategory();
-                await createPersonPaymentRepository(uid, person.id, category.id).revertPayment(person, paymentId);
-              },
-            });
-          }
-          return transactionRepository.softDeleteTransaction(transaction);
-        }, "Couldn't delete transaction"),
+        withErrorToast(() => deleteWithLinkedEffects(transaction, expense), "Couldn't delete transaction"),
+      /** `deleteTransaction` without the toast — for callers (Transaction Studio) that report errors themselves. */
+      deleteTransactionWithLinkedEffects: (transaction: Transaction, expense?: Expense | null) => deleteWithLinkedEffects(transaction, expense),
+      /**
+       * Removes ghost People entries — owned by a transaction that no longer exists (see
+       * `LedgerRepository.reconcileOrphanedTransactionEntries`, which re-verifies ownership on fresh reads).
+       */
+      reconcileOrphanedEntries: async (person: Person, entryIds: readonly string[]) =>
+        createLedgerRepositoryFor(uid, person.id, personRepository).reconcileOrphanedTransactionEntries(person, entryIds, transactionRepository),
       /** Creates a split expense — its own Transaction plus a per-participant settlement schedule. */
       createSplitTransaction: (params: {
         description: string;
@@ -270,6 +338,18 @@ export function useTransactionActions() {
         participantInputs: ExpenseParticipantInput[];
         notes?: string;
       }) => withErrorToast(() => expenseRepository.createExpense(params), "Couldn't create split expense"),
+      /** "Money I Borrowed → Person paid directly": the expense (no account) + its "I owe them" entry, atomically. */
+      createPersonFundedExpense: (
+        person: Person,
+        params: Parameters<LedgerRepository["createPersonFundedExpense"]>[1],
+      ) =>
+        withErrorToast(
+          () => createLedgerRepositoryFor(uid, person.id, personRepository).createPersonFundedExpense(person, params, transactionRepository),
+          "Couldn't add expense",
+        ),
+      /** Switches who paid an expense (account ↔ person) — see `LedgerRepository.changeExpenseFunding`. */
+      changeExpenseFunding: (transaction: Transaction, to: FundingTarget, edits?: FundingEdits) =>
+        withErrorToast(() => changeFunding(transaction, to, edits), "Couldn't save changes"),
       createPerson: (params: CreatePersonParams) =>
         withErrorToast(() => personRepository.createPerson(params), "Couldn't create person"),
       /** The person-owed state machine (assign/unassign/reassign/edit-in-place) — see owes-person-transition.ts. */

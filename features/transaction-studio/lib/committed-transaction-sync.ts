@@ -88,11 +88,18 @@ export async function deleteCommittedAwareRow({
   committedTransaction,
   transactionRepository,
   mutations,
+  deleteTransaction,
 }: {
   row: GridRow;
   committedTransaction: Transaction | null;
   transactionRepository: TransactionRepository | null;
   mutations: Pick<TransactionStudioMutations, "deleteRecord">;
+  /**
+   * The app-wide linked delete (`deleteTransactionWithLinkedEffects` via `useTransactionActions`) — takes a
+   * transaction's People obligation / split Expense with it, exactly as `/transactions` does. Without it a
+   * person-linked row would leave a ghost People entry behind.
+   */
+  deleteTransaction?: ((transaction: Transaction) => Promise<void>) | null;
 }): Promise<void> {
   if (row.committedTransactionId != null) {
     if (!transactionRepository || !committedTransaction) {
@@ -101,7 +108,9 @@ export async function deleteCommittedAwareRow({
     // A transfer leg (retroactively linked by Transfer Reconciliation) must have both legs
     // removed together, or the sibling leg's account balance is left reflecting half a
     // transfer that no longer exists.
-    if (committedTransaction.transferId != null) {
+    if (deleteTransaction) {
+      await deleteTransaction(committedTransaction);
+    } else if (committedTransaction.transferId != null) {
       await transactionRepository.deleteTransferPair(committedTransaction);
     } else {
       await transactionRepository.softDeleteTransaction(committedTransaction);

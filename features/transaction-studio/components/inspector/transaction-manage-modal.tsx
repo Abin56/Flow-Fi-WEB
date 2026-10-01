@@ -26,6 +26,7 @@ import type { Transaction } from "@/lib/models/transaction";
 import type { TransactionRepository } from "@/lib/repositories/transaction-repository";
 import type { TransactionStudioMutations } from "@/hooks/use-transaction-studio-mutations";
 import { toast } from "@/store/toast-store";
+import { useTransactionActions } from "@/features/transactions/hooks/use-transactions-data";
 import { actionBadgeClassName, actionLabel, actionToAxesPatch, defaultActionForDirection, deriveRecordAction } from "../../lib/action-metadata";
 import { deleteCommittedAwareRow, draftToEditTransactionParams, formatAccountDisplay } from "../../lib/committed-transaction-sync";
 import type { GridRow } from "../../lib/grid-types";
@@ -137,6 +138,8 @@ export function TransactionManageModal({
   categories: Category[];
   mutations: TransactionStudioMutations;
 }) {
+  // The app-wide linked delete — a committed row's People obligation or split Expense goes with it.
+  const linkedDelete = useTransactionActions()?.deleteTransactionWithLinkedEffects ?? null;
   const [draft, setDraft] = useState<TransactionDetailsDraft | null>(null);
   const [fieldErrors, setFieldErrors] = useState<{ amount?: string; date?: string; category?: string }>({});
   const [tagDraft, setTagDraft] = useState("");
@@ -291,7 +294,7 @@ export function TransactionManageModal({
     if (deleting || !committedDataReady) return;
     setDeleting(true);
     try {
-      await deleteCommittedAwareRow({ row: currentRow, committedTransaction, transactionRepository, mutations });
+      await deleteCommittedAwareRow({ row: currentRow, committedTransaction, transactionRepository, mutations, deleteTransaction: linkedDelete });
       toast.success("Transaction deleted");
       setConfirmDeleteOpen(false);
       onOpenChange(false);

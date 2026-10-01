@@ -127,7 +127,19 @@ export function allocatePayment(params: {
  * "Apply to another obligation" is not a resolution of its own: selecting that obligation makes it part
  * of the allocation, so the extra shrinks.
  */
-export type ExtraResolution = { kind: "advance" } | { kind: "income"; categoryId: string; description: string };
+export type ExtraResolution =
+  | { kind: "advance" }
+  | { kind: "income"; categoryId: string; description: string }
+  /**
+   * "Keep for a purpose" — the money stays in the account (still not income, still not an advance),
+   * remembered as what it must be used for. Whatever the purposes don't cover needs its own explicit
+   * `remainder` (advance or income) — never an unexplained rest. Only for money they paid me.
+   */
+  | {
+      kind: "purpose";
+      purposes: readonly { title: string; amount: number }[];
+      remainder: { kind: "advance" } | { kind: "income"; categoryId: string; description: string } | null;
+    };
 
 /** Why this payment can't be recorded yet (null when it can). */
 export function paymentBlocker(params: {
@@ -147,8 +159,23 @@ export function paymentBlocker(params: {
       if (direction !== "theyPaid") return "Only money received can be recorded as income.";
       if (!resolution.categoryId) return "Choose an income category.";
     }
+    if (resolution.kind === "purpose") {
+      if (direction !== "theyPaid") return "Only money received can be kept for a purpose.";
+      if (resolution.purposes.length === 0) return "Add at least one purpose.";
+      for (const [i, p] of resolution.purposes.entries()) {
+        if (!p.title.trim()) return `Purpose ${i + 1}: say what this money is for.`;
+        if (!(p.amount > 0)) return `Purpose ${i + 1}: enter the amount.`;
+      }
+      const assigned = round2(resolution.purposes.reduce((s, p) => s + p.amount, 0));
+      if (assigned > allocation.extra + PAYMENT_EPSILON) return "The purposes add up to more than the extra amount.";
+      if (allocation.extra - assigned > PAYMENT_EPSILON) {
+        if (resolution.remainder == null) return "Decide the rest — assign it to a purpose, or keep it as advance or income.";
+        if (resolution.remainder.kind === "income" && !resolution.remainder.categoryId) return "Choose an income category for the rest.";
+      }
+    }
   }
-  if (allocation.lines.length === 0 && !(allocation.extra > PAYMENT_EPSILON && resolution?.kind === "advance")) return "Select what this payment is for.";
+  if (allocation.lines.length === 0 && !(allocation.extra > PAYMENT_EPSILON && (resolution?.kind === "advance" || resolution?.kind === "purpose")))
+    return "Select what this payment is for.";
   return null;
 }
 
@@ -251,15 +278,18 @@ export interface PaymentReconciliation {
   allocated: number;
   advance: number;
   income: number;
+  /** Kept for purposes — in the account, but neither income nor an advance. */
+  purpose: number;
   unallocated: number;
   balanced: boolean;
 }
 
-export function reconcilePayment(parts: { received: number; allocated: number; advance?: number; income?: number }): PaymentReconciliation {
+export function reconcilePayment(parts: { received: number; allocated: number; advance?: number; income?: number; purpose?: number }): PaymentReconciliation {
   const received = round2(parts.received);
   const allocated = round2(parts.allocated);
   const advance = round2(parts.advance ?? 0);
   const income = round2(parts.income ?? 0);
-  const unallocated = round2(received - allocated - advance - income);
-  return { received, allocated, advance, income, unallocated, balanced: Math.abs(unallocated) <= PAYMENT_EPSILON };
+  const purpose = round2(parts.purpose ?? 0);
+  const unallocated = round2(received - allocated - advance - income - purpose);
+  return { received, allocated, advance, income, purpose, unallocated, balanced: Math.abs(unallocated) <= PAYMENT_EPSILON };
 }

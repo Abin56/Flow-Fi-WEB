@@ -150,16 +150,19 @@ describe("Add Expense — first-invalid-field navigation", () => {
     expect(actions.expenseRepository.convertToSplit).not.toHaveBeenCalled();
   });
 
-  it("Money borrowed → valid direction, posts the existing People Ledger borrowed entry", async () => {
+  it("Money borrowed → valid direction, then requires who paid; never a borrowed-cash receipt into an account", async () => {
     const user = userEvent.setup();
     renderAdd();
     await user.type(amountInput(), "500");
-    await user.type(descriptionInput(), "Loan from Amma");
+    await user.type(descriptionInput(), "Dinner");
     await assignTo(user, "AMMA");
     await user.click(screen.getByRole("radio", { name: /money i borrowed/i }));
     await user.click(submitButton());
 
-    await waitFor(() => expect(addLedgerEntryWithTransaction).toHaveBeenCalledTimes(1));
+    expect(fieldWrapper("personFunding").dataset.invalid).toBe("true");
+    expect(fieldWrapper("personFunding").contains(document.activeElement)).toBe(true);
+    expect(addLedgerEntryWithTransaction).not.toHaveBeenCalled();
+    expect(actions.createTransaction).not.toHaveBeenCalled();
     expect(actions.expenseRepository.convertToSplit).not.toHaveBeenCalled();
   });
 

@@ -14,15 +14,20 @@ import { outstandingPrincipalFor } from "@/lib/engines/loan-outstanding";
 import { useLoanRows } from "@/features/loans/hooks/use-loans-data";
 import { useEmiRows } from "@/features/emi/hooks/use-emi-data";
 import { useCreditCardTotals } from "@/features/credit-cards/hooks/use-credit-cards-data";
-import { usePersonPositions } from "@/features/people/hooks/use-people-data";
-import { peopleDirectPayable } from "@/lib/engines/person-position";
+import { usePeopleLedgerEntries, usePersonPositions } from "@/features/people/hooks/use-people-data";
+import { peopleDirectGross } from "@/lib/engines/person-position";
 
 export function useLoanBalanceSheet(): {
   sheet: LoanBalanceSheet;
   accountBalances: number;
   netWorth: number;
-  /** What I owe people directly (borrowed, unpaid shares) — already inside `netWorth` via the People direct balance. */
+  /**
+   * What I owe people directly (borrowed, unpaid shares), GROSS per person — never reduced by what the same
+   * person owes me. Already inside `netWorth` via the People direct balance (receivable − payable).
+   */
   peoplePayable: number;
+  /** What people owe me directly, GROSS per person (asset side of the same People direct balance). */
+  peopleReceivable: number;
   isLoading: boolean;
 } {
   const accountBalances = useNetWorth();
@@ -32,10 +37,29 @@ export function useLoanBalanceSheet(): {
   // Card-owned EMI / card-funded Loan exposure no recorded purchase represents (Case B/C) — the same
   // figure the cards' available credit and the Reports "Credit Cards" line use.
   const { totals: cardTotals, isLoading: cardsLoading } = useCreditCardTotals();
-  const { positionsByPersonId, isLoading: peopleLoading } = usePersonPositions();
+  const { positionsByPersonId, loanIds, isLoading: peopleLoading } = usePersonPositions();
+  const { entriesByPersonId } = usePeopleLedgerEntries();
   const peopleDirectBalance = useMemo(
     () => Object.values(positionsByPersonId).reduce((sum, p) => sum + p.directBalance, 0),
     [positionsByPersonId],
+  );
+  const peopleGross = useMemo(
+    () =>
+      peopleDirectGross(
+        Object.entries(positionsByPersonId).map(([personId, position]) => ({
+          position,
+          entries: (entriesByPersonId[personId] ?? []).map((e) => ({
+            id: e.id,
+            type: e.type,
+            amount: e.amount,
+            parentEntryId: e.parentEntryId,
+            transactionRef: e.transactionRef,
+            isDeleted: e.deletedAt != null,
+          })),
+        })),
+        loanIds,
+      ),
+    [positionsByPersonId, entriesByPersonId, loanIds],
   );
 
   const sheet = useMemo(() => {
@@ -65,7 +89,8 @@ export function useLoanBalanceSheet(): {
     sheet,
     accountBalances,
     netWorth: netWorthWithLoans(accountBalances, sheet, peopleDirectBalance),
-    peoplePayable: peopleDirectPayable(Object.values(positionsByPersonId)),
+    peoplePayable: peopleGross.payable,
+    peopleReceivable: peopleGross.receivable,
     isLoading: loansLoading || emisLoading || cardsLoading || cardListLoading || peopleLoading,
   };
 }

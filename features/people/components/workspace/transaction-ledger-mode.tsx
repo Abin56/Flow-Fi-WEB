@@ -114,7 +114,8 @@ export function TransactionLedgerMode({
   /** The selected cycle's statement — the fixed header's position and reconciliation. */
   statement: PersonCycleStatement | null;
   /** Overall position across every cycle. */
-  balance: { direction: StatementDirection; amount: number } | null;
+  /** `toReceive`/`toGive`: the gross sides (engine) — shown separately whenever both are open. */
+  balance: { direction: StatementDirection; amount: number; toReceive?: number; toGive?: number } | null;
   onClose: () => void;
   handlers: LedgerRowHandlers;
   lookups: SettlementLookupsWithAccounts;
@@ -160,7 +161,9 @@ export function TransactionLedgerMode({
   const visible = applySettlementFilters(filterLedgerRows(rows, "all", search), status, type, lookups);
   const carried = scope === "cycle" && !isLoading ? applySettlementFilters(filterLedgerRows(carriedRows, "all", search), status, type, lookups) : [];
   // The fixed position: the selected cycle's statement in cycle view, the overall balance in all-time view.
-  const position = scope === "cycle" && statement ? { direction: statement.direction, amount: statement.amount } : balance;
+  const position =
+    scope === "cycle" && statement ? { direction: statement.direction, amount: statement.amount, toReceive: statement.toReceive, toGive: statement.toGive } : balance;
+  const bothSides = (position?.toReceive ?? 0) > 0 && (position?.toGive ?? 0) > 0;
   const positionTone = position?.direction === "theyOwe" ? "text-settle-receivable-text" : position?.direction === "iOwe" ? "text-settle-payable-text" : "text-success";
   const PositionIcon = position?.direction === "theyOwe" ? ArrowDownLeft : position?.direction === "iOwe" ? ArrowUpRight : Check;
   const headline = position?.direction === "theyOwe" ? `You need to receive from ${firstName}` : position?.direction === "iOwe" ? `You need to give to ${firstName}` : "All settled";
@@ -185,7 +188,20 @@ export function TransactionLedgerMode({
             <p className="truncate text-sm font-semibold text-foreground">
               {personName} <span className="font-medium text-foreground/65">· {scope === "cycle" ? `Settlement · ${formatCycleLabel(cycle)}` : "All cycles"}</span>
             </p>
-            {position ? (
+            {position && bothSides ? (
+              // Two independent obligations: both gross, each settled on its own — never one netted figure.
+              <div className="mt-1.5 flex flex-wrap items-baseline gap-x-5 gap-y-1">
+                <span className="inline-flex items-baseline gap-2">
+                  <span className="text-[12px] font-bold tracking-[0.08em] text-settle-receivable-text uppercase">You need to receive</span>
+                  <span className="font-heading text-[24px] leading-none font-bold tracking-tight tabular-nums text-settle-receivable-text sm:text-[28px]">{money(position.toReceive ?? 0)}</span>
+                </span>
+                <span className="inline-flex items-baseline gap-2">
+                  <span className="text-[12px] font-bold tracking-[0.08em] text-settle-payable-text uppercase">You need to give</span>
+                  <span className="font-heading text-[24px] leading-none font-bold tracking-tight tabular-nums text-settle-payable-text sm:text-[28px]">{money(position.toGive ?? 0)}</span>
+                </span>
+                <span className="text-xs font-medium text-foreground/65">Tracked separately</span>
+              </div>
+            ) : position ? (
               <div className="mt-1.5 flex flex-wrap items-baseline gap-x-3 gap-y-1">
                 <span className={cn("inline-flex items-center gap-1.5 text-[13px] font-bold tracking-[0.08em] uppercase", positionTone)}>
                   <PositionIcon className="size-4" strokeWidth={2.5} aria-hidden />

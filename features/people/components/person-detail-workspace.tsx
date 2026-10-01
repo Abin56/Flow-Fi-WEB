@@ -31,8 +31,12 @@ import { EditPersonMode, type EditPersonPatch } from "@/features/people/componen
 import { InlineReveal, LedgerConfirmDialog, type EntryEditValues, type EntrySettleValues } from "@/features/people/components/workspace/ledger-ui";
 import { LE_RADIUS } from "@/features/loans/components/loan-emi-ui";
 import { WS_PRIMARY, WS_SECONDARY, WsLabel } from "@/features/people/components/workspace/person-workspace-ui";
-import { RecordPaymentPanel, type RecordPaymentInitial } from "@/features/people/components/workspace/record-payment-panel";
+import { paymentInitialFor, RecordPaymentPanel, type RecordPaymentInitial } from "@/features/people/components/workspace/record-payment-panel";
+import { paymentImpact } from "@/lib/engines/person-payment-impact";
 import { ApplyAdvancePanel, PaymentRevertDetails } from "@/features/people/components/workspace/payment-extras";
+import { MoneyToUseSection } from "@/features/people/components/workspace/purpose-money";
+import { usePersonPurposeFunds } from "@/features/people/hooks/use-purpose-funds";
+import { purposeCashOf } from "@/lib/engines/purpose-funds";
 import { advanceSources, payableObligations } from "@/features/people/lib/person-payment-obligations";
 import { advanceRemaining, type AdvanceUse } from "@/lib/engines/person-payment";
 import { isInAppPath } from "@/lib/engines/linked-people-readiness";
@@ -191,7 +195,6 @@ export function PersonDetailWorkspace({
   const { data: accounts = [] } = useAccounts();
   const { data: categories = [] } = useCategories();
   const { data: people = [] } = usePeople();
-  const net = person.youAreOwed - person.youOwe;
   const firstName = person.name.split(" ")[0];
   const contact = [person.phone, person.email].filter(Boolean).join(" · ");
 
@@ -241,6 +244,30 @@ export function PersonDetailWorkspace({
 
   const bulkPlan = useMemo(() => planBulkDeletion(ledgerEntries, cashLegIds), [ledgerEntries, cashLegIds]);
   const { data: allTransactions = [] } = useTransactions();
+  const { funds: purposeFunds } = usePersonPurposeFunds(person.id);
+
+  // ---- Edit / revert one recorded payment — read from its own records, never assumed ----
+  const transactionById = useMemo(() => new Map(allTransactions.map((t) => [t.id, t])), [allTransactions]);
+  const purposePaymentIds = useMemo(() => new Set(purposeFunds.filter((f) => f.deletedAt == null).map((f) => f.paymentId)), [purposeFunds]);
+  const accountIdOf = (id: string) => transactionById.get(id)?.accountId ?? null;
+  const incomeOf = (id: string) => {
+    const t = transactionById.get(id);
+    return t && t.deletedAt == null ? { amount: t.amount, categoryId: t.categoryId, description: t.description ?? "" } : null;
+  };
+  // Live: re-computed as the dependency list changes (e.g. after undoing a later advance use).
+  const undoImpactId = undoing?.payment.undo?.kind === "payment" ? undoing.payment.undo.paymentId : null;
+  const paymentInitial = (paymentId: string) => paymentInitialFor(paymentId, ledgerEntries, accountIdOf, purposePaymentIds, incomeOf);
+  const impactOf = (paymentId: string) =>
+    paymentImpact({
+      paymentId,
+      entries: ledgerEntries,
+      applications: advanceApplications,
+      transactionOf: (id) => transactionById.get(id),
+      purposeAmount: purposeCashOf(purposeFunds, paymentId),
+      purposeCashRefs: purposeFunds.flatMap((f) => (f.deletedAt == null && f.paymentId === paymentId ? [f.receiptTransactionRef] : [])),
+      purposeIncomeRefs: purposeFunds.flatMap((f) => (f.deletedAt == null && f.paymentId === paymentId && f.incomeTransactionRef ? [f.incomeTransactionRef] : [])),
+    });
+  const undoImpact = undoImpactId ? impactOf(undoImpactId) : null;
 
   /** Record payment opens in place: inline on the page, or as the expanded ledger's own view. */
   function openPayment(next: { preselectKey?: string | null; initial?: RecordPaymentInitial | null }) {
@@ -397,6 +424,13 @@ export function PersonDetailWorkspace({
           setDeleteOpen(true);
         }
       : undefined,
+    editablePayment: (p) => p.undo?.kind === "payment" && paymentInitial(p.undo.paymentId) != null,
+    onEditPayment: onRecordPayment
+      ? (p) => {
+          const initial = p.undo?.kind === "payment" ? paymentInitial(p.undo.paymentId) : null;
+          if (initial) openPayment({ initial });
+        }
+      : undefined,
     onUndoPayment:
       onDeleteEntries || onUndoSplitReceived || onRevertPayment || onRemoveAdvanceApplications
         ? (row, payment) => {
@@ -501,17 +535,16 @@ export function PersonDetailWorkspace({
 
   const loansNote = (person.loanReceivable > 0 || person.loanPayable > 0) && (
     <p className="mt-4 max-w-md text-xs leading-relaxed text-muted-foreground">
-      Loans are settled from the Loan, outside this statement. Overall incl. loans {formatCurrency(Math.abs(net))}
-      {net > 0 ? " you need to receive" : net < 0 ? " you need to give" : ""}
-      {" · "}Direct balance {formatCurrency(Math.abs(person.directBalance))}
-      {person.directBalance > 0 ? " you need to receive" : person.directBalance < 0 ? " you need to give" : ""}
+      Loans are settled from the Loan, outside this statement. Overall incl. loans: you need to receive {formatCurrency(person.breakdown.toReceive)}
+      {" · "}you need to give {formatCurrency(person.breakdown.toGive)}
       {person.loanReceivable > 0 && ` · Loans — you need to receive ${formatCurrency(person.loanReceivable)}`}
       {person.loanPayable > 0 && ` · Loans — you need to give ${formatCurrency(person.loanPayable)}`}
     </p>
   );
 
   // Balance summary — explains the overall position from the People engine's own breakdown (never a re-sum):
-  // each borrowed/gave entry stays its own obligation; only opposite directions net.
+  // each borrowed/gave entry stays its own obligation, and the two directions are settled separately —
+  // the net is a summary line only (it never drives Record Payment, Full payment or allocation).
   const b = person.breakdown;
   const summaryLines: { label: string; amount: number; tone: "expense" | "success" }[] = [
     { label: "You need to give", amount: b.toGive, tone: "expense" },
@@ -529,14 +562,15 @@ export function PersonDetailWorkspace({
             </td>
           </tr>
         ))}
-        <tr className="bg-secondary/60">
-          <th scope="row" className="px-2.5 py-1.5 text-left font-bold text-foreground">
-            {b.net > 0 ? "Net you need to receive" : b.net < 0 ? "Net you need to give" : "Net — settled"}
-          </th>
-          <td className={cn("px-2.5 py-1.5 text-right font-bold", b.net > 0 ? "text-success" : b.net < 0 ? "text-expense" : "text-foreground")}>
-            {formatCurrency(Math.abs(b.net))}
-          </td>
-        </tr>
+        {b.toGive > 0 && b.toReceive > 0 && (
+          <tr className="bg-secondary/40">
+            <th scope="row" className="px-2.5 py-1.5 text-left font-medium text-foreground/75">
+              Net position {b.net > 0 ? "· to receive" : b.net < 0 ? "· to give" : "· even"}
+              <span className="block text-[10.5px] font-normal text-foreground/65">Summary only — payments are settled separately.</span>
+            </th>
+            <td className="px-2.5 py-1.5 text-right font-medium text-foreground/75">{formatCurrency(Math.abs(b.net))}</td>
+          </tr>
+        )}
       </tbody>
       {(Math.abs(b.unlinked) >= 0.005 || b.loanPayable > 0 || b.loanReceivable > 0 || b.emiReceivable > 0) && (
         <tfoot>
@@ -588,6 +622,8 @@ export function PersonDetailWorkspace({
             )}
           </InlineReveal>
         </div>
+        {/* Money to use — received money held for specific purposes (not income, not advance) */}
+        {rawPerson && <MoneyToUseSection person={rawPerson} entries={ledgerEntries} onRevertPayment={onRevertPayment} />}
         {onApplyAdvance &&
           heldSides.map((side) => (
             <ApplyAdvancePanel
@@ -783,7 +819,7 @@ export function PersonDetailWorkspace({
           setSettlingKey(null);
     setEditingKey(null);
         }}
-        balance={allTimeStatement ? { direction: allTimeStatement.direction, amount: allTimeStatement.amount } : null}
+        balance={allTimeStatement ? { direction: allTimeStatement.direction, amount: allTimeStatement.amount, toReceive: allTimeStatement.toReceive, toGive: allTimeStatement.toGive } : null}
         onClose={back}
         handlers={rowHandlers}
         carriedForward={carriedForward}
@@ -972,43 +1008,58 @@ export function PersonDetailWorkspace({
           open={undoOpen}
           onOpenChange={setUndoOpen}
           variant="reverse"
-          title={undoing?.payment.undo?.kind === "payment" ? "Revert this payment?" : "Undo this settlement?"}
-          confirmLabel={undoing?.payment.undo?.kind === "payment" ? "Revert payment" : "Undo settlement"}
+          title={undoImpact ? (undoImpact.canRevert ? "Revert payment?" : "Can't revert this payment yet") : "Undo this settlement?"}
+          confirmLabel={undoImpact ? "Revert payment" : "Undo settlement"}
           busyLabel="Undoing…"
-          disabled={undoing?.payment.undo == null}
+          disabled={undoing?.payment.undo == null || (undoImpact != null && !undoImpact.canRevert)}
           onConfirm={async () => {
             if (undoing) await undoPayment(undoing.payment);
           }}
         >
-          {undoing && (
-            <>
-              <p className="font-medium text-foreground">
-                {undoing.payment.direction === "youPaid" ? "Paid" : "Received"} {money(undoing.payment.amount)} ·{" "}
-                {formatStatementDate(undoing.payment.date, true)} · for “{undoing.row.title}”
-              </p>
-              <p>
-                {money(undoing.payment.amount)} will become outstanding again and the People Ledger balance will be updated —{" "}
-                {undoing.row.direction === "iOwe" ? `you'll owe ${firstName}` : `${firstName} will owe you`} that amount on this transaction.
-              </p>
-              {undoing.payment.undo?.kind === "payment" ? (
-                <PaymentRevertDetails
-                  paymentId={undoing.payment.undo.paymentId}
-                  entries={ledgerEntries}
-                  firstName={firstName}
-                  onEdit={
-                    onRecordPayment
-                      ? (initial) => {
-                          setUndoOpen(false);
-                          openPayment({ initial });
-                        }
-                      : undefined
-                  }
-                  accountIdOf={(id) => allTransactions.find((t) => t.id === id)?.accountId ?? null}
-                />
-              ) : (
-                undoing.row.payments.length > 1 && <p>Only this payment is reversed; the other payments on this transaction stay as they are.</p>
-              )}
-            </>
+          {undoing && undoImpact ? (
+            <PaymentRevertDetails
+              impact={undoImpact}
+              firstName={firstName}
+              initial={undoing.payment.undo?.kind === "payment" ? paymentInitial(undoing.payment.undo.paymentId) : null}
+              onEdit={
+                onRecordPayment
+                  ? (initial) => {
+                      setUndoOpen(false);
+                      openPayment({ initial });
+                    }
+                  : undefined
+              }
+              accountNameOf={(id) => accounts.find((a) => a.id === id)?.name ?? "the account"}
+              obligationTitleOf={(key) => allRows.find((r) => r.key === key)?.title ?? "A later obligation"}
+              onUndoDependency={
+                onRemoveAdvanceApplications
+                  ? async (applicationId) => {
+                      const applications = advanceApplications.filter((x) => x.id === applicationId);
+                      try {
+                        if (applications.length === 0) throw new Error("That advance use no longer exists.");
+                        await onRemoveAdvanceApplications(applications);
+                        toast.success("Advance use undone");
+                      } catch (e) {
+                        toast.error("Couldn't undo that use", e instanceof Error ? e.message : "Please try again.");
+                      }
+                    }
+                  : undefined
+              }
+            />
+          ) : (
+            undoing && (
+              <>
+                <p className="font-medium text-foreground">
+                  {undoing.payment.direction === "youPaid" ? "Paid" : "Received"} {money(undoing.payment.amount)} ·{" "}
+                  {formatStatementDate(undoing.payment.date, true)} · for “{undoing.row.title}”
+                </p>
+                <p>
+                  {money(undoing.payment.amount)} will become outstanding again and the People Ledger balance will be updated —{" "}
+                  {undoing.row.direction === "iOwe" ? `you'll owe ${firstName}` : `${firstName} will owe you`} that amount on this transaction.
+                </p>
+                {undoing.row.payments.length > 1 && <p>Only this payment is reversed; the other payments on this transaction stay as they are.</p>}
+              </>
+            )
           )}
         </LedgerConfirmDialog>
 

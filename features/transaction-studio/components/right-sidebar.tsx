@@ -11,6 +11,7 @@ import type { Transaction } from "@/lib/models/transaction";
 import type { TransactionRepository } from "@/lib/repositories/transaction-repository";
 import type { TransactionStudioMutations } from "@/hooks/use-transaction-studio-mutations";
 import { toast } from "@/store/toast-store";
+import { useTransactionActions } from "@/features/transactions/hooks/use-transactions-data";
 import { actionToAxesPatch, deriveRecordAction } from "../lib/action-metadata";
 import { deleteCommittedAwareRow, formatAccountDisplay, resolveCategoryId } from "../lib/committed-transaction-sync";
 import { ActionDetailPanel } from "./inspector/action-detail-panel";
@@ -61,6 +62,8 @@ export function RightSidebar({
   mutations: TransactionStudioMutations;
   onClose: () => void;
 }) {
+  // The app-wide linked delete — a committed row's People obligation or split Expense goes with it.
+  const linkedDelete = useTransactionActions()?.deleteTransactionWithLinkedEffects ?? null;
   if (!row) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
@@ -143,7 +146,7 @@ export function RightSidebar({
 
   async function onDelete() {
     try {
-      await deleteCommittedAwareRow({ row: currentRow, committedTransaction, transactionRepository, mutations });
+      await deleteCommittedAwareRow({ row: currentRow, committedTransaction, transactionRepository, mutations, deleteTransaction: linkedDelete });
       onClose();
     } catch (error) {
       toast.error("Couldn't delete row", error instanceof Error ? error.message : undefined);

@@ -630,7 +630,8 @@ export function usePeopleActions() {
       },
       revertPersonPayment: async (person: Person, paymentId: string) => {
         const category = await createCategoryRepository(uid).getOrCreatePersonalLoanCategory();
-        await createPersonPaymentRepository(uid, person.id, category.id).revertPayment(person, paymentId);
+        // From the People Ledger: advance a later settlement already used blocks the revert (never silently un-applied).
+        await createPersonPaymentRepository(uid, person.id, category.id).revertPayment(person, paymentId, { blockIfAdvanceUsed: true });
       },
       applyPersonAdvance: async (person: Person, params: { targets: { obligationKey: string; uses: AdvanceUse[] }[]; date: Date }) => {
         const category = await createCategoryRepository(uid).getOrCreatePersonalLoanCategory();

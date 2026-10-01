@@ -133,8 +133,11 @@ describe("Standardized money-direction wording", () => {
     expect(signedSideLabel(-500, "AMMA K")).toBe("You need to give to AMMA");
     expect(signedSideLabel(0, "AMMA")).toBeNull();
     const detail = read("features/people/components/person-detail-workspace.tsx");
-    expect(detail).toContain('"Net you need to give"');
-    expect(detail).toContain('"Net you need to receive"');
+    // Gross sides lead; the net is a summary-only line and never reads as an amount due.
+    expect(detail).toContain('label: "You need to give"');
+    expect(detail).toContain('label: "You need to receive"');
+    expect(detail).toContain("Summary only — payments are settled separately.");
+    expect(detail).not.toMatch(/"Net you need to (give|receive)"/);
     expect(detail).not.toMatch(/" you owe"|" owed to you"/);
   });
 

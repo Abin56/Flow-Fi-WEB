@@ -21,6 +21,8 @@ import { FirestoreCrudRepository } from "@/lib/firestore/firestore-crud-reposito
 import { recordEdit, updateField } from "@/lib/firestore/soft-deletable";
 import {
   balanceEffect,
+  hasAccountLeg,
+  PERSON_FUNDED_ACCOUNT_ID,
   type Transaction,
   type TransactionSource,
   type TransactionStatus,
@@ -71,6 +73,29 @@ export interface CreateTransactionParams {
   paymentAllocationType?: PaymentAllocationType | null;
   /** See `Transaction.isPersonLedgerMovement`. Defaults to `false`, matching every other transaction. */
   isPersonLedgerMovement?: boolean;
+  /**
+   * See `Transaction.fundedByPersonId`. When set, the transaction is a person-funded expense: `accountId`
+   * must be `PERSON_FUNDED_ACCOUNT_ID` and no account is read or written. Normally only
+   * `LedgerRepository.createPersonFundedExpense` passes this (it also writes the People obligation).
+   */
+  fundedByPersonId?: string | null;
+}
+
+/** Thrown when a person-funded expense is given an account, or an account-funded one is given none. */
+export class TransactionFundingMismatchError extends Error {
+  constructor(message = "A transaction is paid either from one of your accounts or directly by a person — never both or neither.") {
+    super(message);
+    this.name = "TransactionFundingMismatchError";
+  }
+}
+
+function assertFundingConsistent(t: Pick<Transaction, "accountId" | "fundedByPersonId" | "type" | "transferId">): void {
+  if (t.fundedByPersonId != null) {
+    if (t.accountId !== PERSON_FUNDED_ACCOUNT_ID) throw new TransactionFundingMismatchError();
+    if (t.type !== "expense" || t.transferId != null) throw new TransactionFundingMismatchError("Only an expense can be paid directly by a person.");
+  } else if (t.accountId === PERSON_FUNDED_ACCOUNT_ID) {
+    throw new TransactionFundingMismatchError("Select an account.");
+  }
 }
 
 /**
@@ -128,6 +153,14 @@ export interface EditTransactionParams {
   /** B8 — e.g. `"pending"` → `"posted"` once a future-dated transaction's date arrives, or → `"reversed"` when a refund/chargeback (B23/B24) reverses it. */
   status?: TransactionStatus;
   isBusiness?: boolean;
+  /**
+   * Switches who paid: `{ kind: "account" }` → paid from `accountId` (clears `fundedByPersonId`);
+   * `{ kind: "person" }` → paid directly by that person (no account). Takes precedence over `accountId`.
+   * The balance math below reverses the old account effect and applies the new one exactly once. The
+   * matching People obligation is kept in step by `LedgerRepository.changeExpenseFunding` — call that,
+   * not this, when funding changes.
+   */
+  funding?: { kind: "account"; accountId: string } | { kind: "person"; personId: string };
 }
 
 export class TransactionRepository extends FirestoreCrudRepository<Transaction> {
@@ -181,6 +214,7 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
       installmentPaymentId: params.installmentPaymentId ?? null,
       paymentAllocationType: params.paymentAllocationType ?? null,
       isPersonLedgerMovement: params.isPersonLedgerMovement ?? false,
+      ...(params.fundedByPersonId != null ? { fundedByPersonId: params.fundedByPersonId } : {}),
       deletedAt: null,
       lastEditedAt: null,
       editHistory: [],
@@ -189,14 +223,18 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
 
   async createTransactionInTransaction(tx: FirestoreTransaction, params: CreateTransactionParams): Promise<Transaction> {
     const transaction = TransactionRepository.buildTransaction(params);
+    assertFundingConsistent(transaction);
 
-    const accountRef = this.accountRepository.docRef(params.accountId);
-    const delta = balanceEffect(transaction);
+    // A person-funded expense has no account: nothing to read, nothing to move.
+    if (hasAccountLeg(transaction)) {
+      const accountRef = this.accountRepository.docRef(params.accountId);
+      const delta = balanceEffect(transaction);
 
-    const accountSnap = await tx.get(accountRef);
-    if (!accountSnap.exists()) throw new Error("Account not found");
-    if (delta !== 0) {
-      tx.set(accountRef, this.accountRepository.applyBalanceDelta(accountSnap.data(), delta));
+      const accountSnap = await tx.get(accountRef);
+      if (!accountSnap.exists()) throw new Error("Account not found");
+      if (delta !== 0) {
+        tx.set(accountRef, this.accountRepository.applyBalanceDelta(accountSnap.data(), delta));
+      }
     }
     tx.set(doc(this.collection, transaction.id), transaction);
 
@@ -329,16 +367,26 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
     }
 
     const oldAccountId = fresh.accountId;
+    const oldHasAccount = hasAccountLeg(fresh);
     const oldBalanceEffect = balanceEffect(fresh);
 
     let updated = fresh;
     updated = updateField(updated, "type", updated.type, params.type, (e, v) => ({ ...e, type: v }));
     updated = updateField(updated, "amount", updated.amount, params.amount, (e, v) => ({ ...e, amount: v }));
     updated = updateField(updated, "dateTime", updated.dateTime, params.dateTime, (e, v) => ({ ...e, dateTime: v }));
-    updated = updateField(updated, "accountId", updated.accountId, params.accountId, (e, v) => ({
+    const nextAccountId =
+      params.funding?.kind === "person" ? PERSON_FUNDED_ACCOUNT_ID : params.funding?.kind === "account" ? params.funding.accountId : params.accountId;
+    updated = updateField(updated, "accountId", updated.accountId, nextAccountId, (e, v) => ({
       ...e,
       accountId: v,
     }));
+    if (params.funding != null) {
+      const nextFunder = params.funding.kind === "person" ? params.funding.personId : null;
+      if ((updated.fundedByPersonId ?? null) !== nextFunder) {
+        updated = recordEdit(updated, "fundedByPersonId", updated.fundedByPersonId ?? "none", nextFunder ?? "none");
+        updated = { ...updated, fundedByPersonId: nextFunder };
+      }
+    }
     updated = updateField(updated, "categoryId", updated.categoryId, params.categoryId, (e, v) => ({
       ...e,
       categoryId: v,
@@ -389,10 +437,28 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
     // Computed after every field update above so a same-transaction toggle
     // of excludeFromCalculations (in either direction) is captured by the
     // delta below exactly like an amount/account change would be.
+    assertFundingConsistent(updated);
     const newBalanceEffect = balanceEffect(updated);
     const newAccountId = updated.accountId;
+    const newHasAccount = hasAccountLeg(updated);
 
-    if (oldAccountId === newAccountId) {
+    if (!oldHasAccount || !newHasAccount) {
+      // Person-funded on at least one side: only the side that has an account moves — the old account's
+      // effect reversed exactly once (account → person) or the new account's applied exactly once
+      // (person → account). Person → person moves no account at all.
+      const oldAccountRef = oldHasAccount ? this.accountRepository.docRef(oldAccountId) : null;
+      const newAccountRef = newHasAccount ? this.accountRepository.docRef(newAccountId) : null;
+      const oldAccountSnap = oldAccountRef ? await tx.get(oldAccountRef) : null;
+      const newAccountSnap = newAccountRef ? await tx.get(newAccountRef) : null;
+      if (oldAccountSnap && !oldAccountSnap.exists()) throw new Error("Account not found");
+      if (newAccountSnap && !newAccountSnap.exists()) throw new Error("Account not found");
+      if (oldAccountRef && oldAccountSnap?.exists() && oldBalanceEffect !== 0) {
+        tx.set(oldAccountRef, this.accountRepository.applyBalanceDelta(oldAccountSnap.data(), -oldBalanceEffect));
+      }
+      if (newAccountRef && newAccountSnap?.exists() && newBalanceEffect !== 0) {
+        tx.set(newAccountRef, this.accountRepository.applyBalanceDelta(newAccountSnap.data(), newBalanceEffect));
+      }
+    } else if (oldAccountId === newAccountId) {
       const accountRef = this.accountRepository.docRef(newAccountId);
       const accountSnap = await tx.get(accountRef);
       if (!accountSnap.exists()) throw new Error("Account not found");
@@ -439,13 +505,15 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
    */
   async softDeleteTransactionInTransaction(tx: FirestoreTransaction, transaction: Transaction): Promise<void> {
     const transactionRef = doc(this.collection, transaction.id);
-    const accountRef = this.accountRepository.docRef(transaction.accountId);
-    const delta = -balanceEffect(transaction);
+    if (hasAccountLeg(transaction)) {
+      const accountRef = this.accountRepository.docRef(transaction.accountId);
+      const delta = -balanceEffect(transaction);
 
-    const accountSnap = await tx.get(accountRef);
-    if (!accountSnap.exists()) throw new Error("Account not found");
-    if (delta !== 0) {
-      tx.set(accountRef, this.accountRepository.applyBalanceDelta(accountSnap.data(), delta));
+      const accountSnap = await tx.get(accountRef);
+      if (!accountSnap.exists()) throw new Error("Account not found");
+      if (delta !== 0) {
+        tx.set(accountRef, this.accountRepository.applyBalanceDelta(accountSnap.data(), delta));
+      }
     }
     tx.set(transactionRef, { ...transaction, deletedAt: new Date() });
   }
@@ -471,7 +539,7 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
       transactions.push(fresh);
     }
     const accounts = new Map<string, Account>();
-    for (const accountId of new Set(transactions.map((t) => t.accountId))) {
+    for (const accountId of new Set(transactions.filter(hasAccountLeg).map((t) => t.accountId))) {
       const accountSnap = await tx.get(this.accountRepository.docRef(accountId));
       if (!accountSnap.exists()) throw new Error("Account not found");
       accounts.set(accountId, accountSnap.data());
@@ -484,7 +552,7 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
     const now = new Date();
     const deltas = new Map<string, number>();
     for (const t of prepared.transactions) {
-      deltas.set(t.accountId, (deltas.get(t.accountId) ?? 0) - balanceEffect(t));
+      if (hasAccountLeg(t)) deltas.set(t.accountId, (deltas.get(t.accountId) ?? 0) - balanceEffect(t));
       tx.set(doc(this.collection, t.id), { ...t, deletedAt: now });
     }
     for (const [accountId, delta] of deltas) {
@@ -511,13 +579,15 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
    */
   async restoreTransactionInTransaction(tx: FirestoreTransaction, transaction: Transaction): Promise<void> {
     const transactionRef = doc(this.collection, transaction.id);
-    const accountRef = this.accountRepository.docRef(transaction.accountId);
-    const delta = balanceEffect(transaction);
+    if (hasAccountLeg(transaction)) {
+      const accountRef = this.accountRepository.docRef(transaction.accountId);
+      const delta = balanceEffect(transaction);
 
-    const accountSnap = await tx.get(accountRef);
-    if (!accountSnap.exists()) throw new Error("Account not found");
-    if (delta !== 0) {
-      tx.set(accountRef, this.accountRepository.applyBalanceDelta(accountSnap.data(), delta));
+      const accountSnap = await tx.get(accountRef);
+      if (!accountSnap.exists()) throw new Error("Account not found");
+      if (delta !== 0) {
+        tx.set(accountRef, this.accountRepository.applyBalanceDelta(accountSnap.data(), delta));
+      }
     }
     tx.set(transactionRef, { ...transaction, deletedAt: null });
   }

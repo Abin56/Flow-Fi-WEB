@@ -3,6 +3,7 @@
 import { Stagger, StaggerItem } from "@/components/foundation/animated-container";
 import { AccountsOverviewCard } from "@/features/dashboard/components/accounts-overview-card";
 import { AttentionRow } from "@/features/dashboard/components/attention-row";
+import { MoneyToUseSignal } from "@/features/people/components/purpose-money-signals";
 import { CashFlowCard } from "@/features/dashboard/components/cash-flow-card";
 import { CreditUtilizationCard } from "@/features/dashboard/components/credit-utilization-card";
 import { DashboardHeader } from "@/features/dashboard/components/dashboard-header";
@@ -47,6 +48,8 @@ export default function DashboardPage() {
 
       <StaggerItem>
         <AttentionRow items={data.needsAttention} isLoading={data.isLoading} />
+        {/* Purpose money people gave me — one quiet line, nothing when there is none */}
+        <MoneyToUseSignal className="mt-3" />
       </StaggerItem>
 
       <StaggerItem>

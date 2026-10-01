@@ -347,7 +347,20 @@ function Progress({ v }: { v: SettlementRowView }) {
   );
 }
 
-function Payments({ v, personName, accountForEntry, onUndo }: { v: SettlementRowView; personName: string; accountForEntry: (id: string | null) => string | null; onUndo?: (p: PaymentRecord) => void }) {
+function Payments({
+  v,
+  personName,
+  accountForEntry,
+  onUndo,
+  onEdit,
+}: {
+  v: SettlementRowView;
+  personName: string;
+  accountForEntry: (id: string | null) => string | null;
+  onUndo?: (p: PaymentRecord) => void;
+  /** Set only for payments that can be edited — a recorded payment, changed in place. */
+  onEdit?: (p: PaymentRecord) => (() => void) | null;
+}) {
   const { row } = v;
   if (row.payments.length === 0) return null;
   const first = personName.split(" ")[0];
@@ -366,10 +379,19 @@ function Payments({ v, personName, accountForEntry, onUndo }: { v: SettlementRow
                 {account && <span className="text-foreground/70"> → {account}</span>}
               </span>
               <span className="ml-auto font-bold text-foreground tabular-nums sm:ml-0">{money(p.amount)}</span>
+              {(() => {
+                const edit = onEdit?.(p);
+                return edit ? (
+                  <button type="button" onClick={edit} title="Edit this payment" className="flex h-6 items-center gap-1 rounded-[5px] px-1 text-[11.5px] font-semibold text-foreground/70 outline-none hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring">
+                    <Pencil className="size-3.5" strokeWidth={1.75} />
+                    Edit
+                  </button>
+                ) : null;
+              })()}
               {p.undo && onUndo ? (
-                <button type="button" onClick={() => onUndo(p)} title="Undo this payment" className="flex h-6 items-center gap-1 rounded-[5px] px-1 text-[11.5px] font-semibold text-foreground/70 outline-none hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring">
+                <button type="button" onClick={() => onUndo(p)} title={p.undo.kind === "payment" ? "Revert this payment" : "Undo this payment"} className="flex h-6 items-center gap-1 rounded-[5px] px-1 text-[11.5px] font-semibold text-foreground/70 outline-none hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring">
                   <Undo2 className="size-3.5" strokeWidth={1.75} />
-                  Undo
+                  {p.undo.kind === "payment" ? "Revert" : "Undo"}
                 </button>
               ) : p.undoBlock ? (
                 <span title={p.undoBlock} className="text-foreground/55"><Info className="size-3.5" /></span>
@@ -429,9 +451,23 @@ export function sourceLink(row: LedgerRow, lookups: SettlementLookups): { href: 
   if (row.category === "loan" && row.loanId) return { href: `/loans?agreement=${encodeURIComponent(row.loanId)}`, label: "Open Loan" };
   if (row.entryId && !row.deletable && row.deleteBlock === "expense" && row.statementRow?.kind === "obligation") {
     const ref = lookups.entriesById.get(row.entryId)?.transactionRef;
-    if (ref) return { href: `/transactions?transaction=${encodeURIComponent(ref)}`, label: "Open expense" };
+    // Never a dead link: a row whose source transaction is gone has nowhere to navigate to.
+    if (ref && !sourceUnavailable(row, lookups)) return { href: `/transactions?transaction=${encodeURIComponent(ref)}`, label: "Open expense" };
   }
   return null;
+}
+
+/**
+ * A transaction-owned row whose source transaction no longer exists (deleted by an older path that left
+ * the People effect behind). Shown as "Original transaction is no longer available" — never an Edit /
+ * Delete that navigates to a missing transaction. Ghosts that are safe to remove are reconciled
+ * automatically (`useOrphanLedgerReconciliation`); what remains here has a payment recorded against it.
+ */
+export function sourceUnavailable(row: LedgerRow, lookups: SettlementLookups): boolean {
+  if (!row.entryId || row.deletable || !lookups.transactionStatus) return false;
+  const entry = lookups.entriesById.get(row.entryId);
+  if (!entry?.transactionRef) return false;
+  return lookups.transactionStatus(entry.transactionRef, entry) === "deleted";
 }
 
 /** Only the actions this row really supports — Edit/Delete here for ledger-owned rows, the source otherwise. */
@@ -445,7 +481,7 @@ function RowActionButtons({ v, handlers, lookups, compact = false }: { v: Settle
     <div className="flex flex-wrap items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
       {loanPay ? (
         <LoanPayLink loanId={row.loanId!} />
-      ) : row.settle ? (
+      ) : row.settle && !sourceUnavailable(row, lookups) ? (
         <button
           type="button"
           aria-pressed={settling}
@@ -480,6 +516,11 @@ function RowActionButtons({ v, handlers, lookups, compact = false }: { v: Settle
           <Trash2 className="size-3.5" strokeWidth={1.75} />
           {!compact && "Delete"}
         </button>
+      )}
+      {sourceUnavailable(row, lookups) && (
+        <span className="text-[12px] text-muted-foreground" title="Its source transaction was deleted. Reverse the payment recorded against it to clear this entry.">
+          Original transaction is no longer available
+        </span>
       )}
       {source && !(row.category === "loan" && loanPay) && (
         <Link
@@ -524,6 +565,9 @@ function Expansion({
     );
   }
   const onUndo = handlers.onUndoPayment ? (p: PaymentRecord) => handlers.onUndoPayment!(row, p) : undefined;
+  const onEditPayment = handlers.onEditPayment
+    ? (p: PaymentRecord) => (handlers.editablePayment?.(p) ? () => handlers.onEditPayment!(p) : null)
+    : undefined;
   return (
     <div className={cn("rounded-[8px] border border-l-[3px] border-border-strong/70 bg-card px-3 py-2.5", FAMILY[v.family].edge)}>
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -537,7 +581,7 @@ function Expansion({
         <Breakdown v={v} personId={personId} personName={personName} lookups={lookups} />
         <div className="flex flex-col gap-3">
           <Progress v={v} />
-          <Payments v={v} personName={personName} accountForEntry={accountForEntry} onUndo={onUndo} />
+          <Payments v={v} personName={personName} accountForEntry={accountForEntry} onUndo={onUndo} onEdit={onEditPayment} />
         </div>
         <Source v={v} cycleLabelOf={cycleLabelOf} />
       </div>

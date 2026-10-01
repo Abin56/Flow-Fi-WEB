@@ -39,7 +39,7 @@ import { useMemo } from "react";
 import { useAccounts } from "@/hooks/use-accounts";
 import { useCreditCards } from "@/hooks/use-credit-cards";
 import { useTransactions } from "@/hooks/use-transactions";
-import { compareTransactionsNewestFirst, signedAmount, type Transaction } from "@/lib/models/transaction";
+import { compareTransactionsNewestFirst, isPersonFunded, signedAmount, type Transaction } from "@/lib/models/transaction";
 import type { Account, AccountType } from "@/lib/models/account";
 import type { AccountColor } from "@/lib/mock/accounts-overview-data";
 import {
@@ -244,7 +244,7 @@ export function useRecentAccountTransactions(limit = 5): { rows: AccountTransact
           merchant: t.description || (t.isPersonLedgerMovement ? "People" : t.type === "income" ? "Income" : "Expense"),
           // A People repayment moves the balance but is never income.
           category: t.isPersonLedgerMovement ? (t.type === "income" ? "Person paid you" : "Paid to person") : t.type === "income" ? "Income" : "Expense",
-          account: account ? `${account.name}${account.accountNumberLast4 ? ` •••• ${account.accountNumberLast4}` : ""}` : "Unknown Account",
+          account: account ? `${account.name}${account.accountNumberLast4 ? ` •••• ${account.accountNumberLast4}` : ""}` : isPersonFunded(t) ? "Paid by a person" : "Unknown Account",
           amount: signedAmount(t),
           timestamp: formatTimestamp(t.dateTime, now),
         };

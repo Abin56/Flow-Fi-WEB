@@ -13,6 +13,7 @@ import type { Transaction } from "@/lib/models/transaction";
 import type { TransactionRepository } from "@/lib/repositories/transaction-repository";
 import type { StagedRecordPatch, TransactionStudioMutations } from "@/hooks/use-transaction-studio-mutations";
 import { toast } from "@/store/toast-store";
+import { useTransactionActions } from "@/features/transactions/hooks/use-transactions-data";
 import { ACTION_GROUPS, ACTION_META, actionToAxesPatch } from "../lib/action-metadata";
 import { applyToCommittedRows, describeBulkFailures, partitionRowsByCommitStatus, resolveCategoryId, type BulkRowFailure } from "../lib/committed-transaction-sync";
 import { downloadCsv, rowsToCsv } from "../lib/export-csv";
@@ -65,6 +66,7 @@ export function BulkActionBar({
   undoRedo: UseUndoRedoResult;
   onClear: () => void;
 }) {
+  const transactionActions = useTransactionActions();
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const count = selectedRowIds.size;
   const committedTransactionsById = useMemo(() => new Map(liveTransactions.map((t) => [t.id, t])), [liveTransactions]);
@@ -227,9 +229,12 @@ export function BulkActionBar({
         // A transfer leg (retroactively linked by Transfer Reconciliation, or created via the
         // manual transfer flow) must have both legs removed together — deleteTransferPair
         // reverses both accounts atomically instead of orphaning the sibling leg.
-        transaction.transferId != null
-          ? transactionRepository!.deleteTransferPair(transaction)
-          : transactionRepository!.softDeleteTransaction(transaction),
+        // People obligations / split Expenses go with it — the same linked delete `/transactions` uses.
+        transactionActions
+          ? transactionActions.deleteTransactionWithLinkedEffects(transaction)
+          : transaction.transferId != null
+            ? transactionRepository!.deleteTransferPair(transaction)
+            : transactionRepository!.softDeleteTransaction(transaction),
       );
       if (succeeded.length > 0) {
         // Only removes the staging copy for rows whose real transaction was actually deleted —

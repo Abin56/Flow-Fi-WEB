@@ -25,7 +25,8 @@ import { useCreditCardStandings, useCreditCardTotals, type CreditCardStandingVie
 import { useEmiRows } from "@/features/emi/hooks/use-emi-data";
 import { useLoanRows } from "@/features/loans/hooks/use-loans-data";
 import { useMonthCycleData } from "@/features/month-cycle/hooks/use-month-cycle-data";
-import { usePersonPositions } from "@/features/people/hooks/use-people-data";
+import { usePeopleLedgerEntries, usePersonPositions } from "@/features/people/hooks/use-people-data";
+import { personDirectGross } from "@/lib/engines/person-position";
 import { cardFundedLoanCardId, emiPurchaseRepresentedOnCard } from "@/lib/engines/credit-utilization";
 import {
   budgetScenarios,
@@ -166,7 +167,24 @@ export function useDebtPlannerData(): {
   const { data: accounts = [] } = useAccounts();
   const { data: transactions = [], isLoading: transactionsLoading } = useTransactions();
   const { data: people = [], isLoading: peopleLoading } = usePeople();
-  const { positionsByPersonId, isLoading: positionsLoading } = usePersonPositions();
+  const { positionsByPersonId, loanIds, isLoading: positionsLoading } = usePersonPositions();
+  const { entriesByPersonId } = usePeopleLedgerEntries();
+  // Each person's direct obligations by direction, GROSS — a payable is never reduced by an unrelated
+  // receivable of the same person (and vice versa).
+  const directGross = useMemo(
+    () =>
+      Object.fromEntries(
+        Object.entries(positionsByPersonId).map(([id, pos]) => [
+          id,
+          personDirectGross(
+            pos,
+            (entriesByPersonId[id] ?? []).map((e) => ({ id: e.id, type: e.type, amount: e.amount, parentEntryId: e.parentEntryId, transactionRef: e.transactionRef, isDeleted: e.deletedAt != null })),
+            loanIds,
+          ),
+        ]),
+      ),
+    [positionsByPersonId, entriesByPersonId, loanIds],
+  );
   const { sheet, isLoading: sheetLoading } = useLoanBalanceSheet();
   const { data: expenses = [], isLoading: expensesLoading } = useExpenses();
   const { installmentsByScheduleId, isLoading: expenseInstallmentsLoading } = useExpenseInstallmentsBySchedule();
@@ -223,13 +241,24 @@ export function useDebtPlannerData(): {
       .filter((p) => positionsByPersonId[p.id] != null)
       .map((p) => {
         const pos = positionsByPersonId[p.id];
-        return { personId: p.id, name: p.name, directBalance: pos.directBalance, emiReceivable: pos.emiReceivable, loanReceivable: pos.loanReceivable, loanPayable: pos.loanPayable };
+        const gross = directGross[p.id];
+        return {
+          personId: p.id,
+          name: p.name,
+          directBalance: pos.directBalance,
+          emiReceivable: pos.emiReceivable,
+          loanReceivable: pos.loanReceivable,
+          loanPayable: pos.loanPayable,
+          directToGive: gross?.payable,
+          directToReceive: gross?.receivable,
+        };
       });
     const facilities = cardFacilities(standings, sharedLimits as SharedCreditLimit[], accounts as Account[]);
     const personNames = Object.fromEntries((people as Person[]).map((p) => [p.id, p.name]));
     const shares = purchaseSharesByFacility(facilities, cardById, activeTransactionById, expenses as Expense[], installmentsByScheduleId, personNames);
-    // Per person, only what they still owe me directly (net) can be attributed to card purchases.
-    const recoverable = Object.fromEntries(Object.entries(positionsByPersonId).map(([id, pos]) => [id, Math.max(pos.directBalance, 0)]));
+    // Per person, only what they still owe me directly (GROSS receivable side) can be attributed to card
+    // purchases — money I separately owe them never shrinks their card share.
+    const recoverable = Object.fromEntries(Object.entries(positionsByPersonId).map(([id, pos]) => [id, directGross[id]?.receivable ?? Math.max(pos.directBalance, 0)]));
     const byFacility = cardPurchaseShares(shares, recoverable);
     return buildDebtSnapshot({
       loans,
@@ -239,17 +268,17 @@ export function useDebtPlannerData(): {
       personNames,
       now,
     });
-  }, [loanRows, emiRows, standings, sharedLimits, accounts, cards, transactions, people, positionsByPersonId, expenses, installmentsByScheduleId, now]);
+  }, [loanRows, emiRows, standings, sharedLimits, accounts, cards, transactions, people, positionsByPersonId, directGross, expenses, installmentsByScheduleId, now]);
 
   const reconciliation = useMemo((): DebtReconciliation => {
     const balanceSheetDebt = liabilityTotals(sheet, cardTotals.utilized).total;
     const peopleDirect = Object.entries(positionsByPersonId).reduce(
-      (s, [personId, p]) => s + personDirectPayable({ personId, name: "", ...p }),
+      (s, [personId, p]) => s + personDirectPayable({ personId, name: "", ...p, directToGive: directGross[personId]?.payable }),
       0,
     );
     const expected = Math.round((balanceSheetDebt + peopleDirect) * 100) / 100;
     return { balanceSheetDebt, peopleDirect, expected, matches: Math.abs(expected - snapshot.total) < 1 };
-  }, [sheet, cardTotals.utilized, positionsByPersonId, snapshot.total]);
+  }, [sheet, cardTotals.utilized, positionsByPersonId, directGross, snapshot.total]);
 
   const required = useMemo(() => requiredThisPeriod(snapshot.positions, monthCycleStartDay, now), [snapshot.positions, monthCycleStartDay, now]);
 

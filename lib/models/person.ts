@@ -13,7 +13,18 @@ import { receivedStatusFromName, type ReceivedStatus } from "@/lib/models/expens
 
 export type LedgerEntryType = "gave" | "borrowed" | "receivedBack" | "repaid" | "adjustment";
 /** Authoritative origin for newly-created People entries. Optional for legacy documents. */
-export type LedgerSourceKind = "manual" | "splitExpense" | "assignedExpense" | "emiInstallment" | "loanInstallment" | "advance";
+/**
+ * "personFundedExpense": the "borrowed" entry (I owe them) backing an expense this person paid directly
+ * for me — `transactionRef` is that expense (`Transaction.fundedByPersonId`), which has no account cash leg.
+ */
+export type LedgerSourceKind =
+  | "manual"
+  | "splitExpense"
+  | "assignedExpense"
+  | "emiInstallment"
+  | "loanInstallment"
+  | "advance"
+  | "personFundedExpense";
 
 const LEDGER_ENTRY_TYPES: LedgerEntryType[] = ["gave", "borrowed", "receivedBack", "repaid", "adjustment"];
 

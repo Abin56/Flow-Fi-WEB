@@ -1,6 +1,6 @@
 /** Add/Edit Transaction form fields that can block a save, in the form's visual (top-to-bottom) order.
  *  Validation reports the FIRST of these that is invalid, so a submit always lands on the topmost problem. */
-export type TxnFormField = "amount" | "description" | "category" | "date" | "account" | "destination" | "personDirection" | "split";
+export type TxnFormField = "amount" | "description" | "category" | "date" | "account" | "destination" | "personDirection" | "personFunding" | "split";
 
 export type TxnValidationError = { field: TxnFormField; message: string };
 

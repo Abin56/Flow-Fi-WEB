@@ -2,51 +2,104 @@
 
 import { PiggyBank } from "lucide-react";
 import { useState } from "react";
-import { paymentInitialFor, type RecordPaymentInitial } from "@/features/people/components/workspace/record-payment-panel";
+import type { RecordPaymentInitial } from "@/features/people/components/workspace/record-payment-panel";
 import { obligationSourceLabel, type PayableObligation } from "@/features/people/lib/person-payment-obligations";
 import { formatStatementDate } from "@/lib/engines/person-cycle-statement";
 import { money } from "@/lib/engines/person-cycle-statement-share";
+import type { PaymentImpact } from "@/lib/engines/person-payment-impact";
 import { planAdvanceApplication, round2, type AdvanceSource, type AdvanceUse } from "@/lib/engines/person-payment";
 import { cn } from "@/lib/utils";
 import { WS_FIELD, WS_GHOST, WS_PRIMARY } from "./person-workspace-ui";
 
-type PaymentEntry = Parameters<typeof paymentInitialFor>[1][number];
-
 /**
- * Inside the revert confirmation: what this ONE payment did — every obligation it paid and any advance —
- * so the user sees the whole financial effect, plus "Edit instead" where the payment can be edited.
+ * Inside the revert confirmation: what this ONE payment did and what reverting it changes — every figure
+ * from `paymentImpact` (its ledger entries, cash leg / income transactions and advance applications).
+ * When a later settlement already used this payment's advance, the revert is blocked and that use is
+ * listed so the user can undo it first. "Edit instead" is offered where the payment can be edited.
  */
 export function PaymentRevertDetails({
-  paymentId,
-  entries,
+  impact,
   firstName,
+  initial,
   onEdit,
-  accountIdOf,
+  accountNameOf,
+  obligationTitleOf,
+  onUndoDependency,
 }: {
-  paymentId: string;
-  entries: readonly PaymentEntry[];
+  impact: PaymentImpact;
   firstName: string;
+  /** The edit pre-fill — null when this payment is changed by revert + record. */
+  initial: RecordPaymentInitial | null;
   onEdit?: (initial: RecordPaymentInitial) => void;
-  accountIdOf: (transactionId: string) => string | null;
+  accountNameOf: (accountId: string) => string;
+  obligationTitleOf: (obligationKey: string) => string;
+  /** Undoes one later use of this payment's advance. */
+  onUndoDependency?: (applicationId: string) => Promise<void>;
 }) {
-  const group = entries.filter((e) => e.deletedAt == null && e.paymentId === paymentId);
-  const total = round2(group.reduce((s, e) => s + e.amount, 0));
-  const advance = round2(group.filter((e) => e.sourceKind === "advance").reduce((s, e) => s + e.amount, 0));
-  const obligationCount = group.filter((e) => e.sourceKind !== "advance").length;
-  const received = group[0]?.type !== "repaid";
-  const initial = paymentInitialFor(paymentId, entries, accountIdOf);
+  const received = impact.direction === "theyPaid";
+  const [undoing, setUndoing] = useState<string | null>(null);
+  if (!impact.canRevert) {
+    return (
+      <>
+        <p className="font-semibold text-foreground">Can&apos;t revert this payment yet</p>
+        <p>
+          {money(impact.advanceUsed)} of the advance from this payment was already used in {impact.dependencies.length === 1 ? "a later settlement" : "later settlements"}:
+        </p>
+        <ul className="divide-y divide-border-strong/45 rounded-[6px] border border-border-strong/70">
+          {impact.dependencies.map((d) => (
+            <li key={d.applicationId} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 px-2.5 py-1.5 text-[12.5px]">
+              <span className="min-w-0 flex-1 font-medium text-foreground">
+                {obligationTitleOf(d.obligationKey)} · {formatStatementDate(d.date, true)}
+              </span>
+              <span className="font-semibold tabular-nums text-foreground">{money(d.amount)}</span>
+              {onUndoDependency && (
+                <button
+                  type="button"
+                  disabled={undoing != null}
+                  onClick={async () => {
+                    setUndoing(d.applicationId);
+                    try {
+                      await onUndoDependency(d.applicationId);
+                    } finally {
+                      setUndoing(null);
+                    }
+                  }}
+                  className="h-6 rounded-[5px] px-1.5 text-[11.5px] font-semibold text-primary-accent-text outline-none hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
+                >
+                  {undoing === d.applicationId ? "Undoing…" : "Undo that use"}
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+        <p>Undo {impact.dependencies.length === 1 ? "that use" : "those uses"} first — then this payment can be reverted. Nothing has been changed.</p>
+      </>
+    );
+  }
   return (
     <>
-      <p>
-        This reverts the whole payment of <span className="font-semibold text-foreground">{money(total)}</span> {received ? "received from" : "paid to"}{" "}
-        {firstName}: the account movement is reversed, and {obligationCount === 1 ? "the obligation" : `each of the ${obligationCount} obligations`} it paid
-        becomes unpaid again by exactly what it received.
+      <p className="flex items-baseline justify-between gap-3 font-medium text-foreground">
+        <span>
+          {firstName} payment · {received ? "received" : "paid"}
+        </span>
+        <span className="font-heading font-bold tabular-nums">{money(impact.received)}</span>
       </p>
-      {advance > 0 && <p>{money(advance)} held as advance goes too — anything applied from it to later obligations is un-applied.</p>}
-      {group.some((e) => e.incomeTransactionRef) && <p>The part recorded as separate income is removed with it.</p>}
+      <p>This will:</p>
+      <ul className="list-disc space-y-0.5 pl-5">
+        {impact.accounts.map((a) => (
+          <li key={a.accountId}>
+            {received ? "remove" : "return"} {money(a.amount)} {received ? "from" : "to"} {accountNameOf(a.accountId)}
+          </li>
+        ))}
+        {impact.settled > 0 && <li>reopen {money(impact.settled)} of settled obligations</li>}
+        {impact.advance > 0 && <li>remove {money(impact.advanceUnused)} of unused advance</li>}
+        {impact.income > 0 && <li>remove {money(impact.income)} recorded as income</li>}
+        {impact.purposes > 0 && <li>remove {money(impact.purposes)} kept for purposes (any use of it must be undone first)</li>}
+      </ul>
+      <p className="text-foreground/75">The People Ledger, statements and reports update as though this payment had never been recorded.</p>
       {onEdit && initial && (
         <p>
-          Only the amount or allocation was wrong?{" "}
+          Only the amount, account or allocation was wrong?{" "}
           <button type="button" onClick={() => onEdit(initial)} className="font-semibold text-foreground underline underline-offset-2">
             Edit the payment instead
           </button>

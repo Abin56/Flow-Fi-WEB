@@ -223,6 +223,36 @@ export function peopleDirectPayable(positions: readonly Pick<PersonPosition, "di
 }
 
 /**
+ * Σ People direct obligations by direction, GROSS — a person who owes me ₹1,000 while I owe them ₹500
+ * is ₹1,000 receivable (asset) AND ₹500 payable (liability), never one netted ₹500. Person Loans are
+ * excluded (already in `loans`). `receivable − payable === Σ directBalance`, so Net Worth is unchanged.
+ */
+export function peopleDirectGross(
+  positions: readonly { position: PersonPosition; entries: readonly BreakdownLedgerEntry[] }[],
+  loanIds: ReadonlySet<string>,
+): { receivable: number; payable: number } {
+  let receivable = 0;
+  let payable = 0;
+  for (const { position, entries } of positions) {
+    const direct = personDirectGross(position, entries, loanIds);
+    receivable += direct.receivable;
+    payable += direct.payable;
+  }
+  return { receivable: round2(receivable), payable: round2(payable) };
+}
+
+/** One person's direct (People ledger) obligations by direction, gross — Loans/EMI excluded. */
+export function personDirectGross(
+  position: PersonPosition,
+  entries: readonly BreakdownLedgerEntry[],
+  loanIds: ReadonlySet<string>,
+): { receivable: number; payable: number } {
+  // Direct only: drop the Loan/EMI parts the breakdown adds on top of the direct ledger.
+  const direct = personBalanceBreakdown({ ...position, loanPayable: 0, loanReceivable: 0, emiReceivable: 0 }, entries, loanIds);
+  return { receivable: direct.toReceive, payable: direct.toGive };
+}
+
+/**
  * Month Cycle's "You need to give" / "You need to receive" sides, from each person's GROSS breakdown —
  * never from the net alone. A person who both owes me and is owed by me appears on BOTH sides (with
  * their net beside it), so money I borrowed is never hidden because the same person also owes me

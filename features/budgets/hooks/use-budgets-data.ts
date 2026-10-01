@@ -20,7 +20,10 @@ import { useTransactions } from "@/hooks/use-transactions";
 import { computeBudgetInsight, resolveBudgetPeriod, type BudgetInsightResult } from "@/lib/engines/budget-insight";
 import type { Budget } from "@/lib/models/budget";
 import type { Category } from "@/lib/models/category";
-import { effectiveMonth, isNonIncomeExpenseMovement, type Transaction } from "@/lib/models/transaction";
+import { effectiveMonth, type Transaction } from "@/lib/models/transaction";
+import { useMySpendContext } from "@/hooks/use-my-spend-context";
+import { myConsumptionAmount } from "@/lib/engines/my-spend";
+
 import { createBudgetRepository } from "@/lib/repositories/repository-factory";
 import type { CreateBudgetParams } from "@/lib/repositories/budget-repository";
 import { useAuthStore } from "@/store/auth-store";
@@ -29,10 +32,6 @@ export interface BudgetRow {
   budget: Budget;
   category: Category | undefined;
   insight: BudgetInsightResult;
-}
-
-function isRealExpense(t: Transaction): boolean {
-  return t.type === "expense" && t.deletedAt == null && !isNonIncomeExpenseMovement(t) && !t.excludeFromCalculations;
 }
 
 /**
@@ -61,17 +60,19 @@ export function useBudgetRows(): { rows: BudgetRow[]; isLoading: boolean } {
   const { data: budgets = [], isLoading: budgetsLoading } = useBudgets();
   const { data: categories = [], isLoading: categoriesLoading } = useCategories();
   const { data: transactions = [], isLoading: transactionsLoading } = useTransactions();
+  const { ctx: mySpendCtx, isLoading: mySpendLoading } = useMySpendContext();
 
   const rows = useMemo(() => {
     const categoryById = new Map((categories as Category[]).map((c) => [c.id, c]));
-    const expenses = (transactions as Transaction[]).filter(isRealExpense);
+    // Budgets track MY spend (shared classifier) — my share of split/assigned expenses only.
+    const expenses = (transactions as Transaction[]).filter((t) => myConsumptionAmount(t, mySpendCtx) > 0);
 
     return (budgets as Budget[]).map((budget) => {
       const period = resolveBudgetPeriod(budget);
       const spent = expenses
         .filter((t) => isWithinBudgetPeriod(t, budget, period))
         .filter((t) => budget.categoryId == null || t.categoryId === budget.categoryId)
-        .reduce((sum, t) => sum + t.amount, 0);
+        .reduce((sum, t) => sum + myConsumptionAmount(t, mySpendCtx), 0);
 
       const insight = computeBudgetInsight({
         limit: budget.amount,
@@ -86,31 +87,33 @@ export function useBudgetRows(): { rows: BudgetRow[]; isLoading: boolean } {
         insight,
       };
     });
-  }, [budgets, categories, transactions]);
+  }, [budgets, categories, transactions, mySpendCtx]);
 
-  return { rows, isLoading: budgetsLoading || categoriesLoading || transactionsLoading };
+  return { rows, isLoading: budgetsLoading || categoriesLoading || transactionsLoading || mySpendLoading };
 }
 
 /** This month's total expense per calendar day — powers the real "Daily Average" chart. */
 export function useDailySpend(): { days: number[]; average: number } {
   const { data: transactions = [] } = useTransactions();
+  const { ctx: mySpendCtx } = useMySpendContext();
 
   return useMemo(() => {
     const now = new Date();
     const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
     const days = new Array(daysInMonth).fill(0);
     for (const t of transactions as Transaction[]) {
-      if (!isRealExpense(t)) continue;
+      const mine = myConsumptionAmount(t, mySpendCtx);
+      if (mine === 0) continue;
       const effective = effectiveMonth(t);
       if (effective.getFullYear() !== now.getFullYear() || effective.getMonth() !== now.getMonth()) continue;
       // dateTime's day-of-month can exceed the accounting month's day count
       // (e.g. Jan 31 accounted to Feb) — clamp so it can't index past the array.
       const dayIndex = Math.min(t.dateTime.getDate(), daysInMonth) - 1;
-      days[dayIndex] += t.amount;
+      days[dayIndex] += mine;
     }
     const average = days.reduce((s, v) => s + v, 0) / daysInMonth;
     return { days, average };
-  }, [transactions]);
+  }, [transactions, mySpendCtx]);
 }
 
 /** Create/edit/delete actions wired to the real repository, scoped to the signed-in user. */

@@ -34,6 +34,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatCurrency } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { MonthCyclePurposePanel } from "@/features/people/components/purpose-money-signals";
 import { categoryIconFor, categoryToneFor, type ToneName } from "@/features/transactions/hooks/use-transactions-data";
 import {
   useMonthCycleData,
@@ -235,17 +236,15 @@ function PersonRow({ item, tone }: { item: MonthCyclePersonItem; tone: "expense"
           <p className="truncate text-sm font-semibold text-foreground">{item.name}</p>
           {item.note && <p className="truncate text-xs text-muted-foreground">{item.note}</p>}
           {item.toGive > 0 && item.toReceive > 0 && (
-            // Both directions open: this person is on both sides (gross) — say what the two net to.
+            // Both directions open: this person is on both sides (gross). The other side is settled on its
+            // own — never offset against this one.
             <p className="truncate text-xs font-medium text-foreground/80 tabular-nums">
               {tone === "success" ? (
-                <span className="text-expense">You need to give {formatCurrency(item.toGive)}</span>
+                <span className="text-expense">Also you need to give {formatCurrency(item.toGive)}</span>
               ) : (
-                <span className="text-success">You need to receive {formatCurrency(item.toReceive)}</span>
+                <span className="text-success">Also you need to receive {formatCurrency(item.toReceive)}</span>
               )}
-              {" · "}
-              <span className={item.net > 0 ? "text-success" : item.net < 0 ? "text-expense" : undefined}>
-                {item.net > 0 ? `Net you need to receive ${formatCurrency(item.net)}` : item.net < 0 ? `Net you need to give ${formatCurrency(-item.net)}` : "Net settled"}
-              </span>
+              {" · tracked separately"}
             </p>
           )}
         </div>
@@ -503,7 +502,7 @@ export function MonthCycleWorkspace() {
        <div className="flex flex-col @5xl:flex-row @5xl:items-stretch">
         <div className="flex flex-col gap-2 bg-gradient-to-br from-expense/[0.08] to-transparent px-5 py-4 sm:px-6 @5xl:min-w-[22rem] @5xl:border-r @5xl:border-border-strong/50 dark:from-expense/[0.14]">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <span className={LABEL}>{isMine ? "My expenses" : "Total spent"}</span>
+            <span className={LABEL}>{isMine ? "My spend" : "Total outflow"}</span>
             <ViewToggle isMine={isMine} onChange={setExpenseView} />
           </div>
           <button
@@ -640,7 +639,7 @@ export function MonthCycleWorkspace() {
         </section>
 
         <section aria-label="Account spend" className={cn(PANEL, "flex flex-col")}>
-          <PanelHeader icon={Wallet} title="Account spend this month" figure={financialView.spent} href="/accounts" />
+          <PanelHeader icon={Wallet} title="Account outflow this cycle" figure={financialView.spent} href="/accounts" />
           {data.accountSpends.length === 0 ? (
             <PanelEmpty title="No spending yet this month" description="Expenses posted this cycle will be grouped by account here." />
           ) : (
@@ -652,6 +651,9 @@ export function MonthCycleWorkspace() {
           )}
         </section>
       </div>
+
+      {/* ── Money to use — purposes due this cycle (informational; never Bills) ── */}
+      <MonthCyclePurposePanel cycle={data.cycleRange} />
 
       {/* ── Month at a glance ── */}
       <section aria-label="Month at a glance" className={PANEL}>
@@ -741,11 +743,11 @@ export function MonthCycleWorkspace() {
           showCloseButton={false}
           className="flex max-h-[88vh] w-full flex-col gap-0 overflow-hidden rounded-[10px] border border-border-strong/60 p-0 shadow-[var(--shadow-e4)] sm:max-w-3xl lg:max-w-5xl"
         >
-          <DialogTitle className="sr-only">{isMine ? "My expenses this cycle" : "Total spent this cycle"}</DialogTitle>
+          <DialogTitle className="sr-only">{isMine ? "My spend this cycle" : "Total outflow this cycle"}</DialogTitle>
           <div className="flex shrink-0 flex-wrap items-end justify-between gap-3 border-b border-border-strong/60 bg-gradient-to-br from-expense/[0.08] to-transparent px-5 py-4 dark:from-expense/[0.14]">
             <div>
               <p className={LABEL}>
-                {isMine ? "My expenses" : "Total spent"} · {data.monthRangeLabel}
+                {isMine ? "My spend" : "Total outflow"} · {data.monthRangeLabel}
               </p>
               <p className="mt-1 text-[30px] leading-none font-bold tracking-tight text-foreground tabular-nums">
                 <AnimatedNumber value={spent} format={formatCurrency} />

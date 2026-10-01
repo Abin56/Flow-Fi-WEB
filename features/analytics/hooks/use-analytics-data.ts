@@ -23,6 +23,9 @@ import { useTransactions } from "@/hooks/use-transactions";
 import type { Budget } from "@/lib/models/budget";
 import type { Category } from "@/lib/models/category";
 import { effectiveMonth, isNonIncomeExpenseMovement, type Transaction } from "@/lib/models/transaction";
+import { useMySpendContext } from "@/hooks/use-my-spend-context";
+import { myConsumptionAmount } from "@/lib/engines/my-spend";
+
 
 const MONTH_LABEL = { month: "short" } as const;
 
@@ -52,6 +55,8 @@ export function useAnalyticsData() {
   const isLoading = transactionsLoading || categoriesLoading || budgetsLoading;
 
   const now = useMemo(() => new Date(), []);
+  // Spending figures are MY spend (shared classifier) — my share of split/assigned expenses only.
+  const { ctx: mySpendCtx } = useMySpendContext();
 
   // --- Last N real months present in the data, oldest first ---
   const months = useMemo(() => {
@@ -66,12 +71,13 @@ export function useAnalyticsData() {
   const spendingTrend = useMemo(() => {
     const totals = new Map<string, number>();
     for (const t of transactions as Transaction[]) {
-      if (t.type !== "expense" || isNonIncomeExpenseMovement(t) || t.deletedAt != null) continue;
+      const mine = myConsumptionAmount(t, mySpendCtx);
+      if (mine === 0) continue;
       const effective = effectiveMonth(t);
-      totals.set(monthKey(effective), (totals.get(monthKey(effective)) ?? 0) + t.amount);
+      totals.set(monthKey(effective), (totals.get(monthKey(effective)) ?? 0) + mine);
     }
     return months.map((m) => ({ label: monthLabel(m), value: totals.get(monthKey(m)) ?? 0 }));
-  }, [transactions, months]);
+  }, [transactions, months, mySpendCtx]);
 
   const incomeTrend = useMemo(() => {
     const totals = new Map<string, number>();
@@ -93,10 +99,11 @@ export function useAnalyticsData() {
   const topCategories = useMemo(() => {
     const totals = new Map<string, number>();
     for (const t of transactions as Transaction[]) {
-      if (t.type !== "expense" || isNonIncomeExpenseMovement(t) || t.deletedAt != null) continue;
+      const mine = myConsumptionAmount(t, mySpendCtx);
+      if (mine === 0) continue;
       const effective = effectiveMonth(t);
       if (!isSameMonth(effective, now)) continue;
-      totals.set(t.categoryId, (totals.get(t.categoryId) ?? 0) + t.amount);
+      totals.set(t.categoryId, (totals.get(t.categoryId) ?? 0) + mine);
     }
     const total = Array.from(totals.values()).reduce((sum, v) => sum + v, 0);
     return Array.from(totals.entries())
@@ -108,7 +115,7 @@ export function useAnalyticsData() {
       }))
       .sort((a, b) => b.amount - a.amount)
       .slice(0, 8);
-  }, [transactions, categories, now]);
+  }, [transactions, categories, now, mySpendCtx]);
 
   // --- Monthly insights: real this-vs-last-month deltas per category (top 5 movers) ---
   const categoryMovers = useMemo(() => {
@@ -117,12 +124,13 @@ export function useAnalyticsData() {
     const lastMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
 
     for (const t of transactions as Transaction[]) {
-      if (t.type !== "expense" || isNonIncomeExpenseMovement(t) || t.deletedAt != null) continue;
+      const mine = myConsumptionAmount(t, mySpendCtx);
+      if (mine === 0) continue;
       const effective = effectiveMonth(t);
       if (isSameMonth(effective, now)) {
-        thisMonth.set(t.categoryId, (thisMonth.get(t.categoryId) ?? 0) + t.amount);
+        thisMonth.set(t.categoryId, (thisMonth.get(t.categoryId) ?? 0) + mine);
       } else if (isSameMonth(effective, lastMonthDate)) {
-        lastMonth.set(t.categoryId, (lastMonth.get(t.categoryId) ?? 0) + t.amount);
+        lastMonth.set(t.categoryId, (lastMonth.get(t.categoryId) ?? 0) + mine);
       }
     }
 
@@ -137,7 +145,7 @@ export function useAnalyticsData() {
       .filter((row) => row.current > 0 || row.previous > 0)
       .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))
       .slice(0, 5);
-  }, [transactions, categories, now]);
+  }, [transactions, categories, now, mySpendCtx]);
 
   // --- Financial health indicators: real this-month savings rate + budget adherence, no fabricated score ---
   const healthIndicators = useMemo(() => {
@@ -146,10 +154,11 @@ export function useAnalyticsData() {
     const categoryBudgets = (budgets as Budget[]).filter((b) => b.categoryId != null);
     const spentByCategory = new Map<string, number>();
     for (const t of transactions as Transaction[]) {
-      if (t.type !== "expense" || isNonIncomeExpenseMovement(t) || t.deletedAt != null) continue;
+      const mine = myConsumptionAmount(t, mySpendCtx);
+      if (mine === 0) continue;
       const effective = effectiveMonth(t);
       if (!isSameMonth(effective, now)) continue;
-      spentByCategory.set(t.categoryId, (spentByCategory.get(t.categoryId) ?? 0) + t.amount);
+      spentByCategory.set(t.categoryId, (spentByCategory.get(t.categoryId) ?? 0) + mine);
     }
     const withinBudget = categoryBudgets.filter(
       (b) => (spentByCategory.get(b.categoryId as string) ?? 0) <= b.amount,
@@ -157,7 +166,7 @@ export function useAnalyticsData() {
     const budgetAdherence = categoryBudgets.length === 0 ? null : (withinBudget / categoryBudgets.length) * 100;
 
     return { savingsRate, budgetAdherence, budgetsTracked: categoryBudgets.length };
-  }, [thisMonthIncome, thisMonthSpend, budgets, transactions, now]);
+  }, [thisMonthIncome, thisMonthSpend, budgets, transactions, now, mySpendCtx]);
 
   return {
     isLoading,

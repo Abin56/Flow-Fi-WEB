@@ -138,7 +138,8 @@ export function CycleReconciliation({ statement, personName, className }: { stat
   const appliedIn = pos.lines.find((l) => l.key === "received")?.value ?? 0;
   const totalDue = statement.previousPending + statement.cycleActivity;
   const advanceIn = round2(statement.rows.filter((r) => r.category === "advance" && r.advanceDelta < 0).reduce((s, r) => s + r.amount, 0));
-  const settled = statement.direction === "settled";
+  const bothSides = statement.toReceive > 0 && statement.toGive > 0;
+  const settled = statement.direction === "settled" && !bothSides;
   const tone = statement.direction === "theyOwe" ? "text-settle-receivable-text" : statement.direction === "iOwe" ? "text-settle-payable-text" : "text-success";
 
   return (
@@ -162,11 +163,31 @@ export function CycleReconciliation({ statement, personName, className }: { stat
           />
         ))}
         <div className="mt-0.5 border-t-2 border-border-strong" />
-        <div className="flex items-baseline justify-between gap-3 pt-1.5">
-          <dt className="text-[12px] font-bold tracking-[0.06em] text-foreground uppercase">{settled ? "Settled" : "Current pending"}</dt>
-          <dd className={cn("font-heading text-[16px] font-bold tabular-nums", tone)}>{money(statement.amount)}</dd>
-        </div>
-        {!settled && <p className={cn("text-right text-[11.5px] font-semibold", tone)}>{pos.headline}</p>}
+        {bothSides ? (
+          // Both directions open: each is its own obligation, settled on its own — never offset.
+          <>
+            <div className="flex items-baseline justify-between gap-3 pt-1.5">
+              <dt className="text-[12px] font-bold tracking-[0.06em] text-settle-receivable-text uppercase">You need to receive</dt>
+              <dd className="font-heading text-[16px] font-bold tabular-nums text-settle-receivable-text">{money(statement.toReceive)}</dd>
+            </div>
+            <div className="flex items-baseline justify-between gap-3 pt-0.5">
+              <dt className="text-[12px] font-bold tracking-[0.06em] text-settle-payable-text uppercase">You need to give</dt>
+              <dd className="font-heading text-[16px] font-bold tabular-nums text-settle-payable-text">{money(statement.toGive)}</dd>
+            </div>
+            <p className="mt-0.5 text-right text-[11px] font-medium text-foreground/70">
+              Net position {money(statement.amount)} {statement.direction === "theyOwe" ? "to receive" : statement.direction === "iOwe" ? "to give" : ""} · summary only — payments are
+              settled separately.
+            </p>
+          </>
+        ) : (
+          <>
+            <div className="flex items-baseline justify-between gap-3 pt-1.5">
+              <dt className="text-[12px] font-bold tracking-[0.06em] text-foreground uppercase">{settled ? "Settled" : "Current pending"}</dt>
+              <dd className={cn("font-heading text-[16px] font-bold tabular-nums", tone)}>{money(statement.amount)}</dd>
+            </div>
+            {!settled && <p className={cn("text-right text-[11.5px] font-semibold", tone)}>{pos.headline}</p>}
+          </>
+        )}
         {cashIn - appliedIn >= 0.005 && (
           <p className="mt-1 text-right text-[11.5px] font-medium text-foreground/75">
             {money(cashIn)} received from {first} this cycle · {money(appliedIn)} applied to what was due

@@ -85,6 +85,8 @@ import { ExpenseRepository } from "./expense-repository";
 import { LoanRepository } from "./loan-repository";
 import { LedgerRepository, PersonRepository } from "./person-repository";
 import { PersonPaymentRepository } from "./person-payment-repository";
+import { PurposeFundRepository } from "./purpose-fund-repository";
+import { purposeFundFromFirestore, purposeFundToFirestore, type PurposeFund } from "@/lib/models/purpose-fund";
 import { SavingsRepository } from "./savings-repository";
 import { InstallmentPaymentRepository, InstallmentRepository, PaymentScheduleRepository } from "./payment-schedule-repository";
 import { TransactionRepository } from "./transaction-repository";
@@ -549,6 +551,31 @@ export function createAdvanceApplicationsCollection(uid: string, personId: strin
   ).withConverter(advanceApplicationConverter);
 }
 
+const purposeFundConverter: FirestoreDataConverter<PurposeFund> = {
+  toFirestore: purposeFundToFirestore,
+  fromFirestore: purposeFundFromFirestore,
+};
+
+/** Purpose money (`PurposeFund`) lives in a per-person `people/{personId}/purposeFunds` subcollection. */
+export function createPurposeFundsCollection(uid: string, personId: string) {
+  return collection(db, FirestoreCollections.users, uid, FirestoreCollections.people, personId, FirestoreCollections.purposeFunds).withConverter(
+    purposeFundConverter,
+  );
+}
+
+/** Purpose money for one person after the receipt — uses, edits, cancel and release (`PurposeFundRepository`). */
+export function createPurposeFundRepository(uid: string, personId: string, cashLegCategoryId: string): PurposeFundRepository {
+  const accountRepository = createAccountRepository(uid);
+  const personRepository = createPersonRepository(uid);
+  return new PurposeFundRepository({
+    personRepository,
+    ledgerRepository: createLedgerRepositoryFor(uid, personId, personRepository),
+    transactionRepository: createTransactionRepository(uid, accountRepository),
+    purposeFunds: createPurposeFundsCollection(uid, personId),
+    cashLegCategoryId,
+  });
+}
+
 /**
  * Record Payment for one person — wires the ledger, the cash-leg Transaction repository, the expense
  * and its split tracking installments, and the advance applications into one atomic writer.
@@ -563,6 +590,7 @@ export function createPersonPaymentRepository(uid: string, personId: string, cas
     ledgerRepository: createLedgerRepositoryFor(uid, personId, personRepository),
     transactionRepository: createTransactionRepository(uid, accountRepository),
     advanceApplications: createAdvanceApplicationsCollection(uid, personId),
+    purposeFunds: createPurposeFundsCollection(uid, personId),
     expenseDocRef: (expenseId) => expenseRepository.docRef(expenseId),
     installmentDocRef: (scheduleId, installmentId) => createInstallmentRepositoryFor(uid, scheduleId).docRef(installmentId),
     installmentPaymentDocRef: (scheduleId, installmentId, paymentId) =>

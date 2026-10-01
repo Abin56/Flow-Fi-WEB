@@ -266,6 +266,17 @@ export interface PersonCycleStatement {
   direction: StatementDirection;
   /** |currentPending|. */
   amount: number;
+  /**
+   * GROSS position at the cycle end, by direction — the authoritative settlement figures. Opposite
+   * obligations never offset each other here: "they owe me ₹1,000" and "I owe them ₹500" stay ₹1,000 to
+   * receive and ₹500 to give, and Record Payment settles each side separately. `currentPending` is only
+   * their signed summary: `toReceive − toGive === currentPending` always.
+   */
+  toReceive: number;
+  toGive: number;
+  /** This cycle's new obligations by direction, gross (`addedToReceive − addedToGive === cycleActivity`). */
+  addedToReceive: number;
+  addedToGive: number;
   /** This cycle's rows, oldest first, with running balance starting at `previousPending`. */
   rows: StatementRow[];
   /** Obligations only, non-zero categories. */
@@ -547,6 +558,49 @@ function breakdown(rows: StatementRow[], order: StatementCategory[]): BreakdownL
     .map((c) => ({ category: c, label: CATEGORY_LABEL[c], signedAmount: sums.get(c)! }));
 }
 
+const OPEN_CATEGORIES = new Set<StatementCategory>(["opening", "split", "gave", "borrowed", "emi", "loan"]);
+
+/**
+ * Each obligation dated on/before the cycle end, minus the settlements linked to it (`settlesKey`) dated
+ * on/before the cycle end, summed per direction — never across directions. A settlement not tied to one
+ * obligation (legacy unlinked payment, adjustment) is the remainder `currentPending − (receive − give)`:
+ * it pays down its own side first and only its excess lands on the other side — the same rule as
+ * `personBalanceBreakdown`, so `toReceive − toGive === currentPending` holds exactly.
+ */
+function grossPosition(
+  events: readonly RawEvent[],
+  obligationByKey: ReadonlyMap<string, RawEvent>,
+  endIdx: number,
+  currentPending: number,
+): { toReceive: number; toGive: number } {
+  const settled = new Map<string, number>();
+  for (const e of events) {
+    if (e.kind !== "settlement" || e.settlesKey == null || dayIndex(e.date) > endIdx || !obligationByKey.has(e.settlesKey)) continue;
+    settled.set(e.settlesKey, (settled.get(e.settlesKey) ?? 0) + e.amount);
+  }
+  let receive = 0;
+  let give = 0;
+  for (const e of events) {
+    if (e.kind !== "obligation" || !OPEN_CATEGORIES.has(e.category) || dayIndex(e.date) > endIdx) continue;
+    const open = Math.max(0, e.amount - (settled.get(e.key) ?? 0));
+    if (e.signedAmount > 0) receive += open;
+    else if (e.signedAmount < 0) give += open;
+  }
+  const unlinked = round2(currentPending - (receive - give));
+  if (unlinked > 0) {
+    const used = Math.min(unlinked, give);
+    give -= used;
+    receive += unlinked - used;
+  } else if (unlinked < 0) {
+    const used = Math.min(-unlinked, receive);
+    receive -= used;
+    give += -unlinked - used;
+  }
+  const toReceive = round2(receive);
+  const toGive = round2(give);
+  return { toReceive: toReceive < EPSILON ? 0 : toReceive, toGive: toGive < EPSILON ? 0 : toGive };
+}
+
 export function buildPersonCycleStatement(input: PersonCycleStatementInput): PersonCycleStatement {
   const { cycle, person } = input;
   const events = collectStatementEvents(input).sort(compareEvents);
@@ -617,6 +671,13 @@ export function buildPersonCycleStatement(input: PersonCycleStatementInput): Per
   const currentPending = round2(previousPending + cycleActivity + cycleSettlements);
   const direction = directionOf(currentPending);
   if (rows.length === 0) advanceBalance = previousAdvance;
+  const gross = grossPosition(events, obligationByKey, endIdx, direction === "settled" ? 0 : currentPending);
+  let addedToReceive = 0;
+  let addedToGive = 0;
+  for (const r of obligations) {
+    if (r.signedAmount > 0) addedToReceive += r.signedAmount;
+    else addedToGive -= r.signedAmount;
+  }
   let cashReceived = 0;
   let cashPaid = 0;
   for (const r of rows) {
@@ -639,6 +700,10 @@ export function buildPersonCycleStatement(input: PersonCycleStatementInput): Per
     cashPaid,
     direction,
     amount: direction === "settled" ? 0 : Math.abs(currentPending),
+    toReceive: gross.toReceive,
+    toGive: gross.toGive,
+    addedToReceive: round2(addedToReceive),
+    addedToGive: round2(addedToGive),
     rows,
     activityBreakdown: breakdown(obligations, ACTIVITY_ORDER),
     settlementBreakdown: breakdown(settlements, SETTLEMENT_ORDER),

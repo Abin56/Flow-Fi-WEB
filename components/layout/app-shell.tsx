@@ -8,6 +8,7 @@ import { Sidebar } from "@/components/layout/sidebar";
 import { Topbar } from "@/components/layout/topbar";
 import { WatcherErrorBanner } from "@/components/layout/watcher-error-banner";
 import { PageTransition } from "@/components/motion/page-transition";
+import { OrphanLedgerReconciler } from "@/features/people/hooks/use-orphan-ledger-reconciliation";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -32,6 +33,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <div className="flex min-w-0 flex-1 flex-col">
         <OfflineBanner />
         <WatcherErrorBanner />
+        <OrphanLedgerReconciler />
         <Topbar
           onOpenCommandPalette={() => setPaletteOpen(true)}
           onOpenMobileNav={() => setMobileNavOpen(true)}

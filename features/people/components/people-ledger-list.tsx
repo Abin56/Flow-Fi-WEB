@@ -329,9 +329,9 @@ export function CyclePicker({
 // Cycle summary
 
 /**
- * Total to receive for the selected cycle — the sum of every row's current pending where the engine says
- * "They owe you" (`direction === "theyOwe"`, `amount = |currentPending|`). Never netted against what the
- * user owes; that figure is shown beside it, from the same rows.
+ * The selected cycle's totals by direction, GROSS — each person's `toReceive` and `toGive` (engine), never
+ * their net. A person who owes me ₹1,000 while I owe them ₹500 adds ₹1,000 to receive AND ₹500 to give
+ * (and counts on both sides): the two are settled separately.
  */
 export function cycleTotals(rows: PeopleLedgerRow[]) {
   let toReceive = 0;
@@ -341,15 +341,17 @@ export function cycleTotals(rows: PeopleLedgerRow[]) {
   let activity = 0;
   for (const r of rows) {
     activity += r.statement.rows.length;
-    if (r.statement.direction === "theyOwe") {
-      toReceive += r.statement.amount;
+    if (r.statement.toReceive > 0) {
+      toReceive += r.statement.toReceive;
       receiveCount += 1;
-    } else if (r.statement.direction === "iOwe") {
-      toPay += r.statement.amount;
+    }
+    if (r.statement.toGive > 0) {
+      toPay += r.statement.toGive;
       payCount += 1;
     }
   }
-  return { toReceive, receiveCount, toPay, payCount, activity };
+  const round2 = (v: number) => Math.round(v * 100) / 100;
+  return { toReceive: round2(toReceive), receiveCount, toPay: round2(toPay), payCount, activity };
 }
 
 export function PeopleCycleSummary({ rows }: { rows: PeopleLedgerRow[] }) {
@@ -497,6 +499,26 @@ function cycleStatus(s: PeopleLedgerRow["statement"], moved: number): { label: s
   return null;
 }
 
+/** One gross direction in a person row, as a tinted chip: "↙ Receive ₹1,000". */
+function DirectionFigure({ side, amount }: { side: "theyOwe" | "iOwe"; amount: number }) {
+  const receive = side === "theyOwe";
+  const Icon = receive ? ArrowDownLeft : ArrowUpRight;
+  return (
+    <span
+      className={cn(
+        "flex w-full max-w-[10rem] items-center justify-between gap-2 rounded-md border px-2 py-1",
+        receive ? "border-success/30 bg-success/10" : "border-expense/30 bg-expense/10",
+      )}
+    >
+      <span className={cn("inline-flex items-center gap-1 text-[11px] font-semibold", receive ? "text-success" : "text-expense")}>
+        <Icon className="size-3.5" strokeWidth={2.25} aria-hidden />
+        {receive ? "Receive" : "Give"}
+      </span>
+      <span className="font-heading text-[15px] leading-tight font-bold whitespace-nowrap tabular-nums text-foreground">{money(amount)}</span>
+    </span>
+  );
+}
+
 function PersonRow({
   row,
   onOpen,
@@ -521,6 +543,7 @@ function PersonRow({
   const status = cycleStatus(s, moved);
   const firstName = row.name.split(" ")[0];
   const advanceText = pos.advance ? `Advance ${money(pos.advance.amount)} ${pos.advance.from === "them" ? `from ${firstName}` : "paid ahead"}` : null;
+  const bothSides = s.toReceive > 0 && s.toGive > 0;
 
   return (
     <li
@@ -530,7 +553,9 @@ function PersonRow({
       <button
         type="button"
         onClick={onOpen}
-        aria-label={`Open ${row.name}'s ledger — ${directionHeadline(s.direction)}${isSettled ? "" : ` ${money(s.amount)}`}`}
+        aria-label={`Open ${row.name}'s ledger — ${
+          bothSides ? `You need to receive ${money(s.toReceive)}, you need to give ${money(s.toGive)}` : `${directionHeadline(s.direction)}${isSettled ? "" : ` ${money(s.amount)}`}`
+        }`}
         className={cn(
           "group relative grid w-full cursor-pointer grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1.5 px-4 py-3.5 text-left outline-none transition-colors duration-150 hover:bg-secondary/60 focus-visible:bg-secondary/60 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset xl:px-5",
           ROW_GRID,
@@ -564,7 +589,13 @@ function PersonRow({
           <Figure label={pos.cashPaid > 0 && pos.cashReceived <= 0 ? "Paid" : "Received"} value={movedText} muted={moved <= 0} />
         </span>
 
-        {/* Current pending + who owes whom */}
+        {/* Current pending + who owes whom — both directions, gross, when both are open (never netted) */}
+        {bothSides ? (
+          <span className="flex min-w-0 flex-col items-end gap-1">
+            <DirectionFigure side="theyOwe" amount={s.toReceive} />
+            <DirectionFigure side="iOwe" amount={s.toGive} />
+          </span>
+        ) : (
         <span className="flex flex-col items-end gap-0.5">
           <span
             key={`${s.cycle.start.getTime()}-${s.currentPending}`}
@@ -580,6 +611,7 @@ function PersonRow({
             {directionHeadline(s.direction)}
           </span>
         </span>
+        )}
 
         <ChevronRight
           className="hidden size-4 text-muted-foreground transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-foreground xl:block"

@@ -11,12 +11,39 @@ import { FirestoreCrudRepository } from "@/lib/firestore/firestore-crud-reposito
 import { recordEdit, updateField } from "@/lib/firestore/soft-deletable";
 import { type LedgerEntry, type LedgerEntryType, type LedgerSourceKind, type Person, signedAmount } from "@/lib/models/person";
 import type { ReceivedStatus } from "@/lib/models/expense";
-import type { Transaction, TransactionType } from "@/lib/models/transaction";
+import { PERSON_FUNDED_ACCOUNT_ID, type Transaction, type TransactionType } from "@/lib/models/transaction";
 import type { EditTransactionParams, TransactionRepository } from "@/lib/repositories/transaction-repository";
 import { generateId } from "@/lib/utils/id-generator";
+import { planOrphanReconciliation } from "@/lib/engines/transaction-owned-ledger";
 
 /** Entries per `softDeleteEntries` transaction — 1 person + N entries, far below Firestore's 500-write cap. */
 const SOFT_DELETE_CHUNK = 200;
+
+/** The "borrowed" obligation (I owe them the full amount) backing a person-funded expense. */
+function personFundedEntry(
+  id: string,
+  personId: string,
+  expense: Pick<Transaction, "id" | "amount" | "dateTime" | "description">,
+): LedgerEntry {
+  return {
+    id,
+    personId,
+    type: "borrowed",
+    amount: expense.amount,
+    date: expense.dateTime,
+    note: expense.description,
+    transactionRef: expense.id,
+    parentEntryId: null,
+    sourceKind: "personFundedExpense",
+    obligationRef: null,
+    increasesBalance: true,
+    receivedStatus: "yetToReceive",
+    createdAt: new Date(),
+    deletedAt: null,
+    lastEditedAt: null,
+    editHistory: [],
+  };
+}
 
 export interface CreatePersonParams {
   name: string;
@@ -312,6 +339,178 @@ export class LedgerRepository extends FirestoreCrudRepository<LedgerEntry> {
   }
 
   /**
+   * An expense this person paid DIRECTLY for me ("Money I Borrowed → Person paid directly"), atomically:
+   *  - the expense Transaction — a real expense of mine (My Spend, categories, Month Cycle), with
+   *    `fundedByPersonId` = this person and NO account (`PERSON_FUNDED_ACCOUNT_ID`), so no account is read
+   *    or moved;
+   *  - one "borrowed" entry (I owe them the full amount), `sourceKind: "personFundedExpense"`,
+   *    `transactionRef` = the expense — the two-way link (expense → `fundedByPersonId`/`linkedPersonId`,
+   *    entry → `transactionRef`).
+   * Never an `isPersonLedgerMovement` cash leg: no cash moved through my accounts. Repaying them later is
+   * an ordinary People settlement against this entry (its own cash leg, never My Spend).
+   */
+  async createPersonFundedExpense(
+    person: Person,
+    params: {
+      amount: number;
+      date: Date;
+      categoryId: string;
+      description?: string;
+      notes?: string;
+      excludeFromCalculations?: boolean;
+      accountingMonth?: Date | null;
+    },
+    transactionRepository: TransactionRepository,
+  ): Promise<{ entry: LedgerEntry; transaction: Transaction }> {
+    if (params.amount <= 0) {
+      throw new Error("Amount must be greater than 0");
+    }
+
+    const entryId = generateId();
+    const db = this.collection.firestore;
+    const entryRef = doc(this.collection, entryId);
+    const personRef = this.personRepository.docRef(person.id);
+
+    let entry!: LedgerEntry;
+    let transaction!: Transaction;
+
+    await runTransaction(db, async (tx) => {
+      const personSnap = await tx.get(personRef);
+      if (!personSnap.exists()) throw new Error("Person not found");
+
+      transaction = await transactionRepository.createTransactionInTransaction(tx, {
+        type: "expense",
+        amount: params.amount,
+        dateTime: params.date,
+        accountId: PERSON_FUNDED_ACCOUNT_ID,
+        categoryId: params.categoryId,
+        description: params.description,
+        notes: params.notes,
+        excludeFromCalculations: params.excludeFromCalculations,
+        accountingMonth: params.accountingMonth,
+        linkedPersonId: person.id,
+        owesPersonToggle: false,
+        fundedByPersonId: person.id,
+      });
+
+      entry = personFundedEntry(entryId, person.id, transaction);
+      tx.set(personRef, this.personRepository.applyBalanceDelta(personSnap.data(), signedAmount(entry)));
+      tx.set(entryRef, entry);
+    });
+
+    return { entry, transaction };
+  }
+
+  /**
+   * Changes who paid an expense — and/or edits a person-funded expense's amount/date — keeping the
+   * expense and its People obligation in step, all in ONE atomic write. Every balance move goes through
+   * `editTransactionInTransaction` (old account effect reversed once, new one applied once):
+   *  - account → person P: the account's debit is reversed; a new "personFundedExpense" entry (I owe P).
+   *  - person P → account: P's entry is soft-deleted (its balance effect reversed); the account is debited.
+   *  - person P → person Q: P's entry removed, Q's created; no account moves.
+   *  - person P → person P: the entry's amount/date/note edited in place (same entry, no duplicate).
+   * `this` may be any LedgerRepository (it only provides the Firestore instance); each side's entries
+   * are addressed through its own ledger. Refuses to move an obligation away from a person once
+   * settlements were recorded against it — reverse those first (they'd otherwise be orphaned).
+   */
+  async changeExpenseFunding(params: {
+    transaction: Transaction;
+    /** The current person-funded obligation (null when the expense is account-funded). */
+    from: { person: Person; ledger: LedgerRepository; entry: LedgerEntry; hasSettlements: boolean } | null;
+    to: { kind: "account"; accountId: string } | { kind: "person"; person: Person; ledger: LedgerRepository };
+    edits?: Omit<EditTransactionParams, "funding" | "accountId" | "linkedPersonId" | "clearLinkedPersonId" | "owesPersonToggle" | "type">;
+    transactionRepository: TransactionRepository;
+  }): Promise<void> {
+    const { transaction, from, to, edits, transactionRepository } = params;
+    const samePerson = from != null && to.kind === "person" && to.person.id === from.person.id;
+    if (from != null && !samePerson && from.hasSettlements) {
+      throw new Error(`Payments to ${from.person.name} are recorded against this expense — reverse them in People before changing who paid.`);
+    }
+    if (edits?.amount != null && edits.amount <= 0) throw new Error("Amount must be greater than 0");
+
+    const db = this.collection.firestore;
+    const fromEntryRef = from ? from.ledger.docRef(from.entry.id) : null;
+    const fromPersonRef = from ? this.personRepository.docRef(from.person.id) : null;
+    const toPersonRef = to.kind === "person" && !samePerson ? this.personRepository.docRef(to.person.id) : null;
+    const newEntryId = generateId();
+
+    await runTransaction(db, async (tx) => {
+      // Every read before any write.
+      const fresh = await transactionRepository.getInTransaction(tx, transaction.id);
+      if (fresh == null || fresh.deletedAt != null) throw new Error("Transaction not found");
+      if ((fresh.fundedByPersonId ?? null) !== (from?.person.id ?? null)) {
+        throw new Error("This transaction changed since it was opened — reopen it and try again.");
+      }
+      const fromEntrySnap = fromEntryRef ? await tx.get(fromEntryRef) : null;
+      const fromPersonSnap = fromPersonRef ? await tx.get(fromPersonRef) : null;
+      const toPersonSnap = toPersonRef ? await tx.get(toPersonRef) : null;
+      if (fromPersonSnap && !fromPersonSnap.exists()) throw new Error("Person not found");
+      if (toPersonSnap && !toPersonSnap.exists()) throw new Error("Person not found");
+      const fromEntry = fromEntrySnap?.exists() ? fromEntrySnap.data() : null;
+      if (from && (fromEntry == null || fromEntry.deletedAt != null || fromEntry.transactionRef !== fresh.id)) {
+        throw new Error("The People entry for this expense is missing — reopen it and try again.");
+      }
+
+      // Expense + account balances (its own reads happen here, before any write below).
+      await transactionRepository.editTransactionInTransaction(tx, fresh, {
+        ...edits,
+        funding: to.kind === "person" ? { kind: "person", personId: to.person.id } : { kind: "account", accountId: to.accountId },
+        linkedPersonId: to.kind === "person" ? to.person.id : undefined,
+        owesPersonToggle: false,
+      });
+      const amount = edits?.amount ?? fresh.amount;
+      const date = edits?.dateTime ?? fresh.dateTime;
+      const note = edits?.description ?? fresh.description;
+
+      if (samePerson) {
+        let updated = updateField(fromEntry!, "amount", fromEntry!.amount, amount, (e, v) => ({ ...e, amount: v }));
+        if (date.getTime() !== fromEntry!.date.getTime()) {
+          updated = updateField(updated, "date", fromEntry!.date.toISOString(), date.toISOString(), (e) => ({ ...e, date }));
+        }
+        updated = updateField(updated, "note", fromEntry!.note, note, (e, v) => ({ ...e, note: v }));
+        const delta = signedAmount(updated) - signedAmount(fromEntry!);
+        if (delta !== 0) tx.set(fromPersonRef!, this.personRepository.applyBalanceDelta(fromPersonSnap!.data()!, delta));
+        if (updated !== fromEntry) tx.set(fromEntryRef!, updated);
+        return;
+      }
+      if (from) {
+        tx.set(fromPersonRef!, this.personRepository.applyBalanceDelta(fromPersonSnap!.data()!, -signedAmount(fromEntry!)));
+        tx.set(fromEntryRef!, { ...fromEntry!, deletedAt: new Date() });
+      }
+      if (to.kind === "person") {
+        const entry = personFundedEntry(newEntryId, to.person.id, { id: fresh.id, amount, dateTime: date, description: note });
+        tx.set(toPersonRef!, this.personRepository.applyBalanceDelta(toPersonSnap!.data()!, signedAmount(entry)));
+        tx.set(to.ledger.docRef(newEntryId), entry);
+      }
+    });
+  }
+
+  /**
+   * Restores a trashed person-funded expense together with its "personFundedExpense" entry, atomically
+   * — the obligation comes back exactly once and no account moves (the expense has none).
+   */
+  async restorePersonFundedExpense(person: Person, entry: LedgerEntry, transactionRepository: TransactionRepository): Promise<void> {
+    if (entry.transactionRef == null) throw new Error("This entry has no linked expense");
+    const db = this.collection.firestore;
+    const entryRef = doc(this.collection, entry.id);
+    const personRef = this.personRepository.docRef(person.id);
+    await runTransaction(db, async (tx) => {
+      const personSnap = await tx.get(personRef);
+      const entrySnap = await tx.get(entryRef);
+      const fresh = await transactionRepository.getInTransaction(tx, entry.transactionRef!);
+      if (!personSnap.exists()) throw new Error("Person not found");
+      if (!entrySnap.exists()) throw new Error("Ledger entry not found");
+      if (fresh == null || fresh.fundedByPersonId !== person.id) throw new Error("This entry's expense wasn't paid by this person");
+      const freshEntry = entrySnap.data();
+      if (fresh.deletedAt != null) await transactionRepository.restoreTransactionInTransaction(tx, fresh);
+      if (freshEntry.deletedAt != null) {
+        tx.set(personRef, this.personRepository.applyBalanceDelta(personSnap.data(), signedAmount(freshEntry)));
+        tx.set(entryRef, { ...freshEntry, deletedAt: null });
+      }
+    });
+  }
+
+  /**
    * Corrects an already-posted entry's `amount` in place and re-syncs the
    * person's cached balance by the delta — the one exception to
    * "append-only" (see `LedgerEntry`'s doc comment), used so editing a
@@ -525,7 +724,8 @@ export class LedgerRepository extends FirestoreCrudRepository<LedgerEntry> {
         const cashLegs = await transactionRepository.readSoftDeleteMany(
           tx,
           active.flatMap((e) => (e.transactionRef == null ? [] : [e.transactionRef])),
-          (t) => t.isPersonLedgerMovement && t.linkedPersonId === person.id,
+          // A person-funded expense is deleted together with its own obligation (it moves no account).
+          (t) => (t.isPersonLedgerMovement && t.linkedPersonId === person.id) || t.fundedByPersonId === person.id,
         );
 
         const now = new Date();
@@ -538,6 +738,53 @@ export class LedgerRepository extends FirestoreCrudRepository<LedgerEntry> {
         transactionRepository.writeSoftDeleteMany(tx, cashLegs);
       });
     }
+  }
+
+  /**
+   * Repairs ghost entries — transaction-owned entries (`transactionOwnership`) whose transaction was
+   * deleted by a path that left the People effect behind. Each candidate and its owning transaction are
+   * re-read FRESH inside one atomic `runTransaction` and re-classified; only an entry that is still
+   * provably owned by a deleted/missing transaction, with no live payment recorded against it, is
+   * soft-deleted with its balance effect reversed (it stays in trash — audit history and
+   * `restorePersonFundedExpense` keep working). Nothing else is ever written; returns the removed ids.
+   */
+  async reconcileOrphanedTransactionEntries(person: Person, candidateIds: readonly string[], transactionRepository: TransactionRepository): Promise<string[]> {
+    if (candidateIds.length === 0) return [];
+    const all = await this.getAll();
+    const db = this.collection.firestore;
+    const personRef = this.personRepository.docRef(person.id);
+    const removed: string[] = [];
+
+    await runTransaction(db, async (tx) => {
+      removed.length = 0;
+      const personSnap = await tx.get(personRef);
+      if (!personSnap.exists()) throw new Error("Person not found");
+      const fresh = new Map<string, LedgerEntry>();
+      for (const id of new Set(candidateIds)) {
+        const snap = await tx.get(doc(this.collection, id));
+        if (snap.exists()) fresh.set(id, snap.data());
+      }
+      const owners = new Map<string, Transaction | null>();
+      for (const e of fresh.values()) {
+        if (e.transactionRef != null && !owners.has(e.transactionRef)) {
+          owners.set(e.transactionRef, await transactionRepository.getInTransaction(tx, e.transactionRef));
+        }
+      }
+      // Fresh candidates replace their listed copies; the rest of the ledger only answers "is a live payment recorded against it".
+      const entries = [...all.filter((e) => !fresh.has(e.id)), ...fresh.values()];
+      const plan = planOrphanReconciliation(entries, (ref) => (owners.has(ref) ? owners.get(ref) : undefined));
+      const toRemove = plan.reconcile.filter((e) => fresh.has(e.id));
+
+      let delta = 0;
+      for (const e of toRemove) delta -= signedAmount(e);
+      if (delta !== 0) tx.set(personRef, this.personRepository.applyBalanceDelta(personSnap.data(), delta));
+      const now = new Date();
+      for (const e of toRemove) {
+        tx.set(doc(this.collection, e.id), { ...e, deletedAt: now });
+        removed.push(e.id);
+      }
+    });
+    return [...removed];
   }
 
   /**

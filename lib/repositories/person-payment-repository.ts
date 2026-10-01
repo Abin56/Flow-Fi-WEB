@@ -8,10 +8,13 @@
  *    `transactionRef` — so the payment is one event, never "money in" + "settlement" twice;
  *  - for a split/assigned-expense share, also the tracking `InstallmentPayment` (+ the installment's
  *    `amountPaid`, + the participant's received status when fully paid) the expense itself reads;
- *  - an advance entry (`sourceKind: "advance"`) for extra money held against future obligations, or a
- *    separate normal Income Transaction for extra money that is really income — never both, and never
- *    also part of the settlement: every rupee has exactly one meaning;
- *  - the Person's cached balance, once.
+ *  - an advance entry (`sourceKind: "advance"`) for extra money held against future obligations, and/or a
+ *    separate normal Income Transaction for extra money that is really income (the extra may be divided —
+ *    `extras`), never also part of the settlement: every rupee has exactly one meaning;
+ *  - the Person's cached balance, once;
+ *  - for extra money kept for a purpose, one `PurposeFund` doc per purpose (`purposeFunds` subcollection):
+ *    the money is part of the cash leg (received once, never income, never an advance) and the doc only
+ *    remembers what it is for — see `lib/models/purpose-fund.ts` and `PurposeFundRepository`.
  *
  * Revert undoes exactly those writes; Edit is revert + record in the same transaction. Applying an
  * advance writes only an `AdvanceApplication` (no cash, no balance — the advance already moved both).
@@ -35,6 +38,7 @@ import { PAYMENT_EPSILON, round2, type AdvanceUse, type PaymentDirection } from 
 import type { Expense } from "@/lib/models/expense";
 import type { Installment, InstallmentPayment } from "@/lib/models/payment-schedule";
 import { type AdvanceApplication, type LedgerEntry, type LedgerSourceKind, type Person, signedAmount } from "@/lib/models/person";
+import type { PurposeFund, PurposeLink } from "@/lib/models/purpose-fund";
 import type { Transaction } from "@/lib/models/transaction";
 import { participantKey } from "@/lib/repositories/expense-repository";
 import type { LedgerRepository, PersonRepository } from "@/lib/repositories/person-repository";
@@ -79,6 +83,24 @@ export interface RecordPaymentInput {
   note?: string;
   lines: PaymentLineInput[];
   extra: PaymentExtraInput | null;
+  /**
+   * More extra destinations for the same receipt, when the extra is divided (e.g. part income, part
+   * advance, part purposes). At most one advance and one income across `extra` + `extras`.
+   */
+  extras?: PaymentExtraInput[];
+  /**
+   * Extra money kept for specific purposes ("Keep for a purpose") — part of the same cash leg, neither
+   * income nor advance. `extra` then holds only an explicit remainder (advance / income), if any.
+   */
+  purposes?: PurposeInput[];
+}
+
+export interface PurposeInput {
+  title: string;
+  amount: number;
+  dueDate: Date | null;
+  note: string;
+  link: PurposeLink | null;
 }
 
 /** A snapshot-like result from the session — what `Transaction.get` returns, from the session cache. */
@@ -139,7 +161,11 @@ export interface PersonPaymentDeps {
   installmentPaymentDocRef: (scheduleId: string, installmentId: string, paymentId: string) => DocumentReference<InstallmentPayment>;
   /** Category of the People cash leg — the same one `addLedgerEntryWithTransaction` uses. */
   cashLegCategoryId: string;
+  /** `people/{personId}/purposeFunds` — required only to record money kept for a purpose. */
+  purposeFunds?: CollectionReference<PurposeFund>;
 }
+
+type PaymentGroup = { entries: LedgerEntry[]; applications: AdvanceApplication[]; funds: PurposeFund[] };
 
 export class PersonPaymentRepository {
   constructor(private readonly deps: PersonPaymentDeps) {}
@@ -159,11 +185,25 @@ export class PersonPaymentRepository {
     return paymentId;
   }
 
-  /** Reverts one payment completely — see the file comment. */
-  async revertPayment(person: Person, paymentId: string): Promise<void> {
+  /**
+   * Reverts one payment completely — see the file comment. With `blockIfAdvanceUsed`, advance from this
+   * payment that a later settlement already used blocks the revert (re-checked inside the transaction)
+   * instead of being un-applied with it — the People Ledger's Revert payment uses this.
+   */
+  async revertPayment(person: Person, paymentId: string, options?: { blockIfAdvanceUsed?: boolean }): Promise<void> {
     const pre = await this.preloadGroup(paymentId);
     await runTransaction(this.db, async (tx) => {
       const session = new TxSession(tx);
+      if (options?.blockIfAdvanceUsed) {
+        let used = 0;
+        for (const a of pre.applications) {
+          const snap = await session.get(doc(this.deps.advanceApplications, a.id));
+          if (snap.exists() && snap.data().deletedAt == null) used = round2(used + snap.data().amount);
+        }
+        if (used > PAYMENT_EPSILON) {
+          throw new Error(`₹${used.toFixed(2)} of this payment's advance has already been used in a later settlement. Undo that use first, then revert this payment.`);
+        }
+      }
       await this.revertInSession(session, person, pre);
       session.flush();
     });
@@ -176,10 +216,15 @@ export class PersonPaymentRepository {
    */
   async editPayment(person: Person, paymentId: string, input: RecordPaymentInput): Promise<string> {
     const pre = await this.preloadGroup(paymentId);
+    // Purpose money has its own life (uses, edits, releases) — like a separate income part, such a payment is
+    // changed by reverting and recording it again, never by re-pointing purposes onto a new payment.
+    if (pre.funds.some((f) => f.deletedAt == null)) throw new Error("This payment keeps money for purposes — revert it and record it again.");
     const applied = round2(pre.applications.filter((a) => a.deletedAt == null).reduce((s, a) => s + a.amount, 0));
-    const newAdvance = input.extra?.kind === "advance" ? input.extra.amount : 0;
+    const newAdvance = round2([input.extra, ...(input.extras ?? [])].reduce((s, x) => s + (x?.kind === "advance" ? x.amount : 0), 0));
     if (applied > PAYMENT_EPSILON && newAdvance + PAYMENT_EPSILON < applied) {
-      throw new Error(`₹${applied.toFixed(2)} of this payment's advance is already applied — the advance can't be less than that.`);
+      throw new Error(
+        `₹${applied.toFixed(2)} of this payment's advance is already applied — the advance can't be less than that. Undo that use first to change it further.`,
+      );
     }
     const newPaymentId = generateId();
     await runTransaction(this.db, async (tx) => {
@@ -268,30 +313,49 @@ export class PersonPaymentRepository {
 
   // -------------------------------------------------------------------------------------------------
 
-  private async preloadGroup(paymentId: string): Promise<{ entries: LedgerEntry[]; applications: AdvanceApplication[] }> {
+  private async preloadGroup(paymentId: string): Promise<PaymentGroup> {
     const entries = (await this.deps.ledgerRepository.getByPaymentId(paymentId)).filter((e) => e.deletedAt == null);
-    if (entries.length === 0) throw new Error("This payment no longer exists.");
+    // A receipt kept entirely for purposes has no ledger entry — its purpose docs carry the payment.
+    const funds = this.deps.purposeFunds
+      ? (await getDocs(query(this.deps.purposeFunds, where("paymentId", "==", paymentId)))).docs.map((d) => d.data()).filter((f) => f.deletedAt == null)
+      : [];
+    if (entries.length === 0 && funds.length === 0) throw new Error("This payment no longer exists.");
     const advanceIds = entries.filter((e) => e.sourceKind === "advance").map((e) => e.id);
     const applications: AdvanceApplication[] = [];
     for (const id of advanceIds) {
       const snap = await getDocs(query(this.deps.advanceApplications, where("advanceEntryId", "==", id)));
       applications.push(...snap.docs.map((d) => d.data()));
     }
-    return { entries, applications };
+    return { entries, applications, funds };
   }
 
   private async recordInSession(session: TxSession, person: Person, input: RecordPaymentInput, paymentId: string): Promise<{ advanceEntryId: string | null }> {
     const { direction, date, accountId } = input;
     const note = input.note?.trim() ?? "";
     const lines = input.lines.filter((l) => l.amount > PAYMENT_EPSILON).map((l) => ({ ...l, amount: round2(l.amount) }));
-    const extra = input.extra && input.extra.amount > PAYMENT_EPSILON ? { ...input.extra, amount: round2(input.extra.amount) } : null;
+    const extraParts = [input.extra, ...(input.extras ?? [])]
+      .filter((x): x is PaymentExtraInput => x != null && x.amount > PAYMENT_EPSILON)
+      .map((x) => ({ ...x, amount: round2(x.amount) }));
+    if (extraParts.filter((x) => x.kind === "advance").length > 1 || extraParts.filter((x) => x.kind === "income").length > 1) {
+      throw new Error("A payment can keep one advance and one income part.");
+    }
+    const advancePart = extraParts.find((x) => x.kind === "advance") ?? null;
+    const incomePart = extraParts.find((x): x is Extract<PaymentExtraInput, { kind: "income" }> => x.kind === "income") ?? null;
+    const extraTotal = round2(extraParts.reduce((s, x) => s + x.amount, 0));
     const allocated = round2(lines.reduce((s, l) => s + l.amount, 0));
-    const total = round2(allocated + (extra?.amount ?? 0));
+    const purposes = (input.purposes ?? []).map((p) => ({ ...p, title: p.title.trim(), note: p.note.trim(), amount: round2(p.amount) }));
+    const purposeTotal = round2(purposes.reduce((s, p) => s + p.amount, 0));
+    const total = round2(allocated + extraTotal + purposeTotal);
 
     if (!(input.amount > 0)) throw new Error("Amount must be greater than 0");
     if (Math.abs(total - round2(input.amount)) > PAYMENT_EPSILON) throw new Error("Every rupee of the payment must be allocated or explicitly classified.");
-    if (lines.length === 0 && extra?.kind !== "advance") throw new Error("Select what this payment is for.");
-    if (extra?.kind === "income" && direction !== "theyPaid") throw new Error("Only money received can be recorded as income.");
+    if (lines.length === 0 && !advancePart && purposes.length === 0) throw new Error("Select what this payment is for.");
+    if (incomePart && direction !== "theyPaid") throw new Error("Only money received can be recorded as income.");
+    if (purposes.length > 0) {
+      if (direction !== "theyPaid") throw new Error("Only money received can be kept for a purpose.");
+      if (!this.deps.purposeFunds) throw new Error("Purposes can't be recorded here.");
+      if (purposes.some((p) => !p.title || !(p.amount > 0))) throw new Error("Every purpose needs a description and an amount.");
+    }
     if (!accountId) throw new Error(direction === "theyPaid" ? "Choose the account it was received into." : "Choose the account it was paid from.");
 
     const personRef = this.deps.personRepository.docRef(person.id);
@@ -315,7 +379,8 @@ export class PersonPaymentRepository {
 
     const tx = session.asTransaction();
     const cashIn = direction === "theyPaid";
-    const settledCash = round2(allocated + (extra?.kind === "advance" ? extra.amount : 0));
+    // Purpose money rides in the same cash leg: received once, never income, never a second deposit.
+    const settledCash = round2(allocated + (advancePart?.amount ?? 0) + purposeTotal);
     let cashLeg: Transaction | null = null;
     if (settledCash > PAYMENT_EPSILON) {
       cashLeg = await this.deps.transactionRepository.createTransactionInTransaction(tx, {
@@ -332,15 +397,15 @@ export class PersonPaymentRepository {
       });
     }
     let income: Transaction | null = null;
-    if (extra?.kind === "income") {
+    if (incomePart) {
       // Separate income: a normal Income transaction, NOT a People movement — it no longer pays the person's debt.
       income = await this.deps.transactionRepository.createTransactionInTransaction(tx, {
         type: "income",
-        amount: extra.amount,
+        amount: incomePart.amount,
         dateTime: date,
         accountId,
-        categoryId: extra.categoryId,
-        description: extra.description.trim() || `${person.name} — extra`,
+        categoryId: incomePart.categoryId,
+        description: incomePart.description.trim() || `${person.name} — extra`,
         notes: note,
       });
     }
@@ -380,14 +445,39 @@ export class PersonPaymentRepository {
       });
     }
     let advanceEntryId: string | null = null;
-    if (extra?.kind === "advance") {
+    if (advancePart) {
       advanceEntryId = generateId();
-      entries.push({ ...base, id: advanceEntryId, type, amount: extra.amount, parentEntryId: null, obligationRef: null, sourceKind: "advance", installmentPaymentRef: null });
+      entries.push({ ...base, id: advanceEntryId, type, amount: advancePart.amount, parentEntryId: null, obligationRef: null, sourceKind: "advance", installmentPaymentRef: null });
     }
 
     const delta = round2(entries.reduce((s, e) => s + signedAmount(e), 0));
     if (delta !== 0) session.set(personRef, this.deps.personRepository.applyBalanceDelta(personSnap.data(), delta));
     for (const e of entries) session.set(this.deps.ledgerRepository.docRef(e.id), e);
+    // Purposes: notes on money already in the cash leg — no cash, no balance, no ledger entry.
+    for (const p of purposes) {
+      const fund: PurposeFund = {
+        id: generateId(),
+        personId: person.id,
+        paymentId,
+        receiptTransactionRef: cashLeg!.id,
+        // The receipt's income part, if any — reachable from here when no ledger entry carries it (all purposes + income).
+        incomeTransactionRef: income?.id ?? null,
+        receivedDate: date,
+        title: p.title,
+        amount: p.amount,
+        dueDate: p.dueDate,
+        note: p.note,
+        link: p.link,
+        uses: [],
+        state: "active",
+        release: null,
+        completedAt: null,
+        createdAt: new Date(),
+        lastEditedAt: null,
+        deletedAt: null,
+      };
+      session.set(doc(this.deps.purposeFunds!, fund.id), fund);
+    }
     return { advanceEntryId };
   }
 
@@ -435,7 +525,7 @@ export class PersonPaymentRepository {
     session.set(ref, { ...recordEdit(expense, "participants", JSON.stringify(expense.participants), JSON.stringify(participants)), participants });
   }
 
-  private async revertInSession(session: TxSession, person: Person, pre: { entries: LedgerEntry[]; applications: AdvanceApplication[] }): Promise<void> {
+  private async revertInSession(session: TxSession, person: Person, pre: PaymentGroup): Promise<void> {
     const personRef = this.deps.personRepository.docRef(person.id);
     const personSnap = await session.get(personRef);
     if (!personSnap.exists()) throw new Error("Person not found");
@@ -445,12 +535,34 @@ export class PersonPaymentRepository {
       const snap = await session.get(this.deps.ledgerRepository.docRef(e.id));
       if (snap.exists() && snap.data().deletedAt == null) fresh.push(snap.data());
     }
-    if (fresh.length === 0) throw new Error("This payment was already reverted.");
+    const tx = session.asTransaction();
+
+    // Purposes kept from this receipt. Money already spent from them is a real outgoing payment that
+    // stays — so the receipt can't disappear underneath it: those uses must be undone first.
+    const freshFunds: PurposeFund[] = [];
+    for (const f of pre.funds) {
+      const snap = await session.get(doc(this.deps.purposeFunds!, f.id));
+      if (snap.exists() && snap.data().deletedAt == null) freshFunds.push(snap.data());
+    }
+    let used = 0;
+    for (const f of freshFunds) {
+      for (const u of f.uses) {
+        const t = await this.deps.transactionRepository.getInTransaction(tx, u.transactionId);
+        if (t && t.deletedAt == null) used = round2(used + u.amount);
+      }
+    }
+    if (used > PAYMENT_EPSILON) {
+      throw new Error(`₹${used.toFixed(2)} of the purpose money from this payment is already used — undo those uses first.`);
+    }
+    if (fresh.length === 0 && freshFunds.length === 0) throw new Error("This payment was already reverted.");
 
     // Cash: the People cash leg and any separate income — each reversed out of its account.
-    const cashIds = new Set(fresh.flatMap((e) => (e.transactionRef ? [e.transactionRef] : [])));
-    const incomeIds = new Set(fresh.flatMap((e) => (e.incomeTransactionRef ? [e.incomeTransactionRef] : [])));
-    const tx = session.asTransaction();
+    const cashIds = new Set([...fresh.flatMap((e) => (e.transactionRef ? [e.transactionRef] : [])), ...freshFunds.map((f) => f.receiptTransactionRef)]);
+    const incomeIds = new Set([
+      ...fresh.flatMap((e) => (e.incomeTransactionRef ? [e.incomeTransactionRef] : [])),
+      ...freshFunds.flatMap((f) => (f.incomeTransactionRef ? [f.incomeTransactionRef] : [])),
+      ...freshFunds.flatMap((f) => (f.release?.kind === "income" ? [f.release.ref] : [])),
+    ]);
     const prepared = await this.deps.transactionRepository.readSoftDeleteMany(tx, [...cashIds, ...incomeIds], (t) =>
       cashIds.has(t.id) ? t.isPersonLedgerMovement && t.linkedPersonId === person.id : incomeIds.has(t.id),
     );
@@ -488,6 +600,8 @@ export class PersonPaymentRepository {
     const delta = round2(-fresh.reduce((s, e) => s + signedAmount(e), 0));
     if (delta !== 0) session.set(personRef, this.deps.personRepository.applyBalanceDelta(personSnap.data(), delta));
     for (const e of fresh) session.set(this.deps.ledgerRepository.docRef(e.id), { ...e, deletedAt: now });
+    // The purposes go with the receipt (the advance / income they were released to is reverted above).
+    for (const f of freshFunds) session.set(doc(this.deps.purposeFunds!, f.id), { ...f, deletedAt: now });
     this.deps.transactionRepository.writeSoftDeleteMany(tx, prepared);
   }
 }

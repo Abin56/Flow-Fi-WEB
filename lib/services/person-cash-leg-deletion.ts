@@ -34,8 +34,13 @@ export async function deletePersonCashLegTransaction(params: {
    * reverts the whole payment (`PersonPaymentRepository.revertPayment`), never one allocation.
    */
   revertPayment?: (person: Person, paymentId: string) => Promise<void>;
+  /**
+   * A receipt kept entirely for purposes has no ledger entry — its purpose docs point at the cash leg.
+   * Returns that payment id (or null), so the delete reverts the whole payment instead of orphaning them.
+   */
+  purposePaymentIdFor?: (personId: string, transactionId: string) => Promise<string | null>;
 }): Promise<void> {
-  const { transaction, transactionRepository, personRepository, ledgerRepositoryFor, revertPayment } = params;
+  const { transaction, transactionRepository, personRepository, ledgerRepositoryFor, revertPayment, purposePaymentIdFor } = params;
   const personId = transaction.linkedPersonId;
   const person = personId == null ? null : await personRepository.getByKey(personId);
   // No person / no entry pointing at this transaction (a person deleted since, or a record from before
@@ -45,7 +50,14 @@ export async function deletePersonCashLegTransaction(params: {
   const ledgerRepository = ledgerRepositoryFor(personId);
   const entries = await ledgerRepository.getAll();
   const entry = entries.find((e) => e.transactionRef === transaction.id);
-  if (entry == null) return transactionRepository.softDeleteTransaction(transaction);
+  if (entry == null) {
+    const purposePaymentId = purposePaymentIdFor ? await purposePaymentIdFor(personId, transaction.id) : null;
+    if (purposePaymentId != null) {
+      if (!revertPayment) throw new PersonCashLegDeleteBlockedError("This is a recorded payment — revert it from the People Ledger");
+      return revertPayment(person, purposePaymentId);
+    }
+    return transactionRepository.softDeleteTransaction(transaction);
+  }
   if (entry.paymentId != null) {
     if (!revertPayment) throw new PersonCashLegDeleteBlockedError("This is a recorded payment — revert it from the People Ledger");
     return revertPayment(person, entry.paymentId);

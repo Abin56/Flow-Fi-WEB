@@ -318,6 +318,12 @@ export interface PersonDebtInput {
   emiReceivable: number;
   loanReceivable: number;
   loanPayable: number;
+  /**
+   * GROSS direct obligations (`personDirectGross`). When given they are authoritative: what I owe a person
+   * is never reduced by an unrelated amount they owe me, and vice versa. Absent → the legacy net rule.
+   */
+  directToGive?: number;
+  directToReceive?: number;
 }
 
 export interface DebtSnapshotInput {
@@ -627,10 +633,12 @@ export function cardPurchaseShares(
 }
 
 /**
- * What I owe a person directly (People ledger), net of whatever else they owe me that is not a Loan —
- * the same netting the People page shows. A Loan borrowed from them is its own Loan position.
+ * What I owe a person directly (People ledger). With the gross sides (`directToGive`) it is exactly the
+ * payable side — never offset by what they owe me (two independent obligations). Legacy callers without
+ * them keep the old net rule. A Loan borrowed from them is its own Loan position.
  */
 export function personDirectPayable(input: PersonDebtInput): number {
+  if (input.directToGive != null) return round2(Math.max(input.directToGive, 0));
   return round2(Math.max(-(input.directBalance + input.emiReceivable + input.loanReceivable), 0));
 }
 
@@ -739,7 +747,14 @@ export function buildDebtSnapshot(input: DebtSnapshotInput): DebtSnapshot {
 
   const lentLoans = round2(input.loans.filter((l) => l.direction === "given").reduce((s, l) => s + Math.max(l.outstandingPrincipal, 0), 0));
   const peopleOwedToMe = round2(
-    input.people.reduce((s, p) => s + Math.max(p.directBalance + p.emiReceivable + p.loanReceivable - p.loanPayable, 0), 0),
+    input.people.reduce(
+      (s, p) =>
+        s +
+        (p.directToReceive != null
+          ? Math.max(p.directToReceive, 0) + p.emiReceivable + p.loanReceivable
+          : Math.max(p.directBalance + p.emiReceivable + p.loanReceivable - p.loanPayable, 0)),
+      0,
+    ),
   );
 
   return {

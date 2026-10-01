@@ -134,6 +134,29 @@ export interface Transaction extends SoftDeletableEntity {
    * See `isNonIncomeExpenseMovement`.
    */
   isPersonLedgerMovement: boolean;
+  /**
+   * Set only on an expense a person paid DIRECTLY for me ("Money I Borrowed → Person paid directly"):
+   * a real expense of mine (My Spend, categories, Month Cycle) whose funding source is that person, not
+   * one of my accounts. It has NO account cash leg — `accountId` is `PERSON_FUNDED_ACCOUNT_ID` ("") and
+   * `balanceEffect` is 0 — and is backed 1:1 by a "borrowed" `LedgerEntry` (`sourceKind:
+   * "personFundedExpense"`, `transactionRef` = this id) recording what I owe them. Additive, web-only,
+   * optional: absent/undefined/null means account-funded, so every pre-existing document and every
+   * document the mobile app writes behaves exactly as before. See `isPersonFunded`.
+   */
+  fundedByPersonId?: string | null;
+}
+
+/** The `accountId` stored on a person-funded expense — it has no account (never a real account id). */
+export const PERSON_FUNDED_ACCOUNT_ID = "";
+
+/** A person paid this expense directly — no account moved (see `Transaction.fundedByPersonId`). */
+export function isPersonFunded(transaction: Pick<Transaction, "fundedByPersonId">): boolean {
+  return transaction.fundedByPersonId != null;
+}
+
+/** Whether this transaction has an account cash leg at all — false only for a person-funded expense. */
+export function hasAccountLeg(transaction: Pick<Transaction, "fundedByPersonId" | "accountId">): boolean {
+  return !isPersonFunded(transaction) && transaction.accountId !== PERSON_FUNDED_ACCOUNT_ID;
 }
 
 /** Set on both legs of a transfer between two of the user's own accounts. */
@@ -182,6 +205,8 @@ export function effectiveMonth(transaction: Transaction): Date {
 
 /** signedAmount, or zero when excludeFromCalculations is true. */
 export function balanceEffect(transaction: Transaction): number {
+  // A person-funded expense never touched any of my accounts.
+  if (!hasAccountLeg(transaction)) return 0;
   return transaction.excludeFromCalculations ? 0 : signedAmount(transaction);
 }
 
@@ -253,6 +278,7 @@ export function transactionFromFirestore(
     paymentAllocationType:
       data.paymentAllocationType == null ? null : paymentAllocationTypeFromName(data.paymentAllocationType as string),
     isPersonLedgerMovement: (data.isPersonLedgerMovement as boolean | undefined) ?? false,
+    fundedByPersonId: (data.fundedByPersonId as string | undefined) ?? null,
     deletedAt: (data.deletedAt as Timestamp | undefined)?.toDate() ?? null,
     lastEditedAt: (data.lastEditedAt as Timestamp | undefined)?.toDate() ?? null,
     editHistory: ((data.editHistory as Record<string, unknown>[] | undefined) ?? []).map(auditEntryFromMap),
@@ -285,6 +311,8 @@ export function transactionToFirestore(transaction: Transaction): DocumentData {
     installmentPaymentId: transaction.installmentPaymentId,
     paymentAllocationType: transaction.paymentAllocationType,
     isPersonLedgerMovement: transaction.isPersonLedgerMovement,
+    // Written only when set — legacy / account-funded documents keep their exact shape.
+    ...(transaction.fundedByPersonId != null ? { fundedByPersonId: transaction.fundedByPersonId } : {}),
     deletedAt: transaction.deletedAt == null ? null : Timestamp.fromDate(transaction.deletedAt),
     lastEditedAt: transaction.lastEditedAt == null ? null : Timestamp.fromDate(transaction.lastEditedAt),
     editHistory: transaction.editHistory.map(auditEntryToMap),

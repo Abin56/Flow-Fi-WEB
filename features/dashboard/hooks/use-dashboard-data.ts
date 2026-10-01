@@ -58,11 +58,13 @@ import {
 import type { Account } from "@/lib/models/account";
 import type { Bill } from "@/lib/models/bill";
 import type { Category } from "@/lib/models/category";
-import { myShare, type Expense } from "@/lib/models/expense";
 import { useExpenses } from "@/hooks/use-expenses";
 import type { CreditCardProfile, Statement } from "@/lib/models/credit-card";
 import { statementRemainingAmount, statementStatus } from "@/lib/models/credit-card";
 import { unbilledSpendForCard } from "@/lib/repositories/credit-card-repository";
+import { useMySpendContext } from "@/hooks/use-my-spend-context";
+import { myConsumptionAmount } from "@/lib/engines/my-spend";
+
 import { compareTransactionsNewestFirst, effectiveMonth, isLoanPrincipalDisbursement, isNonIncomeExpenseMovement, signedAmount, type Transaction } from "@/lib/models/transaction";
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -121,7 +123,7 @@ export function useDashboardData() {
   const { data: transactions = [], isLoading: transactionsLoading } = useTransactions();
   const { data: bills = [], isLoading: billsLoading } = useBills();
   const { data: categories = [], isLoading: categoriesLoading } = useCategories();
-  const { data: expenses = [], isLoading: expensesLoading } = useExpenses();
+  const { isLoading: expensesLoading } = useExpenses();
   const { data: creditCards = [], isLoading: creditCardsLoading } = useCreditCards();
   const { data: sharedLimits = [], isLoading: sharedLimitsLoading } = useSharedCreditLimits();
   const { data: statements = [], isLoading: statementsLoading } = useAllCreditCardStatements();
@@ -152,13 +154,9 @@ export function useDashboardData() {
   // Personal-spending figures (category split, budgets) count only MY share of an expense: an
   // expense paid for someone else (split, or fully assigned to a person) is a People receivable,
   // not my consumption. Unlinked transactions count in full.
-  const personalAmount = useMemo(() => {
-    const byTransactionId = new Map((expenses as Expense[]).filter((e) => e.deletedAt == null).map((e) => [e.transactionId, e]));
-    return (t: Transaction) => {
-      const expense = byTransactionId.get(t.id);
-      return expense ? myShare(expense) : t.amount;
-    };
-  }, [expenses]);
+  // Shared classifier (`lib/engines/my-spend.ts`) — the same answer Month Cycle, Reports and Budgets use.
+  const { ctx: mySpendCtx } = useMySpendContext();
+  const personalAmount = useMemo(() => (t: Transaction) => myConsumptionAmount(t, mySpendCtx), [mySpendCtx]);
 
   // --- Net Worth (lib/engines/loan-balance-sheet.ts:netWorthWithLoans via useLoanBalanceSheet) ---
   // `trend`: direct port of `NetWorthWidgetCard._weeklyTrend` (Finance_App's
@@ -261,7 +259,6 @@ export function useDashboardData() {
   const expensesByCategory = useMemo(() => {
     const totals = new Map<string, number>();
     for (const t of transactions as Transaction[]) {
-      if (t.type !== "expense" || isNonIncomeExpenseMovement(t) || t.deletedAt != null) continue;
       const effective = effectiveMonth(t);
       if (!isThisMonth(effective, now)) continue;
       const amount = personalAmount(t);

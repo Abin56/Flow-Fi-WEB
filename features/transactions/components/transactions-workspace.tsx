@@ -53,6 +53,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { useLoans } from "@/hooks/use-loans";
 import { usePeople } from "@/hooks/use-people";
+import { paidFromLabel } from "@/features/transactions/lib/funding-label";
 import { useExpenses } from "@/hooks/use-expenses";
 import type { Account } from "@/lib/models/account";
 import type { Category } from "@/lib/models/category";
@@ -830,7 +831,7 @@ export function TransactionsWorkspace() {
                         <span className="min-w-0 flex-1">
                           <span className="block truncate text-sm font-semibold text-foreground">{displayDescription(t) || (t.transferId ? TRANSFER_SIDE_LABEL[transferSideOf(t)] : "(No description)")}</span>
                           <span className="block truncate text-xs text-muted-foreground">
-                            {shortDate(t.dateTime)} {t.dateTime.getFullYear()} · {row.category?.name ?? "Uncategorized"} · {row.account?.name ?? "Unknown"}
+                            {shortDate(t.dateTime)} {t.dateTime.getFullYear()} · {row.category?.name ?? "Uncategorized"} · {paidFromLabel(t, row.account?.name, personNameById) ?? "Unknown"}
                           </span>
                         </span>
                         <Amount transaction={t} />
@@ -1487,7 +1488,7 @@ function LedgerTable({
                       <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
                         <span className="truncate text-xs text-muted-foreground">
                           {row.category?.name ?? "Uncategorized"}
-                          <span className="lg:hidden"> · {row.account?.name ?? "Unknown account"}</span>
+                          <span className="lg:hidden"> · {paidFromLabel(row.transaction, row.account?.name) ?? "Unknown account"}</span>
                         </span>
                         <TxnBadges transaction={t} isSplit={isSplit(t.id)} assignedTo={assigneeFor(t)} isDuplicate={isDuplicate} hideLoan />
                       </div>
@@ -1498,7 +1499,7 @@ function LedgerTable({
                   <TypeTag transaction={t} presentation={presentation} />
                 </td>
                 <td className={cn(TD, "hidden max-w-0 lg:table-cell")}>
-                  <p className="truncate text-xs text-foreground/85">{row.account?.name ?? "Unknown"}</p>
+                  <p className="truncate text-xs text-foreground/85">{paidFromLabel(row.transaction, row.account?.name) ?? "Unknown"}</p>
                   {mate && (
                     <p className="mt-0.5 flex min-w-0 items-center gap-1 text-[11px] text-muted-foreground" title={route ?? undefined}>
                       {side === "sent" ? <ArrowRight className="size-3 shrink-0" strokeWidth={2} /> : <ArrowLeft className="size-3 shrink-0" strokeWidth={2} />}
@@ -1828,7 +1829,7 @@ function RowDetails({
         <div className="flex min-w-0 flex-1 flex-col">
           <div className="grid flex-1 grid-cols-1 sm:grid-cols-2">
             <Fact icon={Tag} label="Type" tone="purple">{TYPE_LABEL[flow]}</Fact>
-            <Fact icon={Wallet} label="Account" tone="lime">{row.account?.name ?? "Unknown"}</Fact>
+            <Fact icon={Wallet} label="Account" tone="lime">{paidFromLabel(row.transaction, row.account?.name) ?? "Unknown"}</Fact>
             <Fact icon={Shapes} label="Category" tone="amber">{row.category?.name ?? "Uncategorized"}</Fact>
             <Fact icon={CreditCard} label="Payment method" tone="green">{paymentMethodFor(t, row.account)}</Fact>
           </div>

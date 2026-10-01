@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowDownLeft, ArrowUpRight, Check, CircleAlert, CircleDashed, PiggyBank, ReceiptText } from "lucide-react";
+import { ArrowDownLeft, ArrowUpRight, Check, CircleAlert, CircleDashed } from "lucide-react";
 import { useMemo, useState } from "react";
 import { EmiBadge } from "@/features/people/components/cycle-statement/statement-parts";
 import type { LedgerRow } from "@/features/people/lib/person-ledger-rows";
@@ -18,10 +18,13 @@ import {
   type ExtraResolution,
   type PaymentDirection,
 } from "@/lib/engines/person-payment";
-import type { RecordPaymentInput } from "@/lib/repositories/person-payment-repository";
+import type { PaymentExtraInput, RecordPaymentInput } from "@/lib/repositories/person-payment-repository";
 import { cn } from "@/lib/utils";
 import { AccountField, CompactAmountInput, useAccountChoice } from "./ledger-ui";
-import { WS_FIELD, WS_GHOST, WS_PRIMARY, WsCloseButton, WsField, WsLabel, WsSegmented } from "./person-workspace-ui";
+import { WS_FIELD, WS_GHOST, WS_PRIMARY, WsCloseButton, WsField, WsSegmented } from "./person-workspace-ui";
+import { usePurposeLinkOptions } from "./purpose-money";
+import { draftsToAllocations, ExtraAllocationEditor, newAllocationDraft, type AllocationDraft } from "./extra-allocation-editor";
+import { planExtraAllocation } from "@/lib/engines/extra-allocation";
 import { DateInput } from "@/components/forms/date-input";
 
 /** An existing payment, for editing: its lines per obligation key, advance, account and date. */
@@ -33,6 +36,8 @@ export interface RecordPaymentInitial {
   date: Date;
   lines: Record<string, number>;
   advance: number;
+  /** The extra recorded as separate income, if any — editable to advance (and back) like any extra. */
+  income?: { amount: number; categoryId: string; description: string } | null;
 }
 
 const toInputDate = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -150,11 +155,21 @@ export function RecordPaymentPanel({
   const elsewhere = projection.elsewhere.filter((o) => o.side === side && o.timing !== "later");
   const [amountText, setAmountText] = useState(() => (initial ? String(initial.amount) : preselected ? String(preselected.outstanding) : ""));
   const [date, setDate] = useState(() => toInputDate(initial?.date ?? new Date()));
-  const [manual, setManual] = useState<Record<string, string> | null>(null);
-  // Extra money defaults to advance (recommended) — still shown and explained before anything is recorded.
-  const [extraChoice, setExtraChoice] = useState<"advance" | "income" | null>("advance");
-  const [incomeCategoryId, setIncomeCategoryId] = useState("");
-  const [incomeDescription, setIncomeDescription] = useState("");
+  // Editing shows the payment exactly as it was allocated (not re-allocated oldest first).
+  const [manual, setManual] = useState<Record<string, string> | null>(() =>
+    initial && Object.keys(initial.lines).length > 0 ? Object.fromEntries(Object.entries(initial.lines).map(([k, v]) => [k, String(v)])) : null,
+  );
+  // The extra, divided across destinations (purpose / income / advance). null = the default: all of it
+  // kept as advance (recommended) — following the extra as it changes, still shown before anything is recorded.
+  const linkOptions = usePurposeLinkOptions();
+  const [extraDrafts, setExtraDrafts] = useState<AllocationDraft[] | null>(() => {
+    if (!initial || (!(initial.advance > 0) && !initial.income)) return null;
+    const out: AllocationDraft[] = [];
+    if (initial.advance > 0) out.push(newAllocationDraft("advance", initial.advance));
+    if (initial.income)
+      out.push(newAllocationDraft("income", initial.income.amount, { categoryId: initial.income.categoryId, description: initial.income.description }));
+    return out;
+  });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const accountId = account.accountId;
@@ -166,19 +181,16 @@ export function RecordPaymentPanel({
     amount,
     manual: manual ? Object.fromEntries(Object.entries(manual).map(([k, v]) => [k, Number(v) || 0])) : null,
   });
-  const resolution: ExtraResolution | null =
-    allocation.extra > PAYMENT_EPSILON
-      ? extraChoice === "advance"
-        ? { kind: "advance" }
-        : extraChoice === "income"
-          ? {
-              kind: "income",
-              categoryId: incomeCategoryId,
-              description: incomeDescription,
-            }
-          : null
-      : null;
-  const blocker = paymentBlocker({
+  const hasExtra = allocation.extra > PAYMENT_EPSILON;
+  const effectiveDrafts = extraDrafts ?? [{ ...newAllocationDraft("advance", allocation.extra), key: "auto-advance" }];
+  const extraPlan = planExtraAllocation({ extra: allocation.extra, direction, allocations: draftsToAllocations(effectiveDrafts, linkOptions), money });
+  // The shared gate still checks amount / account / one-side / "pays something"; the divided extra is checked by its plan.
+  const resolution: ExtraResolution | null = !hasExtra
+    ? null
+    : extraPlan.advance > PAYMENT_EPSILON || extraPlan.purposes.length > 0
+      ? { kind: "advance" }
+      : { kind: "income", categoryId: extraPlan.income?.categoryId ?? "", description: extraPlan.income?.description ?? "" };
+  const blocker = (hasExtra ? extraPlan.error : null) ?? paymentBlocker({
     direction,
     amount,
     allocation,
@@ -189,6 +201,17 @@ export function RecordPaymentPanel({
   const allSelected = options.some((o) => o.timing !== "later") && options.filter((o) => o.timing !== "later").every((o) => selected.has(o.key));
   const unselected = options.filter((o) => !selected.has(o.key));
   const theyPaid = direction === "theyPaid";
+
+  /** One direction at a time — each side's obligations are settled on their own, never netted. */
+  function switchDirection(d: PaymentDirection) {
+    if (initial) return;
+    setDirection(d);
+    setSelected(new Set(obligations.filter((o) => o.side === sideForDirection(d) && o.timing !== "later").map((o) => o.key)));
+    setManual(null);
+    setExtraDrafts(null);
+  }
+  // The opposite side, shown for information only — it never reduces this side's outstanding or Full payment.
+  const otherSideTotal = theyPaid ? iOweTotal : theyOweTotal;
 
   const toggle = (key: string) =>
     setSelected((s) => {
@@ -209,17 +232,19 @@ export function RecordPaymentPanel({
         date: fromInputDate(date),
         accountId: accountId!,
         lines: paymentLines(options, allocation.lines),
-        extra:
-          allocation.extra <= PAYMENT_EPSILON || !resolution
-            ? null
-            : resolution.kind === "advance"
-              ? { kind: "advance", amount: allocation.extra }
-              : {
-                  kind: "income",
-                  amount: allocation.extra,
-                  categoryId: resolution.categoryId,
-                  description: resolution.description.trim() || `Extra amount from ${first}`,
-                },
+        ...(() => {
+          if (!hasExtra) return { extra: null };
+          // One receipt, each part through its existing path: advance entry, Income transaction, purpose docs.
+          const parts: PaymentExtraInput[] = [];
+          if (extraPlan.advance > PAYMENT_EPSILON) parts.push({ kind: "advance", amount: extraPlan.advance });
+          if (extraPlan.income)
+            parts.push({ kind: "income", ...extraPlan.income, description: extraPlan.income.description || `Extra amount from ${first}` });
+          return {
+            extra: parts[0] ?? null,
+            ...(parts.length > 1 ? { extras: parts.slice(1) } : {}),
+            ...(extraPlan.purposes.length > 0 ? { purposes: extraPlan.purposes } : {}),
+          };
+        })(),
       };
       await onSubmit(input, initial?.paymentId ?? null);
     } catch (e) {
@@ -245,12 +270,13 @@ export function RecordPaymentPanel({
   const recon = reconcilePayment({
     received: amount,
     allocated: allocation.allocated,
-    advance: resolution?.kind === "advance" ? allocation.extra : 0,
-    income: resolution?.kind === "income" ? allocation.extra : 0,
+    advance: hasExtra ? extraPlan.advance : 0,
+    income: hasExtra ? (extraPlan.income?.amount ?? 0) : 0,
+    purpose: hasExtra ? round2(extraPlan.purposes.reduce((t, x) => t + x.amount, 0)) : 0,
   });
   const accountName = account.accounts.find((a) => a.id === accountId)?.name ?? "the chosen account";
-  const hasExtra = allocation.extra > PAYMENT_EPSILON;
   const seedManual = () => Object.fromEntries(allocation.lines.map((l) => [l.key, String(l.amount)]));
+  const dueTotal = theyPaid ? theyOweTotal : iOweTotal;
 
   return (
     // A real <form>: Enter in a single-line field records through the same submit() as the primary button,
@@ -262,65 +288,56 @@ export function RecordPaymentPanel({
         if (e.target !== e.currentTarget || !recon.balanced) return;
         void submit();
       }}
+      aria-label={initial ? `Edit payment — ${personName}` : `Record payment — ${personName}`}
       className="mt-4 overflow-hidden rounded-[8px] border border-border-strong bg-card"
     >
-      {/* Title */}
-      <div className="flex items-center justify-between gap-3 border-b border-border-strong px-4 py-2.5">
-        <h3 className="font-heading text-[15px] leading-tight font-semibold tracking-tight text-foreground">
-          {initial ? "Edit payment" : "Record payment"} — {personName}
-          <span className="ml-2 text-xs font-semibold text-foreground/70">Cycle: {cycleLabel}</span>
-        </h3>
-        <WsCloseButton onClick={onCancel} className="-my-0.5" />
+      {/* Hero — the one question: how much came in, from whom; then what it's against */}
+      <div className="border-b border-border-strong px-4 pt-3 pb-3">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h3 className="text-[11px] font-bold tracking-[0.07em] text-foreground/75 uppercase">
+              {initial ? "Edit payment" : "Record payment"} — {personName}
+            </h3>
+            <p className="mt-0.5 flex flex-wrap items-baseline gap-x-2">
+              <span className="font-heading text-[26px] leading-tight font-bold tracking-tight text-foreground tabular-nums" data-testid="rp-hero-amount">
+                {money(amount)}
+              </span>
+              <span className="text-sm font-semibold text-foreground/85">{theyPaid ? `received from ${personName}` : `paid to ${personName}`}</span>
+            </p>
+            <p className="mt-0.5 text-xs font-medium text-foreground/75">
+              {initial ? `Recorded ${formatStatementDate(initial.date, true)}` : `Cycle · ${cycleLabel}`}
+              <span aria-hidden> · </span>
+              {theyPaid ? "Into" : "From"} {accountName}
+              <span aria-hidden> · </span>
+              {date ? formatStatementDate(fromInputDate(date), true) : "No date"}
+            </p>
+            {initial && <p className="mt-0.5 text-xs font-medium text-foreground/75">Changes will update the existing payment and its linked allocations.</p>}
+          </div>
+          <WsCloseButton onClick={onCancel} className="shrink-0" />
+        </div>
+
+        {/* Live figures — every number here is `allocatePayment`'s */}
+        <dl className="mt-2.5 grid grid-cols-3 gap-2 sm:max-w-xl">
+          <Indicator label={theyPaid ? `Due from ${first}` : `Due to ${first}`} value={money(dueTotal)} tone={dueTotal > PAYMENT_EPSILON ? (theyPaid ? "text-settle-receivable-text" : "text-settle-payable-text") : undefined} />
+          <Indicator label="Allocated" value={money(allocation.allocated)} tone={allocation.allocated > PAYMENT_EPSILON ? "text-settle-split-text" : undefined} />
+          <Indicator label="Remaining" value={money(allocation.extra)} emphasis={hasExtra} />
+        </dl>
       </div>
 
-      {/* Live figures — every number here is `allocatePayment`'s */}
-      <dl className="grid grid-cols-2 divide-border-strong/70 border-b border-border-strong bg-secondary/50 sm:grid-cols-5 sm:divide-x">
-        <Kpi label="Person" value={personName} />
-        <Kpi
-          label={theyPaid ? `You need to receive from ${first}` : `You need to give to ${first}`}
-          value={money(theyPaid ? theyOweTotal : iOweTotal)}
-          tone={theyPaid ? "text-settle-receivable-text" : "text-settle-payable-text"}
-        />
-        <Kpi label={theyPaid ? "Payment received" : "Payment made"} value={money(amount)} strong />
-        <Kpi label="Allocated" value={money(allocation.allocated)} tone={allocation.allocated > PAYMENT_EPSILON ? "text-success" : undefined} />
-        <Kpi
-          label="Extra / unallocated"
-          value={money(allocation.extra)}
-          tone={hasExtra ? "text-settle-advance-text" : "text-foreground/70"}
-          strong={hasExtra}
-          className={hasExtra ? "bg-settle-advance-tint" : undefined}
-        />
-      </dl>
-
       <div className="grid lg:grid-cols-[minmax(0,1fr)_19rem]">
-        <div className="min-w-0 px-4 pt-3.5 pb-4">
+        <div className="min-w-0 px-4 pt-3 pb-4">
           {/* Who paid whom, how much, where it moved, when */}
-          <div className="grid gap-3 sm:grid-cols-[minmax(0,15rem)_minmax(0,9rem)_minmax(0,1fr)_minmax(0,9.5rem)] sm:items-end">
-            <WsField label="Direction">
-              <WsSegmented
-                label="Direction"
-                value={direction}
-                onChange={(d) => {
-                  if (initial) return;
-                  setDirection(d);
-                  setSelected(new Set(obligations.filter((o) => o.side === sideForDirection(d) && o.timing !== "later").map((o) => o.key)));
-                  setManual(null);
-                  setExtraChoice("advance");
-                }}
-                options={[
-                  {
-                    value: "theyPaid",
-                    label: `Money received from ${first}`,
-                    icon: ArrowDownLeft,
-                  },
-                  {
-                    value: "iPaid",
-                    label: `Money paid to ${first}`,
-                    icon: ArrowUpRight,
-                  },
-                ]}
-              />
-            </WsField>
+          <WsSegmented
+            label="Direction"
+            value={direction}
+            onChange={switchDirection}
+            className="sm:max-w-md"
+            options={[
+              { value: "theyPaid", label: `Money received from ${first}`, icon: ArrowDownLeft },
+              { value: "iPaid", label: `Money paid to ${first}`, icon: ArrowUpRight },
+            ]}
+          />
+          <div className="mt-2.5 grid gap-2.5 sm:grid-cols-[minmax(0,10rem)_minmax(0,1fr)_minmax(0,10rem)] sm:items-end">
             <WsField label={theyPaid ? "Amount received" : "Amount paid"}>
               <CompactAmountInput label={theyPaid ? "Amount received" : "Amount paid"} value={amountText} onChange={setAmountText} autoFocus />
             </WsField>
@@ -330,55 +347,55 @@ export function RecordPaymentPanel({
             </WsField>
           </div>
 
-          {/* Allocation table */}
-          <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
-            <WsLabel>Apply payment to</WsLabel>
-            <div className="flex items-center gap-1">
-              {manual && (
-                <button
-                  type="button"
-                  onClick={() => setManual(null)}
-                  className="h-7 rounded-[6px] px-2 text-xs font-semibold text-foreground/80 hover:bg-secondary"
-                >
-                  Allocate automatically (oldest first)
-                </button>
-              )}
-              {options.length > 0 && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setManual(null);
-                    setSelected(allSelected ? new Set() : new Set(options.filter((o) => o.timing !== "later").map((o) => o.key)));
-                  }}
-                  className="h-7 rounded-[6px] border border-border-strong px-2.5 text-xs font-semibold text-foreground hover:bg-secondary"
-                >
-                  {allSelected ? "Clear selection" : "Select all due"}
-                </button>
-              )}
+          {/* What this payment settles */}
+          <section aria-labelledby="rp-settle-heading" className="mt-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h4 id="rp-settle-heading" className="text-sm font-bold text-foreground">
+                {theyPaid ? `Settle what ${first} owes you` : `Settle what you owe ${first}`}
+              </h4>
+              <div className="flex items-center gap-1">
+                {manual && (
+                  <button
+                    type="button"
+                    onClick={() => setManual(null)}
+                    className="h-8 rounded-[6px] px-2 text-xs font-semibold text-foreground/80 outline-none hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    Allocate automatically (oldest first)
+                  </button>
+                )}
+                {options.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setManual(null);
+                      setSelected(allSelected ? new Set() : new Set(options.filter((o) => o.timing !== "later").map((o) => o.key)));
+                    }}
+                    className="h-8 rounded-[6px] border border-border-strong px-2.5 text-xs font-semibold text-foreground outline-none hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    {allSelected ? "Clear selection" : "Select all due"}
+                  </button>
+                )}
+              </div>
             </div>
-          </div>
-          {options.length === 0 ? (
-            <p className="mt-2 rounded-[6px] border border-dashed border-border-strong px-3 py-2.5 text-sm text-foreground/80">
-              {theyPaid ? `Nothing to receive from ${first} right now` : `Nothing to give to ${first} right now`} — anything recorded is held as advance.
-            </p>
-          ) : (
-            <div className="mt-2 overflow-x-auto rounded-[6px] border border-border-strong">
-              <table className="w-full min-w-[46rem] border-collapse text-sm">
-                <thead>
-                  <tr className="bg-secondary text-left text-[11px] font-semibold tracking-[0.05em] text-foreground/75 uppercase">
-                    <th className="w-9 border-b border-border-strong px-2 py-1.5">
-                      <span className="sr-only">Select</span>
-                    </th>
-                    <th className="border-b border-border-strong px-2 py-1.5">Date</th>
-                    <th className="border-b border-border-strong px-2 py-1.5">Description</th>
-                    <th className="border-b border-border-strong px-2 py-1.5">Source</th>
-                    <th className="border-b border-border-strong px-2 py-1.5 text-right">Due</th>
-                    <th className="border-b border-border-strong px-2 py-1.5 text-right">Paying now</th>
-                    <th className="border-b border-border-strong px-2 py-1.5 text-right">Remaining</th>
-                    <th className="border-b border-border-strong px-2 py-1.5">Result</th>
-                  </tr>
-                </thead>
-                <tbody>
+            {options.length === 0 ? (
+              <p className="mt-1.5 flex items-center gap-1.5 text-sm font-semibold text-foreground">
+                <Check className="size-4 shrink-0 text-success" strokeWidth={2.75} aria-hidden />
+                {theyPaid ? `Nothing to receive from ${first} right now` : `Nothing to give to ${first} right now`}
+                <span className="font-medium text-foreground/70">— decide what happens to the money below.</span>
+              </p>
+            ) : (
+              <div className="mt-2 overflow-hidden rounded-[6px] border border-border-strong">
+                <div
+                  aria-hidden
+                  className="hidden grid-cols-[1.25rem_minmax(0,1fr)_7rem_7.5rem_8rem] gap-x-3 border-b border-border-strong bg-secondary px-3 py-1.5 text-[11px] font-bold tracking-[0.05em] text-foreground/75 uppercase sm:grid"
+                >
+                  <span />
+                  <span>Item</span>
+                  <span className="text-right">Due</span>
+                  <span className="text-right">Paying now</span>
+                  <span className="text-right">After</span>
+                </div>
+                <ul className="divide-y divide-border">
                   {visible.map((o) => {
                     const on = selected.has(o.key);
                     const line = lineByKey.get(o.key);
@@ -386,30 +403,26 @@ export function RecordPaymentPanel({
                     const remaining = on ? (line?.remainingAfter ?? o.outstanding) : o.outstanding;
                     const result = !on || paying <= PAYMENT_EPSILON ? null : remaining <= PAYMENT_EPSILON ? "full" : "partial";
                     return (
-                      <tr
+                      <li
                         key={o.key}
+                        data-selected={on || undefined}
                         className={cn(
-                          "transition-colors",
-                          on ? "bg-primary/[0.07] shadow-[inset_3px_0_0_var(--color-primary-accent-text)]" : "hover:bg-secondary/60",
+                          "grid grid-cols-[1.25rem_minmax(0,1fr)] items-center gap-x-3 gap-y-1.5 px-3 py-2 transition-colors sm:grid-cols-[1.25rem_minmax(0,1fr)_7rem_7.5rem_8rem]",
+                          on ? "bg-settle-split-tint/50 shadow-[inset_3px_0_0_var(--color-settle-split-edge)]" : "hover:bg-secondary/60",
                         )}
                       >
-                        <td className="border-b border-border px-2 py-1.5 text-center align-middle">
-                          <input
-                            type="checkbox"
-                            checked={on}
-                            onChange={() => {
-                              setManual(null);
-                              toggle(o.key);
-                            }}
-                            aria-label={`Apply to ${o.title}`}
-                            className="size-4 accent-[var(--color-primary-accent-text)]"
-                          />
-                        </td>
-                        <td className="border-b border-border px-2 py-1.5 whitespace-nowrap text-foreground tabular-nums">
-                          {formatStatementDate(o.date, true)}
-                        </td>
-                        <td className="border-b border-border px-2 py-1.5">
-                          <span className="flex min-w-0 items-center gap-1.5 font-semibold text-foreground">
+                        <input
+                          type="checkbox"
+                          checked={on}
+                          onChange={() => {
+                            setManual(null);
+                            toggle(o.key);
+                          }}
+                          aria-label={`Apply to ${o.title}`}
+                          className="size-4 accent-[var(--color-settle-split-edge)]"
+                        />
+                        <div className="min-w-0">
+                          <p className="flex min-w-0 items-center gap-1.5 text-sm font-semibold text-foreground">
                             <span className="truncate">{o.title}</span>
                             {o.isEmi && <EmiBadge />}
                             {o.timing === "carried" && (
@@ -420,172 +433,148 @@ export function RecordPaymentPanel({
                             {o.timing === "later" && (
                               <span className="shrink-0 rounded-[4px] bg-secondary px-1.5 text-[10px] leading-4 font-bold text-foreground/75 uppercase">Upcoming</span>
                             )}
-                          </span>
-                        </td>
-                        <td className="border-b border-border px-2 py-1.5 text-xs font-medium text-foreground/80">{obligationSourceLabel(o, first)}</td>
-                        <td className="border-b border-border px-2 py-1.5 text-right font-semibold text-foreground tabular-nums">{money(o.outstanding)}</td>
-                        <td className="border-b border-border px-2 py-1.5 text-right tabular-nums">
-                          {on ? (
-                            <input
-                              type="number"
-                              inputMode="decimal"
-                              min={0}
-                              aria-label={`Paying now for ${o.title}`}
-                              value={manual ? (manual[o.key] ?? "") : String(paying)}
-                              onChange={(e) =>
-                                setManual((m) => ({
-                                  ...(m ?? seedManual()),
-                                  [o.key]: e.target.value,
-                                }))
-                              }
-                              className={cn(WS_FIELD, "h-8 w-28 text-right font-semibold tabular-nums")}
-                            />
-                          ) : (
-                            <span className="text-foreground/55">—</span>
-                          )}
-                        </td>
-                        <td
-                          className={cn(
-                            "border-b border-border px-2 py-1.5 text-right font-semibold tabular-nums",
-                            result === "partial" ? "text-warning" : result === "full" ? "text-success" : "text-foreground",
-                          )}
-                        >
-                          {money(remaining)}
-                        </td>
-                        <td className="border-b border-border px-2 py-1.5">
-                          {result === "full" ? (
-                            <span className="inline-flex items-center gap-1 text-xs font-bold text-success">
-                              <Check className="size-3.5" strokeWidth={2.75} aria-hidden />
-                              Paid in full
+                          </p>
+                          <p className="truncate text-xs font-medium text-foreground/75">
+                            {obligationSourceLabel(o, first)} · {formatStatementDate(o.date, true)}
+                          </p>
+                        </div>
+                        {/* On phones the three figures sit in a row under the title; from sm they're grid columns. */}
+                        <div className="col-start-2 grid grid-cols-3 items-center gap-2 sm:contents">
+                          <div className="text-left sm:text-right">
+                            <span className="block text-[10px] font-bold tracking-[0.05em] text-foreground/65 uppercase sm:hidden">Due</span>
+                            <span className="block text-sm font-semibold text-foreground tabular-nums">{money(o.outstanding)}</span>
+                            {o.amount > o.outstanding + PAYMENT_EPSILON && <span className="block text-[11px] text-foreground/65 tabular-nums">of {money(o.amount)}</span>}
+                          </div>
+                          <div className="sm:text-right">
+                            <span className="block text-[10px] font-bold tracking-[0.05em] text-foreground/65 uppercase sm:hidden">Paying now</span>
+                            {on ? (
+                              <input
+                                type="number"
+                                inputMode="decimal"
+                                min={0}
+                                aria-label={`Paying now for ${o.title}`}
+                                value={manual ? (manual[o.key] ?? "") : String(paying)}
+                                onChange={(e) =>
+                                  setManual((m) => ({
+                                    ...(m ?? seedManual()),
+                                    [o.key]: e.target.value,
+                                  }))
+                                }
+                                className={cn(WS_FIELD, "h-8 w-full text-right font-semibold tabular-nums sm:w-28 sm:justify-self-end")}
+                              />
+                            ) : (
+                              <span className="block text-sm text-foreground/55">—</span>
+                            )}
+                          </div>
+                          <div className="text-right">
+                            <span className="block text-[10px] font-bold tracking-[0.05em] text-foreground/65 uppercase sm:hidden">After</span>
+                            <span
+                              className={cn(
+                                "block text-sm font-semibold tabular-nums",
+                                result === "partial" ? "text-warning" : result === "full" ? "text-success" : "text-foreground",
+                              )}
+                            >
+                              {money(remaining)}
                             </span>
-                          ) : result === "partial" ? (
-                            <span className="inline-flex items-center gap-1 text-xs font-bold text-warning">
-                              <CircleDashed className="size-3.5" strokeWidth={2.5} aria-hidden />
-                              Partially paid
-                            </span>
-                          ) : (
-                            <span className="text-xs font-medium text-foreground/60">{on ? "Nothing applied" : "Not selected"}</span>
-                          )}
-                        </td>
-                      </tr>
+                            {result === "full" ? (
+                              <span className="inline-flex items-center gap-1 text-[11px] font-bold text-success">
+                                <Check className="size-3" strokeWidth={3} aria-hidden />
+                                Paid in full
+                              </span>
+                            ) : result === "partial" ? (
+                              <span className="inline-flex items-center gap-1 text-[11px] font-bold text-warning">
+                                <CircleDashed className="size-3" strokeWidth={2.75} aria-hidden />
+                                Partially paid
+                              </span>
+                            ) : (
+                              <span className="text-[11px] font-medium text-foreground/60">{on ? "Nothing applied" : "Not selected"}</span>
+                            )}
+                          </div>
+                        </div>
+                      </li>
                     );
                   })}
                   {laterCount > 0 && (
-                    <tr>
-                      <td colSpan={8} className="border-b border-border px-2 py-1.5">
-                        <button type="button" onClick={() => setShowLater((v) => !v)} className="text-xs font-semibold text-foreground/80 underline underline-offset-2 hover:text-foreground">
-                          {showLater ? "Hide upcoming items" : `Show ${laterCount} upcoming ${laterCount === 1 ? "item" : "items"} after this cycle`}
-                        </button>
-                      </td>
-                    </tr>
+                    <li className="px-3 py-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setShowLater((v) => !v)}
+                        className="text-xs font-semibold text-foreground/80 underline underline-offset-2 outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                      >
+                        {showLater ? "Hide upcoming items" : `Show ${laterCount} upcoming ${laterCount === 1 ? "item" : "items"} after this cycle`}
+                      </button>
+                    </li>
                   )}
-                </tbody>
-                <tfoot>
-                  <tr className="bg-secondary/70 font-semibold text-foreground">
-                    <td colSpan={4} className="px-2 py-1.5 text-right text-xs tracking-[0.04em] uppercase">
-                      Selected
-                    </td>
-                    <td className="px-2 py-1.5 text-right tabular-nums">{money(allocation.selectedTotal)}</td>
-                    <td className="px-2 py-1.5 text-right tabular-nums">{money(allocation.allocated)}</td>
-                    <td className={cn("px-2 py-1.5 text-right tabular-nums", allocation.unpaid > PAYMENT_EPSILON ? "text-warning" : "text-success")}>
-                      {money(allocation.unpaid)}
-                    </td>
-                    <td />
-                  </tr>
-                </tfoot>
-              </table>
-            </div>
-          )}
-
-          {elsewhere.length > 0 && (
-            <div className="mt-3 rounded-[6px] border border-border-strong bg-secondary/50 px-3 py-2">
-              <p className="text-[11px] font-bold tracking-[0.06em] text-foreground/80 uppercase">
-                Also outstanding — settled at the source ({money(elsewhere.reduce((sum, e) => sum + e.outstanding, 0))})
-              </p>
-              <ul className="mt-1 space-y-0.5 text-xs">
-                {elsewhere.map((e) => (
-                  <li key={e.key} className="flex flex-wrap items-baseline justify-between gap-x-3">
-                    <span className="font-semibold text-foreground">
-                      {formatStatementDate(e.date, true)} · {e.title} · {money(e.outstanding)}
-                    </span>
-                    <span className="text-foreground/75">
-                      {e.reason}
-                      {e.loanId && (
-                        <>
-                          {" · "}
-                          <a href={`/loans?agreement=${encodeURIComponent(e.loanId)}`} className="font-semibold text-foreground underline underline-offset-2">
-                            Open Loan
-                          </a>
-                        </>
-                      )}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {/* Overpayment — a first-class decision, never silently classified */}
-          {hasExtra && (
-            <div className="mt-4 rounded-[8px] border border-settle-advance-edge/70 bg-settle-advance-tint/50 p-3.5">
-              <p className="flex items-center gap-2 text-sm font-bold text-foreground">
-                <CircleAlert className="size-4 text-settle-advance-text" strokeWidth={2.25} aria-hidden />
-                {money(allocation.extra)} is left after settling the selected items.
-              </p>
-              <p className="mt-0.5 text-xs font-medium text-foreground/80">What should happen to this money?</p>
-              <div role="radiogroup" aria-label="What the extra amount is" className="mt-2.5 grid gap-2 sm:grid-cols-2">
-                <ExtraOption
-                  active={extraChoice === "advance"}
-                  onSelect={() => setExtraChoice("advance")}
-                  icon={PiggyBank}
-                  title={theyPaid ? `Keep as advance from ${first}` : `Keep as advance paid to ${first}`}
-                  badge="Recommended"
-                  detail={
-                    theyPaid
-                      ? `${first} has already paid you ${money(allocation.extra)} toward future obligations. Not income — carried forward until you apply it.`
-                      : `You have already paid ${first} ${money(allocation.extra)} toward what you'll owe. Carried forward until you apply it.`
-                  }
-                />
-                {theyPaid && (
-                  <ExtraOption
-                    active={extraChoice === "income"}
-                    onSelect={() => setExtraChoice("income")}
-                    icon={ReceiptText}
-                    title="Record as income"
-                    detail={`The extra ${money(allocation.extra)} is really yours — a normal income, no longer toward what ${first} owes.`}
-                  />
-                )}
-              </div>
-              {extraChoice === "income" && theyPaid && (
-                <div className="mt-2.5 grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-                  <WsField label="Income category">
-                    <select className={WS_FIELD} value={incomeCategoryId} onChange={(e) => setIncomeCategoryId(e.target.value)}>
-                      <option value="">Choose…</option>
-                      {incomeCategories.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.name}
-                        </option>
-                      ))}
-                    </select>
-                  </WsField>
-                  <WsField label="Description / note">
-                    <input
-                      className={WS_FIELD}
-                      value={incomeDescription}
-                      onChange={(e) => setIncomeDescription(e.target.value)}
-                      placeholder={`Extra amount from ${first}`}
-                    />
-                  </WsField>
-                  <p className="text-xs text-foreground/75 sm:col-span-2">
-                    Recorded into <span className="font-semibold text-foreground">{accountName}</span> on{" "}
-                    <span className="font-semibold text-foreground">{formatStatementDate(fromInputDate(date), true)}</span> — the same receipt, so the account
-                    still goes up by {money(amount)} in total, never more.
-                  </p>
+                </ul>
+                <div className="flex flex-wrap items-center justify-end gap-x-5 gap-y-1 border-t border-border-strong bg-secondary/60 px-3 py-1.5 text-xs font-semibold text-foreground">
+                  <span>
+                    Selected <span className="tabular-nums">{money(allocation.selectedTotal)}</span>
+                  </span>
+                  <span>
+                    Paying <span className="tabular-nums">{money(allocation.allocated)}</span>
+                  </span>
+                  <span className={allocation.unpaid > PAYMENT_EPSILON ? "text-warning" : "text-success"}>
+                    Still open <span className="tabular-nums">{money(allocation.unpaid)}</span>
+                  </span>
                 </div>
-              )}
+              </div>
+            )}
+
+            {elsewhere.length > 0 && (
+              <div className="mt-2 border-l-[3px] border-border-strong pl-3">
+                <p className="text-xs font-bold text-foreground/85">
+                  Also outstanding — settled at the source ({money(elsewhere.reduce((sum, e) => sum + e.outstanding, 0))})
+                </p>
+                <ul className="mt-0.5 space-y-0.5 text-xs">
+                  {elsewhere.map((e) => (
+                    <li key={e.key} className="flex flex-wrap items-baseline justify-between gap-x-3">
+                      <span className="font-semibold text-foreground">
+                        {formatStatementDate(e.date, true)} · {e.title} · {money(e.outstanding)}
+                      </span>
+                      <span className="text-foreground/75">
+                        {e.reason}
+                        {e.loanId && (
+                          <>
+                            {" · "}
+                            <a href={`/loans?agreement=${encodeURIComponent(e.loanId)}`} className="font-semibold text-foreground underline underline-offset-2">
+                              Open Loan
+                            </a>
+                          </>
+                        )}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </section>
+
+          {/* Remaining money — a first-class decision, never silently classified */}
+          {hasExtra && (
+            <section aria-labelledby="rp-remaining-heading" className="mt-4 border-t border-border-strong pt-3.5">
+              <p className="flex flex-wrap items-baseline gap-x-2">
+                <span className="font-heading text-[20px] leading-tight font-bold text-foreground tabular-nums">{money(allocation.extra)}</span>
+                <span className="text-sm font-semibold text-foreground/85">{allocation.allocated > PAYMENT_EPSILON ? "left after settling" : "remaining"}</span>
+              </p>
+              <h4 id="rp-remaining-heading" className="text-sm font-bold text-foreground">
+                What should happen to this money?
+              </h4>
+              <p className="text-xs font-medium text-foreground/70">
+                {accountName} still {theyPaid ? "receives" : "pays"} {money(amount)} once — this only decides what the money means.
+              </p>
+              <ExtraAllocationEditor
+                extra={allocation.extra}
+                direction={direction}
+                firstName={first}
+                drafts={effectiveDrafts}
+                onChange={setExtraDrafts}
+                linkOptions={linkOptions}
+                incomeCategories={incomeCategories}
+                accountName={accountName}
+              />
               {unselected.length > 0 && (
-                <div className="mt-2.5 border-t border-settle-advance-edge/40 pt-2.5">
-                  <p className="text-xs font-semibold text-foreground/80">Or apply it to another outstanding item:</p>
+                <div className="mt-2.5">
+                  <p className="text-xs font-semibold text-foreground/80">Or use it to settle another item:</p>
                   <div className="mt-1.5 flex flex-wrap gap-1.5">
                     {unselected.map((o) => (
                       <button
@@ -595,7 +584,7 @@ export function RecordPaymentPanel({
                           setManual(null);
                           toggle(o.key);
                         }}
-                        className="h-7 rounded-full border border-border-strong bg-card px-2.5 text-xs font-semibold text-foreground hover:border-primary-accent-text hover:bg-primary/10"
+                        className="h-8 rounded-full border border-border-strong bg-card px-2.5 text-xs font-semibold text-foreground outline-none hover:border-settle-split-edge hover:bg-settle-split-tint/50 focus-visible:ring-2 focus-visible:ring-ring"
                       >
                         + {o.title} · {formatStatementDate(o.date, true)} · {money(o.outstanding)}
                       </button>
@@ -603,38 +592,79 @@ export function RecordPaymentPanel({
                   </div>
                 </div>
               )}
-            </div>
+            </section>
           )}
         </div>
 
-        {/* Sticky reconciliation + the action */}
-        <aside className="border-t border-border-strong bg-secondary/60 px-4 py-3.5 lg:border-t-0 lg:border-l">
+        {/* Sticky payment summary + the action */}
+        <aside aria-label="Payment summary" className="border-t border-border-strong bg-secondary/40 px-4 py-3.5 lg:border-t-0 lg:border-l">
           <div className="lg:sticky lg:top-3">
-            <WsLabel>Where the money goes</WsLabel>
-            <dl className="mt-2 space-y-1.5 text-sm">
-              <SummaryLine label={theyPaid ? "Payment received" : "Payment made"} value={money(recon.received)} strong />
-              <div className="my-2 border-t border-border-strong" />
-              <SummaryLine
-                label="Allocated to obligations"
-                value={money(recon.allocated)}
-                tone={recon.allocated > PAYMENT_EPSILON ? "text-success" : undefined}
-              />
-              {recon.advance > PAYMENT_EPSILON && <SummaryLine label="Advance created" value={money(recon.advance)} tone="text-settle-advance-text" />}
-              {recon.income > PAYMENT_EPSILON && <SummaryLine label="Recorded as income" value={money(recon.income)} />}
-              {recon.unallocated > PAYMENT_EPSILON && <SummaryLine label="Not yet decided" value={money(recon.unallocated)} tone="text-warning" />}
-              <div className="my-2 border-t border-border-strong" />
-              <SummaryLine
-                label="Still open on selected"
-                value={money(allocation.unpaid)}
-                tone={allocation.unpaid > PAYMENT_EPSILON ? "text-warning" : "text-success"}
-              />
+            <p className="text-[11px] font-bold tracking-[0.08em] text-foreground/80 uppercase">Payment summary</p>
+            <dl className="mt-2 space-y-1 text-sm">
+              <SummaryLine label={theyPaid ? "Received" : "Paid"} value={money(recon.received)} strong />
+              <div className="my-1.5 border-t border-border-strong" />
+              <SummaryLine label="Settled obligations" value={money(recon.allocated)} dot="bg-settle-split-edge" muted={recon.allocated <= PAYMENT_EPSILON} />
+              {theyPaid && (
+                <>
+                  <SummaryLine label="Set aside" value={money(recon.purpose)} dot="bg-settle-emi-edge" muted={recon.purpose <= PAYMENT_EPSILON} />
+                  {hasExtra && extraPlan.purposes.length > 0 && (
+                    <div className="ml-4 space-y-0.5 border-l border-border-strong pl-2.5 text-xs">
+                      {extraPlan.purposes.map((p, i) => (
+                        <div key={i} className="flex items-baseline justify-between gap-3">
+                          <dt className="truncate text-foreground/80">{p.title || "Unnamed purpose"}</dt>
+                          <dd className="font-semibold text-foreground tabular-nums">{money(p.amount)}</dd>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <SummaryLine label="Income" value={money(recon.income)} dot="bg-success" muted={recon.income <= PAYMENT_EPSILON} />
+                </>
+              )}
+              <SummaryLine label="Advance" value={money(recon.advance)} dot="bg-settle-advance-edge" muted={recon.advance <= PAYMENT_EPSILON} />
+              <div className="my-1.5 border-t border-border-strong" />
+              <div className="flex items-baseline justify-between gap-3">
+                <dt className="font-semibold text-foreground">Unassigned</dt>
+                <dd
+                  className={cn(
+                    "flex items-center gap-1 font-heading text-[15px] font-bold tabular-nums",
+                    recon.balanced ? "text-success" : recon.unallocated < 0 ? "text-expense" : "text-warning",
+                  )}
+                >
+                  {money(recon.unallocated)}
+                  {recon.balanced ? <Check className="size-4" strokeWidth={3} aria-label="Balanced" /> : <CircleAlert className="size-4" aria-label="Not balanced" />}
+                </dd>
+              </div>
+              {selected.size > 0 && (
+                <SummaryLine
+                  label="Still open on selected"
+                  value={money(allocation.unpaid)}
+                  tone={allocation.unpaid > PAYMENT_EPSILON ? "text-warning" : "text-success"}
+                />
+              )}
             </dl>
             {outcomeLabel && <p className={cn("mt-2 text-xs font-bold", outcomeLabel.tone)}>{outcomeLabel.text}</p>}
-            <p className="mt-2 text-xs leading-relaxed text-foreground/75">
+            <p className="mt-1.5 text-xs leading-relaxed text-foreground/75">
               {theyPaid ? `${accountName} goes up` : `${accountName} goes down`} by exactly {money(amount)} — one payment, never counted twice.
             </p>
+            {otherSideTotal > PAYMENT_EPSILON && (
+              <div className="mt-2 border-l-[3px] border-border-strong pl-2.5 text-xs">
+                <p className="font-semibold text-foreground">
+                  {theyPaid ? `You also need to give ${first} ${money(otherSideTotal)}` : `${first} also needs to give you ${money(otherSideTotal)}`}
+                </p>
+                <p className="text-foreground/70">Tracked separately — not subtracted from this payment.</p>
+                {!initial && (
+                  <button
+                    type="button"
+                    onClick={() => switchDirection(theyPaid ? "iPaid" : "theyPaid")}
+                    className="mt-0.5 font-semibold text-primary-accent-text underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    {theyPaid ? "View amount to give →" : "View amount to receive →"}
+                  </button>
+                )}
+              </div>
+            )}
             {(error || blocker) && (
-              <p className={cn("mt-2 text-xs font-medium", error ? "text-expense" : "text-foreground/80")} role={error ? "alert" : undefined}>
+              <p className={cn("mt-2 text-xs font-semibold", error ? "text-expense" : "text-foreground/85")} role={error ? "alert" : undefined}>
                 {error ?? blocker}
               </p>
             )}
@@ -653,73 +683,31 @@ export function RecordPaymentPanel({
   );
 }
 
-function Kpi({ label, value, tone, strong, className }: { label: string; value: string; tone?: string; strong?: boolean; className?: string }) {
+function Indicator({ label, value, tone, emphasis }: { label: string; value: string; tone?: string; emphasis?: boolean }) {
   return (
-    <div className={cn("min-w-0 px-4 py-2", className)}>
-      <dt className="text-[10.5px] font-bold tracking-[0.07em] text-foreground/70 uppercase">{label}</dt>
-      <dd className={cn("truncate font-heading tabular-nums", strong ? "text-[18px] font-bold" : "text-[16px] font-semibold", tone ?? "text-foreground")}>
+    <div
+      className={cn(
+        "min-w-0 rounded-[6px] border px-2.5 py-1.5",
+        emphasis ? "border-primary-accent-text bg-primary/10 shadow-[inset_3px_0_0_var(--color-primary-accent-text)]" : "border-border-strong",
+      )}
+    >
+      <dt className="truncate text-[10.5px] font-bold tracking-[0.06em] text-foreground/75 uppercase">{label}</dt>
+      <dd className={cn("truncate font-heading tabular-nums", emphasis ? "text-[17px] font-bold text-foreground" : "text-[15px] font-semibold", !emphasis && (tone ?? "text-foreground"))}>
         {value}
       </dd>
     </div>
   );
 }
 
-function SummaryLine({ label, value, tone, strong }: { label: string; value: string; tone?: string; strong?: boolean }) {
+function SummaryLine({ label, value, tone, strong, dot, muted }: { label: string; value: string; tone?: string; strong?: boolean; dot?: string; muted?: boolean }) {
   return (
     <div className="flex items-baseline justify-between gap-3">
-      <dt className="text-foreground/75">{label}</dt>
-      <dd className={cn("tabular-nums", strong ? "font-heading text-[15px] font-bold" : "font-semibold", tone ?? "text-foreground")}>{value}</dd>
+      <dt className={cn("flex items-center gap-2", strong ? "font-semibold text-foreground" : "text-foreground/80")}>
+        {dot && <span aria-hidden className={cn("size-2 shrink-0 rounded-full", dot, muted && "opacity-40")} />}
+        {label}
+      </dt>
+      <dd className={cn("tabular-nums", strong ? "font-heading text-[16px] font-bold" : "font-semibold", muted ? "text-foreground/55" : (tone ?? "text-foreground"))}>{value}</dd>
     </div>
-  );
-}
-
-function ExtraOption({
-  active,
-  onSelect,
-  icon: Icon,
-  title,
-  detail,
-  badge,
-}: {
-  badge?: string;
-  active: boolean;
-  onSelect: () => void;
-  icon: React.ComponentType<{ className?: string; strokeWidth?: number }>;
-  title: string;
-  detail: string;
-}) {
-  return (
-    <button
-      type="button"
-      role="radio"
-      aria-checked={active}
-      onClick={onSelect}
-      className={cn(
-        "flex items-start gap-2.5 rounded-[6px] border bg-card px-3 py-2 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
-        active ? "border-primary-accent-text ring-1 ring-primary-accent-text" : "border-border-strong hover:bg-secondary",
-      )}
-    >
-      <span
-        className={cn(
-          "mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full border-2",
-          active ? "border-primary-accent-text" : "border-foreground/40",
-        )}
-      >
-        {active && <span className="size-2 rounded-full bg-primary-accent-text" />}
-      </span>
-      <span className="min-w-0">
-        <span className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
-          <Icon className="size-3.5" strokeWidth={2} />
-          {title}
-          {badge && (
-            <span className="rounded-[4px] bg-settle-advance-badge px-1.5 py-px text-[10px] font-bold tracking-[0.05em] text-settle-advance-text uppercase">
-              {badge}
-            </span>
-          )}
-        </span>
-        <span className="block text-xs text-foreground/70">{detail}</span>
-      </span>
-    </button>
   );
 }
 
@@ -741,11 +729,18 @@ export function paymentInitialFor(
     transactionRef: string | null;
   }[],
   accountIdOf: (transactionId: string) => string | null,
+  /** Payments that kept money for a purpose — changed by revert + record. */
+  purposePaymentIds?: ReadonlySet<string>,
+  /** The separate Income transaction of a payment, by id — without it a payment with an income part isn't editable here. */
+  incomeOf?: (transactionId: string) => { amount: number; categoryId: string; description: string } | null,
 ): RecordPaymentInitial | null {
   const group = entries.filter((e) => e.deletedAt == null && e.paymentId === paymentId);
-  if (group.length === 0) return null;
-  // A split-share line or a separate income part is changed by reverting and recording again.
-  if (group.some((e) => e.installmentPaymentRef != null || e.incomeTransactionRef != null)) return null;
+  if (group.length === 0 || purposePaymentIds?.has(paymentId)) return null;
+  // A split-share line is changed by reverting and recording again (its tracking lives on the expense).
+  if (group.some((e) => e.installmentPaymentRef != null)) return null;
+  const incomeRef = group.find((e) => e.incomeTransactionRef != null)?.incomeTransactionRef ?? null;
+  const income = incomeRef ? (incomeOf?.(incomeRef) ?? null) : null;
+  if (incomeRef && !income) return null;
   const lines: Record<string, number> = {};
   let advance = 0;
   for (const e of group) {
@@ -755,11 +750,12 @@ export function paymentInitialFor(
   return {
     paymentId,
     direction: group[0].type === "repaid" ? "iPaid" : "theyPaid",
-    amount: round2(group.reduce((s, e) => s + e.amount, 0)),
+    amount: round2(group.reduce((s, e) => s + e.amount, 0) + (income?.amount ?? 0)),
     accountId: group[0].transactionRef ? accountIdOf(group[0].transactionRef) : null,
     date: group[0].date,
     lines,
     advance,
+    income,
   };
 }
 

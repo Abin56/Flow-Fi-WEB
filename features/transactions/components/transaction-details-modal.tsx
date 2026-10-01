@@ -72,12 +72,11 @@ import { isSplit, type Expense, type SplitType } from "@/lib/models/expense";
 import type { Account, AccountType } from "@/lib/models/account";
 import type { Category, CategoryType } from "@/lib/models/category";
 import type { LedgerEntryType, Person } from "@/lib/models/person";
-import type { Transaction } from "@/lib/models/transaction";
+import { PERSON_FUNDED_ACCOUNT_ID, type Transaction } from "@/lib/models/transaction";
 import type { ExpenseParticipantInput } from "@/lib/repositories/expense-repository";
 import type { EditTransactionParams } from "@/lib/repositories/transaction-repository";
 import { formatMonthYear, isSameMonth, transactionFlagFor } from "@/features/transactions/lib/transaction-flag";
 import { useDuplicateGuardedCreate } from "@/lib/services/duplicate-detection/use-duplicate-guarded-create";
-import { usePeopleActions } from "@/features/people/hooks/use-people-data";
 import { resolveMixedSplit } from "@/lib/split/mixed-split";
 import { WS_FIELD, WS_GHOST, WS_PRIMARY, WS_SECONDARY, WS_SELECT_TRIGGER } from "@/features/people/components/workspace/person-workspace-ui";
 import { choiceClass } from "@/features/loans/components/loan-emi-ui";
@@ -125,16 +124,25 @@ const SPLIT_TYPE_OPTIONS: { value: SplitType; label: string }[] = [
 
 /** Same options/labels/tones as the People page's "Add Ledger Entry" picker
  *  (`LEDGER_ENTRY_TYPE_OPTIONS` in people-workspace.tsx) — kept in sync by hand since the two
- *  live in different features. Only "gave" has a real expense-assignment behind it
- *  (`applyOwesPersonChange`, unchanged); "borrowed" records a plain reference on the
- *  transaction plus one `addLedgerEntry` call, same as the People page does. "repaid"/
+ *  live in different features. "gave" is the expense-assignment (`applyOwesPersonChange`,
+ *  unchanged). "borrowed" on an expense is still MY expense; it then asks who paid
+ *  (`BORROW_FUNDING_OPTIONS`): the person directly (`createPersonFundedExpense` — no account,
+ *  one "I owe them" entry) or me from an account (an ordinary expense, person as reference).
+ *  Borrowed CASH received into an account is a different event, recorded from People. "repaid"/
  *  "receivedBack" are settlements against an existing "gave"/"borrowed" entry, not a starting
- *  point for a new one, so they're not offered here. Add mode only — editing an existing
- *  transaction only exposes "gave", since reversing a previously-recorded standalone ledger
- *  entry on an edit has no existing transition logic to reuse safely. */
+ *  point for a new one, so they're not offered here. Edit mode offers "gave" as before; it offers
+ *  "borrowed" only together with "paid directly", whose transitions `changeExpenseFunding` owns. */
 const PERSON_ENTRY_OPTIONS: { value: LedgerEntryType; label: string; description: string; icon: LucideIcon; tone: "expense" | "success" }[] = [
   { value: "gave", label: "Money I Gave", description: "They owe me", icon: ArrowUpFromLine, tone: "expense" },
   { value: "borrowed", label: "Money I Borrowed", description: "I owe them", icon: ArrowDownToLine, tone: "success" },
+];
+
+type BorrowFunding = "person" | "account";
+
+/** "Money I Borrowed" → who actually paid. Nothing preselected: the user must say which. */
+const BORROW_FUNDING_OPTIONS: { value: BorrowFunding; label: (name: string) => string; description: string }[] = [
+  { value: "person", label: (name) => `${name} paid directly`, description: "No money leaves your accounts." },
+  { value: "account", label: () => "I paid from my account", description: "Choose the account you used." },
 ];
 
 /** Matches the icon set the Add Account dialog already uses for these types — kept visually
@@ -463,7 +471,6 @@ export function TransactionDetailsModal({
   onDestinationAccountChange?: (accountId: string) => void;
 }) {
   const transaction = row?.transaction ?? null;
-  const peopleActions = usePeopleActions();
 
   const [kind, setKind] = useState<FormKind>(defaultKind);
   const [description, setDescription] = useState("");
@@ -478,6 +485,8 @@ export function TransactionDetailsModal({
   const [month, setMonth] = useState<Date>(new Date());
   const [personId, setPersonId] = useState<string | null>(null);
   const [personEntryType, setPersonEntryType] = useState<LedgerEntryType | null>(null);
+  /** "Money I Borrowed" only: who actually paid — the person directly (no account), or me from an account. */
+  const [borrowFunding, setBorrowFunding] = useState<BorrowFunding | null>(null);
   const [addingPerson, setAddingPerson] = useState(false);
   const [newPersonName, setNewPersonName] = useState("");
   const [addingPersonBusy, setAddingPersonBusy] = useState(false);
@@ -528,8 +537,10 @@ export function TransactionDetailsModal({
       setExclude(transaction.excludeFromCalculations);
       setReassign(transaction.accountingMonth != null);
       setMonth(transaction.accountingMonth ?? transaction.dateTime);
-      setPersonId(transaction.linkedPersonId);
-      setPersonEntryType(transaction.owesPersonToggle ? "gave" : null);
+      setPersonId(transaction.linkedPersonId ?? transaction.fundedByPersonId ?? null);
+      // A person-funded expense reopens as "Money I Borrowed → <person> paid directly".
+      setPersonEntryType(transaction.fundedByPersonId != null ? "borrowed" : transaction.owesPersonToggle ? "gave" : null);
+      setBorrowFunding(transaction.fundedByPersonId != null ? "person" : null);
       setAddingPerson(autoFocusAssign && transaction.linkedPersonId == null);
     } else {
       const firstCategory = categories.find((c) => (defaultKind === "income" ? c.type !== "expense" : c.type !== "income"));
@@ -547,6 +558,7 @@ export function TransactionDetailsModal({
       setMonth(new Date());
       setPersonId(null);
       setPersonEntryType(null);
+      setBorrowFunding(null);
       setAddingPerson(false);
     }
     setNewPersonName("");
@@ -577,6 +589,10 @@ export function TransactionDetailsModal({
   }
 
   const isTransferLeg = !!transaction?.transferId;
+  /** "Money I Borrowed" is on — the form must know who paid before it can save. */
+  const borrowedChosen = kind === "expense" && personId != null && !splitOpen && personEntryType === "borrowed";
+  /** The person paid this expense directly: no account is part of the transaction (any selected one is ignored). */
+  const personPaysDirectly = borrowedChosen && borrowFunding === "person";
   const personName = personId ? (people.find((p) => p.id === personId)?.name ?? "") : "";
   const flag = transaction ? transactionFlagFor(transaction) : null;
   const monthChanged = transaction ? !isSameMonth(month, transaction.dateTime) : false;
@@ -698,7 +714,7 @@ export function TransactionDetailsModal({
     if (dateValue.getTime() > today.getTime()) return fail("date", "Date can't be in the future.");
     const earliestAllowed = new Date("2000-01-01");
     if (dateValue.getTime() < earliestAllowed.getTime()) return fail("date", "Enter a valid date.");
-    if (!accountId) return fail("account", kind === "transfer" ? "Select a source account." : "Select an account.");
+    if (!accountId && !personPaysDirectly) return fail("account", kind === "transfer" ? "Select a source account." : "Select an account.");
     // The destination-account picker only applies to creating a new transfer — an existing
     // transfer leg's amount/account/date are read-only (see isTransferLeg below), so
     // destinationAccountId is never part of what gets saved for one.
@@ -709,6 +725,9 @@ export function TransactionDetailsModal({
     // Assigning to a person needs an explicit direction — never defaulted for the user.
     if (!transaction && kind === "expense" && personId != null && !splitOpen && !personEntryType) {
       return fail("personDirection", "Select Money given or Money borrowed.");
+    }
+    if (borrowedChosen && borrowFunding == null) {
+      return fail("personFunding", "Choose who paid this expense.");
     }
     if (splitOpen) {
       const problem = validateSplit();
@@ -828,8 +847,8 @@ export function TransactionDetailsModal({
               description,
               amount: amountValue,
               date: dateTime,
-              direction: kind === "income" || (kind === "expense" && personId != null && !splitOpen && personEntryType === "borrowed") ? "credit" : "debit",
-              accountId,
+              direction: kind === "income" ? "credit" : "debit",
+              accountId: personPaysDirectly ? PERSON_FUNDED_ACCOUNT_ID : accountId,
               referenceNumber: null,
               requireDescriptionMatch: false,
             });
@@ -847,21 +866,25 @@ export function TransactionDetailsModal({
     try {
       op.stage("submit", kind === "transfer" && !transaction ? "Saving both legs & balances" : "Saving transaction & balance");
       if (!transaction) {
-        // "Money I Borrowed" is cash coming IN from the person — it is not an expense of mine. It used to
-        // also write the expense above (SBI −X) next to the borrowed income leg (SBI +X): the two cancelled
-        // out, so the receiving account never rose, and the same event showed as Money Out + Money In with a
-        // phantom spend. Only the People path is posted now: one "borrowed" LedgerEntry (I owe them) + its
-        // `isPersonLedgerMovement` Transaction into the chosen account (moves the balance, never income).
-        const borrowOnly = kind === "expense" && personId != null && !splitOpen && personEntryType === "borrowed";
-        if (borrowOnly) {
+        // "Money I Borrowed" on an expense is always a real expense of mine (My Spend). WHO PAID decides the
+        // rest — never a borrowed-cash receipt into an account (that is its own People event, recorded from
+        // People → Add entry):
+        //  - the person paid directly → the expense with NO account + one "borrowed" entry (I owe them),
+        //    atomically; an account still selected in the form is ignored, never written or moved;
+        //  - I paid from my account → an ordinary expense on that account, the person a plain reference.
+        if (personPaysDirectly) {
           const person = people.find((p) => p.id === personId);
-          if (!person || !peopleActions) throw new Error("Couldn't find this person — refresh and try again");
-          op.stage("related", "Recording money borrowed");
-          await peopleActions.addLedgerEntryWithTransaction(
-            person,
-            { type: "borrowed", amount: amountValue, date: dateTime, note: description || undefined },
-            accountId,
-          );
+          if (!person) throw new Error("Couldn't find this person — refresh and try again");
+          op.stage("related", `Recording that ${person.name} paid`);
+          await actions.createPersonFundedExpense(person, {
+            amount: amountValue,
+            date: dateTime,
+            categoryId,
+            description,
+            notes,
+            excludeFromCalculations: exclude,
+            accountingMonth: reassign ? month : null,
+          });
         } else if (kind === "transfer") {
           await actions.createTransferPair({ amount: amountValue, dateTime, sourceAccountId: accountId, destinationAccountId, categoryId, description, notes });
         } else {
@@ -909,8 +932,8 @@ export function TransactionDetailsModal({
                 });
               } else {
                 // Plain descriptive reference (no expense-owed effect) — same shape as
-                // `applyOwesPersonChange`'s own "reference-only" branch. ("Money I Borrowed" never
-                // reaches here — it is posted on its own above, without an expense.)
+                // `applyOwesPersonChange`'s own "reference-only" branch. "Money I Borrowed → I paid from
+                // my account" lands here: my account paid, so this expense creates nothing owed.
                 await actions.editTransaction(newTransaction, { linkedPersonId: personId, owesPersonToggle: false });
               }
             } catch (assignError) {
@@ -935,7 +958,37 @@ export function TransactionDetailsModal({
           clearAccountingMonth: !reassign,
         };
 
-        if (splitOpen) {
+        const wasPersonFunded = transaction.fundedByPersonId != null;
+        if (personPaysDirectly && personId != null) {
+          // → paid directly by a person (from an account, or from another/the same person): one atomic
+          // write takes the expense off its account (old debit reversed once) and keeps exactly one
+          // "I owe them" entry. An existing "they owe me" assignment is cleared first (its own path).
+          op.stage("related", `Recording that ${personName || "this person"} paid`);
+          if (!wasPersonFunded && expense != null) {
+            await actions.applyOwesPersonChange({
+              transaction,
+              existingExpense: expense,
+              target: { personId: null, personName: "", owesPersonToggle: false },
+            });
+          }
+          const { accountId: _account, ...fundingEdits } = transactionEdits;
+          void _account;
+          await actions.changeExpenseFunding(transaction, { kind: "person", personId }, fundingEdits);
+        } else if (wasPersonFunded) {
+          // Paid directly by a person → paid from my account: that person's entry is removed and the
+          // account debited exactly once, atomically. Then the usual person assignment, if any.
+          if (splitOpen) throw new Error("Move this payment to your account and save first, then split it.");
+          op.stage("related", "Moving payment to your account");
+          const { accountId: _account, ...fundingEdits } = transactionEdits;
+          void _account;
+          await actions.changeExpenseFunding(transaction, { kind: "account", accountId }, fundingEdits);
+          const moved: Transaction = { ...transaction, amount: amountValue, dateTime, categoryId, description, notes, accountId, fundedByPersonId: null };
+          await actions.applyOwesPersonChange({
+            transaction: moved,
+            existingExpense: null,
+            target: { personId, personName, owesPersonToggle: personId != null && personEntryType === "gave" },
+          });
+        } else if (splitOpen) {
           const inputs = buildParticipantInputs();
           op.stage("related", "Updating split");
 
@@ -990,6 +1043,7 @@ export function TransactionDetailsModal({
           setAmount("");
           setPersonId(null);
           setPersonEntryType(null);
+          setBorrowFunding(null);
           setAddingPerson(false);
           setNewPersonName("");
           setSplitOpen(false);
@@ -1476,8 +1530,27 @@ export function TransactionDetailsModal({
               </div>
             </FormSection>
 
-            <FormSection icon={kind === "income" ? ArrowDownToLine : Wallet} title={kind === "income" ? "Received in" : kind === "transfer" ? "Accounts" : "Paid from"}>
+            <FormSection
+              icon={kind === "income" ? ArrowDownToLine : personPaysDirectly ? Users : Wallet}
+              title={kind === "income" ? "Received in" : kind === "transfer" ? "Accounts" : personPaysDirectly ? "Paid by" : "Paid from"}
+            >
             {(() => {
+              // The person paid directly: no account is part of this expense — the picker is replaced (not
+              // just disabled) and whatever account was selected before is never saved or moved.
+              if (personPaysDirectly) {
+                return (
+                  <div data-testid="paid-by-person" className="grid grid-cols-2 gap-2">
+                    <div className={cn("rounded-[6px] border border-success bg-card px-3 py-2", FIELD_BORDER)}>
+                      <p className="text-[11px] font-medium uppercase tracking-wide text-foreground/70">Paid by</p>
+                      <p className="truncate text-sm font-semibold text-foreground">{personName || "This person"}</p>
+                    </div>
+                    <div className={cn("rounded-[6px] border bg-secondary px-3 py-2", FIELD_BORDER)}>
+                      <p className="text-[11px] font-medium uppercase tracking-wide text-foreground/70">Your account</p>
+                      <p className="text-sm font-semibold text-foreground">Not used</p>
+                    </div>
+                  </div>
+                );
+              }
               const fromRow = (
               <FormRow label={kind === "transfer" ? "From Account *" : "Account *"} field="account" error={fieldError("account")}>
                 {isTransferLeg ? (
@@ -1641,11 +1714,11 @@ export function TransactionDetailsModal({
                       className="overflow-hidden"
                     >
                       {transaction ? (
-                        // Edit mode only ever offers "I Gave" — reversing a previously-recorded
-                        // standalone ledger entry (Borrowed/Repaid/Received Back) on an edit has no
-                        // existing transition logic to reuse safely, unlike `applyOwesPersonChange`
-                        // which already handles every "gave" transition (assign/unassign/reassign/
-                        // edit-in-place).
+                        // Edit mode offers "I Gave" (every transition via `applyOwesPersonChange`) and
+                        // "I Borrowed" — the latter only as "<person> paid directly", whose transitions
+                        // (account ↔ person, amount/date) `changeExpenseFunding` owns atomically. Never a
+                        // standalone borrowed-cash ledger entry. Both are optional toggles here.
+                        <div className="grid grid-cols-1 gap-2 min-[420px]:grid-cols-2">
                         <button
                           type="button"
                           onClick={() => setPersonEntryType((t) => (t === "gave" ? null : "gave"))}
@@ -1663,6 +1736,28 @@ export function TransactionDetailsModal({
                             <p className="truncate text-xs text-muted-foreground">They owe me — adds this amount to what they owe you.</p>
                           </span>
                         </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPersonEntryType((t) => (t === "borrowed" ? null : "borrowed"));
+                            // Editing only supports "paid directly" for a borrowing — said explicitly below.
+                            setBorrowFunding("person");
+                          }}
+                          aria-pressed={personEntryType === "borrowed"}
+                          className={cn(
+                            "flex w-full items-center gap-2.5 rounded-[6px] border p-2.5 text-left transition-colors",
+                            personEntryType === "borrowed" ? "border-success bg-success/10 ring-1 ring-success" : "border-border-strong bg-card hover:border-muted-foreground hover:bg-secondary",
+                          )}
+                        >
+                          <span className={cn("flex size-7 shrink-0 items-center justify-center rounded-[4px]", personEntryType === "borrowed" ? "bg-success text-success-foreground" : "bg-secondary text-muted-foreground")}>
+                            <ArrowDownToLine className="size-3.5" strokeWidth={2} />
+                          </span>
+                          <span className="min-w-0">
+                            <p className="truncate text-sm font-semibold text-foreground">Money I Borrowed</p>
+                            <p className="truncate text-xs text-muted-foreground">They paid this for me — I owe them.</p>
+                          </span>
+                        </button>
+                        </div>
                       ) : (
                         // Add mode — same "I Gave"/"I Borrowed" picker as the People page's "Add
                         // Ledger Entry" dialog (`LEDGER_ENTRY_TYPE_OPTIONS`). "I Gave" goes through
@@ -1734,13 +1829,88 @@ export function TransactionDetailsModal({
                               {fieldError("personDirection")}
                             </p>
                           )}
-                          {personEntryType === "borrowed" && (
-                            <p className="col-span-full flex items-start gap-1.5 rounded-[6px] border border-border-strong bg-secondary px-2.5 py-2 text-[11px] text-foreground/80">
+                        </div>
+                      )}
+                      {personEntryType === "borrowed" && (
+                        // Who actually paid — required, nothing preselected in Add mode. Same radio-group
+                        // keyboard contract as the direction picker above.
+                        <div className="mt-2.5">
+                          <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-foreground/80">How was this paid?</p>
+                          <div
+                            data-field="personFunding"
+                            data-invalid={fieldError("personFunding") ? "true" : undefined}
+                            role="radiogroup"
+                            aria-label="How was this paid?"
+                            aria-required="true"
+                            aria-invalid={fieldError("personFunding") ? true : undefined}
+                            aria-describedby={fieldError("personFunding") ? "txn-person-funding-error" : undefined}
+                            className={cn(
+                              "grid grid-cols-1 gap-2 rounded-[6px] min-[420px]:grid-cols-2",
+                              fieldError("personFunding") && "bg-danger/5 p-1.5 ring-2 ring-danger",
+                            )}
+                          >
+                            {BORROW_FUNDING_OPTIONS.map((o, index) => {
+                              const active = borrowFunding === o.value;
+                              const tabbable = active || (borrowFunding == null && index === 0);
+                              const Icon = o.value === "person" ? Users : Wallet;
+                              return (
+                                <button
+                                  key={o.value}
+                                  type="button"
+                                  role="radio"
+                                  aria-checked={active}
+                                  tabIndex={tabbable ? 0 : -1}
+                                  onClick={() => setBorrowFunding(o.value)}
+                                  onKeyDown={(e) => {
+                                    const step = e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : e.key === "ArrowLeft" || e.key === "ArrowUp" ? -1 : 0;
+                                    if (!step) return;
+                                    e.preventDefault();
+                                    const nextIndex = (index + step + BORROW_FUNDING_OPTIONS.length) % BORROW_FUNDING_OPTIONS.length;
+                                    setBorrowFunding(BORROW_FUNDING_OPTIONS[nextIndex].value);
+                                    e.currentTarget.parentElement?.querySelectorAll<HTMLElement>('[role="radio"]')[nextIndex]?.focus();
+                                  }}
+                                  className={cn(
+                                    "flex items-center gap-2 rounded-[6px] border-2 p-2 text-left transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+                                    active ? "border-foreground bg-card" : "border-border-strong bg-card hover:border-muted-foreground hover:bg-secondary",
+                                  )}
+                                >
+                                  <span
+                                    className={cn(
+                                      "flex size-7 shrink-0 items-center justify-center rounded-[4px]",
+                                      active ? "bg-foreground text-background" : "bg-secondary text-muted-foreground",
+                                    )}
+                                  >
+                                    {active ? <Check className="size-3.5" strokeWidth={2.5} /> : <Icon className="size-3.5" strokeWidth={2} />}
+                                  </span>
+                                  <span className="min-w-0">
+                                    <p className="truncate text-xs font-semibold text-foreground">{o.label(personName || "They")}</p>
+                                    <p className="truncate text-[11px] text-muted-foreground">{o.description}</p>
+                                  </span>
+                                </button>
+                              );
+                            })}
+                            {fieldError("personFunding") && (
+                              <p id="txn-person-funding-error" role="alert" className="col-span-full px-1 text-[11px] font-medium text-danger">
+                                {fieldError("personFunding")}
+                              </p>
+                            )}
+                          </div>
+                          {borrowFunding === "person" && (
+                            <p data-testid="person-funded-helper" className="mt-2 flex items-start gap-1.5 rounded-[6px] border border-border-strong bg-secondary px-2.5 py-2 text-[11px] text-foreground/85">
                               <Info className="mt-px size-3.5 shrink-0" strokeWidth={1.75} />
                               <span>
-                                Saved as money received into{" "}
-                                <span className="font-semibold text-foreground">{accounts.find((a) => a.id === accountId)?.name ?? "the selected account"}</span> that you owe{" "}
-                                <span className="font-semibold text-foreground">{people.find((p) => p.id === personId)?.name ?? "this person"}</span> — not an expense, not income.
+                                <span className="font-semibold text-foreground">{personName || "They"}</span> paid
+                                {Number(amount) > 0 ? ` ${formatCurrencyPrecise(Number(amount))}` : " this"} for you. It counts as your spending and you owe{" "}
+                                <span className="font-semibold text-foreground">{personName || "them"}</span>
+                                {Number(amount) > 0 ? ` ${formatCurrencyPrecise(Number(amount))}` : " this amount"}. No money moves through your accounts.
+                              </span>
+                            </p>
+                          )}
+                          {borrowFunding === "account" && (
+                            <p className="mt-2 flex items-start gap-1.5 rounded-[6px] border border-border-strong bg-secondary px-2.5 py-2 text-[11px] text-foreground/85">
+                              <Info className="mt-px size-3.5 shrink-0" strokeWidth={1.75} />
+                              <span>
+                                A normal expense from your account. Money {personName || "they"} lent you earlier is recorded separately in People.
                               </span>
                             </p>
                           )}

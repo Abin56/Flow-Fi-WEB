@@ -70,6 +70,22 @@ export function PersonCycleStatementSection({
         ) : (
           <>
             <p className="text-[11.5px] font-semibold tracking-[0.04em] text-foreground/70">Settlement · {formatCycleLabel(cycle)}</p>
+            {statement.toReceive > 0 && statement.toGive > 0 ? (
+              // Two independent obligations — both gross, each settled on its own; never one netted figure.
+              <>
+                <div className="mt-1.5 grid max-w-md grid-cols-2 gap-2">
+                  <div className="rounded-[8px] border border-settle-receivable-edge/70 border-l-[4px] border-l-settle-receivable-edge bg-settle-receivable-tint px-3 py-2">
+                    <p className="text-[11.5px] font-bold tracking-[0.08em] text-settle-receivable-text uppercase">You need to receive</p>
+                    <p className="mt-0.5 font-heading text-[26px] leading-none font-bold tracking-tight tabular-nums text-settle-receivable-text sm:text-[30px]">{money(statement.toReceive)}</p>
+                  </div>
+                  <div className="rounded-[8px] border border-settle-payable-edge/70 border-l-[4px] border-l-settle-payable-edge bg-settle-payable-tint px-3 py-2">
+                    <p className="text-[11.5px] font-bold tracking-[0.08em] text-settle-payable-text uppercase">You need to give</p>
+                    <p className="mt-0.5 font-heading text-[26px] leading-none font-bold tracking-tight tabular-nums text-settle-payable-text sm:text-[30px]">{money(statement.toGive)}</p>
+                  </div>
+                </div>
+                <p className="mt-1.5 text-[11.5px] font-medium text-foreground/70">Tracked separately — each side is settled on its own.</p>
+              </>
+            ) : (
             <div className={cn("mt-1.5 border-l-[4px] pl-3", edge)}>
               <p className={cn("inline-flex items-center gap-1.5 text-[13px] font-bold tracking-[0.08em] uppercase", tone)}>
                 <DirectionIcon className="size-4" strokeWidth={2.5} aria-hidden />
@@ -79,6 +95,7 @@ export function PersonCycleStatementSection({
                 {money(statement.amount)}
               </p>
             </div>
+            )}
           </>
         )}
 

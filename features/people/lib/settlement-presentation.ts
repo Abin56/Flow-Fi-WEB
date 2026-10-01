@@ -99,6 +99,11 @@ export function matchesTypeFilter(kind: SettlementKind, filter: SettlementTypeFi
 export interface SettlementLookups {
   entriesById: ReadonlyMap<string, Pick<LedgerEntry, "sourceKind" | "transactionRef">>;
   expenseByTransactionId: ReadonlyMap<string, Expense>;
+  /**
+   * Whether a transaction id is live, deleted (in trash or gone for a transaction-owned entry), or not yet
+   * known (still loading / not a transaction, e.g. a legacy Loan id). Omitted = always "unknown".
+   */
+  transactionStatus?: (transactionRef: string, entry: Pick<LedgerEntry, "sourceKind">) => "live" | "deleted" | "unknown";
 }
 
 export const NO_LOOKUPS: SettlementLookups = { entriesById: new Map(), expenseByTransactionId: new Map() };

@@ -96,6 +96,9 @@ export interface LedgerRowHandlers {
   onDelete?: (row: LedgerRow) => void;
   /** Reverses one recorded payment (its confirmation lives in the workspace). */
   onUndoPayment?: (row: LedgerRow, payment: PaymentRecord) => void;
+  /** Opens Record payment in edit mode for one recorded payment — null when it can't be edited here. */
+  editablePayment?: (payment: PaymentRecord) => boolean;
+  onEditPayment?: (payment: PaymentRecord) => void;
 }
 
 /**
