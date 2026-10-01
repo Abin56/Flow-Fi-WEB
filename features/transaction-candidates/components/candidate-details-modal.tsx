@@ -71,6 +71,7 @@ import {
 import type { CandidateDuplicateResult } from "../lib/candidate-duplicate";
 import { ignoreCandidate, importCandidate, type CandidatePersonAssignment } from "../lib/import-candidate";
 import { CandidateStatusBadge } from "./candidate-status-badge";
+import { handleEnterKey } from "@/components/ui/enter-key";
 
 const DATE_DISPLAY_FORMAT = new Intl.DateTimeFormat("en-IN", { day: "2-digit", month: "short", year: "numeric" });
 
@@ -285,6 +286,8 @@ export function CandidateDetailsModal({
         open={open}
         onOpenChange={onOpenChange}
         busy={importing || dismissing}
+        onEnter={() => handleImport()}
+        enterEnabled={!importing && !dismissing && ready}
         headerIcon={MessageSquareText}
         headerTitle="Transaction Details"
         headerDescription="Review this SMS-detected transaction before importing it"
@@ -486,7 +489,13 @@ export function CandidateDetailsModal({
                           value={newPersonName}
                           className={FIELD_BORDER}
                           onChange={(e) => setNewPersonName(e.target.value)}
-                          onKeyDown={(e) => e.key === "Enter" && void handleAddPerson()}
+                          onKeyDown={(e) => {
+                            // Enter adds the person — it must not also import the transaction behind this dialog.
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              void handleAddPerson();
+                            }
+                          }}
                         />
                         <Button size="icon-sm" onClick={() => void handleAddPerson()} disabled={addingPersonBusy || !newPersonName.trim()} aria-label="Save person">
                           <Check className="size-4" />
@@ -649,7 +658,7 @@ export function CandidateDetailsModal({
       />
 
       <Dialog open={confirmDismissOpen} onOpenChange={setConfirmDismissOpen}>
-        <DialogContent>
+        <DialogContent onKeyDown={(e) => handleEnterKey(e, handleDismiss, { enabled: !dismissing, fromButtons: true })}>
           <DialogHeader>
             <DialogTitle>Dismiss this candidate?</DialogTitle>
             <DialogDescription>

@@ -22,6 +22,7 @@ import type { RecordPaymentInput } from "@/lib/repositories/person-payment-repos
 import { cn } from "@/lib/utils";
 import { AccountField, CompactAmountInput, useAccountChoice } from "./ledger-ui";
 import { WS_FIELD, WS_GHOST, WS_PRIMARY, WsCloseButton, WsField, WsLabel, WsSegmented } from "./person-workspace-ui";
+import { DateInput } from "@/components/forms/date-input";
 
 /** An existing payment, for editing: its lines per obligation key, advance, account and date. */
 export interface RecordPaymentInitial {
@@ -325,7 +326,7 @@ export function RecordPaymentPanel({
             </WsField>
             <AccountField choice={account} label={theyPaid ? "Receive into account" : "Pay from account"} />
             <WsField label="Date">
-              <input type="date" className={WS_FIELD} value={date} onChange={(e) => setDate(e.target.value)} />
+              <DateInput className={WS_FIELD} value={date} onChange={(e) => setDate(e.target.value)} />
             </WsField>
           </div>
 

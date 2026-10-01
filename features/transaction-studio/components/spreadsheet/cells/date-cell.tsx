@@ -2,6 +2,7 @@
 
 import { useCallback, useState } from "react";
 import { CellShell } from "./cell-shell";
+import { DateInput } from "@/components/forms/date-input";
 
 const DISPLAY_FORMAT = new Intl.DateTimeFormat("en-IN", { day: "2-digit", month: "short", year: "numeric" });
 
@@ -38,9 +39,8 @@ export function DateCell({
   return (
     <CellShell isFocused={isFocused} isEditing={isEditing} onFocus={onFocus} onStartEdit={onStartEdit}>
       {isEditing ? (
-        <input
+        <DateInput
           ref={focusOnMount}
-          type="date"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onBlur={commit}

@@ -10,6 +10,8 @@ import type { DeleteBlock, LedgerRow } from "@/features/people/lib/person-ledger
 import { formatCurrency } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { WS_FIELD, WS_GHOST, WS_PRIMARY, WS_SELECT_TRIGGER, WsCloseButton, WsField } from "./person-workspace-ui";
+import { DateInput } from "@/components/forms/date-input";
+import { handleEnterAdvance } from "@/components/finance/enter-advance";
 
 /**
  * Shared pieces of the People Ledger's inline actions and transaction management — the inline
@@ -202,7 +204,7 @@ export function EntryEditForm({
   }
 
   return (
-    <form onSubmit={submit} className="rounded-[8px] border border-border-strong bg-card p-3">
+    <form onSubmit={submit} onKeyDown={handleEnterAdvance} className="rounded-[8px] border border-border-strong bg-card p-3">
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
         <p className="text-sm font-semibold text-foreground">Edit transaction</p>
         <p className="text-xs text-muted-foreground">{row.typeLabel}{settled > 0 && ` · ${formatCurrency(settled)} already settled`}</p>
@@ -219,7 +221,7 @@ export function EntryEditForm({
           )}
         </WsField>
         <WsField label="Date">
-          <input type="date" className={WS_FIELD} value={date} onChange={(e) => setDate(e.target.value)} />
+          <DateInput className={WS_FIELD} value={date} onChange={(e) => setDate(e.target.value)} />
         </WsField>
       </div>
       {error && (
@@ -344,7 +346,7 @@ export function EntrySettleForm({
   }
 
   return (
-    <form onSubmit={submit} className="rounded-[8px] border border-border-strong bg-card p-3">
+    <form onSubmit={submit} onKeyDown={handleEnterAdvance} className="rounded-[8px] border border-border-strong bg-card p-3">
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
         <p className="text-sm font-semibold text-foreground">Record payment</p>
         <p className="text-xs text-muted-foreground">
@@ -356,7 +358,7 @@ export function EntrySettleForm({
           <CompactAmountInput label="Settlement amount" value={amount} onChange={setAmount} invalid={!!error} autoFocus />
         </WsField>
         <WsField label="Date">
-          <input type="date" className={WS_FIELD} value={date} onChange={(e) => setDate(e.target.value)} />
+          <DateInput className={WS_FIELD} value={date} onChange={(e) => setDate(e.target.value)} />
         </WsField>
         {needsAccount && <AccountField choice={account} label={row.direction === "iOwe" ? "Paid from" : "Received into"} />}
       </div>

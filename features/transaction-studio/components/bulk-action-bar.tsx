@@ -18,6 +18,7 @@ import { applyToCommittedRows, describeBulkFailures, partitionRowsByCommitStatus
 import { downloadCsv, rowsToCsv } from "../lib/export-csv";
 import type { GridRow } from "../lib/grid-types";
 import type { UseUndoRedoResult } from "../hooks/use-undo-redo";
+import { handleEnterKey } from "@/components/ui/enter-key";
 
 /**
  * Follows the same committed-vs-staged rule every other Transaction Studio mutation path now does
@@ -325,7 +326,7 @@ export function BulkActionBar({
       </div>
 
       <Dialog open={confirmDeleteOpen} onOpenChange={setConfirmDeleteOpen}>
-        <DialogContent>
+        <DialogContent onKeyDown={(e) => handleEnterKey(e, handleConfirmDelete, { fromButtons: true })}>
           <DialogHeader>
             <DialogTitle>Delete {count} row{count === 1 ? "" : "s"}?</DialogTitle>
             <DialogDescription>

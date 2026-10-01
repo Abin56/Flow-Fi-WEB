@@ -26,7 +26,7 @@ export function RecentAccountTransactions() {
         </Link>
       </div>
 
-      <div className="overflow-hidden rounded-[10px] border border-border-strong/70 bg-card shadow-e1">
+      <div className="@container overflow-hidden rounded-[10px] border border-border-strong/70 bg-card shadow-e1">
         {isLoading ? (
           <div className="flex flex-col">
             {Array.from({ length: 4 }, (_, i) => (
@@ -44,10 +44,10 @@ export function RecentAccountTransactions() {
             <thead>
               <tr>
                 <th className={TH}>Description</th>
-                <th className={cn(TH, "hidden w-28 sm:table-cell")}>Type</th>
-                <th className={cn(TH, "hidden w-44 md:table-cell")}>Account</th>
-                <th className={cn(TH, "hidden w-32 md:table-cell")}>When</th>
-                <th className={cn(TH, "w-36 text-right")}>Amount</th>
+                <th className={cn(TH, "hidden w-28 @2xl:table-cell")}>Type</th>
+                <th className={cn(TH, "hidden w-44 @4xl:table-cell")}>Account</th>
+                <th className={cn(TH, "hidden w-32 @4xl:table-cell")}>When</th>
+                <th className={cn(TH, "w-28 text-right @md:w-36")}>Amount</th>
               </tr>
             </thead>
             <tbody>
@@ -63,15 +63,15 @@ export function RecentAccountTransactions() {
                         </span>
                         <div className="min-w-0">
                           <p className="truncate font-semibold text-foreground">{txn.merchant}</p>
-                          <p className="truncate text-xs text-muted-foreground md:hidden">
+                          <p className="truncate text-xs text-muted-foreground @4xl:hidden">
                             {txn.account} · {txn.timestamp}
                           </p>
                         </div>
                       </div>
                     </td>
-                    <td className={cn(TD, "hidden text-xs font-medium text-foreground/85 sm:table-cell")}>{txn.category}</td>
-                    <td className={cn(TD, "hidden truncate text-xs text-foreground/85 md:table-cell")}>{txn.account}</td>
-                    <td className={cn(TD, "hidden text-xs text-muted-foreground md:table-cell")}>{txn.timestamp}</td>
+                    <td className={cn(TD, "hidden text-xs font-medium text-foreground/85 @2xl:table-cell")}>{txn.category}</td>
+                    <td className={cn(TD, "hidden truncate text-xs text-foreground/85 @4xl:table-cell")}>{txn.account}</td>
+                    <td className={cn(TD, "hidden text-xs text-muted-foreground @4xl:table-cell")}>{txn.timestamp}</td>
                     <td className={cn(TD, "text-right")}>
                       <span className={cn("text-[17px] font-bold tracking-tight whitespace-nowrap tabular-nums", incoming ? "text-success" : "text-foreground")}>
                         {incoming ? "+" : "−"}

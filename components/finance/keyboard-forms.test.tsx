@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { useState } from "react";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { ClayButton } from "@/components/clay/clay-button";
@@ -14,6 +14,9 @@ import { SectionedFormDialog } from "./sectioned-form-dialog";
  * Keyboard contract for FlowFi's shared create/edit/confirm dialogs — every Add/Edit flow built on
  * FormDialog / SectionedFormDialog (bills, budgets, savings, loans & EMIs, loan payments, statement import,
  * split expense) and every delete built on ConfirmDialog inherits exactly this behavior.
+ *
+ * Enter is the "finish" key everywhere: in a form it saves, in a confirm/delete dialog it confirms (even with
+ * focus still on Cancel), always once, and never from a held-down key.
  */
 
 beforeAll(() => {
@@ -270,8 +273,8 @@ function DeleteHarness({ remove }: { remove: () => Promise<void> | void }) {
   );
 }
 
-describe("C. DELETE — ConfirmDialog keyboard safety", () => {
-  it("Enter on the row's Delete opens confirmation; focus starts on Cancel, so Enter again does not delete", async () => {
+describe("C. DELETE — ConfirmDialog keyboard", () => {
+  it("Enter on the row's Delete opens confirmation; a second Enter confirms and deletes once, even from Cancel", async () => {
     const user = userEvent.setup();
     const remove = vi.fn();
     render(<DeleteHarness remove={remove} />);
@@ -279,9 +282,23 @@ describe("C. DELETE — ConfirmDialog keyboard safety", () => {
     await user.keyboard("{Enter}");
     await screen.findByRole("dialog");
     expect(document.activeElement?.textContent).toContain("Cancel");
+    expect(remove).not.toHaveBeenCalled();
     await user.keyboard("{Enter}");
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(remove).toHaveBeenCalledTimes(1);
+  });
+
+  it("a held-down Enter (key repeat) never confirms, so the Enter that opened the dialog cannot delete", async () => {
+    const user = userEvent.setup();
+    const remove = vi.fn();
+    render(<DeleteHarness remove={remove} />);
+    screen.getByRole("button", { name: "Delete Coffee" }).focus();
+    await user.keyboard("{Enter}");
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.keyDown(dialog, { key: "Enter", repeat: true });
+    fireEvent.keyDown(dialog, { key: "Enter", repeat: true });
     expect(remove).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog")).toBeTruthy();
   });
 
   it("Escape cancels and restores focus to the Delete trigger", async () => {

@@ -4,6 +4,7 @@ import { AlertTriangle } from "lucide-react";
 import { useState } from "react";
 import { ClayButton } from "@/components/clay/clay-button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { handleEnterKey } from "@/components/ui/enter-key";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 
@@ -54,7 +55,7 @@ export function DestructiveDeleteDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent>
+      <DialogContent onKeyDown={(e) => handleEnterKey(e, onConfirm, { enabled: canConfirm, fromButtons: true })}>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-danger">
             <AlertTriangle className="size-5" />

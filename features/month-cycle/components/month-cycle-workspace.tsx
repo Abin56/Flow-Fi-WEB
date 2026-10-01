@@ -483,8 +483,9 @@ export function MonthCycleWorkspace() {
       </header>
 
       {/* ── Cycle summary: spend leads; income, net, budget and savings support it ── */}
-      <section aria-label="Cycle summary" className={cn(PANEL, "flex flex-col lg:flex-row lg:items-stretch")}>
-        <div className="flex flex-col gap-2 bg-gradient-to-br from-expense/[0.08] to-transparent px-5 py-4 sm:px-6 lg:min-w-[22rem] lg:border-r lg:border-border-strong/50 dark:from-expense/[0.14]">
+      <section aria-label="Cycle summary" className={cn(PANEL, "@container")}>
+       <div className="flex flex-col @5xl:flex-row @5xl:items-stretch">
+        <div className="flex flex-col gap-2 bg-gradient-to-br from-expense/[0.08] to-transparent px-5 py-4 sm:px-6 @5xl:min-w-[22rem] @5xl:border-r @5xl:border-border-strong/50 dark:from-expense/[0.14]">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <span className={LABEL}>{isMine ? "My expenses" : "Total spent"}</span>
             <ViewToggle isMine={isMine} onChange={setExpenseView} />
@@ -510,8 +511,8 @@ export function MonthCycleWorkspace() {
           </div>
         </div>
 
-        <div className="grid flex-1 grid-cols-2 border-t border-border-strong/50 lg:grid-cols-4 lg:border-t-0 [&>*]:border-border-strong/40">
-          <div className="flex flex-col justify-center gap-1 border-r border-b px-5 py-3.5 lg:border-b-0">
+        <div className="grid min-w-0 flex-1 grid-cols-2 border-t border-border-strong/50 @xl:grid-cols-4 @5xl:border-t-0 [&>*]:border-border-strong/40">
+          <div className="flex min-w-0 flex-col justify-center gap-1 border-r border-b px-3 py-3.5 @xl:border-b-0 @xl:px-4 @5xl:px-5">
             <span className={cn(LABEL, "inline-flex items-center gap-1.5")}>
               <Wallet className="size-3.5 text-success" strokeWidth={1.75} />
               Income
@@ -520,13 +521,13 @@ export function MonthCycleWorkspace() {
               <AnimatedNumber value={financialView.income} format={formatCurrency} />
             </span>
           </div>
-          <div className="flex flex-col justify-center gap-1 border-b px-5 py-3.5 lg:border-r lg:border-b-0">
+          <div className="flex min-w-0 flex-col justify-center gap-1 border-b px-3 py-3.5 @xl:border-r @xl:border-b-0 @xl:px-4 @5xl:px-5">
             <span className={LABEL}>Net balance</span>
             <span className={cn("text-xl leading-tight font-bold tabular-nums", net < 0 ? "text-expense" : "text-foreground")}>
               <AnimatedNumber value={net} format={formatCurrency} />
             </span>
           </div>
-          <div className="flex items-center gap-3 border-r px-5 py-3.5">
+          <div className="flex min-w-0 items-center gap-2 border-r px-3 py-3.5 @xl:gap-3 @xl:px-4 @5xl:px-5">
             <ProgressRing value={budgetPercent ?? 0} size={46} strokeWidth={5}>
               <span className="text-[11px] font-bold tabular-nums">{budgetPercent != null ? `${budgetPercent}%` : "—"}</span>
             </ProgressRing>
@@ -537,7 +538,7 @@ export function MonthCycleWorkspace() {
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-3 px-5 py-3.5">
+          <div className="flex min-w-0 items-center gap-2 px-3 py-3.5 @xl:gap-3 @xl:px-4 @5xl:px-5">
             <span className="flex size-[46px] shrink-0 items-center justify-center rounded-full bg-success/12 text-success">
               <PiggyBank className="size-5" strokeWidth={1.75} />
             </span>
@@ -548,6 +549,7 @@ export function MonthCycleWorkspace() {
             </div>
           </div>
         </div>
+       </div>
       </section>
 
       {/* ── Obligations this cycle — every figure opens its workspace ── */}
@@ -574,7 +576,7 @@ export function MonthCycleWorkspace() {
 
       {/* ── People + account spend ── */}
       <div className="grid gap-4 lg:grid-cols-2">
-        <section aria-label="People ledger" className={cn(PANEL, "flex flex-col")}>
+        <section aria-label="People ledger" className={cn(PANEL, "@container flex flex-col")}>
           <PanelHeader
             icon={Users}
             title="People ledger"
@@ -586,8 +588,8 @@ export function MonthCycleWorkspace() {
           {data.peopleYouNeedToGive.length === 0 && data.peopleHandoverPending.length === 0 ? (
             <PanelEmpty title="No pending balances" description="Money you're owed or owe will show up here." />
           ) : (
-            <div className="grid flex-1 sm:grid-cols-2 sm:divide-x sm:divide-border-strong/40">
-              <div>
+            <div className="grid min-w-0 flex-1 @xl:grid-cols-2 @xl:divide-x @xl:divide-border-strong/40">
+              <div className="min-w-0">
                 <div className="flex items-center justify-between border-b border-border-strong/40 bg-warning/8 px-4 py-2">
                   <p className="text-[11px] font-semibold tracking-[0.06em] text-warning-foreground uppercase dark:text-warning">You need to give</p>
                   <p className="text-xs font-bold text-warning-foreground tabular-nums dark:text-warning">{formatCurrency(data.peopleStats.totalYouOwe)}</p>
@@ -600,7 +602,7 @@ export function MonthCycleWorkspace() {
                   )}
                 </div>
               </div>
-              <div className="border-t border-border-strong/40 sm:border-t-0">
+              <div className="min-w-0 border-t border-border-strong/40 @xl:border-t-0">
                 <div className="flex items-center justify-between border-b border-border-strong/40 bg-success/8 px-4 py-2">
                   <p className="text-[11px] font-semibold tracking-[0.06em] text-success uppercase">Handover pending</p>
                   <p className="text-xs font-bold text-success tabular-nums">{formatCurrency(data.peopleStats.totalYouAreOwed)}</p>
@@ -681,7 +683,7 @@ export function MonthCycleWorkspace() {
                 style={{ width: `${Math.min(100, Math.round(data.budgetOverview.usageRatio * 100))}%` }}
               />
             </div>
-            <div className="flex items-end justify-between gap-3">
+            <div className="flex flex-wrap items-end justify-between gap-x-3 gap-y-2">
               <div>
                 <p className={LABEL}>Used</p>
                 <p className="text-lg leading-tight font-bold text-foreground tabular-nums">{formatCurrency(data.budgetOverview.spent)}</p>

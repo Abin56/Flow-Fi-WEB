@@ -33,6 +33,7 @@ import type { Person } from "@/lib/models/person";
 import { buildDestinationOptions, isSplitReady, resolveImportDestination, resolvePersonAssignment, type CandidateImportDraft } from "../lib/candidate-details-view";
 import type { CandidatePersonAssignment } from "../lib/import-candidate";
 import { CandidatePersonSplitEditor } from "./candidate-person-split-editor";
+import { handleEnterKey } from "@/components/ui/enter-key";
 
 export interface BulkImportSelection {
   categoryId: string;
@@ -103,7 +104,7 @@ export function BulkImportDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent>
+      <DialogContent onKeyDown={(e) => handleEnterKey(e, handleConfirm, { enabled: !busy && ready })}>
         <DialogHeader>
           <DialogTitle>Import {selectedCount} transaction{selectedCount === 1 ? "" : "s"}</DialogTitle>
           <DialogDescription>

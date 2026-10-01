@@ -41,7 +41,7 @@ export function DatePicker({ label, value, onChange, placeholder = "Select date"
   const id = React.useId();
 
   const days = React.useMemo(() => buildMonthGrid(visibleMonth), [visibleMonth]);
-  const monthLabel = visibleMonth.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+  const monthLabel = visibleMonth.toLocaleDateString("en-IN", { month: "long", year: "numeric" });
 
   return (
     <div className="flex flex-col gap-1.5">
@@ -50,7 +50,7 @@ export function DatePicker({ label, value, onChange, placeholder = "Select date"
         <PopoverTrigger asChild>
           <Button id={id} type="button" variant="outline" className={cn("w-56 justify-start gap-2 font-normal", className)}>
             <CalendarIcon className="size-4 text-muted-foreground" />
-            {value ? value.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : placeholder}
+            {value ? value.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }) : placeholder}
           </Button>
         </PopoverTrigger>
         <PopoverContent className="w-64" align="start">

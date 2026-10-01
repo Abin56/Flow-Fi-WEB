@@ -73,6 +73,7 @@ import { loanTransactionLabel } from "@/features/loans/lib/loan-labels";
 import { findSameAmountDateDuplicateIds } from "@/features/transactions/lib/same-amount-date-duplicates";
 import { useDuplicateGuardedCreate } from "@/lib/services/duplicate-detection/use-duplicate-guarded-create";
 import { cn } from "@/lib/utils";
+import { DateInput } from "@/components/forms/date-input";
 
 /**
  * Corner-ribbon tag for a Loan/EMI-generated transaction card — "EMI" only for a payment tied to
@@ -663,8 +664,7 @@ export function TransactionsWorkspace() {
                 </button>
                 <label className="flex flex-col gap-1">
                   <span className="text-[11px] font-medium text-muted-foreground">From</span>
-                  <input
-                    type="date"
+                  <DateInput
                     className={TX_INPUT}
                     value={dateFrom}
                     onChange={(e) => {
@@ -675,8 +675,7 @@ export function TransactionsWorkspace() {
                 </label>
                 <label className="flex flex-col gap-1">
                   <span className="text-[11px] font-medium text-muted-foreground">To</span>
-                  <input
-                    type="date"
+                  <DateInput
                     className={TX_INPUT}
                     value={dateTo}
                     onChange={(e) => {
@@ -1046,8 +1045,7 @@ function SplitFormFields({
       </label>
       <label className="flex flex-col gap-1">
         <span className="text-xs font-medium text-muted-foreground">Date</span>
-        <input
-          type="date"
+        <DateInput
           className="clay-pressed h-10 rounded-xl px-3 text-sm outline-none"
           value={form.date}
           onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))}
@@ -1168,8 +1166,8 @@ const FILTER_LABEL: Record<string, string> = {
 };
 
 const TH =
-  "sticky top-0 z-[2] border-r border-b border-r-border-strong/40 border-b-border-strong bg-secondary px-3 py-2 text-left text-[11px] font-semibold tracking-[0.06em] whitespace-nowrap text-muted-foreground uppercase last:border-r-0";
-const TD = "border-r border-b border-r-border-strong/30 border-b-border-strong/40 px-3 py-2.5 align-middle last:border-r-0";
+  "sticky top-0 z-[2] border-r border-b border-r-border-strong/40 border-b-border-strong bg-secondary px-2 py-2 text-left text-[11px] font-semibold tracking-[0.06em] whitespace-nowrap text-muted-foreground uppercase last:border-r-0 sm:px-3";
+const TD = "border-r border-b border-r-border-strong/30 border-b-border-strong/40 px-2 py-2.5 align-middle last:border-r-0 sm:px-3";
 const COLS = 7;
 
 function shortDate(d: Date): string {
@@ -1258,7 +1256,7 @@ function Amount({
       <span
         className={cn(
           "font-bold tracking-tight whitespace-nowrap tabular-nums",
-          size === "lg" ? "text-[18px] leading-tight" : "text-[15px] leading-tight",
+          size === "lg" ? "text-[15px] leading-tight sm:text-[18px]" : "text-[15px] leading-tight",
           // Only real income is green; a paid obligation is money out, shown in strong neutral text.
           row === "income" ? "text-success" : "text-foreground",
         )}
@@ -1392,13 +1390,15 @@ function LedgerTable({
     <table className="isolate w-full border-separate border-spacing-0 text-sm">
       <thead>
         <tr>
-          <th className={cn(TH, "hidden w-12 text-right sm:table-cell")}>#</th>
+          <th className={cn(TH, "hidden w-12 text-right lg:table-cell")}>#</th>
           <th className={cn(TH, "w-[4.5rem]")}>Date</th>
           <th className={TH}>Description</th>
-          <th className={cn(TH, "hidden w-28 md:table-cell")}>Type</th>
+          <th className={cn(TH, "hidden w-28 xl:table-cell")}>Type</th>
           <th className={cn(TH, "hidden w-40 lg:table-cell")}>Account</th>
-          <th className={cn(TH, "w-36 text-right")}>Amount</th>
-          <th className={cn(TH, "w-[7.25rem]")}>
+          <th className={cn(TH, "w-24 text-right sm:w-36")}>Amount</th>
+          {/* Edit / Delete move into the expanded row wherever the table is narrow (phones, and the md range where the
+              sidebar takes a third of the screen) — tap a row — so Description keeps room. */}
+          <th className={cn(TH, "hidden w-[7.25rem] sm:table-cell md:hidden lg:table-cell")}>
             <span className="sr-only sm:not-sr-only">Actions</span>
           </th>
         </tr>
@@ -1452,7 +1452,7 @@ function LedgerTable({
                 <td
                   className={cn(
                     TD,
-                    "hidden border-l-[3px] text-right text-[11px] text-muted-foreground tabular-nums sm:table-cell",
+                    "hidden border-l-[3px] text-right text-[11px] text-muted-foreground tabular-nums lg:table-cell",
                     edge,
                   )}
                 >
@@ -1461,7 +1461,7 @@ function LedgerTable({
                 <td
                   className={cn(
                     TD,
-                    "border-l-[3px] whitespace-nowrap tabular-nums sm:border-l-0",
+                    "border-l-[3px] whitespace-nowrap tabular-nums lg:border-l-0",
                     edge,
                   )}
                 >
@@ -1472,7 +1472,7 @@ function LedgerTable({
                 <td className={cn(TD, "relative max-w-0", loanTag && "pr-20")}>
                   {loanTag && <CornerTag label={loanTag.label} />}
                   <div className="flex min-w-0 items-center gap-2.5">
-                    <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-[8px]", TONE_ICON_CLASS[categoryToneFor(iconKey)])}>
+                    <span className={cn("hidden size-8 shrink-0 items-center justify-center rounded-[8px] sm:flex", TONE_ICON_CLASS[categoryToneFor(iconKey)])}>
                       <Icon className="size-4" />
                     </span>
                     <div className="min-w-0 flex-1">
@@ -1494,7 +1494,7 @@ function LedgerTable({
                     </div>
                   </div>
                 </td>
-                <td className={cn(TD, "hidden md:table-cell")}>
+                <td className={cn(TD, "hidden xl:table-cell")}>
                   <TypeTag transaction={t} presentation={presentation} />
                 </td>
                 <td className={cn(TD, "hidden max-w-0 lg:table-cell")}>
@@ -1511,7 +1511,7 @@ function LedgerTable({
                 <td className={cn(TD, "text-right")}>
                   <Amount transaction={t} presentation={presentation} withLabel size="lg" />
                 </td>
-                <td className={cn(TD, "px-1.5")} onClick={(e) => e.stopPropagation()}>
+                <td className={cn(TD, "hidden px-1.5 sm:table-cell md:hidden lg:table-cell")} onClick={(e) => e.stopPropagation()}>
                   <div className="flex items-center justify-end gap-1.5">
                     {/* Edit · Delete — one compact joined control */}
                     <div className="flex h-7 items-stretch overflow-hidden rounded-[7px] border border-border-strong/70 bg-card shadow-[0_1px_1px_rgb(0_0_0/0.04)]">

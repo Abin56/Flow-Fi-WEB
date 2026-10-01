@@ -58,7 +58,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
+import { Input, INPUT_BASE_CLASS } from "@/components/ui/input";
+import { DateInput } from "@/components/forms/date-input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
@@ -89,6 +90,8 @@ import {
   type TransactionRow,
   type useTransactionActions,
 } from "@/features/transactions/hooks/use-transactions-data";
+import { handleEnterKey } from "@/components/ui/enter-key";
+import { handleEnterAdvance } from "@/components/finance/enter-advance";
 
 const DATE_DISPLAY_FORMAT = new Intl.DateTimeFormat("en-IN", { day: "2-digit", month: "short", year: "numeric" });
 /** Solid `border-strong` edge (People Ledger / Loan & EMI rule) — never an opacity-faded border that
@@ -569,6 +572,10 @@ export function TransactionDetailsModal({
   const [justSaved, setJustSaved] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  // Set once Done has been pressed on the split view — from then on the split's own problem (if any) shows
+  // live on that view and clears itself as the entries are fixed.
+  const [splitAttempted, setSplitAttempted] = useState(false);
+  const meShareRef = useRef<HTMLInputElement>(null);
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const duplicateGuard = useDuplicateGuardedCreate(
     existingTransactions.map((t) => ({ id: t.id, description: t.description, amount: t.amount, dateTime: t.dateTime, accountId: t.accountId, type: t.type })),
@@ -620,6 +627,7 @@ export function TransactionDetailsModal({
     }
     setNewPersonName("");
     setFormError(null);
+    setSplitAttempted(false);
     setSplitOpen(false);
     setSplitType(expense?.splitType && expense.splitType !== "none" ? expense.splitType : "equal");
     // A reopened "Custom amounts" split had every amount hand-typed, so every row starts
@@ -763,27 +771,52 @@ export function TransactionDetailsModal({
     const earliestAllowed = new Date("2000-01-01");
     if (dateValue.getTime() < earliestAllowed.getTime()) return "Enter a valid date.";
     if (splitOpen) {
-      const named = participants.filter((p) => p.name.trim() !== "" || p.personId != null);
-      if (named.length === 0) return "Add at least one person to split with.";
-      if (splitType === "percentage") {
-        for (const p of named) {
-          const v = Number(p.value);
-          if (p.value.trim() === "" || Number.isNaN(v) || v < 0) {
-            return `Enter a valid percentage for ${p.name || "this person"}.`;
-          }
-        }
-        if (includeMe) {
-          const v = Number(meValue);
-          if (meValue.trim() === "" || Number.isNaN(v) || v < 0) {
-            return "Enter a valid percentage for your own share.";
-          }
-        }
-      } else if (splitType === "custom" && mixedSplit?.error) {
-        return mixedSplit.error;
-      }
+      const problem = validateSplit();
+      if (problem) return problem;
     }
     return null;
   }
+
+  /** Whether the split itself is complete — what the split view's Done button and the final save both require. */
+  function validateSplit(): string | null {
+    const named = participants.filter((p) => p.name.trim() !== "" || p.personId != null);
+    if (named.length === 0) return "Add at least one person to split with.";
+    if (splitType === "percentage") {
+      for (const p of named) {
+        const v = Number(p.value);
+        if (p.value.trim() === "" || Number.isNaN(v) || v < 0) {
+          return `Enter a valid percentage for ${p.name || "this person"}.`;
+        }
+      }
+      if (includeMe) {
+        const v = Number(meValue);
+        if (meValue.trim() === "" || Number.isNaN(v) || v < 0) {
+          return splitRemaining > 0
+            ? `Enter your share (%) — ${splitRemaining}% is still left to assign.`
+            : "Enter your share (%) for this expense.";
+        }
+      }
+      if (splitRemaining !== 0) {
+        return splitRemaining > 0
+          ? `Percentages add up to ${round2(splitEntered)}% — they must total 100% (${splitRemaining}% left).`
+          : `Percentages add up to ${round2(splitEntered)}% — they must total 100% (${Math.abs(splitRemaining)}% over).`;
+      }
+    } else if (splitType === "custom" && mixedSplit?.error) {
+      return mixedSplit.error;
+    }
+    return null;
+  }
+
+  /** Done on the split view: only go back to the transaction once the split is complete; otherwise stay and say what's missing. */
+  function handleSplitDone() {
+    setSplitAttempted(true);
+    if (validateSplit()) {
+      if (splitType === "percentage" && includeMe && meValue.trim() === "") meShareRef.current?.focus();
+      return;
+    }
+    setView("form");
+  }
+  const splitProblem = splitAttempted && splitOpen ? validateSplit() : null;
 
   // Re-entry gate for handleSave: `saving` only flips after the async duplicate check, so without this a
   // rapid double Enter (or Enter + click) could start two saves. Gates re-entry only — no save logic here.
@@ -1097,7 +1130,7 @@ export function TransactionDetailsModal({
             )}
             <div className="flex shrink-0 items-center gap-1.5">
               {view === "form" && flag && (
-                <Badge variant="outline" className="text-[11px]">
+                <Badge variant="outline" className="hidden text-[11px] min-[400px]:inline-flex">
                   {flag.label}
                 </Badge>
               )}
@@ -1108,13 +1141,18 @@ export function TransactionDetailsModal({
           </div>
 
           {/* Real <form> (display: contents keeps the flex layout): Enter in a single-line field saves through
-              the same handleSave as the button. The split view has its own Done flow, so it never submits. */}
+              the same handleSave as the button. On the split view, Enter / Done checks the split is complete before returning. */}
           <form
             className="contents"
             noValidate
+            onKeyDown={handleEnterAdvance}
             onSubmit={(e) => {
               e.preventDefault();
-              if (e.target !== e.currentTarget || view === "split") return;
+              if (e.target !== e.currentTarget) return;
+              if (view === "split") {
+                handleSplitDone();
+                return;
+              }
               void handleSave();
             }}
           >
@@ -1240,9 +1278,11 @@ export function TransactionDetailsModal({
                           <span className="text-xs text-muted-foreground">My share</span>
                           {splitType === "percentage" ? (
                             <Input
+                              ref={meShareRef}
                               type="number"
                               placeholder="%"
                               value={meValue}
+                              aria-invalid={splitProblem != null && meValue.trim() === "" ? true : undefined}
                               className={cn("h-9 w-24 shrink-0", FIELD_BORDER)}
                               onChange={(e) => setMeValue(e.target.value)}
                             />
@@ -1319,6 +1359,14 @@ export function TransactionDetailsModal({
                             </div>
                           )}
                         </div>
+                      )}
+
+                      {/* Done was pressed with the split incomplete (e.g. your own share % left blank): stay here and say so. */}
+                      {splitProblem && !(splitType === "custom" && mixedSplit?.error) && (
+                        <p role="alert" className="flex items-start gap-2 rounded-[6px] border border-danger/50 bg-danger/10 px-3 py-2 text-xs font-medium text-danger">
+                          <Info className="mt-px size-3.5 shrink-0" strokeWidth={2} />
+                          {splitProblem}
+                        </p>
                       )}
                     </div>
                   </FormRow>
@@ -1438,13 +1486,12 @@ export function TransactionDetailsModal({
                   </FormRow>
                 )}
                 <FormRow label="Date *">
-                  <Input
+                  <DateInput
                     ref={dateRef}
-                    type="date"
                     value={date}
                     onChange={(e) => setDate(e.target.value)}
                     disabled={isTransferLeg}
-                    className={cn(WS_FIELD, "disabled:opacity-60 dark:[color-scheme:dark]")}
+                    className={cn(INPUT_BASE_CLASS, WS_FIELD, "disabled:opacity-60 dark:[color-scheme:dark]")}
                   />
                 </FormRow>
               </div>
@@ -1793,7 +1840,7 @@ export function TransactionDetailsModal({
             </AnimatePresence>
           </div>
 
-          <DialogFooter className="shrink-0 flex-row items-center justify-between gap-2 border-t border-border-strong bg-secondary/60 px-4 py-3 sm:justify-between sm:px-5">
+          <DialogFooter className="shrink-0 flex-row flex-wrap items-center justify-between gap-2 border-t border-border-strong bg-secondary/60 px-4 py-3 sm:justify-between sm:px-5">
             {view === "split" ? (
               <>
                 <ClayButton
@@ -1808,11 +1855,11 @@ export function TransactionDetailsModal({
                 >
                   <X className="size-3.5" /> Remove split
                 </ClayButton>
-                <div className="flex items-center gap-2">
+                <div className="ml-auto flex items-center gap-2">
                   <ClayButton type="button" variant="secondary" size="sm" onClick={() => setView("form")}>
                     Back
                   </ClayButton>
-                  <ClayButton type="button" size="sm" onClick={() => setView("form")}>
+                  <ClayButton type="submit" size="sm">
                     <Check className="size-3.5" /> Done
                   </ClayButton>
                 </div>
@@ -1820,7 +1867,7 @@ export function TransactionDetailsModal({
             ) : (
               <>
                 {transaction ? (
-                  <Button variant="ghost" size="sm" className="text-danger hover:bg-danger/10 hover:text-danger" onClick={() => setConfirmDeleteOpen(true)}>
+                  <Button variant="ghost" size="sm" className="shrink-0 text-danger hover:bg-danger/10 hover:text-danger" onClick={() => setConfirmDeleteOpen(true)}>
                     <Trash2 className="size-3.5" /> {isTransferLeg ? "Delete Transfer" : "Delete"}
                   </Button>
                 ) : (
@@ -1831,7 +1878,7 @@ export function TransactionDetailsModal({
                     account={accounts.find((a) => a.id === accountId)}
                   />
                 )}
-                <div className="flex min-w-0 flex-1 items-center justify-end gap-2">
+                <div className="flex min-w-[13.5rem] flex-1 items-center justify-end gap-2">
                   <button type="button" className={WS_GHOST} onClick={() => onOpenChange(false)} disabled={saving}>
                     Cancel
                   </button>
@@ -1863,7 +1910,7 @@ export function TransactionDetailsModal({
       </Dialog>
 
       <Dialog open={confirmDeleteOpen} onOpenChange={setConfirmDeleteOpen}>
-        <DialogContent>
+        <DialogContent onKeyDown={(e) => handleEnterKey(e, handleDelete, { enabled: !deleting, fromButtons: true })}>
           <DialogHeader>
             <DialogTitle>{isTransferLeg ? "Delete this transfer?" : "Delete this transaction?"}</DialogTitle>
             <DialogDescription>

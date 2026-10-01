@@ -48,7 +48,7 @@ interface Entry {
 
 function Metric({ label, icon: Icon, children }: { label: string; icon?: LucideIcon; children: React.ReactNode }) {
   return (
-    <div className="flex min-w-0 flex-col gap-1 py-3 sm:px-4">
+    <div className="flex min-w-0 flex-col gap-1 py-3 @xl:px-4">
       <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">
         {Icon && <Icon className="size-3.5 text-foreground" />}
         {label}
@@ -204,8 +204,9 @@ export function LoanEmiWorkspace() {
       ) : (
         <>
           {/* Summary — one defined panel: the total first and largest, then the next payment and counts. */}
-          <section aria-label="Summary" className={cn(LE_RADIUS.panel, "flex flex-col border border-border bg-card shadow-e1 lg:flex-row lg:items-stretch")}>
-            <div className="flex flex-col gap-2 px-5 py-4 sm:px-6 lg:min-w-72 lg:border-r lg:border-border">
+          <section aria-label="Summary" className={cn(LE_RADIUS.panel, "@container border border-border bg-card shadow-e1")}>
+           <div className="flex flex-col @4xl:flex-row @4xl:items-stretch">
+            <div className="flex flex-col gap-2 px-5 py-4 sm:px-6 @4xl:min-w-72 @4xl:border-r @4xl:border-border">
               <span className="text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">Total outstanding</span>
               <AmountDisplay amount={summary.owed} size="lg" />
               {summary.toReceive > 0 && (
@@ -214,7 +215,7 @@ export function LoanEmiWorkspace() {
                 </span>
               )}
             </div>
-            <div className="grid flex-1 grid-cols-2 gap-x-4 border-t border-border px-5 sm:grid-cols-4 sm:gap-x-0 sm:divide-x sm:divide-border sm:px-2 lg:border-t-0">
+            <div className="grid min-w-0 flex-1 grid-cols-2 gap-x-4 border-t border-border px-5 @xl:grid-cols-4 @xl:gap-x-0 @xl:divide-x @xl:divide-border @xl:px-2 @4xl:border-t-0">
               <Metric label="Next payment" icon={Wallet}>
                 {summary.next ? (
                   <span className="flex min-w-0 flex-col">
@@ -241,6 +242,7 @@ export function LoanEmiWorkspace() {
                 <span className="font-heading text-lg font-semibold text-muted-foreground">{summary.closedCount}</span>
               </Metric>
             </div>
+           </div>
           </section>
 
           {/* Obligations — a titled list with a solid rule under its toolbar, then the record cards. */}

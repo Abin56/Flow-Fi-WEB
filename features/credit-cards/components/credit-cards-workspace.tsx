@@ -67,6 +67,7 @@ import { toast } from "@/store/toast-store";
 import { startOperation } from "@/store/operation-progress-store";
 import { errorDetail } from "@/lib/operation-progress/operation-progress";
 import { cn } from "@/lib/utils";
+import { handleEnterAdvance } from "@/components/finance/enter-advance";
 
 const CARD_NETWORK_OPTIONS: CardNetwork[] = ["visa", "mastercard", "rupay", "amex"];
 
@@ -431,7 +432,7 @@ export function CreditCardsWorkspace() {
         </DialogHeader>
 
         {/* Real <form> (display: contents keeps the layout): Enter in a single-line field saves via the same handler as the primary button. */}
-        <form className="contents" noValidate onSubmit={submitCard}>
+        <form className="contents" noValidate onSubmit={submitCard} onKeyDown={handleEnterAdvance}>
 
         <div className="flex flex-1 flex-col gap-6 overflow-y-auto px-6 py-5 text-sm">
           <div
@@ -777,8 +778,9 @@ export function CreditCardsWorkspace() {
       {header}
 
       {/* ── Summary — one panel: what's used leads, limit / available / this month support it ── */}
-      <section aria-label="Summary" className="flex flex-col overflow-hidden rounded-[10px] border border-border-strong/60 bg-card shadow-e1 lg:flex-row lg:items-stretch">
-        <div className="flex flex-col gap-2 bg-gradient-to-br from-expense/[0.08] to-transparent px-5 py-4 sm:px-6 lg:min-w-[22rem] lg:border-r lg:border-border-strong/50 dark:from-expense/[0.14]">
+      <section aria-label="Summary" className="@container overflow-hidden rounded-[10px] border border-border-strong/60 bg-card shadow-e1">
+       <div className="flex flex-col @4xl:flex-row @4xl:items-stretch">
+        <div className="flex flex-col gap-2 bg-gradient-to-br from-expense/[0.08] to-transparent px-5 py-4 sm:px-6 @4xl:min-w-[22rem] @4xl:border-r @4xl:border-border-strong/50 dark:from-expense/[0.14]">
           <span className={cn(CC_LABEL, "inline-flex items-center gap-1.5")}>
             <PieChartIcon className="size-3.5 text-foreground" strokeWidth={1.75} />
             Credit used
@@ -797,11 +799,12 @@ export function CreditCardsWorkspace() {
             <span className="text-xs font-semibold text-foreground tabular-nums">{totalUtilization}% used</span>
           </div>
         </div>
-        <div className="grid flex-1 grid-cols-1 border-t border-border-strong/50 sm:grid-cols-3 sm:divide-x sm:divide-border-strong/50 lg:border-t-0">
+        <div className="grid min-w-0 flex-1 grid-cols-1 border-t border-border-strong/50 @xl:grid-cols-3 @xl:divide-x @xl:divide-border-strong/50 @4xl:border-t-0">
           <SummaryFigure icon={Wallet} tone="bg-purple/12 text-purple" label="Credit limit" value={formatCurrency(totals.creditLimit)} />
           <SummaryFigure icon={ShieldCheck} tone="bg-success/12 text-success" label="Available" value={formatCurrency(totals.available)} />
           <SummaryFigure icon={ShoppingBag} tone="bg-warning/20 text-warning-foreground dark:text-warning" label="Spent this month" value={formatCurrency(totals.spentThisMonth)} />
         </div>
+       </div>
       </section>
 
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_23rem] xl:items-start">
@@ -1213,7 +1216,7 @@ const CC_TD = "border-r border-b border-r-border-strong/30 border-b-border-stron
 
 function SummaryFigure({ icon: Icon, tone, label, value }: { icon: typeof Wallet; tone: string; label: string; value: string }) {
   return (
-    <div className="flex items-center gap-3 border-b border-border-strong/40 px-5 py-3.5 last:border-b-0 sm:border-b-0">
+    <div className="flex items-center gap-3 border-b border-border-strong/40 px-5 py-3.5 last:border-b-0 @xl:border-b-0">
       <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-[8px]", tone)}>
         <Icon className="size-4" strokeWidth={1.75} />
       </span>

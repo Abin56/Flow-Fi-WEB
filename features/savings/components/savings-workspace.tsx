@@ -27,6 +27,7 @@ import {
   useSavingsRows,
   type SavingsGoalRow,
 } from "@/features/savings/hooks/use-savings-data";
+import { DateInput } from "@/components/forms/date-input";
 
 const STAT_TONE_CLASS = {
   purple: { card: "bg-purple/8 border-purple/20", icon: "bg-purple/20 text-purple" },
@@ -50,12 +51,12 @@ function StatCard({
 }) {
   const toneClass = STAT_TONE_CLASS[tone];
   return (
-    <div className={cn("flex flex-col gap-3 rounded-3xl border p-4", toneClass.card)}>
+    <div className={cn("flex flex-col gap-3 rounded-3xl border p-3 sm:p-4", toneClass.card)}>
       <div className="flex items-center gap-2">
         <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-xl", toneClass.icon)}>
           <Icon className="size-4" />
         </span>
-        <p className="text-xs font-medium text-muted-foreground">{label}</p>
+        <p className="min-w-0 truncate text-xs font-medium text-muted-foreground">{label}</p>
       </div>
       <div>
         <p className="font-mono text-xl font-semibold tabular-nums text-foreground">{value}</p>
@@ -436,8 +437,7 @@ export function SavingsWorkspace() {
             </label>
             <label className="flex flex-col gap-1">
               <span className="text-xs font-medium text-muted-foreground">Due Date (optional)</span>
-              <input
-                type="date"
+              <DateInput
                 className="clay-pressed h-10 rounded-xl px-3 text-sm outline-none"
                 value={form.dueDate}
                 onChange={(e) => setForm((f) => ({ ...f, dueDate: e.target.value }))}
@@ -490,8 +490,7 @@ export function SavingsWorkspace() {
             </label>
             <label className="flex flex-col gap-1">
               <span className="text-xs font-medium text-muted-foreground">Due Date</span>
-              <input
-                type="date"
+              <DateInput
                 className="clay-pressed h-10 rounded-xl px-3 text-sm outline-none"
                 value={form.dueDate}
                 onChange={(e) => setForm((f) => ({ ...f, dueDate: e.target.value }))}

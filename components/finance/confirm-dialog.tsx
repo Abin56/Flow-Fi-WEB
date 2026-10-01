@@ -1,5 +1,6 @@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { ClayButton } from "@/components/clay/clay-button";
+import { handleEnterKey } from "@/components/ui/enter-key";
 import { cn } from "@/lib/utils";
 import { useGuardedAction } from "./use-guarded-submit";
 
@@ -28,12 +29,13 @@ export function ConfirmDialog({
   onConfirm,
   loading = false,
 }: ConfirmDialogProps) {
-  // Focus opens on Cancel (first control), so Enter on open never confirms; a rapid double Enter/click on
-  // the focused confirm button runs the action once.
+  // Enter confirms from anywhere in the dialog (focus opens on Cancel, so a held-down Enter — `event.repeat` —
+  // is ignored: the Enter that opened the dialog can't also confirm it). A rapid double Enter/click runs the
+  // action once.
   const confirm = useGuardedAction(onConfirm, loading);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent onKeyDown={(e) => handleEnterKey(e, confirm, { enabled: !loading, fromButtons: true })}>
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           {description && <DialogDescription>{description}</DialogDescription>}

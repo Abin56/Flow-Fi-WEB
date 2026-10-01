@@ -12,8 +12,9 @@ interface SettingsRowProps extends React.HTMLAttributes<HTMLDivElement> {
  *  inside a SettingsCard (noPadding) with SettingsDivider between them for a list-style card. */
 export function SettingsRow({ icon, label, description, control, className, ...props }: SettingsRowProps) {
   return (
-    <div className={cn("flex items-center justify-between gap-4 px-5 py-4", className)} {...props}>
-      <div className="flex min-w-0 items-center gap-3">
+    <div className={cn("flex flex-wrap items-center justify-between gap-x-4 gap-y-3 px-4 py-4 sm:px-5", className)} {...props}>
+      {/* basis keeps the label readable: a control that doesn't fit beside it wraps underneath instead of crushing the text. */}
+      <div className="flex min-w-0 flex-1 basis-48 items-center gap-3">
         {icon && <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted text-muted-foreground">{icon}</div>}
         <div className="min-w-0">
           <p className="text-sm font-medium text-foreground">{label}</p>

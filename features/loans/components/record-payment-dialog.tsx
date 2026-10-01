@@ -50,6 +50,7 @@ import { remainingAmount, type Installment } from "@/lib/models/payment-schedule
 import { formatCurrency } from "@/lib/format";
 import { generateId } from "@/lib/utils/id-generator";
 import { cn } from "@/lib/utils";
+import { DateInput } from "@/components/forms/date-input";
 
 /** An EMI target may name a specific `installment` (picked from the schedule); otherwise the next-due one. */
 export type PaymentTarget = { kind: "loan"; row: LoanRow } | { kind: "emi"; row: EmiRow; installment?: Installment | null };
@@ -426,7 +427,7 @@ export function RecordPaymentDialog({ target, open, onOpenChange }: { target: Pa
             <Field label="Payment date">
               <span className="relative">
                 <CalendarClock className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
-                <input type="date" className={cn(LOAN_EMI_INPUT, "pl-9")} value={date} onChange={(e) => setDate(e.target.value)} />
+                <DateInput className={cn(LOAN_EMI_INPUT, "pl-9")} value={date} onChange={(e) => setDate(e.target.value)} />
               </span>
             </Field>
             <Field label="Note">

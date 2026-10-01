@@ -59,6 +59,7 @@ import { useOperation } from "@/components/feedback/operation-progress";
 import { SUCCESS_HOLD_MS, errorDetail } from "@/lib/operation-progress/operation-progress";
 import { cn } from "@/lib/utils";
 import { toast } from "@/store/toast-store";
+import { DateInput } from "@/components/forms/date-input";
 
 const KIND_OPTIONS: { value: AddKind; label: string; fullLabel: string; hint: string; icon: LucideIcon }[] = [
   { value: "borrowed", label: "Loan I Took", fullLabel: "Loan I Took — I need to pay it back", hint: "I received money and need to pay it back", icon: Landmark },
@@ -309,7 +310,7 @@ export function LoanEmiAddDialog({ open, onOpenChange, initialKind = null }: Loa
               {amountField}
               {!isEmi && (
                 <Field label={kind === "lent" ? "Loan given on" : "Loan taken on"}>
-                  <input type="date" className={LOAN_EMI_INPUT} value={form.date} onChange={(e) => set({ date: e.target.value })} />
+                  <DateInput className={LOAN_EMI_INPUT} value={form.date} onChange={(e) => set({ date: e.target.value })} />
                 </Field>
               )}
             </div>
@@ -383,7 +384,7 @@ export function LoanEmiAddDialog({ open, onOpenChange, initialKind = null }: Loa
               </FieldGroup>
               {s.firstPaymentDate && (
                 <Field label="First EMI Date">
-                  <input type="date" className={LOAN_EMI_INPUT} value={form.firstEmiDate} onChange={(e) => set({ firstEmiDate: e.target.value })} />
+                  <DateInput className={LOAN_EMI_INPUT} value={form.firstEmiDate} onChange={(e) => set({ firstEmiDate: e.target.value })} />
                 </Field>
               )}
               <FieldGroup label="Interest">

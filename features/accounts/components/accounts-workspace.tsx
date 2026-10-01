@@ -59,6 +59,8 @@ import {
   validateAccountForm,
   type AccountFormInput,
 } from "@/features/accounts/lib/account-product-rules";
+import { DateInput } from "@/components/forms/date-input";
+import { handleEnterAdvance } from "@/components/finance/enter-advance";
 
 const ACCOUNT_TYPE_OPTIONS: { value: AccountType; label: string; icon: LucideIcon }[] = [
   { value: "bank", label: "Bank", icon: Landmark },
@@ -521,7 +523,7 @@ export function AccountsWorkspace() {
           </DialogHeader>
 
           {/* Real <form> (display: contents keeps the layout): Enter in a single-line field saves via the same handler as the primary button. */}
-          <form className="contents" noValidate onSubmit={submitAccount}>
+          <form className="contents" noValidate onSubmit={submitAccount} onKeyDown={handleEnterAdvance}>
           <div className="flex flex-1 flex-col gap-6 overflow-y-auto px-6 py-5 text-sm">
             <div className="flex items-center gap-3 border border-border bg-muted/30 p-4">
               <span
@@ -921,8 +923,7 @@ export function AccountsWorkspace() {
                     <span className="text-xs font-medium text-muted-foreground">Maturity Date</span>
                     <div className="relative">
                       <Calendar className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
-                      <input
-                        type="date"
+                      <DateInput
                         className="h-10 w-full rounded-none border border-border bg-background pr-3 pl-9 text-sm outline-none transition-colors focus:border-primary"
                         value={form.maturityDate}
                         onChange={(e) => setForm((f) => ({ ...f, maturityDate: e.target.value }))}

@@ -7,7 +7,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
+import { Input, INPUT_BASE_CLASS } from "@/components/ui/input";
+import { DateInput } from "@/components/forms/date-input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
@@ -40,6 +41,7 @@ import { StatusCell } from "../spreadsheet/cells/status-cell";
 import { ActionDetailPanel } from "./action-detail-panel";
 import { CommittedClassificationNotice, CommittedPeopleNotice } from "./committed-transaction-notices";
 import { FlowOwnershipHeader } from "./flow-ownership-header";
+import { handleEnterKey } from "@/components/ui/enter-key";
 
 const DATE_DISPLAY_FORMAT = new Intl.DateTimeFormat("en-IN", { day: "2-digit", month: "short", year: "numeric" });
 
@@ -306,6 +308,8 @@ export function TransactionManageModal({
         open={open}
         onOpenChange={onOpenChange}
         busy={saving || deleting}
+        onEnter={handleSave}
+        enterEnabled={!saving && !deleting && dirty && committedDataReady}
         headerIcon={Settings2}
         headerTitle="Transaction Details"
         headerDescription="Review and manage this transaction"
@@ -352,12 +356,11 @@ export function TransactionManageModal({
               />
             </Field>
             <Field label="Date *" error={fieldErrors.date}>
-              <Input
-                type="date"
+              <DateInput
                 value={draft.date}
                 onChange={(e) => setDraft({ ...draft, date: e.target.value })}
                 aria-invalid={!!fieldErrors.date}
-                className={FIELD_BORDER}
+                className={cn(INPUT_BASE_CLASS, FIELD_BORDER)}
               />
             </Field>
             <Field label="Merchant">
@@ -551,7 +554,7 @@ export function TransactionManageModal({
       />
 
       <Dialog open={confirmDeleteOpen} onOpenChange={setConfirmDeleteOpen}>
-        <DialogContent>
+        <DialogContent onKeyDown={(e) => handleEnterKey(e, handleDelete, { enabled: !deleting, fromButtons: true })}>
           <DialogHeader>
             <DialogTitle>Delete this transaction?</DialogTitle>
             <DialogDescription>

@@ -14,8 +14,11 @@ export function AccountsStats({ accountCount }: { accountCount?: number }) {
   const { stats } = useAccountsStats();
 
   return (
-    <section aria-label="Summary" className="flex flex-col overflow-hidden rounded-[10px] border border-border-strong/60 bg-card shadow-e1 lg:flex-row lg:items-stretch">
-      <div className="flex flex-col gap-1.5 bg-gradient-to-br from-primary/15 to-transparent px-5 py-4 sm:px-6 lg:min-w-80 lg:border-r lg:border-border-strong/50 dark:from-primary/10">
+    // Container queries (@…): the panel sizes to the room it actually has — the sidebar and the account side panel
+    // take a big share of the viewport, so viewport breakpoints (lg:) squeezed the figures out of sight.
+    <section aria-label="Summary" className="@container overflow-hidden rounded-[10px] border border-border-strong/60 bg-card shadow-e1">
+     <div className="flex flex-col @4xl:flex-row @4xl:items-stretch">
+      <div className="flex flex-col gap-1.5 bg-gradient-to-br from-primary/15 to-transparent px-5 py-4 sm:px-6 @4xl:min-w-72 @4xl:border-r @4xl:border-border-strong/50 dark:from-primary/10">
         <span className={cn(LABEL, "inline-flex items-center gap-1.5")}>
           <Wallet className="size-3.5 text-foreground" strokeWidth={1.75} />
           Total balance
@@ -28,18 +31,19 @@ export function AccountsStats({ accountCount }: { accountCount?: number }) {
         )}
       </div>
 
-      <div className="grid flex-1 grid-cols-1 border-t border-border-strong/50 sm:grid-cols-3 sm:divide-x sm:divide-border-strong/50 lg:border-t-0">
+      <div className="grid min-w-0 flex-1 grid-cols-1 border-t border-border-strong/50 @xl:grid-cols-3 @xl:divide-x @xl:divide-border-strong/50 @4xl:border-t-0">
         <Figure icon={Landmark} tone="bg-success/12 text-success" label="In banks" value={formatCurrency(stats.totalInBanks)} />
         <Figure icon={Coins} tone="bg-warning/20 text-warning-foreground dark:text-warning" label="Cash on hand" value={formatCurrency(stats.cashOnHand)} />
         <Figure icon={Bell} tone="bg-purple/12 text-purple" label="Upcoming · 7 days" value={null} />
       </div>
+     </div>
     </section>
   );
 }
 
 function Figure({ icon: Icon, tone, label, value }: { icon: typeof Bell; tone: string; label: string; value: string | null }) {
   return (
-    <div className="flex items-center gap-3 border-b border-border-strong/40 px-5 py-3.5 last:border-b-0 sm:border-b-0">
+    <div className="flex items-center gap-3 border-b border-border-strong/40 px-5 py-3.5 last:border-b-0 @xl:border-b-0">
       <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-[8px]", tone)}>
         <Icon className="size-4" strokeWidth={1.75} />
       </span>

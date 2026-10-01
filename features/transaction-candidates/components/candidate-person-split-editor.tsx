@@ -113,7 +113,12 @@ export function CandidatePersonSplitEditor({
               value={newPersonName}
               className={FIELD_BORDER}
               onChange={(e) => setNewPersonName(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && void handleAddPerson()}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  void handleAddPerson();
+                }
+              }}
             />
             <Button size="icon-sm" onClick={() => void handleAddPerson()} disabled={addingPersonBusy || !newPersonName.trim()} aria-label="Save person">
               <Check className="size-4" />

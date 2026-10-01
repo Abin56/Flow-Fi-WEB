@@ -25,6 +25,8 @@ import { useTransactions } from "@/hooks/use-transactions";
 import type { LoanFundingSource } from "@/lib/models/loan";
 import { generateId } from "@/lib/utils/id-generator";
 import { toast } from "@/store/toast-store";
+import { DateInput } from "@/components/forms/date-input";
+import { handleEnterKey } from "@/components/ui/enter-key";
 
 const rupees = (value: number) => `₹${value.toLocaleString("en-IN")}`;
 
@@ -82,7 +84,11 @@ export function UnifiedAgreementCreateDialog({ open, onOpenChange }: { open: boo
 
   return (
     <Dialog open={open} onOpenChange={(value) => { if (!value && !saving) reset(); onOpenChange(value); }}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
+      <DialogContent
+        className="max-h-[90vh] overflow-y-auto sm:max-w-xl"
+        // Enter moves the wizard on (Continue), and on the review step creates the agreement.
+        onKeyDown={(e) => handleEnterKey(e, step < 2 ? () => setStep(step + 1) : create, { enabled: step === 0 ? kind != null : error == null && !saving })}
+      >
         <DialogHeader>
           <DialogTitle>Add Loan / Installment</DialogTitle>
           <DialogDescription>Step {step + 1} of 3 · {step === 0 ? "Choose an agreement" : step === 1 ? "Enter the terms" : "Review before creating"}</DialogDescription>
@@ -185,7 +191,7 @@ export function UnifiedAgreementCreateDialog({ open, onOpenChange }: { open: boo
               {oneTime ? (
                 <label className="grid gap-1 text-sm">
                   Repay by
-                  <input type="date" className={FLAT_INPUT} value={form.dueDate} onChange={(e) => set({ dueDate: e.target.value })} />
+                  <DateInput className={FLAT_INPUT} value={form.dueDate} onChange={(e) => set({ dueDate: e.target.value })} />
                 </label>
               ) : (
                 <label className="grid gap-1 text-sm">

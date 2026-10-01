@@ -3,6 +3,7 @@
 import * as React from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { handleEnterKey } from "@/components/ui/enter-key";
 import { Input } from "@/components/ui/input";
 
 export interface DeleteDialogProps {
@@ -29,7 +30,7 @@ export function DeleteDialog({ open, onOpenChange, title, description, itemName,
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent>
+      <DialogContent onKeyDown={(e) => handleEnterKey(e, onConfirm, { enabled: !loading && canDelete, fromButtons: true })}>
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           {description && <DialogDescription>{description}</DialogDescription>}

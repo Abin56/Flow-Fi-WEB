@@ -85,7 +85,7 @@ export function AccountTile({
       onClick={onSelect}
       aria-pressed={active}
       className={cn(
-        "group relative flex flex-col gap-3 overflow-hidden rounded-[10px] border bg-card p-4 pt-5 text-left shadow-e1 outline-none transition-[border-color,box-shadow,transform] duration-150 hover:-translate-y-px hover:shadow-e2 focus-visible:ring-2 focus-visible:ring-ring",
+        "group @container relative flex flex-col gap-3 overflow-hidden rounded-[10px] border bg-card p-4 pt-5 text-left shadow-e1 outline-none transition-[border-color,box-shadow,transform] duration-150 hover:-translate-y-px hover:shadow-e2 focus-visible:ring-2 focus-visible:ring-ring",
         active ? "border-primary-accent-text ring-1 ring-primary-accent-text/40" : "border-border-strong/60 hover:border-border-strong",
       )}
     >
@@ -105,7 +105,7 @@ export function AccountTile({
       <div className="flex items-end justify-between gap-2 border-t border-border-strong/40 pt-3">
         <div className="min-w-0">
           <p className="text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">{account.balanceLabel}</p>
-          <p className="mt-0.5 text-[22px] leading-tight font-bold tracking-tight text-foreground tabular-nums">{formatCurrency(account.balance)}</p>
+          <p className="mt-0.5 text-[18px] leading-tight font-bold tracking-tight text-foreground tabular-nums @[11rem]:text-[22px]">{formatCurrency(account.balance)}</p>
         </div>
         {account.cardStyle === "featured" && account.sparkline ? (
           <div className="h-9 w-24 shrink-0">
@@ -116,7 +116,7 @@ export function AccountTile({
             </ResponsiveContainer>
           </div>
         ) : (
-          <span className="flex size-7 shrink-0 items-center justify-center rounded-full border border-border-strong/60 text-muted-foreground transition-colors group-hover:border-border-strong group-hover:text-foreground">
+          <span className="hidden size-7 shrink-0 items-center justify-center rounded-full border border-border-strong/60 text-muted-foreground @[11rem]:flex transition-colors group-hover:border-border-strong group-hover:text-foreground">
             <ChevronRight className="size-3.5" strokeWidth={1.75} />
           </span>
         )}

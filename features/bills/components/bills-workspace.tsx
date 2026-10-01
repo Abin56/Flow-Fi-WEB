@@ -29,6 +29,7 @@ import { UpcomingDuesSection } from "@/features/bills/components/upcoming-dues-s
 import { useBillActions, useBillRows, type BillRow } from "@/features/bills/hooks/use-bills-data";
 import { toast } from "@/store/toast-store";
 import { cn } from "@/lib/utils";
+import { DateInput } from "@/components/forms/date-input";
 
 const RECURRENCE_OPTIONS: BillRecurrence[] = ["oneTime", "daily", "weekly", "monthly", "yearly", "custom"];
 
@@ -406,8 +407,7 @@ function BillFormFields({
           </label>
           <label className="flex flex-col gap-1">
             <span className="text-xs font-medium text-muted-foreground">Next Due Date</span>
-            <input
-              type="date"
+            <DateInput
               className="clay-pressed h-10 rounded-xl px-3 text-sm outline-none"
               value={form.dueDate}
               onChange={(e) => setForm((f) => ({ ...f, dueDate: e.target.value }))}

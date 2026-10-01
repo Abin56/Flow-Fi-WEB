@@ -2,6 +2,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { ClayButton } from "@/components/clay/clay-button";
 import { cn } from "@/lib/utils";
 import { useGuardedSubmit } from "./use-guarded-submit";
+import { handleEnterAdvance } from "./enter-advance";
 
 interface FormDialogProps {
   open: boolean;
@@ -46,7 +47,7 @@ export function FormDialog({
         </DialogHeader>
         {/* A real <form> (display: contents, so layout is untouched) — Enter in a single-line field submits
             through the same onConfirm as the Save button; textareas keep Enter as a newline natively. */}
-        <form className="contents" onSubmit={handleSubmit} noValidate>
+        <form className="contents" onSubmit={handleSubmit} onKeyDown={handleEnterAdvance} noValidate>
           <div className="-mx-1 min-h-0 flex-1 overflow-y-auto px-1">{children}</div>
           <DialogFooter className="shrink-0">
             <ClayButton

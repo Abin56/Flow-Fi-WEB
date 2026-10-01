@@ -394,7 +394,7 @@ export function BudgetsWorkspace() {
         </div>
 
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-5">
-          <div className="surface-flat rounded-3xl border border-border/50 p-5 lg:col-span-3">
+          <div className="surface-flat @container rounded-3xl border border-border/50 p-5 lg:col-span-3">
             <div className="flex items-center justify-between">
               <h2 className="text-sm font-semibold text-foreground">Budget Overview</h2>
               <ClayButton variant="secondary" size="sm" className="gap-1.5">
@@ -405,7 +405,7 @@ export function BudgetsWorkspace() {
             {breakdown.length === 0 ? (
               <EmptyState icon={PieChartIcon} title="No category budgets yet" description="Create a category budget to see the breakdown here." />
             ) : (
-              <div className="mt-4 flex items-center gap-5">
+              <div className="mt-4 flex flex-col items-center gap-5 @lg:flex-row">
                 <div className="relative size-32 shrink-0">
                   <ResponsiveContainer width="100%" height="100%">
                     <PieChart>
@@ -421,8 +421,8 @@ export function BudgetsWorkspace() {
                     <span className="text-[10px] text-muted-foreground">of budget used</span>
                   </div>
                 </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center justify-end gap-6 pb-1.5 text-xs text-muted-foreground">
+                <div className="w-full min-w-0 @lg:flex-1">
+                  <div className="hidden items-center justify-end gap-6 pb-1.5 text-xs text-muted-foreground @lg:flex">
                     <span className="w-16 text-right">Budget</span>
                     <span className="w-16 text-right">Spent</span>
                     <span className="w-14 text-right">% Used</span>
@@ -430,12 +430,16 @@ export function BudgetsWorkspace() {
                   {breakdown.map((item) => {
                     const pct = item.budget === 0 ? 0 : Math.round((item.spent / item.budget) * 1000) / 10;
                     return (
-                      <div key={item.type} className="flex items-center gap-2 border-t border-border/50 py-2 text-sm">
+                      // Phones: name + % on one line, "spent of budget" beneath; from sm up, the three right-aligned columns.
+                      <div key={item.type} className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-2 gap-y-0.5 border-t border-border/50 py-2 text-sm @lg:grid-cols-[auto_minmax(0,1fr)_4rem_4rem_3.5rem]">
                         <span className="size-2 shrink-0 rounded-full" style={{ background: TYPE_CHART_COLOR[item.color] }} />
-                        <span className="min-w-0 flex-1 truncate text-foreground">{item.type}</span>
-                        <span className="w-16 shrink-0 text-right tabular-nums text-muted-foreground">{formatCurrency(item.budget)}</span>
-                        <span className="w-16 shrink-0 text-right tabular-nums text-muted-foreground">{formatCurrency(item.spent)}</span>
-                        <span className="w-14 shrink-0 text-right tabular-nums text-foreground">{pct}%</span>
+                        <span className="min-w-0 truncate text-foreground">{item.type}</span>
+                        <span className="hidden text-right tabular-nums text-muted-foreground @lg:block">{formatCurrency(item.budget)}</span>
+                        <span className="hidden text-right tabular-nums text-muted-foreground @lg:block">{formatCurrency(item.spent)}</span>
+                        <span className="text-right tabular-nums text-foreground">{pct}%</span>
+                        <span className="col-span-2 col-start-2 truncate text-xs tabular-nums text-muted-foreground @lg:hidden">
+                          {formatCurrency(item.spent)} of {formatCurrency(item.budget)}
+                        </span>
                       </div>
                     );
                   })}

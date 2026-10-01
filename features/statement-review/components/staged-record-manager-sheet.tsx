@@ -32,6 +32,7 @@ import type { Person } from "@/lib/models/person";
 import { cn } from "@/lib/utils";
 import { toast } from "@/store/toast-store";
 import { stagedRecordFlagFor } from "@/features/statement-review/lib/staged-record-flag";
+import { handleEnterKey } from "@/components/ui/enter-key";
 
 const SPLIT_TYPE_OPTIONS: { value: SplitType; label: string }[] = [
   { value: "equal", label: "Split equally" },
@@ -253,7 +254,14 @@ export function StagedRecordManagerSheet({
   }
 
   return (
-    <DetailDrawer open={open} onOpenChange={onOpenChange} title="Transaction Details" className="sm:max-w-lg duration-150">
+    <DetailDrawer
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Transaction Details"
+      className="sm:max-w-lg duration-150"
+      // Enter saves whichever form is open — the split, or the details.
+      onKeyDown={(e) => handleEnterKey(e, splitOpen ? handleSaveSplit : handleSaveManage, { enabled: !(splitOpen ? splitSaving : saving) })}
+    >
       <div className="flex flex-col gap-5 text-sm">
         <div className="min-w-0 flex-1">
           <p className="truncate font-semibold text-foreground">{description || "(No description)"}</p>
@@ -326,7 +334,12 @@ export function StagedRecordManagerSheet({
                       placeholder="Person's name"
                       value={newPersonName}
                       onChange={(e) => setNewPersonName(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && handleAddPerson()}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          handleAddPerson();
+                        }
+                      }}
                     />
                     <ClayButton size="icon" onClick={handleAddPerson} disabled={addingPersonBusy || !newPersonName.trim()} aria-label="Save person">
                       <Check className="size-4" />

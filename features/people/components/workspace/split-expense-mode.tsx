@@ -24,6 +24,7 @@ import {
   WsField,
   WsSegmented,
 } from "./person-workspace-ui";
+import { DateInput } from "@/components/forms/date-input";
 
 const SPLIT_TYPE_OPTIONS: { value: SplitType; label: string; icon: typeof Divide }[] = [
   { value: "equal", label: "Equal", icon: Divide },
@@ -365,7 +366,7 @@ export function SplitExpenseMode({
 
             <div className="mt-3 grid gap-x-3 gap-y-3 sm:grid-cols-3">
               <WsField label="Date" error={errors.date}>
-                <input type="date" className={WS_FIELD} value={date} onChange={(e) => setDate(e.target.value)} />
+                <DateInput className={WS_FIELD} value={date} onChange={(e) => setDate(e.target.value)} />
               </WsField>
               <WsField label="Category" error={errors.category}>
                 <Select

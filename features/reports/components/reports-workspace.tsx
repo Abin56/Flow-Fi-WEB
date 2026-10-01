@@ -65,12 +65,12 @@ export function ReportsWorkspace() {
 
   return (
     <Tabs value={tab} onValueChange={(v) => setTab(v as typeof tab)} className="gap-6">
-      <TabsList className="clay-pressed h-auto w-fit gap-0.5 rounded-2xl bg-transparent p-1">
+      <TabsList className="clay-pressed h-auto w-fit max-w-full justify-start gap-0.5 overflow-x-auto rounded-2xl bg-transparent p-1">
         {TABS.map((t) => (
           <TabsTrigger
             key={t.value}
             value={t.value}
-            className="rounded-xl px-3.5 py-1.5 text-xs font-medium text-muted-foreground data-active:bg-card data-active:text-foreground data-active:shadow-e1"
+            className="shrink-0 rounded-xl px-3.5 py-1.5 text-xs font-medium text-muted-foreground data-active:bg-card data-active:text-foreground data-active:shadow-e1"
           >
             {t.label}
           </TabsTrigger>

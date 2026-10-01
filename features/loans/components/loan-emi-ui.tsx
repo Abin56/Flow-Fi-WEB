@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/compone
 import { ClayBadge } from "@/components/clay/clay-badge";
 import { StaggerItem } from "@/components/foundation/animated-container";
 import { cn } from "@/lib/utils";
+import { handleEnterKey } from "@/components/ui/enter-key";
 
 /**
  * Shared presentation for the Loan & EMI section — one card, one detail hero, one fact grid and one
@@ -231,11 +232,12 @@ export function DebtCard({
           muted && "bg-secondary",
         )}
       >
-        <div className="flex items-start gap-3">
+        <div className="flex flex-wrap items-start gap-x-3 gap-y-1.5">
           <span className={cn(LE_RADIUS.control, "flex size-9 shrink-0 items-center justify-center border border-border bg-secondary text-foreground")}>
             <Icon className="size-[18px]" strokeWidth={1.75} />
           </span>
-          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+          {/* min-w keeps the name readable: a status badge that doesn't fit beside it drops below instead of squeezing it to "L…". */}
+          <div className="flex min-w-[8rem] flex-1 flex-col gap-0.5">
             <h3 className={cn("truncate font-heading text-[15px] leading-snug font-semibold", muted ? "text-muted-foreground" : "text-foreground")}>{name}</h3>
             <p className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
               {tag && (
@@ -247,7 +249,7 @@ export function DebtCard({
             </p>
           </div>
           {badges.length > 0 ? (
-            <div className="flex shrink-0 flex-col items-end gap-1">
+            <div className="ml-auto flex shrink-0 flex-col items-end gap-1">
               {badges.map((b) => (
                 <ClayBadge key={b.label} tone={b.tone} className="rounded-[5px] px-2 py-0.5 text-[11px] font-semibold">
                   {b.label}
@@ -513,7 +515,7 @@ export function FilterTabs<T extends string>({
   className?: string;
 }) {
   return (
-    <div role="tablist" aria-label={ariaLabel} className={cn("inline-flex max-w-full items-center gap-0.5 self-start rounded-[7px] border border-border bg-secondary p-0.5", className)}>
+    <div role="tablist" aria-label={ariaLabel} className={cn("inline-flex max-w-full items-center gap-0.5 self-start overflow-x-auto rounded-[7px] border border-border bg-secondary p-0.5", className)}>
       {options.map(({ value: v, label, count }) => {
         const active = v === value;
         return (
@@ -524,7 +526,7 @@ export function FilterTabs<T extends string>({
             aria-selected={active}
             onClick={() => onChange(v)}
             className={cn(
-              "inline-flex h-8 min-w-0 items-center gap-1.5 rounded-[5px] border px-2.5 text-[13px] whitespace-nowrap transition-[background-color,border-color,color] duration-150 outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-[5px] border px-2.5 text-[13px] whitespace-nowrap transition-[background-color,border-color,color] duration-150 outline-none focus-visible:ring-2 focus-visible:ring-ring",
               active
                 ? "border-primary-accent-text bg-primary font-semibold text-primary-foreground"
                 : "border-transparent font-medium text-muted-foreground hover:bg-card hover:text-foreground",
@@ -847,6 +849,8 @@ export function LoanEmiFormDialog({
     <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
       <DialogContent
         showCloseButton={false}
+        // Enter in any single-line field runs the same primary action as the button (not while busy / invalid).
+        onKeyDown={(e) => handleEnterKey(e, onConfirm, { enabled: !busy && !confirmDisabled })}
         className={cn(
           "flex flex-col gap-0 overflow-hidden border border-border bg-card p-0 shadow-[var(--shadow-e4)] ring-0",
           // Phone: full-height sheet. Desktop: centered panel.

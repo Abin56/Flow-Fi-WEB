@@ -6,6 +6,8 @@ import type { LedgerEntryType } from "@/lib/models/person";
 import { cn } from "@/lib/utils";
 import { AccountField, CompactAmountInput, InlinePanel, useAccountChoice } from "./ledger-ui";
 import { WS_FIELD, WS_GHOST, WS_PRIMARY, WsField, WsSegmented } from "./person-workspace-ui";
+import { DateInput } from "@/components/forms/date-input";
+import { handleEnterAdvance } from "@/components/finance/enter-advance";
 
 export type AddEntryType = Extract<LedgerEntryType, "gave" | "borrowed">;
 
@@ -72,7 +74,7 @@ export function AddEntryPanel({
   }
 
   return (
-    <form onSubmit={submit} className="max-w-3xl">
+    <form onSubmit={submit} onKeyDown={handleEnterAdvance} className="max-w-3xl">
       <InlinePanel
         title="Add transaction"
         subtitle={type === "gave" ? `${firstName} will owe you this` : type === "borrowed" ? `You will owe ${firstName} this` : `What happened with ${firstName}?`}
@@ -119,7 +121,7 @@ export function AddEntryPanel({
             />
           </WsField>
           <WsField label="Date">
-            <input type="date" className={WS_FIELD} value={date} onChange={(e) => setDate(e.target.value)} />
+            <DateInput className={WS_FIELD} value={date} onChange={(e) => setDate(e.target.value)} />
           </WsField>
           <AccountField choice={account} />
           <WsField label="Description" className="sm:col-span-3">

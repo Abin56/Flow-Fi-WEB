@@ -50,7 +50,6 @@ import {
   type DashboardBillOccurrence,
   type DashboardExpense,
   type DashboardInstallment,
-  type DashboardStatement,
   type DashboardTransaction,
   type DateRange,
   type DateRangeStrategy,
@@ -299,10 +298,6 @@ export function useMonthCycleData() {
     // Only schedule-only (legacy, unlinked) payments on money I borrowed — modern Loan payments are
     // already counted through their linked Transaction, and lent-loan repayments are not spending.
     const dashboardLoanInstallments: DashboardInstallment[] = dashboardLoanPaidRows(loanScheduledPayments);
-    const dashboardStatements: DashboardStatement[] = (statements as Statement[]).map((s) => ({
-      dueDate: s.dueDate,
-      amountPaid: s.amountPaid,
-    }));
 
     const inputs: FinancialViewInputs = {
       transactions: dashboardTransactions,
@@ -310,8 +305,12 @@ export function useMonthCycleData() {
       billOccurrences: dashboardBillOccurrences,
       emiInstallments: dashboardEmiInstallments,
       loanInstallments: dashboardLoanInstallments,
-      creditCardStatements: dashboardStatements,
-      creditCardAccountIds: new Set((creditCards as CreditCardProfile[]).map((c) => c.accountId)),
+      // The cycle counts card purchases when they happen (their own Transactions), so card
+      // accounts are NOT excluded and statement payments are NOT added on top — the default
+      // `combinedExpenses` shape would only show card spend once a statement is paid, and
+      // would double-count it if both were included.
+      creditCardStatements: [],
+      creditCardAccountIds: new Set<string>(),
     };
 
     const spent = amountFor("combinedExpenses", strategy, range, inputs);
@@ -329,7 +328,7 @@ export function useMonthCycleData() {
     const mySpentChangePercent = percentChange(mySpent, myPreviousSpent);
 
     return { spent, previousSpent, income, net, spentChangePercent, mySpent, myPreviousSpent, myNet, mySpentChangePercent };
-  }, [isCustomCycle, cycleRange, transactions, expenses, billOccurrences, emiInstallments, loanScheduledPayments, statements, creditCards]);
+  }, [isCustomCycle, cycleRange, transactions, expenses, billOccurrences, emiInstallments, loanScheduledPayments]);
 
   const savingsRatePercent = financialView.income > 0 ? Math.round((financialView.net / financialView.income) * 100) : 0;
 

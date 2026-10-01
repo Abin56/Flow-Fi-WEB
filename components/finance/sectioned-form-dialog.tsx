@@ -5,6 +5,7 @@ import { ClayButton } from "@/components/clay/clay-button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { useGuardedSubmit } from "./use-guarded-submit";
+import { handleEnterAdvance } from "./enter-advance";
 
 interface SectionedFormDialogProps {
   open: boolean;
@@ -63,7 +64,7 @@ export function SectionedFormDialog({
         </DialogHeader>
 
         {/* Real <form> (display: contents keeps the grid layout) so Enter submits via the same onConfirm. */}
-        <form className="contents" onSubmit={handleSubmit} noValidate>
+        <form className="contents" onSubmit={handleSubmit} onKeyDown={handleEnterAdvance} noValidate>
           <div className="flex max-h-[65vh] flex-col gap-6 overflow-y-auto px-6 py-5 text-sm">{children}</div>
 
           <DialogFooter className="shrink-0 border-t border-border bg-muted/20 px-6 py-4">

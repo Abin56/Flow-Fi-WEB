@@ -10,14 +10,16 @@ interface DetailDrawerProps {
   children: React.ReactNode;
   footer?: React.ReactNode;
   className?: string;
+  /** Key handler for the whole panel — e.g. `handleEnterKey` to make Enter run the drawer's primary action. */
+  onKeyDown?: React.KeyboardEventHandler<HTMLElement>;
 }
 
 /** Right-side inspector panel for viewing/editing a single record — wraps Sheet with a header, scrollable
  *  content area, and an optional footer slot for save/delete actions. */
-export function DetailDrawer({ open, onOpenChange, title, description, children, footer, className }: DetailDrawerProps) {
+export function DetailDrawer({ open, onOpenChange, title, description, children, footer, className, onKeyDown }: DetailDrawerProps) {
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className={cn("flex w-full flex-col gap-0 p-0 sm:max-w-md", className)}>
+      <SheetContent side="right" onKeyDown={onKeyDown} className={cn("flex w-full flex-col gap-0 p-0 sm:max-w-md", className)}>
         <SheetHeader className="border-b border-border/60 px-5 py-4">
           <SheetTitle>{title}</SheetTitle>
           {description && <SheetDescription>{description}</SheetDescription>}

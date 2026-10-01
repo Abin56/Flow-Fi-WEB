@@ -53,6 +53,7 @@ import type { Account } from "@/lib/models/account";
 import { friendlyLoanError } from "@/features/loans/lib/loan-live-state";
 import { cn } from "@/lib/utils";
 import { toast } from "@/store/toast-store";
+import { DateInput } from "@/components/forms/date-input";
 
 interface LoanFormState {
   name: string;
@@ -852,8 +853,7 @@ function LoanFormFields({
             label="Loan taken on"
             hint={isEdit ? (hasPayments ? "Locked once a payment is recorded." : "Does not change the repayment schedule.") : undefined}
           >
-            <input
-              type="date"
+            <DateInput
               disabled={isEdit && hasPayments}
               className={cn(LOAN_EMI_INPUT, isEdit && hasPayments && "text-muted-foreground")}
               value={form.loanDate}
@@ -864,8 +864,7 @@ function LoanFormFields({
             label="First EMI Date"
             hint={isEdit ? (hasPayments ? "Locked once a payment is recorded." : "Regenerates the repayment schedule from this date.") : undefined}
           >
-            <input
-              type="date"
+            <DateInput
               disabled={isEdit && hasPayments}
               className={cn(LOAN_EMI_INPUT, isEdit && hasPayments && "text-muted-foreground")}
               value={form.firstEmiDate}

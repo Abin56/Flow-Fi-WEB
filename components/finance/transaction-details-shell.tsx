@@ -18,6 +18,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import { X } from "lucide-react";
+import { handleEnterKey } from "@/components/ui/enter-key";
 
 /** One of the popup's body cards — icon-badge + title header. Border uses `foreground/12` rather
  *  than the theme's own `--border` token, which is a 10%-opacity tint of the *primary* color and
@@ -111,6 +112,8 @@ export function TransactionDetailsShell({
   rightColumn,
   footerLeft,
   footerActions,
+  onEnter,
+  enterEnabled = true,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -134,11 +137,15 @@ export function TransactionDetailsShell({
   rightColumn: ReactNode;
   footerLeft?: ReactNode;
   footerActions: ReactNode;
+  /** The popup's primary action (Save / Import). Enter in any single-line field runs it, when `enterEnabled`. */
+  onEnter?: () => unknown;
+  enterEnabled?: boolean;
 }) {
   return (
     <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
       <DialogContent
         showCloseButton={false}
+        onKeyDown={onEnter ? (e) => handleEnterKey(e, onEnter, { enabled: enterEnabled }) : undefined}
         className="flex max-h-[85vh] w-full flex-col gap-0 overflow-hidden rounded-none border border-border p-0 shadow-lg ring-0 sm:max-w-[1096px]"
       >
         <div className="h-1 w-full shrink-0 bg-primary" />

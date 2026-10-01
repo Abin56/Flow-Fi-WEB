@@ -11,6 +11,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import type { Category } from "@/lib/models/category";
 import type { GridRow } from "../../lib/grid-types";
+import { handleEnterKey } from "@/components/ui/enter-key";
 
 /**
  * Grid-agnostic row management, grouped in the Inspector now that Category/
@@ -122,7 +123,18 @@ export function RowManagementPanel({
       </div>
 
       <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
-        <DialogContent>
+        <DialogContent
+          onKeyDown={(e) =>
+            handleEnterKey(
+              e,
+              () => {
+                setConfirmOpen(false);
+                onDelete();
+              },
+              { fromButtons: true },
+            )
+          }
+        >
           <DialogHeader>
             <DialogTitle>Delete this transaction?</DialogTitle>
             <DialogDescription>

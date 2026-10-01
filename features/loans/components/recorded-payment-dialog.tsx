@@ -46,6 +46,7 @@ import { PaymentEditIncompleteError, PaymentReversalBlockedError } from "@/lib/r
 import { generateId } from "@/lib/utils/id-generator";
 import { cn } from "@/lib/utils";
 import { toast } from "@/store/toast-store";
+import { DateInput } from "@/components/forms/date-input";
 
 /** A snapshot of the payment taken when the surface opens; the Loan/EMI `row` itself is resolved live. */
 export type RecordedPaymentTarget =
@@ -617,7 +618,7 @@ export function RecordedPaymentDialog({
         <Field label="Payment date">
           <span className="relative">
             <CalendarClock className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" strokeWidth={1.75} />
-            <input type="date" className={cn(LOAN_EMI_INPUT, "pl-9")} value={date} onChange={(e) => setDate(e.target.value)} />
+            <DateInput className={cn(LOAN_EMI_INPUT, "pl-9")} value={date} onChange={(e) => setDate(e.target.value)} />
           </span>
         </Field>
         <Field label="Note">

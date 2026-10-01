@@ -4,6 +4,7 @@ import { useState } from "react";
 import type { Person } from "@/lib/models/person";
 import { cn } from "@/lib/utils";
 import { ModeFooter, ModeHeader, WS_FIELD, WS_GHOST, WS_PAD, WS_PRIMARY, WsField } from "./person-workspace-ui";
+import { handleEnterAdvance } from "@/components/finance/enter-advance";
 
 export interface EditPersonPatch {
   name: string;
@@ -48,7 +49,7 @@ export function EditPersonMode({
   }
 
   return (
-    <form onSubmit={submit} className="flex min-h-full flex-col">
+    <form onSubmit={submit} onKeyDown={handleEnterAdvance} className="flex min-h-full flex-col">
       <ModeHeader backLabel={person.name} onBack={onBack} title={`Edit ${person.name}`} subtitle="Contact details" />
 
       <div className={cn(WS_PAD, "mt-5 flex max-w-lg flex-1 flex-col gap-3.5")}>

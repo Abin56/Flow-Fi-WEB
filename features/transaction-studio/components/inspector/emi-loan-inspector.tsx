@@ -11,7 +11,9 @@
 import { useState } from "react";
 import { Landmark, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Input, INPUT_BASE_CLASS } from "@/components/ui/input";
+import { DateInput } from "@/components/forms/date-input";
+import { cn } from "@/lib/utils";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatCurrencyPrecise } from "@/lib/format";
@@ -248,10 +250,21 @@ function LabeledInput({
   onBlur: () => void;
   type?: string;
 }) {
+  // These fields save when they lose focus — Enter does the same without having to click away.
+  const submitOnEnter = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      onBlur();
+    }
+  };
   return (
     <div>
       <Label className="mb-1 block text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">{label}</Label>
-      <Input value={value} type={type} onChange={(e) => onChange(e.target.value)} onBlur={onBlur} className="h-9 text-sm" />
+      {type === "date" ? (
+        <DateInput value={value} onChange={(e) => onChange(e.target.value)} onBlur={onBlur} onKeyDown={submitOnEnter} className={cn(INPUT_BASE_CLASS, "h-9 text-sm")} />
+      ) : (
+        <Input value={value} type={type} onChange={(e) => onChange(e.target.value)} onBlur={onBlur} onKeyDown={submitOnEnter} className="h-9 text-sm" />
+      )}
     </div>
   );
 }

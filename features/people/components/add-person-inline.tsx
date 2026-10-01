@@ -9,6 +9,7 @@ import {
   WsField,
 } from "@/features/people/components/workspace/person-workspace-ui";
 import { cn } from "@/lib/utils";
+import { handleEnterAdvance } from "@/components/finance/enter-advance";
 
 export interface AddPersonValues {
   name: string;
@@ -106,6 +107,7 @@ function AddPersonForm({
       onSubmit={submit}
       onKeyDown={(e) => {
         if (e.key === "Escape" && !saving) onCancel();
+        handleEnterAdvance(e);
       }}
       className="mt-3 flex max-w-2xl flex-col gap-3 rounded-[10px] border border-border bg-card p-4 shadow-e1"
     >

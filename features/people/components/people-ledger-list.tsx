@@ -32,6 +32,7 @@ import {
 } from "@/lib/engines/person-cycle-statement";
 import { money } from "@/lib/engines/person-cycle-statement-share";
 import { cn } from "@/lib/utils";
+import { DateInput } from "@/components/forms/date-input";
 
 /**
  * The People Ledger list — one row per person for the selected cycle, read straight from that
@@ -286,9 +287,9 @@ export function CyclePicker({
             Jump to the cycle containing a date
           </label>
           <div className="flex gap-2">
-            <input
+            <DateInput
               id="people-cycle-date"
-              type="date"
+              wrapperClassName="min-w-0 flex-1"
               max={toDateInput(today)}
               value={dateValue}
               onChange={(e) => setDateValue(e.target.value)}
@@ -467,7 +468,7 @@ function Figure({
 }) {
   return (
     <span className="flex flex-col items-end gap-0.5">
-      <span className="text-[11px] font-medium text-muted-foreground md:hidden">{label}</span>
+      <span className="text-[11px] font-medium text-muted-foreground xl:hidden">{label}</span>
       <span className={cn("text-sm font-semibold tabular-nums", muted ? "text-muted-foreground" : "text-foreground")}>
         {value}
       </span>
@@ -476,8 +477,9 @@ function Figure({
   );
 }
 
-/** Shared desktop column template — the header row and every person row use it. */
-const ROW_GRID = "md:grid-cols-[minmax(0,1fr)_7rem_8rem_8rem_10rem_1rem] md:gap-x-5";
+/** Shared desktop column template — the header row and every person row use it. It needs ~660px, which only fits
+ *  from xl (below that the sidebar leaves too little room), so phones and tablets use the stacked row instead. */
+const ROW_GRID = "xl:grid-cols-[minmax(0,1fr)_7rem_8rem_8rem_10rem_1rem] xl:gap-x-5";
 
 /**
  * The cycle's payment status in the shared settlement wording (`settlement-presentation.ts`), from engine
@@ -530,7 +532,7 @@ function PersonRow({
         onClick={onOpen}
         aria-label={`Open ${row.name}'s ledger — ${directionHeadline(s.direction)}${isSettled ? "" : ` ${money(s.amount)}`}`}
         className={cn(
-          "group relative grid w-full cursor-pointer grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1.5 px-4 py-3.5 text-left outline-none transition-colors duration-150 hover:bg-secondary/60 focus-visible:bg-secondary/60 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset md:px-5",
+          "group relative grid w-full cursor-pointer grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1.5 px-4 py-3.5 text-left outline-none transition-colors duration-150 hover:bg-secondary/60 focus-visible:bg-secondary/60 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset xl:px-5",
           ROW_GRID,
         )}
       >
@@ -552,13 +554,13 @@ function PersonRow({
         </span>
 
         {/* Desktop: previous + this cycle columns */}
-        <span className="hidden md:block">
+        <span className="hidden xl:block">
           <Figure label="Previous" value={money(previous)} muted={!hasValue(previous)} />
         </span>
-        <span className="hidden md:block">
+        <span className="hidden xl:block">
           <Figure label="This cycle" value={activityText} muted={!hasValue(activity)} />
         </span>
-        <span className="hidden md:block">
+        <span className="hidden xl:block">
           <Figure label={pos.cashPaid > 0 && pos.cashReceived <= 0 ? "Paid" : "Received"} value={movedText} muted={moved <= 0} />
         </span>
 
@@ -580,13 +582,13 @@ function PersonRow({
         </span>
 
         <ChevronRight
-          className="hidden size-4 text-muted-foreground transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-foreground md:block"
+          className="hidden size-4 text-muted-foreground transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-foreground xl:block"
           strokeWidth={2}
           aria-hidden
         />
 
         {/* Phone / tablet: the trail on one line under the name */}
-        <span className="col-span-2 flex flex-wrap gap-x-1.5 pl-12 text-xs text-muted-foreground tabular-nums md:hidden">
+        <span className="col-span-2 flex flex-wrap gap-x-1.5 pl-12 text-xs text-muted-foreground tabular-nums xl:hidden">
           <span>
             Previous <span className="font-semibold text-foreground">{money(previous)}</span>
           </span>
@@ -613,7 +615,7 @@ export function PeopleLedgerList({
 }) {
   return (
     <div>
-      <div className={cn("hidden border-b border-border px-5 py-2 md:grid", ROW_GRID)} aria-hidden>
+      <div className={cn("hidden border-b border-border px-5 py-2 xl:grid", ROW_GRID)} aria-hidden>
         <span className={LABEL}>Person</span>
         <span className={cn(LABEL, "text-right")}>Previous</span>
         <span className={cn(LABEL, "text-right")}>This cycle</span>

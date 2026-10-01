@@ -26,6 +26,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import type { DuplicateDetectionResult, DuplicateMatch } from "./duplicate-detection-service";
+import { handleEnterKey } from "@/components/ui/enter-key";
 
 /** Same three-tier language the confidence-score comment on `checkForDuplicates` already documents (0.9/0.98 vs 0.6 vs everything the account-factor pulls below that) — surfaced here as a badge instead of a raw decimal. */
 function matchStrength(confidence: number): { label: string; className: string } {
@@ -81,7 +82,7 @@ export function DuplicateWarningDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[440px]">
+      <DialogContent className="sm:max-w-[440px]" onKeyDown={(e) => handleEnterKey(e, onConfirm, { enabled: !busy, fromButtons: true })}>
         <DialogHeader className="flex-row items-start gap-3 space-y-0">
           <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-warning/22 text-warning-foreground">
             <AlertTriangle className="size-5" />
