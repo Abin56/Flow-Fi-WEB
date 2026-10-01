@@ -53,11 +53,14 @@ import { PersonPaymentRepository, type RecordPaymentInput } from "@/lib/reposito
 import { allocatePayment, advanceRemaining, drawAdvance, planAdvanceApplication, reconcilePayment } from "@/lib/engines/person-payment";
 import { buildPersonCycleStatement, cycleContaining, shiftCycle, type StatementCycle } from "@/lib/engines/person-cycle-statement";
 import { buildLedgerRows } from "@/features/people/lib/person-ledger-rows";
-import { advanceSources, paymentLines, payableObligations } from "@/features/people/lib/person-payment-obligations";
+import { advanceSources, obligationSourceLabel, paymentLines, payableObligations, settlementProjection } from "@/features/people/lib/person-payment-obligations";
 import { planEntryDeletion } from "@/lib/engines/person-ledger-deletion";
 import type { AdvanceApplication, LedgerEntry, Person } from "@/lib/models/person";
 import type { Installment } from "@/lib/models/payment-schedule";
 import type { Expense } from "@/lib/models/expense";
+import { isNonIncomeExpenseMovement, type Transaction } from "@/lib/models/transaction";
+import { round2 } from "@/lib/engines/person-payment";
+import { computeLinkedFunds, linkedFundsForInstallment, linkedPendingForAccount } from "@/lib/engines/linked-funds";
 
 const db = {};
 const col = (path: string) => ({ path, firestore: db }) as never;
@@ -607,5 +610,339 @@ describe("Record Payment — mixed obligation types in one receipt", () => {
     expect(splitPaid()).toBe(0);
     expect(statement(SEP).currentPending).toBe(4500);
     expect(statement(ALL).advanceBalance).toBe(0);
+  });
+});
+
+/**
+ * Record Payment reads ONE obligation projection (`settlementProjection`) over the same ledger rows the
+ * statement produces — so every open obligation is either selectable or listed as settled elsewhere.
+ */
+describe("Record Payment — every eligible obligation, not only EMIs", () => {
+  let payments: PersonPaymentRepository;
+  const tracked = new Set<string>(); // no split/assigned share tracked by an installment unless a test adds one
+
+  function seedEntry(id: string, type: "gave" | "borrowed", amount: number, date: Date, extra: Partial<LedgerEntry> = {}) {
+    const e = {
+      id, personId: "amma", type, amount, date, note: id, increasesBalance: true, transactionRef: null, parentEntryId: null,
+      sourceKind: "manual", obligationRef: null, createdAt: date, receivedStatus: "yetToReceive", ...audit, ...extra,
+    } as LedgerEntry;
+    store.set(`${U}/people/amma/ledger/${id}`, e as unknown as Doc);
+    const p = person();
+    store.set(`${U}/people/amma`, { ...p, currentBalance: p.currentBalance + (type === "gave" ? amount : -amount) } as unknown as Doc);
+  }
+  const projRows = (cycle = SEP, pending: never[] = []) =>
+    buildLedgerRows({ statement: statement(cycle), history: statement(ALL), entries: ledger(), pending, advanceApplications: applications(), trackedShareRefs: tracked });
+  const project = (cycle = SEP) => settlementProjection(buildLedgerRows({ statement: statement(ALL), entries: ledger(), pending: [], advanceApplications: applications(), trackedShareRefs: tracked }), cycle);
+
+  beforeEach(() => {
+    installments = [emiInst("i1", 1, d(9, 30), 1667), emiInst("i2", 2, d(10, 30), 1667), emiInst("i3", 3, d(11, 30), 1667)];
+    ({ payments } = setup());
+    tracked.clear();
+    seedKseb(); // KSEB ₹1,000 (manual "gave"), 29 Sep
+  });
+
+  it("1/4/6 — manual, legacy person-linked and EMI obligations all appear together; later EMIs are 'later'", () => {
+    // A "gave" linked to a normal (non-People) transaction — previously dropped from Record Payment.
+    seedEntry("legacy", "gave", 500, d(10, 10), { transactionRef: "tx-normal-expense" });
+    const { payable, elsewhere } = project();
+    expect(payable.map((o) => [o.key, o.outstanding, o.timing])).toEqual([
+      ["ledger:kseb", 1000, "cycle"],
+      ["emi-inst:i1", 1667, "cycle"],
+      ["ledger:legacy", 500, "cycle"],
+      ["emi-inst:i2", 1667, "later"],
+      ["emi-inst:i3", 1667, "later"],
+    ]);
+    expect(elsewhere).toEqual([]);
+    expect(obligationSourceLabel(payable[0], "Amma")).toBe("Money you gave Amma");
+    expect(obligationSourceLabel(payable[1], "Amma")).toBe("EMI installment");
+  });
+
+  it("7 — opening balance (previous pending) is settleable and reconciles; revert reopens it", async () => {
+    store.set(`${U}/people/amma`, { ...person(), openingBalance: 300, currentBalance: person().currentBalance + 300 } as unknown as Doc);
+    const withOpening = () =>
+      buildPersonCycleStatement({
+        person: { id: "amma", name: "Amma", openingBalance: 300, createdAt: d(1, 1) }, ledgerEntries: ledger(), loanIds: new Set(), emis: [phoneEmi], loans: [],
+        installments, cycle: ALL, now: d(10, 1), advanceApplications: applications(),
+      });
+    const rowsNow = () => buildLedgerRows({ statement: withOpening(), entries: ledger(), pending: [], advanceApplications: applications(), trackedShareRefs: tracked });
+    const opening = settlementProjection(rowsNow(), SEP).payable.find((o) => o.key === "opening:amma")!;
+    expect([opening.outstanding, opening.timing, obligationSourceLabel(opening, "Amma")]).toEqual([300, "carried", "Previous pending"]);
+
+    const obligations = settlementProjection(rowsNow(), SEP).payable.filter((o) => o.timing !== "later");
+    const alloc = allocatePayment({ obligations, selectedKeys: obligations.map((o) => o.key), amount: 2967 });
+    expect([alloc.allocated, alloc.extra, alloc.unpaid]).toEqual([2967, 0, 0]);
+    const id = await payments.recordPayment(person(), { direction: "theyPaid", amount: 2967, date: d(10, 2), accountId: "sbi", lines: paymentLines(obligations, alloc.lines), extra: null });
+    expect(rowsNow().find((r) => r.key === "opening:amma")!.state).toBe("settled");
+    expect(transactions().filter((t) => t.deletedAt == null)).toHaveLength(1); // 21: one cash movement for 3 obligations
+    await payments.revertPayment(person(), id);
+    expect(rowsNow().find((r) => r.key === "opening:amma")!.remaining).toBe(300);
+    expect(account()).toBe(10_000);
+  });
+
+  it("3 — a split/assigned share with no tracking installment settles as a ledger settlement; unknown tracking stays conservative", () => {
+    seedEntry("assigned", "gave", 1000, d(9, 29), { sourceKind: "assignedExpense", transactionRef: "tx-kseb" });
+    const row = () => projRows().find((r) => r.key === "ledger:assigned")!;
+    expect(row().settle?.kind).toBe("entry");
+    expect(obligationSourceLabel(payableObligations(projRows()).find((o) => o.key === "ledger:assigned")!, "Amma")).toBe("You paid for Amma");
+    // Installment tracking exists but isn't loaded/open → not settled here (would desync the expense).
+    tracked.add("tx-kseb");
+    expect(row().settle).toBeNull();
+    const rowsUnknown = buildLedgerRows({ statement: statement(SEP), entries: ledger(), pending: [] });
+    expect(rowsUnknown.find((r) => r.key === "ledger:assigned")!.settle).toBeNull();
+    // ...and it is then listed as outstanding elsewhere, so the totals still reconcile.
+    expect(project().elsewhere.map((e) => e.key)).toEqual(["ledger:assigned"]);
+  });
+
+  it("5 — a person-counterparty Loan installment is listed with its reason (paid on the Loan), never silently dropped", () => {
+    const loan = { id: "loan1", personId: "amma", direction: "given", scheduleId: "sch-loan", name: "Hand loan", isClosed: false, deletedAt: null };
+    const s = buildPersonCycleStatement({
+      person: { id: "amma", name: "Amma", openingBalance: 0, createdAt: d(1, 1) }, ledgerEntries: ledger(), loanIds: new Set(["loan1"]), emis: [phoneEmi],
+      loans: [loan] as never, installments: [...installments, { ...emiInst("L1", 1, d(10, 5), 800), scheduleId: "sch-loan" }], cycle: ALL, now: d(10, 1),
+    });
+    const { elsewhere } = settlementProjection(buildLedgerRows({ statement: s, entries: ledger(), pending: [] }), SEP);
+    expect(elsewhere.map((e) => [e.key, e.outstanding, e.loanId])).toEqual([["loan-inst:L1", 800, "loan1"]]);
+    expect(elsewhere[0].reason).toMatch(/paid on the Loan/);
+  });
+
+  it("CRITICAL — statement outstanding = selectable + elsewhere, per side", () => {
+    seedEntry("legacy", "gave", 500, d(10, 10), { transactionRef: "tx-normal-expense" });
+    seedEntry("assigned", "gave", 1000, d(9, 29), { sourceKind: "assignedExpense", transactionRef: "tx-kseb" });
+    tracked.add("tx-kseb");
+    const s = statement(ALL);
+    const { payable, elsewhere } = project();
+    const sum = (xs: { outstanding: number; side: string }[]) => xs.filter((x) => x.side === "theyOwe").reduce((a, x) => a + x.outstanding, 0);
+    expect(sum(payable) + sum(elsewhere)).toBeCloseTo(s.currentPending, 2);
+  });
+
+  it("8/9/10 — select one; mixed partial/full: ₹2,000 → KSEB paid in full, EMI ₹667 left, money given still pending", async () => {
+    seedEntry("given", "gave", 500, d(10, 10));
+    const obligations = project().payable.filter((o) => o.timing !== "later");
+    // Select only one.
+    expect(allocatePayment({ obligations, selectedKeys: ["ledger:given"], amount: 500 }).lines.map((l) => l.key)).toEqual(["ledger:given"]);
+    const alloc = allocatePayment({ obligations, selectedKeys: ["ledger:kseb", "emi-inst:i1"], amount: 2000 });
+    await payments.recordPayment(person(), { direction: "theyPaid", amount: 2000, date: d(10, 12), accountId: "sbi", lines: paymentLines(obligations, alloc.lines), extra: null });
+    const byKey = Object.fromEntries(projRows(ALL).map((r) => [r.key, r]));
+    expect([byKey["ledger:kseb"].state, byKey["emi-inst:i1"].state, byKey["emi-inst:i1"].remaining, byKey["ledger:given"].state]).toEqual(["settled", "partial", 667, "open"]);
+    // 17/23: history stays linked, no duplicate primary rows.
+    expect(byKey["emi-inst:i1"].payments.map((p) => p.amount)).toEqual([1000]);
+    const keys = projRows(ALL).map((r) => r.key);
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  it("13 — I pay them: only what I owe is offered and the account goes down", async () => {
+    seedEntry("borrowed", "borrowed", 700, d(10, 3));
+    const iOwe = project().payable.filter((o) => o.side === "iOwe");
+    expect(iOwe.map((o) => [o.key, obligationSourceLabel(o, "Amma")])).toEqual([["ledger:borrowed", "Money borrowed from Amma"]]);
+    const alloc = allocatePayment({ obligations: iOwe, selectedKeys: ["ledger:borrowed"], amount: 700 });
+    await payments.recordPayment(person(), { direction: "iPaid", amount: 700, date: d(10, 5), accountId: "sbi", lines: paymentLines(iOwe, alloc.lines), extra: null });
+    expect(account()).toBe(9_300);
+  });
+
+  it("19/20 — cycle navigation: last cycle's open item becomes 'carried', next cycle's EMI becomes due", () => {
+    const oct = project(OCT);
+    expect(oct.payable.find((o) => o.key === "ledger:kseb")!.timing).toBe("carried");
+    expect(oct.payable.find((o) => o.key === "emi-inst:i2")!.timing).toBe("cycle");
+    expect(oct.payable.find((o) => o.key === "emi-inst:i3")!.timing).toBe("later");
+  });
+
+  it("12/24 — overpayment + advance across mixed items; revert leaves no orphan allocations", async () => {
+    seedEntry("given", "gave", 500, d(10, 10));
+    const obligations = project().payable.filter((o) => o.timing !== "later");
+    const alloc = allocatePayment({ obligations, selectedKeys: obligations.map((o) => o.key), amount: 3500 });
+    expect([alloc.allocated, alloc.extra]).toEqual([3167, 333]);
+    const id = await payments.recordPayment(person(), {
+      direction: "theyPaid", amount: 3500, date: d(10, 12), accountId: "sbi", lines: paymentLines(obligations, alloc.lines), extra: { kind: "advance", amount: 333 },
+    });
+    expect(ledger().filter((e) => e.paymentId === id)).toHaveLength(4); // 3 allocations + 1 advance, one cash leg
+    await payments.revertPayment(person(), id);
+    expect(ledger().filter((e) => e.paymentId === id && e.deletedAt == null)).toHaveLength(0);
+    expect(transactions().filter((t) => t.deletedAt == null)).toHaveLength(0);
+    expect(account()).toBe(10_000);
+  });
+});
+
+/**
+ * People repayment ≠ income. Three facts stay separate: the cash receipt (moves the account once), the
+ * People settlement (reduces what Amma owes) and the onward payment (card bill / lender EMI — changes
+ * the external liability only when I actually pay it). Linked funds are derived from stable IDs only.
+ */
+describe("People repayment ≠ income — source-linked funds awaiting onward payment", () => {
+  let payments: PersonPaymentRepository;
+  let txRepo: TransactionRepository;
+  let kseb: { id: string };
+  const hdfc = () => (store.get(`${U}/accounts/hdfc`) as unknown as { currentBalance: number }).currentBalance;
+  const liveTx = () => transactions().filter((t) => t.deletedAt == null) as unknown as Transaction[];
+  /** The one income rule every total (Dashboard, Cash Flow, Analytics, Budgets, Month Cycle) applies. */
+  const income = () => liveTx().filter((t) => t.type === "income" && !isNonIncomeExpenseMovement(t)).reduce((s, t) => s + t.amount, 0);
+  const funds = () =>
+    computeLinkedFunds({
+      entries: ledger(),
+      persons: [{ id: "amma", name: "Amma" }],
+      transactions: liveTx(),
+      creditCardAccountIds: new Set(["hdfc"]),
+      emis: [phoneEmi],
+      loans: [],
+      installments,
+    });
+  const pendingInSbi = () => linkedPendingForAccount(funds(), "sbi").total;
+  /** Record Payment's automatic allocation; the card share has no expense-side tracking installment. */
+  function pay(amount: number, extra: RecordPaymentInput["extra"] = null): RecordPaymentInput {
+    const r = buildLedgerRows({ statement: statement(SEP), history: statement(ALL), entries: ledger(), pending: [], advanceApplications: applications(), trackedShareRefs: new Set() });
+    const obligations = payableObligations(r).filter((o) => o.side === "theyOwe");
+    const alloc = allocatePayment({ obligations, selectedKeys: obligations.map((o) => o.key), amount });
+    return { direction: "theyPaid", amount, date: d(10, 2), accountId: "sbi", lines: paymentLines(obligations, alloc.lines), extra };
+  }
+
+  async function seedCardKseb() {
+    // HDFC card pays KSEB ₹1,000 for Amma: card liability +₹1,000, Amma owes +₹1,000.
+    kseb = await txRepo.createTransaction({ type: "expense", amount: 1000, dateTime: d(9, 26), accountId: "hdfc", categoryId: "cat-util", description: "KSEB" });
+    const share: LedgerEntry = {
+      id: "kseb-share", personId: "amma", type: "gave", amount: 1000, date: d(9, 26), note: "KSEB", increasesBalance: true,
+      transactionRef: kseb.id, parentEntryId: null, sourceKind: "assignedExpense", obligationRef: null, createdAt: d(9, 26), receivedStatus: "yetToReceive", ...audit,
+    };
+    store.set(`${U}/people/amma/ledger/kseb-share`, share as unknown as Doc);
+    store.set(`${U}/people/amma`, { ...person(), currentBalance: person().currentBalance + 1000 } as unknown as Doc);
+  }
+
+  /** The authoritative lender payment result: SBI −₹amount and the installment's `amountPaid` — never a People entry. */
+  async function payEmiFromSbi(amount: number) {
+    await txRepo.createTransaction({ type: "expense", amount, dateTime: d(10, 5), accountId: "sbi", categoryId: "cat-emi", description: "Phone EMI" });
+    installments = installments.map((i) => (i.id === "i1" ? { ...i, amountPaid: i.amountPaid + amount } : i));
+  }
+
+  beforeEach(() => {
+    ({ payments } = setup());
+    txRepo = new TransactionRepository(col(`${U}/transactions`), new AccountRepository(col(`${U}/accounts`)));
+    store.set(`${U}/accounts/hdfc`, { id: "hdfc", name: "HDFC Card", openingBalance: 0, currentBalance: 0, ...audit } as Doc);
+  });
+
+  it("CASE A — credit card: reimbursement is not income, card liability stays until the card is paid", async () => {
+    installments = [];
+    await seedCardKseb();
+    expect(hdfc()).toBe(-1000);
+    expect(person().currentBalance).toBe(1000);
+
+    await payments.recordPayment(person(), pay(1000));
+    expect(account()).toBe(11_000);
+    expect(person().currentBalance).toBe(0);
+    expect(income()).toBe(0);
+    expect(hdfc()).toBe(-1000); // the person reimbursing me does not pay my card
+    const [f] = funds();
+    expect(f).toMatchObject({
+      title: "KSEB", amount: 1000, pendingAmount: 1000, status: "pending", receivedAccountId: "sbi",
+      destination: { kind: "card", accountId: "hdfc", sourceTransactionId: kseb.id },
+    });
+    expect(pendingInSbi()).toBe(1000);
+
+    // Pay the card bill from SBI: a transfer — a liability settlement, not a second expense.
+    await txRepo.createTransferPair({ amount: 1000, dateTime: d(10, 10), sourceAccountId: "sbi", destinationAccountId: "hdfc", categoryId: "cat-transfer" });
+    expect(account()).toBe(10_000);
+    expect(hdfc()).toBe(0);
+    expect(pendingInSbi()).toBe(0);
+    expect(funds()[0].status).toBe("completed");
+    expect(income()).toBe(0);
+    // KSEB is the only counted expense — never recreated, and the card payment is not a second one.
+    expect(liveTx().filter((t) => t.type === "expense" && !isNonIncomeExpenseMovement(t)).map((t) => t.id)).toEqual([kseb.id]);
+    expect(person().currentBalance).toBe(0);
+  });
+
+  it("CASE B — EMI: the person's settlement leaves the lender unpaid until I pay it; paying never re-charges the person", async () => {
+    installments = [emiInst("i1", 1, d(9, 30), 2000)];
+    await payments.recordPayment(person(), pay(2000));
+    expect(account()).toBe(12_000);
+    expect(statement(SEP).currentPending).toBe(0);
+    expect(income()).toBe(0);
+    expect(installments[0].amountPaid).toBe(0); // lender EMI still unpaid
+    expect(funds()).toEqual([
+      expect.objectContaining({ title: "Phone EMI #1", amount: 2000, pendingAmount: 2000, status: "pending", destination: expect.objectContaining({ kind: "emi", installmentId: "i1" }) }),
+    ]);
+    expect(linkedFundsForInstallment(funds(), "i1")).toHaveLength(1);
+
+    const ledgerBefore = ledger().length;
+    await payEmiFromSbi(2000);
+    expect(account()).toBe(10_000);
+    expect(pendingInSbi()).toBe(0);
+    expect(funds()[0].status).toBe("completed");
+    expect(ledger()).toHaveLength(ledgerBefore); // the lender payment is not a second People settlement
+    expect(statement(SEP).currentPending).toBe(0);
+    expect(income()).toBe(0);
+  });
+
+  it("CASE C — mixed: ONE ₹3,000 receipt, allocated KSEB ₹1,000 + EMI ₹2,000, both awaiting onward payment", async () => {
+    installments = [emiInst("i1", 1, d(9, 30), 2000)];
+    await seedCardKseb();
+    await payments.recordPayment(person(), pay(3000));
+    expect(liveTx().filter((t) => t.isPersonLedgerMovement).map((t) => [t.amount, t.accountId])).toEqual([[3000, "sbi"]]);
+    expect(account()).toBe(13_000);
+    expect(income()).toBe(0);
+    const f = funds();
+    expect(new Set(f.map((x) => x.paymentId)).size).toBe(1);
+    expect(f.map((x) => [x.destination.kind, x.pendingAmount]).sort()).toEqual([
+      ["card", 1000],
+      ["emi", 2000],
+    ]);
+    expect(pendingInSbi()).toBe(3000);
+
+    await payEmiFromSbi(2000);
+    expect(pendingInSbi()).toBe(1000);
+  });
+
+  it("CASE D — overpayment held as advance: account +₹3,200 once, income ₹0, the advance is never a linked fund", async () => {
+    installments = [emiInst("i1", 1, d(9, 30), 2000)];
+    await seedCardKseb();
+    await payments.recordPayment(person(), pay(3200, { kind: "advance", amount: 200 }));
+    expect(account()).toBe(13_200);
+    expect(liveTx().filter((t) => t.isPersonLedgerMovement)).toHaveLength(1);
+    expect(income()).toBe(0);
+    expect(statement(ALL).advanceBalance).toBe(-200);
+    expect(pendingInSbi()).toBe(3000);
+  });
+
+  it("CASE E — extra explicitly recorded as income: only the ₹200 is income; the account receives ₹3,200 once", async () => {
+    installments = [emiInst("i1", 1, d(9, 30), 2000)];
+    await seedCardKseb();
+    await payments.recordPayment(person(), pay(3200, { kind: "income", amount: 200, categoryId: "cat-gift", description: "Extra" }));
+    expect(account()).toBe(13_200);
+    // ₹3,000 settlement + ₹200 income = the one ₹3,200 receipt; no further deposit.
+    expect(liveTx().filter((t) => t.accountId === "sbi").reduce((s, t) => s + t.amount, 0)).toBe(3200);
+    expect(income()).toBe(200);
+    expect(pendingInSbi()).toBe(3000);
+  });
+
+  it("revert reverses the receipt once, restores the obligations, clears linked funds; an independent card payment stays", async () => {
+    installments = [emiInst("i1", 1, d(9, 30), 2000)];
+    await seedCardKseb();
+    const id = await payments.recordPayment(person(), pay(3000));
+    await txRepo.createTransferPair({ amount: 1000, dateTime: d(10, 10), sourceAccountId: "sbi", destinationAccountId: "hdfc", categoryId: "cat-transfer" });
+    await payments.revertPayment(person(), id);
+    expect(account()).toBe(9_000); // only the receipt was reversed; my card payment is my own
+    expect(hdfc()).toBe(0);
+    expect(person().currentBalance).toBe(1000);
+    expect(statement(SEP).currentPending).toBe(3000);
+    expect(funds()).toEqual([]);
+    expect(income()).toBe(0);
+  });
+
+  it("edit ₹3,000 → ₹2,500 re-allocates through the engine; linked funds follow the new allocation", async () => {
+    installments = [emiInst("i1", 1, d(9, 30), 2000)];
+    await seedCardKseb();
+    const edited = pay(2500); // allocated over the same open obligations the edit screen shows
+    const id = await payments.recordPayment(person(), pay(3000));
+    await payments.editPayment(person(), id, edited);
+    expect(account()).toBe(12_500);
+    expect(liveTx().filter((t) => t.isPersonLedgerMovement)).toHaveLength(1);
+    expect(round2(funds().reduce((s, f) => s + f.amount, 0))).toBe(2500);
+    expect(pendingInSbi()).toBe(2500);
+    expect(statement(SEP).currentPending).toBe(500);
+    expect(income()).toBe(0);
+  });
+
+  it("a card already paid before the reimbursement is completed at once — nothing awaits", async () => {
+    installments = [];
+    await seedCardKseb();
+    await txRepo.createTransferPair({ amount: 1000, dateTime: d(9, 28), sourceAccountId: "sbi", destinationAccountId: "hdfc", categoryId: "cat-transfer" });
+    await payments.recordPayment(person(), pay(1000));
+    expect(funds().map((f) => f.status)).toEqual(["completed"]);
+    expect(pendingInSbi()).toBe(0);
   });
 });

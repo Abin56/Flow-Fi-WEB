@@ -4,7 +4,7 @@ import { ArrowDownLeft, ArrowUpRight, Check, CircleAlert, CircleDashed, PiggyBan
 import { useMemo, useState } from "react";
 import { EmiBadge } from "@/features/people/components/cycle-statement/statement-parts";
 import type { LedgerRow } from "@/features/people/lib/person-ledger-rows";
-import { obligationSourceLabel, paymentLines, payableObligations, routeFor, type PayableObligation } from "@/features/people/lib/person-payment-obligations";
+import { obligationSourceLabel, paymentLines, routeFor, settlementProjection, timingOf, type PayableObligation } from "@/features/people/lib/person-payment-obligations";
 import { useCategories } from "@/hooks/use-categories";
 import { formatStatementDate } from "@/lib/engines/person-cycle-statement";
 import { money } from "@/lib/engines/person-cycle-statement-share";
@@ -51,6 +51,8 @@ export function RecordPaymentPanel({
   rows,
   preselectKey,
   initial,
+  cycle,
+  cycleLabel,
   onCancel,
   onSubmit,
 }: {
@@ -59,6 +61,9 @@ export function RecordPaymentPanel({
   rows: readonly LedgerRow[];
   preselectKey?: string | null;
   initial?: RecordPaymentInitial | null;
+  /** The selected People cycle — decides what is brought forward, due now, or later. */
+  cycle: { start: Date; end: Date };
+  cycleLabel: string;
   onCancel: () => void;
   onSubmit: (input: RecordPaymentInput, paymentId: string | null) => Promise<void>;
 }) {
@@ -68,8 +73,9 @@ export function RecordPaymentPanel({
   const incomeCategories = categories.filter((c) => c.deletedAt == null && c.type !== "expense");
 
   // When editing, this payment's own lines count as open again — the edit reverts it in the same write.
+  const projection = useMemo(() => settlementProjection(rows, cycle), [rows, cycle]);
   const obligations = useMemo<PayableObligation[]>(() => {
-    const open = payableObligations(rows);
+    const open = projection.payable;
     if (!initial) return open;
     const byKey = new Map(open.map((o) => [o.key, o]));
     for (const [key, paid] of Object.entries(initial.lines)) {
@@ -85,7 +91,9 @@ export function RecordPaymentPanel({
       if (!row || (row.direction !== "theyOwe" && row.direction !== "iOwe")) continue;
       const entry = row.statementRow;
       if (!entry) continue;
-      const target = key.startsWith("ledger:")
+      const target = key.startsWith("opening:")
+        ? ({ kind: "opening", obligationRef: key, max: paid } as const)
+        : key.startsWith("ledger:")
         ? row.category === "split"
           ? null
           : ({
@@ -112,22 +120,33 @@ export function RecordPaymentPanel({
         category: row.category,
         target,
         isEmi: row.category === "emi",
+        timing: timingOf(row.date, cycle),
       });
     }
     return [...byKey.values()].sort((a, b) => a.date.getTime() - b.date.getTime() || a.createdAt.getTime() - b.createdAt.getTime());
-  }, [rows, initial]);
+  }, [rows, initial, projection, cycle]);
 
   const preselected = obligations.find((o) => o.key === preselectKey);
-  const theyOweTotal = obligations.filter((o) => o.side === "theyOwe").reduce((s, o) => s + o.outstanding, 0);
-  const iOweTotal = obligations.filter((o) => o.side === "iOwe").reduce((s, o) => s + o.outstanding, 0);
+  // "Due now" = brought forward + this cycle; later items (e.g. upcoming EMIs) stay available but aren't due yet.
+  const dueNow = (sd: "theyOwe" | "iOwe") => round2(obligations.filter((o) => o.side === sd && o.timing !== "later").reduce((s, o) => s + o.outstanding, 0));
+  const theyOweTotal = dueNow("theyOwe");
+  const iOweTotal = dueNow("iOwe");
   const [direction, setDirection] = useState<PaymentDirection>(
     initial?.direction ?? (preselected ? (preselected.side === "iOwe" ? "iPaid" : "theyPaid") : iOweTotal > theyOweTotal ? "iPaid" : "theyPaid"),
   );
   const side = sideForDirection(direction);
   const options = obligations.filter((o) => o.side === side);
   const [selected, setSelected] = useState<Set<string>>(() =>
-    initial ? new Set(Object.keys(initial.lines)) : preselected ? new Set([preselected.key]) : new Set(options.map((o) => o.key)),
+    initial
+      ? new Set(Object.keys(initial.lines))
+      : preselected
+        ? new Set([preselected.key])
+        : new Set(options.filter((o) => o.timing !== "later").map((o) => o.key)),
   );
+  const [showLater, setShowLater] = useState(false);
+  const laterCount = options.filter((o) => o.timing === "later" && !selected.has(o.key)).length;
+  const visible = options.filter((o) => o.timing !== "later" || showLater || selected.has(o.key));
+  const elsewhere = projection.elsewhere.filter((o) => o.side === side && o.timing !== "later");
   const [amountText, setAmountText] = useState(() => (initial ? String(initial.amount) : preselected ? String(preselected.outstanding) : ""));
   const [date, setDate] = useState(() => toInputDate(initial?.date ?? new Date()));
   const [manual, setManual] = useState<Record<string, string> | null>(null);
@@ -166,7 +185,7 @@ export function RecordPaymentPanel({
     accountId,
   });
   const lineByKey = new Map(allocation.lines.map((l) => [l.key, l]));
-  const allSelected = options.length > 0 && options.every((o) => selected.has(o.key));
+  const allSelected = options.some((o) => o.timing !== "later") && options.filter((o) => o.timing !== "later").every((o) => selected.has(o.key));
   const unselected = options.filter((o) => !selected.has(o.key));
   const theyPaid = direction === "theyPaid";
 
@@ -233,10 +252,23 @@ export function RecordPaymentPanel({
   const seedManual = () => Object.fromEntries(allocation.lines.map((l) => [l.key, String(l.amount)]));
 
   return (
-    <div className="mt-4 overflow-hidden rounded-[8px] border border-border-strong bg-card">
+    // A real <form>: Enter in a single-line field records through the same submit() as the primary button,
+    // with the same gates (blocker / saving / unbalanced allocation) the button's disabled state applies.
+    <form
+      noValidate
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (e.target !== e.currentTarget || !recon.balanced) return;
+        void submit();
+      }}
+      className="mt-4 overflow-hidden rounded-[8px] border border-border-strong bg-card"
+    >
       {/* Title */}
       <div className="flex items-center justify-between gap-3 border-b border-border-strong px-4 py-2.5">
-        <h3 className="font-heading text-[15px] leading-tight font-semibold tracking-tight text-foreground">{initial ? "Edit payment" : "Record payment"}</h3>
+        <h3 className="font-heading text-[15px] leading-tight font-semibold tracking-tight text-foreground">
+          {initial ? "Edit payment" : "Record payment"} — {personName}
+          <span className="ml-2 text-xs font-semibold text-foreground/70">Cycle: {cycleLabel}</span>
+        </h3>
         <WsCloseButton onClick={onCancel} className="-my-0.5" />
       </div>
 
@@ -270,19 +302,19 @@ export function RecordPaymentPanel({
                 onChange={(d) => {
                   if (initial) return;
                   setDirection(d);
-                  setSelected(new Set(obligations.filter((o) => o.side === sideForDirection(d)).map((o) => o.key)));
+                  setSelected(new Set(obligations.filter((o) => o.side === sideForDirection(d) && o.timing !== "later").map((o) => o.key)));
                   setManual(null);
                   setExtraChoice("advance");
                 }}
                 options={[
                   {
                     value: "theyPaid",
-                    label: `${first} paid me`,
+                    label: `Money received from ${first}`,
                     icon: ArrowDownLeft,
                   },
                   {
                     value: "iPaid",
-                    label: `I paid ${first}`,
+                    label: `Money paid to ${first}`,
                     icon: ArrowUpRight,
                   },
                 ]}
@@ -291,7 +323,7 @@ export function RecordPaymentPanel({
             <WsField label={theyPaid ? "Amount received" : "Amount paid"}>
               <CompactAmountInput label={theyPaid ? "Amount received" : "Amount paid"} value={amountText} onChange={setAmountText} autoFocus />
             </WsField>
-            <AccountField choice={account} label={theyPaid ? "Received into" : "Paid from"} />
+            <AccountField choice={account} label={theyPaid ? "Receive into account" : "Pay from account"} />
             <WsField label="Date">
               <input type="date" className={WS_FIELD} value={date} onChange={(e) => setDate(e.target.value)} />
             </WsField>
@@ -315,11 +347,11 @@ export function RecordPaymentPanel({
                   type="button"
                   onClick={() => {
                     setManual(null);
-                    setSelected(allSelected ? new Set() : new Set(options.map((o) => o.key)));
+                    setSelected(allSelected ? new Set() : new Set(options.filter((o) => o.timing !== "later").map((o) => o.key)));
                   }}
                   className="h-7 rounded-[6px] border border-border-strong px-2.5 text-xs font-semibold text-foreground hover:bg-secondary"
                 >
-                  {allSelected ? "Clear selection" : "Select all outstanding"}
+                  {allSelected ? "Clear selection" : "Select all due"}
                 </button>
               )}
             </div>
@@ -346,7 +378,7 @@ export function RecordPaymentPanel({
                   </tr>
                 </thead>
                 <tbody>
-                  {options.map((o) => {
+                  {visible.map((o) => {
                     const on = selected.has(o.key);
                     const line = lineByKey.get(o.key);
                     const paying = line?.amount ?? 0;
@@ -379,6 +411,14 @@ export function RecordPaymentPanel({
                           <span className="flex min-w-0 items-center gap-1.5 font-semibold text-foreground">
                             <span className="truncate">{o.title}</span>
                             {o.isEmi && <EmiBadge />}
+                            {o.timing === "carried" && (
+                              <span className="shrink-0 rounded-[4px] bg-settle-carried-badge px-1.5 text-[10px] leading-4 font-bold text-settle-carried-text uppercase">
+                                Carried forward
+                              </span>
+                            )}
+                            {o.timing === "later" && (
+                              <span className="shrink-0 rounded-[4px] bg-secondary px-1.5 text-[10px] leading-4 font-bold text-foreground/75 uppercase">Upcoming</span>
+                            )}
                           </span>
                         </td>
                         <td className="border-b border-border px-2 py-1.5 text-xs font-medium text-foreground/80">{obligationSourceLabel(o, first)}</td>
@@ -429,6 +469,15 @@ export function RecordPaymentPanel({
                       </tr>
                     );
                   })}
+                  {laterCount > 0 && (
+                    <tr>
+                      <td colSpan={8} className="border-b border-border px-2 py-1.5">
+                        <button type="button" onClick={() => setShowLater((v) => !v)} className="text-xs font-semibold text-foreground/80 underline underline-offset-2 hover:text-foreground">
+                          {showLater ? "Hide upcoming items" : `Show ${laterCount} upcoming ${laterCount === 1 ? "item" : "items"} after this cycle`}
+                        </button>
+                      </td>
+                    </tr>
+                  )}
                 </tbody>
                 <tfoot>
                   <tr className="bg-secondary/70 font-semibold text-foreground">
@@ -444,6 +493,34 @@ export function RecordPaymentPanel({
                   </tr>
                 </tfoot>
               </table>
+            </div>
+          )}
+
+          {elsewhere.length > 0 && (
+            <div className="mt-3 rounded-[6px] border border-border-strong bg-secondary/50 px-3 py-2">
+              <p className="text-[11px] font-bold tracking-[0.06em] text-foreground/80 uppercase">
+                Also outstanding — settled at the source ({money(elsewhere.reduce((sum, e) => sum + e.outstanding, 0))})
+              </p>
+              <ul className="mt-1 space-y-0.5 text-xs">
+                {elsewhere.map((e) => (
+                  <li key={e.key} className="flex flex-wrap items-baseline justify-between gap-x-3">
+                    <span className="font-semibold text-foreground">
+                      {formatStatementDate(e.date, true)} · {e.title} · {money(e.outstanding)}
+                    </span>
+                    <span className="text-foreground/75">
+                      {e.reason}
+                      {e.loanId && (
+                        <>
+                          {" · "}
+                          <a href={`/loans?agreement=${encodeURIComponent(e.loanId)}`} className="font-semibold text-foreground underline underline-offset-2">
+                            Open Loan
+                          </a>
+                        </>
+                      )}
+                    </span>
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
 
@@ -564,14 +641,14 @@ export function RecordPaymentPanel({
               <button type="button" onClick={onCancel} disabled={saving} className={WS_GHOST}>
                 Cancel
               </button>
-              <button type="button" onClick={() => void submit()} disabled={!!blocker || saving || !recon.balanced} className={cn(WS_PRIMARY, "flex-1")}>
+              <button type="submit" disabled={!!blocker || saving || !recon.balanced} className={cn(WS_PRIMARY, "flex-1")}>
                 {saving ? "Saving…" : initial ? "Save changes" : theyPaid ? `Record ${money(amount)} received` : `Record ${money(amount)} paid`}
               </button>
             </div>
           </div>
         </aside>
       </div>
-    </div>
+    </form>
   );
 }
 

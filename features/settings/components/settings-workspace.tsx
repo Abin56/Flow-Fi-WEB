@@ -321,6 +321,15 @@ export function SettingsWorkspace() {
                   </div>
                 </div>
 
+                {/* Real <form> (display: contents): Enter in a profile field saves like "Save Changes". */}
+                <form
+                  className="contents"
+                  noValidate
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    void handleSaveProfile();
+                  }}
+                >
                 <div className="mt-4 flex flex-col gap-3">
                   <TextField label="Full Name" value={fullName} onChange={(e) => setFullName(e.target.value)} />
                   <TextField label="Email Address" type="email" value={email} disabled onChange={() => {}} />
@@ -354,8 +363,9 @@ export function SettingsWorkspace() {
                 </div>
 
                 <div className="mt-4 flex justify-end">
-                  <ClayButton onClick={handleSaveProfile}>Save Changes</ClayButton>
+                  <ClayButton type="submit">Save Changes</ClayButton>
                 </div>
+                </form>
               </div>
 
               <div className="surface-flat rounded-3xl border border-border/50 p-5">

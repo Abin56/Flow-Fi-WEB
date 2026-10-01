@@ -52,7 +52,12 @@ export function CreditCardTile({ card, active, onClick, onEdit, onDelete }: Cred
         role="button"
         tabIndex={0}
         onClick={onClick}
-        onKeyDown={(e) => e.key === "Enter" && onClick()}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onClick();
+          }
+        }}
         style={{ background: CARD_GRADIENT[card.accent] }}
         className={cn(
           "relative flex h-full cursor-pointer flex-col gap-3.5 overflow-hidden rounded-[12px] p-4 text-white shadow-e2 transition-[transform,box-shadow] duration-150 outline-none hover:-translate-y-px focus-visible:ring-2 focus-visible:ring-ring",

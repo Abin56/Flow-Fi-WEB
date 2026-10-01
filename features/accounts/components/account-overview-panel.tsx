@@ -7,6 +7,8 @@ import { Line, LineChart, ResponsiveContainer } from "recharts";
 import { BankLogo } from "@/components/finance/bank-logo";
 import { ACCOUNT_COLOR } from "@/features/accounts/lib/account-colors";
 import type { AccountOverviewItem } from "@/features/accounts/hooks/use-accounts-data";
+import { AccountLinkedFundsSection } from "@/features/people/components/linked-funds";
+import type { LinkedFund } from "@/lib/engines/linked-funds";
 import { formatCurrency } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -53,11 +55,17 @@ export function AccountOverviewPanel({
   onClose,
   onEdit,
   onDelete,
+  onViewTransactions,
+  linkedFunds,
 }: {
   account: AccountOverviewItem;
   onClose: () => void;
+  /** Opens the central Transactions workspace filtered to this account. */
+  onViewTransactions?: () => void;
   onEdit?: () => void;
   onDelete?: () => void;
+  /** People money held in this account for a card bill / EMI still to be paid — informational, never subtracted. */
+  linkedFunds?: { funds: LinkedFund[]; total: number };
 }) {
   const [revealed, setRevealed] = useState(false);
   const palette = ACCOUNT_COLOR[account.color];
@@ -108,6 +116,22 @@ export function AccountOverviewPanel({
             </div>
           )}
         </div>
+
+        {linkedFunds && <AccountLinkedFundsSection balance={account.balance} funds={linkedFunds.funds} total={linkedFunds.total} />}
+
+        {onViewTransactions && (
+          <button
+            type="button"
+            onClick={onViewTransactions}
+            className="mt-3 flex h-9 w-full items-center justify-between gap-2 rounded-[6px] border border-border-strong bg-card px-3 text-sm font-semibold text-foreground transition-colors hover:border-primary-accent-text hover:bg-primary/10"
+          >
+            <span className="flex items-center gap-1.5">
+              <Receipt className="size-3.5" strokeWidth={2} />
+              View all transactions
+            </span>
+            <ChevronRight className="size-4" strokeWidth={2} />
+          </button>
+        )}
 
         {/* Working actions */}
         {(onEdit || onDelete) && (

@@ -226,7 +226,7 @@ export interface StatementRow {
   remainingNow?: number;
   /** EMI rows only. */
   /** `sourceKind`/`sourceId`: the EMI or taken Loan the installment belongs to — where it is edited. */
-  emi?: { sourceName: string; installmentNumber: number; status: EmiRowStatus; sourceKind?: "emi" | "loan"; sourceId?: string };
+  emi?: { sourceName: string; installmentNumber: number; status: EmiRowStatus; sourceKind?: "emi" | "loan"; sourceId?: string; /** The whole installment, when this row is only this person's share of a shared Loan/EMI. */ installmentAmount?: number };
   /** Person-Loan installment rows (and their payments): the Loan it belongs to. */
   loan?: { loanId: string; installmentNumber: number; installmentCount: number; dueDate: Date };
 }
@@ -409,10 +409,17 @@ export function collectStatementEvents(input: Omit<PersonCycleStatementInput, "c
       order: 1,
       kind: "obligation",
       category: "emi",
-      title: o.sourceName,
+      title: o.installmentAmount > o.amount ? `${o.sourceName} · EMI share` : o.sourceName,
       amount: o.amount,
       signedAmount: o.amount,
-      emi: { sourceName: o.sourceName, installmentNumber: o.installmentNumber, status: o.lenderStatus, sourceKind: o.sourceKind, sourceId: o.sourceId },
+      emi: {
+        sourceName: o.sourceName,
+        installmentNumber: o.installmentNumber,
+        status: o.lenderStatus,
+        sourceKind: o.sourceKind,
+        sourceId: o.sourceId,
+        ...(o.installmentAmount > o.amount ? { installmentAmount: o.installmentAmount } : {}),
+      },
     });
   }
 

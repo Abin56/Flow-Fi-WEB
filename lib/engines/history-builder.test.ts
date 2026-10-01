@@ -62,6 +62,19 @@ describe("buildHistory — transaction classification", () => {
     expect(entry.isCredit).toBe(true);
   });
 
+  it("a People repayment received into an account is a credit but never 'myIncome'", () => {
+    const [entry] = buildHistory({
+      transactions: [transaction({ type: "income", isPersonLedgerMovement: true })],
+      expenses: [],
+      loans: [],
+      bills: [],
+      emis: [],
+    });
+    expect(entry.kind).toBe("people");
+    expect(entry.title).toBe("Person paid you");
+    expect(entry.isCredit).toBe(true);
+  });
+
   it("a transfer leg overrides every other classification, even a split expense", () => {
     const expense: HistoryExpense = {
       transactionId: "t1",

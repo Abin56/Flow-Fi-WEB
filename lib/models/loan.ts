@@ -17,6 +17,7 @@
 import type { DocumentData, QueryDocumentSnapshot, SnapshotOptions } from "firebase/firestore";
 import { Timestamp } from "firebase/firestore";
 import type { AuditEntry, SoftDeletableEntity } from "@/lib/firestore/soft-deletable";
+import { ownershipSharesFromData, type OwnershipShare } from "@/lib/engines/debt-ownership";
 import type { InterestPeriod, InterestType } from "@/lib/engines/interest-calculator";
 import type { Installment, ScheduleType } from "@/lib/models/payment-schedule";
 import { installmentStatus } from "@/lib/models/payment-schedule";
@@ -189,6 +190,15 @@ export interface Loan extends SoftDeletableEntity {
    */
   beneficiaryRepaysInstallments?: boolean;
 
+  /**
+   * Multi-party ownership of the principal (`lib/engines/debt-ownership.ts`): each party's share, with
+   * `personId: null` = me. Sums exactly to the principal. Present only on a shared agreement — every
+   * listed person repays me their share of each installment (People obligations); the lender schedule
+   * stays ONE schedule. Absent (every legacy document) = resolve from the beneficiary fields. Fixed at
+   * creation so historical installment shares can never be rewritten. Written only when present.
+   */
+  ownershipShares?: OwnershipShare[] | null;
+
   /** Locked once any payment has been recorded — see `LoanRepository.editLoan`. */
   loanAmount: number;
 
@@ -290,6 +300,7 @@ export function loanFromFirestore(
       : null,
     linkedCreditCardId: (data.linkedCreditCardId as string | undefined) ?? null,
     beneficiaryRepaysInstallments: data.beneficiaryRepaysInstallments === true,
+    ownershipShares: ownershipSharesFromData(data.ownershipShares),
     purchaseTransactionId: (data.purchaseTransactionId as string | undefined) ?? null,
     purchaseAmount: (data.purchaseAmount as number | undefined) ?? null,
     downPayment: (data.downPayment as number | undefined) ?? null,
@@ -342,6 +353,7 @@ export function loanToFirestore(loan: Loan): DocumentData {
     payerPersonId: loan.payerPersonId ?? null,
     beneficiaryPersonId: loan.beneficiaryPersonId ?? null,
     ...(loan.beneficiaryRepaysInstallments === true ? { beneficiaryRepaysInstallments: true } : {}),
+    ...(loan.ownershipShares != null && loan.ownershipShares.length > 0 ? { ownershipShares: loan.ownershipShares.map((x) => ({ personId: x.personId, amount: x.amount })) } : {}),
     loanAmount: loan.loanAmount,
     interest: loan.interest == null ? null : loanInterestToMap(loan.interest),
     loanDate: Timestamp.fromDate(loan.loanDate),

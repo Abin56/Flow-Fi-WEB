@@ -7,6 +7,7 @@ import {
   CalendarClock,
   Check,
   ChevronDown,
+  ExternalLink,
   CornerDownRight,
   HandCoins,
   History,
@@ -21,6 +22,7 @@ import {
   UserCheck,
   type LucideIcon,
 } from "lucide-react";
+import Link from "next/link";
 import { Fragment, useState } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { LedgerRowHandlers } from "@/features/people/components/person-activity-feed";
@@ -128,7 +130,7 @@ const BANK_STATUS: Record<EmiRowStatus, string> = {
 
 const TH =
   "sticky top-0 z-[2] border-r border-b border-r-border-strong/50 border-b-border-strong bg-secondary px-2.5 py-1.5 text-left text-[10.5px] font-bold tracking-[0.07em] whitespace-nowrap text-foreground/75 uppercase last:border-r-0";
-const TD = "border-r border-b border-r-border-strong/40 border-b-border-strong/55 px-2.5 py-2 align-middle last:border-r-0";
+const TD = "border-r border-b border-r-border-strong/40 border-b-border-strong/55 px-2.5 py-1 align-middle last:border-r-0";
 const NUM = "text-right tabular-nums whitespace-nowrap";
 
 const isPaymentKind = (k: SettlementKind) => k === "paymentReceived" || k === "paymentMade" || k === "advance" || k === "advanceApplied";
@@ -181,11 +183,11 @@ export function StatusPill({ status, compact = false }: { status: SettlementRowV
   const Icon = STATUS_ICON[status.tone];
   return (
     <div className="min-w-0">
-      <span className={cn("inline-flex h-5 items-center gap-1 rounded-[4px] px-1.5 text-[10.5px] leading-none font-bold tracking-[0.04em] whitespace-nowrap uppercase", STATUS_STYLE[status.tone])}>
+      <span className={cn("inline-flex h-[18px] items-center gap-1 rounded-[4px] px-1.5 text-[10px] leading-none font-bold tracking-[0.04em] whitespace-nowrap uppercase", STATUS_STYLE[status.tone])}>
         {Icon && <Icon className="size-3" strokeWidth={2.5} aria-hidden />}
         {status.label}
       </span>
-      {!compact && status.detail && <p className="mt-0.5 truncate text-[11.5px] leading-tight font-medium text-foreground/75">{status.detail}</p>}
+      {!compact && status.detail && <p className="truncate text-[11px] leading-tight font-medium text-foreground/75">{status.detail}</p>}
     </div>
   );
 }
@@ -411,11 +413,31 @@ function Source({ v, cycleLabelOf }: { v: SettlementRowView; cycleLabelOf?: (d: 
 }
 
 const ACTION_BTN =
-  "flex h-7 items-center gap-1.5 rounded-[6px] border px-2.5 text-[12px] font-semibold whitespace-nowrap outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring";
+  "flex h-6 items-center gap-1.5 rounded-[5px] border px-2 text-[12px] font-semibold whitespace-nowrap outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring";
 
-/** Only the actions this row really supports. */
-function RowActionButtons({ v, handlers, compact = false }: { v: SettlementRowView; handlers: LedgerRowHandlers; compact?: boolean }) {
+/**
+ * Where a row that is NOT owned by the People Ledger is edited or deleted — its authoritative source (the
+ * EMI / Loan, or the expense transaction for a split/assigned/linked share). Null for ledger-owned rows.
+ */
+export function sourceLink(row: LedgerRow, lookups: SettlementLookups): { href: string; label: string } | null {
+  const emi = row.statementRow?.emi;
+  if (row.category === "emi" && emi?.sourceId) {
+    return emi.sourceKind === "loan"
+      ? { href: `/loans?agreement=${encodeURIComponent(emi.sourceId)}`, label: "Open Loan" }
+      : { href: `/emi?agreement=${encodeURIComponent(emi.sourceId)}`, label: "Open EMI" };
+  }
+  if (row.category === "loan" && row.loanId) return { href: `/loans?agreement=${encodeURIComponent(row.loanId)}`, label: "Open Loan" };
+  if (row.entryId && !row.deletable && row.deleteBlock === "expense" && row.statementRow?.kind === "obligation") {
+    const ref = lookups.entriesById.get(row.entryId)?.transactionRef;
+    if (ref) return { href: `/transactions?transaction=${encodeURIComponent(ref)}`, label: "Open expense" };
+  }
+  return null;
+}
+
+/** Only the actions this row really supports — Edit/Delete here for ledger-owned rows, the source otherwise. */
+function RowActionButtons({ v, handlers, lookups, compact = false }: { v: SettlementRowView; handlers: LedgerRowHandlers; lookups: SettlementLookups; compact?: boolean }) {
   const { row } = v;
+  const source = sourceLink(row, lookups);
   const settling = handlers.settlingKey === row.key;
   const editing = handlers.editingKey === row.key;
   const loanPay = row.category === "loan" && row.loanId != null && row.state != null && row.state !== "settled";
@@ -434,17 +456,40 @@ function RowActionButtons({ v, handlers, compact = false }: { v: SettlementRowVi
           {compact ? "Record" : row.state === "partial" ? "Record rest" : "Record payment"}
         </button>
       ) : null}
-      {!compact && isEditable(row) && handlers.onEditStart && (
-        <button type="button" aria-pressed={editing} onClick={() => (editing ? handlers.onEditCancel?.() : handlers.onEditStart!(row))} className={cn(ACTION_BTN, "border-border-strong bg-card text-foreground hover:bg-secondary")}>
+      {isEditable(row) && handlers.onEditStart && (
+        <button
+          type="button"
+          aria-pressed={editing}
+          aria-label={`Edit ${v.title}`}
+          title="Edit"
+          onClick={() => (editing ? handlers.onEditCancel?.() : handlers.onEditStart!(row))}
+          className={cn(ACTION_BTN, compact && "px-1.5", "border-border-strong bg-card text-foreground hover:bg-secondary")}
+        >
           <Pencil className="size-3.5" strokeWidth={1.75} />
-          Edit
+          {!compact && "Edit"}
         </button>
       )}
-      {!compact && row.deletable && handlers.onDelete && (
-        <button type="button" onClick={() => handlers.onDelete!(row)} className={cn(ACTION_BTN, "border-border-strong bg-card text-foreground hover:border-expense hover:text-expense")}>
+      {row.deletable && handlers.onDelete && (
+        <button
+          type="button"
+          aria-label={`Delete ${v.title}`}
+          title="Delete"
+          onClick={() => handlers.onDelete!(row)}
+          className={cn(ACTION_BTN, compact && "px-1.5", "border-border-strong bg-card text-foreground hover:border-expense hover:text-expense")}
+        >
           <Trash2 className="size-3.5" strokeWidth={1.75} />
-          Delete
+          {!compact && "Delete"}
         </button>
+      )}
+      {source && !(row.category === "loan" && loanPay) && (
+        <Link
+          href={source.href}
+          title={`Edit or delete it where it comes from — ${source.label.replace("Open ", "the ")}`}
+          className={cn(ACTION_BTN, compact && "px-1.5", "border-border-strong bg-card text-foreground hover:bg-secondary")}
+        >
+          <ExternalLink className="size-3.5" strokeWidth={1.75} />
+          {compact ? <span className="sr-only">{source.label}</span> : source.label}
+        </Link>
       )}
     </div>
   );
@@ -480,15 +525,15 @@ function Expansion({
   }
   const onUndo = handlers.onUndoPayment ? (p: PaymentRecord) => handlers.onUndoPayment!(row, p) : undefined;
   return (
-    <div className={cn("rounded-[8px] border border-l-[3px] border-border-strong/70 bg-card px-3.5 py-3", FAMILY[v.family].edge)}>
+    <div className={cn("rounded-[8px] border border-l-[3px] border-border-strong/70 bg-card px-3 py-2.5", FAMILY[v.family].edge)}>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2">
           <p className="truncate text-[13px] font-bold tracking-[0.03em] text-foreground uppercase">{v.title}</p>
           <TypeBadge kind={v.kind} family={v.typeFamily} />
         </div>
-        <RowActionButtons v={v} handlers={handlers} />
+        <RowActionButtons v={v} handlers={handlers} lookups={lookups} />
       </div>
-      <div className="mt-2.5 grid gap-x-7 gap-y-3.5 md:grid-cols-2 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_minmax(0,0.7fr)]">
+      <div className="mt-2 grid gap-x-7 gap-y-2.5 md:grid-cols-2 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_minmax(0,0.7fr)]">
         <Breakdown v={v} personId={personId} personName={personName} lookups={lookups} />
         <div className="flex flex-col gap-3">
           <Progress v={v} />
@@ -519,11 +564,13 @@ export interface SettlementTableProps {
   empty: React.ReactNode;
   /** "Brought forward" source label, e.g. "Sep cycle". */
   cycleLabelOf?: (d: Date) => string;
+  /** Onward-payment trail for an obligation settled with money received (card bill / EMI still to pay, or paid). */
+  linkedTrail?: (rowKey: string) => React.ReactNode;
   /** Sticky header offset container: the table's header sticks to the top of its scrolling parent. */
   className?: string;
 }
 
-export function SettlementTable({ personId, personName, rows, carriedRows = [], isLoading, lookups, accountForEntry, handlers, empty, cycleLabelOf, className }: SettlementTableProps) {
+export function SettlementTable({ personId, personName, rows, carriedRows = [], isLoading, lookups, accountForEntry, handlers, empty, cycleLabelOf, className, linkedTrail }: SettlementTableProps) {
   const [openKey, setOpenKey] = useState<string | null>(null);
 
   if (isLoading) {
@@ -564,36 +611,47 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
         <tr
           onClick={() => toggle(row)}
           aria-expanded={open}
+          // Keyboard: the row is one tab stop; Enter/Space expands it (only when the row itself is focused,
+          // so Enter on an action button inside still runs just that button).
+          tabIndex={0}
+          onKeyDown={(e) => {
+            if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
+              e.preventDefault();
+              toggle(row);
+            }
+          }}
           className={cn("group cursor-pointer transition-colors", fam.tint, "hover:brightness-[0.97] dark:hover:brightness-110", open && "outline-2 -outline-offset-2 outline-primary-accent-text/60")}
         >
           <td className={cn(TD, "hidden w-10 border-l-[4px] text-right text-[11px] font-semibold text-foreground/60 tabular-nums lg:table-cell", fam.edge)}>{sequence(n, total)}</td>
           <td className={cn(TD, "w-[4.75rem] border-l-[4px] whitespace-nowrap lg:border-l-0", fam.edge)}>
             <p className="text-[13px] leading-tight font-semibold text-foreground tabular-nums">{formatStatementDate(row.date)}</p>
-            <p className="text-[10.5px] leading-tight font-medium text-foreground/60 tabular-nums">{row.date.getFullYear()}</p>
+            {/* The month heading carries the year; brought-forward rows sit outside it, so they keep theirs. */}
+            {v.carried && <p className="text-[10.5px] leading-tight font-medium text-foreground/65 tabular-nums">{row.date.getFullYear()}</p>}
           </td>
           <td className={cn(TD, "w-full max-w-0")}>
             <div className="flex min-w-0 items-center gap-1.5">
               <ChevronDown className={cn("size-3.5 shrink-0 text-foreground/50 transition-transform", open && "rotate-180")} strokeWidth={2} aria-hidden />
-              <span className={cn("truncate text-[13.5px] font-semibold", muted ? "text-foreground/80" : "text-foreground")}>{v.title}</span>
+              <span className={cn("truncate text-[13.5px] leading-tight font-semibold", muted ? "text-foreground/80" : "text-foreground")}>{v.title}</span>
+              <TypeBadge kind={v.kind} family={v.typeFamily} className="h-[18px] xl:hidden" />
               {v.carried && <span className="shrink-0 rounded-[4px] bg-settle-carried-badge px-1.5 text-[10px] leading-4 font-bold tracking-wide text-settle-carried-text uppercase">Brought forward</span>}
             </div>
-            <p className="truncate pl-5 text-[11.5px] leading-snug font-medium text-foreground/70">
+            <p className="truncate pl-5 text-[11.5px] leading-tight font-medium text-foreground/75">
               {v.carried && cycleLabelOf ? `From ${cycleLabelOf(row.date)} · ` : ""}
               {v.relation}
             </p>
-            <div className="mt-1 pl-5 xl:hidden"><TypeBadge kind={v.kind} family={v.typeFamily} /></div>
+            {linkedTrail?.(row.key) && <div className="pl-5">{linkedTrail(row.key)}</div>}
           </td>
           <td className={cn(TD, "hidden w-[9.5rem] xl:table-cell")}><TypeBadge kind={v.kind} family={v.typeFamily} /></td>
           <td className={cn(TD, NUM, "w-[6.5rem]")}><Amount value={isPaymentKind(v.kind) ? null : row.amount} tone={muted ? "text-foreground/75" : undefined} /></td>
           <td className={cn(TD, NUM, "hidden w-[6.5rem] lg:table-cell")}><Amount value={v.paid} tone={v.paid ? "text-success" : "text-foreground/60"} /></td>
           <td className={cn(TD, NUM, "w-[7rem]")}><RemainingAmount v={v} /></td>
           <td className={cn(TD, "w-[11.5rem] max-w-[11.5rem]")}><StatusPill status={v.status} /></td>
-          <td className={cn(TD, "w-[8.5rem] py-1")}><RowActionButtons v={v} handlers={handlers} compact /></td>
+          <td className={cn(TD, "w-[10rem] py-0.5")}><RowActionButtons v={v} handlers={handlers} lookups={lookups} compact /></td>
         </tr>
         <tr aria-hidden={!open}>
           <td colSpan={9} className={cn("p-0", open && "border-b border-border-strong/60 bg-secondary/60")}>
             <InlineReveal open={open}>
-              <div className="px-3 py-2.5 lg:pl-12">
+              <div className="px-3 py-2 lg:pl-12">
                 <Expansion v={v} {...expansionProps} />
               </div>
             </InlineReveal>
@@ -609,7 +667,7 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
     const fam = FAMILY[v.family];
     return (
       <li key={row.key} className={cn("border-b border-l-[4px] border-b-border-strong/55", fam.tint, fam.edge)}>
-        <button type="button" onClick={() => toggle(row)} aria-expanded={open} className="block w-full px-3 py-2.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset">
+        <button type="button" onClick={() => toggle(row)} aria-expanded={open} className="block w-full px-3 py-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <p className="truncate text-[14px] font-semibold text-foreground">{v.title}</p>
@@ -625,8 +683,9 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
             </div>
           </div>
           <p className="mt-1 truncate text-[12px] font-medium text-foreground/75">{v.relation}</p>
+          {linkedTrail?.(row.key) && <span className="mt-0.5 block">{linkedTrail(row.key)}</span>}
           {row.state != null ? (
-            <dl className="mt-1.5 grid grid-cols-3 gap-2 text-[11.5px]">
+            <dl className="mt-1 grid grid-cols-3 gap-2 text-[11.5px]">
               <div><dt className="text-foreground/60">Original</dt><dd className="font-semibold text-foreground tabular-nums">{money(row.amount)}</dd></div>
               <div><dt className="text-foreground/60">Paid</dt><dd className="font-semibold text-success tabular-nums">{money(v.paid ?? 0)}</dd></div>
               <div><dt className="text-foreground/60">Remaining</dt><dd className="font-semibold text-foreground tabular-nums">{money(row.remaining ?? 0)}</dd></div>
@@ -634,7 +693,7 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
           ) : (
             <p className="mt-1 text-[13px] font-bold text-foreground tabular-nums">{money(row.amount)}</p>
           )}
-          <div className="mt-1.5 flex items-center justify-between gap-2">
+          <div className="mt-1 flex items-center justify-between gap-2">
             <StatusPill status={v.status} />
             <ChevronDown className={cn("size-4 shrink-0 text-foreground/55 transition-transform", open && "rotate-180")} />
           </div>
@@ -663,7 +722,7 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
             <th className={cn(TH, "hidden w-[6.5rem] text-right lg:table-cell")}>Paid</th>
             <th className={cn(TH, "w-[7rem] text-right")}>Remaining</th>
             <th className={cn(TH, "w-[11.5rem]")}>Status</th>
-            <th className={cn(TH, "w-[8.5rem]")}>Action</th>
+            <th className={cn(TH, "w-[10rem]")}>Action</th>
           </tr>
         </thead>
         <tbody>
@@ -679,13 +738,14 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
           )}
           {groups.map((g) => (
             <Fragment key={g.key}>
-              {(g.label || carriedViews.length > 0) && (
-                <tr>
-                  <td colSpan={9} className="border-b border-border-strong/60 bg-secondary px-3 py-1 text-[10.5px] font-bold tracking-[0.08em] text-foreground/70 uppercase">
-                    {g.label ?? "This cycle"}
-                  </td>
-                </tr>
-              )}
+              <tr>
+                <td colSpan={9} className="border-t-2 border-b border-t-border-strong border-b-border-strong/70 bg-secondary px-3 pt-2 pb-1">
+                  <span className="text-[12px] font-bold tracking-[0.08em] text-foreground uppercase">{g.label}</span>
+                  <span className="ml-2 text-[11.5px] font-medium text-foreground/70">
+                    {g.rows.length} {g.rows.length === 1 ? "transaction" : "transactions"}
+                  </span>
+                </td>
+              </tr>
               {g.rows.map(({ row }) => desktopRow(viewOf(row, personName, lookups), ++n))}
             </Fragment>
           ))}
@@ -700,7 +760,10 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
         {carriedViews.map(mobileRow)}
         {groups.map((g) => (
           <Fragment key={g.key}>
-            {g.label && <li className="sticky top-0 z-[1] border-b border-border-strong/60 bg-secondary px-3 py-1 text-[10.5px] font-bold tracking-[0.08em] text-foreground/70 uppercase">{g.label}</li>}
+            <li className="sticky top-0 z-[1] flex items-baseline justify-between border-t-2 border-b border-t-border-strong border-b-border-strong/70 bg-secondary px-3 py-1">
+              <span className="text-[12px] font-bold tracking-[0.08em] text-foreground uppercase">{g.label}</span>
+              <span className="text-[11px] font-medium text-foreground/70">{g.rows.length} {g.rows.length === 1 ? "transaction" : "transactions"}</span>
+            </li>
             {g.rows.map(({ row }) => mobileRow(viewOf(row, personName, lookups)))}
           </Fragment>
         ))}

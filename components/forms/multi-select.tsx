@@ -52,6 +52,7 @@ export function MultiSelect({ label, values, onChange, options, placeholder = "S
                   <span
                     role="button"
                     tabIndex={-1}
+                    aria-label={`Remove ${option.label}`}
                     onClick={(e) => {
                       e.stopPropagation();
                       toggle(option.value);

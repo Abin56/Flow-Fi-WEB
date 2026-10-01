@@ -23,6 +23,7 @@
 import type { DocumentData, QueryDocumentSnapshot, SnapshotOptions } from "firebase/firestore";
 import { Timestamp } from "firebase/firestore";
 import type { AuditEntry, SoftDeletableEntity } from "@/lib/firestore/soft-deletable";
+import { ownershipSharesFromData, type OwnershipShare } from "@/lib/engines/debt-ownership";
 import type { InterestPeriod, InterestType } from "@/lib/engines/interest-calculator";
 import type { Installment, ScheduleType } from "@/lib/models/payment-schedule";
 import { installmentStatus, remainingAmount } from "@/lib/models/payment-schedule";
@@ -167,6 +168,15 @@ export interface Emi extends SoftDeletableEntity {
    * lender never settles it; only a Person settlement in the ledger does. Written only when true.
    */
   beneficiaryRepaysInstallments?: boolean;
+
+  /**
+   * Multi-party ownership of the principal (`lib/engines/debt-ownership.ts`): each party's share, with
+   * `personId: null` = me. Sums exactly to the principal. Present only on a shared agreement — every
+   * listed person repays me their share of each installment (People obligations); the lender schedule
+   * stays ONE schedule. Absent (every legacy document) = resolve from the beneficiary fields. Fixed at
+   * creation so historical installment shares can never be rewritten. Written only when present.
+   */
+  ownershipShares?: OwnershipShare[] | null;
 
   /** Locked once any payment has been recorded — see `EmiRepository.editEmi`. */
   principalAmount: number;
@@ -342,6 +352,7 @@ export function emiFromFirestore(
     name: data.name as string,
     lenderName: (data.lenderName as string | undefined) ?? null,
     beneficiaryRepaysInstallments: data.beneficiaryRepaysInstallments === true,
+    ownershipShares: ownershipSharesFromData(data.ownershipShares),
     categoryId: (data.categoryId as string | undefined) ?? null,
     principalAmount: data.principalAmount as number,
     interest: data.interest == null ? null : emiInterestFromMap(data.interest as Record<string, unknown>),
@@ -410,6 +421,7 @@ export function emiToFirestore(emi: Emi): DocumentData {
     purchaseTransactionId: emi.purchaseTransactionId,
     beneficiaryPersonId: emi.beneficiaryPersonId ?? null,
     ...(emi.beneficiaryRepaysInstallments === true ? { beneficiaryRepaysInstallments: true } : {}),
+    ...(emi.ownershipShares != null && emi.ownershipShares.length > 0 ? { ownershipShares: emi.ownershipShares.map((x) => ({ personId: x.personId, amount: x.amount })) } : {}),
     dueDayOfMonth: emi.dueDayOfMonth,
     deletedAt: emi.deletedAt == null ? null : Timestamp.fromDate(emi.deletedAt),
     lastEditedAt: emi.lastEditedAt == null ? null : Timestamp.fromDate(emi.lastEditedAt),

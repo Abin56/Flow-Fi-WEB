@@ -439,8 +439,12 @@ const MONTH_FORMAT = new Intl.DateTimeFormat("en-IN", { month: "long", year: "nu
  * Groups already-ordered rows by month, numbering each row in display order (01 = the top row). No
  * month headings at all for one or two rows — the dates alone are enough.
  */
+/**
+ * Calendar-month headings over rows already in display order (newest first) — presentation only: each row
+ * goes under the month of its own date, exactly once. Independent of the 18th→17th cycle, which still
+ * decides WHICH rows are shown; a cycle spanning Sep/Oct simply shows both months.
+ */
 export function groupByMonth<T>(rows: readonly T[], dateOf: (r: T) => Date): { key: string; label: string | null; rows: { row: T; n: number }[] }[] {
-  if (rows.length <= 2) return [{ key: "all", label: null, rows: rows.map((row, i) => ({ row, n: i + 1 })) }];
   const groups: { key: string; label: string; rows: { row: T; n: number }[] }[] = [];
   rows.forEach((row, i) => {
     const d = dateOf(row);

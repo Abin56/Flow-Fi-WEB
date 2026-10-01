@@ -29,10 +29,12 @@ interface ClayButtonProps
     VariantProps<typeof clayButtonVariants> {}
 
 /** Raised clay button — presses into the inset shadow on tap so activating it feels physical, not just a color change. */
-export function ClayButton({ className, variant, size, style, ...props }: ClayButtonProps) {
+export function ClayButton({ className, variant, size, style, type = "button", ...props }: ClayButtonProps) {
   const ghost = variant === "ghost";
   return (
     <motion.button
+      // Defaults to "button" so a ClayButton inside a <form> never submits it by accident; submit buttons opt in.
+      type={type}
       whileHover={!ghost ? { y: -1 } : undefined}
       whileTap={{ y: 0, scale: 0.97, boxShadow: "var(--shadow-pressed-sm)" }}
       transition={springs.snappy}

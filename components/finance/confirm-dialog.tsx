@@ -1,6 +1,7 @@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { ClayButton } from "@/components/clay/clay-button";
 import { cn } from "@/lib/utils";
+import { useGuardedAction } from "./use-guarded-submit";
 
 interface ConfirmDialogProps {
   open: boolean;
@@ -27,6 +28,9 @@ export function ConfirmDialog({
   onConfirm,
   loading = false,
 }: ConfirmDialogProps) {
+  // Focus opens on Cancel (first control), so Enter on open never confirms; a rapid double Enter/click on
+  // the focused confirm button runs the action once.
+  const confirm = useGuardedAction(onConfirm, loading);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
@@ -40,7 +44,7 @@ export function ConfirmDialog({
           </ClayButton>
           <ClayButton
             variant="primary"
-            onClick={onConfirm}
+            onClick={confirm}
             disabled={loading}
             className={cn(variant === "destructive" && "bg-danger text-danger-foreground")}
           >

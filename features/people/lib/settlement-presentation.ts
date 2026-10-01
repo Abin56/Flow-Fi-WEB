@@ -54,12 +54,12 @@ export const KIND_LABEL: Record<SettlementKind, string> = {
   loanEmi: "Loan EMI",
   loanInstallment: "Loan installment",
   loan: "Loan",
-  moneyGiven: "Money given",
-  moneyReceived: "Money received",
+  moneyGiven: "Given · to collect",
+  moneyReceived: "Received · to repay",
   assigned: "Assigned expense",
   split: "Split expense",
-  paymentReceived: "Payment received",
-  paymentMade: "Payment made",
+  paymentReceived: "Paid back to you",
+  paymentMade: "You paid back",
   opening: "Opening balance",
   adjustment: "Adjustment",
   advance: "Advance",
@@ -181,6 +181,57 @@ export function settlementTone(row: LedgerRow, kind: SettlementKind): Settlement
 const firstNameOf = (name: string) => name.trim().split(/\s+/)[0] || name;
 
 /** Default titles the engine uses when a manual entry has no note — replaced by person-aware wording. */
+/**
+ * Who owes whom because of one statement event, in plain words — from the engine's category and
+ * signed amount (+ = they owe me), never from the description. Shared by the person table, the
+ * statement preview and the PDF so one event reads the same everywhere.
+ */
+export function directionMessage(row: Pick<StatementRow, "kind" | "category" | "signedAmount" | "advanceDelta">, personName: string): string {
+  const name = firstNameOf(personName);
+  if (row.category === "advance") return (row.advanceDelta ?? 0) < 0 ? `${name} paid you ahead · held as advance` : `You paid ${name} ahead · held as advance`;
+  if (row.category === "advanceApplied") return "Covered by advance · no new money";
+  if (row.kind === "settlement") return row.category === "repaid" ? `You paid ${name} back` : `${name} paid you back`;
+  if (row.signedAmount < 0) return `You owe ${name}`;
+  switch (row.category) {
+    case "split":
+      return `${name} owes you for this`;
+    case "emi":
+      return `${name} needs to pay this installment`;
+    case "opening":
+      return `${name} owed you when tracking began`;
+    default:
+      return `${name} owes you`;
+  }
+}
+
+/** Plain type for a statement row — the same vocabulary as the person table (`KIND_LABEL`). */
+export function statementTypeLabel(row: Pick<StatementRow, "kind" | "category" | "signedAmount">): string {
+  switch (row.category) {
+    case "gave":
+      return KIND_LABEL.moneyGiven;
+    case "borrowed":
+      return KIND_LABEL.moneyReceived;
+    case "received":
+      return KIND_LABEL.paymentReceived;
+    case "repaid":
+      return KIND_LABEL.paymentMade;
+    case "emi":
+      return KIND_LABEL.emi;
+    case "loan":
+      return KIND_LABEL.loanInstallment;
+    case "split":
+      return KIND_LABEL.split;
+    case "opening":
+      return KIND_LABEL.opening;
+    case "advance":
+      return KIND_LABEL.advance;
+    case "advanceApplied":
+      return KIND_LABEL.advanceApplied;
+    default:
+      return KIND_LABEL.adjustment;
+  }
+}
+
 const GENERIC_TITLES = new Set(["Money I Gave", "Money I Borrowed", "Payment received", "Payment made", "Adjustment"]);
 
 /**
@@ -216,16 +267,16 @@ export function relationLine(row: LedgerRow, kind: SettlementKind, personName: s
   const s = row.statementRow;
   switch (kind) {
     case "moneyGiven":
-      return `You gave ${name} ${amount}`;
+      return `You gave ${name} ${amount} · ${name} owes you`;
     case "moneyReceived":
-      return `${name} gave you ${amount}`;
+      return `${name} gave you ${amount} · you owe ${name}`;
     case "assigned":
-      return row.direction === "iOwe" ? `Assigned to you · you pay ${amount}` : `Assigned to ${name} · ${name} pays ${amount}`;
+      return row.direction === "iOwe" ? `You owe ${name} for this` : `${name} owes you for this`;
     case "split":
       return row.direction === "iOwe" ? `Your share of a split with ${name}` : `${name}'s share of a split expense`;
     case "emi":
     case "loanEmi":
-      return s?.emi ? `Installment #${s.emi.installmentNumber} · ${name} repays you` : `${name} repays you`;
+      return s?.emi ? `Installment #${s.emi.installmentNumber} · ${name} needs to pay this installment` : `${name} needs to pay this installment`;
     case "loanInstallment": {
       const loan = s?.loan;
       const which = loan ? `Installment ${loan.installmentNumber} of ${loan.installmentCount}` : "Installment";
@@ -234,9 +285,9 @@ export function relationLine(row: LedgerRow, kind: SettlementKind, personName: s
     case "loan":
       return row.direction === "theyOwe" ? `You lent ${name} ${amount} · repaid in installments` : `${name} lent you ${amount} · repaid in installments`;
     case "paymentReceived":
-      return s?.settles ? `You received ${amount} from ${name} · for ${s.settles.title}` : `You received ${amount} from ${name}`;
+      return s?.settles ? `${name} paid you back ${amount} · for ${s.settles.title}` : `${name} paid you back ${amount}`;
     case "paymentMade":
-      return s?.settles ? `You paid ${name} ${amount} · for ${s.settles.title}` : `You paid ${name} ${amount}`;
+      return s?.settles ? `You paid ${name} back ${amount} · for ${s.settles.title}` : `You paid ${name} back ${amount}`;
     case "opening":
       return row.direction === "iOwe" ? `You owed ${name} ${amount} when tracking began` : `${name} owed you ${amount} when tracking began`;
     case "adjustment":

@@ -25,9 +25,10 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Cell, Pie, PieChart, ResponsiveContainer } from "recharts";
 import { ClayButton } from "@/components/clay/clay-button";
+import { transactionsHrefForAccount } from "@/features/transactions/lib/account-filter-param";
 import { Stagger } from "@/components/foundation/animated-container";
 import {
   BankCombobox,
@@ -35,12 +36,16 @@ import {
   SectionLabel,
   type DestructiveDeleteImpactRow,
 } from "@/components/finance";
+import { useGuardedSubmit } from "@/components/finance/use-guarded-submit";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAccounts } from "@/hooks/use-accounts";
 import { useSharedCreditLimits } from "@/hooks/use-credit-cards";
+import { LinkedFundsPayNotice } from "@/features/people/components/linked-funds";
+import { useLinkedFunds } from "@/features/people/hooks/use-linked-funds";
+import { linkedPendingForCard } from "@/lib/engines/linked-funds";
 import type { Account } from "@/lib/models/account";
 import type { CardNetwork } from "@/lib/models/credit-card";
 import { formatCurrency } from "@/lib/format";
@@ -188,8 +193,11 @@ export function CreditCardsWorkspace() {
   const { rows: transactionRows, accounts: txnAccounts, categories: txnCategories } = useTransactionRows();
   const transactionActions = useTransactionActions();
   const [payCard, setPayCard] = useState<CreditCardViewItem | null>(null);
+  const { funds: linkedFunds } = useLinkedFunds();
 
-  const [activeCardId, setActiveCardId] = useState<string | undefined>(undefined);
+  // `?card=<id>` reopens that card — so Back from its filtered Transactions lands on the same card.
+  const cardParams = useSearchParams();
+  const [activeCardId, setActiveCardId] = useState<string | undefined>(() => cardParams.get("card") ?? undefined);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [addOpen, setAddOpen] = useState(false);
   const [editingCard, setEditingCard] = useState<CreditCardViewItem | null>(null);
@@ -208,6 +216,8 @@ export function CreditCardsWorkspace() {
     setForm(cardFormFromCard(card, accounts as Account[]));
     setEditingCard(card);
   }
+
+  const submitCard = useGuardedSubmit(handleSaveCard, saving);
 
   async function handleSaveCard() {
     if (!actions) return;
@@ -411,15 +421,6 @@ export function CreditCardsWorkspace() {
       <DialogContent showCloseButton={false} className="flex max-h-[calc(100vh-2rem)] flex-col gap-0 overflow-hidden rounded-2xl border border-border p-0 shadow-lg ring-0 sm:max-w-2xl">
         <div className="h-1 w-full bg-primary" />
 
-        <button
-          type="button"
-          onClick={closeCardDialog}
-          aria-label="Close"
-          className="absolute top-4 right-4 flex size-7 items-center justify-center border border-transparent text-muted-foreground transition-colors hover:border-border hover:text-foreground"
-        >
-          <XIcon className="size-4" />
-        </button>
-
         <DialogHeader className="shrink-0 gap-1 border-b border-border bg-muted/40 px-6 py-5 text-left">
           <DialogTitle className="font-heading text-lg font-semibold">
             {editingCard ? `Edit ${editingCard.name}` : "Add a Credit Card"}
@@ -428,6 +429,9 @@ export function CreditCardsWorkspace() {
             <DialogDescription>A few details to start tracking spending, utilization and due dates.</DialogDescription>
           )}
         </DialogHeader>
+
+        {/* Real <form> (display: contents keeps the layout): Enter in a single-line field saves via the same handler as the primary button. */}
+        <form className="contents" noValidate onSubmit={submitCard}>
 
         <div className="flex flex-1 flex-col gap-6 overflow-y-auto px-6 py-5 text-sm">
           <div
@@ -669,10 +673,20 @@ export function CreditCardsWorkspace() {
           <ClayButton variant="ghost" className="rounded-xl" onClick={closeCardDialog} disabled={saving}>
             Cancel
           </ClayButton>
-          <ClayButton variant="primary" className="rounded-xl" onClick={handleSaveCard} disabled={saving}>
+          <ClayButton type="submit" variant="primary" className="rounded-xl" disabled={saving}>
             {saving ? "Saving…" : editingCard ? "Save Changes" : "Add Card"}
           </ClayButton>
         </DialogFooter>
+        </form>
+        {/* Close sits last in the DOM (absolutely positioned, so visually unchanged): focus opens on the first field. */}
+        <button
+          type="button"
+          onClick={closeCardDialog}
+          aria-label="Close"
+          className="absolute top-4 right-4 flex size-7 items-center justify-center border border-transparent text-muted-foreground transition-colors hover:border-border hover:text-foreground"
+        >
+          <XIcon className="size-4" />
+        </button>
       </DialogContent>
     </Dialog>
   );
@@ -858,6 +872,15 @@ export function CreditCardsWorkspace() {
                         <tr
                           key={card.id}
                           onClick={() => setActiveCardId(card.id)}
+                          // Keyboard: the row is one tab stop; Enter/Space selects the card, same as a click.
+                          tabIndex={0}
+                          aria-current={active || undefined}
+                          onKeyDown={(e) => {
+                            if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
+                              e.preventDefault();
+                              setActiveCardId(card.id);
+                            }
+                          }}
                           className={cn("cursor-pointer transition-colors hover:bg-secondary/60 [&:last-child>td]:border-b-0", active && "bg-primary/10 hover:bg-primary/15")}
                         >
                           <td className={cn(CC_TD, "max-w-0")}>
@@ -1082,6 +1105,26 @@ export function CreditCardsWorkspace() {
                 />
                 <QuickAction icon={RefreshCw} label="Convert to EMI" tone="bg-success/12 text-success" soon />
                 <QuickAction icon={Settings} label="Card settings" tone="bg-secondary text-foreground/75" onClick={() => openEdit(activeCard)} />
+              </div>
+              {/* People money received for purchases on this card — held in another account until the bill is paid. */}
+              <LinkedFundsPayNotice
+                funds={linkedPendingForCard(linkedFunds, activeCard.card.accountId)}
+                accountName={(id) => accounts.find((a) => a.id === id)?.name}
+                className="mx-2 mb-2"
+              />
+              <div className="border-t border-border-strong/50 p-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    // Only filters the existing Transactions list to this card's account — nothing is re-read as income/expense.
+                    router.replace(`/credit-cards?card=${encodeURIComponent(activeCard.id)}`, { scroll: false });
+                    router.push(transactionsHrefForAccount(activeCard.card.accountId));
+                  }}
+                  className="flex h-9 w-full items-center justify-between rounded-[6px] px-2.5 text-sm font-semibold text-foreground transition-colors hover:bg-primary/10"
+                >
+                  View all card transactions
+                  <ArrowRight className="size-3.5" strokeWidth={2} />
+                </button>
               </div>
             </section>
           )}

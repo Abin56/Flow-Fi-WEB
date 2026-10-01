@@ -18,9 +18,12 @@ import {
   X as XIcon,
   type LucideIcon,
 } from "lucide-react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ClayButton } from "@/components/clay/clay-button";
+import { transactionsHrefForAccount } from "@/features/transactions/lib/account-filter-param";
 import { BankCombobox, DestructiveDeleteDialog, SectionLabel, type DestructiveDeleteImpactRow } from "@/components/finance";
+import { useGuardedSubmit } from "@/components/finance/use-guarded-submit";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AccountOverviewPanel } from "@/features/accounts/components/account-overview-panel";
 import { AccountsHeader } from "@/features/accounts/components/accounts-header";
@@ -40,6 +43,8 @@ import {
 import { useCreditCardActions, type CreditCardDeletionImpact } from "@/features/credit-cards/hooks/use-credit-cards-data";
 import { useAccounts } from "@/hooks/use-accounts";
 import { useCreditCards } from "@/hooks/use-credit-cards";
+import { useLinkedFunds } from "@/features/people/hooks/use-linked-funds";
+import { linkedPendingForAccount } from "@/lib/engines/linked-funds";
 import { bankById, GENERIC_BANK } from "@/lib/data/bank-registry";
 import type { Account, AccountType, BankAccountSubtype, CardSubtype } from "@/lib/models/account";
 import type { AccountColor } from "@/lib/mock/accounts-overview-data";
@@ -166,10 +171,13 @@ function accountFormFromAccount(account: Account): AccountFormState {
 }
 
 export function AccountsWorkspace() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const [search, setSearch] = useState("");
   const [type, setType] = useState("All Types");
   const [view, setView] = useState<"grid" | "list">("grid");
-  const [selectedId, setSelectedId] = useState<string | undefined>(undefined);
+  // `?account=<id>` reopens that account — so Back from its filtered Transactions lands where the user was.
+  const [selectedId, setSelectedId] = useState<string | undefined>(() => searchParams.get("account") ?? undefined);
   const [overviewOpen, setOverviewOpen] = useState(true);
 
   const { items: accountsOverviewList, isLoading } = useAccountsOverview();
@@ -177,6 +185,7 @@ export function AccountsWorkspace() {
   const { data: creditCards = [] } = useCreditCards();
   const actions = useAccountActions();
   const cardActions = useCreditCardActions();
+  const { funds: linkedFunds } = useLinkedFunds();
 
   const [addOpen, setAddOpen] = useState(false);
   const [editingAccount, setEditingAccount] = useState<Account | null>(null);
@@ -207,6 +216,8 @@ export function AccountsWorkspace() {
     setFormError(null);
     setNameAutoFillable(false);
   }
+
+  const submitAccount = useGuardedSubmit(handleSave, saving);
 
   async function handleSave() {
     if (!actions) return;
@@ -476,7 +487,12 @@ export function AccountsWorkspace() {
       {overviewOpen && selected && (
         <AccountOverviewPanel
           account={selected}
+          linkedFunds={linkedPendingForAccount(linkedFunds, selected.id)}
           onClose={() => setOverviewOpen(false)}
+          onViewTransactions={() => {
+            router.replace(`/accounts?account=${encodeURIComponent(selected.id)}`, { scroll: false });
+            router.push(transactionsHrefForAccount(selected.id));
+          }}
           onEdit={() => {
             const raw = (rawAccounts as Account[]).find((a) => a.id === selected.id);
             if (raw) openEdit(raw);
@@ -495,15 +511,6 @@ export function AccountsWorkspace() {
         <DialogContent showCloseButton={false} className="flex max-h-[calc(100vh-2rem)] flex-col gap-0 overflow-hidden rounded-none border border-border p-0 shadow-lg ring-0 sm:max-w-xl">
           <div className="h-1 w-full bg-primary" />
 
-          <button
-            type="button"
-            onClick={closeAccountDialog}
-            aria-label="Close"
-            className="absolute top-4 right-4 flex size-7 items-center justify-center border border-transparent text-muted-foreground transition-colors hover:border-border hover:text-foreground"
-          >
-            <XIcon className="size-4" />
-          </button>
-
           <DialogHeader className="shrink-0 gap-1 border-b border-border bg-muted/40 px-6 py-5 text-left">
             <DialogTitle className="font-heading text-lg font-semibold">
               {editingAccount ? `Edit ${editingAccount.name}` : "Add an Account"}
@@ -513,6 +520,8 @@ export function AccountsWorkspace() {
             )}
           </DialogHeader>
 
+          {/* Real <form> (display: contents keeps the layout): Enter in a single-line field saves via the same handler as the primary button. */}
+          <form className="contents" noValidate onSubmit={submitAccount}>
           <div className="flex flex-1 flex-col gap-6 overflow-y-auto px-6 py-5 text-sm">
             <div className="flex items-center gap-3 border border-border bg-muted/30 p-4">
               <span
@@ -965,10 +974,21 @@ export function AccountsWorkspace() {
             <ClayButton variant="ghost" className="rounded-none" onClick={closeAccountDialog} disabled={saving}>
               Cancel
             </ClayButton>
-            <ClayButton variant="primary" className="rounded-none" onClick={handleSave} disabled={saving}>
+            <ClayButton type="submit" variant="primary" className="rounded-none" disabled={saving}>
               {saving ? "Saving…" : editingAccount ? "Save Changes" : "Save"}
             </ClayButton>
           </DialogFooter>
+          </form>
+          {/* Close sits last in the DOM (absolutely positioned top-right, so visually unchanged): focus opens on the
+              first field and Tab ends on Close instead of starting there. */}
+          <button
+            type="button"
+            onClick={closeAccountDialog}
+            aria-label="Close"
+            className="absolute top-4 right-4 flex size-7 items-center justify-center border border-transparent text-muted-foreground transition-colors hover:border-border hover:text-foreground"
+          >
+            <XIcon className="size-4" />
+          </button>
         </DialogContent>
       </Dialog>
 

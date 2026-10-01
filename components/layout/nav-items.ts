@@ -16,6 +16,7 @@ import {
   FileStack,
   History,
   LineChart,
+  TrendingDown,
 } from "lucide-react";
 
 export interface NavItem {
@@ -50,6 +51,7 @@ export const NAV_ITEMS: NavItem[] = [
   { label: "Savings", href: "/savings", icon: Target, section: "Plan" },
 
   { label: "Loan & EMI", href: "/loans", icon: Landmark, section: "Debt", alsoActiveFor: ["/emi"] },
+  { label: "Debt Planner", href: "/debt-planner", icon: TrendingDown, section: "Debt" },
 
   { label: "Statement Review", href: "/statement-review", icon: FileStack, section: "Import" },
   { label: "SMS Candidates", href: "/transaction-candidates", icon: MessageSquareText, section: "Import" },

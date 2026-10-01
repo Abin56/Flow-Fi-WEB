@@ -6,6 +6,7 @@ import type { EntryEditValues, EntrySettleValues } from "@/features/people/compo
 import { WS_SECONDARY } from "@/features/people/components/workspace/person-workspace-ui";
 import { applySettlementFilters, CyclePaymentHistory, SettledCycleNote, SettlementFilters } from "@/features/people/components/workspace/settlement-summary";
 import { SettlementTable } from "@/features/people/components/workspace/settlement-table";
+import { linkedTrailFor } from "@/features/people/components/linked-funds";
 import type { SettlementLookupsWithAccounts } from "@/features/people/hooks/use-settlement-lookups";
 import { filterLedgerRows, type LedgerRow, type PaymentRecord } from "@/features/people/lib/person-ledger-rows";
 import type { SettlementStatusFilter, SettlementTypeFilter } from "@/features/people/lib/settlement-presentation";
@@ -226,6 +227,7 @@ export function PersonActivityFeed({
           lookups={lookups}
           accountForEntry={lookups.accountForEntry}
           handlers={handlers}
+          linkedTrail={linkedTrailFor(lookups, personName)}
           empty={empty}
           cycleLabelOf={cycleLabelOf}
         />

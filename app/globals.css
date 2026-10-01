@@ -69,6 +69,7 @@
   --color-debt-surface-hover: var(--debt-surface-hover);
   --color-debt-border: var(--debt-border);
   --color-debt-text: var(--debt-text);
+  --color-debt-strong: var(--debt-strong);
   --color-settle-receivable-text: var(--settle-receivable-text);
   --color-settle-receivable-edge: var(--settle-receivable-edge);
   --color-settle-receivable-tint: var(--settle-receivable-tint);
@@ -258,6 +259,8 @@
   --debt-surface-hover: oklch(0.875 0.07 295);
   --debt-border: oklch(0.56 0.19 293);
   --debt-text: oklch(0.44 0.19 293);
+  /* Borrowed-money outline / badge / icon — deeper than --debt-border so a 2px line reads on low-contrast FHD panels. */
+  --debt-strong: oklch(0.45 0.23 293);
   /* People settlement semantic families - text (>= 4.5:1 on card), strong edge, a solid row tint that
      stays visible on low-contrast displays, and a badge surface. Lime stays the action accent. */
   --settle-receivable-text: oklch(0.45 0.14 149);
@@ -468,6 +471,7 @@
   --debt-surface-hover: oklch(0.33 0.09 295);
   --debt-border: oklch(0.68 0.17 293);
   --debt-text: oklch(0.8 0.12 293);
+  --debt-strong: oklch(0.74 0.19 293);
   --settle-receivable-text: oklch(0.8 0.15 149);
   --settle-receivable-edge: oklch(0.7 0.16 149);
   --settle-receivable-tint: oklch(0.27 0.045 149);
@@ -711,4 +715,23 @@
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* Keyboard focus indicator — one app-wide, high-contrast ring for keyboard (:focus-visible) focus only;
+   mouse clicks don't show it. The per-component `ring-ring/50` glow is a pale lime (~37% alpha) that
+   washes out on low-contrast panels, so this adds a solid 2px outline on top. It is deliberately
+   UNLAYERED: unlayered rules outrank Tailwind's layered `outline-none`/`outline-hidden` utilities, so every
+   control (shadcn, Clay, raw buttons/inputs, role=button tiles) gets it without touching each component.
+   Light: deep lime-green (>= 4.5:1 on the light card). Dark: brand lime (>= 9:1 on the dark card).
+   `[tabindex="-1"]` is excluded so programmatically focused containers (dialog content, scroll regions)
+   don't draw a box around themselves. */
+:root {
+  --focus-ring: oklch(0.42 0.13 135);
+}
+.dark {
+  --focus-ring: oklch(0.912 0.185 126);
+}
+:focus-visible:not([tabindex="-1"]) {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }

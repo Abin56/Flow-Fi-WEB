@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import { buildLedgerRows, type LedgerRow } from "@/features/people/lib/person-ledger-rows";
 import {
   cyclePosition,
+  directionMessage,
+  KIND_LABEL,
+  statementTypeLabel,
   matchesStatusFilter,
   matchesTypeFilter,
   paidSoFar,
@@ -94,7 +97,7 @@ describe("assigned expense with a partial payment (A, F)", () => {
     expect(paidSoFar(row)).toBe(600);
     expect(row.remaining).toBe(400);
     expect(v.status).toEqual({ label: "Partially paid", detail: `Amma still owes ${money(400)}`, tone: "partial" });
-    expect(v.relation).toContain("Assigned to Amma");
+    expect(v.relation).toBe("Amma owes you for this");
   });
 
   it("the payment is the row's history, not a second row", () => {
@@ -111,7 +114,7 @@ describe("manual money in both directions (K)", () => {
     expect(v.kind).toBe("moneyGiven");
     expect(v.tone).toBe("receivable");
     expect(v.title).toBe("Money given to Amma");
-    expect(v.relation).toBe(`You gave Amma ${money(1000)}`);
+    expect(v.relation).toBe(`You gave Amma ${money(1000)} · Amma owes you`);
     expect(v.status).toEqual({ label: "Payment due", detail: `Amma owes you ${money(1000)}`, tone: "due" });
   });
 
@@ -122,7 +125,7 @@ describe("manual money in both directions (K)", () => {
     expect(v.kind).toBe("moneyReceived");
     expect(v.tone).toBe("payable");
     expect(v.title).toBe("Money received from Amma");
-    expect(v.relation).toBe(`Amma gave you ${money(1000)}`);
+    expect(v.relation).toBe(`Amma gave you ${money(1000)} · you owe Amma`);
     expect(v.status).toEqual({ label: "You need to pay", detail: `You owe Amma ${money(1000)}`, tone: "payable" });
     expect(cyclePosition(statement, PERSON).headline).toBe("You owe Amma");
   });
@@ -144,7 +147,7 @@ describe("manual money in both directions (K)", () => {
     const v = view(payment, lookupsFor([gave, lump]));
     expect(v.kind).toBe("paymentReceived");
     expect(v.title).toBe("Payment from Amma");
-    expect(v.relation).toBe(`You received ${money(1000)} from Amma`);
+    expect(v.relation).toBe(`Amma paid you back ${money(1000)}`);
     expect(v.status.label).toBe("Received");
   });
 });
@@ -202,7 +205,7 @@ describe("EMI and Loan installments (C, D, H)", () => {
     const v = view(rows[0], lookupsFor([]));
     expect(v.kind).toBe("emi");
     expect(v.tone).toBe("emi");
-    expect(v.relation).toBe("Installment #1 · Amma repays you");
+    expect(v.relation).toBe("Installment #1 · Amma needs to pay this installment");
     expect(v.status).toEqual({ label: "Upcoming EMI", detail: "Due 04 Oct", tone: "upcoming" });
   });
 
@@ -279,5 +282,26 @@ describe("type filter", () => {
     expect(matchesTypeFilter("moneyGiven", "manual")).toBe(true);
     expect(matchesTypeFilter("split", "assigned")).toBe(false);
     expect(matchesTypeFilter("paymentReceived", "all")).toBe(true);
+  });
+});
+
+describe("shared direction wording (person table, statement preview, PDF)", () => {
+  const row = (kind: "obligation" | "settlement", category: string, signedAmount: number, advanceDelta = 0) =>
+    ({ kind, category, signedAmount, advanceDelta }) as Parameters<typeof directionMessage>[0];
+  it("says who owes whom from the engine category and sign — never from the description", () => {
+    expect(directionMessage(row("obligation", "borrowed", -2000), "Shambu K")).toBe("You owe Shambu");
+    expect(directionMessage(row("obligation", "gave", 2000), "Shambu K")).toBe("Shambu owes you");
+    expect(directionMessage(row("settlement", "received", -2000), "Shambu")).toBe("Shambu paid you back");
+    expect(directionMessage(row("settlement", "repaid", 2000), "Shambu")).toBe("You paid Shambu back");
+    expect(directionMessage(row("obligation", "split", 1000), "Shambu")).toBe("Shambu owes you for this");
+    expect(directionMessage(row("obligation", "emi", 1666.67), "Shambu")).toBe("Shambu needs to pay this installment");
+    expect(directionMessage(row("obligation", "emi", -1666.67), "Shambu")).toBe("You owe Shambu");
+    expect(directionMessage(row("obligation", "advance", 0, -200), "Shambu")).toMatch(/Shambu paid you ahead/);
+  });
+  it("uses the same type vocabulary as the person table", () => {
+    expect(statementTypeLabel(row("obligation", "borrowed", -1))).toBe(KIND_LABEL.moneyReceived);
+    expect(statementTypeLabel(row("obligation", "gave", 1))).toBe(KIND_LABEL.moneyGiven);
+    expect(statementTypeLabel(row("settlement", "received", -1))).toBe(KIND_LABEL.paymentReceived);
+    expect(statementTypeLabel(row("settlement", "repaid", 1))).toBe(KIND_LABEL.paymentMade);
   });
 });

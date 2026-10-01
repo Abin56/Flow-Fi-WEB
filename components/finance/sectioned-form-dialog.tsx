@@ -4,6 +4,7 @@ import { X } from "lucide-react";
 import { ClayButton } from "@/components/clay/clay-button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
+import { useGuardedSubmit } from "./use-guarded-submit";
 
 interface SectionedFormDialogProps {
   open: boolean;
@@ -41,6 +42,8 @@ export function SectionedFormDialog({
   cancelLabel = "Cancel",
   contentClassName,
 }: SectionedFormDialogProps) {
+  const handleSubmit = useGuardedSubmit(onConfirm, loading);
+
   function close() {
     onCancel?.();
     onOpenChange(false);
@@ -54,6 +57,26 @@ export function SectionedFormDialog({
       >
         <div className="h-1 w-full shrink-0 bg-primary" />
 
+        <DialogHeader className="shrink-0 gap-1 border-b border-border bg-muted/40 px-6 py-5 text-left">
+          <DialogTitle className="font-heading text-lg font-semibold">{title}</DialogTitle>
+          {description && <DialogDescription>{description}</DialogDescription>}
+        </DialogHeader>
+
+        {/* Real <form> (display: contents keeps the grid layout) so Enter submits via the same onConfirm. */}
+        <form className="contents" onSubmit={handleSubmit} noValidate>
+          <div className="flex max-h-[65vh] flex-col gap-6 overflow-y-auto px-6 py-5 text-sm">{children}</div>
+
+          <DialogFooter className="shrink-0 border-t border-border bg-muted/20 px-6 py-4">
+            <ClayButton variant="ghost" className="rounded-none" onClick={close} disabled={loading}>
+              {cancelLabel}
+            </ClayButton>
+            <ClayButton type="submit" variant="primary" className="rounded-none" disabled={loading}>
+              {loading ? loadingLabel : confirmLabel}
+            </ClayButton>
+          </DialogFooter>
+        </form>
+        {/* Close sits last in the DOM (absolutely positioned top-right, so visually unchanged): focus opens on the
+            first field and Tab ends on Close instead of starting there. */}
         <button
           type="button"
           onClick={close}
@@ -63,22 +86,6 @@ export function SectionedFormDialog({
         >
           <X className="size-4" />
         </button>
-
-        <DialogHeader className="shrink-0 gap-1 border-b border-border bg-muted/40 px-6 py-5 text-left">
-          <DialogTitle className="font-heading text-lg font-semibold">{title}</DialogTitle>
-          {description && <DialogDescription>{description}</DialogDescription>}
-        </DialogHeader>
-
-        <div className="flex max-h-[65vh] flex-col gap-6 overflow-y-auto px-6 py-5 text-sm">{children}</div>
-
-        <DialogFooter className="shrink-0 border-t border-border bg-muted/20 px-6 py-4">
-          <ClayButton variant="ghost" className="rounded-none" onClick={close} disabled={loading}>
-            {cancelLabel}
-          </ClayButton>
-          <ClayButton variant="primary" className="rounded-none" onClick={onConfirm} disabled={loading}>
-            {loading ? loadingLabel : confirmLabel}
-          </ClayButton>
-        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

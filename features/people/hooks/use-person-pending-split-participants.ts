@@ -19,17 +19,22 @@ import {
  */
 export function usePersonPendingSplitParticipants(personId: string | null | undefined): {
   pending: PendingSplitParticipant[];
+  /** Expense `transactionId`s whose share for this person has an installment (any status) — see `trackedShareRefs`. */
+  trackedShareRefs: ReadonlySet<string>;
   isLoading: boolean;
 } {
   const { data: expenses = [], isLoading: expensesLoading } = useExpenses();
   const { installmentsByScheduleId, isLoading: installmentsLoading } = useExpenseInstallmentsBySchedule();
 
-  const pending = useMemo(() => {
-    if (!personId) return [];
-    return derivePendingSplitParticipants(personId, expenses, installmentsByScheduleId).filter(
-      (item) => remainingAmount(item.installment) > 0,
-    );
+  const { pending, trackedShareRefs } = useMemo(() => {
+    if (!personId) return { pending: [], trackedShareRefs: new Set<string>() };
+    const all = derivePendingSplitParticipants(personId, expenses, installmentsByScheduleId);
+    return {
+      pending: all.filter((item) => remainingAmount(item.installment) > 0),
+      trackedShareRefs: new Set(all.map((item) => item.expense.transactionId)),
+    };
   }, [personId, expenses, installmentsByScheduleId]);
 
-  return { pending, isLoading: expensesLoading || installmentsLoading };
+  const isLoading = expensesLoading || installmentsLoading;
+  return { pending, trackedShareRefs, isLoading };
 }

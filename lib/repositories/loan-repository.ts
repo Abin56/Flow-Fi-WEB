@@ -54,6 +54,7 @@ import {
 } from "@/lib/repositories/payment-schedule-repository";
 import { balanceEffect, transactionFromFirestore, transactionToFirestore, type Transaction } from "@/lib/models/transaction";
 import { generateId } from "@/lib/utils/id-generator";
+import { checkedOwnership, type OwnershipShare } from "@/lib/engines/debt-ownership";
 
 function precomputedFromPeriods(periods: InterestPeriodBreakdown[]): PrecomputedInstallmentAmount[] {
   return periods.map((p) => ({
@@ -110,6 +111,11 @@ export interface CreateLoanParams {
    * settable at creation. Only kept on a taken Loan that has a beneficiary; absent/false = association only.
    */
   beneficiaryRepaysInstallments?: boolean;
+  /**
+   * Shared ownership of the principal (`Loan.ownershipShares`) — taken Loans only; must reconcile exactly
+   * to `loanAmount` (`validateOwnership`) or creation throws. Fixed at creation.
+   */
+  ownershipShares?: OwnershipShare[] | null;
   name?: string | null;
   interest?: LoanInterest | null;
   dueDate?: Date | null;
@@ -260,6 +266,7 @@ function normalizeCreateLoanParams(params: CreateLoanParams): NormalizedCreateLo
     payerPersonId: params.payerPersonId ?? null,
     beneficiaryPersonId: params.beneficiaryPersonId ?? null,
     beneficiaryRepaysInstallments: params.beneficiaryRepaysInstallments === true,
+    ownershipShares: params.ownershipShares != null && params.ownershipShares.length > 0 ? params.ownershipShares : null,
     name: params.name ?? null,
     interest: params.interest ?? null,
     dueDate: params.dueDate ?? null,
@@ -369,6 +376,7 @@ function buildLoanDocument(p: NormalizedCreateLoan, loanId: string, scheduleId: 
     beneficiaryPersonId: p.direction === "taken" ? p.beneficiaryPersonId : null,
     // Written only when true, like the model's own serializer — legacy/association-only Loans stay flag-free.
     ...(p.direction === "taken" && p.beneficiaryPersonId != null && p.beneficiaryRepaysInstallments ? { beneficiaryRepaysInstallments: true } : {}),
+    ...(p.direction === "taken" && p.ownershipShares != null ? { ownershipShares: checkedOwnership(p.loanAmount, p.ownershipShares) } : {}),
     loanAmount: p.loanAmount,
     interest: p.interest,
     loanDate: p.loanDate,

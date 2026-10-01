@@ -22,6 +22,7 @@ import {
   type StatementRow,
 } from "@/lib/engines/person-cycle-statement";
 import { money } from "@/lib/engines/person-cycle-statement-share";
+import { directionMessage, statementTypeLabel } from "@/features/people/lib/settlement-presentation";
 import { cn } from "@/lib/utils";
 
 const CATEGORY_ICON: Record<StatementCategory, LucideIcon> = {
@@ -160,7 +161,10 @@ export function StatementActivityRow({ statement, row }: { statement: PersonCycl
           {isEmi && <EmiBadge />}
         </p>
         <p className="truncate text-xs text-muted-foreground">
-          {formatStatementDate(row.date)} · {row.typeLabel}
+          {formatStatementDate(row.date)} · {statementTypeLabel(row)} ·{" "}
+          <span className={cn("font-semibold", row.signedAmount < 0 || row.category === "repaid" ? "text-settle-payable-text" : "text-settle-receivable-text")}>
+            {directionMessage(row, statement.personName)}
+          </span>
           {status && (
             <>
               {" · "}

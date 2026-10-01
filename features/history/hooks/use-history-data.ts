@@ -120,6 +120,7 @@ export function useHistoryEntries(): { entries: HistoryEntry[]; isLoading: boole
       dateTime: t.dateTime,
       notes: t.notes,
       receiptPurpose: t.receiptPurpose,
+      isPersonLedgerMovement: t.isPersonLedgerMovement,
       transferId: t.transferId,
       excludeFromCalculations: t.excludeFromCalculations,
       accountingMonth: t.accountingMonth,

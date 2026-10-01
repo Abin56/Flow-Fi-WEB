@@ -22,6 +22,7 @@ import { InlineReveal } from "./ledger-ui";
 import { WS_PAD, WS_PRIMARY, WS_SECONDARY } from "./person-workspace-ui";
 import { applySettlementFilters, CycleReconciliation, CyclePaymentHistory, SettlementFilters } from "./settlement-summary";
 import { SettlementTable } from "./settlement-table";
+import { linkedTrailFor } from "@/features/people/components/linked-funds";
 
 /** The expanded workspace's internal navigation — the ledger, or one of the Person-level flows in its place. */
 export type LedgerView = "transactions" | "settle" | "split";
@@ -300,6 +301,7 @@ export function TransactionLedgerMode({
           lookups={lookups}
           accountForEntry={lookups.accountForEntry}
           handlers={handlers}
+          linkedTrail={linkedTrailFor(lookups, personName)}
           cycleLabelOf={cycleLabelOf}
           empty={
             <p className={cn(WS_PAD, "py-6 text-sm font-medium text-foreground/75")}>

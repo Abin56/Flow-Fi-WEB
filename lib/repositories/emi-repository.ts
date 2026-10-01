@@ -40,6 +40,7 @@ import type {
   PrecomputedInstallmentAmount,
 } from "@/lib/repositories/payment-schedule-repository";
 import { generateId } from "@/lib/utils/id-generator";
+import { checkedOwnership, type OwnershipShare } from "@/lib/engines/debt-ownership";
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
@@ -105,6 +106,8 @@ export interface CreateEmiParams {
    * settable at creation. Only kept with a beneficiary; absent/false = association only.
    */
   beneficiaryRepaysInstallments?: boolean;
+  /** Shared ownership of the principal (`Emi.ownershipShares`); must reconcile to `principalAmount` or creation throws. */
+  ownershipShares?: OwnershipShare[] | null;
   dueDayOfMonth?: number | null;
 }
 
@@ -211,6 +214,7 @@ export class EmiRepository extends FirestoreCrudRepository<Emi> {
       purchaseTransactionId = null,
       beneficiaryPersonId = null,
       beneficiaryRepaysInstallments = false,
+      ownershipShares = null,
       dueDayOfMonth = null,
     } = params;
 
@@ -297,6 +301,7 @@ export class EmiRepository extends FirestoreCrudRepository<Emi> {
       beneficiaryPersonId,
       // Written only when true, like the model's own serializer — association-only EMIs stay flag-free.
       ...(beneficiaryPersonId != null && beneficiaryRepaysInstallments ? { beneficiaryRepaysInstallments: true } : {}),
+      ...(ownershipShares != null && ownershipShares.length > 0 ? { ownershipShares: checkedOwnership(params.principalAmount, ownershipShares) } : {}),
       dueDayOfMonth,
       isClosed: false,
       deletedAt: null,

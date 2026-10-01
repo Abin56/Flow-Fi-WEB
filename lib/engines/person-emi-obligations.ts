@@ -16,8 +16,13 @@
  * is NOT reinterpreted. An EMI/taken Loan counts only when it ALSO carries the explicit, additive
  * opt-in `beneficiaryRepaysInstallments === true`. Every legacy document (flag absent) stays
  * association-only.
+ *
+ * Shared agreements (`ownershipShares`, several people and/or me): every listed person owes me THEIR
+ * share of each installment only (`personInstallmentShare`, paise-exact, the parts summing to the
+ * installment). Still one lender schedule — the shares are sub-obligations beneath it.
  */
 
+import { personInstallmentShare, personSharesInstallments, type OwnershipShare } from "@/lib/engines/debt-ownership";
 import { installmentStatus, type Installment, type InstallmentStatus } from "@/lib/models/payment-schedule";
 
 export interface EmiObligationEmiSource {
@@ -26,6 +31,7 @@ export interface EmiObligationEmiSource {
   scheduleId: string;
   beneficiaryPersonId?: string | null;
   beneficiaryRepaysInstallments?: boolean;
+  ownershipShares?: readonly OwnershipShare[] | null;
   isClosed: boolean;
   deletedAt: Date | null;
 }
@@ -40,6 +46,7 @@ export interface EmiObligationLoanSource {
   personId?: string | null;
   beneficiaryPersonId?: string | null;
   beneficiaryRepaysInstallments?: boolean;
+  ownershipShares?: readonly OwnershipShare[] | null;
   isClosed: boolean;
   deletedAt: Date | null;
 }
@@ -62,8 +69,10 @@ export interface PersonEmiObligation {
   installmentNumber: number;
   dueDate: Date;
   createdAt: Date;
-  /** What the Person owes me for this installment. */
+  /** What the Person owes me for this installment (their share on a shared agreement). */
   amount: number;
+  /** The whole installment the lender expects — equals `amount` unless the agreement is shared. */
+  installmentAmount: number;
   lenderStatus: LenderInstallmentStatus;
 }
 
@@ -72,14 +81,15 @@ interface LinkedSource {
   id: string;
   name: string;
   isClosed: boolean;
+  owner: EmiObligationEmiSource | EmiObligationLoanSource;
 }
 
-/** True when this EMI/taken Loan is explicitly one the beneficiary repays me for. */
+/** True when this EMI/taken Loan is explicitly one `personId` repays me for (whole or a share). */
 export function beneficiaryOwesInstallments(
-  source: Pick<EmiObligationEmiSource, "beneficiaryPersonId" | "beneficiaryRepaysInstallments" | "deletedAt">,
+  source: Pick<EmiObligationEmiSource, "beneficiaryPersonId" | "beneficiaryRepaysInstallments" | "ownershipShares" | "deletedAt">,
   personId: string,
 ): boolean {
-  return source.deletedAt == null && source.beneficiaryPersonId === personId && source.beneficiaryRepaysInstallments === true;
+  return personSharesInstallments(source, personId);
 }
 
 function lenderStatus(inst: EmiObligationInstallment, now: Date): LenderInstallmentStatus {
@@ -103,7 +113,7 @@ export function personEmiObligations(params: {
   const bySchedule = new Map<string, LinkedSource>();
   for (const emi of emis) {
     if (beneficiaryOwesInstallments(emi, personId))
-      bySchedule.set(emi.scheduleId, { kind: "emi", id: emi.id, name: emi.name?.trim() || "EMI", isClosed: emi.isClosed });
+      bySchedule.set(emi.scheduleId, { kind: "emi", id: emi.id, name: emi.name?.trim() || "EMI", isClosed: emi.isClosed, owner: emi });
   }
   for (const loan of loans) {
     if (loan.direction === "taken" && beneficiaryOwesInstallments(loan, personId))
@@ -112,6 +122,7 @@ export function personEmiObligations(params: {
         id: loan.id,
         name: loan.name?.trim() || loan.institutionName?.trim() || "Loan EMI",
         isClosed: loan.isClosed,
+        owner: loan,
       });
   }
   if (bySchedule.size === 0) return [];
@@ -124,6 +135,8 @@ export function personEmiObligations(params: {
     // A skipped installment, or a closed (e.g. foreclosed) EMI's never-paid tail, was never charged.
     if (inst.isSkipped && inst.amountPaid <= 0) continue;
     if (source.isClosed && inst.amountPaid <= 0) continue;
+    const amount = personInstallmentShare(source.owner, inst.amountDue, personId);
+    if (amount <= 0) continue;
     seen.add(inst.id);
     result.push({
       key: `${source.kind === "emi" ? "emi-inst" : "loan-inst"}:${inst.id}`,
@@ -134,7 +147,8 @@ export function personEmiObligations(params: {
       installmentNumber: inst.sequenceNumber,
       dueDate: inst.dueDate,
       createdAt: inst.createdAt,
-      amount: inst.amountDue,
+      amount,
+      installmentAmount: inst.amountDue,
       lenderStatus: lenderStatus(inst, now),
     });
   }

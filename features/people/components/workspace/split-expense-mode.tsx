@@ -316,7 +316,15 @@ export function SplitExpenseMode({
   const personShareValue = shareFor((p) => p.personId === person.id);
 
   return (
-    <div className="flex min-h-full flex-col">
+    // A real <form>: Enter in a single-line field saves through the same handleSave as "Save Split".
+    <form
+      noValidate
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (e.target === e.currentTarget) void handleSave();
+      }}
+      className="flex min-h-full flex-col"
+    >
       <ModeHeader
         backLabel={backLabel ?? person.name}
         onBack={onBack}
@@ -659,10 +667,10 @@ export function SplitExpenseMode({
         <button type="button" onClick={onBack} disabled={saving} className={WS_GHOST}>
           Cancel
         </button>
-        <button type="button" onClick={() => void handleSave()} disabled={saving} className={WS_PRIMARY}>
+        <button type="submit" disabled={saving} className={WS_PRIMARY}>
           {saving ? "Saving…" : "Save Split"}
         </button>
       </ModeFooter>
-    </div>
+    </form>
   );
 }

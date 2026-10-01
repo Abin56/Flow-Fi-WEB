@@ -26,6 +26,8 @@ export interface HistoryTransaction {
   dateTime: Date;
   notes: string;
   receiptPurpose: string | null;
+  /** A Record Payment / People cash leg — money a person paid me (or I paid them): never income or expense. */
+  isPersonLedgerMovement?: boolean;
   transferId: string | null;
   excludeFromCalculations: boolean;
   accountingMonth: Date | null;
@@ -145,19 +147,22 @@ function fromTransaction(
   const category: HistoryCategory = splitExpense != null ? "splitExpense" : isMoneyReceived ? "moneyReceived" : "transaction";
   const isCredit = transaction.type === "income";
   const isTransfer = transaction.transferId != null;
+  const isPeople = transaction.isPersonLedgerMovement === true;
 
   const kind: TransactionKind = isTransfer
     ? "transfer"
     : splitExpense != null
       ? "splitExpense"
-      : isCredit
-        ? "myIncome"
-        : "myExpense";
+      : isPeople
+        ? "people"
+        : isCredit
+          ? "myIncome"
+          : "myExpense";
 
   return {
     id: `txn-${transaction.id}`,
     date: transaction.dateTime,
-    title: transaction.type === "income" ? "Income" : "Expense",
+    title: isPeople ? (isCredit ? "Person paid you" : "You paid a person") : transaction.type === "income" ? "Income" : "Expense",
     subtitle: transaction.notes,
     amount: transaction.amount,
     isCredit,

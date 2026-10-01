@@ -785,7 +785,20 @@ export function TransactionDetailsModal({
     return null;
   }
 
+  // Re-entry gate for handleSave: `saving` only flips after the async duplicate check, so without this a
+  // rapid double Enter (or Enter + click) could start two saves. Gates re-entry only — no save logic here.
+  const saveInFlight = useRef(false);
   async function handleSave() {
+    if (saveInFlight.current) return;
+    saveInFlight.current = true;
+    try {
+      await handleSaveOnce();
+    } finally {
+      saveInFlight.current = false;
+    }
+  }
+
+  async function handleSaveOnce() {
     if (saving || justSaved) return;
     const validationError = validate();
     if (validationError) {
@@ -1094,6 +1107,17 @@ export function TransactionDetailsModal({
             </div>
           </div>
 
+          {/* Real <form> (display: contents keeps the flex layout): Enter in a single-line field saves through
+              the same handleSave as the button. The split view has its own Done flow, so it never submits. */}
+          <form
+            className="contents"
+            noValidate
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (e.target !== e.currentTarget || view === "split") return;
+              void handleSave();
+            }}
+          >
           <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
             <AnimatePresence mode="wait" initial={false}>
               {view === "split" ? (
@@ -1375,7 +1399,9 @@ export function TransactionDetailsModal({
                     if (next === "" || /^\d*\.?\d*$/.test(next)) setAmount(next);
                   }}
                   onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) {
+                    // Description is required: until it's filled, Enter steps there instead of hitting a
+                    // validation error; once filled, Enter falls through to the form's submit (Save).
+                    if (e.key === "Enter" && !e.shiftKey && !description.trim()) {
                       e.preventDefault();
                       descriptionRef.current?.focus();
                     }
@@ -1393,12 +1419,6 @@ export function TransactionDetailsModal({
                   ref={descriptionRef}
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) {
-                      e.preventDefault();
-                      dateRef.current?.focus();
-                    }
-                  }}
                   placeholder={kind === "income" ? "e.g. Salary, Freelance payment" : "e.g. Blue Tokai Coffee"}
                   className={cn(WS_FIELD, "bg-card")}
                 />
@@ -1518,7 +1538,17 @@ export function TransactionDetailsModal({
                           value={newPersonName}
                           className={cn(WS_FIELD, "min-w-0")}
                           onChange={(e) => setNewPersonName(e.target.value)}
-                          onKeyDown={(e) => e.key === "Enter" && void handleAddPerson()}
+                          onKeyDown={(e) => {
+                            // Enter adds the person — it must not also submit the transaction form.
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              void handleAddPerson();
+                            } else if (e.key === "Escape") {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setAddingPerson(false);
+                            }
+                          }}
                         />
                         <Button size="icon-sm" onClick={() => void handleAddPerson()} disabled={addingPersonBusy || !newPersonName.trim()} aria-label="Save person">
                           <Check className="size-4" />
@@ -1806,9 +1836,8 @@ export function TransactionDetailsModal({
                     Cancel
                   </button>
                   <button
-                    type="button"
+                    type="submit"
                     className={cn(WS_PRIMARY, "min-w-0 flex-1 sm:flex-none sm:min-w-36", (saving || justSaved) && "disabled:opacity-80")}
-                    onClick={() => void handleSave()}
                     disabled={saving || justSaved}
                   >
                     <AnimatePresence mode="wait" initial={false}>
@@ -1829,6 +1858,7 @@ export function TransactionDetailsModal({
               </>
             )}
           </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
 

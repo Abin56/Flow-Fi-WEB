@@ -7,12 +7,17 @@ import type { SettlementLookups } from "@/features/people/lib/settlement-present
 import type { PendingSplitParticipant } from "@/lib/engines/person-pending-split-participants";
 import type { Expense } from "@/lib/models/expense";
 import type { LedgerEntry } from "@/lib/models/person";
+import { useLinkedFunds } from "@/features/people/hooks/use-linked-funds";
+import { linkedFundsByObligation, type LinkedFund } from "@/lib/engines/linked-funds";
 
 export interface SettlementLookupsWithAccounts extends SettlementLookups {
   /** The account a ledger entry's cash leg moved through ("SBI Savings"), when it has one. */
   accountForEntry: (entryId: string | null) => string | null;
   /** The part of a Record Payment recorded as separate income (its Income transaction), for the entry's payment. */
   incomeForEntry: (entryId: string | null) => number;
+  /** Money received for this obligation (statement row key) that funds a card bill / EMI — pending or paid onward. */
+  linkedFundsFor: (rowKey: string) => LinkedFund[];
+  accountNameOf: (accountId: string) => string | undefined;
 }
 
 /**
@@ -23,6 +28,7 @@ export interface SettlementLookupsWithAccounts extends SettlementLookups {
 export function useSettlementLookups(ledgerEntries: readonly LedgerEntry[], pending: readonly PendingSplitParticipant[]): SettlementLookupsWithAccounts {
   const { data: transactions = [] } = useTransactions();
   const { data: accounts = [] } = useAccounts();
+  const { funds } = useLinkedFunds();
   return useMemo(() => {
     const entriesById = new Map(ledgerEntries.map((e) => [e.id, e]));
     const expenseByTransactionId = new Map<string, Expense>();
@@ -39,6 +45,9 @@ export function useSettlementLookups(ledgerEntries: readonly LedgerEntry[], pend
       const accountId = ref ? accountByTransaction.get(ref) : undefined;
       return accountId ? (accountName.get(accountId) ?? null) : null;
     };
-    return { entriesById, expenseByTransactionId, accountForEntry, incomeForEntry };
-  }, [ledgerEntries, pending, transactions, accounts]);
+    const byObligation = linkedFundsByObligation(funds);
+    const linkedFundsFor = (rowKey: string) => byObligation.get(rowKey) ?? [];
+    const accountNameOf = (accountId: string) => accountName.get(accountId);
+    return { entriesById, expenseByTransactionId, accountForEntry, incomeForEntry, linkedFundsFor, accountNameOf };
+  }, [ledgerEntries, pending, transactions, accounts, funds]);
 }

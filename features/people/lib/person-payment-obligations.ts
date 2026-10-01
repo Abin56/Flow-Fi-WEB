@@ -86,19 +86,18 @@ export function advanceSources(entries: readonly LedgerEntry[]): AdvanceSource[]
     .map((e) => ({ entryId: e.id, date: e.date, createdAt: e.createdAt, amount: e.amount, side: e.type === "receivedBack" ? "theyOwe" : "iOwe" }));
 }
 
-/** Plain-language source of an obligation for the payment tables ("EMI installment", "Money you paid for Amma"). */
+/** Plain-language source of an obligation — says who owes whom ("Money you gave Amma", "You paid for Amma"). */
 export function obligationSourceLabel(o: Pick<PayableObligation, "category" | "target" | "side">, firstName: string): string {
-  if (o.target.kind === "split") return o.target.sourceKind === "assignedExpense" ? `Expense assigned to ${firstName}` : "Split expense";
+  if (o.target.kind === "opening") return "Previous pending";
+  if (o.target.kind === "split") return o.target.sourceKind === "assignedExpense" ? `You paid for ${firstName}` : "Split expense";
   if (o.target.kind === "derivedInstallment") return o.target.sourceKind === "loanInstallment" ? "Loan installment" : "EMI installment";
+  if (o.target.entry.sourceKind === "assignedExpense") return `You paid for ${firstName}`;
+  if (o.target.entry.sourceKind === "splitExpense") return "Split expense";
   switch (o.category) {
     case "gave":
-      return `Money you paid for ${firstName}`;
+      return `Money you gave ${firstName}`;
     case "borrowed":
-      return `Money ${firstName} lent you`;
-    case "emi":
-      return "EMI installment";
-    case "loan":
-      return "Loan installment";
+      return `Money borrowed from ${firstName}`;
     case "split":
       return "Split expense";
     default:

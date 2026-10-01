@@ -76,7 +76,15 @@ function SavedPasswordPanel({ uid, cardId }: { uid: string; cardId: string }) {
   }
 
   return (
-    <div className="mt-2 flex flex-col gap-3 rounded-xl border border-border/60 bg-muted/40 p-3">
+    // A real <form>: Enter in a password field saves with the same gate as the Save button.
+    <form
+      noValidate
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (canSave && !saving) void handleSave();
+      }}
+      className="mt-2 flex flex-col gap-3 rounded-xl border border-border/60 bg-muted/40 p-3"
+    >
       <PasswordField label="PDF Password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} />
       {hasSaved && (
         <PasswordField
@@ -87,7 +95,7 @@ function SavedPasswordPanel({ uid, cardId }: { uid: string; cardId: string }) {
         />
       )}
       <div className="flex items-center gap-3">
-        <ClayButton size="sm" onClick={handleSave} disabled={!canSave || saving}>
+        <ClayButton type="submit" size="sm" disabled={!canSave || saving}>
           {saving ? "Saving…" : "Save"}
         </ClayButton>
         {hasSaved && (
@@ -96,7 +104,7 @@ function SavedPasswordPanel({ uid, cardId }: { uid: string; cardId: string }) {
           </button>
         )}
       </div>
-    </div>
+    </form>
   );
 }
 

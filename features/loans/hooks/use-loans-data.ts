@@ -41,6 +41,7 @@
  *    `lenderName` fallback and `useLoanActions().createLoan`/`editLoan` below.
  */
 
+import type { OwnershipShare } from "@/lib/engines/debt-ownership";
 import { useMemo } from "react";
 import { outstandingPrincipalAfterPrepaymentsFor } from "@/lib/engines/loan-outstanding";
 import { useLoanPrincipalPrepaid } from "@/hooks/use-loan-principal-prepaid";
@@ -218,6 +219,8 @@ export interface CreateLoanFormParams {
   beneficiaryPersonId?: string | null;
   /** That person repays me each installment — see `Loan.beneficiaryRepaysInstallments`. */
   beneficiaryRepaysInstallments?: boolean;
+  /** Shared ownership — see `Loan.ownershipShares`. */
+  ownershipShares?: OwnershipShare[] | null;
   repaymentType?: CreateLoanParams["repaymentType"];
   dueDate?: Date | null;
   agreementKind?: CreateLoanParams["agreementKind"];
@@ -308,6 +311,7 @@ export function useLoanActions() {
           payerPersonId: params.payerPersonId,
           beneficiaryPersonId: params.beneficiaryPersonId,
           beneficiaryRepaysInstallments: params.beneficiaryRepaysInstallments,
+          ownershipShares: params.ownershipShares ?? null,
         };
         if (params.movementAccountId) {
           if (!params.idempotencyKey) throw new Error("Missing idempotency key for an account-linked loan");

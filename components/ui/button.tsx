@@ -59,6 +59,8 @@ function Button({
       data-variant={variant}
       data-size={size}
       className={cn(buttonVariants({ variant, size, className }))}
+      // Native buttons default to "submit"; default to "button" so only explicit submit buttons submit a form.
+      type={asChild ? undefined : "button"}
       {...props}
     />
   )

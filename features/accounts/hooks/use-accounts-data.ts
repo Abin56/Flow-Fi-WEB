@@ -241,8 +241,9 @@ export function useRecentAccountTransactions(limit = 5): { rows: AccountTransact
         const account = accountById.get(t.accountId);
         return {
           id: t.id,
-          merchant: t.description || (t.type === "income" ? "Income" : "Expense"),
-          category: t.type === "income" ? "Income" : "Expense",
+          merchant: t.description || (t.isPersonLedgerMovement ? "People" : t.type === "income" ? "Income" : "Expense"),
+          // A People repayment moves the balance but is never income.
+          category: t.isPersonLedgerMovement ? (t.type === "income" ? "Person paid you" : "Paid to person") : t.type === "income" ? "Income" : "Expense",
           account: account ? `${account.name}${account.accountNumberLast4 ? ` •••• ${account.accountNumberLast4}` : ""}` : "Unknown Account",
           amount: signedAmount(t),
           timestamp: formatTimestamp(t.dateTime, now),

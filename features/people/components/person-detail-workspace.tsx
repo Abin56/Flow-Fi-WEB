@@ -180,7 +180,9 @@ export function PersonDetailWorkspace({
   const [advanceOpen, setAdvanceOpen] = useState<"theyOwe" | "iOwe" | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const { statement, allTimeStatement, ledgerEntries, isLoading, linkedEmis, setRepays, advanceApplications } = usePersonCycleStatement(person.id, cycle);
-  const { pending } = usePersonPendingSplitParticipants(person.id);
+  const { pending, trackedShareRefs: trackedAll, isLoading: sharesLoading } = usePersonPendingSplitParticipants(person.id);
+  // Until expenses have loaded, whether a share is tracked is unknown — keep it conservative (null).
+  const trackedShareRefs = sharesLoading ? null : trackedAll;
   const txActions = useTransactionActions();
   const { items: upcomingEmi } = usePersonUpcomingEmi(person.id);
   const { data: accounts = [] } = useAccounts();
@@ -196,8 +198,8 @@ export function PersonDetailWorkspace({
   const cashLegIds = usePersonCashLegIds();
   // Cycle rows read payment history from the whole-history statement, so a transaction shows every payment against it.
   const cycleRows = useMemo(
-    () => buildLedgerRows({ statement, history: allTimeStatement, entries: ledgerEntries, pending, cashLegIds }),
-    [statement, allTimeStatement, ledgerEntries, pending, cashLegIds],
+    () => buildLedgerRows({ statement, history: allTimeStatement, entries: ledgerEntries, pending, cashLegIds, trackedShareRefs }),
+    [statement, allTimeStatement, ledgerEntries, pending, cashLegIds, trackedShareRefs],
   );
   const allRows = useMemo(
     () =>
@@ -207,8 +209,10 @@ export function PersonDetailWorkspace({
         loanItems: person.activity.filter((a) => isLoanItem(a.id)),
         pending,
         cashLegIds,
+        trackedShareRefs,
+        advanceApplications,
       }),
-    [allTimeStatement, ledgerEntries, person.activity, pending, cashLegIds],
+    [allTimeStatement, ledgerEntries, person.activity, pending, cashLegIds, trackedShareRefs, advanceApplications],
   );
   const scopeRows = scope === "cycle" ? cycleRows : allRows;
   const lookups = useSettlementLookups(ledgerEntries, pending);
@@ -254,7 +258,9 @@ export function PersonDetailWorkspace({
   const paymentPanel =
     onRecordPayment != null ? (
       <RecordPaymentPanel
-        key={`${paying?.preselectKey ?? ""}|${paying?.initial?.paymentId ?? ""}`}
+        key={`${paying?.preselectKey ?? ""}|${paying?.initial?.paymentId ?? ""}|${cycle.start.getTime()}`}
+        cycle={cycle}
+        cycleLabel={formatCycleLabel(cycle)}
         personName={person.name}
         rows={allRows}
         preselectKey={paying?.preselectKey}
@@ -310,16 +316,16 @@ export function PersonDetailWorkspace({
   async function settleRow(row: LedgerRow, values: EntrySettleValues) {
     const target = row.settle;
     if (!target) return;
-    if (target.kind === "entry" || target.kind === "derivedInstallment") {
+    if (target.kind === "entry" || target.kind === "derivedInstallment" || target.kind === "opening") {
       if (!onSettleEntry) throw new Error("Not signed in");
       await onSettleEntry({
-        // "I borrowed X" settles by "I repaid"; every derived installment is a Person receivable.
-        type: target.kind === "entry" && target.entry.type === "borrowed" ? "repaid" : "receivedBack",
+        // "I borrowed X" / an opening balance I owe settles by "I repaid"; everything else is a Person receivable.
+        type: (target.kind === "entry" && target.entry.type === "borrowed") || (target.kind === "opening" && row.direction === "iOwe") ? "repaid" : "receivedBack",
         amount: values.amount,
         date: values.date,
         parentEntryId: target.kind === "entry" ? target.entry.id : undefined,
         sourceKind: target.kind === "derivedInstallment" ? target.sourceKind : undefined,
-        obligationRef: target.kind === "derivedInstallment" ? target.obligationRef : undefined,
+        obligationRef: target.kind === "entry" ? undefined : target.obligationRef,
         accountId: values.accountId ?? "",
       });
     } else {

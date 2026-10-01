@@ -32,9 +32,15 @@ import {
   Upload,
   Wallet,
   X,
+  Check,
+  CheckCircle2,
 } from "lucide-react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Fragment, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { ClayButton } from "@/components/clay/clay-button";
+import { ACCOUNT_FILTER_PARAM, resolveAccountFilter } from "@/features/transactions/lib/account-filter-param";
+import { usePeopleLedgerEntries } from "@/features/people/hooks/use-people-data";
+import { getTransactionPresentation, type RowTreatment, type TransactionPresentation } from "@/features/transactions/lib/transaction-presentation";
 import {
   ConfirmDialog,
   type FilterDef,
@@ -209,7 +215,26 @@ export function TransactionsWorkspace() {
 
   const [search, setSearch] = useState("");
   const deferredSearch = useDeferredValue(search);
-  const [accountFilter, setAccountFilter] = useState<string | null>(null);
+  // `?account=<accountId>` (from Accounts / Credit Cards "View transactions") pre-selects the EXISTING account
+  // filter — same filter, same list; a card is an account, so one param covers both.
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  const [accountFilter, setAccountFilter] = useState<string | null>(() => searchParams.get(ACCOUNT_FILTER_PARAM));
+  // A stale/deleted id from the URL falls back to the unfiltered list once accounts are known.
+  const resolvedAccountFilter = resolveAccountFilter(accountFilter, accounts, isLoading);
+  if (resolvedAccountFilter !== accountFilter) setAccountFilter(resolvedAccountFilter);
+  // Keep the URL in step with the filter (replace, not push): clearing the chip clears the param, so a
+  // refresh doesn't silently re-filter and Back still returns to the page the user came from.
+  useEffect(() => {
+    const current = searchParams.get(ACCOUNT_FILTER_PARAM);
+    if (current === accountFilter) return;
+    const next = new URLSearchParams(searchParams.toString());
+    if (accountFilter) next.set(ACCOUNT_FILTER_PARAM, accountFilter);
+    else next.delete(ACCOUNT_FILTER_PARAM);
+    const qs = next.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+  }, [accountFilter, searchParams, router, pathname]);
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
   const [typeFilter, setTypeFilter] = useState<string | null>(null);
   const [paymentMethodFilter, setPaymentMethodFilter] = useState<string | null>(null);
@@ -230,6 +255,17 @@ export function TransactionsWorkspace() {
   const [splitSaving, setSplitSaving] = useState(false);
   const [splitError, setSplitError] = useState<string | null>(null);
   const splitDuplicateGuard = useDuplicateGuardedCreate(rows.map((r) => r.transaction));
+
+  // `?transaction=<id>` handoff (e.g. the People Ledger's "Open expense"): open that transaction's details once.
+  const [handoffId, setHandoffId] = useState<string | null>(() => searchParams.get("transaction"));
+  if (handoffId) {
+    const target = rows.find((r) => r.transaction.id === handoffId);
+    if (target) {
+      setHandoffId(null);
+      setDetailRow(target);
+      setDetailOpen(true);
+    }
+  }
 
   const [fullscreen, setFullscreen] = useState(false);
   useEffect(() => {
@@ -273,6 +309,12 @@ export function TransactionsWorkspace() {
   // Computed over the full, unfiltered `rows` — not `filtered` — so a duplicate is still flagged even
   // if its pair got filtered out of the current view.
   const duplicateTransactionIds = useMemo(() => findSameAmountDateDuplicateIds(rows.map((r) => r.transaction)), [rows]);
+  // Cash legs of People "Borrowed" entries (`LedgerEntry.transactionRef`) — display only: they get the borrowed outline.
+  const { entriesByPersonId } = usePeopleLedgerEntries();
+  const borrowedTransactionIds = useMemo(
+    () => new Set(Object.values(entriesByPersonId).flat().filter((e) => e.type === "borrowed" && e.deletedAt == null && e.transactionRef).map((e) => e.transactionRef as string)),
+    [entriesByPersonId],
+  );
 
   const count = filtered.length;
   const totalPages = Math.max(1, Math.ceil(count / rowsPerPage));
@@ -494,7 +536,7 @@ export function TransactionsWorkspace() {
       ? [{ key: "date", label: dateRangeLabel(dateFrom, dateTo), clear: () => (setDateFrom(""), setDateTo("")) }]
       : []),
     ...(typeFilter ? [{ key: "type", label: `Type: ${typeFilter === "income" ? "Income" : "Expense"}`, clear: () => setTypeFilter(null) }] : []),
-    ...(accountFilter ? [{ key: "account", label: `Account: ${accountName(accountFilter)}`, clear: () => setAccountFilter(null) }] : []),
+    ...(accountFilter ? [{ key: "account", label: `${accounts.find((a) => a.id === accountFilter)?.type === "card" ? "Card" : "Account"}: ${accountName(accountFilter)}`, clear: () => setAccountFilter(null) }] : []),
     ...(categoryFilter ? [{ key: "category", label: `Category: ${categoryName(categoryFilter)}`, clear: () => setCategoryFilter(null) }] : []),
     ...(paymentMethodFilter ? [{ key: "method", label: `Method: ${paymentMethodFilter}`, clear: () => setPaymentMethodFilter(null) }] : []),
   ];
@@ -756,6 +798,7 @@ export function TransactionsWorkspace() {
                 offset={(safePage - 1) * rowsPerPage}
                 total={count}
                 duplicateIds={duplicateTransactionIds}
+                borrowedIds={borrowedTransactionIds}
                 displayDescription={displayDescription}
                 isSplit={(id) => splitTransactionIds.has(id)}
                 assigneeFor={assigneeFor}
@@ -1195,18 +1238,29 @@ const TRANSFER_SIDE_LABEL = { sent: "Transfer sent", received: "Transfer receive
  * (neutral, signed by side but never green/red — moving your own money isn't income or spending);
  * `size="lg"` for the ledger's Amount column, with the direction label beneath.
  */
-function Amount({ transaction, withLabel = false, size = "md" }: { transaction: Transaction; withLabel?: boolean; size?: "md" | "lg" }) {
-  const flow = flowOf(transaction);
-  const side = flow === "transfer" ? transferSideOf(transaction) : null;
-  const incoming = flow === "in" || side === "received" || (flow === "debt" && transaction.type === "income");
-  const Icon = incoming ? ArrowDownLeft : ArrowUpRight;
+function Amount({
+  transaction,
+  presentation = getTransactionPresentation(transaction),
+  withLabel = false,
+  size = "md",
+}: {
+  transaction: Transaction;
+  /** From `getTransactionPresentation` (with the row's card context) — never the sign alone. */
+  presentation?: TransactionPresentation;
+  withLabel?: boolean;
+  size?: "md" | "lg";
+}) {
+  const { incoming, row, settled, status } = presentation;
+  // Borrowed: the note points at the obligation ('repay', outward), not at the money coming in.
+  const Icon = settled ? Check : row === "borrowed" ? ArrowUpRight : incoming ? ArrowDownLeft : ArrowUpRight;
   return (
     <span className="flex shrink-0 flex-col items-end gap-0.5">
       <span
         className={cn(
           "font-bold tracking-tight whitespace-nowrap tabular-nums",
           size === "lg" ? "text-[18px] leading-tight" : "text-[15px] leading-tight",
-          flow === "in" ? "text-success" : "text-foreground",
+          // Only real income is green; a paid obligation is money out, shown in strong neutral text.
+          row === "income" ? "text-success" : "text-foreground",
         )}
       >
         {incoming ? "+" : "−"}
@@ -1215,18 +1269,22 @@ function Amount({ transaction, withLabel = false, size = "md" }: { transaction: 
       {withLabel && (
         <span
           className={cn(
-            "inline-flex items-center gap-0.5 text-[11px] font-medium",
-            flow === "in" || (flow === "debt" && transaction.type !== "income")
-              ? "text-success"
-              : flow === "out"
-                ? "text-expense"
-                : flow === "debt"
-                  ? PURPLE_TEXT
-                  : "text-foreground/70",
+            "inline-flex items-center gap-0.5 text-[11px]",
+            settled
+              ? "rounded-[4px] border border-success/60 bg-success/12 px-1 font-bold tracking-wide text-success uppercase"
+              : row === "borrowed"
+                ? "rounded-[4px] border border-debt-strong px-1 font-bold text-debt-strong"
+                : row === "income"
+                ? "font-medium text-success"
+                : row === "expense"
+                  ? "font-medium text-expense"
+                  : row === "debt"
+                    ? cn("font-medium", PURPLE_TEXT)
+                    : "font-medium text-foreground/70",
           )}
         >
-          <Icon className="size-3" strokeWidth={2} aria-hidden />
-          {side ? TRANSFER_SIDE_LABEL[side] : flow === "debt" ? debtLabel(transaction) : FLOW_LABEL[flow]}
+          <Icon className="size-3" strokeWidth={settled ? 2.75 : 2} aria-hidden />
+          {status}
         </span>
       )}
     </span>
@@ -1298,6 +1356,7 @@ function LedgerTable({
   offset,
   total,
   duplicateIds,
+  borrowedIds,
   displayDescription,
   isSplit,
   assigneeFor,
@@ -1308,6 +1367,8 @@ function LedgerTable({
   offset: number;
   total: number;
   duplicateIds: Set<string>;
+  /** People "Borrowed" cash legs — money in that must be repaid. */
+  borrowedIds: ReadonlySet<string>;
   displayDescription: (t: Transaction) => string;
   isSplit: (transactionId: string) => boolean;
   assigneeFor: (t: Transaction) => string | null;
@@ -1363,17 +1424,11 @@ function LedgerTable({
           // (either this leg's account or its paired leg's). Read-only account data — display only.
           // A possible duplicate keeps its row's own meaning (tint) — the warning is its badge + red edge only,
           // so a flagged People/Income row never turns into a generic pink row.
-          const tone: RowTone = flow === "in"
-              ? "income"
-              : flow === "debt"
-                ? t.type === "income"
-                  ? "debt"
-                  : "debtPaid"
-                : flow === "transfer"
-                ? row.account?.type === "card" || mate?.account?.type === "card"
-                  ? "cardPayment"
-                  : "transfer"
-                : "expense";
+          const presentation = getTransactionPresentation(t, {
+            touchesCard: row.account?.type === "card" || mate?.account?.type === "card",
+            borrowedFromPerson: borrowedIds.has(t.id),
+          });
+          const tone: RowTone = presentation.row;
           const edge = isDuplicate ? ROW_TONE.duplicate.edge : ROW_TONE[tone].edge;
           return (
             <Fragment key={t.id}>
@@ -1389,6 +1444,9 @@ function LedgerTable({
                   role && "[&>td:last-child]:border-r [&>td:last-child]:border-r-border-strong",
                   role === "first" && "[&>td]:border-t [&>td]:border-t-border-strong [&>td]:border-b-transparent",
                   role === "second" && "[&>td]:border-b-border-strong",
+                  // Borrowed money: one outline around the whole logical row, drawn on the cells' own
+                  // borders so the grid's vertical separators stay intact.
+                  tone === "borrowed" && !isDuplicate && BORROWED_OUTLINE,
                 )}
               >
                 <td
@@ -1437,7 +1495,7 @@ function LedgerTable({
                   </div>
                 </td>
                 <td className={cn(TD, "hidden md:table-cell")}>
-                  <TypeTag transaction={t} />
+                  <TypeTag transaction={t} presentation={presentation} />
                 </td>
                 <td className={cn(TD, "hidden max-w-0 lg:table-cell")}>
                   <p className="truncate text-xs text-foreground/85">{row.account?.name ?? "Unknown"}</p>
@@ -1451,7 +1509,7 @@ function LedgerTable({
                   )}
                 </td>
                 <td className={cn(TD, "text-right")}>
-                  <Amount transaction={t} withLabel size="lg" />
+                  <Amount transaction={t} presentation={presentation} withLabel size="lg" />
                 </td>
                 <td className={cn(TD, "px-1.5")} onClick={(e) => e.stopPropagation()}>
                   <div className="flex items-center justify-end gap-1.5">
@@ -1517,13 +1575,17 @@ function LedgerTable({
   );
 }
 
-type RowTone = "income" | "expense" | "transfer" | "cardPayment" | "debt" | "debtPaid" | "duplicate";
+type RowTone = RowTreatment | "duplicate";
+
+/** 2px deep-violet frame on every cell edge of a borrowed row (top/bottom on all cells, right on the last). */
+const BORROWED_OUTLINE =
+  "[&>td]:border-y-2 [&>td]:border-y-debt-strong [&>td:last-child]:border-r-2 [&>td:last-child]:border-r-debt-strong";
 
 /**
  * Semantic row wash + leading edge. Edge = clearly visible; wash = a light tint of an existing theme
- * token (stronger alpha in dark mode, where the same tint reads fainter). Income is green, a card/bill
- * payment is the lime "settlement" accent, a transfer is a neutral grey — so a transfer received never
- * looks like income and a card payment never looks like new money. Expense keeps its existing plain row.
+ * token (stronger alpha in dark mode, where the same tint reads fainter). Only Income is a filled green
+ * row; a paid obligation is a neutral row with a thick success rail + ✓; a transfer is a neutral grey;
+ * debt created is violet. Expense keeps its existing plain row. Tone comes from `getTransactionPresentation`.
  */
 const ROW_TONE: Record<RowTone, { edge: string; rest: string; open: string }> = {
   income: {
@@ -1544,54 +1606,76 @@ const ROW_TONE: Record<RowTone, { edge: string; rest: string; open: string }> = 
     rest: "bg-debt-surface hover:bg-debt-surface-hover",
     open: "bg-debt-surface-hover",
   },
-  // Loan/People cash OUT (paid to person, lent) — a completed payment: soft green surface.
-  debtPaid: {
-    edge: "border-l-success",
-    rest: "bg-success/[0.14] hover:bg-success/[0.2] dark:bg-success/[0.15] dark:hover:bg-success/[0.2]",
-    open: "bg-success/[0.22] dark:bg-success/[0.23]",
+  // Borrowed money in (People "Borrowed", Loan principal taken) — NOT income: a neutral row whose 2px
+  // deep-violet OUTLINE is the signal (see `BORROWED_OUTLINE`), a slightly stronger left edge, and only
+  // a faint inner tint. Badge, icon and "You need to repay" carry the meaning too.
+  borrowed: {
+    edge: "border-l-[4px] border-l-debt-strong",
+    rest: "bg-debt-surface/[0.22] hover:bg-debt-surface/[0.4] dark:bg-debt-surface/[0.3] dark:hover:bg-debt-surface/[0.5]",
+    open: "bg-debt-surface/[0.5]",
   },
-  cardPayment: {
-    edge: "border-l-primary-accent-text",
-    rest: "bg-primary/[0.2] hover:bg-primary/[0.28] dark:bg-primary/[0.12] dark:hover:bg-primary/[0.17]",
-    open: "bg-primary/[0.3] dark:bg-primary/[0.2]",
+  // A paid / reduced obligation (EMI, loan repayment, card bill, paid back to a person): a NEUTRAL row
+  // with a thick, high-contrast success rail + the ✓ status chip — never Income's filled green. The wash
+  // is only a whisper so the rail, icon and wording carry the meaning on low-contrast screens.
+  settled: {
+    edge: "border-l-[5px] border-l-success",
+    rest: "bg-success/[0.035] hover:bg-secondary/70 dark:bg-success/[0.05]",
+    open: "bg-secondary",
   },
   duplicate: { edge: "border-l-danger", rest: "bg-danger/[0.08] hover:bg-danger/[0.12]", open: "bg-danger/[0.14]" },
 };
 
 /** Type column tag — label + icon + tone, so meaning never rests on colour alone. Transfer legs read as
  *  "Sent"/"Received" in the neutral transfer tone, never as Income/Expense. */
-function TypeTag({ transaction }: { transaction: Transaction }) {
-  const flow = flowOf(transaction);
-  if (flow === "transfer") {
-    const side = transferSideOf(transaction);
+function TypeTag({ transaction, presentation = getTransactionPresentation(transaction) }: { transaction: Transaction; presentation?: TransactionPresentation }) {
+  const { row, label, detail } = presentation;
+  if (row === "transfer") {
     return (
       <span className="inline-flex flex-col gap-0.5">
         <span className={cn(BADGE, "w-fit border-border-strong bg-secondary text-foreground")}>
           <ArrowLeftRight className="size-3" strokeWidth={2} aria-hidden />
-          Transfer
+          {label}
         </span>
-        <span className="text-[11px] font-medium text-foreground/70">{side === "sent" ? "Sent" : "Received"}</span>
+        <span className="text-[11px] font-medium text-foreground/70">{detail}</span>
       </span>
     );
   }
-  if (flow === "debt") {
+  if (row === "settled") {
+    // Neutral badge, success outline + ✓ — "an obligation was paid", not "money came in".
     return (
       <span className="inline-flex flex-col gap-0.5">
-        <span
-          className={cn(
-            BADGE,
-            "w-fit",
-            transaction.type === "income" ? "border-debt-border bg-card text-debt-text" : "border-success/60 bg-success/15 text-success",
-          )}
-        >
-          <Landmark className="size-3" strokeWidth={2} aria-hidden />
-          {isLoanPrincipalDisbursement(transaction) ? "Loan" : "People"}
+        <span className={cn(BADGE, "w-fit border-success/70 bg-card text-foreground")}>
+          <CheckCircle2 className="size-3 text-success" strokeWidth={2.5} aria-hidden />
+          {label}
         </span>
-        <span className="text-[11px] font-medium text-foreground/70">{debtLabel(transaction)}</span>
+        <span className="text-[11px] font-medium text-foreground/75">{detail}</span>
       </span>
     );
   }
-  if (flow === "in") {
+  if (row === "borrowed") {
+    // Deep-violet outlined badge + inbound icon: "money received" — the amount column says it must be repaid.
+    return (
+      <span className="inline-flex flex-col gap-0.5">
+        <span className={cn(BADGE, "w-fit border-debt-strong bg-card font-bold text-debt-strong")}>
+          <ArrowDownLeft className="size-3" strokeWidth={2.5} aria-hidden />
+          {label}
+        </span>
+        <span className="text-[11px] font-medium text-foreground/75">{detail}</span>
+      </span>
+    );
+  }
+  if (row === "debt") {
+    return (
+      <span className="inline-flex flex-col gap-0.5">
+        <span className={cn(BADGE, "w-fit border-debt-border bg-card text-debt-text")}>
+          <Landmark className="size-3" strokeWidth={2} aria-hidden />
+          {label}
+        </span>
+        <span className="text-[11px] font-medium text-foreground/70">{detail}</span>
+      </span>
+    );
+  }
+  if (row === "income") {
     return (
       <span className={cn(BADGE, "border-success/50 bg-success/12 text-success")}>
         <ArrowDownLeft className="size-3" strokeWidth={2.25} aria-hidden />
@@ -1599,7 +1683,7 @@ function TypeTag({ transaction }: { transaction: Transaction }) {
       </span>
     );
   }
-  return <span className="text-xs font-medium text-foreground/85">{TYPE_LABEL[flow]}</span>;
+  return <span className="text-xs font-medium text-foreground/85">{label}</span>;
 }
 
 /**

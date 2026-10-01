@@ -19,6 +19,7 @@
 
 import type { CreateLoanFormParams } from "@/features/loans/hooks/use-loans-data";
 import type { InterestType } from "@/lib/engines/interest-calculator";
+import { allocateOwnership, type AllocationMode, type AllocationResult } from "@/lib/engines/debt-ownership";
 import type { Emi, EmiLoanType } from "@/lib/models/emi";
 import type { Loan, LoanCategory } from "@/lib/models/loan";
 import type { ScheduleType } from "@/lib/models/payment-schedule";
@@ -28,6 +29,15 @@ export type AddKind = "borrowed" | "purchase" | "creditCard" | "lent";
 /** How a card-linked EMI came about — only changes wording; both lock the principal against the card. */
 export type CardEmiKind = "productPurchase" | "creditCardLoan";
 export type OwnershipChoice = "me" | "someoneElse";
+/** The Add form also offers "shared": ONE loan whose principal is allocated between me and/or several people. */
+export type AddOwnership = OwnershipChoice | "shared";
+
+/** One row of the shared-loan allocation. `personId`: null = Me, "" = not chosen yet. */
+export interface AllocationFormRow {
+  personId: string | null;
+  /** ₹ (custom) or % (percentage); ignored for equal. */
+  value: string;
+}
 
 export interface LoanEmiAddForm {
   kind: AddKind | null;
@@ -57,8 +67,11 @@ export interface LoanEmiAddForm {
   /** Borrowed / Lent only — "Where did the money go / come from?". */
   useAccount: boolean;
   accountId: string;
-  ownership: OwnershipChoice;
+  ownership: AddOwnership;
   beneficiaryPersonId: string;
+  /** "shared" only — how the principal is divided, and between whom. */
+  allocationMode: AllocationMode;
+  allocationRows: AllocationFormRow[];
   /**
    * "They repay me each installment" — the explicit opt-in (`beneficiaryRepaysInstallments`) that makes
    * each installment a People obligation on its due date. Off = "who is this for" association only.
@@ -99,6 +112,8 @@ export function emptyLoanEmiAddForm(kind: AddKind | null = null, idempotencyKey 
     accountId: "",
     ownership: "me",
     beneficiaryPersonId: "",
+    allocationMode: "equal",
+    allocationRows: [{ personId: null, value: "" }, { personId: "", value: "" }],
     beneficiaryRepays: false,
     payerPersonId: "",
     loanType: "",
@@ -174,7 +189,25 @@ export function loanEmiAddError(form: LoanEmiAddForm): string | null {
   if (form.hasInterest && !(form.ratePercent.trim() !== "" && Number(form.ratePercent) >= 0)) return "Enter the interest rate";
   if (s.account && form.useAccount && form.accountId === "") return "Choose the account";
   if (s.whoFor && form.ownership === "someoneElse" && form.beneficiaryPersonId === "") return "Choose who this is for";
+  if (s.whoFor && form.ownership === "shared") {
+    if (!form.allocationRows.some((r) => r.personId !== null)) return "Add at least one other person";
+    const error = allocationOf(form).error;
+    if (error != null) return error;
+  }
   return null;
+}
+
+/** The live allocation of the principal for the "shared" choice — the form shows it continuously. */
+export function allocationOf(form: Pick<LoanEmiAddForm, "amount" | "allocationMode" | "allocationRows">): AllocationResult {
+  return allocateOwnership(
+    Number(form.amount) > 0 ? Number(form.amount) : 0,
+    form.allocationMode,
+    form.allocationRows.map((r) => ({ personId: r.personId, value: r.value.trim() === "" ? 0 : Number(r.value) })),
+  );
+}
+
+function sharesOf(form: LoanEmiAddForm) {
+  return addSections(form).whoFor && form.ownership === "shared" ? allocationOf(form).shares : null;
 }
 
 export function parseDateInput(value: string): Date | null {
@@ -230,6 +263,7 @@ export function buildLoanEmiCreateRequest(form: LoanEmiAddForm): LoanEmiCreateRe
         payerPersonId: kind === "borrowed" ? form.payerPersonId || null : null,
         beneficiaryPersonId: beneficiaryOf(form),
         beneficiaryRepaysInstallments: kind === "borrowed" && beneficiaryOf(form) != null && form.beneficiaryRepays,
+        ownershipShares: kind === "borrowed" ? sharesOf(form) : null,
         movementAccountId: movesMoney ? form.accountId : null,
         idempotencyKey: movesMoney ? form.idempotencyKey : undefined,
       },
@@ -246,6 +280,7 @@ export function buildLoanEmiCreateRequest(form: LoanEmiAddForm): LoanEmiCreateRe
       linkedCreditCardId: card ? form.cardId : null,
       beneficiaryPersonId: beneficiaryOf(form),
       beneficiaryRepaysInstallments: beneficiaryOf(form) != null && form.beneficiaryRepays,
+      ownershipShares: sharesOf(form),
       principalAmount: Number(form.amount),
       startDate: firstEmiDate,
       installmentFrequency: form.frequency,

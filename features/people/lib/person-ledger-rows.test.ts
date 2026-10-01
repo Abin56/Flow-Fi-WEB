@@ -204,7 +204,8 @@ describe("entries added with an account (own People cash leg as transactionRef)"
     const cashLegIds = new Set(["txn-borrow", "txn-gave", "txn-gave-back"]);
 
     const before = buildLedgerRows({ statement: statementOf(entries), entries, pending: [pendingFor("t1", 300)] });
-    expect(before.find((r) => r.entryId === borrowed.id)).toMatchObject({ settle: null, deletable: false });
+    // Linked to a transaction the ledger doesn't own: still settleable (a settlement pointing at it), never deletable here.
+    expect(before.find((r) => r.entryId === borrowed.id)).toMatchObject({ settle: { kind: "entry", max: 1000 }, deletable: false });
 
     const rows = buildLedgerRows({ statement: statementOf(entries), entries, pending: [pendingFor("t1", 300)], cashLegIds });
     const byId = (id: string) => rows.find((r) => r.entryId === id)!;
@@ -216,5 +217,20 @@ describe("entries added with an account (own People cash leg as transactionRef)"
     expect(byId(gave.id).payments[0]).toMatchObject({ entryId: gavePart.id, undoBlock: null });
     // The split share is still owned by its expense.
     expect(byId(share.id)).toMatchObject({ deletable: false, deleteBlock: "expense" });
+  });
+});
+
+describe("calendar-month headings (presentation only)", () => {
+  it("a cycle spanning Sep/Oct shows both months, every row exactly once, under its own date's month", () => {
+    const rows = [{ d: new Date(2026, 9, 15) }, { d: new Date(2026, 9, 4) }, { d: new Date(2026, 8, 29) }];
+    const groups = groupByMonth(rows, (r) => r.d);
+    expect(groups.map((g) => [g.label, g.rows.length])).toEqual([
+      ["October 2026", 2],
+      ["September 2026", 1],
+    ]);
+    expect(groups.flatMap((g) => g.rows.map((x) => x.row))).toEqual(rows);
+  });
+  it("labels even a single row — the heading carries the year the row date omits", () => {
+    expect(groupByMonth([{ d: new Date(2026, 9, 4) }], (r) => r.d)[0].label).toBe("October 2026");
   });
 });

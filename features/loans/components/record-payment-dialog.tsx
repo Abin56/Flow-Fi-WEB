@@ -23,6 +23,9 @@ import {
 } from "@/features/loans/components/loan-emi-ui";
 import { AddElsewhereLink } from "@/features/loans/components/loans-workspace";
 import { useLoanActions, type LoanRow } from "@/features/loans/hooks/use-loans-data";
+import { LinkedFundsPayNotice } from "@/features/people/components/linked-funds";
+import { useLinkedFunds } from "@/features/people/hooks/use-linked-funds";
+import { linkedFundsForInstallment } from "@/lib/engines/linked-funds";
 import { previewPrincipalPrepayment } from "@/features/loans/lib/loan-adjustment-preview";
 import { friendlyLoanError } from "@/features/loans/lib/loan-live-state";
 import { EMI_PAYMENT_HISTORY_KEY } from "@/features/loans/hooks/use-payment-history";
@@ -120,6 +123,7 @@ export function RecordPaymentDialog({ target, open, onOpenChange }: { target: Pa
   const queryClient = useQueryClient();
   const { data: allAccounts = [] } = useAccounts();
   const accounts = useMemo(() => allAccounts.filter((a) => a.deletedAt == null), [allAccounts]);
+  const { funds: linkedFunds } = useLinkedFunds();
 
   const [choice, setChoice] = useState<PayChoice>("installment");
   const [customAmount, setCustomAmount] = useState("");
@@ -371,6 +375,14 @@ export function RecordPaymentDialog({ target, open, onOpenChange }: { target: Pa
             </p>
           )}
         </section>
+      )}
+
+      {next && !lent && (
+        <LinkedFundsPayNotice
+          funds={linkedFundsForInstallment(linkedFunds, next.id)}
+          accountName={(id) => accounts.find((a) => a.id === id)?.name}
+          onUseAccount={needsAccount ? setAccountId : undefined}
+        />
       )}
 
       {next && needsAccount && (
