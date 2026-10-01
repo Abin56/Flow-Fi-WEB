@@ -46,6 +46,7 @@ import { useSharedCreditLimits } from "@/hooks/use-credit-cards";
 import { LinkedFundsPayNotice } from "@/features/people/components/linked-funds";
 import { useLinkedFunds } from "@/features/people/hooks/use-linked-funds";
 import { linkedPendingForCard } from "@/lib/engines/linked-funds";
+import { useLinkedPeopleReadiness } from "@/features/people/hooks/use-linked-people-readiness";
 import type { Account } from "@/lib/models/account";
 import type { CardNetwork } from "@/lib/models/credit-card";
 import { formatCurrency } from "@/lib/format";
@@ -195,9 +196,31 @@ export function CreditCardsWorkspace() {
   const transactionActions = useTransactionActions();
   const [payCard, setPayCard] = useState<CreditCardViewItem | null>(null);
   const { funds: linkedFunds } = useLinkedFunds();
+  // The card Pay bill is currently paying — the dialog's To account (starts as `payCard`, follows a change).
+  const [payDestAccountId, setPayDestAccountId] = useState<string | null>(null);
+  const payDestCard = payCard ? (creditCards.find((c) => c.card.accountId === (payDestAccountId ?? payCard.card.accountId)) ?? null) : null;
+  // Card bill: people's shares of charges this card still carries — they must be settled before Pay bill completes.
+  const { readiness: payCardPeople, isLoading: payCardPeopleLoading } = useLinkedPeopleReadiness(
+    payDestCard ? { kind: "card", cardAccountId: payDestCard.card.accountId, lenderDue: Math.max(0, payDestCard.currentBalance) } : null,
+  );
 
   // `?card=<id>` reopens that card — so Back from its filtered Transactions lands on the same card.
   const cardParams = useSearchParams();
+  // `?card=<id>&pay=1` (People returns here after a settlement) reopens that card's Pay bill once, then drops `pay`.
+  const reopenPayId = cardParams.get("pay") === "1" ? cardParams.get("card") : null;
+  const [reopenedPay, setReopenedPay] = useState(false);
+  if (reopenPayId && !reopenedPay && !cardsLoading) {
+    setReopenedPay(true);
+    const target = creditCards.find((c) => c.id === reopenPayId);
+    if (target) setPayCard(target);
+  }
+  useEffect(() => {
+    if (!reopenedPay || typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has("pay")) return;
+    url.searchParams.delete("pay");
+    window.history.replaceState(null, "", `${url.pathname}${url.search}`);
+  }, [reopenedPay]);
   const [activeCardId, setActiveCardId] = useState<string | undefined>(() => cardParams.get("card") ?? undefined);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [addOpen, setAddOpen] = useState(false);
@@ -1184,7 +1207,11 @@ export function CreditCardsWorkspace() {
       {transactionActions && (
         <TransactionDetailsModal
           open={payCard != null}
-          onOpenChange={(open) => !open && setPayCard(null)}
+          onOpenChange={(open) => {
+            if (open) return;
+            setPayCard(null);
+            setPayDestAccountId(null);
+          }}
           row={null}
           expense={null}
           people={people}
@@ -1194,6 +1221,18 @@ export function CreditCardsWorkspace() {
           defaultKind="transfer"
           initialDestinationAccountId={payCard?.card.accountId}
           initialAmount={payCard?.currentBalance}
+          onDestinationAccountChange={setPayDestAccountId}
+          peopleGate={
+            payDestCard
+              ? {
+                  accountId: payDestCard.card.accountId,
+                  readiness: payCardPeople,
+                  loading: payCardPeopleLoading,
+                  payeeName: payDestCard.name,
+                  returnTo: `/credit-cards?card=${encodeURIComponent(payDestCard.id)}&pay=1`,
+                }
+              : null
+          }
           existingTransactions={transactionRows.map((r) => r.transaction)}
         />
       )}

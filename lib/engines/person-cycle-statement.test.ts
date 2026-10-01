@@ -407,7 +407,7 @@ describe("outputs share the engine total", () => {
     expect(view.currentPending).toBe(4750);
     expect(view.current).toEqual({ label: "Current pending", value: money(4750) });
     expect(view.amount).toBe(money(4750));
-    expect(view.headline).toBe(`${s.personName.split(" ")[0]} owes you`);
+    expect(view.headline).toBe(`You need to receive from ${s.personName.split(" ")[0]}`);
     expect(view.rows.find((r) => r.kind === "emi")).toMatchObject({ typeLabel: "EMI", original: money(2500), remaining: money(2500) });
     // The received payment is listed in the cycle's payment history.
     expect(view.payments.some((p) => p.amount === money(1500) && p.inbound)).toBe(true);

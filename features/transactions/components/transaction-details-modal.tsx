@@ -20,13 +20,14 @@
  * as before.
  */
 
-import { useRef, useState, type ReactNode } from "react";
+import { useRef, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   ArrowDownToLine,
   ArrowLeft,
-  ArrowLeftRight,
+  ArrowRight,
   ArrowUpFromLine,
   Banknote,
   Briefcase,
@@ -46,8 +47,6 @@ import {
   Shapes,
   SplitSquareHorizontal,
   Trash2,
-  TrendingDown,
-  TrendingUp,
   UserPlus,
   Users,
   Wallet,
@@ -93,6 +92,19 @@ import {
 import { handleEnterKey } from "@/components/ui/enter-key";
 import { handleEnterAdvance } from "@/components/finance/enter-advance";
 import { focusInvalidField, type TxnFormField, type TxnValidationError } from "@/features/transactions/lib/focus-invalid-field";
+import {
+  TXN_KIND_EDGE as KIND_BORDER_CLASS,
+  TXN_KIND_META as KIND_META,
+  TXN_KIND_SOLID as KIND_SOLID_CLASS,
+  TXN_KIND_TEXT as KIND_TEXT_CLASS,
+  TxnAccountFlow,
+  TxnFieldRow as FormRow,
+  TxnModeSwitch,
+  TxnSection as FormSection,
+  type TxnFormKind,
+} from "./transaction-form-ui";
+import { PeopleSettlementCard, settleCtaLabel } from "@/features/people/components/linked-people-panel";
+import { peopleSettleHref, peopleSettlementGate, type LinkedPeopleReadiness } from "@/lib/engines/linked-people-readiness";
 
 const DATE_DISPLAY_FORMAT = new Intl.DateTimeFormat("en-IN", { day: "2-digit", month: "short", year: "numeric" });
 /** Solid `border-strong` edge (People Ledger / Loan & EMI rule) — never an opacity-faded border that
@@ -136,51 +148,16 @@ const ACCOUNT_TYPE_ICON: Record<AccountType, LucideIcon> = {
   other: Layers,
 };
 
-/** One label-above-control row — the single field pattern this popup uses throughout. `field` tags the row as a
- *  submit-validation target (see `focusInvalidField`); `error` marks it invalid with a solid danger ring + short message. */
-function FormRow({ label, children, field, error }: { label: string; children: ReactNode; field?: TxnFormField; error?: string | null }) {
-  return (
-    <div className="flex min-w-0 flex-col gap-1.5" data-field={field} data-invalid={error ? "true" : undefined}>
-      <span className={cn("text-xs font-medium", error ? "text-danger" : "text-foreground/80")}>{label}</span>
-      {/* Always-present wrapper: toggling the ring must not remount the control (that would drop its focus). */}
-      <div className={cn("min-w-0 rounded-[6px]", error && "ring-2 ring-danger")}>{children}</div>
-      {error && (
-        <p role="alert" className="text-[11px] font-medium text-danger">
-          {error}
-        </p>
-      )}
-    </div>
-  );
-}
-
-/** One titled section of the form — flat, separated from the previous section by a solid divider
- *  (no nested cards), with a small uppercase label + lightweight icon, same as People Ledger's `WsLabel`. */
-function FormSection({ icon: Icon, title, aside, children }: { icon: LucideIcon; title: string; aside?: ReactNode; children: ReactNode }) {
-  return (
-    <section className="flex flex-col gap-3 border-t border-border px-4 py-4 sm:px-5">
-      <div className="flex min-h-6 items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <span className="flex size-6 shrink-0 items-center justify-center rounded-[6px] border border-border bg-secondary text-foreground/75">
-            <Icon className="size-3.5" strokeWidth={1.75} aria-hidden />
-          </span>
-          <h3 className="font-heading text-[13px] font-semibold tracking-tight text-foreground">{title}</h3>
-        </div>
-        {aside}
-      </div>
-      {children}
-    </section>
-  );
-}
-
-/** Add-mode footer recap of what's about to be saved — "−₹450 · Food · HDFC". Display only: reads the
- *  same form state the save handler reads, never feeds anything back. Hidden on phones. */
+/** Add-mode footer recap of what's about to be saved — "−₹450 · Food · HDFC" (a transfer carries no
+ *  +/− — it is neither income nor expense). Display only: reads the same form state the save handler
+ *  reads, never feeds anything back. Hidden on phones. */
 function FooterSummary({ kind, amount, category, account }: { kind: FormKind; amount: string; category?: Category; account?: Account }) {
   const value = Number(amount);
   const hasAmount = amount.trim() !== "" && !Number.isNaN(value) && value > 0;
   return (
-    <div className="hidden min-w-0 items-center gap-2 text-xs text-muted-foreground sm:flex">
+    <div className="hidden min-w-0 items-center gap-2 text-xs text-foreground/75 sm:flex">
       <span className={cn("font-heading text-sm font-bold tabular-nums", hasAmount ? KIND_TEXT_CLASS[kind] : "text-muted-foreground")}>
-        {kind === "income" ? "+" : "−"}
+        {kindSign(kind)}
         {hasAmount ? formatCurrencyPrecise(value) : "₹0"}
       </span>
       {category && (
@@ -398,103 +375,18 @@ function CategorySelect({
   );
 }
 
-type FormKind = "expense" | "income" | "transfer";
+type FormKind = TxnFormKind;
 
-const KIND_META: Record<FormKind, { label: string; icon: LucideIcon }> = {
-  expense: { label: "Expense", icon: TrendingDown },
-  income: { label: "Income", icon: TrendingUp },
-  transfer: { label: "Transfer", icon: ArrowLeftRight },
-};
 const FORM_KINDS: FormKind[] = ["expense", "income", "transfer"];
-/** Kinds offered when adding a brand-new transaction — Transfer is intentionally left off (see
- *  `TransactionDetailsModal`'s Add-mode `KindSelector` usage): a new transfer still can't be
- *  created from this popup, but an existing transfer transaction still opens/edits/displays
- *  exactly as before via the Edit-mode `KindSelector` usage, which keeps showing all three so a
- *  locked "Transfer" pill still renders correctly for it. */
+/** Kinds offered when adding a brand-new transaction — Transfer is intentionally left off: a new
+ *  transfer can only be started from a flow that opens this popup with `defaultKind: "transfer"`
+ *  (card Pay bill), which keeps all three so the Transfer mode has its own visible identity. An
+ *  existing transfer still opens/edits exactly as before (Edit mode shows all three, locked). */
 const ADD_MODE_FORM_KINDS: FormKind[] = ["expense", "income"];
 
-/** Per-kind tone used for the amount hero, the header icon, and the segmented control's active label. */
-const KIND_TEXT_CLASS: Record<FormKind, string> = {
-  expense: "text-expense",
-  income: "text-success",
-  transfer: "text-primary-accent-text",
-};
-/** Solid kind color + its matched foreground token — for surfaces that need real color instead of a tint. */
-const KIND_SOLID_CLASS: Record<FormKind, string> = {
-  expense: "bg-expense text-expense-foreground",
-  income: "bg-success text-success-foreground",
-  transfer: "bg-primary text-primary-foreground",
-};
-/** Faint kind-coloured fill behind the amount field — paired with a solid left edge
- *  (`KIND_BORDER_CLASS`) so the kind still reads on displays that wash out tints. */
-const KIND_HERO_BG: Record<FormKind, string> = {
-  expense: "bg-expense/6",
-  income: "bg-success/8",
-  transfer: "bg-primary/10",
-};
-/** Ring tint for the segmented control's sliding active pill, and the hero card's border — written
- *  as full literal class names (never built via string concatenation) so Tailwind's JIT scanner,
- *  which only finds classes that appear verbatim in the source text, can pick them up. */
-const KIND_RING_CLASS: Record<FormKind, string> = {
-  expense: "ring-expense/70",
-  income: "ring-success/70",
-  transfer: "ring-primary-accent-text/70",
-};
-const KIND_BORDER_CLASS: Record<FormKind, string> = {
-  expense: "border-l-expense",
-  income: "border-l-success",
-  transfer: "border-l-primary-accent-text",
-};
-
-/** Segmented Expense/Income/Transfer control with a sliding active pill. Locked (but still shown,
- *  just disabled) once editing an existing transaction — its kind can't change after creation. */
-function KindSelector({
-  value,
-  onChange,
-  locked,
-  kinds = FORM_KINDS,
-}: {
-  value: FormKind;
-  onChange: (k: FormKind) => void;
-  locked: boolean;
-  /** Which kinds to render as options — defaults to all three (Edit mode, so a locked existing
-   *  transfer's pill still shows). Add mode passes `ADD_MODE_FORM_KINDS` to leave Transfer out. */
-  kinds?: FormKind[];
-}) {
-  return (
-    <div className={cn("grid gap-1 rounded-[8px] border border-border bg-secondary p-1", kinds.length === 3 ? "grid-cols-3" : "grid-cols-2")}>
-      {kinds.map((k) => {
-        const meta = KIND_META[k];
-        const Icon = meta.icon;
-        const active = value === k;
-        return (
-          <button
-            key={k}
-            type="button"
-            disabled={locked && !active}
-            onClick={() => onChange(k)}
-            className={cn(
-              "relative flex h-8 items-center justify-center gap-1.5 rounded-[6px] px-2 text-xs font-semibold transition-colors",
-              !active && !locked && "hover:bg-card/60",
-              locked && !active && "opacity-40",
-            )}
-          >
-            {active && (
-              <motion.span
-                layoutId="kind-pill"
-                className={cn("absolute inset-0 rounded-[6px] bg-card shadow-sm ring-1", KIND_RING_CLASS[k])}
-                transition={springs.snappy}
-              />
-            )}
-            <span className={cn("relative z-10 flex items-center gap-1.5", active ? KIND_TEXT_CLASS[k] : "text-foreground/70")}>
-              <Icon className="size-3.5" strokeWidth={2} />
-              {meta.label}
-            </span>
-          </button>
-        );
-      })}
-    </div>
-  );
+/** The amount's sign — money out, money in, or none for a transfer (neither income nor expense). */
+function kindSign(kind: FormKind): string {
+  return kind === "income" ? "+" : kind === "expense" ? "−" : "";
 }
 
 interface ParticipantForm {
@@ -508,6 +400,19 @@ interface ParticipantForm {
 
 function toDateInputValue(date: Date): string {
   return date.toISOString().slice(0, 10);
+}
+
+/** A lender payment's People settlement gate, computed by the caller from live People data. */
+export interface PeopleGateInput {
+  /** The lender account being paid (the card). */
+  accountId: string;
+  readiness: LinkedPeopleReadiness | null;
+  /** People data still loading — the gate is unknown, so the payment waits. */
+  loading: boolean;
+  /** Shown as "Ready to pay {payeeName}". */
+  payeeName: string;
+  /** In-app path People returns to once the settlement is recorded. */
+  returnTo?: string;
 }
 
 function kindFromRow(row: TransactionRow): FormKind {
@@ -528,6 +433,8 @@ export function TransactionDetailsModal({
   existingTransactions = [],
   initialDestinationAccountId,
   initialAmount,
+  peopleGate = null,
+  onDestinationAccountChange,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -548,6 +455,12 @@ export function TransactionDetailsModal({
   initialDestinationAccountId?: string;
   /** Add mode only — pre-fills the amount field (e.g. a statement's total due). */
   initialAmount?: number;
+  /** Add mode + transfer only — the People settlement gate for paying `accountId` (a card bill): while a
+   *  People obligation linked to that bill is still open, this payment can't be saved and the primary
+   *  action becomes the exact settlement step. Applies only while the To account is `accountId`. */
+  peopleGate?: PeopleGateInput | null;
+  /** Add mode + transfer — the To account changed (so the caller can re-target `peopleGate`). */
+  onDestinationAccountChange?: (accountId: string) => void;
 }) {
   const transaction = row?.transaction ?? null;
   const peopleActions = usePeopleActions();
@@ -671,6 +584,17 @@ export function TransactionDetailsModal({
   // Income can't be received into a credit card account, so it's excluded from the picker for
   // that kind — same reasoning as `filteredCategories` above, just on the account list instead.
   const filteredAccounts = kind === "income" ? accounts.filter((a) => a.type !== "card") : accounts;
+  const destinationAccount = kind === "transfer" ? accounts.find((a) => a.id === destinationAccountId) : undefined;
+  const paysCardBill = destinationAccount?.type === "card";
+
+  // People settlement gate — only a new transfer paying the gated card. Obligations linked to that bill
+  // (by key, from the caller's readiness) gate it; nothing else about the person does.
+  const gateActive = !transaction && kind === "transfer" && peopleGate != null && peopleGate.accountId === destinationAccountId;
+  const settlement = peopleSettlementGate(gateActive ? peopleGate.readiness : null);
+  const gateLoading = gateActive && peopleGate.loading;
+  const gateBlocked = gateActive && (settlement.blocked || gateLoading);
+  /** The footer's Settle action — where Enter / Ctrl+Enter / Save land while the payment is blocked. */
+  const settleCtaRef = useRef<HTMLAnchorElement>(null);
 
   // Live running total for the percentage split editor — percentages are always hand-typed and
   // must sum to 100, so this is a simple entered-vs-target check.
@@ -854,6 +778,12 @@ export function TransactionDetailsModal({
 
   async function handleSaveOnce() {
     if (saving || justSaved) return;
+    // People settlement gate: the bill payment can't be saved yet — no keyboard path bypasses it. Point at
+    // the exact next step instead (never a dead end).
+    if (gateBlocked) {
+      settleCtaRef.current?.focus();
+      return;
+    }
     const validationError = validate();
     if (validationError) {
       // No save: jump straight to the first invalid field (scrolled into view, focused) so the user can fix it.
@@ -878,7 +808,7 @@ export function TransactionDetailsModal({
     if (!transaction) {
       // Paying a card bill: the source leg naturally shares amount/date with the card purchases
       // being paid off — those are the other side of the liability, not duplicates of this payment.
-      const isCardBillPayment = kind === "transfer" && accounts.some((a) => a.id === destinationAccountId && a.type === "card");
+      const isCardBillPayment = kind === "transfer" && paysCardBill;
       const proceed =
         kind === "transfer"
           ? await duplicateGuard.guardBatch([
@@ -1124,15 +1054,15 @@ export function TransactionDetailsModal({
         >
           <div className={cn("h-1 w-full shrink-0 transition-colors", view === "split" ? "bg-primary" : KIND_SOLID_CLASS[kind].split(" ")[0])} />
 
-          <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border px-4 py-2.5 sm:px-5">
+          <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border-strong px-4 py-2.5 sm:px-5">
             {view === "split" ? (
               <div className="flex min-w-0 items-center gap-3">
                 <Button variant="ghost" size="icon-sm" aria-label="Back to transaction" onClick={() => setView("form")}>
                   <ArrowLeft className="size-4" />
                 </Button>
                 <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold text-foreground">Split Expense</p>
-                  <p className="truncate text-xs text-muted-foreground">Divide this expense among people</p>
+                  <DialogTitle className="truncate text-sm font-semibold text-foreground">Split Expense</DialogTitle>
+                  <DialogDescription className="truncate text-xs text-foreground/70">Divide this expense among people</DialogDescription>
                 </div>
               </div>
             ) : (
@@ -1140,16 +1070,18 @@ export function TransactionDetailsModal({
                 <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-[6px] transition-colors", KIND_SOLID_CLASS[kind])}>
                   {(() => {
                     const HeaderIcon = KIND_META[kind].icon;
-                    return <HeaderIcon className="size-4" strokeWidth={2} />;
+                    return <HeaderIcon className="size-4" strokeWidth={2} aria-hidden />;
                   })()}
                 </span>
                 <div className="min-w-0">
-                  <p className="truncate font-heading text-[15px] font-semibold tracking-tight text-foreground">
+                  <DialogTitle className="truncate font-heading text-[15px] leading-tight font-semibold tracking-tight text-foreground">
                     {transaction ? "Transaction Details" : `Add ${KIND_META[kind].label}`}
-                  </p>
-                  <p className="truncate text-xs text-muted-foreground">
-                    {transaction ? `${DATE_DISPLAY_FORMAT.format(transaction.dateTime)} · ${row?.account?.name ?? "Unknown"}` : "⌘/Ctrl + Enter to save"}
-                  </p>
+                  </DialogTitle>
+                  <DialogDescription className="truncate text-xs text-foreground/70">
+                    {transaction
+                      ? `${DATE_DISPLAY_FORMAT.format(transaction.dateTime)} · ${row?.account?.name ?? "Unknown"}`
+                      : `${paysCardBill ? `Card bill payment · ${destinationAccount?.name}` : KIND_META[kind].hint} · ⌘/Ctrl + Enter to save`}
+                  </DialogDescription>
                 </div>
               </div>
             )}
@@ -1171,7 +1103,16 @@ export function TransactionDetailsModal({
             ref={formRef}
             className="contents"
             noValidate
-            onKeyDown={handleEnterAdvance}
+            onKeyDown={(e) => {
+              // Bill payment blocked on People: Enter in a field goes to the Settle step — never a submit underneath.
+              // (A field's own Enter handling — e.g. Amount stepping to an empty Description — still runs first.)
+              if (gateBlocked && e.key === "Enter" && !e.defaultPrevented && !e.shiftKey && !e.nativeEvent.isComposing && e.target instanceof HTMLInputElement) {
+                e.preventDefault();
+                settleCtaRef.current?.focus();
+                return;
+              }
+              handleEnterAdvance(e);
+            }}
             onSubmit={(e) => {
               e.preventDefault();
               if (e.target !== e.currentTarget) return;
@@ -1406,7 +1347,7 @@ export function TransactionDetailsModal({
                   transition={{ duration: durations.fast, ease: easings.out }}
                   className="flex flex-col"
                 >
-            <div className={cn("flex flex-col gap-3 px-4 pt-4 pb-4 transition-colors sm:px-5", KIND_HERO_BG[kind])}>
+            <div className="flex flex-col gap-2.5 px-4 pt-3 pb-3 sm:px-5">
             {showFormError && (
               <motion.p
                 initial={{ opacity: 0, y: -4 }}
@@ -1420,15 +1361,15 @@ export function TransactionDetailsModal({
               </motion.p>
             )}
             {isTransferLeg && (
-              <div className="flex items-start gap-2 rounded-[6px] border border-dashed border-border-strong bg-secondary px-3 py-2.5">
-                <Info className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
-                <p className="text-xs text-muted-foreground">
+              <div className="flex items-start gap-2 rounded-[6px] border border-dashed border-border-strong bg-secondary px-3 py-2">
+                <Info className="mt-0.5 size-3.5 shrink-0 text-foreground/70" />
+                <p className="text-xs text-foreground/75">
                   This is one leg of a transfer. Amount, account, and date are locked so the two linked transactions can&apos;t drift out of sync — delete the transfer and create a new one to change them.
                 </p>
               </div>
             )}
 
-            <KindSelector
+            <TxnModeSwitch
               value={kind}
               onChange={(next) => {
                 setKind(next);
@@ -1439,29 +1380,31 @@ export function TransactionDetailsModal({
                 }
               }}
               locked={!!transaction}
-              kinds={transaction ? FORM_KINDS : ADD_MODE_FORM_KINDS}
+              // A transfer flow (card Pay bill) shows Transfer as its own selected mode, never a blank Expense/Income pair.
+              kinds={transaction || defaultKind === "transfer" ? FORM_KINDS : ADD_MODE_FORM_KINDS}
             />
 
             <div
               data-field="amount"
               data-invalid={fieldError("amount") ? "true" : undefined}
+              // One amount surface: label, currency and figure share it — the kind reads from the solid left edge.
               className={cn(
-                "flex flex-col gap-1 rounded-[8px] border border-l-[4px] border-border-strong bg-card px-4 py-3 shadow-sm transition-colors focus-within:border-primary-accent-text",
+                "flex flex-col gap-0.5 rounded-[8px] border border-l-[4px] border-border-strong bg-card px-3.5 pt-2 pb-1.5 has-[input:focus-visible]:outline-2 has-[input:focus-visible]:outline-offset-2 has-[input:focus-visible]:outline-[var(--focus-ring)] has-[input:focus-visible]:outline-solid",
                 KIND_BORDER_CLASS[kind],
-                fieldError("amount") && "border-danger ring-2 ring-danger focus-within:border-danger",
+                fieldError("amount") && "border-danger ring-2 ring-danger focus-within:ring-danger",
               )}
             >
               <div className="flex items-center justify-between gap-2">
-                <label htmlFor="txn-amount" className="text-[11px] font-medium tracking-[0.08em] text-foreground/75 uppercase">
+                <label htmlFor="txn-amount" className="text-[11px] font-bold tracking-[0.08em] text-foreground/80 uppercase">
                   Amount *
                 </label>
-                <span className="truncate text-xs text-muted-foreground tabular-nums">
-                  {amount.trim() && !Number.isNaN(Number(amount)) ? formatCurrencyPrecise(Number(amount)) : "Enter an amount"}
-                </span>
+                {amount.trim() !== "" && !Number.isNaN(Number(amount)) && Number(amount) > 0 && (
+                  <span className="truncate text-xs font-medium text-foreground/70 tabular-nums">{formatCurrencyPrecise(Number(amount))}</span>
+                )}
               </div>
-              <div className="flex min-w-0 items-baseline gap-1.5">
-                <span className={cn("font-heading text-[26px] font-bold", KIND_TEXT_CLASS[kind])}>{kind === "income" ? "+" : "−"}</span>
-                <span className="font-heading text-[22px] font-semibold text-muted-foreground">₹</span>
+              <div className="flex min-w-0 items-baseline gap-1">
+                {kindSign(kind) && <span className={cn("font-heading text-2xl font-bold", KIND_TEXT_CLASS[kind])}>{kindSign(kind)}</span>}
+                <span className="font-heading text-xl font-semibold text-foreground/70">₹</span>
                 <input
                   id="txn-amount"
                   ref={amountRef}
@@ -1484,8 +1427,8 @@ export function TransactionDetailsModal({
                     }
                   }}
                   className={cn(
-                    "min-w-0 flex-1 border-none bg-transparent font-heading text-[34px] leading-tight font-bold tracking-tight tabular-nums outline-none placeholder:text-muted-foreground/60 disabled:opacity-60",
-                    KIND_TEXT_CLASS[kind],
+                    "h-10 min-w-0 flex-1 border-none bg-transparent shadow-none outline-none! focus-visible:outline-none! font-heading text-[28px] leading-none font-bold tracking-tight tabular-nums placeholder:text-foreground/35 disabled:opacity-60",
+                    kind === "transfer" ? "text-foreground" : KIND_TEXT_CLASS[kind],
                   )}
                 />
               </div>
@@ -1495,20 +1438,22 @@ export function TransactionDetailsModal({
                 </p>
               )}
             </div>
+            </div>
 
+            <FormSection icon={Shapes} title="Details">
+              {/* Description → Category → Date (validation order). A transfer has no category, so Date sits beside Description. */}
+              <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+              <div className={cn("min-w-0", kind !== "transfer" && "sm:col-span-2")}>
               <FormRow label={kind === "transfer" ? "Description" : "Description *"} field="description" error={fieldError("description")}>
                 <Input
                   ref={descriptionRef}
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
-                  placeholder={kind === "income" ? "e.g. Salary, Freelance payment" : "e.g. Blue Tokai Coffee"}
+                  placeholder={kind === "income" ? "e.g. Salary, Freelance payment" : kind === "transfer" ? (paysCardBill ? "e.g. Card bill payment" : "e.g. Savings sweep") : "e.g. Blue Tokai Coffee"}
                   className={cn(WS_FIELD, "bg-card")}
                 />
               </FormRow>
-            </div>
-
-            <FormSection icon={Shapes} title="Details">
-              <div className={cn("grid grid-cols-1 gap-3", kind !== "transfer" && "sm:grid-cols-2")}>
+              </div>
                 {kind !== "transfer" && (
                   <FormRow label="Category *" field="category" error={fieldError("category")}>
                     <CategorySelect
@@ -1532,7 +1477,8 @@ export function TransactionDetailsModal({
             </FormSection>
 
             <FormSection icon={kind === "income" ? ArrowDownToLine : Wallet} title={kind === "income" ? "Received in" : kind === "transfer" ? "Accounts" : "Paid from"}>
-            <div className={cn("grid grid-cols-1 gap-3", kind === "transfer" && !isTransferLeg && "sm:grid-cols-2")}>
+            {(() => {
+              const fromRow = (
               <FormRow label={kind === "transfer" ? "From Account *" : "Account *"} field="account" error={fieldError("account")}>
                 {isTransferLeg ? (
                   <div className={cn("flex h-9 w-full items-center gap-1.5 rounded-[6px] border bg-secondary px-3 text-sm font-medium text-foreground/80", FIELD_BORDER)}>
@@ -1553,25 +1499,49 @@ export function TransactionDetailsModal({
                   <AccountSelect accounts={filteredAccounts} value={accountId} onChange={setAccountId} />
                 )}
               </FormRow>
-
-              {kind === "transfer" && !isTransferLeg && (
-                <FormRow label="To Account *" field="destination" error={fieldError("destination")}>
-                  <AccountSelect
-                    accounts={accounts.filter((a) => a.id !== accountId)}
-                    value={destinationAccountId}
-                    onChange={setDestinationAccountId}
-                    placeholder="Select destination account"
-                  />
-                </FormRow>
-              )}
-            </div>
+              );
+              // A new transfer reads as one direction: From → To (stacked ↓ on phones).
+              if (kind !== "transfer" || isTransferLeg) return fromRow;
+              return (
+                <TxnAccountFlow
+                  from={fromRow}
+                  to={
+                    <FormRow label="To Account *" field="destination" error={fieldError("destination")}>
+                      <AccountSelect
+                        accounts={accounts.filter((a) => a.id !== accountId)}
+                        value={destinationAccountId}
+                        onChange={(id) => {
+                          setDestinationAccountId(id);
+                          onDestinationAccountChange?.(id);
+                        }}
+                        placeholder="Select destination account"
+                      />
+                    </FormRow>
+                  }
+                />
+              );
+            })()}
             </FormSection>
+
+            {gateActive && (gateLoading || (peopleGate.readiness?.people.length ?? 0) > 0) && (
+              <div className="border-t border-border px-4 py-3 sm:px-5">
+                <PeopleSettlementCard
+                  readiness={peopleGate.readiness}
+                  gate={settlement}
+                  loading={gateLoading}
+                  dueLabel="Bill"
+                  subject="this card bill"
+                  payeeName={peopleGate.payeeName}
+                  returnTo={peopleGate.returnTo}
+                />
+              </div>
+            )}
 
             {kind === "expense" && (
               <FormSection
                 icon={Users}
                 title="People & Split"
-                aside={<span className="text-[11px] text-muted-foreground">Optional</span>}
+                aside={<span className="text-[11px] font-medium text-foreground/70">Optional</span>}
               >
                 {!splitOpen && (
                   <FormRow label="Assign to a person">
@@ -1644,7 +1614,7 @@ export function TransactionDetailsModal({
                 )}
 
                 {!personId && !splitOpen && (
-                  <p className="text-xs text-muted-foreground">Pick a person above to record Money I Gave or Money I Borrowed.</p>
+                  <p className="text-xs text-foreground/70">Pick a person above to record Money I Gave or Money I Borrowed.</p>
                 )}
 
                 {!splitOpen && !personId && (
@@ -1820,7 +1790,7 @@ export function TransactionDetailsModal({
                 value={notes}
                 placeholder="Add a note (optional)"
                 aria-label="Notes"
-                className={cn(WS_FIELD, "h-auto min-h-16 resize-y py-2")}
+                className={cn(WS_FIELD, "h-auto min-h-10 resize-y py-2")}
                 onChange={(e) => setNotes(e.target.value)}
               />
 
@@ -1833,7 +1803,7 @@ export function TransactionDetailsModal({
               >
                 <ChevronDown className={cn("size-3.5 transition-transform", moreOpen && "rotate-180")} strokeWidth={2} />
                 More options
-                <span className="text-muted-foreground">(visibility, month)</span>
+                <span className="text-foreground/60">(visibility, month)</span>
               </button>
               <AnimatePresence initial={false}>
                 {moreOpen && (
@@ -1947,6 +1917,26 @@ export function TransactionDetailsModal({
                   <button type="button" className={WS_GHOST} onClick={() => onOpenChange(false)} disabled={saving}>
                     Cancel
                   </button>
+                  {gateBlocked ? (
+                    // People settlement first: the bill payment stays unavailable, and the primary action is the
+                    // exact next step — never a bare "can't continue".
+                    settlement.next ? (
+                      <Link
+                        ref={settleCtaRef}
+                        href={peopleSettleHref(settlement.next.personId, settlement.next.obligationKey, peopleGate?.returnTo)}
+                        data-gate="settle"
+                        className={cn(WS_PRIMARY, "min-w-0 flex-1 sm:min-w-44 sm:flex-none")}
+                      >
+                        <span className="truncate">{settleCtaLabel(settlement)}</span>
+                        <ArrowRight className="size-3.5 shrink-0" aria-hidden />
+                      </Link>
+                    ) : (
+                      <button type="button" disabled className={cn(WS_PRIMARY, "min-w-0 flex-1 sm:min-w-36 sm:flex-none")}>
+                        <Loader2 className="size-3.5 animate-spin" aria-hidden />
+                        <span className="truncate">Checking People…</span>
+                      </button>
+                    )
+                  ) : (
                   <button
                     type="submit"
                     className={cn(WS_PRIMARY, "min-w-0 flex-1 sm:flex-none sm:min-w-36", (saving || justSaved) && "disabled:opacity-80")}
@@ -1964,8 +1954,19 @@ export function TransactionDetailsModal({
                         {justSaved ? <Check className="size-3.5" /> : saving ? <Loader2 className="size-3.5 animate-spin" /> : <Save className="size-3.5" />}
                       </motion.span>
                     </AnimatePresence>
-                    <span className="truncate">{justSaved ? "Saved" : saving ? "Saving…" : transaction ? "Save changes" : `Add ${KIND_META[kind].label}`}</span>
+                    <span className="truncate">
+                      {justSaved
+                        ? "Saved"
+                        : saving
+                          ? "Saving…"
+                          : transaction
+                            ? "Save changes"
+                            : paysCardBill && Number(amount) > 0
+                              ? `Pay ${formatCurrencyPrecise(Number(amount))}`
+                              : `Add ${KIND_META[kind].label}`}
+                    </span>
                   </button>
+                  )}
                 </div>
               </>
             )}

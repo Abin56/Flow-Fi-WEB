@@ -22,6 +22,8 @@ export interface NetWorthHeroProps {
     debt?: number;
     /** The Loan/EMI part of `debt`. */
     loanDebt?: number;
+    /** Owed to people directly (People ledger) — part of `debt`. */
+    peopleDebt?: number;
   };
   isLoading?: boolean;
   hideAmount?: boolean;
@@ -85,6 +87,9 @@ export function NetWorthHero({ netWorth, isLoading, hideAmount = false, onToggle
               <dd className="font-semibold text-expense tabular-nums">{hideAmount ? "••••" : formatCurrency(netWorth.debt)}</dd>
               {!hideAmount && (netWorth.loanDebt ?? 0) > 0 && (
                 <span className="text-xs text-muted-foreground">incl. {formatCurrency(netWorth.loanDebt!)} loans/EMI</span>
+              )}
+              {!hideAmount && (netWorth.peopleDebt ?? 0) > 0 && (
+                <span className="text-xs text-muted-foreground">incl. {formatCurrency(netWorth.peopleDebt!)} owed to people</span>
               )}
             </div>
           </dl>

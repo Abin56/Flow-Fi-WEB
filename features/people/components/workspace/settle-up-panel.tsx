@@ -56,7 +56,7 @@ export function SettleUpPanel({
   const loanBalance = position ? position.loanReceivable - position.loanPayable : 0;
   const totalPending = Math.abs(directBalance);
   const firstName = person.name.split(" ")[0];
-  const positionLabel = totalPending === 0 ? "All settled" : directBalance > 0 ? `${firstName} owes you` : `You owe ${firstName}`;
+  const positionLabel = totalPending === 0 ? "All settled" : directBalance > 0 ? `You need to receive from ${firstName}` : `You need to give to ${firstName}`;
   const effectLine = directBalance > 0 ? `Money received from ${firstName}` : `Money paid to ${firstName}`;
 
   async function handleSettleLump() {
@@ -147,7 +147,7 @@ export function SettleUpPanel({
 
   const loanNote = loanBalance !== 0 && (
     <p className="mt-2 text-xs text-muted-foreground">
-      Loans ({loanBalance > 0 ? "they owe you" : "you owe"} {formatCurrency(Math.abs(loanBalance))}) aren&apos;t settled here — record Loan payments from
+      Loans ({loanBalance > 0 ? "you need to receive" : "you need to give"} {formatCurrency(Math.abs(loanBalance))}) aren&apos;t settled here — record Loan payments from
       the Loan.
     </p>
   );

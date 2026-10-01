@@ -817,6 +817,7 @@ export function LoanEmiFormDialog({
   icon: Icon,
   children,
   onConfirm,
+  onEnter,
   confirmLabel,
   loading = false,
   confirmDisabled = false,
@@ -832,6 +833,9 @@ export function LoanEmiFormDialog({
   icon?: LucideIcon;
   children: React.ReactNode;
   onConfirm: () => void;
+  /** What Enter in a field runs — defaults to `onConfirm`. Set when the primary action navigates away (e.g. a
+   *  settle-first gate) so a stray Enter only focuses the next step instead of leaving the dialog. */
+  onEnter?: () => void;
   confirmLabel: string;
   loading?: boolean;
   /** Blocks the primary action (e.g. nothing valid to submit yet) without the loading state. */
@@ -850,7 +854,7 @@ export function LoanEmiFormDialog({
       <DialogContent
         showCloseButton={false}
         // Enter in any single-line field runs the same primary action as the button (not while busy / invalid).
-        onKeyDown={(e) => handleEnterKey(e, onConfirm, { enabled: !busy && !confirmDisabled })}
+        onKeyDown={(e) => handleEnterKey(e, onEnter ?? onConfirm, { enabled: !busy && !confirmDisabled })}
         className={cn(
           "flex flex-col gap-0 overflow-hidden border border-border bg-card p-0 shadow-[var(--shadow-e4)] ring-0",
           // Phone: full-height sheet. Desktop: centered panel.

@@ -41,6 +41,7 @@ import { useLoanRows } from "@/features/loans/hooks/use-loans-data";
 import { loanCycleDues, loanCycleDueTotals, type LoanCycleDue } from "@/lib/engines/loan-cycle-dues";
 import { formatCurrency } from "@/lib/format";
 import { usePeopleRows, usePeopleStats } from "@/features/people/hooks/use-people-data";
+import { peopleDirectionSides } from "@/lib/engines/person-position";
 import { useUserPreferences } from "@/features/settings/hooks/use-user-preferences";
 import { cycleRangeFor, isInCycle, isOwedInCycle, shiftMonthsClamped } from "@/lib/engines/month-cycle-range";
 import {
@@ -117,7 +118,13 @@ export interface MonthCyclePersonItem {
   id: string;
   name: string;
   note: string;
+  /** What this person owes / is owed on THIS side, gross (`peopleDirectionSides`). */
   amount: number;
+  /** Gross sides behind `amount` (`PersonViewRow.breakdown`) — shown when both are non-zero, so a net never hides an obligation. */
+  toGive: number;
+  toReceive: number;
+  /** toReceive − toGive (People engine). Positive: they owe me. */
+  net: number;
   /** Days since this person's most recent ledger activity — null when there is no activity to date from
    *  (`Person`/`LedgerEntry` carry no due-date concept, so this is the closest real "since"/"ago" figure). */
   daysSince: number | null;
@@ -449,34 +456,33 @@ export function useMonthCycleData() {
     return { items, total, count: items.length };
   }, [billRows, now, cycleRange]);
 
-  // --- People: who you need to give money to / whose handover to you is pending ---
-  const peopleYouNeedToGive = useMemo(() => {
-    return peopleRows
-      .filter((p) => p.youOwe > 0)
-      .sort((a, b) => b.youOwe - a.youOwe)
-      .slice(0, 6)
-      .map((p) => ({
-        id: p.id,
-        name: p.name,
-        note: p.notes || p.activity[0]?.description || "",
-        amount: p.youOwe,
-        daysSince: daysSinceLastActivity(p.activity, now),
-      }));
+  // --- People: who you need to give money to / who you need to receive money from ---
+  //     Sides come from each person's GROSS breakdown (`peopleDirectionSides`), not the net: a borrowing
+  //     stays under "You need to give" even when the same person also owes me something; their net is
+  //     shown beside it. (`peopleHandoverPending` keeps its name — it IS "You need to receive".)
+  const peopleSides = useMemo(() => {
+    const sides = peopleDirectionSides(peopleRows);
+    const toItem = ({ row: p, amount }: { row: (typeof peopleRows)[number]; amount: number }): MonthCyclePersonItem => ({
+      id: p.id,
+      name: p.name,
+      note: p.notes || p.activity[0]?.description || "",
+      amount,
+      toGive: p.breakdown.toGive,
+      toReceive: p.breakdown.toReceive,
+      net: p.breakdown.net,
+      daysSince: daysSinceLastActivity(p.activity, now),
+    });
+    return {
+      give: sides.toGive.slice(0, 6).map(toItem),
+      receive: sides.toReceive.slice(0, 6).map(toItem),
+      totalToGive: sides.totalToGive,
+      giveCount: sides.toGive.length,
+      totalToReceive: sides.totalToReceive,
+      receiveCount: sides.toReceive.length,
+    };
   }, [peopleRows, now]);
-
-  const peopleHandoverPending = useMemo(() => {
-    return peopleRows
-      .filter((p) => p.youAreOwed > 0)
-      .sort((a, b) => b.youAreOwed - a.youAreOwed)
-      .slice(0, 6)
-      .map((p) => ({
-        id: p.id,
-        name: p.name,
-        note: p.notes || p.activity[0]?.description || "",
-        amount: p.youAreOwed,
-        daysSince: daysSinceLastActivity(p.activity, now),
-      }));
-  }, [peopleRows, now]);
+  const peopleYouNeedToGive = peopleSides.give;
+  const peopleHandoverPending = peopleSides.receive;
 
   // --- Account spend this month (direct Transaction field reads, grouped by account) ---
   const accountSpends = useMemo(() => {
@@ -581,6 +587,12 @@ export function useMonthCycleData() {
     peopleStats,
     peopleYouNeedToGive,
     peopleHandoverPending,
+    peopleSides: {
+      totalToGive: peopleSides.totalToGive,
+      giveCount: peopleSides.giveCount,
+      totalToReceive: peopleSides.totalToReceive,
+      receiveCount: peopleSides.receiveCount,
+    },
     accountSpends,
     accountsStats,
     monthSummary,

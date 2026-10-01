@@ -199,7 +199,33 @@ export function useTransactionActions() {
         notes?: string;
       }) => withErrorToast(() => transactionRepository.createTransferPair(params), "Couldn't create transfer"),
       editTransaction: (transaction: Transaction, params: EditTransactionParams) =>
-        withErrorToast(() => transactionRepository.editTransaction(transaction, params), "Couldn't save changes"),
+        withErrorToast(async () => {
+          // A People "Money I Borrowed"/"Money I Gave" cash leg: its amount/date IS the obligation's, so an
+          // edit goes through the ledger entry (which edits this leg in the same atomic write) — never the
+          // account alone, which would leave People, Month Cycle and Net Worth on the old amount.
+          const amountChanged = params.amount != null && params.amount !== transaction.amount;
+          const dateChanged = params.dateTime != null && params.dateTime.getTime() !== transaction.dateTime.getTime();
+          if (transaction.isPersonLedgerMovement && transaction.linkedPersonId != null && (amountChanged || dateChanged)) {
+            const personId = transaction.linkedPersonId;
+            const person = await personRepository.getByKey(personId);
+            const entry = person
+              ? (await createLedgerRepositoryFor(uid, personId, personRepository).getAll()).find(
+                  (e) => e.transactionRef === transaction.id && (e.type === "borrowed" || e.type === "gave") && e.amount === transaction.amount,
+                )
+              : undefined;
+            if (person && entry) {
+              const { amount, dateTime, ...rest } = params;
+              return createLedgerRepositoryFor(uid, personId, personRepository).editEntry(
+                person,
+                entry,
+                { amount: amountChanged ? amount : undefined, date: dateChanged ? dateTime : undefined },
+                transactionRepository,
+                rest,
+              );
+            }
+          }
+          return transactionRepository.editTransaction(transaction, params);
+        }, "Couldn't save changes"),
       /**
        * A transaction backed by an assigned/split Expense must be deleted
        * through `ExpenseRepository.deleteExpense` — it cascades the

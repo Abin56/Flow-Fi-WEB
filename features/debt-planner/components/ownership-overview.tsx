@@ -7,8 +7,11 @@ import { Label, Money } from "./planner-ui";
 
 /**
  * Whose debt is it? A VIEW over the planner snapshot — never a change to it. The lender / card issuer
- * still holds you liable for the full total; "Others' share" is what the people it was for owe you back.
- * Every figure comes from `DebtPosition.ownership` (`lib/engines/debt-ownership.ts`).
+ * still holds you liable for the full total; "Others' share" is the part of that lender debt economically
+ * ALLOCATED to the people it was for — ownership, not a receivable: someone who already reimbursed you
+ * still has a share here until the lender is paid. What a person still owes you is People's figure.
+ * Every figure comes from `DebtPosition.ownership` (`lib/engines/debt-ownership.ts`). Card attributions
+ * use the card's overall mine/others ratio, so they are labelled as estimates.
  */
 
 export type DebtView = "mine" | "all" | "others";
@@ -83,7 +86,7 @@ export function OwnershipOverview({
       <div className="grid grid-cols-1 divide-y divide-border sm:grid-cols-3 sm:divide-y-0">
         <Cell label="Total liability" amount={snapshot.total} note="Everything lenders and card issuers hold you liable for" />
         <Cell label="My debt" amount={o.mine} emphasis note={shared ? "Your own share — the planning number" : "All of it is yours"} />
-        <Cell label="Others' share" amount={o.others} tone={shared ? "people" : undefined} note={shared ? "Expected back from people" : "Nothing assigned to people"} />
+        <Cell label="Others' share" amount={o.others} tone={shared ? "people" : undefined} note={shared ? "Lender debt allocated to others — not what they owe you now (see People)" : "Nothing assigned to people"} />
       </div>
 
       {(shared || requiredSplit.fromPeople > 0) && (
@@ -93,15 +96,17 @@ export function OwnershipOverview({
             <dl className="mt-1.5 text-[13px]">
               <Line label="You still need to pay lenders" amount={requiredSplit.required} strong />
               <Line label="Your economic share" amount={requiredSplit.mine} />
-              <Line label="Expected from people" amount={requiredSplit.fromPeople} />
+              <Line label="Others' allocated share" amount={requiredSplit.fromPeople} />
             </dl>
             <p className="mt-1.5 text-xs text-foreground/80">
               The lender expects the full amount on time, whoever it was for. Payoff dates below plan these full payments.
+              Money people have already given you is tracked in People and is not deducted here. Card splits are estimated
+              from each card&apos;s overall share.
             </p>
           </div>
           {o.byPerson.length > 0 && (
             <div className="border-t border-border px-4 py-3 lg:border-t-0 lg:border-l">
-              <Label>Others owe you (inside these debts)</Label>
+              <Label>Allocated to others (ownership, not receivable)</Label>
               <dl className="mt-1.5 text-[13px]">
                 {o.byPerson.map((p) => (
                   <Line key={p.personId} label={`${p.name}'s share`} amount={p.amount} />

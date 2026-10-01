@@ -277,7 +277,7 @@ export function RecordPaymentPanel({
       <dl className="grid grid-cols-2 divide-border-strong/70 border-b border-border-strong bg-secondary/50 sm:grid-cols-5 sm:divide-x">
         <Kpi label="Person" value={personName} />
         <Kpi
-          label={theyPaid ? `${first} owes you` : `You owe ${first}`}
+          label={theyPaid ? `You need to receive from ${first}` : `You need to give to ${first}`}
           value={money(theyPaid ? theyOweTotal : iOweTotal)}
           tone={theyPaid ? "text-settle-receivable-text" : "text-settle-payable-text"}
         />
@@ -359,7 +359,7 @@ export function RecordPaymentPanel({
           </div>
           {options.length === 0 ? (
             <p className="mt-2 rounded-[6px] border border-dashed border-border-strong px-3 py-2.5 text-sm text-foreground/80">
-              {theyPaid ? `${first} owes you nothing right now` : `You owe ${first} nothing right now`} — anything recorded is held as advance.
+              {theyPaid ? `Nothing to receive from ${first} right now` : `Nothing to give to ${first} right now`} — anything recorded is held as advance.
             </p>
           ) : (
             <div className="mt-2 overflow-x-auto rounded-[6px] border border-border-strong">
@@ -639,10 +639,10 @@ export function RecordPaymentPanel({
               </p>
             )}
             <div className="mt-3 flex items-center gap-2">
-              <button type="button" onClick={onCancel} disabled={saving} className={WS_GHOST}>
+              <button type="button" onClick={onCancel} disabled={saving} className={cn(WS_GHOST, "shrink-0")}>
                 Cancel
               </button>
-              <button type="submit" disabled={!!blocker || saving || !recon.balanced} className={cn(WS_PRIMARY, "flex-1")}>
+              <button type="submit" disabled={!!blocker || saving || !recon.balanced} className={cn(WS_PRIMARY, "min-w-0 flex-1 truncate whitespace-nowrap")}>
                 {saving ? "Saving…" : initial ? "Save changes" : theyPaid ? `Record ${money(amount)} received` : `Record ${money(amount)} paid`}
               </button>
             </div>

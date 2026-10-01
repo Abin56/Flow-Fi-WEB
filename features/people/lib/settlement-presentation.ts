@@ -405,7 +405,7 @@ export function shareBreakdown(expense: Expense | null, personId: string, person
 // ---------------------------------------------------------------------------------------------------
 
 export interface CyclePosition {
-  /** "Amma owes you" / "You owe Amma" / "All settled" — never a bare sign. */
+  /** "You need to receive from Amma" / "You need to give to Amma" / "All settled" — never a bare sign. */
   headline: string;
   direction: PersonCycleStatement["direction"];
   amount: number;
@@ -433,7 +433,7 @@ export function cyclePosition(statement: PersonCycleStatement, personName: strin
   const received = sum("received"); // ≤ 0
   const paid = sum("repaid"); // ≥ 0
   const applied = sum("advanceApplied");
-  const headline = statement.direction === "theyOwe" ? `${name} owes you` : statement.direction === "iOwe" ? `You owe ${name}` : "All settled";
+  const headline = statement.direction === "theyOwe" ? `You need to receive from ${name}` : statement.direction === "iOwe" ? `You need to give to ${name}` : "All settled";
   const lines: CyclePosition["lines"] = [
     { key: "previous", label: "Previous pending", value: Math.abs(statement.previousPending), signed: statement.previousPending },
     { key: "added", label: "Added this cycle", value: Math.abs(statement.cycleActivity), signed: statement.cycleActivity },
@@ -454,11 +454,11 @@ export function cyclePosition(statement: PersonCycleStatement, personName: strin
   };
 }
 
-/** "Amma owes you" / "You owe Amma" for a signed FlowFi balance (+ = they owe me). */
+/** "You need to receive from Amma" / "You need to give to Amma" for a signed FlowFi balance (+ = they owe me). */
 export function signedSideLabel(signed: number, personName: string): string | null {
   if (Math.abs(signed) < 0.005) return null;
   const name = firstNameOf(personName);
-  return signed > 0 ? `${name} owes you` : `You owe ${name}`;
+  return signed > 0 ? `You need to receive from ${name}` : `You need to give to ${name}`;
 }
 
 // ---------------------------------------------------------------------------------------------------

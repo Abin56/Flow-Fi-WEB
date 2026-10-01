@@ -24,8 +24,8 @@ import { RECEIVED_STATUS_NOTE_PREFIX } from "@/lib/repositories/expense-reposito
 export type LedgerRowDirection = "theyOwe" | "iOwe" | "theyPaid" | "youPaid" | "loan";
 
 export const DIRECTION_LABEL: Record<LedgerRowDirection, string> = {
-  theyOwe: "They owe you",
-  iOwe: "You owe them",
+  theyOwe: "To receive",
+  iOwe: "To give",
   theyPaid: "Received back",
   youPaid: "Paid back",
   loan: "Via loan",

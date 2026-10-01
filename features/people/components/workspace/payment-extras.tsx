@@ -124,7 +124,7 @@ export function ApplyAdvancePanel({
         </p>
         <dl className="flex flex-1 flex-wrap gap-x-6 gap-y-1">
           <Figure label="Advance available" value={money(plan.availableTotal)} tone="text-settle-advance-text" strong />
-          <Figure label={side === "theyOwe" ? `${first} owes you` : `You owe ${first}`} value={money(openTotal)} />
+          <Figure label={side === "theyOwe" ? `You need to receive from ${first}` : `You need to give to ${first}`} value={money(openTotal)} />
           <Figure label="Remaining after advance" value={money(Math.max(0, round2(openTotal - plan.availableTotal)))} strong />
         </dl>
         {!open && options.length > 0 && (

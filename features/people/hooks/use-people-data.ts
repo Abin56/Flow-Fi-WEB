@@ -45,7 +45,7 @@ import type { Installment } from "@/lib/models/payment-schedule";
 import { useTransactions } from "@/hooks/use-transactions";
 import { useLoanRows } from "@/features/loans/hooks/use-loans-data";
 import { personLoanActivity } from "@/features/people/lib/person-loan-activity";
-import { isLegacyLoanLedgerEntry, peopleTotals, personPosition, type PersonPosition } from "@/lib/engines/person-position";
+import { isLegacyLoanLedgerEntry, peopleTotals, personBalanceBreakdown, personPosition, type PersonBalanceBreakdown, type PersonPosition } from "@/lib/engines/person-position";
 import type { Loan } from "@/lib/models/loan";
 import { useMemo } from "react";
 import { usePeople } from "@/hooks/use-people";
@@ -237,6 +237,8 @@ export interface PersonViewRow {
   /** Outstanding Loan principal they owe me / I owe them — settled from the Loan, never from the ledger. */
   loanReceivable: number;
   loanPayable: number;
+  /** Gross "to give" / "to receive" behind the net — explanation only (`personBalanceBreakdown`). */
+  breakdown: PersonBalanceBreakdown;
   status: PersonStatus;
   lastActivity: string;
   firstTransaction: string;
@@ -302,6 +304,11 @@ function toPersonRow(
     directBalance: position.directBalance,
     loanReceivable: position.loanReceivable,
     loanPayable: position.loanPayable,
+    breakdown: personBalanceBreakdown(
+      position,
+      entries.map((e) => ({ id: e.id, type: e.type, amount: e.amount, parentEntryId: e.parentEntryId, transactionRef: e.transactionRef, isDeleted: e.deletedAt != null })),
+      loanIds,
+    ),
     status: position.net === 0 ? "settled" : "active",
     lastActivity: activity[0] ? formatTimestamp(activity[0].rawDate, now) : formatDate(person.createdAt),
     firstTransaction: activity.length > 0 ? formatDate(activity[activity.length - 1].rawDate) : formatDate(person.createdAt),
@@ -559,10 +566,11 @@ export function usePeopleActions() {
         const entry = await ledgerRepository.addEntry(person, params);
         return entry;
       },
-      /** Edits a posted entry's amount/date/note, re-syncing the balance — see `LedgerRepository.editEntry`. */
+      /** Edits a posted entry's amount/date/note, re-syncing the balance and the entry's own cash leg
+       *  (account balance) — see `LedgerRepository.editEntry`. */
       editLedgerEntry: async (person: Person, entry: LedgerEntry, patch: { amount?: number; date?: Date; note?: string }) => {
         const ledgerRepository = createLedgerRepository(uid, person.id, personRepository);
-        await ledgerRepository.editEntry(person, entry, patch);
+        await ledgerRepository.editEntry(person, entry, patch, createTransactionRepository(uid, accountRepository));
       },
       /**
        * Same as `addLedgerEntry`, but also posts a real account-affecting

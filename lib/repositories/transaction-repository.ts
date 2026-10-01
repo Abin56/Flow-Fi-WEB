@@ -419,6 +419,12 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
     tx.set(transactionRef, updated);
   }
 
+  /** Fresh read of one transaction inside the caller's open `tx` (a read — call before any write). */
+  async getInTransaction(tx: FirestoreTransaction, id: string): Promise<Transaction | null> {
+    const snap = await tx.get(doc(this.collection, id));
+    return snap.exists() ? snap.data() : null;
+  }
+
   async editTransaction(transaction: Transaction, params: EditTransactionParams): Promise<void> {
     const db = this.collection.firestore;
     await runTransaction(db, async (tx) => {

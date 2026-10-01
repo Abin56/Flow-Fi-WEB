@@ -12,7 +12,7 @@ import { recordEdit, updateField } from "@/lib/firestore/soft-deletable";
 import { type LedgerEntry, type LedgerEntryType, type LedgerSourceKind, type Person, signedAmount } from "@/lib/models/person";
 import type { ReceivedStatus } from "@/lib/models/expense";
 import type { Transaction, TransactionType } from "@/lib/models/transaction";
-import type { TransactionRepository } from "@/lib/repositories/transaction-repository";
+import type { EditTransactionParams, TransactionRepository } from "@/lib/repositories/transaction-repository";
 import { generateId } from "@/lib/utils/id-generator";
 
 /** Entries per `softDeleteEntries` transaction — 1 person + N entries, far below Firestore's 500-write cap. */
@@ -353,7 +353,20 @@ export class LedgerRepository extends FirestoreCrudRepository<LedgerEntry> {
    * re-syncing the person's cached balance by any amount delta — same atomic read-then-write as
    * `editEntryAmount`. Omitted fields are left as they are.
    */
-  async editEntry(person: Person, entry: LedgerEntry, patch: { amount?: number; date?: Date; note?: string }): Promise<void> {
+  async editEntry(
+    person: Person,
+    entry: LedgerEntry,
+    patch: { amount?: number; date?: Date; note?: string },
+    /**
+     * When given, the entry's OWN cash leg (the 1:1 `isPersonLedgerMovement` Transaction
+     * `addEntryWithTransaction` posted for a "gave"/"borrowed" entry) is edited in the same atomic write —
+     * so the account balance moves with the obligation and the two never drift apart. A payment cash leg
+     * shared by several settlement entries is never touched here.
+     */
+    transactionRepository?: TransactionRepository,
+    /** Extra cash-leg fields to save alongside (e.g. description/category from the Transactions page). */
+    cashLegExtra?: Omit<EditTransactionParams, "amount" | "dateTime">,
+  ): Promise<void> {
     if (patch.amount != null && patch.amount <= 0) {
       throw new Error("Amount must be greater than 0");
     }
@@ -369,11 +382,31 @@ export class LedgerRepository extends FirestoreCrudRepository<LedgerEntry> {
       if (!entrySnap.exists()) throw new Error("Ledger entry not found");
 
       const fresh = entrySnap.data();
+      const cashLeg =
+        transactionRepository != null && fresh.transactionRef != null && (fresh.type === "borrowed" || fresh.type === "gave")
+          ? await transactionRepository.getInTransaction(tx, fresh.transactionRef)
+          : null;
+      const ownCashLeg =
+        cashLeg != null && cashLeg.deletedAt == null && cashLeg.isPersonLedgerMovement && cashLeg.linkedPersonId === person.id && cashLeg.amount === fresh.amount
+          ? cashLeg
+          : null;
+
       let updated = updateField(fresh, "amount", fresh.amount, patch.amount, (e, v) => ({ ...e, amount: v }));
       if (patch.date && patch.date.getTime() !== fresh.date.getTime()) {
         updated = updateField(updated, "date", fresh.date.toISOString(), patch.date.toISOString(), (e) => ({ ...e, date: patch.date! }));
       }
       updated = updateField(updated, "note", fresh.note, patch.note, (e, v) => ({ ...e, note: v }));
+      if (updated === fresh && cashLegExtra == null) return;
+
+      // The cash leg's reads happen inside `editTransactionInTransaction` before its writes, and before
+      // the person/entry writes below — Firestore allows no read after a write.
+      if (ownCashLeg != null) {
+        await transactionRepository!.editTransactionInTransaction(tx, ownCashLeg, {
+          ...cashLegExtra,
+          amount: updated.amount !== ownCashLeg.amount ? updated.amount : undefined,
+          dateTime: updated.date.getTime() !== fresh.date.getTime() ? updated.date : undefined,
+        });
+      }
       if (updated === fresh) return;
 
       const delta = signedAmount(updated) - signedAmount(fresh);

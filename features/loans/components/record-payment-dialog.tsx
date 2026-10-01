@@ -2,7 +2,8 @@
 
 import { ArrowRight, CalendarClock, CreditCard, Info, Wallet } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
 import { useEmiActions, type EmiRow } from "@/features/emi/hooks/use-emi-data";
 import { emiCardLabel } from "@/features/emi/components/emi-card";
 import { loanDisplayName } from "@/features/loans/components/loan-card";
@@ -26,6 +27,9 @@ import { useLoanActions, type LoanRow } from "@/features/loans/hooks/use-loans-d
 import { LinkedFundsPayNotice } from "@/features/people/components/linked-funds";
 import { useLinkedFunds } from "@/features/people/hooks/use-linked-funds";
 import { linkedFundsForInstallment } from "@/lib/engines/linked-funds";
+import { PeopleSettlementCard, settleCtaLabel } from "@/features/people/components/linked-people-panel";
+import { useLinkedPeopleReadiness } from "@/features/people/hooks/use-linked-people-readiness";
+import { peopleSettleHref, peopleSettlementGate } from "@/lib/engines/linked-people-readiness";
 import { previewPrincipalPrepayment } from "@/features/loans/lib/loan-adjustment-preview";
 import { friendlyLoanError } from "@/features/loans/lib/loan-live-state";
 import { EMI_PAYMENT_HISTORY_KEY } from "@/features/loans/hooks/use-payment-history";
@@ -164,6 +168,19 @@ export function RecordPaymentDialog({ target, open, onOpenChange }: { target: Pa
   const planAmount = plan?.ok ? plan.amount : null;
   const extra = loanPlan?.ok ? loanPlan.extra : 0;
   const lent = loanRow?.direction === "given";
+  // Shared Loan / EMI: people's shares of THIS installment (by installment id) must be received before it is paid.
+  const { readiness: linkedPeople, isLoading: linkedPeopleLoading } = useLinkedPeopleReadiness(
+    next && !lent ? { kind: isLoan ? "loan" : "emi", installmentId: next.id, lenderDue: Math.max(0, next.amountDue - next.amountPaid) } : null,
+  );
+  const peopleGated = next != null && !lent;
+  const settlement = peopleSettlementGate(peopleGated ? linkedPeople : null);
+  const gateLoading = peopleGated && linkedPeopleLoading;
+  const gateBlocked = peopleGated && (settlement.blocked || gateLoading);
+  const router = useRouter();
+  const pathname = usePathname();
+  // Enter while blocked lands here (the first Settle link) — it never records the lender payment.
+  const settleRef = useRef<HTMLAnchorElement>(null);
+  const settleHref = settlement.next ? peopleSettleHref(settlement.next.personId, settlement.next.obligationKey, pathname) : null;
 
   // Existing preview engine — only for the "reduce principal" case, to show what the repository will do.
   const prepaymentPreview =
@@ -188,6 +205,11 @@ export function RecordPaymentDialog({ target, open, onOpenChange }: { target: Pa
   const blocked = next == null || error != null || (needsAccount && accountId === "");
 
   async function submit() {
+    // People settlement gate: no path records this installment while a linked share is still to come in.
+    if (gateBlocked) {
+      settleRef.current?.focus();
+      return;
+    }
     if (submission.inFlight || blocked || planAmount == null) return;
     const stages = paymentStages({ reamortizes });
     let title = "Payment recorded successfully";
@@ -259,7 +281,15 @@ export function RecordPaymentDialog({ target, open, onOpenChange }: { target: Pa
     );
   }
 
-  const confirmLabel = saving ? "Recording…" : planAmount != null ? `Record ${formatCurrency(planAmount)}` : "Record payment";
+  const confirmLabel = gateBlocked
+    ? settleHref
+      ? `${settleCtaLabel(settlement)} →`
+      : "Checking People…"
+    : saving
+      ? "Recording…"
+      : planAmount != null
+        ? `Record ${formatCurrency(planAmount)}`
+        : "Record payment";
 
   return (
     <LoanEmiFormDialog
@@ -269,9 +299,11 @@ export function RecordPaymentDialog({ target, open, onOpenChange }: { target: Pa
       icon={Wallet}
       title={lent ? "Record repayment received" : "Record payment"}
       description={name}
-      onConfirm={submit}
+      // Blocked: the primary action is the exact People settlement; Enter only focuses it.
+      onConfirm={gateBlocked ? () => settleHref && router.push(settleHref) : submit}
+      onEnter={gateBlocked ? () => settleRef.current?.focus() : undefined}
       confirmLabel={confirmLabel}
-      confirmDisabled={blocked}
+      confirmDisabled={gateBlocked ? settleHref == null : blocked}
       loading={saving}
       success={success}
       operation={operation.snapshot}
@@ -376,6 +408,22 @@ export function RecordPaymentDialog({ target, open, onOpenChange }: { target: Pa
             </p>
           )}
         </section>
+      )}
+
+      {next && !lent && (linkedPeopleLoading || (linkedPeople?.people.length ?? 0) > 0) && (
+        // Wrapped: the dialog body divides its direct children (border + padding) — that belongs outside the card.
+        <div>
+        <PeopleSettlementCard
+          ref={settleRef}
+          readiness={linkedPeople}
+          gate={settlement}
+          loading={gateLoading}
+          dueLabel={isLoan ? `Installment #${next.sequenceNumber} due` : `EMI #${next.sequenceNumber} due`}
+          subject={isLoan ? "this loan installment" : "this EMI"}
+          payeeName={name}
+          returnTo={pathname}
+        />
+        </div>
       )}
 
       {next && !lent && (

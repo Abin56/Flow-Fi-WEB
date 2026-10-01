@@ -234,10 +234,26 @@ function PersonRow({ item, tone }: { item: MonthCyclePersonItem; tone: "expense"
         <div className="min-w-0">
           <p className="truncate text-sm font-semibold text-foreground">{item.name}</p>
           {item.note && <p className="truncate text-xs text-muted-foreground">{item.note}</p>}
+          {item.toGive > 0 && item.toReceive > 0 && (
+            // Both directions open: this person is on both sides (gross) — say what the two net to.
+            <p className="truncate text-xs font-medium text-foreground/80 tabular-nums">
+              {tone === "success" ? (
+                <span className="text-expense">You need to give {formatCurrency(item.toGive)}</span>
+              ) : (
+                <span className="text-success">You need to receive {formatCurrency(item.toReceive)}</span>
+              )}
+              {" · "}
+              <span className={item.net > 0 ? "text-success" : item.net < 0 ? "text-expense" : undefined}>
+                {item.net > 0 ? `Net you need to receive ${formatCurrency(item.net)}` : item.net < 0 ? `Net you need to give ${formatCurrency(-item.net)}` : "Net settled"}
+              </span>
+            </p>
+          )}
         </div>
       </div>
       <div className="flex shrink-0 flex-col items-end">
-        <span className={cn("text-[15px] font-bold tabular-nums", tone === "success" ? "text-success" : "text-expense")}>{formatCurrency(item.amount)}</span>
+        <span className={cn("text-[15px] font-bold tabular-nums", tone === "success" ? "text-success" : "text-expense")}>
+          {formatCurrency(item.amount)}
+        </span>
         {item.daysSince != null && <span className="text-[11px] text-muted-foreground">{item.daysSince === 0 ? "Today" : `Since ${item.daysSince}d`}</span>}
       </div>
     </div>
@@ -561,8 +577,8 @@ export function MonthCycleWorkspace() {
               : `${data.loans.count} installment${data.loans.count === 1 ? "" : "s"} due`
           } accent="purple" href="/loans" />
         <StatCell icon={CreditCard} label="Credit card bills" amount={data.cards.total} meta={`${data.cards.count} bills due`} accent="expense" href="/credit-cards" />
-        <StatCell icon={Users} label="You need to give" amount={data.peopleStats.totalYouOwe} meta={`${data.peopleStats.owingPeopleCount} people`} accent="warning" href="/people" />
-        <StatCell icon={Users} label="Handover pending" amount={data.peopleStats.totalYouAreOwed} meta={`${data.peopleStats.owedByPeopleCount} people`} accent="success" href="/people" />
+        <StatCell icon={Users} label="You need to give" amount={data.peopleSides.totalToGive} meta={`${data.peopleSides.giveCount} people`} accent="warning" href="/people" />
+        <StatCell icon={Users} label="You need to receive" amount={data.peopleSides.totalToReceive} meta={`${data.peopleSides.receiveCount} people`} accent="success" href="/people" />
         <StatCell icon={Receipt} label="Bills (utility & others)" amount={data.bills.total} meta={`${data.bills.count} bills due`} accent="success" href="/bills" />
       </section>
 
@@ -592,11 +608,11 @@ export function MonthCycleWorkspace() {
               <div className="min-w-0">
                 <div className="flex items-center justify-between border-b border-border-strong/40 bg-warning/8 px-4 py-2">
                   <p className="text-[11px] font-semibold tracking-[0.06em] text-warning-foreground uppercase dark:text-warning">You need to give</p>
-                  <p className="text-xs font-bold text-warning-foreground tabular-nums dark:text-warning">{formatCurrency(data.peopleStats.totalYouOwe)}</p>
+                  <p className="text-xs font-bold text-warning-foreground tabular-nums dark:text-warning">{formatCurrency(data.peopleSides.totalToGive)}</p>
                 </div>
                 <div className="divide-y divide-border-strong/40">
                   {data.peopleYouNeedToGive.length === 0 ? (
-                    <p className="px-4 py-3 text-xs text-muted-foreground">You owe nobody right now.</p>
+                    <p className="px-4 py-3 text-xs text-muted-foreground">Nothing to give right now.</p>
                   ) : (
                     data.peopleYouNeedToGive.map((p) => <PersonRow key={p.id} item={p} tone="expense" />)
                   )}
@@ -604,12 +620,12 @@ export function MonthCycleWorkspace() {
               </div>
               <div className="min-w-0 border-t border-border-strong/40 @xl:border-t-0">
                 <div className="flex items-center justify-between border-b border-border-strong/40 bg-success/8 px-4 py-2">
-                  <p className="text-[11px] font-semibold tracking-[0.06em] text-success uppercase">Handover pending</p>
-                  <p className="text-xs font-bold text-success tabular-nums">{formatCurrency(data.peopleStats.totalYouAreOwed)}</p>
+                  <p className="text-[11px] font-semibold tracking-[0.06em] text-success uppercase">You need to receive</p>
+                  <p className="text-xs font-bold text-success tabular-nums">{formatCurrency(data.peopleSides.totalToReceive)}</p>
                 </div>
                 <div className="divide-y divide-border-strong/40">
                   {data.peopleHandoverPending.length === 0 ? (
-                    <p className="px-4 py-3 text-xs text-muted-foreground">Nobody owes you right now.</p>
+                    <p className="px-4 py-3 text-xs text-muted-foreground">Nothing to receive right now.</p>
                   ) : (
                     data.peopleHandoverPending.map((p) => <PersonRow key={p.id} item={p} tone="success" />)
                   )}

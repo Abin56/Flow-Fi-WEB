@@ -130,7 +130,7 @@ export function useDashboardData() {
   const { utilizationEmis: cardUtilizationEmis, isLoading: cardEmisLoading } = useCardUtilizationEmis();
 
   // Net Worth adds loan principal to account balances (Decision 6 — see `netWorthWithLoans`).
-  const { netWorth: netWorthAmount, sheet: balanceSheet, isLoading: balanceSheetLoading } = useLoanBalanceSheet();
+  const { netWorth: netWorthAmount, sheet: balanceSheet, peoplePayable, isLoading: balanceSheetLoading } = useLoanBalanceSheet();
   const cashFlowSummary = useCashFlowThisMonth();
 
   const isLoading =
@@ -187,16 +187,21 @@ export function useDashboardData() {
     const cardAccountIds = new Set((creditCards as CreditCardProfile[]).map((c) => c.accountId));
     const cardDebt = -(accounts as Account[]).filter((a) => cardAccountIds.has(a.id)).reduce((s, a) => s + a.currentBalance, 0);
     const debt = liabilityTotals(balanceSheet, cardDebt);
+    // Money owed to people directly (e.g. borrowed from a person) is a liability Net Worth already
+    // subtracts (People direct balance) — counting it here keeps Assets − Debt equal to Net Worth while
+    // showing the borrowed cash as an asset and the obligation as debt.
+    const totalDebt = debt.total + peoplePayable;
     return {
       amount: netWorthAmount,
       changeAmount: 0,
       changePercent: 0,
       trend,
-      assets: netWorthAmount + debt.total,
-      debt: debt.total,
+      assets: netWorthAmount + totalDebt,
+      debt: totalDebt,
+      peopleDebt: peoplePayable,
       loanDebt: debt.loanDebt,
     };
-  }, [netWorthAmount, balanceSheet, accounts, creditCards, transactions, now]);
+  }, [netWorthAmount, balanceSheet, peoplePayable, accounts, creditCards, transactions, now]);
 
   // --- Cash Flow (lib/engines/cash-flow.ts:cashFlowThisMonth via useCashFlowThisMonth) ---
   const cashFlow = useMemo(() => {

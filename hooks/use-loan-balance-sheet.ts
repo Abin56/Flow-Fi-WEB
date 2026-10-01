@@ -15,8 +15,16 @@ import { useLoanRows } from "@/features/loans/hooks/use-loans-data";
 import { useEmiRows } from "@/features/emi/hooks/use-emi-data";
 import { useCreditCardTotals } from "@/features/credit-cards/hooks/use-credit-cards-data";
 import { usePersonPositions } from "@/features/people/hooks/use-people-data";
+import { peopleDirectPayable } from "@/lib/engines/person-position";
 
-export function useLoanBalanceSheet(): { sheet: LoanBalanceSheet; accountBalances: number; netWorth: number; isLoading: boolean } {
+export function useLoanBalanceSheet(): {
+  sheet: LoanBalanceSheet;
+  accountBalances: number;
+  netWorth: number;
+  /** What I owe people directly (borrowed, unpaid shares) — already inside `netWorth` via the People direct balance. */
+  peoplePayable: number;
+  isLoading: boolean;
+} {
   const accountBalances = useNetWorth();
   const { rows: loanRows, isLoading: loansLoading } = useLoanRows();
   const { rows: emiRows, isLoading: emisLoading } = useEmiRows();
@@ -57,6 +65,7 @@ export function useLoanBalanceSheet(): { sheet: LoanBalanceSheet; accountBalance
     sheet,
     accountBalances,
     netWorth: netWorthWithLoans(accountBalances, sheet, peopleDirectBalance),
+    peoplePayable: peopleDirectPayable(Object.values(positionsByPersonId)),
     isLoading: loansLoading || emisLoading || cardsLoading || cardListLoading || peopleLoading,
   };
 }

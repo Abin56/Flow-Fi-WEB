@@ -1,0 +1,330 @@
+// @vitest-environment jsdom
+import { forwardRef, type AnchorHTMLAttributes } from "react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Account } from "@/lib/models/account";
+import type { Category } from "@/lib/models/category";
+import type { Person } from "@/lib/models/person";
+import { linkedStateOf, type LinkedPeopleReadiness, type LinkedPerson } from "@/lib/engines/linked-people-readiness";
+import { TransactionDetailsModal, type PeopleGateInput } from "./transaction-details-modal";
+
+/**
+ * Transaction form redesign + card-bill People settlement gate.
+ *  - Add Expense / Add Income / Add Transfer keep every field and behavior.
+ *  - A card-bill transfer whose card carries an unresolved linked People obligation can't be saved by any path
+ *    (button, Enter, Ctrl+Enter, form submit); the primary action becomes the exact Settle step instead.
+ */
+
+vi.mock("@/lib/firebase/client", () => ({ firebaseApp: {}, auth: {}, db: {}, storage: {} }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+vi.mock("next/link", () => ({
+  default: forwardRef<HTMLAnchorElement, AnchorHTMLAttributes<HTMLAnchorElement>>(function Link({ href, children, ...rest }, ref) {
+    return (
+      <a ref={ref} href={String(href)} {...rest}>
+        {children}
+      </a>
+    );
+  }),
+}));
+const addLedgerEntryWithTransaction = vi.fn(async () => {});
+vi.mock("@/features/people/hooks/use-people-data", () => ({
+  usePeopleActions: () => ({ addLedgerEntryWithTransaction }),
+}));
+
+beforeAll(() => {
+  Element.prototype.scrollIntoView = vi.fn();
+  Element.prototype.hasPointerCapture ??= () => false;
+  Element.prototype.releasePointerCapture ??= () => {};
+  globalThis.ResizeObserver ??= class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  };
+});
+afterEach(cleanup);
+
+const accounts = [
+  { id: "sbi", name: "SBI", type: "bank", bankId: null },
+  { id: "octane", name: "OCTANE", type: "card" },
+  { id: "hdfc-card", name: "HDFC CARD", type: "card" },
+] as unknown as Account[];
+const categories = [
+  { id: "food", name: "Food", type: "expense" },
+  { id: "salary", name: "Salary", type: "income" },
+] as unknown as Category[];
+const people = [{ id: "amma", name: "AMMA" }] as unknown as Person[];
+
+function makeActions() {
+  return {
+    createTransaction: vi.fn(async (input: Record<string, unknown>) => ({ id: "t1", ...input })),
+    createTransferPair: vi.fn(async (_input: Record<string, unknown>) => {}),
+    applyOwesPersonChange: vi.fn(async () => {}),
+    editTransaction: vi.fn(async () => {}),
+    deleteTransaction: vi.fn(async () => {}),
+    expenseRepository: { convertToSplit: vi.fn(async () => {}), editExpense: vi.fn(async () => {}) },
+  };
+}
+let actions: ReturnType<typeof makeActions>;
+beforeEach(() => {
+  actions = makeActions();
+  addLedgerEntryWithTransaction.mockClear();
+});
+
+/** One person's linked share on the card bill — `received` of `share` already given. */
+function person(personId: string, personName: string, share: number, received: number): LinkedPerson {
+  const remaining = share - received;
+  const state = linkedStateOf(share, remaining);
+  return { personId, personName, share, received, remaining, state, obligations: [{ key: `ledger:${personId}-g`, title: "Phone", share, received, remaining, state }] };
+}
+function readinessOf(lenderDue: number, list: LinkedPerson[]): LinkedPeopleReadiness {
+  const peopleShare = list.reduce((s, p) => s + p.share, 0);
+  const received = list.reduce((s, p) => s + p.received, 0);
+  const sorted = [...list].sort((a, b) => b.remaining - a.remaining);
+  return { lenderDue, people: sorted, peopleShare, received, stillExpected: peopleShare - received, yourPortion: Math.max(0, lenderDue - peopleShare) };
+}
+const gateOf = (readiness: LinkedPeopleReadiness | null, loading = false): PeopleGateInput => ({
+  accountId: "octane",
+  readiness,
+  loading,
+  payeeName: "OCTANE",
+  returnTo: "/credit-cards?card=c-octane&pay=1",
+});
+
+function renderAdd(props: Partial<Parameters<typeof TransactionDetailsModal>[0]> = {}) {
+  return render(
+    <TransactionDetailsModal
+      open
+      onOpenChange={() => {}}
+      row={null}
+      expense={null}
+      people={people}
+      accounts={accounts}
+      categories={categories}
+      actions={actions as never}
+      {...props}
+    />,
+  );
+}
+const renderCardBill = (peopleGate: PeopleGateInput | null, extra: Partial<Parameters<typeof TransactionDetailsModal>[0]> = {}) =>
+  renderAdd({ defaultKind: "transfer", initialDestinationAccountId: "octane", initialAmount: 1000, peopleGate, ...extra });
+
+const amountInput = () => document.getElementById("txn-amount") as HTMLInputElement;
+const footerSettle = () => document.querySelector<HTMLAnchorElement>('[data-gate="settle"]');
+const settlementCard = () => screen.queryByRole("region", { name: "People settlement" });
+const nothingSaved = () => {
+  expect(actions.createTransferPair).not.toHaveBeenCalled();
+  expect(actions.createTransaction).not.toHaveBeenCalled();
+};
+
+describe("Add Expense — every field and function retained", () => {
+  it("renders amount, mode switch (no Transfer), details, Paid from, People & Split, notes and more options", async () => {
+    const user = userEvent.setup();
+    renderAdd();
+    expect(screen.getByRole("heading", { name: "Add Expense" })).toBeTruthy();
+    const modes = within(screen.getByRole("group", { name: "Transaction type" }));
+    expect(modes.getByRole("button", { name: /expense/i }).getAttribute("aria-pressed")).toBe("true");
+    expect(modes.getByRole("button", { name: /income/i }).getAttribute("aria-pressed")).toBe("false");
+    expect(modes.queryByRole("button", { name: /transfer/i })).toBeNull();
+
+    expect(amountInput()).toBeTruthy();
+    expect(screen.getByPlaceholderText("e.g. Blue Tokai Coffee")).toBeTruthy();
+    expect(screen.getByText("Category *")).toBeTruthy();
+    expect(screen.getByText("Date *")).toBeTruthy();
+    expect(screen.getByText("Paid from")).toBeTruthy();
+    expect(screen.getByText("Assign to a person")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /split with more people/i })).toBeTruthy();
+    expect(screen.getByRole("textbox", { name: "Notes" })).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: /more options/i }));
+    expect(screen.getByText(/don.t count this in my totals/i)).toBeTruthy();
+    expect(screen.getByText(/count this in a different month/i)).toBeTruthy();
+  });
+
+  it("Enter on the amount steps to Description; a valid Ctrl+Enter saves exactly one expense", async () => {
+    const user = userEvent.setup();
+    renderAdd();
+    await user.type(amountInput(), "450");
+    await user.keyboard("{Enter}");
+    expect(document.activeElement).toBe(screen.getByPlaceholderText("e.g. Blue Tokai Coffee"));
+    await user.type(screen.getByPlaceholderText("e.g. Blue Tokai Coffee"), "Lunch");
+    await user.keyboard("{Control>}{Enter}{/Control}");
+    await waitFor(() => expect(actions.createTransaction).toHaveBeenCalledTimes(1));
+    expect(actions.createTransaction.mock.calls[0][0]).toMatchObject({ type: "expense", amount: 450, accountId: "sbi", categoryId: "food", description: "Lunch" });
+  });
+
+  it("a People gate passed to the popup never affects an expense", async () => {
+    const user = userEvent.setup();
+    renderAdd({ peopleGate: gateOf(readinessOf(1000, [person("amma", "AMMA", 1000, 0)])) });
+    expect(settlementCard()).toBeNull();
+    await user.type(amountInput(), "100");
+    await user.type(screen.getByPlaceholderText("e.g. Blue Tokai Coffee"), "Tea");
+    await user.click(screen.getByRole("button", { name: "Add Expense" }));
+    await waitFor(() => expect(actions.createTransaction).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe("Add Income — every field and function retained", () => {
+  it("switching to Income: semantic mode, income placeholder, Received in, no People & Split; saves income", async () => {
+    const user = userEvent.setup();
+    renderAdd();
+    const income = screen.getByRole("button", { name: /income/i });
+    await user.click(income);
+    expect(income.getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("heading", { name: "Add Income" })).toBeTruthy();
+    expect(screen.getByText("Received in")).toBeTruthy();
+    expect(screen.queryByText("Assign to a person")).toBeNull();
+    // A plus sign, never a minus, on the amount.
+    expect(within(amountInput().parentElement!).getByText("+")).toBeTruthy();
+
+    await user.type(amountInput(), "5000");
+    await user.type(screen.getByPlaceholderText("e.g. Salary, Freelance payment"), "Salary");
+    await user.click(screen.getByRole("button", { name: "Add Income" }));
+    await waitFor(() => expect(actions.createTransaction).toHaveBeenCalledTimes(1));
+    expect(actions.createTransaction.mock.calls[0][0]).toMatchObject({ type: "income", amount: 5000 });
+  });
+});
+
+describe("Add Transfer — transfer identity, From → To, card bill", () => {
+  it("shows Transfer as its own selected mode, no +/− sign, From and To accounts, card-bill context", () => {
+    renderCardBill(null);
+    expect(screen.getByRole("heading", { name: "Add Transfer" })).toBeTruthy();
+    expect(screen.getByText(/card bill payment · octane/i)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /transfer/i }).getAttribute("aria-pressed")).toBe("true");
+    expect(within(amountInput().parentElement!).queryByText("−")).toBeNull();
+    expect(within(amountInput().parentElement!).queryByText("+")).toBeNull();
+    expect(screen.getByText("From Account *")).toBeTruthy();
+    expect(screen.getByText("To Account *")).toBeTruthy();
+  });
+
+  it("card bill with no linked People: Pay is available and writes ONE transfer pair (never income / expense)", async () => {
+    const user = userEvent.setup();
+    renderCardBill(gateOf(readinessOf(1000, [])));
+    expect(settlementCard()).toBeNull();
+    await user.click(screen.getByRole("button", { name: /pay ₹1,000/i }));
+    await waitFor(() => expect(actions.createTransferPair).toHaveBeenCalledTimes(1));
+    expect(actions.createTransferPair.mock.calls[0][0]).toMatchObject({ amount: 1000, sourceAccountId: "sbi", destinationAccountId: "octane" });
+    expect(actions.createTransaction).not.toHaveBeenCalled();
+    expect(addLedgerEntryWithTransaction).not.toHaveBeenCalled();
+  });
+});
+
+describe("Card bill — People settlement gate", () => {
+  it("pending People share → blocked: settlement card, exact Settle CTA, no Pay action", () => {
+    renderCardBill(gateOf(readinessOf(1000, [person("amma", "AMMA", 1000, 0)])));
+    const card = settlementCard()!;
+    expect(card.dataset.state).toBe("blocked");
+    expect(within(card).getByText("People payment pending")).toBeTruthy();
+    expect(within(card).getByText("Not received yet")).toBeTruthy();
+    expect(within(card).getByText(/must be recorded from AMMA before this card bill can be paid/)).toBeTruthy();
+    // The five accounting rows stay collapsed by default.
+    expect(within(card).queryByText("People share")).toBeNull();
+
+    const cta = footerSettle()!;
+    expect(cta.textContent).toMatch(/Settle ₹1,000 with AMMA/);
+    expect(cta.getAttribute("href")).toBe("/people?person=amma&obligation=ledger%3Aamma-g&settle=1&return=%2Fcredit-cards%3Fcard%3Dc-octane%26pay%3D1");
+    expect(screen.queryByRole("button", { name: /pay ₹|add transfer/i })).toBeNull();
+  });
+
+  it("Enter, Ctrl+Enter and a raw submit can't bypass the gate — focus lands on the Settle step", async () => {
+    const user = userEvent.setup();
+    renderCardBill(gateOf(readinessOf(1000, [person("amma", "AMMA", 1000, 0)])));
+    amountInput().focus();
+    await user.keyboard("{Enter}"); // Description empty → steps there first (existing behavior)
+    await user.type(document.activeElement as HTMLElement, "Bill");
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(document.activeElement).toBe(footerSettle()));
+    amountInput().focus();
+    await user.keyboard("{Control>}{Enter}{/Control}");
+    await waitFor(() => expect(document.activeElement).toBe(footerSettle()));
+    fireEvent.submit(amountInput().form!);
+    await new Promise((r) => setTimeout(r, 30));
+    nothingSaved();
+  });
+
+  it("partial People settlement → still blocked for exactly what remains", () => {
+    renderCardBill(gateOf(readinessOf(1000, [person("amma", "AMMA", 1000, 400)])));
+    expect(settlementCard()!.dataset.state).toBe("blocked");
+    expect(screen.getByText(/₹400 of ₹1,000 received · ₹600 remaining/)).toBeTruthy();
+    expect(footerSettle()!.textContent).toMatch(/Settle ₹600 with AMMA/);
+  });
+
+  it("fully settled → the card turns into PEOPLE SETTLED and Pay saves once", async () => {
+    const user = userEvent.setup();
+    renderCardBill(gateOf(readinessOf(1000, [person("amma", "AMMA", 1000, 1000)])));
+    const card = settlementCard()!;
+    expect(card.dataset.state).toBe("settled");
+    expect(within(card).getByText("People settled")).toBeTruthy();
+    expect(within(card).getByText("Ready to pay OCTANE.")).toBeTruthy();
+    expect(within(card).getByText("received")).toBeTruthy();
+    expect(footerSettle()).toBeNull();
+    await user.click(screen.getByRole("button", { name: /pay ₹1,000/i }));
+    await waitFor(() => expect(actions.createTransferPair).toHaveBeenCalledTimes(1));
+  });
+
+  it("multiple people: both open items need attention, the received one shows ✓, all must resolve", () => {
+    renderCardBill(gateOf(readinessOf(5000, [person("amma", "AMMA", 2000, 0), person("john", "JOHN", 1000, 1000), person("anu", "ANU", 500, 200)])), {
+      initialAmount: 5000,
+    });
+    const card = settlementCard()!;
+    expect(within(card).getByText("2 need attention")).toBeTruthy();
+    expect(within(card).getByRole("link", { name: "Settle ₹2,000 with AMMA" })).toBeTruthy();
+    expect(within(card).getByRole("link", { name: "Settle ₹300 with ANU" })).toBeTruthy();
+    expect(within(card).queryByRole("link", { name: /with JOHN/ })).toBeNull();
+    expect(within(card).getByText("JOHN")).toBeTruthy();
+    expect(within(card).getByText(/₹2,300/)).toBeTruthy();
+    expect(footerSettle()!.textContent).toMatch(/Settle ₹2,000 with AMMA/);
+  });
+
+  it("View breakdown reveals Bill / People share / Received / Remaining / Your share", async () => {
+    const user = userEvent.setup();
+    renderCardBill(gateOf(readinessOf(5000, [person("amma", "AMMA", 2000, 0), person("anu", "ANU", 500, 200)])), { initialAmount: 5000 });
+    await user.click(screen.getByRole("button", { name: /view breakdown/i }));
+    const card = settlementCard()!;
+    for (const label of ["Bill", "People share", "Received", "Remaining", "Your share"]) expect(within(card).getByText(label)).toBeTruthy();
+    expect(within(card).getByText("Your share").nextElementSibling?.textContent).toBe("₹2,500"); // 5,000 − 2,500
+    expect(within(card).getByText("Remaining").nextElementSibling?.textContent).toBe("₹2,300");
+  });
+
+  it("loading People data → the payment waits (no save), never reads as 'nothing linked'", async () => {
+    const user = userEvent.setup();
+    renderCardBill(gateOf(null, true));
+    expect(screen.getByText("Checking linked People…")).toBeTruthy();
+    const waiting = screen.getByRole("button", { name: /checking people/i }) as HTMLButtonElement;
+    expect(waiting.disabled).toBe(true);
+    await user.type(screen.getAllByRole("textbox")[1], "Bill{Enter}");
+    fireEvent.submit(amountInput().form!);
+    await new Promise((r) => setTimeout(r, 30));
+    nothingSaved();
+  });
+
+  it("the gate only covers the gated card: paying a different account is not blocked by it", async () => {
+    const user = userEvent.setup();
+    const onDestinationAccountChange = vi.fn();
+    renderCardBill(gateOf(readinessOf(1000, [person("amma", "AMMA", 1000, 0)])), { onDestinationAccountChange });
+    expect(footerSettle()).not.toBeNull();
+
+    const toTrigger = screen
+      .getAllByRole("combobox")
+      .find((el) => el.textContent?.includes("OCTANE"))!;
+    await user.click(toTrigger);
+    await user.click(await screen.findByRole("option", { name: /HDFC CARD/ }));
+    expect(onDestinationAccountChange).toHaveBeenCalledWith("hdfc-card");
+    expect(settlementCard()).toBeNull();
+    expect(footerSettle()).toBeNull();
+    await user.click(screen.getByRole("button", { name: /pay ₹1,000/i }));
+    await waitFor(() => expect(actions.createTransferPair).toHaveBeenCalledTimes(1));
+    expect(actions.createTransferPair.mock.calls[0][0]).toMatchObject({ destinationAccountId: "hdfc-card" });
+  });
+
+  it("switching the flow to Expense drops the gate (it applies to the bill payment only)", async () => {
+    const user = userEvent.setup();
+    renderCardBill(gateOf(readinessOf(1000, [person("amma", "AMMA", 1000, 0)])));
+    await user.click(screen.getByRole("button", { name: /expense/i }));
+    expect(settlementCard()).toBeNull();
+    expect(footerSettle()).toBeNull();
+    expect(screen.getByRole("button", { name: "Add Expense" })).toBeTruthy();
+  });
+});
+
+

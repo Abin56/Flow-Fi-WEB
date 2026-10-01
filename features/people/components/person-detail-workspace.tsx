@@ -1,7 +1,8 @@
 "use client";
 
 import { ArrowLeft, Bell, Calendar, ChevronDown, HandCoins, ListX, Mail, MoreHorizontal, Paperclip, Pencil, Phone, Plus, Share2, Split, StickyNote, Trash2, Users } from "lucide-react";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { ClayAvatar } from "@/components/clay/clay-avatar";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -34,6 +35,7 @@ import { RecordPaymentPanel, type RecordPaymentInitial } from "@/features/people
 import { ApplyAdvancePanel, PaymentRevertDetails } from "@/features/people/components/workspace/payment-extras";
 import { advanceSources, payableObligations } from "@/features/people/lib/person-payment-obligations";
 import { advanceRemaining, type AdvanceUse } from "@/lib/engines/person-payment";
+import { isInAppPath } from "@/lib/engines/linked-people-readiness";
 import type { RecordPaymentInput } from "@/lib/repositories/person-payment-repository";
 import { ShareStatementMode } from "@/features/people/components/workspace/share-statement-mode";
 import { SplitExpenseMode } from "@/features/people/components/workspace/split-expense-mode";
@@ -184,6 +186,7 @@ export function PersonDetailWorkspace({
   // Until expenses have loaded, whether a share is tracked is unknown — keep it conservative (null).
   const trackedShareRefs = sharesLoading ? null : trackedAll;
   const txActions = useTransactionActions();
+  const router = useRouter();
   const { items: upcomingEmi } = usePersonUpcomingEmi(person.id);
   const { data: accounts = [] } = useAccounts();
   const { data: categories = [] } = useCategories();
@@ -251,10 +254,29 @@ export function PersonDetailWorkspace({
     }
   }
   const closePayment = () => {
+    settleReturnRef.current = null;
     setPaying(null);
     setInline(null);
     setLedgerView("transactions");
   };
+
+  // Deep link from a lender-payment gate (`?obligation=<key>&settle=1[&return=<path>]`): open Record payment with
+  // that exact obligation preselected, once. Once it is recorded, go back to the lender payment it unblocks.
+  const settleReturnRef = useRef<string | null>(null);
+  const settleDeepLinkedRef = useRef(false);
+  useEffect(() => {
+    if (settleDeepLinkedRef.current || isLoading || onRecordPayment == null || typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const key = params.get("obligation");
+    if (params.get("settle") !== "1" || !key || !allRows.some((r) => r.key === key)) return;
+    settleDeepLinkedRef.current = true;
+    const back = params.get("return");
+    requestAnimationFrame(() => {
+      openPayment({ preselectKey: key });
+      settleReturnRef.current = back && isInAppPath(back) ? back : null;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot on load; `openPayment` is render-scoped
+  }, [isLoading, allRows, onRecordPayment]);
   const paymentPanel =
     onRecordPayment != null ? (
       <RecordPaymentPanel
@@ -268,8 +290,10 @@ export function PersonDetailWorkspace({
         onCancel={closePayment}
         onSubmit={async (input, paymentId) => {
           await onRecordPayment(input, paymentId);
-          toast.success(paymentId ? "Payment updated" : "Payment recorded");
+          const back = settleReturnRef.current;
+          toast.success(paymentId ? "Payment updated" : back ? "Payment recorded — back to your payment" : "Payment recorded");
           closePayment();
+          if (back) router.push(back);
         }}
       />
     ) : null;
@@ -478,12 +502,57 @@ export function PersonDetailWorkspace({
   const loansNote = (person.loanReceivable > 0 || person.loanPayable > 0) && (
     <p className="mt-4 max-w-md text-xs leading-relaxed text-muted-foreground">
       Loans are settled from the Loan, outside this statement. Overall incl. loans {formatCurrency(Math.abs(net))}
-      {net > 0 ? " owed to you" : net < 0 ? " you owe" : ""}
+      {net > 0 ? " you need to receive" : net < 0 ? " you need to give" : ""}
       {" · "}Direct balance {formatCurrency(Math.abs(person.directBalance))}
-      {person.directBalance > 0 ? " owed to you" : person.directBalance < 0 ? " you owe" : ""}
-      {person.loanReceivable > 0 && ` · Loans owed to you ${formatCurrency(person.loanReceivable)}`}
-      {person.loanPayable > 0 && ` · Loans you owe ${formatCurrency(person.loanPayable)}`}
+      {person.directBalance > 0 ? " you need to receive" : person.directBalance < 0 ? " you need to give" : ""}
+      {person.loanReceivable > 0 && ` · Loans — you need to receive ${formatCurrency(person.loanReceivable)}`}
+      {person.loanPayable > 0 && ` · Loans — you need to give ${formatCurrency(person.loanPayable)}`}
     </p>
+  );
+
+  // Balance summary — explains the overall position from the People engine's own breakdown (never a re-sum):
+  // each borrowed/gave entry stays its own obligation; only opposite directions net.
+  const b = person.breakdown;
+  const summaryLines: { label: string; amount: number; tone: "expense" | "success" }[] = [
+    { label: "You need to give", amount: b.toGive, tone: "expense" },
+    { label: "You need to receive", amount: b.toReceive, tone: "success" },
+  ];
+  const balanceSummary = (b.toGive > 0 || b.toReceive > 0) && (
+    <table aria-label="Balance summary" className="mt-4 w-full max-w-sm border-collapse border border-border-strong/75 text-xs tabular-nums">
+      <caption className="pb-1 text-left text-[11px] font-semibold tracking-[0.06em] text-foreground uppercase">Balance summary · overall</caption>
+      <tbody>
+        {summaryLines.map((l) => (
+          <tr key={l.label} className="border-b border-border-strong/75">
+            <th scope="row" className="px-2.5 py-1.5 text-left font-medium text-foreground">{l.label}</th>
+            <td className={cn("px-2.5 py-1.5 text-right font-semibold", l.amount > 0 ? (l.tone === "expense" ? "text-expense" : "text-success") : "text-foreground/70")}>
+              {formatCurrency(l.amount)}
+            </td>
+          </tr>
+        ))}
+        <tr className="bg-secondary/60">
+          <th scope="row" className="px-2.5 py-1.5 text-left font-bold text-foreground">
+            {b.net > 0 ? "Net you need to receive" : b.net < 0 ? "Net you need to give" : "Net — settled"}
+          </th>
+          <td className={cn("px-2.5 py-1.5 text-right font-bold", b.net > 0 ? "text-success" : b.net < 0 ? "text-expense" : "text-foreground")}>
+            {formatCurrency(Math.abs(b.net))}
+          </td>
+        </tr>
+      </tbody>
+      {(Math.abs(b.unlinked) >= 0.005 || b.loanPayable > 0 || b.loanReceivable > 0 || b.emiReceivable > 0) && (
+        <tfoot>
+          <tr>
+            <td colSpan={2} className="px-2.5 py-1.5 text-[11px] leading-snug text-foreground/80">
+              Open borrowed {formatCurrency(b.borrowedOpen)} · Open given {formatCurrency(b.gaveOpen)}
+              {Math.abs(b.unlinked) >= 0.005 &&
+                ` · Payments/adjustments not tied to one transaction ${b.unlinked > 0 ? "+" : "−"}${formatCurrency(Math.abs(b.unlinked))}`}
+              {b.loanPayable > 0 && ` · Loans — you need to give ${formatCurrency(b.loanPayable)}`}
+              {b.loanReceivable > 0 && ` · Loans — you need to receive ${formatCurrency(b.loanReceivable)}`}
+              {b.emiReceivable > 0 && ` · EMI — you need to receive ${formatCurrency(b.emiReceivable)}`}
+            </td>
+          </tr>
+        </tfoot>
+      )}
+    </table>
   );
 
   const overview = (
@@ -498,7 +567,12 @@ export function PersonDetailWorkspace({
             onCycleChange={setCycle}
             linkedEmis={linkedEmis}
             setRepays={setRepays}
-            footnote={loansNote}
+            footnote={
+              <>
+                {balanceSummary}
+                {loansNote}
+              </>
+            }
           />
           <div className="min-w-0 lg:border-l lg:border-border-strong/75 lg:pl-7">{actionBar}</div>
         </div>

@@ -209,8 +209,8 @@ function AddPersonForm({
               >
                 {(
                   [
-                    { value: "theyOwe", label: "They owe you" },
-                    { value: "iOwe", label: "You owe them" },
+                    { value: "theyOwe", label: "You need to receive" },
+                    { value: "iOwe", label: "You need to give" },
                   ] as const
                 ).map((o) => (
                   <button

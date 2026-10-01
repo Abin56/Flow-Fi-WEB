@@ -127,7 +127,7 @@ describe("manual money in both directions (K)", () => {
     expect(v.title).toBe("Money received from Amma");
     expect(v.relation).toBe(`Amma gave you ${money(1000)} · you owe Amma`);
     expect(v.status).toEqual({ label: "You need to pay", detail: `You owe Amma ${money(1000)}`, tone: "payable" });
-    expect(cyclePosition(statement, PERSON).headline).toBe("You owe Amma");
+    expect(cyclePosition(statement, PERSON).headline).toBe("You need to give to Amma");
   });
 
   it("a fully paid obligation reads Paid in full (G)", () => {
@@ -253,13 +253,13 @@ describe("cycle position and overpayment (I, J)", () => {
     expect(v.relation).toBe(`Amma paid you ${money(2000)} ahead · held as advance`);
   });
 
-  it("a legacy unlinked overpayment stays in pending, so the headline flips to You owe", () => {
+  it("a legacy unlinked overpayment stays in pending, so the headline flips to You need to give", () => {
     const gave = entry("gave", 3000, d(9, 20));
     const paid = entry("receivedBack", 5000, d(9, 25));
     const { statement } = build([gave, paid]);
     const pos = cyclePosition(statement, PERSON);
     expect(statement.currentPending).toBe(-2000);
-    expect(pos.headline).toBe("You owe Amma");
+    expect(pos.headline).toBe("You need to give to Amma");
     expect(pos.advance).toBeNull();
   });
 
@@ -271,7 +271,7 @@ describe("cycle position and overpayment (I, J)", () => {
     expect(pos.lines.find((l) => l.key === "previous")?.value).toBe(400);
     expect(pos.lines.find((l) => l.key === "added")?.value).toBe(3000);
     expect(pos.advance).toBeNull();
-    expect(pos.headline).toBe("Amma owes you");
+    expect(pos.headline).toBe("You need to receive from Amma");
   });
 });
 

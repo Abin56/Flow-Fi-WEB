@@ -51,8 +51,8 @@ export interface PeopleLedgerRow {
 
 const FILTERS: { value: PeopleFilter; label: string }[] = [
   { value: "all", label: "All" },
-  { value: "theyOwe", label: "They owe you" },
-  { value: "iOwe", label: "You owe them" },
+  { value: "theyOwe", label: "You need to receive" },
+  { value: "iOwe", label: "You need to give" },
   { value: "settled", label: "Settled" },
 ];
 
@@ -361,17 +361,17 @@ export function PeopleCycleSummary({ rows }: { rows: PeopleLedgerRow[] }) {
       className={cn(LE_RADIUS.panel, "flex flex-col border border-border bg-card shadow-e1 sm:flex-row sm:items-stretch")}
     >
       <div className="flex flex-1 flex-col gap-1.5 px-5 py-4 sm:px-6">
-        <span className={LABEL}>To receive this cycle</span>
+        <span className={LABEL}>You need to receive · this cycle</span>
         <Money amount={Math.round(toReceive)} className="text-[32px] leading-none text-foreground sm:text-[38px]" />
         <span className="text-xs text-muted-foreground">
           {receiveCount === 0
-            ? "No one owes you at the end of this cycle"
+            ? "Nothing to receive at the end of this cycle"
             : `Across ${receiveCount} ${receiveCount === 1 ? "person" : "people"}`}
         </span>
       </div>
       <div className="grid grid-cols-2 border-t border-border sm:w-80 sm:border-t-0 sm:border-l">
         <div className="flex flex-col gap-1 px-5 py-3.5 sm:justify-center">
-          <span className={LABEL}>You owe</span>
+          <span className={LABEL}>You need to give</span>
           <Money amount={Math.round(toPay)} className={cn("text-lg leading-none", toPay > 0 ? "text-expense" : "text-muted-foreground")} />
           <span className="text-xs text-muted-foreground">
             {payCount === 0 ? "Nothing" : `${payCount} ${payCount === 1 ? "person" : "people"}`}

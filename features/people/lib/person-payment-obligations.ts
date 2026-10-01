@@ -101,7 +101,7 @@ export function obligationSourceLabel(o: Pick<PayableObligation, "category" | "t
     case "split":
       return "Split expense";
     default:
-      return o.side === "theyOwe" ? `${firstName} owes you` : `You owe ${firstName}`;
+      return o.side === "theyOwe" ? `You need to receive from ${firstName}` : `You need to give to ${firstName}`;
   }
 }
 

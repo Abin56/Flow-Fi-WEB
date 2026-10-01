@@ -23,7 +23,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import Link from "next/link";
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { LedgerRowHandlers } from "@/features/people/components/person-activity-feed";
 import { EntryEditForm, EntrySettleForm, InlineReveal, isEditable, LoanPayLink, DELETE_BLOCK_NOTE } from "@/features/people/components/workspace/ledger-ui";
@@ -572,6 +572,18 @@ export interface SettlementTableProps {
 
 export function SettlementTable({ personId, personName, rows, carriedRows = [], isLoading, lookups, accountForEntry, handlers, empty, cycleLabelOf, className, linkedTrail }: SettlementTableProps) {
   const [openKey, setOpenKey] = useState<string | null>(null);
+  // Deep link from a lender-payment screen (`?obligation=<row key>`): open and scroll to that row once.
+  const deepLinkedRef = useRef(false);
+  useEffect(() => {
+    if (deepLinkedRef.current || isLoading || typeof window === "undefined") return;
+    const key = new URLSearchParams(window.location.search).get("obligation");
+    if (!key || ![...rows, ...carriedRows].some((r) => r.key === key)) return;
+    deepLinkedRef.current = true;
+    requestAnimationFrame(() => {
+      setOpenKey(key);
+      [...document.querySelectorAll<HTMLElement>(`[data-obligation-key="${CSS.escape(key)}"]`)].find((el) => el.offsetParent != null)?.scrollIntoView({ block: "center", behavior: "smooth" });
+    });
+  }, [isLoading, rows, carriedRows]);
 
   if (isLoading) {
     return (
@@ -609,6 +621,7 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
     return (
       <Fragment key={row.key}>
         <tr
+          data-obligation-key={row.key}
           onClick={() => toggle(row)}
           aria-expanded={open}
           // Keyboard: the row is one tab stop; Enter/Space expands it (only when the row itself is focused,
@@ -666,7 +679,7 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
     const open = isOpen(row);
     const fam = FAMILY[v.family];
     return (
-      <li key={row.key} className={cn("border-b border-l-[4px] border-b-border-strong/55", fam.tint, fam.edge)}>
+      <li key={row.key} data-obligation-key={row.key} className={cn("border-b border-l-[4px] border-b-border-strong/55", fam.tint, fam.edge)}>
         <button type="button" onClick={() => toggle(row)} aria-expanded={open} className="block w-full px-3 py-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">

@@ -205,7 +205,7 @@ function AdvancePosition({ statement, personName }: { statement: PersonCycleStat
         )}
         {offsets && (
           <div className="flex justify-between gap-3">
-            <dt className="text-foreground/80">{statement.direction === "theyOwe" ? `${first} owes you (gross)` : `You owe ${first} (gross)`}</dt>
+            <dt className="text-foreground/80">{statement.direction === "theyOwe" ? `You need to receive from ${first} (gross)` : `You need to give to ${first} (gross)`}</dt>
             <dd className="font-semibold tabular-nums">{money(statement.amount)}</dd>
           </div>
         )}

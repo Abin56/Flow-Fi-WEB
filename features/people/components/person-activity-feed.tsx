@@ -37,7 +37,7 @@ export function CarriedForwardNote({
       <span className="font-bold tracking-[0.06em] text-settle-carried-text uppercase">Brought forward</span>
       <span className="font-heading text-sm font-bold text-foreground tabular-nums">{money(carried.amount)}</span>
       <span className="font-medium text-foreground/75">
-        {carried.direction === "theyOwe" ? `${first} owes you` : `You owe ${first}`} · from earlier cycles — not new activity
+        {carried.direction === "theyOwe" ? `You need to receive from ${first}` : `You need to give to ${first}`} · from earlier cycles — not new activity
       </span>
     </div>
   );

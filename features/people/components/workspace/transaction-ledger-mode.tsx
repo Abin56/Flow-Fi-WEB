@@ -163,7 +163,7 @@ export function TransactionLedgerMode({
   const position = scope === "cycle" && statement ? { direction: statement.direction, amount: statement.amount } : balance;
   const positionTone = position?.direction === "theyOwe" ? "text-settle-receivable-text" : position?.direction === "iOwe" ? "text-settle-payable-text" : "text-success";
   const PositionIcon = position?.direction === "theyOwe" ? ArrowDownLeft : position?.direction === "iOwe" ? ArrowUpRight : Check;
-  const headline = position?.direction === "theyOwe" ? `${firstName} owes you` : position?.direction === "iOwe" ? `You owe ${firstName}` : "All settled";
+  const headline = position?.direction === "theyOwe" ? `You need to receive from ${firstName}` : position?.direction === "iOwe" ? `You need to give to ${firstName}` : "All settled";
 
   const slide = cn("animate-in duration-[220ms] ease-out fade-in-0", direction === "forward" ? "slide-in-from-right-4" : "slide-in-from-left-4");
 
@@ -196,7 +196,7 @@ export function TransactionLedgerMode({
                 </span>
                 {scope === "cycle" && balance && (
                   <span className="text-xs font-medium text-foreground/65">
-                    Overall {balance.direction === "settled" ? "settled" : `${balance.direction === "theyOwe" ? `${firstName} owes you` : `you owe ${firstName}`} ${money(balance.amount)}`}
+                    Overall {balance.direction === "settled" ? "settled" : `${balance.direction === "theyOwe" ? `you need to receive ${money(balance.amount)} from ${firstName}` : `you need to give ${money(balance.amount)} to ${firstName}`}`}
                   </span>
                 )}
               </div>

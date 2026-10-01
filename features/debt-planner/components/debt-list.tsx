@@ -118,8 +118,14 @@ function OwnershipBreakdown({ p, required }: { p: DebtPosition; required: number
         total={{ label: "Total outstanding", amount: o.total }}
       />
       <p className="text-xs text-foreground/80">
-        Others owe you <strong className="tabular-nums text-foreground">{formatCurrency(o.othersTotal)}</strong> of this.
-        {required > 0 && <> This cycle the lender still expects {formatCurrency(required)} from you — about {formatCurrency(reqOthers)} of it is others&apos; share.</>}
+        <strong className="tabular-nums text-foreground">{formatCurrency(o.othersTotal)}</strong> of this is allocated to others — their ownership of the
+        debt, not necessarily what they still owe you (see People).
+        {required > 0 && (
+          <>
+            {" "}This cycle the lender still expects {formatCurrency(required)} from you — about {formatCurrency(reqOthers)} of it is others&apos; share
+            {p.sourceType === "creditCard" ? " (estimated from the card's overall split)" : ""}.
+          </>
+        )}
       </p>
     </div>
   );
