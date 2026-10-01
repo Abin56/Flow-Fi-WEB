@@ -3,10 +3,8 @@
 import { Stagger, StaggerItem } from "@/components/foundation/animated-container";
 import { AccountsOverviewCard } from "@/features/dashboard/components/accounts-overview-card";
 import { AttentionRow } from "@/features/dashboard/components/attention-row";
-import { BudgetsOverviewCard } from "@/features/dashboard/components/budgets-overview-card";
 import { CashFlowCard } from "@/features/dashboard/components/cash-flow-card";
 import { CreditUtilizationCard } from "@/features/dashboard/components/credit-utilization-card";
-import { DebtPlanCard } from "@/features/dashboard/components/debt-plan-card";
 import { DashboardHeader } from "@/features/dashboard/components/dashboard-header";
 import { ExpensesByCategoryCard } from "@/features/dashboard/components/expenses-by-category-card";
 import { NetWorthHero } from "@/features/dashboard/components/net-worth-hero";
@@ -19,9 +17,9 @@ import { useUserPreferences } from "@/features/settings/hooks/use-user-preferenc
 /**
  * Dashboard, ordered by information priority:
  *  1. Headline — net worth beside this month's cash flow.
- *  2. Attention — anything overdue / at risk, right under the headline; then the Debt Planner summary.
+ *  2. Attention — anything overdue / at risk, right under the headline.
  *  3. Activity — recent transactions beside upcoming payments.
- *  4. Composition — accounts, spending by category, budgets.
+ *  4. Composition — accounts beside spending by category.
  *  5. Credit utilization + shortcuts.
  * Every figure is live (`useDashboardData`); nothing here reads mock data.
  */
@@ -52,10 +50,6 @@ export default function DashboardPage() {
       </StaggerItem>
 
       <StaggerItem>
-        <DebtPlanCard />
-      </StaggerItem>
-
-      <StaggerItem>
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           <RecentTransactionsCard recentTransactions={data.recentTransactions} isLoading={data.isLoading} />
           <UpcomingPaymentsCard payments={data.upcomingPayments} isLoading={data.isLoading} />
@@ -63,10 +57,9 @@ export default function DashboardPage() {
       </StaggerItem>
 
       <StaggerItem>
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           <AccountsOverviewCard accountsOverview={data.accountsOverview} isLoading={data.isLoading} />
           <ExpensesByCategoryCard expensesByCategory={data.expensesByCategory} isLoading={data.isLoading} />
-          <BudgetsOverviewCard budgetsOverview={data.budgetsOverview} isLoading={data.isLoading} />
         </div>
       </StaggerItem>
 

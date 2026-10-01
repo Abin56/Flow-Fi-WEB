@@ -460,6 +460,15 @@ function mostRecentClosedCycleForCard(card: CreditCardProfile, now?: Date): Stat
   return periodEndingFor(card, addMonths(current.periodEnd, -1));
 }
 
+/**
+ * The statement window (period + due date) that owns `date` on `card` — the same
+ * `CycleAnchor(card.statementDay)` + due-day math `currentCycleFor`/`materializeIfDue` use, exported
+ * read-only so derived (not-yet-materialized) bills land in exactly the cycle a statement would.
+ */
+export function statementWindowForDate(card: CreditCardProfile, date: Date): StatementPeriodWindow {
+  return currentCycleForCard(card, date);
+}
+
 function periodContains(period: StatementPeriodWindow, date: Date): boolean {
   const day = new Date(date.getFullYear(), date.getMonth(), date.getDate());
   const start = new Date(period.periodStart.getFullYear(), period.periodStart.getMonth(), period.periodStart.getDate());
@@ -494,10 +503,11 @@ export function unbilledSpendForCard(
     new Date(0),
   );
   const now = new Date();
-  // Incoming transfer legs are bill payments (see `isCardBillPaymentLeg`) — they settle the
-  // liability via `settleCardPayments`, never add to it as spend.
+  // Same inclusion rule as a statement (`countsTowardCardStatement`): unbilled spend is exactly what the
+  // next statement will bill. Incoming transfer legs are bill payments (see `isCardBillPaymentLeg`) —
+  // they settle the liability via `settleCardPayments`, never add to it as spend.
   const totalAmount = cardTransactions
-    .filter((t) => t.deletedAt == null && !isCardBillPaymentLeg(t) && t.dateTime.getTime() > billedThrough.getTime())
+    .filter((t) => countsTowardCardStatement(t) && t.dateTime.getTime() > billedThrough.getTime())
     .reduce((sum, t) => sum + t.amount, 0);
   return { periodStart: billedThrough, periodEnd: now, totalAmount };
 }
@@ -821,6 +831,17 @@ export class StatementPaymentRepository extends FirestoreCrudRepository<Statemen
 }
 
 /**
+ * The ONE rule for whether a card-account transaction is billable card liability — shared by statement
+ * totals, unbilled spend, derived Month Cycle bills and (by definition) `emiPurchaseRepresentedOnCard`:
+ * active, calculable, and not a transfer leg. Excluded rows are outside every financial total (and
+ * `balanceEffect` zeroes them); a card-linked EMI whose purchase is excluded or a transfer is owned by
+ * the EMI lock instead (Case C), so counting it here too would double the exposure.
+ */
+export function countsTowardCardStatement(t: Transaction): boolean {
+  return t.deletedAt == null && !t.excludeFromCalculations && !isTransfer(t);
+}
+
+/**
  * The one definition of a statement period's total (see `StatementRepository.totalFor`, which
  * delegates here) — exported so every standing can recompute a closed statement's LIVE total
  * instead of trusting the stale materialized `totalAmount`. Mirrors Flutter's
@@ -828,12 +849,6 @@ export class StatementPaymentRepository extends FirestoreCrudRepository<Statemen
  */
 export function statementPeriodTotal(cardTransactions: Transaction[], period: { periodStart: Date; periodEnd: Date }): number {
   return cardTransactions
-    .filter(
-      (t) =>
-        t.deletedAt == null &&
-        !t.excludeFromCalculations &&
-        !isTransfer(t) &&
-        periodContains(period as StatementPeriodWindow, t.dateTime),
-    )
+    .filter((t) => countsTowardCardStatement(t) && periodContains(period as StatementPeriodWindow, t.dateTime))
     .reduce((sum, t) => sum + t.amount, 0);
 }

@@ -5,7 +5,6 @@ import {
   Landmark,
   LifeBuoy,
   MessageSquareText,
-  PiggyBank,
   Receipt,
   Repeat,
   Settings,
@@ -46,7 +45,6 @@ export const NAV_ITEMS: NavItem[] = [
   { label: "Credit Cards", href: "/credit-cards", icon: CreditCard, section: "Daily Money" },
   { label: "People Ledger", href: "/people", icon: Users, section: "Daily Money" },
 
-  { label: "Budgets", href: "/budgets", icon: PiggyBank, section: "Plan" },
   { label: "Bills", href: "/bills", icon: Repeat, section: "Plan" },
   { label: "Savings", href: "/savings", icon: Target, section: "Plan" },
 

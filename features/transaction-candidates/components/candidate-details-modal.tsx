@@ -69,6 +69,7 @@ import {
   type CandidateImportDraft,
 } from "../lib/candidate-details-view";
 import type { CandidateDuplicateResult } from "../lib/candidate-duplicate";
+import { scheduleDelayedDismiss } from "../lib/delayed-dismiss";
 import { ignoreCandidate, importCandidate, type CandidatePersonAssignment } from "../lib/import-candidate";
 import { CandidateStatusBadge } from "./candidate-status-badge";
 import { handleEnterKey } from "@/components/ui/enter-key";
@@ -118,6 +119,8 @@ export function CandidateDetailsModal({
   candidateRepository,
   expenseRepository,
   onCreatePerson,
+  onHide,
+  onUnhide,
 }: {
   candidate: SmsTransactionCandidate | null;
   onOpenChange: (open: boolean) => void;
@@ -135,6 +138,10 @@ export function CandidateDetailsModal({
   candidateRepository: SmsTransactionCandidateRepository;
   expenseRepository: ExpenseRepository;
   onCreatePerson: (name: string) => Promise<Person>;
+  /** Hides this candidate from every list view right away, before the real delayed delete runs. */
+  onHide: (candidateId: string) => void;
+  /** Restores visibility — called when the toast's Undo is clicked, or if the delayed delete itself fails. */
+  onUnhide: (candidateId: string) => void;
 }) {
   // Never `null` — unlike `TransactionManageModal`'s own `draft`, this one is read unconditionally
   // in the very first render pass below (see the reset block right after `open`), and a `null`
@@ -173,6 +180,7 @@ export function CandidateDetailsModal({
     setDraft(initialImportDraft(candidate));
     setPendingDuplicate(null);
     setConfirmDismissOpen(false);
+    setDismissing(false);
   } else if (!open && draftSessionCandidateId !== null) {
     setDraftSessionCandidateId(null);
   }
@@ -265,19 +273,29 @@ export function CandidateDetailsModal({
     setDraft({ ...currentDraft, participants: currentDraft.participants.filter((_, i) => i !== index) });
   }
 
-  async function handleDismiss() {
+  /**
+   * Same delayed "Dismiss with Undo" as the list's `IgnoreCandidateButton` (`scheduleDelayedDismiss`):
+   * hides the candidate right away, deletes only after the undo window, and the toast's Undo cancels it.
+   * `dismissing` guards against scheduling a second dismissal (e.g. a repeated Enter) for this open.
+   */
+  function handleDismiss() {
     if (dismissing) return;
     setDismissing(true);
-    try {
-      await ignoreCandidate(currentCandidate, candidateRepository);
-      toast.success("Candidate dismissed");
-      setConfirmDismissOpen(false);
-      onOpenChange(false);
-    } catch (error) {
-      toast.error("Couldn't dismiss this candidate", error instanceof Error ? error.message : undefined);
-    } finally {
-      setDismissing(false);
-    }
+    const { cancel } = scheduleDelayedDismiss({
+      candidateId: currentCandidate.id,
+      hide: onHide,
+      unhide: onUnhide,
+      commitDelete: () => ignoreCandidate(currentCandidate, candidateRepository),
+      onDeleteFailed: (error) => {
+        toast.error("Couldn't dismiss this candidate", error instanceof Error ? error.message : undefined);
+      },
+    });
+    toast.success("Candidate dismissed", `${currentCandidate.merchant ?? currentCandidate.bankName ?? "Transaction"} won't show in the review queue.`, {
+      label: "Undo",
+      onClick: cancel,
+    });
+    setConfirmDismissOpen(false);
+    onOpenChange(false);
   }
 
   return (
@@ -663,15 +681,15 @@ export function CandidateDetailsModal({
             <DialogTitle>Dismiss this candidate?</DialogTitle>
             <DialogDescription>
               &ldquo;{currentCandidate.merchant ?? currentCandidate.bankName ?? "This SMS transaction"}&rdquo; (
-              {formatCurrencyPrecise(currentCandidate.amount)}) will be removed from the review queue without creating a transaction. This can&apos;t be
-              undone from here.
+              {formatCurrencyPrecise(currentCandidate.amount)}) will be removed from the review queue without creating a transaction. You&apos;ll get a
+              few seconds to undo from the confirmation toast.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setConfirmDismissOpen(false)} disabled={dismissing}>
               Cancel
             </Button>
-            <Button variant="destructive" onClick={() => void handleDismiss()} disabled={dismissing}>
+            <Button variant="destructive" onClick={handleDismiss} disabled={dismissing}>
               {dismissing ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
               Dismiss candidate
             </Button>

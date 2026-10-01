@@ -1039,8 +1039,7 @@ export class LoanRepository extends FirestoreCrudRepository<Loan> {
    * is already editable via `editLoan`.
    */
   async editLoanDate(loan: Loan, params: EditLoanDateParams): Promise<Loan> {
-    const { newLoanDate, hasPayments, currentInstallments } = params;
-    const firstDueDate = currentInstallments[0]?.dueDate ?? loan.loanDate;
+    const { newLoanDate, hasPayments } = params;
 
     if (loan.repaymentType !== "installment") {
       throw new Error("Only installment loans have an editable loan date");
@@ -1055,61 +1054,6 @@ export class LoanRepository extends FirestoreCrudRepository<Loan> {
     updatedLoanDate = { ...updatedLoanDate, loanDate: newLoanDate };
     await this.update(updatedLoanDate);
     return updatedLoanDate;
-
-    const installmentRepository = this.installmentRepositoryFor(loan.scheduleId);
-    for (const installment of currentInstallments) {
-      await installmentRepository.softDelete(installment);
-    }
-
-    let precomputed: PrecomputedInstallmentAmount[] | undefined;
-    const interest = loan.interest;
-    if (interest != null) {
-      const breakdown = calculate({
-        principal: loan.loanAmount,
-        type: interest.type,
-        ratePercent: interest.ratePercent,
-        period: interest.period,
-        installmentCount: loan.installmentCount!,
-        installmentFrequency: "monthly",
-        installmentsPerYear: installmentsPerYearFor(loan.installmentFrequency!),
-      });
-      precomputed = precomputedFromPeriods(breakdown.periods);
-    }
-
-    const schedule = await this.paymentScheduleRepository.getByKey(loan.scheduleId);
-    const totalAmount =
-      precomputed == null ? loan.loanAmount : precomputed.reduce((sum, p) => sum + p.amountDue, 0);
-    if (schedule != null) {
-      await this.paymentScheduleRepository.editSchedule(schedule, {
-        totalAmount,
-        firstDueDate,
-      });
-    }
-
-    await installmentRepository.generateInstallments(
-      {
-        id: loan.scheduleId,
-        ownerType: "loan",
-        ownerId: loan.id,
-        totalAmount,
-        scheduleType: loan.installmentFrequency!,
-        firstDueDate,
-        customIntervalDays: null,
-        installmentCount: loan.installmentCount!,
-        notes: "",
-        createdAt: loan.createdAt,
-        deletedAt: null,
-        lastEditedAt: null,
-        editHistory: [],
-      },
-      // Pinned to the loan date's day like Flutter's `editLoanDate` — see `createLoan`.
-      { precomputedAmounts: precomputed, dueDayOfMonth: firstDueDate.getDate() },
-    );
-
-    let updated = recordEdit(loan, "loanDate", loan.loanDate.toISOString(), newLoanDate.toISOString());
-    updated = { ...updated, loanDate: newLoanDate };
-    await this.update(updated);
-    return updated;
   }
 
   /** Changes only the schedule anchor; the loan-taken date stays untouched. */

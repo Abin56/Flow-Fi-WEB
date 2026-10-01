@@ -42,7 +42,7 @@ import { loanCycleDues, loanCycleDueTotals, type LoanCycleDue } from "@/lib/engi
 import { formatCurrency } from "@/lib/format";
 import { usePeopleRows, usePeopleStats } from "@/features/people/hooks/use-people-data";
 import { useUserPreferences } from "@/features/settings/hooks/use-user-preferences";
-import { CycleAnchor } from "@/lib/engines/cycle-engine";
+import { cycleRangeFor, isInCycle, isOwedInCycle, shiftMonthsClamped } from "@/lib/engines/month-cycle-range";
 import {
   amountFor,
   percentChange,
@@ -60,53 +60,12 @@ import type { Account } from "@/lib/models/account";
 import { billOccurrenceRemainingAmount, billOccurrenceStatus, type Bill } from "@/lib/models/bill";
 import type { Budget } from "@/lib/models/budget";
 import type { Category } from "@/lib/models/category";
-import { statementRemainingAmount, statementStatus, type CreditCardProfile, type Statement } from "@/lib/models/credit-card";
+import type { CreditCardProfile, Statement } from "@/lib/models/credit-card";
+import { cardBillsDueInCycle, cardBillsForCard } from "@/lib/engines/card-cycle-bills";
 import { isSplit, myShare, type Expense } from "@/lib/models/expense";
 import { compareTransactionsNewestFirst, effectiveMonth, isLoanPrincipalDisbursement, isNonIncomeExpenseMovement, isTransfer, type Transaction } from "@/lib/models/transaction";
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
-
-/**
- * The user's configured Month Cycle window containing `now` — a plain
- * calendar month when `startDay` is 1 (every existing user's default,
- * unchanged), otherwise the `startDay`-to-`startDay`-minus-a-day-next-month
- * window built on the same `CycleAnchor` engine credit card statement cycles
- * already use (anchored one day early, at `startDay - 1`, since the engine's
- * anchor day is defined as the cycle's *closing* day — anchoring at
- * `startDay - 1` makes `startDay` itself the first day of the next cycle).
- */
-function cycleRangeFor(startDay: number, now: Date): { start: Date; end: Date } {
-  if (startDay <= 1) {
-    return {
-      start: new Date(now.getFullYear(), now.getMonth(), 1),
-      end: new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999),
-    };
-  }
-  const period = new CycleAnchor(startDay - 1).currentCycleFor(now);
-  return {
-    start: new Date(period.start.getFullYear(), period.start.getMonth(), period.start.getDate()),
-    end: new Date(period.end.getFullYear(), period.end.getMonth(), period.end.getDate(), 23, 59, 59, 999),
-  };
-}
-
-function isInCycle(date: Date, range: { start: Date; end: Date }): boolean {
-  return date.getTime() >= range.start.getTime() && date.getTime() <= range.end.getTime();
-}
-
-/**
- * `date` shifted by `months` calendar months, day-of-month clamped to the target month's last
- * valid day (so e.g. 31 Aug + 1 month lands on 30 Sep, not rolls over into October) — used to
- * step the cycle-switcher between cycles. A fixed day-of-month shift always lands somewhere
- * inside the target cycle's ~month-long window, since each cycle corresponds to exactly one
- * such step regardless of `startDay`.
- */
-function shiftMonthsClamped(date: Date, months: number): Date {
-  const targetMonthIndex = date.getMonth() + months;
-  const targetYear = date.getFullYear() + Math.floor(targetMonthIndex / 12);
-  const targetMonth = ((targetMonthIndex % 12) + 12) % 12;
-  const lastDayOfTargetMonth = new Date(targetYear, targetMonth + 1, 0).getDate();
-  return new Date(targetYear, targetMonth, Math.min(date.getDate(), lastDayOfTargetMonth));
-}
 
 /**
  * The date a transaction should be bucketed under for "this cycle" totals —
@@ -387,7 +346,7 @@ export function useMonthCycleData() {
     for (const row of emiRows) {
       if (row.status === "closed" || row.status === "completed") continue;
       const due = row.nextInstallment?.dueDate;
-      if (!due || !isInCycle(due, cycleRange)) continue;
+      if (!due || !isOwedInCycle(due, cycleRange, now)) continue;
       const amount = row.nextInstallment ? row.nextInstallment.amountDue - row.nextInstallment.amountPaid : 0;
       total += amount;
       items.push({
@@ -437,28 +396,32 @@ export function useMonthCycleData() {
 
   // --- Credit card statements due this month, unpaid ---
   const cardsThisMonth = useMemo(() => {
-    const cardById = new Map((creditCards as CreditCardProfile[]).map((c) => [c.id, c]));
     const items: MonthCycleUpcomingItem[] = [];
     let total = 0;
-    for (const statement of statements as Statement[]) {
-      if (statementStatus(statement) === "paid") continue;
-      if (!isInCycle(statement.dueDate, cycleRange)) continue;
-      const remaining = statementRemainingAmount(statement);
-      total += remaining;
-      const card = cardById.get(statement.cardId);
-      items.push({
-        id: statement.id,
-        title: card ? `Card •••• ${card.lastFourDigits ?? ""}` : "Credit Card",
-        subtitle: "Statement due",
-        amount: remaining,
-        dueDate: statement.dueDate,
-        daysLeft: daysLeftIn(statement.dueDate, now),
-        metaLabel: `Due on ${formatShortDate(statement.dueDate)}`,
-      });
+    let carriedOverdue = 0;
+    for (const card of creditCards as CreditCardProfile[]) {
+      const cardTransactions = (transactions as Transaction[]).filter((t) => t.accountId === card.accountId);
+      const bills = cardBillsForCard(card, cardTransactions, statements as Statement[], now);
+      for (const bill of cardBillsDueInCycle(bills, cycleRange, now)) {
+        total += bill.remaining;
+        if (bill.carriedForward) carriedOverdue += bill.remaining;
+        items.push({
+          id: `${card.id}:${bill.id}`,
+          title: `Card •••• ${card.lastFourDigits ?? ""}`,
+          subtitle: bill.isClosed
+            ? `Statement ${formatShortDate(bill.periodStart)} – ${formatShortDate(bill.periodEnd)}`
+            : `Current cycle · closes ${formatShortDate(bill.periodEnd)}`,
+          amount: bill.remaining,
+          dueDate: bill.dueDate,
+          daysLeft: daysLeftIn(bill.dueDate, now),
+          metaLabel: bill.overdue ? `Overdue · due ${formatShortDate(bill.dueDate)}` : `Due on ${formatShortDate(bill.dueDate)}`,
+        });
+      }
     }
     items.sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime());
-    return { items, total, count: items.length };
-  }, [creditCards, statements, now, cycleRange]);
+    const round2 = (v: number) => Math.round(v * 100) / 100;
+    return { items, total: round2(total), carriedOverdue: round2(carriedOverdue), count: items.length };
+  }, [creditCards, statements, transactions, now, cycleRange]);
 
   // --- Bills & reminders due this month, unpaid ---
   const billsThisMonth = useMemo(() => {
@@ -469,7 +432,7 @@ export function useMonthCycleData() {
       if (!occurrence) continue;
       const status = billOccurrenceStatus(occurrence, now);
       if (status === "paid" || status === "skipped") continue;
-      if (!isInCycle(occurrence.dueDate, cycleRange)) continue;
+      if (!isOwedInCycle(occurrence.dueDate, cycleRange, now)) continue;
       const remaining = billOccurrenceRemainingAmount(occurrence);
       total += remaining;
       items.push({

@@ -20,7 +20,7 @@
  *    (accounts only track `currentBalance`, not a balance history), so both
  *    are reported as 0 rather than invented.
  *  - `accountsOverview.changeThisMonth` has the same gap, same reason.
- *  - The "Needs Your Attention" row only surfaces bill/budget alerts — EMI
+ *  - The "Needs Your Attention" row only surfaces bill alerts (Budgets are no longer on the Dashboard) — EMI
  *    and Savings-Goal repositories weren't in this pass's scope (only
  *    Budget/Bill/Category were named), so those two alert types are omitted
  *    rather than shown with fake data.
@@ -37,7 +37,6 @@ import { liabilityTotals } from "@/lib/engines/loan-balance-sheet";
 import { useCardUtilizationEmis } from "@/hooks/use-card-utilization-emis";
 import { toLiveUtilizationStatement } from "@/features/credit-cards/hooks/use-credit-cards-data";
 import { useBills } from "@/hooks/use-bills";
-import { useBudgets } from "@/hooks/use-budgets";
 import { useCategories } from "@/hooks/use-categories";
 import {
   useAllCreditCardStatements,
@@ -47,7 +46,6 @@ import {
   useSharedCreditLimits,
 } from "@/hooks/use-credit-cards";
 import { useCashFlowThisMonth, useTransactions } from "@/hooks/use-transactions";
-import { computeBudgetInsight, resolveBudgetPeriod } from "@/lib/engines/budget-insight";
 import {
   creditCardStanding,
   creditUtilizationPercent,
@@ -59,7 +57,6 @@ import {
 } from "@/lib/engines/credit-utilization";
 import type { Account } from "@/lib/models/account";
 import type { Bill } from "@/lib/models/bill";
-import type { Budget } from "@/lib/models/budget";
 import type { Category } from "@/lib/models/category";
 import { myShare, type Expense } from "@/lib/models/expense";
 import { useExpenses } from "@/hooks/use-expenses";
@@ -122,7 +119,6 @@ export interface DashboardNeedsAttentionItem {
 export function useDashboardData() {
   const { data: accounts = [], isLoading: accountsLoading } = useAccounts();
   const { data: transactions = [], isLoading: transactionsLoading } = useTransactions();
-  const { data: budgets = [], isLoading: budgetsLoading } = useBudgets();
   const { data: bills = [], isLoading: billsLoading } = useBills();
   const { data: categories = [], isLoading: categoriesLoading } = useCategories();
   const { data: expenses = [], isLoading: expensesLoading } = useExpenses();
@@ -140,7 +136,6 @@ export function useDashboardData() {
   const isLoading =
     accountsLoading ||
     transactionsLoading ||
-    budgetsLoading ||
     billsLoading ||
     categoriesLoading ||
     expensesLoading ||
@@ -294,55 +289,6 @@ export function useDashboardData() {
 
     return { total, items };
   }, [transactions, categories, now, personalAmount]);
-
-  // --- Budgets Overview (lib/engines/budget-insight.ts:resolveBudgetPeriod/computeBudgetInsight) ---
-  const budgetsOverview = useMemo(() => {
-    const budgetList = budgets as Budget[];
-    const overall = budgetList.find((b) => b.type === "monthly" && b.categoryId == null);
-
-    const spentInPeriod = (categoryId: string | null, periodStart: Date, periodEnd: Date) =>
-      (transactions as Transaction[])
-        .filter(
-          (t) =>
-            t.type === "expense" &&
-            !isNonIncomeExpenseMovement(t) &&
-            t.deletedAt == null &&
-            (categoryId == null || t.categoryId === categoryId) &&
-            t.dateTime.getTime() >= periodStart.getTime() &&
-            t.dateTime.getTime() <= periodEnd.getTime(),
-        )
-        .reduce((sum, t) => sum + personalAmount(t), 0);
-
-    let monthlyBudget = 0;
-    let spent = 0;
-    if (overall) {
-      const period = resolveBudgetPeriod({ type: overall.type, categoryId: overall.categoryId }, now);
-      spent = spentInPeriod(null, period.periodStart, period.periodEnd);
-      monthlyBudget = overall.amount;
-    }
-
-    const categoryBudgets = budgetList.filter((b) => b.categoryId != null);
-    const categoryRows = categoryBudgets.map((budget) => {
-      const period = resolveBudgetPeriod({ type: budget.type, categoryId: budget.categoryId }, now);
-      const categorySpent = spentInPeriod(budget.categoryId, period.periodStart, period.periodEnd);
-      const insight = computeBudgetInsight({
-        limit: budget.amount,
-        spent: categorySpent,
-        periodStart: period.periodStart,
-        periodEnd: period.periodEnd,
-        now,
-      });
-      return {
-        id: budget.id,
-        category: categoryNameFor(budget.categoryId as string, categories as Category[]),
-        spent: insight.spent,
-        limit: insight.limit,
-        alertLevel: insight.alertLevel,
-      };
-    });
-
-    return { monthlyBudget, spent, categories: categoryRows };
-  }, [budgets, transactions, categories, now, personalAmount]);
 
   // --- Recent Transactions (direct Transaction field reads; signedAmount matches mock's +income/-expense convention) ---
   const recentTransactions = useMemo(() => {
@@ -530,7 +476,7 @@ export function useDashboardData() {
       .map(({ dueDate: _dueDate, ...item }) => item);
   }, [bills, creditCards, statements, now]);
 
-  // --- Needs Your Attention (bill/budget alerts only — see gap note above) ---
+  // --- Needs Your Attention (bill alerts only — see gap note above) ---
   const needsAttention = useMemo(() => {
     const items: DashboardNeedsAttentionItem[] = [];
 
@@ -547,24 +493,8 @@ export function useDashboardData() {
       });
     }
 
-    const worstBudget = budgetsOverview.categories
-      .filter((c) => c.alertLevel === "over" || c.alertLevel === "at100" || c.alertLevel === "at90")
-      .sort((a, b) => b.spent / b.limit - a.spent / a.limit)[0];
-    if (worstBudget) {
-      const overPercent = Math.round((worstBudget.spent / worstBudget.limit) * 100 - 100);
-      items.push({
-        id: `attn-budget-${worstBudget.id}`,
-        type: "budget",
-        title: "Budget Alert",
-        subtitle: worstBudget.category,
-        amount: worstBudget.spent,
-        note: overPercent > 0 ? `${overPercent}% over budget` : "Nearing budget limit",
-        cta: "View",
-      });
-    }
-
     return items;
-  }, [upcomingBills, bills, budgetsOverview]);
+  }, [upcomingBills, bills]);
 
   return {
     isLoading,
@@ -572,7 +502,6 @@ export function useDashboardData() {
     cashFlow,
     accountsOverview,
     expensesByCategory,
-    budgetsOverview,
     recentTransactions,
     upcomingBills,
     upcomingPayments,

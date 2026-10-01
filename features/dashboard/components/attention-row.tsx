@@ -52,7 +52,7 @@ export function AttentionRow({ items, isLoading }: AttentionRowProps) {
       <section aria-label="Needs your attention" className={cn(DASH_PANEL, "flex items-center gap-2.5 px-4 py-3 text-sm")}>
         <CheckCircle2 className="size-4.5 shrink-0 text-success" />
         <span className="font-semibold text-foreground">All caught up.</span>
-        <span className="text-muted-foreground">No bills or budgets need attention right now.</span>
+        <span className="text-muted-foreground">No bills need attention right now.</span>
       </section>
     );
   }

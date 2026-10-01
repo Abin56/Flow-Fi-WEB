@@ -92,6 +92,7 @@ import {
 } from "@/features/transactions/hooks/use-transactions-data";
 import { handleEnterKey } from "@/components/ui/enter-key";
 import { handleEnterAdvance } from "@/components/finance/enter-advance";
+import { focusInvalidField, type TxnFormField, type TxnValidationError } from "@/features/transactions/lib/focus-invalid-field";
 
 const DATE_DISPLAY_FORMAT = new Intl.DateTimeFormat("en-IN", { day: "2-digit", month: "short", year: "numeric" });
 /** Solid `border-strong` edge (People Ledger / Loan & EMI rule) — never an opacity-faded border that
@@ -135,12 +136,19 @@ const ACCOUNT_TYPE_ICON: Record<AccountType, LucideIcon> = {
   other: Layers,
 };
 
-/** One label-above-control row — the single field pattern this popup uses throughout. */
-function FormRow({ label, children }: { label: string; children: ReactNode }) {
+/** One label-above-control row — the single field pattern this popup uses throughout. `field` tags the row as a
+ *  submit-validation target (see `focusInvalidField`); `error` marks it invalid with a solid danger ring + short message. */
+function FormRow({ label, children, field, error }: { label: string; children: ReactNode; field?: TxnFormField; error?: string | null }) {
   return (
-    <div className="flex min-w-0 flex-col gap-1.5">
-      <span className="text-xs font-medium text-foreground/80">{label}</span>
-      {children}
+    <div className="flex min-w-0 flex-col gap-1.5" data-field={field} data-invalid={error ? "true" : undefined}>
+      <span className={cn("text-xs font-medium", error ? "text-danger" : "text-foreground/80")}>{label}</span>
+      {/* Always-present wrapper: toggling the ring must not remount the control (that would drop its focus). */}
+      <div className={cn("min-w-0 rounded-[6px]", error && "ring-2 ring-danger")}>{children}</div>
+      {error && (
+        <p role="alert" className="text-[11px] font-medium text-danger">
+          {error}
+        </p>
+      )}
     </div>
   );
 }
@@ -572,6 +580,9 @@ export function TransactionDetailsModal({
   const [justSaved, setJustSaved] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  // Which field the last failed submit pointed at — highlighted only while that field is still the first problem.
+  const [invalidField, setInvalidField] = useState<TxnFormField | null>(null);
+  const formRef = useRef<HTMLFormElement>(null);
   // Set once Done has been pressed on the split view — from then on the split's own problem (if any) shows
   // live on that view and clears itself as the entries are fixed.
   const [splitAttempted, setSplitAttempted] = useState(false);
@@ -627,6 +638,7 @@ export function TransactionDetailsModal({
     }
     setNewPersonName("");
     setFormError(null);
+    setInvalidField(null);
     setSplitAttempted(false);
     setSplitOpen(false);
     setSplitType(expense?.splitType && expense.splitType !== "none" ? expense.splitType : "equal");
@@ -746,33 +758,37 @@ export function TransactionDetailsModal({
     setParticipants((list) => list.filter((_, i) => i !== index));
   }
 
-  function validate(): string | null {
-    if (!description.trim() && kind !== "transfer") return "Description is required.";
+  /** First invalid required field in the form's visual order (Amount → Description → Category → Date → Account →
+   *  To Account → Money given/borrowed → Split), so a failed submit always lands on the topmost problem. */
+  function validate(): TxnValidationError | null {
+    const fail = (field: TxnFormField, message: string): TxnValidationError => ({ field, message });
     const amountValue = Number(amount);
-    if (!amount.trim() || Number.isNaN(amountValue) || amountValue <= 0) return "Enter an amount greater than 0.";
-    if (amountValue !== Math.round(amountValue * 100) / 100) return "Amounts can have at most 2 decimal places.";
-    if (!accountId) return kind === "transfer" ? "Select a source account." : "Select an account.";
+    if (!amount.trim() || Number.isNaN(amountValue) || amountValue <= 0) return fail("amount", "Enter an amount greater than 0.");
+    if (amountValue !== Math.round(amountValue * 100) / 100) return fail("amount", "Amounts can have at most 2 decimal places.");
+    if (!description.trim() && kind !== "transfer") return fail("description", "Description is required.");
+    if (kind !== "transfer" && !categoryId) return fail("category", "Select a category.");
+    if (!date) return fail("date", "Select a date.");
+    const dateValue = new Date(date);
+    const today = new Date();
+    today.setHours(23, 59, 59, 999);
+    if (dateValue.getTime() > today.getTime()) return fail("date", "Date can't be in the future.");
+    const earliestAllowed = new Date("2000-01-01");
+    if (dateValue.getTime() < earliestAllowed.getTime()) return fail("date", "Enter a valid date.");
+    if (!accountId) return fail("account", kind === "transfer" ? "Select a source account." : "Select an account.");
     // The destination-account picker only applies to creating a new transfer — an existing
     // transfer leg's amount/account/date are read-only (see isTransferLeg below), so
     // destinationAccountId is never part of what gets saved for one.
     if (kind === "transfer" && !isTransferLeg) {
-      if (!destinationAccountId) return "Select a destination account.";
-      if (destinationAccountId === accountId) return "Source and destination accounts must differ.";
+      if (!destinationAccountId) return fail("destination", "Select a destination account.");
+      if (destinationAccountId === accountId) return fail("destination", "Source and destination accounts must differ.");
     }
-    if (kind !== "transfer" && !categoryId) return "Select a category.";
+    // Assigning to a person needs an explicit direction — never defaulted for the user.
     if (!transaction && kind === "expense" && personId != null && !splitOpen && !personEntryType) {
-      return "Choose Money I Gave or Money I Borrowed for this person.";
+      return fail("personDirection", "Select Money given or Money borrowed.");
     }
-    if (!date) return "Select a date.";
-    const dateValue = new Date(date);
-    const today = new Date();
-    today.setHours(23, 59, 59, 999);
-    if (dateValue.getTime() > today.getTime()) return "Date can't be in the future.";
-    const earliestAllowed = new Date("2000-01-01");
-    if (dateValue.getTime() < earliestAllowed.getTime()) return "Enter a valid date.";
     if (splitOpen) {
       const problem = validateSplit();
-      if (problem) return problem;
+      if (problem) return fail("split", problem);
     }
     return null;
   }
@@ -817,6 +833,11 @@ export function TransactionDetailsModal({
     setView("form");
   }
   const splitProblem = splitAttempted && splitOpen ? validateSplit() : null;
+  // Live field highlight: the field the last submit flagged stays marked until it's fixed.
+  const liveInvalid = invalidField != null ? validate() : null;
+  const fieldError = (field: TxnFormField) => (liveInvalid?.field === field ? liveInvalid.message : null);
+  // A field-validation banner clears together with its field's highlight once that field is fixed.
+  const showFormError = formError != null && (invalidField == null || liveInvalid?.field === invalidField);
 
   // Re-entry gate for handleSave: `saving` only flips after the async duplicate check, so without this a
   // rapid double Enter (or Enter + click) could start two saves. Gates re-entry only — no save logic here.
@@ -835,10 +856,14 @@ export function TransactionDetailsModal({
     if (saving || justSaved) return;
     const validationError = validate();
     if (validationError) {
-      setFormError(validationError);
+      // No save: jump straight to the first invalid field (scrolled into view, focused) so the user can fix it.
+      setFormError(validationError.message);
+      setInvalidField(validationError.field);
+      focusInvalidField(formRef.current, validationError.field);
       return;
     }
     setFormError(null);
+    setInvalidField(null);
 
     const amountValue = Number(amount);
     const dateTime = new Date(date);
@@ -1143,6 +1168,7 @@ export function TransactionDetailsModal({
           {/* Real <form> (display: contents keeps the flex layout): Enter in a single-line field saves through
               the same handleSave as the button. On the split view, Enter / Done checks the split is complete before returning. */}
           <form
+            ref={formRef}
             className="contents"
             noValidate
             onKeyDown={handleEnterAdvance}
@@ -1381,7 +1407,7 @@ export function TransactionDetailsModal({
                   className="flex flex-col"
                 >
             <div className={cn("flex flex-col gap-3 px-4 pt-4 pb-4 transition-colors sm:px-5", KIND_HERO_BG[kind])}>
-            {formError && (
+            {showFormError && (
               <motion.p
                 initial={{ opacity: 0, y: -4 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -1417,9 +1443,12 @@ export function TransactionDetailsModal({
             />
 
             <div
+              data-field="amount"
+              data-invalid={fieldError("amount") ? "true" : undefined}
               className={cn(
                 "flex flex-col gap-1 rounded-[8px] border border-l-[4px] border-border-strong bg-card px-4 py-3 shadow-sm transition-colors focus-within:border-primary-accent-text",
                 KIND_BORDER_CLASS[kind],
+                fieldError("amount") && "border-danger ring-2 ring-danger focus-within:border-danger",
               )}
             >
               <div className="flex items-center justify-between gap-2">
@@ -1460,9 +1489,14 @@ export function TransactionDetailsModal({
                   )}
                 />
               </div>
+              {fieldError("amount") && (
+                <p role="alert" className="text-[11px] font-medium text-danger">
+                  {fieldError("amount")}
+                </p>
+              )}
             </div>
 
-              <FormRow label={kind === "transfer" ? "Description" : "Description *"}>
+              <FormRow label={kind === "transfer" ? "Description" : "Description *"} field="description" error={fieldError("description")}>
                 <Input
                   ref={descriptionRef}
                   value={description}
@@ -1476,7 +1510,7 @@ export function TransactionDetailsModal({
             <FormSection icon={Shapes} title="Details">
               <div className={cn("grid grid-cols-1 gap-3", kind !== "transfer" && "sm:grid-cols-2")}>
                 {kind !== "transfer" && (
-                  <FormRow label="Category *">
+                  <FormRow label="Category *" field="category" error={fieldError("category")}>
                     <CategorySelect
                       categories={filteredCategories}
                       value={categoryId}
@@ -1485,7 +1519,7 @@ export function TransactionDetailsModal({
                     />
                   </FormRow>
                 )}
-                <FormRow label="Date *">
+                <FormRow label="Date *" field="date" error={fieldError("date")}>
                   <DateInput
                     ref={dateRef}
                     value={date}
@@ -1499,7 +1533,7 @@ export function TransactionDetailsModal({
 
             <FormSection icon={kind === "income" ? ArrowDownToLine : Wallet} title={kind === "income" ? "Received in" : kind === "transfer" ? "Accounts" : "Paid from"}>
             <div className={cn("grid grid-cols-1 gap-3", kind === "transfer" && !isTransferLeg && "sm:grid-cols-2")}>
-              <FormRow label={kind === "transfer" ? "From Account *" : "Account *"}>
+              <FormRow label={kind === "transfer" ? "From Account *" : "Account *"} field="account" error={fieldError("account")}>
                 {isTransferLeg ? (
                   <div className={cn("flex h-9 w-full items-center gap-1.5 rounded-[6px] border bg-secondary px-3 text-sm font-medium text-foreground/80", FIELD_BORDER)}>
                     <Lock className="size-3.5 text-muted-foreground" strokeWidth={1.75} />
@@ -1521,7 +1555,7 @@ export function TransactionDetailsModal({
               </FormRow>
 
               {kind === "transfer" && !isTransferLeg && (
-                <FormRow label="To Account *">
+                <FormRow label="To Account *" field="destination" error={fieldError("destination")}>
                   <AccountSelect
                     accounts={accounts.filter((a) => a.id !== accountId)}
                     value={destinationAccountId}
@@ -1665,18 +1699,44 @@ export function TransactionDetailsModal({
                         // the same `applyOwesPersonChange` expense-assignment path as edit mode;
                         // "I Borrowed" records a plain descriptive link on the transaction plus one
                         // `addLedgerEntry` call, mirroring what the People page itself does.
-                        <div className="grid grid-cols-1 gap-2 min-[420px]:grid-cols-2">
-                          {PERSON_ENTRY_OPTIONS.map((o) => {
+                        //
+                        // One required, mutually exclusive choice (radio group, roving tabindex): nothing is
+                        // preselected, picking one clears the other, arrow keys move + select, Space/Enter select.
+                        <div
+                          data-field="personDirection"
+                          data-invalid={fieldError("personDirection") ? "true" : undefined}
+                          role="radiogroup"
+                          aria-label="Money given or Money borrowed"
+                          aria-required="true"
+                          aria-invalid={fieldError("personDirection") ? true : undefined}
+                          aria-describedby={fieldError("personDirection") ? "txn-person-direction-error" : undefined}
+                          className={cn(
+                            "grid grid-cols-1 gap-2 rounded-[6px] min-[420px]:grid-cols-2",
+                            fieldError("personDirection") && "bg-danger/5 p-1.5 ring-2 ring-danger",
+                          )}
+                        >
+                          {PERSON_ENTRY_OPTIONS.map((o, index) => {
                             const Icon = o.icon;
                             const active = personEntryType === o.value;
+                            const tabbable = active || (personEntryType == null && index === 0);
                             return (
                               <button
                                 key={o.value}
                                 type="button"
-                                onClick={() => setPersonEntryType((t) => (t === o.value ? null : o.value))}
-                                aria-pressed={active}
+                                role="radio"
+                                aria-checked={active}
+                                tabIndex={tabbable ? 0 : -1}
+                                onClick={() => setPersonEntryType(o.value)}
+                                onKeyDown={(e) => {
+                                  const step = e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : e.key === "ArrowLeft" || e.key === "ArrowUp" ? -1 : 0;
+                                  if (!step) return;
+                                  e.preventDefault();
+                                  const nextIndex = (index + step + PERSON_ENTRY_OPTIONS.length) % PERSON_ENTRY_OPTIONS.length;
+                                  setPersonEntryType(PERSON_ENTRY_OPTIONS[nextIndex].value);
+                                  e.currentTarget.parentElement?.querySelectorAll<HTMLElement>('[role="radio"]')[nextIndex]?.focus();
+                                }}
                                 className={cn(
-                                  "flex items-center gap-2 rounded-[6px] border p-2 text-left transition-colors",
+                                  "flex items-center gap-2 rounded-[6px] border p-2 text-left transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
                                   active
                                     ? o.tone === "success"
                                       ? "border-success bg-success/10 ring-1 ring-success"
@@ -1699,6 +1759,11 @@ export function TransactionDetailsModal({
                               </button>
                             );
                           })}
+                          {fieldError("personDirection") && (
+                            <p id="txn-person-direction-error" role="alert" className="col-span-full px-1 text-[11px] font-medium text-danger">
+                              {fieldError("personDirection")}
+                            </p>
+                          )}
                           {personEntryType === "borrowed" && (
                             <p className="col-span-full flex items-start gap-1.5 rounded-[6px] border border-border-strong bg-secondary px-2.5 py-2 text-[11px] text-foreground/80">
                               <Info className="mt-px size-3.5 shrink-0" strokeWidth={1.75} />
