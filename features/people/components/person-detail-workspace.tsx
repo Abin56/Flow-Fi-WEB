@@ -18,6 +18,7 @@ import type { AdvanceApplication, LedgerEntry, Person } from "@/lib/models/perso
 import type { LedgerSourceKind } from "@/lib/models/person";
 import type { PersonViewRow } from "@/features/people/hooks/use-people-data";
 import { usePersonCycleStatement } from "@/features/people/hooks/use-person-cycle-statement";
+import { useSelectedCycle } from "@/features/people/hooks/use-selected-cycle";
 import { usePersonPendingSplitParticipants } from "@/features/people/hooks/use-person-pending-split-participants";
 import { usePersonUpcomingEmi } from "@/features/people/hooks/use-person-upcoming-emi";
 import { useSettlementLookups } from "@/features/people/hooks/use-settlement-lookups";
@@ -165,7 +166,7 @@ export function PersonDetailWorkspace({
 }) {
   const [mode, setMode] = useState<Mode>({ kind: "overview" });
   const [direction, setDirection] = useState<"forward" | "back">("forward");
-  const [cycle, setCycle] = useState<StatementCycle>(() => initialCycle ?? cycleContaining(new Date()));
+  const [cycle, setCycle, cycleStartDay] = useSelectedCycle(initialCycle);
   const [inline, setInline] = useState<InlineAction>(null);
   /** Details (contact, EMI, notes, attachments) are secondary — collapsed under Activity until asked for. */
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -228,7 +229,7 @@ export function PersonDetailWorkspace({
     const start = new Date(cycle.start.getFullYear(), cycle.start.getMonth(), cycle.start.getDate()).getTime();
     return allRows.filter((r) => r.statementRow?.kind === "obligation" && r.date.getTime() < start && (r.state === "open" || r.state === "partial"));
   }, [allRows, cycle]);
-  const cycleLabelOf = (d: Date) => `${formatCycleLabel(cycleContaining(d), false)} cycle`;
+  const cycleLabelOf = (d: Date) => `${formatCycleLabel(cycleContaining(d, cycleStartDay), false)} cycle`;
   const scopeCounts = { cycle: cycleRows.length, all: allRows.length };
   // The cycle view is always the cycle picked with ‹ › (shared by the statement, the list and the expanded ledger).
   const cycleLabel = "Selected cycle";
@@ -355,7 +356,7 @@ export function PersonDetailWorkspace({
     if (!onAddEntry) throw new Error("Not signed in");
     await onAddEntry(params);
     setInline(null);
-    const next = cycleShowingNewEntry(scope, cycle, params.date);
+    const next = cycleShowingNewEntry(scope, cycle, params.date, cycleStartDay);
     if (next) setCycle(next);
   }
 
@@ -550,43 +551,43 @@ export function PersonDetailWorkspace({
     { label: "You need to give", amount: b.toGive, tone: "expense" },
     { label: "You need to receive", amount: b.toReceive, tone: "success" },
   ];
+  const breakdownNote = Math.abs(b.unlinked) >= 0.005 || b.loanPayable > 0 || b.loanReceivable > 0 || b.emiReceivable > 0;
   const balanceSummary = (b.toGive > 0 || b.toReceive > 0) && (
-    <table aria-label="Balance summary" className="mt-4 w-full max-w-sm border-collapse border border-border-strong/75 text-xs tabular-nums">
-      <caption className="pb-1 text-left text-[11px] font-semibold tracking-[0.06em] text-foreground uppercase">Balance summary · overall</caption>
-      <tbody>
+    <div aria-label="Balance summary" className="text-[13px] tabular-nums">
+      <p className="text-[11px] font-bold tracking-[0.08em] text-foreground/75 uppercase">Overall with {person.name.split(" ")[0]}</p>
+      <dl className="mt-1">
         {summaryLines.map((l) => (
-          <tr key={l.label} className="border-b border-border-strong/75">
-            <th scope="row" className="px-2.5 py-1.5 text-left font-medium text-foreground">{l.label}</th>
-            <td className={cn("px-2.5 py-1.5 text-right font-semibold", l.amount > 0 ? (l.tone === "expense" ? "text-expense" : "text-success") : "text-foreground/70")}>
+          <div key={l.label} className="flex items-baseline justify-between gap-3 py-0.5">
+            <dt className="font-medium text-foreground">{l.label}</dt>
+            <dd className={cn("font-semibold", l.amount > 0 ? (l.tone === "expense" ? "text-expense" : "text-success") : "text-foreground/60")}>
               {formatCurrency(l.amount)}
-            </td>
-          </tr>
+            </dd>
+          </div>
         ))}
-        {b.toGive > 0 && b.toReceive > 0 && (
-          <tr className="bg-secondary/40">
-            <th scope="row" className="px-2.5 py-1.5 text-left font-medium text-foreground/75">
-              Net position {b.net > 0 ? "· to receive" : b.net < 0 ? "· to give" : "· even"}
-              <span className="block text-[10.5px] font-normal text-foreground/65">Summary only — payments are settled separately.</span>
-            </th>
-            <td className="px-2.5 py-1.5 text-right font-medium text-foreground/75">{formatCurrency(Math.abs(b.net))}</td>
-          </tr>
-        )}
-      </tbody>
-      {(Math.abs(b.unlinked) >= 0.005 || b.loanPayable > 0 || b.loanReceivable > 0 || b.emiReceivable > 0) && (
-        <tfoot>
-          <tr>
-            <td colSpan={2} className="px-2.5 py-1.5 text-[11px] leading-snug text-foreground/80">
-              Open borrowed {formatCurrency(b.borrowedOpen)} · Open given {formatCurrency(b.gaveOpen)}
-              {Math.abs(b.unlinked) >= 0.005 &&
-                ` · Payments/adjustments not tied to one transaction ${b.unlinked > 0 ? "+" : "−"}${formatCurrency(Math.abs(b.unlinked))}`}
-              {b.loanPayable > 0 && ` · Loans — you need to give ${formatCurrency(b.loanPayable)}`}
-              {b.loanReceivable > 0 && ` · Loans — you need to receive ${formatCurrency(b.loanReceivable)}`}
-              {b.emiReceivable > 0 && ` · EMI — you need to receive ${formatCurrency(b.emiReceivable)}`}
-            </td>
-          </tr>
-        </tfoot>
+      </dl>
+      {b.toGive > 0 && b.toReceive > 0 && (
+        // Secondary on purpose: the two sides are separate obligations — the net never means "nothing to do".
+        <p className="mt-0.5 text-[11.5px] text-foreground/70">
+          Net {formatCurrency(Math.abs(b.net))} {b.net > 0 ? "to receive" : b.net < 0 ? "to give" : "even"} · Summary only — payments are settled separately.
+        </p>
       )}
-    </table>
+      {breakdownNote && (
+        <details className="group mt-1">
+          <summary className="flex cursor-pointer list-none items-center gap-1 text-xs font-medium text-foreground/70 hover:text-foreground [&::-webkit-details-marker]:hidden">
+            How this is calculated
+            <ChevronDown className="size-3.5 transition-transform group-open:rotate-180" strokeWidth={1.75} />
+          </summary>
+          <p className="mt-1 rounded-[6px] bg-secondary/60 px-2.5 py-1.5 text-[11px] leading-snug text-foreground/80">
+            Open borrowed {formatCurrency(b.borrowedOpen)} · Open given {formatCurrency(b.gaveOpen)}
+            {Math.abs(b.unlinked) >= 0.005 &&
+              ` · Payments/adjustments not tied to one transaction ${b.unlinked > 0 ? "+" : "−"}${formatCurrency(Math.abs(b.unlinked))}`}
+            {b.loanPayable > 0 && ` · Loans — you need to give ${formatCurrency(b.loanPayable)}`}
+            {b.loanReceivable > 0 && ` · Loans — you need to receive ${formatCurrency(b.loanReceivable)}`}
+            {b.emiReceivable > 0 && ` · EMI — you need to receive ${formatCurrency(b.emiReceivable)}`}
+          </p>
+        </details>
+      )}
+    </div>
   );
 
   const overview = (

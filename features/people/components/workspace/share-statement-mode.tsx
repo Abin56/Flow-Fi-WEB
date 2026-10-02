@@ -6,6 +6,7 @@ import { usePersonCycleStatement } from "@/features/people/hooks/use-person-cycl
 import { usePersonPendingSplitParticipants } from "@/features/people/hooks/use-person-pending-split-participants";
 import { useSettlementLookups } from "@/features/people/hooks/use-settlement-lookups";
 import { renderPersonStatementPdf } from "@/features/people/lib/person-statement-pdf";
+import { useMonthCycleStartDay } from "@/features/settings/hooks/use-user-preferences";
 import { statementView, type StatementViewOptions } from "@/features/people/lib/person-statement-pdf-model";
 import type { PersonCycleStatement } from "@/lib/engines/person-cycle-statement";
 import { sharedPositionLine, statementShareText, whatsAppShareUrl } from "@/lib/engines/person-cycle-statement-share";
@@ -36,9 +37,10 @@ export function ShareStatementMode({
   const { allTimeStatement, ledgerEntries } = usePersonCycleStatement(statement.personId, statement.cycle);
   const { pending } = usePersonPendingSplitParticipants(statement.personId);
   const lookups = useSettlementLookups(ledgerEntries, pending);
+  const cycleStartDay = useMonthCycleStartDay();
   const options = useMemo<StatementViewOptions>(
-    () => ({ entries: ledgerEntries, history: allTimeStatement, lookups, accountForEntry: lookups.accountForEntry }),
-    [ledgerEntries, allTimeStatement, lookups],
+    () => ({ entries: ledgerEntries, history: allTimeStatement, lookups, accountForEntry: lookups.accountForEntry, cycleStartDay }),
+    [ledgerEntries, allTimeStatement, lookups, cycleStartDay],
   );
   const view = useMemo(() => statementView(statement, options), [statement, options]);
   const text = statementShareText(statement);
@@ -120,13 +122,14 @@ export function ShareStatementMode({
                         <p className="truncate text-[11.5px] font-medium text-foreground/70">
                           {r.date} · {r.relation}
                         </p>
+                        {r.splitNote && <p className="truncate text-[11px] text-foreground/60 tabular-nums">{r.splitNote.split(" · ").map((part, i) => (i === 0 ? <span key={i} className="font-bold text-foreground">{part}</span> : <span key={i}> · {part}</span>))}</p>}
                       </div>
                       <div className="flex items-start justify-end">
                         <TypeBadge kind={r.kind} family={fam} />
                       </div>
                       <dl className="flex flex-wrap gap-x-4 text-[11.5px]">
                         {r.original && (
-                          <div className="flex gap-1"><dt className="text-foreground/60">Original</dt><dd className="font-semibold text-foreground tabular-nums">{r.original}</dd></div>
+                          <div className="flex gap-1"><dt className="text-foreground/60">{r.splitNote ? "Share" : "Original"}</dt><dd className="font-semibold text-foreground tabular-nums">{r.original}</dd></div>
                         )}
                         {r.paid && (
                           <div className="flex gap-1"><dt className="text-foreground/60">Paid</dt><dd className="font-semibold text-success tabular-nums">{r.paid}</dd></div>

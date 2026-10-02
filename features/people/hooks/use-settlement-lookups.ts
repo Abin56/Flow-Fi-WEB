@@ -2,10 +2,11 @@
 
 import { useMemo } from "react";
 import { useAccounts } from "@/hooks/use-accounts";
+import { useExpenses } from "@/hooks/use-expenses";
 import { useTransactions, useTrashedTransactions } from "@/hooks/use-transactions";
 import type { SettlementLookups } from "@/features/people/lib/settlement-presentation";
 import type { PendingSplitParticipant } from "@/lib/engines/person-pending-split-participants";
-import type { Expense } from "@/lib/models/expense";
+import { isSplit, type Expense } from "@/lib/models/expense";
 import type { LedgerEntry } from "@/lib/models/person";
 import { useLinkedFunds } from "@/features/people/hooks/use-linked-funds";
 import { linkedFundsByObligation, type LinkedFund } from "@/lib/engines/linked-funds";
@@ -30,6 +31,7 @@ export function useSettlementLookups(ledgerEntries: readonly LedgerEntry[], pend
   const { data: trashed = [], isLoading: trashLoading } = useTrashedTransactions();
   const { data: accounts = [] } = useAccounts();
   const { funds } = useLinkedFunds();
+  const { data: expenses = [] } = useExpenses();
   return useMemo(() => {
     const liveIds = new Set(transactions.filter((t) => t.deletedAt == null).map((t) => t.id));
     const trashedIds = new Set(trashed.map((t) => t.id));
@@ -45,6 +47,9 @@ export function useSettlementLookups(ledgerEntries: readonly LedgerEntry[], pend
     };
     const entriesById = new Map(ledgerEntries.map((e) => [e.id, e]));
     const expenseByTransactionId = new Map<string, Expense>();
+    // Every live split/assigned Expense — so a fully settled share keeps its original-expense context
+    // (`pending` only holds outstanding shares). Deleted expenses are never indexed.
+    for (const e of expenses as Expense[]) if (e.deletedAt == null && isSplit(e)) expenseByTransactionId.set(e.transactionId, e);
     for (const p of pending) expenseByTransactionId.set(p.expense.transactionId, p.expense);
     const accountName = new Map(accounts.map((a) => [a.id, a.name]));
     const accountByTransaction = new Map(transactions.map((t) => [t.id, t.accountId]));
@@ -62,5 +67,5 @@ export function useSettlementLookups(ledgerEntries: readonly LedgerEntry[], pend
     const linkedFundsFor = (rowKey: string) => byObligation.get(rowKey) ?? [];
     const accountNameOf = (accountId: string) => accountName.get(accountId);
     return { entriesById, expenseByTransactionId, transactionStatus, accountForEntry, incomeForEntry, linkedFundsFor, accountNameOf };
-  }, [ledgerEntries, pending, transactions, trashed, transactionsLoading, trashLoading, accounts, funds]);
+  }, [ledgerEntries, pending, expenses, transactions, trashed, transactionsLoading, trashLoading, accounts, funds]);
 }

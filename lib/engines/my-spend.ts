@@ -21,6 +21,7 @@
  * Spend is bucketed by its own date — never by the date a card bill, loan or person is later paid.
  */
 
+import { myShare, type Expense } from "@/lib/models/expense";
 import type { PaymentAllocationType } from "@/lib/models/payment-schedule";
 
 export interface MySpendTransaction {
@@ -133,6 +134,23 @@ export function repaymentRecognitionByAgreement(params: {
   }
   for (const emi of params.emis) map.set(emi.id, purchaseUnrecorded(emi.purchaseTransactionId));
   return map;
+}
+
+/**
+ * The `MySpendContext` built from the raw live records — exactly what `useMySpendContext` subscribes to, so
+ * every surface (and the tests) classify against the same split shares and repayment recognition.
+ */
+export function mySpendContextFromRecords(params: {
+  transactions: readonly Pick<MySpendTransaction, "id" | "deletedAt" | "excludeFromCalculations">[];
+  expenses: readonly Expense[];
+  loans: readonly { id: string; agreementKind?: "loan" | "installmentPurchase"; purchaseTransactionId?: string | null }[];
+  emis: readonly { id: string; purchaseTransactionId: string | null }[];
+}): MySpendContext {
+  const liveTransactionIds = new Set(params.transactions.filter((t) => t.deletedAt == null && !t.excludeFromCalculations).map((t) => t.id));
+  return buildMySpendContext({
+    expenses: params.expenses.map((e) => ({ transactionId: e.transactionId, totalAmount: e.totalAmount, myShare: myShare(e), deletedAt: e.deletedAt })),
+    repaymentIsConsumptionByAgreementId: repaymentRecognitionByAgreement({ loans: params.loans, emis: params.emis, liveTransactionIds }),
+  });
 }
 
 export interface MySpendRow<T extends MySpendTransaction> {

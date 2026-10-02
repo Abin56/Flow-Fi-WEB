@@ -21,6 +21,8 @@ import {
   settlementTitle,
   settlementTone,
   signedSideLabel,
+  splitContext,
+  splitContextLine,
   type SettlementKind,
   type SettlementLookups,
   type SettlementStatusTone,
@@ -44,6 +46,11 @@ export interface StatementViewRow {
   status: string;
   statusDetail: string;
   statusTone: SettlementStatusTone;
+  /**
+   * Split/assigned share only: "Original ₹3,000 · 3-way split · Amma's share ₹1,000". Deliberately the
+   * recipient's own allocation only — other participants' names and shares are never in a shared statement.
+   */
+  splitNote?: string | null;
   /** An open obligation from an earlier cycle, listed as brought forward. */
   carried?: boolean;
   /** e.g. "18 Aug – 17 Sep cycle" for a brought-forward row. */
@@ -103,12 +110,15 @@ export interface StatementViewOptions {
   lookups?: SettlementLookups;
   accountForEntry?: (entryId: string | null) => string | null;
   now?: Date;
+  /** The global accounting-cycle start day (Settings → Month cycle) for "brought forward from" labels. */
+  cycleStartDay?: number;
 }
 
 const isPayment = (k: SettlementKind) => k === "paymentReceived" || k === "paymentMade" || k === "advance" || k === "advanceApplied";
 
-function viewRow(row: LedgerRow, n: number, personName: string, lookups: SettlementLookups, now: Date, total: number): StatementViewRow {
+function viewRow(row: LedgerRow, n: number, personName: string, lookups: SettlementLookups, now: Date, total: number, personId: string): StatementViewRow {
   const kind = settlementKind(row, lookups);
+  const ctx = kind === "split" || kind === "assigned" ? splitContext(row, lookups, personId) : null;
   const status = settlementStatus(row, kind, personName, money, now);
   const paid = isPayment(kind) ? row.amount : paidSoFar(row);
   return {
@@ -125,6 +135,7 @@ function viewRow(row: LedgerRow, n: number, personName: string, lookups: Settlem
     status: status.label,
     statusDetail: status.detail ?? "",
     statusTone: status.tone,
+    splitNote: ctx ? `${splitContextLine(ctx, money)} · ${personName.split(" ")[0]}'s share ${money(ctx.personShare ?? row.amount)}` : null,
   };
 }
 
@@ -147,11 +158,11 @@ export function statementView(statement: PersonCycleStatement, options: Statemen
     : [];
   const total = carriedRows.length + ledgerRows.length;
   const carried = carriedRows.map((r, i) => ({
-    ...viewRow(r, i + 1, name, lookups, now, total),
+    ...viewRow(r, i + 1, name, lookups, now, total, statement.personId),
     carried: true,
-    fromCycle: `${formatCycleLabel(cycleContaining(r.date), false)} cycle`,
+    fromCycle: `${formatCycleLabel(cycleContaining(r.date, options.cycleStartDay), false)} cycle`,
   }));
-  const rows = ledgerRows.map((r, i) => viewRow(r, carriedRows.length + i + 1, name, lookups, now, total));
+  const rows = ledgerRows.map((r, i) => viewRow(r, carriedRows.length + i + 1, name, lookups, now, total, statement.personId));
 
   const line = (key: string) => pos.lines.find((l) => l.key === key);
   const previous = line("previous")!;

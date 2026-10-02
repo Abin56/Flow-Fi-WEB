@@ -516,3 +516,45 @@ export function paymentGroupLabel(rows: readonly StatementRow[], personName: str
   if (isInboundPayment(head)) return rows.length > 1 ? `${first} paid` : `Received from ${first}`;
   return rows.length > 1 ? `You paid ${first}` : `Paid to ${first}`;
 }
+
+// ---------------------------------------------------------------------------------------------------
+// Split context — the original expense behind one person's share, read from the stored Expense only
+// ---------------------------------------------------------------------------------------------------
+
+export interface SplitContext {
+  /** The whole expense (`Expense.totalAmount`) — never derived from a share or a remaining amount. */
+  original: number;
+  /** Participants carrying a stored share above zero, "Me" included. */
+  participantCount: number;
+  /** This person's stored allocation (`ExpenseParticipant.share`), or null if they are not on the expense. */
+  personShare: number | null;
+  /** My stored allocation (0 when I carry none). */
+  myShare: number;
+}
+
+const SHARE_EPSILON = 0.005;
+
+/**
+ * The split context of a split/assigned row: the original expense and how many people it was split
+ * between, from the Expense's stored participants (amounts are authoritative — nothing is inferred
+ * from the participant count). Null when the row isn't a split share or the Expense isn't available
+ * (deleted, legacy entry with no expense, or not loaded) — the row then shows exactly what it did before.
+ */
+export function splitContext(row: LedgerRow, lookups: SettlementLookups, personId: string): SplitContext | null {
+  const expense = linkedExpense(row, lookups);
+  if (!expense || expense.deletedAt != null || expense.participants.length === 0) return null;
+  const mine = expense.participants.filter((p) => p.isMe).reduce((s, p) => s + p.share, 0);
+  const theirs = expense.participants.filter((p) => !p.isMe && p.personId === personId);
+  return {
+    original: expense.totalAmount,
+    participantCount: expense.participants.filter((p) => p.share > SHARE_EPSILON).length,
+    personShare: theirs.length > 0 ? round2(theirs.reduce((s, p) => s + p.share, 0)) : null,
+    myShare: round2(mine),
+  };
+}
+
+/** "Total price ₹3,000 · 3-way split" (or "… · assigned in full" for a single-payer bill). The part before the first " · " is the total, shown bold. */
+export function splitContextLine(ctx: SplitContext, money: (n: number) => string): string {
+  const split = ctx.participantCount >= 2 ? `${ctx.participantCount}-way split` : "assigned in full";
+  return `Total price ${money(ctx.original)} · ${split}`;
+}

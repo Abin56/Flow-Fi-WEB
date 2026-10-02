@@ -38,6 +38,8 @@ import {
   settlementTitle,
   settlementTone,
   shareBreakdown,
+  splitContext,
+  splitContextLine,
   type SettlementKind,
   type SettlementLookups,
   type SettlementStatusTone,
@@ -147,10 +149,13 @@ export interface SettlementRowView {
   paid: number | null;
   /** Row belongs to an earlier cycle and is shown as brought forward. */
   carried: boolean;
+  /** "Original ₹3,000 · 3-way split" for a split/assigned share whose Expense is available; else null. */
+  splitNote: string | null;
 }
 
-export function viewOf(row: LedgerRow, personName: string, lookups: SettlementLookups, carried = false): SettlementRowView {
+export function viewOf(row: LedgerRow, personName: string, lookups: SettlementLookups, carried = false, personId?: string): SettlementRowView {
   const kind = settlementKind(row, lookups);
+  const ctx = (kind === "split" || kind === "assigned") && personId != null ? splitContext(row, lookups, personId) : null;
   const tone = settlementTone(row, kind);
   return {
     row,
@@ -162,6 +167,7 @@ export function viewOf(row: LedgerRow, personName: string, lookups: SettlementLo
     status: settlementStatus(row, kind, personName, money),
     paid: isPaymentKind(kind) ? row.amount : paidSoFar(row),
     carried,
+    splitNote: ctx ? splitContextLine(ctx, money) : null,
   };
 }
 
@@ -265,10 +271,15 @@ function Breakdown({ v, personId, personName, lookups }: { v: SettlementRowView;
       <dl className="text-[13px]">
         {shares && (
           <>
-            <Line label={kind === "assigned" ? "Total bill" : "Total expense"} value={money(shares.total)} />
+            <SectionLabel>Split details</SectionLabel>
+            <Line label={<span className="font-bold text-foreground">Total price</span>} value={money(shares.total)} strong />
             {shares.lines.map((l, i) => (
-              <Line key={i} indent label={l.highlight ? <span className="font-semibold text-foreground">{l.label}</span> : l.label} value={money(l.amount)} />
+              <Line key={i} indent label={l.highlight ? <span className="font-semibold text-foreground">{l.label}</span> : l.label} value={l.highlight ? <span className="font-semibold">{money(l.amount)}</span> : money(l.amount)} />
             ))}
+            {/* Sum of the stored allocations, as stored — never forced to equal the total. */}
+            <div className="border-t border-border-strong/50">
+              <Line label="Allocated" value={money(Math.round(shares.lines.reduce((s, l) => s + l.amount, 0) * 100) / 100)} />
+            </div>
             <div className="my-1" />
           </>
         )}
@@ -520,6 +531,7 @@ function RowActionButtons({ v, handlers, lookups, compact = false }: { v: Settle
       {sourceUnavailable(row, lookups) && (
         <span className="text-[12px] text-muted-foreground" title="Its source transaction was deleted. Reverse the payment recorded against it to clear this entry.">
           Original transaction is no longer available
+          {(row.payments.length > 0 || row.state === "partial" || row.state === "settled") && " · repair blocked — payment history exists"}
         </span>
       )}
       {source && !(row.category === "loan" && loanPay) && (
@@ -652,7 +664,7 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
   };
   const isOpen = (row: LedgerRow) => openKey === row.key || handlers.settlingKey === row.key || handlers.editingKey === row.key;
 
-  const carriedViews = carriedRows.map((r) => viewOf(r, personName, lookups, true));
+  const carriedViews = carriedRows.map((r) => viewOf(r, personName, lookups, true, personId));
   const groups = groupByMonth(rows, (r) => r.date);
   const total = rows.length + carriedRows.length;
   const expansionProps = { personId, personName, lookups, accountForEntry, handlers, cycleLabelOf };
@@ -696,6 +708,7 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
               {v.carried && cycleLabelOf ? `From ${cycleLabelOf(row.date)} · ` : ""}
               {v.relation}
             </p>
+            {v.splitNote && <p className="truncate pl-5 text-[11px] leading-tight text-foreground/60 tabular-nums">{v.splitNote.split(" · ").map((part, i) => (i === 0 ? <span key={i} className="font-bold text-foreground">{part}</span> : <span key={i}> · {part}</span>))}</p>}
             {linkedTrail?.(row.key) && <div className="pl-5">{linkedTrail(row.key)}</div>}
           </td>
           <td className={cn(TD, "hidden w-[9.5rem] xl:table-cell")}><TypeBadge kind={v.kind} family={v.typeFamily} /></td>
@@ -740,10 +753,11 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
             </div>
           </div>
           <p className="mt-1 truncate text-[12px] font-medium text-foreground/75">{v.relation}</p>
+          {v.splitNote && <p className="truncate text-[11px] text-foreground/60 tabular-nums">{v.splitNote.split(" · ").map((part, i) => (i === 0 ? <span key={i} className="font-bold text-foreground">{part}</span> : <span key={i}> · {part}</span>))}</p>}
           {linkedTrail?.(row.key) && <span className="mt-0.5 block">{linkedTrail(row.key)}</span>}
           {row.state != null ? (
             <dl className="mt-1 grid grid-cols-3 gap-2 text-[11.5px]">
-              <div><dt className="text-foreground/60">Original</dt><dd className="font-semibold text-foreground tabular-nums">{money(row.amount)}</dd></div>
+              <div><dt className="text-foreground/60">{v.splitNote ? "Share" : "Original"}</dt><dd className="font-semibold text-foreground tabular-nums">{money(row.amount)}</dd></div>
               <div><dt className="text-foreground/60">Paid</dt><dd className="font-semibold text-success tabular-nums">{money(v.paid ?? 0)}</dd></div>
               <div><dt className="text-foreground/60">Remaining</dt><dd className="font-semibold text-foreground tabular-nums">{money(row.remaining ?? 0)}</dd></div>
             </dl>
@@ -803,7 +817,7 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
                   </span>
                 </td>
               </tr>
-              {g.rows.map(({ row }) => desktopRow(viewOf(row, personName, lookups), ++n))}
+              {g.rows.map(({ row }) => desktopRow(viewOf(row, personName, lookups, false, personId), ++n))}
             </Fragment>
           ))}
         </tbody>
@@ -821,7 +835,7 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
               <span className="text-[12px] font-bold tracking-[0.08em] text-foreground uppercase">{g.label}</span>
               <span className="text-[11px] font-medium text-foreground/70">{g.rows.length} {g.rows.length === 1 ? "transaction" : "transactions"}</span>
             </li>
-            {g.rows.map(({ row }) => mobileRow(viewOf(row, personName, lookups)))}
+            {g.rows.map(({ row }) => mobileRow(viewOf(row, personName, lookups, false, personId)))}
           </Fragment>
         ))}
       </ul>

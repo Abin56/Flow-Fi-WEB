@@ -42,10 +42,11 @@ import { loanCycleDues, loanCycleDueTotals, type LoanCycleDue } from "@/lib/engi
 import { formatCurrency } from "@/lib/format";
 import { usePeopleRows, usePeopleStats } from "@/features/people/hooks/use-people-data";
 import { peopleDirectionSides } from "@/lib/engines/person-position";
-import { useUserPreferences } from "@/features/settings/hooks/use-user-preferences";
-import { cycleRangeFor, isInCycle, isOwedInCycle, shiftMonthsClamped } from "@/lib/engines/month-cycle-range";
+import { useMonthCycleStartDay } from "@/features/settings/hooks/use-user-preferences";
+import { adjacentCycleRange, cycleRangeFor, cycleRangeForMonth, isInCycle, isOwedInCycle, mySpendBucketDate } from "@/lib/engines/month-cycle-range";
 import {
   amountFor,
+  breakdownFor,
   percentChange,
   previousRangeFor,
   type DashboardBillOccurrence,
@@ -85,9 +86,7 @@ function bucketDateFor(t: Transaction, isCustomCycle: boolean): Date {
  * The hero's bucketing (`dashboard-aggregation.bucketDateFor` with `isMonthGranular = !isCustomCycle`) for a
  * raw Transaction — so "My spend", its drill-down rows and its top category always cover the same rows.
  */
-function heroBucketDate(t: Transaction, isCustomCycle: boolean): Date {
-  return isCustomCycle ? t.dateTime : effectiveMonth(t);
-}
+const heroBucketDate = mySpendBucketDate;
 
 function daysLeftIn(date: Date, now: Date): number {
   return Math.ceil((date.getTime() - now.getTime()) / MS_PER_DAY);
@@ -167,8 +166,7 @@ export interface MonthCycleExpenseRow {
 
 export function useMonthCycleData() {
   const now = useMemo(() => new Date(), []);
-  const { preferences } = useUserPreferences();
-  const monthCycleStartDay = preferences.monthCycleStartDay;
+  const monthCycleStartDay = useMonthCycleStartDay();
   const isCustomCycle = monthCycleStartDay > 1;
 
   // --- Cycle switcher: 0 = the cycle containing today, negative = past, positive = future.
@@ -176,13 +174,16 @@ export function useMonthCycleData() {
   //     the only state a caller needs to browse a different cycle. `daysLeftIn`/`dueInDaysLabel`
   //     etc. still compare against the real `now`, not the browsed cycle, so a past cycle's items
   //     correctly read as overdue rather than "days left". ---
-  const [cycleOffset, setCycleOffset] = useState(0);
-  const referenceDate = useMemo(() => shiftMonthsClamped(now, cycleOffset), [now, cycleOffset]);
+  //     The browsed cycle is held as a day inside it (null = today's cycle); prev/next step from the shown
+  //     cycle's own edges, so no cycle is ever skipped or repeated. ---
+  const [referenceDay, setReferenceDay] = useState<Date | null>(null);
+  const referenceDate = referenceDay ?? now;
   const cycleRange = useMemo(() => cycleRangeFor(monthCycleStartDay, referenceDate), [monthCycleStartDay, referenceDate]);
-  const isCurrentCycle = cycleOffset === 0;
-  const goToPreviousCycle = () => setCycleOffset((o) => o - 1);
-  const goToNextCycle = () => setCycleOffset((o) => o + 1);
-  const goToCurrentCycle = () => setCycleOffset(0);
+  const isCurrentCycle = isInCycle(now, cycleRange);
+  const goToPreviousCycle = () => setReferenceDay(adjacentCycleRange(monthCycleStartDay, cycleRange, -1).start);
+  const goToNextCycle = () => setReferenceDay(adjacentCycleRange(monthCycleStartDay, cycleRange, 1).start);
+  const goToCurrentCycle = () => setReferenceDay(null);
+  const goToCycleForMonth = (year: number, month: number) => setReferenceDay(cycleRangeForMonth(monthCycleStartDay, year, month).start);
 
   const { data: transactions = [], isLoading: transactionsLoading } = useTransactions();
   const { data: accounts = [], isLoading: accountsLoading } = useAccounts();
@@ -296,6 +297,9 @@ export function useMonthCycleData() {
     const income = amountFor("income", strategy, range, inputs);
     const net = income - spent;
     const spentChangePercent = percentChange(spent, previousSpent);
+    // The exact components `amountFor("combinedExpenses")` adds for `spent` (zero lines omitted) — the
+    // "Total outflow" drill-down shows these so its lines always add back to the headline.
+    const spentBreakdown = breakdownFor("combinedExpenses", strategy, range, inputs);
 
     // "My spend" — MY consumption only, from the shared `lib/engines/my-spend.ts` classifier (my share of
     // split/assigned expenses; no transfers, card-bill payments, person/loan principal movements, or
@@ -307,7 +311,7 @@ export function useMonthCycleData() {
     const myNet = income - mySpent;
     const mySpentChangePercent = percentChange(mySpent, myPreviousSpent);
 
-    return { spent, previousSpent, income, net, spentChangePercent, mySpent, myPreviousSpent, myNet, mySpentChangePercent };
+    return { spent, spentBreakdown, previousSpent, income, net, spentChangePercent, mySpent, myPreviousSpent, myNet, mySpentChangePercent };
   }, [isCustomCycle, cycleRange, transactions, expenses, billOccurrences, emiInstallments, loanScheduledPayments, mySpendCtx]);
 
   const savingsRatePercent = financialView.income > 0 ? Math.round((financialView.net / financialView.income) * 100) : 0;
@@ -593,6 +597,7 @@ export function useMonthCycleData() {
     goToPreviousCycle,
     goToNextCycle,
     goToCurrentCycle,
+    goToCycleForMonth,
     financialView,
     savingsRatePercent,
     expenseRows,

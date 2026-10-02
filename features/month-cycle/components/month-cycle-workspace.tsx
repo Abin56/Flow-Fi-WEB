@@ -8,6 +8,7 @@ import {
   ArrowUpRight,
   Banknote,
   CalendarClock,
+  CalendarDays,
   ChevronLeft,
   ChevronRight,
   CreditCard,
@@ -30,9 +31,11 @@ import {
 import { AnimatedNumber } from "@/components/foundation/animated-number";
 import { ProgressRing } from "@/components/foundation/progress-ring";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatCurrency } from "@/lib/format";
+import { ordinalDay } from "@/lib/engines/month-cycle-range";
 import { cn } from "@/lib/utils";
 import { MonthCyclePurposePanel } from "@/features/people/components/purpose-money-signals";
 import { categoryIconFor, categoryToneFor, type ToneName } from "@/features/transactions/hooks/use-transactions-data";
@@ -363,6 +366,125 @@ function ExpenseTable({ rows, isMine }: { rows: MonthCycleExpenseRow[]; isMine: 
   );
 }
 
+/**
+ * What "Total outflow" is made of — the same `breakdownFor("combinedExpenses")` lines the headline sums,
+ * so they add back to it exactly. The purchase list below covers only the expense part (full amounts).
+ */
+export function OutflowBreakdown({ breakdown, total }: { breakdown: Record<string, number>; total: number }) {
+  const lines = Object.entries(breakdown);
+  return (
+    <section aria-label="Total outflow breakdown" className="border-b border-border-strong/60 px-5 py-3">
+      <dl className="flex flex-col gap-1 text-sm">
+        {lines.map(([label, amount]) => (
+          <div key={label} className="flex items-center justify-between gap-3">
+            <dt className="text-muted-foreground">{label}</dt>
+            <dd className="font-semibold text-foreground tabular-nums">{formatCurrency(amount)}</dd>
+          </div>
+        ))}
+        <div className="mt-1 flex items-center justify-between gap-3 border-t border-border-strong/50 pt-1.5">
+          <dt className="font-semibold text-foreground">Total outflow</dt>
+          <dd className="font-bold text-foreground tabular-nums" data-testid="outflow-breakdown-total">{formatCurrency(total)}</dd>
+        </div>
+      </dl>
+      <p className="mt-2 text-[11px] text-muted-foreground">
+        Card purchases count when made; card-bill payments are transfers and aren&apos;t added again. Money moved to or from people is not
+        included. The list below shows the purchases this cycle at their full amount.
+      </p>
+    </section>
+  );
+}
+
+const MONTHS_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** The cycle label doubles as a month picker — picking a month jumps to the cycle named after it. */
+function CyclePicker({
+  label,
+  rangeLabel,
+  selected,
+  onPick,
+  onToday,
+}: {
+  label: string;
+  rangeLabel: string;
+  /** Any day in the shown cycle's named month (its end). */
+  selected: Date;
+  onPick: (year: number, month: number) => void;
+  onToday: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [year, setYear] = useState(selected.getFullYear());
+  const today = new Date();
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(o) => {
+        setOpen(o);
+        if (o) setYear(selected.getFullYear());
+      }}
+    >
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          aria-label="Choose cycle"
+          className="min-w-[10rem] rounded-[6px] px-2 py-0.5 text-center transition-colors hover:bg-secondary"
+          aria-live="polite"
+        >
+          <span className="flex items-center justify-center gap-1.5 text-sm leading-tight font-semibold text-foreground">
+            {label} cycle
+            <CalendarDays className="size-3.5 text-muted-foreground" />
+          </span>
+          <span className="block text-[11px] leading-tight text-muted-foreground tabular-nums">{rangeLabel}</span>
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-64 p-3">
+        <div className="mb-2 flex items-center justify-between">
+          <button type="button" aria-label="Previous year" onClick={() => setYear((y) => y - 1)} className="flex size-7 items-center justify-center rounded-[6px] text-muted-foreground hover:bg-secondary hover:text-foreground">
+            <ChevronLeft className="size-4" />
+          </button>
+          <span className="text-sm font-semibold text-foreground tabular-nums">{year}</span>
+          <button type="button" aria-label="Next year" onClick={() => setYear((y) => y + 1)} className="flex size-7 items-center justify-center rounded-[6px] text-muted-foreground hover:bg-secondary hover:text-foreground">
+            <ChevronRight className="size-4" />
+          </button>
+        </div>
+        <div className="grid grid-cols-3 gap-1">
+          {MONTHS_SHORT.map((m, i) => {
+            const isSelected = selected.getFullYear() === year && selected.getMonth() === i;
+            const isThisMonth = today.getFullYear() === year && today.getMonth() === i;
+            return (
+              <button
+                key={m}
+                type="button"
+                aria-pressed={isSelected}
+                onClick={() => {
+                  onPick(year, i);
+                  setOpen(false);
+                }}
+                className={cn(
+                  "h-8 rounded-[6px] text-xs font-semibold transition-colors",
+                  isSelected ? "bg-primary text-primary-foreground" : "text-foreground hover:bg-secondary",
+                  !isSelected && isThisMonth && "ring-1 ring-primary-accent-text/60",
+                )}
+              >
+                {m}
+              </button>
+            );
+          })}
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            onToday();
+            setOpen(false);
+          }}
+          className="mt-2 h-7 w-full rounded-[6px] border border-border-strong text-xs font-semibold text-foreground hover:bg-secondary"
+        >
+          Current cycle
+        </button>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 function ViewToggle({ isMine, onChange }: { isMine: boolean; onChange: (v: "combined" | "mine") => void }) {
   return (
     <div role="radiogroup" aria-label="Expense view" className="inline-flex items-center rounded-[6px] border border-border-strong bg-card p-0.5">
@@ -395,7 +517,7 @@ function ViewToggle({ isMine, onChange }: { isMine: boolean; onChange: (v: "comb
 
 export function MonthCycleWorkspace() {
   const data = useMonthCycleData();
-  const [expenseView, setExpenseView] = useState<"combined" | "mine">("combined");
+  const [expenseView, setExpenseView] = useState<"combined" | "mine">("mine");
   const [showExpenseList, setShowExpenseList] = useState(false);
 
   if (data.isLoading) {
@@ -440,10 +562,13 @@ export function MonthCycleWorkspace() {
               >
                 <ChevronLeft className="size-4" strokeWidth={1.75} />
               </button>
-              <div className="min-w-[10rem] px-2 text-center" aria-live="polite">
-                <p className="text-sm leading-tight font-semibold text-foreground">{data.monthLabel} cycle</p>
-                <p className="text-[11px] leading-tight text-muted-foreground tabular-nums">{data.monthRangeLabel}</p>
-              </div>
+              <CyclePicker
+                label={data.monthLabel}
+                rangeLabel={data.monthRangeLabel}
+                selected={data.cycleRange.end}
+                onPick={data.goToCycleForMonth}
+                onToday={data.goToCurrentCycle}
+              />
               <button
                 type="button"
                 onClick={data.goToNextCycle}
@@ -481,7 +606,7 @@ export function MonthCycleWorkspace() {
               </TooltipTrigger>
               <TooltipContent>
                 {data.isCustomCycle
-                  ? `Cycle totals cover the ${data.monthCycleStartDay}th of each month through the ${data.monthCycleStartDay}th of the next — change this in Settings.`
+                  ? `Cycle totals cover the ${ordinalDay(data.monthCycleStartDay)} of each month through the ${ordinalDay(data.monthCycleStartDay - 1)} of the next — change this in Settings.`
                   : "Cycle totals cover the current calendar month."}
               </TooltipContent>
             </Tooltip>
@@ -733,7 +858,7 @@ export function MonthCycleWorkspace() {
       <p className="flex items-center gap-1.5 px-1 text-[11px] text-muted-foreground">
         <CalendarClock className="size-3.5" />
         {data.isCustomCycle
-          ? `Cycle totals reflect your ${data.monthCycleStartDay}–${data.monthCycleStartDay} monthly cycle and update live as you record payments and transactions.`
+          ? `Cycle totals reflect your ${ordinalDay(data.monthCycleStartDay)} → ${ordinalDay(data.monthCycleStartDay - 1)} monthly cycle and update live as you record payments and transactions.`
           : "Cycle totals reflect the current calendar month and update live as you record payments and transactions."}
       </p>
 
@@ -770,6 +895,7 @@ export function MonthCycleWorkspace() {
           </div>
 
           <div className="min-h-0 flex-1 overflow-auto overscroll-contain">
+            {!isMine && <OutflowBreakdown breakdown={financialView.spentBreakdown} total={financialView.spent} />}
             {data.expenseRows.length === 0 ? (
               <PanelEmpty title="No expenses this cycle" description="Transactions in this cycle will appear here." />
             ) : (

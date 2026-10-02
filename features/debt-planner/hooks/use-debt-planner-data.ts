@@ -59,12 +59,13 @@ function cardName(card: CreditCardProfile, account: Account | undefined): string
 }
 
 /** One facility per standalone card, one per shared limit (its standing is pooled across its cards). */
-function cardFacilities(standings: CreditCardStandingView[], sharedLimits: SharedCreditLimit[], accounts: Account[]): CardFacilityInput[] {
+export function cardFacilities(standings: CreditCardStandingView[], sharedLimits: SharedCreditLimit[], accounts: Account[]): CardFacilityInput[] {
   const accountById = new Map(accounts.map((a) => [a.id, a]));
   const sharedById = new Map(sharedLimits.map((s) => [s.id, s]));
   const groups = new Map<string, CreditCardStandingView[]>();
   for (const s of standings) {
-    const key = s.card.sharedLimitId != null && sharedById.has(s.card.sharedLimitId) ? `shared:${s.card.sharedLimitId}` : s.card.id;
+    // Group on the facility the standing actually pooled against — an unresolvable one stays standalone.
+    const key = s.sharedLimit != null && sharedById.has(s.sharedLimit.id) ? `shared:${s.sharedLimit.id}` : s.card.id;
     groups.set(key, [...(groups.get(key) ?? []), s]);
   }
   return [...groups.entries()].map(([key, members]) => {

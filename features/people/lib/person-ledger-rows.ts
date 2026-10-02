@@ -409,9 +409,9 @@ export function singleUndoablePayment(row: LedgerRow): PaymentRecord | null {
  * an entry outside it moves the selection rather than switching the list to "All transactions" — a
  * silent scope switch left the list all-time while the cycle arrows kept changing only the statement.
  */
-export function cycleShowingNewEntry(scope: "cycle" | "all", selected: StatementCycle, date: Date): StatementCycle | null {
+export function cycleShowingNewEntry(scope: "cycle" | "all", selected: StatementCycle, date: Date, startDay?: number): StatementCycle | null {
   if (scope !== "cycle") return null;
-  const target = cycleContaining(date);
+  const target = cycleContaining(date, startDay);
   return sameCycle(selected, target) ? null : target;
 }
 
@@ -441,7 +441,7 @@ const MONTH_FORMAT = new Intl.DateTimeFormat("en-IN", { month: "long", year: "nu
  */
 /**
  * Calendar-month headings over rows already in display order (newest first) — presentation only: each row
- * goes under the month of its own date, exactly once. Independent of the 18th→17th cycle, which still
+ * goes under the month of its own date, exactly once. Independent of the accounting cycle, which still
  * decides WHICH rows are shown; a cycle spanning Sep/Oct simply shows both months.
  */
 export function groupByMonth<T>(rows: readonly T[], dateOf: (r: T) => Date): { key: string; label: string | null; rows: { row: T; n: number }[] }[] {

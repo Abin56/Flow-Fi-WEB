@@ -14,7 +14,7 @@ import { cyclePosition } from "@/features/people/lib/settlement-presentation";
 import { EmiBadge, StatementBreakdown, StatementCalculation } from "./statement-parts";
 
 /**
- * The People Ledger's monthly (18th → 17th) settlement summary for one person — the balance hero, cycle
+ * The People Ledger's per-accounting-cycle (Settings → Month cycle) settlement summary for one person — the balance hero, cycle
  * switcher and compact reconciliation. Presentational only: the statement comes from
  * `usePersonCycleStatement`, owned by the Person workspace so its activity feed reads the same result.
  */
@@ -27,6 +27,7 @@ export function PersonCycleStatementSection({
   setRepays,
   actions,
   footnote,
+  aside,
 }: {
   statement: PersonCycleStatement | null;
   isLoading: boolean;
@@ -38,6 +39,8 @@ export function PersonCycleStatementSection({
   actions?: React.ReactNode;
   /** Small print under the actions (e.g. the loans-outside-this-statement note). */
   footnote?: React.ReactNode;
+  /** Overall-relationship context — its own column on wide screens, above the linked EMIs. */
+  aside?: React.ReactNode;
 }) {
   const [howOpen, setHowOpen] = useState(false);
   const [savingLink, setSavingLink] = useState<string | null>(null);
@@ -59,7 +62,7 @@ export function PersonCycleStatementSection({
   const DirectionIcon = statement?.direction === "theyOwe" ? ArrowDownLeft : statement?.direction === "iOwe" ? ArrowUpRight : Check;
 
   return (
-    <section className="grid gap-x-8 gap-y-4 md:grid-cols-[minmax(0,1fr)_minmax(15rem,20rem)]">
+    <section className="grid gap-x-8 gap-y-5 md:grid-cols-[minmax(0,1fr)_minmax(15rem,1fr)] xl:grid-cols-[minmax(13rem,0.85fr)_minmax(16rem,1fr)_minmax(16rem,1fr)]">
       {/* Balance hero — the strongest element on the page */}
       <div className="min-w-0">
         {loading ? (
@@ -91,9 +94,13 @@ export function PersonCycleStatementSection({
                 <DirectionIcon className="size-4" strokeWidth={2.5} aria-hidden />
                 {cyclePosition(statement, statement.personName).headline}
               </p>
-              <p className={cn("mt-0.5 font-heading text-[34px] leading-none font-bold tracking-tight tabular-nums sm:text-[38px]", statement.direction === "settled" ? "text-foreground" : tone)}>
-                {money(statement.amount)}
-              </p>
+              {statement.direction === "settled" ? (
+                <p className="mt-1 text-[13px] font-medium text-foreground/80">Nothing to receive or give this cycle.</p>
+              ) : (
+                <p className={cn("mt-0.5 font-heading text-[34px] leading-none font-bold tracking-tight tabular-nums sm:text-[38px]", tone)}>
+                  {money(statement.amount)}
+                </p>
+              )}
             </div>
             )}
           </>
@@ -109,7 +116,7 @@ export function PersonCycleStatementSection({
       </div>
 
       {/* Compact reconciliation */}
-      <div className="min-w-0 border-t border-border-strong/75 pt-4 md:border-t-0 md:border-l md:pt-0 md:pl-7">
+      <div className="min-w-0 border-t border-border-strong/60 pt-4 md:border-t-0 md:border-l md:pt-0 md:pl-7">
         {loading ? (
           <div className="space-y-2 pt-1">
             <Skeleton className="h-4 w-full" />
@@ -120,38 +127,6 @@ export function PersonCycleStatementSection({
           <>
             <p className="text-[11px] font-bold tracking-[0.08em] text-foreground/75 uppercase">This cycle</p>
             <CycleReconciliation statement={statement} personName={statement.personName} className="mt-1" />
-
-            {linkedEmis.length > 0 && (
-              <div className="mt-3 border-t border-border-strong/75 pt-2.5">
-                <p className="text-[11px] font-medium tracking-[0.08em] text-muted-foreground uppercase">Linked EMIs</p>
-                <ul className="mt-1.5 space-y-2">
-                  {linkedEmis.map((s) => (
-                    <li key={`${s.kind}:${s.id}`} className="flex flex-col gap-1 text-xs">
-                      <span className="flex min-w-0 items-center gap-1.5">
-                        <EmiBadge />
-                        <span className="truncate font-medium text-foreground">{s.name}</span>
-                      </span>
-                      <span className="flex items-center justify-between gap-2">
-                        <span className="text-muted-foreground">
-                          {s.repays ? `${statement.personName} repays you` : "For them, not counted"}
-                        </span>
-                        <button
-                          type="button"
-                          disabled={savingLink === s.id}
-                          onClick={() => toggleRepays(s)}
-                          className="shrink-0 rounded-[6px] border border-border-strong px-2 py-0.5 font-semibold text-foreground transition-colors hover:border-primary-accent-text hover:text-primary-accent-text disabled:opacity-50"
-                        >
-                          {s.repays ? "Stop counting" : `${statement.personName} repays me`}
-                        </button>
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-                <p className="mt-1.5 text-[11px] text-muted-foreground">
-                  Paying the bank doesn&apos;t settle this — record what they pay you with Settle Up.
-                </p>
-              </div>
-            )}
 
             <div className="mt-2">
               <button
@@ -173,6 +148,39 @@ export function PersonCycleStatementSection({
           </>
         )}
       </div>
+      {/* Context — overall relationship + linked obligations; only when there is something to show */}
+      {!loading && (aside || linkedEmis.length > 0) && (
+        <div className="flex min-w-0 flex-col gap-4 border-t border-border-strong/60 pt-4 md:col-span-2 xl:col-span-1 xl:border-t-0 xl:border-l xl:pt-0 xl:pl-7">
+          {aside}
+          {linkedEmis.length > 0 && (
+            <div>
+              <p className="text-[11px] font-bold tracking-[0.08em] text-foreground/75 uppercase">Linked EMIs</p>
+              <ul className="mt-1.5 divide-y divide-border-strong/50">
+                {linkedEmis.map((s) => (
+                  <li key={`${s.kind}:${s.id}`} className="flex items-center justify-between gap-3 py-1.5 text-xs">
+                    <span className="flex min-w-0 flex-col gap-0.5">
+                      <span className="flex min-w-0 items-center gap-1.5">
+                        <EmiBadge />
+                        <span className="truncate font-semibold text-foreground">{s.name}</span>
+                      </span>
+                      <span className="text-foreground/70">{s.repays ? `${statement.personName} repays you` : "For them, not counted"}</span>
+                    </span>
+                    <button
+                      type="button"
+                      disabled={savingLink === s.id}
+                      onClick={() => toggleRepays(s)}
+                      className="shrink-0 rounded-[6px] border border-border-strong px-2 py-0.5 font-semibold text-foreground transition-colors hover:border-primary-accent-text hover:text-primary-accent-text disabled:opacity-50"
+                    >
+                      {s.repays ? "Stop counting" : `${statement.personName} repays me`}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-1 text-[11px] text-foreground/65">Paying the bank doesn&apos;t settle this — record what they pay you with Settle Up.</p>
+            </div>
+          )}
+        </div>
+      )}
     </section>
   );
 }

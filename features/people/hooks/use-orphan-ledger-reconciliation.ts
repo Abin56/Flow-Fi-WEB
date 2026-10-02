@@ -22,6 +22,8 @@ import { useTransactionActions } from "@/features/transactions/hooks/use-transac
 import { planOrphanReconciliation } from "@/lib/engines/transaction-owned-ledger";
 import type { Person } from "@/lib/models/person";
 import type { Transaction } from "@/lib/models/transaction";
+import type { Expense } from "@/lib/models/expense";
+import { useExpenses } from "@/hooks/use-expenses";
 
 export function useOrphanLedgerReconciliation(): void {
   const { data: people = [], isLoading: peopleLoading } = usePeople();
@@ -50,6 +52,26 @@ export function useOrphanLedgerReconciliation(): void {
       });
     }
   }, [actions, people, entriesByPersonId, active, trashed, peopleLoading, entriesLoading, activeLoading, trashLoading]);
+
+  // Split/assigned Expenses whose Transaction was deleted alone (the old Transaction Studio path). The
+  // service re-reads everything fresh and repairs only a ghost with no payment history; a blocked one is
+  // left untouched and reported here (the People Ledger shows "repair blocked — payment history exists").
+  const { data: expenses = [], isLoading: expensesLoading } = useExpenses();
+  const attemptedExpenses = useRef(new Set<string>());
+  useEffect(() => {
+    if (!actions || expensesLoading || activeLoading || trashLoading) return;
+    const liveIds = new Set((active as Transaction[]).map((t) => t.id));
+    for (const expense of expenses as Expense[]) {
+      if (expense.deletedAt != null || liveIds.has(expense.transactionId) || attemptedExpenses.current.has(expense.id)) continue;
+      attemptedExpenses.current.add(expense.id);
+      actions
+        .repairSplitGhost(expense.id)
+        .then((verdict) => {
+          if (verdict.kind === "blocked") console.warn("[people] split ghost repair blocked — payment history exists", verdict.diagnostics);
+        })
+        .catch((error: unknown) => console.warn("[people] couldn't repair split ghost", expense.id, error));
+    }
+  }, [actions, expenses, active, expensesLoading, activeLoading, trashLoading]);
 }
 
 /** Render-nothing mount point for {@link useOrphanLedgerReconciliation}. */

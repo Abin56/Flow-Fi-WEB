@@ -37,10 +37,8 @@ import {
 } from "@/features/people/hooks/use-people-data";
 import { usePeopleCycleStatements } from "@/features/people/hooks/use-person-cycle-statement";
 import { usePeople } from "@/hooks/use-people";
-import {
-  cycleContaining,
-  type StatementCycle,
-} from "@/lib/engines/person-cycle-statement";
+import type { StatementCycle } from "@/lib/engines/person-cycle-statement";
+import { useSelectedCycle } from "@/features/people/hooks/use-selected-cycle";
 import type { LedgerEntry, Person } from "@/lib/models/person";
 import { cn } from "@/lib/utils";
 import { toast } from "@/store/toast-store";
@@ -65,9 +63,7 @@ export function PeopleWorkspace() {
   const { data: rawPeople = [] } = usePeople();
   const actions = usePeopleActions();
 
-  const [cycle, setCycleState] = useState<StatementCycle>(() =>
-    cycleContaining(new Date()),
-  );
+  const [cycle, setCycleState] = useSelectedCycle();
   const [cycleDirection, setCycleDirection] = useState<-1 | 0 | 1>(0);
   function setCycle(next: StatementCycle) {
     const delta = next.start.getTime() - cycle.start.getTime();

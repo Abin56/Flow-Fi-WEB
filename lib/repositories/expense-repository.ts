@@ -26,7 +26,8 @@ import { generateId } from "@/lib/utils/id-generator";
 import { InstallmentPaymentRepository, InstallmentRepository, PaymentScheduleRepository } from "./payment-schedule-repository";
 import { LedgerRepository, PersonRepository } from "./person-repository";
 import { TransactionRepository } from "./transaction-repository";
-import type { CollectionReference } from "firebase/firestore";
+import type { Transaction } from "@/lib/models/transaction";
+import { type CollectionReference, runTransaction } from "firebase/firestore";
 
 /**
  * A single participant's raw input before shares are resolved — the UI
@@ -42,6 +43,20 @@ export interface ExpenseParticipantInput {
   isMe?: boolean;
   /** See `ReceivedStatus`. Defaults to "yetToReceive" for a non-"Me" participant, ignored (forced "notApplicable") for "Me". */
   receivedStatus?: ReceivedStatus;
+}
+
+/**
+ * Every document a split write created, in order — so a failure part-way can be undone exactly
+ * (`ExpenseRepository.rollbackSplitWrites`) instead of leaving shares, installments or people behind.
+ */
+export interface SplitWriteJournal {
+  createdPeople: Person[];
+  scheduleIds: string[];
+  entries: { personId: string; entryId: string }[];
+}
+
+function newSplitWriteJournal(): SplitWriteJournal {
+  return { createdPeople: [], scheduleIds: [], entries: [] };
 }
 
 function round2(v: number): number {
@@ -341,7 +356,7 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
    * picking an existing Person up front, so a `personId` is never null there
    * for a real ledger-bound participant.
    */
-  private async promoteCustomNameParticipants(participants: ExpenseParticipant[]): Promise<ExpenseParticipant[]> {
+  private async promoteCustomNameParticipants(participants: ExpenseParticipant[], journal?: SplitWriteJournal): Promise<ExpenseParticipant[]> {
     const needsPromotion = participants.some((p) => !p.isMe && p.personId == null && p.name.trim() !== "");
     if (!needsPromotion) return participants;
 
@@ -366,6 +381,7 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
           openingBalance: 0,
         });
         createdThisCall.set(key, person);
+        journal?.createdPeople.push(person);
       }
       resolved.push({ ...participant, personId: person.id });
     }
@@ -391,9 +407,12 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
     transactionId: string;
     dueDate?: Date | null;
     sourceKind: Extract<LedgerSourceKind, "splitExpense" | "assignedExpense">;
+    /** Records every write, so a caller can undo a partial split exactly (`rollbackSplitWrites`). */
+    journal?: SplitWriteJournal;
   }): Promise<{ scheduleId: string; participants: ExpenseParticipant[] }> {
     const { expenseId, totalAmount, date, description, transactionId, dueDate, sourceKind } = params;
-    const participants = await this.promoteCustomNameParticipants(params.participants);
+    const { journal } = params;
+    const participants = await this.promoteCustomNameParticipants(params.participants, journal);
     const collectible = participants.filter((p) => !p.isMe);
     if (collectible.length === 0) {
       throw new Error("Add at least one other person to share with");
@@ -409,6 +428,7 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
       firstDueDate: dueDate ?? addDays(date, 7),
       installmentCount: collectible.length,
     });
+    journal?.scheduleIds.push(schedule.id);
 
     const installments = await this.installmentRepositoryFor(schedule.id).generateInstallments(schedule, {
       precomputedAmounts: collectible.map((p) => ({ amountDue: p.share })),
@@ -424,7 +444,7 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
       const person = await this.personRepository.getByKey(participant.personId);
       if (person == null) continue;
       const ledgerRepository = this.ledgerRepositoryFor(person.id);
-      await ledgerRepository.addEntry(person, {
+      const shareEntry = await ledgerRepository.addEntry(person, {
         type: "gave",
         amount: participant.share,
         date,
@@ -433,6 +453,7 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
         sourceKind,
         receivedStatus: "yetToReceive",
       });
+      journal?.entries.push({ personId: person.id, entryId: shareEntry.id });
       // "Received" is decided up front (e.g. the payer already collected cash
       // at the table) — post the settlement immediately rather than waiting
       // for a separate Settle Up action, so the ledger's received total is
@@ -441,7 +462,7 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
       // intent, not in ledger effect, per Task 2.
       if (participant.receivedStatus === "received") {
         const refreshedPerson = (await this.personRepository.getByKey(person.id)) ?? person;
-        await ledgerRepository.addEntry(refreshedPerson, {
+        const receivedEntry = await ledgerRepository.addEntry(refreshedPerson, {
           type: "receivedBack",
           amount: participant.share,
           date,
@@ -450,6 +471,7 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
           sourceKind,
           receivedStatus: "received",
         });
+        journal?.entries.push({ personId: person.id, entryId: receivedEntry.id });
       }
     }
 
@@ -497,6 +519,7 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
 
     const expenseId = generateId();
     let scheduleId: string | null = null;
+    const journal = newSplitWriteJournal();
 
     try {
       if (participants.length > 0) {
@@ -509,6 +532,7 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
           transactionId: transaction.id,
           dueDate: params.dueDate,
           sourceKind: params.sourceKind ?? "splitExpense",
+          journal,
         });
         scheduleId = result.scheduleId;
         participants = result.participants;
@@ -538,10 +562,78 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
       // undo it rather than leave an orphaned Transaction with no Expense/schedule/
       // ledger behind it, which would otherwise double-count on a caller's retry
       // (retry sees no committed Expense, so it creates a second Transaction).
-      await this.transactionRepository.softDeleteTransaction(transaction).catch(() => {
-        // Best-effort — the original error below is what actually surfaces.
-      });
+      // Every share, installment, schedule and auto-created person written so far is
+      // undone too, so a failed split leaves zero partial financial state.
+      await this.rollbackSplitWrites(journal, { expenseId, transaction }, error);
       throw error;
+    }
+  }
+
+  /**
+   * Undoes a partially written split, newest write first, through the same balance-safe primitives
+   * every other delete uses: each People share via `softDeleteEntries` (balance reversed once, an
+   * already-trashed entry skipped), the schedule's installments and the schedule, the Expense if it
+   * landed, people auto-created for this split, and — for `createExpense` only — its new Transaction
+   * (re-read fresh, so an already-trashed one is never reversed twice). Every step is attempted even
+   * if an earlier one fails; if any fails the error says so, never a silent half-rollback. Idempotent.
+   */
+  private async rollbackSplitWrites(
+    journal: SplitWriteJournal,
+    owned: { expenseId: string | null; transaction?: Transaction },
+    /** The failure being rolled back — its message is kept, so the real cause always surfaces. */
+    original?: unknown,
+  ): Promise<void> {
+    const failures: unknown[] = [];
+    const attempt = async (step: () => Promise<unknown>) => {
+      try {
+        await step();
+      } catch (e) {
+        failures.push(e);
+      }
+    };
+
+    const byPerson = new Map<string, string[]>();
+    for (const { personId, entryId } of journal.entries) byPerson.set(personId, [...(byPerson.get(personId) ?? []), entryId]);
+    for (const [personId, entryIds] of byPerson) {
+      await attempt(async () => {
+        const person = await this.personRepository.getByKey(personId);
+        if (person == null) return;
+        const ledger = this.ledgerRepositoryFor(personId);
+        const entries = (await Promise.all(entryIds.map((id) => ledger.getByKey(id)))).filter((e): e is LedgerEntry => e != null);
+        await ledger.softDeleteEntries(person, entries.reverse());
+      });
+    }
+    for (const scheduleId of journal.scheduleIds) {
+      await attempt(async () => {
+        const installmentRepository = this.installmentRepositoryFor(scheduleId);
+        for (const installment of await installmentRepository.getAll()) await installmentRepository.softDelete(installment);
+        const schedule = await this.paymentScheduleRepository.getByKey(scheduleId);
+        if (schedule != null && schedule.deletedAt == null) await this.paymentScheduleRepository.softDelete(schedule);
+      });
+    }
+    if (owned.expenseId != null) await attempt(async () => {
+      const expense = await this.getByKey(owned.expenseId!);
+      if (expense != null && expense.deletedAt == null) await this.softDelete(expense);
+    });
+    for (const person of journal.createdPeople) {
+      await attempt(async () => {
+        const fresh = await this.personRepository.getByKey(person.id);
+        if (fresh != null && fresh.deletedAt == null) await this.personRepository.softDelete(fresh);
+      });
+    }
+    if (owned.transaction) {
+      const transaction = owned.transaction;
+      // Read fresh inside the same atomic write: an already-trashed Transaction is never reversed twice.
+      await attempt(() =>
+        runTransaction(this.collection.firestore, async (tx) => {
+          const fresh = await this.transactionRepository.getInTransaction(tx, transaction.id);
+          if (fresh != null && fresh.deletedAt == null) await this.transactionRepository.softDeleteTransactionInTransaction(tx, fresh);
+        }),
+      );
+    }
+    if (failures.length > 0) {
+      const reason = original instanceof Error ? original.message : "This split failed";
+      throw new Error(`${reason} — and it couldn't be fully undone; please check this expense and the people in it.`, { cause: failures[0] });
     }
   }
 
@@ -591,24 +683,40 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
     }
 
     const expenseId = existingExpense?.id ?? generateId();
+    // The Transaction already existed and stays; only what this conversion writes is undone on failure
+    // (never an Expense that existed before it).
+    const journal = newSplitWriteJournal();
+    const rollback = (error: unknown) => this.rollbackSplitWrites(journal, { expenseId: existingExpense == null ? expenseId : null }, error);
 
-    const result = await this.generateScheduleAndLedger({
-      expenseId,
-      participants,
-      totalAmount: params.totalAmount,
-      date: params.date,
-      description: params.description,
-      transactionId: params.transactionId,
-      dueDate: params.dueDate,
-      sourceKind: params.sourceKind ?? "splitExpense",
-    });
+    let result: { scheduleId: string; participants: ExpenseParticipant[] };
+    try {
+      result = await this.generateScheduleAndLedger({
+        expenseId,
+        participants,
+        totalAmount: params.totalAmount,
+        date: params.date,
+        description: params.description,
+        transactionId: params.transactionId,
+        dueDate: params.dueDate,
+        sourceKind: params.sourceKind ?? "splitExpense",
+        journal,
+      });
+    } catch (error) {
+      await rollback(error);
+      throw error;
+    }
     const scheduleId = result.scheduleId;
     participants = result.participants;
 
     if (existingExpense != null) {
       let updated = recordEdit(existingExpense, "splitType", existingExpense.splitType, params.splitType);
       updated = { ...updated, splitType: params.splitType, participants, scheduleId };
-      await this.update(updated);
+      try {
+        await this.update(updated);
+      } catch (error) {
+        await rollback(error);
+        throw error;
+      }
       return updated;
     }
 
@@ -629,7 +737,12 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
       lastEditedAt: null,
       editHistory: [],
     };
-    await this.add(expense.id, expense);
+    try {
+      await this.add(expense.id, expense);
+    } catch (error) {
+      await rollback(error);
+      throw error;
+    }
     return expense;
   }
 
@@ -830,26 +943,34 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
             const ledgerRepository = this.ledgerRepositoryFor(person.id);
             const entries = await ledgerRepository.getByTransactionRef(expense.transactionId);
             const originalEntry: LedgerEntry | undefined = entries.find((e) => e.type === "gave");
-            if (delta !== 0) {
-              if (originalEntry != null) {
-                // Corrects the same "Split: ..."/"gave" entry the person's
-                // statement already shows, so its displayed amount moves in
-                // step with the just-synced Transaction/Installment instead
-                // of staying stale next to a separate "Correct Balance" line.
-                await ledgerRepository.editEntryAmount(person, originalEntry, participant.share);
-              } else {
-                // The original entry is gone (e.g. manually deleted from the
-                // person's timeline) — fall back to a standalone correction
-                // so the balance still stays in sync.
-                await ledgerRepository.addEntry(person, {
-                  type: "adjustment",
-                  amount: Math.abs(delta),
-                  date: params.date ?? expense.date,
-                  note: `Edited: ${params.description ?? expense.description}`,
-                  increasesBalance: delta >= 0,
-                  receivedStatus: "yetToReceive",
+            const newDate = params.date ?? expense.date;
+            const newNote = `Split: ${params.description ?? expense.description}`;
+            if (originalEntry != null) {
+              // Corrects the same "Split: ..."/"gave" entry the person's
+              // statement already shows — amount, date and description move in
+              // step with the just-synced Transaction/Installment instead of
+              // staying stale (date/description edits used to be dropped).
+              const dateChanged = originalEntry.date.getTime() !== newDate.getTime();
+              const noteChanged = originalEntry.note.startsWith("Split: ") && originalEntry.note !== newNote;
+              if (delta !== 0 || dateChanged || noteChanged) {
+                await ledgerRepository.editEntry(person, originalEntry, {
+                  amount: delta !== 0 ? participant.share : undefined,
+                  date: dateChanged ? newDate : undefined,
+                  note: noteChanged ? newNote : undefined,
                 });
               }
+            } else if (delta !== 0) {
+              // The original entry is gone (e.g. manually deleted from the
+              // person's timeline) — fall back to a standalone correction
+              // so the balance still stays in sync.
+              await ledgerRepository.addEntry(person, {
+                type: "adjustment",
+                amount: Math.abs(delta),
+                date: newDate,
+                note: `Edited: ${params.description ?? expense.description}`,
+                increasesBalance: delta >= 0,
+                receivedStatus: "yetToReceive",
+              });
             }
 
             // Reconcile the received-status transition — idempotent by
@@ -1196,7 +1317,9 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
    */
   async deleteExpense(expense: Expense): Promise<void> {
     const transaction = await this.transactionRepository.getByKey(expense.transactionId);
-    if (transaction != null) {
+    if (transaction != null && transaction.deletedAt == null) {
+      // An already-trashed Transaction already had its balance reversed — never reverse it twice
+      // (e.g. a split whose transaction was deleted alone by an older path, then repaired here).
       await this.transactionRepository.softDeleteTransaction(transaction);
     }
 

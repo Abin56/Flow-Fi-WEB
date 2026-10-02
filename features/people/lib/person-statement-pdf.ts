@@ -256,7 +256,8 @@ export async function renderPersonStatementPdf(statement: PersonCycleStatement, 
   const drawRow = (row: StatementViewRow) => {
     const fam = row.carried ? F.carried : TONE_FAMILY[row.tone];
     const typeFam = TONE_FAMILY[row.tone];
-    const h = 27;
+    // A split share carries a third line (original expense · split count · their share).
+    const h = row.splitNote ? 34 : 27;
     ensure(h);
     const top = y;
     const bottom = y - h;
@@ -282,6 +283,14 @@ export async function renderPersonStatementPdf(statement: PersonCycleStatement, 
         case 2:
           text(fit(row.title, bold, 8, w - 2 * PAD), x + PAD, top - 11, 8, bold, INK);
           text(fit(row.carried && row.fromCycle ? `From ${row.fromCycle}  |  ${row.relation}` : row.relation, regular, 6.4, w - 2 * PAD), x + PAD, top - 21, 6.4, regular, MUTED);
+          if (row.splitNote) {
+            // "Total price ₹X" in bold, the rest of the split line regular.
+            const cut = row.splitNote.indexOf(" · ");
+            const head = cut < 0 ? row.splitNote : row.splitNote.slice(0, cut);
+            const headW = bold.widthOfTextAtSize(pdfSafe(head), 6.4);
+            text(head, x + PAD, top - 29, 6.4, bold, INK);
+            if (cut >= 0) text(fit(row.splitNote.slice(cut), regular, 6.2, w - 2 * PAD - headW), x + PAD + headW, top - 29, 6.2, regular, MUTED);
+          }
           break;
         case 3:
           pill(fit(row.typeLabel, bold, 6.3, w - 2 * PAD - 8), x + PAD, row.carried ? mid + 4 : mid, WHITE, typeFam.text, 6.3, typeFam.accent);

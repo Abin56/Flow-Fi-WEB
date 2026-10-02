@@ -39,11 +39,13 @@
 
 import { useMemo } from "react";
 import {
+  cardOwnStanding,
   creditCardStanding,
   creditUtilizationPercent,
   sharedCreditLimitStanding,
   statementCycleView,
   type UtilizationCard,
+  type UtilizationEmi,
   type UtilizationStatement,
 } from "@/lib/engines/credit-utilization";
 import {
@@ -141,8 +143,19 @@ function toUtilizationCard(card: CreditCardProfile): UtilizationCard {
   };
 }
 
+/** The facility a card draws from, resolved — `null` for a standalone card or unresolvable metadata. */
+export interface SharedLimitView {
+  id: string;
+  name: string;
+  /** `SharedCreditLimit.creditLimit` — the ONE limit every member card draws from. */
+  creditLimit: number;
+  /** Every card under this facility (this card included), in list order. */
+  memberCardIds: string[];
+}
+
 export interface CreditCardStandingView {
   card: CreditCardProfile;
+  /** Facility-wide for a shared-limit card (identical on every sibling); the card's own otherwise. */
   outstanding: number;
   available: number;
   currentCycleSpend: number;
@@ -153,15 +166,140 @@ export interface CreditCardStandingView {
    *  utilization and `available` add up to the limit. A shared-limit card's effective limit is the
    *  pooled `SharedCreditLimit.creditLimit`, not its own (often nominal) `creditLimit`. */
   utilizationPercent: number;
+  /** The limit this card actually draws from — `SharedCreditLimit.creditLimit` for a shared card. */
+  effectiveCreditLimit: number;
+  /** This physical card's own usage (its statements + unbilled spend) — equals `outstanding` when standalone. */
+  ownOutstanding: number;
+  sharedLimit: SharedLimitView | null;
+}
+
+/** A facility doc usable for pooling — anything else falls back to standalone so no debt is hidden. */
+function isUsableSharedLimit(s: SharedCreditLimit | undefined): s is SharedCreditLimit {
+  return s != null && s.deletedAt == null && Number.isFinite(s.creditLimit) && s.creditLimit > 0;
 }
 
 /**
- * Every active card's engine-computed standing — shared-limit cards are
- * pooled via `sharedCreditLimitStanding` (each sibling gets the *same*
- * pooled `outstanding`/`available`, matching what `creditCardStandingProvider`
- * does for a shared-limit card in the Dart source), standalone cards via
- * plain `creditCardStanding`. This is the one function every other hook/view
- * in this file builds on — never call the engine functions again elsewhere.
+ * Every card's engine-computed standing — the pure core of `useCreditCardStandings`. Shared-limit cards
+ * are pooled via `sharedCreditLimitStanding` (every sibling gets the *same* facility `outstanding`/
+ * `available`, matching Flutter's `creditCardStandingProvider` delegating to
+ * `sharedCreditLimitStandingProvider`); standalone cards via plain `creditCardStanding`. A card whose
+ * `sharedLimitId` points at a missing/trashed/malformed facility is treated as standalone — Flutter
+ * would report ₹0 there, which hides real card debt, so Web keeps counting it.
+ */
+export function computeCreditCardStandings(input: {
+  cards: CreditCardProfile[];
+  sharedLimits: SharedCreditLimit[];
+  statements: Statement[];
+  transactions: Transaction[];
+  utilizationEmis: UtilizationEmi[];
+}): CreditCardStandingView[] {
+  const { cards: cardList, statements: statementList, transactions: transactionList, utilizationEmis } = input;
+
+  const transactionsByAccountId = new Map<string, Transaction[]>();
+  for (const t of transactionList) {
+    if (t.deletedAt != null) continue;
+    const list = transactionsByAccountId.get(t.accountId) ?? [];
+    list.push(t);
+    transactionsByAccountId.set(t.accountId, list);
+  }
+
+  const statementsByCardId = new Map<string, Statement[]>();
+  for (const s of statementList) {
+    const list = statementsByCardId.get(s.cardId) ?? [];
+    list.push(s);
+    statementsByCardId.set(s.cardId, list);
+  }
+
+  /**
+   * Every card's statements (live totals) and not-yet-billed spend since its most recent statement
+   * (or all-time, if it has none), with the card's bill payments (transfers into the card account)
+   * reconciled against them — oldest statement first, then the unbilled spend. Always per PHYSICAL
+   * card: a bill payment into one card's account settles that card's own statements only.
+   */
+  const settledByCardId = new Map(
+    cardList.map((c) => {
+      const cardTransactions = transactionsByAccountId.get(c.accountId) ?? [];
+      const cardStatements = statementsByCardId.get(c.id) ?? [];
+      const unbilled = unbilledSpendForCard(cardTransactions, cardStatements);
+      const live = cardStatements.map((s) =>
+        statementWithLiveTotal(s, statementPeriodTotal(cardTransactions, s), s.minimumDue),
+      );
+      const settled = settleCardPayments(live, unbilled.totalAmount, cardPaymentTotal(cardTransactions));
+      return [c.id, { statements: settled.statements, currentCycle: { ...unbilled, totalAmount: settled.unbilledTotal } }] as const;
+    }),
+  );
+  const currentCycleByCardId = new Map([...settledByCardId].map(([id, s]) => [id, s.currentCycle]));
+  const utilizationStatementsFor = (cardId: string) =>
+    (settledByCardId.get(cardId)?.statements ?? []).map(toSnapshotUtilizationStatement);
+
+  const sharedLimitById = new Map(input.sharedLimits.map((s) => [s.id, s]));
+  const resolvedSharedLimit = (card: CreditCardProfile) => {
+    if (card.sharedLimitId == null) return undefined;
+    const s = sharedLimitById.get(card.sharedLimitId);
+    return isUsableSharedLimit(s) ? s : undefined;
+  };
+
+  const cardsBySharedLimitId = new Map<string, CreditCardProfile[]>();
+  for (const c of cardList) {
+    const s = resolvedSharedLimit(c);
+    if (s == null) continue;
+    cardsBySharedLimitId.set(s.id, [...(cardsBySharedLimitId.get(s.id) ?? []), c]);
+  }
+
+  return cardList.map((card): CreditCardStandingView => {
+    const cardStatements = utilizationStatementsFor(card.id);
+    const rawStatements = settledByCardId.get(card.id)?.statements ?? [];
+    const own = cardOwnStanding(toUtilizationCard(card), cardStatements, currentCycleByCardId.get(card.id) ?? null);
+    const sharedLimit = resolvedSharedLimit(card);
+
+    if (sharedLimit != null) {
+      const siblings = cardsBySharedLimitId.get(sharedLimit.id) ?? [card];
+      const standing = sharedCreditLimitStanding({
+        sharedLimit: { id: sharedLimit.id, creditLimit: sharedLimit.creditLimit },
+        perCard: siblings.map((sibling) => ({
+          card: toUtilizationCard(sibling),
+          statements: utilizationStatementsFor(sibling.id),
+          currentCycleStatement: currentCycleByCardId.get(sibling.id) ?? null,
+          emis: utilizationEmis,
+        })),
+      });
+      return {
+        card,
+        ...standing,
+        statements: rawStatements,
+        utilizationPercent: creditUtilizationPercent(standing.outstanding + standing.lockedEmiPrincipal, sharedLimit.creditLimit),
+        effectiveCreditLimit: sharedLimit.creditLimit,
+        ownOutstanding: own.outstanding,
+        sharedLimit: {
+          id: sharedLimit.id,
+          name: sharedLimit.name,
+          creditLimit: sharedLimit.creditLimit,
+          memberCardIds: siblings.map((s) => s.id),
+        },
+      };
+    }
+
+    const standing = creditCardStanding({
+      card: toUtilizationCard(card),
+      statements: cardStatements,
+      currentCycleStatement: currentCycleByCardId.get(card.id) ?? null,
+      emis: utilizationEmis,
+    });
+    return {
+      card,
+      ...standing,
+      statements: rawStatements,
+      utilizationPercent: creditUtilizationPercent(standing.outstanding + standing.lockedEmiPrincipal, card.creditLimit),
+      effectiveCreditLimit: card.creditLimit,
+      ownOutstanding: own.outstanding,
+      sharedLimit: null,
+    };
+  });
+}
+
+/**
+ * Every active card's engine-computed standing — see `computeCreditCardStandings`. This is the one
+ * function every other hook/view in this file builds on — never call the engine functions again elsewhere.
  */
 export function useCreditCardStandings(): { standings: CreditCardStandingView[]; isLoading: boolean } {
   const { data: cards = [], isLoading: cardsLoading } = useCreditCards();
@@ -170,100 +308,17 @@ export function useCreditCardStandings(): { standings: CreditCardStandingView[];
   const { utilizationEmis, isLoading: emisLoading } = useCardUtilizationEmis();
   const { data: transactions = [], isLoading: transactionsLoading } = useTransactions();
 
-  const standings = useMemo(() => {
-    const cardList = cards as CreditCardProfile[];
-    const statementList = statements as Statement[];
-    const transactionList = transactions as Transaction[];
-
-    const transactionsByAccountId = new Map<string, Transaction[]>();
-    for (const t of transactionList) {
-      if (t.deletedAt != null) continue;
-      const list = transactionsByAccountId.get(t.accountId) ?? [];
-      list.push(t);
-      transactionsByAccountId.set(t.accountId, list);
-    }
-
-    const statementsByCardId = new Map<string, Statement[]>();
-    for (const s of statementList) {
-      const list = statementsByCardId.get(s.cardId) ?? [];
-      list.push(s);
-      statementsByCardId.set(s.cardId, list);
-    }
-
-    /**
-     * Every card's statements (live totals) and not-yet-billed spend since its most recent statement
-     * (or all-time, if it has none), with the card's bill payments (transfers into the card account)
-     * reconciled against them — oldest statement first, then the unbilled spend.
-     */
-    const settledByCardId = new Map(
-      cardList.map((c) => {
-        const cardTransactions = transactionsByAccountId.get(c.accountId) ?? [];
-        const cardStatements = statementsByCardId.get(c.id) ?? [];
-        const unbilled = unbilledSpendForCard(cardTransactions, cardStatements);
-        const live = cardStatements.map((s) =>
-          statementWithLiveTotal(s, statementPeriodTotal(cardTransactions, s), s.minimumDue),
-        );
-        const settled = settleCardPayments(live, unbilled.totalAmount, cardPaymentTotal(cardTransactions));
-        return [c.id, { statements: settled.statements, currentCycle: { ...unbilled, totalAmount: settled.unbilledTotal } }] as const;
+  const standings = useMemo(
+    () =>
+      computeCreditCardStandings({
+        cards: cards as CreditCardProfile[],
+        sharedLimits: sharedLimits as SharedCreditLimit[],
+        statements: statements as Statement[],
+        transactions: transactions as Transaction[],
+        utilizationEmis,
       }),
-    );
-    const currentCycleByCardId = new Map([...settledByCardId].map(([id, s]) => [id, s.currentCycle]));
-    const utilizationStatementsFor = (cardId: string) =>
-      (settledByCardId.get(cardId)?.statements ?? []).map(toSnapshotUtilizationStatement);
-
-    const cardsBySharedLimitId = new Map<string, CreditCardProfile[]>();
-    for (const c of cardList) {
-      if (c.sharedLimitId == null) continue;
-      const list = cardsBySharedLimitId.get(c.sharedLimitId) ?? [];
-      list.push(c);
-      cardsBySharedLimitId.set(c.sharedLimitId, list);
-    }
-
-    const sharedLimitById = new Map((sharedLimits as SharedCreditLimit[]).map((s) => [s.id, s]));
-    const results: CreditCardStandingView[] = [];
-
-    for (const card of cardList) {
-      const cardStatements = utilizationStatementsFor(card.id);
-      const rawStatements = settledByCardId.get(card.id)?.statements ?? [];
-
-      if (card.sharedLimitId != null && sharedLimitById.has(card.sharedLimitId)) {
-        const sharedLimit = sharedLimitById.get(card.sharedLimitId)!;
-        const siblings = cardsBySharedLimitId.get(card.sharedLimitId) ?? [card];
-        const perCard = siblings.map((sibling) => ({
-          card: toUtilizationCard(sibling),
-          statements: utilizationStatementsFor(sibling.id),
-          currentCycleStatement: currentCycleByCardId.get(sibling.id) ?? null,
-          emis: utilizationEmis,
-        }));
-        const standing = sharedCreditLimitStanding({
-          sharedLimit: { id: sharedLimit.id, creditLimit: sharedLimit.creditLimit },
-          perCard,
-        });
-        results.push({
-          card,
-          ...standing,
-          statements: rawStatements,
-          utilizationPercent: creditUtilizationPercent(standing.outstanding + standing.lockedEmiPrincipal, sharedLimit.creditLimit),
-        });
-        continue;
-      }
-
-      const standing = creditCardStanding({
-        card: toUtilizationCard(card),
-        statements: cardStatements,
-        currentCycleStatement: currentCycleByCardId.get(card.id) ?? null,
-        emis: utilizationEmis,
-      });
-      results.push({
-        card,
-        ...standing,
-        statements: rawStatements,
-        utilizationPercent: creditUtilizationPercent(standing.outstanding + standing.lockedEmiPrincipal, card.creditLimit),
-      });
-    }
-
-    return results;
-  }, [cards, sharedLimits, statements, utilizationEmis, transactions]);
+    [cards, sharedLimits, statements, utilizationEmis, transactions],
+  );
 
   return {
     standings,
@@ -290,48 +345,48 @@ export interface CreditCardTotals {
 }
 
 /**
- * Workspace-level totals — dedupes a shared limit's creditLimit/outstanding
- * to count it exactly once (per `creditUtilizationPercent`'s own contract),
- * by summing over distinct shared-limit ids plus every standalone card,
- * rather than summing every card's `available`/`outstanding` naively (which
- * would double count a shared limit across its member cards).
+ * Totals across cards, counting a resolved shared facility exactly once — its `SharedCreditLimit.creditLimit`,
+ * pooled outstanding, lock and available — and every standalone card individually. Mirrors Flutter's
+ * `_sumStandingAcrossCards` + `totalCreditLimitProvider`. Dedupe keys on the RESOLVED facility only: cards
+ * whose `sharedLimitId` dangles are standalone in `computeCreditCardStandings`, so each still counts.
  */
+export function creditCardTotalsFrom(standings: readonly CreditCardStandingView[]): CreditCardTotals {
+  const seenSharedLimitIds = new Set<string>();
+  let creditLimit = 0;
+  let utilized = 0;
+  let lockedEmiPrincipal = 0;
+  let available = 0;
+  let spentThisMonth = 0;
+
+  for (const s of standings) {
+    if (s.sharedLimit != null) {
+      if (seenSharedLimitIds.has(s.sharedLimit.id)) continue;
+      seenSharedLimitIds.add(s.sharedLimit.id);
+    }
+    // currentCycleSpend is pooled on a shared card too — counted once per facility like the rest.
+    spentThisMonth += s.currentCycleSpend;
+    creditLimit += s.effectiveCreditLimit;
+    utilized += s.outstanding;
+    lockedEmiPrincipal += s.lockedEmiPrincipal;
+    available += s.available;
+  }
+
+  return {
+    creditLimit,
+    utilized,
+    usedCredit: utilized + lockedEmiPrincipal,
+    lockedEmiPrincipal,
+    available,
+    spentThisMonth,
+    // Exposure (statement outstanding + locked card-EMI principal), matching `available`.
+    utilizationPercent: creditUtilizationPercent(utilized + lockedEmiPrincipal, creditLimit),
+  };
+}
+
+/** Workspace-level totals — see `creditCardTotalsFrom`. */
 export function useCreditCardTotals(): { totals: CreditCardTotals; isLoading: boolean } {
   const { standings, isLoading } = useCreditCardStandings();
-
-  const totals = useMemo(() => {
-    const seenSharedLimitIds = new Set<string>();
-    let creditLimit = 0;
-    let utilized = 0;
-    let lockedEmiPrincipal = 0;
-    let available = 0;
-    let spentThisMonth = 0;
-
-    for (const s of standings) {
-      spentThisMonth += s.currentCycleSpend;
-
-      if (s.card.sharedLimitId != null) {
-        if (seenSharedLimitIds.has(s.card.sharedLimitId)) continue;
-        seenSharedLimitIds.add(s.card.sharedLimitId);
-      }
-      creditLimit += s.card.creditLimit;
-      utilized += s.outstanding;
-      lockedEmiPrincipal += s.lockedEmiPrincipal;
-      available += s.available;
-    }
-
-    return {
-      creditLimit,
-      utilized,
-      usedCredit: utilized + lockedEmiPrincipal,
-      lockedEmiPrincipal,
-      available,
-      spentThisMonth,
-      // Exposure (statement outstanding + locked card-EMI principal), matching `available`.
-      utilizationPercent: creditUtilizationPercent(utilized + lockedEmiPrincipal, creditLimit),
-    };
-  }, [standings]);
-
+  const totals = useMemo(() => creditCardTotalsFrom(standings), [standings]);
   return { totals, isLoading };
 }
 
@@ -414,8 +469,9 @@ export interface CreditCardViewItem {
   issuer: string;
   network: string;
   last4: string;
+  /** The limit this card draws from — the facility's `SharedCreditLimit.creditLimit` for a shared card. */
   creditLimit: number;
-  /** Card-account outstanding (statement liability) — what gets billed. */
+  /** Card-account outstanding (statement liability) — what gets billed. Facility-wide for a shared card. */
   currentBalance: number;
   /** Card-linked EMI principal still locked against this card's limit (engine `lockedEmiPrincipal`). */
   lockedEmiPrincipal: number;
@@ -429,20 +485,40 @@ export interface CreditCardViewItem {
   dueDate: Date | null;
   minimumDue: number;
   isPrimary: boolean;
-  accent: "primary" | "success" | "warning" | "purple" | "expense";
+  accent: CardAccent;
   rewardPoints: number;
   cashbackEarned: number;
   loungeVisitsLeft: number;
+  /** This physical card's own usage — differs from `currentBalance` only for a shared-limit card. */
+  ownUsage: number;
+  /** The facility this card shares its limit with, plus its sibling cards' display identity. */
+  sharedLimit: (SharedLimitView & { siblings: { id: string; name: string; last4: string; network: string }[] }) | null;
   card: CreditCardProfile;
 }
 
+export type CardAccent = "primary" | "success" | "warning" | "purple" | "expense" | "teal" | "orange" | "gold" | "rose" | "sky" | "emerald" | "violet" | "slate" | "bronze" | "magenta" | "navy";
+
 /** Exported so the Add/Edit Card dialog can preview the accent a new card will actually be assigned. */
-export const ACCENT_CYCLE: CreditCardViewItem["accent"][] = ["primary", "success", "warning", "purple", "expense"];
+export const ACCENT_CYCLE: CardAccent[] = ["primary", "success", "warning", "purple", "expense"];
+
+/** Every user-pickable card colour, in picker order. */
+export const CARD_ACCENTS: CardAccent[] = ["primary", "purple", "teal", "success", "gold", "orange", "expense", "warning", "rose", "sky", "emerald", "violet", "slate", "bronze", "magenta", "navy"];
+
+/** The card account's `colorValue` stores the picked colour as `CARD_ACCENTS` index + 1; 0 (legacy / never
+ *  picked) keeps the old list-position colour so existing cards don't all change look. */
+export function colorValueForCardAccent(accent: CardAccent | null): number {
+  return accent == null ? 0 : CARD_ACCENTS.indexOf(accent) + 1;
+}
+
+export function pickedCardAccent(colorValue: number | undefined): CardAccent | null {
+  return colorValue != null && colorValue > 0 ? (CARD_ACCENTS[colorValue - 1] ?? null) : null;
+}
 
 function toViewItem(
   standing: CreditCardStandingView,
   index: number,
   accountsByAccountId: Map<string, Account>,
+  cardsById: Map<string, CreditCardProfile>,
 ): CreditCardViewItem {
   const { card, statements } = standing;
   const account = accountsByAccountId.get(card.accountId);
@@ -474,7 +550,7 @@ function toViewItem(
     issuer: account?.bankId ?? "—",
     network: card.cardNetwork ?? "—",
     last4: card.lastFourDigits ?? "----",
-    creditLimit: card.creditLimit,
+    creditLimit: standing.effectiveCreditLimit,
     currentBalance: standing.outstanding,
     lockedEmiPrincipal: standing.lockedEmiPrincipal,
     usedCredit: standing.outstanding + standing.lockedEmiPrincipal,
@@ -484,11 +560,28 @@ function toViewItem(
     dueDate: nextDueStatement ? nextDueStatement.dueDate : null,
     minimumDue: nextDueStatement?.minimumDue ?? 0,
     isPrimary: index === 0,
-    accent: ACCENT_CYCLE[index % ACCENT_CYCLE.length],
+    accent: pickedCardAccent(account?.colorValue) ?? ACCENT_CYCLE[index % ACCENT_CYCLE.length],
     // No rewards-ledger feature exists to source these from — see module doc comment.
     rewardPoints: 0,
     cashbackEarned: 0,
     loungeVisitsLeft: 0,
+    ownUsage: standing.ownOutstanding,
+    sharedLimit:
+      standing.sharedLimit == null
+        ? null
+        : {
+            ...standing.sharedLimit,
+            siblings: standing.sharedLimit.memberCardIds
+              .filter((id) => id !== card.id)
+              .map((id) => cardsById.get(id))
+              .filter((c): c is CreditCardProfile => c != null)
+              .map((c) => ({
+                id: c.id,
+                name: accountsByAccountId.get(c.accountId)?.name ?? "Credit Card",
+                last4: c.lastFourDigits ?? "----",
+                network: c.cardNetwork ?? "—",
+              })),
+          },
     card,
   };
 }
@@ -500,7 +593,8 @@ export function useCreditCardViewItems(): { items: CreditCardViewItem[]; isLoadi
 
   const items = useMemo(() => {
     const accountsByAccountId = new Map((accounts as Account[]).map((a) => [a.id, a]));
-    return standings.map((s, i) => toViewItem(s, i, accountsByAccountId));
+    const cardsById = new Map(standings.map((s) => [s.card.id, s.card]));
+    return standings.map((s, i) => toViewItem(s, i, accountsByAccountId, cardsById));
   }, [standings, accounts]);
 
   return { items, isLoading: standingsLoading || accountsLoading };
@@ -516,13 +610,18 @@ export interface CreateCreditCardFormParams {
   paymentDueDay: number;
   bankId?: string | null;
   sharedLimitId?: string | null;
+  colorValue?: number;
 }
 
 export interface EditCreditCardFormParams {
+  colorValue?: number;
   name?: string;
   cardHolderName?: string | null;
   creditLimit?: number;
   lastFourDigits?: string | null;
+  cardNetwork?: CreditCardProfile["cardNetwork"];
+  statementDay?: number;
+  paymentDueDay?: number;
   bankId?: string | null;
   sharedLimitId?: string | null;
   clearSharedLimitId?: boolean;
@@ -574,7 +673,7 @@ export function useCreditCardActions() {
           name: params.name,
           type: "card",
           openingBalance: 0,
-          colorValue: 0,
+          colorValue: params.colorValue ?? 0,
           accountHolderName: params.cardHolderName,
           accountNumberLast4: params.lastFourDigits,
           bankId: params.bankId ?? null,
@@ -596,16 +695,26 @@ export function useCreditCardActions() {
         const nameChanged = params.name != null && params.name !== account?.name;
         const bankChanged = params.bankId !== undefined && params.bankId !== (account?.bankId ?? null);
         const holderChanged = params.cardHolderName !== undefined && params.cardHolderName !== (account?.accountHolderName ?? null);
-        if (account && (nameChanged || bankChanged || holderChanged)) {
+        // createCard writes last-4 on both documents — keep the account's copy in step on edit.
+        const last4Changed = params.lastFourDigits != null && params.lastFourDigits !== (account?.accountNumberLast4 ?? null);
+        const colorChanged = params.colorValue != null && params.colorValue !== account?.colorValue;
+        if (account && (nameChanged || bankChanged || holderChanged || last4Changed || colorChanged)) {
           await accountRepository.editAccount(account, {
             ...(params.name != null ? { name: params.name } : {}),
             ...(bankChanged ? { bankId: params.bankId, clearBankId: params.bankId == null } : {}),
             ...(holderChanged ? { accountHolderName: params.cardHolderName } : {}),
+            ...(last4Changed ? { accountNumberLast4: params.lastFourDigits } : {}),
+            ...(colorChanged ? { colorValue: params.colorValue } : {}),
           });
         }
         const cardParams: EditCardParams = {};
         if (params.creditLimit != null) cardParams.creditLimit = params.creditLimit;
         if (params.lastFourDigits !== undefined) cardParams.lastFourDigits = params.lastFourDigits;
+        // Mirrors Flutter's editCard: network and the card's own bill/due days are editable per physical card.
+        if (params.cardNetwork != null) cardParams.cardNetwork = params.cardNetwork;
+        if (params.statementDay != null) cardParams.statementDay = params.statementDay;
+        if (params.paymentDueDay != null) cardParams.paymentDueDay = params.paymentDueDay;
+
         if (params.cardHolderName !== undefined) cardParams.cardHolderName = params.cardHolderName;
         if (params.clearSharedLimitId) cardParams.clearSharedLimitId = true;
         else if (params.sharedLimitId !== undefined) cardParams.sharedLimitId = params.sharedLimitId;

@@ -1,5 +1,5 @@
 /**
- * PersonCycleStatement — the single authoritative calculation behind a Person's monthly (18th → 17th)
+ * PersonCycleStatement — the single authoritative calculation behind a Person's per-accounting-cycle (global start day; 18th → 17th by default here)
  * settlement statement. The People Ledger UI, the "How is this calculated?" breakdown, the share
  * preview, the WhatsApp/text message and the PDF all read ONE result from `buildPersonCycleStatement`
  * — none of them do their own arithmetic. Pure: no React, no Firebase I/O.
@@ -25,9 +25,9 @@
  * Historical correctness: every cycle is rebuilt from dated events — Previous Pending is the signed sum
  * of every event before the cycle start, never today's balance.
  *
- * Cycle boundaries are computed here rather than via `CycleAnchor` (`cycle-engine.ts`): that faithful
- * Dart port reproduces a truncating-division quirk that puts January's cycle start in December of the
- * SAME year, which would corrupt cycle navigation across a year boundary.
+ * Cycle boundaries come from the canonical `cycleRangeFor` (`month-cycle-range.ts`), never `CycleAnchor`
+ * (`cycle-engine.ts`): that faithful Dart port reproduces a truncating-division quirk that puts January's
+ * cycle start in December of the SAME year, which would corrupt cycle navigation across a year boundary.
  */
 
 import {
@@ -39,13 +39,21 @@ import {
 } from "@/lib/engines/person-emi-obligations";
 import type { AdvanceApplication, LedgerEntry } from "@/lib/models/person";
 import { signedAmount } from "@/lib/models/person";
+import { cycleRangeFor } from "@/lib/engines/month-cycle-range";
 
 // ---------------------------------------------------------------------------------------------------
 // Cycle
 // ---------------------------------------------------------------------------------------------------
 
-/** Last day of every FlowFi cycle — cycles run 18th → 17th. */
-export const PEOPLE_CYCLE_END_DAY = 17;
+/**
+ * Cycle start day the pure helpers below use when a caller passes none — the People Ledger's original
+ * fixed 18th → 17th cycle, kept so existing callers and fixtures resolve exactly as before. Every UI
+ * caller passes the user's global `monthCycleStartDay` (Settings → Month cycle) instead, so People
+ * shares the one accounting cycle with Month Cycle and Debt Planner.
+ */
+export const PEOPLE_DEFAULT_CYCLE_START_DAY = 18;
+/** Last day of the default cycle. */
+export const PEOPLE_CYCLE_END_DAY = PEOPLE_DEFAULT_CYCLE_START_DAY - 1;
 
 export interface StatementCycle {
   /** First day, 00:00 local. */
@@ -54,19 +62,27 @@ export interface StatementCycle {
   end: Date;
 }
 
-/** The 18th → 17th cycle containing `date`. */
-export function cycleContaining(date: Date, endDay = PEOPLE_CYCLE_END_DAY): StatementCycle {
-  const y = date.getFullYear();
-  const m = date.getMonth();
-  // `new Date(y, m ± n, d)` normalises month overflow across years correctly.
-  if (date.getDate() > endDay) return { start: new Date(y, m, endDay + 1), end: new Date(y, m + 1, endDay) };
-  return { start: new Date(y, m - 1, endDay + 1), end: new Date(y, m, endDay) };
+/**
+ * The accounting cycle containing `date` for cycle start day `startDay`, resolved by the canonical
+ * `cycleRangeFor` (calendar month for 1, start day clamped to short months), with the end reduced to
+ * its inclusive last day at 00:00 — this module compares whole days.
+ */
+export function cycleContaining(date: Date, startDay = PEOPLE_DEFAULT_CYCLE_START_DAY): StatementCycle {
+  const range = cycleRangeFor(startDay, date);
+  return { start: range.start, end: new Date(range.end.getFullYear(), range.end.getMonth(), range.end.getDate()) };
 }
 
-/** The cycle `offset` cycles after (`+`) or before (`−`) `cycle`. */
-export function shiftCycle(cycle: StatementCycle, offset: number, endDay = PEOPLE_CYCLE_END_DAY): StatementCycle {
-  const end = new Date(cycle.end.getFullYear(), cycle.end.getMonth() + offset, endDay);
-  return cycleContaining(end, endDay);
+/** The cycle `offset` cycles after (`+`) or before (`−`) `cycle`, stepped one contiguous cycle at a time. */
+export function shiftCycle(cycle: StatementCycle, offset: number, startDay = PEOPLE_DEFAULT_CYCLE_START_DAY): StatementCycle {
+  let out = cycleContaining(cycle.start, startDay);
+  for (let i = 0; i < Math.abs(offset); i += 1) {
+    const edge =
+      offset < 0
+        ? new Date(out.start.getFullYear(), out.start.getMonth(), out.start.getDate() - 1, 12)
+        : new Date(out.end.getFullYear(), out.end.getMonth(), out.end.getDate() + 1, 12);
+    out = cycleContaining(edge, startDay);
+  }
+  return out;
 }
 
 export function sameCycle(a: StatementCycle, b: StatementCycle): boolean {

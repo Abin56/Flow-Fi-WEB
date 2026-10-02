@@ -20,7 +20,7 @@
  */
 
 import { calculate } from "@/lib/engines/interest-calculator";
-import { CycleAnchor } from "@/lib/engines/cycle-engine";
+import { cycleRangeFor } from "@/lib/engines/month-cycle-range";
 import { reduceTenurePolicy } from "@/lib/engines/prepayment-reamortization-policy";
 import { nextDueDate } from "@/lib/models/payment-schedule";
 import { annualRateForOrdering, type DebtPosition, type ScheduledDebtPayment } from "@/lib/engines/debt-position";
@@ -35,14 +35,6 @@ export interface PlanningPeriod {
   label: string;
 }
 
-function shiftMonthsClamped(date: Date, months: number): Date {
-  const targetMonthIndex = date.getMonth() + months;
-  const targetYear = date.getFullYear() + Math.floor(targetMonthIndex / 12);
-  const targetMonth = ((targetMonthIndex % 12) + 12) % 12;
-  const lastDay = new Date(targetYear, targetMonth + 1, 0).getDate();
-  return new Date(targetYear, targetMonth, Math.min(date.getDate(), lastDay));
-}
-
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 export function periodLabel(end: Date): string {
@@ -50,22 +42,17 @@ export function periodLabel(end: Date): string {
 }
 
 /**
- * The Month Cycle period `offset` cycles from the one containing `now` — the same window
- * `use-month-cycle-data.ts`'s `cycleRangeFor` uses (calendar month when `startDay` is 1, otherwise
- * `startDay` → `startDay − 1` of the next month on the shared `CycleAnchor`).
+ * The Month Cycle period `offset` cycles from the one containing `now` — resolved by the canonical
+ * `cycleRangeFor` (`month-cycle-range.ts`), so it is exactly the window Month Cycle and People show.
+ * (`CycleAnchor` is not used here: its Dart month-arithmetic quirk misplaces cycles near January.)
  */
 export function planningPeriod(startDay: number, now: Date, offset: number): PlanningPeriod {
-  const reference = shiftMonthsClamped(now, offset);
-  let start: Date;
-  let end: Date;
-  if (startDay <= 1) {
-    start = new Date(reference.getFullYear(), reference.getMonth(), 1);
-    end = new Date(reference.getFullYear(), reference.getMonth() + 1, 0, 23, 59, 59, 999);
-  } else {
-    const period = new CycleAnchor(startDay - 1).currentCycleFor(reference);
-    start = new Date(period.start.getFullYear(), period.start.getMonth(), period.start.getDate());
-    end = new Date(period.end.getFullYear(), period.end.getMonth(), period.end.getDate(), 23, 59, 59, 999);
-  }
+  const current = cycleRangeFor(startDay, now);
+  // Cycle k starts on the (clamped) start day k months after the current cycle's start month.
+  const y = current.start.getFullYear();
+  const m = current.start.getMonth() + offset;
+  const day = startDay <= 1 ? 1 : Math.min(startDay, new Date(y, m + 1, 0).getDate());
+  const { start, end } = offset === 0 ? current : cycleRangeFor(startDay, new Date(y, m, day, 12));
   return { index: offset, start, end, label: periodLabel(end) };
 }
 

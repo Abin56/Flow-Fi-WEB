@@ -182,7 +182,7 @@ export function CycleReconciliation({ statement, personName, className }: { stat
         ) : (
           <>
             <div className="flex items-baseline justify-between gap-3 pt-1.5">
-              <dt className="text-[12px] font-bold tracking-[0.06em] text-foreground uppercase">{settled ? "Settled" : "Current pending"}</dt>
+              <dt className="text-[12px] font-bold tracking-[0.06em] text-foreground uppercase">{settled ? "Remaining" : "Current pending"}</dt>
               <dd className={cn("font-heading text-[16px] font-bold tabular-nums", tone)}>{money(statement.amount)}</dd>
             </div>
             {!settled && <p className={cn("text-right text-[11.5px] font-semibold", tone)}>{pos.headline}</p>}

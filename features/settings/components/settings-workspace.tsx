@@ -72,6 +72,8 @@ import type { CreditCardProfile } from "@/lib/models/credit-card";
 import { useAuthStore } from "@/store/auth-store";
 import { cn } from "@/lib/utils";
 import { toast } from "@/store/toast-store";
+import { adjacentCycleRange, cycleRangeFor, normalizeCycleStartDay, ordinalDay } from "@/lib/engines/month-cycle-range";
+import { formatStatementDate } from "@/lib/engines/person-cycle-statement";
 import { useUserPreferences } from "@/features/settings/hooks/use-user-preferences";
 import { PdfAnalyzerSetupCard } from "@/features/settings/components/pdf-analyzer-setup-card";
 
@@ -122,6 +124,78 @@ function RowSelect({
         ))}
       </SelectContent>
     </Select>
+  );
+}
+
+const CYCLE_START_DAY_OPTIONS = Array.from({ length: 31 }, (_, i) => i + 1).map((day) => ({
+  value: String(day),
+  label: day === 1 ? "1st (calendar month)" : ordinalDay(day),
+}));
+
+/**
+ * The ONE global accounting-cycle setting (`monthCycleStartDay`). The choice is a draft with a live preview
+ * of the current / previous cycle (from the canonical `cycleRangeFor`, inclusive end dates) until Save —
+ * changing it only regroups existing records into cycles; it never edits or rewrites any of them.
+ */
+function MonthCycleSetting({ value, onSave }: { value: number; onSave: (day: number) => void }) {
+  const [draft, setDraft] = useState(value);
+  const [synced, setSynced] = useState(value);
+  // Follow the saved value when it loads or changes elsewhere (adjust-state-during-render).
+  if (synced !== value) {
+    setSynced(value);
+    setDraft(value);
+  }
+  const now = new Date();
+  const current = cycleRangeFor(draft, now);
+  const previous = adjacentCycleRange(draft, current, -1);
+  const fmt = (d: Date) => formatStatementDate(d, true);
+  const dirty = draft !== value;
+  return (
+    <div className="flex flex-col gap-3 py-4">
+      <div className="flex items-start gap-3">
+        <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted text-muted-foreground">
+          <CalendarClock className="size-4.5" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-medium text-foreground">Month cycle</p>
+          <p className="text-xs text-muted-foreground">
+            FlowFi uses this cycle across Month Cycle, People Ledger, Dashboard and other cycle-based summaries.
+          </p>
+        </div>
+      </div>
+      <div className="flex flex-wrap items-end gap-x-6 gap-y-3 sm:pl-12">
+        <label className="flex flex-col gap-1">
+          <span className="text-[11px] font-medium text-muted-foreground">Cycle starts on</span>
+          <RowSelect value={String(draft)} onChange={(v) => setDraft(Number(v))} options={CYCLE_START_DAY_OPTIONS} />
+        </label>
+        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs" aria-live="polite">
+          <dt className="text-muted-foreground">Current cycle</dt>
+          <dd className="font-medium tabular-nums text-foreground">
+            {fmt(current.start)} → {fmt(current.end)}
+          </dd>
+          <dt className="text-muted-foreground">Previous cycle</dt>
+          <dd className="tabular-nums text-foreground">
+            {fmt(previous.start)} → {fmt(previous.end)}
+          </dd>
+        </dl>
+        <Button
+          size="sm"
+          className="ml-auto"
+          disabled={!dirty}
+          onClick={() => {
+            onSave(draft);
+            toast.success("Month cycle saved", `Cycles now start on the ${ordinalDay(draft)}. No records were changed.`);
+          }}
+        >
+          Save
+        </Button>
+      </div>
+      {draft >= 29 && (
+        <p className="text-[11px] text-muted-foreground sm:pl-12">
+          In months shorter than {draft} days the cycle starts on the month&apos;s last day.
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -208,8 +282,8 @@ export function SettingsWorkspace() {
   const setLanguage = (v: string) => update("language", v);
   const startWeekOn = preferences.startWeekOn;
   const setStartWeekOn = (v: string) => update("startWeekOn", v);
-  const monthCycleStartDay = preferences.monthCycleStartDay;
-  const setMonthCycleStartDay = (v: string) => update("monthCycleStartDay", Number(v));
+  const monthCycleStartDay = normalizeCycleStartDay(preferences.monthCycleStartDay);
+  const setMonthCycleStartDay = (day: number) => update("monthCycleStartDay", normalizeCycleStartDay(day));
 
   // Security (Profile tab quick card)
   const biometricLock = preferences.biometricLock;
@@ -461,24 +535,7 @@ export function SettingsWorkspace() {
                       />
                     }
                   />
-                  <SettingsRow
-                    icon={<CalendarClock className="size-4.5" />}
-                    label="Month Cycle Start Day"
-                    description="Day the Month Cycle page's cycle runs from — e.g. 17 means each cycle spans the 17th to the 16th of the next month"
-                    control={
-                      <RowSelect
-                        value={String(monthCycleStartDay)}
-                        onChange={setMonthCycleStartDay}
-                        options={[
-                          { value: "1", label: "1st (Calendar Month)" },
-                          ...Array.from({ length: 30 }, (_, i) => i + 2).map((day) => ({
-                            value: String(day),
-                            label: `${day}${day === 2 ? "nd" : day === 3 ? "rd" : day === 21 ? "st" : day === 22 ? "nd" : day === 23 ? "rd" : day === 31 ? "st" : "th"}`,
-                          })),
-                        ]}
-                      />
-                    }
-                  />
+                  <MonthCycleSetting value={monthCycleStartDay} onSave={setMonthCycleStartDay} />
                 </div>
               </div>
             </div>

@@ -181,10 +181,12 @@ export function meParticipant(expense: Expense): ExpenseParticipant | null {
 }
 
 /**
- * How much of this expense was actually mine: the full amount for a plain or
- * single-assignee expense, or the "Me" participant's own share for a split
- * expense. Split expenses with no "Me" participant report 0 rather than
- * guessing. Mirrors `Expense.myShare`.
+ * How much of this expense was economically mine — independent of who funded it:
+ *  - plain (unsplit) expense: the full amount, whether paid from my account/card
+ *    or directly by a person on my behalf (a person-funded expense);
+ *  - split expense: only the "Me" participant's allocated share;
+ *  - assigned entirely to other people (participants with no "Me"): 0.
+ * Mirrors `Expense.myShare`.
  *
  * Derived (not a stored field), per the Dart getter and the compatibility
  * report.

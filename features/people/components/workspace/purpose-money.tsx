@@ -11,7 +11,7 @@
  * Every number comes from `lib/engines/purpose-funds.ts`; every write from `PurposeFundRepository`.
  */
 
-import { AlertTriangle, Check, CircleDashed, CreditCard, HandCoins, Landmark, Link2, MoreHorizontal, Plus, ReceiptText, Target, Trash2, User, Wallet, X } from "lucide-react";
+import { AlertTriangle, Check, ChevronDown, CircleDashed, CreditCard, HandCoins, Landmark, Link2, MoreHorizontal, Plus, ReceiptText, Target, Trash2, User, Wallet, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { DateInput } from "@/components/forms/date-input";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
@@ -225,6 +225,7 @@ export function MoneyToUseSection({
   const [editing, setEditing] = useState<{ view: PurposeView; assign: boolean } | null>(null);
   const [releasing, setReleasing] = useState<PurposeView | null>(null);
   const [showDone, setShowDone] = useState(false);
+  const [showReceipts, setShowReceipts] = useState(false);
   const first = person.name.split(" ")[0];
 
   // Receipts that carried purpose money — newest first.
@@ -258,26 +259,56 @@ export function MoneyToUseSection({
 
   if (summary.open.length === 0 && summary.unassigned.length === 0 && summary.completed.length === 0) return null;
 
+  const idle = summary.open.length === 0 && summary.unassigned.length === 0;
+  const latest = receipts[0];
+  const accountOf = (r: (typeof receipts)[number]) => (r.accountId ? (accounts.find((a) => a.id === r.accountId)?.name ?? null) : null);
+
   return (
     <section aria-label="Money to use" className="mt-4 rounded-[8px] border border-border-strong bg-card">
-      <header className="flex flex-wrap items-end justify-between gap-3 border-b border-border-strong px-4 py-3">
-        <div>
-          <WsLabel>Money to use</WsLabel>
-          <p className="mt-0.5 font-heading text-[22px] leading-tight font-bold text-foreground tabular-nums">{money(summary.stillToUse)}</p>
-          <p className="text-xs font-semibold text-foreground/80">
-            Still to use · {summary.open.length} {summary.open.length === 1 ? "item" : "items"} — already in your account, held for these purposes
-          </p>
+      {/* One compact row — grows only when there are active purposes or the receipt is opened */}
+      <header className={cn("flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-2.5", !idle && "border-b border-border-strong")}>
+        <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-0.5">
+          <WsLabel>Money kept for future use</WsLabel>
+          <span className={cn("font-heading font-bold tabular-nums text-foreground", idle ? "text-[15px]" : "text-[20px] leading-tight")}>{money(summary.stillToUse)}</span>
+          <span className="text-xs font-medium text-foreground/80">
+            {idle
+              ? "No active amounts"
+              : `${summary.open.length} ${summary.open.length === 1 ? "item" : "items"} — already in your account, held for these purposes`}
+          </span>
         </div>
-        {receipts.slice(0, 2).map((r) => (
-          <ReceiptSummary
-            key={r.breakdown.paymentId}
-            date={r.date}
-            b={r.breakdown}
-            items={r.items}
-            accountName={r.accountId ? (accounts.find((a) => a.id === r.accountId)?.name ?? null) : null}
-            onRevert={onRevertPayment ? () => onRevertPayment(r.breakdown.paymentId) : undefined} />
-        ))}
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+          {idle && summary.completed.length > 0 && (
+            <button type="button" onClick={() => setShowDone((s) => !s)} className="font-semibold text-foreground/85 underline underline-offset-2">
+              {showDone ? "Hide completed" : `Show ${summary.completed.length} completed`}
+            </button>
+          )}
+          {latest && (
+            <button
+              type="button"
+              aria-expanded={showReceipts}
+              onClick={() => setShowReceipts((o) => !o)}
+              className="inline-flex items-center gap-1 rounded-[6px] font-medium text-foreground/85 hover:text-foreground"
+            >
+              Latest payment · {formatStatementDate(latest.date, true)} ·{" "}
+              <span className="font-bold tabular-nums text-foreground">{money(latest.breakdown.received)}</span>
+              <ChevronDown className={cn("size-3.5 transition-transform", showReceipts && "rotate-180")} strokeWidth={1.75} />
+            </button>
+          )}
+        </div>
       </header>
+      {showReceipts && (
+        <div className={cn("flex flex-wrap justify-end gap-3 px-4 pb-3", idle ? "pt-0" : "border-b border-border-strong pt-3")}>
+          {receipts.slice(0, 2).map((r) => (
+            <ReceiptSummary
+              key={r.breakdown.paymentId}
+              date={r.date}
+              b={r.breakdown}
+              items={r.items}
+              accountName={accountOf(r)}
+              onRevert={onRevertPayment ? () => onRevertPayment(r.breakdown.paymentId) : undefined} />
+          ))}
+        </div>
+      )}
 
       {summary.unassigned.map((v) => (
         <div key={v.fund.id} className="flex flex-wrap items-center justify-between gap-2 border-b border-border-strong border-l-4 border-l-settle-emi-edge px-4 py-2.5">
@@ -323,7 +354,7 @@ export function MoneyToUseSection({
             transactions={transactions}
           />
         ))}
-        {summary.completed.length > 0 && (
+        {!idle && summary.completed.length > 0 && (
           <li className="px-4 py-1.5">
             <button type="button" onClick={() => setShowDone((s) => !s)} className="text-xs font-semibold text-foreground/85 underline underline-offset-2">
               {showDone ? "Hide completed" : `Show ${summary.completed.length} completed`}

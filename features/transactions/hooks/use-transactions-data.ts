@@ -53,6 +53,7 @@ import { isPersonFunded, type Transaction, type TransactionType } from "@/lib/mo
 import type { Person } from "@/lib/models/person";
 import {
   createAccountRepository,
+  createAdvanceApplicationsCollection,
   createCategoryRepository,
   createExpenseRepository,
   createInstallmentPaymentRepositoryFor,
@@ -66,6 +67,7 @@ import {
 import { getDocs, query, where } from "firebase/firestore";
 import { deletePersonCashLegTransaction } from "@/lib/services/person-cash-leg-deletion";
 import { deleteTransactionWithLinkedEffects } from "@/lib/services/transaction-deletion";
+import { repairSplitGhost } from "@/lib/services/split-ghost-repair";
 import type {
   PendingSettlement,
   SettleAcrossPendingParams,
@@ -327,6 +329,20 @@ export function useTransactionActions() {
        */
       reconcileOrphanedEntries: async (person: Person, entryIds: readonly string[]) =>
         createLedgerRepositoryFor(uid, person.id, personRepository).reconcileOrphanedTransactionEntries(person, entryIds, transactionRepository),
+      /**
+       * Repairs a split/assigned Expense whose Transaction was deleted alone (old Transaction Studio path) —
+       * only when no payment history exists; otherwise returns "blocked" with diagnostics and changes nothing.
+       */
+      repairSplitGhost: (expenseId: string) =>
+        repairSplitGhost(expenseId, {
+          getExpense: (id) => expenseRepository.getByKey(id),
+          getTransaction: (id) => transactionRepository.getByKey(id),
+          installmentsFor: (scheduleId) => createInstallmentRepositoryFor(uid, scheduleId).getAll(),
+          ledgerEntriesFor: (personId) => createLedgerRepositoryFor(uid, personId, personRepository).getAll(),
+          advanceApplicationsFor: async (personId) =>
+            (await getDocs(createAdvanceApplicationsCollection(uid, personId))).docs.map((d) => d.data()).filter((a) => a.deletedAt == null),
+          deleteExpense: (e) => expenseRepository.deleteExpense(e),
+        }),
       /** Creates a split expense — its own Transaction plus a per-participant settlement schedule. */
       createSplitTransaction: (params: {
         description: string;

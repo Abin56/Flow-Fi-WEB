@@ -341,7 +341,8 @@ export function creditCardProfileFromFirestore(
     rewardNotes: (data.rewardNotes as string | undefined) ?? null,
     autoDebitAccount: (data.autoDebitAccount as string | undefined) ?? null,
     cardHolderName: (data.cardHolderName as string | undefined) ?? null,
-    sharedLimitId: (data.sharedLimitId as string | undefined) ?? null,
+    // Absent (legacy), null, or malformed (non-string / empty) → standalone, exactly as Flutter treats absent.
+    sharedLimitId: typeof data.sharedLimitId === "string" && data.sharedLimitId.trim() !== "" ? data.sharedLimitId : null,
     deletedAt: (data.deletedAt as Timestamp | undefined)?.toDate() ?? null,
     lastEditedAt: (data.lastEditedAt as Timestamp | undefined)?.toDate() ?? null,
     editHistory: ((data.editHistory as Record<string, unknown>[] | undefined) ?? []).map(auditEntryFromMap),
@@ -381,10 +382,13 @@ export function sharedCreditLimitFromFirestore(
   const data = snapshot.data();
   return {
     id: snapshot.id,
-    name: data.name as string,
-    creditLimit: data.creditLimit as number,
-    createdAt: (data.createdAt as Timestamp).toDate(),
+    // Tolerant read: a malformed facility must not crash the page — a non-positive/missing limit is
+    // treated as unusable by `computeCreditCardStandings`, so its cards fall back to standalone.
+    name: typeof data.name === "string" ? data.name : "",
+    creditLimit: typeof data.creditLimit === "number" ? data.creditLimit : Number.NaN,
+    createdAt: typeof data.createdAt?.toDate === "function" ? (data.createdAt as Timestamp).toDate() : new Date(0),
     deletedAt: (data.deletedAt as Timestamp | undefined)?.toDate() ?? null,
+
     lastEditedAt: (data.lastEditedAt as Timestamp | undefined)?.toDate() ?? null,
     editHistory: ((data.editHistory as Record<string, unknown>[] | undefined) ?? []).map(auditEntryFromMap),
   };

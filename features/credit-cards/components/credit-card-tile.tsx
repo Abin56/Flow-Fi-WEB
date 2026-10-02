@@ -16,6 +16,17 @@ export const CARD_GRADIENT: Record<CreditCardViewItem["accent"], string> = {
   success: "linear-gradient(135deg, #0e3d2e 0%, #146b4d 100%)",
   purple: "linear-gradient(135deg, #1c2a5e 0%, #2d4a9e 100%)",
   primary: "linear-gradient(135deg, #1e3a5f 0%, #2563eb 100%)",
+  teal: "linear-gradient(135deg, #0b3b40 0%, #0f766e 100%)",
+  orange: "linear-gradient(135deg, #7a2e0b 0%, #ea580c 100%)",
+  gold: "linear-gradient(135deg, #5c4410 0%, #b8862b 100%)",
+  rose: "linear-gradient(135deg, #7f1d3a 0%, #e11d48 100%)",
+  sky: "linear-gradient(135deg, #0c4a6e 0%, #0ea5e9 100%)",
+  emerald: "linear-gradient(135deg, #064e3b 0%, #10b981 100%)",
+  violet: "linear-gradient(135deg, #3b0764 0%, #7c3aed 100%)",
+  slate: "linear-gradient(135deg, #1e293b 0%, #64748b 100%)",
+  bronze: "linear-gradient(135deg, #3f2a14 0%, #8b5a2b 100%)",
+  magenta: "linear-gradient(135deg, #701a75 0%, #c026d3 100%)",
+  navy: "linear-gradient(135deg, #0a0f2c 0%, #1e2a78 100%)",
 };
 
 function daysUntil(date: Date): number {
@@ -71,6 +82,11 @@ export function CreditCardTile({ card, active, onClick, onEdit, onDelete }: Cred
           <div className="min-w-0">
             <h3 className="truncate font-heading text-base font-semibold">{card.name}</h3>
             <p className="mt-0.5 text-[13px] tracking-[0.18em] text-white/75 tabular-nums">•••• {card.last4}</p>
+            {card.sharedLimit && (
+              <p className="mt-1 inline-flex items-center rounded-[4px] bg-white/15 px-1.5 py-0.5 text-[10.5px] font-semibold text-white/90">
+                ↳ Shared limit{card.sharedLimit.siblings.length > 0 ? ` · with •••• ${card.sharedLimit.siblings.map((s) => s.last4).join(", ")}` : ""}
+              </p>
+            )}
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
             <span className="text-[11px] font-bold tracking-wide text-white/75 italic uppercase">{card.network}</span>
@@ -104,7 +120,7 @@ export function CreditCardTile({ card, active, onClick, onEdit, onDelete }: Cred
             )}
           </div>
           <div className="text-right">
-            <p className="text-[10.5px] font-semibold tracking-[0.08em] text-white/65 uppercase">Limit</p>
+            <p className="text-[10.5px] font-semibold tracking-[0.08em] text-white/65 uppercase">{card.sharedLimit ? "Shared limit" : "Limit"}</p>
             <p className="text-sm font-semibold text-white/90 tabular-nums">{formatCurrency(card.creditLimit)}</p>
           </div>
         </div>

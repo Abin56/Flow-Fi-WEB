@@ -21,6 +21,8 @@ import {
   User,
   Wallet,
   Wifi,
+  Check,
+  Palette,
   X as XIcon,
   type LucideIcon,
 } from "lucide-react";
@@ -52,6 +54,10 @@ import type { CardNetwork } from "@/lib/models/credit-card";
 import { formatCurrency } from "@/lib/format";
 import {
   ACCENT_CYCLE,
+  CARD_ACCENTS,
+  colorValueForCardAccent,
+  pickedCardAccent,
+  type CardAccent,
   useCardTransactions,
   useCreditCardActions,
   useCreditCardTotals,
@@ -87,7 +93,25 @@ interface CardFormState {
   sharedLimitName: string;
   sharedLimitAmount: string;
   selectedSharedLimitId: string | null;
+  /** Null = no colour picked — the card keeps its automatic list-position colour. */
+  color: CardAccent | null;
+  /** Mobile's "add the paired card too" — only with a NEW shared limit; the second physical card on it. */
+  addPairCard: boolean;
+  pairName: string;
+  pairLastFourDigits: string;
+  pairCardNetwork: CardNetwork | "";
+  pairStatementDay: string;
+  pairPaymentDueDay: string;
 }
+
+const EMPTY_PAIR_FIELDS = {
+  addPairCard: false,
+  pairName: "",
+  pairLastFourDigits: "",
+  pairCardNetwork: "",
+  pairStatementDay: "",
+  pairPaymentDueDay: "",
+} as const;
 
 function emptyCardForm(): CardFormState {
   return {
@@ -103,6 +127,8 @@ function emptyCardForm(): CardFormState {
     sharedLimitName: "",
     sharedLimitAmount: "",
     selectedSharedLimitId: null,
+    color: null,
+    ...EMPTY_PAIR_FIELDS,
   };
 }
 
@@ -111,7 +137,8 @@ function cardFormFromCard(card: CreditCardViewItem, accounts: Account[]): CardFo
   return {
     name: card.name,
     cardHolderName: card.card.cardHolderName ?? "",
-    creditLimit: String(card.creditLimit),
+    // The card's OWN stored limit (₹0 on a shared-limit member) — never the facility's inherited one.
+    creditLimit: card.card.creditLimit > 0 ? String(card.card.creditLimit) : "",
     lastFourDigits: card.last4 === "----" ? "" : card.last4,
     cardNetwork: (card.card.cardNetwork as CardNetwork | null) ?? "",
     statementDay: String(card.card.statementDay),
@@ -121,6 +148,8 @@ function cardFormFromCard(card: CreditCardViewItem, accounts: Account[]): CardFo
     sharedLimitName: "",
     sharedLimitAmount: "",
     selectedSharedLimitId: card.card.sharedLimitId ?? null,
+    color: pickedCardAccent(account?.colorValue),
+    ...EMPTY_PAIR_FIELDS,
   };
 }
 
@@ -201,7 +230,8 @@ export function CreditCardsWorkspace() {
   const payDestCard = payCard ? (creditCards.find((c) => c.card.accountId === (payDestAccountId ?? payCard.card.accountId)) ?? null) : null;
   // Card bill: people's shares of charges this card still carries — they must be settled before Pay bill completes.
   const { readiness: payCardPeople, isLoading: payCardPeopleLoading } = useLinkedPeopleReadiness(
-    payDestCard ? { kind: "card", cardAccountId: payDestCard.card.accountId, lenderDue: Math.max(0, payDestCard.currentBalance) } : null,
+    // This physical card's own bill — a shared facility's pooled total belongs to its sibling cards too.
+    payDestCard ? { kind: "card", cardAccountId: payDestCard.card.accountId, lenderDue: Math.max(0, payDestCard.ownUsage) } : null,
   );
 
   // `?card=<id>` reopens that card — so Back from its filtered Transactions lands on the same card.
@@ -233,6 +263,12 @@ export function CreditCardsWorkspace() {
 
   function openAdd() {
     setForm(emptyCardForm());
+    setAddOpen(true);
+  }
+
+  /** Mobile's "Add another physical card" — a new card joining `sharedLimitId`, which supplies the limit. */
+  function openAddToSharedLimit(sharedLimitId: string) {
+    setForm({ ...emptyCardForm(), limitSource: "existingShared", selectedSharedLimitId: sharedLimitId });
     setAddOpen(true);
   }
 
@@ -284,6 +320,17 @@ export function CreditCardsWorkspace() {
       toast.error("Choose a shared credit limit.");
       return;
     }
+    const addPair = !editingCard && form.limitSource === "newShared" && form.addPairCard;
+    if (addPair) {
+      if (!/^\d{4}$/.test(form.pairLastFourDigits)) {
+        toast.error("The other card's last 4 digits are required and must be exactly 4 numbers.");
+        return;
+      }
+      if (form.pairLastFourDigits === form.lastFourDigits) {
+        toast.error("The two cards must have different last 4 digits.");
+        return;
+      }
+    }
     const statementDay = Number(form.statementDay);
     const paymentDueDay = Number(form.paymentDueDay);
     if (!Number.isInteger(statementDay) || statementDay < 1 || statementDay > 31) {
@@ -322,7 +369,11 @@ export function CreditCardsWorkspace() {
           cardHolderName,
           ...(form.limitSource === "own" ? { creditLimit } : {}),
           lastFourDigits: form.lastFourDigits,
+          ...(form.cardNetwork ? { cardNetwork: form.cardNetwork } : {}),
+          statementDay,
+          paymentDueDay,
           bankId: form.bankId,
+          ...(form.color ? { colorValue: colorValueForCardAccent(form.color) } : {}),
           ...(sharedLimitId ? { sharedLimitId } : { clearSharedLimitId: true }),
         });
         setEditingCard(null);
@@ -338,7 +389,23 @@ export function CreditCardsWorkspace() {
           paymentDueDay,
           bankId: form.bankId,
           sharedLimitId,
+          colorValue: colorValueForCardAccent(form.color),
         });
+        if (addPair && sharedLimitId) {
+          // The second physical card on the new facility: own number/network/bill, ₹0 own limit (Flutter's `_createLinkedPairCard`).
+          op.stage("related", "Adding the other card");
+          await actions.createCard({
+            name: form.pairName.trim() || `${name} ${form.pairCardNetwork ? form.pairCardNetwork.toUpperCase() : `•••• ${form.pairLastFourDigits}`}`,
+            cardHolderName,
+            creditLimit: 0,
+            lastFourDigits: form.pairLastFourDigits,
+            cardNetwork: form.pairCardNetwork || null,
+            statementDay: Number(form.pairStatementDay) || statementDay,
+            paymentDueDay: Number(form.pairPaymentDueDay) || paymentDueDay,
+            bankId: form.bankId,
+            sharedLimitId,
+          });
+        }
         setAddOpen(false);
         op.succeed({ toast: { title: "Card added" } });
       }
@@ -433,7 +500,7 @@ export function CreditCardsWorkspace() {
 
   // Preview which gradient this card will actually be assigned — accent is "index in list order"
   // (see ACCENT_CYCLE in use-credit-cards-data.ts), so a new card lands at the current list length.
-  const previewAccent = editingCard ? editingCard.accent : ACCENT_CYCLE[creditCards.length % ACCENT_CYCLE.length];
+  const previewAccent = form.color ?? (editingCard ? editingCard.accent : ACCENT_CYCLE[creditCards.length % ACCENT_CYCLE.length]);
 
   const closeCardDialog = () => {
     setAddOpen(false);
@@ -600,8 +667,35 @@ export function CreditCardsWorkspace() {
               </div>
             )}
 
+            {form.limitSource === "existingShared" && form.selectedSharedLimitId && (() => {
+              // The facility supplies the limit — show what this card inherits and who it shares it with.
+              const facility = sharedLimits.find((sl) => sl.id === form.selectedSharedLimitId);
+              const members = creditCards.filter((c) => c.card.sharedLimitId === form.selectedSharedLimitId && c.id !== editingCard?.id);
+              if (!facility) return null;
+              return (
+                <div className="flex flex-col gap-1 rounded-xl border border-border-strong/60 bg-background px-3 py-2.5 text-xs">
+                  <span className="text-muted-foreground">Shares limit with</span>
+                  {members.length > 0 ? (
+                    members.map((m) => (
+                      <span key={m.id} className="font-semibold text-foreground">
+                        {m.name} <span className="font-mono tracking-widest">•••• {m.last4}</span>
+                        {m.network !== "—" && <span className="ml-1 text-muted-foreground uppercase">{m.network}</span>}
+                      </span>
+                    ))
+                  ) : (
+                    <span className="font-semibold text-foreground">{facility.name}</span>
+                  )}
+                  <span className="mt-1 text-foreground/85">
+                    Shared credit limit <span className="font-semibold tabular-nums">{formatCurrency(facility.creditLimit)}</span> — inherited, not entered again.
+                    This is a separate card with its own number, bill and transactions.
+                  </span>
+                </div>
+              );
+            })()}
+
             {form.limitSource === "existingShared" && (
               <label className="flex flex-col gap-1">
+
                 <span className="text-xs font-medium text-muted-foreground">Shared Credit Limit</span>
                 <Select
                   value={form.selectedSharedLimitId ?? undefined}
@@ -621,9 +715,123 @@ export function CreditCardsWorkspace() {
               </label>
             )}
 
+            {!editingCard && form.limitSource === "newShared" && (
+              <div className="flex flex-col gap-3 rounded-xl border border-border-strong/60 bg-background p-3">
+                <label className="flex cursor-pointer items-center gap-2 text-xs font-semibold text-foreground">
+                  <input
+                    type="checkbox"
+                    className="size-4 accent-current"
+                    checked={form.addPairCard}
+                    onChange={(e) => setForm((f) => ({ ...f, addPairCard: e.target.checked }))}
+                  />
+                  Also add the other card on this shared limit
+                </label>
+                {form.addPairCard && (
+                  <>
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <label className="flex flex-col gap-1">
+                        <span className="text-xs font-medium text-muted-foreground">Other card name (optional)</span>
+                        <input
+                          className="h-10 w-full rounded-xl border border-border bg-background px-3 text-sm outline-none transition-colors focus:border-primary"
+                          placeholder="e.g. OCTANE Visa"
+                          value={form.pairName}
+                          onChange={(e) => setForm((f) => ({ ...f, pairName: e.target.value }))}
+                        />
+                      </label>
+                      <label className="flex flex-col gap-1">
+                        <span className="text-xs font-medium text-muted-foreground">Other card number (last 4 digits) *</span>
+                        <input
+                          className="h-10 rounded-xl border border-border bg-background px-3 font-mono text-sm tracking-widest outline-none transition-colors focus:border-primary"
+                          placeholder="5678"
+                          maxLength={4}
+                          inputMode="numeric"
+                          value={form.pairLastFourDigits}
+                          onChange={(e) => setForm((f) => ({ ...f, pairLastFourDigits: e.target.value.replace(/\D/g, "") }))}
+                        />
+                      </label>
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <span className="text-xs font-medium text-muted-foreground">Other card network</span>
+                      <div className="flex flex-wrap gap-2">
+                        {CARD_NETWORK_OPTIONS.map((n) => {
+                          const selected = form.pairCardNetwork === n;
+                          return (
+                            <button
+                              key={n}
+                              type="button"
+                              onClick={() => setForm((f) => ({ ...f, pairCardNetwork: f.pairCardNetwork === n ? "" : n }))}
+                              className={cn(
+                                "border px-3 py-1.5 text-xs font-semibold transition-colors",
+                                selected ? "border-primary bg-primary/10 text-primary-accent-text" : "border-border text-muted-foreground hover:bg-muted",
+                              )}
+                            >
+                              {n.toUpperCase()}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <label className="flex flex-col gap-1">
+                        <span className="text-xs font-medium text-muted-foreground">Its bill day</span>
+                        <input
+                          type="number"
+                          className="h-10 rounded-xl border border-border bg-background px-3 text-sm outline-none transition-colors focus:border-primary"
+                          placeholder={`Same (${form.statementDay || "—"})`}
+                          value={form.pairStatementDay}
+                          onChange={(e) => setForm((f) => ({ ...f, pairStatementDay: e.target.value }))}
+                        />
+                      </label>
+                      <label className="flex flex-col gap-1">
+                        <span className="text-xs font-medium text-muted-foreground">Its due day</span>
+                        <input
+                          type="number"
+                          className="h-10 rounded-xl border border-border bg-background px-3 text-sm outline-none transition-colors focus:border-primary"
+                          placeholder={`Same (${form.paymentDueDay || "—"})`}
+                          value={form.pairPaymentDueDay}
+                          onChange={(e) => setForm((f) => ({ ...f, pairPaymentDueDay: e.target.value }))}
+                        />
+                      </label>
+                    </div>
+                    <p className="text-[11px] text-muted-foreground">
+                      A separate card with its own number, bill and transactions — it uses this same shared limit, so the limit isn&apos;t entered twice.
+                    </p>
+                  </>
+                )}
+              </div>
+            )}
+
             <p className="text-[11px] text-muted-foreground">
               A shared limit is one combined credit line two cards from the same bank draw from — each keeps its own number and bill.
             </p>
+
+          </div>
+
+          <div className="flex flex-col gap-3 rounded-2xl bg-muted/30 p-4">
+            <SectionLabel icon={Palette}>Card colour</SectionLabel>
+            <div className="flex flex-wrap gap-2.5" role="radiogroup" aria-label="Card colour">
+              {CARD_ACCENTS.map((accent) => {
+                const selected = previewAccent === accent;
+                return (
+                  <button
+                    key={accent}
+                    type="button"
+                    role="radio"
+                    aria-checked={selected}
+                    aria-label={accent}
+                    title={accent}
+                    onClick={() => setForm((f) => ({ ...f, color: accent }))}
+                    style={{ background: CARD_GRADIENT[accent] }}
+                    className={cn(
+                      "flex size-8 items-center justify-center rounded-full text-white shadow-e1 outline-none transition-transform hover:scale-110 focus-visible:ring-2 focus-visible:ring-ring",
+                      selected && "ring-2 ring-primary-accent-text ring-offset-2 ring-offset-background",
+                    )}
+                  >
+                    {selected && <Check className="size-4" />}
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
           <div className="flex flex-col gap-3 rounded-2xl bg-muted/30 p-4">
@@ -977,7 +1185,7 @@ export function CreditCardsWorkspace() {
                         {card.statementDate ? billingPeriodLabel(card.statementDate) : "—"}
                       </td>
                       <td className={cn(CC_TD, "text-right")}>
-                        <span className="text-[17px] font-bold text-expense tabular-nums">{formatCurrency(card.currentBalance)}</span>
+                        <span className="text-[17px] font-bold text-expense tabular-nums">{formatCurrency(card.ownUsage)}</span>
                       </td>
                       <td className={cn(CC_TD, "hidden text-right font-semibold text-foreground tabular-nums sm:table-cell")}>{formatCurrency(card.minimumDue)}</td>
                       <td className={cn(CC_TD, "px-2")}>
@@ -1084,6 +1292,17 @@ export function CreditCardsWorkspace() {
                   <div className="min-w-0">
                     <h3 className="truncate font-heading text-lg font-semibold">{activeCard.name}</h3>
                     <p className="mt-0.5 text-sm tracking-[0.18em] text-white/80 tabular-nums">•••• {activeCard.last4}</p>
+                    {activeCard.sharedLimit && (
+                      <p className="mt-1 flex items-center gap-1 text-xs text-white/85">
+                        <Link2 className="size-3 shrink-0" />
+                        <span className="truncate">
+                          Shares {formatCurrency(activeCard.sharedLimit.creditLimit)} limit
+                          {activeCard.sharedLimit.siblings.length > 0
+                            ? ` with ${activeCard.sharedLimit.siblings.map((s) => `${s.name} •••• ${s.last4}`).join(", ")}`
+                            : ` (${activeCard.sharedLimit.name})`}
+                        </span>
+                      </p>
+                    )}
                   </div>
                   <div className="flex shrink-0 flex-col items-end gap-1.5">
                     {activeCard.isPrimary && <span className="rounded-[4px] bg-white/20 px-1.5 py-0.5 text-[10px] font-semibold">Primary</span>}
@@ -1111,8 +1330,15 @@ export function CreditCardsWorkspace() {
               </div>
 
               <dl className="grid grid-cols-2 border-b border-border-strong/40">
-                <PanelFact label="Available" value={formatCurrency(available)} tone="text-success" />
-                <PanelFact label="Credit limit" value={formatCurrency(activeCard.creditLimit)} />
+                <PanelFact label={activeCard.sharedLimit ? "Shared available" : "Available"} value={formatCurrency(available)} tone="text-success" />
+                <PanelFact label={activeCard.sharedLimit ? "Shared limit" : "Credit limit"} value={formatCurrency(activeCard.creditLimit)} />
+                {activeCard.sharedLimit && (
+                  <>
+                    <PanelFact label="This card usage" value={formatCurrency(activeCard.ownUsage)} />
+                    <PanelFact label="Shared outstanding" value={formatCurrency(activeCard.currentBalance)} />
+                  </>
+                )}
+
                 <PanelFact label="Next statement" value={activeCard.statementDate ? formatShortDate(activeCard.statementDate) : "—"} />
                 <PanelFact
                   label="Payment due"
@@ -1132,6 +1358,18 @@ export function CreditCardsWorkspace() {
                 <QuickAction icon={RefreshCw} label="Convert to EMI" tone="bg-success/12 text-success" soon />
                 <QuickAction icon={Settings} label="Card settings" tone="bg-secondary text-foreground/75" onClick={() => openEdit(activeCard)} />
               </div>
+              {activeCard.sharedLimit && (
+                <div className="border-t border-border-strong/50 p-2">
+                  <button
+                    type="button"
+                    onClick={() => openAddToSharedLimit(activeCard.sharedLimit!.id)}
+                    className="flex w-full items-center justify-center gap-1.5 rounded-[6px] border border-border-strong/70 px-3 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-secondary"
+                  >
+                    <Link2 className="size-3.5" />
+                    Add another card to this shared limit
+                  </button>
+                </div>
+              )}
               {/* People money received for purchases on this card — held in another account until the bill is paid. */}
               <LinkedFundsPayNotice
                 funds={linkedPendingForCard(linkedFunds, activeCard.card.accountId)}
@@ -1220,7 +1458,7 @@ export function CreditCardsWorkspace() {
           actions={transactionActions}
           defaultKind="transfer"
           initialDestinationAccountId={payCard?.card.accountId}
-          initialAmount={payCard?.currentBalance}
+          initialAmount={payCard?.ownUsage}
           onDestinationAccountChange={setPayDestAccountId}
           peopleGate={
             payDestCard

@@ -23,6 +23,7 @@ import { WS_PAD, WS_PRIMARY, WS_SECONDARY } from "./person-workspace-ui";
 import { applySettlementFilters, CycleReconciliation, CyclePaymentHistory, SettlementFilters } from "./settlement-summary";
 import { SettlementTable } from "./settlement-table";
 import { linkedTrailFor } from "@/features/people/components/linked-funds";
+import { useMonthCycleStartDay } from "@/features/settings/hooks/use-user-preferences";
 
 /** The expanded workspace's internal navigation — the ledger, or one of the Person-level flows in its place. */
 export type LedgerView = "transactions" | "settle" | "split";
@@ -32,11 +33,12 @@ const NAV_BUTTON =
 
 /** Previous / quick picker / Next — the same month-grid + date picker as the People list (`CyclePicker`). */
 export function CycleNavigator({ cycle, onCycleChange }: { cycle: StatementCycle; onCycleChange: (cycle: StatementCycle) => void }) {
-  const current = cycleContaining(new Date());
+  const startDay = useMonthCycleStartDay();
+  const current = cycleContaining(new Date(), startDay);
   const isCurrent = sameCycle(cycle, current);
   return (
     <div className="flex min-w-0 items-center gap-1">
-      <button type="button" aria-label="Previous cycle" onClick={() => onCycleChange(shiftCycle(cycle, -1))} className={NAV_BUTTON}>
+      <button type="button" aria-label="Previous cycle" onClick={() => onCycleChange(shiftCycle(cycle, -1, startDay))} className={NAV_BUTTON}>
         <ChevronLeft className="size-4" strokeWidth={1.75} />
       </button>
       <CyclePicker cycle={cycle} current={current} onCycleChange={onCycleChange} direction={0} />
@@ -44,7 +46,7 @@ export function CycleNavigator({ cycle, onCycleChange }: { cycle: StatementCycle
         type="button"
         aria-label="Next cycle"
         disabled={isCurrent}
-        onClick={() => onCycleChange(shiftCycle(cycle, 1))}
+        onClick={() => onCycleChange(shiftCycle(cycle, 1, startDay))}
         className={cn(NAV_BUTTON, "disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent")}
       >
         <ChevronRight className="size-4" strokeWidth={1.75} />

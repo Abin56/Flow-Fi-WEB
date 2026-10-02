@@ -305,7 +305,16 @@ export function TransactionsWorkspace() {
       list = list.filter((r) => r.transaction.dateTime <= to);
     }
 
-    return [...list].sort((a, b) => compareTransactionsNewestFirst(a.transaction, b.transaction));
+    // Transaction date first (so month groups stay contiguous); same day → most recently touched first,
+    // and transfer legs stay adjacent.
+    return [...list].sort((a, b) => {
+      const ta = a.transaction;
+      const tb = b.transaction;
+      const dayDelta = dayKeyOf(tb.dateTime) - dayKeyOf(ta.dateTime);
+      if (dayDelta !== 0) return dayDelta;
+      if (ta.transferId && ta.transferId === tb.transferId) return 0;
+      return compareTransactionsNewestFirst(ta, tb);
+    });
   }, [rows, deferredSearch, accountFilter, categoryFilter, typeFilter, paymentMethodFilter, dateFrom, dateTo, displayDescription]);
 
   // Computed over the full, unfiltered `rows` — not `filtered` — so a duplicate is still flagged even
@@ -1166,6 +1175,9 @@ const FILTER_LABEL: Record<string, string> = {
   paymentMethod: "Payment method",
 };
 
+const monthKeyOf = (d: Date) => d.getFullYear() * 12 + d.getMonth();
+const dayKeyOf = (d: Date) => monthKeyOf(d) * 32 + d.getDate();
+
 const TH =
   "sticky top-0 z-[2] border-r border-b border-r-border-strong/40 border-b-border-strong bg-secondary px-2 py-2 text-left text-[11px] font-semibold tracking-[0.06em] whitespace-nowrap text-muted-foreground uppercase last:border-r-0 sm:px-3";
 const TD = "border-r border-b border-r-border-strong/30 border-b-border-strong/40 px-2 py-2.5 align-middle last:border-r-0 sm:px-3";
@@ -1433,6 +1445,16 @@ function LedgerTable({
           const edge = isDuplicate ? ROW_TONE.duplicate.edge : ROW_TONE[tone].edge;
           return (
             <Fragment key={t.id}>
+              {(i === 0 || monthKeyOf(rows[i - 1].transaction.dateTime) !== monthKeyOf(t.dateTime)) && (
+                <tr>
+                  <td
+                    colSpan={7}
+                    className="border-b border-border bg-muted/60 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+                  >
+                    {t.dateTime.toLocaleDateString("en-IN", { month: "long", year: "numeric" })}
+                  </td>
+                </tr>
+              )}
               <tr
                 onClick={toggle}
                 aria-expanded={open}

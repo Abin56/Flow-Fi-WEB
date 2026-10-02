@@ -27,6 +27,7 @@ import type { Loan } from "@/lib/models/loan";
 import type { Installment } from "@/lib/models/payment-schedule";
 import type { AdvanceApplication, LedgerEntry, Person } from "@/lib/models/person";
 import { createEmiRepository, createLoanRepository } from "@/lib/repositories/repository-factory";
+import { useMonthCycleStartDay } from "@/features/settings/hooks/use-user-preferences";
 import { useAuthStore } from "@/store/auth-store";
 
 export interface LinkedEmiSource {
@@ -105,9 +106,10 @@ export function usePersonCycleStatement(
   }, [person, ledgerEntries, advanceApplications, emis, loans, trashedLoans, emiInstallments, loanInstallments, loanPayments]);
 
   const statement = useMemo(() => (baseInput ? buildPersonCycleStatement({ ...baseInput, cycle }) : null), [baseInput, cycle]);
+  const cycleStartDay = useMonthCycleStartDay();
   const allTimeStatement = useMemo(
-    () => (baseInput ? buildPersonCycleStatement({ ...baseInput, cycle: { start: new Date(1970, 0, 1), end: cycleContaining(new Date()).end } }) : null),
-    [baseInput],
+    () => (baseInput ? buildPersonCycleStatement({ ...baseInput, cycle: { start: new Date(1970, 0, 1), end: cycleContaining(new Date(), cycleStartDay).end } }) : null),
+    [baseInput, cycleStartDay],
   );
 
   const setRepays = async (source: LinkedEmiSource, repays: boolean) => {

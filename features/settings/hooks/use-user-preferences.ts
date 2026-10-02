@@ -9,6 +9,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
+import { normalizeCycleStartDay } from "@/lib/engines/month-cycle-range";
 import { useAuthStore } from "@/store/auth-store";
 
 export interface UserPreferences {
@@ -21,9 +22,20 @@ export interface UserPreferences {
   numberFormat: string;
   language: string;
   startWeekOn: string;
-  /** Day of month (1-31) the Month Cycle page's "cycle" starts on — e.g. 17 means each
-   *  cycle runs the 17th through the 16th of the next month. 1 (the default) preserves
-   *  the plain calendar month every existing user already sees. */
+  /** The ONE global accounting-cycle start day (1-31) — e.g. 18 means each cycle runs the 18th
+   *  through the 17th of the next month. Month Cycle, People Ledger/statements and Debt Planner
+   *  all derive their cycle from it (`cycleRangeFor`). 1 (the default) is the plain calendar month.
+   *
+   *  KNOWN LIMITATION: Month Cycle preference is currently stored per user per browser/device.
+   *  It is not yet synchronized across Web/Flutter devices.
+   *
+   *  Scope — which views use what:
+   *  - GLOBAL ACCOUNTING CYCLE (this setting): Month Cycle; People Ledger / People statements;
+   *    Debt Planner cycle calculations.
+   *  - CALENDAR MONTH (intentionally not this setting): Dashboard "This month"; Bills page "This month";
+   *    Budgets; Analytics; Reports; Credit Cards "Spent this month"; Transactions "This month".
+   *  - OWN INDEPENDENT SCHEDULE (never this setting): credit-card statement cycle (card `statementDay`);
+   *    Loan/EMI installment schedules. */
   monthCycleStartDay: number;
   /** When true, the Dashboard's Net Worth hero hides its amount behind the eye toggle. */
   hideNetWorth: boolean;
@@ -96,11 +108,16 @@ function loadPreferences(uid: string | undefined): UserPreferences {
   }
 }
 
+/** Fired (same tab) after a user-initiated change is written, so every other mounted instance reloads. */
+const PREFERENCES_CHANGED_EVENT = "flowfi:user-preferences-changed";
+
 /** Loads once per signed-in user, then keeps localStorage in sync with every change. */
 export function useUserPreferences() {
   const uid = useAuthStore((s) => s.user?.uid);
   const [preferences, setPreferences] = useState<UserPreferences>(() => loadPreferences(uid));
   const loadedUidRef = useRef<string | undefined>(undefined);
+  // Set only by `update` — a reload triggered by another instance must not re-broadcast (no ping-pong).
+  const broadcastRef = useRef(false);
 
   useEffect(() => {
     if (uid !== loadedUidRef.current) {
@@ -112,11 +129,42 @@ export function useUserPreferences() {
   useEffect(() => {
     if (!uid || typeof window === "undefined") return;
     window.localStorage.setItem(storageKey(uid), JSON.stringify(preferences));
+    if (broadcastRef.current) {
+      broadcastRef.current = false;
+      window.dispatchEvent(new CustomEvent(PREFERENCES_CHANGED_EVENT, { detail: uid }));
+    }
   }, [uid, preferences]);
 
+  // Another instance in this tab (e.g. Settings) or another tab changed the stored preferences.
+  useEffect(() => {
+    if (!uid || typeof window === "undefined") return;
+    const reload = () => setPreferences(loadPreferences(uid));
+    const onLocal = (e: Event) => {
+      if ((e as CustomEvent<string>).detail === uid) reload();
+    };
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === storageKey(uid)) reload();
+    };
+    window.addEventListener(PREFERENCES_CHANGED_EVENT, onLocal);
+    window.addEventListener("storage", onStorage);
+    return () => {
+      window.removeEventListener(PREFERENCES_CHANGED_EVENT, onLocal);
+      window.removeEventListener("storage", onStorage);
+    };
+  }, [uid]);
+
   function update<K extends keyof UserPreferences>(key: K, value: UserPreferences[K]) {
+    broadcastRef.current = true;
     setPreferences((prev) => ({ ...prev, [key]: value }));
   }
 
   return { preferences, update };
+}
+
+/**
+ * The ONE accounting-cycle start day (Settings → Month cycle) every cycle-based view — Month Cycle,
+ * People Ledger & statements, Debt Planner — resolves its cycle from, via `cycleRangeFor`.
+ */
+export function useMonthCycleStartDay(): number {
+  return normalizeCycleStartDay(useUserPreferences().preferences.monthCycleStartDay);
 }

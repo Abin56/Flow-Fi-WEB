@@ -39,6 +39,7 @@ import { useEmis } from "@/hooks/use-credit-cards";
 import { useAllEmiInstallments } from "@/hooks/use-emis";
 import { useAllLoanInstallments, useTrashedLoans } from "@/hooks/use-loans";
 import { cycleContaining } from "@/lib/engines/person-cycle-statement";
+import { useMonthCycleStartDay } from "@/features/settings/hooks/use-user-preferences";
 import { emiReceivableThrough, personEmiObligations } from "@/lib/engines/person-emi-obligations";
 import type { Emi } from "@/lib/models/emi";
 import type { Installment } from "@/lib/models/payment-schedule";
@@ -374,12 +375,13 @@ export function usePersonPositions(): {
   const { data: emis = [] } = useEmis();
   const { data: emiInstallments = [] } = useAllEmiInstallments();
   const { data: loanInstallments = [] } = useAllLoanInstallments();
+  const cycleStartDay = useMonthCycleStartDay();
 
   return useMemo(() => {
-    // Person-linked EMI installments due through the end of the current 18th → 17th cycle — the same
+    // Person-linked EMI installments due through the end of the current accounting cycle (global setting) — the same
     // primitive and cutoff the current-cycle statement uses, so the list and the statement agree.
     const now = new Date();
-    const emiCutoff = cycleContaining(now).end;
+    const emiCutoff = cycleContaining(now, cycleStartDay).end;
     const allInstallments = [...(emiInstallments as Installment[]), ...(loanInstallments as Installment[])];
     const loans = loanRows.map((r) => r.loan);
     const positionLoans = loanRows.map((r) => ({
@@ -409,7 +411,7 @@ export function usePersonPositions(): {
       });
     }
     return { positionsByPersonId, loans, loanIds, isLoading: peopleLoading || entriesLoading || loansLoading || trashLoading };
-  }, [people, entriesByPersonId, loanRows, trashedLoans, emis, emiInstallments, loanInstallments, peopleLoading, entriesLoading, loansLoading, trashLoading]);
+  }, [people, entriesByPersonId, loanRows, trashedLoans, emis, emiInstallments, loanInstallments, peopleLoading, entriesLoading, loansLoading, trashLoading, cycleStartDay]);
 }
 
 export interface PeopleStatsSummary {

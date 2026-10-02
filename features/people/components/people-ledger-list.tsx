@@ -19,7 +19,6 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Skeleton } from "@/components/ui/skeleton";
 import { FilterTabs, LE_RADIUS, Money } from "@/features/loans/components/loan-emi-ui";
 import {
-  PEOPLE_CYCLE_END_DAY,
   cycleContaining,
   directionHeadline,
   formatCycleLabel,
@@ -31,6 +30,8 @@ import {
   type StatementDirection,
 } from "@/lib/engines/person-cycle-statement";
 import { money } from "@/lib/engines/person-cycle-statement-share";
+import { useMonthCycleStartDay } from "@/features/settings/hooks/use-user-preferences";
+import { ordinalDay } from "@/lib/engines/month-cycle-range";
 import { cn } from "@/lib/utils";
 import { DateInput } from "@/components/forms/date-input";
 
@@ -89,7 +90,7 @@ function toDateInput(d: Date): string {
 
 /**
  * Previous / label / Next, with the label opening a quick picker: a month grid (each month opens the
- * cycle starting on its 18th — the engine's own `cycleContaining`) and a date field that resolves any
+ * cycle starting in it on the global start day — the engine's own `cycleContaining`) and a date field that resolves any
  * date to the cycle containing it. Nothing after the current cycle is reachable.
  */
 export function PeopleCycleControl({
@@ -101,7 +102,8 @@ export function PeopleCycleControl({
   onCycleChange: (cycle: StatementCycle) => void;
   direction: -1 | 0 | 1;
 }) {
-  const current = cycleContaining(new Date());
+  const startDay = useMonthCycleStartDay();
+  const current = cycleContaining(new Date(), startDay);
   const isCurrent = sameCycle(cycle, current);
   const navButton = cn(
     LE_RADIUS.control,
@@ -114,7 +116,7 @@ export function PeopleCycleControl({
         <button
           type="button"
           aria-label="Previous cycle"
-          onClick={() => onCycleChange(shiftCycle(cycle, -1))}
+          onClick={() => onCycleChange(shiftCycle(cycle, -1, startDay))}
           className={navButton}
         >
           <ChevronLeft className="size-4" strokeWidth={1.75} />
@@ -127,7 +129,7 @@ export function PeopleCycleControl({
           type="button"
           aria-label="Next cycle"
           disabled={isCurrent}
-          onClick={() => onCycleChange(shiftCycle(cycle, 1))}
+          onClick={() => onCycleChange(shiftCycle(cycle, 1, startDay))}
           className={navButton}
         >
           <span className="hidden sm:inline">Next</span>
@@ -171,6 +173,7 @@ export function CyclePicker({
   const [open, setOpen] = useState(false);
   const [year, setYear] = useState(cycle.start.getFullYear());
   const [dateValue, setDateValue] = useState("");
+  const startDay = useMonthCycleStartDay();
   const today = new Date();
   const maxYear = current.start.getFullYear();
 
@@ -241,8 +244,8 @@ export function CyclePicker({
 
         <div className="grid grid-cols-3 gap-1 p-2">
           {MONTHS.map((label, m) => {
-            // The cycle opening on this month's 18th — resolved by the engine, never recomputed here.
-            const target = cycleContaining(new Date(year, m, PEOPLE_CYCLE_END_DAY + 1));
+            // The cycle opening in this month (on the global start day, clamped) — resolved by the engine.
+            const target = cycleContaining(new Date(year, m, Math.min(startDay, new Date(year, m + 1, 0).getDate())), startDay);
             const future = target.start.getTime() > current.start.getTime();
             const selected = sameCycle(target, cycle);
             const isNow = sameCycle(target, current);
@@ -280,7 +283,7 @@ export function CyclePicker({
           onSubmit={(e) => {
             e.preventDefault();
             const d = parseDateInput(dateValue);
-            if (d) pick(cycleContaining(d));
+            if (d) pick(cycleContaining(d, startDay));
           }}
         >
           <label htmlFor="people-cycle-date" className="text-[11px] font-medium text-muted-foreground">
@@ -305,13 +308,13 @@ export function CyclePicker({
           </div>
           {parseDateInput(dateValue) && (
             <p className="text-xs text-muted-foreground tabular-nums">
-              Opens {formatCycleLabel(cycleContaining(parseDateInput(dateValue)!))}
+              Opens {formatCycleLabel(cycleContaining(parseDateInput(dateValue)!, startDay))}
             </p>
           )}
         </form>
 
         <div className="flex items-center justify-between border-t border-border px-3 py-2">
-          <span className="text-[11px] text-muted-foreground">Cycles run 18th → 17th</span>
+          <span className="text-[11px] text-muted-foreground">{startDay <= 1 ? "Cycles follow calendar months" : `Cycles run ${ordinalDay(startDay)} → ${ordinalDay(startDay - 1)}`}</span>
           <button
             type="button"
             onClick={() => pick(current)}

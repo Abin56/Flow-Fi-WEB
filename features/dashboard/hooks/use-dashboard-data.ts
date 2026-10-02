@@ -35,7 +35,11 @@ import { useAccounts } from "@/hooks/use-accounts";
 import { useLoanBalanceSheet } from "@/hooks/use-loan-balance-sheet";
 import { liabilityTotals } from "@/lib/engines/loan-balance-sheet";
 import { useCardUtilizationEmis } from "@/hooks/use-card-utilization-emis";
-import { toLiveUtilizationStatement } from "@/features/credit-cards/hooks/use-credit-cards-data";
+import {
+  creditCardTotalsFrom,
+  useCreditCardStandings,
+  type CreditCardStandingView,
+} from "@/features/credit-cards/hooks/use-credit-cards-data";
 import { useBills } from "@/hooks/use-bills";
 import { useCategories } from "@/hooks/use-categories";
 import {
@@ -46,22 +50,12 @@ import {
   useSharedCreditLimits,
 } from "@/hooks/use-credit-cards";
 import { useCashFlowThisMonth, useTransactions } from "@/hooks/use-transactions";
-import {
-  creditCardStanding,
-  creditUtilizationPercent,
-  lockedEmiPrincipalFor,
-  sharedCreditLimitStanding,
-  type UtilizationCard,
-  type UtilizationEmi,
-  type UtilizationStatement,
-} from "@/lib/engines/credit-utilization";
 import type { Account } from "@/lib/models/account";
 import type { Bill } from "@/lib/models/bill";
 import type { Category } from "@/lib/models/category";
 import { useExpenses } from "@/hooks/use-expenses";
 import type { CreditCardProfile, Statement } from "@/lib/models/credit-card";
 import { statementRemainingAmount, statementStatus } from "@/lib/models/credit-card";
-import { unbilledSpendForCard } from "@/lib/repositories/credit-card-repository";
 import { useMySpendContext } from "@/hooks/use-my-spend-context";
 import { myConsumptionAmount } from "@/lib/engines/my-spend";
 
@@ -125,11 +119,12 @@ export function useDashboardData() {
   const { data: categories = [], isLoading: categoriesLoading } = useCategories();
   const { isLoading: expensesLoading } = useExpenses();
   const { data: creditCards = [], isLoading: creditCardsLoading } = useCreditCards();
-  const { data: sharedLimits = [], isLoading: sharedLimitsLoading } = useSharedCreditLimits();
+  const { isLoading: sharedLimitsLoading } = useSharedCreditLimits();
   const { data: statements = [], isLoading: statementsLoading } = useAllCreditCardStatements();
   const { isLoading: emisLoading } = useEmis();
   const { isLoading: emiBreakdownsLoading } = useAllEmiPaymentBreakdowns();
-  const { utilizationEmis: cardUtilizationEmis, isLoading: cardEmisLoading } = useCardUtilizationEmis();
+  const { isLoading: cardEmisLoading } = useCardUtilizationEmis();
+  const { standings: cardStandings, isLoading: cardStandingsLoading } = useCreditCardStandings();
 
   // Net Worth adds loan principal to account balances (Decision 6 — see `netWorthWithLoans`).
   const { netWorth: netWorthAmount, sheet: balanceSheet, peoplePayable, isLoading: balanceSheetLoading } = useLoanBalanceSheet();
@@ -147,6 +142,7 @@ export function useDashboardData() {
     emisLoading ||
     emiBreakdownsLoading ||
     cardEmisLoading ||
+    cardStandingsLoading ||
     balanceSheetLoading;
 
   const now = useMemo(() => new Date(), []);
@@ -326,117 +322,48 @@ export function useDashboardData() {
       });
   }, [bills, now]);
 
-  // --- Credit Card Utilization (lib/engines/credit-utilization.ts, per active card + shared limits) ---
+  // --- Credit Card Utilization — the SAME standings the Credit Cards page uses (one facility = one row) ---
   const utilization = useMemo(() => {
-    const cardList = creditCards as CreditCardProfile[];
-    const statementList = statements as Statement[];
-
-    // Same card-linked EMI inputs (ownership + principal restored) as the Credit Cards page —
-    // `useCardUtilizationEmis` — so the two can never disagree about locked EMI principal.
-    const utilizationEmis: UtilizationEmi[] = cardUtilizationEmis;
-
-    const transactionsByAccountId = new Map<string, Transaction[]>();
-    for (const t of transactions as Transaction[]) {
-      if (t.deletedAt != null) continue;
-      const list = transactionsByAccountId.get(t.accountId) ?? [];
-      list.push(t);
-      transactionsByAccountId.set(t.accountId, list);
-    }
-
-    // Live statement totals (a deleted/edited transaction inside a closed period leaves the card's
-    // liability), unpaid only — same projection as the Credit Cards page.
-    const statementsForCard = (cardId: string): UtilizationStatement[] => {
-      const card = cardList.find((c) => c.id === cardId);
-      const cardTransactions = card ? (transactionsByAccountId.get(card.accountId) ?? []) : [];
-      return statementList
-        .filter((s) => s.cardId === cardId)
-        .map((s) => toLiveUtilizationStatement(s, cardTransactions))
-        .filter((s) => !s.isPaid);
-    };
-    // Unlike `statementsForCard` above (unpaid only, for `outstanding`'s carry-forward), the
-    // "billed through" cutoff must consider every statement — a paid one still marks that
-    // period's spend as already billed, so it must not be double-counted as unbilled again.
-    const currentCycleFor = (card: CreditCardProfile) =>
-      unbilledSpendForCard(
-        transactionsByAccountId.get(card.accountId) ?? [],
-        statementList.filter((s) => s.cardId === card.id),
-      );
-
-    const standingFor = (card: CreditCardProfile): { outstanding: number; available: number } => {
-      const utilCard: UtilizationCard = {
-        id: card.id,
-        statementDay: card.statementDay,
-        creditLimit: card.creditLimit,
-        sharedLimitId: card.sharedLimitId,
-      };
-      const cardStatements = statementsForCard(card.id);
-
-      if (card.sharedLimitId) {
-        const sharedLimit = (sharedLimits as { id: string; creditLimit: number }[]).find(
-          (l) => l.id === card.sharedLimitId,
-        );
-        if (!sharedLimit) return { outstanding: 0, available: card.creditLimit };
-        const siblingCards = cardList.filter((c) => c.sharedLimitId === card.sharedLimitId);
-        const standing = sharedCreditLimitStanding({
-          sharedLimit,
-          perCard: siblingCards.map((c) => ({
-            card: { id: c.id, statementDay: c.statementDay, creditLimit: c.creditLimit, sharedLimitId: c.sharedLimitId },
-            statements: statementsForCard(c.id),
-            currentCycleStatement: currentCycleFor(c),
-            emis: utilizationEmis,
-          })),
+    // A shared facility is one credit line: one row, its pooled outstanding against its ONE
+    // `SharedCreditLimit.creditLimit` (never a per-sibling ₹0 or own limit), counted once in the total.
+    const rows: { id: string; name: string; outstanding: number; creditLimit: number; percent: number }[] = [];
+    const seenSharedLimitIds = new Set<string>();
+    const shown: CreditCardStandingView[] = [];
+    for (const s of cardStandings) {
+      if (s.sharedLimit != null) {
+        const sharedLimitId = s.sharedLimit.id;
+        if (seenSharedLimitIds.has(sharedLimitId)) continue;
+        const members = cardStandings.filter((m) => m.sharedLimit?.id === sharedLimitId);
+        if (!members.some((m) => m.card.status === "active")) continue;
+        seenSharedLimitIds.add(sharedLimitId);
+        shown.push(s);
+        rows.push({
+          id: sharedLimitId,
+          name: `${s.sharedLimit.name} · shared (${members.length} cards)`,
+          outstanding: s.outstanding,
+          creditLimit: s.effectiveCreditLimit,
+          percent: s.utilizationPercent,
         });
-        // Attribute this card's own outstanding share (not the pooled total) for display.
-        const ownOutstanding = cardStatements.reduce((sum, s) => sum + s.remainingAmount, 0) + currentCycleFor(card).totalAmount;
-        return { outstanding: ownOutstanding, available: standing.available };
+        continue;
       }
-
-      const standing = creditCardStanding({
-        card: utilCard,
-        statements: cardStatements,
-        currentCycleStatement: currentCycleFor(card),
-        emis: utilizationEmis,
+      if (s.card.status !== "active") continue;
+      shown.push(s);
+      rows.push({
+        id: s.card.id,
+        name: s.card.cardHolderName ?? `Card •••• ${s.card.lastFourDigits ?? ""}`,
+        outstanding: s.outstanding,
+        creditLimit: s.effectiveCreditLimit,
+        percent: s.utilizationPercent,
       });
-      return { outstanding: standing.outstanding, available: standing.available };
-    };
-
-    const activeCards = cardList.filter((c) => c.status === "active");
-    const rows = activeCards.map((card) => {
-      const { outstanding } = standingFor(card);
-      // Utilization is on exposure: statement outstanding + this card's locked EMI principal (Case B/C).
-      const percent = creditUtilizationPercent(outstanding + lockedEmiPrincipalFor(utilizationEmis, card.id), card.creditLimit);
-      return { id: card.id, name: card.cardHolderName ?? `Card •••• ${card.lastFourDigits ?? ""}`, outstanding, creditLimit: card.creditLimit, percent };
-    });
-
-    // Dedupe shared-limit totals: count each shared limit's own creditLimit once, standalone cards individually.
-    const seenSharedLimits = new Set<string>();
-    let totalOutstanding = 0;
-    let totalLockedEmiPrincipal = 0;
-    let totalCreditLimit = 0;
-    for (const card of activeCards) {
-      const { outstanding } = standingFor(card);
-      totalOutstanding += outstanding;
-      totalLockedEmiPrincipal += lockedEmiPrincipalFor(utilizationEmis, card.id);
-      if (card.sharedLimitId) {
-        if (!seenSharedLimits.has(card.sharedLimitId)) {
-          seenSharedLimits.add(card.sharedLimitId);
-          const sharedLimit = (sharedLimits as { id: string; creditLimit: number }[]).find(
-            (l) => l.id === card.sharedLimitId,
-          );
-          totalCreditLimit += sharedLimit?.creditLimit ?? 0;
-        }
-      } else {
-        totalCreditLimit += card.creditLimit;
-      }
     }
-
+    const totals = creditCardTotalsFrom(shown);
     return {
-      totalOutstanding,
-      totalCreditLimit,
-      percent: creditUtilizationPercent(totalOutstanding + totalLockedEmiPrincipal, totalCreditLimit),
+      totalOutstanding: totals.utilized,
+      totalCreditLimit: totals.creditLimit,
+      percent: totals.utilizationPercent,
       cards: rows,
     };
-  }, [creditCards, sharedLimits, statements, cardUtilizationEmis, transactions]);
+  }, [cardStandings]);
 
   // --- Upcoming Payments (Bill.nextDueDate + unpaid Statement.dueDate, merged and sorted soonest-first) ---
   const upcomingPayments = useMemo(() => {
