@@ -66,6 +66,7 @@ import {
 } from "@/lib/repositories/repository-factory";
 import { getDocs, query, where } from "firebase/firestore";
 import { deletePersonCashLegTransaction } from "@/lib/services/person-cash-leg-deletion";
+import { followsDescription, syncLinkedDescription } from "@/lib/services/transaction-description-sync";
 import { deleteTransactionWithLinkedEffects } from "@/lib/services/transaction-deletion";
 import { repairSplitGhost } from "@/lib/services/split-ghost-repair";
 import type {
@@ -261,6 +262,18 @@ export function useTransactionActions() {
         expense,
       );
 
+    /**
+     * People rows show their ledger entry's stored `note` (and a share its Expense's description), so a
+     * rename is carried to those copies — one routing for every save path, description only. See
+     * `lib/services/transaction-description-sync.ts` for the per-owner rules.
+     */
+    const syncDescription = (transaction: Transaction, params: EditTransactionParams) =>
+      syncLinkedDescription(
+        { expenseRepository, personRepository, ledgerRepositoryFor: (personId) => createLedgerRepositoryFor(uid, personId, personRepository) },
+        transaction,
+        params.description,
+      );
+
     return {
       createTransaction: (params: CreateTransactionParams) =>
         withErrorToast(() => transactionRepository.createTransaction(params), "Couldn't create transaction"),
@@ -280,8 +293,10 @@ export function useTransactionActions() {
           // account alone, which would leave People, Month Cycle and Net Worth on the old amount.
           const amountChanged = params.amount != null && params.amount !== transaction.amount;
           const dateChanged = params.dateTime != null && params.dateTime.getTime() !== transaction.dateTime.getTime();
-          // A person-funded expense's amount/date IS its People obligation's — kept in step atomically.
-          if (isPersonFunded(transaction) && (amountChanged || dateChanged || params.accountId != null)) {
+          const descriptionChanged = params.description != null && params.description.trim() !== transaction.description.trim();
+          // A person-funded expense's amount/date/description IS its People obligation's — kept in step
+          // atomically (same-person `changeExpenseFunding` edits the entry in place; no account moves).
+          if (isPersonFunded(transaction) && (amountChanged || dateChanged || descriptionChanged || params.accountId != null)) {
             const { amount, dateTime, accountId: _ignored, linkedPersonId: _l, clearLinkedPersonId: _c, owesPersonToggle: _o, type: _t, ...rest } = params;
             return changeFunding(transaction, { kind: "person", personId: transaction.fundedByPersonId! }, { ...rest, amount, dateTime });
           }
@@ -298,13 +313,18 @@ export function useTransactionActions() {
               return createLedgerRepositoryFor(uid, personId, personRepository).editEntry(
                 person,
                 entry,
-                { amount: amountChanged ? amount : undefined, date: dateChanged ? dateTime : undefined },
+                {
+                  amount: amountChanged ? amount : undefined,
+                  date: dateChanged ? dateTime : undefined,
+                  note: followsDescription(entry.note, transaction.description, params.description) ? params.description!.trim() : undefined,
+                },
                 transactionRepository,
                 rest,
               );
             }
           }
-          return transactionRepository.editTransaction(transaction, params);
+          await transactionRepository.editTransaction(transaction, params);
+          await syncDescription(transaction, params);
         }, "Couldn't save changes"),
       /**
        * A transaction backed by an assigned/split Expense must be deleted
@@ -373,13 +393,15 @@ export function useTransactionActions() {
         params: Omit<ApplyOwesPersonChangeParams, "transactionRepository" | "expenseRepository" | "installmentRepositoryFor">,
       ) =>
         withErrorToast(
-          () =>
-            applyOwesPersonChange({
+          async () => {
+            await applyOwesPersonChange({
               ...params,
               transactionRepository,
               expenseRepository,
               installmentRepositoryFor: (scheduleId: string) => createInstallmentRepositoryFor(uid, scheduleId),
-            }),
+            });
+            if (params.transactionEdits != null) await syncDescription(params.transaction, params.transactionEdits);
+          },
           "Couldn't update who owes this",
         ),
       /** Direct repository access for the Transaction Manager popup's richer split-editing UI (convertToSplit/resplitExpense/editExpense) and installment lookups. */

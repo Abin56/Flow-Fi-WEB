@@ -104,6 +104,8 @@ import {
 } from "./transaction-form-ui";
 import { PeopleSettlementCard, settleCtaLabel } from "@/features/people/components/linked-people-panel";
 import { peopleSettleHref, peopleSettlementGate, type LinkedPeopleReadiness } from "@/lib/engines/linked-people-readiness";
+import { SplitAllocationBreakdown } from "@/components/finance/split-allocation-breakdown";
+import { splitAllocation } from "@/lib/split/split-allocation";
 
 const DATE_DISPLAY_FORMAT = new Intl.DateTimeFormat("en-IN", { day: "2-digit", month: "short", year: "numeric" });
 /** Solid `border-strong` edge (People Ledger / Loan & EMI rule) — never an opacity-faded border that
@@ -443,7 +445,10 @@ export function TransactionDetailsModal({
   initialAmount,
   peopleGate = null,
   onDestinationAccountChange,
+  returnLabel = null,
 }: {
+  /** Opened from a person's People ledger — shows "Back to <name>"; closing returns there (caller routes). */
+  returnLabel?: string | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** `null` opens the popup in Add mode. */
@@ -588,6 +593,8 @@ export function TransactionDetailsModal({
     setSeenKey(null);
   }
 
+  /** The saved split behind this transaction (stored total + stored shares), for the read-only breakdown. */
+  const savedSplit = expense && isSplit(expense) ? splitAllocation(expense) : null;
   const isTransferLeg = !!transaction?.transferId;
   /** "Money I Borrowed" is on — the form must know who paid before it can save. */
   const borrowedChosen = kind === "expense" && personId != null && !splitOpen && personEntryType === "borrowed";
@@ -1140,6 +1147,19 @@ export function TransactionDetailsModal({
               </div>
             )}
             <div className="flex shrink-0 items-center gap-1.5">
+              {returnLabel && view === "form" && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 max-w-[11rem] gap-1 px-2 text-xs"
+                  onClick={() => onOpenChange(false)}
+                  disabled={saving || deleting}
+                  title={`Back to ${returnLabel}'s ledger — nothing is saved`}
+                >
+                  <ArrowLeft className="size-3.5 shrink-0" />
+                  <span className="truncate">Back to {returnLabel}</span>
+                </Button>
+              )}
               {view === "form" && flag && (
                 <Badge variant="outline" className="hidden text-[11px] min-[400px]:inline-flex">
                   {flag.label}
@@ -1616,6 +1636,8 @@ export function TransactionDetailsModal({
                 title="People & Split"
                 aside={<span className="text-[11px] font-medium text-foreground/70">Optional</span>}
               >
+                {/* The saved split as stored — the same breakdown as the People Ledger. Display only. */}
+                {transaction && !splitOpen && savedSplit && <SplitAllocationBreakdown allocation={savedSplit} format={formatCurrencyPrecise} />}
                 {!splitOpen && (
                   <FormRow label="Assign to a person">
                   <AnimatePresence mode="wait" initial={false}>

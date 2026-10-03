@@ -845,6 +845,33 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
   }
 
   /**
+   * Description-only follow-up for a split/assigned Expense whose Transaction was just renamed: the
+   * Expense's own `description` and each participant's "Split: …" share entry (the People row title)
+   * take the new text. No amount, share, installment, settlement or balance is touched — `editEntry`
+   * with only a note has zero balance delta. Idempotent: anything already in step is left alone, so
+   * running it after `editExpense` (which syncs notes for tracked shares) changes nothing further.
+   * Settlement entries ("Split settlement: …", "Received: …") are payment-history snapshots and are
+   * deliberately not rewritten.
+   */
+  async syncDescription(expense: Expense, description: string): Promise<void> {
+    const next = description.trim();
+    if (next === "") return;
+    if (expense.description !== next) await this.update({ ...expense, description: next });
+    const newNote = `Split: ${next}`;
+    const personIds = new Set(expense.participants.flatMap((p) => (p.isMe || p.personId == null ? [] : [p.personId])));
+    for (const personId of personIds) {
+      const person = await this.personRepository.getByKey(personId);
+      if (person == null) continue;
+      const ledgerRepository = this.ledgerRepositoryFor(person.id);
+      const entries = await ledgerRepository.getByTransactionRef(expense.transactionId);
+      for (const entry of entries) {
+        if (entry.type !== "gave" || entry.paymentId != null || !entry.note.startsWith("Split: ") || entry.note === newNote) continue;
+        await ledgerRepository.editEntry(person, entry, { note: newNote });
+      }
+    }
+  }
+
+  /**
    * Edits an existing expense in place — simple fields always apply;
    * `totalAmount`/`splitType`/`participantInputs` only matter when `expense`
    * is split, and re-resolve every participant's share via `resolveShares`.

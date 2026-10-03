@@ -405,9 +405,11 @@ describe("outputs share the engine total", () => {
   it("25. PDF total = engine total", async () => {
     const view = statementView(s);
     expect(view.currentPending).toBe(4750);
-    expect(view.current).toEqual({ label: "Current pending", value: money(4750) });
+    expect(view.current).toEqual({ label: "Balance due", value: money(4750) });
     expect(view.amount).toBe(money(4750));
-    expect(view.headline).toBe(`You need to receive from ${s.personName.split(" ")[0]}`);
+    // Read by the person: both sides named, never "you" (no profile name → the neutral fallback).
+    expect(view.headline).toBe(`${s.personName} owes Account holder`);
+    expect(view.flow).toEqual({ from: s.personName, to: "Account holder" });
     expect(view.rows.find((r) => r.kind === "emi")).toMatchObject({ typeLabel: "EMI", original: money(2500), remaining: money(2500) });
     // The received payment is listed in the cycle's payment history.
     expect(view.payments.some((p) => p.amount === money(1500) && p.inbound)).toBe(true);

@@ -46,7 +46,7 @@ import type { Installment } from "@/lib/models/payment-schedule";
 import { useTransactions } from "@/hooks/use-transactions";
 import { useLoanRows } from "@/features/loans/hooks/use-loans-data";
 import { personLoanActivity } from "@/features/people/lib/person-loan-activity";
-import { isLegacyLoanLedgerEntry, peopleTotals, personBalanceBreakdown, personPosition, type PersonBalanceBreakdown, type PersonPosition } from "@/lib/engines/person-position";
+import { breakdownEntryOf, isLegacyLoanLedgerEntry, peopleTotals, personBalanceBreakdown, personPosition, type PersonBalanceBreakdown, type PersonPosition } from "@/lib/engines/person-position";
 import type { Loan } from "@/lib/models/loan";
 import { useMemo } from "react";
 import { usePeople } from "@/hooks/use-people";
@@ -307,7 +307,7 @@ function toPersonRow(
     loanPayable: position.loanPayable,
     breakdown: personBalanceBreakdown(
       position,
-      entries.map((e) => ({ id: e.id, type: e.type, amount: e.amount, parentEntryId: e.parentEntryId, transactionRef: e.transactionRef, isDeleted: e.deletedAt != null })),
+      entries.map(breakdownEntryOf),
       loanIds,
     ),
     status: position.net === 0 ? "settled" : "active",

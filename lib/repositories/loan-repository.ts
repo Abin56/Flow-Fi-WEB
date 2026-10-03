@@ -806,7 +806,25 @@ export class LoanRepository extends FirestoreCrudRepository<Loan> {
    */
   override async softDelete(loan: Loan): Promise<Loan> {
     if ((await this.originationMoneyState(loan)) === "moneyActive") throw new OriginationDeleteBlockedError("reverseFirst");
-    return super.softDelete(loan);
+    return this.setTrashed(loan.id, new Date());
+  }
+
+  /**
+   * Trash / restore flip `deletedAt` on the FRESH document inside a transaction — never a whole-document
+   * write of the caller's (possibly stale) Loan, which would roll back anything written since (Borrow More's
+   * `loanAmount`, close/reopen, terms). Repeating it (double click, two tabs, restore twice) is a no-op.
+   */
+  private async setTrashed(loanId: string, deletedAt: Date | null): Promise<Loan> {
+    const ref = doc(this.collection, loanId);
+    return runTransaction(this.collection.firestore, async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists()) throw new Error("Loan not found");
+      const fresh = snap.data();
+      if ((fresh.deletedAt == null) === (deletedAt == null)) return fresh;
+      const updated = { ...fresh, deletedAt };
+      tx.set(ref, updated);
+      return updated;
+    });
   }
 
   /**
@@ -815,7 +833,7 @@ export class LoanRepository extends FirestoreCrudRepository<Loan> {
    */
   override async restore(loan: Loan): Promise<Loan> {
     if ((await this.originationMoneyState(loan)) === "moneyReversed") throw new OriginationDeleteBlockedError("reversed");
-    return super.restore(loan);
+    return this.setTrashed(loan.id, null);
   }
 
   /**

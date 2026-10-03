@@ -26,6 +26,7 @@ import { PAYMENT_EPSILON, round2 } from "@/lib/engines/person-payment";
 import type { PersonCycleStatement } from "@/lib/engines/person-cycle-statement";
 import type { LedgerEntry } from "@/lib/models/person";
 import { unpaidCardCharges, type LinkedFundsTransaction } from "@/lib/engines/linked-funds";
+import type { Installment } from "@/lib/models/payment-schedule";
 
 export type LinkedPersonState = "received" | "partial" | "pending";
 
@@ -100,16 +101,69 @@ export function linkedPeopleForInstallment(params: {
   sourceKind: "emi" | "loan";
   lenderDue: number;
 }): LinkedPeopleReadiness {
-  const key = `${params.sourceKind === "emi" ? "emi-inst" : "loan-inst"}:${params.installmentId}`;
+  return linkedPeopleForInstallments({ ...params, installmentIds: [params.installmentId] });
+}
+
+/**
+ * People obligations beneath every installment one lender payment settles (e.g. "Pay all due" over two
+ * overdue installments) — each person's shares of all of them, so no covered installment escapes the gate.
+ */
+export function linkedPeopleForInstallments(params: {
+  statements: readonly StatementLike[];
+  installmentIds: readonly string[];
+  sourceKind: "emi" | "loan";
+  lenderDue: number;
+}): LinkedPeopleReadiness {
+  const prefix = params.sourceKind === "emi" ? "emi-inst" : "loan-inst";
+  const keys = [...new Set(params.installmentIds)].map((id) => `${prefix}:${id}`);
   const byPerson = new Map<string, { name: string; obligations: LinkedObligation[] }>();
   for (const st of params.statements) {
-    const row = st.rows.find((r) => r.key === key);
-    // Category `emi` = a person's share of my lender installment; a person-counterparty Loan is `loan`.
-    if (!row || row.category !== "emi") continue;
-    const o = obligationFrom(st, key);
-    if (o) byPerson.set(st.personId, { name: st.personName, obligations: [o] });
+    for (const key of keys) {
+      const row = st.rows.find((r) => r.key === key);
+      // Category `emi` = a person's share of my lender installment; a person-counterparty Loan is `loan`.
+      if (!row || row.category !== "emi") continue;
+      const o = obligationFrom(st, key);
+      if (!o) continue;
+      const slot = byPerson.get(st.personId) ?? { name: st.personName, obligations: [] };
+      slot.obligations.push(o);
+      byPerson.set(st.personId, slot);
+    }
   }
   return summarize(params.lenderDue, byPerson);
+}
+
+/**
+ * THE People-gate rule for a lender payment — the one function the payment dialog and the authoritative
+ * write paths (`LoanAdvancePaymentRepository`, the EMI payment transaction) both call:
+ *
+ *  - `touched` = the installments the payment actually settles or reaches, from the SAME allocator the
+ *    write uses (`planLoanPaymentCore` / `planEmiPaymentAllocation`) — never a separate approximation;
+ *  - of those, only installments already DUE on the payment date are gated: a person's share of an
+ *    installment that is not due yet is not owed yet, so paying the lender early is never blocked on it.
+ */
+export function peopleGateInstallmentIds(touched: readonly Pick<Installment, "id" | "dueDate">[], paymentDate: Date): string[] {
+  const cutoff = new Date(paymentDate.getFullYear(), paymentDate.getMonth(), paymentDate.getDate() + 1).getTime();
+  return [...new Set(touched.filter((i) => i.dueDate.getTime() < cutoff).map((i) => i.id))];
+}
+
+/** A lender payment was refused at the write layer because linked People shares are still open. */
+export class PeopleSettlementPendingError extends Error {
+  constructor(readonly gate: PeopleSettlementGate) {
+    const fmt = (n: number) => `₹${n.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
+    const who = gate.attention.map((p) => `${fmt(p.remaining)} from ${p.personName}`).join(", ");
+    super(`${who} is still expected for this installment. Record it in People first, then pay the lender.`);
+    this.name = "PeopleSettlementPendingError";
+  }
+}
+
+/**
+ * An explicit, recorded decision to pay the lender although linked People shares are still open (e.g. the
+ * bank already auto-debited the EMI). Never a default: without it the write layer enforces the gate.
+ * The People obligations stay open either way — nothing is netted or auto-settled.
+ */
+export interface UnsettledPeopleAcknowledgement {
+  acknowledgedUnsettledPeople: true;
+  reason: string;
 }
 
 /**

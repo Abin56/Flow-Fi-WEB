@@ -26,7 +26,11 @@ Ownership shares say whose liability it is economically. They never change:
 
 ## Findings
 
-### F1. Net Worth counts a settled loan-share reimbursement as a debt to that person
+### F1. Net Worth counts a settled loan-share reimbursement as a debt to that person — FIXED (2026-10-02)
+
+**Fix:** `personBalanceBreakdown` applies settlements carrying `obligationRef: emi-inst:/loan-inst:` to the EMI receivable, never to the direct side. Net Worth's People part is `peopleNetWorthPosition` = Σ (directBalance + emiReceivable), with gross components. A due share is now a receivable, and its reimbursement is an asset swap. Consequence: Net Worth rises by a share when it falls due, and is unchanged when it is reimbursed. Tests: `lib/engines/emi-share-settlement-components.test.ts`, plus the §2 and §20 emulator tests.
+
+Original finding:
 
 A person's installment share lives on the Loan as `PersonPosition.emiReceivable`. Net Worth excludes it, because Net Worth adds only `Σ directBalance`. The reimbursement, however, is a `receivedBack` ledger entry, and it lowers `directBalance`.
 
@@ -42,7 +46,7 @@ A pinned test in the lifecycle suite covers this.
 
 Possible fix (needs a decision): feed `directBalance + emiReceivable` into the People part of Net Worth and into `peoplePayable`. That is a Net Worth contract change, so it was not made here.
 
-### F2. Card attribution cap ignores loan-share reimbursements
+### F2. Card attribution cap ignores loan-share reimbursements — FIXED (2026-10-02, same root cause as F1)
 
 `use-debt-planner-data` caps each person's card attribution at `max(directBalance, 0)`.
 

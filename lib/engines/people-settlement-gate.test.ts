@@ -3,11 +3,14 @@ import { buildPersonCycleStatement, type StatementEmiSource, type StatementInsta
 import {
   isInAppPath,
   linkedPeopleForCard,
+  peopleGateInstallmentIds,
   linkedPeopleForInstallment,
+  linkedPeopleForInstallments,
   peopleSettleHref,
   peopleSettlementGate,
 } from "@/lib/engines/linked-people-readiness";
 import type { LinkedFundsTransaction } from "@/lib/engines/linked-funds";
+import { planInstallmentSettlement } from "@/lib/engines/installment-settlement";
 import type { LedgerEntry } from "@/lib/models/person";
 
 /**
@@ -195,6 +198,57 @@ describe("peopleSettlementGate — Loan / EMI installment", () => {
       expect(gateFor(kind, [paid("s1", "amma", 1000, { obligationRef: ref("i2") }), paid("s2", "john", 1000, { obligationRef: ref("i2") })], "i2").blocked).toBe(false);
     });
   }
+});
+
+describe("peopleSettlementGate — a payment covering several due installments (Pay all due / custom)", () => {
+  const shares = [
+    { personId: null, amount: 10000 },
+    { personId: "amma", amount: 10000 },
+    { personId: "john", amount: 10000 },
+  ];
+  // #1 due Sep 5, #2 due Sep 6 (both overdue at Sep 15), #3 due Oct 30 (upcoming).
+  const inst = (id: string, seq: number, due: Date) =>
+    ({ id, scheduleId: "sch", sequenceNumber: seq, dueDate: due, amountDue: 3000, amountPaid: 0, isSkipped: false, deletedAt: null, createdAt: d(1), lastEditedAt: null, editHistory: [] }) as never;
+  const i1 = inst("i1", 1, d(5));
+  const i2 = inst("i2", 2, d(6));
+  const i3 = inst("i3", 3, new Date(2026, 9, 30));
+  const sts = (entries: (LedgerEntry & { id: string })[]) =>
+    statements(entries, {
+      loans: [{ id: "src", name: "Home", scheduleId: "sch", ownershipShares: shares, isClosed: false, deletedAt: null, direction: "taken" } as unknown as StatementLoanSource],
+      installments: [i1, i2, i3],
+    });
+  // `touched` comes from the write's own allocator; oldest-first here, as `planLoanPaymentCore` allocates due installments.
+  const ids = (amount: number) => peopleGateInstallmentIds(planInstallmentSettlement([i1, i2, i3], amount).portions.map((p) => p.installment), d(15));
+
+  it("covered installments: only #1 for one installment; #1 + #2 for Pay all due; never the upcoming #3", () => {
+    expect(ids(3000)).toEqual(["i1"]);
+    expect(ids(6000)).toEqual(["i1", "i2"]);
+    expect(ids(9000)).toEqual(["i1", "i2"]); // #3 reached by the amount but not owed by people yet
+    expect(ids(4000)).toEqual(["i1", "i2"]); // partly reaches #2 → #2 is being paid too
+  });
+
+  it("paying an installment BEFORE its due date is never gated on a share that is not owed yet", () => {
+    expect(peopleGateInstallmentIds([i3], d(15))).toEqual([]);
+    expect(peopleGateInstallmentIds([i3], new Date(2026, 9, 30))).toEqual(["i3"]); // on its due date it is gated
+    expect(peopleGateInstallmentIds([i1, i1, i2], d(15))).toEqual(["i1", "i2"]); // de-duplicated
+  });
+
+  it("#1 shares received, #2 shares pending → Pay all due is BLOCKED (previously only #1 was checked)", () => {
+    const entries = [paid("a1", "amma", 1000, { obligationRef: "loan-inst:i1" }), paid("j1", "john", 1000, { obligationRef: "loan-inst:i1" })];
+    expect(peopleSettlementGate(linkedPeopleForInstallment({ statements: sts(entries), installmentId: "i1", sourceKind: "loan", lenderDue: 3000 })).blocked).toBe(false);
+    const gate = peopleSettlementGate(linkedPeopleForInstallments({ statements: sts(entries), installmentIds: ids(6000), sourceKind: "loan", lenderDue: 6000 }));
+    expect(gate.blocked).toBe(true);
+    expect(gate.outstanding).toBe(2000);
+    expect(gate.next).toMatchObject({ obligationKey: "loan-inst:i2", amount: 1000 }); // opens the exact #2 share
+  });
+
+  it("every covered share received → unblocked; a person's shares of both installments are summed, never merged", () => {
+    const entries = ["i1", "i2"].flatMap((i) => [paid(`a-${i}`, "amma", 1000, { obligationRef: `loan-inst:${i}` }), paid(`j-${i}`, "john", 1000, { obligationRef: `loan-inst:${i}` })]);
+    const r = linkedPeopleForInstallments({ statements: sts(entries), installmentIds: ids(6000), sourceKind: "loan", lenderDue: 6000 });
+    expect(peopleSettlementGate(r).blocked).toBe(false);
+    expect(r.people.find((p) => p.personId === "amma")!.obligations.map((o) => o.key)).toEqual(["loan-inst:i1", "loan-inst:i2"]);
+    expect(r.peopleShare).toBe(4000);
+  });
 });
 
 describe("peopleSettleHref", () => {

@@ -308,7 +308,7 @@ function expectUntouched() {
   const c = consumers();
   expect(c.mySpend).toBe(0);
   expect(c.monthCycle).toEqual({ toGive: 0, toReceive: 0 });
-  expect(c.netWorth).toEqual({ receivable: 0, payable: 0 });
+  expect(c.netWorth).toMatchObject({ receivable: 0, payable: 0 });
 }
 
 const boom = () => new Error("injected failure");
@@ -553,7 +553,7 @@ describe("C1. Person-funded ₹1,000 — AMMA paid my expense directly", () => {
     expect(c.mySpend).toBe(1000);
     expect(c.sbi).toBe(10000); // my account movement ₹0
     expectPerson("amma", 0, 1000);
-    expect(c.netWorth).toEqual({ receivable: 0, payable: 1000 });
+    expect(c.netWorth).toMatchObject({ receivable: 0, payable: 1000 });
     expect(c.monthCycle).toEqual({ toGive: 1000, toReceive: 0 });
     expect(activeTransactions().map((t) => t.id)).toEqual([transaction.id]); // Transactions list
 
@@ -562,7 +562,7 @@ describe("C1. Person-funded ₹1,000 — AMMA paid my expense directly", () => {
     expect(c.mySpend).toBe(0);
     expect(c.sbi).toBe(10000);
     expectPerson("amma", 0, 0);
-    expect(c.netWorth).toEqual({ receivable: 0, payable: 0 });
+    expect(c.netWorth).toMatchObject({ receivable: 0, payable: 0 });
     expect(c.monthCycle).toEqual({ toGive: 0, toReceive: 0 });
     expect(activeTransactions()).toHaveLength(0);
 
@@ -571,7 +571,7 @@ describe("C1. Person-funded ₹1,000 — AMMA paid my expense directly", () => {
     c = consumers();
     expect(c.mySpend).toBe(1000);
     expectPerson("amma", 0, 1000); // exactly once
-    expect(c.netWorth).toEqual({ receivable: 0, payable: 1000 });
+    expect(c.netWorth).toMatchObject({ receivable: 0, payable: 1000 });
     expect(activeLedgerEntries()).toHaveLength(1);
   });
 });
@@ -594,7 +594,7 @@ describe("C2. ₹3,000 split from SBI — me / AMMA / TRIPTHEE ₹1,000 each", (
     expect(c.mySpend).toBe(1000);
     expectPerson("amma", 1000, 0);
     expectPerson("tripthee", 1000, 0);
-    expect(c.netWorth).toEqual({ receivable: 2000, payable: 0 });
+    expect(c.netWorth).toMatchObject({ receivable: 2000, payable: 0 });
     expect(c.monthCycle).toEqual({ toGive: 0, toReceive: 2000 });
 
     await settle(expense, "amma", 400); // partial
@@ -616,7 +616,7 @@ describe("C2. ₹3,000 split from SBI — me / AMMA / TRIPTHEE ₹1,000 each", (
     expect(c.mySpend).toBe(0);
     expectPerson("amma", 0, 0);
     expectPerson("tripthee", 0, 0);
-    expect(c.netWorth).toEqual({ receivable: 0, payable: 0 });
+    expect(c.netWorth).toMatchObject({ receivable: 0, payable: 0 });
     expect(activeLedgerEntries()).toHaveLength(0);
 
     await expenseRepository.restoreExpense((await expenseRepository.getByKey(expense.id))!);
@@ -637,12 +637,12 @@ describe("D. Both People directions stay separate", () => {
 
     expectPerson("amma", 1000, 500);
     let c = consumers();
-    expect(c.netWorth).toEqual({ receivable: 1000, payable: 500 });
+    expect(c.netWorth).toMatchObject({ receivable: 1000, payable: 500 });
     expect(c.monthCycle).toEqual({ toGive: 500, toReceive: 1000 });
 
     await linkedDelete((await transactionRepository.getByKey(transaction.id))!);
     expectPerson("amma", 1000, 0);
     c = consumers();
-    expect(c.netWorth).toEqual({ receivable: 1000, payable: 0 });
+    expect(c.netWorth).toMatchObject({ receivable: 1000, payable: 0 });
   });
 });

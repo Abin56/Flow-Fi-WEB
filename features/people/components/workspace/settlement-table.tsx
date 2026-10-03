@@ -24,10 +24,12 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { Fragment, useEffect, useRef, useState } from "react";
+import { SplitAllocationBreakdown } from "@/components/finance/split-allocation-breakdown";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { LedgerRowHandlers } from "@/features/people/components/person-activity-feed";
 import { EntryEditForm, EntrySettleForm, InlineReveal, isEditable, LoanPayLink, DELETE_BLOCK_NOTE } from "@/features/people/components/workspace/ledger-ui";
 import { groupByMonth, sequence, type LedgerRow, type PaymentRecord } from "@/features/people/lib/person-ledger-rows";
+import { transactionHref } from "@/features/people/lib/people-return-link";
 import {
   KIND_LABEL,
   linkedExpense,
@@ -37,7 +39,6 @@ import {
   settlementStatus,
   settlementTitle,
   settlementTone,
-  shareBreakdown,
   splitContext,
   splitContextLine,
   type SettlementKind,
@@ -47,6 +48,7 @@ import {
 } from "@/features/people/lib/settlement-presentation";
 import { formatStatementDate, type EmiRowStatus } from "@/lib/engines/person-cycle-statement";
 import { money } from "@/lib/engines/person-cycle-statement-share";
+import { splitAllocation } from "@/lib/split/split-allocation";
 import { cn } from "@/lib/utils";
 
 /**
@@ -151,12 +153,16 @@ export interface SettlementRowView {
   carried: boolean;
   /** "Original ₹3,000 · 3-way split" for a split/assigned share whose Expense is available; else null. */
   splitNote: string | null;
+  /** The same split context as separate figures — the collapsed row shows original total and share apart, never as one sentence. */
+  split: { original: number; participantCount: number; shareLabel: string; share: number } | null;
 }
 
 export function viewOf(row: LedgerRow, personName: string, lookups: SettlementLookups, carried = false, personId?: string): SettlementRowView {
   const kind = settlementKind(row, lookups);
   const ctx = (kind === "split" || kind === "assigned") && personId != null ? splitContext(row, lookups, personId) : null;
   const tone = settlementTone(row, kind);
+  const shareLabel = row.direction === "iOwe" ? "Your share" : `${personName.split(" ")[0]}'s share`;
+  const share = row.direction === "iOwe" ? row.amount : (ctx?.personShare ?? row.amount);
   return {
     row,
     kind,
@@ -167,13 +173,40 @@ export function viewOf(row: LedgerRow, personName: string, lookups: SettlementLo
     status: settlementStatus(row, kind, personName, money),
     paid: isPaymentKind(kind) ? row.amount : paidSoFar(row),
     carried,
-    splitNote: ctx ? splitContextLine(ctx, money) : null,
+    // The row amount is one share of a bigger bill — say whose, next to the original total.
+    splitNote: ctx ? `${splitContextLine(ctx, money)} · ${shareLabel} ${money(share)}` : null,
+    split: ctx ? { original: ctx.original, participantCount: ctx.participantCount, shareLabel, share } : null,
   };
 }
 
 // ---------------------------------------------------------------------------------------------------
 // Small parts
 // ---------------------------------------------------------------------------------------------------
+
+/** Split rows sit on a neutral surface — the badge and left edge already say "split"; colour is kept for state. */
+function rowTint(v: SettlementRowView): string {
+  return v.family === "split" ? "bg-card" : FAMILY[v.family].tint;
+}
+
+/**
+ * Collapsed split context as three separate facts — "Split expense · 4 people", the purchase total and this
+ * person's share — so the share is never read as the original amount. The full allocation is in the expansion.
+ */
+function SplitSummary({ split, className }: { split: NonNullable<SettlementRowView["split"]>; className?: string }) {
+  return (
+    <p className={cn("flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-[11.5px] leading-tight tabular-nums", className)}>
+      <span className="font-medium text-foreground/65">{split.participantCount >= 2 ? `Split expense · ${split.participantCount} people` : "Assigned in full"}</span>
+      <span className="whitespace-nowrap">
+        <span className="text-foreground/60">Original </span>
+        <span className="font-bold text-foreground">{money(split.original)}</span>
+      </span>
+      <span className="whitespace-nowrap">
+        <span className="text-foreground/60">{split.shareLabel} </span>
+        <span className="font-semibold text-foreground">{money(split.share)}</span>
+      </span>
+    </p>
+  );
+}
 
 export function TypeBadge({ kind, family, className }: { kind: SettlementKind; family: Family; className?: string }) {
   const Icon = KIND_ICON[kind];
@@ -228,7 +261,7 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   return <p className="mb-1 text-[10.5px] font-bold tracking-[0.08em] text-foreground/65 uppercase">{children}</p>;
 }
 
-function Breakdown({ v, personId, personName, lookups }: { v: SettlementRowView; personId: string; personName: string; lookups: SettlementLookups }) {
+function Breakdown({ v, personName }: { v: SettlementRowView; personId: string; personName: string; lookups: SettlementLookups }) {
   const { row, kind } = v;
   const s = row.statementRow;
   const first = personName.split(" ")[0];
@@ -266,25 +299,17 @@ function Breakdown({ v, personId, personName, lookups }: { v: SettlementRowView;
     );
   }
   if (kind === "split" || kind === "assigned") {
-    const shares = shareBreakdown(linkedExpense(row, lookups), personId, personName);
+    // The allocation (whole bill, every stored share) is shown full width above by `Expansion`; this
+    // column is only this person's settlement — never mixed into the allocation.
     return (
-      <dl className="text-[13px]">
-        {shares && (
+      <div className="text-[13px]">
+        {settleLines && (
           <>
-            <SectionLabel>Split details</SectionLabel>
-            <Line label={<span className="font-bold text-foreground">Total price</span>} value={money(shares.total)} strong />
-            {shares.lines.map((l, i) => (
-              <Line key={i} indent label={l.highlight ? <span className="font-semibold text-foreground">{l.label}</span> : l.label} value={l.highlight ? <span className="font-semibold">{money(l.amount)}</span> : money(l.amount)} />
-            ))}
-            {/* Sum of the stored allocations, as stored — never forced to equal the total. */}
-            <div className="border-t border-border-strong/50">
-              <Line label="Allocated" value={money(Math.round(shares.lines.reduce((s, l) => s + l.amount, 0) * 100) / 100)} />
-            </div>
-            <div className="my-1" />
+            <SectionLabel>{row.direction === "iOwe" ? "Your settlement" : `${first}'s settlement`}</SectionLabel>
+            <dl>{settleLines}</dl>
           </>
         )}
-        {settleLines}
-      </dl>
+      </div>
     );
   }
   if (kind === "loanInstallment") {
@@ -463,7 +488,8 @@ export function sourceLink(row: LedgerRow, lookups: SettlementLookups): { href: 
   if (row.entryId && !row.deletable && row.deleteBlock === "expense" && row.statementRow?.kind === "obligation") {
     const ref = lookups.entriesById.get(row.entryId)?.transactionRef;
     // Never a dead link: a row whose source transaction is gone has nowhere to navigate to.
-    if (ref && !sourceUnavailable(row, lookups)) return { href: `/transactions?transaction=${encodeURIComponent(ref)}`, label: "Open expense" };
+    // Carries the People return context so Transactions can bring the user back to this exact ledger.
+    if (ref && !sourceUnavailable(row, lookups)) return { href: transactionHref(ref, lookups.sourceReturn), label: "Open expense" };
   }
   return null;
 }
@@ -580,6 +606,7 @@ function Expansion({
   const onEditPayment = handlers.onEditPayment
     ? (p: PaymentRecord) => (handlers.editablePayment?.(p) ? () => handlers.onEditPayment!(p) : null)
     : undefined;
+  const allocation = v.kind === "split" || v.kind === "assigned" ? splitAllocation(linkedExpense(row, lookups), personId) : null;
   return (
     <div className={cn("rounded-[8px] border border-l-[3px] border-border-strong/70 bg-card px-3 py-2.5", FAMILY[v.family].edge)}>
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -589,6 +616,13 @@ function Expansion({
         </div>
         <RowActionButtons v={v} handlers={handlers} lookups={lookups} />
       </div>
+      {allocation && (
+        // The whole purchase and every stored share, across the row's full width; settlement follows separately.
+        <div className="mt-2.5">
+          <p className="mb-1 text-[10.5px] font-bold tracking-[0.08em] text-foreground/65 uppercase">Split details</p>
+          <SplitAllocationBreakdown allocation={allocation} focusName={personName} className="max-w-4xl" />
+        </div>
+      )}
       <div className="mt-2 grid gap-x-7 gap-y-2.5 md:grid-cols-2 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_minmax(0,0.7fr)]">
         <Breakdown v={v} personId={personId} personName={personName} lookups={lookups} />
         <div className="flex flex-col gap-3">
@@ -689,7 +723,7 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
               toggle(row);
             }
           }}
-          className={cn("group cursor-pointer transition-colors", fam.tint, "hover:brightness-[0.97] dark:hover:brightness-110", open && "outline-2 -outline-offset-2 outline-primary-accent-text/60")}
+          className={cn("group cursor-pointer transition-colors", rowTint(v), "hover:brightness-[0.97] dark:hover:brightness-110", open && "outline-2 -outline-offset-2 outline-primary-accent-text/60")}
         >
           <td className={cn(TD, "hidden w-10 border-l-[4px] text-right text-[11px] font-semibold text-foreground/60 tabular-nums lg:table-cell", fam.edge)}>{sequence(n, total)}</td>
           <td className={cn(TD, "w-[4.75rem] border-l-[4px] whitespace-nowrap lg:border-l-0", fam.edge)}>
@@ -708,11 +742,15 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
               {v.carried && cycleLabelOf ? `From ${cycleLabelOf(row.date)} · ` : ""}
               {v.relation}
             </p>
-            {v.splitNote && <p className="truncate pl-5 text-[11px] leading-tight text-foreground/60 tabular-nums">{v.splitNote.split(" · ").map((part, i) => (i === 0 ? <span key={i} className="font-bold text-foreground">{part}</span> : <span key={i}> · {part}</span>))}</p>}
+            {v.split && <SplitSummary split={v.split} className="pl-5" />}
             {linkedTrail?.(row.key) && <div className="pl-5">{linkedTrail(row.key)}</div>}
           </td>
           <td className={cn(TD, "hidden w-[9.5rem] xl:table-cell")}><TypeBadge kind={v.kind} family={v.typeFamily} /></td>
-          <td className={cn(TD, NUM, "w-[6.5rem]")}><Amount value={isPaymentKind(v.kind) ? null : row.amount} tone={muted ? "text-foreground/75" : undefined} /></td>
+          <td className={cn(TD, NUM, "w-[6.5rem]")}>
+            <Amount value={isPaymentKind(v.kind) ? null : row.amount} tone={muted ? "text-foreground/75" : undefined} />
+            {/* A split row's amount is a share, not the purchase — say so right under it. */}
+            {v.split && <p className="text-[10.5px] leading-tight font-medium whitespace-nowrap text-foreground/60">{v.split.shareLabel}</p>}
+          </td>
           <td className={cn(TD, NUM, "hidden w-[6.5rem] lg:table-cell")}><Amount value={v.paid} tone={v.paid ? "text-success" : "text-foreground/60"} /></td>
           <td className={cn(TD, NUM, "w-[7rem]")}><RemainingAmount v={v} /></td>
           <td className={cn(TD, "w-[11.5rem] max-w-[11.5rem]")}><StatusPill status={v.status} /></td>
@@ -736,7 +774,7 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
     const open = isOpen(row);
     const fam = FAMILY[v.family];
     return (
-      <li key={row.key} data-obligation-key={row.key} className={cn("border-b border-l-[4px] border-b-border-strong/55", fam.tint, fam.edge)}>
+      <li key={row.key} data-obligation-key={row.key} className={cn("border-b border-l-[4px] border-b-border-strong/55", rowTint(v), fam.edge)}>
         <button type="button" onClick={() => toggle(row)} aria-expanded={open} className="block w-full px-3 py-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
@@ -753,7 +791,7 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
             </div>
           </div>
           <p className="mt-1 truncate text-[12px] font-medium text-foreground/75">{v.relation}</p>
-          {v.splitNote && <p className="truncate text-[11px] text-foreground/60 tabular-nums">{v.splitNote.split(" · ").map((part, i) => (i === 0 ? <span key={i} className="font-bold text-foreground">{part}</span> : <span key={i}> · {part}</span>))}</p>}
+          {v.split && <SplitSummary split={v.split} className="mt-0.5" />}
           {linkedTrail?.(row.key) && <span className="mt-0.5 block">{linkedTrail(row.key)}</span>}
           {row.state != null ? (
             <dl className="mt-1 grid grid-cols-3 gap-2 text-[11.5px]">
@@ -789,7 +827,7 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
             <th className={cn(TH, "w-[4.75rem]")}>Date</th>
             <th className={cn(TH, "w-full")}>What</th>
             <th className={cn(TH, "hidden w-[9.5rem] xl:table-cell")}>Type</th>
-            <th className={cn(TH, "w-[6.5rem] text-right")}>Original</th>
+            <th className={cn(TH, "w-[6.5rem] text-right")} title="This person's amount on the row — for a split, their share (the purchase total is shown under the description)">Amount</th>
             <th className={cn(TH, "hidden w-[6.5rem] text-right lg:table-cell")}>Paid</th>
             <th className={cn(TH, "w-[7rem] text-right")}>Remaining</th>
             <th className={cn(TH, "w-[11.5rem]")}>Status</th>

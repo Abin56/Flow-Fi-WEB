@@ -184,7 +184,10 @@ describe("Share Statement — split rows", () => {
     expect(row.paid).toBe(money(400));
     expect(row.remaining).toBe(money(600));
     const everything = JSON.stringify(view);
-    expect(everything).not.toContain("Tripthee");
+    // Shared statements show THIS split's full stored allocation (so Amma can verify her share)…
+    expect(row.allocation!.participants.map((p) => [p.label, p.amount])).toEqual([["Account holder", 1000], ["Amma", 1000], ["Tripthee", 1000]]);
+    // …but nothing else about the other participants (no person ids beyond keys, no status, notes or balances).
+    expect(everything).not.toMatch(/receivedStatus|installmentId|currentBalance|notes/);
   });
 
   it("non-split rows carry no split note", () => {

@@ -13,7 +13,7 @@ import {
 } from "@/lib/engines/debt-ownership";
 import { buildDebtSnapshot, cardPurchaseShares, personDirectPayable, requiredByOwnership } from "@/lib/engines/debt-position";
 import { personEmiObligations, type EmiObligationInstallment } from "@/lib/engines/person-emi-obligations";
-import { personPosition } from "@/lib/engines/person-position";
+import { personDirectGross, personPosition } from "@/lib/engines/person-position";
 import { cardInput, flatSchedule, loanInput, NOW, personInput } from "@/lib/engines/debt-planner.fixtures";
 
 /**
@@ -153,16 +153,21 @@ describe("3 — card ownership netting (current rule, documented — NOT changed
   });
 
   /**
-   * FINDING (documented, NOT changed): the planner's cap uses `directBalance` only. A reimbursement of a
-   * shared-loan installment share is a "receivedBack" ledger entry (lowers directBalance) while the share
-   * itself is `emiReceivable` (not in directBalance) — so paying their loan share shrinks how much of
-   * their unrelated card purchases is attributed to them.
+   * F2 (FIXED): the cap used to be `max(directBalance, 0)`, so AMMA reimbursing a ₹1,000 loan-installment
+   * share (a "receivedBack" with `obligationRef: loan-inst:…`) cut her unrelated ₹8,000 card attribution to
+   * ₹7,000. The planner now caps by `personDirectGross(...).receivable`, where share settlements pay the
+   * EMI receivable, never the direct side. Previously this test pinned ₹7,000; it now asserts the fix.
    */
-  it("pinned finding: AMMA settling a ₹1,000 loan-installment share cuts her ₹8,000 card attribution to ₹7,000", () => {
+  it("F2 fixed: AMMA settling a ₹1,000 loan-installment share leaves her ₹8,000 card attribution intact", () => {
     const pos = personPosition({ personId: "amma", currentBalance: 8_000 - 1_000, loans: [], ledgerEntries: [], loanIds: new Set(), emiReceivable: 1_000 });
     expect(pos.net).toBe(8_000); // People: she still owes me the full ₹8,000 card share
-    const byFacility = cardPurchaseShares(ammaCard, { amma: Math.max(pos.directBalance, 0) }); // = use-debt-planner-data
-    expect(byFacility.card[0].amount).toBe(7_000); // ← understated by the ₹1,000 loan reimbursement
+    const entries = [
+      { id: "g", type: "gave" as const, amount: 8_000, parentEntryId: null, transactionRef: null, isDeleted: false },
+      { id: "r", type: "receivedBack" as const, amount: 1_000, parentEntryId: null, transactionRef: "cash", obligationRef: "loan-inst:i1", isDeleted: false },
+    ];
+    const gross = personDirectGross(pos, entries, new Set()); // = use-debt-planner-data
+    const byFacility = cardPurchaseShares(ammaCard, { amma: gross.receivable });
+    expect(byFacility.card[0].amount).toBe(8_000);
   });
 });
 

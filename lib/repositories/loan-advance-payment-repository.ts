@@ -95,6 +95,8 @@ import {
 import { loanTransactionId, planLoanPaymentCore } from "@/lib/engines/loan-payment-core";
 import { mergeInstallmentWrites, netBalanceDeltas, reversePaymentPortions } from "@/lib/engines/payment-correction";
 import { principalPrepaidFor } from "@/lib/engines/loan-outstanding";
+import { assertLinkedPeopleSettled } from "@/lib/repositories/people-settlement-gate";
+import type { UnsettledPeopleAcknowledgement } from "@/lib/engines/linked-people-readiness";
 import { generateId } from "@/lib/utils/id-generator";
 
 export interface LoanAdvancePaymentResult {
@@ -150,6 +152,11 @@ export interface RecordAdvancePaymentParams {
   includeUpcomingInstallments?: boolean;
   /** Told when the atomic core has committed and the (prepayment-only) re-amortization write starts. */
   onReamortizing?: () => void;
+  /**
+   * Explicit decision to pay although a linked person's share of a DUE installment is still open (e.g. the
+   * bank already debited it). Absent → the People settlement gate is enforced here, at the write layer.
+   */
+  peopleGateAcknowledgement?: UnsettledPeopleAcknowledgement | null;
 }
 
 interface CoreResult {
@@ -217,6 +224,11 @@ export interface EditLoanPaymentParams {
   /** One per edit action, reused verbatim on a retry — it becomes the corrected payment's key. */
   idempotencyKey: string;
   onStage?: (stage: "reversing" | "recording" | "reamortizing") => void;
+  /**
+   * Explicit decision to pay although a linked person's share of a DUE installment is still open (e.g. the
+   * bank already debited it). Absent → the People settlement gate is enforced here, at the write layer.
+   */
+  peopleGateAcknowledgement?: UnsettledPeopleAcknowledgement | null;
 }
 
 export interface EditLoanPaymentResult {
@@ -479,6 +491,18 @@ export class LoanAdvancePaymentRepository {
         idempotencyKey,
         note,
         includeUpcomingInstallments,
+      });
+
+      // People settlement gate — authoritative, from current documents (see `people-settlement-gate.ts`).
+      await assertLinkedPeopleSettled({
+        firestore: this.firestore,
+        uid: this.uid,
+        tx,
+        source: { kind: "loan", id: loan.id },
+        installments: freshSorted,
+        touched: core.payments.map((p) => freshById.get(p.installmentId)).filter((i): i is Installment => i != null),
+        paymentDate: date,
+        acknowledgement: params.peopleGateAcknowledgement,
       });
 
       // --- Then all writes. ---
@@ -985,6 +1009,7 @@ export class LoanAdvancePaymentRepository {
         idempotencyKey: params.idempotencyKey,
         includeUpcomingInstallments: params.includeUpcomingInstallments,
         onReamortizing: () => onStage?.("reamortizing"),
+        peopleGateAcknowledgement: params.peopleGateAcknowledgement,
       });
       return { alreadyRecorded: result.alreadyRecorded, atomic: false, overallAllocationType: result.overallAllocationType, reamortization: result.reamortization };
     } catch (e) {
@@ -1042,6 +1067,21 @@ export class LoanAdvancePaymentRepository {
         includeUpcomingInstallments: params.includeUpcomingInstallments,
       });
       if (core.overflow > 0) throw new NeedsReplanError();
+      // A correction may reach installments the original did not — those are gated like a new payment.
+      const originallyTouched = new Set(original.installmentIds);
+      await assertLinkedPeopleSettled({
+        firestore: this.firestore,
+        uid: this.uid,
+        tx,
+        source: { kind: "loan", id: loan.id },
+        installments: fresh,
+        touched: core.payments
+          .filter((p) => !originallyTouched.has(p.installmentId))
+          .map((p) => fresh.find((i) => i.id === p.installmentId))
+          .filter((i): i is Installment => i != null),
+        paymentDate: params.date,
+        acknowledgement: params.peopleGateAcknowledgement,
+      });
 
       // --- Then all writes. ---
       for (const installment of mergeInstallmentWrites(fresh, reversed, core.installments)) {

@@ -45,6 +45,14 @@ import type { LedgerRepository, PersonRepository } from "@/lib/repositories/pers
 import type { TransactionRepository } from "@/lib/repositories/transaction-repository";
 import { generateId } from "@/lib/utils/id-generator";
 
+/** The person changed after the payment screen was built — e.g. the same payment was already saved. */
+export class StalePersonPaymentError extends Error {
+  constructor(name: string) {
+    super(`${name}'s balance changed since this payment was opened — it may already be saved. Check the ledger, then try again.`);
+    this.name = "StalePersonPaymentError";
+  }
+}
+
 /** Where one allocation line goes — the path that owns that obligation. */
 export type PaymentRoute =
   /** A manual "gave"/"borrowed" entry. */
@@ -174,11 +182,22 @@ export class PersonPaymentRepository {
     return this.deps.personRepository.docRef("_").firestore;
   }
 
-  /** Records one payment. Returns its `paymentId`. */
+  /**
+   * Records one payment. Returns its `paymentId`.
+   *
+   * One user action → one financial effect: the allocation was built from `person` as the screen saw it,
+   * so if the person's balance has moved since (this same payment already committed by a double-click or
+   * a network retry, another tab, or any other People write), the payment is refused instead of moving
+   * cash twice or over-settling an EMI/Loan share whose open amount the transaction cannot re-derive.
+   */
   async recordPayment(person: Person, input: RecordPaymentInput): Promise<string> {
     const paymentId = generateId();
     await runTransaction(this.db, async (tx) => {
       const session = new TxSession(tx);
+      const fresh = await session.get(this.deps.personRepository.docRef(person.id));
+      if (fresh.exists() && Math.abs(fresh.data().currentBalance - person.currentBalance) > PAYMENT_EPSILON) {
+        throw new StalePersonPaymentError(person.name);
+      }
       await this.recordInSession(session, person, input, paymentId);
       session.flush();
     });

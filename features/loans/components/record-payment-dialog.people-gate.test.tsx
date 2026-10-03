@@ -65,9 +65,10 @@ beforeEach(() => {
 });
 
 const day = (offset: number) => new Date(Date.now() + offset * 86_400_000);
-function installment(id: string, sequenceNumber: number, ownerType: "emi" | "loan"): Installment {
+// #1 is 3 days overdue, #2 is due in 2 days: only a DUE installment's People shares gate a lender payment.
+function installment(id: string, sequenceNumber: number, ownerType: "emi" | "loan", dueOffset = sequenceNumber * 5 - 8): Installment {
   return {
-    id, scheduleId: "sch", ownerType, ownerId: "src", sequenceNumber, dueDate: day(sequenceNumber * 5), amountDue: 3000, amountPaid: 0, isSkipped: false,
+    id, scheduleId: "sch", ownerType, ownerId: "src", sequenceNumber, dueDate: day(dueOffset), amountDue: 3000, amountPaid: 0, isSkipped: false,
     principalPortion: null, interestPortion: null, createdAt: day(-30), deletedAt: null, lastEditedAt: null, editHistory: [],
   };
 }
@@ -111,7 +112,7 @@ describe("EMI Record payment — People settlement gate", () => {
   it("reads readiness for THIS installment only (by id)", () => {
     peopleState = { readiness: JOHN_PENDING(), isLoading: false };
     renderDialog(emiTarget());
-    expect(readinessTargets.at(-1)).toEqual({ kind: "emi", installmentId: "i1", lenderDue: 3000 });
+    expect(readinessTargets.at(-1)).toEqual({ kind: "emi", installmentId: "i1", installmentIds: ["i1"], lenderDue: 3000 });
   });
 
   it("JOHN pending → blocked: Settle CTA replaces Record, deep-links to JOHN's installment share", async () => {
@@ -173,11 +174,18 @@ describe("EMI Record payment — People settlement gate", () => {
 });
 
 describe("Loan Record payment — People settlement gate", () => {
+  it("paying an installment before it is due asks People about nothing (its shares are not owed yet)", () => {
+    const target = loanTarget();
+    const future = [installment("l1", 1, "loan", 5), installment("l2", 2, "loan", 35)];
+    renderDialog({ ...target, row: { ...(target.row as object), installments: future } } as PaymentTarget);
+    expect(readinessTargets.at(-1)).toEqual({ kind: "loan", installmentId: "l1", installmentIds: [], lenderDue: 3000 });
+  });
+
   it("linked People pending on this installment → loan payment gated", async () => {
     const user = userEvent.setup();
     peopleState = { readiness: readinessOf([person("john", "JOHN", 1000, 0, "loan-inst:l1")]), isLoading: false };
     renderDialog(loanTarget());
-    expect(readinessTargets.at(-1)).toEqual({ kind: "loan", installmentId: "l1", lenderDue: 3000 });
+    expect(readinessTargets.at(-1)).toEqual({ kind: "loan", installmentId: "l1", installmentIds: ["l1"], lenderDue: 3000 });
     await user.click(screen.getByRole("button", { name: "Settle ₹1,000 with JOHN →" }));
     expect(push).toHaveBeenCalledWith(expect.stringContaining("obligation=loan-inst%3Al1"));
     expect(loanRecordPayment).not.toHaveBeenCalled();

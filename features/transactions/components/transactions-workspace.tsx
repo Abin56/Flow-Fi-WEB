@@ -37,6 +37,8 @@ import {
 } from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Fragment, useDeferredValue, useEffect, useMemo, useState } from "react";
+import { readPeopleReturnContext, type PeopleReturnContext } from "@/features/people/lib/people-return-link";
+import { toast } from "@/store/toast-store";
 import { ClayButton } from "@/components/clay/clay-button";
 import { ACCOUNT_FILTER_PARAM, resolveAccountFilter } from "@/features/transactions/lib/account-filter-param";
 import { usePeopleLedgerEntries } from "@/features/people/hooks/use-people-data";
@@ -260,14 +262,33 @@ export function TransactionsWorkspace() {
 
   // `?transaction=<id>` handoff (e.g. the People Ledger's "Open expense"): open that transaction's details once.
   const [handoffId, setHandoffId] = useState<string | null>(() => searchParams.get("transaction"));
+  // Opened from a People ledger (`&return=/people?person=…&cycle=…`): the details show "Back to <name>" and,
+  // once the operation finishes (saved, deleted, cancelled or closed), return to that exact ledger.
+  const [handoffMissing, setHandoffMissing] = useState(false);
+  const [peopleReturn, setPeopleReturn] = useState<PeopleReturnContext | null>(() => (searchParams.get("transaction") ? readPeopleReturnContext(searchParams) : null));
   if (handoffId) {
     const target = rows.find((r) => r.transaction.id === handoffId);
     if (target) {
       setHandoffId(null);
       setDetailRow(target);
       setDetailOpen(true);
+    } else if (!isLoading && peopleReturn != null) {
+      // The source is gone (deleted since the link was rendered): never a dead editor — straight back.
+      setHandoffId(null);
+      setHandoffMissing(true);
     }
   }
+  useEffect(() => {
+    if (!handoffMissing || peopleReturn == null) return;
+    toast.error("Original transaction is no longer available");
+    router.push(peopleReturn.href);
+  }, [handoffMissing, peopleReturn, router]);
+  /** Finishing the People-origin operation (saved / deleted / cancelled / closed) goes back to that ledger. */
+  const returnToPeople = () => {
+    if (peopleReturn == null) return;
+    setPeopleReturn(null);
+    router.push(peopleReturn.href);
+  };
 
   const [fullscreen, setFullscreen] = useState(false);
   useEffect(() => {
@@ -919,9 +940,13 @@ export function TransactionsWorkspace() {
           if (!open) {
             setDetailRow(null);
             setAutoFocusAssign(false);
+            // The modal only closes after a successful Save/Delete or on Cancel/close — a failed write keeps
+            // it open — so returning here never leaves a failed edit behind.
+            returnToPeople();
           }
         }}
         row={detailRow}
+        returnLabel={peopleReturn?.label ?? null}
         expense={detailRow ? (expenseByTransactionId.get(detailRow.transaction.id) ?? null) : null}
         people={people}
         accounts={accounts}

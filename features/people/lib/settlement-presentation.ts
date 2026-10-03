@@ -104,6 +104,8 @@ export interface SettlementLookups {
    * known (still loading / not a transaction, e.g. a legacy Loan id). Omitted = always "unknown".
    */
   transactionStatus?: (transactionRef: string, entry: Pick<LedgerEntry, "sourceKind">) => "live" | "deleted" | "unknown";
+  /** Where "Open expense" comes back to (this person's ledger + selected cycle). Omitted = no return link. */
+  sourceReturn?: { href: string; label: string } | null;
 }
 
 export const NO_LOOKUPS: SettlementLookups = { entriesById: new Map(), expenseByTransactionId: new Map() };
@@ -184,6 +186,32 @@ export function settlementTone(row: LedgerRow, kind: SettlementKind): Settlement
 }
 
 const firstNameOf = (name: string) => name.trim().split(/\s+/)[0] || name;
+
+/**
+ * How the owner appears in a sentence. The private app speaks to the owner ("You owe Amma"); a shared
+ * statement is read by the person, so `owner` (the owner's short name) replaces every "you" there.
+ */
+function ownerVoice(owner?: string | null) {
+  return owner ? { You: owner, you: owner, Your: `${owner}'s`, s: "s" } : { You: "You", you: "you", Your: "Your", s: "" };
+}
+
+/** `KIND_LABEL` for a reader: with `owner`, the owner-perspective kinds name who paid / lent instead. */
+export function kindLabel(kind: SettlementKind, personName: string, owner?: string | null): string {
+  if (!owner) return KIND_LABEL[kind];
+  const name = firstNameOf(personName);
+  switch (kind) {
+    case "paymentReceived":
+      return `Paid by ${name}`;
+    case "paymentMade":
+      return `Paid by ${owner}`;
+    case "moneyGiven":
+      return `Lent by ${owner}`;
+    case "moneyReceived":
+      return `Lent by ${name}`;
+    default:
+      return KIND_LABEL[kind];
+  }
+}
 
 /** Default titles the engine uses when a manual entry has no note — replaced by person-aware wording. */
 /**
@@ -266,39 +294,40 @@ export function settlementTitle(row: LedgerRow, kind: SettlementKind, personName
  * One plain sentence that states who owes whom (or who paid whom) — the relationship line under the
  * title. `money` formats an amount.
  */
-export function relationLine(row: LedgerRow, kind: SettlementKind, personName: string, money: (n: number) => string): string {
+export function relationLine(row: LedgerRow, kind: SettlementKind, personName: string, money: (n: number) => string, owner?: string | null): string {
   const name = firstNameOf(personName);
+  const v = ownerVoice(owner);
   const amount = money(row.amount);
   const s = row.statementRow;
   switch (kind) {
     case "moneyGiven":
-      return `You gave ${name} ${amount} · ${name} owes you`;
+      return `${v.You} gave ${name} ${amount} · ${name} owes ${v.you}`;
     case "moneyReceived":
-      return `${name} gave you ${amount} · you owe ${name}`;
+      return `${name} gave ${v.you} ${amount} · ${v.you} owe${v.s} ${name}`;
     case "assigned":
-      return row.direction === "iOwe" ? `You owe ${name} for this` : `${name} owes you for this`;
+      return row.direction === "iOwe" ? `${v.You} owe${v.s} ${name} for this` : `${name} owes ${v.you} for this`;
     case "split":
-      return row.direction === "iOwe" ? `Your share of a split with ${name}` : `${name}'s share of a split expense`;
+      return row.direction === "iOwe" ? `${v.Your} share of a split with ${name}` : `${name}'s share of a split expense`;
     case "emi":
     case "loanEmi":
       return s?.emi ? `Installment #${s.emi.installmentNumber} · ${name} needs to pay this installment` : `${name} needs to pay this installment`;
     case "loanInstallment": {
       const loan = s?.loan;
       const which = loan ? `Installment ${loan.installmentNumber} of ${loan.installmentCount}` : "Installment";
-      return `${which} · ${row.direction === "iOwe" ? `you repay ${name}` : `${name} repays you`}`;
+      return `${which} · ${row.direction === "iOwe" ? `${v.you} repay${v.s} ${name}` : `${name} repays ${v.you}`}`;
     }
     case "loan":
-      return row.direction === "theyOwe" ? `You lent ${name} ${amount} · repaid in installments` : `${name} lent you ${amount} · repaid in installments`;
+      return row.direction === "theyOwe" ? `${v.You} lent ${name} ${amount} · repaid in installments` : `${name} lent ${v.you} ${amount} · repaid in installments`;
     case "paymentReceived":
-      return s?.settles ? `${name} paid you back ${amount} · for ${s.settles.title}` : `${name} paid you back ${amount}`;
+      return s?.settles ? `${name} paid ${v.you} back ${amount} · for ${s.settles.title}` : `${name} paid ${v.you} back ${amount}`;
     case "paymentMade":
-      return s?.settles ? `You paid ${name} back ${amount} · for ${s.settles.title}` : `You paid ${name} back ${amount}`;
+      return s?.settles ? `${v.You} paid ${name} back ${amount} · for ${s.settles.title}` : `${v.You} paid ${name} back ${amount}`;
     case "opening":
-      return row.direction === "iOwe" ? `You owed ${name} ${amount} when tracking began` : `${name} owed you ${amount} when tracking began`;
+      return row.direction === "iOwe" ? `${v.You} owed ${name} ${amount} when tracking began` : `${name} owed ${v.you} ${amount} when tracking began`;
     case "adjustment":
-      return row.direction === "iOwe" ? `Correction · you owe ${name} ${amount} more` : `Correction · ${name} owes you ${amount} more`;
+      return row.direction === "iOwe" ? `Correction · ${v.you} owe${v.s} ${name} ${amount} more` : `Correction · ${name} owes ${v.you} ${amount} more`;
     case "advance":
-      return (s?.advanceDelta ?? 0) > 0 ? `You paid ${name} ${amount} ahead · held as advance` : `${name} paid you ${amount} ahead · held as advance`;
+      return (s?.advanceDelta ?? 0) > 0 ? `${v.You} paid ${name} ${amount} ahead · held as advance` : `${name} paid ${v.you} ${amount} ahead · held as advance`;
     case "advanceApplied":
       return s?.settles ? `${amount} of advance used for ${s.settles.title}` : `${amount} of advance used`;
   }
@@ -318,8 +347,10 @@ export function settlementStatus(
   personName: string,
   money: (n: number) => string,
   now: Date = new Date(),
+  owner?: string | null,
 ): SettlementStatus {
   const name = firstNameOf(personName);
+  const v = ownerVoice(owner);
   const left = money(row.remaining ?? 0);
   if (kind === "paymentReceived") return { label: "Received", detail: `From ${name}`, tone: "received" };
   if (kind === "paymentMade") return { label: "Paid", detail: `To ${name}`, tone: "paid" };
@@ -328,22 +359,22 @@ export function settlementStatus(
   if (kind === "loan") return { label: "Repaid in installments", detail: "Settled from the Loan", tone: "neutral" };
   if (row.state == null) {
     return row.direction === "iOwe"
-      ? { label: "You owe", detail: `Part of your balance with ${name}`, tone: "payable" }
+      ? { label: `${v.You} owe${v.s}`, detail: `Part of ${owner ? `${owner}'s` : "your"} balance with ${name}`, tone: "payable" }
       : { label: `${name} owes`, detail: `Part of ${name}'s balance`, tone: "due" };
   }
   if (row.state === "settled") {
     return row.direction === "iOwe"
-      ? { label: "Paid in full", detail: `You paid ${money(row.amount)}`, tone: "settled" }
+      ? { label: "Paid in full", detail: `${v.You} paid ${money(row.amount)}`, tone: "settled" }
       : { label: "Paid in full", detail: `${name} paid ${money(row.amount)}`, tone: "settled" };
   }
   if (row.overdue) {
     return row.direction === "iOwe"
-      ? { label: "Overdue", detail: `You still owe ${name} ${left}`, tone: "overdue" }
-      : { label: "Overdue", detail: `${name} still owes you ${left}`, tone: "overdue" };
+      ? { label: "Overdue", detail: `${v.You} still owe${v.s} ${name} ${left}`, tone: "overdue" }
+      : { label: "Overdue", detail: `${name} still owes ${v.you} ${left}`, tone: "overdue" };
   }
   if (row.state === "partial") {
     return row.direction === "iOwe"
-      ? { label: "Partially paid", detail: `You still owe ${left}`, tone: "partial" }
+      ? { label: "Partially paid", detail: `${v.You} still owe${v.s} ${left}`, tone: "partial" }
       : { label: "Partially paid", detail: `${name} still owes ${left}`, tone: "partial" };
   }
   // Open. An installment whose due date hasn't arrived yet is upcoming, not due.
@@ -352,8 +383,8 @@ export function settlementStatus(
     return { label: kind === "loanInstallment" ? "Upcoming installment" : "Upcoming EMI", detail: `Due ${formatStatementDate(row.date)}`, tone: "upcoming" };
   }
   return row.direction === "iOwe"
-    ? { label: "You need to pay", detail: `You owe ${name} ${left}`, tone: "payable" }
-    : { label: "Payment due", detail: `${name} owes you ${left}`, tone: "due" };
+    ? { label: owner ? "Payment due" : "You need to pay", detail: `${v.You} owe${v.s} ${name} ${left}`, tone: "payable" }
+    : { label: "Payment due", detail: `${name} owes ${v.you} ${left}`, tone: "due" };
 }
 
 /** What was paid against the row so far (engine: original − remaining); null for rows with no settlement state. */
@@ -509,10 +540,12 @@ export function allocationLine(r: StatementRow, money: (n: number) => string): s
 }
 
 /** "Received from Amma" / "Amma paid" / "Paid to Amma" / "Advance applied" for a payment group's head row. */
-export function paymentGroupLabel(rows: readonly StatementRow[], personName: string): string {
+export function paymentGroupLabel(rows: readonly StatementRow[], personName: string, owner?: string | null): string {
   const first = firstNameOf(personName);
   const head = rows[0];
   if (head.category === "advanceApplied") return "Advance applied";
+  // A shared statement names both sides — never "Received from" (received by whom?).
+  if (owner) return isInboundPayment(head) ? `${first} paid ${owner}` : `${owner} paid ${first}`;
   if (isInboundPayment(head)) return rows.length > 1 ? `${first} paid` : `Received from ${first}`;
   return rows.length > 1 ? `You paid ${first}` : `Paid to ${first}`;
 }

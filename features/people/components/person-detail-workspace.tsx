@@ -41,6 +41,7 @@ import { purposeCashOf } from "@/lib/engines/purpose-funds";
 import { advanceSources, payableObligations } from "@/features/people/lib/person-payment-obligations";
 import { advanceRemaining, type AdvanceUse } from "@/lib/engines/person-payment";
 import { isInAppPath } from "@/lib/engines/linked-people-readiness";
+import { peopleLedgerHref } from "@/features/people/lib/people-return-link";
 import type { RecordPaymentInput } from "@/lib/repositories/person-payment-repository";
 import { ShareStatementMode } from "@/features/people/components/workspace/share-statement-mode";
 import { SplitExpenseMode } from "@/features/people/components/workspace/split-expense-mode";
@@ -135,9 +136,12 @@ export function PersonDetailWorkspace({
   onEditPerson,
   onDelete,
   initialCycle,
+  initialView,
 }: {
   /** The cycle the People list was showing when this person was opened (defaults to the current one). */
   initialCycle?: StatementCycle;
+  /** "ledger" reopens the expanded ledger — set when coming back from a transaction opened there. */
+  initialView?: "ledger" | null;
   person: PersonViewRow;
   /** The stored `Person` record — Settle, Split and Edit act on it. */
   rawPerson: Person | null;
@@ -164,7 +168,7 @@ export function PersonDetailWorkspace({
   onEditPerson?: (patch: EditPersonPatch) => Promise<void>;
   onDelete?: () => void;
 }) {
-  const [mode, setMode] = useState<Mode>({ kind: "overview" });
+  const [mode, setMode] = useState<Mode>(() => (initialView === "ledger" ? { kind: "ledger" } : { kind: "overview" }));
   const [direction, setDirection] = useState<"forward" | "back">("forward");
   const [cycle, setCycle, cycleStartDay] = useSelectedCycle(initialCycle);
   const [inline, setInline] = useState<InlineAction>(null);
@@ -222,7 +226,10 @@ export function PersonDetailWorkspace({
     [allTimeStatement, ledgerEntries, person.activity, pending, cashLegIds, trackedShareRefs, advanceApplications],
   );
   const scopeRows = scope === "cycle" ? cycleRows : allRows;
-  const lookups = useSettlementLookups(ledgerEntries, pending);
+  const baseLookups = useSettlementLookups(ledgerEntries, pending);
+  // "Open expense" carries this exact ledger context (person, selected cycle, expanded ledger) to Transactions.
+  const returnHref = peopleLedgerHref({ personId: person.id, cycle, view: mode.kind === "ledger" ? "ledger" : null });
+  const lookups = useMemo(() => ({ ...baseLookups, sourceReturn: { href: returnHref, label: person.name } }), [baseLookups, returnHref, person.name]);
   // Obligations dated before the selected cycle that are still open today — listed as "Brought forward"
   // with their source, so carried money never reads as a new expense. Engine rows, nothing recomputed.
   const carriedRows = useMemo(() => {
@@ -551,7 +558,7 @@ export function PersonDetailWorkspace({
     { label: "You need to give", amount: b.toGive, tone: "expense" },
     { label: "You need to receive", amount: b.toReceive, tone: "success" },
   ];
-  const breakdownNote = Math.abs(b.unlinked) >= 0.005 || b.loanPayable > 0 || b.loanReceivable > 0 || b.emiReceivable > 0;
+  const breakdownNote = Math.abs(b.unlinked) >= 0.005 || b.loanPayable > 0 || b.loanReceivable > 0 || b.emiReceivableOpen > 0;
   const balanceSummary = (b.toGive > 0 || b.toReceive > 0) && (
     <div aria-label="Balance summary" className="text-[13px] tabular-nums">
       <p className="text-[11px] font-bold tracking-[0.08em] text-foreground/75 uppercase">Overall with {person.name.split(" ")[0]}</p>
@@ -583,7 +590,7 @@ export function PersonDetailWorkspace({
               ` · Payments/adjustments not tied to one transaction ${b.unlinked > 0 ? "+" : "−"}${formatCurrency(Math.abs(b.unlinked))}`}
             {b.loanPayable > 0 && ` · Loans — you need to give ${formatCurrency(b.loanPayable)}`}
             {b.loanReceivable > 0 && ` · Loans — you need to receive ${formatCurrency(b.loanReceivable)}`}
-            {b.emiReceivable > 0 && ` · EMI — you need to receive ${formatCurrency(b.emiReceivable)}`}
+            {b.emiReceivableOpen > 0 && ` · EMI shares — you need to receive ${formatCurrency(b.emiReceivableOpen)}`}
           </p>
         </details>
       )}

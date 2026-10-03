@@ -29,7 +29,8 @@ import { useLinkedFunds } from "@/features/people/hooks/use-linked-funds";
 import { linkedFundsForInstallment } from "@/lib/engines/linked-funds";
 import { PeopleSettlementCard, settleCtaLabel } from "@/features/people/components/linked-people-panel";
 import { useLinkedPeopleReadiness } from "@/features/people/hooks/use-linked-people-readiness";
-import { peopleSettleHref, peopleSettlementGate } from "@/lib/engines/linked-people-readiness";
+import { peopleGateInstallmentIds, peopleSettleHref, peopleSettlementGate } from "@/lib/engines/linked-people-readiness";
+import { planLoanPaymentCore } from "@/lib/engines/loan-payment-core";
 import { previewPrincipalPrepayment } from "@/features/loans/lib/loan-adjustment-preview";
 import { friendlyLoanError } from "@/features/loans/lib/loan-live-state";
 import { EMI_PAYMENT_HISTORY_KEY } from "@/features/loans/hooks/use-payment-history";
@@ -43,6 +44,7 @@ import {
   planEmiPayment,
   planLoanPayment,
   type ExtraTreatment,
+  type LoanPaymentPlan,
   type PayChoice,
   type QuickOption,
 } from "@/features/loans/lib/record-payment";
@@ -168,9 +170,16 @@ export function RecordPaymentDialog({ target, open, onOpenChange }: { target: Pa
   const planAmount = plan?.ok ? plan.amount : null;
   const extra = loanPlan?.ok ? loanPlan.extra : 0;
   const lent = loanRow?.direction === "given";
-  // Shared Loan / EMI: people's shares of THIS installment (by installment id) must be received before it is paid.
+  // Shared Loan / EMI: people's shares of every installment this payment settles that is already due (by
+  // installment id) must be received before it is paid — "Pay all due" over two overdue installments gates both.
+  // Same rule and same allocator the write layer enforces (`peopleGateInstallmentIds` over what the payment
+  // touches) — the dialog only shows early what the repository would refuse.
+  const touched = emiAllocation ? emiAllocation.portions.map((p) => p.installment) : loanTouchedInstallments(loanRow, loanPlan, accountId, paymentDate);
+  const gatedIds = peopleGateInstallmentIds(touched, paymentDate);
   const { readiness: linkedPeople, isLoading: linkedPeopleLoading } = useLinkedPeopleReadiness(
-    next && !lent ? { kind: isLoan ? "loan" : "emi", installmentId: next.id, lenderDue: Math.max(0, next.amountDue - next.amountPaid) } : null,
+    next && !lent
+      ? { kind: isLoan ? "loan" : "emi", installmentId: next.id, installmentIds: [...new Set(gatedIds)], lenderDue: Math.max(0, next.amountDue - next.amountPaid) }
+      : null,
   );
   const peopleGated = next != null && !lent;
   const settlement = peopleSettlementGate(peopleGated ? linkedPeople : null);
@@ -502,4 +511,27 @@ export function RecordPaymentDialog({ target, open, onOpenChange }: { target: Pa
       )}
     </LoanEmiFormDialog>
   );
+}
+
+/** The Loan installments this payment would settle or reach — `planLoanPaymentCore`, exactly as the write allocates. */
+function loanTouchedInstallments(row: LoanRow | null, plan: LoanPaymentPlan | null, accountId: string, date: Date): Installment[] {
+  if (row == null || plan == null || !plan.ok) return [];
+  const sorted = [...row.installments].filter((i) => i.deletedAt == null).sort((a, b) => a.sequenceNumber - b.sequenceNumber);
+  if (sorted.length === 0) return [];
+  try {
+    const core = planLoanPaymentCore({
+      loan: row.loan,
+      fresh: sorted,
+      lastInstallmentId: sorted[sorted.length - 1].id,
+      accountId,
+      amount: plan.amount,
+      date,
+      idempotencyKey: "people-gate-preview",
+      includeUpcomingInstallments: plan.includeUpcomingInstallments,
+    });
+    const byId = new Map(sorted.map((i) => [i.id, i]));
+    return core.payments.map((p) => byId.get(p.installmentId)).filter((i): i is Installment => i != null);
+  } catch {
+    return [];
+  }
 }

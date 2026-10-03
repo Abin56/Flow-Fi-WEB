@@ -15,7 +15,7 @@ import { useLoanRows } from "@/features/loans/hooks/use-loans-data";
 import { useEmiRows } from "@/features/emi/hooks/use-emi-data";
 import { useCreditCardTotals } from "@/features/credit-cards/hooks/use-credit-cards-data";
 import { usePeopleLedgerEntries, usePersonPositions } from "@/features/people/hooks/use-people-data";
-import { peopleDirectGross } from "@/lib/engines/person-position";
+import { breakdownEntryOf, peopleNetWorthPosition } from "@/lib/engines/person-position";
 
 export function useLoanBalanceSheet(): {
   sheet: LoanBalanceSheet;
@@ -26,7 +26,7 @@ export function useLoanBalanceSheet(): {
    * person owes me. Already inside `netWorth` via the People direct balance (receivable − payable).
    */
   peoplePayable: number;
-  /** What people owe me directly, GROSS per person (asset side of the same People direct balance). */
+  /** What people owe me, GROSS per person — direct ledger + open Person-linked installment shares. */
   peopleReceivable: number;
   isLoading: boolean;
 } {
@@ -39,23 +39,14 @@ export function useLoanBalanceSheet(): {
   const { totals: cardTotals, isLoading: cardsLoading } = useCreditCardTotals();
   const { positionsByPersonId, loanIds, isLoading: peopleLoading } = usePersonPositions();
   const { entriesByPersonId } = usePeopleLedgerEntries();
-  const peopleDirectBalance = useMemo(
-    () => Object.values(positionsByPersonId).reduce((sum, p) => sum + p.directBalance, 0),
-    [positionsByPersonId],
-  );
-  const peopleGross = useMemo(
+  // People part of Net Worth: direct ledger + due Person-linked installment shares, gross components
+  // (F1 — a reimbursed share is cash in / receivable out, never a phantom payable).
+  const people = useMemo(
     () =>
-      peopleDirectGross(
+      peopleNetWorthPosition(
         Object.entries(positionsByPersonId).map(([personId, position]) => ({
           position,
-          entries: (entriesByPersonId[personId] ?? []).map((e) => ({
-            id: e.id,
-            type: e.type,
-            amount: e.amount,
-            parentEntryId: e.parentEntryId,
-            transactionRef: e.transactionRef,
-            isDeleted: e.deletedAt != null,
-          })),
+          entries: (entriesByPersonId[personId] ?? []).map(breakdownEntryOf),
         })),
         loanIds,
       ),
@@ -88,9 +79,9 @@ export function useLoanBalanceSheet(): {
   return {
     sheet,
     accountBalances,
-    netWorth: netWorthWithLoans(accountBalances, sheet, peopleDirectBalance),
-    peoplePayable: peopleGross.payable,
-    peopleReceivable: peopleGross.receivable,
+    netWorth: netWorthWithLoans(accountBalances, sheet, people.balance),
+    peoplePayable: people.payable,
+    peopleReceivable: people.receivable,
     isLoading: loansLoading || emisLoading || cardsLoading || cardListLoading || peopleLoading,
   };
 }

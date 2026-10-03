@@ -62,6 +62,8 @@ import {
   createTransactionRepository,
 } from "@/lib/repositories/repository-factory";
 import type { CreateEmiParams, EditEmiParams, EditEmiTermsParams } from "@/lib/repositories/emi-repository";
+import { assertLinkedPeopleSettled } from "@/lib/repositories/people-settlement-gate";
+import type { UnsettledPeopleAcknowledgement } from "@/lib/engines/linked-people-readiness";
 import { useAuthStore } from "@/store/auth-store";
 
 export interface EmiRow {
@@ -141,6 +143,11 @@ export interface RecordEmiPaymentParams {
   serviceCharge?: number;
   penalty?: number;
   otherCharges?: number;
+  /**
+   * Explicit decision to pay although a linked person's share of a DUE installment is still open. Absent →
+   * the People settlement gate is enforced inside the payment transaction (`people-settlement-gate.ts`).
+   */
+  peopleGateAcknowledgement?: UnsettledPeopleAcknowledgement | null;
 }
 
 export interface EditEmiPaymentParams extends Omit<RecordEmiPaymentParams, "targetInstallmentId" | "principalPaid" | "interestPaid"> {
@@ -243,6 +250,16 @@ export function useEmiActions() {
             targetInstallmentId: params.targetInstallmentId,
           });
           if (!allocation.ok) throw new Error(allocation.error);
+          await assertLinkedPeopleSettled({
+            firestore: db,
+            uid,
+            tx,
+            source: { kind: "emi", id: emi.id },
+            installments: fresh,
+            touched: allocation.portions.map((p) => p.installment),
+            paymentDate: params.date,
+            acknowledgement: params.peopleGateAcknowledgement,
+          });
           const writes = buildEmiPaymentWrites({
             portions: allocation.portions,
             idempotencyKey: params.idempotencyKey,
@@ -340,6 +357,18 @@ export function useEmiActions() {
             charges: params,
           });
           if (!plan.ok) throw new Error(plan.error);
+          // A correction may reach installments the original did not — those are gated like a new payment.
+          const originallyTouched = new Set(params.original.installmentIds);
+          await assertLinkedPeopleSettled({
+            firestore: db,
+            uid,
+            tx,
+            source: { kind: "emi", id: emi.id },
+            installments: fresh,
+            touched: plan.allocation.portions.map((p) => p.installment).filter((i) => !originallyTouched.has(i.id)),
+            paymentDate: params.date,
+            acknowledgement: params.peopleGateAcknowledgement,
+          });
 
           // --- Then all writes. ---
           const now = new Date();

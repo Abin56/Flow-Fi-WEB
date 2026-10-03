@@ -39,6 +39,7 @@ import { usePeopleCycleStatements } from "@/features/people/hooks/use-person-cyc
 import { usePeople } from "@/hooks/use-people";
 import type { StatementCycle } from "@/lib/engines/person-cycle-statement";
 import { useSelectedCycle } from "@/features/people/hooks/use-selected-cycle";
+import { CYCLE_PARAM, parseCycleAnchor, VIEW_PARAM } from "@/features/people/lib/people-return-link";
 import type { LedgerEntry, Person } from "@/lib/models/person";
 import { cn } from "@/lib/utils";
 import { toast } from "@/store/toast-store";
@@ -63,7 +64,15 @@ export function PeopleWorkspace() {
   const { data: rawPeople = [] } = usePeople();
   const actions = usePeopleActions();
 
-  const [cycle, setCycleState] = useSelectedCycle();
+  // A return link from Transactions (`?person=…&cycle=<start>[&view=ledger]`) restores that exact ledger
+  // context, resolved against the global Month cycle setting. Read once — later navigation is local state.
+  const initialParams = useSearchParams();
+  const [returnAnchor] = useState(() => parseCycleAnchor(initialParams.get(CYCLE_PARAM)));
+  /** The person whose expanded ledger the return link reopens — consumed when that person is closed. */
+  const [returnLedgerPersonId, setReturnLedgerPersonId] = useState<string | null>(() =>
+    initialParams.get(VIEW_PARAM) === "ledger" ? initialParams.get("person") : null,
+  );
+  const [cycle, setCycleState] = useSelectedCycle(undefined, returnAnchor);
   const [cycleDirection, setCycleDirection] = useState<-1 | 0 | 1>(0);
   function setCycle(next: StatementCycle) {
     const delta = next.start.getTime() - cycle.start.getTime();
@@ -93,6 +102,7 @@ export function PeopleWorkspace() {
   }
 
   function closePerson() {
+    setReturnLedgerPersonId(null);
     if (pushedRef.current) {
       pushedRef.current = false;
       window.history.back();
@@ -269,6 +279,7 @@ export function PeopleWorkspace() {
               rawPerson={selectedRaw}
               key={selected.id}
               initialCycle={cycle}
+              initialView={returnLedgerPersonId === selected.id ? "ledger" : null}
               onBack={closePerson}
               onAddEntry={async (params) => {
                 if (!selectedRaw) throw new Error("Person not found");

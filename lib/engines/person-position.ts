@@ -130,6 +130,41 @@ export interface BreakdownLedgerEntry {
   parentEntryId: string | null;
   transactionRef: string | null;
   isDeleted: boolean;
+  /**
+   * `LedgerEntry.obligationRef` — an `emi-inst:` / `loan-inst:` key means this settlement pays a
+   * Person-linked installment share (`emiReceivable`), never a direct ledger obligation.
+   */
+  obligationRef?: string | null;
+}
+
+/** True for a settlement entry Record Payment allocated to a Person-linked EMI / Loan installment share. */
+export function isInstallmentShareSettlement(entry: Pick<BreakdownLedgerEntry, "type" | "obligationRef">): boolean {
+  return (
+    (entry.type === "receivedBack" || entry.type === "repaid") &&
+    entry.obligationRef != null &&
+    (entry.obligationRef.startsWith("emi-inst:") || entry.obligationRef.startsWith("loan-inst:"))
+  );
+}
+
+/** A `LedgerEntry`-shaped document as the breakdown reads it — the one mapping every caller uses. */
+export function breakdownEntryOf(e: {
+  id: string;
+  type: BreakdownLedgerEntry["type"];
+  amount: number;
+  parentEntryId: string | null;
+  transactionRef: string | null;
+  obligationRef?: string | null;
+  deletedAt: Date | null;
+}): BreakdownLedgerEntry {
+  return {
+    id: e.id,
+    type: e.type,
+    amount: e.amount,
+    parentEntryId: e.parentEntryId,
+    transactionRef: e.transactionRef,
+    obligationRef: e.obligationRef ?? null,
+    isDeleted: e.deletedAt != null,
+  };
 }
 
 /**
@@ -142,7 +177,13 @@ export interface BreakdownLedgerEntry {
  *  - Whatever the direct balance holds beyond those open amounts (a payment not linked to one entry, a
  *    split share settled by its expense, an adjustment, an opening balance) is `unlinked`: it first reduces
  *    the side it pays down, and only what is left over lands on the other side.
- *  - Loans/EMI are added from the position as-is (Loan principal, opted-in EMI receivable).
+ *  - Loans are added from the position as-is (Loan principal).
+ *  - The opted-in EMI receivable (installment shares due so far) is reduced by the settlements Record
+ *    Payment allocated to those shares (`obligationRef` `emi-inst:`/`loan-inst:`) — ID-based, never by
+ *    amount. Those settlements are NOT direct-ledger payments: counting them as an unlinked remainder
+ *    turned a settled share into a phantom "to give" beside a stale "to receive" (audit finding F1).
+ *    An unlinked negative remainder (e.g. an advance later applied to a share) pays down direct
+ *    receivables first, then the open EMI receivable, and only then crosses over to "to give".
  */
 export interface PersonBalanceBreakdown {
   /** Open "borrowed" obligations — what I still owe them from money I borrowed, gross. */
@@ -154,6 +195,8 @@ export interface PersonBalanceBreakdown {
   loanPayable: number;
   loanReceivable: number;
   emiReceivable: number;
+  /** The EMI receivable still open after share settlements and absorbed unlinked payments. */
+  emiReceivableOpen: number;
   /** Gross: everything I need to give them. */
   toGive: number;
   /** Gross: everything I need to receive from them. */
@@ -176,7 +219,9 @@ export function personBalanceBreakdown(
   }
   let borrowedOpen = 0;
   let gaveOpen = 0;
+  let shareSettled = 0;
   for (const e of active) {
+    if (isInstallmentShareSettlement(e)) shareSettled += e.type === "receivedBack" ? e.amount : -e.amount;
     if (e.type !== "borrowed" && e.type !== "gave") continue;
     const open = Math.max(0, e.amount - (settledByParent.get(e.id) ?? 0));
     if (e.type === "borrowed") borrowedOpen += open;
@@ -184,7 +229,12 @@ export function personBalanceBreakdown(
   }
   borrowedOpen = round2(borrowedOpen);
   gaveOpen = round2(gaveOpen);
-  const unlinked = round2(position.directBalance - (gaveOpen - borrowedOpen));
+  shareSettled = round2(shareSettled);
+  // Share settlements pay the EMI receivable, never the direct side; an over-settlement (nothing due
+  // yet) stays an ordinary unlinked remainder, i.e. money held for them.
+  const emiNet = round2(position.emiReceivable - shareSettled);
+  let emiOpen = Math.max(emiNet, 0);
+  const unlinked = round2(position.directBalance + shareSettled - (gaveOpen - borrowedOpen) + Math.min(emiNet, 0));
 
   // An unlinked remainder pays down its own side first; only the excess crosses over.
   let directGive = borrowedOpen;
@@ -194,13 +244,19 @@ export function personBalanceBreakdown(
     directGive -= used;
     directReceive += unlinked - used;
   } else if (unlinked < 0) {
-    const used = Math.min(-unlinked, directReceive);
-    directReceive -= used;
-    directGive += -unlinked - used;
+    let rest = -unlinked;
+    const usedDirect = Math.min(rest, directReceive);
+    directReceive -= usedDirect;
+    rest -= usedDirect;
+    const usedEmi = Math.min(rest, emiOpen);
+    emiOpen -= usedEmi;
+    rest -= usedEmi;
+    directGive += rest;
   }
+  emiOpen = round2(emiOpen);
 
   const toGive = round2(directGive + position.loanPayable);
-  const toReceive = round2(directReceive + position.loanReceivable + position.emiReceivable);
+  const toReceive = round2(directReceive + position.loanReceivable + emiOpen);
   return {
     borrowedOpen,
     gaveOpen,
@@ -208,6 +264,7 @@ export function personBalanceBreakdown(
     loanPayable: position.loanPayable,
     loanReceivable: position.loanReceivable,
     emiReceivable: position.emiReceivable,
+    emiReceivableOpen: emiOpen,
     toGive,
     toReceive,
     net: round2(toReceive - toGive),
@@ -223,33 +280,53 @@ export function peopleDirectPayable(positions: readonly Pick<PersonPosition, "di
 }
 
 /**
- * Σ People direct obligations by direction, GROSS — a person who owes me ₹1,000 while I owe them ₹500
+ * Σ People obligations by direction, GROSS — a person who owes me ₹1,000 while I owe them ₹500
  * is ₹1,000 receivable (asset) AND ₹500 payable (liability), never one netted ₹500. Person Loans are
- * excluded (already in `loans`). `receivable − payable === Σ directBalance`, so Net Worth is unchanged.
+ * excluded (already in `loans`). `receivable` is the direct ledger only; `emiReceivableOpen` is the open
+ * Person-linked installment shares, kept apart so callers that add an EMI figure themselves never count
+ * it twice. `receivable + emiReceivableOpen − payable === Σ (directBalance + emiReceivable)`.
  */
 export function peopleDirectGross(
   positions: readonly { position: PersonPosition; entries: readonly BreakdownLedgerEntry[] }[],
   loanIds: ReadonlySet<string>,
-): { receivable: number; payable: number } {
+): { receivable: number; payable: number; emiReceivableOpen: number } {
   let receivable = 0;
   let payable = 0;
+  let emiReceivableOpen = 0;
   for (const { position, entries } of positions) {
     const direct = personDirectGross(position, entries, loanIds);
     receivable += direct.receivable;
     payable += direct.payable;
+    emiReceivableOpen += direct.emiReceivableOpen;
   }
-  return { receivable: round2(receivable), payable: round2(payable) };
+  return { receivable: round2(receivable), payable: round2(payable), emiReceivableOpen: round2(emiReceivableOpen) };
 }
 
-/** One person's direct (People ledger) obligations by direction, gross — Loans/EMI excluded. */
+/** One person's direct (People ledger) obligations by direction, gross — Loans excluded, EMI shares apart. */
 export function personDirectGross(
   position: PersonPosition,
   entries: readonly BreakdownLedgerEntry[],
   loanIds: ReadonlySet<string>,
-): { receivable: number; payable: number } {
-  // Direct only: drop the Loan/EMI parts the breakdown adds on top of the direct ledger.
-  const direct = personBalanceBreakdown({ ...position, loanPayable: 0, loanReceivable: 0, emiReceivable: 0 }, entries, loanIds);
-  return { receivable: direct.toReceive, payable: direct.toGive };
+): { receivable: number; payable: number; emiReceivableOpen: number } {
+  // Loans are their own positions. EMI shares stay in, so their settlements land on them and not on the
+  // direct side (F1/F2) — then they are reported apart.
+  const b = personBalanceBreakdown({ ...position, loanPayable: 0, loanReceivable: 0 }, entries, loanIds);
+  return { receivable: round2(b.toReceive - b.emiReceivableOpen), payable: b.toGive, emiReceivableOpen: b.emiReceivableOpen };
+}
+
+/**
+ * The People part of Net Worth. A due Person-linked installment share is a real receivable (People shows
+ * it) and its reimbursement is an asset swap (cash in, receivable out) — so the People balance is
+ * `Σ (directBalance + emiReceivable)`. `Σ directBalance` alone booked every reimbursed share as a phantom
+ * payable offset by the cash (F1): right total, wrong components. Components are gross.
+ */
+export function peopleNetWorthPosition(
+  positions: readonly { position: PersonPosition; entries: readonly BreakdownLedgerEntry[] }[],
+  loanIds: ReadonlySet<string>,
+): { balance: number; receivable: number; payable: number } {
+  const gross = peopleDirectGross(positions, loanIds);
+  const balance = round2(positions.reduce((s, p) => s + p.position.directBalance + p.position.emiReceivable, 0));
+  return { balance, receivable: round2(gross.receivable + gross.emiReceivableOpen), payable: gross.payable };
 }
 
 /**

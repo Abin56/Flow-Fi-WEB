@@ -26,7 +26,7 @@ import { useEmiRows } from "@/features/emi/hooks/use-emi-data";
 import { useLoanRows } from "@/features/loans/hooks/use-loans-data";
 import { useMonthCycleData } from "@/features/month-cycle/hooks/use-month-cycle-data";
 import { usePeopleLedgerEntries, usePersonPositions } from "@/features/people/hooks/use-people-data";
-import { personDirectGross } from "@/lib/engines/person-position";
+import { breakdownEntryOf, personDirectGross } from "@/lib/engines/person-position";
 import { cardFundedLoanCardId, emiPurchaseRepresentedOnCard } from "@/lib/engines/credit-utilization";
 import {
   budgetScenarios,
@@ -177,11 +177,7 @@ export function useDebtPlannerData(): {
       Object.fromEntries(
         Object.entries(positionsByPersonId).map(([id, pos]) => [
           id,
-          personDirectGross(
-            pos,
-            (entriesByPersonId[id] ?? []).map((e) => ({ id: e.id, type: e.type, amount: e.amount, parentEntryId: e.parentEntryId, transactionRef: e.transactionRef, isDeleted: e.deletedAt != null })),
-            loanIds,
-          ),
+          personDirectGross(pos, (entriesByPersonId[id] ?? []).map(breakdownEntryOf), loanIds),
         ]),
       ),
     [positionsByPersonId, entriesByPersonId, loanIds],
@@ -247,7 +243,9 @@ export function useDebtPlannerData(): {
           personId: p.id,
           name: p.name,
           directBalance: pos.directBalance,
-          emiReceivable: pos.emiReceivable,
+          // With the gross sides, the EMI receivable is what is still OPEN after the person reimbursed
+          // their shares — the gross due figure would count a settled share again (F1).
+          emiReceivable: gross != null ? gross.emiReceivableOpen : pos.emiReceivable,
           loanReceivable: pos.loanReceivable,
           loanPayable: pos.loanPayable,
           directToGive: gross?.payable,
