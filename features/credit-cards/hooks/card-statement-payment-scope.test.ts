@@ -147,3 +147,89 @@ describe("shared-limit Visa + RuPay — standings carry each card's own statemen
     expect(v.ownOutstanding).toBe(v.statementPayment.cardOutstanding);
   });
 });
+
+/** A non-transfer card credit (merchant refund / reversal / cashback / adjustment) — `type: "income"` on the card. */
+const credit = (accountId: string, amount: number, date: Date, overrides: Partial<Transaction> = {}) => txn(accountId, amount, date, { type: "income", ...overrides });
+
+describe("card credits reduce the statement — never raise it (canonical `cardStatementAmount`)", () => {
+  // Statement Sep 17 – Oct 16 (closed, due 5 Nov); open cycle Oct 17 – Nov 16.
+  const c = card("visa");
+  const purchases = [txn(c.accountId, 6000, d(10, 1)), txn(c.accountId, 4000, d(10, 5))];
+  const ownOf = (txns: Transaction[]) => computeCreditCardStandings({ cards: [c], sharedLimits: [], statements: [], transactions: txns, utilizationEmis: [], now: NOW })[0];
+
+  it("1. ₹10,000 purchases + ₹2,000 same-cycle credit = ₹8,000 net charges (not ₹12,000)", () => {
+    const txns = [...purchases, credit(c.accountId, 2000, d(10, 10))];
+    const scope = scopeOf(c, txns);
+    expect(scope.current?.totalAmount).toBe(8000);
+    expect(scope).toMatchObject({ statementDue: 8000, cardOutstanding: 8000 });
+    // Standings (usage / available) reconcile to the same liability.
+    const s = ownOf(txns);
+    expect([s.ownOutstanding, s.outstanding, s.available]).toEqual([8000, 8000, 92000]);
+  });
+
+  it("2. ₹10,000 + ₹2,000 credit + ₹3,000 payment = ₹5,000 remaining — either order, refund and payment kept apart", () => {
+    const creditFirst = [...purchases, credit(c.accountId, 2000, d(10, 10)), payment(c.accountId, 3000, d(10, 20))];
+    const paymentFirst = [...purchases, payment(c.accountId, 3000, d(10, 8)), credit(c.accountId, 2000, d(10, 12))];
+    for (const txns of [creditFirst, paymentFirst]) {
+      const scope = scopeOf(c, txns);
+      expect(scope.current).toMatchObject({ totalAmount: 8000, amountPaid: 3000, remaining: 5000 }); // net charges vs payments
+      expect(scope.statementDue).toBe(5000);
+    }
+  });
+
+  it("3. credit AFTER the statement closed posts in the open cycle — the closed statement's total is never rewritten", () => {
+    // Open cycle has ₹3,000 new spend: the ₹2,000 refund nets it to ₹1,000; the closed bill stays ₹10,000.
+    const withSpend = scopeOf(c, [...purchases, txn(c.accountId, 3000, d(10, 25)), credit(c.accountId, 2000, d(10, 28))]);
+    expect(withSpend).toMatchObject({ statementDue: 10000, unbilled: 1000, cardOutstanding: 11000 });
+    expect(withSpend.current?.totalAmount).toBe(10000);
+    // Open cycle has nothing else: its net-credit ₹2,000 settles the oldest open bill like an overpayment.
+    const alone = scopeOf(c, [...purchases, credit(c.accountId, 2000, d(10, 28))]);
+    expect(alone.current).toMatchObject({ totalAmount: 10000, remaining: 8000 });
+    expect(alone).toMatchObject({ statementDue: 8000, unbilled: 0, cardOutstanding: 8000 });
+  });
+
+  it("4. credits larger than charges → nothing payable: no negative due, no Pay now, no minimum", () => {
+    const txns = [txn(c.accountId, 1000, d(10, 1)), credit(c.accountId, 1500, d(10, 3))];
+    const scope = scopeOf(c, txns);
+    expect(scope).toMatchObject({ current: null, statementDue: 0, closedDue: 0, cardOutstanding: 0 });
+    expect(payBillAmount(scope, "statement", 0)).toBeUndefined();
+    expect(payBillAmount(scope, "full", ownOf(txns).ownOutstanding)).toBeUndefined();
+    expect(ownOf(txns).ownOutstanding).toBe(0); // the ₹500 credit balance lives on the card account balance
+    // The excess ₹500 settles the next bill rather than vanishing.
+    expect(scopeOf(c, [...txns, txn(c.accountId, 2000, d(10, 20))]).unbilled).toBe(1500);
+  });
+
+  it("5–7. deleted credit stops counting; restored counts once; edited ₹2,000 → ₹1,500 recalculates exactly once", () => {
+    const cr = credit(c.accountId, 2000, d(10, 10));
+    expect(scopeOf(c, [...purchases, cr]).statementDue).toBe(8000);
+    expect(scopeOf(c, [...purchases, { ...cr, deletedAt: NOW }]).statementDue).toBe(10000);
+    expect(scopeOf(c, [...purchases, { ...cr, deletedAt: null }]).statementDue).toBe(8000);
+    expect(scopeOf(c, [...purchases, { ...cr, amount: 1500 }]).statementDue).toBe(8500);
+    expect(scopeOf(c, [...purchases, { ...cr, excludeFromCalculations: true }]).statementDue).toBe(10000);
+  });
+
+  it("8–9. single-statement Pay Now uses the NET bill; Statement B stays separate", () => {
+    // Statement A Aug 17 – Sep 16 (due 5 Oct): ₹22,152.02 charges + ₹2,000 credit. Statement B Sep 17 – Oct 16: ₹27,170.
+    const txns = [txn(c.accountId, 22152.02, d(9, 1)), credit(c.accountId, 2000, d(9, 10)), txn(c.accountId, 27170, d(10, 1))];
+    const scope = scopeOf(c, txns);
+    expect(scope.statementDue).toBe(20152.02);
+    expect(scope.later.map((b) => b.remaining)).toEqual([27170]);
+    expect(payBillAmount(scope, "statement", scope.cardOutstanding)).toBe(20152.02);
+    const paid = scopeOf(c, [...txns, payment(c.accountId, 5000)]);
+    expect(paid.statementDue).toBe(15152.02);
+    expect(paid.later.map((b) => b.remaining)).toEqual([27170]);
+  });
+
+  it("10. shared limit: a credit on Visa reduces Visa's usage and the facility once; RuPay's statement untouched, no fake payment", () => {
+    const sl: SharedCreditLimit = { id: "sl", name: "SBI", creditLimit: 100000, createdAt: d(1, 1), deletedAt: null, lastEditedAt: null, editHistory: [] } as SharedCreditLimit;
+    const visa = card("visa", { sharedLimitId: "sl", creditLimit: 0 });
+    const rupay = card("rupay", { sharedLimitId: "sl", creditLimit: 0 });
+    const base = [txn(visa.accountId, 8000, d(10, 5)), txn(rupay.accountId, 4000, d(10, 1))];
+    const run = (txns: Transaction[]) => computeCreditCardStandings({ cards: [visa, rupay], sharedLimits: [sl], statements: [], transactions: txns, utilizationEmis: [], now: NOW });
+    const [v, r] = run([...base, credit(visa.accountId, 2000, d(10, 10))]);
+    expect(v.statementPayment.statementDue).toBe(6000);
+    expect(r.statementPayment).toMatchObject({ statementDue: 4000, cardOutstanding: 4000 });
+    expect(r.statementPayment.current?.amountPaid).toBe(0);
+    expect([v.outstanding, r.outstanding, v.available]).toEqual([10000, 10000, 90000]);
+  });
+});

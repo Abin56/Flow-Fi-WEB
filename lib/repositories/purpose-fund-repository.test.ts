@@ -288,6 +288,29 @@ describe("Purpose money — AMMA sends ₹10,000 while owing ₹1,000", () => {
     expect(liveTx().filter((t) => t.transferId != null)).toHaveLength(0);
   });
 
+  it("card link goes through the card bill People gate before any write: refused → nothing moves; allowed → one pair", async () => {
+    await payments.recordPayment(person(), receipt(null, [P("Pay OCTANE card bill", 3000, null, { kind: "card", id: "octane", label: "OCTANE card" }), P("Rest", 6000)]));
+    store.set(`${U}/accounts/octane`, { ...store.get(`${U}/accounts/octane`)!, type: "card" });
+    const calls: { cardAccountId: string; amount: number }[] = [];
+    let open = true; // e.g. a person's share of a charge this payment reaches is still unsettled
+    transactionRepository.withCardPaymentGuard(async (_tx, { cardAccount, amount }) => {
+      calls.push({ cardAccountId: cardAccount.id, amount });
+      if (open) throw new Error("Some people-linked amounts in this bill still need to be settled (₹8,000 from AMMA). Review them before paying.");
+    });
+    const card = fund("Pay OCTANE card bill");
+    const use = { mode: "card" as const, accountId: "sbi", cardAccountId: "octane", amount: 3000, date: d(10, 8), description: "OCTANE bill" };
+    const [sbi, octane, txCount] = [balance("sbi"), balance("octane"), liveTx().length];
+    await expect(purposes.recordUse(person(), card.id, use)).rejects.toThrow(/still need to be settled/);
+    expect([balance("sbi"), balance("octane"), liveTx().length]).toEqual([sbi, octane, txCount]);
+    expect(fund("Pay OCTANE card bill").uses).toHaveLength(0); // purpose money untouched
+    expect(calls).toEqual([{ cardAccountId: "octane", amount: 3000 }]);
+
+    open = false;
+    await purposes.recordUse(person(), card.id, use);
+    expect([balance("sbi"), balance("octane")]).toEqual([sbi - 3000, octane + 3000]);
+    expect(liveTx().filter((t) => t.transferId != null)).toHaveLength(2);
+  });
+
   it.each([
     ["loan", { loanId: "loan1" }],
     ["emi", { emiId: "emi1" }],

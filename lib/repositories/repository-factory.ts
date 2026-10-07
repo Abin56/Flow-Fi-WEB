@@ -69,7 +69,7 @@ import {
   type SmsTransactionCandidate,
 } from "@/lib/models/sms-transaction-candidate";
 import { AccountRepository } from "./account-repository";
-import { assertCardBillPeopleSettled, type CardBillGateReader } from "./card-bill-people-gate";
+import { assertCardBillPeopleSettled, loadCardBillState, type CardBillGateReader, type CardBillState } from "./card-bill-people-gate";
 import { BillRepository } from "./bill-repository";
 import { BudgetRepository } from "./budget-repository";
 import { CategoryRepository } from "./category-repository";
@@ -132,7 +132,9 @@ export function createTransactionRepository(uid: string, accountRepository: Acco
   const repository = new TransactionRepository(ref, accountRepository);
   // Every card-payment write through the app's repository (create, restore) enforces the card-bill People gate.
   const reader = firestoreCardBillGateReader(uid, repository);
-  return repository.withCardPaymentGuard((tx, { cardAccount, amount }) => assertCardBillPeopleSettled({ tx, reader, cardAccount, amount }));
+  return repository.withCardPaymentGuard((tx, { cardAccount, amount, statementIntent }) =>
+    assertCardBillPeopleSettled({ tx, reader, cardAccount, amount, statementIntent }),
+  );
 }
 
 /** The card bill People gate's fresh reads, from Firestore through the existing repositories. */
@@ -156,6 +158,19 @@ export function firestoreCardBillGateReader(uid: string, transactionRepository: 
       for (const id of statementIds) await tx.get(statements.docRef(id));
     },
   };
+}
+
+/**
+ * Pay bill's "Refresh bill": an authoritative read of a card's bill straight from Firestore — the card
+ * account, card profile, statements, card transactions and linked People — through the same reader and
+ * canonical chain (`loadCardBillState`) the payment write uses. Reads only; never writes.
+ */
+export async function fetchCardBillState(uid: string, cardAccountId: string): Promise<CardBillState | null> {
+  const accountRepository = createAccountRepository(uid);
+  const cardAccount = await accountRepository.getByKey(cardAccountId);
+  if (cardAccount == null) throw new Error("Card account not found");
+  const reader = firestoreCardBillGateReader(uid, createTransactionRepository(uid, accountRepository));
+  return loadCardBillState({ reader, cardAccount });
 }
 
 export function createBudgetRepository(uid: string): BudgetRepository {

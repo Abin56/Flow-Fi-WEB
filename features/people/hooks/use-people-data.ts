@@ -284,6 +284,7 @@ function toPersonRow(
   position: PersonPosition,
   loanItems: PersonActivityItem[],
   loanIds: ReadonlySet<string>,
+  advanceApplications: readonly AdvanceApplication[] = [],
 ): PersonViewRow {
   // Legacy Loan-generated ledger entries are replaced by the Loan's own events (`loanItems`), so a
   // Loan event never appears twice.
@@ -309,6 +310,7 @@ function toPersonRow(
       position,
       entries.map(breakdownEntryOf),
       loanIds,
+      advanceApplications,
     ),
     status: position.net === 0 ? "settled" : "active",
     lastActivity: activity[0] ? formatTimestamp(activity[0].rawDate, now) : formatDate(person.createdAt),
@@ -324,6 +326,7 @@ function toPersonRow(
 export function usePeopleRows(): { rows: PersonViewRow[]; isLoading: boolean } {
   const { data: people = [], isLoading: peopleLoading } = usePeople();
   const { entriesByPersonId, isLoading: entriesLoading } = usePeopleLedgerEntries();
+  const { applicationsByPersonId, isLoading: applicationsLoading } = usePeopleAdvanceApplications();
 
   const { positionsByPersonId, loans, loanIds, isLoading: positionsLoading } = usePersonPositions();
   const { data: transactions = [] } = useTransactions();
@@ -346,12 +349,12 @@ export function usePeopleRows(): { rows: PersonViewRow[]; isLoading: boolean } {
           parentEntryId: null,
           remainingAmount: null,
         }));
-        return toPersonRow(person, entriesByPersonId[person.id] ?? [], positionsByPersonId[person.id], loanItems, loanIds);
+        return toPersonRow(person, entriesByPersonId[person.id] ?? [], positionsByPersonId[person.id], loanItems, loanIds, applicationsByPersonId[person.id]);
       }),
-    [people, entriesByPersonId, positionsByPersonId, loans, loanIds, transactions],
+    [people, entriesByPersonId, positionsByPersonId, loans, loanIds, transactions, applicationsByPersonId],
   );
 
-  return { rows, isLoading: peopleLoading || entriesLoading || positionsLoading };
+  return { rows, isLoading: peopleLoading || entriesLoading || positionsLoading || applicationsLoading };
 }
 
 /**

@@ -112,6 +112,9 @@ export class PurposeFundRepository {
       } else if (input.mode === "card") {
         if (input.accountId === input.cardAccountId) throw new Error("Choose the account you paid the card from.");
         // The card's own payment rule: a transfer pair into the card account (one transferId), atomic here.
+        // It settles the card's statements exactly like Pay bill, and purpose money never settles anyone's
+        // share (it isn't an advance), so the same card People gate applies — checked before any write.
+        await this.deps.transactionRepository.assertCardPaymentAllowedInTransaction(tx, input.cardAccountId, amount);
         const transferId = generateId();
         const common = { amount, dateTime: input.date, categoryId: input.categoryId || this.deps.cashLegCategoryId, description: input.description.trim() || fund.title, notes: `From ${person.name}'s money — ${fund.title}`, transferId };
         const out = await this.deps.transactionRepository.createTransactionInTransaction(tx, { ...common, type: "expense", accountId: input.accountId });

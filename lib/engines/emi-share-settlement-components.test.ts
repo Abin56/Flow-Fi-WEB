@@ -48,14 +48,14 @@ describe("EMI share reimbursement is an asset swap — never a phantom payable (
   it("₹1,000 share due, unpaid → receivable ₹1,000, nothing to give", () => {
     const { breakdown, netWorth } = world([], 1_000);
     expect([breakdown.toReceive, breakdown.toGive, breakdown.emiReceivableOpen]).toEqual([1_000, 0, 1_000]);
-    expect(netWorth).toEqual({ balance: 1_000, receivable: 1_000, payable: 0 });
+    expect(netWorth).toEqual({ balance: 1_000, receivable: 1_000, payable: 0, advanceHeld: 0, advancePaid: 0 });
   });
 
   it("AMMA reimburses ₹1,000 → receivable ₹0 AND payable ₹0 (was: payable ₹1,000 + receivable ₹1,000)", () => {
     const { position, breakdown, netWorth } = world([share(1_000)], 1_000);
     expect(position.net).toBe(0);
     expect([breakdown.toReceive, breakdown.toGive, breakdown.unlinked]).toEqual([0, 0, 0]);
-    expect(netWorth).toEqual({ balance: 0, receivable: 0, payable: 0 });
+    expect(netWorth).toEqual({ balance: 0, receivable: 0, payable: 0, advanceHeld: 0, advancePaid: 0 });
     // Net Worth moves only by the cash: +₹1,000 cash, −₹1,000 receivable.
   });
 
@@ -63,11 +63,11 @@ describe("EMI share reimbursement is an asset swap — never a phantom payable (
     const p1 = share(400);
     expect(world([p1], 1_000).breakdown.emiReceivableOpen).toBe(600);
     const p2 = share(600);
-    expect(world([p1, p2], 1_000).netWorth).toEqual({ balance: 0, receivable: 0, payable: 0 });
+    expect(world([p1, p2], 1_000).netWorth).toEqual({ balance: 0, receivable: 0, payable: 0, advanceHeld: 0, advancePaid: 0 });
     const reverted = { ...p1, isDeleted: true };
     const after = world([reverted, p2], 1_000);
     expect([after.breakdown.toReceive, after.breakdown.toGive]).toEqual([400, 0]);
-    expect(after.netWorth).toEqual({ balance: 400, receivable: 400, payable: 0 });
+    expect(after.netWorth).toEqual({ balance: 400, receivable: 400, payable: 0, advanceHeld: 0, advancePaid: 0 });
   });
 
   it("gross sides stay independent: AMMA owes ₹1,000 share, I owe AMMA ₹500 — receiving ₹1,000 settles only the receivable", () => {
@@ -76,23 +76,27 @@ describe("EMI share reimbursement is an asset swap — never a phantom payable (
     expect([before.breakdown.toReceive, before.breakdown.toGive]).toEqual([1_000, 500]);
     const after = world([borrowed, share(1_000)], 1_000);
     expect([after.breakdown.toReceive, after.breakdown.toGive]).toEqual([0, 500]); // never "₹500 net received"
-    expect(after.netWorth).toEqual({ balance: -500, receivable: 0, payable: 500 });
+    expect(after.netWorth).toEqual({ balance: -500, receivable: 0, payable: 500, advanceHeld: 0, advancePaid: 0 });
   });
 
-  it("advance paid before the share is due is money held for her; once due it is absorbed, not doubled", () => {
-    const advance = entry("receivedBack", 1_000); // `sourceKind: "advance"` — no obligationRef
+  // A LEGACY unlinked payment (no obligationRef, no advance marker) keeps the old netting. A real Record
+  // Payment advance (`sourceKind: "advance"`) is never absorbed on its own — see loan-share-person-position.test.ts.
+  it("legacy unlinked payment before the share is due is held for her; once due it is absorbed, not doubled", () => {
+    const advance = entry("receivedBack", 1_000);
     const early = world([advance], 0);
     expect([early.breakdown.toReceive, early.breakdown.toGive]).toEqual([0, 1_000]);
-    expect(early.netWorth).toEqual({ balance: -1_000, receivable: 0, payable: 1_000 }); // real: I hold her money
+    expect(early.netWorth).toEqual({ balance: -1_000, receivable: 0, payable: 1_000, advanceHeld: 0, advancePaid: 0 }); // real: I hold her money
     const due = world([advance], 1_000);
     expect([due.breakdown.toReceive, due.breakdown.toGive]).toEqual([0, 0]);
-    expect(due.netWorth).toEqual({ balance: 0, receivable: 0, payable: 0 });
+    expect(due.netWorth).toEqual({ balance: 0, receivable: 0, payable: 0, advanceHeld: 0, advancePaid: 0 });
   });
 
-  it("overpaying a share: the excess is held for her (payable), the share itself is settled", () => {
+  // Record Payment never allocates beyond a share (the extra becomes an advance). A share settlement above
+  // what is due arises when the share later shrinks or goes (Loan cancelled): that money is a refund owed.
+  it("share settled beyond what is due: the excess is a refund owed to her (payable), the share itself is settled", () => {
     const { breakdown, netWorth } = world([share(1_500)], 1_000);
     expect([breakdown.emiReceivableOpen, breakdown.toReceive, breakdown.toGive]).toEqual([0, 0, 500]);
-    expect(netWorth).toEqual({ balance: -500, receivable: 0, payable: 500 });
+    expect(netWorth).toEqual({ balance: -500, receivable: 0, payable: 500, advanceHeld: 0, advancePaid: 0 });
   });
 
   it("missed share carried forward: Oct ₹1,000 unpaid + Nov ₹1,000 due → ₹2,000; paying Oct leaves Nov ₹1,000", () => {
@@ -109,7 +113,7 @@ describe("EMI share reimbursement is an asset swap — never a phantom payable (
 
   it("breakdownEntryOf carries obligationRef from a LedgerEntry-shaped doc", () => {
     const e = breakdownEntryOf({ id: "x", type: "receivedBack", amount: 5, parentEntryId: null, transactionRef: "t", obligationRef: "emi-inst:z", deletedAt: null });
-    expect(e).toEqual({ id: "x", type: "receivedBack", amount: 5, parentEntryId: null, transactionRef: "t", obligationRef: "emi-inst:z", isDeleted: false });
+    expect(e).toEqual({ id: "x", type: "receivedBack", amount: 5, parentEntryId: null, transactionRef: "t", obligationRef: "emi-inst:z", sourceKind: null, isDeleted: false });
   });
 });
 
@@ -118,7 +122,7 @@ describe("Debt Planner reads the same components (F1 / F2)", () => {
     const entries = [entry("gave", 8_000), share(1_000)];
     const { position } = world(entries, 1_000);
     const gross = personDirectGross(position, entries, new Set());
-    expect(gross).toEqual({ receivable: 8_000, payable: 0, emiReceivableOpen: 0 });
+    expect(gross).toEqual({ receivable: 8_000, payable: 0, emiReceivableOpen: 0, advanceHeld: 0, advancePaid: 0 });
     const byFacility = cardPurchaseShares(
       [{ facilityId: "card", personId: "amma", name: "AMMA", unrecovered: 8_000, dueDate: new Date(2026, 9, 1) }],
       { amma: gross.receivable },

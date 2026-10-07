@@ -112,8 +112,8 @@ function OwnershipBreakdown({ p, required }: { p: DebtPosition; required: number
       <Label>Whose share</Label>
       <Breakdown
         rows={[
-          { label: "My share", amount: o.mine },
-          ...o.others.map((x) => ({ label: `${x.name}'s share`, amount: x.amount })),
+          { label: p.sourceType === "creditCard" ? "My gross share" : "My share", amount: o.mine },
+          ...o.others.map((x) => ({ label: p.sourceType === "creditCard" ? `Caused by ${x.name}` : `${x.name}'s share`, amount: x.amount })),
         ]}
         total={{ label: "Total outstanding", amount: o.total }}
       />

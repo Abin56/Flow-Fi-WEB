@@ -186,7 +186,7 @@ describe("receive and give stay independent (no cross-direction netting)", () =>
   it("12. a card-linked receivable is not reduced by an unrelated payable (ownership + readiness)", () => {
     const { entries } = base();
     const gross = personDirectGross(positionOf(entries), breakdownEntries(entries), new Set());
-    expect(gross).toEqual({ receivable: 1000, payable: 500, emiReceivableOpen: 0 });
+    expect(gross).toEqual({ receivable: 1000, payable: 500, emiReceivableOpen: 0, advanceHeld: 0, advancePaid: 0 });
     const shares = cardPurchaseShares([{ facilityId: "card1", personId: "A", name: "Amma", unrecovered: 1000, dueDate: d(10, 2) }], { A: gross.receivable });
     expect(shares.card1).toEqual([{ personId: "A", name: "Amma", amount: 1000 }]);
   });
@@ -223,18 +223,18 @@ describe("receive and give stay independent (no cross-direction netting)", () =>
     const { gave, borrowed, entries } = base();
     const pos = positionOf(entries);
     const g0 = peopleDirectGross([{ position: pos, entries: breakdownEntries(entries) }], new Set());
-    expect(g0).toEqual({ receivable: 1000, payable: 500, emiReceivableOpen: 0 });
+    expect(g0).toEqual({ receivable: 1000, payable: 500, emiReceivableOpen: 0, advanceHeld: 0, advancePaid: 0 });
     expect(g0.receivable - g0.payable).toBeCloseTo(pos.directBalance, 2);
 
     const afterReceive = [...entries, entry("receivedBack", 1000, d(10, 3), { parentEntryId: gave.id })];
     const g1 = peopleDirectGross([{ position: positionOf(afterReceive), entries: breakdownEntries(afterReceive) }], new Set());
-    expect(g1).toEqual({ receivable: 0, payable: 500, emiReceivableOpen: 0 });
+    expect(g1).toEqual({ receivable: 0, payable: 500, emiReceivableOpen: 0, advanceHeld: 0, advancePaid: 0 });
     // Cash +1,000, receivable −1,000 → Net Worth unchanged.
     expect(1000 + (g1.receivable - g1.payable)).toBeCloseTo(g0.receivable - g0.payable, 2);
 
     const afterGive = [...afterReceive, entry("repaid", 500, d(10, 4), { parentEntryId: borrowed.id })];
     const g2 = peopleDirectGross([{ position: positionOf(afterGive), entries: breakdownEntries(afterGive) }], new Set());
-    expect(g2).toEqual({ receivable: 0, payable: 0, emiReceivableOpen: 0 });
+    expect(g2).toEqual({ receivable: 0, payable: 0, emiReceivableOpen: 0, advanceHeld: 0, advancePaid: 0 });
     expect(1000 - 500 + (g2.receivable - g2.payable)).toBeCloseTo(g0.receivable - g0.payable, 2);
   });
 

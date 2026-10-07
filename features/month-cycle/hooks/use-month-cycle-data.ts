@@ -496,6 +496,7 @@ export function useMonthCycleData() {
       giveCount: sides.toGive.length,
       totalToReceive: sides.totalToReceive,
       receiveCount: sides.toReceive.length,
+      advanceHeld: sides.advanceHeld,
     };
   }, [peopleRows, now]);
   const peopleYouNeedToGive = peopleSides.give;
@@ -615,6 +616,7 @@ export function useMonthCycleData() {
       giveCount: peopleSides.giveCount,
       totalToReceive: peopleSides.totalToReceive,
       receiveCount: peopleSides.receiveCount,
+      advanceHeld: peopleSides.advanceHeld,
     },
     accountSpends,
     accountsStats,

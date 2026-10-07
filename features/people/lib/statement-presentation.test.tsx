@@ -229,8 +229,9 @@ describe("original purchase vs recipient's share", () => {
     expect(s.view.rows[0].amountLabel).toBe("Sojan's share");
     const lines = cellLines(await pdfText(s));
     expect(lines).toContain("2-way split");
-    // The owner is named only where the statement states the direction (header + ending), never as a split cell.
-    expect(lines.filter((l) => l === OWNER)).toHaveLength(2);
+    // The owner is named only in the direction sentence (balance block + ending balance), never as a split cell.
+    expect(lines.filter((l) => l === OWNER)).toHaveLength(0);
+    expect(lines.filter((l) => l === `Sojan owes ${OWNER}`)).toHaveLength(2);
   });
 
   it("E. recipient share ₹0 on the expense: no focus cell, no false \"Sojan's share\" label", () => {
@@ -416,7 +417,7 @@ describe("recipient-safe wording (the person reads this statement)", () => {
     expect(lines.filter((l) => YOU.test(l))).toEqual([]);
     expect(lines).toContain("BALANCE DUE");
     expect(lines).toContain("ENDING BALANCE");
-    expect(lines).toContain(`${pm(220.74)} due`);
+    expect(lines[lines.indexOf("ENDING BALANCE") + 3]).toBe(pm(220.74));
   });
 
   it("B. owner owes person: direction Ibin John → Sojan; rows, types and statuses name the owner", async () => {
@@ -431,7 +432,7 @@ describe("recipient-safe wording (the person reads this statement)", () => {
     expect(s.view.reconciliation.map((l) => l.label)).toContain("Paid by Ibin");
     const lines = cellLines(await pdfText(s));
     expect(lines.filter((l) => YOU.test(l))).toEqual([]);
-    expect(lines).toContain(OWNER);
+    expect(lines).toContain(`${OWNER} owes Sojan`);
   });
 
   it("C. settled: \"Settled\", no direction, ₹0 due, and no redundant side sentences", async () => {
@@ -441,7 +442,7 @@ describe("recipient-safe wording (the person reads this statement)", () => {
     expect(s.view.payments[0].label).toBe("Sojan paid Ibin");
     const lines = cellLines(await pdfText(s));
     expect(lines).toContain("SETTLED");
-    expect(lines).toContain(`${pm(0)} due`);
+    expect(lines[lines.indexOf("ENDING BALANCE") + 3]).toBe(pm(0));
     expect(lines).toContain("Total paid by Sojan  " + pm(220.74));
     expect(lines.filter((l) => YOU.test(l))).toEqual([]);
   });

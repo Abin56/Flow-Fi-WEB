@@ -192,3 +192,39 @@ export function emiPaymentOutcome(allocation: Extract<EmiPaymentAllocation, { ok
   if (portions.length === 1) return covered.length === 1 ? `Installment #${seqs[0]} paid. Next: ${still}` : `Partial payment — ${still}`;
   return `Covered ${covered.length > 0 ? covered.join(", ") : `#${seqs[0]}`}${covered.length < portions.length ? ` and part of #${seqs[seqs.length - 1]}` : ""}. ${still}`;
 }
+
+/** One allocated portion, as both allocators report it (Loan: `planLoanPaymentCore().payments`; EMI: `portions`). */
+export interface PreviewPortion {
+  sequenceNumber: number;
+  amount: number;
+  remainingAfter: number;
+}
+
+export interface PaymentCoverage {
+  /** Installments this payment settles in full. */
+  settled: { count: number; amount: number; first: number; last: number } | null;
+  /** The installment it reaches without finishing (an advance's remainder) — at most one, always last. */
+  partial: { sequenceNumber: number; amount: number; left: number } | null;
+}
+
+/**
+ * The compact "what this payment covers" summary for the pre-save preview — a regrouping of the
+ * allocator's own portions (no re-allocation), so "6 installments ₹6,000 + #7 ₹500 (₹500 left)" is
+ * exactly what gets written.
+ */
+export function paymentCoverage(portions: readonly PreviewPortion[]): PaymentCoverage {
+  const full = portions.filter((p) => p.remainingAfter <= 0.005);
+  const open = portions.find((p) => p.remainingAfter > 0.005) ?? null;
+  return {
+    settled:
+      full.length > 0
+        ? {
+            count: full.length,
+            amount: Math.round(full.reduce((s, p) => s + p.amount, 0) * 100) / 100,
+            first: full[0].sequenceNumber,
+            last: full[full.length - 1].sequenceNumber,
+          }
+        : null,
+    partial: open ? { sequenceNumber: open.sequenceNumber, amount: open.amount, left: open.remainingAfter } : null,
+  };
+}

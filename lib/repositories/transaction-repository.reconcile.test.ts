@@ -4,20 +4,24 @@ import { TransactionRepository } from "./transaction-repository";
 import type { AccountRepository } from "./account-repository";
 
 /**
- * `reconcileTransfers` is the only method on this repository that calls
- * `doc`/`writeBatch` directly (every other method goes through the inherited
- * `FirestoreCrudRepository.add`/`update`, which this file never exercises
- * since `getAll` is stubbed on the instance) — mocking just those two
- * functions is enough to test the orchestration layer without a Firestore
- * emulator, matching this repo's package-wide "no emulator available in
- * this environment" constraint (see B2/B3's same note).
+ * `reconcileTransfers` orchestration without a Firestore emulator (this repo's package-wide "no emulator
+ * available in this environment" constraint — see B2/B3's same note). Each pair is linked by
+ * `linkTransferPair` in its own Firestore transaction that re-reads both legs (and the inflow's account)
+ * fresh: `runTransaction` runs the callback over `docs` (seeded from the stubbed `getAll`), and each
+ * transaction's `set` calls are kept in `linkWrites` — one entry per linked pair.
  */
+const docs = new Map<string, unknown>();
+const linkWrites: ReturnType<typeof vi.fn>[] = [];
 vi.mock("firebase/firestore", () => ({
   doc: vi.fn((_collection: unknown, id: string) => ({ id })),
-  writeBatch: vi.fn(() => ({ set: vi.fn(), commit: vi.fn().mockResolvedValue(undefined) })),
+  runTransaction: vi.fn(async (_db: unknown, fn: (tx: unknown) => Promise<unknown>) => {
+    const set = vi.fn();
+    linkWrites.push(set);
+    return fn({ get: async (ref: { id: string }) => ({ exists: () => docs.has(ref.id), data: () => structuredClone(docs.get(ref.id)) }), set });
+  }),
 }));
 
-import { doc, writeBatch } from "firebase/firestore";
+import { doc } from "firebase/firestore";
 
 function txn(overrides: Partial<Transaction> = {}): Transaction {
   return {
@@ -54,18 +58,24 @@ function txn(overrides: Partial<Transaction> = {}): Transaction {
 }
 
 function makeRepo(all: Transaction[]) {
-  const repo = new TransactionRepository({ firestore: {} } as never, {} as AccountRepository);
+  const accounts = { docRef: (id: string) => ({ id: `account:${id}` }) } as unknown as AccountRepository;
+  const repo = new TransactionRepository({ firestore: {} } as never, accounts);
   repo.getAll = vi.fn().mockResolvedValue(all);
+  docs.clear();
+  for (const t of all) {
+    docs.set(t.id, t);
+    docs.set(`account:${t.accountId}`, { id: t.accountId, type: "bank" });
+  }
   return repo;
 }
 
 describe("TransactionRepository.reconcileTransfers", () => {
   beforeEach(() => {
-    vi.mocked(writeBatch).mockClear();
+    linkWrites.length = 0;
     vi.mocked(doc).mockClear();
   });
 
-  it("links a confident pair: writes a shared transferId + transferMatchedAt to both legs in one batch", async () => {
+  it("links a confident pair: writes a shared transferId + transferMatchedAt to both legs in one transaction", async () => {
     const outflow = txn({ id: "out-1", type: "expense", accountId: "acc-a", amount: 5000, dateTime: new Date("2026-07-01T00:00:00Z") });
     const inflow = txn({ id: "in-1", type: "income", accountId: "acc-b", amount: 5000, dateTime: new Date("2026-07-01T00:00:00Z") });
     const repo = makeRepo([outflow, inflow]);
@@ -73,21 +83,21 @@ describe("TransactionRepository.reconcileTransfers", () => {
     const result = await repo.reconcileTransfers();
 
     expect(result.matches).toHaveLength(1);
-    expect(writeBatch).toHaveBeenCalledTimes(1);
+    expect(linkWrites).toHaveLength(1);
     expect(doc).toHaveBeenCalledWith(expect.anything(), "out-1");
     expect(doc).toHaveBeenCalledWith(expect.anything(), "in-1");
 
-    const batchInstance = vi.mocked(writeBatch).mock.results[0].value;
-    expect(batchInstance.set).toHaveBeenCalledTimes(2);
-    const [, outflowWrite] = batchInstance.set.mock.calls[0];
-    const [, inflowWrite] = batchInstance.set.mock.calls[1];
+    const set = linkWrites[0];
+    expect(set).toHaveBeenCalledTimes(2); // both legs, nothing else (no account write — linking moves no money)
+    const [, outflowWrite] = set.mock.calls[0];
+    const [, inflowWrite] = set.mock.calls[1];
     expect(outflowWrite.transferId).toBe(inflowWrite.transferId); // same shared id on both legs
+    expect([outflowWrite.amount, inflowWrite.amount]).toEqual([5000, 5000]);
     expect(outflowWrite.transferMatchedAt).toBeInstanceOf(Date);
     expect(inflowWrite.transferMatchedAt).toBeInstanceOf(Date);
-    expect(batchInstance.commit).toHaveBeenCalledTimes(1);
   });
 
-  it("idempotency: already-linked transactions (transferId set) are excluded from the candidate pool — no batch is ever created", async () => {
+  it("idempotency: already-linked transactions (transferId set) are excluded from the candidate pool — no link write is ever made", async () => {
     const outflow = txn({ id: "out-1", type: "expense", accountId: "acc-a", amount: 5000, transferId: "xfer-existing" });
     const inflow = txn({ id: "in-1", type: "income", accountId: "acc-b", amount: 5000, transferId: "xfer-existing" });
     const repo = makeRepo([outflow, inflow]);
@@ -95,7 +105,7 @@ describe("TransactionRepository.reconcileTransfers", () => {
     const result = await repo.reconcileTransfers();
 
     expect(result.matches).toHaveLength(0);
-    expect(writeBatch).not.toHaveBeenCalled();
+    expect(linkWrites).toHaveLength(0);
   });
 
   it("retry safety: re-running after a successful link finds nothing left to do for that pair", async () => {
@@ -104,7 +114,7 @@ describe("TransactionRepository.reconcileTransfers", () => {
     const firstRunRepo = makeRepo([outflow, inflow]);
     const firstResult = await firstRunRepo.reconcileTransfers();
     expect(firstResult.matches).toHaveLength(1);
-    expect(writeBatch).toHaveBeenCalledTimes(1);
+    expect(linkWrites).toHaveLength(1);
 
     // Simulate the persisted state a real Firestore read would now return: both legs carry the
     // shared transferId the first run just wrote.
@@ -114,8 +124,8 @@ describe("TransactionRepository.reconcileTransfers", () => {
     const secondResult = await secondRunRepo.reconcileTransfers();
 
     expect(secondResult.matches).toHaveLength(0);
-    // Only the first run's batch exists — the retry created no new batch since there was nothing to link.
-    expect(writeBatch).toHaveBeenCalledTimes(1);
+    // Only the first run's link write exists — the retry made no new link write since there was nothing to link.
+    expect(linkWrites).toHaveLength(1);
   });
 
   it("does not touch unrelated already-linked pairs while linking a new unmatched pair in the same run", async () => {

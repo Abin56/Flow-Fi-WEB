@@ -198,6 +198,54 @@ function amountLabel(amount: number, a: SplitAllocation | null, personName: stri
   return "Share";
 }
 
+/** One figure of the statement summary strip, with a plain supporting line. */
+export interface StatementSummaryCell {
+  label: string;
+  value: string;
+  note: string;
+  /** The closing figure (Balance due / Settled) — carries the weight. */
+  current: boolean;
+  advance: boolean;
+}
+
+/**
+ * The summary strip shared by the PDF and the preview: the reconciliation lines, any advance held apart, then
+ * the balance due. Wording only — every value is the view's own string; a note never states a new figure.
+ */
+export function statementSummaryCells(view: StatementView): StatementSummaryCell[] {
+  const zero = money(0);
+  const first = view.personName.split(" ")[0];
+  const noteFor = (label: string, value: string): string => {
+    const none = value === zero;
+    if (label === STATEMENT_COPY.carried.label) return none ? "Nothing brought forward" : STATEMENT_COPY.carried.note;
+    if (label === "New this cycle") return none ? "No new activity" : "Added in this cycle";
+    if (label === "Total due") return "Before payments";
+    if (label === `Paid by ${first}`) return none ? "No payments received" : "Applied this cycle";
+    if (label.startsWith("Paid by")) return none ? "No payments made" : "Applied this cycle";
+    if (label === "Covered by advance") return "From an earlier advance";
+    return "";
+  };
+  const settled = view.direction === "settled";
+  return [
+    ...view.reconciliation.map((l) => ({ label: l.label, value: l.value, note: l.side ?? noteFor(l.label, l.value), current: false, advance: false })),
+    ...(view.advance ? [{ label: view.advance.label, value: view.advance.value, note: "Held apart — not in the balance", current: false, advance: true }] : []),
+    { label: view.current.label, value: view.current.value, note: settled ? "Nothing left to settle" : "Amount remaining to settle", current: true, advance: false },
+  ];
+}
+
+/** How the transaction list is sectioned — the same rules in the PDF and the preview. */
+export function statementSections(view: StatementView) {
+  const previous = view.reconciliation.find((r) => r.label === STATEMENT_COPY.carried.label) ?? null;
+  return {
+    /** The Previous balance line, shown as the carry-forward row. */
+    previous,
+    /** A carry-forward row (and a THIS CYCLE band after it) when anything was brought forward. */
+    showPrevious: view.carried.length > 0 || (previous != null && previous.value !== money(0)),
+    /** Month headings only when the listed rows span more than one month. */
+    byMonth: new Set([...view.carried, ...view.rows].map((r) => r.month)).size > 1,
+  };
+}
+
 export function statementView(statement: PersonCycleStatement, options: StatementViewOptions = {}): StatementView {
   const now = options.now ?? new Date();
   const lookups = options.lookups ?? (options.entries ? { ...NO_LOOKUPS, entriesById: new Map(options.entries.map((e) => [e.id, e])) } : NO_LOOKUPS);

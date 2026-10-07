@@ -124,3 +124,22 @@ export function liabilityTotals(sheet: LoanBalanceSheet, cardOutstanding: number
 export function netWorthWithLoans(accountBalances: number, sheet: LoanBalanceSheet, peopleDirectBalance = 0): number {
   return accountBalances + sheet.lentPrincipal - sheet.borrowedPrincipal - sheet.emiPrincipal - sheet.cardLockedEmiPrincipal + peopleDirectBalance;
 }
+
+/**
+ * Net Worth split into what I own, what I owe and money I hold for people — the Dashboard's
+ * Assets / Debt / Held lines. An unapplied advance a person paid me (`advanceHeld`) is cash I possess,
+ * but neither debt (I don't owe it as a payable) nor wealth (it is not income): it is its own line, so
+ * `assets − debt − heldForPeople === netWorth` and the held cash never disappears from Assets.
+ * People amounts come from `peopleNetWorthPosition` only — never re-derived from ledger rows.
+ */
+export function netWorthComposition(
+  netWorth: number,
+  liabilities: Pick<LiabilityTotals, "total">,
+  people: { payable: number; advanceHeld: number },
+): { assets: number; debt: number; heldForPeople: number } {
+  const debt = round2Sheet(liabilities.total + people.payable);
+  const heldForPeople = round2Sheet(people.advanceHeld);
+  return { assets: round2Sheet(netWorth + debt + heldForPeople), debt, heldForPeople };
+}
+
+const round2Sheet = (v: number) => Math.round(v * 100) / 100;

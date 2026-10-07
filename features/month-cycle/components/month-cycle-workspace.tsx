@@ -720,11 +720,21 @@ export function MonthCycleWorkspace() {
           <PanelHeader
             icon={Users}
             title="People ledger"
-            figure={data.peopleStats.netBalance}
-            figureLabel="Net balance"
-            figureTone={data.peopleStats.netBalance >= 0 ? "text-success" : "text-expense"}
             href="/people"
           />
+          {/* Gross sides + held advance — never one net figure that hides an advance inside "to receive". */}
+          <dl className="grid grid-cols-3 divide-x divide-border-strong/40 border-b border-border-strong/40 text-center">
+            {[
+              { label: "To receive", value: data.peopleSides.totalToReceive, tone: data.peopleSides.totalToReceive > 0 ? "text-success" : "text-foreground" },
+              { label: "To give", value: data.peopleSides.totalToGive, tone: data.peopleSides.totalToGive > 0 ? "text-expense" : "text-foreground" },
+              { label: "Advance held", value: data.peopleSides.advanceHeld, tone: "text-foreground" },
+            ].map((f) => (
+              <div key={f.label} className="px-2 py-2">
+                <dt className="text-[10px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">{f.label}</dt>
+                <dd className={cn("text-sm leading-tight font-bold tabular-nums", f.tone)}>{formatCurrency(f.value)}</dd>
+              </div>
+            ))}
+          </dl>
           {data.peopleYouNeedToGive.length === 0 && data.peopleHandoverPending.length === 0 ? (
             <PanelEmpty title="No pending balances" description="Money you're owed or owe will show up here." />
           ) : (

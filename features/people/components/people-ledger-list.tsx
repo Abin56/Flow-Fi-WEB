@@ -334,7 +334,8 @@ export function CyclePicker({
 /**
  * The selected cycle's totals by direction, GROSS — each person's `toReceive` and `toGive` (engine), never
  * their net. A person who owes me ₹1,000 while I owe them ₹500 adds ₹1,000 to receive AND ₹500 to give
- * (and counts on both sides): the two are settled separately.
+ * (and counts on both sides): the two are settled separately. An unapplied advance a person paid me is
+ * held money — its own total (`advanceBalance`, engine), never added to "to give" or taken off "to receive".
  */
 export function cycleTotals(rows: PeopleLedgerRow[]) {
   let toReceive = 0;
@@ -342,8 +343,15 @@ export function cycleTotals(rows: PeopleLedgerRow[]) {
   let toPay = 0;
   let payCount = 0;
   let activity = 0;
+  let advanceHeld = 0;
+  let advanceHeldCount = 0;
   for (const r of rows) {
     activity += r.statement.rows.length;
+    const adv = r.statement.advanceBalance ?? 0;
+    if (adv < 0) {
+      advanceHeld -= adv;
+      advanceHeldCount += 1;
+    }
     if (r.statement.toReceive > 0) {
       toReceive += r.statement.toReceive;
       receiveCount += 1;
@@ -354,11 +362,11 @@ export function cycleTotals(rows: PeopleLedgerRow[]) {
     }
   }
   const round2 = (v: number) => Math.round(v * 100) / 100;
-  return { toReceive: round2(toReceive), receiveCount, toPay: round2(toPay), payCount, activity };
+  return { toReceive: round2(toReceive), receiveCount, toPay: round2(toPay), payCount, advanceHeld: round2(advanceHeld), advanceHeldCount, activity };
 }
 
 export function PeopleCycleSummary({ rows }: { rows: PeopleLedgerRow[] }) {
-  const { toReceive, receiveCount, toPay, payCount, activity } = cycleTotals(rows);
+  const { toReceive, receiveCount, toPay, payCount, advanceHeld, advanceHeldCount, activity } = cycleTotals(rows);
 
   return (
     <section
@@ -374,7 +382,7 @@ export function PeopleCycleSummary({ rows }: { rows: PeopleLedgerRow[] }) {
             : `Across ${receiveCount} ${receiveCount === 1 ? "person" : "people"}`}
         </span>
       </div>
-      <div className="grid grid-cols-2 border-t border-border sm:w-80 sm:border-t-0 sm:border-l">
+      <div className={cn("grid border-t border-border sm:border-t-0 sm:border-l", advanceHeld > 0 ? "grid-cols-3 sm:w-[30rem]" : "grid-cols-2 sm:w-80")}>
         <div className="flex flex-col gap-1 px-5 py-3.5 sm:justify-center">
           <span className={LABEL}>You need to give</span>
           <Money amount={Math.round(toPay)} className={cn("text-lg leading-none", toPay > 0 ? "text-expense" : "text-muted-foreground")} />
@@ -382,6 +390,16 @@ export function PeopleCycleSummary({ rows }: { rows: PeopleLedgerRow[] }) {
             {payCount === 0 ? "Nothing" : `${payCount} ${payCount === 1 ? "person" : "people"}`}
           </span>
         </div>
+        {advanceHeld > 0 && (
+          // Money people paid ahead, not yet applied — held for them: not owed by them, not owed by you.
+          <div className="flex flex-col gap-1 border-l border-border px-5 py-3.5 sm:justify-center">
+            <span className={LABEL}>Advance held</span>
+            <Money amount={Math.round(advanceHeld)} className="text-lg leading-none text-foreground" />
+            <span className="text-xs text-muted-foreground">
+              Not applied yet · {advanceHeldCount} {advanceHeldCount === 1 ? "person" : "people"}
+            </span>
+          </div>
+        )}
         <div className="flex flex-col gap-1 border-l border-border px-5 py-3.5 sm:justify-center">
           <span className={LABEL}>Activity</span>
           <span className="font-heading text-lg leading-none font-bold text-foreground tabular-nums">{activity}</span>
@@ -544,8 +562,8 @@ function PersonRow({
   const moved = pos.cashReceived > 0 ? pos.cashReceived : pos.cashPaid;
   const movedText = pos.cashReceived > 0 ? money(pos.cashReceived) : pos.cashPaid > 0 ? `Paid ${money(pos.cashPaid)}` : money(0);
   const status = cycleStatus(s, moved);
-  const firstName = row.name.split(" ")[0];
-  const advanceText = pos.advance ? `Advance ${money(pos.advance.amount)} ${pos.advance.from === "them" ? `from ${firstName}` : "paid ahead"}` : null;
+  // Held money, never folded into the amount above: their advance is not something you owe them.
+  const advanceText = pos.advance ? `${pos.advance.from === "them" ? "Advance held" : "Advance paid"} ${money(pos.advance.amount)}` : null;
   const bothSides = s.toReceive > 0 && s.toGive > 0;
 
   return (

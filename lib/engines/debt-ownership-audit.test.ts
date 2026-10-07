@@ -114,33 +114,44 @@ describe("6 — Σ ownership parts === installment, to the paisa", () => {
 
 // ═══════════════════════ 3. card netting ═══════════════════════
 
-describe("3 — card ownership netting (current rule, documented — NOT changed)", () => {
+describe("3 — card ownership: gross attribution, People offset kept separate", () => {
   const ammaCard = [{ facilityId: "card", personId: "amma", name: "AMMA", unrecovered: 8_000, dueDate: d(9, 1) }];
 
-  it("AMMA card share ₹8,000, I separately owe AMMA ₹5,000 → card attributes ₹3,000 to AMMA (net), ₹5,000 to me", () => {
-    // People: +8,000 (her card share) − 5,000 (I owe her) → directBalance +3,000 → recoverable 3,000.
+  /**
+   * Approved contract. This test previously pinned the NET rule through the legacy path
+   * (`max(directBalance, 0)` → AMMA ₹3,000). The planner reads GROSS sides (`personDirectGross`): AMMA's
+   * ₹8,000 card attribution stays ₹8,000 and the ₹5,000 I owe her is its own People position.
+   */
+  it("AMMA card share ₹8,000, I separately owe AMMA ₹5,000 → card attributes ₹8,000 to AMMA; ₹5,000 is a separate People debt", () => {
+    const entries = [
+      { id: "g", type: "gave" as const, amount: 8_000, parentEntryId: null, transactionRef: "purchase", isDeleted: false },
+      { id: "b", type: "borrowed" as const, amount: 5_000, parentEntryId: null, transactionRef: null, isDeleted: false },
+    ];
     const pos = personPosition({ personId: "amma", currentBalance: 3_000, loans: [], ledgerEntries: [], loanIds: new Set() });
-    const byFacility = cardPurchaseShares(ammaCard, { amma: Math.max(pos.directBalance, 0) });
+    const gross = personDirectGross(pos, entries, new Set()); // = use-debt-planner-data
+    const byFacility = cardPurchaseShares(ammaCard, { amma: gross.receivable });
+    const amma = personInput({ personId: "amma", name: "AMMA", directBalance: pos.directBalance, directToGive: gross.payable, directToReceive: gross.receivable });
     const snap = buildDebtSnapshot({
       loans: [],
       emis: [],
       cards: [cardInput({ id: "card", outstanding: 8_000, purchaseShares: byFacility.card })],
-      people: [personInput({ personId: "amma", name: "AMMA", directBalance: pos.directBalance })],
+      people: [amma],
       personNames: names,
       now: NOW,
     });
-    // Liability is untouched — the issuer is owed the full ₹8,000.
-    expect(snap.total).toBe(8_000);
-    // The ₹5,000 I owe AMMA is NOT a separate planner position (People nets it against what she owes me)…
-    expect(personDirectPayable(personInput({ personId: "amma", name: "AMMA", directBalance: pos.directBalance }))).toBe(0);
-    // …so it is carried inside the card's "mine": My debt = ₹5,000 = exactly what I owe net.
-    expect(snap.ownership).toMatchObject({ mine: 5_000, others: 3_000 });
-    // Gross facts are NOT stored on the position: AMMA's ₹8,000 card share and my ₹5,000 debt to her are
-    // only recoverable from the People ledger, not from DebtPosition.ownership.
-    expect(snap.positions[0].ownership.others).toEqual([{ personId: "amma", name: "AMMA", amount: 3_000 }]);
+    const card = snap.positions.find((p) => p.sourceType === "creditCard")!;
+    // The issuer is still owed the full ₹8,000 — attribution never changes the card amount.
+    expect(card.outstanding).toBe(8_000);
+    // Gross card attribution: AMMA ₹8,000.
+    expect(card.ownership.others).toEqual([{ personId: "amma", name: "AMMA", amount: 8_000 }]);
+    // Separate People offset: I owe AMMA ₹5,000 — its own position.
+    expect(personDirectPayable(amma)).toBe(5_000);
+    // My debt = ₹5,000, exactly what I owe; net economic position with AMMA = ₹3,000 (pos.net).
+    expect(snap.ownership).toMatchObject({ mine: 5_000, others: 8_000 });
+    expect(pos.net).toBe(3_000);
   });
 
-  it("gross alternative (what would double count): attributing the full ₹8,000 AND netting the ₹5,000 makes My debt ₹0 while I really owe ₹5,000", () => {
+  it("what must NOT be done (double count): attributing the full ₹8,000 AND netting the ₹5,000 away makes My debt ₹0 while I really owe ₹5,000", () => {
     const gross = buildDebtSnapshot({
       loans: [],
       emis: [],

@@ -18,6 +18,7 @@ import { statementWithLiveTotal, type CreditCardProfile, type Statement } from "
 import type { Transaction } from "@/lib/models/transaction";
 import {
   cardPaymentTotal,
+  cardStatementAmount,
   countsTowardCardStatement,
   settleCardPayments,
   statementPeriodTotal,
@@ -77,7 +78,7 @@ export function cardBillsForCard(
       remaining: 0,
       isClosed: dayIndex(s.periodEnd) < today,
       minimumDue: s.minimumDue ?? null,
-      chargeIds: cardTransactions.filter((t) => countsTowardCardStatement(t) && containsDay(s, t.dateTime)).map((t) => t.id),
+      chargeIds: cardTransactions.filter((t) => countsTowardCardStatement(t) && t.type === "expense" && containsDay(s, t.dateTime)).map((t) => t.id),
     };
   });
 
@@ -90,8 +91,8 @@ export function cardBillsForCard(
     const key = dayIndex(window.periodEnd);
     const existing = derived.get(key);
     if (existing) {
-      existing.totalAmount += t.amount;
-      existing.chargeIds.push(t.id);
+      existing.totalAmount += cardStatementAmount(t);
+      if (t.type === "expense") existing.chargeIds.push(t.id);
       continue;
     }
     derived.set(key, {
@@ -101,12 +102,12 @@ export function cardBillsForCard(
       periodStart: window.periodStart,
       periodEnd: window.periodEnd,
       dueDate: window.dueDate,
-      totalAmount: t.amount,
+      totalAmount: cardStatementAmount(t),
       amountPaid: 0,
       remaining: 0,
       isClosed: key < today,
       minimumDue: null,
-      chargeIds: [t.id],
+      chargeIds: t.type === "expense" ? [t.id] : [],
     });
   }
   bills.push(...derived.values());

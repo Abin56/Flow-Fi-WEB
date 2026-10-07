@@ -35,7 +35,7 @@ import { outstandingPrincipalAfterPrepaymentsFor, principalPrepaidFor } from "@/
 import { emiReceivableThrough, personEmiObligations } from "@/lib/engines/person-emi-obligations";
 import { allocatePayment, advanceRemaining, planAdvanceApplication } from "@/lib/engines/person-payment";
 import { buildPersonCycleStatement, type StatementCycle } from "@/lib/engines/person-cycle-statement";
-import { breakdownEntryOf, peopleNetWorthPosition, personPosition, type PersonPosition } from "@/lib/engines/person-position";
+import { breakdownEntryOf, peopleNetWorthPosition, personDirectGross, personPosition, type PersonPosition } from "@/lib/engines/person-position";
 import { buildLedgerRows } from "@/features/people/lib/person-ledger-rows";
 import { advanceSources, payableObligations, paymentLines } from "@/features/people/lib/person-payment-obligations";
 import { accountFromFirestore, accountToFirestore } from "@/lib/models/account";
@@ -249,10 +249,13 @@ async function netWorth(w: World, now: Date) {
   const loan = await loanNow(w);
   const sheet = loanBalanceSheet(loan.deletedAt == null ? [{ direction: loan.direction, outstandingPrincipal: await outstanding(w) }] : [], []);
   const people = peopleNetWorthPosition(
-    [
-      { position: await position(w, w.aId, now), entries: (await ledgerEntries(w, w.aId)).map(breakdownEntryOf) },
-      { position: await position(w, w.bId, now), entries: (await ledgerEntries(w, w.bId)).map(breakdownEntryOf) },
-    ],
+    await Promise.all(
+      [w.aId, w.bId].map(async (id) => ({
+        position: await position(w, id, now),
+        entries: (await ledgerEntries(w, id)).map(breakdownEntryOf),
+        advanceApplications: await applications(w, id),
+      })),
+    ),
     new Set([loan.id]),
   );
   return {
@@ -260,6 +263,7 @@ async function netWorth(w: World, now: Date) {
     sheet,
     peoplePayable: people.payable,
     peopleReceivable: people.receivable,
+    peopleAdvanceHeld: people.advanceHeld,
   };
 }
 /** Month Cycle's income: the hook drops loan-principal disbursements and People cash legs before `amountFor("income")`. */
@@ -535,12 +539,24 @@ describe("7 — partial payments ₹500 → ₹200 → ₹200 on a ₹900 share"
     const shareOf = async () => (await shareRow(w, w.aId, 1, FEB_15))!;
     expect((await shareOf()).remaining).toBe(900);
 
+    // Net Worth / Dashboard components at each step: A's receivable shrinks, nothing becomes payable, B's
+    // ₹900 stays, Net Worth never moves (cash +x, receivable −x).
+    const components = async () => {
+      const nw = await netWorth(w, FEB_15);
+      return [nw.peopleReceivable, nw.peoplePayable, nw.peopleAdvanceHeld, nw.netWorth];
+    };
+    const nw0 = (await netWorth(w, FEB_15)).netWorth;
+    expect(await components()).toEqual([1_800, 0, 0, nw0]);
     const p1 = await personPays(w, w.aId, 500, FEB_12);
     expect([(await shareOf()).remaining, await cash(w)]).toEqual([400, base + 500]);
+    expect(await components()).toEqual([1_300, 0, 0, nw0]); // A ₹400 + B ₹900 — never ₹400 receivable + ₹500 payable
     await personPays(w, w.aId, 200, FEB_12);
     expect([(await shareOf()).remaining, await cash(w)]).toEqual([200, base + 700]);
+    expect(await components()).toEqual([1_100, 0, 0, nw0]);
     await personPays(w, w.aId, 200, FEB_12);
     expect([(await shareOf()).remaining, (await shareOf()).state, await cash(w)]).toEqual([0, "settled", base + 900]);
+    expect(await components()).toEqual([900, 0, 0, nw0]);
+    expect((await position(w, w.aId, FEB_15)).iOwe).toBe(0);
 
     expect(await monthCycleIncome(w)).toBe(0);
     expect((await liveInstallments(w))[0].amountPaid).toBe(0); // lender installment not paid
@@ -551,6 +567,7 @@ describe("7 — partial payments ₹500 → ₹200 → ₹200 on a ₹900 share"
     // Reversible: undo the first ₹500 → ₹500 owed again, cash back.
     await w.personPayments(w.aId).revertPayment((await w.people.getByKey(w.aId))!, p1.paymentId);
     expect([(await shareOf()).remaining, await cash(w)]).toEqual([500, base + 400]);
+    expect(await components()).toEqual([1_400, 0, 0, nw0]);
   });
 });
 
@@ -565,10 +582,16 @@ describe("8 — overpayment follows the existing advance policy", () => {
     expect(await monthCycleIncome(w)).toBe(0); // advance is never income
     const st = await statement(w, w.aId, FEB_15);
     expect([st.currentPending, st.advanceBalance]).toEqual([0, -300]);
+    // The ₹300 is held for A: not a payable (no "You owe A"), not income, not a receivable.
+    let nw = await netWorth(w, FEB_15);
+    expect([nw.peopleReceivable, nw.peoplePayable, nw.peopleAdvanceHeld]).toEqual([900, 0, 300]); // B's ₹900 only
 
     // March: installment #2 share ₹900 due. The advance is NOT consumed on its own…
     const MAR_15 = new Date(2026, 2, 15);
     expect((await statement(w, w.aId, MAR_15)).currentPending).toBe(900);
+    nw = await netWorth(w, MAR_15);
+    expect([nw.peopleReceivable, nw.peoplePayable, nw.peopleAdvanceHeld]).toEqual([900 + 1_800, 0, 300]); // A ₹900 + B ₹1,800
+    const nwBeforeApply = nw.netWorth;
     // …only when applied (existing policy).
     const entries = await ledgerEntries(w, w.aId);
     const inst2 = (await liveInstallments(w))[1];
@@ -582,8 +605,48 @@ describe("8 — overpayment follows the existing advance policy", () => {
     await w.personPayments(w.aId).applyAdvance((await w.people.getByKey(w.aId))!, { targets: plan.targets, date: MAR_15 });
     const mar = await statement(w, w.aId, MAR_15);
     expect([mar.currentPending, mar.advanceBalance]).toEqual([600, 0]);
+    nw = await netWorth(w, MAR_15);
+    expect([nw.peopleReceivable, nw.peoplePayable, nw.peopleAdvanceHeld, nw.netWorth]).toEqual([600 + 1_800, 0, 0, nwBeforeApply]); // applying moves no wealth
     expect(await cash(w)).toBe(base + 1_200); // applying moves no money
     expect((await liveInstallments(w))[1].amountPaid).toBe(0); // lender untouched
+  });
+});
+
+// ═══════════════ F2. Card attribution vs loan-share reimbursement ═══════════════
+
+describe("F2 — a loan-share reimbursement never shrinks the person's unrelated receivables", () => {
+  it("A owes ₹8,000 directly (e.g. card purchases) and reimburses their ₹1,000 loan share → ₹8,000 still attributable, no payable", async () => {
+    const w = await world();
+    await w.ledgerFor(w.aId).addEntry((await w.people.getByKey(w.aId))!, { type: "gave", amount: 8_000, date: FEB_12, sourceKind: "assignedExpense", transactionRef: "card-purchase" });
+    await personPays(w, w.aId, 1_000, FEB_12); // oldest first: the share (due Feb 10) before the ₹8,000 (Feb 12)
+    const entries = (await ledgerEntries(w, w.aId)).map(breakdownEntryOf);
+    const pos = await position(w, w.aId, FEB_15);
+    const gross = personDirectGross(pos, entries, new Set([w.loanId]), await applications(w, w.aId)); // = use-debt-planner-data
+    // Whatever Record Payment's oldest-first allocation settled, A's total open is ₹8,000 and nothing is payable.
+    expect(gross.receivable + gross.emiReceivableOpen).toBe(8_000);
+    expect(gross.payable).toBe(0);
+    expect((await liveInstallments(w))[0].amountPaid).toBe(0); // not a lender payment
+    expect(await monthCycleIncome(w)).toBe(0); // not income
+  });
+
+  it("reimbursing ONLY the loan share leaves the ₹8,000 card attribution intact", async () => {
+    const w = await world();
+    await w.ledgerFor(w.aId).addEntry((await w.people.getByKey(w.aId))!, { type: "gave", amount: 8_000, date: FEB_12, sourceKind: "assignedExpense", transactionRef: "card-purchase" });
+    const obligations = payableObligations(await rows(w, w.aId, FEB_12)).filter((o) => o.side === "theyOwe" && o.key.startsWith("loan-inst:"));
+    const alloc = allocatePayment({ obligations, selectedKeys: obligations.map((o) => o.key), amount: 1_000 });
+    await w.personPayments(w.aId).recordPayment((await w.people.getByKey(w.aId)) as Person, {
+      direction: "theyPaid",
+      amount: 1_000,
+      date: FEB_12,
+      accountId: w.accountId,
+      lines: paymentLines(obligations, alloc.lines),
+      extra: null,
+    });
+    const gross = personDirectGross(await position(w, w.aId, FEB_15), (await ledgerEntries(w, w.aId)).map(breakdownEntryOf), new Set([w.loanId]));
+    expect(gross).toEqual({ receivable: 8_000, payable: 0, emiReceivableOpen: 0, advanceHeld: 0, advancePaid: 0 });
+    const nw = await netWorth(w, FEB_15);
+    expect([nw.peopleReceivable, nw.peoplePayable]).toEqual([8_000 + 1_000, 0]); // A's ₹8,000 + B's share
+    expect(await cash(w)).toBe(36_000); // the ₹1,000 moved once
   });
 });
 

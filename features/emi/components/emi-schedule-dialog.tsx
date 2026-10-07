@@ -6,6 +6,7 @@ import { ClayButton } from "@/components/clay/clay-button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { formatCurrency } from "@/lib/format";
 import { remainingAmount, type Installment } from "@/lib/models/payment-schedule";
+import { installmentProgress } from "@/lib/engines/installment-progress";
 import { InstallmentList, PaymentHistoryList } from "@/features/loans/components/payment-rows";
 import type { RecordedPaymentAction } from "@/features/loans/lib/recorded-payments";
 import type { EmiRow } from "@/features/emi/hooks/use-emi-data";
@@ -95,6 +96,7 @@ export function EmiScheduleDialog({ open, onOpenChange, row, onDelete, onRecordP
               amount={row.remainingBalance}
               paid={row.installmentsPaid}
               total={row.emi.installmentCount}
+              partial={installmentProgress(row.installments).partial}
               badges={emiBadges(row)}
             />
 

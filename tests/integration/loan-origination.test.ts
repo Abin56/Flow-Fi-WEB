@@ -201,7 +201,7 @@ describe("Money I Borrowed", () => {
     const [txn] = txns;
     expect(txn.id).toBe("orig_borrow-move-01_txn");
     expect([txn.type, txn.amount, txn.accountId, txn.paymentAllocationType, txn.excludeFromCalculations]).toEqual(["income", 50000, hdfc.id, "additionalDisbursement", false]);
-    expect(loanTransactionLabel(txn, result.loan)).toBe("Loan Received — Home renovation");
+    expect(loanTransactionLabel(txn, result.loan)).toBe("Loan I Took — Home renovation");
 
     // Visible in Transactions (it is a real document), but not income: Cash Flow / Dashboard / Reports
     // all derive income from `cashFlowThisMonth` over `isNonIncomeExpenseMovement`.
@@ -250,7 +250,7 @@ describe("Money I Lent", () => {
     const txns = await s.loanTransactions(result.loan.id);
     expect(txns.map((t) => [t.type, t.amount, t.paymentAllocationType])).toEqual([["expense", 25000, "additionalDisbursement"]]);
     expect(cashFlowFor(txns, LOAN_DATE).moneyOut).toBe(0);
-    expect(loanTransactionLabel(txns[0], result.loan)).toBe("Money Lent — Rahul");
+    expect(loanTransactionLabel(txns[0], result.loan)).toBe("Loan I Gave — Rahul");
     // Person linkage only — no Person document/ledger was written by the origination.
     expect((await getDocs(collection(s.db, "users", UID, "people"))).size).toBe(0);
   });

@@ -69,6 +69,10 @@ import {
   type CreditCardViewItem,
 } from "@/features/credit-cards/hooks/use-credit-cards-data";
 import { CARD_GRADIENT, CreditCardTile } from "@/features/credit-cards/components/credit-card-tile";
+import { useAuthStore } from "@/store/auth-store";
+import { fetchCardBillState } from "@/lib/repositories/repository-factory";
+import type { CardBillState } from "@/lib/repositories/card-bill-people-gate";
+import { useStoredStatementTotalRepair } from "@/features/credit-cards/hooks/use-stored-statement-total-repair";
 import { TransactionDetailsModal } from "@/features/transactions/components/transaction-details-modal";
 import { useTransactionActions, useTransactionRows } from "@/features/transactions/hooks/use-transactions-data";
 import { usePeople } from "@/hooks/use-people";
@@ -220,6 +224,8 @@ export function CreditCardsWorkspace() {
   const { data: people = [] } = usePeople();
   const { rows: transactionRows, accounts: txnAccounts, categories: txnCategories } = useTransactionRows();
   const transactionActions = useTransactionActions();
+  // One-time repair of stored statement totals written by the old credit-as-charge formula (writes only when provably affected).
+  useStoredStatementTotalRepair();
   const [payCard, setPayCard] = useState<CreditCardViewItem | null>(null);
   // Pay bill defaults to what the CLOSED statements still owe (card statement cycle); paying the whole
   // outstanding is a separate, explicit choice.
@@ -231,6 +237,22 @@ export function CreditCardsWorkspace() {
   // The card Pay bill is currently paying — the dialog's To account (starts as `payCard`, follows a change).
   const [payDestAccountId, setPayDestAccountId] = useState<string | null>(null);
   const payDestCard = payCard ? (creditCards.find((c) => c.card.accountId === (payDestAccountId ?? payCard.card.accountId)) ?? null) : null;
+  // "Refresh bill" result — an authoritative Firestore read (`fetchCardBillState`) of the To card's bill,
+  // shown in the dialog in place of the live-feed figures until the dialog closes or the To card changes.
+  const uid = useAuthStore((s) => s.user?.uid);
+  const [freshPay, setFreshPay] = useState<{ accountId: string; state: CardBillState } | null>(null);
+  const freshPayState = payDestCard && freshPay?.accountId === payDestCard.card.accountId ? freshPay.state : null;
+  const payDestScope = freshPayState?.scope ?? (payDestCard ? payScopeOf(payDestCard) : null);
+  async function refreshPayBill(accountId: string) {
+    if (!uid) throw new Error("Not signed in");
+    const state = await fetchCardBillState(uid, accountId);
+    if (state == null) return null;
+    setFreshPay({ accountId, state });
+    const current = state.scope.current;
+    return current ? { accountId, statementId: current.id, remaining: current.remaining } : null;
+  }
+  // The statement normal Pay Now is paying (the dialog snapshots it per payment action).
+  const payCurrentStatement = payDestScope?.current ?? null;
   // Card bill: people's shares of charges this card still carries — they must be settled before Pay bill completes.
   const { readiness: payCardPeople, readinessFor: payCardPeopleFor, isLoading: payCardPeopleLoading } = useLinkedPeopleReadiness(
     // This physical card's own bill — a shared facility's pooled total belongs to its sibling cards too.
@@ -1509,6 +1531,7 @@ export function CreditCardsWorkspace() {
             if (open) return;
             setPayCard(null);
             setPayDestAccountId(null);
+            setFreshPay(null);
           }}
           row={null}
           expense={null}
@@ -1519,15 +1542,24 @@ export function CreditCardsWorkspace() {
           defaultKind="transfer"
           initialDestinationAccountId={payCard?.card.accountId}
           initialAmount={payCard ? payBillAmount(payScopeOf(payCard), payChoice, payCard.ownUsage) : undefined}
-          onDestinationAccountChange={setPayDestAccountId}
+          onDestinationAccountChange={(id) => {
+            setPayDestAccountId(id);
+            setFreshPay(null);
+          }}
+          onRefreshBill={refreshPayBill}
+          statementIntent={
+            payDestCard && payCurrentStatement
+              ? { accountId: payDestCard.card.accountId, statementId: payCurrentStatement.id, remaining: payCurrentStatement.remaining }
+              : null
+          }
           paymentScope={
             payDestCard
               ? {
                   accountId: payDestCard.card.accountId,
                   content: (
                     <PayBillDialogScope
-                      scope={payScopeOf(payDestCard)}
-                      ownOutstanding={payDestCard.ownUsage}
+                      scope={payDestScope ?? payScopeOf(payDestCard)}
+                      ownOutstanding={freshPayState ? freshPayState.scope.cardOutstanding : payDestCard.ownUsage}
                       // The choice made outside belongs to the card it was made on; a switched To card reads as a statement payment.
                       choice={payDestCard.id === payCard?.id ? payChoice : "statement"}
                     />
@@ -1539,13 +1571,16 @@ export function CreditCardsWorkspace() {
             payDestCard
               ? {
                   accountId: payDestCard.card.accountId,
-                  readiness: payCardPeople,
+                  // After Refresh: People readiness recomputed from the freshly read scope (its charge ids).
+                  readiness: freshPayState ? freshPayState.readinessFor(freshPayState.scope.cardOutstanding) : payCardPeople,
                   // Only the current bill's own charges gate an amount within that bill (by transaction id);
                   // paying beyond it (explicit full outstanding) falls back to oldest-first reach.
-                  readinessFor: payCardPeopleFor
-                    ? (amount: number) => payCardPeopleFor(amount, payBillChargeScope(payScopeOf(payDestCard), amount))
-                    : null,
-                  loading: payCardPeopleLoading,
+                  readinessFor: freshPayState
+                    ? freshPayState.readinessFor
+                    : payCardPeopleFor
+                      ? (amount: number) => payCardPeopleFor(amount, payBillChargeScope(payScopeOf(payDestCard), amount))
+                      : null,
+                  loading: freshPayState ? false : payCardPeopleLoading,
                   payeeName: payDestCard.name,
                   returnTo: `/credit-cards?card=${encodeURIComponent(payDestCard.id)}&pay=1`,
                 }

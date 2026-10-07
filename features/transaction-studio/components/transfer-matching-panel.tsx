@@ -9,6 +9,7 @@ import { useAccounts } from "@/hooks/use-accounts";
 import { useTransactions } from "@/hooks/use-transactions";
 import { createAccountRepository, createTransactionRepository } from "@/lib/repositories/repository-factory";
 import { useAuthStore } from "@/store/auth-store";
+import { withErrorToast } from "@/features/transactions/lib/error-toast";
 
 const DATE_FORMAT = new Intl.DateTimeFormat("en-IN", { day: "numeric", month: "short", year: "numeric" });
 
@@ -56,7 +57,17 @@ export function useTransferMatches() {
     try {
       const accountRepository = createAccountRepository(uid);
       const transactionRepository = createTransactionRepository(uid, accountRepository);
-      await transactionRepository.linkTransferPair(outflow, inflow);
+      // Linking two existing records reconstructs a transfer that already happened (into a card: a bill
+      // payment already made at the bank). The reviewer's per-pair confirmation is that acknowledgement —
+      // People obligations stay open, nothing is settled or moved.
+      await withErrorToast(
+        () =>
+          transactionRepository.linkTransferPair(outflow, inflow, {
+            acknowledgedUnsettledPeople: true,
+            reason: `Matched existing records ${outflow.id} → ${inflow.id} in Transaction Studio`,
+          }),
+        "Couldn't link these transactions",
+      ).catch(() => {});
       // No manual list update needed — the live `useTransactions()` listener picks up the new
       // `transferId` and this pair naturally drops out of `visibleMatches` on the next render.
     } finally {

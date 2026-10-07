@@ -15,7 +15,6 @@ import {
   runTransaction,
   type Transaction as FirestoreTransaction,
   where,
-  writeBatch,
 } from "firebase/firestore";
 import { FirestoreCrudRepository } from "@/lib/firestore/firestore-crud-repository";
 import { recordEdit, updateField } from "@/lib/firestore/soft-deletable";
@@ -38,7 +37,7 @@ import {
 import { generateId } from "@/lib/utils/id-generator";
 import type { Account } from "@/lib/models/account";
 import type { AccountRepository } from "./account-repository";
-import { hasPeopleGateAcknowledgement, type UnsettledPeopleAcknowledgement } from "@/lib/engines/linked-people-readiness";
+import { hasPeopleGateAcknowledgement, PeopleSettlementPendingError, type UnsettledPeopleAcknowledgement } from "@/lib/engines/linked-people-readiness";
 
 /** Fresh reads for {@link TransactionRepository.writeSoftDeleteMany} — see {@link TransactionRepository.readSoftDeleteMany}. */
 export interface PreparedSoftDelete {
@@ -137,6 +136,38 @@ export class LoanPaymentTransactionRestrictedError extends Error {
   }
 }
 
+/**
+ * A normal Pay Now was made against one statement (`CardStatementIntent`), but by Save time that
+ * statement is no longer the one a payment settles first, or no longer owes this much — e.g. another tab
+ * already paid it. Recording the amount anyway would silently spill into the NEXT statement; refused.
+ */
+export class CardStatementChangedError extends Error {
+  constructor() {
+    super("This bill changed since you opened it (it may already be partly or fully paid). Refresh the bill to review what's due now — nothing was paid.");
+    this.name = "CardStatementChangedError";
+  }
+}
+
+/**
+ * A retry of a transfer action (same `idempotencyKey`) whose amount, accounts or date differ from what
+ * that action already saved — the earlier attempt went through. Returning the stored transfer would make
+ * the edited values look saved; recording a second one would duplicate it. Refused either way.
+ */
+export class TransferRetryMismatchError extends Error {
+  constructor(saved: Pick<Transaction, "amount">) {
+    super(
+      `This transfer was already saved as ₹${saved.amount.toLocaleString("en-IN", { maximumFractionDigits: 2 })}. Close this dialog and check your transactions before changing it.`,
+    );
+    this.name = "TransferRetryMismatchError";
+  }
+}
+
+/** Normal Pay Now's scope: the ONE statement the dialog was paying, as `cardStatementPaymentScope` named it. */
+export interface CardStatementIntent {
+  /** `CardBill.id` of the statement normal Pay Now was paying. */
+  statementId: string;
+}
+
 export interface EditTransactionParams {
   type?: TransactionType;
   amount?: number;
@@ -168,7 +199,10 @@ export interface EditTransactionParams {
  * The card-bill People settlement check (`assertCardBillPeopleSettled`), run inside a write's Firestore
  * transaction after its account reads and before any write. Throws to refuse; never writes.
  */
-export type CardPaymentGuard = (tx: FirestoreTransaction, payment: { cardAccount: Account; amount: number }) => Promise<void>;
+export type CardPaymentGuard = (
+  tx: FirestoreTransaction,
+  payment: { cardAccount: Account; amount: number; statementIntent?: CardStatementIntent | null },
+) => Promise<void>;
 
 /** Parameters every transfer-pair write takes. */
 export interface TransferPairParams {
@@ -196,6 +230,13 @@ export interface TransferPairParams {
    * gate is not a precondition for recording a historical fact; People obligations stay open either way.
    */
   peopleGateAcknowledgement?: UnsettledPeopleAcknowledgement | null;
+  /**
+   * Normal Pay Now only: the statement it pays. Re-checked against CURRENT state in the write — if that
+   * statement is no longer the oldest unpaid one or owes less than `amount`, the write is refused
+   * (`CardStatementChangedError`) instead of spilling into the next statement. Omitted for an explicit
+   * full-outstanding / beyond-statement payment and for an ordinary Add Transfer.
+   */
+  cardStatementIntent?: CardStatementIntent | null;
 }
 
 const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
@@ -212,6 +253,12 @@ function isCardPaymentLeg(leg: Pick<Transaction, "type" | "transferId">, account
   return account.type === "card" && leg.type === "income" && leg.transferId != null;
 }
 
+/**
+ * Low-level CRUD: the inherited `add` / `update` / `restore` / `softDelete` write a document as-is — no
+ * balance effect, no card People gate, no statement-intent check. No application flow calls them on
+ * transactions (only tests); every app write goes through the methods below. Never use them to record,
+ * edit or restore a card payment.
+ */
 export class TransactionRepository extends FirestoreCrudRepository<Transaction> {
   /**
    * The card-bill People gate every card-payment write enforces (create, restore). Installed by
@@ -237,10 +284,22 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
     leg: Pick<Transaction, "type" | "transferId" | "amount">,
     account: Account,
     acknowledgement?: UnsettledPeopleAcknowledgement | null,
+    statementIntent?: CardStatementIntent | null,
   ): Promise<void> {
     if (this.cardPaymentGuard == null || !isCardPaymentLeg(leg, account)) return;
     if (hasPeopleGateAcknowledgement(acknowledgement)) return;
-    await this.cardPaymentGuard(tx, { cardAccount: account, amount: leg.amount });
+    await this.cardPaymentGuard(tx, { cardAccount: account, amount: leg.amount, statementIntent });
+  }
+
+  /**
+   * The card payment rule for a caller that builds its own transfer pair inside its own transaction
+   * (Purpose money → card): reads the card account in `tx` and runs the same guard a Pay bill write
+   * does. Call before any write in `tx`. No-op when `cardAccountId` isn't a card.
+   */
+  async assertCardPaymentAllowedInTransaction(tx: FirestoreTransaction, cardAccountId: string, amount: number): Promise<void> {
+    const snap = await tx.get(this.accountRepository.docRef(cardAccountId));
+    if (!snap.exists()) throw new Error("Account not found");
+    await this.guardCardPayment(tx, { type: "income", transferId: "pending", amount }, snap.data());
   }
 
   /**
@@ -359,14 +418,24 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
       if (ids) {
         // Already recorded by this same action → return it; nothing is written twice.
         const [outSnap, inSnap] = [await tx.get(sourceLegRef), await tx.get(destinationLegRef)];
-        if (outSnap.exists() && inSnap.exists()) return [outSnap.data(), inSnap.data()];
+        if (outSnap.exists() && inSnap.exists()) {
+          const [out, inn] = [outSnap.data(), inSnap.data()];
+          // Only the SAME operation is returned; edited amount / accounts / date after an uncertain save is refused.
+          const same =
+            Math.abs(out.amount - params.amount) < 0.005 &&
+            out.accountId === params.sourceAccountId &&
+            inn.accountId === params.destinationAccountId &&
+            out.dateTime.getTime() === params.dateTime.getTime();
+          if (!same) throw new TransferRetryMismatchError(out);
+          return [out, inn];
+        }
       }
       const sourceRef = this.accountRepository.docRef(params.sourceAccountId);
       const destinationRef = this.accountRepository.docRef(params.destinationAccountId);
       const sourceSnap = await tx.get(sourceRef);
       const destinationSnap = await tx.get(destinationRef);
       if (!sourceSnap.exists() || !destinationSnap.exists()) throw new Error("Account not found");
-      await this.guardCardPayment(tx, destinationLeg, destinationSnap.data(), params.peopleGateAcknowledgement);
+      await this.guardCardPayment(tx, destinationLeg, destinationSnap.data(), params.peopleGateAcknowledgement, params.cardStatementIntent);
       tx.set(sourceRef, this.accountRepository.applyBalanceDelta(sourceSnap.data(), balanceEffect(sourceLeg)));
       tx.set(destinationRef, this.accountRepository.applyBalanceDelta(destinationSnap.data(), balanceEffect(destinationLeg)));
       tx.set(sourceLegRef, sourceLeg);
@@ -869,19 +938,41 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
    * Studio's Transfer Matching panel) calls for one candidate pair at a time. Same idempotency/
    * atomicity guarantees as the batch path: both legs land together or neither does.
    */
-  async linkTransferPair(outflow: Transaction, inflow: Transaction): Promise<void> {
+  async linkTransferPair(
+    outflow: Transaction,
+    inflow: Transaction,
+    /**
+     * Linking a credit INTO A CARD makes it count as a bill payment (it settles statements oldest-first) —
+     * a historical card payment being reconstructed, like an import. Without this explicit, reasoned
+     * acknowledgement the card People gate applies; with it, People obligations simply stay open.
+     */
+    peopleGateAcknowledgement: UnsettledPeopleAcknowledgement | null = null,
+  ): Promise<void> {
     const transferId = generateId();
     const now = new Date();
+    const outRef = doc(this.collection, outflow.id);
+    const inRef = doc(this.collection, inflow.id);
 
-    let updatedOutflow = recordEdit(outflow, "transferId", "none", transferId);
-    updatedOutflow = { ...updatedOutflow, transferId, transferMatchedAt: now };
-    let updatedInflow = recordEdit(inflow, "transferId", "none", transferId);
-    updatedInflow = { ...updatedInflow, transferId, transferMatchedAt: now };
-
-    const batch = writeBatch(this.collection.firestore);
-    batch.set(doc(this.collection, outflow.id), updatedOutflow);
-    batch.set(doc(this.collection, inflow.id), updatedInflow);
-    await batch.commit();
+    // Linking only reclassifies two records that already moved their accounts — it never moves money.
+    // So it writes the CURRENT documents (never the caller's possibly stale copies, which could revive a
+    // trashed leg without its balance effect or undo a concurrent edit) and only while both are still
+    // live, unlinked, and unchanged in amount / account since they were matched.
+    await runTransaction(this.collection.firestore, async (tx) => {
+      const [outSnap, inSnap] = [await tx.get(outRef), await tx.get(inRef)];
+      if (!outSnap.exists() || !inSnap.exists()) throw new Error("One of these transactions no longer exists.");
+      const [out, inn] = [outSnap.data(), inSnap.data()];
+      if (out.deletedAt != null || inn.deletedAt != null) throw new Error("One of these transactions was deleted.");
+      if (out.transferId != null || inn.transferId != null) throw new Error("One of these transactions is already linked.");
+      const changed = (fresh: Transaction, matched: Transaction) => fresh.amount !== matched.amount || fresh.accountId !== matched.accountId || fresh.type !== matched.type;
+      if (out.type !== "expense" || inn.type !== "income" || changed(out, outflow) || changed(inn, inflow)) {
+        throw new Error("These transactions no longer match.");
+      }
+      const inAccountSnap = await tx.get(this.accountRepository.docRef(inn.accountId));
+      if (!inAccountSnap.exists()) throw new Error("Account not found");
+      await this.guardCardPayment(tx, { ...inn, transferId }, inAccountSnap.data(), peopleGateAcknowledgement);
+      tx.set(outRef, { ...recordEdit(out, "transferId", "none", transferId), transferId, transferMatchedAt: now });
+      tx.set(inRef, { ...recordEdit(inn, "transferId", "none", transferId), transferId, transferMatchedAt: now });
+    });
   }
 
   /** Every transaction referencing this account, active and trashed alike — the full set the
@@ -892,7 +983,17 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
     return snapshot.docs.map((d) => d.data());
   }
 
-  async reconcileTransfers(config: ReconciliationConfig = DEFAULT_RECONCILIATION_CONFIG): Promise<ReconciliationResult> {
+  /**
+   * No app caller today (Transaction Studio links one confirmed pair at a time via `linkTransferPair`).
+   * Every pair goes through `linkTransferPair`, so a pair INTO A CARD (which becomes a bill payment) is
+   * gated by the card People check unless the caller passes the same explicit historical acknowledgement
+   * import / Match & Link use. A refused pair is skipped and reported in `refused` — never linked, nothing
+   * moved; the other pairs still link. Linking never moves account balances.
+   */
+  async reconcileTransfers(
+    config: ReconciliationConfig = DEFAULT_RECONCILIATION_CONFIG,
+    peopleGateAcknowledgement: UnsettledPeopleAcknowledgement | null = null,
+  ): Promise<ReconciliationResult & { refused: { outflowId: string; inflowId: string; error: PeopleSettlementPendingError }[] }> {
     const all = await this.getAll();
     const outflows = all.filter((t) => t.type === "expense" && t.transferId == null);
     const inflows = all.filter((t) => t.type === "income" && t.transferId == null);
@@ -902,13 +1003,19 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
     const outflowById = new Map(outflows.map((t) => [t.id, t]));
     const inflowById = new Map(inflows.map((t) => [t.id, t]));
 
+    const refused: { outflowId: string; inflowId: string; error: PeopleSettlementPendingError }[] = [];
     for (const match of result.matches) {
       const outflow = outflowById.get(match.outflowId);
       const inflow = inflowById.get(match.inflowId);
       if (outflow == null || inflow == null) continue; // defensive — should never happen, both came from the same fetch
-      await this.linkTransferPair(outflow, inflow);
+      try {
+        await this.linkTransferPair(outflow, inflow, peopleGateAcknowledgement);
+      } catch (error) {
+        if (!(error instanceof PeopleSettlementPendingError)) throw error;
+        refused.push({ outflowId: match.outflowId, inflowId: match.inflowId, error });
+      }
     }
 
-    return result;
+    return { ...result, refused };
   }
 }

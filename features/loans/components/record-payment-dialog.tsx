@@ -30,7 +30,9 @@ import { linkedFundsForInstallment } from "@/lib/engines/linked-funds";
 import { PeopleSettlementCard, settleCtaLabel } from "@/features/people/components/linked-people-panel";
 import { useLinkedPeopleReadiness } from "@/features/people/hooks/use-linked-people-readiness";
 import { peopleGateInstallmentIds, peopleSettleHref, peopleSettlementGate } from "@/lib/engines/linked-people-readiness";
-import { planLoanPaymentCore } from "@/lib/engines/loan-payment-core";
+import { planLoanPaymentCore, type LoanPaymentCore } from "@/lib/engines/loan-payment-core";
+import { installmentProgress } from "@/lib/engines/installment-progress";
+import { outstandingPrincipalAfterPrepaymentsFor } from "@/lib/engines/loan-outstanding";
 import { previewPrincipalPrepayment } from "@/features/loans/lib/loan-adjustment-preview";
 import { friendlyLoanError } from "@/features/loans/lib/loan-live-state";
 import { EMI_PAYMENT_HISTORY_KEY } from "@/features/loans/hooks/use-payment-history";
@@ -40,6 +42,8 @@ import {
   loanPaymentFigures,
   loanPaymentSuccessTitle,
   loanQuickOptions,
+  paymentCoverage,
+  type PaymentCoverage,
   paymentDateFrom,
   planEmiPayment,
   planLoanPayment,
@@ -174,7 +178,8 @@ export function RecordPaymentDialog({ target, open, onOpenChange }: { target: Pa
   // installment id) must be received before it is paid — "Pay all due" over two overdue installments gates both.
   // Same rule and same allocator the write layer enforces (`peopleGateInstallmentIds` over what the payment
   // touches) — the dialog only shows early what the repository would refuse.
-  const touched = emiAllocation ? emiAllocation.portions.map((p) => p.installment) : loanTouchedInstallments(loanRow, loanPlan, accountId, paymentDate);
+  const loanCore = loanCorePreview(loanRow, loanPlan, accountId, paymentDate);
+  const touched = emiAllocation ? emiAllocation.portions.map((p) => p.installment) : loanTouchedInstallments(loanRow, loanCore);
   const gatedIds = peopleGateInstallmentIds(touched, paymentDate);
   const { readiness: linkedPeople, isLoading: linkedPeopleLoading } = useLinkedPeopleReadiness(
     next && !lent
@@ -202,6 +207,25 @@ export function RecordPaymentDialog({ target, open, onOpenChange }: { target: Pa
   // Same allocation the write uses — each installment's own principal share, summed.
   const cardRelease = emiRow && cardLabel && emiAllocation ? emiAllocation.portions.reduce((sum, p) => sum + p.principalPaid, 0) : null;
   const reamortizes = loanRow != null && extra > 0 && treatment === "reducePrincipal" && loanRow.loan.repaymentType !== "oneTime";
+
+  // Pre-save preview, read off the same allocation the write performs. A Loan payment that re-plans the
+  // schedule keeps its own preview above (the next installment is only known after the re-plan).
+  const loanPreview = (() => {
+    if (!loanRow || !loanCore || reamortizes) return null;
+    const seqById = new Map(loanRow.installments.map((i) => [i.id, i.sequenceNumber]));
+    const writes = new Map(loanCore.installments.map((i) => [i.id, i]));
+    const after = loanRow.installments.map((i) => writes.get(i.id) ?? i);
+    const next = installmentProgress(after).next;
+    return {
+      coverage: paymentCoverage(
+        loanCore.payments.map((p) => ({ sequenceNumber: seqById.get(p.installmentId) ?? 0, amount: p.amount, remainingAfter: p.remainingBalanceAfterPayment ?? 0 })),
+      ),
+      extraPrincipal: loanCore.overflow,
+      outstandingAfter: outstandingPrincipalAfterPrepaymentsFor(loanRow.loan.loanAmount, after, loanRow.principalPrepaid + loanCore.overflow),
+      nextDue: next ? { amount: next.stillDue, covered: next.covered, sequenceNumber: next.installment.sequenceNumber, dueDate: next.installment.dueDate } : null,
+    };
+  })();
+  const emiNext = emiAllocation?.nextAfter ?? null;
 
   if (!target) return null;
   const name = loanRow ? loanDisplayName(loanRow) : emiRow!.emi.name;
@@ -360,18 +384,22 @@ export function RecordPaymentDialog({ target, open, onOpenChange }: { target: Pa
                 />
               </Field>
               {emiAllocation && (emiAllocation.portions.length > 1 || emiAllocation.nextAfter?.installment.id === next.id) && (
-                <Reveal className={cn(LE_RADIUS.control, "flex flex-col gap-1.5 border border-border bg-secondary px-3 py-2.5")}>
-                  {emiAllocation.portions.map((p) => (
-                    <div key={p.installment.id} className="flex items-center justify-between gap-3 text-xs">
-                      <span className="text-muted-foreground">
-                        Installment #{p.installment.sequenceNumber}
-                        {p.allocationType === "advanceEmi" ? " · advance" : ""}
-                        {p.remainingAfter > 0 ? ` · ${formatCurrency(p.remainingAfter)} left` : " · paid"}
-                      </span>
-                      <Money amount={p.amount} className="text-xs text-foreground" />
-                    </div>
-                  ))}
-                  <PreviewLine label="Outstanding" before={<Money amount={emiAllocation.remainingBefore} />} after={<Money amount={emiAllocation.remainingAfter} />} />
+                <Reveal>
+                  <PaymentPreview
+                    coverage={paymentCoverage(emiAllocation.portions.map((p) => ({ sequenceNumber: p.installment.sequenceNumber, amount: p.amount, remainingAfter: p.remainingAfter })))}
+                    outstandingBefore={emiAllocation.remainingBefore}
+                    outstandingAfter={emiAllocation.remainingAfter}
+                    nextDue={
+                      emiNext
+                        ? {
+                            amount: emiNext.remaining,
+                            covered: Math.max(0, emiNext.installment.amountDue - emiNext.remaining),
+                            sequenceNumber: emiNext.installment.sequenceNumber,
+                            dueDate: emiNext.installment.dueDate,
+                          }
+                        : null
+                    }
+                  />
                 </Reveal>
               )}
               {extra > 0 && loanRow?.loan.repaymentType !== "oneTime" && (
@@ -407,6 +435,17 @@ export function RecordPaymentDialog({ target, open, onOpenChange }: { target: Pa
                         : null}
                     </p>
                   )}
+                </Reveal>
+              )}
+              {loanPreview && (loanPreview.coverage.partial != null || (loanPreview.coverage.settled?.count ?? 0) > 1 || loanPreview.extraPrincipal > 0) && (
+                <Reveal>
+                  <PaymentPreview
+                    coverage={loanPreview.coverage}
+                    extraPrincipal={loanPreview.extraPrincipal}
+                    outstandingBefore={loanRow!.outstandingPrincipal}
+                    outstandingAfter={loanPreview.outstandingAfter}
+                    nextDue={loanPreview.nextDue}
+                  />
                 </Reveal>
               )}
             </Reveal>
@@ -513,25 +552,92 @@ export function RecordPaymentDialog({ target, open, onOpenChange }: { target: Pa
   );
 }
 
-/** The Loan installments this payment would settle or reach — `planLoanPaymentCore`, exactly as the write allocates. */
-function loanTouchedInstallments(row: LoanRow | null, plan: LoanPaymentPlan | null, accountId: string, date: Date): Installment[] {
-  if (row == null || plan == null || !plan.ok) return [];
+/** What this Loan payment would write — `planLoanPaymentCore`, exactly as the write allocates (null when it can't). */
+function loanCorePreview(row: LoanRow | null, plan: LoanPaymentPlan | null, accountId: string, date: Date): LoanPaymentCore | null {
+  if (row == null || plan == null || !plan.ok) return null;
   const sorted = [...row.installments].filter((i) => i.deletedAt == null).sort((a, b) => a.sequenceNumber - b.sequenceNumber);
-  if (sorted.length === 0) return [];
+  if (sorted.length === 0) return null;
   try {
-    const core = planLoanPaymentCore({
+    return planLoanPaymentCore({
       loan: row.loan,
       fresh: sorted,
       lastInstallmentId: sorted[sorted.length - 1].id,
       accountId,
       amount: plan.amount,
       date,
-      idempotencyKey: "people-gate-preview",
+      idempotencyKey: "payment-preview",
       includeUpcomingInstallments: plan.includeUpcomingInstallments,
     });
-    const byId = new Map(sorted.map((i) => [i.id, i]));
-    return core.payments.map((p) => byId.get(p.installmentId)).filter((i): i is Installment => i != null);
   } catch {
-    return [];
+    return null;
   }
+}
+
+/** The installments `core` writes to, in allocation order. */
+function loanTouchedInstallments(row: LoanRow | null, core: LoanPaymentCore | null): Installment[] {
+  if (row == null || core == null) return [];
+  const byId = new Map(row.installments.map((i) => [i.id, i]));
+  return core.payments.map((p) => byId.get(p.installmentId)).filter((i): i is Installment => i != null);
+}
+
+/**
+ * The pre-save "what this payment covers" block — a regrouping of the allocator's own portions, plus
+ * the outstanding before → after and the next amount still due once it is recorded.
+ */
+function PaymentPreview({
+  coverage,
+  extraPrincipal = 0,
+  outstandingBefore,
+  outstandingAfter,
+  nextDue,
+}: {
+  coverage: PaymentCoverage;
+  extraPrincipal?: number;
+  outstandingBefore: number;
+  outstandingAfter: number;
+  nextDue: { amount: number; covered: number; sequenceNumber: number; dueDate: Date } | null;
+}) {
+  const { settled, partial } = coverage;
+  return (
+    <div className={cn(LE_RADIUS.control, "flex flex-col gap-1.5 border border-border bg-secondary px-3 py-2.5")} aria-label="Payment preview">
+      {settled && (
+        <div className="flex items-center justify-between gap-3 text-xs">
+          <span className="text-muted-foreground">
+            {settled.count === 1 ? `Installment #${settled.first}` : `${settled.count} installments · #${settled.first}–#${settled.last}`} · paid
+          </span>
+          <Money amount={settled.amount} className="text-xs text-foreground" />
+        </div>
+      )}
+      {partial && (
+        <div className="flex items-center justify-between gap-3 text-xs">
+          <span className="text-muted-foreground">
+            Installment #{partial.sequenceNumber} · part · {formatCurrency(partial.left)} still due
+          </span>
+          <Money amount={partial.amount} className="text-xs text-foreground" />
+        </div>
+      )}
+      {extraPrincipal > 0 && (
+        <div className="flex items-center justify-between gap-3 text-xs">
+          <span className="text-muted-foreground">Extra · reduces principal</span>
+          <Money amount={extraPrincipal} className="text-xs text-foreground" />
+        </div>
+      )}
+      <PreviewLine label="Outstanding" before={<Money amount={outstandingBefore} />} after={<Money amount={outstandingAfter} />} />
+      <div className="flex items-center justify-between gap-3 text-xs">
+        <span className="text-muted-foreground">Next amount due</span>
+        {nextDue ? (
+          <span className="font-semibold text-foreground tabular-nums">
+            <Money amount={nextDue.amount} className="text-xs" />
+            <span className="font-normal text-muted-foreground">
+              {" "}
+              · #{nextDue.sequenceNumber}, {formatDueDate(nextDue.dueDate)}
+              {nextDue.covered > 0 ? ` · ${formatCurrency(nextDue.covered)} already covered` : ""}
+            </span>
+          </span>
+        ) : (
+          <span className="font-semibold text-success">Fully paid</span>
+        )}
+      </div>
+    </div>
+  );
 }

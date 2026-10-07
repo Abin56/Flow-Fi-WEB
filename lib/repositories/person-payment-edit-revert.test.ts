@@ -545,10 +545,18 @@ describe("Apply advance to a FUTURE obligation — explicit, exact, reversible, 
     expect(statement(ALL).advanceBalance).toBe(0);
     // Items themselves are untouched: SEP's KSEB + EMI #1 are still fully open, Nov EMI is not made "current".
     expect([row("ledger:kseb").remaining, row("emi-inst:i1").remaining]).toEqual([1000, 2000]);
-    // KNOWN ENGINE BEHAVIOUR (reported, not changed): the statement counts an advance application in the
-    // cycle it is DATED, so SEP's net pending reads 3,000 − 2,000 = 1,000 until NOV's 4,000 lands; over the
-    // whole history it reconciles (5,000 open = 1,000 + 2,000 + 2,000).
-    expect(statement(SEP).currentPending).toBe(sepBefore.currentPending - 2000);
+    // The early application settles the NOV item, so it reduces pending only in NOV's cycle. SEP still
+    // owes its own KSEB ₹1,000 + EMI #1 ₹2,000 = ₹3,000 (it used to read ₹1,000: the ₹2,000 was netted
+    // in the cycle the application was dated, against items it never settled).
+    expect(sepBefore.currentPending).toBe(3000);
+    expect(statement(SEP)).toMatchObject({ previousPending: sepBefore.previousPending, cycleActivity: 3000, currentPending: 3000 });
+    expect(statement(SEP).advanceBalance).toBe(0); // the held advance is used up the day it's applied
+    expect(statement(OCT).previousPending).toBe(3000); // carried forward unchanged
+    const NOV = cycleContaining(d(11, 30));
+    const nov = statement(NOV);
+    expect(nov.previousPending).toBe(3000);
+    expect(nov.cycleActivity).toBe(4000); // Nov EMI added in its own cycle…
+    expect(nov.currentPending).toBe(5000); // …net of the ₹2,000 applied early → 3,000 + 2,000
     expect(statement(ALL).currentPending).toBe(5000);
     expect(statement(SEP).cycleActivity).toBe(sepBefore.cycleActivity);
     expect(statement(OCT).cycleActivity).toBe(octBefore.cycleActivity);

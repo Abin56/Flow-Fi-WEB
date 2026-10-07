@@ -531,9 +531,27 @@ export function collectStatementEvents(input: Omit<PersonCycleStatementInput, "c
     if (advanceSign == null || obligation == null) continue;
     const obligationSign = Math.sign(obligation.signedAmount);
     if (obligationSign === 0 || advanceSign !== -obligationSign) continue;
+    // Applied EARLY to a future item: the held advance is used up on the day it is applied, but the
+    // item it settles only reduces pending in the cycle that item belongs to — never an earlier cycle's
+    // pending (its own items are still fully owed). Over the whole history the totals are unchanged.
+    const early = dayIndex(obligation.date) > dayIndex(app.date);
+    if (early) {
+      push({
+        key: `adv-app:${app.id}:held`,
+        date: app.date,
+        createdAt: app.createdAt,
+        order: 2,
+        kind: "settlement",
+        category: "advanceApplied",
+        title: `Advance applied early · ${obligation.title}`,
+        amount: app.amount,
+        signedAmount: 0,
+        advanceDelta: obligationSign * app.amount,
+      });
+    }
     push({
       key: `adv-app:${app.id}`,
-      date: app.date,
+      date: early ? obligation.date : app.date,
       createdAt: app.createdAt,
       order: 2,
       kind: "settlement",
@@ -541,7 +559,7 @@ export function collectStatementEvents(input: Omit<PersonCycleStatementInput, "c
       title: "Advance applied",
       amount: app.amount,
       signedAmount: -obligationSign * app.amount,
-      advanceDelta: obligationSign * app.amount,
+      advanceDelta: early ? 0 : obligationSign * app.amount,
       settlesKey: app.obligationKey,
     });
   }

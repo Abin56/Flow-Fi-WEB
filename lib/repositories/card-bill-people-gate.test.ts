@@ -77,8 +77,9 @@ vi.mock("firebase/firestore", () => {
 vi.mock("@/lib/firebase/client", () => ({ firebaseApp: {}, auth: {}, db: {}, storage: {} }));
 
 import { AccountRepository } from "./account-repository";
-import { TransactionRepository } from "./transaction-repository";
-import { assertCardBillPeopleSettled, type CardBillGateReader } from "./card-bill-people-gate";
+import { CardStatementChangedError, TransactionRepository, TransferRetryMismatchError, type CardStatementIntent } from "./transaction-repository";
+import { assertCardBillPeopleSettled, loadCardBillState, type CardBillGateReader } from "./card-bill-people-gate";
+import { StatementRepository } from "./credit-card-repository";
 import { cardBillsForCard, cardStatementPaymentScope } from "@/lib/engines/card-cycle-bills";
 import { PeopleSettlementPendingError } from "@/lib/engines/linked-people-readiness";
 import { computeCreditCardStandings } from "@/features/credit-cards/hooks/use-credit-cards-data";
@@ -92,6 +93,7 @@ const col = (path: string) => ({ path, firestore: {} }) as never;
 const d = (m: number, day: number) => new Date(2026, m - 1, day, 12);
 const NOW = d(10, 3);
 const audit = { deletedAt: null, lastEditedAt: null, editHistory: [] };
+const round2 = (v: number) => Math.round(v * 100) / 100;
 
 const OCTANE: CreditCardProfile = {
   id: "octane", accountId: "acc-octane", sharedLimitId: null, statementDay: 1, paymentDueDay: 20, creditLimit: 200000, minimumDuePercent: null,
@@ -142,8 +144,11 @@ const reader: CardBillGateReader = {
 
 let txRepo: TransactionRepository;
 /** The app's card bill write (Pay bill / Add Transfer): atomic, keyed, People gate re-checked inside it. */
-const payBill = (amount: number, idempotencyKey?: string, destinationAccountId = OCTANE.accountId) =>
-  txRepo.createTransferPairAtomic({ amount, dateTime: NOW, sourceAccountId: "sbi", destinationAccountId, categoryId: "cat-transfer", description: "Card bill", idempotencyKey });
+const payBill = (amount: number, idempotencyKey?: string, destinationAccountId = OCTANE.accountId, cardStatementIntent?: CardStatementIntent) =>
+  txRepo.createTransferPairAtomic({ amount, dateTime: NOW, sourceAccountId: "sbi", destinationAccountId, categoryId: "cat-transfer", description: "Card bill", idempotencyKey, cardStatementIntent });
+/** The statement normal Pay Now targets right now (what the dialog snapshots when it opens). */
+const currentStatementId = () =>
+  cardStatementPaymentScope(cardBillsForCard(OCTANE, (under(`${U}/transactions/`) as unknown as Transaction[]).filter((t) => t.deletedAt == null && t.accountId === OCTANE.accountId), [], NOW), NOW).current!.id;
 
 async function purchase(id: string, amount: number, date: Date) {
   const t = await txRepo.createTransaction({ type: "expense", amount, dateTime: date, accountId: OCTANE.accountId, categoryId: "cat-shop", description: id, notes: "" });
@@ -158,8 +163,8 @@ beforeEach(async () => {
   store.set(`${U}/accounts/sbi`, account("sbi", "bank", 100_000));
   store.set(`${U}/accounts/acc-octane`, account("acc-octane", "card", 0));
   // Built like `createTransactionRepository`: the card-bill People gate installed as the repository's guard.
-  txRepo = new TransactionRepository(col(`${U}/transactions`), new AccountRepository(col(`${U}/accounts`))).withCardPaymentGuard((tx, { cardAccount, amount }) =>
-    assertCardBillPeopleSettled({ tx, reader, cardAccount, amount, now: NOW }),
+  txRepo = new TransactionRepository(col(`${U}/transactions`), new AccountRepository(col(`${U}/accounts`))).withCardPaymentGuard((tx, { cardAccount, amount, statementIntent }) =>
+    assertCardBillPeopleSettled({ tx, reader, cardAccount, amount, statementIntent, now: NOW }),
   );
   store.set(`${U}/creditCards/octane`, OCTANE as never);
   transactionAttempts = 0;
@@ -255,12 +260,19 @@ describe("Card Pay bill — People gate enforced at the write layer (OCTANE)", (
     expect(await rejected(22152.02)).toEqual(["AMMA 8000"]);
   });
 
-  it("stale dialog: another tab already paid Statement A → the same ₹22,152.02 now pays B and is gated on B's shares", async () => {
+  it("stale dialog: another tab already paid Statement A → this tab's Pay Now of A is refused, never spills into B", async () => {
     putEntry(settle("r-amma", "amma", "e-amma-a", 8000));
     putEntry(settle("r-shambu", "shambu", "e-shambu", 1000));
-    await payBill(22152.02); // other tab
-    expect(await rejected(22152.02)).toEqual(["AMMA 6686", "TRIPTHEE 6899"]); // this tab's stale Save
-    expect(snapshot()).toMatchObject({ statementA: 0, statementB: 27170, transferCount: 2 }); // only the first payment exists
+    const intentA = { statementId: currentStatementId() };
+    // Clear B's People too, so ONLY the statement-scope rule can stop the spill.
+    putEntry(settle("r-amma-b", "amma", "e-amma-b", 6686));
+    putEntry(settle("r-tripthee", "tripthee", "e-tripthee", 6899));
+    await payBill(22152.02, "tab-a-intent", OCTANE.accountId, intentA); // Tab A
+    const afterA = snapshot();
+    const err = await payBill(22152.02, "tab-b-intent", OCTANE.accountId, intentA).catch((e: unknown) => e); // Tab B's stale Save
+    expect(err).toBeInstanceOf(CardStatementChangedError);
+    expect(snapshot()).toEqual(afterA); // nothing written: Statement B still ₹27,170, balances unchanged
+    expect(afterA).toMatchObject({ statementA: 0, statementB: 27170, transferCount: 2 });
   });
 
   it("edit (delete + re-pay) and revert restore Statement A, B, accounts and available credit exactly; no ghosts", async () => {
@@ -446,5 +458,298 @@ describe("Card payment write routes — every one enforces the invariant at the 
     await payBill(3000, "sib-intent-1", "acc-sib"); // OCTANE's AMMA / SHAMBU shares are open — irrelevant here
     expect(snapshot()).toMatchObject({ statementA: 22152.02, statementB: 27170 }); // OCTANE untouched
     expect(balanceOf("acc-sib")).toBe(0);
+  });
+});
+
+describe("Reconciliation — current tree (normal Pay Now write path, intent, retries, Match & Link)", () => {
+  it("normal Pay Now of Statement A ₹22,152.02 with AMMA's reached share open → refused, nothing moves; AMMA settled → exactly one payment", async () => {
+    putEntry(settle("r-shambu", "shambu", "e-shambu", 1000)); // only AMMA's share is unresolved
+    const intent = { statementId: currentStatementId() };
+    const before = snapshot();
+    expect(before).toMatchObject({ statementA: 22152.02, statementB: 27170, outstanding: 49322.02 });
+    // The SAME method the dialog's Save calls (`actions.createTransferPair` → `createTransferPairAtomic`).
+    const err = await payBill(22152.02, "pay-now-1", OCTANE.accountId, intent).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(PeopleSettlementPendingError);
+    expect((err as PeopleSettlementPendingError).gate.attention.map((p) => `${p.personName} ${p.remaining}`)).toEqual(["AMMA 8000"]);
+    expect(snapshot()).toEqual(before); // no transfer, bank / card balance, statement due, People all unchanged
+
+    putEntry(settle("r-amma", "amma", "e-amma-a", 8000));
+    const settled = snapshot();
+    await payBill(22152.02, "pay-now-1", OCTANE.accountId, intent); // retry of the same action
+    const after = snapshot();
+    expect(liveTransfers()).toHaveLength(2); // one pair
+    expect(after).toMatchObject({ statementA: 0, statementB: 27170, outstanding: 27170, sbi: settled.sbi - 22152.02, card: settled.card + 22152.02 });
+    expect(after.people).toBe(settled.people);
+  });
+
+  it("two intentional ₹5,000 payments of the same statement — even from two dialogs opened together — are both recorded", async () => {
+    settleStatementA();
+    const intent = { statementId: currentStatementId() };
+    await payBill(5000, "five-a-intent", OCTANE.accountId, intent);
+    await payBill(5000, "five-b-intent", OCTANE.accountId, intent); // still within Statement A → allowed
+    expect(liveTransfers()).toHaveLength(4);
+    expect(snapshot()).toMatchObject({ statementA: 12152.02, statementB: 27170 });
+  });
+
+  it("a Pay Now larger than what the statement still owes at Save time is refused (would spill into B)", async () => {
+    settleStatementA();
+    const intent = { statementId: currentStatementId() };
+    await payBill(20000, "other-tab", OCTANE.accountId, intent);
+    const before = snapshot();
+    await expect(payBill(5000, "this-tab", OCTANE.accountId, intent)).rejects.toBeInstanceOf(CardStatementChangedError);
+    expect(snapshot()).toEqual(before);
+  });
+
+  it("explicit full outstanding (no statement intent) still pays across statements", async () => {
+    settleStatementA();
+    putEntry(settle("r-amma-b", "amma", "e-amma-b", 6686));
+    putEntry(settle("r-tripthee", "tripthee", "e-tripthee", 6899));
+    await payBill(49322.02, "full-outstanding-1");
+    expect(snapshot()).toMatchObject({ statementA: 0, statementB: 0, outstanding: 0 });
+  });
+
+  it("lost response + edited amount: the retry is refused (never returns the old payment as if the edit saved, never duplicates)", async () => {
+    settleStatementA();
+    await payBill(10000, "uncertain-1"); // saved, response lost
+    const after = snapshot();
+    const err = await payBill(12000, "uncertain-1").catch((e: unknown) => e); // user edits the amount, retries
+    expect(err).toBeInstanceOf(TransferRetryMismatchError);
+    expect((err as Error).message).toMatch(/already saved as ₹10,000/);
+    expect(snapshot()).toEqual(after);
+    // The unchanged retry is still the same operation: returned, nothing written twice.
+    await payBill(10000, "uncertain-1");
+    expect(snapshot()).toEqual(after);
+  });
+
+  it("Match & Link never moves money; into a card it becomes a bill payment, so it is gated unless acknowledged as historical; stale / linked records are refused", async () => {
+    store.set(`${U}/accounts/hdfc`, account("hdfc", "bank", 0));
+    const out = await txRepo.createTransaction({ type: "expense", amount: 3000, dateTime: NOW, accountId: "sbi", categoryId: "c", description: "to card", notes: "" });
+    const inn = await txRepo.createTransaction({ type: "income", amount: 3000, dateTime: NOW, accountId: OCTANE.accountId, categoryId: "c", description: "card credit", notes: "" });
+    const before = snapshot();
+    // Unacknowledged link into a card with Statement A's People open → refused, nothing written.
+    await expect(txRepo.linkTransferPair(out, inn)).rejects.toBeInstanceOf(PeopleSettlementPendingError);
+    expect(snapshot()).toEqual(before);
+    expect(stored(inn.id).transferId).toBeNull();
+
+    // The Studio's per-pair confirmation (historical reconstruction) links it; People stay open.
+    await txRepo.linkTransferPair(out, inn, { acknowledgedUnsettledPeople: true, reason: "Matched existing records in Transaction Studio" });
+    const linked = snapshot();
+    expect([linked.sbi, linked.card]).toEqual([before.sbi, before.card]); // no account movement
+    expect([stored(out.id).amount, stored(inn.id).amount]).toEqual([3000, 3000]); // amounts unchanged
+    expect(stored(out.id).transferId).toBe(stored(inn.id).transferId);
+    expect(linked.people).toBe(before.people);
+    // A plain card credit already reduced the card's debt (`cardStatementAmount`); linked, the same ₹3,000
+    // is a bill payment instead — the classification changes, the debt and statement dues do not.
+    expect(before.outstanding).toBe(round2(49322.02 - 3000));
+    expect([linked.outstanding, linked.statementA, linked.statementB]).toEqual([before.outstanding, before.statementA, before.statementB]);
+    await expect(txRepo.linkTransferPair(out, inn)).rejects.toThrow(/already linked/);
+
+    // A stale match whose leg was deleted meanwhile is refused — never revived without its balance effect.
+    const out2 = await txRepo.createTransaction({ type: "expense", amount: 700, dateTime: NOW, accountId: "sbi", categoryId: "c", description: "x", notes: "" });
+    const in2 = await txRepo.createTransaction({ type: "income", amount: 700, dateTime: NOW, accountId: "hdfc", categoryId: "c", description: "x", notes: "" });
+    await txRepo.softDeleteTransaction(stored(out2.id));
+    const beforeStale = snapshot();
+    await expect(txRepo.linkTransferPair(out2, in2)).rejects.toThrow(/deleted/);
+    expect(snapshot()).toEqual(beforeStale);
+    expect(stored(out2.id).deletedAt).not.toBeNull();
+  });
+});
+
+describe("Card credits, stale Pay bill, reconcileTransfers — remaining integrity items", () => {
+  const cardCredit = (amount: number, date: Date, extra: { linkedPersonId?: string; description?: string } = {}) =>
+    txRepo.createTransaction({ type: "income", amount, dateTime: date, accountId: OCTANE.accountId, categoryId: "cat-refund", description: extra.description ?? "Merchant refund", notes: "", linkedPersonId: extra.linkedPersonId });
+
+  it("11. an unrelated card credit lowers Statement A but never reduces anyone's People share", async () => {
+    const before = snapshot();
+    await cardCredit(2000, d(8, 20));
+    const after = snapshot();
+    expect(after).toMatchObject({ statementA: 20152.02, statementB: 27170, outstanding: 47322.02, card: before.card + 2000 });
+    expect(after.people).toBe(before.people);
+    // Pay Now of the net bill is still gated on exactly the same shares.
+    expect(await rejected(20152.02)).toEqual(["AMMA 8000", "SHAMBU 1000"]);
+  });
+
+  it("12. no refund→purchase link exists in the model: even a credit tagged to AMMA leaves her ₹8,000 share as is", async () => {
+    const before = snapshot();
+    await cardCredit(4000, d(8, 6), { linkedPersonId: "amma", description: "Refund — a-amma purchase" });
+    expect(snapshot().people).toBe(before.people);
+    expect(snapshot().statementA).toBe(18152.02);
+    expect(await rejected(18152.02)).toEqual(["AMMA 8000", "SHAMBU 1000"]);
+  });
+
+  it("5/6. delete a card credit → bill and card balance revert; restore → counted exactly once", async () => {
+    const before = snapshot();
+    const cr = await cardCredit(2000, d(8, 20));
+    await txRepo.softDeleteTransaction(stored(cr.id));
+    expect(snapshot()).toMatchObject({ statementA: 22152.02, card: before.card });
+    await txRepo.restoreTransaction(stored(cr.id));
+    await txRepo.restoreTransaction(stored(cr.id)); // repeated restore never re-applies
+    expect(snapshot()).toMatchObject({ statementA: 20152.02, card: before.card + 2000 });
+  });
+
+  it("7. edit a card credit ₹2,000 → ₹1,500: bill and card balance move by exactly ₹500", async () => {
+    const before = snapshot();
+    const cr = await cardCredit(2000, d(8, 20));
+    await txRepo.editTransaction(stored(cr.id), { amount: 1500 });
+    expect(snapshot()).toMatchObject({ statementA: 20652.02, card: before.card + 1500 });
+  });
+
+  it("13/12. stale dialog: Statement A due when opened, another device pays ₹4,000 → stale full Save refused; the refreshed amount pays", async () => {
+    settleStatementA();
+    const intent = { statementId: currentStatementId() };
+    await payBill(4000, "other-device-pay", OCTANE.accountId, intent);
+    const before = snapshot();
+    await expect(payBill(22152.02, "stale-tab-pay", OCTANE.accountId, intent)).rejects.toBeInstanceOf(CardStatementChangedError);
+    expect(snapshot()).toEqual(before); // never saved, never spilled into B
+    // "Refresh bill" re-reads the same statement: ₹18,152.02 left — paid only when the user presses Pay.
+    expect(currentStatementId()).toBe(intent.statementId);
+    expect(before.statementA).toBe(18152.02);
+    await payBill(18152.02, "stale-tab-pay", OCTANE.accountId, { statementId: currentStatementId() });
+    expect(snapshot()).toMatchObject({ statementA: 0, statementB: 27170 });
+  });
+
+  it("16. reconcileTransfers: ordinary non-card pair links with no money movement", async () => {
+    store.set(`${U}/accounts/hdfc`, account("hdfc", "bank", 0));
+    const out = await txRepo.createTransaction({ type: "expense", amount: 777, dateTime: NOW, accountId: "sbi", categoryId: "c", description: "x", notes: "" });
+    const inn = await txRepo.createTransaction({ type: "income", amount: 777, dateTime: NOW, accountId: "hdfc", categoryId: "c", description: "x", notes: "" });
+    const [sbi, hdfc] = [balanceOf("sbi"), balanceOf("hdfc")];
+    const result = await txRepo.reconcileTransfers();
+    expect(result.refused).toEqual([]);
+    expect(stored(out.id).transferId).not.toBeNull();
+    expect(stored(out.id).transferId).toBe(stored(inn.id).transferId);
+    expect([balanceOf("sbi"), balanceOf("hdfc")]).toEqual([sbi, hdfc]);
+  });
+
+  it("17/18. reconcileTransfers into a card: refused without acknowledgement (nothing written); acknowledged → linked once, balances never move twice, statements settle once, People open", async () => {
+    const out = await txRepo.createTransaction({ type: "expense", amount: 3333, dateTime: NOW, accountId: "sbi", categoryId: "c", description: "card bill", notes: "" });
+    const inn = await cardCredit(3333, NOW, { description: "Payment received" });
+    const before = snapshot();
+    const refused = await txRepo.reconcileTransfers();
+    expect(refused.refused.map((r) => [r.outflowId, r.inflowId])).toEqual([[out.id, inn.id]]);
+    expect(snapshot()).toEqual(before);
+    expect(stored(inn.id).transferId).toBeNull();
+
+    const ack = { acknowledgedUnsettledPeople: true as const, reason: "Historical statement reconciliation" };
+    const linked = await txRepo.reconcileTransfers(undefined, ack);
+    expect(linked.refused).toEqual([]);
+    const after = snapshot();
+    expect([after.sbi, after.card]).toEqual([before.sbi, before.card]); // no new money movement
+    expect([after.statementA, after.statementB, after.outstanding]).toEqual([before.statementA, before.statementB, before.outstanding]); // credit → payment, settled once
+    expect(after.people).toBe(before.people);
+    expect(stored(out.id).transferId).toBe(stored(inn.id).transferId);
+    // Re-running finds nothing left — no second link, no second settlement.
+    expect((await txRepo.reconcileTransfers(undefined, ack)).matches).toEqual([]);
+    expect(snapshot()).toEqual(after);
+  });
+});
+
+describe("Stored statement totals written by the old credit-as-charge formula — conservative, idempotent repair", () => {
+  const SA = `${U}/creditCards/octane/statements/s-a`;
+  const statements = () => new StatementRepository(col(`${U}/creditCards/octane/statements`));
+  const putStatementA = (totalAmount: number, amountPaid = 0) =>
+    store.set(SA, { id: "s-a", cardId: "octane", periodStart: d(8, 2), periodEnd: d(9, 1), generatedDate: d(9, 1), dueDate: d(10, 20), totalAmount, amountPaid, minimumDue: 1100, interestCharged: null, lateFee: null, createdAt: d(9, 2), ...audit } as never);
+  const cardTxns = () => (under(`${U}/transactions/`) as unknown as Transaction[]).filter((t) => t.accountId === OCTANE.accountId);
+  /** Everything except the one statement document. */
+  const ledgerState = () => JSON.stringify([...store.entries()].filter(([k]) => k !== SA).sort(([a], [b]) => a.localeCompare(b)));
+
+  beforeEach(async () => {
+    // Statement A also holds a ₹2,000 merchant credit: canonical ₹20,152.02; the old formula said ₹24,152.02.
+    await txRepo.createTransaction({ type: "income", amount: 2000, dateTime: d(8, 20), accountId: OCTANE.accountId, categoryId: "cat-refund", description: "Merchant refund", notes: "" });
+  });
+
+  it("A + E–I. inflated stored total → only totalAmount repaired to the canonical figure; identity, payments, balances, People, transactions untouched", async () => {
+    putStatementA(24152.02, 3000);
+    const before = ledgerState();
+    const txCount = under(`${U}/transactions/`).length;
+    expect(await statements().repairCreditInflatedTotal("s-a", cardTxns())).toBe(true);
+    const doc = store.get(SA)!;
+    expect(doc.totalAmount).toBe(20152.02);
+    expect(doc).toMatchObject({ id: "s-a", cardId: "octane", periodStart: d(8, 2), periodEnd: d(9, 1), dueDate: d(10, 20), amountPaid: 3000, minimumDue: 1100 });
+    expect((doc.editHistory as { field: string }[]).map((e) => e.field)).toEqual(["totalAmount"]);
+    expect(ledgerState()).toBe(before); // no transaction, payment, balance or People change
+    expect(under(`${U}/transactions/`)).toHaveLength(txCount);
+  });
+
+  it("B. stored total already canonical → no write", async () => {
+    putStatementA(20152.02);
+    const before = JSON.stringify(store.get(SA));
+    expect(await statements().repairCreditInflatedTotal("s-a", cardTxns())).toBe(false);
+    expect(JSON.stringify(store.get(SA))).toBe(before);
+  });
+
+  it("C. running twice: the second run is a no-op", async () => {
+    putStatementA(24152.02);
+    expect(await statements().repairCreditInflatedTotal("s-a", cardTxns())).toBe(true);
+    const after = JSON.stringify(store.get(SA));
+    expect(await statements().repairCreditInflatedTotal("s-a", cardTxns())).toBe(false);
+    expect(JSON.stringify(store.get(SA))).toBe(after);
+  });
+
+  it("D. with a partial payment the TOTAL is repaired — never replaced by the remaining due; payments untouched", async () => {
+    settleStatementA();
+    putStatementA(24152.02, 0);
+    await payBill(5000, "partial-before-repair", OCTANE.accountId, { statementId: "s-a" }); // the stored statement is the current bill
+    const paymentsBefore = JSON.stringify(liveTransfers());
+    await statements().repairCreditInflatedTotal("s-a", cardTxns());
+    expect(store.get(SA)!.totalAmount).toBe(20152.02); // not 15,152.02
+    expect(JSON.stringify(liveTransfers())).toBe(paymentsBefore);
+    expect(cardStatementPaymentScope(cardBillsForCard(OCTANE, cardTxns().filter((t) => t.deletedAt == null), [store.get(SA) as never], NOW), NOW).statementDue).toBe(15152.02);
+  });
+
+  it("a stored total that differs for any OTHER reason (not provably the credit bug) is never touched", async () => {
+    putStatementA(30000);
+    expect(await statements().repairCreditInflatedTotal("s-a", cardTxns())).toBe(false);
+    expect(store.get(SA)!.totalAmount).toBe(30000);
+  });
+});
+
+describe("Pay bill Refresh — authoritative fresh read through the write gate's own chain (`loadCardBillState`)", () => {
+  const cardAccount = () => store.get(`${U}/accounts/acc-octane`) as unknown as Account;
+  const load = () => loadCardBillState({ reader, cardAccount: cardAccount(), now: NOW });
+
+  it("A + C. another device paid ₹4,000: refresh reads ₹18,152.02 on the SAME statement and writes nothing", async () => {
+    settleStatementA();
+    const intent = { statementId: currentStatementId() };
+    await payBill(4000, "other-device-4000", OCTANE.accountId, intent);
+    const before = JSON.stringify([...store.entries()]);
+    const fresh = (await load())!;
+    expect(fresh.scope.current).toMatchObject({ id: intent.statementId, remaining: 18152.02 });
+    expect(JSON.stringify([...store.entries()])).toBe(before); // a read only — no transaction, no balance change
+  });
+
+  it("D. Statement A paid in full elsewhere: refresh names Statement B — the old Statement-A intent still can't pay it", async () => {
+    settleStatementA();
+    const intentA = { statementId: currentStatementId() };
+    await payBill(22152.02, "paid-elsewhere-a1", OCTANE.accountId, intentA);
+    const fresh = (await load())!;
+    expect(fresh.scope.current?.id).not.toBe(intentA.statementId);
+    expect(fresh.scope.statementDue).toBe(27170);
+    await expect(payBill(5000, "old-intent-to-b", OCTANE.accountId, intentA)).rejects.toBeInstanceOf(CardStatementChangedError);
+  });
+
+  it("E. refresh read ₹18,152.02, then another ₹1,000 lands before Save → the write still refuses the stale ₹18,152.02", async () => {
+    settleStatementA();
+    const intent = { statementId: currentStatementId() };
+    await payBill(4000, "other-device-4k-b", OCTANE.accountId, intent);
+    const refreshed = (await load())!.scope.current!;
+    await payBill(1000, "other-device-1k-b", OCTANE.accountId, intent);
+    const before = snapshot();
+    await expect(payBill(refreshed.remaining, "after-refresh-sv", OCTANE.accountId, { statementId: refreshed.id })).rejects.toBeInstanceOf(CardStatementChangedError);
+    expect(snapshot()).toEqual(before);
+  });
+
+  it("F. People readiness is recomputed from the refreshed scope's transaction ids", async () => {
+    // Before: Statement A's shares (AMMA ₹8,000, SHAMBU ₹1,000) gate a Statement-A payment.
+    const open = (g: { attention: { personName: string; remaining: number }[] }) => g.attention.map((p) => `${p.personName} ${p.remaining}`).sort();
+    expect(open((await load())!.peopleGateFor(22152.02))).toEqual(["AMMA 8000", "SHAMBU 1000"]);
+    settleStatementA();
+    await payBill(22152.02, "clear-statement-a", OCTANE.accountId, { statementId: currentStatementId() });
+    // After refresh the current bill is B: only B's charges (b-tripthee, b-amma) gate it — no stale A blockers.
+    const fresh = (await load())!;
+    expect(open(fresh.peopleGateFor(27170))).toEqual(["AMMA 6686", "TRIPTHEE 6899"]);
+    expect(open(fresh.peopleGateFor(27170))).toEqual(open((() => {
+      const g = fresh.readinessFor(27170);
+      return { attention: g.people.filter((p) => p.remaining > 0) };
+    })()));
   });
 });

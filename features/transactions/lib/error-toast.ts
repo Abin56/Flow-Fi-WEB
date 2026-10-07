@@ -1,5 +1,5 @@
 import { toast } from "@/store/toast-store";
-import { TransferEditRestrictedError } from "@/lib/repositories/transaction-repository";
+import { CardStatementChangedError, TransferEditRestrictedError, TransferRetryMismatchError } from "@/lib/repositories/transaction-repository";
 import { PeopleSettlementPendingError } from "@/lib/engines/linked-people-readiness";
 
 /**
@@ -11,7 +11,7 @@ import { PeopleSettlementPendingError } from "@/lib/engines/linked-people-readin
  * deliberately written to be user-facing (see `TransferEditRestrictedError`'s
  * own doc comment).
  */
-const USER_FACING_ERROR_TYPES = [TransferEditRestrictedError] as const;
+const USER_FACING_ERROR_TYPES = [TransferEditRestrictedError, CardStatementChangedError, TransferRetryMismatchError] as const;
 
 export function userFacingMessage(error: unknown): string | null {
   // A card bill refused by the write-layer People gate says exactly what to settle (Loan/EMI keep theirs).

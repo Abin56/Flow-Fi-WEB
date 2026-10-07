@@ -8,6 +8,7 @@ import type { Category } from "@/lib/models/category";
 import type { Person } from "@/lib/models/person";
 import { linkedStateOf, peopleSettlementGate, PeopleSettlementPendingError, type LinkedPeopleReadiness, type LinkedPerson } from "@/lib/engines/linked-people-readiness";
 import { TransactionDetailsModal, type PeopleGateInput } from "./transaction-details-modal";
+import { CardStatementChangedError } from "@/lib/repositories/transaction-repository";
 
 /**
  * Transaction form redesign + card-bill People settlement gate.
@@ -380,3 +381,109 @@ describe("Card bill — People settlement gate", () => {
 });
 
 
+
+describe("Pay bill — stale statement: refused, then an explicit Refresh bill (never auto-pays)", () => {
+  it("another device paid ₹4,000 of the ₹10,000 bill: stale Save refused → Refresh loads ₹6,000 → nothing saved until Pay is pressed", async () => {
+    const user = userEvent.setup();
+    actions.createTransferPair.mockRejectedValueOnce(new CardStatementChangedError());
+    const props = (remaining: number) =>
+      ({
+        open: true,
+        onOpenChange: () => {},
+        row: null,
+        expense: null,
+        people,
+        accounts,
+        categories,
+        actions: actions as never,
+        defaultKind: "transfer" as const,
+        initialDestinationAccountId: "octane",
+        initialAmount: 10000,
+        peopleGate: gateOf(readinessOf(remaining, [])),
+        statementIntent: { accountId: "octane", statementId: "stmt-A", remaining },
+      }) satisfies Parameters<typeof TransactionDetailsModal>[0];
+    const view = render(<TransactionDetailsModal {...props(10000)} />);
+
+    await user.click(screen.getByRole("button", { name: /pay ₹10,000/i }));
+    await waitFor(() => expect(actions.createTransferPair).toHaveBeenCalledTimes(1));
+    expect(actions.createTransferPair.mock.calls[0][0]).toMatchObject({ amount: 10000, cardStatementIntent: { statementId: "stmt-A" } });
+    expect(screen.getByRole("alert").textContent).toMatch(/^This bill changed since you opened it/);
+
+    // The live bill now says ₹6,000 left (another device paid ₹4,000).
+    view.rerender(<TransactionDetailsModal {...props(6000)} />);
+    await user.click(screen.getByRole("button", { name: "Refresh bill" }));
+    expect(amountInput().value).toBe("6000");
+    expect(screen.queryByRole("alert")).toBeNull();
+    await new Promise((r) => setTimeout(r, 30));
+    expect(actions.createTransferPair).toHaveBeenCalledTimes(1); // refresh never submits
+
+    await user.click(screen.getByRole("button", { name: /pay ₹6,000/i }));
+    await waitFor(() => expect(actions.createTransferPair).toHaveBeenCalledTimes(2));
+    expect(actions.createTransferPair.mock.calls[1][0]).toMatchObject({ amount: 6000, cardStatementIntent: { statementId: "stmt-A" } });
+  });
+});
+
+describe("Pay bill — Refresh bill is an authoritative fresh read (onRefreshBill), never a save", () => {
+  type Fresh = { accountId: string; statementId: string; remaining: number } | null;
+  async function staleThenRefresh(onRefreshBill: (accountId: string) => Promise<Fresh>) {
+    const user = userEvent.setup();
+    actions.createTransferPair.mockRejectedValueOnce(new CardStatementChangedError());
+    // The live props stay STALE at ₹10,000 throughout — only the fresh read knows better.
+    renderCardBill(gateOf(readinessOf(10000, [])), {
+      initialAmount: 10000,
+      statementIntent: { accountId: "octane", statementId: "stmt-A", remaining: 10000 },
+      onRefreshBill,
+    });
+    await user.click(screen.getByRole("button", { name: /pay ₹10,000/i }));
+    await waitFor(() => expect(actions.createTransferPair).toHaveBeenCalledTimes(1));
+    return user;
+  }
+
+  it("A + B. the fresh read says ₹6,000 although the live feed still says ₹10,000 → ₹6,000 shown; nothing submitted", async () => {
+    const onRefreshBill = vi.fn(async () => ({ accountId: "octane", statementId: "stmt-A", remaining: 6000 }));
+    const user = await staleThenRefresh(onRefreshBill);
+    await user.click(screen.getByRole("button", { name: "Refresh bill" }));
+    await waitFor(() => expect(amountInput().value).toBe("6000"));
+    expect(onRefreshBill).toHaveBeenCalledWith("octane");
+    await new Promise((r) => setTimeout(r, 30));
+    expect(actions.createTransferPair).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("button", { name: /pay ₹6,000/i }));
+    await waitFor(() => expect(actions.createTransferPair).toHaveBeenCalledTimes(2));
+    expect(actions.createTransferPair.mock.calls[1][0]).toMatchObject({ amount: 6000, cardStatementIntent: { statementId: "stmt-A" } });
+  });
+
+  it("D. the opened statement was paid in full elsewhere → the next statement is NOT pre-filled with the old amount; the user must enter one", async () => {
+    const user = await staleThenRefresh(async () => ({ accountId: "octane", statementId: "stmt-B", remaining: 27170 }));
+    await user.click(screen.getByRole("button", { name: "Refresh bill" }));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toMatch(/already paid\. The next statement is shown/));
+    expect(amountInput().value).toBe("");
+    expect(actions.createTransferPair).toHaveBeenCalledTimes(1);
+  });
+
+  it("G. refresh failure: clear message, amount kept, nothing saved, Refresh still offered", async () => {
+    const user = await staleThenRefresh(async () => {
+      throw new Error("offline");
+    });
+    await user.click(screen.getByRole("button", { name: "Refresh bill" }));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toMatch(/Couldn't refresh this bill\. Nothing was changed\./));
+    expect(amountInput().value).toBe("10000");
+    expect(screen.getByRole("button", { name: "Refresh bill" })).toBeTruthy();
+    expect(actions.createTransferPair).toHaveBeenCalledTimes(1);
+  });
+
+  it("H. repeated Refresh clicks while the read is running → one read, button busy, no payment", async () => {
+    let resolve!: (v: Fresh) => void;
+    const onRefreshBill = vi.fn(() => new Promise<Fresh>((r) => (resolve = r)));
+    const user = await staleThenRefresh(onRefreshBill);
+    const button = screen.getByRole("button", { name: "Refresh bill" });
+    fireEvent.click(button);
+    fireEvent.click(button);
+    fireEvent.click(screen.getByRole("button", { name: /refreshing/i }));
+    expect(onRefreshBill).toHaveBeenCalledTimes(1);
+    expect((screen.getByRole("button", { name: /refreshing/i }) as HTMLButtonElement).disabled).toBe(true);
+    resolve({ accountId: "octane", statementId: "stmt-A", remaining: 6000 });
+    await waitFor(() => expect(amountInput().value).toBe("6000"));
+    expect(actions.createTransferPair).toHaveBeenCalledTimes(1);
+    void user;
+  });
+});

@@ -597,8 +597,10 @@ export function PersonDetailWorkspace({
     { label: "You need to give", amount: b.toGive, tone: "expense" },
     { label: "You need to receive", amount: b.toReceive, tone: "success" },
   ];
+  // Unapplied advance: held money — shown beside the two sides, never inside either of them.
+  const hasAdvance = Math.abs(b.advance) >= 0.005;
   const breakdownNote = Math.abs(b.unlinked) >= 0.005 || b.loanPayable > 0 || b.loanReceivable > 0 || b.emiReceivableOpen > 0;
-  const balanceSummary = (b.toGive > 0 || b.toReceive > 0) && (
+  const balanceSummary = (b.toGive > 0 || b.toReceive > 0 || hasAdvance) && (
     <div aria-label="Balance summary" className="text-[13px] tabular-nums">
       <p className="text-[11px] font-bold tracking-[0.08em] text-foreground/75 uppercase">Overall with {person.name.split(" ")[0]}</p>
       <dl className="mt-1">
@@ -610,11 +612,19 @@ export function PersonDetailWorkspace({
             </dd>
           </div>
         ))}
+        {hasAdvance && (
+          <div className="flex items-baseline justify-between gap-3 py-0.5">
+            <dt className="font-medium text-foreground">{b.advance < 0 ? "Advance held (not applied)" : "Advance you paid (not applied)"}</dt>
+            <dd className="font-semibold text-foreground">{formatCurrency(Math.abs(b.advance))}</dd>
+          </div>
+        )}
       </dl>
-      {b.toGive > 0 && b.toReceive > 0 && (
+      {((b.toGive > 0 && b.toReceive > 0) || (hasAdvance && (b.toGive > 0 || b.toReceive > 0))) && (
         // Secondary on purpose: the two sides are separate obligations — the net never means "nothing to do".
         <p className="mt-0.5 text-[11.5px] text-foreground/70">
-          Net {formatCurrency(Math.abs(b.net))} {b.net > 0 ? "to receive" : b.net < 0 ? "to give" : "even"} · Summary only — payments are settled separately.
+          {hasAdvance
+            ? `Net position ${formatCurrency(Math.abs(b.net))} ${b.net > 0 ? "in your favour" : b.net < 0 ? `in ${person.name.split(" ")[0]}'s favour` : "even"} · includes the advance held · Summary only.`
+            : `Net ${formatCurrency(Math.abs(b.net))} ${b.net > 0 ? "to receive" : b.net < 0 ? "to give" : "even"} · Summary only — payments are settled separately.`}
         </p>
       )}
       {breakdownNote && (

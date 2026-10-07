@@ -4,6 +4,7 @@ import { HandCoins, UserRound } from "lucide-react";
 import { DebtCard, LOAN_ICON, cadenceLabel, daysUntil, type DebtCardBadge } from "@/features/loans/components/loan-emi-ui";
 import type { LoanRow } from "@/features/loans/hooks/use-loans-data";
 import { installmentStatus, remainingAmount } from "@/lib/models/payment-schedule";
+import { installmentProgress } from "@/lib/engines/installment-progress";
 
 interface LoanCardProps {
   row: LoanRow;
@@ -60,6 +61,7 @@ export function LoanCard({ row, tag, onClick }: LoanCardProps) {
       overdue={overdue}
       paid={installmentsPaid}
       total={totalInstallments}
+      partial={installmentProgress(row.installments).partial}
       links={[
         row.beneficiaryPersonId ? { icon: UserRound, label: `For ${row.beneficiaryName ?? "someone else"}` } : null,
         row.payerName ? { icon: HandCoins, label: `Paid by ${row.payerName}` } : null,

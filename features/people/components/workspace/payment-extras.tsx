@@ -166,6 +166,10 @@ export function ApplyAdvancePanel({
   // Due through the selected cycle — upcoming items are shown separately, never counted as "need to receive" now.
   const openTotal = round2(options.filter((o) => !isLater(o)).reduce((s, o) => s + o.outstanding, 0));
   const lineByKey = new Map(plan.allocation.lines.map((l) => [l.key, l]));
+  // Received vs applied, straight from `advanceRemaining` (each advance: amount, remaining) — no second balance.
+  const sideAdvances = available.filter((a) => a.side === side);
+  const received = round2(sideAdvances.reduce((s, a) => s + a.amount, 0));
+  const applied = round2(sideAdvances.reduce((s, a) => s + (a.amount - a.remaining), 0));
   const applying = plan.allocation.allocated;
   const toggle = (key: string) => {
     setManual(null);
@@ -185,7 +189,9 @@ export function ApplyAdvancePanel({
           {side === "theyOwe" ? `Advance from ${first}` : `Advance you paid ${first}`}
         </p>
         <dl className="flex flex-1 flex-wrap gap-x-6 gap-y-1">
-          <Figure label="Advance available" value={money(plan.availableTotal)} tone="text-settle-advance-text" strong />
+          <Figure label={side === "theyOwe" ? "Advance received" : "Advance paid"} value={money(received)} />
+          <Figure label="Applied" value={money(applied)} />
+          <Figure label="Available to apply" value={money(plan.availableTotal)} tone="text-settle-advance-text" strong />
           <Figure label={side === "theyOwe" ? `You need to receive from ${first}` : `You need to give to ${first}`} value={money(openTotal)} />
           <Figure label="Remaining after advance" value={money(Math.max(0, round2(openTotal - plan.availableTotal)))} strong />
           {upcomingTotal > 0 && <Figure label="Upcoming (later cycles)" value={money(upcomingTotal)} />}

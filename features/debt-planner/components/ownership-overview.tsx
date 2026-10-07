@@ -71,6 +71,9 @@ export function OwnershipOverview({
 }) {
   const o = snapshot.ownership;
   const shared = o.others > 0;
+  // What I separately owe each person (their own People position) — a separate offset, never subtracted
+  // from their gross ownership.
+  const owedTo = new Map(snapshot.positions.filter((p) => p.sourceType === "person").map((p) => [p.sourceId, p.outstanding]));
   return (
     <section aria-labelledby="dp-ownership" className="overflow-hidden rounded-[8px] border border-border-strong bg-card">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-2.5">
@@ -108,10 +111,30 @@ export function OwnershipOverview({
             <div className="border-t border-border px-4 py-3 lg:border-t-0 lg:border-l">
               <Label>Allocated to others (ownership, not receivable)</Label>
               <dl className="mt-1.5 text-[13px]">
-                {o.byPerson.map((p) => (
-                  <Line key={p.personId} label={`${p.name}'s share`} amount={p.amount} />
-                ))}
+                {o.byPerson.map((p) => {
+                  const offset = owedTo.get(p.personId) ?? 0;
+                  const net = Math.round((p.amount - offset) * 100) / 100;
+                  return (
+                    <div key={p.personId} className="border-b border-border/70 py-1.5 last:border-b-0">
+                      <div className="flex items-baseline justify-between gap-3">
+                        <dt className="min-w-0 text-foreground">Caused by {p.name}</dt>
+                        <dd className="shrink-0 font-semibold tabular-nums text-foreground">
+                          <Money amount={p.amount} />
+                        </dd>
+                      </div>
+                      {offset > 0 && (
+                        <p className="mt-0.5 text-xs text-foreground/80">
+                          Separately, you owe {p.name} <Money amount={offset} /> (People) · net <Money amount={Math.abs(net)} />{" "}
+                          {net > 0 ? `from ${p.name}` : net < 0 ? `to ${p.name}` : "even"}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
               </dl>
+              <p className="mt-1.5 text-xs text-foreground/80">
+                Gross ownership. Anything you owe a person is its own debt and never reduces their share here.
+              </p>
             </div>
           )}
         </div>

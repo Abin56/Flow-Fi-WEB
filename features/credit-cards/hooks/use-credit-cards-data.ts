@@ -132,7 +132,7 @@ function derivedStatement(card: CreditCardProfile, w: { periodStart: Date; perio
     generatedDate: w.periodEnd,
     dueDate: w.dueDate,
     totalAmount: w.totalAmount,
-    minimumDue: card.minimumDuePercent == null ? null : (w.totalAmount * card.minimumDuePercent) / 100,
+    minimumDue: card.minimumDuePercent == null ? null : (Math.max(w.totalAmount, 0) * card.minimumDuePercent) / 100,
     amountPaid: 0,
     interestCharged: null,
     lateFee: null,

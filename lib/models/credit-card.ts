@@ -225,7 +225,8 @@ export interface Statement extends SoftDeletableEntity {
 /** Mirrors `Statement.remainingAmount`. */
 export function statementRemainingAmount(statement: Statement): number {
   const remaining = statement.totalAmount - statement.amountPaid;
-  return Math.min(Math.max(remaining, 0), statement.totalAmount);
+  // A net-credit statement (credits > charges) owes nothing — never a negative remaining.
+  return Math.min(Math.max(remaining, 0), Math.max(statement.totalAmount, 0));
 }
 
 /**

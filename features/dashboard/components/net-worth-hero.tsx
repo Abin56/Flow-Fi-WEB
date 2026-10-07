@@ -16,7 +16,7 @@ export interface NetWorthHeroProps {
     changePercent: number;
     /** Cumulative net (income - expense) for each of the last 7 days, oldest first — see `use-dashboard-data.ts`. */
     trend: number[];
-    /** Everything owned (accounts, money lent, what people owe you) — Net Worth + Debt. */
+    /** Everything owned (accounts, money lent, what people owe you) — Net Worth + Debt + Held for people. */
     assets?: number;
     /** Every liability once: card debt + remaining Loan/EMI principal (`liabilityTotals`). */
     debt?: number;
@@ -24,6 +24,8 @@ export interface NetWorthHeroProps {
     loanDebt?: number;
     /** Owed to people directly (People ledger) — part of `debt`. */
     peopleDebt?: number;
+    /** Advances people paid you, not yet applied — cash you hold for them; neither debt nor yours. */
+    heldForPeople?: number;
   };
   isLoading?: boolean;
   hideAmount?: boolean;
@@ -92,6 +94,13 @@ export function NetWorthHero({ netWorth, isLoading, hideAmount = false, onToggle
                 <span className="text-xs text-muted-foreground">incl. {formatCurrency(netWorth.peopleDebt!)} owed to people</span>
               )}
             </div>
+            {(netWorth.heldForPeople ?? 0) > 0 && (
+              <div className="flex items-baseline gap-1.5">
+                <dt className="text-xs text-muted-foreground">Held for people</dt>
+                <dd className="font-semibold text-foreground tabular-nums">{hideAmount ? "••••" : formatCurrency(netWorth.heldForPeople!)}</dd>
+                {!hideAmount && <span className="text-xs text-muted-foreground">advances not yet applied</span>}
+              </div>
+            )}
           </dl>
         )}
       </div>

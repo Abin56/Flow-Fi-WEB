@@ -147,3 +147,17 @@ it("parses payment dates at local noon", () => {
   expect(paymentDateFrom("2026-09-27")?.getHours()).toBe(12);
   expect(paymentDateFrom("bad")).toBeNull();
 });
+
+describe("paymentCoverage — the pre-save preview's regrouping of the allocator's portions", () => {
+  it("₹6,500 over ₹1,000 installments → 6 settled (#1–#6, ₹6,000) + #7 ₹500 with ₹500 still due", async () => {
+    const { paymentCoverage } = await import("./record-payment");
+    const portions = [1, 2, 3, 4, 5, 6].map((n) => ({ sequenceNumber: n, amount: 1000, remainingAfter: 0 }));
+    portions.push({ sequenceNumber: 7, amount: 500, remainingAfter: 500 });
+    expect(paymentCoverage(portions)).toEqual({ settled: { count: 6, amount: 6000, first: 1, last: 6 }, partial: { sequenceNumber: 7, amount: 500, left: 500 } });
+  });
+
+  it("a partial-only payment has no settled group; ₹5 is kept exactly", async () => {
+    const { paymentCoverage } = await import("./record-payment");
+    expect(paymentCoverage([{ sequenceNumber: 7, amount: 5, remainingAfter: 995 }])).toEqual({ settled: null, partial: { sequenceNumber: 7, amount: 5, left: 995 } });
+  });
+});

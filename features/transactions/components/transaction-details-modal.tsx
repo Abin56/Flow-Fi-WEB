@@ -74,7 +74,7 @@ import type { Category, CategoryType } from "@/lib/models/category";
 import type { LedgerEntryType, Person } from "@/lib/models/person";
 import { PERSON_FUNDED_ACCOUNT_ID, type Transaction } from "@/lib/models/transaction";
 import type { ExpenseParticipantInput } from "@/lib/repositories/expense-repository";
-import type { EditTransactionParams } from "@/lib/repositories/transaction-repository";
+import { CardStatementChangedError, type EditTransactionParams } from "@/lib/repositories/transaction-repository";
 import { formatMonthYear, isSameMonth, transactionFlagFor } from "@/features/transactions/lib/transaction-flag";
 import { useDuplicateGuardedCreate } from "@/lib/services/duplicate-detection/use-duplicate-guarded-create";
 import { resolveMixedSplit } from "@/lib/split/mixed-split";
@@ -452,10 +452,18 @@ export function TransactionDetailsModal({
   onDestinationAccountChange,
   returnLabel = null,
   paymentScope = null,
+  statementIntent = null,
+  onRefreshBill = null,
 }: {
+  /** Card Pay bill — "Refresh bill": an authoritative fresh read of the card's bill (Firestore, canonical
+   *  scope + People). Resolves to the statement normal Pay Now would pay now (null: nothing payable). Never saves. */
+  onRefreshBill?: ((accountId: string) => Promise<{ accountId: string; statementId: string; remaining: number } | null>) | null;
   /** Add mode + transfer only — what this payment pays (card Pay bill: statement vs full outstanding), shown
    *  under the amount while the To account is `accountId`. Display only; never changes the amount. */
   paymentScope?: { accountId: string; content: ReactNode } | null;
+  /** Card Pay bill — the statement normal Pay Now was paying when the dialog opened. An amount within it is
+   *  saved as a payment OF that statement: the write refuses it if that statement changed meanwhile. */
+  statementIntent?: { accountId: string; statementId: string; remaining: number } | null;
   /** Opened from a person's People ledger — shows "Back to <name>"; closing returns there (caller routes). */
   returnLabel?: string | null;
   open: boolean;
@@ -516,6 +524,8 @@ export function TransactionDetailsModal({
   const [justSaved, setJustSaved] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  // Pay bill Save was refused because the statement changed (another tab / device) — offers "Refresh bill".
+  const [billChanged, setBillChanged] = useState(false);
   // Which field the last failed submit pointed at — highlighted only while that field is still the first problem.
   const [invalidField, setInvalidField] = useState<TxnFormField | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
@@ -539,10 +549,41 @@ export function TransactionDetailsModal({
   // One Save action's identity: a new key when the dialog opens or after a successful save, the SAME key
   // across retries of a failed one — the repository records a keyed transfer at most once.
   const [transferKey, setTransferKey] = useState<string>(() => crypto.randomUUID());
+  // The card statement this payment ACTION pays — snapshotted when the action starts (dialog opens, a save
+  // succeeds, or the To card changes), never re-read from live data mid-action: a stale dialog then fails
+  // at the write instead of silently paying whatever statement is oldest by Save time.
+  const [intentSnapshot, setIntentSnapshot] = useState<{ for: string; intent: typeof statementIntent }>({ for: "", intent: null });
+  const intentFor = `${transferKey}|${statementIntent?.accountId ?? ""}`;
+  if (open && intentSnapshot.for !== intentFor) setIntentSnapshot({ for: intentFor, intent: statementIntent });
+  // "Refresh bill" after a refused stale Save: an AUTHORITATIVE fresh read (`onRefreshBill`), then
+  // re-snapshot that statement. Never saves — the user reviews the refreshed bill and presses Pay again.
+  // If the statement the dialog was paying is no longer the one due (paid elsewhere), the old amount is
+  // NOT carried onto the next statement: the amount is cleared and the user enters a new one.
+  const [refreshingBill, setRefreshingBill] = useState(false);
+  async function refreshBill() {
+    if (refreshingBill) return;
+    const previous = intentSnapshot.intent;
+    setRefreshingBill(true);
+    try {
+      const fresh = onRefreshBill ? await onRefreshBill(destinationAccountId) : statementIntent;
+      const sameStatement = fresh != null && previous != null && fresh.statementId === previous.statementId;
+      setIntentSnapshot({ for: intentFor, intent: fresh });
+      setAmount(sameStatement && fresh.remaining > 0 ? String(fresh.remaining) : "");
+      setBillChanged(false);
+      setFormError(
+        sameStatement ? null : fresh == null ? "This bill is already paid — nothing is due on it now." : "The bill you opened is already paid. The next statement is shown — enter the amount you want to pay.",
+      );
+    } catch {
+      setFormError("Couldn't refresh this bill. Nothing was changed.");
+    } finally {
+      setRefreshingBill(false);
+    }
+  }
   const key = transaction ? transaction.id : "__add__";
   if (open && seenKey !== key) {
     setSeenKey(key);
     setTransferKey(crypto.randomUUID());
+    setBillChanged(false);
     if (transaction) {
       setKind(kindFromRow(row!));
       setDescription(transaction.description);
@@ -930,7 +971,11 @@ export function TransactionDetailsModal({
             accountingMonth: reassign ? month : null,
           });
         } else if (kind === "transfer") {
-          await actions.createTransferPair({ amount: amountValue, dateTime, sourceAccountId: accountId, destinationAccountId, categoryId, description, notes, idempotencyKey: transferKey });
+          // Within the opened statement → a payment OF that statement (beyond it is the explicit full / extra choice).
+          const intent = intentSnapshot.intent;
+          const cardStatementIntent =
+            intent != null && intent.accountId === destinationAccountId && amountValue <= intent.remaining + 0.005 ? { statementId: intent.statementId } : null;
+          await actions.createTransferPair({ amount: amountValue, dateTime, sourceAccountId: accountId, destinationAccountId, categoryId, description, notes, idempotencyKey: transferKey, cardStatementIntent });
         } else {
           const newTransaction = await actions.createTransaction({
             type: kind,
@@ -1108,6 +1153,7 @@ export function TransactionDetailsModal({
       // surface just stops and steps aside rather than repeating the same failure.
       op.dismiss();
       setFormError(e instanceof Error ? e.message : "Could not save this transaction");
+      setBillChanged(e instanceof CardStatementChangedError);
     } finally {
       setSaving(false);
     }
@@ -1468,7 +1514,18 @@ export function TransactionDetailsModal({
                 className="flex items-start gap-2 rounded-[6px] border border-danger/50 bg-danger/10 px-3 py-2 text-xs font-medium text-danger"
               >
                 <Info className="mt-px size-3.5 shrink-0" strokeWidth={2} />
-                {formError}
+                <span className="flex-1">{formError}</span>
+                {billChanged && (
+                  <button
+                    type="button"
+                    onClick={() => void refreshBill()}
+                    disabled={refreshingBill}
+                    aria-busy={refreshingBill}
+                    className="shrink-0 font-semibold underline underline-offset-2 disabled:opacity-60"
+                  >
+                    {refreshingBill ? "Refreshing…" : "Refresh bill"}
+                  </button>
+                )}
               </motion.p>
             )}
             {isTransferLeg && (

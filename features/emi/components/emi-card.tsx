@@ -5,6 +5,7 @@ import { DebtCard, EMI_ICON, cadenceLabel, daysUntil, type DebtCardBadge } from 
 import type { EmiRow } from "@/features/emi/hooks/use-emi-data";
 import type { EmiLoanType } from "@/lib/models/emi";
 import { remainingAmount } from "@/lib/models/payment-schedule";
+import { installmentProgress } from "@/lib/engines/installment-progress";
 
 export const EMI_TYPE_ICON: Record<EmiLoanType, typeof Home> = {
   home: Home,
@@ -79,6 +80,7 @@ export function EmiCard({ row, tag, onClick }: EmiCardProps) {
       overdue={status === "overdue" || (nextInstallment != null && daysUntil(nextInstallment.dueDate) < 0)}
       paid={installmentsPaid}
       total={emi.installmentCount}
+      partial={installmentProgress(row.installments).partial}
       links={[
         cardLabel && cardLabel !== source ? { icon: CreditCard, label: cardLabel } : null,
         emi.beneficiaryPersonId ? { icon: UserRound, label: `For ${row.beneficiaryName ?? "someone else"}` } : null,

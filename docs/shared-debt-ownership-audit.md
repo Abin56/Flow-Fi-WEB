@@ -1,6 +1,6 @@
 # Shared debt ownership: financial integrity audit (Web)
 
-Status: audit only. No engine behaviour changed. The only product change is Debt Planner wording (§4, §11, §12).
+Status: the audit found no engine changes beyond the findings below, which are fixed as recorded under each one. The other product change is Debt Planner wording (§4, §11, §12).
 
 Tests:
 - `tests/integration/shared-loan-ownership-lifecycle.test.ts` runs the real repositories against the Firestore emulator.
@@ -46,6 +46,12 @@ A pinned test in the lifecycle suite covers this.
 
 Possible fix (needs a decision): feed `directBalance + emiReceivable` into the People part of Net Worth and into `peoplePayable`. That is a Net Worth contract change, so it was not made here.
 
+**Completed (2026-10-07):** advances. Record Payment keeps an overpayment as a separate `sourceKind: "advance"` entry. The breakdown used to treat it as an unlinked remainder: it paid down the person's card receivable first, then any open share, then became "to give". So ₹1,200 paid against a ₹900 share showed a phantom ₹300 payable. With an unrelated ₹8,000 card share, it cut the card attribution to ₹7,700.
+
+`personBalanceBreakdown` now keeps an unapplied advance as its own signed `advance` component, the same as the People statement's advance balance. It is never "to give", never "to receive", and never netted against anything. It settles a share or entry only through an explicit `AdvanceApplication`. Net Worth reports it as `advanceHeld` / `advancePaid`: it stays in the People balance, so the total is unchanged, but it is never in `peoplePayable`.
+
+A share settlement that exceeds the share now due is a refund owed to the person ("to give"). This happens, for example, when the loan is cancelled after the person reimbursed. That refund is never netted against an unrelated receivable. Tests: `lib/engines/loan-share-person-position.test.ts`, plus the §7, §8 and F2 emulator tests.
+
 ### F2. Card attribution cap ignores loan-share reimbursements — FIXED (2026-10-02, same root cause as F1)
 
 `use-debt-planner-data` caps each person's card attribution at `max(directBalance, 0)`.
@@ -66,7 +72,19 @@ These all reconcile on live documents:
 
 ## §3 Card ownership netting: gross vs net
 
-Current rule: the card share attributed to a person equals `min(unrecovered card share, max(directBalance, 0))`.
+**Current rule (approved 2026-10-07):** the Debt Planner caps a person's card attribution at their GROSS direct receivable (`personDirectGross(...).receivable`). What I owe them is their own People position (`directToGive`), never netted into the card.
+
+Example: AMMA owes ₹8,000 of card purchases and I separately owe her ₹5,000.
+- The card attributes ₹8,000 to AMMA and ₹0 to me.
+- A separate People position says "You owe AMMA ₹5,000".
+- My debt is ₹5,000.
+- The net economic position with AMMA is ₹3,000 (`PersonPosition.net`).
+
+Neither loan-share reimbursements nor advances reduce the gross figure. Tests: §3 in `lib/engines/debt-ownership-audit.test.ts` and F2 in `lib/engines/loan-share-person-position.test.ts`.
+
+The rest of this section is the original analysis of the net rule. It is superseded.
+
+Previous rule: the card share attributed to a person equals `min(unrecovered card share, max(directBalance, 0))`.
 
 Example: AMMA owes ₹8,000 of card purchases and I separately owe her ₹5,000. The card shows AMMA ₹3,000 and me ₹5,000.
 

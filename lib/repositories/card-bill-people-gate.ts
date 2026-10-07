@@ -24,13 +24,14 @@
  */
 
 import type { Transaction as FirestoreTransaction } from "firebase/firestore";
-import { cardBillsForCard, cardStatementPaymentScope, payBillChargeScope } from "@/lib/engines/card-cycle-bills";
-import { linkedPeopleForCard, peopleSettlementGate, PeopleSettlementPendingError } from "@/lib/engines/linked-people-readiness";
+import { cardBillsForCard, cardStatementPaymentScope, payBillChargeScope, type CardStatementPaymentScope } from "@/lib/engines/card-cycle-bills";
+import { linkedPeopleForCard, peopleSettlementGate, PeopleSettlementPendingError, type LinkedPeopleReadiness, type PeopleSettlementGate } from "@/lib/engines/linked-people-readiness";
 import { buildPersonCycleStatement, type PersonCycleStatement } from "@/lib/engines/person-cycle-statement";
 import type { Account } from "@/lib/models/account";
 import type { CreditCardProfile, Statement } from "@/lib/models/credit-card";
 import type { AdvanceApplication, LedgerEntry, Person } from "@/lib/models/person";
 import type { Transaction } from "@/lib/models/transaction";
+import { CardStatementChangedError, type CardStatementIntent } from "./transaction-repository";
 
 const ALL_TIME = { start: new Date(1970, 0, 1), end: new Date(2200, 0, 1) };
 
@@ -49,33 +50,45 @@ export interface CardBillGateReader {
    * In-transaction reads of the card profile and its stored statements: their statement day / due day and
    * statement periods decide which bill is current and which charges it holds, so an edit committing
    * meanwhile re-runs the gate.
+   *
+   * INVARIANT for future statement creation: a statement CREATED mid-payment is not one of these locked
+   * documents, so it would not re-run the gate. No app flow creates statements today (bills are derived
+   * from the card's statement day). Whatever adds one must also write the card profile document (e.g. a
+   * statements version / lastEditedAt) in the same transaction, so this lock catches it.
    */
   lockCard(tx: FirestoreTransaction, cardId: string, statementIds: readonly string[]): Promise<void>;
 }
 
+/** A card's bill as freshly read: the canonical Pay Now scope and the People gate for any amount. */
+export interface CardBillState {
+  card: CreditCardProfile;
+  scope: CardStatementPaymentScope;
+  /** People readiness for a payment of `amount` against this scope (what Pay bill shows). */
+  readinessFor(amount: number): LinkedPeopleReadiness;
+  /** The SAME People check the payment write runs: `peopleSettlementGate(readinessFor(amount))`. */
+  peopleGateFor(amount: number): PeopleSettlementGate;
+}
+
 /**
- * Throws `PeopleSettlementPendingError` (subject "card-bill") when People shares beneath the charges a
- * payment of `amount` reaches on `cardAccount` are still open. Never writes anything.
+ * Reads a card's bill FRESH through `reader` and runs the canonical chain once — `cardBillsForCard` →
+ * `cardStatementPaymentScope`, and per amount `payBillChargeScope` → `linkedPeopleForCard` →
+ * `peopleSettlementGate`. Used by the payment write (with `tx`: the card, its statements and each linked
+ * person are also read in the transaction so a concurrent change re-runs it) and by Pay bill's Refresh
+ * (no `tx`: an authoritative read, no locks). Null when the account isn't a card with a profile.
  */
-export async function assertCardBillPeopleSettled(params: {
-  tx: FirestoreTransaction;
-  reader: CardBillGateReader;
-  /** The card account as read in the payment's transaction. */
-  cardAccount: Account;
-  amount: number;
-  now?: Date;
-}): Promise<void> {
-  const { tx, reader, cardAccount, amount } = params;
+export async function loadCardBillState(params: { reader: CardBillGateReader; cardAccount: Account; tx?: FirestoreTransaction | null; now?: Date }): Promise<CardBillState | null> {
+  const { reader, cardAccount, tx } = params;
   const now = params.now ?? new Date();
-  if (cardAccount.type !== "card") return;
+  if (cardAccount.type !== "card") return null;
   const card = await reader.cardForAccount(cardAccount.id);
-  if (card == null) return;
+  if (card == null) return null;
 
   const [allStatements, rawTransactions, people] = await Promise.all([reader.statements(card.id), reader.cardTransactions(cardAccount.id), reader.people()]);
   const statements = allStatements.filter((s) => s.deletedAt == null);
   const transactions = rawTransactions.filter((t) => t.deletedAt == null && t.accountId === cardAccount.id);
-  await reader.lockCard(tx, card.id, statements.map((s) => s.id));
+  if (tx) await reader.lockCard(tx, card.id, statements.map((s) => s.id));
   const chargeIds = new Set(transactions.map((t) => t.id));
+  const scope = cardStatementPaymentScope(cardBillsForCard(card, transactions, statements, now), now);
 
   // Only people with a share of one of this card's charges can gate it.
   const linked: { person: Person; entries: LedgerEntry[] }[] = [];
@@ -86,11 +99,9 @@ export async function assertCardBillPeopleSettled(params: {
       linked.push({ person, entries });
     }
   }
-  if (linked.length === 0) return;
-
   const personStatements: PersonCycleStatement[] = [];
   for (const { person, entries } of linked) {
-    await reader.lockPerson(tx, person.id);
+    if (tx) await reader.lockPerson(tx, person.id);
     personStatements.push(
       buildPersonCycleStatement({
         person: { id: person.id, name: person.name, openingBalance: person.openingBalance, createdAt: person.createdAt },
@@ -105,8 +116,7 @@ export async function assertCardBillPeopleSettled(params: {
     );
   }
 
-  const scope = cardStatementPaymentScope(cardBillsForCard(card, transactions, statements, now), now);
-  const gate = peopleSettlementGate(
+  const readinessFor = (amount: number): LinkedPeopleReadiness =>
     linkedPeopleForCard({
       statements: personStatements,
       ledgerEntries: linked.flatMap((l) => l.entries),
@@ -116,7 +126,36 @@ export async function assertCardBillPeopleSettled(params: {
       lenderDue: amount,
       paymentAmount: amount,
       chargeScope: payBillChargeScope(scope, amount),
-    }),
-  );
+    });
+  return { card, scope, readinessFor, peopleGateFor: (amount) => peopleSettlementGate(readinessFor(amount)) };
+}
+
+/**
+ * Throws `PeopleSettlementPendingError` (subject "card-bill") when People shares beneath the charges a
+ * payment of `amount` reaches on `cardAccount` are still open. Never writes anything.
+ */
+export async function assertCardBillPeopleSettled(params: {
+  tx: FirestoreTransaction;
+  reader: CardBillGateReader;
+  /** The card account as read in the payment's transaction. */
+  cardAccount: Account;
+  amount: number;
+  /** Normal Pay Now's statement — re-checked against current state (see `TransferPairParams.cardStatementIntent`). */
+  statementIntent?: CardStatementIntent | null;
+  now?: Date;
+}): Promise<void> {
+  const { tx, reader, cardAccount, amount, statementIntent } = params;
+  const state = await loadCardBillState({ reader, cardAccount, tx, now: params.now });
+  if (state == null) return;
+  const { scope } = state;
+
+  // Normal Pay Now pays ONE statement. If that statement is no longer the one a payment settles first,
+  // or now owes less than this amount (another tab / device paid it), refuse rather than let the
+  // oldest-first allocator spill this payment into the next statement.
+  if (statementIntent != null && (scope.current?.id !== statementIntent.statementId || amount > scope.current.remaining + 0.005)) {
+    throw new CardStatementChangedError();
+  }
+
+  const gate = state.peopleGateFor(amount);
   if (gate.blocked) throw new PeopleSettlementPendingError(gate, "card-bill");
 }

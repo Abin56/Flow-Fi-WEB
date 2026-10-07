@@ -5,6 +5,7 @@ import Link from "next/link";
 import { ClayButton } from "@/components/clay/clay-button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { remainingAmount, type Installment } from "@/lib/models/payment-schedule";
+import { installmentProgress } from "@/lib/engines/installment-progress";
 import type { LoanRow } from "@/features/loans/hooks/use-loans-data";
 import { loanBadges, loanDisplayName } from "@/features/loans/components/loan-card";
 import { DetailHero, DetailSectionTitle, FactGrid, LinkedList, LinkedRow, Money, daysUntil, dueLabel } from "@/features/loans/components/loan-emi-ui";
@@ -141,6 +142,7 @@ export function LoanScheduleDialog({ open, onOpenChange, row, onEdit, onDelete, 
               amount={row.outstandingPrincipal}
               paid={row.installmentsPaid}
               total={row.totalInstallments}
+              partial={installmentProgress(row.installments).partial}
               badges={loanBadges(row)}
             />
 

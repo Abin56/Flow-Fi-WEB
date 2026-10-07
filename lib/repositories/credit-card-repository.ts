@@ -28,7 +28,7 @@
  * `addMonths`).
  */
 
-import type { CollectionReference } from "firebase/firestore";
+import { type CollectionReference, runTransaction } from "firebase/firestore";
 import { FirestoreCrudRepository } from "@/lib/firestore/firestore-crud-repository";
 import { recordEdit, updateField } from "@/lib/firestore/soft-deletable";
 import { CycleAnchor } from "@/lib/engines/cycle-engine";
@@ -512,7 +512,7 @@ export function unbilledSpendForCard(
   // they settle the liability via `settleCardPayments`, never add to it as spend.
   const totalAmount = cardTransactions
     .filter((t) => countsTowardCardStatement(t) && t.dateTime.getTime() > billedThrough.getTime())
-    .reduce((sum, t) => sum + t.amount, 0);
+    .reduce((sum, t) => sum + cardStatementAmount(t), 0);
   return { periodStart: billedThrough, periodEnd: now, totalAmount };
 }
 
@@ -542,8 +542,8 @@ export function uncoveredClosedSpendForCard(
     const window = statementWindowForDate(card, t.dateTime);
     const key = window.periodEnd.getTime();
     const existing = byPeriodEnd.get(key);
-    if (existing) existing.totalAmount += t.amount;
-    else byPeriodEnd.set(key, { periodStart: window.periodStart, periodEnd: window.periodEnd, dueDate: window.dueDate, totalAmount: t.amount });
+    if (existing) existing.totalAmount += cardStatementAmount(t);
+    else byPeriodEnd.set(key, { periodStart: window.periodStart, periodEnd: window.periodEnd, dueDate: window.dueDate, totalAmount: cardStatementAmount(t) });
   }
   return [...byPeriodEnd.values()];
 }
@@ -575,7 +575,12 @@ export function settleCardPayments<S extends { dueDate: Date; totalAmount: numbe
   unbilledTotal: number,
   paymentTotal: number,
 ): { statements: S[]; unbilledTotal: number } {
-  let left = Math.max(paymentTotal, 0);
+  // A statement (or the unbilled cycle) whose credits exceed its charges nets below zero: it owes
+  // nothing, and its excess credit settles the other open debt oldest-first exactly like an overpayment
+  // — never a negative due. Its own total stays as is (net credit); `remaining` clamps it to 0.
+  const excessCredit = statements.reduce((sum, s) => sum + Math.max(-s.totalAmount, 0), 0) + Math.max(-unbilledTotal, 0);
+  unbilledTotal = Math.max(unbilledTotal, 0);
+  let left = Math.max(paymentTotal, 0) + excessCredit;
   const extraById = new Map<S, number>();
   for (const s of [...statements].sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime())) {
     if (left <= 0) break;
@@ -632,6 +637,26 @@ export class StatementRepository extends FirestoreCrudRepository<Statement> {
    */
   totalFor(cardTransactions: Transaction[], period: { periodStart: Date; periodEnd: Date }): number {
     return statementPeriodTotal(cardTransactions, period);
+  }
+
+  /**
+   * Repairs ONE stored statement's `totalAmount` if it was written by the old credit-as-charge formula
+   * (`creditInflatedTotalRepair`). Re-reads the document in a transaction and decides from that fresh copy,
+   * so a concurrent edit or a second run never writes twice. Writes only `totalAmount` (+ its edit-history
+   * line): never `amountPaid`, `minimumDue`, period, due date, id, transactions, payments or balances.
+   * Returns whether it wrote.
+   */
+  async repairCreditInflatedTotal(statementId: string, cardTransactions: Transaction[]): Promise<boolean> {
+    const ref = this.docRef(statementId);
+    return runTransaction(this.collection.firestore, async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists()) return false;
+      const fresh = snap.data();
+      const repaired = creditInflatedTotalRepair(fresh, cardTransactions);
+      if (repaired == null) return false;
+      tx.set(ref, { ...recordEdit(fresh, "totalAmount", String(fresh.totalAmount), String(repaired)), totalAmount: repaired });
+      return true;
+    });
   }
 
   /**
@@ -807,6 +832,10 @@ export class StatementPaymentRepository extends FirestoreCrudRepository<Statemen
    * direction="debit", accountId=params.sourceAccountId, requireDescriptionMatch: false. Do not
    * add the check inside this method itself — no dialog can live at the repository layer (see
    * `use-duplicate-guarded-create.tsx`'s module doc for why).
+   *
+   * NOT SAFE FOR CARD PAYMENTS AS WRITTEN: it writes only a bank expense (no card leg), outside the card
+   * People gate and statement-intent check. A real "Pay Statement" screen must record the payment through
+   * `TransactionRepository.createTransferPairAtomic` (with `cardStatementIntent`), as Pay bill does.
    */
   async recordPayment(statement: Statement, params: RecordStatementPaymentParams): Promise<StatementPayment> {
     if (params.amount <= 0) {
@@ -878,6 +907,48 @@ export function countsTowardCardStatement(t: Transaction): boolean {
 }
 
 /**
+ * A statement row's effect on the card's billable debt — the ONE classification of card movements:
+ *  - CHARGE  — a non-transfer `expense` on the card (purchase, fee, interest): + amount;
+ *  - CREDIT  — a non-transfer `income` on the card (merchant refund, reversal, cashback, adjustment):
+ *              − amount, in the statement cycle it is DATED in (the card's own statement day), never
+ *              rewriting an earlier statement;
+ *  - PAYMENT — the income leg of a transfer INTO the card (`isCardBillPaymentLeg`): not a statement row;
+ *              settles statements via `cardPaymentTotal` / `settleCardPayments`;
+ *  - EXCLUDED — deleted, `excludeFromCalculations`, or the expense leg of a transfer OUT of the card.
+ * Same sign as `balanceEffect` on the card account, so statements reconcile to the card's balance.
+ * Call only for rows `countsTowardCardStatement` accepts.
+ */
+export function cardStatementAmount(t: Pick<Transaction, "type" | "amount">): number {
+  return t.type === "income" ? -t.amount : t.amount;
+}
+
+const round2 = (v: number) => Math.round(v * 100) / 100;
+
+/**
+ * Stored-statement repair: the canonical total (`statementPeriodTotal`) to write back when a stored
+ * `totalAmount` was produced by the OLD formula that added card credits as charges — or null (leave it).
+ *
+ * Conservative by design: a stored total is a generation-time snapshot that may legitimately differ from
+ * today's transactions (a later edit/delete, another client's rules), so it is repaired ONLY when it equals
+ * exactly what the old formula gives for the period's current rows (every amount added, credits included)
+ * AND that differs from the canonical total — i.e. the period has a credit and the document still carries
+ * the inflated figure. Anything else is not provably this bug and is never touched. The old formula below
+ * only RECOGNISES affected documents; the value written is always the canonical one.
+ */
+export function creditInflatedTotalRepair(
+  statement: Pick<Statement, "totalAmount" | "periodStart" | "periodEnd" | "deletedAt">,
+  cardTransactions: Transaction[],
+): number | null {
+  if (statement.deletedAt != null) return null;
+  const rows = cardTransactions.filter((t) => countsTowardCardStatement(t) && periodContains(statement as unknown as StatementPeriodWindow, t.dateTime));
+  const legacy = round2(rows.reduce((sum, t) => sum + t.amount, 0));
+  const canonical = round2(statementPeriodTotal(cardTransactions, statement));
+  const stored = round2(statement.totalAmount);
+  if (Math.abs(stored - legacy) >= 0.005 || Math.abs(legacy - canonical) < 0.005) return null;
+  return canonical;
+}
+
+/**
  * The one definition of a statement period's total (see `StatementRepository.totalFor`, which
  * delegates here) — exported so every standing can recompute a closed statement's LIVE total
  * instead of trusting the stale materialized `totalAmount`. Mirrors Flutter's
@@ -886,5 +957,5 @@ export function countsTowardCardStatement(t: Transaction): boolean {
 export function statementPeriodTotal(cardTransactions: Transaction[], period: { periodStart: Date; periodEnd: Date }): number {
   return cardTransactions
     .filter((t) => countsTowardCardStatement(t) && periodContains(period as StatementPeriodWindow, t.dateTime))
-    .reduce((sum, t) => sum + t.amount, 0);
+    .reduce((sum, t) => sum + cardStatementAmount(t), 0);
 }

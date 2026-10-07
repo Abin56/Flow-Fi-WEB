@@ -14,7 +14,7 @@ import { outstandingPrincipalFor } from "@/lib/engines/loan-outstanding";
 import { useLoanRows } from "@/features/loans/hooks/use-loans-data";
 import { useEmiRows } from "@/features/emi/hooks/use-emi-data";
 import { useCreditCardTotals } from "@/features/credit-cards/hooks/use-credit-cards-data";
-import { usePeopleLedgerEntries, usePersonPositions } from "@/features/people/hooks/use-people-data";
+import { usePeopleAdvanceApplications, usePeopleLedgerEntries, usePersonPositions } from "@/features/people/hooks/use-people-data";
 import { breakdownEntryOf, peopleNetWorthPosition } from "@/lib/engines/person-position";
 
 export function useLoanBalanceSheet(): {
@@ -28,6 +28,8 @@ export function useLoanBalanceSheet(): {
   peoplePayable: number;
   /** What people owe me, GROSS per person — direct ledger + open Person-linked installment shares. */
   peopleReceivable: number;
+  /** Unapplied advances people paid me — cash I hold for them, inside `netWorth` but neither payable nor receivable. */
+  peopleAdvanceHeld: number;
   isLoading: boolean;
 } {
   const accountBalances = useNetWorth();
@@ -39,18 +41,21 @@ export function useLoanBalanceSheet(): {
   const { totals: cardTotals, isLoading: cardsLoading } = useCreditCardTotals();
   const { positionsByPersonId, loanIds, isLoading: peopleLoading } = usePersonPositions();
   const { entriesByPersonId } = usePeopleLedgerEntries();
+  const { applicationsByPersonId } = usePeopleAdvanceApplications();
   // People part of Net Worth: direct ledger + due Person-linked installment shares, gross components
-  // (F1 — a reimbursed share is cash in / receivable out, never a phantom payable).
+  // (F1 — a reimbursed share is cash in / receivable out, never a phantom payable; an unapplied advance
+  // is held money, never a payable).
   const people = useMemo(
     () =>
       peopleNetWorthPosition(
         Object.entries(positionsByPersonId).map(([personId, position]) => ({
           position,
           entries: (entriesByPersonId[personId] ?? []).map(breakdownEntryOf),
+          advanceApplications: applicationsByPersonId[personId],
         })),
         loanIds,
       ),
-    [positionsByPersonId, entriesByPersonId, loanIds],
+    [positionsByPersonId, entriesByPersonId, applicationsByPersonId, loanIds],
   );
 
   const sheet = useMemo(() => {
@@ -82,6 +87,7 @@ export function useLoanBalanceSheet(): {
     netWorth: netWorthWithLoans(accountBalances, sheet, people.balance),
     peoplePayable: people.payable,
     peopleReceivable: people.receivable,
+    peopleAdvanceHeld: people.advanceHeld,
     isLoading: loansLoading || emisLoading || cardsLoading || cardListLoading || peopleLoading,
   };
 }

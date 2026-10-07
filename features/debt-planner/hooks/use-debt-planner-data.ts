@@ -25,7 +25,7 @@ import { useCreditCardStandings, useCreditCardTotals, type CreditCardStandingVie
 import { useEmiRows } from "@/features/emi/hooks/use-emi-data";
 import { useLoanRows } from "@/features/loans/hooks/use-loans-data";
 import { useMonthCycleData } from "@/features/month-cycle/hooks/use-month-cycle-data";
-import { usePeopleLedgerEntries, usePersonPositions } from "@/features/people/hooks/use-people-data";
+import { usePeopleAdvanceApplications, usePeopleLedgerEntries, usePersonPositions } from "@/features/people/hooks/use-people-data";
 import { breakdownEntryOf, personDirectGross } from "@/lib/engines/person-position";
 import { cardFundedLoanCardId, emiPurchaseRepresentedOnCard } from "@/lib/engines/credit-utilization";
 import {
@@ -170,6 +170,7 @@ export function useDebtPlannerData(): {
   const { data: people = [], isLoading: peopleLoading } = usePeople();
   const { positionsByPersonId, loanIds, isLoading: positionsLoading } = usePersonPositions();
   const { entriesByPersonId } = usePeopleLedgerEntries();
+  const { applicationsByPersonId } = usePeopleAdvanceApplications();
   // Each person's direct obligations by direction, GROSS — a payable is never reduced by an unrelated
   // receivable of the same person (and vice versa).
   const directGross = useMemo(
@@ -177,10 +178,10 @@ export function useDebtPlannerData(): {
       Object.fromEntries(
         Object.entries(positionsByPersonId).map(([id, pos]) => [
           id,
-          personDirectGross(pos, (entriesByPersonId[id] ?? []).map(breakdownEntryOf), loanIds),
+          personDirectGross(pos, (entriesByPersonId[id] ?? []).map(breakdownEntryOf), loanIds, applicationsByPersonId[id]),
         ]),
       ),
-    [positionsByPersonId, entriesByPersonId, loanIds],
+    [positionsByPersonId, entriesByPersonId, applicationsByPersonId, loanIds],
   );
   const { sheet, isLoading: sheetLoading } = useLoanBalanceSheet();
   const { data: expenses = [], isLoading: expensesLoading } = useExpenses();

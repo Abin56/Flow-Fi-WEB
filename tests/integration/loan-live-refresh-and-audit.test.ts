@@ -239,7 +239,7 @@ describe("Money operations — one Transaction each, correct FKs, direction and 
     expect(emiTxn).toMatchObject({ type: "expense", loanId: loan.id, paymentAllocationType: "regularEmi", installmentId: installments[0].id, installmentPaymentId: regular.paymentIds[0] });
     const emiPayment = (await paymentsUnder(db, loan.scheduleId, installments[0].id)).find((p) => p.id === regular.paymentIds[0]);
     expect(emiPayment?.transactionId).toBe(emiTxn.id);
-    expect(loanTransactionLabel(emiTxn, loan)).toBe("Loan EMI — Home Loan");
+    expect(loanTransactionLabel(emiTxn, loan)).toBe("Loan Installment — Home Loan");
     installments = await liveInstallments(db, loan.scheduleId);
     expect(historyKey(loan, installments)).not.toBe(key);
     key = historyKey(loan, installments);
@@ -296,7 +296,7 @@ describe("Money operations — one Transaction each, correct FKs, direction and 
     expect(loanAfterMore.loanAmount).toBe(17000);
     const moreTxn = (await transactionsFor(db, loan.id)).find((t) => t.id === more.transactionId)!;
     expect(moreTxn).toMatchObject({ type: "income", paymentAllocationType: "additionalDisbursement", amount: 5000 });
-    expect(loanTransactionLabel(moreTxn, loan)).toBe("Borrowed More — Home Loan");
+    expect(loanTransactionLabel(moreTxn, loan)).toBe("Additional Money Received — Home Loan");
     const disbDoc = await getDoc(doc(db, "users", UID, "loans", loan.id, "additionalDisbursements", more.disbursementId));
     expect(disbDoc.data()?.transactionId).toBe(more.transactionId);
     const afterMore = await liveInstallments(db, loan.scheduleId);
@@ -334,7 +334,7 @@ describe("Money operations — one Transaction each, correct FKs, direction and 
     expect(txns).toHaveLength(3);
     const moreTxn = txns.find((t) => t.id === more.transactionId)!;
     expect(moreTxn.type).toBe("expense");
-    expect(loanTransactionLabel(moreTxn, loan)).toBe("Lent More — Rahul Loan");
+    expect(loanTransactionLabel(moreTxn, loan)).toBe("Additional Money Given — Rahul Loan");
     expect(loanTransactionLabel(txns.find((t) => t.paymentAllocationType === "regularEmi")!, loan)).toBe("Loan Repayment Received — Rahul Loan");
     expect((await loanRepository.getByKey(loan.id))?.loanAmount).toBe(16000);
   });

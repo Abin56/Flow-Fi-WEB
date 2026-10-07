@@ -130,7 +130,7 @@ function FigureLabel({ children }: { children: React.ReactNode }) {
 
 /** Installment progress bar — dark olive on light, lime on dark (via `primary-accent-text`), on a solid
  *  `border`-grey track so the empty part stays visible on washed-out displays. */
-export function InstallmentProgress({ paid, total, className }: { paid: number; total: number; className?: string }) {
+export function InstallmentProgress({ paid, total, partial = 0, className }: { paid: number; total: number; partial?: number; className?: string }) {
   const percent = total > 0 ? Math.min(100, Math.round((paid / total) * 100)) : 0;
   return (
     <div className={cn("flex flex-col gap-1.5", className)}>
@@ -140,15 +140,17 @@ export function InstallmentProgress({ paid, total, className }: { paid: number; 
         aria-valuemin={0}
         aria-valuemax={total}
         aria-valuenow={paid}
-        aria-label={`${paid} of ${total} installments paid`}
+        aria-label={`${paid} of ${total} installments paid${partial > 0 ? `, ${partial} partly paid` : ""}`}
       >
         <div className="h-full rounded-[2px] bg-primary-accent-text transition-[width] duration-700 ease-out" style={{ width: `${percent}%` }} />
       </div>
       <div className="flex items-center justify-between text-xs">
         <span className="font-medium text-foreground tabular-nums">
           {paid} of {total} paid
+          {/* A partly covered installment (e.g. an advance's remainder) is never counted as paid. */}
+          {partial > 0 && <span className="text-muted-foreground"> · {partial} partial</span>}
         </span>
-        <span className="text-muted-foreground tabular-nums">{Math.max(total - paid, 0)} left</span>
+        <span className="text-muted-foreground tabular-nums">{Math.max(total - paid - partial, 0)} left</span>
       </div>
     </div>
   );
@@ -179,6 +181,8 @@ export interface DebtCardProps {
   overdue?: boolean;
   paid: number;
   total: number;
+  /** Installments only partly paid (not counted in `paid`). */
+  partial?: number;
   /** Small linked-record chips — card, person. */
   links?: { icon: LucideIcon; label: string }[];
   muted?: boolean;
@@ -208,6 +212,7 @@ export function DebtCard({
   overdue = false,
   paid,
   total,
+  partial = 0,
   links = [],
   muted = false,
   onClick,
@@ -280,7 +285,7 @@ export function DebtCard({
           )}
         </div>
 
-        {total > 1 && <InstallmentProgress paid={paid} total={total} />}
+        {total > 1 && <InstallmentProgress paid={paid} total={total} partial={partial} />}
 
         {links.length > 0 && (
           <div className="mt-auto flex flex-wrap gap-x-3 gap-y-1 border-t border-border pt-2.5">
@@ -305,12 +310,14 @@ export function DetailHero({
   amount,
   paid,
   total,
+  partial = 0,
   badges = [],
 }: {
   label: string;
   amount: number;
   paid: number;
   total: number;
+  partial?: number;
   badges?: DebtCardBadge[];
 }) {
   return (
@@ -330,7 +337,7 @@ export function DetailHero({
           </div>
         )}
       </div>
-      {total > 0 && <InstallmentProgress paid={paid} total={total} />}
+      {total > 0 && <InstallmentProgress paid={paid} total={total} partial={partial} />}
     </div>
   );
 }

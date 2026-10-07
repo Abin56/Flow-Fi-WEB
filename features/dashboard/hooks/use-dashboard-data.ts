@@ -33,7 +33,7 @@
 import { useMemo } from "react";
 import { useAccounts } from "@/hooks/use-accounts";
 import { useLoanBalanceSheet } from "@/hooks/use-loan-balance-sheet";
-import { liabilityTotals } from "@/lib/engines/loan-balance-sheet";
+import { liabilityTotals, netWorthComposition } from "@/lib/engines/loan-balance-sheet";
 import { useCardUtilizationEmis } from "@/hooks/use-card-utilization-emis";
 import {
   creditCardTotalsFrom,
@@ -127,7 +127,7 @@ export function useDashboardData() {
   const { standings: cardStandings, isLoading: cardStandingsLoading } = useCreditCardStandings();
 
   // Net Worth adds loan principal to account balances (Decision 6 — see `netWorthWithLoans`).
-  const { netWorth: netWorthAmount, sheet: balanceSheet, peoplePayable, isLoading: balanceSheetLoading } = useLoanBalanceSheet();
+  const { netWorth: netWorthAmount, sheet: balanceSheet, peoplePayable, peopleAdvanceHeld, isLoading: balanceSheetLoading } = useLoanBalanceSheet();
   const cashFlowSummary = useCashFlowThisMonth();
 
   const isLoading =
@@ -184,18 +184,21 @@ export function useDashboardData() {
     // Money owed to people directly (e.g. borrowed from a person) is a liability Net Worth already
     // subtracts (People direct balance) — counting it here keeps Assets − Debt equal to Net Worth while
     // showing the borrowed cash as an asset and the obligation as debt.
-    const totalDebt = debt.total + peoplePayable;
+    // Money a person paid me ahead (unapplied advance) is cash I hold — neither debt nor wealth — so it is its
+    // own line: Assets − Debt − Held for people = Net Worth (`netWorthComposition`).
+    const composition = netWorthComposition(netWorthAmount, debt, { payable: peoplePayable, advanceHeld: peopleAdvanceHeld });
     return {
       amount: netWorthAmount,
       changeAmount: 0,
       changePercent: 0,
       trend,
-      assets: netWorthAmount + totalDebt,
-      debt: totalDebt,
+      assets: composition.assets,
+      debt: composition.debt,
+      heldForPeople: composition.heldForPeople,
       peopleDebt: peoplePayable,
       loanDebt: debt.loanDebt,
     };
-  }, [netWorthAmount, balanceSheet, peoplePayable, accounts, creditCards, transactions, now]);
+  }, [netWorthAmount, balanceSheet, peoplePayable, peopleAdvanceHeld, accounts, creditCards, transactions, now]);
 
   // --- Cash Flow (lib/engines/cash-flow.ts:cashFlowThisMonth via useCashFlowThisMonth) ---
   const cashFlow = useMemo(() => {
