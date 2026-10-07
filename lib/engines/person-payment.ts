@@ -116,6 +116,35 @@ export function allocatePayment(params: {
   return { lines, selectedTotal, allocated, extra, unpaid, outcome, error };
 }
 
+/**
+ * "Use only ₹X of this payment to settle the balance." Never a new allocation rule: `allocatePayment`
+ * spreads `settle` across the selected obligations in its own oldest-first order, and those lines are
+ * then recorded as a manual allocation of the full `amount` — so the rest (`amount − settle`) becomes
+ * the payment's extra, decided through advance / income / purpose like any extra. What stays open on
+ * the obligations is still owed (each obligation keeps its own partial remaining).
+ *
+ * Returns the per-key manual lines, or an error when `settle` is out of range (never silently capped).
+ */
+export function settleCapLines(params: {
+  obligations: readonly PaymentObligation[];
+  selectedKeys: readonly string[];
+  amount: number;
+  settle: number;
+}): { manual: Record<string, number>; error: string | null } {
+  const { obligations, selectedKeys, amount, settle } = params;
+  const pay = Number.isFinite(amount) && amount > 0 ? round2(amount) : 0;
+  const cap = Number.isFinite(settle) ? round2(settle) : NaN;
+  const due = allocatePayment({ obligations, selectedKeys, amount: Number.MAX_SAFE_INTEGER }).selectedTotal;
+  let error: string | null = null;
+  if (!Number.isFinite(cap)) error = "Enter how much should settle the balance.";
+  else if (cap < 0) error = "The amount to settle can't be negative.";
+  else if (cap > pay + PAYMENT_EPSILON) error = `Only ${pay.toFixed(2)} was received — you can't settle more than that.`;
+  else if (cap > due + PAYMENT_EPSILON) error = `Only ${due.toFixed(2)} is due on the selected items — use Keep as advance for money beyond it.`;
+  if (error) return { manual: {}, error };
+  const lines = allocatePayment({ obligations, selectedKeys, amount: cap }).lines;
+  return { manual: Object.fromEntries(lines.map((l) => [l.key, l.amount])), error: null };
+}
+
 // ---------------------------------------------------------------------------------------------------
 // Extra amount
 // ---------------------------------------------------------------------------------------------------

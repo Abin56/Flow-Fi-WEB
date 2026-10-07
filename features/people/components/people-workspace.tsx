@@ -1,5 +1,6 @@
 "use client";
 
+import { PeopleAttention } from "@/features/people/components/people-attention";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
 import { Plus, UserPlus, Users, X } from "lucide-react";
@@ -423,6 +424,7 @@ export function PeopleWorkspace() {
           className="flex animate-in flex-col gap-5 fade-in duration-200"
         >
           <PeopleCycleSummary rows={ledgerRows} />
+          <PeopleAttention onOpenPerson={openPerson} />
 
           <section aria-label="People" className="flex flex-col gap-3">
             <PeopleListToolbar

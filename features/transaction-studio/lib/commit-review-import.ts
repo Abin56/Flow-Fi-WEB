@@ -194,6 +194,11 @@ async function reverseInstallmentPayment(
   }
 }
 
+/** A staged record's transfer idempotency key (`transferPairIdsFor` charset, 8–128 chars). */
+export function importTransferKey(recordId: string): string {
+  return `imp_${recordId.replace(/[^A-Za-z0-9_-]/g, "-")}`.padEnd(8, "_").slice(0, 128);
+}
+
 async function commitOneRow(row: StagedRecord, categoryId: string, params: CommitReviewImportParams): Promise<{ transactionId: string }> {
   const { repositories } = params;
   const action = deriveRecordAction(row);
@@ -249,7 +254,16 @@ async function commitOneRow(row: StagedRecord, categoryId: string, params: Commi
     case "transfer": {
       const detail = requireDetail(row.actionDetail, "transfer");
       if (!detail?.destinationAccountId) throw new Error("No destination account chosen — open this row's Inspector to pick one.");
+      // A statement line is a payment that ALREADY HAPPENED at the bank — recorded, never refused. So a
+      // transfer into a credit card goes through the same atomic, idempotent card-payment write as Pay bill,
+      // with the People gate explicitly acknowledged as historical (People obligations stay open, nothing is
+      // auto-settled). Keyed by the staged record, a re-run of Approve & Import can never record it twice.
       const [sourceLeg] = await repositories.transactionRepository.createTransferPair({
+        idempotencyKey: importTransferKey(row.id),
+        peopleGateAcknowledgement: {
+          acknowledgedUnsettledPeople: true,
+          reason: `Imported statement line ${row.id} — already paid at the bank`,
+        },
         amount: row.amount,
         dateTime: row.date,
         sourceAccountId: params.accountId,

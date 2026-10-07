@@ -46,6 +46,7 @@ import { useCategories } from "@/hooks/use-categories";
 import { useTransactions } from "@/hooks/use-transactions";
 import { applyOwesPersonChange, type ApplyOwesPersonChangeParams } from "@/features/transactions/lib/owes-person-transition";
 import { withErrorToast } from "@/features/transactions/lib/error-toast";
+import type { TransferPairParams } from "@/lib/repositories/transaction-repository";
 import type { Account } from "@/lib/models/account";
 import type { Category } from "@/lib/models/category";
 import type { Expense, SplitType } from "@/lib/models/expense";
@@ -277,15 +278,10 @@ export function useTransactionActions() {
     return {
       createTransaction: (params: CreateTransactionParams) =>
         withErrorToast(() => transactionRepository.createTransaction(params), "Couldn't create transaction"),
-      createTransferPair: (params: {
-        amount: number;
-        dateTime: Date;
-        sourceAccountId: string;
-        destinationAccountId: string;
-        categoryId: string;
-        description?: string;
-        notes?: string;
-      }) => withErrorToast(() => transactionRepository.createTransferPair(params), "Couldn't create transfer"),
+      // One atomic, idempotent write (the dialog's `idempotencyKey` = one Save action). Paying a card, the
+      // repository re-checks the People settlement gate inside it against CURRENT stored state — a refusal
+      // writes nothing.
+      createTransferPair: (params: TransferPairParams) => withErrorToast(() => transactionRepository.createTransferPairAtomic(params), "Couldn't create transfer"),
       editTransaction: (transaction: Transaction, params: EditTransactionParams) =>
         withErrorToast(async () => {
           // A People "Money I Borrowed"/"Money I Gave" cash leg: its amount/date IS the obligation's, so an
@@ -383,6 +379,22 @@ export function useTransactionActions() {
           () => createLedgerRepositoryFor(uid, person.id, personRepository).createPersonFundedExpense(person, params, transactionRepository),
           "Couldn't add expense",
         ),
+      /**
+       * "Money I Borrowed → Money received into my account": the person lent me cash. Exactly what People →
+       * Add entry → Money I Borrowed records — one "borrowed" entry (I owe them) + its cash-IN leg on the
+       * account, atomically (`addEntryWithTransaction`). Never an expense, never income (the leg is an
+       * `isPersonLedgerMovement`, excluded from My Spend/income).
+       */
+      recordBorrowedCash: (person: Person, params: { amount: number; date: Date; accountId: string; note?: string }) =>
+        withErrorToast(async () => {
+          const category = await createCategoryRepository(uid).getOrCreatePersonalLoanCategory();
+          return createLedgerRepositoryFor(uid, person.id, personRepository).addEntryWithTransaction(
+            person,
+            { type: "borrowed", amount: params.amount, date: params.date, note: params.note, receivedStatus: "yetToReceive" },
+            { type: "income", accountId: params.accountId, categoryId: category.id, description: person.name },
+            transactionRepository,
+          );
+        }, "Couldn't record borrowing"),
       /** Switches who paid an expense (account ↔ person) — see `LedgerRepository.changeExpenseFunding`. */
       changeExpenseFunding: (transaction: Transaction, to: FundingTarget, edits?: FundingEdits) =>
         withErrorToast(() => changeFunding(transaction, to, edits), "Couldn't save changes"),

@@ -197,6 +197,20 @@ describe("nested money-bearing subcollections inherit the same owner-scoping", (
     await assertFails(getDoc(doc(otherDb, "users", OWNER_UID, "people", "person-1", "ledger", "entry-1")));
   });
 
+  it("People follow-up reminders (web-only metadata) are owner-only: set, update, delete; others denied", async () => {
+    const ownerDb = testEnv.authenticatedContext(OWNER_UID).firestore();
+    const ref = doc(ownerDb, "users", OWNER_UID, "people", "person-1", "followUps", "ledger%3Ashare");
+    await assertSucceeds(setDoc(ref, { obligationKey: "ledger:share", state: "active" }));
+    await assertSucceeds(updateDoc(ref, { state: "dismissed" }));
+    const otherDb = testEnv.authenticatedContext(OTHER_UID).firestore();
+    const foreign = doc(otherDb, "users", OWNER_UID, "people", "person-1", "followUps", "ledger%3Ashare");
+    await assertFails(getDoc(foreign));
+    await assertFails(setDoc(foreign, { state: "active" }));
+    await assertFails(deleteDoc(foreign));
+    await assertFails(getDoc(doc(testEnv.unauthenticatedContext().firestore(), "users", OWNER_UID, "people", "person-1", "followUps", "ledger%3Ashare")));
+    await assertSucceeds(deleteDoc(ref));
+  });
+
   it("owner can read/write their own bill occurrence", async () => {
     const ownerDb = testEnv.authenticatedContext(OWNER_UID).firestore();
     const ref = doc(ownerDb, "users", OWNER_UID, "bills", "bill-1", "occurrences", "occ-1");

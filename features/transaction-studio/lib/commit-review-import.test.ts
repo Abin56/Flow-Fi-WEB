@@ -297,6 +297,22 @@ describe("commitReviewImport — every Action dispatches to its correct reposito
     expect(result.results[0].transactionId).toBe("leg-source");
   });
 
+  it("transfer: a statement line is recorded as HISTORICAL — keyed by the staged record (never twice) with an explicit, reasoned People-gate acknowledgement", async () => {
+    const createTransferPair = vi.fn().mockResolvedValue([{ id: "leg-source" }, { id: "leg-dest" }]);
+    await commitReviewImport({
+      ...baseParams,
+      rows: [row({ id: "rec/7", ...actionToAxesPatch("transfer", { kind: "transfer", destinationAccountId: "acc-card" }) })],
+      repositories: { ...unreachableRepositories(), transactionRepository: { createTransaction: vi.fn(), createTransferPair } as never },
+      onRowCommitted: vi.fn(),
+    });
+    expect(createTransferPair).toHaveBeenCalledWith(
+      expect.objectContaining({
+        idempotencyKey: "imp_rec-7",
+        peopleGateAcknowledgement: { acknowledgedUnsettledPeople: true, reason: "Imported statement line rec/7 — already paid at the bank" },
+      }),
+    );
+  });
+
   it("existing_emi: pays the earliest open installment then writes a plain expense transaction", async () => {
     const applyPayment = vi.fn().mockResolvedValue(undefined);
     const getAll = vi.fn().mockResolvedValue([{ dueDate: new Date("2026-08-01"), amountPaid: 0, amountDue: 100, isSkipped: false }]);

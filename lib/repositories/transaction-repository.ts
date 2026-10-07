@@ -38,6 +38,7 @@ import {
 import { generateId } from "@/lib/utils/id-generator";
 import type { Account } from "@/lib/models/account";
 import type { AccountRepository } from "./account-repository";
+import { hasPeopleGateAcknowledgement, type UnsettledPeopleAcknowledgement } from "@/lib/engines/linked-people-readiness";
 
 /** Fresh reads for {@link TransactionRepository.writeSoftDeleteMany} — see {@link TransactionRepository.readSoftDeleteMany}. */
 export interface PreparedSoftDelete {
@@ -163,12 +164,83 @@ export interface EditTransactionParams {
   funding?: { kind: "account"; accountId: string } | { kind: "person"; personId: string };
 }
 
+/**
+ * The card-bill People settlement check (`assertCardBillPeopleSettled`), run inside a write's Firestore
+ * transaction after its account reads and before any write. Throws to refuse; never writes.
+ */
+export type CardPaymentGuard = (tx: FirestoreTransaction, payment: { cardAccount: Account; amount: number }) => Promise<void>;
+
+/** Parameters every transfer-pair write takes. */
+export interface TransferPairParams {
+  amount: number;
+  dateTime: Date;
+  sourceAccountId: string;
+  destinationAccountId: string;
+  categoryId: string;
+  description?: string;
+  notes?: string;
+  excludeFromCalculations?: boolean;
+  accountingMonth?: Date | null;
+  isBusiness?: boolean;
+  /**
+   * One user action's identity (e.g. generated when the Pay bill dialog opens, kept across its retries) —
+   * the same pattern as Loan payments' `idempotencyKey`. Both legs get ids derived from it, so the same
+   * action can create the pair at most once: a repeat (double submit, another tab, a retry after a lost
+   * response) finds the stored pair and writes nothing. Two separate actions — even of the same amount —
+   * have different keys and are both recorded.
+   */
+  idempotencyKey?: string;
+  /**
+   * Only for a card payment that ALREADY HAPPENED at the bank and is being reconstructed (a Transaction
+   * Studio statement line) — the same explicit, reasoned acknowledgement Loan/EMI writes accept. The People
+   * gate is not a precondition for recording a historical fact; People obligations stay open either way.
+   */
+  peopleGateAcknowledgement?: UnsettledPeopleAcknowledgement | null;
+}
+
+const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
+
+/** Deterministic leg ids for one transfer action — see `TransferPairParams.idempotencyKey`. */
+export function transferPairIdsFor(idempotencyKey: string): { transferId: string; sourceLegId: string; destinationLegId: string } {
+  if (!IDEMPOTENCY_KEY_PATTERN.test(idempotencyKey)) throw new Error("Transfer idempotency key must be 8–128 letters, digits, '-' or '_'");
+  const transferId = `xfer_${idempotencyKey}`;
+  return { transferId, sourceLegId: `${transferId}_out`, destinationLegId: `${transferId}_in` };
+}
+
+/** A live, non-excluded income leg of a transfer into a credit-card account — i.e. a card bill payment. */
+function isCardPaymentLeg(leg: Pick<Transaction, "type" | "transferId">, account: Pick<Account, "type">): boolean {
+  return account.type === "card" && leg.type === "income" && leg.transferId != null;
+}
+
 export class TransactionRepository extends FirestoreCrudRepository<Transaction> {
+  /**
+   * The card-bill People gate every card-payment write enforces (create, restore). Installed by
+   * `createTransactionRepository` for the signed-in user; a bare repository (tests, tooling) has none.
+   */
+  private cardPaymentGuard: CardPaymentGuard | null = null;
+
   constructor(
     collection: CollectionReference<Transaction>,
     private readonly accountRepository: AccountRepository,
   ) {
     super(collection);
+  }
+
+  withCardPaymentGuard(guard: CardPaymentGuard): this {
+    this.cardPaymentGuard = guard;
+    return this;
+  }
+
+  /** Runs the card gate when `leg` on `account` is a card payment (unless explicitly acknowledged as historical). */
+  private async guardCardPayment(
+    tx: FirestoreTransaction,
+    leg: Pick<Transaction, "type" | "transferId" | "amount">,
+    account: Account,
+    acknowledgement?: UnsettledPeopleAcknowledgement | null,
+  ): Promise<void> {
+    if (this.cardPaymentGuard == null || !isCardPaymentLeg(leg, account)) return;
+    if (hasPeopleGateAcknowledgement(acknowledgement)) return;
+    await this.cardPaymentGuard(tx, { cardAccount: account, amount: leg.amount });
   }
 
   /**
@@ -251,26 +323,73 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
   }
 
   /**
+   * The same transfer as {@link createTransferPair} — identical legs and balance effects — but both legs
+   * and both balances in ONE Firestore transaction, with the card-bill People gate (a transfer INTO a
+   * credit card) checked after the account reads and before anything is written: a refusal writes nothing
+   * (no stray leg, no balance change), and whatever the gate reads with `tx.get` makes a concurrent change
+   * re-run it. With `idempotencyKey`, the action is recorded at most once (see `TransferPairParams`).
+   */
+  async createTransferPairAtomic(params: TransferPairParams): Promise<[Transaction, Transaction]> {
+    if (params.sourceAccountId === params.destinationAccountId) {
+      throw new Error("Choose two different accounts to transfer between");
+    }
+    const ids = params.idempotencyKey != null ? transferPairIdsFor(params.idempotencyKey) : null;
+    const transferId = ids?.transferId ?? generateId();
+    const common = {
+      amount: params.amount,
+      dateTime: params.dateTime,
+      categoryId: params.categoryId,
+      description: params.description,
+      notes: params.notes ?? "",
+      transferId,
+      excludeFromCalculations: params.excludeFromCalculations,
+      accountingMonth: params.accountingMonth,
+      isBusiness: params.isBusiness,
+    };
+    let sourceLeg = TransactionRepository.buildTransaction({ ...common, type: "expense", accountId: params.sourceAccountId });
+    let destinationLeg = TransactionRepository.buildTransaction({ ...common, type: "income", accountId: params.destinationAccountId });
+    if (ids) {
+      sourceLeg = { ...sourceLeg, id: ids.sourceLegId };
+      destinationLeg = { ...destinationLeg, id: ids.destinationLegId };
+    }
+
+    return runTransaction(this.collection.firestore, async (tx): Promise<[Transaction, Transaction]> => {
+      const sourceLegRef = doc(this.collection, sourceLeg.id);
+      const destinationLegRef = doc(this.collection, destinationLeg.id);
+      if (ids) {
+        // Already recorded by this same action → return it; nothing is written twice.
+        const [outSnap, inSnap] = [await tx.get(sourceLegRef), await tx.get(destinationLegRef)];
+        if (outSnap.exists() && inSnap.exists()) return [outSnap.data(), inSnap.data()];
+      }
+      const sourceRef = this.accountRepository.docRef(params.sourceAccountId);
+      const destinationRef = this.accountRepository.docRef(params.destinationAccountId);
+      const sourceSnap = await tx.get(sourceRef);
+      const destinationSnap = await tx.get(destinationRef);
+      if (!sourceSnap.exists() || !destinationSnap.exists()) throw new Error("Account not found");
+      await this.guardCardPayment(tx, destinationLeg, destinationSnap.data(), params.peopleGateAcknowledgement);
+      tx.set(sourceRef, this.accountRepository.applyBalanceDelta(sourceSnap.data(), balanceEffect(sourceLeg)));
+      tx.set(destinationRef, this.accountRepository.applyBalanceDelta(destinationSnap.data(), balanceEffect(destinationLeg)));
+      tx.set(sourceLegRef, sourceLeg);
+      tx.set(destinationLegRef, destinationLeg);
+      return [sourceLeg, destinationLeg];
+    });
+  }
+
+  /**
    * Moves money between two of the user's own accounts — an expense leg on
    * sourceAccountId + an income leg on destinationAccountId, sharing one
    * transferId so aggregations can recognize and exclude the pair. Not
    * atomic across the two writes — if the second leg fails, the first leg
    * is soft-deleted as a best-effort rollback.
    */
-  async createTransferPair(params: {
-    amount: number;
-    dateTime: Date;
-    sourceAccountId: string;
-    destinationAccountId: string;
-    categoryId: string;
-    description?: string;
-    notes?: string;
-    excludeFromCalculations?: boolean;
-    accountingMonth?: Date | null;
-    isBusiness?: boolean;
-  }): Promise<[Transaction, Transaction]> {
+  async createTransferPair(params: TransferPairParams): Promise<[Transaction, Transaction]> {
     if (params.sourceAccountId === params.destinationAccountId) {
       throw new Error("Choose two different accounts to transfer between");
+    }
+    // A card bill payment (or any keyed action) never takes the two-write path below: it must be atomic
+    // and pass the card People gate before anything changes. Ordinary transfers are unchanged.
+    if (params.idempotencyKey != null || (this.cardPaymentGuard != null && (await this.accountRepository.getByKey(params.destinationAccountId))?.type === "card")) {
+      return this.createTransferPairAtomic(params);
     }
 
     const transferId = generateId();
@@ -579,12 +698,18 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
    */
   async restoreTransactionInTransaction(tx: FirestoreTransaction, transaction: Transaction): Promise<void> {
     const transactionRef = doc(this.collection, transaction.id);
+    // Idempotent: a leg that is already live (restored by another tab, or a repeated click) is never
+    // re-applied — re-applying would move its account balance a second time.
+    const freshSnap = await tx.get(transactionRef);
+    if (freshSnap.exists() && freshSnap.data().deletedAt == null) return;
     if (hasAccountLeg(transaction)) {
       const accountRef = this.accountRepository.docRef(transaction.accountId);
       const delta = balanceEffect(transaction);
 
       const accountSnap = await tx.get(accountRef);
       if (!accountSnap.exists()) throw new Error("Account not found");
+      // Restoring a card payment leg is a card payment made again — gated against CURRENT state.
+      await this.guardCardPayment(tx, transaction, accountSnap.data());
       if (delta !== 0) {
         tx.set(accountRef, this.accountRepository.applyBalanceDelta(accountSnap.data(), delta));
       }
@@ -686,10 +811,18 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
     const siblingAccountRef = this.accountRepository.docRef(sibling.accountId);
 
     await runTransaction(db, async (tx) => {
+      // Idempotent: if both legs are already live, nothing is re-applied.
+      const [legSnap, siblingLegSnap] = [await tx.get(txRef), await tx.get(siblingRef)];
+      if (legSnap.exists() && legSnap.data().deletedAt == null && siblingLegSnap.exists() && siblingLegSnap.data().deletedAt == null) return;
       const accountSnap = await tx.get(accountRef);
       const siblingAccountSnap = await tx.get(siblingAccountRef);
       if (!accountSnap.exists()) throw new Error("Account not found");
       if (!siblingAccountSnap.exists()) throw new Error("Account not found");
+      // A restored card payment is evaluated exactly like a NEW payment of its amount, against the card's
+      // current oldest-first state — never the scope it reached when it was first made. Refused → nothing
+      // is written: both legs stay deleted, both balances unchanged.
+      await this.guardCardPayment(tx, transaction, accountSnap.data());
+      await this.guardCardPayment(tx, sibling, siblingAccountSnap.data());
 
       const delta = balanceEffect(transaction);
       const siblingDelta = balanceEffect(sibling);

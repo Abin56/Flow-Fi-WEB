@@ -3,7 +3,7 @@
 import { PiggyBank } from "lucide-react";
 import { useState } from "react";
 import type { RecordPaymentInitial } from "@/features/people/components/workspace/record-payment-panel";
-import { obligationSourceLabel, type PayableObligation } from "@/features/people/lib/person-payment-obligations";
+import { obligationSourceLabel, timingOf, type PayableObligation } from "@/features/people/lib/person-payment-obligations";
 import { formatStatementDate } from "@/lib/engines/person-cycle-statement";
 import { money } from "@/lib/engines/person-cycle-statement-share";
 import type { PaymentImpact } from "@/lib/engines/person-payment-impact";
@@ -132,6 +132,7 @@ export function ApplyAdvancePanel({
   open,
   onOpenChange,
   onConfirm,
+  cycle,
 }: {
   personName: string;
   side: "theyOwe" | "iOwe";
@@ -141,10 +142,17 @@ export function ApplyAdvancePanel({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onConfirm: (targets: { obligationKey: string; uses: AdvanceUse[] }[]) => Promise<void>;
+  /**
+   * The selected People cycle. Items dated after it are "Upcoming": still offered (applying advance early
+   * is allowed) but never pre-selected — advance only reaches a future item when the user ticks it.
+   */
+  cycle?: { start: Date; end: Date };
 }) {
   const first = personName.split(" ")[0];
   const options = obligations.filter((o) => o.side === side);
-  const [selected, setSelected] = useState<Set<string>>(() => new Set(options.map((o) => o.key)));
+  const isLater = (o: PayableObligation) => cycle != null && timingOf(o.date, cycle) === "later";
+  const [selected, setSelected] = useState<Set<string>>(() => new Set(options.filter((o) => !isLater(o)).map((o) => o.key)));
+  const upcomingTotal = round2(options.filter(isLater).reduce((s, o) => s + o.outstanding, 0));
   const [manual, setManual] = useState<Record<string, string> | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -155,7 +163,8 @@ export function ApplyAdvancePanel({
     selectedKeys: [...selected],
     manual: manual ? Object.fromEntries(Object.entries(manual).map(([k, v]) => [k, Number(v) || 0])) : null,
   });
-  const openTotal = round2(options.reduce((s, o) => s + o.outstanding, 0));
+  // Due through the selected cycle — upcoming items are shown separately, never counted as "need to receive" now.
+  const openTotal = round2(options.filter((o) => !isLater(o)).reduce((s, o) => s + o.outstanding, 0));
   const lineByKey = new Map(plan.allocation.lines.map((l) => [l.key, l]));
   const applying = plan.allocation.allocated;
   const toggle = (key: string) => {
@@ -179,6 +188,7 @@ export function ApplyAdvancePanel({
           <Figure label="Advance available" value={money(plan.availableTotal)} tone="text-settle-advance-text" strong />
           <Figure label={side === "theyOwe" ? `You need to receive from ${first}` : `You need to give to ${first}`} value={money(openTotal)} />
           <Figure label="Remaining after advance" value={money(Math.max(0, round2(openTotal - plan.availableTotal)))} strong />
+          {upcomingTotal > 0 && <Figure label="Upcoming (later cycles)" value={money(upcomingTotal)} />}
         </dl>
         {!open && options.length > 0 && (
           <button type="button" onClick={() => onOpenChange(true)} className={cn(WS_PRIMARY, "h-8 px-3")}>
@@ -233,7 +243,12 @@ export function ApplyAdvancePanel({
                         />
                       </td>
                       <td className="border-b border-border px-2 py-1.5">
-                        <span className="block font-semibold text-foreground">{o.title}</span>
+                        <span className="flex items-center gap-1.5 font-semibold text-foreground">
+                          {o.title}
+                          {isLater(o) && (
+                            <span className="rounded-[4px] bg-secondary px-1.5 text-[10px] leading-4 font-bold text-foreground/75 uppercase">Upcoming</span>
+                          )}
+                        </span>
                         <span className="text-xs text-foreground/70">
                           {formatStatementDate(o.date, true)} · {obligationSourceLabel(o, first)}
                         </span>
@@ -275,7 +290,11 @@ export function ApplyAdvancePanel({
             <dl className="grid grid-cols-2 gap-x-6 gap-y-1 sm:grid-cols-3">
               <Figure label="Applying now" value={money(applying)} tone="text-settle-advance-text" strong />
               <Figure label="Advance left" value={money(round2(plan.availableTotal - applying))} />
-              <Figure label="Still due after" value={money(Math.max(0, round2(openTotal - applying)))} strong />
+              <Figure
+                label="Still due after"
+                value={money(Math.max(0, round2(options.filter((o) => !isLater(o)).reduce((s, o) => s + (selected.has(o.key) ? (lineByKey.get(o.key)?.remainingAfter ?? o.outstanding) : o.outstanding), 0))))}
+                strong
+              />
             </dl>
             <div className="flex items-center gap-2">
               <button type="button" onClick={() => onOpenChange(false)} disabled={busy} className={WS_GHOST}>

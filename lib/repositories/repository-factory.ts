@@ -7,7 +7,7 @@
  * pair from the matching model file.
  */
 
-import { collection, collectionGroup, type FirestoreDataConverter, type Query } from "firebase/firestore";
+import { collection, collectionGroup, getDocs, query, where, type FirestoreDataConverter, type Query } from "firebase/firestore";
 import { db } from "@/lib/firebase/client";
 import { FirestoreCollections } from "@/lib/firestore/collections";
 import { accountFromFirestore, accountToFirestore, type Account } from "@/lib/models/account";
@@ -69,6 +69,7 @@ import {
   type SmsTransactionCandidate,
 } from "@/lib/models/sms-transaction-candidate";
 import { AccountRepository } from "./account-repository";
+import { assertCardBillPeopleSettled, type CardBillGateReader } from "./card-bill-people-gate";
 import { BillRepository } from "./bill-repository";
 import { BudgetRepository } from "./budget-repository";
 import { CategoryRepository } from "./category-repository";
@@ -87,6 +88,7 @@ import { LedgerRepository, PersonRepository } from "./person-repository";
 import { PersonPaymentRepository } from "./person-payment-repository";
 import { PurposeFundRepository } from "./purpose-fund-repository";
 import { purposeFundFromFirestore, purposeFundToFirestore, type PurposeFund } from "@/lib/models/purpose-fund";
+import { personFollowUpFromFirestore, personFollowUpToFirestore, type PersonFollowUp } from "@/lib/models/person-follow-up";
 import { SavingsRepository } from "./savings-repository";
 import { InstallmentPaymentRepository, InstallmentRepository, PaymentScheduleRepository } from "./payment-schedule-repository";
 import { TransactionRepository } from "./transaction-repository";
@@ -127,7 +129,33 @@ export function createTransactionRepository(uid: string, accountRepository: Acco
   const ref = collection(db, FirestoreCollections.users, uid, FirestoreCollections.transactions).withConverter(
     transactionConverter,
   );
-  return new TransactionRepository(ref, accountRepository);
+  const repository = new TransactionRepository(ref, accountRepository);
+  // Every card-payment write through the app's repository (create, restore) enforces the card-bill People gate.
+  const reader = firestoreCardBillGateReader(uid, repository);
+  return repository.withCardPaymentGuard((tx, { cardAccount, amount }) => assertCardBillPeopleSettled({ tx, reader, cardAccount, amount }));
+}
+
+/** The card bill People gate's fresh reads, from Firestore through the existing repositories. */
+export function firestoreCardBillGateReader(uid: string, transactionRepository: TransactionRepository): CardBillGateReader {
+  const personRepository = createPersonRepository(uid);
+  return {
+    cardForAccount: async (accountId) => (await createCreditCardRepository(uid).getAll()).find((c) => c.accountId === accountId) ?? null,
+    statements: (cardId) => createStatementRepository(uid, cardId).getAll(),
+    cardTransactions: (accountId) => transactionRepository.getAllForAccountIncludingTrash(accountId),
+    people: () => personRepository.getAll(),
+    ledger: (personId) => createLedgerRepositoryFor(uid, personId, personRepository).getAll(),
+    advanceApplications: async (personId) =>
+      (await getDocs(query(createAdvanceApplicationsCollection(uid, personId), where("deletedAt", "==", null)))).docs.map((d) => d.data()),
+    lockPerson: async (tx, personId) => {
+      await tx.get(personRepository.docRef(personId));
+    },
+    lockCard: async (tx, cardId, statementIds) => {
+      const cards = createCreditCardRepository(uid);
+      await tx.get(cards.docRef(cardId));
+      const statements = createStatementRepository(uid, cardId);
+      for (const id of statementIds) await tx.get(statements.docRef(id));
+    },
+  };
 }
 
 export function createBudgetRepository(uid: string): BudgetRepository {
@@ -549,6 +577,18 @@ export function createAdvanceApplicationsCollection(uid: string, personId: strin
     personId,
     FirestoreCollections.advanceApplications,
   ).withConverter(advanceApplicationConverter);
+}
+
+const personFollowUpConverter: FirestoreDataConverter<PersonFollowUp> = {
+  toFirestore: personFollowUpToFirestore,
+  fromFirestore: personFollowUpFromFirestore,
+};
+
+/** Follow-up reminders (`PersonFollowUp`) — a per-person `people/{personId}/followUps` subcollection, metadata only. */
+export function createPersonFollowUpsCollection(uid: string, personId: string) {
+  return collection(db, FirestoreCollections.users, uid, FirestoreCollections.people, personId, FirestoreCollections.followUps).withConverter(
+    personFollowUpConverter,
+  );
 }
 
 const purposeFundConverter: FirestoreDataConverter<PurposeFund> = {

@@ -15,6 +15,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { PeopleNavBadge } from "@/features/people/components/people-attention";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/store/auth-store";
 
@@ -98,6 +99,7 @@ export function SidebarNavContent({
                   >
                     <Icon className="size-4.5 shrink-0" />
                     {!collapsed && <span>{item.label}</span>}
+                    {item.href === "/people" && <PeopleNavBadge collapsed={collapsed} />}
                   </Link>
                 );
 

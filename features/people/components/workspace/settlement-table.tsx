@@ -50,6 +50,7 @@ import { formatStatementDate, type EmiRowStatus } from "@/lib/engines/person-cyc
 import { money } from "@/lib/engines/person-cycle-statement-share";
 import { splitAllocation } from "@/lib/split/split-allocation";
 import { cn } from "@/lib/utils";
+import { FollowUpControl, FollowUpNote } from "./follow-up";
 
 /**
  * The People settlement reconciliation table — one component for the Person workspace's Activity and the
@@ -631,6 +632,7 @@ function Expansion({
         </div>
         <Source v={v} cycleLabelOf={cycleLabelOf} />
       </div>
+      <FollowUpControl rowKey={row.key} title={v.title} open={(row.state === "open" || row.state === "partial")} />
     </div>
   );
 }
@@ -752,7 +754,7 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
             {v.split && <p className="text-[10.5px] leading-tight font-medium whitespace-nowrap text-foreground/60">{v.split.shareLabel}</p>}
           </td>
           <td className={cn(TD, NUM, "hidden w-[6.5rem] lg:table-cell")}><Amount value={v.paid} tone={v.paid ? "text-success" : "text-foreground/60"} /></td>
-          <td className={cn(TD, NUM, "w-[7rem]")}><RemainingAmount v={v} /></td>
+          <td className={cn(TD, NUM, "w-[7rem]")}><RemainingAmount v={v} /><FollowUpNote rowKey={row.key} className="flex justify-end" /></td>
           <td className={cn(TD, "w-[11.5rem] max-w-[11.5rem]")}><StatusPill status={v.status} /></td>
           <td className={cn(TD, "w-[10rem] py-0.5")}><RowActionButtons v={v} handlers={handlers} lookups={lookups} compact /></td>
         </tr>
@@ -788,6 +790,7 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
             <div className="shrink-0 text-right">
               <RemainingAmount v={v} />
               <p className="text-[10.5px] font-semibold text-foreground/60 uppercase">{row.state == null ? (v.paid != null ? "amount" : "") : "remaining"}</p>
+              <FollowUpNote rowKey={row.key} />
             </div>
           </div>
           <p className="mt-1 truncate text-[12px] font-medium text-foreground/75">{v.relation}</p>

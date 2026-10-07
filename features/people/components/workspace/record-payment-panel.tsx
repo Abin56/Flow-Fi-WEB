@@ -1,7 +1,7 @@
 "use client";
 
 import { ArrowDownLeft, ArrowUpRight, Check, CircleAlert, CircleDashed } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { EmiBadge } from "@/features/people/components/cycle-statement/statement-parts";
 import type { LedgerRow } from "@/features/people/lib/person-ledger-rows";
 import { obligationSourceLabel, paymentLines, routeFor, settlementProjection, timingOf, type PayableObligation } from "@/features/people/lib/person-payment-obligations";
@@ -14,6 +14,7 @@ import {
   paymentBlocker,
   reconcilePayment,
   round2,
+  settleCapLines,
   sideForDirection,
   type ExtraResolution,
   type PaymentDirection,
@@ -26,6 +27,7 @@ import { usePurposeLinkOptions } from "./purpose-money";
 import { draftsToAllocations, ExtraAllocationEditor, newAllocationDraft, type AllocationDraft } from "./extra-allocation-editor";
 import { planExtraAllocation } from "@/lib/engines/extra-allocation";
 import { DateInput } from "@/components/forms/date-input";
+import { ReminderPicker, type ReminderWhen } from "./follow-up";
 
 /** An existing payment, for editing: its lines per obligation key, advance, account and date. */
 export interface RecordPaymentInitial {
@@ -61,6 +63,8 @@ export function RecordPaymentPanel({
   cycleLabel,
   onCancel,
   onSubmit,
+  onSetReminder,
+  cycleStartDay = 1,
 }: {
   personName: string;
   /** The person's whole-history ledger rows — obligations are read from them. */
@@ -72,6 +76,10 @@ export function RecordPaymentPanel({
   cycleLabel: string;
   onCancel: () => void;
   onSubmit: (input: RecordPaymentInput, paymentId: string | null) => Promise<void>;
+  /** Saves a follow-up reminder on each item left open — called only after the payment itself is saved. */
+  onSetReminder?: (targets: { key: string; title: string }[], when: ReminderWhen) => Promise<void>;
+  /** Settings → Month Cycle start day — "Next cycle" resolves against it. */
+  cycleStartDay?: number;
 }) {
   const first = personName.split(" ")[0];
   const account = useAccountChoice(initial?.accountId);
@@ -175,11 +183,17 @@ export function RecordPaymentPanel({
   const accountId = account.accountId;
 
   const amount = Number(amountText) || 0;
+  // "Use only ₹X to settle" — null = the default (settle as much as the payment covers, or the per-line amounts).
+  const [settleText, setSettleText] = useState<string | null>(null);
+  const capped =
+    settleText == null
+      ? null
+      : settleCapLines({ obligations: options, selectedKeys: [...selected], amount, settle: settleText.trim() === "" ? NaN : Number(settleText) });
   const allocation = allocatePayment({
     obligations: options,
     selectedKeys: [...selected],
     amount,
-    manual: manual ? Object.fromEntries(Object.entries(manual).map(([k, v]) => [k, Number(v) || 0])) : null,
+    manual: capped ? capped.manual : manual ? Object.fromEntries(Object.entries(manual).map(([k, v]) => [k, Number(v) || 0])) : null,
   });
   const hasExtra = allocation.extra > PAYMENT_EPSILON;
   const effectiveDrafts = extraDrafts ?? [{ ...newAllocationDraft("advance", allocation.extra), key: "auto-advance" }];
@@ -190,7 +204,7 @@ export function RecordPaymentPanel({
     : extraPlan.advance > PAYMENT_EPSILON || extraPlan.purposes.length > 0
       ? { kind: "advance" }
       : { kind: "income", categoryId: extraPlan.income?.categoryId ?? "", description: extraPlan.income?.description ?? "" };
-  const blocker = (hasExtra ? extraPlan.error : null) ?? paymentBlocker({
+  const blocker = capped?.error ?? (hasExtra ? extraPlan.error : null) ?? paymentBlocker({
     direction,
     amount,
     allocation,
@@ -198,6 +212,13 @@ export function RecordPaymentPanel({
     accountId,
   });
   const lineByKey = new Map(allocation.lines.map((l) => [l.key, l]));
+  // The selected items this payment leaves open — where a "remind me" goes (each keeps its own remaining).
+  const reminderTargets = allocation.unpaid > PAYMENT_EPSILON
+    ? options
+        .filter((o) => selected.has(o.key) && (lineByKey.get(o.key)?.remainingAfter ?? o.outstanding) > PAYMENT_EPSILON)
+        .map((o) => ({ key: o.key, title: o.title }))
+    : [];
+  const [reminder, setReminder] = useState<ReminderWhen | null>(null);
   const allSelected = options.some((o) => o.timing !== "later") && options.filter((o) => o.timing !== "later").every((o) => selected.has(o.key));
   const unselected = options.filter((o) => !selected.has(o.key));
   const theyPaid = direction === "theyPaid";
@@ -208,6 +229,7 @@ export function RecordPaymentPanel({
     setDirection(d);
     setSelected(new Set(obligations.filter((o) => o.side === sideForDirection(d) && o.timing !== "later").map((o) => o.key)));
     setManual(null);
+    setSettleText(null);
     setExtraDrafts(null);
   }
   // The opposite side, shown for information only — it never reduces this side's outstanding or Full payment.
@@ -221,8 +243,12 @@ export function RecordPaymentPanel({
       return next;
     });
 
+  const submittedRef = useRef(false);
   async function submit() {
-    if (blocker || saving) return;
+    // A ref, not state: a double click lands before the re-render that disables the button. Once saved, the
+    // panel closes — it never records the same payment twice.
+    if (blocker || saving || submittedRef.current) return;
+    submittedRef.current = true;
     setSaving(true);
     setError(null);
     try {
@@ -247,7 +273,10 @@ export function RecordPaymentPanel({
         })(),
       };
       await onSubmit(input, initial?.paymentId ?? null);
+      // Metadata only, after the payment is safely recorded — a failed reminder never undoes the payment.
+      if (reminder && onSetReminder && reminderTargets.length > 0) await onSetReminder(reminderTargets, reminder).catch(() => {});
     } catch (e) {
+      submittedRef.current = false;
       setError(e instanceof Error ? e.message : "Couldn't record the payment.");
     } finally {
       setSaving(false);
@@ -277,6 +306,10 @@ export function RecordPaymentPanel({
   const accountName = account.accounts.find((a) => a.id === accountId)?.name ?? "the chosen account";
   const seedManual = () => Object.fromEntries(allocation.lines.map((l) => [l.key, String(l.amount)]));
   const dueTotal = theyPaid ? theyOweTotal : iOweTotal;
+  // The same Due, split by the timing it already has — brought forward vs added this cycle. Presentation only.
+  const dueByTiming = (t: "carried" | "cycle") => round2(options.filter((o) => o.timing === t).reduce((sum, o) => sum + o.outstanding, 0));
+  const duePrevious = dueByTiming("carried");
+  const dueThisCycle = round2(dueTotal - duePrevious);
 
   return (
     // A real <form>: Enter in a single-line field records through the same submit() as the primary button,
@@ -319,9 +352,26 @@ export function RecordPaymentPanel({
         {/* Live figures — every number here is `allocatePayment`'s */}
         <dl className="mt-2.5 grid grid-cols-3 gap-2 sm:max-w-xl">
           <Indicator label={theyPaid ? `Due from ${first}` : `Due to ${first}`} value={money(dueTotal)} tone={dueTotal > PAYMENT_EPSILON ? (theyPaid ? "text-settle-receivable-text" : "text-settle-payable-text") : undefined} />
-          <Indicator label="Allocated" value={money(allocation.allocated)} tone={allocation.allocated > PAYMENT_EPSILON ? "text-settle-split-text" : undefined} />
-          <Indicator label="Remaining" value={money(allocation.extra)} emphasis={hasExtra} />
+          <Indicator label="Settles balance" value={money(allocation.allocated)} tone={allocation.allocated > PAYMENT_EPSILON ? "text-settle-split-text" : undefined} />
+          <Indicator label="Money left to decide" value={money(allocation.extra)} emphasis={hasExtra} />
         </dl>
+        {/* Only when Due includes brought-forward money — otherwise the single Due figure says it all. */}
+        {duePrevious > PAYMENT_EPSILON && (
+          <dl className="mt-2 grid max-w-xs gap-0.5 rounded-[6px] border border-border-strong px-2.5 py-1.5 text-xs" data-testid="rp-due-breakdown">
+            <div className="flex items-baseline justify-between gap-3">
+              <dt className="text-foreground/80">Previous pending</dt>
+              <dd className="font-semibold text-foreground tabular-nums">{money(duePrevious)}</dd>
+            </div>
+            <div className="flex items-baseline justify-between gap-3">
+              <dt className="text-foreground/80">Added this cycle</dt>
+              <dd className="font-semibold text-foreground tabular-nums">{money(dueThisCycle)}</dd>
+            </div>
+            <div className="mt-0.5 flex items-baseline justify-between gap-3 border-t border-border-strong pt-1">
+              <dt className="font-semibold text-foreground">Due through this cycle</dt>
+              <dd className="font-heading text-[13px] font-bold text-foreground tabular-nums">{money(dueTotal)}</dd>
+            </div>
+          </dl>
+        )}
       </div>
 
       <div className="grid lg:grid-cols-[minmax(0,1fr)_19rem]">
@@ -347,11 +397,144 @@ export function RecordPaymentPanel({
             </WsField>
           </div>
 
-          {/* What this payment settles */}
-          <section aria-labelledby="rp-settle-heading" className="mt-4">
+          {/* 1. The money decision first: how much settles the balance… */}
+          {options.length > 0 && (
+            <section aria-labelledby="rp-decide-heading" className="mt-4">
+              <h4 id="rp-decide-heading" className="text-sm font-bold text-foreground">
+                {theyPaid ? `Settle what ${first} owes you` : `Settle what you owe ${first}`}
+              </h4>
+              <p className="text-xs font-medium text-foreground/70">
+                How much of the {money(amount)} {theyPaid ? "received" : "paid"} should settle {theyPaid ? `${first}'s balance` : `what you owe ${first}`}? Applied oldest first.
+              </p>
+              <div className="mt-2 grid gap-2.5 sm:grid-cols-[minmax(0,12rem)_minmax(0,1fr)] sm:items-end">
+                <WsField label={theyPaid ? `Apply to ${first}'s balance` : `Apply to what you owe`}>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    min={0}
+                    aria-label="Apply to balance"
+                    aria-invalid={capped?.error ? true : undefined}
+                    value={settleText ?? String(allocation.allocated)}
+                    onChange={(e) => {
+                      setManual(null);
+                      setSettleText(e.target.value);
+                    }}
+                    className={cn(WS_FIELD, "h-9 w-full text-right font-semibold tabular-nums")}
+                  />
+                </WsField>
+                <div className="flex flex-wrap gap-1.5">
+                  <button
+                    type="button"
+                    aria-pressed={settleText == null && manual == null}
+                    onClick={() => {
+                      setManual(null);
+                      setSettleText(null);
+                    }}
+                    className="h-8 rounded-[6px] border border-border-strong px-2.5 text-xs font-semibold text-foreground outline-none hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring aria-pressed:border-settle-split-edge aria-pressed:bg-settle-split-tint/50"
+                  >
+                    Settle full {money(Math.min(amount, allocation.selectedTotal))}
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={settleText != null && Number(settleText) === 0 && settleText.trim() !== ""}
+                    onClick={() => {
+                      setManual(null);
+                      setSettleText("0");
+                    }}
+                    className="h-8 rounded-[6px] border border-border-strong px-2.5 text-xs font-semibold text-foreground outline-none hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring aria-pressed:border-settle-split-edge aria-pressed:bg-settle-split-tint/50"
+                  >
+                    Settle nothing now
+                  </button>
+                </div>
+              </div>
+              {capped?.error && (
+                <p className="mt-1 text-xs font-semibold text-warning" role="alert">
+                  {capped.error}
+                </p>
+              )}
+              {/* Two different "remaining" numbers — never mixed: a debt still owed vs money still to classify. */}
+              <dl className="mt-2.5 grid gap-2 sm:max-w-xl sm:grid-cols-2">
+                <div className="rounded-[6px] border border-border-strong px-2.5 py-1.5">
+                  <dt className="text-[10.5px] font-bold tracking-[0.06em] text-foreground/75 uppercase">{theyPaid ? `Still owed by ${first}` : `Still owed to ${first}`}</dt>
+                  <dd className={cn("font-heading text-[15px] font-semibold tabular-nums", allocation.unpaid > PAYMENT_EPSILON ? "text-warning" : "text-success")} data-testid="rp-still-owed">
+                    {money(allocation.unpaid)}
+                  </dd>
+                  <p className="text-[11px] text-foreground/65">Stays open on the same items — not advance, not income.</p>
+                </div>
+                <div className="rounded-[6px] border border-border-strong px-2.5 py-1.5">
+                  <dt className="text-[10.5px] font-bold tracking-[0.06em] text-foreground/75 uppercase">{theyPaid ? "Remaining received money" : "Remaining paid money"}</dt>
+                  <dd className="font-heading text-[15px] font-semibold text-foreground tabular-nums" data-testid="rp-left-over">
+                    {money(allocation.extra)}
+                  </dd>
+                  <p className="text-[11px] text-foreground/65">{hasExtra ? "Decide what it is below." : "Nothing left to decide."}</p>
+                </div>
+              </dl>
+            </section>
+          )}
+
+          {/* 2. …then what the rest of the money is — a first-class decision, never silently classified */}
+          {hasExtra && (
+            <section aria-labelledby="rp-remaining-heading" className="mt-4 border-t border-border-strong pt-3.5">
+              <p className="flex flex-wrap items-baseline gap-x-2">
+                <span className="font-heading text-[20px] leading-tight font-bold text-foreground tabular-nums">{money(allocation.extra)}</span>
+                <span className="text-sm font-semibold text-foreground/85">{allocation.allocated > PAYMENT_EPSILON ? "left after settling" : "remaining"}</span>
+              </p>
+              <h4 id="rp-remaining-heading" className="text-sm font-bold text-foreground">
+                What should happen to this money?
+              </h4>
+              <p className="text-xs font-medium text-foreground/70">
+                {accountName} still {theyPaid ? "receives" : "pays"} {money(amount)} once — this only decides what the money means.
+              </p>
+              <ExtraAllocationEditor
+                extra={allocation.extra}
+                direction={direction}
+                firstName={first}
+                drafts={effectiveDrafts}
+                onChange={setExtraDrafts}
+                linkOptions={linkOptions}
+                incomeCategories={incomeCategories}
+                accountName={accountName}
+              />
+              {unselected.length > 0 && (
+                <div className="mt-2.5">
+                  <p className="text-xs font-semibold text-foreground/80">Or use it to settle another item:</p>
+                  <div className="mt-1.5 flex flex-wrap gap-1.5">
+                    {unselected.map((o) => (
+                      <button
+                        key={o.key}
+                        type="button"
+                        onClick={() => {
+                          setManual(null);
+                          setSettleText(null);
+                          toggle(o.key);
+                        }}
+                        className="h-8 rounded-full border border-border-strong bg-card px-2.5 text-xs font-semibold text-foreground outline-none hover:border-settle-split-edge hover:bg-settle-split-tint/50 focus-visible:ring-2 focus-visible:ring-ring"
+                      >
+                        + {o.title} · {formatStatementDate(o.date, true)} · {money(o.outstanding)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </section>
+          )}
+
+          {/* 3. Optional follow-up on what is still owed — a reminder only, it moves no money */}
+          {onSetReminder && reminderTargets.length > 0 && (
+            <section aria-labelledby="rp-reminder-heading" className="mt-4 border-t border-border-strong pt-3.5">
+              <h4 id="rp-reminder-heading" className="text-sm font-bold text-foreground">
+                Remind me about the {money(allocation.unpaid)} still owed
+              </h4>
+              <p className="text-xs font-medium text-foreground/70">A personal reminder — it doesn&apos;t change what is owed and isn&apos;t shown on shared statements.</p>
+              <ReminderPicker value={reminder} onChange={setReminder} cycleStartDay={cycleStartDay} className="mt-2" />
+            </section>
+          )}
+
+          {/* 4. The detail: exactly which items this payment settles */}
+          <section aria-labelledby="rp-settle-heading" className="mt-4 border-t border-border-strong pt-3.5">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h4 id="rp-settle-heading" className="text-sm font-bold text-foreground">
-                {theyPaid ? `Settle what ${first} owes you` : `Settle what you owe ${first}`}
+                Payment allocation
               </h4>
               <div className="flex items-center gap-1">
                 {manual && (
@@ -454,12 +637,15 @@ export function RecordPaymentPanel({
                                 min={0}
                                 aria-label={`Paying now for ${o.title}`}
                                 value={manual ? (manual[o.key] ?? "") : String(paying)}
-                                onChange={(e) =>
+                                onChange={(e) => {
+                                  // Per-item amounts take over from "Apply to balance" (seeded from its lines).
+                                  const seed = seedManual();
+                                  setSettleText(null);
                                   setManual((m) => ({
-                                    ...(m ?? seedManual()),
+                                    ...(m ?? seed),
                                     [o.key]: e.target.value,
-                                  }))
-                                }
+                                  }));
+                                }}
                                 className={cn(WS_FIELD, "h-8 w-full text-right font-semibold tabular-nums sm:w-28 sm:justify-self-end")}
                               />
                             ) : (
@@ -548,52 +734,6 @@ export function RecordPaymentPanel({
               </div>
             )}
           </section>
-
-          {/* Remaining money — a first-class decision, never silently classified */}
-          {hasExtra && (
-            <section aria-labelledby="rp-remaining-heading" className="mt-4 border-t border-border-strong pt-3.5">
-              <p className="flex flex-wrap items-baseline gap-x-2">
-                <span className="font-heading text-[20px] leading-tight font-bold text-foreground tabular-nums">{money(allocation.extra)}</span>
-                <span className="text-sm font-semibold text-foreground/85">{allocation.allocated > PAYMENT_EPSILON ? "left after settling" : "remaining"}</span>
-              </p>
-              <h4 id="rp-remaining-heading" className="text-sm font-bold text-foreground">
-                What should happen to this money?
-              </h4>
-              <p className="text-xs font-medium text-foreground/70">
-                {accountName} still {theyPaid ? "receives" : "pays"} {money(amount)} once — this only decides what the money means.
-              </p>
-              <ExtraAllocationEditor
-                extra={allocation.extra}
-                direction={direction}
-                firstName={first}
-                drafts={effectiveDrafts}
-                onChange={setExtraDrafts}
-                linkOptions={linkOptions}
-                incomeCategories={incomeCategories}
-                accountName={accountName}
-              />
-              {unselected.length > 0 && (
-                <div className="mt-2.5">
-                  <p className="text-xs font-semibold text-foreground/80">Or use it to settle another item:</p>
-                  <div className="mt-1.5 flex flex-wrap gap-1.5">
-                    {unselected.map((o) => (
-                      <button
-                        key={o.key}
-                        type="button"
-                        onClick={() => {
-                          setManual(null);
-                          toggle(o.key);
-                        }}
-                        className="h-8 rounded-full border border-border-strong bg-card px-2.5 text-xs font-semibold text-foreground outline-none hover:border-settle-split-edge hover:bg-settle-split-tint/50 focus-visible:ring-2 focus-visible:ring-ring"
-                      >
-                        + {o.title} · {formatStatementDate(o.date, true)} · {money(o.outstanding)}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </section>
-          )}
         </div>
 
         {/* Sticky payment summary + the action */}
@@ -636,7 +776,7 @@ export function RecordPaymentPanel({
               </div>
               {selected.size > 0 && (
                 <SummaryLine
-                  label="Still open on selected"
+                  label={theyPaid ? `Still owed by ${first}` : `Still owed to ${first}`}
                   value={money(allocation.unpaid)}
                   tone={allocation.unpaid > PAYMENT_EPSILON ? "text-warning" : "text-success"}
                 />

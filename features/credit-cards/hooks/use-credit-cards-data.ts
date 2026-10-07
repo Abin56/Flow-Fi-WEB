@@ -63,7 +63,9 @@ import {
   settleCardPayments,
   statementPeriodTotal,
   unbilledSpendForCard,
+  uncoveredClosedSpendForCard,
 } from "@/lib/repositories/credit-card-repository";
+import { cardBillsForCard, cardStatementPaymentScope, type CardStatementPaymentScope } from "@/lib/engines/card-cycle-bills";
 import { useCardUtilizationEmis } from "@/hooks/use-card-utilization-emis";
 import { useAccounts } from "@/hooks/use-accounts";
 import { useTransactions } from "@/hooks/use-transactions";
@@ -119,6 +121,28 @@ function toSnapshotUtilizationStatement(statement: Statement): UtilizationStatem
   };
 }
 
+/** An unsaved closed bill (see `uncoveredClosedSpendForCard`) in `Statement` shape — same id scheme as
+ *  `cardBillsForCard`'s derived bills. Never written; exists only so payments settle it oldest first. */
+function derivedStatement(card: CreditCardProfile, w: { periodStart: Date; periodEnd: Date; dueDate: Date; totalAmount: number }): Statement {
+  return {
+    id: `derived:${card.id}:${w.periodEnd.getTime()}`,
+    cardId: card.id,
+    periodStart: w.periodStart,
+    periodEnd: w.periodEnd,
+    generatedDate: w.periodEnd,
+    dueDate: w.dueDate,
+    totalAmount: w.totalAmount,
+    minimumDue: card.minimumDuePercent == null ? null : (w.totalAmount * card.minimumDuePercent) / 100,
+    amountPaid: 0,
+    interestCharged: null,
+    lateFee: null,
+    createdAt: w.periodEnd,
+    deletedAt: null,
+    lastEditedAt: null,
+    editHistory: [],
+  } as Statement;
+}
+
 export function toLiveUtilizationStatement(statement: Statement, cardTransactions: Transaction[]): UtilizationStatement {
   const liveTotal = statementPeriodTotal(cardTransactions, statement);
   const live = statementWithLiveTotal(statement, liveTotal, statement.minimumDue);
@@ -170,6 +194,9 @@ export interface CreditCardStandingView {
   effectiveCreditLimit: number;
   /** This physical card's own usage (its statements + unbilled spend) — equals `outstanding` when standalone. */
   ownOutstanding: number;
+  /** What Pay bill settles for this PHYSICAL card: its closed statements' remaining (oldest first), with
+   *  the open cycle's spend reported separately — never the card's or facility's whole outstanding. */
+  statementPayment: CardStatementPaymentScope;
   sharedLimit: SharedLimitView | null;
 }
 
@@ -192,8 +219,10 @@ export function computeCreditCardStandings(input: {
   statements: Statement[];
   transactions: Transaction[];
   utilizationEmis: UtilizationEmi[];
+  now?: Date;
 }): CreditCardStandingView[] {
   const { cards: cardList, statements: statementList, transactions: transactionList, utilizationEmis } = input;
+  const now = input.now ?? new Date();
 
   const transactionsByAccountId = new Map<string, Transaction[]>();
   for (const t of transactionList) {
@@ -205,6 +234,8 @@ export function computeCreditCardStandings(input: {
 
   const statementsByCardId = new Map<string, Statement[]>();
   for (const s of statementList) {
+    // A trashed statement covers nothing — its spend falls back to uncovered/unbilled (same as `cardBillsForCard`).
+    if (s.deletedAt != null) continue;
     const list = statementsByCardId.get(s.cardId) ?? [];
     list.push(s);
     statementsByCardId.set(s.cardId, list);
@@ -224,7 +255,9 @@ export function computeCreditCardStandings(input: {
       const live = cardStatements.map((s) =>
         statementWithLiveTotal(s, statementPeriodTotal(cardTransactions, s), s.minimumDue),
       );
-      const settled = settleCardPayments(live, unbilled.totalAmount, cardPaymentTotal(cardTransactions));
+      // Closed cycles no stored statement covers (before the first one / gaps) — unsaved bills, still owed.
+      const derived = uncoveredClosedSpendForCard(c, cardTransactions, cardStatements).map((w) => derivedStatement(c, w));
+      const settled = settleCardPayments([...live, ...derived], unbilled.totalAmount, cardPaymentTotal(cardTransactions));
       return [c.id, { statements: settled.statements, currentCycle: { ...unbilled, totalAmount: settled.unbilledTotal } }] as const;
     }),
   );
@@ -249,6 +282,10 @@ export function computeCreditCardStandings(input: {
   return cardList.map((card): CreditCardStandingView => {
     const cardStatements = utilizationStatementsFor(card.id);
     const rawStatements = settledByCardId.get(card.id)?.statements ?? [];
+    const statementPayment = cardStatementPaymentScope(
+      cardBillsForCard(card, transactionsByAccountId.get(card.accountId) ?? [], statementsByCardId.get(card.id) ?? [], now),
+      now,
+    );
     const own = cardOwnStanding(toUtilizationCard(card), cardStatements, currentCycleByCardId.get(card.id) ?? null);
     const sharedLimit = resolvedSharedLimit(card);
 
@@ -270,6 +307,7 @@ export function computeCreditCardStandings(input: {
         utilizationPercent: creditUtilizationPercent(standing.outstanding + standing.lockedEmiPrincipal, sharedLimit.creditLimit),
         effectiveCreditLimit: sharedLimit.creditLimit,
         ownOutstanding: own.outstanding,
+        statementPayment,
         sharedLimit: {
           id: sharedLimit.id,
           name: sharedLimit.name,
@@ -292,6 +330,7 @@ export function computeCreditCardStandings(input: {
       utilizationPercent: creditUtilizationPercent(standing.outstanding + standing.lockedEmiPrincipal, card.creditLimit),
       effectiveCreditLimit: card.creditLimit,
       ownOutstanding: own.outstanding,
+      statementPayment,
       sharedLimit: null,
     };
   });
@@ -483,7 +522,8 @@ export interface CreditCardViewItem {
   utilizationPercent: number;
   statementDate: Date | null;
   dueDate: Date | null;
-  minimumDue: number;
+  /** The current bill's issuer minimum — only a stored statement carries one; null = not tracked. */
+  minimumDue: number | null;
   isPrimary: boolean;
   accent: CardAccent;
   rewardPoints: number;
@@ -491,6 +531,8 @@ export interface CreditCardViewItem {
   loungeVisitsLeft: number;
   /** This physical card's own usage — differs from `currentBalance` only for a shared-limit card. */
   ownUsage: number;
+  /** Pay bill's scope — closed statements due vs the open cycle's spend (see `CreditCardStandingView`). */
+  statementPayment: CardStatementPaymentScope;
   /** The facility this card shares its limit with, plus its sibling cards' display identity. */
   sharedLimit: (SharedLimitView & { siblings: { id: string; name: string; last4: string; network: string }[] }) | null;
   card: CreditCardProfile;
@@ -556,9 +598,11 @@ function toViewItem(
     usedCredit: standing.outstanding + standing.lockedEmiPrincipal,
     available: standing.available,
     utilizationPercent: standing.utilizationPercent,
-    statementDate: nextDueStatement ? nextDueStatement.periodEnd : null,
-    dueDate: nextDueStatement ? nextDueStatement.dueDate : null,
-    minimumDue: nextDueStatement?.minimumDue ?? 0,
+    // The bill Pay Now targets (stored OR derived — most cycles have no stored statement) wins; the
+    // stored-statement fallback only applies when nothing closed is unpaid.
+    statementDate: standing.statementPayment.current?.periodEnd ?? (nextDueStatement ? nextDueStatement.periodEnd : null),
+    dueDate: standing.statementPayment.current?.dueDate ?? (nextDueStatement ? nextDueStatement.dueDate : null),
+    minimumDue: standing.statementPayment.current ? standing.statementPayment.current.minimumDue : null,
     isPrimary: index === 0,
     accent: pickedCardAccent(account?.colorValue) ?? ACCENT_CYCLE[index % ACCENT_CYCLE.length],
     // No rewards-ledger feature exists to source these from — see module doc comment.
@@ -566,6 +610,7 @@ function toViewItem(
     cashbackEarned: 0,
     loungeVisitsLeft: 0,
     ownUsage: standing.ownOutstanding,
+    statementPayment: standing.statementPayment,
     sharedLimit:
       standing.sharedLimit == null
         ? null

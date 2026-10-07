@@ -37,6 +37,10 @@ export interface CardBill {
   remaining: number;
   /** The statement period has ended (the bill is generated) — false for the cycle still in progress. */
   isClosed: boolean;
+  /** Issuer minimum due — only a stored statement carries one; null = not tracked (never invented). */
+  minimumDue: number | null;
+  /** Ids of the card transactions this bill is made of — People gating scopes by these, never by rupees. */
+  chargeIds: string[];
 }
 
 const round2 = (v: number) => Math.round(v * 100) / 100;
@@ -72,6 +76,8 @@ export function cardBillsForCard(
       amountPaid: live.amountPaid,
       remaining: 0,
       isClosed: dayIndex(s.periodEnd) < today,
+      minimumDue: s.minimumDue ?? null,
+      chargeIds: cardTransactions.filter((t) => countsTowardCardStatement(t) && containsDay(s, t.dateTime)).map((t) => t.id),
     };
   });
 
@@ -85,6 +91,7 @@ export function cardBillsForCard(
     const existing = derived.get(key);
     if (existing) {
       existing.totalAmount += t.amount;
+      existing.chargeIds.push(t.id);
       continue;
     }
     derived.set(key, {
@@ -98,6 +105,8 @@ export function cardBillsForCard(
       amountPaid: 0,
       remaining: 0,
       isClosed: key < today,
+      minimumDue: null,
+      chargeIds: [t.id],
     });
   }
   bills.push(...derived.values());
@@ -137,4 +146,78 @@ export function cardBillsDueInCycle(bills: CardBill[], cycle: { start: Date; end
     result.push({ ...b, overdue: due < today, carriedForward: carried });
   }
   return result;
+}
+
+/**
+ * THE canonical answer to "which statement is normal Pay Now paying right now?" — every Pay bill
+ * surface (Card bills table, Pay now prefill, the dialog's bill summary, People readiness) reads this.
+ *
+ * ONE Pay Now = ONE bill: the OLDEST closed statement with something still unpaid (`current`).
+ * Payments are not tagged to a statement — the allocator (`settleCardPayments`) applies every payment
+ * oldest due first — so the oldest unpaid statement is the one any payment settles first; naming any
+ * other would misdescribe where the money goes. Later closed statements (`later`) and the open cycle's
+ * spend (`unbilled`) stay on the card as the next bills and are never folded into the Pay Now amount.
+ * Closed ≠ due: `currentOverdue` says whether `current` is already past its own due date. Paying several
+ * statements at once is only the explicit "full outstanding" choice.
+ *
+ * Per PHYSICAL card: a shared-limit sibling's statements are never included.
+ */
+export interface CardStatementPaymentScope {
+  /** Every closed statement with something still unpaid, oldest due first — the allocation order. */
+  statements: CardBill[];
+  /** The ONE bill normal Pay Now targets (`statements[0]`); null when no closed statement is unpaid. */
+  current: CardBill | null;
+  /** `current` is past its due date. */
+  currentOverdue: boolean;
+  /** Closed statements after `current`, still unpaid — next bills, NOT part of a normal payment. */
+  later: CardBill[];
+  /** `current.remaining` — the normal Pay Now amount (0 when no closed statement is unpaid). */
+  statementDue: number;
+  /** Σ remaining of every closed unpaid statement (`current` + `later`). */
+  closedDue: number;
+  /** Remaining on the still-open cycle(s) — the next statement's spend, not billed yet. */
+  unbilled: number;
+  /** `closedDue + unbilled` — this physical card's own outstanding. */
+  cardOutstanding: number;
+}
+
+export function cardStatementPaymentScope(bills: readonly CardBill[], now: Date = new Date()): CardStatementPaymentScope {
+  const statements = bills.filter((b) => b.isClosed && b.remaining > 0).sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime());
+  const current = statements[0] ?? null;
+  const closedDue = round2(statements.reduce((s, b) => s + b.remaining, 0));
+  const unbilled = round2(bills.filter((b) => !b.isClosed).reduce((s, b) => s + b.remaining, 0));
+  return {
+    statements,
+    current,
+    currentOverdue: current != null && dayIndex(current.dueDate) < dayIndex(now),
+    later: statements.slice(1),
+    statementDue: current?.remaining ?? 0,
+    closedDue,
+    unbilled,
+    cardOutstanding: round2(closedDue + unbilled),
+  };
+}
+
+/**
+ * The card charges a payment of `amount` may be People-gated on: the current bill's own charges (by
+ * transaction id) while the amount stays within that bill — an exact or partial Pay Now never reaches
+ * the next statement. Null (no statement restriction; oldest-first reach decides) once the user
+ * explicitly pays beyond the current bill, e.g. full outstanding.
+ */
+export function payBillChargeScope(scope: CardStatementPaymentScope, amount: number): ReadonlySet<string> | null {
+  if (scope.current == null || amount > scope.current.remaining + 0.005) return null;
+  return new Set(scope.current.chargeIds);
+}
+
+export type PayBillChoice = "statement" | "full";
+
+/**
+ * The amount "Pay bill" opens with. "statement" (the default) = the current bill's remaining — never
+ * several statements, never the card's whole outstanding; nothing pre-filled when no closed statement
+ * is unpaid. "full" is the explicit "pay everything this card owes" choice (this physical card's own
+ * outstanding — never a shared facility's pooled total).
+ */
+export function payBillAmount(scope: CardStatementPaymentScope, choice: PayBillChoice, ownOutstanding: number): number | undefined {
+  if (choice === "full") return ownOutstanding > 0 ? round2(ownOutstanding) : undefined;
+  return scope.statementDue > 0 ? scope.statementDue : undefined;
 }

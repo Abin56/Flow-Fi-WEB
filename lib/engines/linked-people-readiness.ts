@@ -25,7 +25,7 @@
 import { PAYMENT_EPSILON, round2 } from "@/lib/engines/person-payment";
 import type { PersonCycleStatement } from "@/lib/engines/person-cycle-statement";
 import type { LedgerEntry } from "@/lib/models/person";
-import { unpaidCardCharges, type LinkedFundsTransaction } from "@/lib/engines/linked-funds";
+import { chargesReachedByPayment, unpaidCardCharges, type LinkedFundsTransaction } from "@/lib/engines/linked-funds";
 import type { Installment } from "@/lib/models/payment-schedule";
 
 export type LinkedPersonState = "received" | "partial" | "pending";
@@ -148,10 +148,18 @@ export function peopleGateInstallmentIds(touched: readonly Pick<Installment, "id
 
 /** A lender payment was refused at the write layer because linked People shares are still open. */
 export class PeopleSettlementPendingError extends Error {
-  constructor(readonly gate: PeopleSettlementGate) {
+  constructor(
+    readonly gate: PeopleSettlementGate,
+    /** What was being paid — the card bill wording is the Pay bill dialog's, the installment one the Loan/EMI one. */
+    readonly subject: "installment" | "card-bill" = "installment",
+  ) {
     const fmt = (n: number) => `₹${n.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
     const who = gate.attention.map((p) => `${fmt(p.remaining)} from ${p.personName}`).join(", ");
-    super(`${who} is still expected for this installment. Record it in People first, then pay the lender.`);
+    super(
+      subject === "card-bill"
+        ? `Some people-linked amounts in this bill still need to be settled (${who}). Review them before paying.`
+        : `${who} is still expected for this installment. Record it in People first, then pay the lender.`,
+    );
     this.name = "PeopleSettlementPendingError";
   }
 }
@@ -166,6 +174,11 @@ export interface UnsettledPeopleAcknowledgement {
   reason: string;
 }
 
+/** A usable acknowledgement — explicit and with a non-empty reason (the same test the Loan/EMI write gate applies). */
+export function hasPeopleGateAcknowledgement(a: UnsettledPeopleAcknowledgement | null | undefined): boolean {
+  return a?.acknowledgedUnsettledPeople === true && a.reason.trim() !== "";
+}
+
 /**
  * People obligations beneath one credit card's current bill: shares of charges this card still carries.
  * A charge the card no longer carries (already paid to the issuer) is not part of this payment — its
@@ -178,13 +191,29 @@ export function linkedPeopleForCard(params: {
   cardAccountId: string;
   cardOpeningBalance?: number;
   lenderDue: number;
+  /**
+   * The payment actually being made. When given, only charges THIS payment reaches (oldest unpaid
+   * charge first — `chargesReachedByPayment`) gate it: a ₹8,000 statement payment is gated by the
+   * statement's charges, not by new purchases that belong to the next statement. Omitted = every charge
+   * the card still carries (the whole outstanding).
+   */
+  paymentAmount?: number;
+  /**
+   * The bill being paid, by transaction identity (`payBillChargeScope`): only these charges may gate it,
+   * so a Pay Now on one statement never asks to settle shares that belong to the next statement.
+   */
+  chargeScope?: ReadonlySet<string> | null;
 }): LinkedPeopleReadiness {
   const unpaid = unpaidCardCharges(params.transactions, params.cardAccountId, params.cardOpeningBalance ?? 0);
+  const reached =
+    params.paymentAmount == null ? null : chargesReachedByPayment(params.transactions, params.cardAccountId, params.paymentAmount, params.cardOpeningBalance ?? 0);
   const byPerson = new Map<string, { name: string; obligations: LinkedObligation[] }>();
   const statementOf = new Map(params.statements.map((s) => [s.personId, s]));
   for (const e of params.ledgerEntries) {
     if (e.deletedAt != null || e.type !== "gave" || e.transactionRef == null) continue;
     if ((unpaid.get(e.transactionRef) ?? 0) <= PAYMENT_EPSILON) continue;
+    if (reached && !reached.has(e.transactionRef)) continue;
+    if (params.chargeScope && !params.chargeScope.has(e.transactionRef)) continue;
     const st = statementOf.get(e.personId);
     const o = st ? obligationFrom(st, `ledger:${e.id}`) : null;
     if (!st || !o) continue;

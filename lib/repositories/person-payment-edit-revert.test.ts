@@ -366,3 +366,251 @@ describe("Edit / Revert a recorded People payment", () => {
     expect(impact("missing")).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------- Custom settle amount + follow-up
+
+import { settleCapLines } from "@/lib/engines/person-payment";
+import { payableObligations, paymentLines } from "@/features/people/lib/person-payment-obligations";
+import { followUpStatus } from "@/lib/models/person-follow-up";
+
+describe("Use only part of a receipt to settle (custom amount) — real write path", () => {
+  beforeEach(() => {
+    installments = [emiInst("i1", 1, d(9, 30), 2000)];
+    setup();
+  });
+
+  /** AMMA owes KSEB ₹1,000 + EMI ₹2,000; sends ₹29,800; only ₹2,000 settles; the rest is kept as advance. */
+  function customInput(received: number, settle: number): RecordPaymentInput {
+    const obligations = payableObligations(rows(ALL)).filter((o) => o.side === "theyOwe");
+    const keys = obligations.map((o) => o.key);
+    const cap = settleCapLines({ obligations, selectedKeys: keys, amount: received, settle });
+    expect(cap.error).toBeNull();
+    const lines = paymentLines(obligations, Object.entries(cap.manual).map(([key, amount]) => ({ key, amount, outstanding: 0, remainingAfter: 0 })));
+    const allocated = Object.values(cap.manual).reduce((s, v) => s + v, 0);
+    return { direction: "theyPaid", amount: received, date: d(10, 2), accountId: "sbi", lines, extra: ADV(received - allocated) };
+  }
+
+  it("₹29,800 in, ₹2,000 applied: SBI +₹29,800 once, EMI stays PARTIAL ₹1,000 on the same obligation, ₹27,800 advance; settling the rest resolves the follow-up", async () => {
+    await payments.recordPayment(person(), customInput(29_800, 2000));
+    expect(balanceOf("sbi")).toBe(39_800);
+    expect(liveTx()).toHaveLength(1); // one cash leg, never income
+    expect(liveTx()[0].amount).toBe(29_800);
+    expect(row("ledger:kseb").remaining).toBe(0);
+    const emi = row("emi-inst:i1");
+    expect([emi.amount, emi.remaining, emi.state]).toEqual([2000, 1000, "partial"]);
+    expect(rows(ALL).filter((r) => r.key.startsWith("emi-inst:"))).toHaveLength(1); // no fake second obligation
+    expect(statement(ALL).currentPending).toBe(1000); // still owed
+    expect(statement(ALL).advanceBalance).toBe(-27_800); // held separately — never netted
+    expectConsistent();
+
+    // A follow-up on the ₹1,000 is metadata: no document it touches is financial.
+    const reminder = { remindOn: d(10, 17), state: "active" as const };
+    expect(followUpStatus(reminder, emi.remaining! > 0, d(10, 18))).toBe("overdue");
+
+    // Settle the rest → the reminder resolves itself.
+    await payments.recordPayment(person(), input([EMI(1000)]));
+    expect(followUpStatus(reminder, row("emi-inst:i1").remaining! > 0, d(10, 18))).toBe("resolved");
+  });
+
+  it("revert of a custom-allocated payment is exact and idempotent", async () => {
+    const before = snapshot();
+    const id = await payments.recordPayment(person(), customInput(29_800, 2000));
+    await payments.revertPayment(person(), id);
+    expect(balanceOf("sbi")).toBe(10_000);
+    expect(liveTx()).toHaveLength(0);
+    expect([row("ledger:kseb").remaining, row("emi-inst:i1").remaining]).toEqual([1000, 2000]);
+    expect(statement(ALL).advanceBalance).toBe(0);
+    expect(statement(ALL).currentPending).toBe(3000);
+    expectConsistent();
+    const afterRevert = snapshot();
+    await payments.revertPayment(person(), id).catch(() => {});
+    expect(snapshot()).toEqual(afterRevert);
+    expect(afterRevert.sbi).toBe(before.sbi);
+  });
+
+  it("edit ₹2,000 → ₹1,000 reopens ₹1,000; → ₹3,000 settles fully — one cash leg throughout", async () => {
+    const id = await payments.recordPayment(person(), customInput(29_800, 2000));
+    // Editing: the panel re-opens this payment's own lines before re-capping — here, revert-equivalent state.
+    const edited = await payments.editPayment(person(), id, { direction: "theyPaid", amount: 29_800, date: d(10, 2), accountId: "sbi", lines: [KSEB(1000)], extra: ADV(28_800) });
+    expect([row("ledger:kseb").remaining, row("emi-inst:i1").remaining]).toEqual([0, 2000]);
+    await payments.editPayment(person(), edited, { direction: "theyPaid", amount: 29_800, date: d(10, 2), accountId: "sbi", lines: [KSEB(1000), EMI(2000)], extra: ADV(26_800) });
+    expect([row("ledger:kseb").remaining, row("emi-inst:i1").remaining]).toEqual([0, 0]);
+    expect(balanceOf("sbi")).toBe(39_800);
+    expect(liveTx()).toHaveLength(1);
+    expect(statement(ALL).advanceBalance).toBe(-26_800);
+    expectConsistent();
+  });
+});
+
+// ---------------------------------------------------------------- Cycle scope: due through the selected cycle
+
+import { settlementProjection } from "@/features/people/lib/person-payment-obligations";
+
+describe("Record Payment scope = due through the selected cycle (future obligations excluded)", () => {
+  beforeEach(() => {
+    // KSEB ₹1,000 (29 Sep) + EMI #1 ₹2,000 (30 Sep) are due in SEP; EMI #2 ₹4,000 is due 30 Nov — a later cycle.
+    installments = [emiInst("i1", 1, d(9, 30), 2000), emiInst("i2", 2, d(11, 30), 4000)];
+    setup();
+  });
+
+  /** What the panel selects by default: open obligations whose timing isn't "later" for `cycle`. */
+  const dueThrough = (cycle: StatementCycle) => settlementProjection(rows(ALL), cycle).payable.filter((o) => o.side === "theyOwe" && o.timing !== "later");
+
+  function scoped(cycle: StatementCycle, received: number, settle: number): RecordPaymentInput {
+    const obligations = dueThrough(cycle);
+    const cap = settleCapLines({ obligations, selectedKeys: obligations.map((o) => o.key), amount: received, settle });
+    expect(cap.error).toBeNull();
+    const lines = paymentLines(obligations, Object.entries(cap.manual).map(([key, amount]) => ({ key, amount, outstanding: 0, remainingAfter: 0 })));
+    const allocated = Object.values(cap.manual).reduce((s, v) => s + v, 0);
+    return { direction: "theyPaid", amount: received, date: d(10, 2), accountId: "sbi", lines, extra: received - allocated > 0 ? ADV(received - allocated) : null };
+  }
+
+  it("all-time open ₹7,000, but due through SEP is ₹3,000 — the future ₹4,000 is not in scope", () => {
+    const all = settlementProjection(rows(ALL), SEP).payable.filter((o) => o.side === "theyOwe");
+    expect(all.reduce((s, o) => s + o.outstanding, 0)).toBe(7000);
+    expect(dueThrough(SEP).map((o) => [o.key, o.outstanding])).toEqual([
+      ["ledger:kseb", 1000],
+      ["emi-inst:i1", 2000],
+    ]);
+    // Asking to settle beyond what's due is refused, not spilled into the future EMI.
+    const over = settleCapLines({ obligations: dueThrough(SEP), selectedKeys: dueThrough(SEP).map((o) => o.key), amount: 5000, settle: 4000 });
+    expect(over.error).toMatch(/Only 3000\.00 is due/);
+  });
+
+  it("₹5,000 received: ₹3,000 applied, ₹2,000 kept as advance; future EMI untouched", async () => {
+    await payments.recordPayment(person(), scoped(SEP, 5000, 3000));
+    expect(balanceOf("sbi")).toBe(15_000);
+    expect([row("ledger:kseb").remaining, row("emi-inst:i1").remaining]).toEqual([0, 0]);
+    expect(rows(ALL).find((r) => r.key === "emi-inst:i2")?.remaining).toBe(4000);
+    expect(statement(ALL).advanceBalance).toBe(-2000);
+    expectConsistent();
+  });
+
+  it("settle only ₹2,000: ₹1,000 still owed carries into OCT as previous pending — the same obligation, no duplicate", async () => {
+    await payments.recordPayment(person(), scoped(SEP, 2000, 2000));
+    expect(row("emi-inst:i1").remaining).toBe(1000);
+    const oct = statement(OCT);
+    expect(oct.previousPending).toBe(1000);
+    expect(oct.rows.filter((r) => r.kind === "obligation" && r.key === "emi-inst:i1")).toHaveLength(0); // not new activity
+    // Opening Record Payment for OCT: the ₹1,000 is "carried", still payable; EMI #2 (Nov) still later.
+    const octScope = settlementProjection(rows(ALL), OCT).payable.filter((o) => o.side === "theyOwe");
+    expect(octScope.map((o) => [o.key, o.outstanding, o.timing])).toEqual([
+      ["emi-inst:i1", 1000, "carried"],
+      ["emi-inst:i2", 4000, "later"],
+    ]);
+    // A follow-up set on it stays attached to that obligation key and resolves once it's paid.
+    const reminder = { remindOn: OCT.start, state: "active" as const };
+    expect(followUpStatus(reminder, row("emi-inst:i1").remaining! > 0, OCT.start)).toBe("dueToday");
+    await payments.recordPayment(person(), scoped(OCT, 1000, 1000));
+    expect(followUpStatus(reminder, row("emi-inst:i1").remaining! > 0, OCT.start)).toBe("resolved");
+    expect(rows(ALL).find((r) => r.key === "emi-inst:i2")?.remaining).toBe(4000);
+    expectConsistent();
+  });
+
+  it("edit and revert a scoped payment: exact, one cash leg, future EMI never touched", async () => {
+    const id = await payments.recordPayment(person(), scoped(SEP, 5000, 3000));
+    const edited = await payments.editPayment(person(), id, { direction: "theyPaid", amount: 5000, date: d(10, 2), accountId: "sbi", lines: [KSEB(1000), EMI(1000)], extra: ADV(3000) });
+    expect(row("emi-inst:i1").remaining).toBe(1000);
+    expect(liveTx()).toHaveLength(1);
+    await payments.revertPayment(person(), edited);
+    expect(balanceOf("sbi")).toBe(10_000);
+    expect([row("ledger:kseb").remaining, row("emi-inst:i1").remaining]).toEqual([1000, 2000]);
+    expect(rows(ALL).find((r) => r.key === "emi-inst:i2")?.remaining).toBe(4000);
+    expect(statement(ALL).advanceBalance).toBe(0);
+    expectConsistent();
+  });
+});
+
+// ---------------------------------------------------------------- Apply advance early to a future item (explicit)
+
+describe("Apply advance to a FUTURE obligation — explicit, exact, reversible, no money moves", () => {
+  beforeEach(() => {
+    installments = [emiInst("i1", 1, d(9, 30), 2000), emiInst("i2", 2, d(11, 30), 4000)];
+    setup();
+  });
+
+  it("₹2,000 of held advance applied early to Nov EMI: reduces it once, keeps obligationRef, no transaction; items untouched; undo restores", async () => {
+    await payments.recordPayment(person(), input([], ADV(2000))); // advance only — SBI +2,000
+    const txBefore = liveTx().length;
+    const sbi = balanceOf("sbi");
+    const octBefore = statement(OCT);
+    const sepBefore = statement(SEP);
+    const available = advanceRemaining(advanceSources(ledger()), applications());
+    await payments.applyAdvance(person(), { targets: [{ obligationKey: "emi-inst:i2", uses: drawAdvance(available, "theyOwe", 2000) }], date: d(10, 3) });
+
+    expect(rows(ALL).find((r) => r.key === "emi-inst:i2")?.remaining).toBe(2000);
+    expect(applications().map((a) => [a.obligationKey, a.amount])).toEqual([["emi-inst:i2", 2000]]);
+    expect(liveTx()).toHaveLength(txBefore); // no income, no spend, no account movement
+    expect(balanceOf("sbi")).toBe(sbi);
+    expect(statement(ALL).advanceBalance).toBe(0);
+    // Items themselves are untouched: SEP's KSEB + EMI #1 are still fully open, Nov EMI is not made "current".
+    expect([row("ledger:kseb").remaining, row("emi-inst:i1").remaining]).toEqual([1000, 2000]);
+    // KNOWN ENGINE BEHAVIOUR (reported, not changed): the statement counts an advance application in the
+    // cycle it is DATED, so SEP's net pending reads 3,000 − 2,000 = 1,000 until NOV's 4,000 lands; over the
+    // whole history it reconciles (5,000 open = 1,000 + 2,000 + 2,000).
+    expect(statement(SEP).currentPending).toBe(sepBefore.currentPending - 2000);
+    expect(statement(ALL).currentPending).toBe(5000);
+    expect(statement(SEP).cycleActivity).toBe(sepBefore.cycleActivity);
+    expect(statement(OCT).cycleActivity).toBe(octBefore.cycleActivity);
+    expectConsistent();
+
+    await payments.removeAdvanceApplications(applications());
+    expect(rows(ALL).find((r) => r.key === "emi-inst:i2")?.remaining).toBe(4000);
+    expect(statement(ALL).advanceBalance).toBe(-2000);
+    expect(applications().filter((a) => a.deletedAt == null)).toHaveLength(0); // soft-deleted, audit kept
+    expect(liveTx()).toHaveLength(txBefore);
+    expectConsistent();
+  });
+});
+
+describe("EMI-linked People items — Record Payment from the selected cycle (overdue + current + future)", () => {
+  // Phone EMI AMMA repays: Aug installment overdue, Sep installment in the selected cycle, Nov installment future.
+  const AUG_I = "emi-inst:i0";
+  const SEP_I = "emi-inst:i1";
+  const NOV_I = "emi-inst:i3";
+  const line = (key: string, amount: number): PaymentLineInput =>
+    key === "ledger:kseb" ? KSEB(amount) : { key, amount, route: { kind: "derived", obligationRef: key, sourceKind: "emiInstallment" } };
+
+  beforeEach(() => {
+    installments = [emiInst("i0", 1, d(8, 30), 2000), emiInst("i1", 2, d(9, 30), 2000), emiInst("i3", 4, d(11, 30), 2000)];
+    setup();
+  });
+
+  it("only overdue + current are eligible by default; pay / edit / revert never touch the future EMI", async () => {
+    const { settlementProjection } = await import("@/features/people/lib/person-payment-obligations");
+    const projection = settlementProjection(rows(ALL), SEP);
+    const due = projection.payable.filter((o) => o.side === "theyOwe" && o.timing !== "later");
+    expect(due.map((o) => [o.key, o.timing, o.outstanding])).toEqual([
+      [AUG_I, "carried", 2000],
+      ["ledger:kseb", "cycle", 1000],
+      [SEP_I, "cycle", 2000],
+    ]);
+    const future = projection.payable.find((o) => o.key === NOV_I);
+    expect(future?.timing).toBe("later");
+    const futureBefore = row(NOV_I, ALL).remaining;
+
+    // Partial ₹2,500 on 2 Oct (cash date) settles Aug in full and ₹500 of KSEB — oldest first.
+    const id = await payments.recordPayment(person(), input([line(AUG_I, 2000), line("ledger:kseb", 500)]));
+    expect([row(AUG_I, ALL).remaining, row("ledger:kseb", ALL).remaining, row(SEP_I, ALL).remaining]).toEqual([0, 500, 2000]);
+    expect(row(NOV_I, ALL).remaining).toBe(futureBefore);
+    expect(balanceOf("sbi")).toBe(12_500);
+
+    // Edit → ₹3,000.
+    await payments.editPayment(person(), id, input([line(AUG_I, 2000), line("ledger:kseb", 1000)]));
+    expect([row(AUG_I, ALL).remaining, row("ledger:kseb", ALL).remaining, row(SEP_I, ALL).remaining]).toEqual([0, 0, 2000]);
+    expect(balanceOf("sbi")).toBe(13_000);
+    expect(row(NOV_I, ALL).remaining).toBe(futureBefore);
+
+    // Revert: everything reopens exactly; cash reversed once; the future EMI keeps its obligationRef/key untouched.
+    const live = ledger().filter((e) => e.deletedAt == null && e.obligationRef != null).map((e) => e.obligationRef);
+    expect(live).not.toContain(NOV_I);
+    const editedId = ledger().find((e) => e.deletedAt == null && e.obligationRef === AUG_I)!;
+    const paymentId = (editedId as unknown as { paymentId?: string }).paymentId ?? id;
+    await payments.revertPayment(person(), paymentId, { blockIfAdvanceUsed: true });
+    expect([row(AUG_I, ALL).remaining, row("ledger:kseb", ALL).remaining, row(SEP_I, ALL).remaining]).toEqual([2000, 1000, 2000]);
+    expect(row(NOV_I, ALL).remaining).toBe(futureBefore);
+    expect(balanceOf("sbi")).toBe(10_000);
+    expect(liveTx()).toHaveLength(0);
+    expectConsistent();
+  });
+});

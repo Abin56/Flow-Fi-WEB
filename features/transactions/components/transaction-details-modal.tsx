@@ -20,7 +20,7 @@
  * as before.
  */
 
-import { useRef, useState } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
@@ -139,12 +139,15 @@ const PERSON_ENTRY_OPTIONS: { value: LedgerEntryType; label: string; description
   { value: "borrowed", label: "Money I Borrowed", description: "I owe them", icon: ArrowDownToLine, tone: "success" },
 ];
 
-type BorrowFunding = "person" | "account";
+type BorrowFunding = "cash" | "person";
 
-/** "Money I Borrowed" → who actually paid. Nothing preselected: the user must say which. */
-const BORROW_FUNDING_OPTIONS: { value: BorrowFunding; label: (name: string) => string; description: string }[] = [
-  { value: "person", label: (name) => `${name} paid directly`, description: "No money leaves your accounts." },
-  { value: "account", label: () => "I paid from my account", description: "Choose the account you used." },
+/** "Money I Borrowed" → HOW the borrowing happened — two different financial events. Nothing preselected.
+ *  - "cash": they lent me money into an account → People "borrowed" entry + its cash-IN leg
+ *    (`recordBorrowedCash`); no expense, no income. Add mode only.
+ *  - "person": they paid an expense for me → `createPersonFundedExpense` (no account, I owe them). */
+const BORROW_FUNDING_OPTIONS: { value: BorrowFunding; label: (name: string) => string; description: (name: string) => string }[] = [
+  { value: "cash", label: () => "Money received into my account", description: (name) => `${name} gave me money that I must repay later.` },
+  { value: "person", label: (name) => `${name} paid this expense for me`, description: (name) => `No money entered my account. I owe ${name} for this purchase.` },
 ];
 
 /** Matches the icon set the Add Account dialog already uses for these types — kept visually
@@ -417,6 +420,8 @@ export interface PeopleGateInput {
   /** The lender account being paid (the card). */
   accountId: string;
   readiness: LinkedPeopleReadiness | null;
+  /** Readiness for the amount being paid (card bill: only the charges that payment reaches). Falls back to `readiness`. */
+  readinessFor?: ((amount: number) => LinkedPeopleReadiness) | null;
   /** People data still loading — the gate is unknown, so the payment waits. */
   loading: boolean;
   /** Shown as "Ready to pay {payeeName}". */
@@ -446,7 +451,11 @@ export function TransactionDetailsModal({
   peopleGate = null,
   onDestinationAccountChange,
   returnLabel = null,
+  paymentScope = null,
 }: {
+  /** Add mode + transfer only — what this payment pays (card Pay bill: statement vs full outstanding), shown
+   *  under the amount while the To account is `accountId`. Display only; never changes the amount. */
+  paymentScope?: { accountId: string; content: ReactNode } | null;
   /** Opened from a person's People ledger — shows "Back to <name>"; closing returns there (caller routes). */
   returnLabel?: string | null;
   open: boolean;
@@ -490,7 +499,7 @@ export function TransactionDetailsModal({
   const [month, setMonth] = useState<Date>(new Date());
   const [personId, setPersonId] = useState<string | null>(null);
   const [personEntryType, setPersonEntryType] = useState<LedgerEntryType | null>(null);
-  /** "Money I Borrowed" only: who actually paid — the person directly (no account), or me from an account. */
+  /** "Money I Borrowed" only: how — cash received into an account, or the person paid this expense for me. */
   const [borrowFunding, setBorrowFunding] = useState<BorrowFunding | null>(null);
   const [addingPerson, setAddingPerson] = useState(false);
   const [newPersonName, setNewPersonName] = useState("");
@@ -527,9 +536,13 @@ export function TransactionDetailsModal({
   // version used — `seenKey` is `transaction.id` for edit, a stable literal for Add (so
   // reopening Add after closing always starts fresh too).
   const [seenKey, setSeenKey] = useState<string | null>(null);
+  // One Save action's identity: a new key when the dialog opens or after a successful save, the SAME key
+  // across retries of a failed one — the repository records a keyed transfer at most once.
+  const [transferKey, setTransferKey] = useState<string>(() => crypto.randomUUID());
   const key = transaction ? transaction.id : "__add__";
   if (open && seenKey !== key) {
     setSeenKey(key);
+    setTransferKey(crypto.randomUUID());
     if (transaction) {
       setKind(kindFromRow(row!));
       setDescription(transaction.description);
@@ -549,7 +562,15 @@ export function TransactionDetailsModal({
       setAddingPerson(autoFocusAssign && transaction.linkedPersonId == null);
     } else {
       const firstCategory = categories.find((c) => (defaultKind === "income" ? c.type !== "expense" : c.type !== "income"));
-      const firstAccount = defaultKind === "income" ? accounts.find((a) => a.type !== "card") : accounts[0];
+      // Paying a card bill: fund it from a bank/cash account — never pre-pick another credit card (a
+      // card-to-card transfer stays possible, but only when the user explicitly selects it).
+      const paysCardOnOpen = defaultKind === "transfer" && accounts.find((a) => a.id === initialDestinationAccountId)?.type === "card";
+      const firstAccount =
+        defaultKind === "income"
+          ? accounts.find((a) => a.type !== "card")
+          : paysCardOnOpen
+            ? accounts.find((a) => a.type !== "card" && a.id !== initialDestinationAccountId)
+            : accounts[0];
       setKind(defaultKind);
       setDescription("");
       setAmount(initialAmount != null ? String(initialAmount) : "");
@@ -600,20 +621,24 @@ export function TransactionDetailsModal({
   const borrowedChosen = kind === "expense" && personId != null && !splitOpen && personEntryType === "borrowed";
   /** The person paid this expense directly: no account is part of the transaction (any selected one is ignored). */
   const personPaysDirectly = borrowedChosen && borrowFunding === "person";
+  /** Add mode, "Money I Borrowed → Money received into my account": a pure borrowing, not an expense. */
+  const borrowsCash = !transaction && borrowedChosen && borrowFunding === "cash";
   const personName = personId ? (people.find((p) => p.id === personId)?.name ?? "") : "";
   const flag = transaction ? transactionFlagFor(transaction) : null;
   const monthChanged = transaction ? !isSameMonth(month, transaction.dateTime) : false;
   const filteredCategories = categories.filter((c) => (kind === "income" ? c.type !== "expense" : c.type !== "income"));
   // Income can't be received into a credit card account, so it's excluded from the picker for
   // that kind — same reasoning as `filteredCategories` above, just on the account list instead.
-  const filteredAccounts = kind === "income" ? accounts.filter((a) => a.type !== "card") : accounts;
+  const filteredAccounts = kind === "income" || borrowsCash ? accounts.filter((a) => a.type !== "card") : accounts;
   const destinationAccount = kind === "transfer" ? accounts.find((a) => a.id === destinationAccountId) : undefined;
   const paysCardBill = destinationAccount?.type === "card";
 
   // People settlement gate — only a new transfer paying the gated card. Obligations linked to that bill
   // (by key, from the caller's readiness) gate it; nothing else about the person does.
   const gateActive = !transaction && kind === "transfer" && peopleGate != null && peopleGate.accountId === destinationAccountId;
-  const settlement = peopleSettlementGate(gateActive ? peopleGate.readiness : null);
+  // Scoped to the amount actually being paid when the caller can (card: only the charges it reaches).
+  const gateReadiness = gateActive ? (peopleGate.readinessFor ? peopleGate.readinessFor(Number(amount) || 0) : peopleGate.readiness) : null;
+  const settlement = peopleSettlementGate(gateReadiness);
   const gateLoading = gateActive && peopleGate.loading;
   const gateBlocked = gateActive && (settlement.blocked || gateLoading);
   /** The footer's Settle action — where Enter / Ctrl+Enter / Save land while the payment is blocked. */
@@ -712,8 +737,8 @@ export function TransactionDetailsModal({
     const amountValue = Number(amount);
     if (!amount.trim() || Number.isNaN(amountValue) || amountValue <= 0) return fail("amount", "Enter an amount greater than 0.");
     if (amountValue !== Math.round(amountValue * 100) / 100) return fail("amount", "Amounts can have at most 2 decimal places.");
-    if (!description.trim() && kind !== "transfer") return fail("description", "Description is required.");
-    if (kind !== "transfer" && !categoryId) return fail("category", "Select a category.");
+    if (!description.trim() && kind !== "transfer" && !borrowsCash) return fail("description", "Description is required.");
+    if (kind !== "transfer" && !borrowsCash && !categoryId) return fail("category", "Select a category.");
     if (!date) return fail("date", "Select a date.");
     const dateValue = new Date(date);
     const today = new Date();
@@ -721,7 +746,9 @@ export function TransactionDetailsModal({
     if (dateValue.getTime() > today.getTime()) return fail("date", "Date can't be in the future.");
     const earliestAllowed = new Date("2000-01-01");
     if (dateValue.getTime() < earliestAllowed.getTime()) return fail("date", "Enter a valid date.");
-    if (!accountId && !personPaysDirectly) return fail("account", kind === "transfer" ? "Select a source account." : "Select an account.");
+    if (!accountId && !personPaysDirectly)
+      return fail("account", kind === "transfer" ? "Select a source account." : borrowsCash ? "Select the account the money was received into." : "Select an account.");
+    if (borrowsCash && accounts.find((a) => a.id === accountId)?.type === "card") return fail("account", "Borrowed money can't be received into a credit card.");
     // The destination-account picker only applies to creating a new transfer — an existing
     // transfer leg's amount/account/date are read-only (see isTransferLeg below), so
     // destinationAccountId is never part of what gets saved for one.
@@ -734,7 +761,7 @@ export function TransactionDetailsModal({
       return fail("personDirection", "Select Money given or Money borrowed.");
     }
     if (borrowedChosen && borrowFunding == null) {
-      return fail("personFunding", "Choose who paid this expense.");
+      return fail("personFunding", "Choose how you borrowed the money.");
     }
     if (splitOpen) {
       const problem = validateSplit();
@@ -854,7 +881,7 @@ export function TransactionDetailsModal({
               description,
               amount: amountValue,
               date: dateTime,
-              direction: kind === "income" ? "credit" : "debit",
+              direction: kind === "income" || borrowsCash ? "credit" : "debit",
               accountId: personPaysDirectly ? PERSON_FUNDED_ACCOUNT_ID : accountId,
               referenceNumber: null,
               requireDescriptionMatch: false,
@@ -874,12 +901,22 @@ export function TransactionDetailsModal({
       op.stage("submit", kind === "transfer" && !transaction ? "Saving both legs & balances" : "Saving transaction & balance");
       if (!transaction) {
         // "Money I Borrowed" on an expense is always a real expense of mine (My Spend). WHO PAID decides the
-        // rest — never a borrowed-cash receipt into an account (that is its own People event, recorded from
-        // People → Add entry):
-        //  - the person paid directly → the expense with NO account + one "borrowed" entry (I owe them),
-        //    atomically; an account still selected in the form is ignored, never written or moved;
-        //  - I paid from my account → an ordinary expense on that account, the person a plain reference.
-        if (personPaysDirectly) {
+        // "Money I Borrowed" is one of two events, never mixed:
+        //  - money received into my account → People "borrowed" entry + cash-IN leg (no expense, no income);
+        //  - the person paid this expense for me → the expense with NO account + one "borrowed" entry
+        //    (I owe them), atomically; an account still selected in the form is ignored, never written or moved.
+        if (borrowsCash) {
+          // A pure borrowing (cash IN + I owe them) through the canonical People path — never an expense.
+          const person = people.find((p) => p.id === personId);
+          if (!person) throw new Error("Couldn't find this person — refresh and try again");
+          op.stage("related", `Recording borrowing from ${person.name}`);
+          await actions.recordBorrowedCash(person, {
+            amount: amountValue,
+            date: dateTime,
+            accountId,
+            note: [description.trim(), notes.trim()].filter(Boolean).join(" — ") || undefined,
+          });
+        } else if (personPaysDirectly) {
           const person = people.find((p) => p.id === personId);
           if (!person) throw new Error("Couldn't find this person — refresh and try again");
           op.stage("related", `Recording that ${person.name} paid`);
@@ -893,7 +930,7 @@ export function TransactionDetailsModal({
             accountingMonth: reassign ? month : null,
           });
         } else if (kind === "transfer") {
-          await actions.createTransferPair({ amount: amountValue, dateTime, sourceAccountId: accountId, destinationAccountId, categoryId, description, notes });
+          await actions.createTransferPair({ amount: amountValue, dateTime, sourceAccountId: accountId, destinationAccountId, categoryId, description, notes, idempotencyKey: transferKey });
         } else {
           const newTransaction = await actions.createTransaction({
             type: kind,
@@ -939,8 +976,7 @@ export function TransactionDetailsModal({
                 });
               } else {
                 // Plain descriptive reference (no expense-owed effect) — same shape as
-                // `applyOwesPersonChange`'s own "reference-only" branch. "Money I Borrowed → I paid from
-                // my account" lands here: my account paid, so this expense creates nothing owed.
+                // `applyOwesPersonChange`'s own "reference-only" branch.
                 await actions.editTransaction(newTransaction, { linkedPersonId: personId, owesPersonToggle: false });
               }
             } catch (assignError) {
@@ -1040,6 +1076,7 @@ export function TransactionDetailsModal({
         op.succeed({ toast: { title: "Transaction updated" } });
       }
       setJustSaved(true);
+      setTransferKey(crypto.randomUUID());
       if (!transaction) {
         // Add mode stays open for rapid entry of the next transaction — date, account, category,
         // description, and notes carry over since they're commonly the same across a run of
@@ -1512,13 +1549,14 @@ export function TransactionDetailsModal({
                 </p>
               )}
             </div>
+            {!transaction && kind === "transfer" && paymentScope != null && paymentScope.accountId === destinationAccountId && paymentScope.content}
             </div>
 
             <FormSection icon={Shapes} title="Details">
               {/* Description → Category → Date (validation order). A transfer has no category, so Date sits beside Description. */}
               <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
               <div className={cn("min-w-0", kind !== "transfer" && "sm:col-span-2")}>
-              <FormRow label={kind === "transfer" ? "Description" : "Description *"} field="description" error={fieldError("description")}>
+              <FormRow label={kind === "transfer" || borrowsCash ? "Description" : "Description *"} field="description" error={fieldError("description")}>
                 <Input
                   ref={descriptionRef}
                   value={description}
@@ -1528,7 +1566,7 @@ export function TransactionDetailsModal({
                 />
               </FormRow>
               </div>
-                {kind !== "transfer" && (
+                {kind !== "transfer" && !borrowsCash && (
                   <FormRow label="Category *" field="category" error={fieldError("category")}>
                     <CategorySelect
                       categories={filteredCategories}
@@ -1551,8 +1589,8 @@ export function TransactionDetailsModal({
             </FormSection>
 
             <FormSection
-              icon={kind === "income" ? ArrowDownToLine : personPaysDirectly ? Users : Wallet}
-              title={kind === "income" ? "Received in" : kind === "transfer" ? "Accounts" : personPaysDirectly ? "Paid by" : "Paid from"}
+              icon={kind === "income" || borrowsCash ? ArrowDownToLine : personPaysDirectly ? Users : Wallet}
+              title={kind === "income" ? "Received in" : borrowsCash ? "Received into" : kind === "transfer" ? "Accounts" : personPaysDirectly ? "Paid by" : "Paid from"}
             >
             {(() => {
               // The person paid directly: no account is part of this expense — the picker is replaced (not
@@ -1568,11 +1606,12 @@ export function TransactionDetailsModal({
                       <p className="text-[11px] font-medium uppercase tracking-wide text-foreground/70">Your account</p>
                       <p className="text-sm font-semibold text-foreground">Not used</p>
                     </div>
+                    <p className="col-span-2 text-[11px] text-foreground/70">No money moved through your accounts.</p>
                   </div>
                 );
               }
               const fromRow = (
-              <FormRow label={kind === "transfer" ? "From Account *" : "Account *"} field="account" error={fieldError("account")}>
+              <FormRow label={kind === "transfer" ? "From Account *" : borrowsCash ? "Received into *" : "Account *"} field="account" error={fieldError("account")}>
                 {isTransferLeg ? (
                   <div className={cn("flex h-9 w-full items-center gap-1.5 rounded-[6px] border bg-secondary px-3 text-sm font-medium text-foreground/80", FIELD_BORDER)}>
                     <Lock className="size-3.5 text-muted-foreground" strokeWidth={1.75} />
@@ -1616,10 +1655,10 @@ export function TransactionDetailsModal({
             })()}
             </FormSection>
 
-            {gateActive && (gateLoading || (peopleGate.readiness?.people.length ?? 0) > 0) && (
+            {gateActive && (gateLoading || (gateReadiness?.people.length ?? 0) > 0) && (
               <div className="border-t border-border px-4 py-3 sm:px-5">
                 <PeopleSettlementCard
-                  readiness={peopleGate.readiness}
+                  readiness={gateReadiness}
                   gate={settlement}
                   loading={gateLoading}
                   dueLabel="Bill"
@@ -1857,12 +1896,12 @@ export function TransactionDetailsModal({
                         // Who actually paid — required, nothing preselected in Add mode. Same radio-group
                         // keyboard contract as the direction picker above.
                         <div className="mt-2.5">
-                          <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-foreground/80">How was this paid?</p>
+                          <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-foreground/80">How did you borrow from {personName || "them"}?</p>
                           <div
                             data-field="personFunding"
                             data-invalid={fieldError("personFunding") ? "true" : undefined}
                             role="radiogroup"
-                            aria-label="How was this paid?"
+                            aria-label={`How did you borrow from ${personName || "them"}?`}
                             aria-required="true"
                             aria-invalid={fieldError("personFunding") ? true : undefined}
                             aria-describedby={fieldError("personFunding") ? "txn-person-funding-error" : undefined}
@@ -1871,10 +1910,10 @@ export function TransactionDetailsModal({
                               fieldError("personFunding") && "bg-danger/5 p-1.5 ring-2 ring-danger",
                             )}
                           >
-                            {BORROW_FUNDING_OPTIONS.map((o, index) => {
+                            {BORROW_FUNDING_OPTIONS.filter((o) => !transaction || o.value === "person").map((o, index, all) => {
                               const active = borrowFunding === o.value;
                               const tabbable = active || (borrowFunding == null && index === 0);
-                              const Icon = o.value === "person" ? Users : Wallet;
+                              const Icon = o.value === "person" ? Users : ArrowDownToLine;
                               return (
                                 <button
                                   key={o.value}
@@ -1887,8 +1926,8 @@ export function TransactionDetailsModal({
                                     const step = e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : e.key === "ArrowLeft" || e.key === "ArrowUp" ? -1 : 0;
                                     if (!step) return;
                                     e.preventDefault();
-                                    const nextIndex = (index + step + BORROW_FUNDING_OPTIONS.length) % BORROW_FUNDING_OPTIONS.length;
-                                    setBorrowFunding(BORROW_FUNDING_OPTIONS[nextIndex].value);
+                                    const nextIndex = (index + step + all.length) % all.length;
+                                    setBorrowFunding(all[nextIndex].value);
                                     e.currentTarget.parentElement?.querySelectorAll<HTMLElement>('[role="radio"]')[nextIndex]?.focus();
                                   }}
                                   className={cn(
@@ -1906,7 +1945,7 @@ export function TransactionDetailsModal({
                                   </span>
                                   <span className="min-w-0">
                                     <p className="truncate text-xs font-semibold text-foreground">{o.label(personName || "They")}</p>
-                                    <p className="truncate text-[11px] text-muted-foreground">{o.description}</p>
+                                    <p className="text-[11px] text-muted-foreground">{o.description(personName || "them")}</p>
                                   </span>
                                 </button>
                               );
@@ -1921,18 +1960,20 @@ export function TransactionDetailsModal({
                             <p data-testid="person-funded-helper" className="mt-2 flex items-start gap-1.5 rounded-[6px] border border-border-strong bg-secondary px-2.5 py-2 text-[11px] text-foreground/85">
                               <Info className="mt-px size-3.5 shrink-0" strokeWidth={1.75} />
                               <span>
-                                <span className="font-semibold text-foreground">{personName || "They"}</span> paid
-                                {Number(amount) > 0 ? ` ${formatCurrencyPrecise(Number(amount))}` : " this"} for you. It counts as your spending and you owe{" "}
+                                {Number(amount) > 0 ? formatCurrencyPrecise(Number(amount)) : "This"} counts as your expense. You will owe{" "}
                                 <span className="font-semibold text-foreground">{personName || "them"}</span>
-                                {Number(amount) > 0 ? ` ${formatCurrencyPrecise(Number(amount))}` : " this amount"}. No money moves through your accounts.
+                                {Number(amount) > 0 ? ` ${formatCurrencyPrecise(Number(amount))}` : " this amount"}. Your account balances will not change.
                               </span>
                             </p>
                           )}
-                          {borrowFunding === "account" && (
-                            <p className="mt-2 flex items-start gap-1.5 rounded-[6px] border border-border-strong bg-secondary px-2.5 py-2 text-[11px] text-foreground/85">
+                          {borrowsCash && (
+                            <p data-testid="borrowed-cash-helper" className="mt-2 flex items-start gap-1.5 rounded-[6px] border border-border-strong bg-secondary px-2.5 py-2 text-[11px] text-foreground/85">
                               <Info className="mt-px size-3.5 shrink-0" strokeWidth={1.75} />
                               <span>
-                                A normal expense from your account. Money {personName || "they"} lent you earlier is recorded separately in People.
+                                {Number(amount) > 0 ? formatCurrencyPrecise(Number(amount)) : "This amount"} will be added to{" "}
+                                <span className="font-semibold text-foreground">{accounts.find((a) => a.id === accountId)?.name ?? "the selected account"}</span>. You will owe{" "}
+                                <span className="font-semibold text-foreground">{personName || "them"}</span>
+                                {Number(amount) > 0 ? ` ${formatCurrencyPrecise(Number(amount))}` : " this amount"}. This is borrowing, not income or spending.
                               </span>
                             </p>
                           )}
@@ -2006,8 +2047,8 @@ export function TransactionDetailsModal({
                     transition={{ duration: durations.fast, ease: easings.out }}
                     className="flex flex-col gap-3 overflow-hidden pt-2.5"
                   >
-                    {kind === "transfer" ? (
-                      <p className="text-xs text-muted-foreground">Visibility and month reassignment aren&apos;t applicable for transfers.</p>
+                    {kind === "transfer" || borrowsCash ? (
+                      <p className="text-xs text-muted-foreground">Visibility and month reassignment aren&apos;t applicable for {borrowsCash ? "borrowing" : "transfers"}.</p>
                     ) : (
                       <>
                         <label className="flex items-start gap-2 border-t border-border pt-2.5 text-sm">
@@ -2097,6 +2138,12 @@ export function TransactionDetailsModal({
                   <Button variant="ghost" size="sm" className="shrink-0 text-danger hover:bg-danger/10 hover:text-danger" onClick={() => setConfirmDeleteOpen(true)}>
                     <Trash2 className="size-3.5" /> {isTransferLeg ? "Delete Transfer" : "Delete"}
                   </Button>
+                ) : gateBlocked && settlement.next ? (
+                  // Step 1 is People, step 2 the bill — say why the bill can't be paid yet, in one line.
+                  <p className="min-w-0 flex-1 text-xs leading-snug font-medium text-foreground/85" data-testid="gate-reason">
+                    <span className="font-semibold text-foreground tabular-nums">{formatCurrencyPrecise(settlement.outstanding)}</span> of this bill is still owed by{" "}
+                    {settlement.attention.map((p) => p.personName).join(", ")}. Settle first, then pay the bill.
+                  </p>
                 ) : (
                   <FooterSummary
                     kind={kind}
@@ -2119,7 +2166,7 @@ export function TransactionDetailsModal({
                         data-gate="settle"
                         className={cn(WS_PRIMARY, "min-w-0 flex-1 sm:min-w-44 sm:flex-none")}
                       >
-                        <span className="truncate">{settleCtaLabel(settlement)}</span>
+                        <span className="truncate">{paysCardBill ? `Settle with ${settlement.next.personName}` : settleCtaLabel(settlement)}</span>
                         <ArrowRight className="size-3.5 shrink-0" aria-hidden />
                       </Link>
                     ) : (
@@ -2153,7 +2200,9 @@ export function TransactionDetailsModal({
                           ? "Saving…"
                           : transaction
                             ? "Save changes"
-                            : paysCardBill && Number(amount) > 0
+                            : borrowsCash
+                              ? "Record borrowing"
+                              : paysCardBill && Number(amount) > 0
                               ? `Pay ${formatCurrencyPrecise(Number(amount))}`
                               : `Add ${KIND_META[kind].label}`}
                     </span>

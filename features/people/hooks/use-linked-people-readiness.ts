@@ -7,7 +7,7 @@
  * People settlement gate (`peopleSettlementGate`) that holds the lender payment until People is settled.
  */
 
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { usePeopleCycleStatements } from "@/features/people/hooks/use-person-cycle-statement";
 import { usePeopleLedgerEntries } from "@/features/people/hooks/use-people-data";
 import { useTransactions } from "@/hooks/use-transactions";
@@ -24,7 +24,12 @@ export type LinkedPeopleTarget =
   /** `installmentIds`: every installment the payment settles that the gate covers (`gatedInstallmentIds`). */
   | { kind: "emi" | "loan"; installmentId: string; installmentIds?: readonly string[]; lenderDue: number };
 
-export function useLinkedPeopleReadiness(target: LinkedPeopleTarget | null): { readiness: LinkedPeopleReadiness | null; isLoading: boolean } {
+export function useLinkedPeopleReadiness(target: LinkedPeopleTarget | null): {
+  readiness: LinkedPeopleReadiness | null;
+  /** Card only: readiness for the payment actually being made — only the charges that amount reaches gate it. */
+  readinessFor: ((paymentAmount: number, chargeScope?: ReadonlySet<string> | null) => LinkedPeopleReadiness) | null;
+  isLoading: boolean;
+} {
   const { statementsByPersonId, isLoading } = usePeopleCycleStatements(ALL_TIME);
   const { entriesByPersonId, isLoading: entriesLoading } = usePeopleLedgerEntries();
   const { data: transactions = [], isLoading: transactionsLoading } = useTransactions();
@@ -53,6 +58,22 @@ export function useLinkedPeopleReadiness(target: LinkedPeopleTarget | null): { r
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `key` captures `target`
   }, [key, statementsByPersonId, entriesByPersonId, transactions, accounts]);
 
+  const cardAccountId = target?.kind === "card" ? target.cardAccountId : null;
+  const readinessFor = useCallback(
+    (paymentAmount: number, chargeScope?: ReadonlySet<string> | null) =>
+      linkedPeopleForCard({
+        statements: Object.values(statementsByPersonId),
+        ledgerEntries: Object.values(entriesByPersonId).flat(),
+        transactions: transactions as Transaction[],
+        cardAccountId: cardAccountId ?? "",
+        cardOpeningBalance: (accounts as Account[]).find((a) => a.id === cardAccountId)?.openingBalance ?? 0,
+        lenderDue: paymentAmount,
+        paymentAmount,
+        chargeScope,
+      }),
+    [cardAccountId, statementsByPersonId, entriesByPersonId, transactions, accounts],
+  );
+
   // Unknown until every source has loaded — a lender-payment gate must not read "nothing linked" early.
-  return { readiness, isLoading: isLoading || entriesLoading || transactionsLoading };
+  return { readiness, readinessFor: cardAccountId ? readinessFor : null, isLoading: isLoading || entriesLoading || transactionsLoading };
 }

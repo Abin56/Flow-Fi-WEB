@@ -6,7 +6,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { Account } from "@/lib/models/account";
 import type { Category } from "@/lib/models/category";
 import type { Person } from "@/lib/models/person";
-import { linkedStateOf, type LinkedPeopleReadiness, type LinkedPerson } from "@/lib/engines/linked-people-readiness";
+import { linkedStateOf, peopleSettlementGate, PeopleSettlementPendingError, type LinkedPeopleReadiness, type LinkedPerson } from "@/lib/engines/linked-people-readiness";
 import { TransactionDetailsModal, type PeopleGateInput } from "./transaction-details-modal";
 
 /**
@@ -197,6 +197,56 @@ describe("Add Transfer — transfer identity, From → To, card bill", () => {
     expect(screen.getByText("To Account *")).toBeTruthy();
   });
 
+  it("fast double Save writes ONE card payment (one transfer pair)", async () => {
+    let finish!: () => void;
+    actions.createTransferPair.mockImplementationOnce(() => new Promise<void>((r) => (finish = r)));
+    renderCardBill(gateOf(readinessOf(1000, [])));
+    const pay = screen.getByRole("button", { name: /pay ₹1,000/i });
+    fireEvent.click(pay);
+    await waitFor(() => expect(actions.createTransferPair).toHaveBeenCalledTimes(1));
+    // Second click and a raw submit while the first save is still in flight.
+    fireEvent.click(pay);
+    fireEvent.submit(pay.closest("form")!);
+    finish();
+    await waitFor(() => expect(actions.createTransferPair).toHaveBeenCalledTimes(1));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(actions.createTransferPair).toHaveBeenCalledTimes(1);
+  });
+
+  it("write-layer People refusal (state changed since the dialog opened): specific message, dialog stays open, nothing auto-settled", async () => {
+    const user = userEvent.setup();
+    const stale: LinkedPerson = { personId: "amma", personName: "AMMA", share: 1000, received: 0, remaining: 1000, state: "pending", obligations: [] };
+    actions.createTransferPair.mockRejectedValueOnce(new PeopleSettlementPendingError(peopleSettlementGate(readinessOf(1000, [stale])), "card-bill"));
+    renderCardBill(gateOf(readinessOf(1000, [])));
+    await user.click(screen.getByRole("button", { name: /pay ₹1,000/i }));
+    await waitFor(() => expect(actions.createTransferPair).toHaveBeenCalled());
+    expect(screen.getByRole("alert").textContent).toBe("Some people-linked amounts in this bill still need to be settled (₹1,000 from AMMA). Review them before paying.");
+    expect(screen.getByRole("heading", { name: "Add Transfer" })).toBeTruthy();
+    expect(actions.createTransaction).not.toHaveBeenCalled();
+  });
+
+  it("one Save action = one idempotency key: kept across a retry after a refusal, so the retry can never double-record", async () => {
+    const user = userEvent.setup();
+    const stale: LinkedPerson = { personId: "amma", personName: "AMMA", share: 1000, received: 0, remaining: 1000, state: "pending", obligations: [] };
+    actions.createTransferPair.mockRejectedValueOnce(new PeopleSettlementPendingError(peopleSettlementGate(readinessOf(1000, [stale])), "card-bill"));
+    renderCardBill(gateOf(readinessOf(1000, [])));
+    await user.click(screen.getByRole("button", { name: /pay ₹1,000/i }));
+    await screen.findByRole("alert");
+    await user.click(screen.getByRole("button", { name: /pay ₹1,000/i }));
+    await waitFor(() => expect(actions.createTransferPair).toHaveBeenCalledTimes(2));
+    const [first, second] = actions.createTransferPair.mock.calls.map(([p]) => (p as { idempotencyKey: string }).idempotencyKey);
+    expect(first).toMatch(/^[0-9a-f-]{36}$/);
+    expect(second).toBe(first);
+  });
+
+  it("card bill funding defaults to a bank account — never another credit card listed first", async () => {
+    const user = userEvent.setup();
+    renderCardBill(gateOf(readinessOf(1000, [])), { accounts: [accounts[2], accounts[1], accounts[0]] as never });
+    await user.click(screen.getByRole("button", { name: /pay ₹1,000/i }));
+    await waitFor(() => expect(actions.createTransferPair).toHaveBeenCalledTimes(1));
+    expect(actions.createTransferPair).toHaveBeenCalledWith(expect.objectContaining({ sourceAccountId: "sbi", destinationAccountId: "octane" }));
+  });
+
   it("card bill with no linked People: Pay is available and writes ONE transfer pair (never income / expense)", async () => {
     const user = userEvent.setup();
     renderCardBill(gateOf(readinessOf(1000, [])));
@@ -221,7 +271,9 @@ describe("Card bill — People settlement gate", () => {
     expect(within(card).queryByText("People share")).toBeNull();
 
     const cta = footerSettle()!;
-    expect(cta.textContent).toMatch(/Settle ₹1,000 with AMMA/);
+    expect(cta.textContent).toBe("Settle with AMMA");
+    // The footer says WHY the bill waits — the bill payment is step 2, never one person's amount.
+    expect(screen.getByTestId("gate-reason").textContent).toMatch(/of this bill is still owed by AMMA. Settle first, then pay the bill./);
     expect(cta.getAttribute("href")).toBe("/people?person=amma&obligation=ledger%3Aamma-g&settle=1&return=%2Fcredit-cards%3Fcard%3Dc-octane%26pay%3D1");
     expect(screen.queryByRole("button", { name: /pay ₹|add transfer/i })).toBeNull();
   });
@@ -246,7 +298,7 @@ describe("Card bill — People settlement gate", () => {
     renderCardBill(gateOf(readinessOf(1000, [person("amma", "AMMA", 1000, 400)])));
     expect(settlementCard()!.dataset.state).toBe("blocked");
     expect(screen.getByText(/₹400 of ₹1,000 received · ₹600 remaining/)).toBeTruthy();
-    expect(footerSettle()!.textContent).toMatch(/Settle ₹600 with AMMA/);
+    expect(footerSettle()!.textContent).toBe("Settle with AMMA");
   });
 
   it("fully settled → the card turns into PEOPLE SETTLED and Pay saves once", async () => {
@@ -273,7 +325,7 @@ describe("Card bill — People settlement gate", () => {
     expect(within(card).queryByRole("link", { name: /with JOHN/ })).toBeNull();
     expect(within(card).getByText("JOHN")).toBeTruthy();
     expect(within(card).getByText(/₹2,300/)).toBeTruthy();
-    expect(footerSettle()!.textContent).toMatch(/Settle ₹2,000 with AMMA/);
+    expect(footerSettle()!.textContent).toBe("Settle with AMMA");
   });
 
   it("View breakdown reveals Bill / People share / Received / Remaining / Your share", async () => {

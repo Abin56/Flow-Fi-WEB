@@ -45,6 +45,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAccounts } from "@/hooks/use-accounts";
 import { useSharedCreditLimits } from "@/hooks/use-credit-cards";
+import { payBillAmount, payBillChargeScope, type CardBill, type CardStatementPaymentScope, type PayBillChoice } from "@/lib/engines/card-cycle-bills";
+import { statementWindowForDate } from "@/lib/repositories/credit-card-repository";
 import { LinkedFundsPayNotice } from "@/features/people/components/linked-funds";
 import { useLinkedFunds } from "@/features/people/hooks/use-linked-funds";
 import { linkedPendingForCard } from "@/lib/engines/linked-funds";
@@ -200,15 +202,10 @@ function formatShortDate(date: Date): string {
   return date.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
 }
 
-/** Statement billing period reads back one month from the statement date — matches how a card's cycle is
- *  usually communicated ("18 Apr – 17 May"). */
-function billingPeriodLabel(statementDate: Date): string {
-  const end = statementDate;
-  const start = new Date(end);
-  start.setMonth(start.getMonth() - 1);
-  start.setDate(start.getDate() + 1);
+/** A bill's own statement period, e.g. "2 Aug – 1 Sep". */
+function billPeriodLabel(b: Pick<CardBill, "periodStart" | "periodEnd">): string {
   const fmt = (d: Date) => d.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
-  return `${fmt(start)} – ${fmt(end)}`;
+  return `${fmt(b.periodStart)} – ${fmt(b.periodEnd)}`;
 }
 
 export function CreditCardsWorkspace() {
@@ -224,12 +221,18 @@ export function CreditCardsWorkspace() {
   const { rows: transactionRows, accounts: txnAccounts, categories: txnCategories } = useTransactionRows();
   const transactionActions = useTransactionActions();
   const [payCard, setPayCard] = useState<CreditCardViewItem | null>(null);
+  // Pay bill defaults to what the CLOSED statements still owe (card statement cycle); paying the whole
+  // outstanding is a separate, explicit choice.
+  const [payChoice, setPayChoice] = useState<PayBillChoice>("statement");
+  // The ONE canonical Pay Now scope (`cardStatementPaymentScope`, computed once in the standings) — every
+  // Pay bill surface reads it; nothing here recomputes a bill.
+  const payScopeOf = (c: CreditCardViewItem): CardStatementPaymentScope => c.statementPayment;
   const { funds: linkedFunds } = useLinkedFunds();
   // The card Pay bill is currently paying — the dialog's To account (starts as `payCard`, follows a change).
   const [payDestAccountId, setPayDestAccountId] = useState<string | null>(null);
   const payDestCard = payCard ? (creditCards.find((c) => c.card.accountId === (payDestAccountId ?? payCard.card.accountId)) ?? null) : null;
   // Card bill: people's shares of charges this card still carries — they must be settled before Pay bill completes.
-  const { readiness: payCardPeople, isLoading: payCardPeopleLoading } = useLinkedPeopleReadiness(
+  const { readiness: payCardPeople, readinessFor: payCardPeopleFor, isLoading: payCardPeopleLoading } = useLinkedPeopleReadiness(
     // This physical card's own bill — a shared facility's pooled total belongs to its sibling cards too.
     payDestCard ? { kind: "card", cardAccountId: payDestCard.card.accountId, lenderDue: Math.max(0, payDestCard.ownUsage) } : null,
   );
@@ -242,7 +245,10 @@ export function CreditCardsWorkspace() {
   if (reopenPayId && !reopenedPay && !cardsLoading) {
     setReopenedPay(true);
     const target = creditCards.find((c) => c.id === reopenPayId);
-    if (target) setPayCard(target);
+    if (target) {
+      setPayChoice("statement");
+      setPayCard(target);
+    }
   }
   useEffect(() => {
     if (!reopenedPay || typeof window === "undefined") return;
@@ -1145,76 +1151,114 @@ export function CreditCardsWorkspace() {
             )}
           </section>
 
-          {/* ── Upcoming statements ── */}
-          <section id="upcoming-statements" aria-label="Upcoming statements" className="flex scroll-mt-4 flex-col gap-3">
+          {/* ── Card bills: the ONE bill each card's Pay now pays (`statementPayment.current`) ── */}
+          <section id="upcoming-statements" aria-label="Card bills" className="flex scroll-mt-4 flex-col gap-3">
             <div className="flex items-center justify-between gap-3 border-b border-border-strong/50 pb-3">
-              <h2 className="font-heading text-base font-semibold text-foreground">Upcoming statements</h2>
+              <h2 className="font-heading text-base font-semibold text-foreground">Card bills</h2>
               <button type="button" onClick={() => router.push("/transactions")} className={CC_LINK}>
                 View all
                 <ArrowRight className="size-3.5" strokeWidth={2} />
               </button>
             </div>
             <div className="overflow-hidden rounded-[10px] border border-border-strong/70 bg-card shadow-e1">
-              <table className="w-full border-separate border-spacing-0 text-sm">
+              <table className="w-full table-fixed border-separate border-spacing-0 text-sm">
                 <thead>
                   <tr>
                     <th className={CC_TH}>Card</th>
-                    <th className={cn(CC_TH, "hidden w-44 md:table-cell")}>Billing period</th>
-                    <th className={cn(CC_TH, "w-36 text-right")}>Total due</th>
-                    <th className={cn(CC_TH, "hidden w-32 text-right sm:table-cell")}>Minimum</th>
-                    <th className={cn(CC_TH, "w-[8.5rem]")}>
+                    <th className={cn(CC_TH, "hidden w-40 md:table-cell")}>Statement</th>
+                    <th className={cn(CC_TH, "w-32 text-right sm:w-36")}>Bill due</th>
+                    <th className={cn(CC_TH, "hidden w-28 text-right lg:table-cell")}>Minimum</th>
+                    <th className={cn(CC_TH, "w-[7.5rem] sm:w-[8.5rem]")}>
                       <span className="sr-only">Actions</span>
                     </th>
                   </tr>
                 </thead>
                 <tbody>
-                  {creditCards.map((card) => (
-                    <tr key={card.id} className="transition-colors hover:bg-secondary/40 [&:last-child>td]:border-b-0">
-                      <td className={cn(CC_TD, "max-w-0")}>
-                        <div className="flex min-w-0 items-center gap-3">
-                          <CardChip card={card} />
-                          <div className="min-w-0">
-                            <p className="truncate font-semibold text-foreground">{card.name}</p>
-                            <p className="truncate text-xs text-muted-foreground tabular-nums">
-                              Statement {card.statementDate ? formatShortDate(card.statementDate) : "—"}
-                            </p>
+                  {creditCards.map((card) => {
+                    const scope = card.statementPayment;
+                    const bill = scope.current;
+                    const nextClose = statementWindowForDate(card.card, new Date()).periodEnd;
+                    return (
+                      <tr key={card.id} className="transition-colors hover:bg-secondary/40 [&:last-child>td]:border-b-0">
+                        <td className={cn(CC_TD, "max-w-0")}>
+                          <div className="flex min-w-0 items-center gap-3">
+                            <CardChip card={card} />
+                            <div className="min-w-0">
+                              <p className="truncate font-semibold text-foreground">{card.name}</p>
+                              <p className={cn("truncate text-xs font-medium tabular-nums", scope.currentOverdue ? "text-expense" : "text-foreground/75")}>
+                                {bill == null
+                                  ? `No bill due · closes ${formatShortDate(nextClose)}`
+                                  : scope.currentOverdue
+                                    ? `Overdue · was due ${formatShortDate(bill.dueDate)}`
+                                    : `Due ${formatShortDate(bill.dueDate)}`}
+                              </p>
+                            </div>
                           </div>
-                        </div>
-                      </td>
-                      <td className={cn(CC_TD, "hidden text-xs font-medium text-foreground/85 tabular-nums md:table-cell")}>
-                        {card.statementDate ? billingPeriodLabel(card.statementDate) : "—"}
-                      </td>
-                      <td className={cn(CC_TD, "text-right")}>
-                        <span className="text-[17px] font-bold text-expense tabular-nums">{formatCurrency(card.ownUsage)}</span>
-                      </td>
-                      <td className={cn(CC_TD, "hidden text-right font-semibold text-foreground tabular-nums sm:table-cell")}>{formatCurrency(card.minimumDue)}</td>
-                      <td className={cn(CC_TD, "px-2")}>
-                        <div className="flex items-center justify-end gap-1">
-                          <button
-                            type="button"
-                            onClick={() => setPayCard(card)}
-                            className="flex h-7 items-center gap-1 rounded-[6px] border border-primary-accent-text bg-primary px-2.5 text-xs font-semibold text-primary-foreground hover:opacity-90"
-                          >
-                            Pay now
-                          </button>
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <button type="button" aria-label="Statement actions" className="flex size-7 items-center justify-center rounded-[6px] text-muted-foreground hover:bg-secondary hover:text-foreground">
-                                <MoreHorizontal className="size-4" strokeWidth={1.75} />
+                        </td>
+                        <td className={cn(CC_TD, "hidden text-xs font-medium text-foreground/85 tabular-nums md:table-cell")}>
+                          {bill ? billPeriodLabel(bill) : <span className="text-foreground/70">Next closes {formatShortDate(nextClose)}</span>}
+                        </td>
+                        <td className={cn(CC_TD, "text-right")}>
+                          {bill ? (
+                            <span className={cn("text-[17px] font-bold tabular-nums", scope.currentOverdue ? "text-expense" : "text-foreground")}>{formatCurrency(scope.statementDue)}</span>
+                          ) : (
+                            <span className="text-sm font-semibold text-foreground/70 tabular-nums">{formatCurrency(0)}</span>
+                          )}
+                          {scope.cardOutstanding > scope.statementDue + 0.005 && (
+                            <p className="text-[11px] font-medium text-foreground/70 tabular-nums">of {formatCurrency(scope.cardOutstanding)} outstanding</p>
+                          )}
+                        </td>
+                        <td className={cn(CC_TD, "hidden text-right tabular-nums lg:table-cell")}>
+                          {/* Only an issuer figure from a stored statement — never a made-up ₹0. */}
+                          {bill?.minimumDue != null ? (
+                            <span className="font-semibold text-foreground">{formatCurrency(bill.minimumDue)}</span>
+                          ) : (
+                            <span className="text-xs font-medium text-foreground/65">{bill ? "Not tracked" : "—"}</span>
+                          )}
+                        </td>
+                        <td className={cn(CC_TD, "px-2")}>
+                          <div className="flex items-center justify-end gap-1">
+                            {bill && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setPayChoice("statement");
+                                  setPayCard(card);
+                                }}
+                                className="flex h-7 items-center gap-1 rounded-[6px] border border-primary-accent-text bg-primary px-2.5 text-xs font-semibold text-primary-foreground hover:opacity-90"
+                              >
+                                Pay now
                               </button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end" className="min-w-44 rounded-[8px]">
-                              <DropdownMenuItem onSelect={() => setActiveCardId(card.id)}>View details</DropdownMenuItem>
-                              <DropdownMenuItem disabled>
-                                Download statement
-                                <span className={cn(CC_SOON, "ml-auto")}>Soon</span>
-                              </DropdownMenuItem>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                            )}
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <button type="button" aria-label="Bill actions" className="flex size-7 items-center justify-center rounded-[6px] text-foreground/70 hover:bg-secondary hover:text-foreground">
+                                  <MoreHorizontal className="size-4" strokeWidth={1.75} />
+                                </button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end" className="min-w-52 rounded-[8px]">
+                                <DropdownMenuItem onSelect={() => setActiveCardId(card.id)}>View details</DropdownMenuItem>
+                                {card.ownUsage > scope.statementDue + 0.005 && (
+                                  <DropdownMenuItem
+                                    onSelect={() => {
+                                      setPayChoice("full");
+                                      setPayCard(card);
+                                    }}
+                                  >
+                                    Pay full outstanding {formatCurrency(card.ownUsage)}
+                                  </DropdownMenuItem>
+                                )}
+                                <DropdownMenuItem disabled>
+                                  Download statement
+                                  <span className={cn(CC_SOON, "ml-auto")}>Soon</span>
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -1348,7 +1392,11 @@ export function CreditCardsWorkspace() {
               </dl>
 
               <div className="grid grid-cols-4 gap-1 p-2">
-                <QuickAction icon={Wallet} label="Pay bill" tone="bg-primary/25 text-foreground dark:text-primary-accent-text" onClick={() => setPayCard(activeCard)} />
+                <QuickAction icon={Wallet} label="Pay bill" tone="bg-primary/25 text-foreground dark:text-primary-accent-text" onClick={() => {
+                    setPayChoice("statement");
+                    setPayCard(activeCard);
+                  }}
+                />
                 <QuickAction
                   icon={FileText}
                   label="Statement"
@@ -1358,6 +1406,18 @@ export function CreditCardsWorkspace() {
                 <QuickAction icon={RefreshCw} label="Convert to EMI" tone="bg-success/12 text-success" soon />
                 <QuickAction icon={Settings} label="Card settings" tone="bg-secondary text-foreground/75" onClick={() => openEdit(activeCard)} />
               </div>
+              <PayScope
+                scope={payScopeOf(activeCard)}
+                ownOutstanding={activeCard.ownUsage}
+                onPayStatement={() => {
+                  setPayChoice("statement");
+                  setPayCard(activeCard);
+                }}
+                onPayFull={() => {
+                  setPayChoice("full");
+                  setPayCard(activeCard);
+                }}
+              />
               {activeCard.sharedLimit && (
                 <div className="border-t border-border-strong/50 p-2">
                   <button
@@ -1458,13 +1518,33 @@ export function CreditCardsWorkspace() {
           actions={transactionActions}
           defaultKind="transfer"
           initialDestinationAccountId={payCard?.card.accountId}
-          initialAmount={payCard?.ownUsage}
+          initialAmount={payCard ? payBillAmount(payScopeOf(payCard), payChoice, payCard.ownUsage) : undefined}
           onDestinationAccountChange={setPayDestAccountId}
+          paymentScope={
+            payDestCard
+              ? {
+                  accountId: payDestCard.card.accountId,
+                  content: (
+                    <PayBillDialogScope
+                      scope={payScopeOf(payDestCard)}
+                      ownOutstanding={payDestCard.ownUsage}
+                      // The choice made outside belongs to the card it was made on; a switched To card reads as a statement payment.
+                      choice={payDestCard.id === payCard?.id ? payChoice : "statement"}
+                    />
+                  ),
+                }
+              : null
+          }
           peopleGate={
             payDestCard
               ? {
                   accountId: payDestCard.card.accountId,
                   readiness: payCardPeople,
+                  // Only the current bill's own charges gate an amount within that bill (by transaction id);
+                  // paying beyond it (explicit full outstanding) falls back to oldest-first reach.
+                  readinessFor: payCardPeopleFor
+                    ? (amount: number) => payCardPeopleFor(amount, payBillChargeScope(payScopeOf(payDestCard), amount))
+                    : null,
                   loading: payCardPeopleLoading,
                   payeeName: payDestCard.name,
                   returnTo: `/credit-cards?card=${encodeURIComponent(payDestCard.id)}&pay=1`,
@@ -1564,5 +1644,177 @@ function QuickAction({
       <span className="text-[11px] leading-tight font-medium text-foreground">{label}</span>
       {soon && <span className={cn(CC_SOON, "absolute top-1 right-1 px-0.5 text-[8.5px]")}>Soon</span>}
     </button>
+  );
+}
+
+/**
+ * What "Pay bill" pays, on this physical card's own statement cycle: the ONE current bill (primary
+ * action), then what stays on the card for later (next statements + new purchases). Paying the whole
+ * outstanding is a separate, secondary action; with no closed statement unpaid, nothing reads as "due".
+ */
+function PayScope({
+  scope,
+  ownOutstanding,
+  onPayStatement,
+  onPayFull,
+}: {
+  scope: CardStatementPaymentScope;
+  ownOutstanding: number;
+  onPayStatement: () => void;
+  onPayFull: () => void;
+}) {
+  if (scope.statementDue <= 0 && ownOutstanding <= 0) return null;
+  const bill = scope.current;
+  const later = Math.round((scope.closedDue - scope.statementDue + scope.unbilled) * 100) / 100;
+  return (
+    <div className="flex flex-col gap-2 border-t border-border-strong/40 px-4 py-2.5 text-xs" data-testid="cc-pay-scope">
+      <dl className="min-w-0 space-y-0.5">
+        {bill ? (
+          <div className="flex flex-wrap items-baseline gap-x-1.5">
+            <dt className="text-foreground/75">{scope.currentOverdue ? "Overdue bill" : "Current bill"}</dt>
+            <dd className="font-semibold text-foreground tabular-nums">{formatCurrency(scope.statementDue)}</dd>
+            <dd className={cn("text-foreground/75", scope.currentOverdue && "font-semibold text-expense")}>
+              · {billPeriodLabel(bill)} · {scope.currentOverdue ? "was due" : "due"} {formatShortDate(bill.dueDate)}
+            </dd>
+          </div>
+        ) : (
+          <div className="flex flex-wrap items-baseline gap-x-1.5">
+            <dt className="text-foreground/75">Current outstanding</dt>
+            <dd className="font-semibold text-foreground tabular-nums">{formatCurrency(ownOutstanding)}</dd>
+            <dd className="text-foreground/75">· no bill due yet</dd>
+          </div>
+        )}
+        {bill && later > 0.005 && (
+          <div className="flex flex-wrap items-baseline gap-x-1.5">
+            <dt className="text-foreground/75">Later bills</dt>
+            <dd className="font-medium text-foreground/85 tabular-nums">{formatCurrency(later)}</dd>
+            <dd className="text-foreground/75">· not part of this payment</dd>
+          </div>
+        )}
+      </dl>
+      <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1">
+        {bill && (
+          <button
+            type="button"
+            onClick={onPayStatement}
+            className="h-7 rounded-[6px] border border-primary-accent-text bg-primary px-2.5 font-semibold text-primary-foreground outline-none hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            Pay bill {formatCurrency(scope.statementDue)}
+          </button>
+        )}
+        {ownOutstanding > scope.statementDue + 0.005 && (
+          <button
+            type="button"
+            onClick={onPayFull}
+            className="font-semibold text-primary-accent-text underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            Pay full outstanding {formatCurrency(ownOutstanding)}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Inside Pay bill, under the amount: which ONE bill the pre-filled amount pays — its period, due date and
+ * (when partly paid) what's left — then, quieter, what stays on the card for later. Full mode says
+ * plainly it pays the card's whole current outstanding, itemised.
+ */
+function PayBillDialogScope({ scope, ownOutstanding, choice }: { scope: CardStatementPaymentScope; ownOutstanding: number; choice: PayBillChoice }) {
+  const row = "flex items-baseline justify-between gap-3";
+  const label = "text-foreground/75";
+  const figure = "font-semibold text-foreground tabular-nums";
+  const bill = scope.current;
+  const full = choice === "full";
+  const eyebrow = "text-[11px] font-bold tracking-[0.08em] uppercase";
+  return (
+    <div className="mt-2 overflow-hidden rounded-[8px] border border-border-strong text-xs" data-testid="pay-bill-scope">
+      {full ? (
+        <div className="bg-secondary/40 px-3.5 py-2.5">
+          <p className={cn(eyebrow, "mb-1.5 text-foreground/80")}>Paying full card outstanding</p>
+          <dl className="space-y-0.5">
+            {bill && (
+              <div className={row}>
+                <dt className={label}>Current bill · {billPeriodLabel(bill)}</dt>
+                <dd className={figure}>{formatCurrency(bill.remaining)}</dd>
+              </div>
+            )}
+            {scope.later.map((b) => (
+              <div key={b.id} className={row}>
+                <dt className={label}>Next statement · {billPeriodLabel(b)}</dt>
+                <dd className={figure}>{formatCurrency(b.remaining)}</dd>
+              </div>
+            ))}
+            {scope.unbilled > 0 && (
+              <div className={row}>
+                <dt className={label}>New purchases (not billed yet)</dt>
+                <dd className={figure}>{formatCurrency(scope.unbilled)}</dd>
+              </div>
+            )}
+            <div className={cn(row, "border-t border-border-strong pt-1")}>
+              <dt className="font-semibold text-foreground">Card outstanding</dt>
+              <dd className={cn(figure, "text-sm")}>{formatCurrency(ownOutstanding)}</dd>
+            </div>
+          </dl>
+        </div>
+      ) : bill == null ? (
+        <p className="bg-secondary/40 px-3.5 py-2.5 font-medium text-foreground/80">No bill is due on this card — nothing has been billed and left unpaid.</p>
+      ) : (
+        <>
+          <div className={cn("px-3.5 py-2.5", scope.currentOverdue ? "bg-expense/8" : "bg-primary/10")}>
+            <div className={row}>
+              <p className={cn(eyebrow, scope.currentOverdue ? "text-expense" : "text-foreground/80")}>{scope.currentOverdue ? "Overdue bill" : "Current bill"}</p>
+              <p className="text-base font-bold text-foreground tabular-nums">{formatCurrency(bill.remaining)}</p>
+            </div>
+            <dl className="mt-1 space-y-0.5">
+              <div className={row}>
+                <dt className={label}>Statement period</dt>
+                <dd className="font-medium text-foreground tabular-nums">{billPeriodLabel(bill)}</dd>
+              </div>
+              <div className={row}>
+                <dt className={label}>{scope.currentOverdue ? "Was due" : "Due date"}</dt>
+                <dd className={cn("font-medium tabular-nums", scope.currentOverdue ? "text-expense" : "text-foreground")}>{formatShortDate(bill.dueDate)}</dd>
+              </div>
+              {bill.amountPaid > 0.005 && (
+                <>
+                  <div className={row}>
+                    <dt className={label}>Original bill</dt>
+                    <dd className={figure}>{formatCurrency(bill.totalAmount)}</dd>
+                  </div>
+                  <div className={row}>
+                    <dt className={label}>Already paid</dt>
+                    <dd className={figure}>{formatCurrency(bill.amountPaid)}</dd>
+                  </div>
+                </>
+              )}
+            </dl>
+          </div>
+          {(scope.later.length > 0 || scope.unbilled > 0) && (
+            <dl className="space-y-0.5 border-t border-border-strong/70 px-3.5 py-2 text-foreground/80">
+              <p className={cn(eyebrow, "mb-0.5 text-foreground/70")}>Stays on the card · not in this payment</p>
+              {scope.later.map((b) => (
+                <div key={b.id} className={row}>
+                  <dt className={label}>
+                    Next statement · {billPeriodLabel(b)} · due {formatShortDate(b.dueDate)}
+                  </dt>
+                  <dd className="font-medium text-foreground/85 tabular-nums">{formatCurrency(b.remaining)}</dd>
+                </div>
+              ))}
+              {scope.unbilled > 0 && (
+                <div className={row}>
+                  <dt className={label}>New purchases (not billed yet)</dt>
+                  <dd className="font-medium text-foreground/85 tabular-nums">{formatCurrency(scope.unbilled)}</dd>
+                </div>
+              )}
+              <div className={cn(row, "border-t border-border-strong/60 pt-1")}>
+                <dt className={label}>Card outstanding</dt>
+                <dd className="font-semibold text-foreground/90 tabular-nums">{formatCurrency(scope.cardOutstanding)}</dd>
+              </div>
+            </dl>
+          )}
+        </>
+      )}
+    </div>
   );
 }

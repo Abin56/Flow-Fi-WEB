@@ -131,6 +131,32 @@ export function unpaidCardCharges(
   return result;
 }
 
+/**
+ * The card charges a NEW payment of `paymentAmount` would reach — same oldest-charge-first rule as
+ * `unpaidCardCharges`, continued with this payment: still-unpaid charges in order until the payment runs
+ * out (a partly covered charge counts as reached). A statement payment therefore reaches the closed
+ * statement's charges, never newer purchases it doesn't cover.
+ */
+export function chargesReachedByPayment(
+  transactions: readonly LinkedFundsTransaction[],
+  cardAccountId: string,
+  paymentAmount: number,
+  openingBalance = 0,
+): Set<string> {
+  const unpaid = unpaidCardCharges(transactions, cardAccountId, openingBalance);
+  const charges = transactions.filter((t) => t.deletedAt == null && t.accountId === cardAccountId && t.type === "expense").sort(chronological);
+  const reached = new Set<string>();
+  let left = round2(Math.max(0, paymentAmount));
+  for (const charge of charges) {
+    if (left <= 0.005) break;
+    const open = unpaid.get(charge.id) ?? 0;
+    if (open <= 0.005) continue;
+    reached.add(charge.id);
+    left = round2(left - open);
+  }
+  return reached;
+}
+
 export function computeLinkedFunds(input: LinkedFundsInput): LinkedFund[] {
   const txById = new Map(input.transactions.filter((t) => t.deletedAt == null).map((t) => [t.id, t]));
   const entryById = new Map(input.entries.filter((e) => e.deletedAt == null).map((e) => [e.id, e]));

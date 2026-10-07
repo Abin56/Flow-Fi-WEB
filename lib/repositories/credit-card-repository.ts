@@ -425,7 +425,12 @@ function addDays(date: Date, days: number): Date {
 }
 
 function periodEndingFor(card: CreditCardProfile, periodEnd: Date): StatementPeriodWindow {
-  const periodStart = addDays(addMonths(periodEnd, -1), 1);
+  // The day after the PREVIOUS statement day (clamped to that month's length). Not `addMonths(-1)`:
+  // its truncating year math sends January back to December of the same year, and stepping back
+  // from a clamped end (28 Feb for day 31) would start at 29 Jan, overlapping January's window.
+  // `new Date(y, m - 1, 1)` rolls the year correctly.
+  const prevMonth = new Date(periodEnd.getFullYear(), periodEnd.getMonth() - 1, 1);
+  const periodStart = addDays(dayInMonth(prevMonth.getFullYear(), prevMonth.getMonth() + 1, card.statementDay), 1);
   const dueMonth = addMonths(periodEnd, 1);
   const dueDate = dayInMonth(dueMonth.getFullYear(), dueMonth.getMonth() + 1, card.paymentDueDay);
   return { periodStart, periodEnd, dueDate };
@@ -449,15 +454,14 @@ function currentCycleForCard(card: CreditCardProfile, now?: Date): StatementPeri
  * The most recently *closed* cycle as of `now` — the one a `Statement`
  * should be materialized for once nothing has been generated yet. Mirrors
  * `StatementPeriodCalculator.mostRecentClosedCycleFor`.
+ *
+ * Same boundary as Pay bill (`cardBillsForCard`): a cycle stays open through its statement day and is
+ * closed from the next day. So this is the canonical window owning the day before the current cycle
+ * starts — no separate month math (which also mis-clamped statement day 29–31 after short months).
  */
 function mostRecentClosedCycleForCard(card: CreditCardProfile, now?: Date): StatementPeriodWindow {
   const current = currentCycleForCard(card, now);
-  const reference = now ?? new Date();
-  const today = new Date(reference.getFullYear(), reference.getMonth(), reference.getDate());
-  if (current.periodEnd.getTime() <= today.getTime()) {
-    return current;
-  }
-  return periodEndingFor(card, addMonths(current.periodEnd, -1));
+  return currentCycleForCard(card, addDays(current.periodStart, -1));
 }
 
 /**
@@ -510,6 +514,38 @@ export function unbilledSpendForCard(
     .filter((t) => countsTowardCardStatement(t) && t.dateTime.getTime() > billedThrough.getTime())
     .reduce((sum, t) => sum + t.amount, 0);
   return { periodStart: billedThrough, periodEnd: now, totalAmount };
+}
+
+/**
+ * The other half of `unbilledSpendForCard`: spend dated ON OR BEFORE the most recent stored statement
+ * that no stored statement covers — before the first stored statement, or in a closed cycle whose
+ * statement was never materialized. Without it that debt fell out of the card's outstanding entirely.
+ * Grouped into the statement window that owns each date (`statementWindowForDate`, the same rule
+ * `cardBillsForCard` uses), so payments settle it oldest due first alongside the stored statements.
+ * Totals are exact sums of uncovered transactions — never recomputed over a window, so spend a stored
+ * statement already counts is never counted twice even if stored periods don't align with today's
+ * statement day.
+ */
+export function uncoveredClosedSpendForCard(
+  card: CreditCardProfile,
+  cardTransactions: Transaction[],
+  statements: { periodStart: Date; periodEnd: Date }[],
+): { periodStart: Date; periodEnd: Date; dueDate: Date; totalAmount: number }[] {
+  const billedThrough = statements.reduce(
+    (latest, s) => (s.periodEnd.getTime() > latest.getTime() ? s.periodEnd : latest),
+    new Date(0),
+  );
+  const byPeriodEnd = new Map<number, { periodStart: Date; periodEnd: Date; dueDate: Date; totalAmount: number }>();
+  for (const t of cardTransactions) {
+    if (!countsTowardCardStatement(t) || t.dateTime.getTime() > billedThrough.getTime()) continue;
+    if (statements.some((s) => periodContains(s as StatementPeriodWindow, t.dateTime))) continue;
+    const window = statementWindowForDate(card, t.dateTime);
+    const key = window.periodEnd.getTime();
+    const existing = byPeriodEnd.get(key);
+    if (existing) existing.totalAmount += t.amount;
+    else byPeriodEnd.set(key, { periodStart: window.periodStart, periodEnd: window.periodEnd, dueDate: window.dueDate, totalAmount: t.amount });
+  }
+  return [...byPeriodEnd.values()];
 }
 
 /**
@@ -642,7 +678,7 @@ export class StatementRepository extends FirestoreCrudRepository<Statement> {
     const period = mostRecentClosedCycleForCard(card, now);
     const reference = now ?? new Date();
     const today = new Date(reference.getFullYear(), reference.getMonth(), reference.getDate());
-    if (period.periodEnd.getTime() > today.getTime()) return null;
+    if (period.periodEnd.getTime() >= today.getTime()) return null;
 
     const alreadyExists = existing.some(
       (s) =>

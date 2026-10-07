@@ -39,7 +39,10 @@ import { MoneyToUseSection } from "@/features/people/components/workspace/purpos
 import { usePersonPurposeFunds } from "@/features/people/hooks/use-purpose-funds";
 import { purposeCashOf } from "@/lib/engines/purpose-funds";
 import { advanceSources, payableObligations } from "@/features/people/lib/person-payment-obligations";
-import { advanceRemaining, type AdvanceUse } from "@/lib/engines/person-payment";
+import { advanceRemaining, PAYMENT_EPSILON, type AdvanceUse } from "@/lib/engines/person-payment";
+import { followUpStatus } from "@/lib/models/person-follow-up";
+import { useAllPersonFollowUps, usePersonFollowUpActions } from "@/features/people/hooks/use-person-follow-ups";
+import { FollowUpContext, type FollowUpContextValue } from "@/features/people/components/workspace/follow-up";
 import { isInAppPath } from "@/lib/engines/linked-people-readiness";
 import { peopleLedgerHref } from "@/features/people/lib/people-return-link";
 import type { RecordPaymentInput } from "@/lib/repositories/person-payment-repository";
@@ -201,6 +204,7 @@ export function PersonDetailWorkspace({
   const { data: categories = [] } = useCategories();
   const { data: people = [] } = usePeople();
   const firstName = person.name.split(" ")[0];
+  const followUpActions = usePersonFollowUpActions();
   const contact = [person.phone, person.email].filter(Boolean).join(" · ");
 
   // ---- Transactions: one row model for the compact list and the expanded ledger ----
@@ -330,12 +334,47 @@ export function PersonDetailWorkspace({
           closePayment();
           if (back) router.push(back);
         }}
+        cycleStartDay={cycleStartDay}
+        onSetReminder={async (targets, when) => {
+          try {
+            for (const t of targets) await followUpActions.set({ personId: person.id, obligationKey: t.key, obligationTitle: t.title, ...when });
+            toast.success("Reminder set");
+          } catch {
+            toast.error("Payment recorded, but the reminder couldn't be saved.");
+          }
+        }}
       />
     ) : null;
 
   // Advance held for / by this person, and the oldest obligation it could settle right now.
   const advanceAvailable = useMemo(() => advanceRemaining(advanceSources(ledgerEntries), advanceApplications), [ledgerEntries, advanceApplications]);
   const openObligations = useMemo(() => payableObligations(allRows), [allRows]);
+
+  // Follow-up reminders — metadata on open rows; status derived from each row's live remaining.
+  const { followUpsByPersonId } = useAllPersonFollowUps();
+  const personFollowUps = followUpsByPersonId[person.id];
+  const followUpContext = useMemo<FollowUpContextValue>(() => {
+    const remainingByKey = new Map(allRows.map((r) => [r.key, r.remaining ?? 0]));
+    const byKey = new Map(
+      (personFollowUps ?? []).map((f) => [f.obligationKey, { followUp: f, status: followUpStatus(f, (remainingByKey.get(f.obligationKey) ?? 0) > PAYMENT_EPSILON) }]),
+    );
+    const guard = async (fn: () => Promise<void>, failure: string) => {
+      try {
+        await fn();
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : failure);
+        throw e;
+      }
+    };
+    return {
+      byKey,
+      cycleStartDay,
+      onSet: (key, title, when) => guard(() => followUpActions.set({ personId: person.id, obligationKey: key, obligationTitle: title, ...when }), "Couldn't save the reminder."),
+      onDismiss: (key) => guard(() => followUpActions.dismiss(person.id, key), "Couldn't update the reminder."),
+      onRemove: (key) => guard(() => followUpActions.remove(person.id, key), "Couldn't remove the reminder."),
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- actions are stateless wrappers over the signed-in uid
+  }, [allRows, personFollowUps, cycleStartDay, person.id]);
   const heldSides = advanceSides(advanceAvailable);
   const deletingRow = deleting?.row ?? null;
   const rowPlan = deleting?.plan ?? null;
@@ -640,6 +679,7 @@ export function PersonDetailWorkspace({
               side={side}
               available={advanceAvailable}
               obligations={openObligations}
+              cycle={cycle}
               open={advanceOpen === side}
               onOpenChange={(o) => setAdvanceOpen(o ? side : null)}
               onConfirm={async (targets) => {
@@ -889,6 +929,7 @@ export function PersonDetailWorkspace({
   }
 
   return (
+    <FollowUpContext.Provider value={followUpContext}>
     <div ref={rootRef} onKeyDown={onKeyDown} className="flex min-w-0 scroll-mt-6 flex-col gap-4 px-1">
       {/* Identity — who, always visible; every mode renders below it. Navigation sits with the actions on the right. */}
       <div>
@@ -1123,5 +1164,6 @@ export function PersonDetailWorkspace({
           {rawPerson && Math.abs(rawPerson.openingBalance) >= 0.005 && <p>The opening balance of {money(Math.abs(rawPerson.openingBalance))} stays.</p>}
         </LedgerConfirmDialog>
     </div>
+    </FollowUpContext.Provider>
   );
 }

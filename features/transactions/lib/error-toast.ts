@@ -1,5 +1,6 @@
 import { toast } from "@/store/toast-store";
 import { TransferEditRestrictedError } from "@/lib/repositories/transaction-repository";
+import { PeopleSettlementPendingError } from "@/lib/engines/linked-people-readiness";
 
 /**
  * Error types whose own `.message` is already a safe, specific, actionable
@@ -13,6 +14,8 @@ import { TransferEditRestrictedError } from "@/lib/repositories/transaction-repo
 const USER_FACING_ERROR_TYPES = [TransferEditRestrictedError] as const;
 
 export function userFacingMessage(error: unknown): string | null {
+  // A card bill refused by the write-layer People gate says exactly what to settle (Loan/EMI keep theirs).
+  if (error instanceof PeopleSettlementPendingError && error.subject === "card-bill") return error.message;
   for (const ErrorType of USER_FACING_ERROR_TYPES) {
     if (error instanceof ErrorType) return error.message;
   }
