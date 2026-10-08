@@ -6,9 +6,11 @@
  * code path should mutate a transaction's effect on a balance directly.
  */
 
+import { safeDocs } from "@/lib/firestore/safe-docs";
 import {
   type CollectionReference,
   doc,
+  type DocumentReference,
   getDocs,
   limit,
   query,
@@ -71,6 +73,12 @@ export interface CreateTransactionParams {
   installmentId?: string | null;
   installmentPaymentId?: string | null;
   paymentAllocationType?: PaymentAllocationType | null;
+  /**
+   * One Save action's identity (WFI-P2-10): the transaction id is derived from it, so a retry after a lost
+   * response returns the transaction already recorded instead of creating a duplicate. A retry with different
+   * money is refused; one whose earlier attempt was since deleted (e.g. rolled back) records afresh.
+   */
+  idempotencyKey?: string;
   /** See `Transaction.isPersonLedgerMovement`. Defaults to `false`, matching every other transaction. */
   isPersonLedgerMovement?: boolean;
   /**
@@ -161,6 +169,88 @@ export class TransferRetryMismatchError extends Error {
     this.name = "TransferRetryMismatchError";
   }
 }
+
+/**
+ * Who owns a Transaction's accounting meaning. A transaction owned by another record (Loan/EMI payment, People
+ * money movement, split/assigned Expense) must never have its money changed through the generic transaction
+ * edit/delete: the account would move while the owner (installment, ledger entry, expense shares) did not.
+ * Only the owning feature's own write path (which passes `owner`) may change it.
+ */
+export type TransactionOwnerKind = "loan" | "emi" | "people" | "split";
+
+/** The owner the Transaction document itself declares (`split` needs the Expense lookup — see `withExpenseOwnerLookup`). */
+export function declaredTransactionOwner(
+  t: Pick<Transaction, "loanId" | "emiId" | "isPersonLedgerMovement" | "fundedByPersonId">,
+): TransactionOwnerKind | null {
+  if (t.loanId != null) return "loan";
+  if (t.emiId != null) return "emi";
+  if (t.isPersonLedgerMovement || t.fundedByPersonId != null) return "people";
+  return null;
+}
+
+const OWNER_EDIT_MESSAGE: Record<TransactionOwnerKind, string> = {
+  loan: "This payment is managed by Loan & EMI. Edit it there — nothing was changed.",
+  emi: "This payment is managed by Loan & EMI. Edit it there — nothing was changed.",
+  people: "This money movement belongs to a People entry. Edit it from that person's ledger in People — nothing was changed.",
+  split: "This expense is shared with people. Change its amount, date or account through the split so every share stays in step — nothing was changed.",
+};
+
+/** A generic edit tried to change the money of a transaction another record owns (see `TransactionOwnerKind`). */
+export class OwnedTransactionEditError extends Error {
+  constructor(readonly owner: TransactionOwnerKind) {
+    super(OWNER_EDIT_MESSAGE[owner]);
+    this.name = "OwnedTransactionEditError";
+  }
+}
+
+/** A generic delete of a transaction another record owns — it must be removed through its owner. */
+export class OwnedTransactionDeleteError extends Error {
+  constructor(readonly owner: TransactionOwnerKind) {
+    super(
+      owner === "split"
+        ? "This expense is shared with people. Delete it from the transaction itself so its shares go with it — nothing was deleted."
+        : owner === "people"
+          ? "This money movement belongs to a People entry. Delete it from that person's ledger in People — nothing was deleted."
+          : "This payment is managed by Loan & EMI. Reverse it there — nothing was deleted.",
+    );
+    this.name = "OwnedTransactionDeleteError";
+  }
+}
+
+/**
+ * Stale-delete contract: a delete names the transaction AS THE CALLER SAW IT. If its money (amount, type,
+ * account, exclusion, funding, transfer link) changed since — another tab or device edited it — the delete is
+ * refused and nothing is written; the user refreshes and decides again. An already-deleted transaction is an
+ * idempotent no-op — its effect is never reversed a second time.
+ */
+export class TransactionChangedError extends Error {
+  constructor() {
+    super("This transaction changed in another tab or device since you opened it. Refresh and try again — nothing was deleted.");
+    this.name = "TransactionChangedError";
+  }
+}
+
+/** Whether the balance-affecting fields of `a` and `b` differ. */
+function moneyFieldsDiffer(a: Transaction, b: Transaction): boolean {
+  return (
+    Math.abs(a.amount - b.amount) >= 0.005 ||
+    a.type !== b.type ||
+    a.accountId !== b.accountId ||
+    a.excludeFromCalculations !== b.excludeFromCalculations ||
+    (a.fundedByPersonId ?? null) !== (b.fundedByPersonId ?? null) ||
+    (a.transferId ?? null) !== (b.transferId ?? null)
+  );
+}
+
+/** Options for an edit / delete made BY the owning feature (Loan/EMI, People, split Expense). */
+export interface OwnerWriteOptions {
+  owner?: TransactionOwnerKind;
+}
+
+/** Finds the split/assigned Expense documents whose `transactionId` is this transaction (each is re-read in the tx). */
+export type ExpenseOwnerLookup = (
+  transactionId: string,
+) => Promise<DocumentReference<{ deletedAt: Date | null; transactionId: string }>[]>;
 
 /** Normal Pay Now's scope: the ONE statement the dialog was paying, as `cardStatementPaymentScope` named it. */
 export interface CardStatementIntent {
@@ -278,6 +368,40 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
     return this;
   }
 
+  /**
+   * How generic edits/deletes recognise a split/assigned-Expense-owned transaction (the Transaction document
+   * itself carries no marker). Installed by `createTransactionRepository`; a bare repository has none.
+   */
+  private expenseOwnerLookup: ExpenseOwnerLookup | null = null;
+
+  withExpenseOwnerLookup(lookup: ExpenseOwnerLookup): this {
+    this.expenseOwnerLookup = lookup;
+    return this;
+  }
+
+  /**
+   * The candidate owning Expense refs, found BEFORE the transaction (queries can't run inside one); each is
+   * re-read inside it by `splitOwnedInTransaction`. Skipped entirely when the caller is the owner.
+   */
+  private async splitOwnerCandidates(transactionId: string, opts?: OwnerWriteOptions): Promise<DocumentReference<{ deletedAt: Date | null; transactionId: string }>[]> {
+    if (opts?.owner != null || this.expenseOwnerLookup == null) return [];
+    return this.expenseOwnerLookup(transactionId);
+  }
+
+  /** Re-reads the candidate Expenses inside `tx` — true when a live one still owns `transactionId`. Reads only. */
+  private async splitOwnedInTransaction(
+    tx: FirestoreTransaction,
+    transactionId: string,
+    candidates: readonly DocumentReference<{ deletedAt: Date | null; transactionId: string }>[],
+  ): Promise<boolean> {
+    let owned = false;
+    for (const ref of candidates) {
+      const snap = await tx.get(ref);
+      if (snap.exists() && snap.data().deletedAt == null && snap.data().transactionId === transactionId) owned = true;
+    }
+    return owned;
+  }
+
   /** Runs the card gate when `leg` on `account` is a card payment (unless explicitly acknowledged as historical). */
   private async guardCardPayment(
     tx: FirestoreTransaction,
@@ -353,7 +477,24 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
   }
 
   async createTransactionInTransaction(tx: FirestoreTransaction, params: CreateTransactionParams): Promise<Transaction> {
-    const transaction = TransactionRepository.buildTransaction(params);
+    let transaction = TransactionRepository.buildTransaction(params);
+    if (params.idempotencyKey != null) {
+      if (!IDEMPOTENCY_KEY_PATTERN.test(params.idempotencyKey)) throw new Error("Transaction idempotency key must be 8–128 letters, digits, '-' or '_'");
+      const keyedId = `txn_${params.idempotencyKey}`;
+      const existing = await tx.get(doc(this.collection, keyedId));
+      if (existing.exists() && existing.data().deletedAt == null) {
+        const prior = existing.data();
+        // Only the SAME save is returned; changed amount / account / date / type after an uncertain save is refused.
+        const same =
+          prior.type === transaction.type &&
+          Math.abs(prior.amount - transaction.amount) < 0.005 &&
+          prior.accountId === transaction.accountId &&
+          prior.dateTime.getTime() === transaction.dateTime.getTime();
+        if (!same) throw new Error("This transaction was already saved with different details. Close and reopen it to edit the saved one.");
+        return prior;
+      }
+      if (!existing.exists()) transaction = { ...transaction, id: keyedId };
+    }
     assertFundingConsistent(transaction);
 
     // A person-funded expense has no account: nothing to read, nothing to move.
@@ -538,7 +679,13 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
    * {@link createTransactionInTransaction}'s doc comment for why this
    * exists and the read-before-write ordering constraint on callers.
    */
-  async editTransactionInTransaction(tx: FirestoreTransaction, transaction: Transaction, params: EditTransactionParams): Promise<void> {
+  async editTransactionInTransaction(
+    tx: FirestoreTransaction,
+    transaction: Transaction,
+    params: EditTransactionParams,
+    /** `owner`: this edit IS the owning feature's write. `splitOwned`: the caller found a live owning Expense. */
+    opts?: OwnerWriteOptions & { splitOwned?: boolean },
+  ): Promise<void> {
     const transactionRef = doc(this.collection, transaction.id);
 
     const freshSnap = await tx.get(transactionRef);
@@ -626,6 +773,26 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
     // of excludeFromCalculations (in either direction) is captured by the
     // delta below exactly like an amount/account change would be.
     assertFundingConsistent(updated);
+
+    // A transfer leg's money is one half of a pair — type / exclusion / funding are as locked as its amount.
+    if (fresh.transferId != null && (updated.type !== fresh.type || updated.excludeFromCalculations !== fresh.excludeFromCalculations || updated.accountId !== fresh.accountId)) {
+      throw new TransferEditRestrictedError();
+    }
+
+    // Owner-aware edit contract: the money (and the person link) of a transaction another record owns changes
+    // only through that owner's write path. Description / notes / category / month / business tag stay editable.
+    const owner = declaredTransactionOwner(fresh) ?? (opts?.splitOwned ? "split" : null);
+    if (owner != null && opts?.owner == null) {
+      // Moving a People cash leg to another of my accounts leaves the obligation untouched (the entry has no
+      // account) — every other owner keeps the account too (Expense.accountId, loan payment source).
+      const accountMayMove = owner === "people" && hasAccountLeg(fresh) && hasAccountLeg(updated);
+      const compared = accountMayMove ? { ...updated, accountId: fresh.accountId } : updated;
+      const moneyChanged = moneyFieldsDiffer(fresh, compared) || updated.dateTime.getTime() !== fresh.dateTime.getTime();
+      const personLinkChanged =
+        owner === "people" && ((updated.linkedPersonId ?? null) !== (fresh.linkedPersonId ?? null) || updated.owesPersonToggle !== fresh.owesPersonToggle);
+      if (moneyChanged || personLinkChanged) throw new OwnedTransactionEditError(owner);
+    }
+
     const newBalanceEffect = balanceEffect(updated);
     const newAccountId = updated.accountId;
     const newHasAccount = hasAccountLeg(updated);
@@ -679,10 +846,16 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
     return snap.exists() ? snap.data() : null;
   }
 
-  async editTransaction(transaction: Transaction, params: EditTransactionParams): Promise<void> {
+  /**
+   * Generic edit. Refuses (`OwnedTransactionEditError`) to change the money of a Loan/EMI-, People- or
+   * split-owned transaction unless `opts.owner` says the owning feature itself is making the edit.
+   */
+  async editTransaction(transaction: Transaction, params: EditTransactionParams, opts?: OwnerWriteOptions): Promise<void> {
     const db = this.collection.firestore;
+    const candidates = await this.splitOwnerCandidates(transaction.id, opts);
     await runTransaction(db, async (tx) => {
-      await this.editTransactionInTransaction(tx, transaction, params);
+      const splitOwned = await this.splitOwnedInTransaction(tx, transaction.id, candidates);
+      await this.editTransactionInTransaction(tx, transaction, params, { ...opts, splitOwned });
     });
   }
 
@@ -691,11 +864,21 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
    * {@link createTransactionInTransaction}'s doc comment for why this
    * exists.
    */
-  async softDeleteTransactionInTransaction(tx: FirestoreTransaction, transaction: Transaction): Promise<void> {
+  /**
+   * The document is re-read here — the caller's copy only names it and states what it expected. Already
+   * deleted → no-op (returns false, nothing reversed again). Money changed since the caller's copy →
+   * `TransactionChangedError`, nothing written. Otherwise the CURRENT effect is reversed exactly once.
+   */
+  async softDeleteTransactionInTransaction(tx: FirestoreTransaction, transaction: Transaction): Promise<boolean> {
     const transactionRef = doc(this.collection, transaction.id);
-    if (hasAccountLeg(transaction)) {
-      const accountRef = this.accountRepository.docRef(transaction.accountId);
-      const delta = -balanceEffect(transaction);
+    const freshSnap = await tx.get(transactionRef);
+    if (!freshSnap.exists()) throw new Error("Transaction not found");
+    const fresh = freshSnap.data();
+    if (fresh.deletedAt != null) return false;
+    if (moneyFieldsDiffer(fresh, transaction)) throw new TransactionChangedError();
+    if (hasAccountLeg(fresh)) {
+      const accountRef = this.accountRepository.docRef(fresh.accountId);
+      const delta = -balanceEffect(fresh);
 
       const accountSnap = await tx.get(accountRef);
       if (!accountSnap.exists()) throw new Error("Account not found");
@@ -703,7 +886,8 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
         tx.set(accountRef, this.accountRepository.applyBalanceDelta(accountSnap.data(), delta));
       }
     }
-    tx.set(transactionRef, { ...transaction, deletedAt: new Date() });
+    tx.set(transactionRef, { ...fresh, deletedAt: new Date() });
+    return true;
   }
 
   /**
@@ -749,41 +933,53 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
     }
   }
 
-  /** Soft-deletes and reverses this transaction's effect on its account's balance. */
-  async softDeleteTransaction(transaction: Transaction): Promise<void> {
+  /**
+   * Generic soft delete: reverses the CURRENT effect once (see `softDeleteTransactionInTransaction` for the
+   * idempotent / stale contract). Loan/EMI-, People- and split-owned transactions are refused unless
+   * `opts.owner` says the owning feature is deleting it (their owner state must go with them).
+   */
+  async softDeleteTransaction(transaction: Transaction, opts?: OwnerWriteOptions): Promise<void> {
     if (transaction.loanId != null || transaction.emiId != null) {
       throw new LoanPaymentTransactionRestrictedError();
     }
     const db = this.collection.firestore;
+    const candidates = await this.splitOwnerCandidates(transaction.id, opts);
     await runTransaction(db, async (tx) => {
+      const fresh = await this.getInTransaction(tx, transaction.id);
+      if (fresh == null) throw new Error("Transaction not found");
+      if (fresh.loanId != null || fresh.emiId != null) throw new LoanPaymentTransactionRestrictedError();
+      if (fresh.deletedAt == null && opts?.owner == null) {
+        const owner = declaredTransactionOwner(fresh) ?? ((await this.splitOwnedInTransaction(tx, fresh.id, candidates)) ? "split" : null);
+        if (owner != null) throw new OwnedTransactionDeleteError(owner);
+      }
       await this.softDeleteTransactionInTransaction(tx, transaction);
     });
   }
 
   /**
-   * Composable form of {@link restoreTransaction}. See
-   * {@link createTransactionInTransaction}'s doc comment for why this
-   * exists.
+   * Composable form of {@link restoreTransaction}. Idempotent: a document that is already live (restored by
+   * another tab, or a repeated click) is never re-applied. The effect applied is the STORED document's,
+   * never the caller's possibly stale copy.
    */
   async restoreTransactionInTransaction(tx: FirestoreTransaction, transaction: Transaction): Promise<void> {
     const transactionRef = doc(this.collection, transaction.id);
-    // Idempotent: a leg that is already live (restored by another tab, or a repeated click) is never
-    // re-applied — re-applying would move its account balance a second time.
     const freshSnap = await tx.get(transactionRef);
-    if (freshSnap.exists() && freshSnap.data().deletedAt == null) return;
-    if (hasAccountLeg(transaction)) {
-      const accountRef = this.accountRepository.docRef(transaction.accountId);
-      const delta = balanceEffect(transaction);
+    if (!freshSnap.exists()) throw new Error("Transaction not found");
+    const fresh = freshSnap.data();
+    if (fresh.deletedAt == null) return;
+    if (hasAccountLeg(fresh)) {
+      const accountRef = this.accountRepository.docRef(fresh.accountId);
+      const delta = balanceEffect(fresh);
 
       const accountSnap = await tx.get(accountRef);
       if (!accountSnap.exists()) throw new Error("Account not found");
       // Restoring a card payment leg is a card payment made again — gated against CURRENT state.
-      await this.guardCardPayment(tx, transaction, accountSnap.data());
+      await this.guardCardPayment(tx, fresh, accountSnap.data());
       if (delta !== 0) {
         tx.set(accountRef, this.accountRepository.applyBalanceDelta(accountSnap.data(), delta));
       }
     }
-    tx.set(transactionRef, { ...transaction, deletedAt: null });
+    tx.set(transactionRef, { ...fresh, deletedAt: null });
   }
 
   /** Restores a trashed transaction and re-applies its balance effect. */
@@ -814,95 +1010,73 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
     const snapshot = await getDocs(
       query(this.collection, where("transferId", "==", transaction.transferId), limit(4)),
     );
-    const sibling = snapshot.docs.map((d) => d.data()).find((t) => t.id !== transaction.id);
+    const sibling = safeDocs(snapshot.docs).find((t) => t.id !== transaction.id);
     return sibling ?? null;
   }
 
   /**
-   * Soft-deletes both legs of a transfer together, atomically reversing
-   * each leg's own effect on its own account. This is the safe replacement
-   * for calling `softDeleteTransaction` on a single leg of a transfer:
-   * that would reverse only the deleted leg's account balance and leave
-   * the sibling leg's account still showing the other half of a transfer
-   * that no longer fully exists.
-   *
-   * If no live sibling can be found (a pre-existing desynced pair, or the
-   * sibling was already removed through some other path before this guard
-   * existed), falls back to a plain single-leg delete — the alternative
-   * would permanently block the user from ever removing a transaction
-   * stuck in that state.
+   * Soft-deletes both legs of a transfer together, in ONE Firestore transaction that re-reads both legs and
+   * reverses only the legs that are STILL LIVE, each by its CURRENT stored effect. A repeat (double click,
+   * second tab, retry after a lost response) finds both legs deleted and writes nothing, so a transfer can never
+   * create or destroy money by being deleted twice. The leg named by the caller is checked against its stored
+   * money first (`TransactionChangedError` if it changed). A legacy orphan leg (no sibling) is deleted alone.
    */
   async deleteTransferPair(transaction: Transaction): Promise<void> {
     const sibling = await this.findTransferSibling(transaction);
-    if (!sibling || sibling.deletedAt != null) {
-      await this.softDeleteTransaction(transaction);
-      return;
-    }
-
-    const db = this.collection.firestore;
-    const txRef = doc(this.collection, transaction.id);
-    const siblingRef = doc(this.collection, sibling.id);
-    const accountRef = this.accountRepository.docRef(transaction.accountId);
-    const siblingAccountRef = this.accountRepository.docRef(sibling.accountId);
-
-    await runTransaction(db, async (tx) => {
-      // Both reads before either write — Firestore transactions don't allow a read after a write.
-      const accountSnap = await tx.get(accountRef);
-      const siblingAccountSnap = await tx.get(siblingAccountRef);
-      if (!accountSnap.exists()) throw new Error("Account not found");
-      if (!siblingAccountSnap.exists()) throw new Error("Account not found");
-
-      const delta = -balanceEffect(transaction);
-      const siblingDelta = -balanceEffect(sibling);
-      if (delta !== 0) {
-        tx.set(accountRef, this.accountRepository.applyBalanceDelta(accountSnap.data(), delta));
+    await runTransaction(this.collection.firestore, async (tx) => {
+      const leg = await this.getInTransaction(tx, transaction.id);
+      if (leg == null) throw new Error("Transaction not found");
+      if (leg.deletedAt == null && moneyFieldsDiffer(leg, transaction)) throw new TransactionChangedError();
+      const other = sibling ? await this.getInTransaction(tx, sibling.id) : null;
+      const live = [leg, other].filter(
+        (t): t is Transaction => t != null && t.deletedAt == null && t.transferId != null && t.transferId === leg.transferId,
+      );
+      if (live.length === 0) return;
+      const accounts = new Map<string, Account>();
+      for (const id of new Set(live.filter(hasAccountLeg).map((t) => t.accountId))) {
+        const snap = await tx.get(this.accountRepository.docRef(id));
+        if (!snap.exists()) throw new Error("Account not found");
+        accounts.set(id, snap.data());
       }
-      if (siblingDelta !== 0) {
-        tx.set(siblingAccountRef, this.accountRepository.applyBalanceDelta(siblingAccountSnap.data(), siblingDelta));
+      // --- writes ---
+      const now = new Date();
+      for (const t of live) {
+        if (hasAccountLeg(t)) accounts.set(t.accountId, this.accountRepository.applyBalanceDelta(accounts.get(t.accountId)!, -balanceEffect(t)));
+        tx.set(doc(this.collection, t.id), { ...t, deletedAt: now });
       }
-      tx.set(txRef, { ...transaction, deletedAt: new Date() });
-      tx.set(siblingRef, { ...sibling, deletedAt: new Date() });
+      for (const [id, account] of accounts) tx.set(this.accountRepository.docRef(id), account);
     });
   }
 
-  /** Restores both legs of a transfer together — the paired counterpart to `deleteTransferPair`. */
+  /**
+   * Restores both legs of a transfer together — the paired counterpart to `deleteTransferPair`, with the same
+   * fresh-read, apply-only-what-changes, idempotent posture.
+   */
   async restoreTransferPair(transaction: Transaction): Promise<void> {
     const sibling = await this.findTransferSibling(transaction);
-    if (!sibling || sibling.deletedAt == null) {
-      await this.restoreTransaction(transaction);
-      return;
-    }
-
-    const db = this.collection.firestore;
-    const txRef = doc(this.collection, transaction.id);
-    const siblingRef = doc(this.collection, sibling.id);
-    const accountRef = this.accountRepository.docRef(transaction.accountId);
-    const siblingAccountRef = this.accountRepository.docRef(sibling.accountId);
-
-    await runTransaction(db, async (tx) => {
-      // Idempotent: if both legs are already live, nothing is re-applied.
-      const [legSnap, siblingLegSnap] = [await tx.get(txRef), await tx.get(siblingRef)];
-      if (legSnap.exists() && legSnap.data().deletedAt == null && siblingLegSnap.exists() && siblingLegSnap.data().deletedAt == null) return;
-      const accountSnap = await tx.get(accountRef);
-      const siblingAccountSnap = await tx.get(siblingAccountRef);
-      if (!accountSnap.exists()) throw new Error("Account not found");
-      if (!siblingAccountSnap.exists()) throw new Error("Account not found");
+    await runTransaction(this.collection.firestore, async (tx) => {
+      const leg = await this.getInTransaction(tx, transaction.id);
+      if (leg == null) throw new Error("Transaction not found");
+      const other = sibling ? await this.getInTransaction(tx, sibling.id) : null;
+      const trashed = [leg, other].filter(
+        (t): t is Transaction => t != null && t.deletedAt != null && t.transferId != null && t.transferId === leg.transferId,
+      );
+      if (trashed.length === 0) return;
+      const accounts = new Map<string, Account>();
+      for (const id of new Set(trashed.filter(hasAccountLeg).map((t) => t.accountId))) {
+        const snap = await tx.get(this.accountRepository.docRef(id));
+        if (!snap.exists()) throw new Error("Account not found");
+        accounts.set(id, snap.data());
+      }
       // A restored card payment is evaluated exactly like a NEW payment of its amount, against the card's
-      // current oldest-first state — never the scope it reached when it was first made. Refused → nothing
-      // is written: both legs stay deleted, both balances unchanged.
-      await this.guardCardPayment(tx, transaction, accountSnap.data());
-      await this.guardCardPayment(tx, sibling, siblingAccountSnap.data());
-
-      const delta = balanceEffect(transaction);
-      const siblingDelta = balanceEffect(sibling);
-      if (delta !== 0) {
-        tx.set(accountRef, this.accountRepository.applyBalanceDelta(accountSnap.data(), delta));
+      // current oldest-first state. Refused → nothing is written.
+      for (const t of trashed) if (hasAccountLeg(t)) await this.guardCardPayment(tx, t, accounts.get(t.accountId)!);
+      // --- writes ---
+      for (const t of trashed) {
+        if (hasAccountLeg(t)) accounts.set(t.accountId, this.accountRepository.applyBalanceDelta(accounts.get(t.accountId)!, balanceEffect(t)));
+        tx.set(doc(this.collection, t.id), { ...t, deletedAt: null });
       }
-      if (siblingDelta !== 0) {
-        tx.set(siblingAccountRef, this.accountRepository.applyBalanceDelta(siblingAccountSnap.data(), siblingDelta));
-      }
-      tx.set(txRef, { ...transaction, deletedAt: null });
-      tx.set(siblingRef, { ...sibling, deletedAt: null });
+      for (const [id, account] of accounts) tx.set(this.accountRepository.docRef(id), account);
     });
   }
 
@@ -980,7 +1154,7 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
    *  to wipe alongside the account itself. */
   async getAllForAccountIncludingTrash(accountId: string): Promise<Transaction[]> {
     const snapshot = await getDocs(query(this.collection, where("accountId", "==", accountId)));
-    return snapshot.docs.map((d) => d.data());
+    return safeDocs(snapshot.docs);
   }
 
   /**

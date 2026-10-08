@@ -96,7 +96,7 @@ describe("countsTowardCardStatement — one rule for statement, unbilled and car
   it.each([
     ["normal expense", normal, true],
     ["excluded expense", excluded, false],
-    ["outgoing transfer leg", outgoingTransfer, false],
+    ["outgoing transfer leg (cash advance / balance transfer — billed, WFI-P1-04)", outgoingTransfer, true],
     ["bill payment (incoming transfer leg)", billPaymentLeg, false],
     ["deleted", deleted, false],
     ["person-assigned expense", assignedToPerson, true],
@@ -107,23 +107,24 @@ describe("countsTowardCardStatement — one rule for statement, unbilled and car
   });
 
   it("unbilled now equals the statement total over the same window (no double counting)", () => {
-    expect(statementPeriodTotal(all, wholeSep)).toBe(1250);
-    expect(unbilledSpendForCard(all, []).totalAmount).toBe(1250);
+    expect(statementPeriodTotal(all, wholeSep)).toBe(1550);
+    expect(unbilledSpendForCard(all, []).totalAmount).toBe(1550);
   });
 
   it("bill payment still settles; balance / utilization / outstanding stay coherent", () => {
     const settled = settleCardPayments([], unbilledSpendForCard(all, []).totalAmount, cardPaymentTotal(all));
-    expect(settled.unbilledTotal).toBe(1050);
+    expect(settled.unbilledTotal).toBe(1350);
     const standing = creditCardStanding({
       card: { id: card.id, statementDay: 15, creditLimit: 100000, sharedLimitId: null },
       statements: [],
       currentCycleStatement: { periodStart: new Date(0), periodEnd: at(30), totalAmount: settled.unbilledTotal },
       emis: [],
     });
-    expect(standing.outstanding).toBe(1050);
-    expect(standing.available).toBe(98950);
+    expect(standing.outstanding).toBe(1350);
+    expect(standing.available).toBe(98650);
     // Card account balance is unchanged by this fix (repository-maintained via balanceEffect):
-    // excluded rows never moved it; the outgoing transfer leg did (it is a real movement, not a bill).
+    // excluded rows never moved it; the outgoing transfer leg did — and is now billed too, so outstanding
+    // equals the card account's debt (1000 + 300 − 200 + 250 = 1350).
     const balance = all.filter((t) => t.deletedAt == null).reduce((s, t) => s + balanceEffect(t), 0);
     expect(balance).toBe(-1000 - 300 + 200 - 250);
   });
@@ -156,6 +157,6 @@ describe("countsTowardCardStatement — one rule for statement, unbilled and car
     const total = bills.reduce((s, b) => s + b.totalAmount, 0);
     expect(total).toBe(statementPeriodTotal(all, wholeSep));
     const owed = cardBillsDueInCycle(bills, { start: at(18), end: new Date(2026, 9, 17, 23, 59) }, now);
-    expect(owed.reduce((s, b) => s + b.remaining, 0)).toBe(1250 - 200);
+    expect(owed.reduce((s, b) => s + b.remaining, 0)).toBe(1550 - 200);
   });
 });

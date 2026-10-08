@@ -979,6 +979,7 @@ export function TransactionDetailsModal({
         } else {
           const newTransaction = await actions.createTransaction({
             type: kind,
+            idempotencyKey: transferKey,
             amount: amountValue,
             dateTime,
             accountId,
@@ -1110,6 +1111,10 @@ export function TransactionDetailsModal({
           }
 
           await actions.editTransaction(transaction, { ...transactionEdits, clearLinkedPersonId: true, owesPersonToggle: false });
+        } else if (transaction.isPersonLedgerMovement) {
+          // A People cash leg: its amount/date ARE its ledger entry's — `actions.editTransaction` edits both in
+          // one atomic write (or the repository refuses a money edit it can't route), never the account alone.
+          await actions.editTransaction(transaction, transactionEdits);
         } else {
           await actions.applyOwesPersonChange({
             transaction,
@@ -1159,8 +1164,11 @@ export function TransactionDetailsModal({
     }
   }
 
+  // Re-entry gate (Enter + click in one tick). Secondary only — the repository delete is itself idempotent.
+  const deleteInFlight = useRef(false);
   async function handleDelete() {
-    if (deleting || !transaction) return;
+    if (deleting || !transaction || deleteInFlight.current) return;
+    deleteInFlight.current = true;
     setDeleting(true);
     const op = startOperation({ label: "Deleting transaction", successLabel: "Transaction deleted", errorLabel: "Couldn't delete transaction" });
     try {
@@ -1175,6 +1183,7 @@ export function TransactionDetailsModal({
       // Already toasted by actions.deleteTransaction.
       op.dismiss();
     } finally {
+      deleteInFlight.current = false;
       setDeleting(false);
     }
   }

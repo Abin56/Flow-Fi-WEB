@@ -175,7 +175,8 @@ describe("owner and recipient identity", () => {
     expect(a.participants.filter((p) => p.isFocus).map((p) => p.label)).toEqual(["Sojan"]);
     expect(a.participants.find((p) => p.isMe)!.isFocus).toBe(false);
     expect(preview(s).container.querySelector("[data-focus] dt")!.textContent).toBe("Sojan");
-    expect(await pdfText(s)).toContain("Sojan's share");
+    expect(s.view.amountHeader).toBe("Sojan's share");
+    expect(await pdfText(s)).toContain("SOJAN'S SHARE");
   });
 });
 
@@ -185,11 +186,15 @@ describe("original purchase vs recipient's share", () => {
     const row = s.view.rows[0];
     expect(row.allocation!.original).toBe(882.96);
     expect(row).toMatchObject({ original: money(220.74), amountLabel: "Sojan's share", paid: money(0), remaining: money(220.74) });
-    const text = await pdfText(s);
-    expect(text).toContain("ORIGINAL PURCHASE");
-    expect(text).toContain(pm(882.96));
-    expect(text).toContain("4-way split");
-    expect(text).not.toMatch(/\nOriginal\n/); // the old ambiguous column header is gone
+    // Every amount is Sojan's share, so the column header says it once instead of a caption on each row.
+    expect(row).toMatchObject({ purchase: money(882.96), purchaseNote: "4-way split", shareLabel: null });
+    expect(s.view.amountHeader).toBe("Sojan's share");
+    const lines = cellLines(await pdfText(s));
+    // The Original column holds the purchase total captioned with the split; the Amount column is headed Sojan's share.
+    expect(lines).toContain("ORIGINAL");
+    expect(lines).toContain("SOJAN'S SHARE");
+    const table = lines.slice(lines.indexOf("STATUS") + 1);
+    expect(table[table.indexOf(pm(882.96)) + 1]).toBe("4-way split");
   });
 
   it("B/V. unequal custom ₹2,080 (610 / 490 / 490 / 490) is shown as stored, never re-derived", async () => {
@@ -330,7 +335,7 @@ describe("settlement states", () => {
     const s = sojan([{ x: a, share: 220.74 }, { x: b, share: 490 }]);
     expect(s.view.rows.map((r) => r.allocation!.original)).toEqual([882.96, 2080]);
     const text = await pdfText(s);
-    expect(text.split("ORIGINAL PURCHASE").length - 1).toBe(2);
+    expect(text.split("4-way split").length - 1).toBe(2);
   });
 });
 
@@ -345,8 +350,9 @@ describe("pages", () => {
     for (const [pi, page] of pages.entries()) {
       // Every transaction that starts on a page carries its whole breakdown on that same page.
       const titles = page.split("\n").filter((l) => l.startsWith("MERCHANT"));
-      expect(page.split("ORIGINAL PURCHASE").length - 1).toBe(titles.length);
-      expect(page.split("Sojan's share").length - 1).toBeGreaterThanOrEqual(titles.length);
+      expect(page.split("4-way split").length - 1).toBe(titles.length);
+      expect(page.split("SHARES").length - 1).toBe(titles.length);
+      if (titles.length) expect(page).toContain("SOJAN'S SHARE"); // the repeated column header names the share
       if (pi > 0) expect(page).toContain("continued");
       expect(page).toContain(`Page ${pi + 1} of ${pages.length}`);
     }
@@ -443,7 +449,7 @@ describe("recipient-safe wording (the person reads this statement)", () => {
     const lines = cellLines(await pdfText(s));
     expect(lines).toContain("SETTLED");
     expect(lines[lines.indexOf("ENDING BALANCE") + 3]).toBe(pm(0));
-    expect(lines).toContain("Total paid by Sojan  " + pm(220.74));
+    expect(lines[lines.indexOf("Total paid by Sojan") + 1]).toBe(pm(220.74));
     expect(lines.filter((l) => YOU.test(l))).toEqual([]);
   });
 
@@ -463,23 +469,25 @@ describe("recipient-safe wording (the person reads this statement)", () => {
 });
 
 describe("statement grouping", () => {
-  it("month headings appear only when the statement spans months; sections use plain words", async () => {
+  it("brought-forward rows are grouped by the cycle they came from (said once, not per row); sections use plain words", async () => {
     const carried = sojan([{ x: expense(882.96, ZOMATO().participants, "SWIGGY", d(7, 3)), share: 220.74 }, { x: expense(882.96, ZOMATO().participants, "BEVCO", d(8, 2)), share: 220.74 }], { history: true });
     const lines = cellLines(await pdfText(carried));
-    expect(lines).toContain("JULY 2026");
-    expect(lines).toContain("AUGUST 2026");
+    const headings = lines.filter((l) => /^\d.* CYCLE$/.test(l));
+    expect(headings).toHaveLength(2);
+    expect(lines.some((l) => l.startsWith("From "))).toBe(false);
     expect(lines).toContain("PREVIOUS BALANCE");
     expect(lines).toContain("THIS CYCLE");
     // Nothing new this cycle: said on the THIS CYCLE band itself, not as a separate line.
     expect(lines.some((l) => l.endsWith(`·  ${STATEMENT_COPY.empty}`))).toBe(true);
-    expect(lines.indexOf("JULY 2026")).toBeLessThan(lines.indexOf("SWIGGY"));
-    expect(lines.indexOf("AUGUST 2026")).toBeLessThan(lines.indexOf("BEVCO"));
+    expect(lines.indexOf(headings[0])).toBeLessThan(lines.indexOf("SWIGGY"));
+    expect(lines.indexOf("SWIGGY")).toBeLessThan(lines.indexOf(headings[1]));
+    expect(lines.indexOf(headings[1])).toBeLessThan(lines.indexOf("BEVCO"));
 
     const single = cellLines(await pdfText(sojan([{ x: ZOMATO(), share: 220.74 }])));
     expect(single.some((l) => /^[A-Z]+ 2026$/.test(l))).toBe(false);
   });
 
-  it("a month heading is never stranded at a page foot: it starts the page with its first transaction", async () => {
+  it("a group heading is never stranded at a page foot: it starts the page with its first transaction", async () => {
     const items = Array.from({ length: 14 }, (_, i) => ({
       x: expense(882.96, ZOMATO().participants, `M${String(i + 1).padStart(2, "0")}`, i < 6 ? d(8, 1 + i) : d(9, 1 + i)),
       share: 220.74,
@@ -487,8 +495,10 @@ describe("statement grouping", () => {
     const pages = await pdfPages(sojan(items, { history: true }));
     for (const page of pages) {
       const l = page.split("\n");
-      const at = l.indexOf("SEPTEMBER 2026");
-      if (at >= 0) expect(l.slice(at + 1).some((x) => /^M\d\d$/.test(x))).toBe(true);
+      // Every heading on a page is followed by one of its transactions before the next heading.
+      l.forEach((x, at) => {
+        if (/^\d.* CYCLE$/.test(x)) expect(l.slice(at + 1).find((y) => /^M\d\d$/.test(y) || /^\d.* CYCLE$/.test(y))).toMatch(/^M\d\d$/);
+      });
     }
   });
 });

@@ -232,7 +232,8 @@ export function RecordPaymentDialog({ target, open, onOpenChange }: { target: Pa
   const outstanding = loanRow ? loanRow.outstandingPrincipal : emiRow!.remainingBalance;
   const totalCount = loanRow ? loanRow.totalInstallments : emiRow!.emi.installmentCount;
   const overdue = next != null && daysUntil(next.dueDate) < 0;
-  const needsAccount = isLoan;
+  // A loan payment, and an EMI not on a card, move a bank account (WFI-P1-08). A card EMI posts on its card.
+  const needsAccount = isLoan || (emiRow != null && emiRow.emi.linkedCreditCardId == null);
   const error = plan && !plan.ok ? plan.error : null;
   const showError = error != null && (effectiveChoice !== "custom" || customTouched);
   const blocked = next == null || error != null || (needsAccount && accountId === "");
@@ -281,6 +282,7 @@ export function RecordPaymentDialog({ target, open, onOpenChange }: { target: Pa
             if (!emiActions) throw new Error("Not signed in");
             const result = await emiActions.recordPayment(emiRow.emi, emiRow.installments, {
               amount: planAmount,
+              accountId: needsAccount ? accountId : null,
               idempotencyKey,
               targetInstallmentId: next.id,
               date: paymentDate,
@@ -493,7 +495,7 @@ export function RecordPaymentDialog({ target, open, onOpenChange }: { target: Pa
           </div>
           {accounts.length === 0 ? (
             <p className="flex h-10 items-center rounded-[6px] border border-dashed border-border bg-secondary px-3 text-xs text-muted-foreground">
-              Loan payments move an account balance — add an account first.
+              Payments move an account balance — add an account first.
             </p>
           ) : (
             <select className={LOAN_EMI_INPUT} value={accountId} onChange={(e) => setAccountId(e.target.value)} aria-label={lent ? "Received into account" : "Paid from account"}>

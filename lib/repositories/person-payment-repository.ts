@@ -30,7 +30,7 @@ import {
   getDocs,
   query,
   runTransaction,
-  type Transaction as FirestoreTransaction,
+  serverTimestamp,
   where,
 } from "firebase/firestore";
 import { recordEdit } from "@/lib/firestore/soft-deletable";
@@ -44,6 +44,9 @@ import { participantKey } from "@/lib/repositories/expense-repository";
 import type { LedgerRepository, PersonRepository } from "@/lib/repositories/person-repository";
 import type { TransactionRepository } from "@/lib/repositories/transaction-repository";
 import { generateId } from "@/lib/utils/id-generator";
+import { TxSession } from "@/lib/firestore/tx-session";
+
+export { TxSession };
 
 /** The person changed after the payment screen was built — e.g. the same payment was already saved. */
 export class StalePersonPaymentError extends Error {
@@ -111,53 +114,7 @@ export interface PurposeInput {
   link: PurposeLink | null;
 }
 
-/** A snapshot-like result from the session — what `Transaction.get` returns, from the session cache. */
-interface SessionSnap<T> {
-  exists(): boolean;
-  data(): T;
-}
 
-/**
- * Buffers every write until `flush`, serving reads from its own cache — so several steps (revert, then
- * record) can run in ONE Firestore transaction, each seeing the previous step's effects, while every
- * `tx.get` still happens before the first `tx.set` (Firestore's read-before-write rule). Existing
- * `*InTransaction` helpers only call `get`/`set`, so they run on a session unchanged.
- */
-export class TxSession {
-  private readonly cache = new Map<string, unknown>();
-  private readonly writes = new Map<string, { ref: DocumentReference; data: unknown }>();
-
-  constructor(private readonly tx: FirestoreTransaction) {}
-
-  private static keyOf(ref: { id: string }): string {
-    return (ref as { path?: string }).path ?? ref.id;
-  }
-
-  async get<T>(ref: DocumentReference<T>): Promise<SessionSnap<T>> {
-    const key = TxSession.keyOf(ref);
-    if (!this.cache.has(key)) {
-      const snap = await this.tx.get(ref);
-      this.cache.set(key, snap.exists() ? snap.data() : undefined);
-    }
-    const data = this.cache.get(key) as T | undefined;
-    return { exists: () => data !== undefined, data: () => data as T };
-  }
-
-  set<T>(ref: DocumentReference<T>, data: T): void {
-    const key = TxSession.keyOf(ref);
-    this.cache.set(key, data);
-    this.writes.set(key, { ref: ref as DocumentReference, data });
-  }
-
-  /** The session viewed as a Firestore transaction, for the existing `*InTransaction` helpers. */
-  asTransaction(): FirestoreTransaction {
-    return this as unknown as FirestoreTransaction;
-  }
-
-  flush(): void {
-    for (const { ref, data } of this.writes.values()) this.tx.set(ref, data as never);
-  }
-}
 
 export interface PersonPaymentDeps {
   personRepository: PersonRepository;
@@ -272,12 +229,15 @@ export class PersonPaymentRepository {
     const targets = params.targets.filter((t) => t.uses.length > 0);
     if (targets.length === 0) throw new Error("Nothing to apply.");
     const advanceIds = [...new Set(targets.flatMap((t) => t.uses.map((u) => u.advanceEntryId)))];
-    const existing = new Map<string, AdvanceApplication[]>();
-    for (const id of advanceIds) {
-      const snap = await getDocs(query(this.deps.advanceApplications, where("advanceEntryId", "==", id)));
-      existing.set(id, snap.docs.map((d) => d.data()));
-    }
     await runTransaction(this.db, async (tx) => {
+      // Re-queried on EVERY attempt (a query can't run inside a client transaction). Together with the lock
+      // write on each advance entry below, a concurrent apply that committed first makes this attempt fail
+      // and retry — and the retry's query sees that apply's applications (WFI-P2-07).
+      const existing = new Map<string, AdvanceApplication[]>();
+      for (const id of advanceIds) {
+        const snap = await getDocs(query(this.deps.advanceApplications, where("advanceEntryId", "==", id)));
+        existing.set(id, snap.docs.map((d) => d.data()));
+      }
       const session = new TxSession(tx);
       const drawing = new Map<string, number>();
       for (const t of targets) {
@@ -296,6 +256,8 @@ export class PersonPaymentRepository {
         }
         if (used + amount > snap.data().amount + PAYMENT_EPSILON) throw new Error("Not enough advance available.");
       }
+      // Lock token outside the model: the write turns a concurrent apply on the same advance into a conflict.
+      for (const id of drawing.keys()) tx.update(this.deps.ledgerRepository.docRef(id), { advanceAppliedAt: serverTimestamp() } as never);
       for (const t of targets) {
         for (const use of t.uses) {
           const app: AdvanceApplication = {

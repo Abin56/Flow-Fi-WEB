@@ -150,6 +150,13 @@ export interface LedgerEntry extends SoftDeletableEntity {
    * wrote, as `{scheduleId}/{installmentId}/{paymentId}` — so reverting the payment reverses exactly it.
    */
   installmentPaymentRef?: string | null;
+  /**
+   * Provenance of a soft delete: set ONLY when a cascade retired this entry on behalf of one owner operation
+   * (e.g. `"expense:<expenseId>"` when its split Expense was deleted), so that owner's restore brings back
+   * exactly what it retired — never an entry retired earlier for another reason. Absent / null on every other
+   * entry and on legacy data (which a restore therefore never resurrects). Cleared again on restore.
+   */
+  retiredBy?: string | null;
   /** When part of the payment was recorded as separate income: that Income `Transaction`'s id. */
   incomeTransactionRef?: string | null;
   createdAt: Date;
@@ -293,6 +300,7 @@ export function ledgerEntryFromFirestore(
     obligationRef: (data.obligationRef as string | undefined) ?? null,
     paymentId: (data.paymentId as string | undefined) ?? null,
     installmentPaymentRef: (data.installmentPaymentRef as string | undefined) ?? null,
+    retiredBy: (data.retiredBy as string | undefined) ?? null,
     incomeTransactionRef: (data.incomeTransactionRef as string | undefined) ?? null,
     increasesBalance: (data.increasesBalance as boolean) ?? true,
     createdAt: (data.createdAt as Timestamp).toDate(),
@@ -316,6 +324,7 @@ export function ledgerEntryToFirestore(entry: LedgerEntry): DocumentData {
     ...(entry.obligationRef == null ? {} : { obligationRef: entry.obligationRef }),
     ...(entry.paymentId == null ? {} : { paymentId: entry.paymentId }),
     ...(entry.installmentPaymentRef == null ? {} : { installmentPaymentRef: entry.installmentPaymentRef }),
+    ...(entry.retiredBy == null ? {} : { retiredBy: entry.retiredBy }),
     ...(entry.incomeTransactionRef == null ? {} : { incomeTransactionRef: entry.incomeTransactionRef }),
     increasesBalance: entry.increasesBalance,
     createdAt: Timestamp.fromDate(entry.createdAt),

@@ -132,9 +132,13 @@ export function createTransactionRepository(uid: string, accountRepository: Acco
   const repository = new TransactionRepository(ref, accountRepository);
   // Every card-payment write through the app's repository (create, restore) enforces the card-bill People gate.
   const reader = firestoreCardBillGateReader(uid, repository);
-  return repository.withCardPaymentGuard((tx, { cardAccount, amount, statementIntent }) =>
-    assertCardBillPeopleSettled({ tx, reader, cardAccount, amount, statementIntent }),
-  );
+  // Generic edits/deletes must recognise a transaction owned by a split/assigned Expense (P0-02).
+  const expenses = collection(db, FirestoreCollections.users, uid, FirestoreCollections.expenses).withConverter(expenseConverter);
+  return repository
+    .withCardPaymentGuard((tx, { cardAccount, amount, statementIntent }) =>
+      assertCardBillPeopleSettled({ tx, reader, cardAccount, amount, statementIntent }),
+    )
+    .withExpenseOwnerLookup(async (transactionId) => (await getDocs(query(expenses, where("transactionId", "==", transactionId)))).docs.map((d) => d.ref));
 }
 
 /** The card bill People gate's fresh reads, from Firestore through the existing repositories. */

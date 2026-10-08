@@ -60,9 +60,13 @@ describe("StatementRepository.totalFor", () => {
     expect(repo.totalFor(transactions, period)).toBe(300);
   });
 
-  it("excludes transfer legs", () => {
-    const transactions = [txn({ id: "t1", amount: 300 }), txn({ id: "t2", amount: 200, transferId: "transfer-1" })];
-    expect(repo.totalFor(transactions, period)).toBe(300);
+  it("excludes an incoming transfer leg (bill payment); bills money moved OUT of the card (WFI-P1-04)", () => {
+    const transactions = [
+      txn({ id: "t1", amount: 300 }),
+      txn({ id: "t2", type: "income", amount: 200, transferId: "transfer-1" }),
+      txn({ id: "t3", amount: 50, transferId: "transfer-2" }),
+    ];
+    expect(repo.totalFor(transactions, period)).toBe(350);
   });
 
   it("excludes soft-deleted transactions", () => {

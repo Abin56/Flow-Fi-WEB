@@ -17,6 +17,7 @@ vi.mock("firebase/firestore", () => {
     doc,
     query: (collection: { path: string }, ...wheres: { field: string; value: unknown }[]) => ({ collection, wheres }),
     where: (field: string, _op: string, value: unknown) => ({ field, value }),
+    serverTimestamp: () => new Date(),
     getDocs: async (q: { collection: { path: string }; wheres: { field: string; value: unknown }[] }) => {
       const prefix = `${q.collection.path}/`;
       const docs = [...store.entries()]
@@ -37,6 +38,12 @@ vi.mock("firebase/firestore", () => {
         set: (ref: { path: string }, value: Doc) => {
           wrote = true;
           pending.set(ref.path, structuredClone(value));
+        },
+        update: (ref: { path: string }, fields: Record<string, unknown>) => {
+          wrote = true;
+          const current = pending.get(ref.path) ?? store.get(ref.path);
+          if (current === undefined) throw new Error("Firestore: update of a missing document");
+          pending.set(ref.path, { ...structuredClone(current), ...fields } as Doc);
         },
       };
       const result = await fn(tx);

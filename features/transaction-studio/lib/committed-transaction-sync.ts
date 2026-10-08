@@ -44,6 +44,8 @@ export function resolveCategoryId(
 export function draftToEditTransactionParams(
   draft: TransactionDetailsDraft,
   categories: Category[],
+  /** The committed transaction being edited — its own date/time is kept unless the day actually changed (WFI-P3-08). */
+  existing?: Pick<Transaction, "dateTime" | "accountingMonth"> | null,
 ): { params: EditTransactionParams; error: null } | { params: null; error: string } {
   const { categoryId, error } = resolveCategoryId(draft.category, categories);
   if (error) return { params: null, error };
@@ -51,16 +53,44 @@ export function draftToEditTransactionParams(
   return {
     params: {
       amount: Number(draft.amount),
-      dateTime: new Date(`${draft.date}T00:00:00.000Z`),
+      dateTime: committedDateTime(draft.date, existing?.dateTime ?? null),
       categoryId,
       description: draft.merchant.trim(),
       notes: draft.notes,
       excludeFromCalculations: draft.excludeFromCalculations,
-      accountingMonth: draft.accountingMonth ? new Date(`${draft.accountingMonth}-01T00:00:00.000Z`) : null,
+      accountingMonth: committedAccountingMonth(draft.accountingMonth, existing?.accountingMonth ?? null),
       clearAccountingMonth: !draft.accountingMonth,
     },
     error: null,
   };
+}
+
+const ymd = (d: Date, utc: boolean) =>
+  utc
+    ? `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`
+    : `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+/**
+ * The committed transaction's new `dateTime` (WFI-P3-08). The draft only carries a day; writing it as UTC
+ * midnight lost the time, shifted the day/month west of UTC, and made every save on a transfer leg look like a
+ * date change (`TransferEditRestrictedError`). Same day as the transaction (either reading) → unchanged
+ * (`undefined`); a new day → that LOCAL day, keeping the transaction's time of day.
+ */
+function committedDateTime(draftDate: string, existing: Date | null): Date | undefined {
+  if (existing != null && (draftDate === ymd(existing, true) || draftDate === ymd(existing, false))) return undefined;
+  const [y, m, d] = draftDate.split("-").map(Number);
+  if (!y || !m || !d) return new Date(`${draftDate}T00:00:00.000Z`);
+  return existing != null
+    ? new Date(y, m - 1, d, existing.getHours(), existing.getMinutes(), existing.getSeconds(), existing.getMilliseconds())
+    : new Date(y, m - 1, d, 12);
+}
+
+/** Same rule for the month attribution: an unchanged month keeps the stored value; a new one is the local 1st. */
+function committedAccountingMonth(draftMonth: string, existing: Date | null): Date | null {
+  if (!draftMonth) return null;
+  if (existing != null && (draftMonth === ymd(existing, true).slice(0, 7) || draftMonth === ymd(existing, false).slice(0, 7))) return existing;
+  const [y, m] = draftMonth.split("-").map(Number);
+  return new Date(y, m - 1, 1);
 }
 
 /** `${account.name} ••••1234` when the last-4 digits are known — the "HDFC Credit Card ••••1234" shape both Transaction Studio edit surfaces show for a committed row's real account — else just the name. */

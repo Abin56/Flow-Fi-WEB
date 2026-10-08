@@ -107,7 +107,6 @@ const PEOPLE_UI = [
   "features/people/components/person-detail-workspace.tsx",
   "features/people/components/person-activity-feed.tsx",
   "features/people/components/add-person-inline.tsx",
-  "features/people/components/workspace/settle-up-panel.tsx",
   "features/people/components/workspace/transaction-ledger-mode.tsx",
   "features/people/components/workspace/record-payment-panel.tsx",
   "features/people/components/workspace/payment-extras.tsx",

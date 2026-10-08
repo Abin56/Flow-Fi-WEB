@@ -1,137 +1,147 @@
 /**
- * Portrait A4 People settlement statement — the PDF twin of the Share Statement preview, laid out as a
- * document (a bank / card statement), never a dashboard: no charts, no KPI tiles, one balance answer.
+ * A4 People settlement statement (landscape by default, portrait on request) — the PDF twin of the Share Statement preview, laid out as a
+ * financial document (a bank / card statement), never a dashboard: no charts, no KPI tiles, one balance answer.
  * Rendered solely from `statementView`: every amount, label, type and status comes from the statement
  * engine through the shared presentation layer; nothing here does arithmetic on money (the only numbers
  * computed are layout coordinates).
  *
  * The statement is read by the person, so it never says "you": both parties are named ("Sojan owes Abin
- * John"). Palette: white paper, deep FlowFi green as the single brand accent, sage surfaces for structure,
- * grey for metadata, and semantic colour only on states that carry meaning (green = paid / settled, soft
- * red = due / overdue, amber = part-paid, blue-grey = carried forward). Every colour supports a word, so
- * the statement stays clear in greyscale print.
+ * John"). Structure: each section is one connected panel (heading → column header → rows), rows share their
+ * rules, and the width is used for fixed money columns — Original (only for a split) / Amount / Paid /
+ * Remaining — so figures line up down the page whatever the description length. Colours come from
+ * `statement-palette` (the preview reads the same tokens); every colour supports a word, so the statement
+ * stays clear in greyscale print.
  */
-import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage, type RGB } from "pdf-lib";
+import fontkit from "@pdf-lib/fontkit";
+import { PDFDocument, PDFName, PDFNull, StandardFonts, rgb, type PDFFont, type PDFPage, type RGB } from "pdf-lib";
 import {
   STATEMENT_COPY,
+  statementDate,
   statementSections,
   statementSummaryCells,
   statementView,
   type StatementViewOptions,
   type StatementViewRow,
 } from "@/features/people/lib/person-statement-pdf-model";
-import type { SettlementStatusTone } from "@/features/people/lib/settlement-presentation";
+import { hexToUnit, STATEMENT_CHIP, STATEMENT_INK, type StatementChip } from "@/features/people/lib/statement-palette";
 import type { PersonCycleStatement } from "@/lib/engines/person-cycle-statement";
 import { money } from "@/lib/engines/person-cycle-statement-share";
-import { splitCountLabel, type SplitAllocation } from "@/lib/split/split-allocation";
+import type { SplitAllocation } from "@/lib/split/split-allocation";
 
 export function pdfSafe(text: string): string {
   return text.replace(/₹/g, "Rs. ").replace(/−/g, "-").replace(/[–—]/g, "-").replace(/→/g, "->").replace(/[^\x20-\x7E\xA0-\xFF]/g, "");
 }
 
-// ---- Palette (solid, PDF-safe; greys kept dark enough to survive print) ----
-const INK = rgb(0.08, 0.09, 0.11);
-const BODY = rgb(0.23, 0.25, 0.28);
-const MUTED = rgb(0.36, 0.38, 0.41);
-const RULE = rgb(0.84, 0.85, 0.86);
-const RULE_STRONG = rgb(0.66, 0.68, 0.7);
+// ---- Palette (statement-palette tokens) ----
+const hex = (h: string) => rgb(...hexToUnit(h));
+const INK = hex(STATEMENT_INK.ink);
+const BODY = hex(STATEMENT_INK.body);
+const MUTED = hex(STATEMENT_INK.muted);
+const RULE = hex(STATEMENT_INK.rule);
+const RULE_STRONG = hex(STATEMENT_INK.ruleStrong);
+const SURFACE = hex(STATEMENT_INK.surface);
+const HEAD = hex(STATEMENT_INK.head);
+const NAVY = hex(STATEMENT_INK.navy);
+const NAVY_TINT = hex(STATEMENT_INK.navyTint);
+const NAVY_RULE = hex(STATEMENT_INK.navyRule);
+const REMAIN_TINT = hex(STATEMENT_INK.remainTint);
+const SPLIT = hex(STATEMENT_INK.split);
+const SPLIT_TINT = hex(STATEMENT_INK.splitTint);
+const ADVANCE = hex(STATEMENT_INK.advance);
+const ADVANCE_TINT = hex(STATEMENT_INK.advanceTint);
 const WHITE = rgb(1, 1, 1);
-/** Deep FlowFi green: the brand mark, section accents and the ending balance. */
-const FOREST = rgb(0.078, 0.263, 0.184);
-const GREEN_TEXT = rgb(0.1, 0.38, 0.25);
-const LIME = rgb(0.73, 0.96, 0.35);
-const SAGE = rgb(0.955, 0.97, 0.958);
-/** The split details' surface — lighter than SAGE, so the panel reads as secondary to its row. */
-const SAGE_SOFT = rgb(0.967, 0.977, 0.969);
-/** Between transactions: present, but quieter than any heading rule. */
-const ROW_RULE = rgb(0.88, 0.89, 0.9);
-const SAGE_RULE = rgb(0.8, 0.86, 0.82);
-const FOCUS_TINT = rgb(0.925, 0.965, 0.89);
-/** Very light blue-grey: the repeated column header and the carry-forward line. */
-const HEAD_TINT = rgb(0.95, 0.957, 0.965);
-const CARRY_TINT = rgb(0.962, 0.97, 0.978);
 type Tone = { fill: RGB; text: RGB; edge: RGB };
-const GREEN: Tone = { fill: rgb(0.9, 0.955, 0.92), text: rgb(0.07, 0.39, 0.22), edge: rgb(0.62, 0.8, 0.68) };
-const RED: Tone = { fill: rgb(0.99, 0.928, 0.922), text: rgb(0.62, 0.13, 0.1), edge: rgb(0.9, 0.64, 0.62) };
-const RED_STRONG: Tone = { fill: rgb(0.98, 0.87, 0.86), text: rgb(0.56, 0.07, 0.05), edge: rgb(0.8, 0.4, 0.37) };
-const AMBER: Tone = { fill: rgb(1, 0.95, 0.86), text: rgb(0.45, 0.27, 0.02), edge: rgb(0.88, 0.71, 0.42) };
-const SLATE: Tone = { fill: rgb(0.925, 0.94, 0.958), text: rgb(0.22, 0.31, 0.4), edge: rgb(0.68, 0.74, 0.8) };
-const GREY: Tone = { fill: rgb(0.945, 0.948, 0.952), text: BODY, edge: RULE_STRONG };
-
-/** Status badge: green = paid / settled, soft red = due, amber = part-paid, blue-grey = upcoming; the rest neutral. */
-/** Status details that only restate a row's direction line plus its Paid / Remaining figures. */
-const REPEATS_COLUMNS = new Set<SettlementStatusTone>(["due", "payable", "partial", "settled"]);
-
-const STATUS: Record<SettlementStatusTone, Tone> = {
-  due: RED,
-  payable: RED,
-  partial: AMBER,
-  settled: GREEN,
-  overdue: RED_STRONG,
-  upcoming: SLATE,
-  received: GREEN,
-  paid: GREY,
-  neutral: GREY,
-};
+const CHIP = Object.fromEntries(
+  Object.entries(STATEMENT_CHIP).map(([k, v]) => [k, { fill: hex(v.fill), text: hex(v.text), edge: hex(v.edge) }]),
+) as Record<StatementChip, Tone>;
+const PAID_TEXT = CHIP.paid.text;
+const OVERDUE_TEXT = CHIP.overdue.text;
 
 /** Type roles (pt). Helvetica's figures are tabular, so amounts align; hierarchy comes from size and weight. */
 const T = {
-  title: 16.5,
-  name: 12.5,
-  section: 11,
-  desc: 8.6,
-  money: 8.2,
+  title: 9,
+  money: 8.4,
   label: 6.3,
-  body: 7.6,
   meta: 7,
-  support: 6.8,
-  badge: 6.1,
+  caption: 6.5,
+  chip: 6.3,
 } as const;
 
-// ---- Page geometry (A4 portrait, 36pt side margins → 523.3pt usable) ----
-const PAGE_W = 595.28;
-const PAGE_H = 841.89;
-const M = 36;
-const M_TOP = 36;
-const TABLE_W = PAGE_W - 2 * M;
-const COLUMNS = [
-  { label: "#", w: 20, align: "right" },
-  { label: "Date", w: 54, align: "left" },
-  { label: "Description", w: 0, align: "left" },
-  { label: "Amount", w: 66, align: "right" },
-  { label: "Paid", w: 58, align: "right" },
-  { label: "Remaining", w: 68, align: "right" },
-  { label: "Status", w: 80, align: "left" },
-] as const;
-/** Description takes whatever the fixed columns leave. */
-const COL_W = COLUMNS.map((c) => (c.w === 0 ? TABLE_W - COLUMNS.reduce((s, x) => s + x.w, 0) : c.w));
-const colX = (i: number) => M + COL_W.slice(0, i).reduce((s, w) => s + w, 0);
-const PAD = 6;
-const DESC_W = COL_W[2] - 2 * PAD;
-const STATUS_W = COL_W[6] - 2 * PAD;
+export type StatementOrientation = "portrait" | "landscape";
+
+/** TTF bytes for the amount figures (Geist Mono Regular / SemiBold, from `public/fonts/geist-mono`). */
+export interface StatementAmountFonts {
+  regular: ArrayBuffer | Uint8Array;
+  bold: ArrayBuffer | Uint8Array;
+}
+
+/** Fetches the amount fonts in the browser; null when they can't be loaded (the PDF then keeps Helvetica and "Rs."). */
+export async function loadStatementAmountFonts(base = "/fonts/geist-mono"): Promise<StatementAmountFonts | null> {
+  try {
+    const [regular, bold] = await Promise.all(
+      ["GeistMono-Regular.ttf", "GeistMono-SemiBold.ttf"].map(async (file) => {
+        const res = await fetch(`${base}/${file}`);
+        if (!res.ok) throw new Error(file);
+        return res.arrayBuffer();
+      }),
+    );
+    return { regular, bold };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Page geometry. A4 landscape (the default: 32pt margins → 777.9pt usable); portrait (30pt margins → 535.3pt) keeps
+ * the same columns with tighter fixed widths, so every figure still has its own aligned column.
+ */
+function pageGeometry(orientation: StatementOrientation) {
+  const portrait = orientation === "portrait";
+  const PAGE_W = portrait ? 595.28 : 841.89;
+  const PAGE_H = portrait ? 841.89 : 595.28;
+  const M = portrait ? 30 : 32;
+  const PAD = portrait ? 5.5 : 7;
+  const TABLE_W = PAGE_W - 2 * M;
+  // [#, Date, Description (the rest), Original, Amount, Paid, Remaining, Status]
+  const widths = portrait ? [18, 52, 0, 64, 68, 58, 64, 78] : [24, 58, 0, 88, 90, 78, 86, 104];
+  const COLUMNS = [
+    { label: "#", align: "right" },
+    { label: "Date", align: "left" },
+    { label: "Description", align: "left" },
+    { label: "Original", align: "right" },
+    { label: "Amount", align: "right" },
+    { label: "Paid", align: "right" },
+    { label: "Remaining", align: "right" },
+    { label: "Status", align: "left" },
+  ] as const;
+  /** Description takes whatever the fixed columns leave. */
+  const COL_W = widths.map((w) => (w === 0 ? TABLE_W - widths.reduce((s, x) => s + x, 0) : w));
+  const colX = (i: number) => M + COL_W.slice(0, i).reduce((s, w) => s + w, 0);
+  const colRight = (i: number) => colX(i) + COL_W[i] - PAD;
+  return { portrait, PAGE_W, PAGE_H, M, PAD, TABLE_W, COLUMNS, COL_W, colX, colRight, DESC_W: COL_W[2] - 2 * PAD, STATUS_W: COL_W[7] - 2 * PAD };
+}
+const M_TOP = 28;
 /** The footer rule's height; footer text sits below it. */
-const FOOTER_RULE_Y = 32;
+const FOOTER_RULE_Y = 26;
 /** The lowest point any content may reach — every keep-together check uses this one floor. */
 const CONTENT_BOTTOM = FOOTER_RULE_Y + 8;
-const TITLE_LH = 10.4;
-const SUPPORT_LH = 8.4;
-/** Offsets (below a row's top) of its first baseline and of the line under the title block. */
-const LINE1 = 12.5;
-const LINE2_GAP = 11;
-/** A month heading (label + rule). */
-const MONTH_H = 19;
-/** The THIS CYCLE divider. */
-const SECTION_H = 20;
-/** The carry-forward (Previous balance) row. */
-const CARRY_H = 28;
-/** Grid columns cap inside a portrait split panel (cells stay wide enough for "Name ₹amount"). */
-const MAX_PANEL_COLS = 4;
-
-function fit(text: string, font: PDFFont, size: number, width: number): string {
-  let t = pdfSafe(text);
-  while (t.length > 1 && font.widthOfTextAtSize(t, size) > width) t = `${t.slice(0, -4)}...`;
-  return t;
-}
+const RADIUS = 4;
+/** A row's first baseline, below its top. */
+const LINE1 = 15;
+const TITLE_LH = 10.6;
+const META_LH = 8.7;
+const NOTE_LH = 8.2;
+const HEADER_H = 17;
+const MONTH_H = 16;
+const SECTION_H = 18;
+const CARRY_H = 26;
+/** The ending balance block and the gap above it. */
+const END_H = 42;
+const END_GAP = 12;
+/** The shares strip under a split row. */
+const SHARE_SIZE = 7.2;
+const SHARE_LH = 9.6;
+const SHARE_PAD = 3.5;
 
 const GENERATED = new Intl.DateTimeFormat("en-IN", { day: "2-digit", month: "short", year: "numeric" });
 
@@ -142,12 +152,19 @@ export function allocationColumns(n: number): number {
   return Math.min(6, Math.ceil(n / 2));
 }
 
+/** A placed run of text in a flowed line. */
+type Run = { text: string; x: number; font: PDFFont; color: RGB };
+
 /**
  * Renders the statement. `options` (the person's ledger entries, the whole-history statement, account
  * names and the owner's display name) only sharpen the wording — assigned vs split, payments made in a
  * later cycle, the account a payment moved through, who the owner is — and never change a figure.
  */
-export async function renderPersonStatementPdf(statement: PersonCycleStatement, options: StatementViewOptions = {}): Promise<Uint8Array> {
+export async function renderPersonStatementPdf(
+  statement: PersonCycleStatement,
+  options: StatementViewOptions & { orientation?: StatementOrientation; amountFonts?: StatementAmountFonts | null } = {},
+): Promise<Uint8Array> {
+  const { portrait, PAGE_W, PAGE_H, M, PAD, TABLE_W, COLUMNS, COL_W, colX, colRight, DESC_W, STATUS_W } = pageGeometry(options.orientation ?? "landscape");
   const view = statementView(statement, options);
   const doc = await PDFDocument.create();
   doc.setTitle(pdfSafe(`${view.personName} - People Statement - ${view.cycleLabel}`));
@@ -155,6 +172,15 @@ export async function renderPersonStatementPdf(statement: PersonCycleStatement, 
   doc.setProducer("FlowFi");
   const regular = await doc.embedFont(StandardFonts.Helvetica);
   const bold = await doc.embedFont(StandardFonts.HelveticaBold);
+  // Amount figures in Geist Mono (the app's figure face) when its bytes are given: even-width digits that line up
+  // down a column, and the real ₹ sign. Without them every figure stays Helvetica with "Rs.".
+  const custom = options.amountFonts ?? null;
+  if (custom) doc.registerFontkit(fontkit);
+  const amountRegular = custom ? await doc.embedFont(custom.regular, { subset: true }) : regular;
+  const amountBold = custom ? await doc.embedFont(custom.bold, { subset: true }) : bold;
+  const amountFace = (font: PDFFont) => (font === bold ? amountBold : amountRegular);
+  /** Text in the embedded figure face keeps ₹ and −; everything else goes through `pdfSafe` for WinAnsi. */
+  const encode = (s: string, font: PDFFont) => (custom && (font === amountRegular || font === amountBold) ? s : pdfSafe(s));
   const first = view.personName.split(" ")[0];
   const settled = view.direction === "settled";
   const ZERO = money(0);
@@ -163,18 +189,54 @@ export async function renderPersonStatementPdf(statement: PersonCycleStatement, 
   let page: PDFPage = doc.addPage([PAGE_W, PAGE_H]);
   let y = PAGE_H - M_TOP;
 
-  const width = (s: string, size: number, font: PDFFont = regular) => font.widthOfTextAtSize(pdfSafe(s), size);
-  const text = (s: string, x: number, yy: number, size: number, font: PDFFont = regular, color: RGB = INK) =>
-    page.drawText(pdfSafe(s), { x, y: yy, size, font, color });
+  /**
+   * With the figure face loaded, a sentence's amounts ("₹1,715.25") are drawn in it too, so ₹ reads the same in
+   * prose as in the columns: the string is split into text runs and amount runs.
+   */
+  const runs = (s: string, font: PDFFont): { s: string; font: PDFFont }[] =>
+    custom && (font === regular || font === bold) && s.includes("₹")
+      ? s.split(/(₹[\d,]+(?:\.\d+)?)/).filter(Boolean).map((part) => ({ s: part, font: part.startsWith("₹") ? amountFace(font) : font }))
+      : [{ s, font }];
+  /** `pdfSafe`, except that ₹ survives when the figure face can draw it. */
+  const safeText = (t: string) => (custom ? pdfSafe(t.replace(/₹/g, "¤")).replace(/¤/g, "₹") : pdfSafe(t));
+  /** Shortens to `w` with "...", measuring mixed text and amount runs. */
+  const fit = (t: string, font: PDFFont, size: number, w: number) => {
+    let s = safeText(t);
+    while (s.length > 1 && width(s, size, font) > w) s = `${s.slice(0, -4)}...`;
+    return s;
+  };
+  const width = (s: string, size: number, font: PDFFont = regular) => runs(s, font).reduce((w, r) => w + r.font.widthOfTextAtSize(encode(r.s, r.font), size), 0);
+  const text = (s: string, x: number, yy: number, size: number, font: PDFFont = regular, color: RGB = INK) => {
+    let cx = x;
+    for (const r of runs(s, font)) {
+      page.drawText(encode(r.s, r.font), { x: cx, y: yy, size, font: r.font, color });
+      cx += r.font.widthOfTextAtSize(encode(r.s, r.font), size);
+    }
+  };
   const textRight = (s: string, right: number, yy: number, size: number, font: PDFFont = regular, color: RGB = INK) =>
     text(s, right - width(s, size, font), yy, size, font, color);
-  const box = (x: number, yy: number, w: number, h: number, fill: RGB, border?: RGB, borderWidth = 0.6) =>
-    page.drawRectangle({ x, y: yy, width: w, height: h, color: fill, ...(border ? { borderColor: border, borderWidth } : {}) });
-  /** A softly rounded rectangle (bottom-left at x, yy). */
-  const roundBox = (x: number, yy: number, w: number, h: number, r: number, fill: RGB, border?: RGB, borderWidth = 0.6) => {
+  const box = (x: number, yy: number, w: number, h: number, fill: RGB) => page.drawRectangle({ x, y: yy, width: w, height: h, color: fill });
+  /**
+   * A rounded rectangle (bottom-left at x, yy). `corners` picks which corners round — "top" for a panel's
+   * header cell, "all" for a panel or a chip. With no fill it is an outline only.
+   */
+  const roundBox = (x: number, yy: number, w: number, h: number, r: number, fill?: RGB, border?: RGB, borderWidth = 0.6, corners: "all" | "top" | "bottom" = "all") => {
     const rr = Math.min(r, w / 2, h / 2);
-    const path = `M ${rr} 0 H ${w - rr} A ${rr} ${rr} 0 0 1 ${w} ${rr} V ${h - rr} A ${rr} ${rr} 0 0 1 ${w - rr} ${h} H ${rr} A ${rr} ${rr} 0 0 1 0 ${h - rr} V ${rr} A ${rr} ${rr} 0 0 1 ${rr} 0 Z`;
-    page.drawSvgPath(path, { x, y: yy + h, color: fill, ...(border ? { borderColor: border, borderWidth } : {}) });
+    const top = corners !== "bottom" ? rr : 0;
+    const bot = corners !== "top" ? rr : 0;
+    // SVG space: y grows downward from the path origin (the box's top-left).
+    const path = [
+      `M ${top} 0 H ${w - top}`,
+      top ? `A ${top} ${top} 0 0 1 ${w} ${top}` : "",
+      `V ${h - bot}`,
+      bot ? `A ${bot} ${bot} 0 0 1 ${w - bot} ${h}` : "",
+      `H ${bot}`,
+      bot ? `A ${bot} ${bot} 0 0 1 0 ${h - bot}` : "",
+      `V ${top}`,
+      top ? `A ${top} ${top} 0 0 1 ${top} 0` : "",
+      "Z",
+    ].join(" ");
+    page.drawSvgPath(path, { x, y: yy + h, ...(fill ? { color: fill } : {}), ...(border ? { borderColor: border, borderWidth } : {}) });
   };
   const vline = (x: number, top: number, bottom: number, color = RULE, thickness = 0.5) =>
     page.drawLine({ start: { x, y: bottom }, end: { x, y: top }, thickness, color });
@@ -185,20 +247,23 @@ export async function renderPersonStatementPdf(statement: PersonCycleStatement, 
     while (sz > min && width(s, sz, font) > maxW) sz -= 0.25;
     return sz;
   };
-  const amountRight = (s: string, right: number, yy: number, size: number, font: PDFFont, color: RGB, colW: number) =>
-    textRight(s, right, yy, sizeToFit(s, size, font, colW - 2 * PAD), font, color);
-  const pillWidth = (label: string, size: number = T.badge) => bold.widthOfTextAtSize(pdfSafe(label), size) + 9;
-  /** A small rounded badge whose text baseline is `yy`. */
-  const pill = (label: string, x: number, yy: number, tone: Tone, size: number = T.badge) => {
-    const w = pillWidth(label, size);
-    roundBox(x, yy - 3.2, w, size + 5.6, 2.6, tone.fill, tone.edge, 0.5);
-    text(label, x + 4.5, yy, size, bold, tone.text);
+  const amountRight = (s: string, right: number, yy: number, size: number, font: PDFFont, color: RGB, maxW = 400) =>
+    textRight(s, right, yy, sizeToFit(s, size, amountFace(font), maxW), amountFace(font), color);
+  /** A compact status chip (pill) whose text baseline is `yy`. */
+  const chip = (label: string, x: number, yy: number, tone: Tone) => {
+    // A narrow (portrait) status column steps the chip's text down rather than cutting a status word.
+    const size = sizeToFit(label, T.chip, bold, STATUS_W - 15, 5.4);
+    const s = fit(label, bold, size, STATUS_W - 15);
+    const w = width(s, size, bold) + 15;
+    roundBox(x, yy - 3.4, w, T.chip + 6, (T.chip + 6) / 2, tone.fill, tone.edge, 0.6);
+    page.drawCircle({ x: x + 5.6, y: yy + 2, size: 1.7, color: tone.text });
+    text(s, x + 10, yy, size, bold, tone.text);
     return w;
   };
 
   /**
    * Word wrap that never truncates: a word wider than the line is broken by characters. `firstW` lets the
-   * first line run beside something (a badge) while later lines take the full width.
+   * first line run beside something while later lines take the full width.
    */
   const wrapWords = (label: string, w: number, font: PDFFont, size: number, firstW = w): string[] => {
     const lines: string[] = [];
@@ -206,527 +271,544 @@ export async function renderPersonStatementPdf(statement: PersonCycleStatement, 
     let cur = "";
     // "Rs. 5,000" is one unit (a no-break space while wrapping), so an amount never splits across lines, and a
     // " · " separator stays at the end of its line instead of starting the next.
-    const units = pdfSafe(label.replace(/\s+/g, " ")).replace(/Rs\. /g, "Rs. ").replace(/ · /g, " ·  ");
+    const units = safeText(label.replace(/\s+/g, " ")).replace(/Rs\. /g, "Rs. ").replace(/ · /g, " ·  ");
     for (const word of units.split(/ +/).filter(Boolean)) {
       let piece = word;
-      while (font.widthOfTextAtSize(piece, size) > limit() && !cur) {
+      while (width(piece, size, font) > limit() && !cur) {
         let n = piece.length - 1;
-        while (n > 1 && font.widthOfTextAtSize(piece.slice(0, n), size) > limit()) n -= 1;
+        while (n > 1 && width(piece.slice(0, n), size, font) > limit()) n -= 1;
         lines.push(piece.slice(0, n));
         piece = piece.slice(n);
       }
       const next = cur ? `${cur} ${piece}` : piece;
-      if (font.widthOfTextAtSize(next, size) <= limit()) cur = next;
+      if (width(next, size, font) <= limit()) cur = next;
       else {
         lines.push(cur);
         cur = piece;
-        while (font.widthOfTextAtSize(cur, size) > limit()) {
+        while (width(cur, size, font) > limit()) {
           let n = cur.length - 1;
-          while (n > 1 && font.widthOfTextAtSize(cur.slice(0, n), size) > limit()) n -= 1;
+          while (n > 1 && width(cur.slice(0, n), size, font) > limit()) n -= 1;
           lines.push(cur.slice(0, n));
           cur = cur.slice(n);
         }
       }
     }
     if (cur) lines.push(cur);
-    return lines.length ? lines.map((l) => l.replace(/ /g, " ")) : [""];
+    return lines.length ? lines.map((l) => l.replace(/ /g, " ")) : [""];
   };
   /** Keeps at most `max` lines; the last kept line carries the rest, shortened with "...". */
   const capLines = (lines: string[], max: number, font: PDFFont, size: number, w: number) =>
     lines.length <= max ? lines : [...lines.slice(0, max - 1), fit(lines.slice(max - 1).join(" "), font, size, w)];
 
-  // ---------------- Header (first page) ----------------
-  const BAL_W = 200;
-  const drawHeader = () => {
-    const top = y;
-    // Brand row: wordmark + tagline over a hairline with a short green accent.
-    text("FlowFi", M, top - 13, 14, bold, FOREST);
-    text("People · Expenses · Settle Up", M, top - 23, 6.6, regular, MUTED);
-    textRight("PEOPLE STATEMENT", M + TABLE_W, top - 13, T.label - 0.2, bold, MUTED);
-    textRight(`Generated ${generated}`, M + TABLE_W, top - 23, 6.6, regular, MUTED);
-    hline(M, M + TABLE_W, top - 31, RULE, 0.5);
-    box(M, top - 31.75, 36, 1.5, FOREST);
-
-    // Title, then who and which period as labelled fields, then who prepared it.
-    const leftW = TABLE_W - BAL_W - 22;
-    text("People Settlement Statement", M, top - 56, sizeToFit("People Settlement Statement", T.title, bold, leftW), bold, INK);
-    const fieldW = leftW / 2 - 8;
-    text("STATEMENT FOR", M, top - 74, T.label - 0.4, bold, MUTED);
-    text(fit(view.personName, bold, T.name - 0.5, fieldW), M, top - 87, sizeToFit(view.personName, T.name - 0.5, bold, fieldW, 8.5), bold, INK);
-    const px = M + leftW / 2;
-    text("PERIOD", px, top - 74, T.label - 0.4, bold, MUTED);
-    text(fit(view.cycleLabel, regular, 9.6, fieldW), px, top - 87, sizeToFit(view.cycleLabel, 9.6, regular, fieldW, 7), regular, INK);
-    text(fit(`Prepared by ${view.ownerName}`, regular, T.meta, leftW), M, top - 103, T.meta, regular, MUTED);
-
-    // The answer: one balance block, the strongest thing on the page.
-    const bx = M + TABLE_W - BAL_W;
-    const bTop = top - 42;
-    const bH = 66;
-    box(bx, bTop - bH, BAL_W, bH, SAGE);
-    box(bx, bTop - bH, 3, bH, FOREST);
-    const inner = BAL_W - 32;
-    text(settled ? "SETTLED" : "BALANCE DUE", bx + 17, bTop - 15, T.label + 0.2, bold, GREEN_TEXT);
-    text(view.amount, bx + 17, bTop - 41, sizeToFit(view.amount, 25, bold, inner, 10), bold, settled ? GREEN.text : INK);
-    const line = settled ? "Nothing left to settle" : view.headline;
-    const lineSize = sizeToFit(line, 8.8, regular, inner, 6.5);
-    text(fit(line, regular, lineSize, inner), bx + 17, bTop - 56, lineSize, regular, BODY);
-    y = bTop - bH - 16;
+  // ---------------- Panels: one connected outline per section per page ----------------
+  // A section (column header → rows) is one rounded panel; rows inside share rules. On a page break the
+  // panel closes on this page and reopens (with its header) on the next.
+  let panelTop: number | null = null;
+  const openPanel = () => {
+    panelTop = y;
+  };
+  const closePanel = () => {
+    if (panelTop == null) return;
+    roundBox(M, y, TABLE_W, panelTop - y, RADIUS, undefined, RULE_STRONG, 0.8);
+    panelTop = null;
+  };
+  /** The tinted header cell row at a panel's top; labels are drawn by the caller. */
+  const panelHeader = (h: number) => {
+    roundBox(M, y - h, TABLE_W, h, RADIUS, HEAD, undefined, 0, "top");
+    hline(M, M + TABLE_W, y - h, RULE_STRONG, 0.6);
   };
 
-  // ---------------- Statement summary (the cycle's reconciliation, one strip) ----------------
+  // ---------------- Header (first page) ----------------
+  const drawHeader = () => {
+    const top = y;
+    // Brand row: wordmark + document name, generated date on the right, a hairline with a short navy accent.
+    text("FlowFi", M, top - 11, 13, bold, NAVY);
+    const lead = M + width("FlowFi", 13, bold) + 10;
+    vline(lead - 5, top - 2, top - 13, RULE, 0.6);
+    text("People Settlement Statement", lead, top - 11, 9.4, regular, BODY);
+    const brandEnd = lead + width("People Settlement Statement", 9.4) + 16;
+    const byline = fit(`Prepared by ${view.ownerName}  ·  Generated ${generated}`, regular, T.meta, M + TABLE_W - brandEnd);
+    textRight(byline, M + TABLE_W, top - 11, T.meta, regular, MUTED);
+    hline(M, M + TABLE_W, top - 19, RULE, 0.6);
+    box(M, top - 19.8, 34, 1.6, NAVY);
+
+    // Who, which period, as of when — labelled fields across the width.
+    const fy = top - 31;
+    const vy = top - 45;
+    const nameW = TABLE_W * 0.44;
+    text("STATEMENT FOR", M, fy, T.label - 0.3, bold, MUTED);
+    text(fit(view.personName, bold, 15, nameW), M, vy, sizeToFit(view.personName, 15, bold, nameW, 9), bold, INK);
+    const px = M + TABLE_W * 0.47;
+    const ax = M + TABLE_W * 0.76;
+    text("PERIOD", px, fy, T.label - 0.3, bold, MUTED);
+    text(view.cycleLabel, px, vy, sizeToFit(view.cycleLabel, 10.5, regular, ax - px - 12, 7), regular, INK);
+    text("AMOUNTS AS OF", ax, fy, T.label - 0.3, bold, MUTED);
+    text(view.asOf, ax, vy, sizeToFit(view.asOf, 10.5, regular, M + TABLE_W - ax, 7), regular, INK);
+    y = top - 54;
+  };
+
+  // ---------------- Statement summary: one panel that reads as a sum, ending in the balance ----------------
   const drawSummary = () => {
     const cells = statementSummaryCells(view);
-    const h = 42;
-    const currentW = 108;
-    const restW = (TABLE_W - currentW) / (cells.length - 1);
-    hline(M, M + TABLE_W, y, RULE_STRONG, 0.5);
-    hline(M, M + TABLE_W, y - h, RULE, 0.5);
-    let x = M;
-    cells.forEach((c, i) => {
-      const w = c.current ? currentW : restW;
-      if (c.current) box(x, y - h + 0.25, w, h - 0.5, SAGE);
-      else if (i > 0) vline(x, y - 9, y - h + 9, ROW_RULE, 0.5);
-      const tx = x + (i === 0 ? 0 : 10);
-      const cw = w - (i === 0 ? 8 : 14);
-      text(fit(c.label.toUpperCase(), bold, T.label - 0.2, cw), tx, y - 11.5, T.label - 0.2, bold, c.current ? FOREST : MUTED);
+    const recon = cells.filter((c) => !c.current && !c.advance);
+    const primary = cells.find((c) => c.current)!;
+    const advance = cells.find((c) => c.advance) ?? null;
+    /** One figure: label, value, note — the primary result larger, in navy. `withOp` draws its "+ / − / =" before it. */
+    const cell = (c: (typeof cells)[number], x: number, w: number, top: number, h: number, withOp: boolean) => {
+      if (c.current) {
+        // The one primary result: navy tint, navy edge, the largest figure on the page.
+        box(x, top - h + 0.3, w, h - 0.6, NAVY_TINT);
+        box(x, top - h + 0.3, 2.4, h - 0.6, NAVY);
+      } else if (c.advance) box(x, top - h + 0.3, w - 0.3, h - 0.6, ADVANCE_TINT);
+      else if (x > M) vline(x, top - 9, top - h + 9, RULE, 0.5);
+      const op = withOp ? c.op : null;
+      const ix = x + (op && !c.current ? 20 : 14);
+      const iw = x + w - ix - 8;
+      const valueY = c.current ? top - 31 : top - 27.5;
+      if (op) {
+        // The operator sits on the boundary, in line with the figures. A true minus is drawn as an en dash
+        // (WinAnsi has no U+2212; `pdfSafe` would shrink it to a hyphen).
+        const glyph = op === "−" ? "–" : op;
+        page.drawText(glyph, { x: c.current ? x - 9 : x + 6, y: valueY - 0.5, size: 11, font: regular, color: MUTED });
+      }
+      text(fit(c.label.toUpperCase(), bold, T.label, iw), ix, top - 12.5, T.label, bold, c.current ? NAVY : c.advance ? ADVANCE : MUTED);
       const zero = c.value === ZERO;
-      const size = sizeToFit(c.value, c.current ? 12 : 9.6, bold, cw, 6.5);
-      const color = c.current ? (settled ? GREEN.text : FOREST) : zero ? MUTED : c.advance ? GREEN.text : INK;
-      text(c.value, tx, y - 24.5, size, zero && !c.current ? regular : bold, color);
-      if (c.note) text(fit(c.note, regular, 6.1, cw), tx, y - 34, 6.1, regular, MUTED);
-      x += w;
-    });
-    y -= h;
-    if (view.cashNote) {
+      if (c.current) {
+        text(c.value, ix, valueY, sizeToFit(c.value, 17, amountBold, iw, 9), amountBold, settled ? PAID_TEXT : NAVY);
+        text(fit(c.note, regular, 7.6, iw), ix, top - 42.5, 7.6, regular, BODY);
+      } else {
+        text(c.value, ix, valueY, sizeToFit(c.value, 10.5, amountBold, iw, 6.5), zero ? amountRegular : amountBold, c.advance ? ADVANCE : zero ? MUTED : INK);
+        if (c.note) text(fit(c.note, regular, T.caption, iw), ix, top - 37.5, T.caption, regular, MUTED);
+      }
+    };
+    const top = y;
+    if (portrait) {
+      // Portrait: the answer (and any advance held apart) across the top, the sum that produces it underneath.
+      const topH = 50;
+      const sumH = 42;
+      roundBox(M, top - topH - sumH, TABLE_W, topH + sumH, RADIUS, undefined, RULE_STRONG, 0.6);
+      const advW = advance ? 176 : 0;
+      cell(primary, M, TABLE_W - advW, top, topH, false);
+      if (advance) cell(advance, M + TABLE_W - advW, advW, top, topH, false);
+      hline(M, M + TABLE_W, top - topH, RULE, 0.5);
+      recon.forEach((c, i) => cell(c, M + (i * TABLE_W) / recon.length, TABLE_W / recon.length, top - topH, sumH, true));
+      y = top - topH - sumH;
+    } else {
+      // Landscape: one row read left to right as a sum, ending in the balance; an advance is held apart after it.
+      const h = 50;
+      const PRIMARY_W = 196;
+      const ADVANCE_W = 150;
+      const reconW = (TABLE_W - PRIMARY_W - (advance ? ADVANCE_W : 0)) / Math.max(1, recon.length);
+      roundBox(M, top - h, TABLE_W, h, RADIUS, undefined, RULE_STRONG, 0.6);
+      recon.forEach((c, i) => cell(c, M + i * reconW, reconW, top, h, true));
+      cell(primary, M + recon.length * reconW, PRIMARY_W, top, h, true);
+      if (advance) cell(advance, M + recon.length * reconW + PRIMARY_W, ADVANCE_W, top, h, false);
+      y = top - h;
+    }
+    // Settlement progress: how much of the total due is already cleared, as one thin bar with its words.
+    const p = view.settleProgress;
+    if (p) {
+      const by = y - 13;
+      text("SETTLEMENT", M + 2, by, T.label, bold, MUTED);
+      const bx = M + 2 + width("SETTLEMENT", T.label, bold) + 10;
+      const labelW = width(p.label, T.meta + 0.3, regular);
+      const bw = Math.max(60, TABLE_W * 0.5 - (bx - M));
+      roundBox(bx, by - 0.5, bw, 4.5, 2.25, HEAD, RULE, 0.4);
+      if (p.ratio > 0) roundBox(bx, by - 0.5, Math.max(4.5, bw * p.ratio), 4.5, 2.25, p.ratio >= 1 ? PAID_TEXT : NAVY);
+      text(p.label, bx + bw + 10, by, T.meta + 0.3, regular, p.ratio >= 1 ? PAID_TEXT : BODY);
+      if (view.cashNote) {
+        const room = M + TABLE_W - (bx + bw + 10 + labelW + 20);
+        if (room > 80) textRight(fit(view.cashNote, regular, T.meta, room), M + TABLE_W, by, T.meta, regular, MUTED);
+        else {
+          textRight(fit(view.cashNote, regular, T.meta, TABLE_W), M + TABLE_W, by - 11, T.meta, regular, MUTED);
+          y -= 11;
+        }
+      }
+      y -= 19;
+    } else if (view.cashNote) {
       textRight(fit(view.cashNote, regular, T.meta, TABLE_W), M + TABLE_W, y - 10, T.meta, regular, MUTED);
       y -= 10;
     }
   };
 
-  // ---------------- Continued header + table header (repeated on every page) ----------------
+  // ---------------- Continued header + column header (repeated on every page) ----------------
   /** Pages after the first: compact, but enough context that a printed page stands on its own. */
   const drawContinued = () => {
-    text("FlowFi", M, y - 10, 9, bold, FOREST);
-    const lead = width("FlowFi", 9, bold) + 8;
-    const pending = `${view.current.label} ${view.current.value}`;
-    const pendingW = width(pending, 8.4, bold);
-    text(fit(`People Settlement Statement  ·  ${view.personName}`, regular, 7.4, TABLE_W - lead - pendingW - 16), M + lead, y - 10, 7.4, regular, BODY);
-    textRight(pending, M + TABLE_W, y - 10, 8.4, bold, settled ? GREEN.text : FOREST);
-    text(fit(view.cycleLabel, regular, 6.8, TABLE_W - 80), M + lead, y - 19.5, 6.8, regular, MUTED);
-    textRight("continued", M + TABLE_W, y - 19.5, 6.6, regular, MUTED);
-    hline(M, M + TABLE_W, y - 26, RULE, 0.5);
-    y -= 34;
+    text("FlowFi", M, y - 10, 9.5, bold, NAVY);
+    const lead = width("FlowFi", 9.5, bold) + 8;
+    const pendingW = width(`${view.current.label} `, 8.4, bold) + width(view.current.value, 8.4, amountBold);
+    text(fit(`People Settlement Statement  ·  ${view.personName}  ·  ${view.cycleLabel}`, regular, 7.6, TABLE_W - lead - pendingW - 70), M + lead, y - 10, 7.6, regular, BODY);
+    textRight(view.current.value, M + TABLE_W, y - 10, 8.4, amountBold, settled ? PAID_TEXT : NAVY);
+    textRight(`${view.current.label} `, M + TABLE_W - width(view.current.value, 8.4, amountBold), y - 10, 8.4, bold, settled ? PAID_TEXT : NAVY);
+    textRight("continued", M + TABLE_W - pendingW - 10, y - 10, T.caption, regular, MUTED);
+    hline(M, M + TABLE_W, y - 16, RULE, 0.6);
+    y -= 24;
   };
   const drawTableHeader = () => {
-    const h = 16;
-    box(M, y - h, TABLE_W, h, HEAD_TINT);
-    hline(M, M + TABLE_W, y - h, RULE_STRONG, 0.5);
+    openPanel();
+    panelHeader(HEADER_H);
     COLUMNS.forEach((c, i) => {
-      const x = colX(i);
-      const label = c.label.toUpperCase();
-      if (c.align === "right") textRight(label, x + COL_W[i] - PAD, y - 10.4, T.label - 0.2, bold, MUTED);
-      else text(label, x + PAD, y - 10.4, T.label - 0.2, bold, MUTED);
+      // The Amount column names whose share it is when that holds for every row ("SHAMBU'S SHARE").
+      const label = fit((i === 4 ? view.amountHeader : c.label).toUpperCase(), bold, T.label, COL_W[i] - 2 * PAD);
+      if (c.align === "right") textRight(label, colRight(i), y - 11, T.label, bold, BODY);
+      else text(label, colX(i) + PAD, y - 11, T.label, bold, BODY);
     });
-    y -= h;
+    for (const i of [3, 7]) vline(colX(i), y - 3, y - HEADER_H + 3, RULE_STRONG, 0.5);
+    y -= HEADER_H;
   };
 
-  const newPage = (withTableHeader: boolean) => {
+  type PanelKind = "table" | "payments" | null;
+  let panelKind: PanelKind = null;
+  let redrawPanelHeader: () => void = () => {};
+  const newPage = () => {
+    closePanel();
     page = doc.addPage([PAGE_W, PAGE_H]);
     y = PAGE_H - M_TOP;
     drawContinued();
-    if (withTableHeader) drawTableHeader();
+    if (panelKind) redrawPanelHeader();
   };
-  const ensure = (h: number, withTableHeader = true) => {
-    // A unit (a transaction with its details, or a heading with its first transaction) is never split across pages.
-    if (y - h < CONTENT_BOTTOM) newPage(withTableHeader);
+  /** A unit (a transaction with its shares, a heading with what follows it) is never split across pages. */
+  const ensure = (h: number) => {
+    if (y - h < CONTENT_BOTTOM) newPage();
   };
 
-  /**
-   * "Total price ₹4,000 · 4-way split · Amma's share ₹1,000" as one or more lines that fit `width`:
-   * the bold total leads the first line, and the remaining " · " parts flow on, wrapping whole.
-   * Only for a legacy split whose Expense isn't available (no full breakdown to draw).
-   */
-  const NOTE_SIZE = T.support;
-  const wrapSplitNote = (note: string, w: number): { head: string; rest: string }[] => {
-    const [head, ...parts] = note.split(" · ");
-    const lines: { head: string; rest: string }[] = [{ head, rest: "" }];
-    for (const part of parts) {
-      const cur = lines[lines.length - 1];
-      const candidate = cur.head || cur.rest ? `${cur.rest} · ${part}` : part;
-      const used = (cur.head ? width(cur.head, NOTE_SIZE, bold) : 0) + width(candidate, NOTE_SIZE);
-      if (used <= w) cur.rest = candidate;
-      else lines.push({ head: "", rest: part });
+  // ---------------- Shares strip (part of a split row) ----------------
+  // A genuine split (2+ people) gets one connected line under its row: every stored allocation as
+  // "Name ₹amount", the recipient's in bold. Names wrap by word (never cut), an amount stays with its name.
+  const STRIP_X = colX(2) + PAD;
+  const STRIP_LABEL = "SHARES";
+  const STRIP_FLOW_X = STRIP_X + width(STRIP_LABEL, T.label - 0.3, bold) + 8;
+  const STRIP_RIGHT = M + TABLE_W - PAD;
+  const layoutShares = (a: SplitAllocation): Run[][] => {
+    const maxW = STRIP_RIGHT - STRIP_FLOW_X;
+    const SEP = 14;
+    const lines: Run[][] = [[]];
+    let x = 0;
+    const place = (r: Omit<Run, "x">, gap: number) => {
+      const w = width(r.text, SHARE_SIZE, r.font);
+      if (x > 0 && x + gap + w > maxW) {
+        lines.push([]);
+        x = 0;
+        gap = 0;
+      }
+      lines[lines.length - 1].push({ ...r, x: x + gap });
+      x += gap + w;
+    };
+    const units: Omit<Run, "x">[][] = a.participants.map((p) => [
+      { text: p.label, font: p.isFocus ? bold : regular, color: p.isFocus ? INK : BODY },
+      { text: money(p.amount), font: amountBold, color: p.amount === 0 ? MUTED : INK },
+    ]);
+    if (!a.reconciles) units.push([{ text: `Allocated ${money(a.allocated)} of ${money(a.original)}`, font: regular, color: MUTED }]);
+    for (const unit of units) {
+      const unitW = unit.reduce((s, r, i) => s + width(r.text, SHARE_SIZE, r.font) + (i > 0 ? 4 : 0), 0);
+      const sep = x > 0 ? SEP : 0;
+      if (x > 0 && x + sep + unitW > maxW && unitW <= maxW) {
+        lines.push([]);
+        x = 0;
+      }
+      if (unitW <= maxW) {
+        unit.forEach((r, i) => place(r, i === 0 ? (x > 0 ? SEP : 0) : 4));
+        continue;
+      }
+      // Wider than a whole line (a very long name): its words flow, the amount stays with the last word.
+      const [name, ...rest] = unit;
+      const words = pdfSafe(name.text).split(/\s+/);
+      words.forEach((wd, i) => place({ ...name, text: wd }, i === 0 ? (x > 0 ? SEP : 0) : 3));
+      rest.forEach((r) => place(r, 4));
     }
     return lines;
   };
-
-  // ---------------- Split details (part of its row) ----------------
-  // Genuine splits (2+ people) get a light sage panel: the bill and who owes what on one line, then every stored
-  // allocation as "Name ₹amount", the recipient's cell tinted. An expense assigned in full (or a legacy one
-  // without participants) needs no panel — one detail line in the description says it all.
-  const PANEL_X = colX(2) + PAD - 4;
-  const PANEL_W = M + TABLE_W - PAD - PANEL_X;
-  const PANEL_HEAD = 15;
-  const NAME_SIZE = 7.2;
-  const NAME_LH = 8.4;
-  const AMOUNT_SIZE = 7.6;
-  const DETAIL_LABEL = T.label - 0.4;
-  const isCompact = (a: SplitAllocation) => a.participants.length <= 1;
-  const layoutAllocation = (a: SplitAllocation) => {
-    const n = a.participants.length;
-    const cols = Math.min(MAX_PANEL_COLS, allocationColumns(n));
-    const cellW = PANEL_W / Math.max(1, cols);
-    const fontOf = (focus: boolean) => (focus ? bold : regular);
-    // "Name ₹amount" on one line while every name's words fit beside the amount; otherwise each cell
-    // stacks the name (wrapped by word) above its amount, so no name is ever broken or hidden.
-    const inlineFits = a.participants.every((p) => {
-      const room = cellW - 2 * PAD - width(money(p.amount), AMOUNT_SIZE, bold) - 6;
-      return pdfSafe(p.label)
-        .split(/\s+/)
-        .every((word) => fontOf(p.isFocus).widthOfTextAtSize(word, NAME_SIZE) <= room);
+  const sharesH = (lines: Run[][]) => lines.length * SHARE_LH + 2 * SHARE_PAD - 1;
+  const drawShares = (lines: Run[][], top: number) => {
+    const h = sharesH(lines);
+    box(colX(2), top - h, M + TABLE_W - colX(2) - 0.6, h, SPLIT_TINT);
+    hline(colX(2), M + TABLE_W - 0.6, top, NAVY_RULE, 0.6);
+    const base = top - SHARE_PAD - SHARE_SIZE + 0.6;
+    text(STRIP_LABEL, STRIP_X, base + 0.3, T.label - 0.3, bold, SPLIT);
+    lines.forEach((line, li) => {
+      for (const r of line) text(r.text, STRIP_FLOW_X + r.x, base - li * SHARE_LH, SHARE_SIZE, r.font, r.color);
     });
-    const names = a.participants.map((p) =>
-      wrapWords(p.label, inlineFits ? cellW - 2 * PAD - width(money(p.amount), AMOUNT_SIZE, bold) - 6 : cellW - 2 * PAD, fontOf(p.isFocus), NAME_SIZE),
-    );
-    const gridRows = Math.ceil(n / cols);
-    const rowHeights = Array.from({ length: gridRows }, (_, r) => {
-      const lines = Math.max(1, ...names.slice(r * cols, r * cols + cols).map((l) => l.length));
-      return 4.5 + lines * NAME_LH + (inlineFits ? 0 : 9) + 2;
-    });
-    const gridH = rowHeights.reduce((s, h) => s + h, 0);
-    const mismatch = a.reconciles || n === 0 ? 0 : 11;
-    const panelH = PANEL_HEAD + gridH + mismatch;
-    return { cols, cellW, names, rowHeights, inlineFits, panelH };
-  };
-  /** Draws "ORIGINAL PURCHASE ₹882.96 · 4-way split" from `x`; returns where it ends. */
-  const purchaseLine = (a: SplitAllocation, x: number, yy: number, tail: string | null) => {
-    text("ORIGINAL PURCHASE", x, yy, DETAIL_LABEL, bold, MUTED);
-    x += width("ORIGINAL PURCHASE", DETAIL_LABEL, bold) + 4;
-    const original = money(a.original);
-    text(original, x, yy, 7.6, bold, INK);
-    x += width(original, 7.6, bold);
-    if (tail) {
-      x += 5;
-      text("·", x, yy, 7, regular, MUTED);
-      x += width("·", 7) + 5;
-      text(tail, x, yy, 7, regular, BODY);
-      x += width(tail, 7);
-    }
-    return x;
-  };
-  const drawAllocation = (a: SplitAllocation, l: ReturnType<typeof layoutAllocation>, top: number, row: StatementViewRow) => {
-    box(PANEL_X, top - l.panelH, PANEL_W, l.panelH, SAGE_SOFT);
-    box(PANEL_X, top - l.panelH, 1.5, l.panelH, SAGE_RULE);
-    const hx = PANEL_X + PAD;
-    const hy = top - 10;
-    // Header: SPLIT DETAILS  ORIGINAL PURCHASE ₹882.96 · 4-way split ………… Sojan owes Abin ₹220.74
-    text("SPLIT DETAILS", hx, hy, DETAIL_LABEL, bold, GREEN_TEXT);
-    const x = purchaseLine(a, hx + width("SPLIT DETAILS", DETAIL_LABEL, bold) + 10, hy, splitCountLabel(a));
-    if (row.statusDetail) {
-      const room = PANEL_X + PANEL_W - PAD - x - 14;
-      const tone = STATUS[row.statusTone];
-      const color = tone === GREY ? INK : tone.text;
-      if (room > 30) textRight(fit(row.statusDetail, bold, 7.2, room), PANEL_X + PANEL_W - PAD, hy, 7.2, bold, color);
-    }
-    let rowTop = top - PANEL_HEAD;
-    hline(PANEL_X + PAD, PANEL_X + PANEL_W - PAD, rowTop, SAGE_RULE, 0.4);
-    for (let r = 0; r < l.rowHeights.length; r += 1) {
-      const rh = l.rowHeights[r];
-      if (r > 0) hline(PANEL_X + PAD, PANEL_X + PANEL_W - PAD, rowTop, SAGE_RULE, 0.3);
-      a.participants.slice(r * l.cols, r * l.cols + l.cols).forEach((p, c) => {
-        const i = r * l.cols + c;
-        const cx = PANEL_X + c * l.cellW;
-        if (p.isFocus) box(cx + 0.5, rowTop - rh + 0.5, l.cellW - 1, rh - 1, FOCUS_TINT);
-        let ty = rowTop - 4.5 - NAME_SIZE + 0.6;
-        const nameFont = p.isFocus ? bold : regular;
-        for (const line of l.names[i]) {
-          text(line, cx + PAD, ty, NAME_SIZE, nameFont, p.isFocus ? INK : BODY);
-          ty -= NAME_LH;
-        }
-        const amount = money(p.amount);
-        const amountColor = p.amount === 0 ? MUTED : INK;
-        if (l.inlineFits) textRight(amount, cx + l.cellW - PAD, rowTop - 4.5 - NAME_SIZE + 0.6, AMOUNT_SIZE, bold, amountColor);
-        else text(amount, cx + PAD, ty - 0.6, AMOUNT_SIZE, bold, amountColor);
-      });
-      rowTop -= rh;
-    }
-    if (!a.reconciles) text(`Allocated ${money(a.allocated)} of ${money(a.original)}`, hx, top - l.panelH + 4, T.meta - 0.4, regular, MUTED);
   };
 
   // ---------------- Rows ----------------
-  // Each transaction is one unit: the description leads (bold), then a quiet meta line (type · cycle), then the
-  // direction note; money sits right-aligned in its columns; the status pill and its detail on the right.
-  const META_SIZE = 6.7;
-  const META_LH = 8.6;
+  // Each transaction is one unit: the title (regular — the figures carry the weight), a quiet meta line (type ·
+  // what it means · cycle), then the money in fixed columns: Original only when it differs from the Amount, the
+  // Amount (captioned with whose share it is only beside an Original), Paid, Remaining, and the status chip.
   const layoutRow = (row: StatementViewRow) => {
     const a = row.allocation ?? null;
-    const compact = a != null && isCompact(a);
-    const strip = a && !compact ? layoutAllocation(a) : null;
-    const titleLines = capLines(wrapWords(row.title, DESC_W, bold, T.desc), 3, bold, T.desc, DESC_W);
-    const typeLabel = fit(row.typeLabel, regular, META_SIZE, DESC_W);
-    const typeW = width(typeLabel, META_SIZE);
-    const from = row.carried && row.fromCycle ? `From ${row.fromCycle}` : "";
-    const sepW = width("  ·  ", META_SIZE);
-    const besideW = DESC_W - typeW - sepW;
-    const fromBeside = from !== "" && width(from.split(" ")[0], META_SIZE) <= besideW;
-    const fromLines = from ? wrapWords(from, DESC_W, regular, META_SIZE, fromBeside ? besideW : DESC_W) : [];
-    // A split drawn with its details needs no "Sojan's share of a split expense": the type, the Amount caption
-    // and the tinted cell already say it.
-    const relation = a && row.kind === "split" ? "" : row.relation;
-    const relationLines = relation ? capLines(wrapWords(relation, DESC_W, regular, T.support), 2, regular, T.support, DESC_W) : [];
-    const splitLines = row.splitNote && !a ? wrapSplitNote(row.splitNote, DESC_W) : [];
-    // An expense assigned to one person is a plain transaction: its Amount already is that person's amount, so
-    // no bill line, no share caption. Only a legacy split without its participant list keeps one bill line
-    // ("ORIGINAL PURCHASE ₹750 · Split expense") — the one place its purchase total appears — and stored
-    // allocations that don't add up still say so.
-    const assignedOnly = compact && a.participants.length === 1;
-    const billLine = compact && a.participants.length === 0;
-    const mismatch = compact && !a.reconciles && a.participants.length > 0;
-    const compactLines = (billLine ? 1 : 0) + (mismatch ? 1 : 0);
-    const metaOffset = LINE1 + (titleLines.length - 1) * TITLE_LH + 10;
-    const metaLines = fromBeside ? fromLines.length : 1 + fromLines.length;
-    const descBottom =
-      metaOffset + (Math.max(1, metaLines) - 1) * META_LH + (relationLines.length + splitLines.length) * SUPPORT_LH + (compactLines ? compactLines * SUPPORT_LH + 2 : 0);
-    // The status detail sits under the pill — unless the split panel states it, or it would only repeat the
-    // direction line beside it and the Paid / Remaining figures ("AMMA owes ABIN ₹50.59").
-    const repeatsRow = relationLines.length > 0 && REPEATS_COLUMNS.has(row.statusTone);
-    const statusLines =
-      row.statusDetail && !strip && !repeatsRow ? capLines(wrapWords(row.statusDetail, STATUS_W, regular, T.support), 3, regular, T.support, STATUS_W) : [];
-    const statusBottom = LINE1 + LINE2_GAP + (statusLines.length - 1) * SUPPORT_LH;
-    const amountBottom = LINE1 + 9;
-    const mainH = Math.max(descBottom, statusBottom, amountBottom) + 9;
-    const h = mainH + (strip ? strip.panelH + 9 : 0);
-    return { a, assignedOnly, billLine, strip, titleLines, typeLabel, typeW, sepW, fromLines, fromBeside, relationLines, splitLines, mismatch, metaOffset, statusLines, mainH, h };
+    const shares = a && a.participants.length >= 2 ? layoutShares(a) : null;
+    // The narrower portrait description column wraps more, so it keeps one more line before shortening.
+    const titleLines = capLines(wrapWords(row.title, DESC_W, regular, T.title), portrait ? 4 : 3, regular, T.title, DESC_W);
+    // A legacy split (no participant list) or a single-carrier allocation that doesn't add up says so here.
+    const mismatch = a && !shares && !a.reconciles && a.participants.length > 0 ? `Allocated ${money(a.allocated)} of ${money(a.original)}` : "";
+    // The cycle a brought-forward row came from is its group heading, so the meta line never repeats it.
+    const metaLines = capLines(wrapWords(row.metaLine, DESC_W, regular, T.meta), 3, regular, T.meta, DESC_W);
+    const descBottom = LINE1 + (titleLines.length - 1) * TITLE_LH + metaLines.length * META_LH + (mismatch ? NOTE_LH : 0) + 9;
+    const noteLines = row.statusNote ? capLines(wrapWords(row.statusNote, STATUS_W, regular, T.caption), 2, regular, T.caption, STATUS_W) : [];
+    const statusBottom = LINE1 + 4 + noteLines.length * NOTE_LH + 9;
+    const amountBottom = LINE1 + (row.purchase || row.shareLabel ? 9 : 0) + 9;
+    const mainH = Math.max(descBottom, statusBottom, amountBottom, 32);
+    const h = mainH + (shares ? sharesH(shares) : 0);
+    return { shares, titleLines, metaLines, mismatch, noteLines, mainH, h };
   };
-  const drawRow = (row: StatementViewRow) => {
+  const drawRow = (row: StatementViewRow, tail = 0) => {
     const l = layoutRow(row);
-    ensure(l.h);
+    ensure(l.h + tail);
     const top = y;
     const line1 = top - LINE1;
-    const line2 = top - LINE1 - 9;
-    // # and date
-    textRight(row.no, colX(0) + COL_W[0] - PAD, line1, T.meta, regular, MUTED);
-    text(row.date, colX(1) + PAD, line1, T.body, regular, BODY);
-    // Description: title, then type · cycle, then the direction note.
+    const line2 = line1 - 9;
+    const split = row.purchase != null || l.shares != null;
+    // A split is marked by a thin slate-blue edge down the whole unit (row + shares).
+    // The Remaining column's faint band, and dividers that frame the money columns.
+    box(colX(6), top - l.mainH, COL_W[6], l.mainH, REMAIN_TINT);
+    for (const i of [3, 7]) vline(colX(i), top, top - l.mainH, RULE, 0.5);
+    if (split) box(M + 0.4, top - l.h, 2.2, l.h, SPLIT);
+    // # and date — "19 Sep"; a quieter year below only when it isn't the statement period's year.
+    textRight(row.no, colRight(0) - 1, line1, T.meta, regular, MUTED);
+    const date = statementDate(view, row.date);
+    text(date.day, colX(1) + PAD, line1, T.meta + 0.6, regular, INK);
+    if (date.year) text(date.year, colX(1) + PAD, line1 - 9, T.caption, regular, MUTED);
+    // Description: title, then the meta line.
     const dx = colX(2) + PAD;
-    l.titleLines.forEach((t, ti) => text(t, dx, line1 - ti * TITLE_LH, T.desc, bold, INK));
-    let ly = top - l.metaOffset;
-    text(l.typeLabel, dx, ly, META_SIZE, regular, GREEN_TEXT);
-    l.fromLines.forEach((f, fi) => {
-      if (fi === 0 && l.fromBeside) {
-        text("  ·  ", dx + l.typeW, ly, META_SIZE, regular, MUTED);
-        text(f, dx + l.typeW + l.sepW, ly, META_SIZE, regular, MUTED);
-      } else {
-        ly -= META_LH;
-        text(f, dx, ly, META_SIZE, regular, MUTED);
-      }
-    });
-    l.relationLines.forEach((r) => {
-      ly -= SUPPORT_LH;
-      text(r, dx, ly, T.support, regular, MUTED);
-    });
-    l.splitLines.forEach((sl) => {
-      ly -= SUPPORT_LH;
-      if (sl.head) {
-        const headW = width(sl.head, NOTE_SIZE, bold);
-        text(sl.head, dx, ly, NOTE_SIZE, bold, INK);
-        if (sl.rest) text(fit(sl.rest, regular, NOTE_SIZE, DESC_W - headW), dx + headW, ly, NOTE_SIZE, regular, MUTED);
-      } else text(fit(sl.rest, regular, NOTE_SIZE, DESC_W), dx, ly, NOTE_SIZE, regular, MUTED);
-    });
-    if (l.a && l.billLine) {
-      ly -= SUPPORT_LH + 2;
-      purchaseLine(l.a, dx, ly, splitCountLabel(l.a));
+    l.titleLines.forEach((t, ti) => text(t, dx, line1 - ti * TITLE_LH, T.title, regular, INK));
+    let ly = line1 - (l.titleLines.length - 1) * TITLE_LH - 1;
+    for (const m of l.metaLines) {
+      ly -= META_LH;
+      text(m, dx, ly, T.meta, regular, MUTED);
     }
-    if (l.a && l.mismatch) {
-      ly -= SUPPORT_LH;
-      text(`Allocated ${money(l.a.allocated)} of ${money(l.a.original)}`, dx, ly, T.meta - 0.4, regular, MUTED);
+    if (l.mismatch) text(l.mismatch, dx, ly - NOTE_LH, T.caption, regular, MUTED);
+    // Original (split only) → Amount → Paid → Remaining.
+    const maxW = (i: number) => COL_W[i] - 2 * PAD;
+    if (row.purchase) {
+      amountRight(row.purchase, colRight(3), line1, T.money, regular, BODY, maxW(3));
+      if (row.purchaseNote) textRight(fit(row.purchaseNote, regular, T.caption, maxW(3)), colRight(3), line2, T.caption, regular, MUTED);
     }
-    // Amount (named for whose share it is), Paid (context), Remaining (the figure that matters).
-    const right = (i: number) => colX(i) + COL_W[i] - PAD;
     if (row.original) {
-      amountRight(row.original, right(3), line1, T.money, bold, INK, COL_W[3]);
-      if (row.amountLabel !== "Amount" && !l.assignedOnly) textRight(fit(row.amountLabel, regular, T.support - 0.4, COL_W[3] - 2 * PAD), right(3), line2, T.support - 0.4, regular, MUTED);
-    } else textRight("-", right(3), line1, T.money, regular, MUTED);
-    if (row.paid) amountRight(row.paid, right(4), line1, T.money, regular, row.paid === ZERO ? MUTED : BODY, COL_W[4]);
-    else textRight("-", right(4), line1, T.money, regular, MUTED);
+      amountRight(row.original, colRight(4), line1, T.money + 0.2, bold, INK, maxW(4));
+      if (row.shareLabel) textRight(fit(row.shareLabel, regular, T.caption, maxW(4)), colRight(4), line2, T.caption, regular, MUTED);
+    } else textRight("-", colRight(4), line1, T.money, regular, MUTED);
+    // Nothing paid yet reads as a quiet dash, so a column of ₹0 doesn't compete with what's left to pay.
+    if (row.paid && row.paid !== ZERO) amountRight(row.paid, colRight(5), line1, T.money, regular, PAID_TEXT, maxW(5));
+    else textRight("-", colRight(5), line1, T.money, regular, MUTED);
     if (row.remaining) {
       const zero = row.remaining === ZERO;
-      const tone = zero ? MUTED : row.statusTone === "overdue" ? RED.text : INK;
-      amountRight(row.remaining, right(5), line1, zero ? T.money : T.money + 0.4, zero ? regular : bold, tone, COL_W[5]);
-    } else textRight("-", right(5), line1, T.money, regular, MUTED);
-    // Status pill + its detail.
-    pill(fit(row.status, bold, T.badge, STATUS_W - 9), colX(6) + PAD, line1, STATUS[row.statusTone]);
-    l.statusLines.forEach((s, si) => text(s, colX(6) + PAD, top - LINE1 - LINE2_GAP - si * SUPPORT_LH, T.support, regular, MUTED));
-    if (l.strip && l.a) drawAllocation(l.a, l.strip, top - l.mainH + 2, row);
+      const tone = zero ? MUTED : row.chip === "overdue" ? OVERDUE_TEXT : INK;
+      amountRight(row.remaining, colRight(6), line1, T.money + 0.2, zero ? regular : bold, tone, maxW(6));
+    } else textRight("-", colRight(6), line1, T.money, regular, MUTED);
+    // Status chip + a note only when it says something new.
+    // A partly paid row shows how far it is paid down: a thin bar under its Remaining amount.
+    if (row.progress != null) {
+      const bw = COL_W[6] - 2 * PAD - 6;
+      const bx = colRight(6) - bw;
+      roundBox(bx, line1 - 9.5, bw, 3, 1.5, WHITE, RULE, 0.4);
+      roundBox(bx, line1 - 9.5, Math.max(3, bw * row.progress), 3, 1.5, CHIP.partial.edge);
+    }
+    chip(row.status, colX(7) + PAD, line1, CHIP[row.chip]);
+    l.noteLines.forEach((s, si) => text(s, colX(7) + PAD, line1 - 11 - si * NOTE_LH, T.caption, regular, MUTED));
+    if (l.shares) drawShares(l.shares, top - l.mainH);
     y = top - l.h;
-    hline(M, M + TABLE_W, y, ROW_RULE, 0.5);
+    hline(M, M + TABLE_W, y, RULE, 0.6);
   };
 
-  // ---------------- Section dividers (each kept with what follows it) ----------------
+  // ---------------- Section rows (inside the table panel, each kept with what follows it) ----------------
+  const { previous, showPrevious, groupOf } = statementSections(view);
   /** The carry-forward line: the previous balance on its own, before the obligations it is made of. */
-  const { previous, showPrevious, byMonth } = statementSections(view);
   const carryRow = (next: number) => {
     ensure(CARRY_H + next);
-    box(M, y - CARRY_H, TABLE_W, CARRY_H, CARRY_TINT);
-    box(M, y - CARRY_H, 2.4, CARRY_H, SLATE.edge);
-    hline(M, M + TABLE_W, y - CARRY_H, RULE, 0.5);
-    text(STATEMENT_COPY.carried.label.toUpperCase(), M + PAD + 2, y - 12, T.label + 0.4, bold, SLATE.text);
+    box(M + 0.3, y - CARRY_H, TABLE_W - 0.6, CARRY_H, SURFACE);
+    text(STATEMENT_COPY.carried.label.toUpperCase(), colX(2) + PAD, y - 11.5, T.label + 0.3, bold, CHIP.carried.text);
     const note = [STATEMENT_COPY.carried.note, previous?.side].filter(Boolean).join("  ·  ");
-    text(fit(note, regular, T.support, colX(3) - M - 2 * PAD), M + PAD + 2, y - 21, T.support, regular, MUTED);
-    if (previous) amountRight(previous.value, colX(5) + COL_W[5] - PAD, y - 12, T.money + 0.6, bold, INK, COL_W[5]);
-    pill("Carry forward", colX(6) + PAD, y - 12, SLATE);
+    text(fit(note, regular, T.meta, colX(3) - colX(2) - 2 * PAD), colX(2) + PAD, y - 20.5, T.meta, regular, MUTED);
+    if (previous) amountRight(previous.value, colRight(6), y - 11.5, T.money + 0.4, bold, INK, COL_W[6] - 2 * PAD);
+    chip("Brought forward", colX(7) + PAD, y - 11.5, CHIP.carried);
     y -= CARRY_H;
+    hline(M, M + TABLE_W, y, RULE, 0.5);
   };
-  /** THIS CYCLE: a section divider (label, the cycle, a green rule) — and, when nothing is new, the notice itself. */
+  /** THIS CYCLE: a navy-tinted divider row (label + the cycle) — and, when nothing is new, the notice itself. */
   const cycleBand = (note: string, next: number) => {
-    ensure(10 + SECTION_H + next);
-    y -= 10;
+    ensure(SECTION_H + next);
+    box(M + 0.3, y - SECTION_H, TABLE_W - 0.6, SECTION_H, NAVY_TINT);
     const l = STATEMENT_COPY.current.toUpperCase();
-    text(l, M + 1, y - 10, T.label + 0.6, bold, FOREST);
-    const lw = width(l, T.label + 0.6, bold);
-    text(fit(note, regular, T.meta, TABLE_W - lw - 12), M + 1 + lw + 10, y - 10, T.meta, regular, BODY);
-    hline(M, M + TABLE_W, y - 15, FOREST, 0.8);
+    text(l, colX(2) + PAD, y - 12, T.label + 0.5, bold, NAVY);
+    const lw = width(l, T.label + 0.5, bold);
+    text(fit(note, regular, T.meta, TABLE_W - lw - 120), colX(2) + PAD + lw + 10, y - 12, T.meta, regular, BODY);
     y -= SECTION_H;
+    hline(M, M + TABLE_W, y, NAVY_RULE, 0.6);
   };
-  /** Month heading: a small uppercase label and a thin sage rule — enough to scan by, never a block. */
+  /** Group heading (a brought-forward cycle, or a month): a small uppercase label on a light surface row. */
   const monthHeading = (month: string, next: number) => {
     ensure(MONTH_H + next);
-    const m = month.toUpperCase();
-    text(m, M + 1, y - 13, T.label + 0.3, bold, GREEN_TEXT);
-    hline(M + width(m, T.label + 0.3, bold) + 10, M + TABLE_W, y - 10.8, SAGE_RULE, 0.5);
+    box(M + 0.3, y - MONTH_H, TABLE_W - 0.6, MONTH_H, SURFACE);
+    text(month.toUpperCase(), colX(1) + PAD, y - 10.8, T.label + 0.2, bold, NAVY);
     y -= MONTH_H;
+    hline(M, M + TABLE_W, y, RULE, 0.5);
   };
   const allRows = [...view.carried, ...view.rows];
-  const drawRows = (rows: StatementViewRow[]) => {
-    let month: string | null = null;
-    for (const r of rows) {
-      if (byMonth && r.month !== month) {
-        monthHeading(r.month, layoutRow(r).h);
-        month = r.month;
-      }
-      drawRow(r);
-    }
+  /** `tail` reserves room after the list's last row (the ending balance), so the conclusion never stands alone. */
+  const drawRows = (rows: StatementViewRow[], tail = 0) => {
+    let group: string | null = null;
+    rows.forEach((r, i) => {
+      const last = i === rows.length - 1 ? tail : 0;
+      const g = groupOf(r);
+      if (g && g !== group) monthHeading(g, layoutRow(r).h + last);
+      group = g;
+      drawRow(r, last);
+    });
   };
-  const firstUnit = (rows: StatementViewRow[]) => (rows.length === 0 ? 0 : (byMonth ? MONTH_H : 0) + layoutRow(rows[0]).h);
+  const firstUnit = (rows: StatementViewRow[], tail = 0) => (rows.length === 0 ? tail : (groupOf(rows[0]) ? MONTH_H : 0) + layoutRow(rows[0]).h + (rows.length === 1 ? tail : 0));
+
+  // ---------------- Payment history (grouped by real payment) ----------------
+  const P_DATE = M + PAD;
+  const P_LABEL = colX(2) + PAD;
+  const P_APPLIED = colX(3) + PAD;
+  const P_APPLIED_RIGHT = colRight(6);
+  const P_AMOUNT_RIGHT = M + TABLE_W - PAD - 4;
+  const P_LABEL_W = P_APPLIED - P_LABEL - 2 * PAD;
+  const P_APPLIED_W = P_APPLIED_RIGHT - P_APPLIED;
+  type Payment = (typeof view.payments)[number];
+  const paymentLayout = (p: Payment) => {
+    const labelLines = capLines(wrapWords(`${p.label}${p.account ? `  ·  ${p.account}` : ""}`, P_LABEL_W, regular, T.title - 0.4), 2, regular, T.title - 0.4, P_LABEL_W);
+    const singleLines = p.single != null ? capLines(wrapWords(p.single, P_APPLIED_W, regular, T.meta), 2, regular, T.meta, P_APPLIED_W) : [];
+    const appliedLines = p.single != null ? singleLines.length : p.applied.length + (p.applied.length > 1 ? 1 : 0) + (p.held ? 1 : 0);
+    const h = Math.max(LINE1 + (labelLines.length - 1) * TITLE_LH, LINE1 + (appliedLines - 1) * 10) + 9;
+    return { labelLines, singleLines, h };
+  };
+  const paymentHeader = () => {
+    openPanel();
+    panelHeader(HEADER_H);
+    text("DATE", P_DATE, y - 11, T.label, bold, BODY);
+    text("PAYMENT", P_LABEL, y - 11, T.label, bold, BODY);
+    text("APPLIED TO", P_APPLIED, y - 11, T.label, bold, BODY);
+    textRight("AMOUNT", P_AMOUNT_RIGHT, y - 11, T.label, bold, BODY);
+    y -= HEADER_H;
+  };
+  const totals = [view.totalReceived && { label: `Total paid by ${first}`, value: view.totalReceived }, view.totalPaid && { label: `Total paid by ${view.ownerShort}`, value: view.totalPaid }].filter(Boolean) as {
+    label: string;
+    value: string;
+  }[];
+  const TOTAL_H = 17;
+  const drawPayment = (p: Payment, tail: number) => {
+    const l = paymentLayout(p);
+    ensure(l.h + tail);
+    const top = y;
+    const line1 = top - LINE1;
+    text(p.date, P_DATE, line1, T.meta + 0.4, regular, BODY);
+    l.labelLines.forEach((s, i) => text(s, P_LABEL, line1 - i * TITLE_LH, T.title - 0.4, regular, INK));
+    amountRight(p.amount, P_AMOUNT_RIGHT, line1, T.money + 0.2, bold, p.inbound ? PAID_TEXT : INK);
+    if (p.single != null) {
+      l.singleLines.forEach((s, i) => text(s, P_APPLIED, line1 - i * 10, T.meta, regular, BODY));
+    } else {
+      // Where one payment went: each obligation it cleared, what was applied, and what was held as an advance.
+      let ly = line1;
+      for (const a of p.applied) {
+        text(fit(a.label, regular, T.meta, P_APPLIED_W - 70), P_APPLIED, ly, T.meta, regular, BODY);
+        amountRight(a.amount, P_APPLIED_RIGHT, ly, T.meta, regular, INK);
+        ly -= 10;
+      }
+      if (p.applied.length > 1) {
+        hline(P_APPLIED, P_APPLIED_RIGHT, ly + 7.2, RULE, 0.5);
+        text("Applied to obligations", P_APPLIED, ly, T.meta, bold, INK);
+        amountRight(p.appliedTotal ?? "", P_APPLIED_RIGHT, ly, T.meta, bold, INK);
+        ly -= 10;
+      }
+      if (p.held) {
+        text("Held as advance", P_APPLIED, ly, T.meta, bold, ADVANCE);
+        amountRight(p.held, P_APPLIED_RIGHT, ly, T.meta, bold, ADVANCE);
+      }
+    }
+    y = top - l.h;
+    hline(M, M + TABLE_W, y, RULE, 0.5);
+  };
+
+  // ---------------- Ending balance ----------------
+  // The statement's conclusion, restating the answer in full. Its room is reserved with the last unit above it
+  // (see `tail`), so it never lands alone on a page.
+  const drawEnding = () => {
+    ensure(END_GAP + END_H);
+    y -= END_GAP;
+    roundBox(M, y - END_H, TABLE_W, END_H, RADIUS, NAVY_TINT, NAVY_RULE, 0.6);
+    box(M + 0.3, y - END_H + 0.3, 2.4, END_H - 0.6, NAVY);
+    const endLine = settled ? "Settled - nothing left to settle" : view.headline;
+    const dueLabel = settled ? "NOTHING DUE" : "AMOUNT DUE";
+    const amountSize = sizeToFit(view.amount, 16, amountBold, 240, 10);
+    const amountW = width(view.amount, amountSize, amountBold);
+    text("ENDING BALANCE", M + 16, y - 15, T.label + 0.3, bold, NAVY);
+    text(fit(endLine, bold, 11, TABLE_W - amountW - 80), M + 16, y - 31, 11, bold, INK);
+    textRight(dueLabel, M + TABLE_W - 16, y - 15, T.label + 0.3, bold, NAVY);
+    textRight(view.amount, M + TABLE_W - 16, y - 32, amountSize, amountBold, settled ? PAID_TEXT : NAVY);
+    y -= END_H;
+  };
+  const ENDING = END_GAP + END_H;
 
   // ---------------- Compose ----------------
   drawHeader();
   drawSummary();
-  y -= 20;
+  y -= 14;
   const count = allRows.length;
-  text("Transactions", M, y - 9, T.section, bold, INK);
-  text(`${count} ${count === 1 ? "item" : "items"}  ·  Paid and remaining as of ${view.asOf}`, M, y - 20, T.meta, regular, MUTED);
-  y -= 27;
+  text("Transactions", M, y - 9, 10.5, bold, INK);
+  text(`${count} ${count === 1 ? "item" : "items"}`, M + width("Transactions", 10.5, bold) + 10, y - 9, T.meta, regular, MUTED);
+  y -= 15;
+  const hasPayments = view.payments.length > 0;
+  // The table's last unit carries the ending balance with it when no payment history follows.
+  const tableTail = hasPayments ? 0 : ENDING;
+  ensure(HEADER_H + firstUnit(showPrevious ? view.carried : view.rows, tableTail) + (showPrevious ? CARRY_H : 0));
+  panelKind = "table";
+  redrawPanelHeader = drawTableHeader;
   drawTableHeader();
   const emptyNote = `${view.cycleLabel}  ·  ${STATEMENT_COPY.empty}`;
   if (showPrevious) {
-    carryRow(firstUnit(view.carried));
+    carryRow(firstUnit(view.carried, view.rows.length ? 0 : tableTail));
     drawRows(view.carried);
-    cycleBand(view.rows.length ? view.cycleLabel : emptyNote, firstUnit(view.rows));
-  } else if (view.rows.length === 0) cycleBand(emptyNote, 0);
-  if (view.rows.length > 0) drawRows(view.rows);
+    cycleBand(view.rows.length ? view.cycleLabel : emptyNote, firstUnit(view.rows, tableTail) || tableTail);
+  } else if (view.rows.length === 0) cycleBand(emptyNote, tableTail);
+  if (view.rows.length > 0) drawRows(view.rows, tableTail);
+  closePanel();
+  panelKind = null;
 
-  // ---------------- Payment history (grouped by real payment) ----------------
-  if (view.payments.length > 0) {
-    const AMOUNT_RIGHT = M + TABLE_W - PAD;
-    const APPLIED_RIGHT = M + 380;
-    const LABEL_X = M + 64;
-    const paymentH = (p: (typeof view.payments)[number]) => (p.single != null ? 26 : 20 + p.applied.length * 10 + 16 + (p.held ? 12 : 0));
+  if (hasPayments) {
+    const totalsH = totals.length * TOTAL_H;
+    const lastTail = totalsH + ENDING;
+    const heading = 20;
     // The heading never sits alone at a page foot: it moves with the first payment.
-    ensure(22 + 20 + paymentH(view.payments[0]), false);
-    y -= 22;
-    text("Payment history", M, y - 9, T.section, bold, INK);
-    text("This cycle", M + width("Payment history", T.section, bold) + 8, y - 9, T.meta, regular, MUTED);
+    ensure(14 + heading + HEADER_H + paymentLayout(view.payments[0]).h + (view.payments.length === 1 ? lastTail : 0));
+    y -= 14;
+    text("Payment history", M, y - 9, 10.5, bold, INK);
+    text("Payments this cycle and where each one went", M + width("Payment history", 10.5, bold) + 10, y - 9, T.meta, regular, MUTED);
     y -= 15;
-    box(M, y - 15, TABLE_W, 15, HEAD_TINT);
-    hline(M, M + TABLE_W, y - 15, RULE_STRONG, 0.5);
-    text("DATE", M + PAD, y - 10, T.label - 0.2, bold, MUTED);
-    text("PAYMENT", LABEL_X, y - 10, T.label - 0.2, bold, MUTED);
-    textRight("AMOUNT", AMOUNT_RIGHT, y - 10, T.label - 0.2, bold, MUTED);
-    y -= 15;
-    for (const p of view.payments) {
-      const h = paymentH(p);
-      ensure(h + 1, false);
-      text(p.date, M + PAD, y - 12, T.body, regular, BODY);
-      text(fit(`${p.label}${p.account ? `  ·  ${p.account}` : ""}`, bold, T.body + 0.2, AMOUNT_RIGHT - LABEL_X - 90), LABEL_X, y - 12, T.body + 0.2, bold, INK);
-      textRight(p.amount, AMOUNT_RIGHT, y - 12, T.money + 0.2, bold, p.inbound ? GREEN.text : INK);
-      if (p.single != null) {
-        text(fit(p.single, regular, T.meta, AMOUNT_RIGHT - LABEL_X - 90), LABEL_X, y - 21, T.meta, regular, MUTED);
-      } else {
-        let ly = y - 23;
-        text("APPLIED TO", LABEL_X, ly, T.label - 0.2, bold, MUTED);
-        ly -= 9.5;
-        for (const a of p.applied) {
-          text(fit(`+  ${a.label}`, regular, 7, APPLIED_RIGHT - LABEL_X - 70), LABEL_X + 6, ly, 7, regular, INK);
-          textRight(a.amount, APPLIED_RIGHT, ly, 7, regular, INK);
-          ly -= 10;
-        }
-        hline(LABEL_X, APPLIED_RIGHT, ly + 7, RULE, 0.5);
-        text("Applied", LABEL_X + 6, ly - 1, 7, bold, INK);
-        textRight(p.appliedTotal ?? "", APPLIED_RIGHT, ly - 1, 7, bold, INK);
-        if (p.held) {
-          ly -= 12;
-          text("Held as advance", LABEL_X + 6, ly, 7, bold, GREEN.text);
-          textRight(p.held, APPLIED_RIGHT, ly, 7, bold, GREEN.text);
-        }
-      }
-      y -= h;
-      hline(M, M + TABLE_W, y, RULE, 0.5);
-    }
-    const totals = [view.totalReceived && `Total paid by ${first}  ${view.totalReceived}`, view.totalPaid && `Total paid by ${view.ownerShort}  ${view.totalPaid}`].filter(Boolean) as string[];
+    panelKind = "payments";
+    redrawPanelHeader = paymentHeader;
+    paymentHeader();
+    view.payments.forEach((p, i) => drawPayment(p, i === view.payments.length - 1 ? lastTail : 0));
     for (const t of totals) {
-      ensure(13, false);
-      y -= 12;
-      textRight(t, AMOUNT_RIGHT, y, T.body + 0.4, bold, INK);
+      ensure(TOTAL_H);
+      box(M + 0.3, y - TOTAL_H + 0.3, TABLE_W - 0.6, TOTAL_H - 0.3, SURFACE);
+      textRight(t.label, P_APPLIED_RIGHT, y - 11.5, T.meta + 0.4, bold, INK);
+      amountRight(t.value, P_AMOUNT_RIGHT, y - 11.5, T.money + 0.2, bold, INK);
+      y -= TOTAL_H;
     }
+    closePanel();
+    panelKind = null;
   }
-
-  // ---------------- Ending balance ----------------
-  // The statement's conclusion: a deep-green band repeating the answer in full. Always drawn: when the full
-  // band doesn't fit, a one-line band takes the remaining room, and only when neither fits does it move to
-  // the next page (under its continued header) — so it rarely sits alone on a page.
-  const endLine = settled ? "Settled - nothing left to settle" : view.headline;
-  const dueLabel = settled ? "NOTHING DUE" : "AMOUNT DUE";
-  const FULL_H = 54;
-  const COMPACT_H = 30;
-  if (y - (12 + FULL_H) < CONTENT_BOTTOM && y - (10 + COMPACT_H) >= CONTENT_BOTTOM) {
-    y -= 10;
-    roundBox(M, y - COMPACT_H, TABLE_W, COMPACT_H, 3, FOREST);
-    const by = y - 19;
-    text("ENDING BALANCE", M + 14, by, T.label + 0.6, bold, LIME);
-    const amountSize = sizeToFit(view.amount, 14, bold, 180, 9);
-    const amountW = width(view.amount, amountSize, bold);
-    const lead = M + 14 + width("ENDING BALANCE", T.label + 0.6, bold) + 14;
-    const dueW = width(dueLabel, T.label, bold) + 10;
-    text(fit(endLine, bold, 9.5, M + TABLE_W - 14 - amountW - dueW - lead - 10), lead, by, 9.5, bold, WHITE);
-    textRight(dueLabel, M + TABLE_W - 14 - amountW - 10, by + 0.5, T.label, bold, SAGE_RULE);
-    textRight(view.amount, M + TABLE_W - 14, by - 1, amountSize, bold, WHITE);
-    y -= COMPACT_H;
-  } else {
-    ensure(12 + FULL_H, false);
-    y -= 12;
-    roundBox(M, y - FULL_H, TABLE_W, FULL_H, 3, FOREST);
-    text("ENDING BALANCE", M + 18, y - 19, T.label + 0.6, bold, LIME);
-    const endAmountSize = sizeToFit(view.amount, 22, bold, 220, 11);
-    const endAmountW = width(view.amount, endAmountSize, bold);
-    text(fit(endLine, bold, 11.5, TABLE_W - endAmountW - 60), M + 18, y - 37, 11.5, bold, WHITE);
-    textRight(dueLabel, M + TABLE_W - 18, y - 19, T.label + 0.2, bold, SAGE_RULE);
-    textRight(view.amount, M + TABLE_W - 18, y - 40, endAmountSize, bold, WHITE);
-    y -= FULL_H;
-  }
+  drawEnding();
 
   // ---------------- Footer ----------------
   const pages = doc.getPages();
   pages.forEach((p, i) => {
+    // A thin navy band across the top of every page: the statement's mark, even on a page printed alone.
+    p.drawRectangle({ x: 0, y: PAGE_H - 5, width: PAGE_W, height: 5, color: NAVY });
     p.drawLine({ start: { x: M, y: FOOTER_RULE_Y }, end: { x: M + TABLE_W, y: FOOTER_RULE_Y }, thickness: 0.5, color: RULE });
     const pageLabel = `Page ${i + 1} of ${pages.length}`;
     const pageW = bold.widthOfTextAtSize(pageLabel, 6.8);
-    p.drawText(pageLabel, { x: M + TABLE_W - pageW, y: 20, size: 6.8, font: bold, color: BODY });
-    const prepared = fit(`Prepared by ${view.ownerName}  ·  `, regular, 6.8, 200);
+    p.drawText(pageLabel, { x: M + TABLE_W - pageW, y: 15, size: 6.8, font: bold, color: BODY });
+    const prepared = fit(`Prepared by ${view.ownerName}  ·  `, regular, 6.8, 220);
     const preparedW = regular.widthOfTextAtSize(prepared, 6.8);
-    p.drawText(prepared, { x: M + TABLE_W - pageW - preparedW, y: 20, size: 6.8, font: regular, color: MUTED });
+    p.drawText(prepared, { x: M + TABLE_W - pageW - preparedW, y: 15, size: 6.8, font: regular, color: MUTED });
     const left = fit(`FlowFi  ·  Statement for ${view.personName}  ·  ${view.cycleLabel}`, regular, 6.8, TABLE_W - preparedW - pageW - 16);
-    p.drawText(left, { x: M, y: 20, size: 6.8, font: regular, color: MUTED });
+    p.drawText(left, { x: M, y: 15, size: 6.8, font: regular, color: MUTED });
   });
+  // Open on page 1 scaled to the page width, the window fitted to the page — a viewer setting (honoured by
+  // Acrobat and most desktop readers; browsers and phone viewers may ignore it). No script is embedded.
+  doc.catalog.set(PDFName.of("OpenAction"), doc.context.obj([pages[0].ref, PDFName.of("FitH"), PDFNull]));
+  doc.catalog.getOrCreateViewerPreferences().setFitWindow(true);
   return doc.save();
 }

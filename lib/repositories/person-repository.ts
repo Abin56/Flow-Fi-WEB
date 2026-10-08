@@ -6,6 +6,7 @@
  * balance-sync hook every ledger write goes through.
  */
 
+import { safeDocs } from "@/lib/firestore/safe-docs";
 import { type CollectionReference, doc, type DocumentReference, getDocs, query, runTransaction, where } from "firebase/firestore";
 import { FirestoreCrudRepository } from "@/lib/firestore/firestore-crud-repository";
 import { recordEdit, updateField } from "@/lib/firestore/soft-deletable";
@@ -100,19 +101,23 @@ export class PersonRepository extends FirestoreCrudRepository<Person> {
 
   /** Opening balance is deliberately not editable here — see `Person`. */
   async editPerson(person: Person, params: EditPersonParams): Promise<void> {
-    let updated = person;
-    updated = updateField(updated, "name", updated.name, params.name, (e, v) => ({ ...e, name: v }));
-    updated = updateField(updated, "phone", updated.phone, params.phone, (e, v) => ({ ...e, phone: v }));
-    updated = updateField(updated, "email", updated.email, params.email, (e, v) => ({ ...e, email: v }));
-    updated = updateField(updated, "notes", updated.notes, params.notes, (e, v) => ({ ...e, notes: v }));
-    updated = updateField(
-      updated,
-      "avatarColor",
-      updated.avatarColorValue,
-      params.avatarColorValue,
-      (e, v) => ({ ...e, avatarColorValue: v }),
-    );
-    await this.update(updated);
+    // Applied to the fresh document: `person` may be the edit form's copy, and writing it back whole would
+    // revert `currentBalance` moved by a ledger write while the form was open.
+    await this.updateFresh(person.id, (fresh) => {
+      let updated = fresh;
+      updated = updateField(updated, "name", updated.name, params.name, (e, v) => ({ ...e, name: v }));
+      updated = updateField(updated, "phone", updated.phone, params.phone, (e, v) => ({ ...e, phone: v }));
+      updated = updateField(updated, "email", updated.email, params.email, (e, v) => ({ ...e, email: v }));
+      updated = updateField(updated, "notes", updated.notes, params.notes, (e, v) => ({ ...e, notes: v }));
+      updated = updateField(
+        updated,
+        "avatarColor",
+        updated.avatarColorValue,
+        params.avatarColorValue,
+        (e, v) => ({ ...e, avatarColorValue: v }),
+      );
+      return updated;
+    });
   }
 
   /** Public doc reference — lets `LedgerRepository` read/write a person within its own
@@ -129,7 +134,8 @@ export class PersonRepository extends FirestoreCrudRepository<Person> {
    * in-memory value — mirrors `AccountRepository.applyBalanceDelta` exactly.
    */
   applyBalanceDelta(person: Person, delta: number): Person {
-    const newBalance = person.currentBalance + delta;
+    // Rounded to the paisa on every write so repeated float additions never drift (WFI-P4-03).
+    const newBalance = Math.round((person.currentBalance + delta) * 100) / 100;
     let updated = recordEdit(person, "currentBalance", String(person.currentBalance), String(newBalance));
     updated = { ...updated, currentBalance: newBalance };
     return updated;
@@ -457,7 +463,7 @@ export class LedgerRepository extends FirestoreCrudRepository<LedgerEntry> {
         funding: to.kind === "person" ? { kind: "person", personId: to.person.id } : { kind: "account", accountId: to.accountId },
         linkedPersonId: to.kind === "person" ? to.person.id : undefined,
         owesPersonToggle: false,
-      });
+      }, { owner: "people" });
       const amount = edits?.amount ?? fresh.amount;
       const date = edits?.dateTime ?? fresh.dateTime;
       const note = edits?.description ?? fresh.description;
@@ -604,7 +610,7 @@ export class LedgerRepository extends FirestoreCrudRepository<LedgerEntry> {
           ...cashLegExtra,
           amount: updated.amount !== ownCashLeg.amount ? updated.amount : undefined,
           dateTime: updated.date.getTime() !== fresh.date.getTime() ? updated.date : undefined,
-        });
+        }, { owner: "people" });
       }
       if (updated === fresh) return;
 
@@ -643,6 +649,9 @@ export class LedgerRepository extends FirestoreCrudRepository<LedgerEntry> {
       if (!entrySnap.exists()) throw new Error("Ledger entry not found");
 
       const freshEntry = entrySnap.data();
+      // Idempotent: an entry that is already deleted (another tab, a repeated click, a re-run cascade) was
+      // reversed when it was deleted — never reverse it a second time.
+      if (freshEntry.deletedAt != null) return;
       const delta = -signedAmount(freshEntry);
       if (delta !== 0) {
         tx.set(personRef, this.personRepository.applyBalanceDelta(personSnap.data(), delta));
@@ -803,6 +812,8 @@ export class LedgerRepository extends FirestoreCrudRepository<LedgerEntry> {
       if (!entrySnap.exists()) throw new Error("Ledger entry not found");
 
       const freshEntry = entrySnap.data();
+      // Idempotent: an entry that is already live (another tab, a repeated click) is never applied twice.
+      if (freshEntry.deletedAt == null) return;
       const delta = signedAmount(freshEntry);
       if (delta !== 0) {
         tx.set(personRef, this.personRepository.applyBalanceDelta(personSnap.data(), delta));
@@ -829,13 +840,13 @@ export class LedgerRepository extends FirestoreCrudRepository<LedgerEntry> {
     const snapshot = await getDocs(
       query(this.collection, where("deletedAt", "==", null), where("transactionRef", "==", transactionId)),
     );
-    return snapshot.docs.map((d) => d.data());
+    return safeDocs(snapshot.docs);
   }
 
   /** Every entry (active and trashed) written by one Record Payment — see `LedgerEntry.paymentId`. */
   async getByPaymentId(paymentId: string): Promise<LedgerEntry[]> {
     const snapshot = await getDocs(query(this.collection, where("paymentId", "==", paymentId)));
-    return snapshot.docs.map((d) => d.data());
+    return safeDocs(snapshot.docs);
   }
 
   /** `getByTransactionRef`, but over trashed entries — mirrors `getTrash` vs `getAll`. */
@@ -843,6 +854,6 @@ export class LedgerRepository extends FirestoreCrudRepository<LedgerEntry> {
     const snapshot = await getDocs(
       query(this.collection, where("deletedAt", "!=", null), where("transactionRef", "==", transactionId)),
     );
-    return snapshot.docs.map((d) => d.data());
+    return safeDocs(snapshot.docs);
   }
 }

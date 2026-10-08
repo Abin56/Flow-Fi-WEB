@@ -313,8 +313,9 @@ export function EntrySettleForm({
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  // Ledger-owned and derived installment settlements post an account cash leg; split shares use their own path.
-  const needsAccount = row.settle?.kind === "entry" || row.settle?.kind === "derivedInstallment";
+  // Every settlement is real money — ledger entries, installment shares, split shares and an opening balance all
+  // post a cash leg, so each needs an account (an opening row without one always failed: WFI-P2-08).
+  const needsAccount = row.settle?.kind === "entry" || row.settle?.kind === "derivedInstallment" || row.settle?.kind === "split" || row.settle?.kind === "opening";
   const account = useAccountChoice();
   const firstName = personName.split(" ")[0];
   const effect = row.direction === "iOwe" ? `You pay ${firstName}` : `${firstName} pays you`;

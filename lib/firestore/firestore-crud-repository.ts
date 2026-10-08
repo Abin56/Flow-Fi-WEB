@@ -5,6 +5,7 @@
  * Flutter base class method-for-method.
  */
 
+import { safeDocs } from "@/lib/firestore/safe-docs";
 import {
   type CollectionReference,
   deleteDoc,
@@ -14,6 +15,7 @@ import {
   getDocs,
   onSnapshot,
   query,
+  runTransaction,
   setDoc,
   where,
 } from "firebase/firestore";
@@ -34,13 +36,13 @@ export class FirestoreCrudRepository<T extends SoftDeletableEntity> {
   /** Active (non-deleted) records. */
   async getAll(): Promise<T[]> {
     const snapshot = await getDocs(query(this.collection, where("deletedAt", "==", null)));
-    return snapshot.docs.map((d) => d.data());
+    return safeDocs(snapshot.docs);
   }
 
   /** Records currently in trash, awaiting restore or permanent deletion. */
   async getTrash(): Promise<T[]> {
     const snapshot = await getDocs(query(this.collection, where("deletedAt", "!=", null)));
-    return snapshot.docs.map((d) => d.data());
+    return safeDocs(snapshot.docs);
   }
 
   async getByKey(key: string): Promise<T | null> {
@@ -59,6 +61,21 @@ export class FirestoreCrudRepository<T extends SoftDeletableEntity> {
    */
   async update(entity: T): Promise<void> {
     await setDoc(doc(this.collection, entity.id), entity);
+  }
+
+  /**
+   * Field edit applied to the FRESH document inside a transaction — never writes back a stale in-memory copy,
+   * so a cached field another write changed meanwhile (e.g. `currentBalance`) is preserved.
+   */
+  async updateFresh(id: string, mutate: (fresh: T) => T): Promise<void> {
+    await runTransaction(this.collection.firestore, async (tx) => {
+      const ref = doc(this.collection, id);
+      const snap = await tx.get(ref);
+      if (!snap.exists()) throw new Error("This record no longer exists — refresh and try again");
+      const fresh = snap.data();
+      const updated = mutate(fresh);
+      if (updated !== fresh) tx.set(ref, updated);
+    });
   }
 
   async softDelete(entity: T): Promise<T> {
@@ -91,7 +108,7 @@ export class FirestoreCrudRepository<T extends SoftDeletableEntity> {
   watchAll(onData: (items: T[]) => void, onError?: (error: Error) => void): () => void {
     return onSnapshot(
       query(this.collection, where("deletedAt", "==", null)),
-      (snapshot) => onData(snapshot.docs.map((d) => d.data())),
+      (snapshot) => onData(safeDocs(snapshot.docs)),
       onError,
     );
   }
@@ -99,7 +116,7 @@ export class FirestoreCrudRepository<T extends SoftDeletableEntity> {
   watchTrash(onData: (items: T[]) => void, onError?: (error: Error) => void): () => void {
     return onSnapshot(
       query(this.collection, where("deletedAt", "!=", null)),
-      (snapshot) => onData(snapshot.docs.map((d) => d.data())),
+      (snapshot) => onData(safeDocs(snapshot.docs)),
       onError,
     );
   }

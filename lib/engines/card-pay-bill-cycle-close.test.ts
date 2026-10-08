@@ -106,7 +106,7 @@ const scope = (all: Transaction[], now = NOW) =>
 
 describe("Card Pay bill — statement closing 17 Oct (permanent regression)", () => {
   it("boundary: 18 Sep–17 Oct is one bill due 5 Nov; 18 Oct starts the next — nothing double-counted or dropped", () => {
-    const bills = cardBillsForCard(C, base, [], NOW);
+    const bills = cardBillsForCard(C, base.filter((t) => t.accountId === C.accountId), [], NOW);
     const closedBill = bills.find((b) => b.isClosed)!;
     expect(closedBill.periodStart).toEqual(new Date(2026, 8, 18));
     expect(closedBill.periodEnd).toEqual(new Date(2026, 9, 17));

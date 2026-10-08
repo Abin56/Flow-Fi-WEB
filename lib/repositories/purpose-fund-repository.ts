@@ -327,7 +327,7 @@ export class PurposeFundRepository {
         // Move it out of the People cash leg into a normal Income transaction — same account, same day.
         const left = round2(cashLeg.amount - amount);
         if (left <= PAYMENT_EPSILON) throw new Error("This is the whole payment — revert it and record it again as income.");
-        await this.deps.transactionRepository.editTransactionInTransaction(tx, cashLeg, { amount: left });
+        await this.deps.transactionRepository.editTransactionInTransaction(tx, cashLeg, { amount: left }, { owner: "people" });
         const income: Transaction = await this.deps.transactionRepository.createTransactionInTransaction(tx, {
           type: "income",
           amount,

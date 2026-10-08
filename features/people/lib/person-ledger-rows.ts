@@ -39,7 +39,7 @@ export type LedgerFilter = "all" | LedgerRowState;
 export type SettleTarget =
   /** A manual "I gave"/"I borrowed" entry — a "Received back"/"I repaid" entry pointing at it (`parentEntryId`). */
   | { kind: "entry"; entry: LedgerEntry; max: number }
-  /** A split/assigned expense share — an installment payment through `ExpenseRepository.settleParticipant`. */
+  /** A split/assigned expense share — settled through Record Payment's `split` route (cash leg + installment payment). */
   | {
       kind: "split";
       pending: PendingSplitParticipant;

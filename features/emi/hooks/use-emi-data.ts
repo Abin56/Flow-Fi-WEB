@@ -128,6 +128,11 @@ export function useEmiRows(): { rows: EmiRow[]; isLoading: boolean } {
 
 export interface RecordEmiPaymentParams {
   amount: number;
+  /**
+   * Paid-from account for an EMI with NO linked card (WFI-P1-08): the payment posts an expense on it, so the
+   * bank balance and Net Worth move with the EMI. Ignored for a card-linked EMI (it posts on the card).
+   */
+  accountId?: string | null;
   /** One per user action (generated when the payment surface opens), reused verbatim on a retry. */
   idempotencyKey: string;
   /** The installment the user chose to pay — filled first; defaults to the next unpaid one. */
@@ -270,13 +275,15 @@ export function useEmiActions() {
             charges: params,
           });
 
-          // Reads the card account and then writes — so it runs before the writes below.
-          if (linkedCard) {
+          // Reads the paying account and then writes — so it runs before the writes below. A card-linked EMI posts
+          // on its card; any other EMI on the chosen paid-from account (WFI-P1-08).
+          const payingAccountId = linkedCard?.accountId ?? params.accountId ?? null;
+          if (payingAccountId) {
             await transactionRepository.createTransactionInTransaction(tx, {
               type: "expense",
               amount: allocation.applied,
               dateTime: params.date,
-              accountId: linkedCard.accountId,
+              accountId: payingAccountId,
               categoryId: emi.categoryId ?? "loan_payment",
               description: emi.name ? `EMI payment — ${emi.name}` : "EMI payment",
               notes: params.note ?? "",
@@ -339,7 +346,9 @@ export function useEmiActions() {
             const snap = await tx.get(transactionRepository.docRef(id));
             if (snap.exists() && snap.data().deletedAt == null) oldCardTransactions.push(snap.data());
           }
-          const accountIds = new Set([...oldCardTransactions.map((t) => t.accountId), ...(linkedCard ? [linkedCard.accountId] : [])]);
+          // The card for a card-linked EMI; otherwise the chosen paid-from account, else the one the original used.
+          const payingAccountId = linkedCard?.accountId ?? params.accountId ?? oldCardTransactions[0]?.accountId ?? null;
+          const accountIds = new Set([...oldCardTransactions.map((t) => t.accountId), ...(payingAccountId ? [payingAccountId] : [])]);
           const accounts = new Map<string, Account>();
           for (const id of accountIds) {
             const snap = await tx.get(accountRepository.docRef(id));
@@ -378,12 +387,12 @@ export function useEmiActions() {
           for (const payment of plan.writes.payments) tx.set(paymentRepositoryFor(payment.installmentId).docRef(payment.id), payment);
           for (const breakdown of plan.writes.breakdowns) tx.set(breakdownRepository.docRef(breakdown.id), breakdown);
 
-          const corrected = linkedCard
+          const corrected = payingAccountId
             ? TransactionRepository.buildTransaction({
                 type: "expense",
                 amount: plan.allocation.applied,
                 dateTime: params.date,
-                accountId: linkedCard.accountId,
+                accountId: payingAccountId,
                 categoryId: emi.categoryId ?? "loan_payment",
                 description: emi.name ? `EMI payment — ${emi.name}` : "EMI payment",
                 notes: params.note ?? "",

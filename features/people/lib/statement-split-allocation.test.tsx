@@ -141,7 +141,7 @@ describe("shared statement — split allocation is transparent", () => {
       expect(text).toContain(n);
       expect(text).toContain(pdfMoney(amt));
     }
-    expect(text).toContain("Sojan's share");
+    expect(text).toContain("SOJAN'S SHARE");
   });
 
   it("5. odd paise remain exact in model, preview and PDF", async () => {
@@ -213,8 +213,9 @@ describe("shared statement — split allocation is transparent", () => {
     const { container } = render(<SplitAllocationBreakdown allocation={row.allocation!} variant="compact" />);
     expect(container.textContent).toContain("Split expense");
     expect(container.querySelector("dl")).toBeNull();
+    // The proven total equals Sojan's amount, so it is shown once — no separate Original figure.
+    expect(row).toMatchObject({ original: money(750), purchase: null, purchaseNote: null, shareLabel: null });
     const text = await pdfText(statement, options);
-    expect(text).toContain("ORIGINAL PURCHASE");
     expect(text).toContain(pdfMoney(750));
     expect(text).toContain("Split expense");
     expect(text).not.toContain("-way split");

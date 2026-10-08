@@ -178,14 +178,16 @@ describe("B/H. card transaction → statement window → Month Cycle bill", () =
     expect(due.map((b) => b.remaining)).toEqual([1000]);
   });
 
-  it("transfers / excluded / deleted transactions never become bill amounts", () => {
+  it("excluded / deleted transactions and bill payments never become bill amounts; money moved out of the card does (WFI-P1-04)", () => {
     const txns = [
       txn({ amount: 500 }),
       txn({ amount: 999, excludeFromCalculations: true }),
       txn({ amount: 999, deletedAt: d(2026, 8, 20) }),
-      txn({ amount: 999, type: "expense", transferId: "tr-out" }),
+      txn({ amount: 999, type: "income", transferId: "tr-pay" }),
+      txn({ amount: 250, type: "expense", transferId: "tr-out" }),
     ];
-    expect(cardBillsForCard(card(), txns, [], now).map((b) => b.totalAmount)).toEqual([500]);
+    const bills = cardBillsForCard(card(), txns, [], now);
+    expect(bills.reduce((s, b) => s + b.totalAmount, 0)).toBe(750);
   });
 });
 

@@ -157,13 +157,13 @@ export function lockedEmiPrincipalFor(emis: UtilizationEmi[], cardId: string): n
  * `purchaseTransactionId` looked up among ACTIVE transactions (a deleted/reversed one is absent):
  *  - Case A — represented: the purchase already carries the exposure; the EMI must not lock again.
  *  - Case B — no link (legacy default / issuer-converted, never recorded): the EMI is the exposure.
- *  - Case C — linked but deleted, excluded, a transfer leg, or on another account: no longer in
+ *  - Case C — linked but deleted, excluded, an incoming transfer leg, or on another account: no longer in
  *    this card's liability, so the EMI owns the exposure like Case B.
  * Never matched by amount/date.
  */
 export function emiPurchaseRepresentedOnCard(
   purchaseTransactionId: string | null | undefined,
-  purchase: { id: string; accountId: string; deletedAt: Date | null; excludeFromCalculations: boolean; transferId: string | null } | null | undefined,
+  purchase: { id: string; accountId: string; deletedAt: Date | null; excludeFromCalculations: boolean; transferId: string | null; type?: string } | null | undefined,
   cardAccountId: string,
 ): boolean {
   if (purchaseTransactionId == null || purchase == null) return false;
@@ -171,7 +171,9 @@ export function emiPurchaseRepresentedOnCard(
     purchase.id === purchaseTransactionId &&
     purchase.deletedAt == null &&
     !purchase.excludeFromCalculations &&
-    purchase.transferId == null &&
+    // Same rule as `countsTowardCardStatement`: only an INCOMING transfer leg (a bill payment) is off the bill;
+    // money moved out of the card is billed as a charge (WFI-P1-04).
+    (purchase.transferId == null || purchase.type === "expense") &&
     purchase.accountId === cardAccountId
   );
 }

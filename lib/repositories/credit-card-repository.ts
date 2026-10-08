@@ -481,6 +481,17 @@ function periodContains(period: StatementPeriodWindow, date: Date): boolean {
 }
 
 /**
+ * The last instant the stored statements bill: the END of the latest `periodEnd` day. A statement includes
+ * its whole closing day (`periodContains` is day-precision), so a 14:30 purchase on that day is billed —
+ * comparing against `periodEnd` (midnight) counted it as unbilled too (WFI-P1-02). Epoch when none stored.
+ */
+function billedThroughEndOfDay(statements: readonly { periodEnd: Date }[]): Date {
+  if (statements.length === 0) return new Date(0);
+  const latest = statements.reduce((max, s) => (s.periodEnd.getTime() > max.getTime() ? s.periodEnd : max), statements[0]!.periodEnd);
+  return new Date(latest.getFullYear(), latest.getMonth(), latest.getDate(), 23, 59, 59, 999);
+}
+
+/**
  * Every dollar spent on `card` since the last billed cycle, computed purely
  * from `cardTransactions` (every `Transaction` with `accountId ===
  * card.accountId`) and `statements` — the engine's `currentCycleStatement`
@@ -501,25 +512,24 @@ function periodContains(period: StatementPeriodWindow, date: Date): boolean {
 export function unbilledSpendForCard(
   cardTransactions: Transaction[],
   statements: { periodEnd: Date }[],
+  /** Start of the card's open cycle: spend before it belongs to a closed cycle (`uncoveredClosedSpendForCard`), never to this one (WFI-P1-03). */
+  openCycleStart: Date = new Date(0),
 ): { periodStart: Date; periodEnd: Date; totalAmount: number } {
-  const billedThrough = statements.reduce(
-    (latest, s) => (s.periodEnd.getTime() > latest.getTime() ? s.periodEnd : latest),
-    new Date(0),
-  );
+  const billedThrough = billedThroughEndOfDay(statements);
   const now = new Date();
   // Same inclusion rule as a statement (`countsTowardCardStatement`): unbilled spend is exactly what the
   // next statement will bill. Incoming transfer legs are bill payments (see `isCardBillPaymentLeg`) —
   // they settle the liability via `settleCardPayments`, never add to it as spend.
   const totalAmount = cardTransactions
-    .filter((t) => countsTowardCardStatement(t) && t.dateTime.getTime() > billedThrough.getTime())
+    .filter((t) => countsTowardCardStatement(t) && t.dateTime.getTime() > billedThrough.getTime() && t.dateTime.getTime() >= openCycleStart.getTime())
     .reduce((sum, t) => sum + cardStatementAmount(t), 0);
   return { periodStart: billedThrough, periodEnd: now, totalAmount };
 }
 
 /**
- * The other half of `unbilledSpendForCard`: spend dated ON OR BEFORE the most recent stored statement
- * that no stored statement covers — before the first stored statement, or in a closed cycle whose
- * statement was never materialized. Without it that debt fell out of the card's outstanding entirely.
+ * The other half of `unbilledSpendForCard`: spend dated before the card's open cycle that no stored
+ * statement covers — before the first stored statement, or in a closed cycle whose statement was never
+ * materialized (including every closed cycle when none is stored). Without it that debt fell out of the card's outstanding entirely.
  * Grouped into the statement window that owns each date (`statementWindowForDate`, the same rule
  * `cardBillsForCard` uses), so payments settle it oldest due first alongside the stored statements.
  * Totals are exact sums of uncovered transactions — never recomputed over a window, so spend a stored
@@ -530,14 +540,14 @@ export function uncoveredClosedSpendForCard(
   card: CreditCardProfile,
   cardTransactions: Transaction[],
   statements: { periodStart: Date; periodEnd: Date }[],
+  now: Date = new Date(),
 ): { periodStart: Date; periodEnd: Date; dueDate: Date; totalAmount: number }[] {
-  const billedThrough = statements.reduce(
-    (latest, s) => (s.periodEnd.getTime() > latest.getTime() ? s.periodEnd : latest),
-    new Date(0),
-  );
+  // Closed = before the open cycle. That includes cycles AFTER the latest stored statement that were never
+  // materialized (always the case on Web with none stored) — not just spend up to the last statement (WFI-P1-03).
+  const openCycleStart = currentCycleForCard(card, now).periodStart;
   const byPeriodEnd = new Map<number, { periodStart: Date; periodEnd: Date; dueDate: Date; totalAmount: number }>();
   for (const t of cardTransactions) {
-    if (!countsTowardCardStatement(t) || t.dateTime.getTime() > billedThrough.getTime()) continue;
+    if (!countsTowardCardStatement(t) || t.dateTime.getTime() >= openCycleStart.getTime()) continue;
     if (statements.some((s) => periodContains(s as StatementPeriodWindow, t.dateTime))) continue;
     const window = statementWindowForDate(card, t.dateTime);
     const key = window.periodEnd.getTime();
@@ -810,6 +820,9 @@ export interface RecordStatementPaymentParams {
  * money out of a chosen account.
  */
 export class StatementPaymentRepository extends FirestoreCrudRepository<StatementPayment> {
+  /** Off: `recordPayment` is unsafe for card payments as written (see its doc comment). */
+  static unsafeRecordPaymentAllowed = false;
+
   constructor(
     collection: CollectionReference<StatementPayment>,
     private readonly statementRepository: StatementRepository,
@@ -838,6 +851,11 @@ export class StatementPaymentRepository extends FirestoreCrudRepository<Statemen
    * `TransactionRepository.createTransferPairAtomic` (with `cardStatementIntent`), as Pay bill does.
    */
   async recordPayment(statement: Statement, params: RecordStatementPaymentParams): Promise<StatementPayment> {
+    // Guarded until a safe implementation exists (WFI-P4-01): the body below would post a bank-only expense with
+    // no card leg, outside the People gate. Card bills are paid through `createTransferPairAtomic` (Pay bill).
+    if (!StatementPaymentRepository.unsafeRecordPaymentAllowed) {
+      throw new Error("Pay credit card bills with Pay bill — this payment path is disabled.");
+    }
     if (params.amount <= 0) {
       throw new Error("Payment amount must be greater than 0");
     }
@@ -898,12 +916,14 @@ export class StatementPaymentRepository extends FirestoreCrudRepository<Statemen
 /**
  * The ONE rule for whether a card-account transaction is billable card liability — shared by statement
  * totals, unbilled spend, derived Month Cycle bills and (by definition) `emiPurchaseRepresentedOnCard`:
- * active, calculable, and not a transfer leg. Excluded rows are outside every financial total (and
+ * active, calculable, and not the INCOMING leg of a transfer (a bill payment — settled via `cardPaymentTotal`).
+ * Money moved OUT of the card (card → bank / card → card: cash advance, balance transfer) IS billed as a charge —
+ * it raised the card account's debt, so leaving it off every bill split the card's figures (WFI-P1-04). Excluded rows are outside every financial total (and
  * `balanceEffect` zeroes them); a card-linked EMI whose purchase is excluded or a transfer is owned by
  * the EMI lock instead (Case C), so counting it here too would double the exposure.
  */
 export function countsTowardCardStatement(t: Transaction): boolean {
-  return t.deletedAt == null && !t.excludeFromCalculations && !isTransfer(t);
+  return t.deletedAt == null && !t.excludeFromCalculations && !(isTransfer(t) && t.type === "income");
 }
 
 /**
@@ -914,7 +934,8 @@ export function countsTowardCardStatement(t: Transaction): boolean {
  *              rewriting an earlier statement;
  *  - PAYMENT — the income leg of a transfer INTO the card (`isCardBillPaymentLeg`): not a statement row;
  *              settles statements via `cardPaymentTotal` / `settleCardPayments`;
- *  - EXCLUDED — deleted, `excludeFromCalculations`, or the expense leg of a transfer OUT of the card.
+ *  - CHARGE also — the expense leg of a transfer OUT of the card (cash advance / balance transfer);
+ *  - EXCLUDED — deleted or `excludeFromCalculations`.
  * Same sign as `balanceEffect` on the card account, so statements reconcile to the card's balance.
  * Call only for rows `countsTowardCardStatement` accepts.
  */

@@ -45,7 +45,7 @@ export async function deletePersonCashLegTransaction(params: {
   const person = personId == null ? null : await personRepository.getByKey(personId);
   // No person / no entry pointing at this transaction (a person deleted since, or a record from before
   // entries carried the link): there is no ledger effect to reconcile — plain delete, as before.
-  if (personId == null || person == null) return transactionRepository.softDeleteTransaction(transaction);
+  if (personId == null || person == null) return transactionRepository.softDeleteTransaction(transaction, { owner: "people" });
 
   const ledgerRepository = ledgerRepositoryFor(personId);
   const entries = await ledgerRepository.getAll();
@@ -56,7 +56,7 @@ export async function deletePersonCashLegTransaction(params: {
       if (!revertPayment) throw new PersonCashLegDeleteBlockedError("This is a recorded payment — revert it from the People Ledger");
       return revertPayment(person, purposePaymentId);
     }
-    return transactionRepository.softDeleteTransaction(transaction);
+    return transactionRepository.softDeleteTransaction(transaction, { owner: "people" });
   }
   if (entry.paymentId != null) {
     if (!revertPayment) throw new PersonCashLegDeleteBlockedError("This is a recorded payment — revert it from the People Ledger");

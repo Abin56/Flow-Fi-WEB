@@ -31,7 +31,8 @@ import {
 import { cycleContaining, formatCycleLabel, formatStatementDate, type PersonCycleStatement } from "@/lib/engines/person-cycle-statement";
 import { money } from "@/lib/engines/person-cycle-statement-share";
 import type { LedgerEntry } from "@/lib/models/person";
-import { splitAllocation, type SplitAllocation } from "@/lib/split/split-allocation";
+import { splitAllocation, splitCountLabel, type SplitAllocation } from "@/lib/split/split-allocation";
+import type { StatementChip } from "@/features/people/lib/statement-palette";
 
 export interface StatementViewRow {
   no: string;
@@ -62,6 +63,29 @@ export interface StatementViewRow {
    * Null when the Expense isn't available (deleted / legacy); a legacy Expense without participants has none.
    */
   allocation?: SplitAllocation | null;
+  /**
+   * The original transaction total (`Expense.totalAmount`) — only when it differs from this row's amount (a
+   * genuine split). Null for an expense assigned in full, a plain entry or a payment: one amount says it all.
+   */
+  purchase: string | null;
+  /** What the purchase total is: "4-way split" / "Split expense" (legacy). Null with `purchase`. */
+  purchaseNote: string | null;
+  /** Caption under the amount ("Amma's share") — only beside a purchase total, where the two must be told apart. */
+  shareLabel: string | null;
+  /** The status chip's colour family — one meaning, one colour, everywhere in the statement. */
+  chip: StatementChip;
+  /** The status detail only when it adds something the columns don't already say ("Due 12 Oct"). */
+  statusNote: string;
+  /**
+   * The quiet line under the title: type · context, each said once. A payment's sentence already names who
+   * paid whom, so its type label ("Paid by Amma") is left out.
+   */
+  metaLine: string;
+  /**
+   * A partly paid obligation's paid-down fraction (0–1), for a bar under its Remaining amount — a drawing width
+   * only, never shown as a figure. Null unless the row is partly paid.
+   */
+  progress: number | null;
   /** An open obligation from an earlier cycle, listed as brought forward. */
   carried?: boolean;
   /** e.g. "18 Aug – 17 Sep cycle" for a brought-forward row. */
@@ -76,6 +100,11 @@ export interface StatementViewLine {
   side: string | null;
   strong?: boolean;
   tone?: "receivable" | "payable" | "advance" | "carried";
+  /**
+   * How the line joins the reconciliation ("+" / "−" / "="), read from the engine's signs against the final
+   * direction. Null on the first line — and on every line when one runs against the balance (its side says so).
+   */
+  op?: "+" | "−" | "=" | null;
 }
 
 export interface StatementViewPayment {
@@ -122,6 +151,13 @@ export interface StatementView {
   asOf: string;
   /** The engine's closing value, for verification. */
   currentPending: number;
+  /** The Amount column header: "Shambu's share" when every listed amount is the person's share, else "Amount". */
+  amountHeader: string;
+  /**
+   * How far the total due is settled, for the summary's progress bar: `ratio` is a drawing width only (0–1); the
+   * label uses figures the statement already shows. Null when nothing was due or the balance changed sides.
+   */
+  settleProgress: { ratio: number; label: string } | null;
 }
 
 export interface StatementViewOptions {
@@ -152,6 +188,25 @@ export const STATEMENT_COPY = {
 export const OWNER_FALLBACK = "Account holder";
 const SAME = 0.005;
 
+/** Statement wording for the advance states, in plain financial words (the private workspace keeps its own). */
+const STATUS_WORDS: Record<string, string> = { "Advance available": "Advance held", "Advance used": "Covered by advance" };
+
+/** Status tone → chip family: paid / received are one green, due is amber, overdue red. */
+const CHIP: Record<SettlementStatusTone, StatementChip> = {
+  settled: "paid",
+  received: "paid",
+  paid: "paid",
+  partial: "partial",
+  due: "due",
+  payable: "due",
+  overdue: "overdue",
+  upcoming: "upcoming",
+  neutral: "neutral",
+};
+
+/** Bar widths only: a fraction kept within 0–1. */
+const clamp01 = (n: number) => Math.min(1, Math.max(0, n));
+
 const isPayment = (k: SettlementKind) => k === "paymentReceived" || k === "paymentMade" || k === "advance" || k === "advanceApplied";
 
 const MONTH = new Intl.DateTimeFormat("en-IN", { month: "long", year: "numeric" });
@@ -169,25 +224,64 @@ function viewRow(row: LedgerRow, n: number, personName: string, lookups: Settlem
   const paid = isPayment(kind) ? row.amount : paidSoFar(row);
   // Read straight from the Expense (not gated on `splitContext`), so a legacy Expense without participants still gives its proven total.
   const allocation = kind === "split" || kind === "assigned" ? splitAllocation(linkedExpense(row, lookups), personId, ownerName) : null;
+  // The original total earns a column only when it says something new — it differs from the amount this row tracks.
+  const showPurchase = allocation != null && Math.abs(allocation.original - row.amount) >= SAME;
+  const label = STATUS_WORDS[status.label] ?? status.label;
+  const amountName = amountLabel(row.amount, allocation, personName, ownerName);
+  const relation = relationLine(row, kind, personName, money, ownerShort);
+  const typeLabel = kindLabel(kind, personName, ownerShort);
   return {
     no: String(n).padStart(Math.max(2, String(total).length), "0"),
     date: formatStatementDate(row.date, true),
     title: settlementTitle(row, kind, personName),
-    relation: relationLine(row, kind, personName, money, ownerShort),
+    relation,
     kind,
     tone: settlementTone(row, kind),
-    typeLabel: kindLabel(kind, personName, ownerShort),
+    typeLabel,
     original: isPayment(kind) ? "" : money(row.amount),
-    amountLabel: amountLabel(row.amount, allocation, personName, ownerName),
+    amountLabel: amountName,
     paid: paid == null ? "" : money(paid),
     remaining: row.state == null ? "" : money(row.remaining ?? 0),
-    status: status.label,
+    status: label,
     statusDetail: status.detail ?? "",
     statusTone: status.tone,
+    purchase: showPurchase ? money(allocation.original) : null,
+    purchaseNote: showPurchase ? splitCountLabel(allocation) : null,
+    shareLabel: showPurchase ? amountName : null,
+    chip: kind === "advance" || kind === "advanceApplied" ? "advance" : CHIP[status.tone],
+    // "Amma owes Abin ₹70" / "From Amma" only restate the direction and the Paid / Remaining columns.
+    statusNote: status.tone === "upcoming" || status.tone === "neutral" || kind === "advanceApplied" ? (status.detail ?? "") : "",
+    metaLine: metaLine(row, kind, typeLabel, relation, personName.split(" ")[0], ownerShort),
+    progress: row.state === "partial" && row.amount > SAME ? clamp01(1 - (row.remaining ?? 0) / row.amount) : null,
     splitNote: ctx ? `${splitContextLine(ctx, money)} · ${personName.split(" ")[0]}'s share ${money(ctx.personShare ?? row.amount)}` : null,
     allocation,
     month: MONTH.format(row.date),
   };
+}
+
+/**
+ * The row's quiet second line — what kind of entry it is and what it means, without restating a figure the
+ * columns already show (the amount, who paid it). A split's shares and the status chip say the rest.
+ */
+function metaLine(row: LedgerRow, kind: SettlementKind, typeLabel: string, relation: string, first: string, ownerShort: string): string {
+  const settles = row.statementRow?.settles?.title;
+  switch (kind) {
+    case "split":
+      return typeLabel;
+    case "paymentReceived":
+    case "paymentMade":
+      return settles ? `Applied to ${settles}` : "Reduces the overall balance";
+    case "advance":
+      return "Paid ahead · held as advance";
+    case "advanceApplied":
+      return settles ? `Advance used for ${settles}` : "Advance used";
+    case "moneyGiven":
+      return `${typeLabel} · ${first} owes ${ownerShort}`;
+    case "moneyReceived":
+      return `${typeLabel} · ${ownerShort} owes ${first}`;
+    default:
+      return `${typeLabel} · ${relation}`;
+  }
 }
 
 /** Whose share a split row's amount is — matched against the stored allocations, never derived from them. */
@@ -198,52 +292,57 @@ function amountLabel(amount: number, a: SplitAllocation | null, personName: stri
   return "Share";
 }
 
-/** One figure of the statement summary strip, with a plain supporting line. */
+/** One figure of the statement summary strip. */
 export interface StatementSummaryCell {
   label: string;
   value: string;
+  /** Only what the label and value can't say: a line running against the balance, the advance kept apart, the direction. */
   note: string;
-  /** The closing figure (Balance due / Settled) — carries the weight. */
+  /** The reconciliation operator drawn before the figure; null when none applies. */
+  op: "+" | "−" | "=" | null;
+  /** The closing figure (Balance due / Settled) — the one primary result. */
   current: boolean;
   advance: boolean;
 }
 
 /**
- * The summary strip shared by the PDF and the preview: the reconciliation lines, any advance held apart, then
- * the balance due. Wording only — every value is the view's own string; a note never states a new figure.
+ * The summary strip shared by the PDF and the preview, read as one sum: the reconciliation lines, then the
+ * balance due as its result, then any advance held apart (never part of the balance). Wording only — every value
+ * is the view's own string; a note never states a new figure.
  */
 export function statementSummaryCells(view: StatementView): StatementSummaryCell[] {
-  const zero = money(0);
-  const first = view.personName.split(" ")[0];
-  const noteFor = (label: string, value: string): string => {
-    const none = value === zero;
-    if (label === STATEMENT_COPY.carried.label) return none ? "Nothing brought forward" : STATEMENT_COPY.carried.note;
-    if (label === "New this cycle") return none ? "No new activity" : "Added in this cycle";
-    if (label === "Total due") return "Before payments";
-    if (label === `Paid by ${first}`) return none ? "No payments received" : "Applied this cycle";
-    if (label.startsWith("Paid by")) return none ? "No payments made" : "Applied this cycle";
-    if (label === "Covered by advance") return "From an earlier advance";
-    return "";
-  };
   const settled = view.direction === "settled";
+  const ops = view.reconciliation.some((l) => l.op != null);
   return [
-    ...view.reconciliation.map((l) => ({ label: l.label, value: l.value, note: l.side ?? noteFor(l.label, l.value), current: false, advance: false })),
-    ...(view.advance ? [{ label: view.advance.label, value: view.advance.value, note: "Held apart — not in the balance", current: false, advance: true }] : []),
-    { label: view.current.label, value: view.current.value, note: settled ? "Nothing left to settle" : "Amount remaining to settle", current: true, advance: false },
+    ...view.reconciliation.map((l) => ({ label: l.label, value: l.value, note: l.side ?? "", op: l.op ?? null, current: false, advance: false })),
+    { label: view.current.label, value: view.current.value, note: settled ? "Nothing left to settle" : view.headline, op: ops ? ("=" as const) : null, current: true, advance: false },
+    ...(view.advance ? [{ label: view.advance.label, value: view.advance.value, note: "Held apart — not in the balance", op: null, current: false, advance: true }] : []),
   ];
 }
 
 /** How the transaction list is sectioned — the same rules in the PDF and the preview. */
 export function statementSections(view: StatementView) {
   const previous = view.reconciliation.find((r) => r.label === STATEMENT_COPY.carried.label) ?? null;
+  const currentByMonth = new Set(view.rows.map((r) => r.month)).size > 1;
   return {
     /** The Previous balance line, shown as the carry-forward row. */
     previous,
     /** A carry-forward row (and a THIS CYCLE band after it) when anything was brought forward. */
     showPrevious: view.carried.length > 0 || (previous != null && previous.value !== money(0)),
-    /** Month headings only when the listed rows span more than one month. */
-    byMonth: new Set([...view.carried, ...view.rows].map((r) => r.month)).size > 1,
+    /**
+     * The heading a row is listed under, or null for none. Brought-forward rows are grouped by the cycle they came
+     * from ("17 Jul – 16 Aug cycle"), so that cycle is said once instead of on every row; this cycle's rows by
+     * month, only when they span more than one.
+     */
+    groupOf: (r: StatementViewRow): string | null => (r.carried ? (r.fromCycle ?? r.month) : currentByMonth ? r.month : null),
   };
+}
+
+/** "19 Sep" with the year only when it isn't the statement period's own year. */
+export function statementDate(view: Pick<StatementView, "cycleLabel">, date: string): { day: string; year: string | null } {
+  const m = date.match(/^(.*\S)\s+(\d{4})$/);
+  if (!m) return { day: date, year: null };
+  return { day: m[1], year: view.cycleLabel.endsWith(m[2]) ? null : m[2] };
 }
 
 export function statementView(statement: PersonCycleStatement, options: StatementViewOptions = {}): StatementView {
@@ -266,12 +365,20 @@ export function statementView(statement: PersonCycleStatement, options: Statemen
         .reverse()
     : [];
   const total = carriedRows.length + ledgerRows.length;
-  const carried = carriedRows.map((r, i) => ({
+  const carriedView = carriedRows.map((r, i) => ({
     ...viewRow(r, i + 1, name, lookups, now, total, statement.personId, owner),
     carried: true,
     fromCycle: `${formatCycleLabel(cycleContaining(r.date, options.cycleStartDay), false)} cycle`,
   }));
-  const rows = ledgerRows.map((r, i) => viewRow(r, carriedRows.length + i + 1, name, lookups, now, total, statement.personId, owner));
+  const listed = ledgerRows.map((r, i) => viewRow(r, carriedRows.length + i + 1, name, lookups, now, total, statement.personId, owner));
+  // When every amount listed is the person's own share, the column header says so once ("Shambu's share") and the
+  // per-row caption goes; any other kind of amount keeps the plain "Amount" header and its captions.
+  const amounts = [...carriedView, ...listed].filter((r) => r.original);
+  const own = `${first}'s share`;
+  const amountHeader = amounts.length > 0 && amounts.every((r) => r.amountLabel === own) ? own : "Amount";
+  const plain = <T extends StatementViewRow>(r: T): T => (amountHeader === own ? { ...r, shareLabel: null } : r);
+  const carried = carriedView.map(plain);
+  const rows = listed.map(plain);
 
   const line = (key: string) => pos.lines.find((l) => l.key === key);
   const previous = line("previous")!;
@@ -281,6 +388,8 @@ export function statementView(statement: PersonCycleStatement, options: Statemen
   // (against the balance due, or — once settled — against what was due before the payments).
   const finalSign = statement.direction === "theyOwe" ? 1 : statement.direction === "iOwe" ? -1 : Math.sign(totalDue);
   const side = (signed: number) => (Math.abs(signed) < 0.005 || Math.sign(signed) === finalSign ? null : signed > 0 ? `Owed by ${first}` : `Owed by ${ownerShort}`);
+  /** "+" when the line runs the balance's way, "−" against it; a zero line takes its natural sign. */
+  const opFor = (signed: number, zero: "+" | "−"): "+" | "−" => (Math.abs(signed) < 0.005 || finalSign === 0 ? zero : Math.sign(signed) === finalSign ? "+" : "−");
   const reconciliation: StatementViewLine[] = [
     { label: "Previous balance", value: money(previous.value), side: side(previous.signed), tone: Math.abs(previous.signed) >= 0.005 ? "carried" : undefined },
     { label: "New this cycle", value: money(added.value), side: side(added.signed) },
@@ -290,8 +399,14 @@ export function statementView(statement: PersonCycleStatement, options: Statemen
   for (const l of pos.lines.filter((x) => x.key === "received" || x.key === "paid" || x.key === "advanceApplied")) {
     // With nothing paid either way, the paid line names whoever owes the balance.
     const label = l.key === "received" && l.value < 0.005 && statement.direction === "iOwe" ? paidLabel.paid : paidLabel[l.key as keyof typeof paidLabel];
-    reconciliation.push({ label, value: money(l.value), side: null, tone: l.value > 0 ? (l.key === "advanceApplied" ? "advance" : "receivable") : undefined });
+    reconciliation.push({ label, value: money(l.value), side: null, tone: l.value > 0 ? (l.key === "advanceApplied" ? "advance" : "receivable") : undefined, op: opFor(l.signed, "−") });
   }
+  // The strip reads as one sum (previous + new = total due − paid = balance) only while every line runs the
+  // balance's way; a line on the other side keeps its "Owed by" note instead, and no operator is drawn.
+  if (reconciliation.every((l) => l.side == null)) {
+    reconciliation[1].op = opFor(added.signed, "+");
+    reconciliation[2].op = "=";
+  } else for (const l of reconciliation) l.op = null;
   const receivedApplied = line("received")?.value ?? 0;
 
   const payments: StatementViewPayment[] = paymentGroups(statement).map((g) => {
@@ -341,5 +456,12 @@ export function statementView(statement: PersonCycleStatement, options: Statemen
     totalPaid: pos.cashPaid > 0 ? money(pos.cashPaid) : null,
     asOf: formatStatementDate(now, true),
     currentPending: statement.currentPending,
+    amountHeader,
+    settleProgress:
+      Math.abs(totalDue) < SAME || (statement.direction !== "settled" && Math.sign(totalDue) !== finalSign)
+        ? null
+        : statement.direction === "settled"
+          ? { ratio: 1, label: "Fully settled" }
+          : { ratio: clamp01(1 - statement.amount / Math.abs(totalDue)), label: `${money(statement.amount)} of ${money(Math.abs(totalDue))} still to settle` },
   };
 }

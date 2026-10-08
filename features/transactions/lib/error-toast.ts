@@ -1,6 +1,17 @@
 import { toast } from "@/store/toast-store";
-import { CardStatementChangedError, TransferEditRestrictedError, TransferRetryMismatchError } from "@/lib/repositories/transaction-repository";
+import {
+  CardStatementChangedError,
+  LoanPaymentTransactionRestrictedError,
+  TransactionFundingMismatchError,
+  OwnedTransactionDeleteError,
+  OwnedTransactionEditError,
+  TransactionChangedError,
+  TransferEditRestrictedError,
+  TransferRetryMismatchError,
+} from "@/lib/repositories/transaction-repository";
 import { PeopleSettlementPendingError } from "@/lib/engines/linked-people-readiness";
+import { ReceivedWithoutCashError } from "@/lib/repositories/expense-repository";
+import { PersonCashLegDeleteBlockedError } from "@/lib/services/person-cash-leg-deletion";
 
 /**
  * Error types whose own `.message` is already a safe, specific, actionable
@@ -11,7 +22,18 @@ import { PeopleSettlementPendingError } from "@/lib/engines/linked-people-readin
  * deliberately written to be user-facing (see `TransferEditRestrictedError`'s
  * own doc comment).
  */
-const USER_FACING_ERROR_TYPES = [TransferEditRestrictedError, CardStatementChangedError, TransferRetryMismatchError] as const;
+const USER_FACING_ERROR_TYPES = [
+  TransactionFundingMismatchError,
+  PersonCashLegDeleteBlockedError,
+  TransferEditRestrictedError,
+  CardStatementChangedError,
+  TransferRetryMismatchError,
+  OwnedTransactionEditError,
+  OwnedTransactionDeleteError,
+  TransactionChangedError,
+  LoanPaymentTransactionRestrictedError,
+  ReceivedWithoutCashError,
+] as const;
 
 export function userFacingMessage(error: unknown): string | null {
   // A card bill refused by the write-layer People gate says exactly what to settle (Loan/EMI keep theirs).
@@ -19,6 +41,10 @@ export function userFacingMessage(error: unknown): string | null {
   for (const ErrorType of USER_FACING_ERROR_TYPES) {
     if (error instanceof ErrorType) return error.message;
   }
+  // The repositories' own validation refusals are plain `Error`s written for the user ("This amount is too small to
+  // split…") — show them (WFI-P3-04). Firebase/Firestore errors carry a `code`, and runtime bugs are TypeError etc.:
+  // those stay behind the generic fallback.
+  if (error instanceof Error && error.constructor === Error && !("code" in error) && error.message.trim() !== "") return error.message;
   return null;
 }
 

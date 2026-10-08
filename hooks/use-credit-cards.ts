@@ -130,7 +130,10 @@ export function useAllCreditCardStatements() {
       const statementsByCard = new Map<string, Statement[]>();
       let erroredOnce = false;
 
-      const publish = () => onData(Array.from(statementsByCard.values()).flat());
+      // Publish only once EVERY card has reported, so totals never mix a partial set of cards (WFI-P3-09).
+      const publish = () => {
+        if (statementsByCard.size === ids.length) onData(Array.from(statementsByCard.values()).flat());
+      };
 
       const unsubscribes = ids.map((cardId) => {
         const repository = createStatementRepository(uid, cardId);

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Account } from "@/lib/models/account";
 import { AccountRepository } from "./account-repository";
 import { TransactionRepository } from "./transaction-repository";
-import { ExpenseRepository } from "./expense-repository";
+import { ExpenseRepository, ReceivedWithoutCashError } from "./expense-repository";
 import { LedgerRepository, PersonRepository } from "./person-repository";
 import {
   InstallmentPaymentRepository,
@@ -212,8 +212,32 @@ async function splitWith(
   return { expense, person, installments, participant };
 }
 
+/**
+ * LEGACY data: what the pre-guard "Received" flag wrote — a ledger-only "Received: …" status entry crediting the
+ * unpaid share, plus the participant flagged received. New code refuses to create this
+ * (`ReceivedWithoutCashError`); existing documents of this shape must still edit / undo / delete correctly.
+ */
+async function seedLegacyReceived(repos: ReturnType<typeof buildRepos>, expenseId: string, personId: string) {
+  const expense = (await repos.expenseRepository.getByKey(expenseId))!;
+  const participant = expense.participants.find((p) => p.personId === personId)!;
+  const installment = (await repos.installmentRepositoryFor(expense.scheduleId!).getByKey(participant.installmentId!))!;
+  const credit = Math.round((participant.share - installment.amountPaid) * 100) / 100;
+  const person = (await repos.personRepository.getByKey(personId))!;
+  await repos.ledgerRepositoryFor(personId).addEntry(person, {
+    type: "receivedBack",
+    amount: credit,
+    date: expense.date,
+    note: `Received: ${expense.description}`,
+    transactionRef: expense.transactionId,
+    receivedStatus: "received",
+  });
+  const updated = { ...expense, participants: expense.participants.map((p) => (p.personId === personId ? { ...p, receivedStatus: "received" as const } : p)) };
+  await repos.expenseRepository.update(updated);
+  return updated;
+}
+
 describe("Status entry vs. settlement entry must never be confused", () => {
-  it("marking a partially-settled participant 'Received' credits only the unsettled remainder, netting the balance to exactly zero", async () => {
+  it("marking a share 'Received' without recording money is refused — nothing changes (use Record payment)", async () => {
     const repos = buildRepos();
     const { expense, person, installments, participant } = await splitWith(repos, "Zed", 400);
 
@@ -228,40 +252,49 @@ describe("Status entry vs. settlement entry must never be confused", () => {
     });
     expect((await repos.personRepository.getByKey(person.id))!.currentBalance).toBe(150);
 
-    // Now flip the participant to "Received".
+    // Flipping the participant to "Received" would clear 150 with no money — refused.
     const current = await repos.installmentRepositoryFor(expense.scheduleId!).getAll();
-    await repos.expenseRepository.editExpense({
-      expense,
-      currentInstallments: current,
-      description: "Trip",
-      totalAmount: 400,
-      splitType: "equal",
-      participantInputs: [
-        { name: "Me", isMe: true },
-        { personId: person.id, name: "Zed", receivedStatus: "received" },
-      ],
-    });
+    await expect(
+      repos.expenseRepository.editExpense({
+        expense,
+        currentInstallments: current,
+        description: "Trip",
+        totalAmount: 400,
+        splitType: "equal",
+        participantInputs: [
+          { name: "Me", isMe: true },
+          { personId: person.id, name: "Zed", receivedStatus: "received" },
+        ],
+      }),
+    ).rejects.toBeInstanceOf(ReceivedWithoutCashError);
+    await expect(repos.expenseRepository.setParticipantReceivedStatus(expense, participant, "received")).rejects.toBeInstanceOf(ReceivedWithoutCashError);
 
     const entries = await repos.ledgerRepositoryFor(person.id).getAll();
-    // The real 50 settlement survives untouched, and the status entry credits
-    // only the outstanding 150 — not the full 200 on top of it.
     expect(entries.find((e) => e.note === "Split settlement: Trip")?.amount).toBe(50);
-    expect(entries.find((e) => e.note === "Received: Trip")?.amount).toBe(150);
-    expect((await repos.personRepository.getByKey(person.id))!.currentBalance).toBe(0);
+    expect(entries.find((e) => e.note === "Received: Trip")).toBeUndefined();
+    expect((await repos.personRepository.getByKey(person.id))!.currentBalance).toBe(150);
   });
 
-  it("un-marking 'Received' removes the status entry and leaves a real settlement entry intact", async () => {
+  it("creating a split with a share already 'Received' is refused before anything is written", async () => {
     const repos = buildRepos();
-    const { expense, person, installments, participant } = await splitWith(repos, "Zed", 400, "received");
+    await expect(splitWith(repos, "Zed", 400, "received")).rejects.toBeInstanceOf(ReceivedWithoutCashError);
+    expect(await repos.expenseRepository.getAll()).toHaveLength(0);
+    expect(await repos.personRepository.getAll()).toHaveLength(0);
+  });
+
+  it("LEGACY: un-marking 'Received' removes the status entry and leaves a real settlement entry intact", async () => {
+    const repos = buildRepos();
+    const { expense: created, person, installments, participant } = await splitWith(repos, "Zed", 400);
 
     await repos.expenseRepository.settleParticipant({
-      expense,
+      expense: created,
       participant,
       installment: installments[0],
-      installmentPaymentRepository: repos.installmentPaymentRepositoryFor(expense.scheduleId!, installments[0].id),
+      installmentPaymentRepository: repos.installmentPaymentRepositoryFor(created.scheduleId!, installments[0].id),
       amount: 50,
       date: new Date("2026-04-05T00:00:00Z"),
     });
+    const expense = await seedLegacyReceived(repos, created.id, person.id); // status credit 150
 
     const current = await repos.installmentRepositoryFor(expense.scheduleId!).getAll();
     await repos.expenseRepository.editExpense({
@@ -282,18 +315,19 @@ describe("Status entry vs. settlement entry must never be confused", () => {
     expect((await repos.personRepository.getByKey(person.id))!.currentBalance).toBe(150);
   });
 
-  it("an amount edit while 'Received' rewrites the status entry only, never a settlement entry's amount", async () => {
+  it("LEGACY: an amount edit while 'Received' rewrites the status entry only, never a settlement entry's amount", async () => {
     const repos = buildRepos();
-    const { expense, person, installments, participant } = await splitWith(repos, "Ana", 400, "received");
+    const { expense: created, person, installments, participant } = await splitWith(repos, "Ana", 400);
 
     await repos.expenseRepository.settleParticipant({
-      expense,
+      expense: created,
       participant,
       installment: installments[0],
-      installmentPaymentRepository: repos.installmentPaymentRepositoryFor(expense.scheduleId!, installments[0].id),
+      installmentPaymentRepository: repos.installmentPaymentRepositoryFor(created.scheduleId!, installments[0].id),
       amount: 50,
       date: new Date("2026-04-05T00:00:00Z"),
     });
+    const expense = await seedLegacyReceived(repos, created.id, person.id); // status credit 150
 
     const current = await repos.installmentRepositoryFor(expense.scheduleId!).getAll();
     await repos.expenseRepository.editExpense({
@@ -315,9 +349,11 @@ describe("Status entry vs. settlement entry must never be confused", () => {
     expect((await repos.personRepository.getByKey(person.id))!.currentBalance).toBe(0);
   });
 
-  it("re-saving the same 'Received' status never posts a second status entry (idempotent)", async () => {
+  it("LEGACY: re-saving the same 'Received' status never posts a second status entry (idempotent)", async () => {
     const repos = buildRepos();
-    const { expense, person } = await splitWith(repos, "Ivy", 400, "received");
+    const created = await splitWith(repos, "Ivy", 400);
+    const person = created.person;
+    const expense = await seedLegacyReceived(repos, created.expense.id, person.id);
 
     for (let i = 0; i < 3; i++) {
       const current = await repos.installmentRepositoryFor(expense.scheduleId!).getAll();
@@ -382,9 +418,9 @@ describe("Participants removed from a split are reconciled, not orphaned", () =>
     expect((await repos.personRepository.getByKey(ka.id))!.currentBalance).toBe(150);
   });
 
-  it("also retires the removed participant's status entry, so a 'Received' participant leaves nothing behind", async () => {
+  it("LEGACY: also retires the removed participant's status entry, so a 'Received' participant leaves nothing behind", async () => {
     const repos = buildRepos();
-    const expense = await repos.expenseRepository.createExpense({
+    const created = await repos.expenseRepository.createExpense({
       description: "Z",
       totalAmount: 300,
       date: new Date("2026-04-01T00:00:00Z"),
@@ -394,12 +430,13 @@ describe("Participants removed from a split are reconciled, not orphaned", () =>
       participantInputs: [
         { name: "Me", isMe: true },
         { name: "Ka", personId: null },
-        { name: "Mo", personId: null, receivedStatus: "received" },
+        { name: "Mo", personId: null },
       ],
     });
     const people = await repos.personRepository.getAll();
     const ka = people.find((p) => p.name === "Ka")!;
     const mo = people.find((p) => p.name === "Mo")!;
+    const expense = await seedLegacyReceived(repos, created.id, mo.id);
     expect(await repos.ledgerRepositoryFor(mo.id).getAll()).toHaveLength(2);
 
     const current = await repos.installmentRepositoryFor(expense.scheduleId!).getAll();
@@ -567,9 +604,9 @@ describe("settleAcrossPending", () => {
 });
 
 describe("Mixed statuses across participants resolve independently", () => {
-  it("received / yetToReceive / excluded in one split each get exactly their own ledger effect", async () => {
+  it("received (legacy) / yetToReceive / excluded in one split each get exactly their own ledger effect", async () => {
     const repos = buildRepos();
-    await repos.expenseRepository.createExpense({
+    const created = await repos.expenseRepository.createExpense({
       description: "Mixed",
       totalAmount: 300,
       date: new Date("2026-04-01T00:00:00Z"),
@@ -577,13 +614,14 @@ describe("Mixed statuses across participants resolve independently", () => {
       accountId: "acc-a",
       splitType: "custom",
       participantInputs: [
-        { name: "Rey", personId: null, value: 100, receivedStatus: "received" },
+        { name: "Rey", personId: null, value: 100, receivedStatus: "yetToReceive" },
         { name: "Yui", personId: null, value: 100, receivedStatus: "yetToReceive" },
         { name: "Exa", personId: null, value: 100, receivedStatus: "excluded" },
       ],
     });
     const people = await repos.personRepository.getAll();
     const byName = (n: string) => people.find((p) => p.name === n)!;
+    await seedLegacyReceived(repos, created.id, byName("Rey").id); // Rey: data written before the guard
 
     const rey = await repos.ledgerRepositoryFor(byName("Rey").id).getAll();
     expect(rey.map((e) => e.type).sort()).toEqual(["gave", "receivedBack"]);

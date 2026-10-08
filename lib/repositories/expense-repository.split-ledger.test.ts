@@ -3,7 +3,7 @@ import type { Account } from "@/lib/models/account";
 import { compareLedgerEntriesNewestFirst } from "@/lib/models/person";
 import { AccountRepository } from "./account-repository";
 import { TransactionRepository } from "./transaction-repository";
-import { ExpenseRepository } from "./expense-repository";
+import { ExpenseRepository, ReceivedWithoutCashError } from "./expense-repository";
 import { LedgerRepository, PersonRepository } from "./person-repository";
 import { PaymentScheduleRepository, InstallmentRepository } from "./payment-schedule-repository";
 
@@ -177,6 +177,29 @@ beforeEach(() => {
   fake.docs.clear();
 });
 
+/**
+ * LEGACY data: what the pre-guard "Received" flag wrote — a ledger-only "Received: …" status entry crediting the
+ * unpaid share, plus the participant flagged received. New code refuses to create this
+ * (`ReceivedWithoutCashError`); existing documents of this shape must still edit / undo / delete correctly.
+ */
+async function seedLegacyReceived(repos: ReturnType<typeof buildRepos>, expenseId: string, personId: string) {
+  const expense = (await repos.expenseRepository.getByKey(expenseId))!;
+  const participant = expense.participants.find((p) => p.personId === personId)!;
+  const installment = (await repos.installmentRepositoryFor(expense.scheduleId!).getByKey(participant.installmentId!))!;
+  const person = (await repos.personRepository.getByKey(personId))!;
+  await repos.ledgerRepositoryFor(personId).addEntry(person, {
+    type: "receivedBack",
+    amount: Math.round((participant.share - installment.amountPaid) * 100) / 100,
+    date: expense.date,
+    note: `Received: ${expense.description}`,
+    transactionRef: expense.transactionId,
+    receivedStatus: "received",
+  });
+  const updated = { ...expense, participants: expense.participants.map((p) => (p.personId === personId ? { ...p, receivedStatus: "received" as const } : p)) };
+  await repos.expenseRepository.update(updated);
+  return updated;
+}
+
 describe("Custom-name split participants → People Ledger (Task 1)", () => {
   it("promotes a custom name to a new Person and posts a ledger entry with the right amount/date/description/transactionRef", async () => {
     const { accountRepository, expenseRepository, personRepository, ledgerRepositoryFor } = buildRepos();
@@ -294,12 +317,8 @@ describe("Received / Yet-to-Receive / Don't-count status (Task 2)", () => {
     return { ...repos, expense, alex };
   }
 
-  it("'Received' posts a receivedBack entry immediately and nets the person's balance to zero", async () => {
-    const { ledgerRepositoryFor, alex, personRepository } = await createSplitWithStatus("received");
-    const entries = await ledgerRepositoryFor(alex.id).getAll();
-    expect(entries.map((e) => e.type).sort()).toEqual(["gave", "receivedBack"]);
-    const refreshed = await personRepository.getByKey(alex.id);
-    expect(refreshed!.currentBalance).toBe(0); // 200 gave - 200 receivedBack
+  it("'Received' at creation is refused — it would clear the share with no money recorded (use Record payment)", async () => {
+    await expect(createSplitWithStatus("received")).rejects.toBeInstanceOf(ReceivedWithoutCashError);
   });
 
   it("'Yet to Receive' leaves the amount outstanding — no receivedBack entry, balance stays positive", async () => {
@@ -319,49 +338,36 @@ describe("Received / Yet-to-Receive / Don't-count status (Task 2)", () => {
     expect(expense.participants.find((p) => p.name === "Alex")?.receivedStatus).toBe("excluded");
   });
 
-  it("editing from 'Yet to Receive' to 'Received' posts the missing receivedBack entry exactly once", async () => {
+  it("editing from 'Yet to Receive' to 'Received' is refused and changes nothing", async () => {
     const { expenseRepository, ledgerRepositoryFor, alex, expense, installmentRepositoryFor, personRepository } =
       await createSplitWithStatus("yetToReceive");
     const currentInstallments = await installmentRepositoryFor(expense.scheduleId!).getAll();
 
-    const edited = await expenseRepository.editExpense({
-      expense,
-      currentInstallments,
-      description: "Movie night",
-      totalAmount: 400,
-      splitType: "equal",
-      participantInputs: [
-        { name: "Me", isMe: true },
-        { personId: alex.id, name: "Alex", receivedStatus: "received" },
-      ],
-    });
+    await expect(
+      expenseRepository.editExpense({
+        expense,
+        currentInstallments,
+        description: "Movie night",
+        totalAmount: 400,
+        splitType: "equal",
+        participantInputs: [
+          { name: "Me", isMe: true },
+          { personId: alex.id, name: "Alex", receivedStatus: "received" },
+        ],
+      }),
+    ).rejects.toBeInstanceOf(ReceivedWithoutCashError);
 
     const entries = await ledgerRepositoryFor(alex.id).getAll();
-    expect(entries.filter((e) => e.type === "receivedBack")).toHaveLength(1);
-    const refreshed = await personRepository.getByKey(alex.id);
-    expect(refreshed!.currentBalance).toBe(0);
-    expect(edited.participants.find((p) => p.name === "Alex")?.receivedStatus).toBe("received");
-
-    // Editing again with the same "received" status must not post a second receivedBack.
-    const currentInstallments2 = await installmentRepositoryFor(expense.scheduleId!).getAll();
-    await expenseRepository.editExpense({
-      expense: edited,
-      currentInstallments: currentInstallments2,
-      description: "Movie night",
-      totalAmount: 400,
-      splitType: "equal",
-      participantInputs: [
-        { name: "Me", isMe: true },
-        { personId: alex.id, name: "Alex", receivedStatus: "received" },
-      ],
-    });
-    const entriesAfterSecondSave = await ledgerRepositoryFor(alex.id).getAll();
-    expect(entriesAfterSecondSave.filter((e) => e.type === "receivedBack")).toHaveLength(1);
+    expect(entries.map((e) => e.type)).toEqual(["gave"]);
+    expect((await personRepository.getByKey(alex.id))!.currentBalance).toBe(200);
+    expect((await expenseRepository.getByKey(expense.id))!.participants.find((p) => p.name === "Alex")?.receivedStatus).toBe("yetToReceive");
   });
 
-  it("editing from 'Received' back to 'Yet to Receive' reverses the receivedBack entry", async () => {
-    const { expenseRepository, ledgerRepositoryFor, alex, expense, installmentRepositoryFor, personRepository } =
-      await createSplitWithStatus("received");
+  it("LEGACY: editing from 'Received' back to 'Yet to Receive' reverses the receivedBack entry", async () => {
+    const created = await createSplitWithStatus("yetToReceive");
+    const { expenseRepository, ledgerRepositoryFor, alex, installmentRepositoryFor, personRepository } = created;
+    const expense = await seedLegacyReceived(created, created.expense.id, alex.id);
+    expect((await personRepository.getByKey(alex.id))!.currentBalance).toBe(0);
     const currentInstallments = await installmentRepositoryFor(expense.scheduleId!).getAll();
 
     await expenseRepository.editExpense({
@@ -418,11 +424,12 @@ describe("Multiple people in one split", () => {
 });
 
 describe("Delete/restore reverses both 'gave' and 'receivedBack' entries", () => {
-  it("deleteExpense soft-deletes both entries and restoreExpense brings both back", async () => {
-    const { accountRepository, expenseRepository, personRepository, ledgerRepositoryFor } = buildRepos();
+  it("LEGACY: deleteExpense soft-deletes both entries and restoreExpense brings both back", async () => {
+    const repos = buildRepos();
+    const { accountRepository, expenseRepository, personRepository, ledgerRepositoryFor } = repos;
     await seedAccount(accountRepository);
 
-    const expense = await expenseRepository.createExpense({
+    const created = await expenseRepository.createExpense({
       description: "Concert tickets",
       totalAmount: 200,
       date: new Date("2026-06-01T00:00:00Z"),
@@ -431,11 +438,12 @@ describe("Delete/restore reverses both 'gave' and 'receivedBack' entries", () =>
       splitType: "equal",
       participantInputs: [
         { name: "Me", isMe: true },
-        { name: "Tia", personId: null, receivedStatus: "received" },
+        { name: "Tia", personId: null },
       ],
     });
     const people = await personRepository.getAll();
     const tia = people.find((p) => p.name === "Tia")!;
+    const expense = await seedLegacyReceived(repos, created.id, tia.id);
     expect((await personRepository.getByKey(tia.id))!.currentBalance).toBe(0);
 
     await expenseRepository.deleteExpense(expense);
@@ -462,7 +470,8 @@ describe("Ledger sort order stays newest-first through add/edit/split/receive (S
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date("2026-09-01T09:00:00Z"));
-      const { accountRepository, expenseRepository, personRepository, ledgerRepositoryFor, installmentRepositoryFor } = buildRepos();
+      const repos = buildRepos();
+      const { accountRepository, expenseRepository, personRepository, ledgerRepositoryFor } = repos;
       await seedAccount(accountRepository);
       const day = new Date("2026-09-01T00:00:00Z"); // the shared, same-day `date` every entry below carries
 
@@ -487,15 +496,17 @@ describe("Ledger sort order stays newest-first through add/edit/split/receive (S
       // not a strict order between "gave" and its own immediate "receivedBack", which a
       // real app never needs to resolve since a settlement always reads as connected to
       // its originating entry regardless of which lands a millisecond first.
-      await expenseRepository.createExpense({
+      // (Legacy "received" data — new code records a real receipt through Record payment instead.)
+      const coffee = await expenseRepository.createExpense({
         description: "Coffee",
         totalAmount: 100,
         date: day,
         categoryId: "cat-1",
         accountId: "acc-a",
         splitType: "equal",
-        participantInputs: [{ name: "Me", isMe: true }, { personId: kim.id, name: "Kim", receivedStatus: "received" }],
+        participantInputs: [{ name: "Me", isMe: true }, { personId: kim.id, name: "Kim" }],
       });
+      await seedLegacyReceived(repos, coffee.id, kim.id);
 
       const entriesAfterAdds = (await ledgerRepositoryFor(kim.id).getAll()).sort(compareLedgerEntriesNewestFirst);
       // Three entries, all dated the same day: Lunch's "gave" (created first, an hour
@@ -511,15 +522,7 @@ describe("Ledger sort order stays newest-first through add/edit/split/receive (S
       // new receivedBack entry "just now" (last of all four by createdAt) — it must
       // immediately take the very top spot, even though its `date` (== day) ties with
       // every other entry here.
-      const lunchInstallments = await installmentRepositoryFor(firstExpense.scheduleId!).getAll();
-      await expenseRepository.editExpense({
-        expense: firstExpense,
-        currentInstallments: lunchInstallments,
-        description: "Lunch",
-        totalAmount: 200,
-        splitType: "equal",
-        participantInputs: [{ name: "Me", isMe: true }, { personId: kim.id, name: "Kim", receivedStatus: "received" }],
-      });
+      await seedLegacyReceived(repos, firstExpense.id, kim.id);
 
       const entriesAfterEdit = (await ledgerRepositoryFor(kim.id).getAll()).sort(compareLedgerEntriesNewestFirst);
       // The just-posted "Received: Lunch" (T=11:00, an hour after everything else) must

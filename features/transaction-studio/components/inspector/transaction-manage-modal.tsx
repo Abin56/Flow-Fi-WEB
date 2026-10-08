@@ -248,7 +248,7 @@ export function TransactionManageModal({
         toast.error("Couldn't save changes", "This transaction hasn't finished loading yet — try again in a moment.");
         return;
       }
-      const mapped = draftToEditTransactionParams(currentDraft, categories);
+      const mapped = draftToEditTransactionParams(currentDraft, categories, committedTransaction);
       if (!mapped.params) {
         setFieldErrors((prev) => ({ ...prev, category: mapped.error }));
         return;

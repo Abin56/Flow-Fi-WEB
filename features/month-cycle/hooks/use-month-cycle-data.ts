@@ -26,6 +26,7 @@ import { useMemo, useState } from "react";
 import { useAccounts } from "@/hooks/use-accounts";
 import { useAllCreditCardStatements, useCreditCards } from "@/hooks/use-credit-cards";
 import { useAllEmiInstallments } from "@/hooks/use-emis";
+import { useEmiInstallmentPayments } from "@/hooks/use-emi-installment-payments";
 import { useExpenses } from "@/hooks/use-expenses";
 import { useLoanScheduledPayments } from "@/hooks/use-loan-scheduled-payments";
 import { dashboardLoanPaidRows } from "@/lib/engines/loan-cash-flow";
@@ -48,7 +49,6 @@ import {
   amountFor,
   breakdownFor,
   percentChange,
-  previousRangeFor,
   type DashboardBillOccurrence,
   type DashboardExpense,
   type DashboardInstallment,
@@ -67,25 +67,18 @@ import { cardBillsDueInCycle, cardBillsForCard } from "@/lib/engines/card-cycle-
 import { isSplit, myShare, type Expense } from "@/lib/models/expense";
 import { useMySpendContext } from "@/hooks/use-my-spend-context";
 import { mySpendRows, summarizeMySpend } from "@/lib/engines/my-spend";
-import { compareTransactionsNewestFirst, effectiveMonth, isLoanPrincipalDisbursement, isNonIncomeExpenseMovement, isPersonFunded, isTransfer, type Transaction } from "@/lib/models/transaction";
+import { monthCycleDashboardTransactions } from "@/lib/engines/cycle-transaction-mapping";
+import { compareTransactionsNewestFirst, isNonIncomeExpenseMovement, isPersonFunded, type Transaction } from "@/lib/models/transaction";
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 /**
- * The date a transaction should be bucketed under for "this cycle" totals —
- * `effectiveMonth` (collapsed to the 1st of its month) for the legacy
- * calendar-month cycle, matching every pre-existing behavior exactly; a
- * custom mid-month cycle needs the real day instead, or a transaction from
- * the wrong half of either calendar month would leak across the boundary.
+ * The ONE bucket rule for every Month Cycle figure (WFI-P2-06) — hero, My spend, drill-downs, account spend and
+ * counts all use `mySpendBucketDate`, the same rule the hero engine applies (`isMonthGranular = !isCustomCycle`):
+ * the calendar-month cycle buckets by `effectiveMonth` (honouring a "count in month X" override); a custom
+ * mid-month cycle buckets by the real day, since a calendar-month override has no single custom cycle.
  */
-function bucketDateFor(t: Transaction, isCustomCycle: boolean): Date {
-  return isCustomCycle ? (t.accountingMonth ?? t.dateTime) : effectiveMonth(t);
-}
-
-/**
- * The hero's bucketing (`dashboard-aggregation.bucketDateFor` with `isMonthGranular = !isCustomCycle`) for a
- * raw Transaction — so "My spend", its drill-down rows and its top category always cover the same rows.
- */
+const bucketDateFor = mySpendBucketDate;
 const heroBucketDate = mySpendBucketDate;
 
 function daysLeftIn(date: Date, now: Date): number {
@@ -189,7 +182,8 @@ export function useMonthCycleData() {
   const { data: accounts = [], isLoading: accountsLoading } = useAccounts();
   const { data: creditCards = [], isLoading: creditCardsLoading } = useCreditCards();
   const { data: statements = [], isLoading: statementsLoading } = useAllCreditCardStatements();
-  const { data: emiInstallments = [], isLoading: emiInstallmentsLoading } = useAllEmiInstallments();
+  const { isLoading: emiInstallmentsLoading } = useAllEmiInstallments();
+  const { payments: emiPayments, isLoading: emiPaymentsLoading } = useEmiInstallmentPayments();
   const { payments: loanScheduledPayments, isLoading: loanInstallmentsLoading } = useLoanScheduledPayments();
   const { occurrences: billOccurrences = [], isLoading: billOccurrencesLoading } = useAllBillOccurrences();
   const { data: expenses = [], isLoading: expensesLoading } = useExpenses();
@@ -212,6 +206,7 @@ export function useMonthCycleData() {
     creditCardsLoading ||
     statementsLoading ||
     emiInstallmentsLoading ||
+    emiPaymentsLoading ||
     loanInstallmentsLoading ||
     billOccurrencesLoading ||
     expensesLoading ||
@@ -249,17 +244,13 @@ export function useMonthCycleData() {
     // real `dateTime` instead, or spend from the wrong half of either month would leak in.
     const strategy: DateRangeStrategy = { kind: "reportsPeriod", isMonthGranular: !isCustomCycle };
     const range: DateRange = cycleRange;
-    const previousRange = previousRangeFor(strategy, range)!;
+    // The real previous cycle (same start day), not a window shifted by this one's length (WFI-P3-03).
+    const previousRange: DateRange = adjacentCycleRange(monthCycleStartDay, range, -1);
 
-    const dashboardTransactions: DashboardTransaction[] = (transactions as Transaction[]).filter((t) => !isLoanPrincipalDisbursement(t) && !t.isPersonLedgerMovement).map((t) => ({
-      id: t.id,
-      type: t.type === "income" ? "income" : "expense",
-      amount: t.amount,
-      dateTime: t.dateTime,
-      effectiveMonth: effectiveMonth(t),
-      isTransfer: isTransfer(t),
-      accountId: t.accountId,
-    }));
+    const dashboardTransactions: DashboardTransaction[] = monthCycleDashboardTransactions(
+      transactions as Transaction[],
+      new Set((creditCards as CreditCardProfile[]).map((c) => c.accountId)),
+    );
     const dashboardExpenses: DashboardExpense[] = (expenses as Expense[]).map((e) => ({
       transactionId: e.transactionId,
       totalAmount: e.totalAmount,
@@ -270,10 +261,8 @@ export function useMonthCycleData() {
       dueDate: o.dueDate,
       amountPaid: o.amountPaid,
     }));
-    const dashboardEmiInstallments: DashboardInstallment[] = emiInstallments.map((i) => ({
-      dueDate: i.dueDate,
-      amountPaid: i.amountPaid,
-    }));
+    // One row per EMI payment, dated by when it was PAID (WFI-P2-11) — an advance / late payment lands in its real cycle.
+    const dashboardEmiInstallments: DashboardInstallment[] = emiPayments.map((p) => ({ dueDate: p.date, amountPaid: p.amount }));
     // Only schedule-only (legacy, unlinked) payments on money I borrowed — modern Loan payments are
     // already counted through their linked Transaction, and lent-loan repayments are not spending.
     const dashboardLoanInstallments: DashboardInstallment[] = dashboardLoanPaidRows(loanScheduledPayments);
@@ -312,7 +301,7 @@ export function useMonthCycleData() {
     const mySpentChangePercent = percentChange(mySpent, myPreviousSpent);
 
     return { spent, spentBreakdown, previousSpent, income, net, spentChangePercent, mySpent, myPreviousSpent, myNet, mySpentChangePercent };
-  }, [isCustomCycle, cycleRange, transactions, expenses, billOccurrences, emiInstallments, loanScheduledPayments, mySpendCtx]);
+  }, [isCustomCycle, cycleRange, monthCycleStartDay, transactions, creditCards, expenses, billOccurrences, emiPayments, loanScheduledPayments, mySpendCtx]);
 
   const savingsRatePercent = financialView.income > 0 ? Math.round((financialView.net / financialView.income) * 100) : 0;
 
@@ -363,28 +352,29 @@ export function useMonthCycleData() {
     return insight;
   }, [budgets, financialView.spent, now]);
 
-  // --- EMIs due this month (active/overdue only, next installment due in the current calendar month) ---
+  // --- EMI installments owed this cycle — per installment, same rule as Loans (`loanCycleDues`): an unpaid
+  //     installment from an earlier cycle is carried as its own overdue row, so the total is never short (WFI-P2-05). ---
   const emiThisMonth = useMemo(() => {
     const items: MonthCycleUpcomingItem[] = [];
-    let total = 0;
+    const allDues: LoanCycleDue[] = [];
     for (const row of emiRows) {
-      if (row.status === "closed" || row.status === "completed") continue;
-      const due = row.nextInstallment?.dueDate;
-      if (!due || !isOwedInCycle(due, cycleRange, now)) continue;
-      const amount = row.nextInstallment ? row.nextInstallment.amountDue - row.nextInstallment.amountPaid : 0;
-      total += amount;
-      items.push({
-        id: row.emi.id,
-        title: row.emi.name,
-        subtitle: row.emi.lenderName ?? "EMI",
-        amount,
-        dueDate: due,
-        daysLeft: daysLeftIn(due, now),
-        metaLabel: dueInDaysLabel(daysLeftIn(due, now)),
-      });
+      const isClosed = row.status === "closed" || row.status === "completed";
+      const dues = loanCycleDues({ id: row.emi.id, isClosed, installments: row.installments }, cycleRange, now);
+      allDues.push(...dues);
+      for (const due of dues) {
+        items.push({
+          id: dues.length > 1 ? `${row.emi.id}:${due.installmentId}` : row.emi.id,
+          title: row.emi.name,
+          subtitle: `${row.emi.lenderName ?? "EMI"} · EMI ${due.sequenceNumber} of ${due.installmentCount}`,
+          amount: due.remaining,
+          dueDate: due.dueDate,
+          daysLeft: daysLeftIn(due.dueDate, now),
+          metaLabel: due.carriedForward ? `Overdue · due ${formatShortDate(due.dueDate)}` : dueInDaysLabel(daysLeftIn(due.dueDate, now)),
+        });
+      }
     }
     items.sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime());
-    return { items, total, count: items.length };
+    return { items, total: loanCycleDueTotals(allDues).total, count: items.length };
   }, [emiRows, now, cycleRange]);
 
   // --- Loan installments owed this cycle (payable = money I borrowed) — per installment from the

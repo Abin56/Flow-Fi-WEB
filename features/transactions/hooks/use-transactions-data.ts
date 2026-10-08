@@ -57,7 +57,6 @@ import {
   createAdvanceApplicationsCollection,
   createCategoryRepository,
   createExpenseRepository,
-  createInstallmentPaymentRepositoryFor,
   createInstallmentRepositoryFor,
   createLedgerRepositoryFor,
   createPersonPaymentRepository,
@@ -70,11 +69,6 @@ import { deletePersonCashLegTransaction } from "@/lib/services/person-cash-leg-d
 import { followsDescription, syncLinkedDescription } from "@/lib/services/transaction-description-sync";
 import { deleteTransactionWithLinkedEffects } from "@/lib/services/transaction-deletion";
 import { repairSplitGhost } from "@/lib/services/split-ghost-repair";
-import type {
-  PendingSettlement,
-  SettleAcrossPendingParams,
-  SettleParticipantParams,
-} from "@/lib/repositories/expense-repository";
 import type { CreateTransactionParams, EditTransactionParams } from "@/lib/repositories/transaction-repository";
 import type { CreatePersonParams, LedgerRepository } from "@/lib/repositories/person-repository";
 import type { ExpenseParticipantInput } from "@/lib/repositories/expense-repository";
@@ -305,7 +299,10 @@ export function useTransactionActions() {
                 )
               : undefined;
             if (person && entry) {
-              const { amount, dateTime, ...rest } = params;
+              // Only presentation / account fields ride along on the owner write — never the person link,
+              // type or exclusion, which would change the cash leg's meaning away from its entry.
+              const { amount, dateTime, type: _t, excludeFromCalculations: _x, linkedPersonId: _l, clearLinkedPersonId: _c, owesPersonToggle: _o, ...rest } = params;
+              void [_t, _x, _l, _c, _o];
               return createLedgerRepositoryFor(uid, personId, personRepository).editEntry(
                 person,
                 entry,
@@ -419,34 +416,6 @@ export function useTransactionActions() {
       /** Direct repository access for the Transaction Manager popup's richer split-editing UI (convertToSplit/resplitExpense/editExpense) and installment lookups. */
       expenseRepository,
       installmentRepositoryFor: (scheduleId: string) => createInstallmentRepositoryFor(uid, scheduleId),
-      /** Records a payment against one split-expense participant's installment (Settle Up's "specific expense" mode). */
-      settleParticipant: (params: Omit<SettleParticipantParams, "installmentPaymentRepository">) =>
-        withErrorToast(() => {
-          const installmentRepository = createInstallmentRepositoryFor(uid, params.installment.scheduleId);
-          const installmentPaymentRepository = createInstallmentPaymentRepositoryFor(
-            uid,
-            params.installment.scheduleId,
-            params.installment.id,
-            installmentRepository,
-          );
-          return expenseRepository.settleParticipant({ ...params, installmentPaymentRepository });
-        }, "Couldn't record settlement"),
-      /** Fans a lump sum across a person's pending split installments, oldest-due-first (Settle Up's "all pending"/"custom amount" modes). */
-      settleAcrossPending: (params: Omit<SettleAcrossPendingParams, "installmentPaymentRepositoryFor"> & { pending: PendingSettlement[] }) =>
-        withErrorToast(
-          () =>
-            expenseRepository.settleAcrossPending({
-              ...params,
-              installmentPaymentRepositoryFor: (scheduleId: string, installmentId: string) =>
-                createInstallmentPaymentRepositoryFor(
-                  uid,
-                  scheduleId,
-                  installmentId,
-                  createInstallmentRepositoryFor(uid, scheduleId),
-                ),
-            }),
-          "Couldn't record settlement",
-        ),
     };
   }, [uid]);
 }

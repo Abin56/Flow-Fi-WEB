@@ -1,6 +1,7 @@
 "use client";
 
 import { ArrowDownToLine, ArrowUpFromLine, Check, Receipt, Undo2 } from "lucide-react";
+import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/finance/empty-state";
@@ -10,6 +11,7 @@ import { isSplit, type Expense, type ExpenseParticipant } from "@/lib/models/exp
 import { formatCurrency } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { toast } from "@/store/toast-store";
+import { peopleSettleHref } from "@/lib/engines/linked-people-readiness";
 
 /**
  * Finds the split-expense participant a ledger row's Yet-to-Receive/Received toggle should act
@@ -101,31 +103,36 @@ export function RecentPeopleTransactions({ onViewAll }: { onViewAll?: () => void
                   {received ? "+" : "-"}
                   {formatCurrency(txn.amount)}
                 </p>
-                {toggleTarget != null && (
+                {pendingReceivable ? (
+                  // ✓ Received = real money received: opens this person's Record payment with this obligation
+                  // preselected (amount, receiving account and date confirmed there) — never a silent status flip.
+                  <Link
+                    href={peopleSettleHref(txn.personId, `ledger:${txn.id}`)}
+                    aria-label={`Record payment received from ${txn.personName}`}
+                    title="Record payment received"
+                    className="flex size-7 shrink-0 items-center justify-center rounded-lg text-success transition-colors hover:bg-muted"
+                  >
+                    <Check className="size-4" />
+                  </Link>
+                ) : settled && toggleTarget != null ? (
+                  // Undo of a LEGACY ledger-only "received" flag (no money was recorded with it).
                   <button
                     type="button"
-                    aria-label={settled ? "Mark as yet to receive" : "Mark as received"}
-                    title={settled ? "Mark as yet to receive" : "Mark as received"}
+                    aria-label="Mark as yet to receive"
+                    title="Mark as yet to receive"
                     onClick={async () => {
                       if (peopleActions == null) return;
                       try {
-                        await peopleActions.setParticipantReceivedStatus(
-                          toggleTarget.expense,
-                          toggleTarget.participant,
-                          settled ? "yetToReceive" : "received",
-                        );
+                        await peopleActions.setParticipantReceivedStatus(toggleTarget.expense, toggleTarget.participant, "yetToReceive");
                       } catch (error) {
                         toast.error(error instanceof Error ? error.message : "Couldn't update status");
                       }
                     }}
-                    className={cn(
-                      "flex size-7 shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-muted",
-                      settled ? "text-warning-foreground" : "text-success",
-                    )}
+                    className="flex size-7 shrink-0 items-center justify-center rounded-lg text-warning-foreground transition-colors hover:bg-muted"
                   >
-                    {settled ? <Undo2 className="size-4" /> : <Check className="size-4" />}
+                    <Undo2 className="size-4" />
                   </button>
-                )}
+                ) : null}
               </div>
             );
           })}

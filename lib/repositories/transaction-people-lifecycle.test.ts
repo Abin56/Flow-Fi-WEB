@@ -269,7 +269,7 @@ describe("Historical ghost repair — an obligation left behind by an older tran
   async function ghostExam() {
     const t = setup();
     const created = await t.exam();
-    await t.transactions.softDeleteTransaction(t.get<Transaction>(created.transaction.id));
+    await t.transactions.softDeleteTransaction(t.get<Transaction>(created.transaction.id), { owner: "people" }); // simulates the pre-guard delete path
     return { t, ...created };
   }
 
@@ -313,7 +313,7 @@ describe("Historical ghost repair — an obligation left behind by an older tran
       { type: "income", accountId: "sbi", categoryId: "personal-loan" },
       t.transactions,
     );
-    await t.transactions.softDeleteTransaction(t.get<Transaction>(transaction.id)); // old bug
+    await t.transactions.softDeleteTransaction(t.get<Transaction>(transaction.id), { owner: "people" }); // old bug — simulates the pre-guard delete path
     expect(t.sbi()).toBe(10000);
     expect(await t.ammaLedger.reconcileOrphanedTransactionEntries(t.amma(), [entry.id], t.transactions)).toEqual([entry.id]);
     expect(t.balanceOf("amma")).toBe(0);
@@ -336,7 +336,7 @@ describe("Historical ghost repair — an obligation left behind by an older tran
       { type: "expense", accountId: "sbi", categoryId: "personal-loan" },
       t.transactions,
     );
-    await t.transactions.softDeleteTransaction(t.get<Transaction>(transaction.id));
+    await t.transactions.softDeleteTransaction(t.get<Transaction>(transaction.id), { owner: "people" }); // simulates the pre-guard delete path
     const plan = planOrphanReconciliation(t.activeEntries("amma"), (ref) => t.get<Transaction>(ref) ?? null);
     expect(plan.reconcile).toHaveLength(0);
     expect(plan.blocked.map((e) => e.id)).toEqual([entry.id]);
@@ -348,7 +348,7 @@ describe("Historical ghost repair — an obligation left behind by an older tran
   it("10/12/13/14. standalone, advance, Loan-linked and split-share entries are never ghosts", async () => {
     const t = setup();
     const deletedTxn = await t.transactions.createTransaction({ type: "expense", amount: 100, dateTime: DATE, accountId: "sbi", categoryId: "food" });
-    await t.transactions.softDeleteTransaction(deletedTxn);
+    await t.transactions.softDeleteTransaction(deletedTxn, { owner: "people" }); // simulates the pre-guard delete path
     const standalone = await t.ammaLedger.addEntry(t.amma(), { type: "borrowed", amount: 700, date: DATE, note: "Cash from AMMA" });
     const loanLinked = await t.ammaLedger.addEntry(t.amma(), { type: "gave", amount: 5000, date: DATE, transactionRef: "loan-123" });
     const advance = await t.ammaLedger.addEntry(t.amma(), { type: "receivedBack", amount: 200, date: DATE, transactionRef: "missing-cash-leg", sourceKind: "advance" });

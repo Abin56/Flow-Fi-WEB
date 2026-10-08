@@ -366,7 +366,16 @@ describe("draftToEditTransactionParams", () => {
     const draft = { ...draftFromRow(row()), accountingMonth: "2026-03" };
     const result = draftToEditTransactionParams(draft, [category()]);
     expect(result.params?.clearAccountingMonth).toBe(false);
-    expect(result.params?.accountingMonth?.toISOString()).toBe("2026-03-01T00:00:00.000Z");
+    // The LOCAL 1st — `effectiveMonth` reads months in local time (WFI-P3-08).
+    expect(result.params?.accountingMonth).toEqual(new Date(2026, 2, 1));
+  });
+
+  it("[WFI-P3-08] keeps the committed transaction's date/time when the day is unchanged; a new day keeps its time of day", () => {
+    const existing = { dateTime: new Date(2026, 7, 15, 14, 30), accountingMonth: null };
+    const same = draftToEditTransactionParams({ ...draftFromRow(row()), date: "2026-08-15" }, [category()], existing);
+    expect(same.params?.dateTime).toBeUndefined();
+    const moved = draftToEditTransactionParams({ ...draftFromRow(row()), date: "2026-08-17" }, [category()], existing);
+    expect(moved.params?.dateTime).toEqual(new Date(2026, 7, 17, 14, 30));
   });
 });
 

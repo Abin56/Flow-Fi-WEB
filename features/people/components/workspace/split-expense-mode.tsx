@@ -32,11 +32,6 @@ const SPLIT_TYPE_OPTIONS: { value: SplitType; label: string; icon: typeof Divide
   { value: "percentage", label: "Percentage", icon: Percent },
 ];
 
-/** Collectible-only statuses — see `ExpenseParticipant.receivedStatus`. Plain-language labels only. */
-const RECEIVED_STATUS_OPTIONS: { value: Exclude<ReceivedStatus, "notApplicable" | "excluded">; label: string }[] = [
-  { value: "yetToReceive", label: "Owes me" },
-  { value: "received", label: "Already paid" },
-];
 
 /**
  * One allocation grid for every participant row: avatar · name · controls · amount · remove. On phones
@@ -62,32 +57,6 @@ type FieldErrors = Partial<Record<"description" | "amount" | "account" | "catego
   extra?: Record<number, string>;
 };
 
-/** "Owes me" / "Already paid" — a two-state control instead of a dropdown. */
-function StatusToggle({ value, onChange, label }: { value: ReceivedStatus; onChange: (v: ReceivedStatus) => void; label: string }) {
-  return (
-    <div role="radiogroup" aria-label={label} className="flex h-8 shrink-0 rounded-[6px] border border-border-strong p-[3px]">
-      {RECEIVED_STATUS_OPTIONS.map((o) => {
-        const active = value === o.value;
-        return (
-          <button
-            key={o.value}
-            type="button"
-            role="radio"
-            aria-checked={active}
-            onClick={() => onChange(o.value)}
-            className={cn(
-              "flex h-full items-center gap-1 rounded-[4px] px-2 text-[11px] whitespace-nowrap transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring",
-              active ? "bg-foreground font-semibold text-background" : "font-medium text-muted-foreground hover:text-foreground",
-            )}
-          >
-            {active && <Check className="size-3" strokeWidth={2.5} />}
-            {o.label}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
 
 function ShareInput({
   value,
@@ -184,7 +153,9 @@ export function SplitExpenseMode({
   const [includeMe, setIncludeMe] = useState(true);
   const [assignFully, setAssignFully] = useState(false);
   const [personShare, setPersonShare] = useState("");
-  const [personReceivedStatus, setPersonReceivedStatus] = useState<ReceivedStatus>("yetToReceive");
+  // A share is always "owes me" at creation — money they already handed over is recorded with Record payment
+  // (real cash into an account), never as a ledger-only "already paid" flag.
+  const [personReceivedStatus] = useState<ReceivedStatus>("yetToReceive");
   const [extraParticipants, setExtraParticipants] = useState<ExtraParticipant[]>([]);
   const [errors, setErrors] = useState<FieldErrors>({});
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -488,7 +459,6 @@ export function SplitExpenseMode({
                     </span>
                   </span>
                   <span className={ALLOC_CONTROLS}>
-                    <StatusToggle value={personReceivedStatus} onChange={setPersonReceivedStatus} label={`${person.name}'s payment status`} />
                     {!assignFully && splitType !== "equal" && (
                       <ShareInput
                         value={personShare}
@@ -557,11 +527,6 @@ export function SplitExpenseMode({
                           )}
                         </span>
                         <span className={ALLOC_CONTROLS}>
-                          <StatusToggle
-                            value={p.receivedStatus}
-                            onChange={(v) => updateExtraParticipant(i, { receivedStatus: v })}
-                            label={`${p.name || "This person"}'s payment status`}
-                          />
                           {splitType !== "equal" && (
                             <ShareInput
                               value={p.value}

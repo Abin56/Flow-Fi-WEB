@@ -190,7 +190,7 @@ export function TransactionsWorkspace() {
   const { rows, accounts, categories, isLoading } = useTransactionRows();
   const actions = useTransactionActions();
   const { data: people = [] } = usePeople();
-  const { data: expenses = [] } = useExpenses();
+  const { data: expenses = [], isLoading: expensesLoading } = useExpenses();
   const expenseByTransactionId = useMemo(() => new Map(expenses.map((e) => [e.transactionId, e])), [expenses]);
   // "Assign to a person" also creates an `Expense` (via `convertToAssigned`), so having an Expense is
   // not what makes a row a split. The authoritative assignment marker is the one `applyOwesPersonChange`
@@ -268,7 +268,9 @@ export function TransactionsWorkspace() {
   const [peopleReturn, setPeopleReturn] = useState<PeopleReturnContext | null>(() => (searchParams.get("transaction") ? readPeopleReturnContext(searchParams) : null));
   if (handoffId) {
     const target = rows.find((r) => r.transaction.id === handoffId);
-    if (target) {
+    // Wait for expenses too: the modal seeds its split editor (participants, Me, split type) once on open,
+    // so opening before the Expense arrives would show an empty split and save it over the real one.
+    if (target && !expensesLoading) {
       setHandoffId(null);
       setDetailRow(target);
       setDetailOpen(true);

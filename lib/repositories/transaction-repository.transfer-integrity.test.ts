@@ -242,7 +242,7 @@ describe("TransactionRepository transfer integrity", () => {
       vi.mocked(getDocs).mockResolvedValue({ docs: [{ data: () => outflow }, { data: () => inflow }] } as never);
 
       const accountsById = { "acc-a": account("acc-a", 1000), "acc-b": account("acc-b", 2000) };
-      const { tx, writes } = makeFakeTx(accountsById);
+      const { tx, writes } = makeFakeTx({ ...accountsById, "out-1": outflow, "in-1": inflow }); // legs are re-read in the tx
       vi.mocked(runTransaction).mockImplementation(async (_db, cb) => (cb as (tx: unknown) => unknown)(tx));
 
       await repo.deleteTransferPair(outflow);
@@ -266,7 +266,7 @@ describe("TransactionRepository transfer integrity", () => {
       const orphan = txn({ id: "out-1", transferId: "xfer-1", type: "expense", accountId: "acc-a", amount: 500 });
       vi.mocked(getDocs).mockResolvedValue({ docs: [{ data: () => orphan }] } as never);
 
-      const { tx, writes } = makeFakeTx({ "acc-a": account("acc-a", 1000) });
+      const { tx, writes } = makeFakeTx({ "acc-a": account("acc-a", 1000), "out-1": orphan });
       vi.mocked(runTransaction).mockImplementation(async (_db, cb) => (cb as (tx: unknown) => unknown)(tx));
 
       await repo.deleteTransferPair(orphan);
@@ -285,7 +285,7 @@ describe("TransactionRepository transfer integrity", () => {
       const inflow = txn({ id: "in-1", transferId: "xfer-1", type: "income", accountId: "acc-b", amount: 500, deletedAt: now });
       vi.mocked(getDocs).mockResolvedValue({ docs: [{ data: () => outflow }, { data: () => inflow }] } as never);
 
-      const { tx, writes } = makeFakeTx({ "acc-a": account("acc-a", 1000), "acc-b": account("acc-b", 2000) });
+      const { tx, writes } = makeFakeTx({ "acc-a": account("acc-a", 1000), "acc-b": account("acc-b", 2000), "out-1": outflow, "in-1": inflow });
       vi.mocked(runTransaction).mockImplementation(async (_db, cb) => (cb as (tx: unknown) => unknown)(tx));
 
       await repo.restoreTransferPair(outflow);

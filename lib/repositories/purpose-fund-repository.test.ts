@@ -261,7 +261,8 @@ describe("Purpose money — AMMA sends ₹10,000 while owing ₹1,000", () => {
     await payments.recordPayment(person(), receipt());
     const k = fund("KSEB bill");
     const id = await purposes.recordUse(person(), k.id, { mode: "new", accountId: "sbi", amount: 2000, date: d(10, 14), description: "KSEB", classification: "behalf" });
-    await transactionRepository.softDeleteTransaction(liveTx().find((t) => t.id === id)!);
+    // The People layer deletes a purpose "behalf" cash leg as its owner (`deletePersonCashLegTransaction`).
+    await transactionRepository.softDeleteTransaction(liveTx().find((t) => t.id === id)!, { owner: "people" });
     expect(balance("sbi")).toBe(20_000);
     expect(summary().stillToUse).toBe(9000);
     // Record again, then undo through the purpose

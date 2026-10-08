@@ -17,7 +17,7 @@ import { deleteTransactionWithLinkedEffects } from "@/lib/services/transaction-d
 import { repairSplitGhost } from "@/lib/services/split-ghost-repair";
 import { AccountRepository } from "./account-repository";
 import { TransactionRepository } from "./transaction-repository";
-import { ExpenseRepository } from "./expense-repository";
+import { ExpenseRepository, ReceivedWithoutCashError } from "./expense-repository";
 import { LedgerRepository, PersonRepository } from "./person-repository";
 import { InstallmentPaymentRepository, InstallmentRepository, PaymentScheduleRepository } from "./payment-schedule-repository";
 
@@ -375,12 +375,10 @@ describe("A. Split creation — failure after every stage leaves zero partial st
     expectUntouched();
   });
 
-  it("fails after another People share (a 'received at the table' settlement entry posted too)", async () => {
+  it("a share 'received at the table' with no money recorded is refused before anything is written", async () => {
     const { expenseRepository } = buildRepos();
-    failAfter(LedgerRepository.prototype, "addEntry", 2);
     const input = { ...SPLIT_3000, participantInputs: SPLIT_3000.participantInputs.map((p) => (p.personId === "amma" ? { ...p, receivedStatus: "received" as const } : p)) };
-    await expect(expenseRepository.createExpense(input)).rejects.toThrow("injected failure");
-    vi.restoreAllMocks();
+    await expect(expenseRepository.createExpense(input)).rejects.toBeInstanceOf(ReceivedWithoutCashError);
     expectUntouched();
   });
 
@@ -513,10 +511,20 @@ describe("B. Historical split ghosts", () => {
     expect(activeExpenses()).toHaveLength(1);
   });
 
-  it("BLOCKED: cash 'received at the table' at split time counts as payment history", async () => {
-    const { expenseRepository, transactionRepository, repairGhost } = buildRepos();
-    const input = { ...SPLIT_3000, participantInputs: SPLIT_3000.participantInputs.map((p) => (p.personId === "tripthee" ? { ...p, receivedStatus: "received" as const } : p)) };
-    const expense = await expenseRepository.createExpense(input);
+  it("BLOCKED: (legacy) cash 'received at the table' at split time counts as payment history", async () => {
+    const { expenseRepository, transactionRepository, repairGhost, personRepository, ledgerRepositoryFor } = buildRepos();
+    const expense = await expenseRepository.createExpense(SPLIT_3000);
+    // Legacy data: what the pre-guard "received at the table" flag wrote for TRIPTHEE.
+    const tripthee = expense.participants.find((p) => p.personId === "tripthee")!;
+    await ledgerRepositoryFor("tripthee").addEntry((await personRepository.getByKey("tripthee"))!, {
+      type: "receivedBack",
+      amount: tripthee.share,
+      date: expense.date,
+      note: `Received: ${expense.description}`,
+      transactionRef: expense.transactionId,
+      receivedStatus: "received",
+    });
+    await expenseRepository.update({ ...expense, participants: expense.participants.map((p) => (p.personId === "tripthee" ? { ...p, receivedStatus: "received" as const } : p)) });
     await transactionRepository.softDeleteTransaction((await transactionRepository.getByKey(expense.transactionId))!);
     const verdict = await repairGhost(expense.id);
     expect(verdict.kind).toBe("blocked");

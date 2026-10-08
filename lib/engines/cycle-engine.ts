@@ -45,11 +45,6 @@ function dayInMonth(year: number, month: number, day: number): Date {
   return new Date(year, month - 1, clampedDay);
 }
 
-/** Dart's `~/` (truncating integer division, truncates toward zero). */
-function truncDiv(a: number, b: number): number {
-  return Math.trunc(a / b);
-}
-
 /** Dart's `%` on int (floored — always non-negative for a positive divisor). */
 function flooredMod(a: number, b: number): number {
   return ((a % b) + b) % b;
@@ -70,7 +65,8 @@ function flooredMod(a: number, b: number): number {
 function addMonths(date: Date, months: number): Date {
   // date.month - 1 + months, 0-based, mirrors `date.month - 1 + months` in Dart (date.month is 1-based there).
   const targetMonthIndex = date.getMonth() + months;
-  const targetYear = date.getFullYear() + truncDiv(targetMonthIndex, 12);
+  // Floored, not Dart's truncating `~/`: January − 1 month is December of the PREVIOUS year (WFI-P3-01).
+  const targetYear = date.getFullYear() + Math.floor(targetMonthIndex / 12);
   const targetMonth = flooredMod(targetMonthIndex, 12) + 1; // 1-based
   return dayInMonth(targetYear, targetMonth, date.getDate());
 }

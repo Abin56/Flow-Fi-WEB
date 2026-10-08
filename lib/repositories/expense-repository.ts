@@ -21,7 +21,8 @@ import {
 } from "@/lib/models/expense";
 import type { Installment } from "@/lib/models/payment-schedule";
 import { remainingAmount as installmentRemainingAmount } from "@/lib/models/payment-schedule";
-import { type LedgerEntry, type LedgerSourceKind, type Person } from "@/lib/models/person";
+import { type LedgerEntry, type LedgerEntryType, type LedgerSourceKind, type Person, signedAmount } from "@/lib/models/person";
+import { TxSession } from "@/lib/firestore/tx-session";
 import { generateId } from "@/lib/utils/id-generator";
 import { InstallmentPaymentRepository, InstallmentRepository, PaymentScheduleRepository } from "./payment-schedule-repository";
 import { LedgerRepository, PersonRepository } from "./person-repository";
@@ -233,6 +234,29 @@ export interface SettleAcrossPendingParams {
   emiReceivable?: number;
 }
 
+/**
+ * "Received" means real money was received (People invariant, audit P1-01 follow-up). A split share can only
+ * become received through People → Record payment, which posts the cash into a chosen account in the same
+ * atomic write. Marking a share received WITHOUT that cash (an "Already paid" flag, the quick ✓ toggle) cleared
+ * the receivable while no account moved — Net Worth silently dropped by the share — so it is refused here.
+ * Undoing a legacy ledger-only "received" (back to "yet to receive") stays allowed.
+ */
+export class ReceivedWithoutCashError extends Error {
+  constructor(name?: string) {
+    super(
+      `${name ? `${name}'s share` : "This share"} can't be marked as received here — no money would be recorded. Save it as "owes me", then use Record payment in People to record the money and the account it went into.`,
+    );
+    this.name = "ReceivedWithoutCashError";
+  }
+}
+
+/** Throws `ReceivedWithoutCashError` for a participant that would BECOME "received" without a cash receipt. */
+function assertNoCashlessReceipt(participants: readonly ExpenseParticipant[], previous: readonly ExpenseParticipant[] = []): void {
+  const before = new Map(previous.map((p) => [participantKey(p), p.receivedStatus]));
+  const offender = participants.find((p) => !p.isMe && p.receivedStatus === "received" && before.get(participantKey(p)) !== "received");
+  if (offender) throw new ReceivedWithoutCashError(offender.name);
+}
+
 export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
   constructor(
     collection: CollectionReference<Expense>,
@@ -287,6 +311,8 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
         return [];
 
       case "equal": {
+        // Every share must be at least ₹0.01 — a ₹0.00 share is rejected later by `addEntry` (WFI-P3-02).
+        if (Math.round(total * 100) < inputs.length) throw new Error(`This amount is too small to split between ${inputs.length} people`);
         const share = round2(total / inputs.length);
         const shares = new Array(inputs.length).fill(share);
         const remainder = round2(total - share * inputs.length);
@@ -497,6 +523,7 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
       total: params.totalAmount,
       inputs: params.participantInputs ?? [],
     });
+    assertNoCashlessReceipt(participants);
 
     const transaction = await this.transactionRepository.createTransaction({
       type: "expense",
@@ -678,6 +705,7 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
       total: params.totalAmount,
       inputs: params.participantInputs,
     });
+    assertNoCashlessReceipt(participants, existingExpense?.participants ?? []);
     if (participants.length === 0) {
       throw new Error("Choose at least one person to share with");
     }
@@ -788,6 +816,7 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
       total: expense.totalAmount,
       inputs: params.participantInputs,
     });
+    assertNoCashlessReceipt(newParticipants, expense.participants);
     if (newParticipants.filter((p) => !p.isMe).length === 0) {
       throw new Error("Choose at least one person to share with");
     }
@@ -872,263 +901,289 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
   }
 
   /**
-   * Edits an existing expense in place — simple fields always apply;
-   * `totalAmount`/`splitType`/`participantInputs` only matter when `expense`
-   * is split, and re-resolve every participant's share via `resolveShares`.
-   * Never lets a participant's new share drop below what they've already
-   * paid. Always keeps the linked Transaction in sync via
-   * `TransactionRepository.editTransaction`. Mirrors
-   * `ExpenseRepository.editExpense`.
+   * Edits an existing expense in place — simple fields always apply; `totalAmount`/`splitType`/
+   * `participantInputs` only matter when the expense is split, and re-resolve every participant's share via
+   * `resolveShares`. Never lets a participant's new share drop below what they've already paid.
+   *
+   * ATOMIC (web-financial-integrity-audit P1-09): every financial change — the linked Transaction and its
+   * account balance, each share's installment, each person's ledger entries and cached balance, added and
+   * removed participants, and the Expense itself — is written in ONE Firestore transaction, computed from
+   * documents re-read inside it. All of it lands, or none of it does. Only non-financial preparation runs
+   * first (resolving shares, promoting a typed name to a Person); a person created for an attempt that then
+   * fails is trashed again.
    */
   async editExpense(params: EditExpenseParams): Promise<Expense> {
-    let expense = params.expense;
-    const { currentInstallments } = params;
-
-    expense = updateField(expense, "description", expense.description, params.description, (e, v) => ({
-      ...e,
-      description: v,
-    }));
-    expense = updateField(expense, "date", expense.date, params.date, (e, v) => ({ ...e, date: v }));
-    expense = updateField(expense, "categoryId", expense.categoryId, params.categoryId, (e, v) => ({
-      ...e,
-      categoryId: v,
-    }));
-    expense = updateField(expense, "accountId", expense.accountId, params.accountId, (e, v) => ({
-      ...e,
-      accountId: v,
-    }));
-    expense = updateField(expense, "notes", expense.notes, params.notes, (e, v) => ({ ...e, notes: v }));
-
-    const resplitting =
-      isSplit(expense) &&
-      (params.totalAmount != null || params.splitType != null || params.participantInputs != null);
-    let syncedTransactionAmount: number | undefined = params.totalAmount;
-
-    if (resplitting) {
-      if (params.participantInputs == null) {
-        throw new Error("Choose who to share this expense with");
-      }
-      const newTotal = params.totalAmount ?? expense.totalAmount;
-      const newSplitType = params.splitType ?? expense.splitType;
-      const installmentById = new Map(currentInstallments.map((i) => [i.id, i]));
-
-      let newParticipants = ExpenseRepository.resolveShares({
-        type: newSplitType,
-        total: newTotal,
+    const caller = params.expense;
+    const resplitRequested = params.totalAmount != null || params.splitType != null || params.participantInputs != null;
+    const journal = newSplitWriteJournal();
+    let newParticipants: ExpenseParticipant[] | null = null;
+    if (isSplit(caller) && resplitRequested) {
+      if (params.participantInputs == null) throw new Error("Choose who to share this expense with");
+      const resolved = ExpenseRepository.resolveShares({
+        type: params.splitType ?? caller.splitType,
+        total: params.totalAmount ?? caller.totalAmount,
         inputs: params.participantInputs,
       });
-      if (newParticipants.length === 0) {
-        throw new Error("Choose at least one person to share with");
-      }
-      // Promote any newly-typed custom name the same way `createExpense`
-      // does, and — critically for idempotency — resolve an *already*
-      // custom-name participant carried over from the prior save (matched by
-      // name below via `participantKey`) back to the very Person it was
-      // promoted to last time, never a second new one.
-      newParticipants = await this.promoteCustomNameParticipants(newParticipants);
+      if (resolved.length === 0) throw new Error("Choose at least one person to share with");
+      assertNoCashlessReceipt(resolved, caller.participants);
+      // Idempotent by name: an already-promoted custom name resolves back to the same Person.
+      newParticipants = await this.promoteCustomNameParticipants(resolved, journal);
+    }
 
+    // Ids the transaction re-reads — queries can't run inside a client transaction.
+    const scheduleId = caller.scheduleId;
+    const installmentIds = new Set<string>(caller.participants.flatMap((p) => (p.installmentId ? [p.installmentId] : [])));
+    if (scheduleId != null) for (const i of await this.installmentRepositoryFor(scheduleId).getAll()) installmentIds.add(i.id);
+    const personIds = [...new Set([...caller.participants, ...(newParticipants ?? [])].flatMap((p) => (p.personId ? [p.personId] : [])))];
+    const entryIdsByPerson = await this.liveEntryIdsByPerson(personIds, caller.transactionId);
+
+    try {
+      return await runTransaction(this.collection.firestore, async (tx) => {
+        const session = new TxSession(tx);
+        const result = await this.editInSession(session, params, newParticipants, [...installmentIds], entryIdsByPerson);
+        session.flush();
+        return result;
+      });
+    } catch (error) {
+      // Nothing financial was written. Undo only the people this attempt promoted from typed names.
+      for (const person of journal.createdPeople) {
+        await this.personRepository
+          .getByKey(person.id)
+          .then((fresh) => (fresh != null && fresh.deletedAt == null ? this.personRepository.softDelete(fresh) : undefined))
+          .catch(() => undefined);
+      }
+      throw error;
+    }
+  }
+
+  /** Active ledger entry ids per person whose `transactionRef` is this expense's transaction (pre-read for a tx). */
+  private async liveEntryIdsByPerson(personIds: readonly string[], transactionId: string): Promise<Map<string, string[]>> {
+    const map = new Map<string, string[]>();
+    for (const personId of personIds) map.set(personId, (await this.ledgerRepositoryFor(personId).getByTransactionRef(transactionId)).map((e) => e.id));
+    return map;
+  }
+
+  private async editInSession(
+    session: TxSession,
+    params: EditExpenseParams,
+    newParticipants: ExpenseParticipant[] | null,
+    installmentIds: readonly string[],
+    entryIdsByPerson: ReadonlyMap<string, string[]>,
+  ): Promise<Expense> {
+    const tx = session.asTransaction();
+    const freshSnap = await session.get(this.docRef(params.expense.id));
+    if (!freshSnap.exists() || freshSnap.data().deletedAt != null) throw new Error("This expense was deleted in another tab or device — nothing was changed.");
+    let expense = freshSnap.data();
+
+    expense = updateField(expense, "description", expense.description, params.description, (e, v) => ({ ...e, description: v }));
+    expense = updateField(expense, "date", expense.date, params.date, (e, v) => ({ ...e, date: v }));
+    expense = updateField(expense, "categoryId", expense.categoryId, params.categoryId, (e, v) => ({ ...e, categoryId: v }));
+    expense = updateField(expense, "accountId", expense.accountId, params.accountId, (e, v) => ({ ...e, accountId: v }));
+    expense = updateField(expense, "notes", expense.notes, params.notes, (e, v) => ({ ...e, notes: v }));
+
+    const scheduleId = expense.scheduleId;
+    const now = new Date();
+    const personDelta = new Map<string, number>();
+    const addDelta = (personId: string, delta: number) => personDelta.set(personId, round2((personDelta.get(personId) ?? 0) + delta));
+    const ledgerRef = (personId: string, entryId: string) => this.ledgerRepositoryFor(personId).docRef(entryId);
+    const installmentRef = (id: string) => this.installmentRepositoryFor(scheduleId!).docRef(id);
+    /** Fresh, live entries of this person on this expense's transaction. */
+    const liveEntries = async (personId: string): Promise<LedgerEntry[]> => {
+      const out: LedgerEntry[] = [];
+      for (const id of entryIdsByPerson.get(personId) ?? []) {
+        const snap = await session.get(ledgerRef(personId, id));
+        if (snap.exists() && snap.data().deletedAt == null && snap.data().transactionRef === expense.transactionId) out.push(snap.data());
+      }
+      return out;
+    };
+    const putEntry = (entry: LedgerEntry) => session.set(ledgerRef(entry.personId, entry.id), entry);
+
+    const installmentById = new Map<string, Installment>();
+    if (scheduleId != null) {
+      for (const id of installmentIds) {
+        const snap = await session.get(installmentRef(id));
+        if (snap.exists() && snap.data().deletedAt == null) installmentById.set(id, snap.data());
+      }
+    }
+    const touchedInstallments = new Map<string, Installment>();
+    let syncedTransactionAmount: number | undefined = params.totalAmount;
+
+    if (newParticipants != null && isSplit(expense)) {
+      const newTotal = params.totalAmount ?? expense.totalAmount;
+      const newSplitType = params.splitType ?? expense.splitType;
+      const description = params.description ?? expense.description;
+      const newDate = params.date ?? expense.date;
+      const newNote = `Split: ${description}`;
       const oldByKey = new Map(expense.participants.map((p) => [participantKey(p), p]));
+      const newKeys = new Set(newParticipants.map(participantKey));
+      if (scheduleId == null) throw new Error("This expense has no tracking schedule to update");
 
-      for (const participant of newParticipants) {
-        if (participant.isMe) continue;
-        const old = oldByKey.get(participantKey(participant));
-        const installment = old?.installmentId == null ? undefined : installmentById.get(old.installmentId);
-        if (installment == null) continue;
-        if (participant.share < installment.amountPaid) {
-          throw new Error(
-            `${participant.name} has already been paid ${installment.amountPaid.toFixed(2)} — ` +
-              "their share can't be reduced below that",
-          );
+      // Validate everything before computing any write.
+      for (const p of newParticipants) {
+        if (p.isMe) continue;
+        const old = oldByKey.get(participantKey(p));
+        const inst = old?.installmentId == null ? undefined : installmentById.get(old.installmentId);
+        if (inst != null && p.share < inst.amountPaid) {
+          throw new Error(`${p.name} has already been paid ${inst.amountPaid.toFixed(2)} — their share can't be reduced below that`);
+        }
+      }
+      for (const removed of expense.participants) {
+        if (removed.isMe || newKeys.has(participantKey(removed)) || removed.installmentId == null) continue;
+        const inst = installmentById.get(removed.installmentId);
+        if (inst != null && inst.amountPaid > 0) {
+          throw new Error(`${removed.name} has already paid ${inst.amountPaid.toFixed(2)} — remove that payment before taking them off this expense`);
         }
       }
 
-      const scheduleId = expense.scheduleId;
-      if (scheduleId == null) {
-        throw new Error("This expense has no tracking schedule to update");
-      }
-      const installmentRepository = this.installmentRepositoryFor(scheduleId);
+      const existing = [...installmentById.values()];
+      let nextSequence = existing.reduce((m, i) => Math.max(m, i.sequenceNumber), 0);
+      const firstDue = params.dueDate ?? existing.map((i) => i.dueDate).sort((a, b) => a.getTime() - b.getTime())[0] ?? addDays(newDate, 7);
 
-      const resolvedParticipants: ExpenseParticipant[] = [];
-      for (const participant of newParticipants) {
-        if (participant.isMe) {
-          resolvedParticipants.push(participant);
+      const resolved: ExpenseParticipant[] = [];
+      for (const p of newParticipants) {
+        if (p.isMe) {
+          resolved.push(p);
           continue;
         }
-        const old = oldByKey.get(participantKey(participant));
-        const installment = old?.installmentId == null ? undefined : installmentById.get(old.installmentId);
-        if (installment == null) {
-          resolvedParticipants.push(participant);
-          continue;
-        }
+        const old = oldByKey.get(participantKey(p));
+        const inst = old?.installmentId == null ? undefined : installmentById.get(old.installmentId);
 
-        await installmentRepository.editInstallmentAmount(installment, participant.share);
-
-        const delta = round2(participant.share - (old?.share ?? 0));
-        if (participant.personId != null) {
-          const person = await this.personRepository.getByKey(participant.personId);
-          if (person != null) {
-            const ledgerRepository = this.ledgerRepositoryFor(person.id);
-            const entries = await ledgerRepository.getByTransactionRef(expense.transactionId);
-            const originalEntry: LedgerEntry | undefined = entries.find((e) => e.type === "gave");
-            const newDate = params.date ?? expense.date;
-            const newNote = `Split: ${params.description ?? expense.description}`;
-            if (originalEntry != null) {
-              // Corrects the same "Split: ..."/"gave" entry the person's
-              // statement already shows — amount, date and description move in
-              // step with the just-synced Transaction/Installment instead of
-              // staying stale (date/description edits used to be dropped).
-              const dateChanged = originalEntry.date.getTime() !== newDate.getTime();
-              const noteChanged = originalEntry.note.startsWith("Split: ") && originalEntry.note !== newNote;
-              if (delta !== 0 || dateChanged || noteChanged) {
-                await ledgerRepository.editEntry(person, originalEntry, {
-                  amount: delta !== 0 ? participant.share : undefined,
-                  date: dateChanged ? newDate : undefined,
-                  note: noteChanged ? newNote : undefined,
-                });
-              }
-            } else if (delta !== 0) {
-              // The original entry is gone (e.g. manually deleted from the
-              // person's timeline) — fall back to a standalone correction
-              // so the balance still stays in sync.
-              await ledgerRepository.addEntry(person, {
-                type: "adjustment",
-                amount: Math.abs(delta),
-                date: newDate,
-                note: `Edited: ${params.description ?? expense.description}`,
-                increasesBalance: delta >= 0,
-                receivedStatus: "yetToReceive",
-              });
+        if (inst == null) {
+          // A participant added by this edit: their tracking installment and their share, like a new split.
+          nextSequence += 1;
+          const installment: Installment = {
+            id: generateId(),
+            scheduleId,
+            ownerType: "splitExpense",
+            ownerId: expense.id,
+            sequenceNumber: nextSequence,
+            dueDate: firstDue,
+            amountDue: p.share,
+            amountPaid: 0,
+            isSkipped: false,
+            principalPortion: null,
+            interestPortion: null,
+            createdAt: now,
+            deletedAt: null,
+            lastEditedAt: null,
+            editHistory: [],
+          };
+          touchedInstallments.set(installment.id, installment);
+          if (p.personId != null) {
+            const gave = newLedgerEntry({ personId: p.personId, type: "gave", amount: p.share, date: newDate, note: newNote, transactionRef: expense.transactionId, sourceKind: "splitExpense", receivedStatus: "yetToReceive" });
+            putEntry(gave);
+            addDelta(p.personId, signedAmount(gave));
+            if (p.receivedStatus === "received") {
+              const back = newLedgerEntry({ personId: p.personId, type: "receivedBack", amount: p.share, date: newDate, note: `${RECEIVED_STATUS_NOTE_PREFIX}${description}`, transactionRef: expense.transactionId, sourceKind: "splitExpense", receivedStatus: "received" });
+              putEntry(back);
+              addDelta(p.personId, signedAmount(back));
             }
+          }
+          resolved.push(copyExpenseParticipant(p, { installmentId: installment.id }));
+          continue;
+        }
 
-            // Reconcile the received-status transition — idempotent by
-            // construction: it only ever posts/removes the one
-            // "receivedBack" entry already tagged with this transactionRef,
-            // never a duplicate, regardless of how many times the same
-            // status is re-saved.
-            const oldStatus = old?.receivedStatus ?? "yetToReceive";
-            // Only ever the status-driven entry — a partial/full settlement
-            // entry on the same transactionRef must never be mistaken for it.
-            const receivedEntry = findReceivedStatusEntry(entries);
-            // "Received" means the participant's whole share came back, so
-            // the status entry credits only what real settlements haven't
-            // already credited. Crediting the full share on top of a recorded
-            // partial payment would double-count that payment and drive the
-            // balance negative — the person would read as owed money they
-            // never lent.
-            const alreadySettled = round2(installment.amountPaid);
-            const statusCredit = round2(participant.share - alreadySettled);
+        if (inst.amountDue !== p.share) {
+          touchedInstallments.set(inst.id, { ...recordEdit(inst, "amountDue", String(inst.amountDue), String(p.share)), amountDue: p.share });
+        }
+        if (p.personId != null) {
+          const entries = await liveEntries(p.personId);
+          const delta = round2(p.share - (old?.share ?? 0));
+          const gave = entries.find((e) => e.type === "gave");
+          if (gave != null) {
+            let updated = updateField(gave, "amount", gave.amount, delta !== 0 ? p.share : undefined, (e, v) => ({ ...e, amount: v }));
+            if (gave.date.getTime() !== newDate.getTime()) updated = updateField(updated, "date", gave.date.toISOString(), newDate.toISOString(), (e) => ({ ...e, date: newDate }));
+            if (gave.note.startsWith("Split: ") && gave.note !== newNote) updated = updateField(updated, "note", gave.note, newNote, (e, v) => ({ ...e, note: v }));
+            if (updated !== gave) {
+              putEntry(updated);
+              addDelta(p.personId, signedAmount(updated) - signedAmount(gave));
+            }
+          } else if (delta !== 0) {
+            // The original share entry is gone (removed from the person's timeline) — a standalone correction.
+            const adjustment = newLedgerEntry({ personId: p.personId, type: "adjustment", amount: Math.abs(delta), date: newDate, note: `Edited: ${description}`, transactionRef: null, sourceKind: "manual", receivedStatus: "yetToReceive", increasesBalance: delta >= 0 });
+            putEntry(adjustment);
+            addDelta(p.personId, signedAmount(adjustment));
+          }
 
-            if (participant.receivedStatus === "received" && oldStatus !== "received") {
-              if (receivedEntry == null && statusCredit > 0) {
-                const refreshedPerson = (await this.personRepository.getByKey(person.id)) ?? person;
-                await ledgerRepository.addEntry(refreshedPerson, {
-                  type: "receivedBack",
-                  amount: statusCredit,
-                  date: params.date ?? expense.date,
-                  note: `${RECEIVED_STATUS_NOTE_PREFIX}${params.description ?? expense.description}`,
-                  transactionRef: expense.transactionId,
-                  receivedStatus: "received",
-                });
-              }
-            } else if (participant.receivedStatus !== "received" && oldStatus === "received") {
-              if (receivedEntry != null) {
-                const refreshedPerson = (await this.personRepository.getByKey(person.id)) ?? person;
-                await ledgerRepository.softDeleteEntry(refreshedPerson, receivedEntry);
-              }
-            } else if (participant.receivedStatus === "received" && receivedEntry != null && delta !== 0) {
-              // Amount changed while already marked received — keep the
-              // status entry's amount matching the corrected share, still net
-              // of anything already settled separately.
-              if (statusCredit > 0) {
-                const refreshedPerson = (await this.personRepository.getByKey(person.id)) ?? person;
-                await ledgerRepository.editEntryAmount(refreshedPerson, receivedEntry, statusCredit);
-              } else {
-                // The new share is fully covered by recorded settlements —
-                // the status entry has nothing left to credit. `editEntryAmount`
-                // rejects a non-positive amount, so retire the entry instead
-                // of leaving it over-crediting at its old amount.
-                const refreshedPerson = (await this.personRepository.getByKey(person.id)) ?? person;
-                await ledgerRepository.softDeleteEntry(refreshedPerson, receivedEntry);
-              }
+          // Status-driven "received" entry: credits only what real settlements haven't already credited.
+          const oldStatus = old?.receivedStatus ?? "yetToReceive";
+          const receivedEntry = findReceivedStatusEntry(entries);
+          const statusCredit = round2(p.share - inst.amountPaid);
+          const retire = (entry: LedgerEntry) => {
+            putEntry({ ...entry, deletedAt: now });
+            addDelta(entry.personId, -signedAmount(entry));
+          };
+          if (p.receivedStatus === "received" && oldStatus !== "received") {
+            if (receivedEntry == null && statusCredit > 0) {
+              const back = newLedgerEntry({ personId: p.personId, type: "receivedBack", amount: statusCredit, date: newDate, note: `${RECEIVED_STATUS_NOTE_PREFIX}${description}`, transactionRef: expense.transactionId, sourceKind: gave?.sourceKind ?? "splitExpense", receivedStatus: "received" });
+              putEntry(back);
+              addDelta(p.personId, signedAmount(back));
+            }
+          } else if (p.receivedStatus !== "received" && oldStatus === "received") {
+            if (receivedEntry != null) retire(receivedEntry);
+          } else if (p.receivedStatus === "received" && receivedEntry != null && delta !== 0) {
+            if (statusCredit > 0) {
+              const updated = updateField(receivedEntry, "amount", receivedEntry.amount, statusCredit, (e, v) => ({ ...e, amount: v }));
+              putEntry(updated);
+              addDelta(p.personId, signedAmount(updated) - signedAmount(receivedEntry));
+            } else {
+              retire(receivedEntry);
             }
           }
         }
-
-        resolvedParticipants.push(
-          copyExpenseParticipant(participant, { installmentId: installment.id }),
-        );
+        resolved.push(copyExpenseParticipant(p, { installmentId: inst.id }));
       }
 
-      // Participants dropped from the split by this edit. Without this, their
-      // "gave" (and any status-driven "receivedBack") entry stays active and
-      // keeps inflating their `currentBalance` forever — a debt with nobody
-      // owing it, unreachable from the expense that created it since the
-      // expense no longer lists them. Their tracking installment is closed
-      // out too, so nothing keeps collecting against a share they no longer
-      // have. Mirrors `unassignFromPerson`'s per-person cleanup, scoped to
-      // just the removed participants.
-      const newKeys = new Set(newParticipants.map(participantKey));
+      // Participants dropped by this edit: their installment closes and every share entry they hold on this
+      // expense is reversed — otherwise a debt would remain with nobody owing it.
       for (const removed of expense.participants) {
         if (removed.isMe || newKeys.has(participantKey(removed))) continue;
-
-        if (removed.installmentId != null) {
-          const installment = installmentById.get(removed.installmentId);
-          if (installment != null) {
-            if (installment.amountPaid > 0) {
-              throw new Error(
-                `${removed.name} has already paid ${installment.amountPaid.toFixed(2)} — ` +
-                  "remove that payment before taking them off this expense",
-              );
-            }
-            await installmentRepository.softDelete(installment);
-          }
-        }
-
+        const inst = removed.installmentId == null ? undefined : installmentById.get(removed.installmentId);
+        if (inst != null) touchedInstallments.set(inst.id, { ...inst, deletedAt: now });
         if (removed.personId == null) continue;
-        const person = await this.personRepository.getByKey(removed.personId);
-        if (person == null) continue;
-        const ledgerRepository = this.ledgerRepositoryFor(person.id);
-        for (const entry of await ledgerRepository.getByTransactionRef(expense.transactionId)) {
-          // Re-read the person between entries: each soft-delete moves the
-          // balance, so a single stale copy would be wrong from the second
-          // entry on (the repository reads it fresh inside its own
-          // transaction regardless — this just keeps the argument honest).
-          const refreshedPerson = (await this.personRepository.getByKey(person.id)) ?? person;
-          await ledgerRepository.softDeleteEntry(refreshedPerson, entry);
+        for (const entry of await liveEntries(removed.personId)) {
+          putEntry({ ...entry, deletedAt: now });
+          addDelta(removed.personId, -signedAmount(entry));
         }
       }
 
       expense = recordEdit(expense, "totalAmount", String(expense.totalAmount), String(newTotal));
       expense = { ...expense, totalAmount: newTotal };
       expense = recordEdit(expense, "splitType", expense.splitType, newSplitType);
-      expense = { ...expense, splitType: newSplitType, participants: resolvedParticipants };
+      expense = { ...expense, splitType: newSplitType, participants: resolved };
       syncedTransactionAmount = newTotal;
     } else {
-      expense = updateField(expense, "totalAmount", expense.totalAmount, params.totalAmount, (e, v) => ({
-        ...e,
-        totalAmount: v,
-      }));
+      expense = updateField(expense, "totalAmount", expense.totalAmount, params.totalAmount, (e, v) => ({ ...e, totalAmount: v }));
     }
 
-    const transaction = await this.transactionRepository.getByKey(expense.transactionId);
-    if (transaction != null) {
-      await this.transactionRepository.editTransaction(transaction, {
-        amount: syncedTransactionAmount,
-        dateTime: params.date,
-        accountId: params.accountId,
-        categoryId: params.categoryId,
-        notes: params.notes,
-      });
+    // The linked Transaction and its account — as the split's owner (P0-02's generic refusal does not apply).
+    const transaction = await this.transactionRepository.getInTransaction(tx, expense.transactionId);
+    if (transaction != null && transaction.deletedAt == null) {
+      await this.transactionRepository.editTransactionInTransaction(
+        tx,
+        transaction,
+        { amount: syncedTransactionAmount, dateTime: params.date, accountId: params.accountId, categoryId: params.categoryId, notes: params.notes },
+        { owner: "split" },
+      );
     }
 
-    if (params.dueDate != null && expense.scheduleId != null) {
-      const installmentRepository = this.installmentRepositoryFor(expense.scheduleId);
-      for (const installment of currentInstallments) {
-        await installmentRepository.editInstallmentDueDate(installment, params.dueDate);
+    if (params.dueDate != null && scheduleId != null) {
+      for (const inst of [...installmentById.values(), ...touchedInstallments.values()]) {
+        const current = touchedInstallments.get(inst.id) ?? inst;
+        if (current.deletedAt != null || current.dueDate.getTime() === params.dueDate.getTime()) continue;
+        touchedInstallments.set(inst.id, { ...recordEdit(current, "dueDate", current.dueDate.toISOString(), params.dueDate.toISOString()), dueDate: params.dueDate });
       }
     }
+    for (const inst of touchedInstallments.values()) session.set(installmentRef(inst.id), inst);
 
-    await this.update(expense);
+    for (const [personId, delta] of personDelta) {
+      if (delta === 0) continue;
+      const personRef = this.personRepository.docRef(personId);
+      const personSnap = await session.get(personRef);
+      if (!personSnap.exists()) throw new Error("Person not found");
+      session.set(personRef, this.personRepository.applyBalanceDelta(personSnap.data(), delta));
+    }
+    session.set(this.docRef(expense.id), expense);
     return expense;
   }
 
@@ -1155,6 +1210,7 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
     }
     const oldStatus = participant.receivedStatus;
     if (oldStatus === receivedStatus) return expense;
+    if (receivedStatus === "received") throw new ReceivedWithoutCashError(participant.name);
 
     const person = await this.personRepository.getByKey(participant.personId);
     if (person == null) throw new Error("Person not found");
@@ -1162,26 +1218,8 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
     const entries = await ledgerRepository.getByTransactionRef(expense.transactionId);
     const receivedEntry = findReceivedStatusEntry(entries);
 
-    let amountPaid = 0;
-    if (participant.installmentId != null && expense.scheduleId != null) {
-      const installment = await this.installmentRepositoryFor(expense.scheduleId).getByKey(participant.installmentId);
-      amountPaid = installment?.amountPaid ?? 0;
-    }
-    const statusCredit = round2(participant.share - amountPaid);
-
-    if (receivedStatus === "received") {
-      if (receivedEntry == null && statusCredit > 0) {
-        const refreshedPerson = (await this.personRepository.getByKey(person.id)) ?? person;
-        await ledgerRepository.addEntry(refreshedPerson, {
-          type: "receivedBack",
-          amount: statusCredit,
-          date: expense.date,
-          note: `${RECEIVED_STATUS_NOTE_PREFIX}${expense.description}`,
-          transactionRef: expense.transactionId,
-          receivedStatus: "received",
-        });
-      }
-    } else if (receivedEntry != null) {
+    // Only the undo direction remains: a legacy ledger-only "received" status entry is retired.
+    if (receivedEntry != null) {
       const refreshedPerson = (await this.personRepository.getByKey(person.id)) ?? person;
       await ledgerRepository.softDeleteEntry(refreshedPerson, receivedEntry);
     }
@@ -1206,6 +1244,10 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
    * doc — otherwise a fully-settled participant still reads as "yet to
    * receive" in the Transaction section, out of sync with the ledger entry
    * this same call just posted with `receivedStatus: "received"`.
+   *
+   * @deprecated LEDGER-ONLY — records a settlement with NO cash leg (no account receives the money). Not wired to
+   * any app action or UI since the "Received = real money" contract; kept only for legacy tests/tooling. A
+   * share being paid back is recorded with `PersonPaymentRepository.recordPayment` (`split` route) instead.
    */
   async settleParticipant(params: SettleParticipantParams): Promise<void> {
     const { expense, participant, installment, installmentPaymentRepository, amount, date, note, settlementMethod } =
@@ -1250,6 +1292,10 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
    * outstanding across `pending`, the remainder is posted as one plain
    * LedgerEntry. `pending` must already be sorted oldest-due-first by the
    * caller. Mirrors `ExpenseRepository.settleAcrossPending`.
+   *
+   * @deprecated LEDGER-ONLY — records a settlement with NO cash leg (no account receives the money). Not wired to
+   * any app action or UI since the "Received = real money" contract; kept only for legacy tests/tooling. A
+   * person paying back is recorded with `PersonPaymentRepository.recordPayment` (Record payment) instead.
    */
   async settleAcrossPending(params: SettleAcrossPendingParams): Promise<void> {
     const { person, pending, amount, date, installmentPaymentRepositoryFor, note, settlementMethod, legacyLoanLedger = 0, emiReceivable = 0 } = params;
@@ -1300,119 +1346,150 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
   }
 
   /**
-   * Reverses this expense's ledger/schedule effect without touching the
-   * underlying Transaction — the symmetric counterpart to
-   * `assignToPerson`/`convertToAssigned` for "this person no longer owes me
-   * this expense". Shares `deleteExpense`'s schedule/installment/ledger
-   * cleanup exactly, but deliberately does NOT soft-delete the Transaction
-   * or the Expense document itself. Mirrors
-   * `ExpenseRepository.unassignFromPerson`.
+   * Reverses this expense's ledger/schedule effect without touching the underlying Transaction — "this person
+   * no longer owes me this expense". Same atomic retirement as `deleteExpense` (one Firestore transaction,
+   * idempotent), except the Transaction and its account stay, and the retired entries carry no restore
+   * provenance (an unassign is never undone by `restoreExpense`).
    */
   async unassignFromPerson(expense: Expense): Promise<void> {
-    const scheduleId = expense.scheduleId;
-    if (scheduleId != null) {
-      const installmentRepository = this.installmentRepositoryFor(scheduleId);
-      for (const installment of await installmentRepository.getAll()) {
-        await installmentRepository.softDelete(installment);
-      }
-      const schedule = await this.paymentScheduleRepository.getByKey(scheduleId);
-      if (schedule != null) {
-        await this.paymentScheduleRepository.softDelete(schedule);
-      }
-    }
-
-    for (const participant of expense.participants) {
-      if (participant.personId == null) continue;
-      const person = await this.personRepository.getByKey(participant.personId);
-      if (person == null) continue;
-      const ledgerRepository = this.ledgerRepositoryFor(person.id);
-      const linkedEntries = await ledgerRepository.getByTransactionRef(expense.transactionId);
-      for (const entry of linkedEntries) {
-        await ledgerRepository.softDeleteEntry(person, entry);
-      }
-    }
-
-    await this.softDelete(expense);
+    await this.retireSplit(expense, { deleteTransaction: false });
   }
 
   /**
-   * Cascading soft-delete for a split/assigned expense. Mirrors
-   * `TransactionRepository.softDeleteTransaction` for the account balance,
-   * then soft-deletes the Expense itself, its PaymentSchedule and every
-   * Installment, and reverses + soft-deletes every person LedgerEntry this
-   * expense posted. Mirrors `ExpenseRepository.deleteExpense`.
+   * Cascading soft delete of a split/assigned expense — ATOMIC and IDEMPOTENT (audit P1-09): in ONE Firestore
+   * transaction the Transaction is soft-deleted with its account reversed once, the schedule and every
+   * installment are retired, every share entry on this expense is reversed out of its person's balance and
+   * stamped `retiredBy: "expense:<id>"` (P1-10 provenance), and the Expense is trashed. Re-reads everything
+   * inside the transaction: an expense that is already deleted (double click, retry after a lost response,
+   * another tab — including concurrently) writes nothing. Settlement entries recorded by Record Payment point at
+   * their own cash leg, not this transaction, so they stay (money that really changed hands).
    */
   async deleteExpense(expense: Expense): Promise<void> {
-    const transaction = await this.transactionRepository.getByKey(expense.transactionId);
-    if (transaction != null && transaction.deletedAt == null) {
-      // An already-trashed Transaction already had its balance reversed — never reverse it twice
-      // (e.g. a split whose transaction was deleted alone by an older path, then repaired here).
-      await this.transactionRepository.softDeleteTransaction(transaction);
-    }
+    await this.retireSplit(expense, { deleteTransaction: true });
+  }
 
+  private async retireSplit(expense: Expense, opts: { deleteTransaction: boolean }): Promise<void> {
+    const marker = opts.deleteTransaction ? splitRetirementMarker(expense.id) : null;
     const scheduleId = expense.scheduleId;
-    if (scheduleId != null) {
-      const installmentRepository = this.installmentRepositoryFor(scheduleId);
-      for (const installment of await installmentRepository.getAll()) {
-        await installmentRepository.softDelete(installment);
-      }
-      const schedule = await this.paymentScheduleRepository.getByKey(scheduleId);
-      if (schedule != null) {
-        await this.paymentScheduleRepository.softDelete(schedule);
-      }
-    }
+    // Ids to re-read inside the transaction (queries can't run in one).
+    const installmentIds = new Set<string>(expense.participants.flatMap((p) => (p.installmentId ? [p.installmentId] : [])));
+    if (scheduleId != null) for (const i of await this.installmentRepositoryFor(scheduleId).getAll()) installmentIds.add(i.id);
+    const personIds = [...new Set(expense.participants.flatMap((p) => (p.personId ? [p.personId] : [])))];
+    const entryIdsByPerson = await this.liveEntryIdsByPerson(personIds, expense.transactionId);
 
-    for (const participant of expense.participants) {
-      if (participant.personId == null) continue;
-      const person = await this.personRepository.getByKey(participant.personId);
-      if (person == null) continue;
-      const ledgerRepository = this.ledgerRepositoryFor(person.id);
-      const linkedEntries = await ledgerRepository.getByTransactionRef(expense.transactionId);
-      for (const entry of linkedEntries) {
-        await ledgerRepository.softDeleteEntry(person, entry);
-      }
-    }
+    await runTransaction(this.collection.firestore, async (tx) => {
+      const session = new TxSession(tx);
+      const t = session.asTransaction();
+      const snap = await session.get(this.docRef(expense.id));
+      if (!snap.exists() || snap.data().deletedAt != null) return; // already retired — never reversed twice
+      const fresh = snap.data();
+      const now = new Date();
 
-    await this.softDelete(expense);
+      if (opts.deleteTransaction) {
+        const transaction = await this.transactionRepository.getInTransaction(t, fresh.transactionId);
+        // An already-trashed Transaction had its balance reversed already (e.g. a ghost from an older path).
+        if (transaction != null && transaction.deletedAt == null) await this.transactionRepository.softDeleteTransactionInTransaction(t, transaction);
+      }
+
+      if (scheduleId != null) {
+        for (const id of installmentIds) {
+          const ref = this.installmentRepositoryFor(scheduleId).docRef(id);
+          const inst = await session.get(ref);
+          if (inst.exists() && inst.data().deletedAt == null) session.set(ref, { ...inst.data(), deletedAt: now });
+        }
+        const scheduleRef = this.paymentScheduleRepository.docRef(scheduleId);
+        const schedule = await session.get(scheduleRef);
+        if (schedule.exists() && schedule.data().deletedAt == null) session.set(scheduleRef, { ...schedule.data(), deletedAt: now });
+      }
+
+      for (const personId of personIds) {
+        const ledger = this.ledgerRepositoryFor(personId);
+        let delta = 0;
+        for (const id of entryIdsByPerson.get(personId) ?? []) {
+          const entrySnap = await session.get(ledger.docRef(id));
+          if (!entrySnap.exists()) continue;
+          const entry = entrySnap.data();
+          if (entry.deletedAt != null || entry.transactionRef !== fresh.transactionId) continue;
+          delta -= signedAmount(entry);
+          session.set(ledger.docRef(id), { ...entry, deletedAt: now, retiredBy: marker });
+        }
+        delta = round2(delta);
+        if (delta !== 0) {
+          const personRef = this.personRepository.docRef(personId);
+          const personSnap = await session.get(personRef);
+          if (!personSnap.exists()) throw new Error("Person not found");
+          session.set(personRef, this.personRepository.applyBalanceDelta(personSnap.data(), delta));
+        }
+      }
+
+      session.set(this.docRef(fresh.id), { ...fresh, deletedAt: now });
+      session.flush();
+    });
   }
 
   /**
-   * Restores everything `deleteExpense` cascaded — the exact inverse. Only
-   * restores a piece that is still actually in trash — each `isDeleted`
-   * check guards against double-applying a balance effect if that piece
-   * was already independently restored first. Mirrors
-   * `ExpenseRepository.restoreExpense`.
+   * Restores what `deleteExpense` retired — ATOMIC and IDEMPOTENT, from documents re-read in ONE transaction:
+   * the Transaction (its account re-applied once), the installments the expense's participants still point
+   * at, the schedule, and ONLY the share entries stamped `retiredBy: "expense:<id>"` by that delete (P1-10).
+   * An entry retired before the delete (e.g. a ✓ received status that was undone) has no such stamp and stays
+   * retired; so does every entry of a legacy delete that predates the stamp — what can't be proven to have
+   * been retired by the delete is never resurrected. A repeat / concurrent restore finds the expense live and
+   * writes nothing.
    */
   async restoreExpense(expense: Expense): Promise<void> {
-    const transaction = await this.transactionRepository.getByKey(expense.transactionId);
-    if (transaction != null && transaction.deletedAt != null) {
-      await this.transactionRepository.restoreTransaction(transaction);
-    }
-
+    const marker = splitRetirementMarker(expense.id);
     const scheduleId = expense.scheduleId;
-    if (scheduleId != null) {
-      const installmentRepository = this.installmentRepositoryFor(scheduleId);
-      for (const installment of await installmentRepository.getTrash()) {
-        await installmentRepository.restore(installment);
-      }
-      const schedule = await this.paymentScheduleRepository.getByKey(scheduleId);
-      if (schedule != null && schedule.deletedAt != null) {
-        await this.paymentScheduleRepository.restore(schedule);
-      }
+    const personIds = [...new Set(expense.participants.flatMap((p) => (p.personId ? [p.personId] : [])))];
+    const trashedEntryIds = new Map<string, string[]>();
+    for (const personId of personIds) {
+      trashedEntryIds.set(personId, (await this.ledgerRepositoryFor(personId).getTrashByTransactionRef(expense.transactionId)).map((e) => e.id));
     }
 
-    for (const participant of expense.participants) {
-      if (participant.personId == null) continue;
-      const person = await this.personRepository.getByKey(participant.personId);
-      if (person == null) continue;
-      const ledgerRepository = this.ledgerRepositoryFor(person.id);
-      const linkedEntries = await ledgerRepository.getTrashByTransactionRef(expense.transactionId);
-      for (const entry of linkedEntries) {
-        await ledgerRepository.restoreEntry(person, entry);
-      }
-    }
+    await runTransaction(this.collection.firestore, async (tx) => {
+      const session = new TxSession(tx);
+      const t = session.asTransaction();
+      const snap = await session.get(this.docRef(expense.id));
+      if (!snap.exists() || snap.data().deletedAt == null) return; // already live — nothing re-applied
+      const fresh = snap.data();
 
-    await this.restore(expense);
+      const transaction = await this.transactionRepository.getInTransaction(t, fresh.transactionId);
+      if (transaction != null && transaction.deletedAt != null) await this.transactionRepository.restoreTransactionInTransaction(t, transaction);
+
+      if (scheduleId != null) {
+        for (const p of fresh.participants) {
+          if (p.installmentId == null) continue;
+          const ref = this.installmentRepositoryFor(scheduleId).docRef(p.installmentId);
+          const inst = await session.get(ref);
+          if (inst.exists() && inst.data().deletedAt != null) session.set(ref, { ...inst.data(), deletedAt: null });
+        }
+        const scheduleRef = this.paymentScheduleRepository.docRef(scheduleId);
+        const schedule = await session.get(scheduleRef);
+        if (schedule.exists() && schedule.data().deletedAt != null) session.set(scheduleRef, { ...schedule.data(), deletedAt: null });
+      }
+
+      for (const personId of personIds) {
+        const ledger = this.ledgerRepositoryFor(personId);
+        let delta = 0;
+        for (const id of trashedEntryIds.get(personId) ?? []) {
+          const entrySnap = await session.get(ledger.docRef(id));
+          if (!entrySnap.exists()) continue;
+          const entry = entrySnap.data();
+          if (entry.deletedAt == null || entry.retiredBy !== marker || entry.transactionRef !== fresh.transactionId) continue;
+          delta += signedAmount(entry);
+          session.set(ledger.docRef(id), { ...entry, deletedAt: null, retiredBy: null });
+        }
+        delta = round2(delta);
+        if (delta !== 0) {
+          const personRef = this.personRepository.docRef(personId);
+          const personSnap = await session.get(personRef);
+          if (!personSnap.exists()) throw new Error("Person not found");
+          session.set(personRef, this.personRepository.applyBalanceDelta(personSnap.data(), delta));
+        }
+      }
+
+      session.set(this.docRef(fresh.id), { ...fresh, deletedAt: null });
+      session.flush();
+    });
   }
 }
 
@@ -1420,4 +1497,42 @@ function addDays(date: Date, days: number): Date {
   const d = new Date(date);
   d.setDate(d.getDate() + days);
   return d;
+}
+
+/** `LedgerEntry.retiredBy` stamped by `deleteExpense` — the provenance `restoreExpense` restores by. */
+export function splitRetirementMarker(expenseId: string): string {
+  return `expense:${expenseId}`;
+}
+
+/** A new ledger entry written inside a split transaction (same shape `LedgerRepository.addEntry` writes). */
+function newLedgerEntry(params: {
+  personId: string;
+  type: LedgerEntryType;
+  amount: number;
+  date: Date;
+  note: string;
+  transactionRef: string | null;
+  sourceKind: LedgerSourceKind;
+  receivedStatus: ReceivedStatus;
+  increasesBalance?: boolean;
+}): LedgerEntry {
+  if (!(params.amount > 0)) throw new Error("Amount must be greater than 0");
+  return {
+    id: generateId(),
+    personId: params.personId,
+    type: params.type,
+    amount: params.amount,
+    date: params.date,
+    note: params.note,
+    transactionRef: params.transactionRef,
+    parentEntryId: null,
+    sourceKind: params.sourceKind,
+    obligationRef: null,
+    increasesBalance: params.increasesBalance ?? true,
+    receivedStatus: params.receivedStatus,
+    createdAt: new Date(),
+    deletedAt: null,
+    lastEditedAt: null,
+    editHistory: [],
+  };
 }

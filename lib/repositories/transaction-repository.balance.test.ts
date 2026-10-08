@@ -245,4 +245,30 @@ describe("TransactionRepository balance-affecting mutations", () => {
 
     expect(store.size).toBe(0);
   });
+
+  it("[WFI-P2-10] createTransaction with an idempotencyKey: a retried Save records once and moves the balance once", async () => {
+    const store = new Map<string, unknown>([["acc-a", account({ currentBalance: 500 })]]);
+    const { transactionRepository } = makeRepos(store);
+    const params = { type: "expense" as const, amount: 120, dateTime: new Date("2026-08-01T00:00:00Z"), accountId: "acc-a", categoryId: "cat-1", idempotencyKey: "save-0001" };
+
+    const first = await transactionRepository.createTransaction(params);
+    const retry = await transactionRepository.createTransaction(params);
+
+    expect(first.id).toBe("txn_save-0001");
+    expect(retry.id).toBe(first.id);
+    expect((store.get("acc-a") as Account).currentBalance).toBe(380);
+    await expect(transactionRepository.createTransaction({ ...params, amount: 999 })).rejects.toThrow("already saved with different details");
+    expect((store.get("acc-a") as Account).currentBalance).toBe(380);
+  });
+
+  it("[WFI-P2-10] createTransaction: a key whose earlier transaction was deleted records afresh", async () => {
+    const store = new Map<string, unknown>([
+      ["acc-a", account({ currentBalance: 500 })],
+      ["txn_save-0002", txn({ id: "txn_save-0002", deletedAt: new Date("2026-08-01T00:00:00Z") })],
+    ]);
+    const { transactionRepository } = makeRepos(store);
+    const created = await transactionRepository.createTransaction({ type: "expense", amount: 50, dateTime: new Date("2026-08-01T00:00:00Z"), accountId: "acc-a", categoryId: "cat-1", idempotencyKey: "save-0002" });
+    expect(created.id).not.toBe("txn_save-0002");
+    expect((store.get("acc-a") as Account).currentBalance).toBe(450);
+  });
 });

@@ -209,6 +209,9 @@ async function rejected(amount: number): Promise<string[]> {
   return (err as PeopleSettlementPendingError).gate.attention.map((p) => `${p.personName} ${p.remaining}`).sort();
 }
 
+/** Stored balances are rounded to the paisa (WFI-P4-03). */
+const r2 = (v: number) => Math.round(v * 100) / 100;
+
 describe("Card Pay bill — People gate enforced at the write layer (OCTANE)", () => {
   it("A. Statement-A People unresolved → ₹22,152.02 refused; ONLY A's shares named; nothing written (atomic)", async () => {
     const before = snapshot();
@@ -231,7 +234,7 @@ describe("Card Pay bill — People gate enforced at the write layer (OCTANE)", (
     await payBill(22152.02);
     const after = snapshot();
     expect(after).toMatchObject({ statementA: 0, statementB: 27170, outstanding: 27170, transferCount: 2 });
-    expect([after.sbi, after.card]).toEqual([before.sbi - 22152.02, before.card + 22152.02]);
+    expect([after.sbi, after.card]).toEqual([r2(before.sbi - 22152.02), r2(before.card + 22152.02)]);
     expect(after.people).toBe(before.people); // paying the issuer never settles People
   });
 
@@ -403,7 +406,7 @@ describe("Card payment write routes — every one enforces the invariant at the 
     expect(a.map((t) => t.id)).toEqual(b.map((t) => t.id));
     const after = snapshot();
     expect(liveTransfers()).toHaveLength(2);
-    expect(after).toMatchObject({ statementA: 0, statementB: 27170, sbi: before.sbi - 22152.02, card: before.card + 22152.02 });
+    expect(after).toMatchObject({ statementA: 0, statementB: 27170, sbi: r2(before.sbi - 22152.02), card: r2(before.card + 22152.02) });
     await payBill(22152.02, "tab-intent-1"); // a late retry of the same action
     expect(snapshot()).toEqual(after);
   });
@@ -447,7 +450,7 @@ describe("Card payment write routes — every one enforces the invariant at the 
     expect({ ...snapshot(), transferCount: 0 }).toEqual({ ...before, transferCount: 0 });
     await txRepo.restoreTransferPair(stored(out.id));
     await txRepo.restoreTransferPair(stored(out.id));
-    expect(snapshot()).toMatchObject({ statementA: 0, transferCount: 2, sbi: before.sbi - 22152.02 });
+    expect(snapshot()).toMatchObject({ statementA: 0, transferCount: 2, sbi: r2(before.sbi - 22152.02) });
   });
 
   it("M. shared-limit sibling card: its own payment gates only on its own charges; OCTANE's open shares never block it", async () => {
@@ -478,7 +481,7 @@ describe("Reconciliation — current tree (normal Pay Now write path, intent, re
     await payBill(22152.02, "pay-now-1", OCTANE.accountId, intent); // retry of the same action
     const after = snapshot();
     expect(liveTransfers()).toHaveLength(2); // one pair
-    expect(after).toMatchObject({ statementA: 0, statementB: 27170, outstanding: 27170, sbi: settled.sbi - 22152.02, card: settled.card + 22152.02 });
+    expect(after).toMatchObject({ statementA: 0, statementB: 27170, outstanding: 27170, sbi: r2(settled.sbi - 22152.02), card: r2(settled.card + 22152.02) });
     expect(after.people).toBe(settled.people);
   });
 

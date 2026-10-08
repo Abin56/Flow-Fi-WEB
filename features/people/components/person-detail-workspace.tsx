@@ -24,7 +24,6 @@ import { usePersonUpcomingEmi } from "@/features/people/hooks/use-person-upcomin
 import { useSettlementLookups } from "@/features/people/hooks/use-settlement-lookups";
 import { buildLedgerRows, cycleShowingNewEntry, type LedgerRow, type PaymentRecord } from "@/features/people/lib/person-ledger-rows";
 import type { PendingSplitParticipant } from "@/lib/engines/person-pending-split-participants";
-import { useTransactionActions } from "@/features/transactions/hooks/use-transactions-data";
 import { PersonCycleStatementSection } from "@/features/people/components/cycle-statement/person-cycle-statement-section";
 import { PersonActivityFeed, type LedgerRowHandlers, type LedgerScope } from "@/features/people/components/person-activity-feed";
 import { AddEntryPanel, type AddEntryParams } from "@/features/people/components/workspace/add-entry-panel";
@@ -38,7 +37,7 @@ import { ApplyAdvancePanel, PaymentRevertDetails } from "@/features/people/compo
 import { MoneyToUseSection } from "@/features/people/components/workspace/purpose-money";
 import { usePersonPurposeFunds } from "@/features/people/hooks/use-purpose-funds";
 import { purposeCashOf } from "@/lib/engines/purpose-funds";
-import { advanceSources, payableObligations } from "@/features/people/lib/person-payment-obligations";
+import { advanceSources, payableObligations, routeFor } from "@/features/people/lib/person-payment-obligations";
 import { advanceRemaining, PAYMENT_EPSILON, type AdvanceUse } from "@/lib/engines/person-payment";
 import { followUpStatus } from "@/lib/models/person-follow-up";
 import { useAllPersonFollowUps, usePersonFollowUpActions } from "@/features/people/hooks/use-person-follow-ups";
@@ -197,7 +196,6 @@ export function PersonDetailWorkspace({
   const { pending, trackedShareRefs: trackedAll, isLoading: sharesLoading } = usePersonPendingSplitParticipants(person.id);
   // Until expenses have loaded, whether a share is tracked is unknown — keep it conservative (null).
   const trackedShareRefs = sharesLoading ? null : trackedAll;
-  const txActions = useTransactionActions();
   const router = useRouter();
   const { items: upcomingEmi } = usePersonUpcomingEmi(person.id);
   const { data: accounts = [] } = useAccounts();
@@ -427,9 +425,15 @@ export function PersonDetailWorkspace({
         accountId: values.accountId ?? "",
       });
     } else {
-      if (!txActions) throw new Error("Not signed in");
-      const { expense, participant, installment } = target.pending;
-      await txActions.settleParticipant({ expense, participant, installment, amount: values.amount, date: values.date });
+      // A split share is settled as a real receipt through Record Payment's `split` route — one atomic write:
+      // cash leg into the chosen account, the share's settlement entry and its tracking installment. Never a
+      // ledger-only settlement (that cleared the receivable while no account received the money).
+      if (!onRecordPayment) throw new Error("Not signed in");
+      if (!values.accountId) throw new Error("Select the account it was received into.");
+      await onRecordPayment(
+        { direction: "theyPaid", amount: values.amount, date: values.date, accountId: values.accountId, lines: [{ key: row.key, amount: values.amount, route: routeFor(target) }], extra: null },
+        null,
+      );
     }
     setSettlingKey(null);
     setEditingKey(null);

@@ -27,10 +27,13 @@ import { InspectorShell } from "./inspector-shell";
 
 type SplitMode = "equal" | "percentage" | "custom";
 
-/** Collectible-only statuses — "Me" never gets this control (see `ExpenseParticipant.receivedStatus`). */
-const RECEIVED_STATUS_OPTIONS: { value: Exclude<ReceivedStatus, "notApplicable">; label: string }[] = [
+/**
+ * Collectible-only statuses — "Me" never gets this control (see `ExpenseParticipant.receivedStatus`). No
+ * "Received": that would clear the share without recording any money (the write layer refuses it —
+ * `ReceivedWithoutCashError`); money a person paid back is recorded with People → Record payment.
+ */
+const RECEIVED_STATUS_OPTIONS: { value: Exclude<ReceivedStatus, "notApplicable" | "received">; label: string }[] = [
   { value: "yetToReceive", label: "Yet to Receive" },
-  { value: "received", label: "Received" },
   { value: "excluded", label: "Don't count in received" },
 ];
 

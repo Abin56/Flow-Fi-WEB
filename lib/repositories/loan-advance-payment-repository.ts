@@ -31,6 +31,7 @@ import {
   type CollectionReference,
   type DocumentReference,
   type Firestore,
+  type Transaction as FirestoreTransaction,
   collection,
   doc,
   getDoc,
@@ -98,6 +99,11 @@ import { principalPrepaidFor } from "@/lib/engines/loan-outstanding";
 import { assertLinkedPeopleSettled } from "@/lib/repositories/people-settlement-gate";
 import type { UnsettledPeopleAcknowledgement } from "@/lib/engines/linked-people-readiness";
 import { generateId } from "@/lib/utils/id-generator";
+
+/** What a reversal's eligibility depends on per installment: paid amount and whether it is live. */
+function installmentFingerprint(i: Installment): string {
+  return `${i.amountPaid}|${i.deletedAt == null ? "live" : "deleted"}`;
+}
 
 export interface LoanAdvancePaymentResult {
   /**
@@ -748,7 +754,7 @@ export class LoanAdvancePaymentRepository {
       }
     }
 
-    await this.assertReversible(loan, transactionDoc, event);
+    const seen = await this.assertReversible(loan, transactionDoc, event);
 
     const alreadyReversed = await runTransaction<boolean>(this.firestore, async (tx) => {
       // --- All reads first (Firestore transaction constraint). ---
@@ -756,6 +762,8 @@ export class LoanAdvancePaymentRepository {
       if (!freshTransactionSnap.exists()) throw new Error("Transaction not found");
       const freshTransaction = freshTransactionSnap.data();
       if (freshTransaction.deletedAt != null) return true; // idempotent race guard
+      // Only a still-live payment needs the schedule to be as checked — an already-reversed one returns above.
+      await this.assertScheduleUnchanged(tx, loan, seen);
 
       const freshAccountSnap = await tx.get(this.accountRef(freshTransaction.accountId));
       if (!freshAccountSnap.exists()) throw new Error("Account not found");
@@ -878,7 +886,7 @@ export class LoanAdvancePaymentRepository {
       }
     }
 
-    await this.assertReversible(loan, transactionDoc, event);
+    const seen = await this.assertReversible(loan, transactionDoc, event);
 
     const alreadyReversed = await runTransaction<boolean>(this.firestore, async (tx) => {
       // --- All reads first. ---
@@ -886,6 +894,8 @@ export class LoanAdvancePaymentRepository {
       if (!freshTransactionSnap.exists()) throw new Error("Transaction not found");
       const freshTransaction = freshTransactionSnap.data();
       if (freshTransaction.deletedAt != null) return true; // idempotent race guard
+      // Only a still-live payment needs the schedule to be as checked — an already-reversed one returns above.
+      await this.assertScheduleUnchanged(tx, loan, seen);
 
       const freshAccountSnap = await tx.get(this.accountRef(freshTransaction.accountId));
       if (!freshAccountSnap.exists()) throw new Error("Account not found");
@@ -1124,8 +1134,10 @@ export class LoanAdvancePaymentRepository {
     loan: Loan,
     transactionDoc: Transaction,
     event: LoanReamortizationEvent | null,
-  ): Promise<void> {
+  ): Promise<Map<string, string>> {
     const allInstallments = await getDocs(this.installments(loan.scheduleId));
+    // What the check saw — re-verified INSIDE the reversal transaction (`assertScheduleUnchanged`, WFI-P2-09).
+    const seen = new Map(allInstallments.docs.map((d) => [d.id, installmentFingerprint(d.data())]));
     for (const installmentDoc of allInstallments.docs) {
       const paymentsSnap = await getDocs(this.payments(loan.scheduleId, installmentDoc.id));
       for (const paymentDoc of paymentsSnap.docs) {
@@ -1137,7 +1149,7 @@ export class LoanAdvancePaymentRepository {
       }
     }
 
-    if (event == null) return;
+    if (event == null) return seen;
 
     const laterEvents = await getDocs(query(this.reamortizationEvents(loan.id), where("reversed", "==", false)));
     for (const otherDoc of laterEvents.docs) {
@@ -1154,6 +1166,22 @@ export class LoanAdvancePaymentRepository {
         throw new PaymentReversalBlockedError(
           "A payment already exists against the re-amortized schedule — reverse it first before reversing this prepayment",
         );
+      }
+    }
+    return seen;
+  }
+
+  /**
+   * Inside the reversal transaction: every installment `assertReversible` saw must be unchanged. A payment
+   * recorded in between changes some installment, so the reversal is refused rather than rewriting history the
+   * check never saw — and because each installment is read here, a payment committing concurrently makes this
+   * transaction retry and land on the refusal (WFI-P2-09).
+   */
+  private async assertScheduleUnchanged(tx: FirestoreTransaction, loan: Loan, seen: ReadonlyMap<string, string>): Promise<void> {
+    for (const [id, fingerprint] of seen) {
+      const snap = await tx.get(doc(this.installments(loan.scheduleId), id));
+      if (!snap.exists() || installmentFingerprint(snap.data()) !== fingerprint) {
+        throw new PaymentReversalBlockedError("This loan changed while reversing (another payment was recorded) — refresh and try again");
       }
     }
   }

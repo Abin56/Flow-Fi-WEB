@@ -55,11 +55,11 @@ import type { Bill } from "@/lib/models/bill";
 import type { Category } from "@/lib/models/category";
 import { useExpenses } from "@/hooks/use-expenses";
 import type { CreditCardProfile, Statement } from "@/lib/models/credit-card";
-import { statementRemainingAmount, statementStatus } from "@/lib/models/credit-card";
 import { useMySpendContext } from "@/hooks/use-my-spend-context";
 import { myConsumptionAmount } from "@/lib/engines/my-spend";
 
 import { compareTransactionsNewestFirst, effectiveMonth, isLoanPrincipalDisbursement, isNonIncomeExpenseMovement, signedAmount, type Transaction } from "@/lib/models/transaction";
+import { cardBillsForCard } from "@/lib/engines/card-cycle-bills";
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
@@ -71,10 +71,6 @@ type CategoryColor = (typeof CATEGORY_COLORS)[number] | "muted";
 
 function isThisMonth(date: Date, now: Date): boolean {
   return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth();
-}
-
-function isSameDay(a: Date, b: Date): boolean {
-  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 }
 
 /** Day-of-month week buckets matching the reference design's "1-7 / 8-14 / 15-21 / 22-31" bars. */
@@ -155,24 +151,28 @@ export function useDashboardData() {
   const personalAmount = useMemo(() => (t: Transaction) => myConsumptionAmount(t, mySpendCtx), [mySpendCtx]);
 
   // --- Net Worth (lib/engines/loan-balance-sheet.ts:netWorthWithLoans via useLoanBalanceSheet) ---
-  // `trend`: direct port of `NetWorthWidgetCard._weeklyTrend` (Finance_App's
-  // `net_worth_widget_card.dart`) — cumulative net (income - expense) for each
-  // of the last 7 days, oldest first, over `calculableTransactions`
-  // (excludeFromCalculations filtered, transfers deliberately NOT excluded:
-  // a transfer's two legs net to zero across total net worth automatically).
+  // `trend`: Net Worth at the end of each of the last 7 days, oldest first (WFI-P3-05) — anchored on today's real
+  // figure and walked back by every later transaction that changes it. Rows that only move money between what I
+  // own and what I owe / am owed are NW-neutral and skipped: transfers (two legs cancel), People cash legs (the
+  // receivable / payable moves with the cash), loan disbursements and loan / EMI payments (mostly principal).
+  // It used to be a cumulative 7-day cash flow starting at 0 — not Net Worth at all.
   const netWorth = useMemo(() => {
-    const calculable = (transactions as Transaction[]).filter(
-      (t) => t.deletedAt == null && !t.excludeFromCalculations && !isLoanPrincipalDisbursement(t),
+    const nwChanging = (transactions as Transaction[]).filter(
+      (t) =>
+        t.deletedAt == null &&
+        !t.excludeFromCalculations &&
+        t.transferId == null &&
+        !t.isPersonLedgerMovement &&
+        !isLoanPrincipalDisbursement(t) &&
+        t.loanId == null &&
+        t.emiId == null,
     );
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    let running = 0;
     const trend: number[] = [];
     for (let i = 6; i >= 0; i--) {
-      const day = new Date(today.getFullYear(), today.getMonth(), today.getDate() - i);
-      running += calculable
-        .filter((t) => isSameDay(t.dateTime, day))
-        .reduce((sum, t) => sum + signedAmount(t), 0);
-      trend.push(running);
+      const endOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate() - i + 1);
+      const after = nwChanging.filter((t) => t.dateTime.getTime() >= endOfDay.getTime()).reduce((sum, t) => sum + signedAmount(t), 0);
+      trend.push(Math.round((netWorthAmount - after) * 100) / 100);
     }
     // Assets / Debt so borrowing is visible even when Net Worth doesn't move (borrowed money in the bank
     // raises assets and debt together). Debt is the shared `liabilityTotals` (remaining principal, card
@@ -384,29 +384,35 @@ export function useDashboardData() {
       };
     });
 
-    const cardById = new Map((creditCards as CreditCardProfile[]).map((c) => [c.id, c]));
-    const statementItems = (statements as Statement[])
-      .filter((s) => statementStatus(s) !== "paid")
-      .map((statement) => {
-        const card = cardById.get(statement.cardId);
-        const daysLeft = Math.ceil((statement.dueDate.getTime() - now.getTime()) / MS_PER_DAY);
-        return {
-          id: `statement-${statement.id}`,
+    // Card bills from the canonical chain (`cardBillsForCard`, same as Pay bill / Month Cycle): live totals, payments
+    // settled oldest-first, and closed cycles with no stored statement included. The stored `Statement.amountPaid`
+    // is never updated on Web, so reading it showed paid bills as unpaid and missed derived ones (WFI-P2-02).
+    const liveStatements = (statements as Statement[]).filter((s) => s.deletedAt == null);
+    const statementItems = (creditCards as CreditCardProfile[]).flatMap((card) =>
+      cardBillsForCard(
+        card,
+        (transactions as Transaction[]).filter((t) => t.accountId === card.accountId && t.deletedAt == null),
+        liveStatements.filter((s) => s.cardId === card.id),
+        now,
+      )
+        .filter((bill) => bill.isClosed && bill.remaining > 0.005)
+        .map((bill) => ({
+          id: `statement-${bill.id}`,
           type: "statement" as const,
-          title: card ? `Card •••• ${card.lastFourDigits ?? ""}` : "Credit Card",
+          title: `Card •••• ${card.lastFourDigits ?? ""}`,
           subtitle: "Statement",
-          amount: statementRemainingAmount(statement),
-          date: formatLongDate(statement.dueDate),
-          daysLeft,
-          dueDate: statement.dueDate,
-        };
-      });
+          amount: bill.remaining,
+          date: formatLongDate(bill.dueDate),
+          daysLeft: Math.ceil((bill.dueDate.getTime() - now.getTime()) / MS_PER_DAY),
+          dueDate: bill.dueDate,
+        })),
+    );
 
     return [...billItems, ...statementItems]
       .sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime())
       .slice(0, 5)
       .map(({ dueDate: _dueDate, ...item }) => item);
-  }, [bills, creditCards, statements, now]);
+  }, [bills, creditCards, statements, transactions, now]);
 
   // --- Needs Your Attention (bill alerts only — see gap note above) ---
   const needsAttention = useMemo(() => {

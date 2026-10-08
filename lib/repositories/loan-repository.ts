@@ -946,6 +946,13 @@ export class LoanRepository extends FirestoreCrudRepository<Loan> {
     if (loanAmount != null && loanAmount <= 0) {
       throw new Error("Loan amount must be greater than 0");
     }
+    // The origination deposit moved exactly `loan.loanAmount` into/out of an account. Re-planning a different
+    // principal would leave that account (and Net Worth) disagreeing with the Loan (WFI-P1-07).
+    if (loanAmount != null && Math.abs(loanAmount - loan.loanAmount) > 0.005 && (await this.originationMoneyState(loan)) === "moneyActive") {
+      throw new Error(
+        "This loan's amount was deposited to an account. To change the amount, reverse the original deposit first, then save the new amount.",
+      );
+    }
 
     const sorted = [...currentInstallments].sort((a, b) => a.sequenceNumber - b.sequenceNumber);
     const settled = sorted.filter((i) => i.amountPaid > 0 || i.isSkipped);

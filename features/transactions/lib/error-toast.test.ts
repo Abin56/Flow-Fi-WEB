@@ -23,8 +23,8 @@ describe("userFacingMessage", () => {
     expect(userFacingMessage(error)).toContain("delete the transfer and create a new one instead");
   });
 
-  it("returns null for a plain/unrecognized Error (falls back to generic elsewhere)", () => {
-    expect(userFacingMessage(new Error("Missing or insufficient permissions."))).toBeNull();
+  it("returns null for a Firestore error (has a code) — falls back to generic elsewhere", () => {
+    expect(userFacingMessage(Object.assign(new Error("Missing or insufficient permissions."), { code: "permission-denied" }))).toBeNull();
   });
 
   it("returns null for a non-Error thrown value", () => {
@@ -48,12 +48,19 @@ describe("withErrorToast", () => {
     );
   });
 
-  it("falls back to the generic message for an unrecognized error", async () => {
-    const action = () => Promise.reject(new Error("Missing or insufficient permissions."));
+  it("falls back to the generic message for a Firestore error (it carries a code)", async () => {
+    const action = () => Promise.reject(Object.assign(new Error("Missing or insufficient permissions."), { code: "permission-denied" }));
 
     await expect(withErrorToast(action, "Couldn't save changes")).rejects.toThrow("Missing or insufficient permissions.");
 
     expect(toast.error).toHaveBeenCalledWith("Couldn't save changes", "Please try again.");
+  });
+
+  it("shows a repository's own plain-Error refusal (WFI-P3-04); a runtime TypeError stays generic", async () => {
+    await expect(withErrorToast(() => Promise.reject(new Error("This amount is too small to split between 4 people")), "Couldn't save")).rejects.toThrow();
+    expect(toast.error).toHaveBeenCalledWith("Couldn't save", "This amount is too small to split between 4 people");
+    await expect(withErrorToast(() => Promise.reject(new TypeError("x is undefined")), "Couldn't save")).rejects.toThrow();
+    expect(toast.error).toHaveBeenLastCalledWith("Couldn't save", "Please try again.");
   });
 
   it("resolves normally and never toasts when the action succeeds", async () => {

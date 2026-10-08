@@ -39,6 +39,7 @@ import { useEmis } from "@/hooks/use-credit-cards";
 import { useAllEmiInstallments } from "@/hooks/use-emis";
 import { useAllLoanInstallments, useTrashedLoans } from "@/hooks/use-loans";
 import { cycleContaining } from "@/lib/engines/person-cycle-statement";
+import { cycleRangeFor } from "@/lib/engines/month-cycle-range";
 import { useMonthCycleStartDay } from "@/features/settings/hooks/use-user-preferences";
 import { emiReceivableThrough, personEmiObligations } from "@/lib/engines/person-emi-obligations";
 import type { Emi } from "@/lib/models/emi";
@@ -432,6 +433,7 @@ export function usePeopleStats(): { stats: PeopleStatsSummary; isLoading: boolea
   const { data: people = [], isLoading: peopleLoading } = usePeople();
   const { entriesByPersonId, isLoading: entriesLoading } = usePeopleLedgerEntries();
 
+  const cycleStartDay = useMonthCycleStartDay();
   const { positionsByPersonId, isLoading: positionsLoading } = usePersonPositions();
 
   const stats = useMemo(() => {
@@ -441,13 +443,14 @@ export function usePeopleStats(): { stats: PeopleStatsSummary; isLoading: boolea
     const totalYouOwe = totals.totalIOwe;
     const owingPeopleCount = totals.owingCount;
 
-    const now = new Date();
+    // "This month" = the user's configured month cycle, same as Month Cycle and the People statement (WFI-P3-06).
+    const cycle = cycleRangeFor(cycleStartDay, new Date());
     let settledThisMonth = 0;
     let settledTransactionsCount = 0;
     for (const entries of Object.values(entriesByPersonId)) {
       for (const entry of entries) {
         const isSettlementType = entry.type === "repaid" || entry.type === "receivedBack";
-        const isThisMonth = entry.date.getFullYear() === now.getFullYear() && entry.date.getMonth() === now.getMonth();
+        const isThisMonth = entry.date >= cycle.start && entry.date <= cycle.end;
         if (isSettlementType && isThisMonth) {
           settledThisMonth += entry.amount;
           settledTransactionsCount += 1;
@@ -464,7 +467,7 @@ export function usePeopleStats(): { stats: PeopleStatsSummary; isLoading: boolea
       settledThisMonth,
       settledTransactionsCount,
     };
-  }, [people, entriesByPersonId, positionsByPersonId]);
+  }, [people, entriesByPersonId, positionsByPersonId, cycleStartDay]);
 
   return { stats, isLoading: peopleLoading || entriesLoading || positionsLoading };
 }

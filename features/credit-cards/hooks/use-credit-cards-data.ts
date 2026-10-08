@@ -62,6 +62,7 @@ import {
   cardPaymentTotal,
   settleCardPayments,
   statementPeriodTotal,
+  statementWindowForDate,
   unbilledSpendForCard,
   uncoveredClosedSpendForCard,
 } from "@/lib/repositories/credit-card-repository";
@@ -251,12 +252,13 @@ export function computeCreditCardStandings(input: {
     cardList.map((c) => {
       const cardTransactions = transactionsByAccountId.get(c.accountId) ?? [];
       const cardStatements = statementsByCardId.get(c.id) ?? [];
-      const unbilled = unbilledSpendForCard(cardTransactions, cardStatements);
+      const openCycleStart = statementWindowForDate(c, now).periodStart;
+      const unbilled = unbilledSpendForCard(cardTransactions, cardStatements, openCycleStart);
       const live = cardStatements.map((s) =>
         statementWithLiveTotal(s, statementPeriodTotal(cardTransactions, s), s.minimumDue),
       );
       // Closed cycles no stored statement covers (before the first one / gaps) — unsaved bills, still owed.
-      const derived = uncoveredClosedSpendForCard(c, cardTransactions, cardStatements).map((w) => derivedStatement(c, w));
+      const derived = uncoveredClosedSpendForCard(c, cardTransactions, cardStatements, now).map((w) => derivedStatement(c, w));
       const settled = settleCardPayments([...live, ...derived], unbilled.totalAmount, cardPaymentTotal(cardTransactions));
       return [c.id, { statements: settled.statements, currentCycle: { ...unbilled, totalAmount: settled.unbilledTotal } }] as const;
     }),

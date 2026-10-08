@@ -97,7 +97,7 @@ export async function applyOwesPersonChange(params: ApplyOwesPersonChangeParams)
         ...transactionEdits,
         linkedPersonId: target.personId,
         owesPersonToggle: true,
-      });
+      }, { owner: "split" });
     } catch (error) {
       // The ledger-side assignment already committed above — tear it down rather than
       // leave an untraceable "owed" balance with no transaction stamped to back it.
@@ -118,7 +118,7 @@ export async function applyOwesPersonChange(params: ApplyOwesPersonChangeParams)
         linkedPersonId: target.personId,
         clearLinkedPersonId: target.personId == null,
         owesPersonToggle: false,
-      });
+      }, { owner: "split" });
     } catch (error) {
       // Re-create the assignment we just tore down — otherwise the debt silently
       // vanishes from People/Ledger totals if the transaction stamp fails.
@@ -170,7 +170,7 @@ export async function applyOwesPersonChange(params: ApplyOwesPersonChangeParams)
           ...transactionEdits,
           linkedPersonId: target.personId,
           owesPersonToggle: true,
-        });
+        }, { owner: "split" });
       } catch (error) {
         // Reverse both ledger-side steps: tear down the new assignment, restore the original one.
         await expenseRepository.unassignFromPerson(newExpense).catch(() => {
@@ -226,7 +226,7 @@ export async function applyOwesPersonChange(params: ApplyOwesPersonChangeParams)
           ...transactionEdits,
           linkedPersonId: target.personId,
           owesPersonToggle: true,
-        });
+        }, { owner: "split" });
       } catch (error) {
         // Revert the in-place ledger edit back to its pre-call state.
         const revertScheduleId = editedExpense.scheduleId ?? scheduleId;

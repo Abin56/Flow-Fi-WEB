@@ -1,3 +1,5 @@
+> **Project status:** see [docs/project-status.md](docs/project-status.md) for the current FlowFi overview, features and engineering highlights.
+
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
 ## Getting Started

@@ -122,151 +122,160 @@ export class AccountRepository extends FirestoreCrudRepository<Account> {
       params.clearAccountNumberLast4 ? null : (params.accountNumberLast4 ?? account.accountNumberLast4),
     );
 
-    let updated = account;
-    updated = updateField(updated, "name", updated.name, params.name, (e, v) => ({ ...e, name: v }));
-    updated = updateField(updated, "type", updated.type, params.type, (e, v) => ({ ...e, type: v }));
-    updated = updateField(
-      updated,
-      "color",
-      updated.colorValue,
-      params.colorValue,
-      (e, v) => ({ ...e, colorValue: v }),
-    );
-
-    if (params.clearBankId) {
-      updated = recordEdit(updated, "bankId", updated.bankId ?? "none", "none");
-      updated = { ...updated, bankId: null };
-    } else {
-      updated = updateField(updated, "bankId", updated.bankId, params.bankId, (e, v) => ({ ...e, bankId: v }));
-    }
-
-    if (params.clearAccountHolderName) {
-      updated = recordEdit(updated, "accountHolderName", updated.accountHolderName ?? "none", "none");
-      updated = { ...updated, accountHolderName: null };
-    } else {
-      updated = updateField(updated, "accountHolderName", updated.accountHolderName, params.accountHolderName, (e, v) => ({
-        ...e,
-        accountHolderName: v,
-      }));
-    }
-
-    if (params.clearNotes) {
-      updated = recordEdit(updated, "notes", updated.notes ?? "none", "none");
-      updated = { ...updated, notes: null };
-    } else {
-      updated = updateField(updated, "notes", updated.notes, params.notes, (e, v) => ({ ...e, notes: v }));
-    }
-
-    if (params.clearAccountNumberLast4) {
-      updated = recordEdit(updated, "accountNumberLast4", updated.accountNumberLast4 ?? "none", "none");
-      updated = { ...updated, accountNumberLast4: null };
-    } else {
+    // Applied to the fresh document: `account` is the edit form's copy, and writing it back whole would revert
+    // `currentBalance` moved by a transaction saved while the form was open (accounts, card outstanding, net worth).
+    await this.updateFresh(account.id, (fresh) => {
+      let updated = fresh;
+      updated = updateField(updated, "name", updated.name, params.name, (e, v) => ({ ...e, name: v }));
+      // A card account owns statements, a card profile and card-bill rules; no other type does. Switching into or out
+      // of "card" would silently re-classify its whole history, so it is refused (WFI-P3-07).
+      if (params.type != null && params.type !== fresh.type && (params.type === "card" || fresh.type === "card")) {
+        throw new Error("A credit card account can't be changed to another type (or another type to a card). Create a new account instead.");
+      }
+      updated = updateField(updated, "type", updated.type, params.type, (e, v) => ({ ...e, type: v }));
       updated = updateField(
         updated,
-        "accountNumberLast4",
-        updated.accountNumberLast4,
-        params.accountNumberLast4,
-        (e, v) => ({ ...e, accountNumberLast4: v }),
+        "color",
+        updated.colorValue,
+        params.colorValue,
+        (e, v) => ({ ...e, colorValue: v }),
       );
-    }
 
-    updated = updateField(
-      updated,
-      "bankAccountSubtype",
-      updated.bankAccountSubtype,
-      params.bankAccountSubtype,
-      (e, v) => ({ ...e, bankAccountSubtype: v }),
-    );
+      if (params.clearBankId) {
+        updated = recordEdit(updated, "bankId", updated.bankId ?? "none", "none");
+        updated = { ...updated, bankId: null };
+      } else {
+        updated = updateField(updated, "bankId", updated.bankId, params.bankId, (e, v) => ({ ...e, bankId: v }));
+      }
 
-    if (params.clearMinimumBalance) {
-      updated = recordEdit(updated, "minimumBalance", updated.minimumBalance?.toString() ?? "none", "none");
-      updated = { ...updated, minimumBalance: null };
-    } else {
-      updated = updateField(updated, "minimumBalance", updated.minimumBalance, params.minimumBalance, (e, v) => ({
-        ...e,
-        minimumBalance: v,
-      }));
-    }
+      if (params.clearAccountHolderName) {
+        updated = recordEdit(updated, "accountHolderName", updated.accountHolderName ?? "none", "none");
+        updated = { ...updated, accountHolderName: null };
+      } else {
+        updated = updateField(updated, "accountHolderName", updated.accountHolderName, params.accountHolderName, (e, v) => ({
+          ...e,
+          accountHolderName: v,
+        }));
+      }
 
-    if (params.clearInterestRatePercent) {
-      updated = recordEdit(updated, "interestRatePercent", updated.interestRatePercent?.toString() ?? "none", "none");
-      updated = { ...updated, interestRatePercent: null };
-    } else {
+      if (params.clearNotes) {
+        updated = recordEdit(updated, "notes", updated.notes ?? "none", "none");
+        updated = { ...updated, notes: null };
+      } else {
+        updated = updateField(updated, "notes", updated.notes, params.notes, (e, v) => ({ ...e, notes: v }));
+      }
+
+      if (params.clearAccountNumberLast4) {
+        updated = recordEdit(updated, "accountNumberLast4", updated.accountNumberLast4 ?? "none", "none");
+        updated = { ...updated, accountNumberLast4: null };
+      } else {
+        updated = updateField(
+          updated,
+          "accountNumberLast4",
+          updated.accountNumberLast4,
+          params.accountNumberLast4,
+          (e, v) => ({ ...e, accountNumberLast4: v }),
+        );
+      }
+
       updated = updateField(
         updated,
-        "interestRatePercent",
-        updated.interestRatePercent,
-        params.interestRatePercent,
-        (e, v) => ({ ...e, interestRatePercent: v }),
+        "bankAccountSubtype",
+        updated.bankAccountSubtype,
+        params.bankAccountSubtype,
+        (e, v) => ({ ...e, bankAccountSubtype: v }),
       );
-    }
 
-    if (params.clearMaturityDate) {
-      updated = recordEdit(updated, "maturityDate", updated.maturityDate?.toISOString() ?? "none", "none");
-      updated = { ...updated, maturityDate: null };
-    } else {
-      updated = updateField(updated, "maturityDate", updated.maturityDate, params.maturityDate, (e, v) => ({
+      if (params.clearMinimumBalance) {
+        updated = recordEdit(updated, "minimumBalance", updated.minimumBalance?.toString() ?? "none", "none");
+        updated = { ...updated, minimumBalance: null };
+      } else {
+        updated = updateField(updated, "minimumBalance", updated.minimumBalance, params.minimumBalance, (e, v) => ({
+          ...e,
+          minimumBalance: v,
+        }));
+      }
+
+      if (params.clearInterestRatePercent) {
+        updated = recordEdit(updated, "interestRatePercent", updated.interestRatePercent?.toString() ?? "none", "none");
+        updated = { ...updated, interestRatePercent: null };
+      } else {
+        updated = updateField(
+          updated,
+          "interestRatePercent",
+          updated.interestRatePercent,
+          params.interestRatePercent,
+          (e, v) => ({ ...e, interestRatePercent: v }),
+        );
+      }
+
+      if (params.clearMaturityDate) {
+        updated = recordEdit(updated, "maturityDate", updated.maturityDate?.toISOString() ?? "none", "none");
+        updated = { ...updated, maturityDate: null };
+      } else {
+        updated = updateField(updated, "maturityDate", updated.maturityDate, params.maturityDate, (e, v) => ({
+          ...e,
+          maturityDate: v,
+        }));
+      }
+
+      if (params.clearTenureMonths) {
+        updated = recordEdit(updated, "tenureMonths", updated.tenureMonths?.toString() ?? "none", "none");
+        updated = { ...updated, tenureMonths: null };
+      } else {
+        updated = updateField(updated, "tenureMonths", updated.tenureMonths, params.tenureMonths, (e, v) => ({
+          ...e,
+          tenureMonths: v,
+        }));
+      }
+
+      updated = updateField(updated, "cardSubtype", updated.cardSubtype, params.cardSubtype, (e, v) => ({
         ...e,
-        maturityDate: v,
+        cardSubtype: v,
       }));
-    }
 
-    if (params.clearTenureMonths) {
-      updated = recordEdit(updated, "tenureMonths", updated.tenureMonths?.toString() ?? "none", "none");
-      updated = { ...updated, tenureMonths: null };
-    } else {
-      updated = updateField(updated, "tenureMonths", updated.tenureMonths, params.tenureMonths, (e, v) => ({
-        ...e,
-        tenureMonths: v,
-      }));
-    }
+      if (params.clearCardProvider) {
+        updated = recordEdit(updated, "cardProvider", updated.cardProvider ?? "none", "none");
+        updated = { ...updated, cardProvider: null };
+      } else {
+        updated = updateField(updated, "cardProvider", updated.cardProvider, params.cardProvider, (e, v) => ({
+          ...e,
+          cardProvider: v,
+        }));
+      }
 
-    updated = updateField(updated, "cardSubtype", updated.cardSubtype, params.cardSubtype, (e, v) => ({
-      ...e,
-      cardSubtype: v,
-    }));
+      if (params.clearLinkedAccountId) {
+        updated = recordEdit(updated, "linkedAccountId", updated.linkedAccountId ?? "none", "none");
+        updated = { ...updated, linkedAccountId: null };
+      } else {
+        updated = updateField(updated, "linkedAccountId", updated.linkedAccountId, params.linkedAccountId, (e, v) => ({
+          ...e,
+          linkedAccountId: v,
+        }));
+      }
 
-    if (params.clearCardProvider) {
-      updated = recordEdit(updated, "cardProvider", updated.cardProvider ?? "none", "none");
-      updated = { ...updated, cardProvider: null };
-    } else {
-      updated = updateField(updated, "cardProvider", updated.cardProvider, params.cardProvider, (e, v) => ({
-        ...e,
-        cardProvider: v,
-      }));
-    }
+      if (params.clearReloadable) {
+        updated = recordEdit(updated, "reloadable", updated.reloadable?.toString() ?? "none", "none");
+        updated = { ...updated, reloadable: null };
+      } else {
+        updated = updateField(updated, "reloadable", updated.reloadable, params.reloadable, (e, v) => ({
+          ...e,
+          reloadable: v,
+        }));
+      }
 
-    if (params.clearLinkedAccountId) {
-      updated = recordEdit(updated, "linkedAccountId", updated.linkedAccountId ?? "none", "none");
-      updated = { ...updated, linkedAccountId: null };
-    } else {
-      updated = updateField(updated, "linkedAccountId", updated.linkedAccountId, params.linkedAccountId, (e, v) => ({
-        ...e,
-        linkedAccountId: v,
-      }));
-    }
+      if (params.clearCurrency) {
+        updated = recordEdit(updated, "currency", updated.currency ?? "none", "none");
+        updated = { ...updated, currency: null };
+      } else {
+        updated = updateField(updated, "currency", updated.currency, params.currency, (e, v) => ({
+          ...e,
+          currency: v,
+        }));
+      }
 
-    if (params.clearReloadable) {
-      updated = recordEdit(updated, "reloadable", updated.reloadable?.toString() ?? "none", "none");
-      updated = { ...updated, reloadable: null };
-    } else {
-      updated = updateField(updated, "reloadable", updated.reloadable, params.reloadable, (e, v) => ({
-        ...e,
-        reloadable: v,
-      }));
-    }
-
-    if (params.clearCurrency) {
-      updated = recordEdit(updated, "currency", updated.currency ?? "none", "none");
-      updated = { ...updated, currency: null };
-    } else {
-      updated = updateField(updated, "currency", updated.currency, params.currency, (e, v) => ({
-        ...e,
-        currency: v,
-      }));
-    }
-
-    await this.update(updated);
+      return updated;
+    });
   }
 
   /** Public doc reference — lets a caller (e.g. TransactionRepository) read/write this
@@ -285,7 +294,8 @@ export class AccountRepository extends FirestoreCrudRepository<Account> {
    * own transaction, rather than trusting a possibly-stale in-memory value).
    */
   applyBalanceDelta(account: Account, delta: number): Account {
-    const newBalance = account.currentBalance + delta;
+    // Rounded to the paisa on every write so repeated float additions never drift (WFI-P4-03).
+    const newBalance = Math.round((account.currentBalance + delta) * 100) / 100;
     let updated = recordEdit(account, "currentBalance", String(account.currentBalance), String(newBalance));
     updated = { ...updated, currentBalance: newBalance };
     return updated;
