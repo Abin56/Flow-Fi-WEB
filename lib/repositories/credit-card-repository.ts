@@ -134,6 +134,13 @@ export class CreditCardRepository extends FirestoreCrudRepository<CreditCardProf
   }
 
   async createCard(params: CreateCardParams): Promise<CreditCardProfile> {
+    const card = this.buildCard(params);
+    await this.add(card.id, card);
+    return card;
+  }
+
+  /** Pure — the validated new profile `createCard` writes; `id` lets a transactional caller fix it up front. */
+  buildCard(params: CreateCardParams, id: string = generateId()): CreditCardProfile {
     validateCard({
       statementDay: params.statementDay,
       paymentDueDay: params.paymentDueDay,
@@ -143,7 +150,7 @@ export class CreditCardRepository extends FirestoreCrudRepository<CreditCardProf
     });
 
     const card: CreditCardProfile = {
-      id: generateId(),
+      id,
       accountId: params.accountId,
       statementDay: params.statementDay,
       paymentDueDay: params.paymentDueDay,
@@ -166,12 +173,12 @@ export class CreditCardRepository extends FirestoreCrudRepository<CreditCardProf
       lastEditedAt: null,
       editHistory: [],
     };
-    await this.add(card.id, card);
     return card;
   }
 
-  async editCard(card: CreditCardProfile, params: EditCardParams): Promise<void> {
-    const previousSharedLimitId = card.sharedLimitId;
+  /** Pure — `params` applied to `card` with audit entries (no write, no shared-limit cleanup). Used by `editCard`
+   *  and by the atomic credit-card save, which applies it to the card read fresh inside its transaction. */
+  applyCardEdits(card: CreditCardProfile, params: EditCardParams): CreditCardProfile {
     const resolvedSharedLimitId = params.clearSharedLimitId
       ? null
       : (params.sharedLimitId ?? card.sharedLimitId);
@@ -305,6 +312,13 @@ export class CreditCardRepository extends FirestoreCrudRepository<CreditCardProf
       );
     }
 
+    return updated;
+  }
+
+  async editCard(card: CreditCardProfile, params: EditCardParams): Promise<void> {
+    const previousSharedLimitId = card.sharedLimitId;
+    const updated = this.applyCardEdits(card, params);
+    const resolvedSharedLimitId = updated.sharedLimitId;
     await this.update(updated);
 
     // The shared limit this card just left (or moved out of) may now have no
@@ -359,9 +373,16 @@ export class SharedCreditLimitRepository extends FirestoreCrudRepository<SharedC
   }
 
   async createSharedLimit(params: CreateSharedLimitParams): Promise<SharedCreditLimit> {
+    const sharedLimit = this.buildSharedLimit(params);
+    await this.add(sharedLimit.id, sharedLimit);
+    return sharedLimit;
+  }
+
+  /** Pure — the validated new group; `id` lets a transactional caller fix it up front. */
+  buildSharedLimit(params: CreateSharedLimitParams, id: string = generateId()): SharedCreditLimit {
     validateSharedLimit({ creditLimit: params.creditLimit, name: params.name });
     const sharedLimit: SharedCreditLimit = {
-      id: generateId(),
+      id,
       name: params.name.trim(),
       creditLimit: params.creditLimit,
       createdAt: new Date(),
@@ -369,11 +390,15 @@ export class SharedCreditLimitRepository extends FirestoreCrudRepository<SharedC
       lastEditedAt: null,
       editHistory: [],
     };
-    await this.add(sharedLimit.id, sharedLimit);
     return sharedLimit;
   }
 
   async editSharedLimit(sharedLimit: SharedCreditLimit, params: EditSharedLimitParams): Promise<void> {
+    await this.update(this.applySharedLimitEdits(sharedLimit, params));
+  }
+
+  /** Pure — `params` applied with audit entries; the atomic card save applies it to the fresh group. */
+  applySharedLimitEdits(sharedLimit: SharedCreditLimit, params: EditSharedLimitParams): SharedCreditLimit {
     validateSharedLimit({
       creditLimit: params.creditLimit ?? sharedLimit.creditLimit,
       name: params.name ?? sharedLimit.name,
@@ -387,7 +412,7 @@ export class SharedCreditLimitRepository extends FirestoreCrudRepository<SharedC
       params.creditLimit,
       (e, v) => ({ ...e, creditLimit: v }),
     );
-    await this.update(updated);
+    return updated;
   }
 }
 

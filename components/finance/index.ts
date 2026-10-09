@@ -19,3 +19,4 @@ export * from "@/components/finance/confirm-dialog";
 export * from "@/components/finance/destructive-delete-dialog";
 export * from "@/components/finance/bank-combobox";
 export * from "@/components/finance/bank-logo";
+export * from "@/components/finance/account-label";

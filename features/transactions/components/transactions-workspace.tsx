@@ -1,5 +1,6 @@
 "use client";
 
+import { AccountLabel, AccountMark } from "@/components/finance/account-label";
 import {
   ArrowDownLeft,
   ArrowLeftRight,
@@ -74,6 +75,7 @@ import { TransactionDetailsModal } from "@/features/transactions/components/tran
 import { transactionFlagFor } from "@/features/transactions/lib/transaction-flag";
 import { loanTransactionLabel } from "@/features/loans/lib/loan-labels";
 import { findSameAmountDateDuplicateIds } from "@/features/transactions/lib/same-amount-date-duplicates";
+import { amountMatches, parseAmountQuery } from "@/features/transactions/lib/amount-search";
 import { useDuplicateGuardedCreate } from "@/lib/services/duplicate-detection/use-duplicate-guarded-create";
 import { cn } from "@/lib/utils";
 import { DateInput } from "@/components/forms/date-input";
@@ -305,12 +307,17 @@ export function TransactionsWorkspace() {
 
     if (deferredSearch.trim()) {
       const q = deferredSearch.trim().toLowerCase();
-      list = list.filter(
-        (r) =>
+      // "500", "₹1,250", ">500", "100-500" also search by amount — see amount-search.ts.
+      const amountQuery = parseAmountQuery(deferredSearch);
+      list = list.filter((r) => {
+        if (amountQuery?.kind === "expression") return amountMatches(amountQuery, r.transaction.amount);
+        return (
+          (amountQuery != null && amountMatches(amountQuery, r.transaction.amount)) ||
           r.transaction.description.toLowerCase().includes(q) ||
           displayDescription(r.transaction).toLowerCase().includes(q) ||
-          r.transaction.notes.toLowerCase().includes(q),
-      );
+          r.transaction.notes.toLowerCase().includes(q)
+        );
+      });
     }
     if (accountFilter) list = list.filter((r) => r.transaction.accountId === accountFilter);
     if (categoryFilter) list = list.filter((r) => r.transaction.categoryId === categoryFilter);
@@ -671,7 +678,8 @@ export function TransactionsWorkspace() {
                 setSearch(e.target.value);
                 setPage(1);
               }}
-              placeholder="Search description or notes…"
+              placeholder="Search description, notes or amount…"
+              title="Search by text or amount: 500, ₹1,250, >500, <=2000, 100-500"
               aria-label="Search transactions"
               className="w-full min-w-0 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
             />
@@ -1057,7 +1065,7 @@ function SplitFormFields({
           <SelectContent>
             {accounts.map((a) => (
               <SelectItem key={a.id} value={a.id}>
-                {a.name}
+                <AccountLabel account={a} />
               </SelectItem>
             ))}
           </SelectContent>
@@ -1548,7 +1556,10 @@ function LedgerTable({
                   <TypeTag transaction={t} presentation={presentation} />
                 </td>
                 <td className={cn(TD, "hidden max-w-0 lg:table-cell")}>
-                  <p className="truncate text-xs text-foreground/85">{paidFromLabel(row.transaction, row.account?.name) ?? "Unknown"}</p>
+                  <p className="flex min-w-0 items-center gap-1.5 truncate text-xs text-foreground/85">
+                    {row.account && paidFromLabel(row.transaction, row.account.name) === row.account.name && <AccountMark account={row.account} size={16} />}
+                    <span className="truncate">{paidFromLabel(row.transaction, row.account?.name) ?? "Unknown"}</span>
+                  </p>
                   {mate && (
                     <p className="mt-0.5 flex min-w-0 items-center gap-1 text-[11px] text-muted-foreground" title={route ?? undefined}>
                       {side === "sent" ? <ArrowRight className="size-3 shrink-0" strokeWidth={2} /> : <ArrowLeft className="size-3 shrink-0" strokeWidth={2} />}
@@ -1878,7 +1889,13 @@ function RowDetails({
         <div className="flex min-w-0 flex-1 flex-col">
           <div className="grid flex-1 grid-cols-1 sm:grid-cols-2">
             <Fact icon={Tag} label="Type" tone="purple">{TYPE_LABEL[flow]}</Fact>
-            <Fact icon={Wallet} label="Account" tone="lime">{paidFromLabel(row.transaction, row.account?.name) ?? "Unknown"}</Fact>
+            <Fact icon={Wallet} label="Account" tone="lime">
+              {row.account && paidFromLabel(row.transaction, row.account.name) === row.account.name ? (
+                <AccountLabel account={row.account} size={16} />
+              ) : (
+                (paidFromLabel(row.transaction, row.account?.name) ?? "Unknown")
+              )}
+            </Fact>
             <Fact icon={Shapes} label="Category" tone="amber">{row.category?.name ?? "Uncategorized"}</Fact>
             <Fact icon={CreditCard} label="Payment method" tone="green">{paymentMethodFor(t, row.account)}</Fact>
           </div>

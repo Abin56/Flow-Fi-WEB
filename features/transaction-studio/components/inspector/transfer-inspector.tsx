@@ -1,5 +1,6 @@
 "use client";
 
+import { AccountLabel } from "@/components/finance/account-label";
 import { ArrowRight } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
@@ -58,7 +59,7 @@ export function TransferInspector({
             <SelectContent>
               {accounts.map((account) => (
                 <SelectItem key={account.id} value={account.id}>
-                  {account.name}
+                  <AccountLabel account={account} />
                 </SelectItem>
               ))}
             </SelectContent>

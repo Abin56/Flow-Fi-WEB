@@ -10,6 +10,7 @@ import {
   Globe,
   Landmark,
   Layers,
+  Loader2,
   Percent,
   Plus,
   RefreshCw,
@@ -22,9 +23,9 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ClayButton } from "@/components/clay/clay-button";
 import { transactionsHrefForAccount } from "@/features/transactions/lib/account-filter-param";
-import { BankCombobox, DestructiveDeleteDialog, SectionLabel, type DestructiveDeleteImpactRow } from "@/components/finance";
+import { BankCombobox, DestructiveDeleteDialog, type DestructiveDeleteImpactRow } from "@/components/finance";
 import { useGuardedSubmit } from "@/components/finance/use-guarded-submit";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AccountOverviewPanel } from "@/features/accounts/components/account-overview-panel";
 import { AccountsHeader } from "@/features/accounts/components/accounts-header";
 import { AccountsStats } from "@/features/accounts/components/accounts-stats";
@@ -61,6 +62,7 @@ import {
 } from "@/features/accounts/lib/account-product-rules";
 import { DateInput } from "@/components/forms/date-input";
 import { handleEnterAdvance } from "@/components/finance/enter-advance";
+import { FormSection, LE_RADIUS, LOAN_EMI_INPUT, choiceClass } from "@/features/loans/components/loan-emi-ui";
 
 const ACCOUNT_TYPE_OPTIONS: { value: AccountType; label: string; icon: LucideIcon }[] = [
   { value: "bank", label: "Bank", icon: Landmark },
@@ -90,6 +92,17 @@ const CARD_SUBTYPE_OPTIONS: { value: CardSubtype; label: string; icon: LucideIco
   { value: "gift", label: "Gift Card", icon: Gift },
   { value: "other", label: "Other Card", icon: Layers },
 ];
+
+/** Add/Edit account dialog — compact fields and choice chips in the Loan & EMI control style. */
+const AC_INPUT = cn(LOAN_EMI_INPUT, "h-9");
+const AC_FIELD = "flex min-w-0 flex-col gap-1";
+const AC_LABEL = "text-xs font-medium text-foreground";
+const AC_HINT = "text-[11px] leading-snug text-muted-foreground";
+const AC_RUPEE = "pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-muted-foreground";
+const AC_READONLY = "flex h-9 items-center rounded-[6px] border border-dashed border-border-strong bg-secondary px-3 text-sm font-semibold tabular-nums text-foreground";
+const AC_CHOICE = "flex h-8 items-center gap-1 rounded-[6px] border px-2.5 text-xs outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none";
+const AC_COMBOBOX =
+  "h-9 rounded-[6px] border-border-strong bg-card transition-[border-color,box-shadow] duration-150 hover:border-muted-foreground focus:border-primary-accent-text focus:ring-2 focus:ring-ring dark:bg-input";
 
 const CURRENCY_OPTIONS = ["USD", "EUR", "GBP", "AED", "SGD", "AUD", "JPY"];
 
@@ -510,48 +523,94 @@ export function AccountsWorkspace() {
       )}
 
       <Dialog open={addOpen || editingAccount != null} onOpenChange={(open) => !open && closeAccountDialog()}>
-        <DialogContent showCloseButton={false} className="flex max-h-[calc(100vh-2rem)] flex-col gap-0 overflow-hidden rounded-none border border-border p-0 shadow-lg ring-0 sm:max-w-xl">
-          <div className="h-1 w-full bg-primary" />
-
-          <DialogHeader className="shrink-0 gap-1 border-b border-border bg-muted/40 px-6 py-5 text-left">
-            <DialogTitle className="font-heading text-lg font-semibold">
-              {editingAccount ? `Edit ${editingAccount.name}` : "Add an Account"}
-            </DialogTitle>
-            {!editingAccount && (
-              <DialogDescription>A few details to start tracking balances and transactions.</DialogDescription>
-            )}
+        <DialogContent
+          showCloseButton={false}
+          // Open on the name field (the colour picker sits above it in the DOM).
+          onOpenAutoFocus={(e) => {
+            if (nameInputRef.current) {
+              e.preventDefault();
+              nameInputRef.current.focus();
+            }
+          }}
+          className={cn(
+            "flex flex-col gap-0 overflow-hidden border border-border bg-card p-0 shadow-[var(--shadow-e4)] ring-0",
+            // Phone: full-height sheet. Desktop: centered panel — same surface as the Loan & EMI dialogs.
+            "top-0 left-0 h-[100dvh] max-h-[100dvh] max-w-none translate-x-0 translate-y-0 rounded-none",
+            "sm:top-1/2 sm:left-1/2 sm:h-auto sm:max-h-[min(90vh,48rem)] sm:max-w-2xl",
+            "sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-[10px]",
+          )}
+        >
+          <DialogHeader className="flex shrink-0 flex-row items-center gap-3 border-b border-border bg-card py-3 pr-14 pl-5 text-left">
+            <span className={cn(LE_RADIUS.control, "flex size-8 shrink-0 items-center justify-center bg-primary text-primary-foreground")}>
+              <Landmark className="size-4" strokeWidth={2} />
+            </span>
+            <div className="flex min-w-0 flex-1 flex-col gap-0">
+              <DialogTitle className="font-heading text-base leading-tight font-semibold tracking-tight">
+                {editingAccount ? `Edit ${editingAccount.name}` : "Add an Account"}
+              </DialogTitle>
+              {!editingAccount && (
+                <DialogDescription className="truncate text-xs text-muted-foreground">Track balances and transactions.</DialogDescription>
+              )}
+            </div>
           </DialogHeader>
 
           {/* Real <form> (display: contents keeps the layout): Enter in a single-line field saves via the same handler as the primary button. */}
           <form className="contents" noValidate onSubmit={submitAccount} onKeyDown={handleEnterAdvance}>
-          <div className="flex flex-1 flex-col gap-6 overflow-y-auto px-6 py-5 text-sm">
-            <div className="flex items-center gap-3 border border-border bg-muted/30 p-4">
-              <span
-                className={cn("flex size-11 shrink-0 items-center justify-center border border-border shadow-sm", ACCOUNT_COLOR[form.color].onGradient)}
-                style={{ background: ACCOUNT_COLOR[form.color].gradient }}
-              >
-                <SelectedTypeIcon className="size-5" />
-              </span>
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-semibold text-foreground">{form.name.trim() || "Account Name"}</p>
-                <p className="truncate text-xs text-muted-foreground">
-                  {form.type === "bank" && selectedBank ? selectedBank.name : selectedType.label}
-                  {form.accountNumberLast4 ? ` • •••• ${form.accountNumberLast4}` : ""}
-                </p>
+          <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto bg-card px-5 py-4 text-sm [&>*+*]:border-t [&>*+*]:border-border [&>*+*]:pt-4">
+            {/* Live preview with the colour picker beside it — what you pick is what you see. */}
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+              <div className={cn(LE_RADIUS.card, "flex min-w-0 items-center gap-3 border border-border bg-secondary px-3 py-2.5 sm:w-60 sm:shrink-0")}>
+                <span
+                  className={cn(LE_RADIUS.card, "flex size-10 shrink-0 items-center justify-center border border-black/10 shadow-e1", ACCOUNT_COLOR[form.color].onGradient)}
+                  style={{ background: ACCOUNT_COLOR[form.color].gradient }}
+                >
+                  <SelectedTypeIcon className="size-5" strokeWidth={1.75} />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-semibold text-foreground">{form.name.trim() || "Account Name"}</p>
+                  <p className="truncate text-xs text-muted-foreground">
+                    {form.type === "bank" && selectedBank ? selectedBank.name : selectedType.label}
+                    {form.accountNumberLast4 ? ` • •••• ${form.accountNumberLast4}` : ""}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex min-w-0 flex-col gap-1.5">
+                <span className={AC_LABEL}>Colour</span>
+                <div className="flex flex-wrap gap-1.5">
+                  {ACCOUNT_COLOR_CYCLE.map((c) => {
+                    const selected = form.color === c;
+                    return (
+                      <button
+                        key={c}
+                        type="button"
+                        aria-label={c}
+                        aria-pressed={selected}
+                        onClick={() => setForm((f) => ({ ...f, color: c }))}
+                        className={cn(
+                          "flex size-6 items-center justify-center rounded-full shadow-e1 outline-none transition-transform hover:scale-110 focus-visible:ring-2 focus-visible:ring-ring",
+                          selected && "ring-2 ring-primary-accent-text ring-offset-2 ring-offset-card",
+                        )}
+                        style={{ background: ACCOUNT_COLOR[c].gradient }}
+                      >
+                        {selected && <Check className={cn("size-3.5", ACCOUNT_COLOR[c].onGradient)} strokeWidth={2.5} />}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             </div>
 
-            <div className="flex flex-col gap-3 bg-muted/30 p-4">
-              <SectionLabel icon={Wallet}>Account Details</SectionLabel>
-              <label className="flex flex-col gap-1">
-                <span className="text-xs font-medium text-muted-foreground">
+            <FormSection title="Account details" icon={Wallet} className="gap-3">
+              <label className={AC_FIELD}>
+                <span className={AC_LABEL}>
                   Account Name <span className="text-expense">*</span>
                 </span>
                 <div className="relative">
-                  <SelectedTypeIcon className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+                  <SelectedTypeIcon className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" strokeWidth={1.75} />
                   <input
                     ref={nameInputRef}
-                    className="h-10 w-full rounded-none border border-border bg-background pr-3 pl-9 text-sm outline-none transition-colors focus:border-primary"
+                    className={cn(AC_INPUT, "pl-9")}
                     placeholder={form.bankId === GENERIC_BANK.id ? "Type your bank's name" : "e.g. HDFC Savings"}
                     value={form.name}
                     onChange={(e) => {
@@ -562,11 +621,11 @@ export function AccountsWorkspace() {
                 </div>
               </label>
 
-              <div className="flex flex-col gap-1.5">
-                <span className="text-xs font-medium text-muted-foreground">
+              <div className={AC_FIELD}>
+                <span className={AC_LABEL}>
                   Account Type <span className="text-expense">*</span>
                 </span>
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap gap-1.5">
                   {ACCOUNT_TYPE_OPTIONS.map((o) => {
                     const selected = form.type === o.value;
                     const Icon = o.icon;
@@ -574,15 +633,11 @@ export function AccountsWorkspace() {
                       <button
                         key={o.value}
                         type="button"
+                        aria-pressed={selected}
                         onClick={() => setForm((f) => ({ ...f, type: o.value, bankId: o.value === "bank" ? f.bankId : null }))}
-                        className={cn(
-                          "flex items-center gap-1.5 border px-3 py-1.5 text-xs font-semibold transition-colors",
-                          selected
-                            ? "border-primary bg-primary/10 text-primary-accent-text"
-                            : "border-border text-muted-foreground hover:bg-muted",
-                        )}
+                        className={cn(AC_CHOICE, choiceClass(selected))}
                       >
-                        <Icon className="size-3.5" />
+                        <Icon className="size-3.5" strokeWidth={selected ? 2.25 : 1.75} />
                         {o.label}
                       </button>
                     );
@@ -591,8 +646,8 @@ export function AccountsWorkspace() {
               </div>
 
               {form.type === "bank" && (
-                <label className="flex flex-col gap-1">
-                  <span className="text-xs font-medium text-muted-foreground">Bank</span>
+                <label className={AC_FIELD}>
+                  <span className={AC_LABEL}>Bank</span>
                   <BankCombobox
                     value={form.bankId}
                     onChange={(bankId) => {
@@ -608,28 +663,26 @@ export function AccountsWorkspace() {
                       if (isGeneric) requestAnimationFrame(() => nameInputRef.current?.focus());
                     }}
                     placeholder="Search for your bank…"
+                    className={AC_COMBOBOX}
                   />
                 </label>
               )}
 
               {form.type === "bank" && (
-                <div className="flex flex-col gap-1.5">
-                  <span className="text-xs font-medium text-muted-foreground">Bank Account Type</span>
-                  <div className="flex flex-wrap gap-2">
+                <div className={AC_FIELD}>
+                  <span className={AC_LABEL}>Bank Account Type</span>
+                  <div className="flex flex-wrap gap-1.5">
                     {BANK_ACCOUNT_SUBTYPE_OPTIONS.map((o) => {
                       const selected = form.bankAccountSubtype === o.value;
                       return (
                         <button
                           key={o.value}
                           type="button"
+                          aria-pressed={selected}
                           onClick={() => setForm((f) => ({ ...f, bankAccountSubtype: o.value }))}
-                          className={cn(
-                            "flex items-center gap-1.5 border px-3 py-1.5 text-xs font-semibold transition-colors",
-                            selected
-                              ? "border-primary bg-primary/10 text-primary"
-                              : "border-border text-muted-foreground hover:bg-muted",
-                          )}
+                          className={cn(AC_CHOICE, choiceClass(selected))}
                         >
+                          {selected && <Check className="size-3.5" strokeWidth={2.5} />}
                           {o.label}
                         </button>
                       );
@@ -639,9 +692,9 @@ export function AccountsWorkspace() {
               )}
 
               {form.type === "card" && (
-                <div className="flex flex-col gap-1.5">
-                  <span className="text-xs font-medium text-muted-foreground">What type of card is this?</span>
-                  <div className="flex flex-wrap gap-2">
+                <div className={AC_FIELD}>
+                  <span className={AC_LABEL}>What type of card is this?</span>
+                  <div className="flex flex-wrap gap-1.5">
                     {CARD_SUBTYPE_OPTIONS.map((o) => {
                       const selected = form.cardSubtype === o.value;
                       const Icon = o.icon;
@@ -649,311 +702,97 @@ export function AccountsWorkspace() {
                         <button
                           key={o.value}
                           type="button"
+                          aria-pressed={selected}
                           disabled={!!editingAccount}
                           onClick={() => setForm((f) => ({ ...f, cardSubtype: o.value }))}
                           className={cn(
-                            "flex items-center gap-1.5 border px-3 py-1.5 text-xs font-semibold transition-colors",
-                            selected
-                              ? "border-primary bg-primary/10 text-primary"
-                              : "border-border text-muted-foreground hover:bg-muted",
-                            !!editingAccount && "cursor-not-allowed opacity-60 hover:bg-transparent",
+                            AC_CHOICE,
+                            choiceClass(selected),
+                            !!editingAccount && "cursor-not-allowed opacity-60 hover:border-border-strong hover:bg-card",
                           )}
                         >
-                          <Icon className="size-3.5" />
+                          <Icon className="size-3.5" strokeWidth={selected ? 2.25 : 1.75} />
                           {o.label}
                         </button>
                       );
                     })}
                   </div>
                   {editingAccount && (
-                    <span className="text-[11px] text-muted-foreground">Card type can&apos;t be changed after creation.</span>
+                    <span className={AC_HINT}>Card type can&apos;t be changed after creation.</span>
                   )}
                 </div>
               )}
 
-              {form.type === "card" && visibility.bankCombobox && (
-                <label className="flex flex-col gap-1">
-                  <span className="text-xs font-medium text-muted-foreground">Issuing Bank / Provider</span>
-                  <BankCombobox
-                    value={form.bankId}
-                    onChange={(bankId) => setForm((f) => ({ ...f, bankId }))}
-                    placeholder="Search for your bank…"
-                  />
-                </label>
-              )}
-
-              {form.type === "card" && visibility.cardProvider && (
-                <label className="flex flex-col gap-1">
-                  <span className="text-xs font-medium text-muted-foreground">Provider</span>
-                  <input
-                    className="h-10 w-full rounded-none border border-border bg-background px-3 text-sm outline-none transition-colors focus:border-primary"
-                    placeholder="e.g. Amazon Pay, Niyo, HDFC"
-                    value={form.cardProvider}
-                    onChange={(e) => setForm((f) => ({ ...f, cardProvider: e.target.value }))}
-                  />
-                </label>
-              )}
-
-              {form.type === "card" && visibility.linkedBankAccount && (
-                <label className="flex flex-col gap-1">
-                  <span className="text-xs font-medium text-muted-foreground">Linked Bank Account</span>
-                  <select
-                    className="h-10 w-full rounded-none border border-border bg-background px-3 text-sm outline-none transition-colors focus:border-primary"
-                    value={form.linkedAccountId ?? ""}
-                    onChange={(e) => setForm((f) => ({ ...f, linkedAccountId: e.target.value || null }))}
-                  >
-                    <option value="">Select a bank account…</option>
-                    {linkableBankAccounts.map((a) => (
-                      <option key={a.id} value={a.id}>
-                        {a.name}
-                      </option>
-                    ))}
-                  </select>
-                  {linkableBankAccounts.length === 0 && (
-                    <span className="text-[11px] text-muted-foreground">Add a bank account first to link a debit card to it.</span>
+              {form.type === "card" && (visibility.bankCombobox || visibility.cardProvider || visibility.linkedBankAccount) && (
+                <div className="grid grid-cols-1 gap-x-3 gap-y-2.5 sm:grid-cols-2">
+                  {visibility.bankCombobox && (
+                    <label className={AC_FIELD}>
+                      <span className={AC_LABEL}>Issuing Bank / Provider</span>
+                      <BankCombobox
+                        value={form.bankId}
+                        onChange={(bankId) => setForm((f) => ({ ...f, bankId }))}
+                        placeholder="Search for your bank…"
+                        className={AC_COMBOBOX}
+                      />
+                    </label>
                   )}
-                </label>
-              )}
 
-              <div className="flex flex-col gap-1.5">
-                <span className="text-xs font-medium text-muted-foreground">Color</span>
-                <div className="flex flex-wrap gap-2">
-                  {ACCOUNT_COLOR_CYCLE.map((c) => {
-                    const selected = form.color === c;
-                    return (
-                      <button
-                        key={c}
-                        type="button"
-                        aria-label={c}
-                        onClick={() => setForm((f) => ({ ...f, color: c }))}
-                        className={cn(
-                          "flex size-8 items-center justify-center border transition-colors",
-                          selected ? "border-foreground" : "border-transparent hover:border-border",
-                        )}
-                        style={{ background: ACCOUNT_COLOR[c].gradient }}
+                  {visibility.cardProvider && (
+                    <label className={AC_FIELD}>
+                      <span className={AC_LABEL}>Provider</span>
+                      <input
+                        className={AC_INPUT}
+                        placeholder="e.g. Amazon Pay, Niyo, HDFC"
+                        value={form.cardProvider}
+                        onChange={(e) => setForm((f) => ({ ...f, cardProvider: e.target.value }))}
+                      />
+                    </label>
+                  )}
+
+                  {visibility.linkedBankAccount && (
+                    <label className={AC_FIELD}>
+                      <span className={AC_LABEL}>Linked Bank Account</span>
+                      <select
+                        className={AC_INPUT}
+                        value={form.linkedAccountId ?? ""}
+                        onChange={(e) => setForm((f) => ({ ...f, linkedAccountId: e.target.value || null }))}
                       >
-                        {selected && <Check className={cn("size-4", ACCOUNT_COLOR[c].onGradient)} />}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {form.type !== "card" && visibility.openingBalance && (
-                <label className="flex flex-col gap-1">
-                  <span className="text-xs font-medium text-muted-foreground">
-                    {formIsDeposit ? "Deposit Amount" : "Opening Balance"}
-                  </span>
-                  <div className="relative">
-                    <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary-accent-text">₹</span>
-                    <input
-                      type="number"
-                      className="h-10 w-full rounded-none border border-primary/30 bg-primary/5 pr-3 pl-7 text-base font-semibold outline-none transition-colors focus:border-primary"
-                      placeholder="0.00"
-                      value={form.openingBalance}
-                      onChange={(e) => setForm((f) => ({ ...f, openingBalance: e.target.value }))}
-                    />
-                  </div>
-                </label>
-              )}
-
-              {form.type === "card" && visibility.creditLimit && (
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <label className="flex flex-col gap-1">
-                    <span className="text-xs font-medium text-muted-foreground">Credit Limit</span>
-                    <div className="relative">
-                      <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary">₹</span>
-                      <input
-                        type="number"
-                        className="h-10 w-full rounded-none border border-primary/30 bg-primary/5 pr-3 pl-7 text-base font-semibold outline-none transition-colors focus:border-primary"
-                        placeholder="0.00"
-                        value={form.creditLimit}
-                        onChange={(e) => setForm((f) => ({ ...f, creditLimit: e.target.value }))}
-                      />
-                    </div>
-                  </label>
-                  <label className="flex flex-col gap-1">
-                    <span className="text-xs font-medium text-muted-foreground">Current Used / Outstanding (optional)</span>
-                    <div className="relative">
-                      <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary">₹</span>
-                      <input
-                        type="number"
-                        className="h-10 w-full rounded-none border border-border bg-background pr-3 pl-7 text-sm outline-none transition-colors focus:border-primary"
-                        placeholder="0.00"
-                        value={form.currentUsed}
-                        onChange={(e) => setForm((f) => ({ ...f, currentUsed: e.target.value }))}
-                      />
-                    </div>
-                  </label>
-                  <div className="flex flex-col gap-1 sm:col-span-2">
-                    <span className="text-xs font-medium text-muted-foreground">Available / Remaining Credit</span>
-                    <p className="h-10 flex items-center border border-dashed border-border bg-background px-3 text-sm font-semibold text-foreground">
-                      ₹{availableCredit(Number(form.creditLimit) || 0, Number(form.currentUsed) || 0).toLocaleString("en-IN")}
-                    </p>
-                    <span className="text-[11px] text-muted-foreground">Calculated as Credit Limit − Current Used, never entered directly.</span>
-                  </div>
-                  <label className="flex flex-col gap-1">
-                    <span className="text-xs font-medium text-muted-foreground">Statement Date (optional)</span>
-                    <input
-                      type="number"
-                      min={1}
-                      max={31}
-                      className="h-10 w-full rounded-none border border-border bg-background px-3 text-sm outline-none transition-colors focus:border-primary"
-                      placeholder="e.g. 1"
-                      value={form.statementDay}
-                      onChange={(e) => setForm((f) => ({ ...f, statementDay: e.target.value }))}
-                    />
-                    <span className="text-[11px] text-muted-foreground">Day of month — can be changed later from Credit Cards.</span>
-                  </label>
-                  <label className="flex flex-col gap-1">
-                    <span className="text-xs font-medium text-muted-foreground">Payment Due Date (optional)</span>
-                    <input
-                      type="number"
-                      min={1}
-                      max={31}
-                      className="h-10 w-full rounded-none border border-border bg-background px-3 text-sm outline-none transition-colors focus:border-primary"
-                      placeholder="e.g. 15"
-                      value={form.paymentDueDay}
-                      onChange={(e) => setForm((f) => ({ ...f, paymentDueDay: e.target.value }))}
-                    />
-                    <span className="text-[11px] text-muted-foreground">Day of month — can be changed later from Credit Cards.</span>
-                  </label>
-                </div>
-              )}
-
-              {form.type === "card" && visibility.openingBalance && (
-                <label className="flex flex-col gap-1">
-                  <span className="text-xs font-medium text-muted-foreground">Initial Balance</span>
-                  <div className="relative">
-                    <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary">₹</span>
-                    <input
-                      type="number"
-                      className="h-10 w-full rounded-none border border-primary/30 bg-primary/5 pr-3 pl-7 text-base font-semibold outline-none transition-colors focus:border-primary"
-                      placeholder="0.00"
-                      value={form.openingBalance}
-                      onChange={(e) => setForm((f) => ({ ...f, openingBalance: e.target.value }))}
-                    />
-                  </div>
-                  <span className="text-[11px] text-muted-foreground">Current balance starts equal to this and updates as the card is used.</span>
-                </label>
-              )}
-
-              {form.type === "card" && visibility.currentBalanceReadOnly && editingAccount && (
-                <div className="flex flex-col gap-1">
-                  <span className="text-xs font-medium text-muted-foreground">Current Balance</span>
-                  <p className="flex h-10 items-center border border-dashed border-border bg-background px-3 text-sm font-semibold text-foreground">
-                    ₹{editingAccount.currentBalance.toLocaleString("en-IN")}
-                  </p>
-                  <span className="text-[11px] text-muted-foreground">Tracked automatically from this card's transactions — not editable here.</span>
-                </div>
-              )}
-
-              {form.type === "card" && visibility.reloadable && (
-                <label className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    className="size-4"
-                    checked={form.reloadable}
-                    onChange={(e) => setForm((f) => ({ ...f, reloadable: e.target.checked }))}
-                  />
-                  <span className="text-xs font-medium text-muted-foreground">Reloadable (can be topped up again)</span>
-                </label>
-              )}
-
-              {form.type === "card" && visibility.currency && (
-                <label className="flex flex-col gap-1">
-                  <span className="text-xs font-medium text-muted-foreground">Currency</span>
-                  <select
-                    className="h-10 w-full rounded-none border border-border bg-background px-3 text-sm outline-none transition-colors focus:border-primary"
-                    value={form.currency}
-                    onChange={(e) => setForm((f) => ({ ...f, currency: e.target.value }))}
-                  >
-                    {CURRENCY_OPTIONS.map((c) => (
-                      <option key={c} value={c}>
-                        {c}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              )}
-
-              {form.type === "bank" && visibility.minimumBalance && (
-                <label className="flex flex-col gap-1">
-                  <span className="text-xs font-medium text-muted-foreground">Minimum Balance Requirement (optional)</span>
-                  <div className="relative">
-                    <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm font-semibold text-primary">₹</span>
-                    <input
-                      type="number"
-                      className="h-10 w-full rounded-none border border-border bg-background pr-3 pl-7 text-sm outline-none transition-colors focus:border-primary"
-                      placeholder="0.00"
-                      value={form.minimumBalance}
-                      onChange={(e) => setForm((f) => ({ ...f, minimumBalance: e.target.value }))}
-                    />
-                  </div>
-                </label>
-              )}
-
-              {form.type === "bank" && visibility.depositFields && (
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <label className="flex flex-col gap-1">
-                    <span className="text-xs font-medium text-muted-foreground">Interest Rate (% p.a.)</span>
-                    <div className="relative">
-                      <Percent className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
-                      <input
-                        type="number"
-                        step="0.01"
-                        className="h-10 w-full rounded-none border border-border bg-background pr-3 pl-9 text-sm outline-none transition-colors focus:border-primary"
-                        placeholder="e.g. 7.1"
-                        value={form.interestRatePercent}
-                        onChange={(e) => setForm((f) => ({ ...f, interestRatePercent: e.target.value }))}
-                      />
-                    </div>
-                  </label>
-                  <label className="flex flex-col gap-1">
-                    <span className="text-xs font-medium text-muted-foreground">Tenure (months)</span>
-                    <input
-                      type="number"
-                      className="h-10 w-full rounded-none border border-border bg-background px-3 text-sm outline-none transition-colors focus:border-primary"
-                      placeholder="e.g. 12"
-                      value={form.tenureMonths}
-                      onChange={(e) => setForm((f) => ({ ...f, tenureMonths: e.target.value }))}
-                    />
-                  </label>
-                  <label className="flex flex-col gap-1 sm:col-span-2">
-                    <span className="text-xs font-medium text-muted-foreground">Maturity Date</span>
-                    <div className="relative">
-                      <Calendar className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
-                      <DateInput
-                        className="h-10 w-full rounded-none border border-border bg-background pr-3 pl-9 text-sm outline-none transition-colors focus:border-primary"
-                        value={form.maturityDate}
-                        onChange={(e) => setForm((f) => ({ ...f, maturityDate: e.target.value }))}
-                      />
-                    </div>
-                  </label>
+                        <option value="">Select a bank account…</option>
+                        {linkableBankAccounts.map((a) => (
+                          <option key={a.id} value={a.id}>
+                            {a.name}
+                          </option>
+                        ))}
+                      </select>
+                      {linkableBankAccounts.length === 0 && (
+                        <span className={AC_HINT}>Add a bank account first to link a debit card to it.</span>
+                      )}
+                    </label>
+                  )}
                 </div>
               )}
 
               {visibility.accountHolderOrCardholder && (
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <label className="flex flex-col gap-1">
-                    <span className="text-xs font-medium text-muted-foreground">
+                <div className="grid grid-cols-1 gap-x-3 gap-y-2.5 sm:grid-cols-2">
+                  <label className={AC_FIELD}>
+                    <span className={AC_LABEL}>
                       {form.type === "card" ? "Card Holder Name" : "Account Holder"} <span className="text-expense">*</span>
                     </span>
                     <div className="relative">
-                      <User className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+                      <User className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" strokeWidth={1.75} />
                       <input
-                        className="h-10 w-full rounded-none border border-border bg-background pr-3 pl-9 text-sm outline-none transition-colors focus:border-primary"
+                        className={cn(AC_INPUT, "pl-9")}
                         value={form.accountHolderName}
                         onChange={(e) => setForm((f) => ({ ...f, accountHolderName: e.target.value }))}
                       />
                     </div>
                   </label>
-                  <label className="flex flex-col gap-1">
-                    <span className="text-xs font-medium text-muted-foreground">
+                  <label className={AC_FIELD}>
+                    <span className={AC_LABEL}>
                       {form.type === "card" ? "Card Number (Last 4 Digits)" : "Last 4 Digits"} <span className="text-expense">*</span>
                     </span>
                     <input
-                      className="h-10 rounded-none border border-border bg-background px-3 font-mono text-sm tracking-widest outline-none transition-colors focus:border-primary"
+                      className={cn(AC_INPUT, "font-mono tracking-widest")}
                       placeholder="4021"
                       maxLength={4}
                       value={form.accountNumberLast4}
@@ -962,23 +801,246 @@ export function AccountsWorkspace() {
                   </label>
                 </div>
               )}
-            </div>
+            </FormSection>
+
+            {((form.type !== "card" && visibility.openingBalance) ||
+              (form.type === "card" &&
+                (visibility.creditLimit ||
+                  visibility.openingBalance ||
+                  (visibility.currentBalanceReadOnly && !!editingAccount) ||
+                  visibility.reloadable ||
+                  visibility.currency)) ||
+              (form.type === "bank" && (visibility.minimumBalance || visibility.depositFields))) && (
+              <FormSection title={form.type === "card" ? "Limit & balance" : "Balance"} icon={Banknote} className="gap-3">
+                {((form.type !== "card" && visibility.openingBalance) || (form.type === "bank" && visibility.minimumBalance)) && (
+                  <div className="grid grid-cols-1 gap-x-3 gap-y-2.5 sm:grid-cols-2">
+                    {/* Already narrowed to a non-card type by the condition above. */}
+                    {visibility.openingBalance && (
+                      <label className={AC_FIELD}>
+                        <span className={AC_LABEL}>{formIsDeposit ? "Deposit Amount" : "Opening Balance"}</span>
+                        <div className="relative">
+                          <span className={AC_RUPEE}>₹</span>
+                          <input
+                            type="number"
+                            className={cn(AC_INPUT, "pl-7 font-semibold tabular-nums")}
+                            placeholder="0.00"
+                            value={form.openingBalance}
+                            onChange={(e) => setForm((f) => ({ ...f, openingBalance: e.target.value }))}
+                          />
+                        </div>
+                      </label>
+                    )}
+
+                    {form.type === "bank" && visibility.minimumBalance && (
+                      <label className={AC_FIELD}>
+                        <span className={AC_LABEL}>Minimum Balance (optional)</span>
+                        <div className="relative">
+                          <span className={AC_RUPEE}>₹</span>
+                          <input
+                            type="number"
+                            className={cn(AC_INPUT, "pl-7 tabular-nums")}
+                            placeholder="0.00"
+                            value={form.minimumBalance}
+                            onChange={(e) => setForm((f) => ({ ...f, minimumBalance: e.target.value }))}
+                          />
+                        </div>
+                      </label>
+                    )}
+                  </div>
+                )}
+
+                {form.type === "bank" && visibility.depositFields && (
+                  <div className="grid grid-cols-1 gap-x-3 gap-y-2.5 sm:grid-cols-3">
+                    <label className={AC_FIELD}>
+                      <span className={AC_LABEL}>Interest Rate (% p.a.)</span>
+                      <div className="relative">
+                        <Percent className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" strokeWidth={1.75} />
+                        <input
+                          type="number"
+                          step="0.01"
+                          className={cn(AC_INPUT, "pl-9")}
+                          placeholder="e.g. 7.1"
+                          value={form.interestRatePercent}
+                          onChange={(e) => setForm((f) => ({ ...f, interestRatePercent: e.target.value }))}
+                        />
+                      </div>
+                    </label>
+                    <label className={AC_FIELD}>
+                      <span className={AC_LABEL}>Tenure (months)</span>
+                      <input
+                        type="number"
+                        className={AC_INPUT}
+                        placeholder="e.g. 12"
+                        value={form.tenureMonths}
+                        onChange={(e) => setForm((f) => ({ ...f, tenureMonths: e.target.value }))}
+                      />
+                    </label>
+                    <label className={AC_FIELD}>
+                      <span className={AC_LABEL}>Maturity Date</span>
+                      <div className="relative">
+                        <Calendar className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" strokeWidth={1.75} />
+                        <DateInput
+                          className={cn(AC_INPUT, "pl-9")}
+                          value={form.maturityDate}
+                          onChange={(e) => setForm((f) => ({ ...f, maturityDate: e.target.value }))}
+                        />
+                      </div>
+                    </label>
+                  </div>
+                )}
+
+                {form.type === "card" && visibility.creditLimit && (
+                  <div className="grid grid-cols-1 gap-x-3 gap-y-2.5 sm:grid-cols-3">
+                    <label className={AC_FIELD}>
+                      <span className={AC_LABEL}>Credit Limit</span>
+                      <div className="relative">
+                        <span className={AC_RUPEE}>₹</span>
+                        <input
+                          type="number"
+                          className={cn(AC_INPUT, "pl-7 font-semibold tabular-nums")}
+                          placeholder="0.00"
+                          value={form.creditLimit}
+                          onChange={(e) => setForm((f) => ({ ...f, creditLimit: e.target.value }))}
+                        />
+                      </div>
+                    </label>
+                    <label className={AC_FIELD}>
+                      <span className={AC_LABEL}>Used / Outstanding (optional)</span>
+                      <div className="relative">
+                        <span className={AC_RUPEE}>₹</span>
+                        <input
+                          type="number"
+                          className={cn(AC_INPUT, "pl-7 tabular-nums")}
+                          placeholder="0.00"
+                          value={form.currentUsed}
+                          onChange={(e) => setForm((f) => ({ ...f, currentUsed: e.target.value }))}
+                        />
+                      </div>
+                    </label>
+                    <div className={AC_FIELD} title="Calculated as Credit Limit − Current Used, never entered directly.">
+                      <span className={AC_LABEL}>Available Credit</span>
+                      <p className={AC_READONLY}>
+                        ₹{availableCredit(Number(form.creditLimit) || 0, Number(form.currentUsed) || 0).toLocaleString("en-IN")}
+                      </p>
+                    </div>
+                    <label className={AC_FIELD}>
+                      <span className={AC_LABEL}>Statement Day (optional)</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={31}
+                        className={AC_INPUT}
+                        placeholder="e.g. 1"
+                        value={form.statementDay}
+                        onChange={(e) => setForm((f) => ({ ...f, statementDay: e.target.value }))}
+                      />
+                    </label>
+                    <label className={AC_FIELD}>
+                      <span className={AC_LABEL}>Payment Due Day (optional)</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={31}
+                        className={AC_INPUT}
+                        placeholder="e.g. 15"
+                        value={form.paymentDueDay}
+                        onChange={(e) => setForm((f) => ({ ...f, paymentDueDay: e.target.value }))}
+                      />
+                    </label>
+                    <p className={cn(AC_HINT, "self-end pb-1 sm:col-span-1")}>
+                      Available = Limit − Used. Days of month can be changed later from Credit Cards.
+                    </p>
+                  </div>
+                )}
+
+                {form.type === "card" && (visibility.openingBalance || (visibility.currentBalanceReadOnly && editingAccount) || visibility.currency) && (
+                  <div className="grid grid-cols-1 gap-x-3 gap-y-2.5 sm:grid-cols-2">
+                    {visibility.openingBalance && (
+                      <label className={AC_FIELD}>
+                        <span className={AC_LABEL}>Initial Balance</span>
+                        <div className="relative">
+                          <span className={AC_RUPEE}>₹</span>
+                          <input
+                            type="number"
+                            className={cn(AC_INPUT, "pl-7 font-semibold tabular-nums")}
+                            placeholder="0.00"
+                            value={form.openingBalance}
+                            onChange={(e) => setForm((f) => ({ ...f, openingBalance: e.target.value }))}
+                          />
+                        </div>
+                        <span className={AC_HINT}>Current balance starts equal to this and updates as the card is used.</span>
+                      </label>
+                    )}
+
+                    {visibility.currentBalanceReadOnly && editingAccount && (
+                      <div className={AC_FIELD}>
+                        <span className={AC_LABEL}>Current Balance</span>
+                        <p className={AC_READONLY}>₹{editingAccount.currentBalance.toLocaleString("en-IN")}</p>
+                        <span className={AC_HINT}>Tracked automatically from this card&apos;s transactions — not editable here.</span>
+                      </div>
+                    )}
+
+                    {visibility.currency && (
+                      <label className={AC_FIELD}>
+                        <span className={AC_LABEL}>Currency</span>
+                        <select
+                          className={AC_INPUT}
+                          value={form.currency}
+                          onChange={(e) => setForm((f) => ({ ...f, currency: e.target.value }))}
+                        >
+                          {CURRENCY_OPTIONS.map((c) => (
+                            <option key={c} value={c}>
+                              {c}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
+                  </div>
+                )}
+
+                {form.type === "card" && visibility.reloadable && (
+                  <label
+                    className={cn(
+                      LE_RADIUS.card,
+                      "flex cursor-pointer items-center gap-2 border px-3 py-2 transition-colors",
+                      form.reloadable ? "border-primary-accent-text" : "border-border-strong",
+                    )}
+                  >
+                    <input
+                      type="checkbox"
+                      className="size-4 accent-current"
+                      checked={form.reloadable}
+                      onChange={(e) => setForm((f) => ({ ...f, reloadable: e.target.checked }))}
+                    />
+                    <span className="text-[13px] font-medium text-foreground">Reloadable (can be topped up again)</span>
+                  </label>
+                )}
+              </FormSection>
+            )}
 
             {formError && (
-              <p className="flex items-center gap-1.5 border border-expense/30 bg-expense/8 px-3 py-2 text-xs font-medium text-expense">
+              <p className={cn(LE_RADIUS.control, "flex items-center gap-1.5 border border-expense/40 bg-expense/8 px-3 py-2 text-xs font-medium text-expense")}>
                 {formError}
               </p>
             )}
           </div>
 
-          <DialogFooter className="shrink-0 border-t border-border bg-muted/20 px-6 py-4">
-            <ClayButton variant="ghost" className="rounded-none" onClick={closeAccountDialog} disabled={saving}>
+          <div className="flex shrink-0 items-center justify-end gap-2 border-t border-border bg-secondary px-5 pt-2.5 pb-[max(0.625rem,env(safe-area-inset-bottom))] sm:pb-2.5">
+            <ClayButton variant="secondary" className="h-9 rounded-[6px] border-border-strong font-medium" onClick={closeAccountDialog} disabled={saving}>
               Cancel
             </ClayButton>
-            <ClayButton type="submit" variant="primary" className="rounded-none" disabled={saving}>
+            <ClayButton
+              type="submit"
+              variant="primary"
+              className="h-9 min-w-28 flex-1 gap-1.5 rounded-[6px] border-primary-accent-text font-semibold sm:flex-none"
+              disabled={saving}
+              aria-busy={saving}
+            >
+              {saving && <Loader2 className="size-4 animate-spin" />}
               {saving ? "Saving…" : editingAccount ? "Save Changes" : "Save"}
             </ClayButton>
-          </DialogFooter>
+          </div>
           </form>
           {/* Close sits last in the DOM (absolutely positioned top-right, so visually unchanged): focus opens on the
               first field and Tab ends on Close instead of starting there. */}
@@ -986,9 +1048,12 @@ export function AccountsWorkspace() {
             type="button"
             onClick={closeAccountDialog}
             aria-label="Close"
-            className="absolute top-4 right-4 flex size-7 items-center justify-center border border-transparent text-muted-foreground transition-colors hover:border-border hover:text-foreground"
+            className={cn(
+              LE_RADIUS.control,
+              "absolute top-3 right-4 flex size-8 items-center justify-center border border-transparent text-muted-foreground outline-none transition-colors duration-150 hover:border-border hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
+            )}
           >
-            <XIcon className="size-4" />
+            <XIcon className="size-4" strokeWidth={1.75} />
           </button>
         </DialogContent>
       </Dialog>

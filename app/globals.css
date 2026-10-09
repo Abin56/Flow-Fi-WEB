@@ -735,3 +735,10 @@
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
+
+/* Credit card tile: one diagonal shine sweep across the face on hover. */
+@keyframes cc-shine {
+  0% { transform: translateX(0) skewX(-12deg); opacity: 0; }
+  20% { opacity: 1; }
+  100% { transform: translateX(450%) skewX(-12deg); opacity: 0; }
+}

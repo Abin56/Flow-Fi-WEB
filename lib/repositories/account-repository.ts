@@ -80,9 +80,16 @@ export class AccountRepository extends FirestoreCrudRepository<Account> {
   }
 
   async createAccount(params: CreateAccountParams): Promise<Account> {
+    const account = this.buildAccount(params);
+    await this.add(account.id, account);
+    return account;
+  }
+
+  /** Pure — the validated new `Account` `createAccount` writes; `id` lets a transactional caller fix it up front. */
+  buildAccount(params: CreateAccountParams, id: string = generateId()): Account {
     validateAccountNumberLast4(params.accountNumberLast4);
-    const account: Account = {
-      id: generateId(),
+    return {
+      id,
       name: params.name,
       type: params.type,
       openingBalance: params.openingBalance,
@@ -108,8 +115,6 @@ export class AccountRepository extends FirestoreCrudRepository<Account> {
       lastEditedAt: null,
       editHistory: [],
     };
-    await this.add(account.id, account);
-    return account;
   }
 
   /**
@@ -124,7 +129,16 @@ export class AccountRepository extends FirestoreCrudRepository<Account> {
 
     // Applied to the fresh document: `account` is the edit form's copy, and writing it back whole would revert
     // `currentBalance` moved by a transaction saved while the form was open (accounts, card outstanding, net worth).
-    await this.updateFresh(account.id, (fresh) => {
+    await this.updateFresh(account.id, (fresh) => this.applyAccountEdits(fresh, params));
+  }
+
+  /** Pure — `params` applied to `fresh` with audit entries. Shared by `editAccount` and transactional callers
+   *  (the atomic credit-card save) that read the account fresh inside their own `runTransaction`. */
+  applyAccountEdits(fresh: Account, params: EditAccountParams): Account {
+    validateAccountNumberLast4(
+      params.clearAccountNumberLast4 ? null : (params.accountNumberLast4 ?? fresh.accountNumberLast4),
+    );
+    {
       let updated = fresh;
       updated = updateField(updated, "name", updated.name, params.name, (e, v) => ({ ...e, name: v }));
       // A card account owns statements, a card profile and card-bill rules; no other type does. Switching into or out
@@ -273,9 +287,8 @@ export class AccountRepository extends FirestoreCrudRepository<Account> {
           currency: v,
         }));
       }
-
       return updated;
-    });
+    }
   }
 
   /** Public doc reference — lets a caller (e.g. TransactionRepository) read/write this

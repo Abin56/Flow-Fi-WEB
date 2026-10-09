@@ -2,10 +2,19 @@
 
 `BankLogo` (web: `components/finance/bank-logo.tsx`, mobile: `lib/shared/widgets/bank_logo.dart`
 in `Finance_App`) renders a bank's real logo when a matching image file exists, and a
-brand-colored initials badge when it doesn't. **No logo files ship with either repo today** —
-every bank currently renders its initials badge. Real bank logos are trademarked artwork; neither
-app fetches or generates them automatically (see the conversation that produced this doc for why).
-Drop the files below into place and both apps pick them up with no code change.
+brand-colored initials badge when it doesn't. **Web ships 41 PNG logos** in `public/banks/logos/`
+(added 2026-10-09; mobile still has none). Real bank logos are trademarked artwork — they're used
+here only to identify the user's own banks, and a bank's own brand kit should replace any file
+before public distribution. Drop a file in place and both apps pick it up with no code change.
+
+Shipped (web): airtel_pb, au_sfb, axis, bandhan, barclays, bob, bofa, bom, canara, citi, city_union,
+csb, dcb, deutsche, equitas_sfb, esaf_sfb, federal, hdfc, hsbc, icici, idfc_first, indian_bank,
+indusind, iob, jpmorgan, karnataka, karur_vysya, mizuho, north_east_sfb (now branded "slice"),
+paytm_pb, pnb, punjab_sind, rbl, sbi, sbm, south_indian, standard_chartered, tmb, uco, union_bank,
+yes_bank.
+
+Still initials-only (no usable logo found): kotak, central_bank, dbs, boi, j_and_k, nainital,
+dhanlaxmi, jana_sfb, suryoday_sfb, ujjivan_sfb, utkarsh_sfb, india_post_pb, fino_pb, nsdl_pb, idbi.
 
 ## Where files go
 
@@ -85,7 +94,12 @@ both bank pickers).
 
 Get logo files from each bank's own official brand/press kit or a source you have the rights to
 redistribute in an app — this is trademarked material, so don't scrape arbitrary logo sites.
-Neither Claude nor this codebase fetches these automatically.
+The codebase never fetches logos at runtime.
+
+How the shipped web set was made (one-off, by hand): each bank's official logo as recorded on
+Wikidata (P154) / Wikimedia Commons, or — for city_union and north_east_sfb — the icon on the bank's
+own website; then trimmed to the bank's emblem where it has one (whole logo for wordmarks) and saved
+as a square 256×256 transparent PNG with ~8% padding, so it reads inside the small round badge.
 
 ## Verifying a drop-in
 

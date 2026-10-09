@@ -1,5 +1,6 @@
 "use client";
 
+import { AccountLabel } from "@/components/finance/account-label";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { FormDialog } from "@/components/finance";
@@ -110,7 +111,7 @@ export function UploadStatementDialog({ open, onOpenChange, uid, creditCards, on
                 const name = accountNameById.get(c.accountId) ?? `Card ${c.id.slice(0, 8)}`;
                 return (
                   <SelectItem key={c.id} value={c.id}>
-                    {c.lastFourDigits ? `${name} •••• ${c.lastFourDigits}` : name}
+                    <AccountLabel account={{ name, bankId: accounts.find((a) => a.id === c.accountId)?.bankId ?? null, type: "card" }} suffix={c.lastFourDigits ? `•••• ${c.lastFourDigits}` : undefined} />
                   </SelectItem>
                 );
               })}

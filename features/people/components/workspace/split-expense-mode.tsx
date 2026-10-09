@@ -1,5 +1,6 @@
 "use client";
 
+import { AccountLabel } from "@/components/finance/account-label";
 import { Check, Divide, Percent, Plus, SlidersHorizontal, Split, Trash2, UserRound } from "lucide-react";
 import { useMemo, useState } from "react";
 import { ClayAvatar } from "@/components/clay/clay-avatar";
@@ -373,7 +374,7 @@ export function SplitExpenseMode({
                   <SelectContent>
                     {accounts.map((a) => (
                       <SelectItem key={a.id} value={a.id}>
-                        {a.name}
+                        <AccountLabel account={a} />
                       </SelectItem>
                     ))}
                   </SelectContent>

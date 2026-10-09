@@ -1,5 +1,6 @@
 "use client";
 
+import { AccountLabel } from "@/components/finance/account-label";
 import { CalendarClock, Plus, StickyNote, Wallet } from "lucide-react";
 import { useMemo, useState } from "react";
 import { ClayBadge } from "@/components/clay/clay-badge";
@@ -461,7 +462,7 @@ function BillFormFields({
                 <SelectItem value="none">No account</SelectItem>
                 {accounts.map((a) => (
                   <SelectItem key={a.id} value={a.id}>
-                    {a.name}
+                    <AccountLabel account={a} />
                   </SelectItem>
                 ))}
               </SelectContent>

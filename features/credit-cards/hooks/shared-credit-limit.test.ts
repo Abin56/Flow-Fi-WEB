@@ -441,3 +441,124 @@ describe("30: Web ↔ Flutter document compatibility", () => {
     expect(Number.isNaN(broken.creditLimit)).toBe(true);
   });
 });
+
+describe("Freedom Visa + Freedom RuPay companion cards on ONE ₹38,000 limit", () => {
+  const FREEDOM = "sl-freedom";
+  const limit = facility(FREEDOM, 38000, { name: "Freedom" });
+  // Visa existed first with its own ₹38,000 limit; RuPay was added later with ₹0 of its own. Different bill cycles.
+  const fVisa = card("fvisa", { sharedLimitId: FREEDOM, cardNetwork: "visa", lastFourDigits: "7960", creditLimit: 38000, statementDay: 5, paymentDueDay: 25 });
+  const fRupay = card("frupay", { sharedLimitId: FREEDOM, cardNetwork: "rupay", lastFourDigits: "4321", creditLimit: 0, statementDay: 20, paymentDueDay: 9 });
+  const run = (transactions: Transaction[]) => compute({ cards: [fVisa, fRupay], sharedLimits: [limit], transactions });
+  const expectRow = (m: Map<string, CreditCardStandingView>, visaOwn: number, rupayOwn: number, available: number) => {
+    expect(m.get("fvisa")!.ownOutstanding).toBe(visaOwn);
+    expect(m.get("frupay")!.ownOutstanding).toBe(rupayOwn);
+    // Both cards show the SAME shared available, but their own balances differ.
+    expect(m.get("fvisa")!.available).toBe(available);
+    expect(m.get("frupay")!.available).toBe(available);
+    expect(creditCardTotalsFrom(all(m)).creditLimit).toBe(38000);
+  };
+
+  const visaBuy = txn("acc-fvisa", 10000);
+  const rupayBuy = txn("acc-frupay", 5000);
+  const payVisa = billPayment("acc-fvisa", 4000);
+  const payRupay = billPayment("acc-frupay", 5000);
+
+  it("initially: ₹0 / ₹0 → ₹38,000 available (never ₹76,000)", () => expectRow(run([]), 0, 0, 38000));
+  it("Visa purchase ₹10,000 → ₹28,000", () => expectRow(run([visaBuy]), 10000, 0, 28000));
+  it("RuPay purchase ₹5,000 → ₹23,000", () => expectRow(run([visaBuy, rupayBuy]), 10000, 5000, 23000));
+  it("pay Visa bill ₹4,000 → Visa ₹6,000, RuPay unchanged, ₹27,000", () => expectRow(run([visaBuy, rupayBuy, ...payVisa]), 6000, 5000, 27000));
+  it("pay RuPay bill ₹5,000 → RuPay ₹0, Visa unchanged, ₹32,000", () =>
+    expectRow(run([visaBuy, rupayBuy, ...payVisa, ...payRupay]), 6000, 0, 32000));
+
+  it("each card keeps its own identity, network and due dates", () => {
+    const m = run([]);
+    expect([m.get("fvisa")!.card.cardNetwork, m.get("frupay")!.card.cardNetwork]).toEqual(["visa", "rupay"]);
+    expect(m.get("fvisa")!.card.lastFourDigits).not.toBe(m.get("frupay")!.card.lastFourDigits);
+    expect(m.get("fvisa")!.card.paymentDueDay).toBe(25);
+    expect(m.get("frupay")!.card.paymentDueDay).toBe(9);
+  });
+
+  it("statements bill only their own card's activity", () => {
+    const inPeriod = new Date("2026-09-10T00:00:00Z");
+    const m = compute({
+      cards: [fVisa, fRupay],
+      sharedLimits: [limit],
+      statements: [statement("fvisa", 10000), statement("frupay", 5000)],
+      transactions: [txn("acc-fvisa", 10000, { dateTime: inPeriod }), txn("acc-frupay", 5000, { dateTime: inPeriod })],
+    });
+    expect(m.get("fvisa")!.statements.map((s) => s.totalAmount)).toEqual([10000]);
+    expect(m.get("frupay")!.statements.map((s) => s.totalAmount)).toEqual([5000]);
+    expect(m.get("fvisa")!.available).toBe(23000);
+  });
+
+  it("an unrelated own-limit card is unaffected by the pair", () => {
+    const solo = card("solo", { creditLimit: 50000 });
+    const m = compute({ cards: [fVisa, fRupay, solo], sharedLimits: [limit], transactions: [visaBuy, txn("acc-solo", 2000)] });
+    expect(m.get("solo")!.available).toBe(48000);
+    expect(creditCardTotalsFrom(all(m)).creditLimit).toBe(88000);
+  });
+});
+
+describe("Add/Edit Card shared-limit flows — standings the redesigned form must produce", () => {
+  // HDFC Freedom ••••7960 (was on its own ₹80,000 limit, then attached) + Millennia ••••5678 on one ₹1,00,000 limit.
+  const HDFC = "sl-hdfc";
+  const hdfc = facility(HDFC, 100000, { name: "HDFC Shared Limit" });
+  const freedom = card("freedom", { sharedLimitId: HDFC, lastFourDigits: "7960", creditLimit: 80000, statementDay: 5, paymentDueDay: 25 });
+  const millennia = card("millennia", { sharedLimitId: HDFC, lastFourDigits: "5678", creditLimit: 0, statementDay: 18, paymentDueDay: 8 });
+
+  it("₹30,000 Freedom + ₹15,000 Millennia → ₹45,000 used, ₹55,000 available on the ONE ₹1,00,000 limit", () => {
+    const m = compute({ cards: [freedom, millennia], sharedLimits: [hdfc], transactions: [txn("acc-freedom", 30000), txn("acc-millennia", 15000)] });
+    for (const s of all(m)) {
+      expect(s.effectiveCreditLimit).toBe(100000);
+      expect(s.outstanding).toBe(45000);
+      expect(s.available).toBe(55000);
+    }
+    expect(m.get("freedom")!.ownOutstanding).toBe(30000);
+    expect(m.get("millennia")!.ownOutstanding).toBe(15000);
+    // An attached card's leftover own limit (₹80,000) is never added to the group's.
+    const totals = creditCardTotalsFrom(all(m));
+    expect(totals.creditLimit).toBe(100000);
+    expect(totals.available).toBe(55000);
+  });
+
+  it("each card keeps its own statement cycle — different bill/due days are not merged", () => {
+    const m = compute({ cards: [freedom, millennia], sharedLimits: [hdfc] });
+    expect(m.get("freedom")!.card.statementDay).toBe(5);
+    expect(m.get("millennia")!.card.statementDay).toBe(18);
+    expect(m.get("millennia")!.card.paymentDueDay).toBe(8);
+  });
+
+  it("updating the combined limit moves every member's available at once (counted once)", () => {
+    const raised = facility(HDFC, 150000);
+    const m = compute({ cards: [freedom, millennia], sharedLimits: [raised], transactions: [txn("acc-freedom", 30000), txn("acc-millennia", 15000)] });
+    for (const s of all(m)) expect(s.available).toBe(105000);
+    expect(creditCardTotalsFrom(all(m)).creditLimit).toBe(150000);
+  });
+
+  it("a refund on Millennia frees shared credit and lowers only Millennia's own balance", () => {
+    const m = compute({
+      cards: [freedom, millennia],
+      sharedLimits: [hdfc],
+      transactions: [txn("acc-freedom", 30000), txn("acc-millennia", 15000), txn("acc-millennia", 5000, { type: "income" })],
+    });
+    expect(m.get("millennia")!.ownOutstanding).toBe(10000);
+    expect(m.get("freedom")!.ownOutstanding).toBe(30000);
+    expect(m.get("freedom")!.available).toBe(60000);
+  });
+
+  it("three cards: adding a third card never adds its ₹0 own limit or doubles the group", () => {
+    const third = card("third", { sharedLimitId: HDFC, lastFourDigits: "1111" });
+    const m = compute({ cards: [freedom, millennia, third], sharedLimits: [hdfc], transactions: [txn("acc-third", 10000)] });
+    for (const s of all(m)) expect(s.available).toBe(90000);
+    expect(creditCardTotalsFrom(all(m)).creditLimit).toBe(100000);
+  });
+
+  it("unlinking Freedom (shared → own ₹80,000) leaves Millennia alone on the unchanged group", () => {
+    const solo = { ...freedom, sharedLimitId: null };
+    const m = compute({ cards: [solo, millennia], sharedLimits: [hdfc], transactions: [txn("acc-freedom", 30000), txn("acc-millennia", 15000)] });
+    expect(m.get("freedom")!.sharedLimit).toBeNull();
+    expect(m.get("freedom")!.available).toBe(50000);
+    expect(m.get("millennia")!.available).toBe(85000);
+    expect(creditCardTotalsFrom(all(m)).creditLimit).toBe(180000);
+  });
+});

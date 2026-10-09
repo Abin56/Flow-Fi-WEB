@@ -37,6 +37,7 @@
  *    real per-card setting read back from Firestore.
  */
 
+import { saveCreditCardAtomically, type AtomicCardSaveInput } from "@/lib/repositories/credit-card-save";
 import { useMemo } from "react";
 import {
   cardOwnStanding,
@@ -767,6 +768,9 @@ export function useCreditCardActions() {
         else if (params.sharedLimitId !== undefined) cardParams.sharedLimitId = params.sharedLimitId;
         await cardRepository.editCard(card, cardParams);
       },
+      /** The Add/Edit Card dialog's whole save as ONE Firestore transaction (see `lib/repositories/credit-card-save.ts`). */
+      saveCardAtomically: (input: AtomicCardSaveInput) =>
+        saveCreditCardAtomically({ accountRepository, creditCardRepository: cardRepository, sharedCreditLimitRepository }, input),
       /** Read-only impact preview for the type-to-confirm delete dialog — call before `deleteCard`. */
       previewCardDeletion: (card: CreditCardProfile) => previewCreditCardDeletionImpact(card, deletionRepos),
       /** PERMANENTLY deletes `card`, its linked `Account`, and their entire history — linked EMIs,

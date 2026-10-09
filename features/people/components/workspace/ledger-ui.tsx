@@ -1,5 +1,6 @@
 "use client";
 
+import { AccountLabel } from "@/components/finance/account-label";
 import { Landmark, Trash2, Undo2 } from "lucide-react";
 import Link from "next/link";
 import { useMemo, useState } from "react";
@@ -277,7 +278,7 @@ export function AccountField({
         <SelectContent>
           {choice.accounts.map((a) => (
             <SelectItem key={a.id} value={a.id}>
-              {a.name}
+              <AccountLabel account={a} />
             </SelectItem>
           ))}
         </SelectContent>
