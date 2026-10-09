@@ -41,6 +41,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useState } from "react";
+import { motion } from "framer-motion";
 import { ClayBadge } from "@/components/clay/clay-badge";
 import { ClayAvatar } from "@/components/clay/clay-avatar";
 import { ClayButton } from "@/components/clay/clay-button";
@@ -78,6 +79,10 @@ import { useUserPreferences } from "@/features/settings/hooks/use-user-preferenc
 import { PdfAnalyzerSetupCard } from "@/features/settings/components/pdf-analyzer-setup-card";
 
 type SettingsTab = "profile" | "preferences" | "accounts" | "security" | "notifications" | "backup" | "others";
+
+/** One settings card — rounded, with a gentle hover lift. */
+const SETTINGS_CARD =
+  "rounded-[20px] border border-border/60 bg-card p-5 shadow-e1 transition-[box-shadow,border-color] duration-200 hover:border-border hover:shadow-[0_14px_34px_-18px_rgba(0,0,0,0.3)]";
 
 const TABS: { id: SettingsTab; label: string; icon: LucideIcon }[] = [
   { id: "profile", label: "Profile", icon: User },
@@ -202,14 +207,14 @@ function MonthCycleSetting({ value, onSave }: { value: number; onSave: (day: num
 function SummaryRow({ icon: Icon, iconClass, label, value, sublabel }: { icon: LucideIcon; iconClass: string; label: string; value: string; sublabel: string }) {
   return (
     <button type="button" className="flex w-full items-center gap-3 rounded-xl px-1 py-2.5 text-left transition-colors hover:bg-muted/50">
-      <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-xl", iconClass)}>
+      <span className={cn("flex size-10 shrink-0 items-center justify-center rounded-full", iconClass)}>
         <Icon className="size-4" />
       </span>
       <div className="min-w-0 flex-1">
         <p className="text-sm font-medium text-foreground">{label}</p>
         <p className="text-xs text-muted-foreground">{sublabel}</p>
       </div>
-      <span className="shrink-0 font-mono text-sm font-semibold tabular-nums text-foreground">{value}</span>
+      <span className="shrink-0 rounded-full bg-secondary px-2.5 py-0.5 text-sm font-semibold tabular-nums text-foreground">{value}</span>
       <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
     </button>
   );
@@ -220,7 +225,7 @@ function SummaryRow({ icon: Icon, iconClass, label, value, sublabel }: { icon: L
 function CardHeading({ icon: Icon, iconClass, title, description }: { icon: LucideIcon; iconClass: string; title: string; description?: string }) {
   return (
     <div className="flex items-start gap-3">
-      <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-xl", iconClass)}>
+      <span className={cn("flex size-10 shrink-0 items-center justify-center rounded-full", iconClass)}>
         <Icon className="size-4.5" />
       </span>
       <div className="min-w-0">
@@ -234,7 +239,7 @@ function CardHeading({ icon: Icon, iconClass, title, description }: { icon: Luci
 function ActionRow({ icon: Icon, iconClass, label, description, destructive, onClick }: { icon: LucideIcon; iconClass: string; label: string; description: string; destructive?: boolean; onClick: () => void }) {
   return (
     <button type="button" onClick={onClick} className="flex w-full items-center gap-3 rounded-xl px-1 py-2.5 text-left transition-colors hover:bg-muted/50">
-      <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-xl", iconClass)}>
+      <span className={cn("flex size-10 shrink-0 items-center justify-center rounded-full", iconClass)}>
         <Icon className="size-4" />
       </span>
       <div className="min-w-0 flex-1">
@@ -358,27 +363,68 @@ export function SettingsWorkspace() {
           <p className="mt-1 text-sm text-muted-foreground">Manage your preferences and app configurations</p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-1 overflow-x-auto border-b border-border/60">
-          {TABS.map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              onClick={() => setTab(t.id)}
-              className={cn(
-                "flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2.5 text-sm font-medium transition-colors",
-                tab === t.id ? "border-primary text-primary-accent-text" : "border-transparent text-muted-foreground hover:text-foreground",
-              )}
-            >
-              <t.icon className="size-4" />
-              {t.label}
-            </button>
-          ))}
+        {/* Profile hero — who you are and what FlowFi holds for you (counts only). */}
+        <section aria-label="Your profile" className="relative overflow-hidden rounded-[20px] bg-gradient-to-br from-[#1d2330] via-[#262e3d] to-[#323b4d] px-5 py-5 text-white shadow-e1 sm:px-6">
+          <span aria-hidden className="pointer-events-none absolute -top-20 -right-16 size-60 rounded-full bg-primary/25 blur-3xl" />
+          <span aria-hidden className="pointer-events-none absolute -bottom-24 -left-16 size-52 rounded-full border border-white/10" />
+          <div className="relative flex flex-wrap items-center gap-4">
+            <span className="rounded-full ring-2 ring-primary/70 ring-offset-2 ring-offset-[#262e3d]">
+              <ClayAvatar name={fullName} size={60} />
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="truncate font-heading text-xl leading-tight font-semibold">{fullName || "Your profile"}</p>
+              <p className="truncate text-sm text-white/70">{email || "Signed in"}</p>
+            </div>
+          </div>
+          <dl className="relative mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {[
+              { label: "Accounts", value: String(accounts.length) },
+              { label: "Total balance", value: formatCurrency(totalBalance) },
+              { label: "Credit cards", value: String(creditCards.length) },
+              { label: "People", value: String(people.length) },
+            ].map((m) => (
+              <div key={m.label} className="min-w-0 rounded-[12px] bg-white/10 px-3 py-2 ring-1 ring-white/15 backdrop-blur-sm">
+                <dt className="truncate text-[10.5px] font-semibold tracking-[0.06em] text-white/70 uppercase">{m.label}</dt>
+                <dd className="truncate text-[15px] font-bold tabular-nums">{m.value}</dd>
+              </div>
+            ))}
+          </dl>
+        </section>
+
+        <div role="tablist" aria-label="Settings sections" className="flex gap-1 overflow-x-auto rounded-full border border-border bg-card p-1 shadow-e1 [scrollbar-width:none]">
+          {TABS.map((t) => {
+            const active = tab === t.id;
+            return (
+              <button
+                key={t.id}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                onClick={() => setTab(t.id)}
+                className={cn(
+                  "relative flex h-9 shrink-0 items-center gap-1.5 rounded-full px-3.5 text-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+                  active ? "font-semibold text-primary-foreground" : "font-medium text-foreground/70 hover:bg-secondary hover:text-foreground",
+                )}
+              >
+                {active && (
+                  <motion.span
+                    layoutId="settings-tab"
+                    aria-hidden
+                    className="absolute inset-0 rounded-full bg-primary ring-1 ring-primary-accent-text/40"
+                    transition={{ type: "spring", stiffness: 500, damping: 40 }}
+                  />
+                )}
+                <t.icon className="relative size-4" />
+                <span className="relative">{t.label}</span>
+              </button>
+            );
+          })}
         </div>
 
         {tab === "profile" && (
           <div className="flex flex-col gap-5">
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-              <div className="surface-flat rounded-3xl border border-border/50 p-5">
+              <div className={SETTINGS_CARD}>
                 <CardHeading icon={User} iconClass="bg-primary/12 text-primary-accent-text" title="Profile Information" description="Update your personal information and profile details." />
 
                 <div className="mt-4 flex items-center gap-4">
@@ -442,7 +488,7 @@ export function SettingsWorkspace() {
                 </form>
               </div>
 
-              <div className="surface-flat rounded-3xl border border-border/50 p-5">
+              <div className={SETTINGS_CARD}>
                 <CardHeading icon={SlidersHorizontal} iconClass="bg-purple/15 text-purple" title="App Preferences" description="Customize the app to match your workflow." />
 
                 <div className="mt-2 flex flex-col divide-y divide-border/60">
@@ -541,7 +587,7 @@ export function SettingsWorkspace() {
             </div>
 
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-              <div className="surface-flat rounded-3xl border border-border/50 p-5">
+              <div className={SETTINGS_CARD}>
                 <CardHeading icon={Shield} iconClass="bg-warning/20 text-warning-foreground" title="Security Settings" description="Manage your security and privacy preferences." />
                 <div className="mt-2 flex flex-col divide-y divide-border/60">
                   <SettingsRow
@@ -585,7 +631,7 @@ export function SettingsWorkspace() {
                 </div>
               </div>
 
-              <div className="surface-flat rounded-3xl border border-border/50 p-5">
+              <div className={SETTINGS_CARD}>
                 <CardHeading icon={Bell} iconClass="bg-success/15 text-success" title="Notifications" description="Choose what notifications you want to receive." />
                 <div className="mt-2 flex flex-col divide-y divide-border/60">
                   <SettingsRow icon={<Bell className="size-4.5" />} label="Transaction Alerts" description="Get notified for new transactions" control={<Switch checked={transactionAlerts} onCheckedChange={setTransactionAlerts} />} />
@@ -596,7 +642,7 @@ export function SettingsWorkspace() {
                 </div>
               </div>
 
-              <div className="surface-flat rounded-3xl border border-border/50 p-5">
+              <div className={SETTINGS_CARD}>
                 <CardHeading icon={CloudUpload} iconClass="bg-primary/12 text-primary-accent-text" title="Backup & Restore" />
                 <p className="mt-3 text-xs text-muted-foreground">
                   Your data is already saved to the cloud automatically — every account, transaction, and budget
@@ -851,8 +897,8 @@ export function SettingsWorkspace() {
         )}
       </div>
 
-      <div className="flex flex-col gap-5 xl:col-span-4">
-        <div className="surface-flat rounded-3xl border border-border/50 p-5">
+      <div className="flex flex-col gap-5 xl:sticky xl:top-0 xl:col-span-4 xl:self-start">
+        <div className={SETTINGS_CARD}>
           <CardHeading icon={Landmark} iconClass="bg-primary/12 text-primary-accent-text" title="Account Summary" />
           <div className="mt-2 flex flex-col">
             <SummaryRow icon={Landmark} iconClass="bg-primary/12 text-primary-accent-text" label="Total Accounts" sublabel="Active" value={String(accounts.length)} />
@@ -863,7 +909,7 @@ export function SettingsWorkspace() {
           </div>
         </div>
 
-        <div className="surface-flat rounded-3xl border border-border/50 p-5">
+        <div className={SETTINGS_CARD}>
           <CardHeading icon={Database} iconClass="bg-purple/15 text-purple" title="Data Management" />
           <div className="mt-2 flex flex-col">
             <ActionRow icon={Download} iconClass="bg-primary/12 text-primary-accent-text" label="Export Data" description="Download your financial data" onClick={() => toast.info("Export", "CSV export isn't wired up yet.")} />
@@ -872,7 +918,7 @@ export function SettingsWorkspace() {
           </div>
         </div>
 
-        <div className="rounded-3xl border border-expense/30 bg-expense/5 p-5">
+        <div className="rounded-[20px] border border-expense/30 bg-gradient-to-br from-expense/10 to-expense/[0.03] p-5">
           <CardHeading icon={AlertTriangle} iconClass="bg-expense/15 text-expense" title="Danger Zone" />
           <div className="mt-2 flex flex-col">
             <ActionRow icon={RotateCcw} iconClass="bg-expense/12 text-expense" label="Reset App" description="Reset app to default settings" destructive onClick={() => setResetOpen(true)} />

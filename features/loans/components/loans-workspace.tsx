@@ -1,5 +1,6 @@
 "use client";
 
+import { AccountSelect } from "@/components/finance/account-label";
 import { ArrowUpRight, Building2, UserRound, Wallet } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -906,18 +907,12 @@ function LoanFormFields({
             {movementAccounts.length === 0 ? (
               <p className="text-xs text-muted-foreground">No accounts yet — add one in Accounts, then come back.</p>
             ) : (
-              <select
+              <AccountSelect
                 className={LOAN_EMI_INPUT}
+                accounts={movementAccounts}
                 value={form.movementAccountId}
-                onChange={(e) => setForm((f) => ({ ...f, movementAccountId: e.target.value }))}
-              >
-                <option value="">Choose account</option>
-                {movementAccounts.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.name}
-                  </option>
-                ))}
-              </select>
+                onChange={(id) => setForm((f) => ({ ...f, movementAccountId: id }))}
+              />
             )}
           </div>
           <p className="text-[11px] text-muted-foreground">This updates the account balance. It isn&apos;t treated as income.</p>

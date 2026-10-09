@@ -26,12 +26,15 @@ export function Sidebar() {
           type="button"
           onClick={() => setCollapsed((v) => !v)}
           aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          className="mx-3 mb-3 flex h-9 shrink-0 items-center justify-center gap-2 rounded-xl text-xs text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+          className="mx-3 mt-2 mb-3 flex h-9 shrink-0 items-center justify-center gap-2 rounded-xl border border-dashed border-border text-xs font-medium text-foreground/60 transition-colors hover:border-border-strong hover:bg-muted/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
         >
           {collapsed ? (
             <ChevronRight className="size-4" />
           ) : (
-            <ChevronLeft className="size-4" />
+            <>
+              <ChevronLeft className="size-4" />
+              Collapse
+            </>
           )}
         </button>
       </div>

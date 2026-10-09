@@ -1,5 +1,6 @@
 "use client";
 
+import { AccountSelect } from "@/components/finance/account-label";
 import { ArrowRight, CalendarClock, CreditCard, Info, Wallet } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useMemo, useRef, useState } from "react";
@@ -498,14 +499,13 @@ export function RecordPaymentDialog({ target, open, onOpenChange }: { target: Pa
               Payments move an account balance — add an account first.
             </p>
           ) : (
-            <select className={LOAN_EMI_INPUT} value={accountId} onChange={(e) => setAccountId(e.target.value)} aria-label={lent ? "Received into account" : "Paid from account"}>
-              {accounts.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name}
-                  {a.accountNumberLast4 ? ` ••${a.accountNumberLast4}` : ""}
-                </option>
-              ))}
-            </select>
+            <AccountSelect
+              className={LOAN_EMI_INPUT}
+              accounts={accounts}
+              value={accountId}
+              onChange={setAccountId}
+              ariaLabel={lent ? "Received into account" : "Paid from account"}
+            />
           )}
         </section>
       )}

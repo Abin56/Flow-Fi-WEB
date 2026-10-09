@@ -52,16 +52,19 @@ function DialogContent({
   className,
   children,
   showCloseButton = true,
+  overlayClassName,
   onOpenAutoFocus,
   onCloseAutoFocus,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean
+  /** Extra classes for this dialog's backdrop (e.g. a lighter, unblurred scrim for a side drawer). */
+  overlayClassName?: string
 }) {
   const returnFocus = useReturnFocus(onOpenAutoFocus, onCloseAutoFocus)
   return (
     <DialogPortal>
-      <DialogOverlay style={{ zIndex: "var(--z-dialog)" }} />
+      <DialogOverlay className={overlayClassName} style={{ zIndex: "var(--z-dialog)" }} />
       <DialogPrimitive.Content
         data-slot="dialog-content"
         style={{ zIndex: "var(--z-dialog)" }}

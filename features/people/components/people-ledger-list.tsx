@@ -11,6 +11,8 @@ import {
   ChevronRight,
   RotateCcw,
   Search,
+  Activity,
+  Wallet,
   X,
 } from "lucide-react";
 import { ClayAvatar } from "@/components/clay/clay-avatar";
@@ -59,11 +61,11 @@ const FILTERS: { value: PeopleFilter; label: string }[] = [
 
 const DIRECTION_TONE: Record<
   StatementDirection,
-  { label: string; edge: string; icon: typeof Check }
+  { label: string; edge: string; icon: typeof Check; ring: string }
 > = {
-  theyOwe: { label: "text-success", edge: "bg-success", icon: ArrowDownLeft },
-  iOwe: { label: "text-expense", edge: "bg-expense", icon: ArrowUpRight },
-  settled: { label: "text-muted-foreground", edge: "bg-transparent", icon: Check },
+  theyOwe: { label: "text-success", edge: "bg-success", icon: ArrowDownLeft, ring: "ring-success/60" },
+  iOwe: { label: "text-expense", edge: "bg-expense", icon: ArrowUpRight, ring: "ring-expense/55" },
+  settled: { label: "text-muted-foreground", edge: "bg-transparent", icon: Check, ring: "ring-border" },
 };
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -367,48 +369,78 @@ export function cycleTotals(rows: PeopleLedgerRow[]) {
 
 export function PeopleCycleSummary({ rows }: { rows: PeopleLedgerRow[] }) {
   const { toReceive, receiveCount, toPay, payCount, advanceHeld, advanceHeldCount, activity } = cycleTotals(rows);
+  // Receive vs give as one bar — display only, from the same cycle totals (never netted into one figure).
+  const both = toReceive + toPay;
+  const receivePct = both > 0 ? (toReceive / both) * 100 : 0;
 
   return (
-    <section
-      aria-label="Cycle summary"
-      className={cn(LE_RADIUS.panel, "flex flex-col border border-border bg-card shadow-e1 sm:flex-row sm:items-stretch")}
-    >
-      <div className="flex flex-1 flex-col gap-1.5 px-5 py-4 sm:px-6">
-        <span className={LABEL}>You need to receive · this cycle</span>
-        <Money amount={Math.round(toReceive)} className="text-[32px] leading-none text-foreground sm:text-[38px]" />
-        <span className="text-xs text-muted-foreground">
-          {receiveCount === 0
-            ? "Nothing to receive at the end of this cycle"
-            : `Across ${receiveCount} ${receiveCount === 1 ? "person" : "people"}`}
-        </span>
-      </div>
-      <div className={cn("grid border-t border-border sm:border-t-0 sm:border-l", advanceHeld > 0 ? "grid-cols-3 sm:w-[30rem]" : "grid-cols-2 sm:w-80")}>
-        <div className="flex flex-col gap-1 px-5 py-3.5 sm:justify-center">
-          <span className={LABEL}>You need to give</span>
-          <Money amount={Math.round(toPay)} className={cn("text-lg leading-none", toPay > 0 ? "text-expense" : "text-muted-foreground")} />
-          <span className="text-xs text-muted-foreground">
-            {payCount === 0 ? "Nothing" : `${payCount} ${payCount === 1 ? "person" : "people"}`}
+    <section aria-label="Cycle summary" className="@container overflow-hidden rounded-[16px] border border-border bg-card shadow-e1">
+      <div className="flex flex-col @3xl:flex-row @3xl:items-stretch">
+        {/* Hero */}
+        <div className="relative flex flex-col gap-1.5 overflow-hidden bg-gradient-to-br from-[#1d2330] via-[#262e3d] to-[#323b4d] px-5 py-5 text-white sm:px-6 @3xl:min-w-[20rem] @3xl:flex-1">
+          <span aria-hidden className="pointer-events-none absolute -top-20 -right-16 size-56 rounded-full bg-success/25 blur-3xl" />
+          <span aria-hidden className="pointer-events-none absolute -bottom-24 -left-16 size-52 rounded-full border border-white/10" />
+          <span className="relative text-[11px] font-semibold tracking-[0.08em] text-white/75 uppercase">You need to receive · this cycle</span>
+          <Money amount={Math.round(toReceive)} className="relative text-[36px] leading-none text-white sm:text-[40px]" />
+          <span className="relative text-xs text-white/70">
+            {receiveCount === 0
+              ? "Nothing to receive at the end of this cycle"
+              : `Across ${receiveCount} ${receiveCount === 1 ? "person" : "people"}`}
           </span>
+          {both > 0 && (
+            <div className="relative mt-2 flex flex-col gap-1.5">
+              <div className="flex h-2 w-full overflow-hidden rounded-full bg-white/15" aria-hidden>
+                <span className="h-full bg-success transition-[width] duration-700" style={{ width: `${receivePct}%` }} />
+                <span className="h-full bg-expense transition-[width] duration-700" style={{ width: `${100 - receivePct}%` }} />
+              </div>
+              <p className="flex flex-wrap gap-x-3 text-[11px] text-white/75">
+                <span className="inline-flex items-center gap-1">
+                  <span className="size-2 rounded-full bg-success" /> Receive {money(toReceive)}
+                </span>
+                <span className="inline-flex items-center gap-1">
+                  <span className="size-2 rounded-full bg-expense" /> Give {money(toPay)}
+                </span>
+              </p>
+            </div>
+          )}
         </div>
-        {advanceHeld > 0 && (
-          // Money people paid ahead, not yet applied — held for them: not owed by them, not owed by you.
-          <div className="flex flex-col gap-1 border-l border-border px-5 py-3.5 sm:justify-center">
-            <span className={LABEL}>Advance held</span>
-            <Money amount={Math.round(advanceHeld)} className="text-lg leading-none text-foreground" />
-            <span className="text-xs text-muted-foreground">
-              Not applied yet · {advanceHeldCount} {advanceHeldCount === 1 ? "person" : "people"}
-            </span>
-          </div>
-        )}
-        <div className="flex flex-col gap-1 border-l border-border px-5 py-3.5 sm:justify-center">
-          <span className={LABEL}>Activity</span>
-          <span className="font-heading text-lg leading-none font-bold text-foreground tabular-nums">{activity}</span>
-          <span className="text-xs text-muted-foreground">
-            {activity === 1 ? "entry" : "entries"} this cycle
-          </span>
+
+        {/* Supporting figures */}
+        <div className={cn("grid min-w-0 gap-2.5 p-3 @3xl:p-4", advanceHeld > 0 ? "grid-cols-1 @lg:grid-cols-3 @3xl:w-[34rem]" : "grid-cols-1 @lg:grid-cols-2 @3xl:w-[24rem]")}>
+          <SummaryTile icon={ArrowUpRight} chip="bg-expense/10 text-expense" label="You need to give">
+            <Money amount={Math.round(toPay)} className={cn("text-lg leading-none", toPay > 0 ? "text-expense" : "text-foreground/55")} />
+            <span className="text-xs text-foreground/60">{payCount === 0 ? "Nothing" : `${payCount} ${payCount === 1 ? "person" : "people"}`}</span>
+          </SummaryTile>
+          {advanceHeld > 0 && (
+            // Money people paid ahead, not yet applied — held for them: not owed by them, not owed by you.
+            <SummaryTile icon={Wallet} chip="bg-primary/25 text-foreground dark:text-primary-accent-text" label="Advance held">
+              <Money amount={Math.round(advanceHeld)} className="text-lg leading-none text-foreground" />
+              <span className="text-xs text-foreground/60">
+                Not applied yet · {advanceHeldCount} {advanceHeldCount === 1 ? "person" : "people"}
+              </span>
+            </SummaryTile>
+          )}
+          <SummaryTile icon={Activity} chip="bg-purple/12 text-purple" label="Activity">
+            <span className="font-heading text-lg leading-none font-bold text-foreground tabular-nums">{activity}</span>
+            <span className="text-xs text-foreground/60">{activity === 1 ? "entry" : "entries"} this cycle</span>
+          </SummaryTile>
         </div>
       </div>
     </section>
+  );
+}
+
+function SummaryTile({ icon: Icon, chip, label, children }: { icon: typeof Wallet; chip: string; label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex min-w-0 items-center gap-3 rounded-[12px] border border-border bg-secondary/40 px-3.5 py-3">
+      <span className={cn("flex size-10 shrink-0 items-center justify-center rounded-full", chip)}>
+        <Icon className="size-4.5" strokeWidth={2} />
+      </span>
+      <span className="flex min-w-0 flex-col gap-1">
+        <span className={LABEL}>{label}</span>
+        {children}
+      </span>
+    </div>
   );
 }
 
@@ -451,7 +483,7 @@ export function PeopleListToolbar({
           onChange={(e) => onSearchChange(e.target.value)}
           placeholder="Search people"
           aria-label="Search people"
-          className="h-9 w-full rounded-[6px] border border-border-strong bg-card pr-8 pl-9 text-sm text-foreground outline-none transition-[border-color,box-shadow] placeholder:text-tertiary-foreground hover:border-muted-foreground focus:border-primary-accent-text focus:ring-2 focus:ring-ring dark:bg-input"
+          className="h-9 w-full rounded-full border border-border-strong bg-card pr-8 pl-9 text-sm text-foreground outline-none transition-[border-color,box-shadow] placeholder:text-tertiary-foreground hover:border-muted-foreground focus:border-primary-accent-text focus:ring-2 focus:ring-ring dark:bg-input"
         />
         {search && (
           <button
@@ -527,7 +559,7 @@ function DirectionFigure({ side, amount }: { side: "theyOwe" | "iOwe"; amount: n
   return (
     <span
       className={cn(
-        "flex w-full max-w-[10rem] items-center justify-between gap-2 rounded-md border px-2 py-1",
+        "flex w-full max-w-[10rem] items-center justify-between gap-2 rounded-full border px-2.5 py-1",
         receive ? "border-success/30 bg-success/10" : "border-expense/30 bg-expense/10",
       )}
     >
@@ -578,22 +610,24 @@ function PersonRow({
           bothSides ? `You need to receive ${money(s.toReceive)}, you need to give ${money(s.toGive)}` : `${directionHeadline(s.direction)}${isSettled ? "" : ` ${money(s.amount)}`}`
         }`}
         className={cn(
-          "group relative grid w-full cursor-pointer grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1.5 px-4 py-3.5 text-left outline-none transition-colors duration-150 hover:bg-secondary/60 focus-visible:bg-secondary/60 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset xl:px-5",
+          "group relative grid w-full cursor-pointer grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1.5 px-4 py-3.5 text-left outline-none transition-colors duration-150 hover:bg-gradient-to-r hover:from-secondary/80 hover:to-transparent focus-visible:bg-secondary/60 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset xl:px-5",
           ROW_GRID,
         )}
       >
-        <span className={cn("absolute top-3 bottom-3 left-0 w-[3px] rounded-r-full", tone.edge)} aria-hidden />
+        <span className={cn("absolute top-3 bottom-3 left-0 w-[3px] rounded-r-full transition-all duration-200 group-hover:top-2 group-hover:bottom-2 group-hover:w-1", tone.edge)} aria-hidden />
 
         {/* Identity */}
         <span className="flex min-w-0 items-center gap-3">
-          <ClayAvatar name={row.name} size={36} />
+          <span className={cn("shrink-0 rounded-full ring-2 ring-offset-2 ring-offset-card transition-transform duration-200 group-hover:scale-105", tone.ring)}>
+            <ClayAvatar name={row.name} size={36} />
+          </span>
           <span className="flex min-w-0 flex-col">
             <span className="truncate font-heading text-[15px] leading-tight font-semibold text-foreground">{row.name}</span>
             <span className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted-foreground">
               {status && (
-                <span className={cn("rounded-[4px] border px-1.5 py-px text-[11px] font-semibold", status.className)}>{status.label}</span>
+                <span className={cn("rounded-full border px-2 py-px text-[11px] font-semibold", status.className)}>{status.label}</span>
               )}
-              {advanceText && <span className="rounded-[4px] border border-primary-accent-text/50 bg-primary/10 px-1.5 py-px text-[11px] font-semibold text-foreground">{advanceText}</span>}
+              {advanceText && <span className="rounded-full border border-primary-accent-text/50 bg-primary/15 px-2 py-px text-[11px] font-semibold text-foreground">{advanceText}</span>}
               {!status && !advanceText && (n === 0 ? "No activity" : `${n} ${n === 1 ? "activity" : "activities"}`)}
             </span>
           </span>

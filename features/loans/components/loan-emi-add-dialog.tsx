@@ -1,5 +1,6 @@
 "use client";
 
+import { AccountSelect } from "@/components/finance/account-label";
 import {
   Building2,
   CalendarClock,
@@ -456,14 +457,7 @@ export function LoanEmiAddDialog({ open, onOpenChange, initialKind = null }: Loa
                     No accounts yet — add one in Accounts.
                   </p>
                 ) : (
-                  <select className={LOAN_EMI_INPUT} value={form.accountId} onChange={(e) => set({ accountId: e.target.value })}>
-                    <option value="">Choose account</option>
-                    {movementAccounts.map((a) => (
-                      <option key={a.id} value={a.id}>
-                        {a.name}
-                      </option>
-                    ))}
-                  </select>
+                  <AccountSelect className={LOAN_EMI_INPUT} accounts={movementAccounts} value={form.accountId} onChange={(id) => set({ accountId: id })} />
                 )}
                 <p className="text-[11px] text-muted-foreground">Updates the account balance. It isn&apos;t counted as {kind === "lent" ? "spending" : "income"}.</p>
               </Reveal>

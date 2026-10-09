@@ -723,17 +723,19 @@ export function CreditCardsWorkspace() {
             first.focus();
           }
         }}
+        overlayClassName="bg-black/20 backdrop-blur-none dark:bg-black/45"
         className={cn(
-          "flex flex-col gap-0 overflow-hidden border border-border bg-card p-0 shadow-[var(--shadow-e4)] ring-0",
-          // Phone: full-height sheet. Desktop: centered panel — same surface as the Loan & EMI dialogs.
-          "top-0 left-0 h-[100dvh] max-h-[100dvh] max-w-none translate-x-0 translate-y-0 rounded-none",
-          "sm:top-1/2 sm:left-1/2 sm:h-auto sm:max-h-[min(90vh,48rem)] sm:max-w-2xl sm:transition-[max-width] sm:duration-300 sm:ease-out",
-          pairWide && "sm:max-w-4xl",
-          "sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-[10px]",
+          "flex flex-col gap-0 overflow-hidden bg-card p-0 ring-0",
+          // Right-side drawer (same experience as Add Transaction): slides in from the edge over the current screen, full height.
+          "top-0 right-0 left-auto h-dvh max-h-dvh w-full max-w-full translate-x-0 translate-y-0 rounded-none border-0 border-l border-border-strong",
+          "shadow-[-24px_0_60px_-20px_rgba(0,0,0,0.45)] duration-300 ease-out data-open:slide-in-from-right data-closed:slide-out-to-right data-closed:duration-200",
+          "sm:max-w-[620px] sm:rounded-l-[16px] sm:transition-[max-width]",
+          // Adding a second card: the drawer widens so both cards stay in view in the left pane.
+          pairWide && "sm:max-w-[900px]",
         )}
       >
-        <DialogHeader className="flex shrink-0 flex-row items-center gap-3 border-b border-border bg-card py-3 pr-14 pl-5 text-left">
-          <span className={cn(LE_RADIUS.control, "flex size-8 shrink-0 items-center justify-center bg-primary text-primary-foreground")}>
+        <DialogHeader className="flex shrink-0 flex-row items-center gap-3 border-b border-border bg-gradient-to-b from-primary/25 via-primary/[0.07] to-transparent pt-5 pr-14 pb-4 pl-5 text-left sm:pl-6">
+          <span className={cn(LE_RADIUS.control, "flex size-10 shrink-0 items-center justify-center rounded-[10px] bg-primary text-primary-foreground shadow-[0_6px_14px_-6px_rgba(0,0,0,0.35)]")}>
             <CreditCardIcon className="size-4" strokeWidth={2} />
           </span>
           <div className="flex min-w-0 flex-1 flex-col gap-0">
@@ -758,12 +760,12 @@ export function CreditCardsWorkspace() {
               initial={{ opacity: 0, x: -12 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ duration: reduceMotion ? 0 : 0.25, ease: "easeOut" }}
-              className="hidden w-[260px] shrink-0 flex-col gap-3 overflow-y-auto border-r border-border bg-secondary/40 px-4 py-4 sm:flex"
+              className="hidden w-[280px] shrink-0 flex-col gap-3 overflow-y-auto overscroll-contain border-r border-border bg-secondary/50 px-4 py-5 sm:flex"
             >
               <CardFormPreview variant="pair" card={previewCard} partner={previewPartner} background={CARD_GRADIENT[previewAccent]} bank={form.bankId} limitLine={previewLimitLine} />
             </motion.aside>
           )}
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-4 overflow-y-auto bg-card px-5 py-4 text-sm [&>*+*]:border-t [&>*+*]:border-border [&>*+*]:pt-4">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-5 overflow-y-auto overscroll-contain scroll-smooth scroll-pt-4 scroll-pb-24 bg-card px-5 py-5 text-sm sm:px-6 [&>*+*]:border-t [&>*+*]:border-border [&>*+*]:pt-5">
           {/* Live preview beside the appearance pickers — what you pick is what you see. */}
           <div className={cn("grid grid-cols-1 gap-4 sm:items-center", pairWide ? "sm:grid-cols-1" : "sm:grid-cols-[240px_1fr]")}>
             {/* In wide pair mode the side panel shows the cards; phones keep this one. */}
@@ -972,14 +974,14 @@ export function CreditCardsWorkspace() {
         </div>
         </div>
 
-        <div className="flex shrink-0 items-center justify-end gap-2 border-t border-border bg-secondary px-5 pt-2.5 pb-[max(0.625rem,env(safe-area-inset-bottom))] sm:pb-2.5">
-          <ClayButton variant="secondary" className="h-9 rounded-[6px] border-border-strong font-medium" onClick={closeCardDialog} disabled={saving}>
+        <div className="flex shrink-0 items-center justify-end gap-2 border-t border-border bg-card px-5 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:rounded-bl-[16px] sm:px-6 sm:pb-3">
+          <ClayButton variant="secondary" className="h-10 rounded-[8px] border-border-strong px-4 font-medium" onClick={closeCardDialog} disabled={saving}>
             Cancel
           </ClayButton>
           <ClayButton
             type="submit"
             variant="primary"
-            className="h-9 min-w-28 flex-1 gap-1.5 rounded-[6px] border-primary-accent-text font-semibold sm:flex-none"
+            className="h-10 min-w-36 flex-1 gap-1.5 rounded-[8px] border-primary-accent-text font-semibold sm:flex-none"
             disabled={saving}
             aria-busy={saving}
           >
@@ -995,7 +997,7 @@ export function CreditCardsWorkspace() {
           aria-label="Close"
           className={cn(
             LE_RADIUS.control,
-            "absolute top-3 right-4 flex size-8 items-center justify-center border border-transparent text-muted-foreground outline-none transition-colors duration-150 hover:border-border hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
+            "absolute top-5 right-4 flex size-8 items-center justify-center border border-transparent text-muted-foreground outline-none transition-colors duration-150 hover:border-border hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
           )}
         >
           <XIcon className="size-4" strokeWidth={1.75} />

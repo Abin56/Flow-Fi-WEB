@@ -2,6 +2,7 @@
 
 import { CreditCard, Landmark, Wallet } from "lucide-react";
 import { BankLogo } from "@/components/finance/bank-logo";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 
 /** The bits of an account (or anything account-like) needed to show it with its bank's logo. */
@@ -48,5 +49,41 @@ export function AccountLabel({
       <span className="truncate">{account.name}</span>
       {suffix != null && <span className="shrink-0 text-muted-foreground">{suffix}</span>}
     </span>
+  );
+}
+
+/**
+ * Account dropdown with each account's logo — a drop-in for a native `<select>` of accounts: same string
+ * value ("" = none chosen) and the same `onChange(id)`. Only the presentation differs.
+ */
+export function AccountSelect({
+  accounts,
+  value,
+  onChange,
+  placeholder = "Choose account",
+  className,
+  ariaLabel,
+}: {
+  accounts: (AccountLabelSource & { id: string; accountNumberLast4?: string | null })[];
+  value: string;
+  onChange: (id: string) => void;
+  placeholder?: string;
+  className?: string;
+  ariaLabel?: string;
+}) {
+  const suffix = (a: { accountNumberLast4?: string | null }) => (a.accountNumberLast4 ? `•••• ${a.accountNumberLast4}` : undefined);
+  return (
+    <Select value={value || undefined} onValueChange={onChange}>
+      <SelectTrigger aria-label={ariaLabel} className={cn("w-full justify-between", className)}>
+        <SelectValue placeholder={placeholder} />
+      </SelectTrigger>
+      <SelectContent className="max-h-72 rounded-[8px]">
+        {accounts.map((a) => (
+          <SelectItem key={a.id} value={a.id}>
+            <AccountLabel account={a} suffix={suffix(a)} />
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   );
 }

@@ -1,9 +1,12 @@
 "use client";
 
+import { AccountSelect } from "@/components/finance/account-label";
+import { Stagger } from "@/components/foundation/animated-container";
 import {
   Banknote,
   Briefcase,
   Calendar,
+  ArrowRight,
   Check,
   CreditCard,
   Gift,
@@ -19,6 +22,7 @@ import {
   X as XIcon,
   type LucideIcon,
 } from "lucide-react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ClayButton } from "@/components/clay/clay-button";
@@ -49,6 +53,7 @@ import { linkedPendingForAccount } from "@/lib/engines/linked-funds";
 import { bankById, GENERIC_BANK } from "@/lib/data/bank-registry";
 import type { Account, AccountType, BankAccountSubtype, CardSubtype } from "@/lib/models/account";
 import type { AccountColor } from "@/lib/mock/accounts-overview-data";
+import { formatCurrency } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { startOperation } from "@/store/operation-progress-store";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -370,13 +375,33 @@ export function AccountsWorkspace() {
   const visibility = fieldVisibilityFor(form.type, formBankSubtype, formCardSubtype, !!editingAccount);
   const linkableBankAccounts = (rawAccounts as Account[]).filter((a) => a.type === "bank");
 
+  // Credit-card accounts are managed in the Credit Cards section (statements, limits, payments).
+  // Here they're split out of the money-you-have list into a compact strip so the bank/cash grid,
+  // its count and the Total balance (which already excludes cards) all describe the same thing.
+  const cardAccountIds = useMemo(() => new Set(creditCards.map((c) => c.accountId)), [creditCards]);
+  const moneyAccounts = useMemo(
+    () => accountsOverviewList.filter((a) => !cardAccountIds.has(a.id)),
+    [accountsOverviewList, cardAccountIds],
+  );
+  const cardAccounts = useMemo(
+    () => accountsOverviewList.filter((a) => cardAccountIds.has(a.id)),
+    [accountsOverviewList, cardAccountIds],
+  );
+
+  // Type chips: only the types you actually hold, with counts (presentation; same filter value).
+  const accountTypeChips = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const a of moneyAccounts) counts.set(a.typeLabel, (counts.get(a.typeLabel) ?? 0) + 1);
+    return [...counts].map(([label, count]) => ({ label, count }));
+  }, [moneyAccounts]);
+
   const filtered = useMemo(() => {
-    return accountsOverviewList.filter((account) => {
+    return moneyAccounts.filter((account) => {
       const matchesSearch = account.name.toLowerCase().includes(search.toLowerCase());
       const matchesType = type === "All Types" || account.typeLabel === type;
       return matchesSearch && matchesType;
     });
-  }, [accountsOverviewList, search, type]);
+  }, [moneyAccounts, search, type]);
 
   // Default the selected account once the live list arrives (mirrors the
   // mock's "primary account, else first" default) without fighting the
@@ -404,12 +429,12 @@ export function AccountsWorkspace() {
       type="button"
       onClick={openAdd}
       className={cn(
-        "flex items-center justify-center gap-2.5 border-dashed border-border-strong text-muted-foreground transition-colors hover:border-primary-accent-text hover:bg-primary/10 hover:text-foreground",
-        view === "grid" ? "min-h-36 flex-col rounded-[10px] border py-6" : "border-t px-4 py-3",
+        "group/add flex items-center justify-center gap-2.5 border-dashed border-border-strong text-foreground/60 transition-[background,border-color,color,transform] duration-200 hover:border-primary-accent-text hover:bg-gradient-to-br hover:from-primary/20 hover:to-primary/5 hover:text-foreground",
+        view === "grid" ? "min-h-36 flex-col rounded-[14px] border-2 py-6" : "border-t px-4 py-3",
       )}
     >
-      <span className="flex size-8 items-center justify-center rounded-full border border-dashed border-current">
-        <Plus className="size-4" />
+      <span className="flex size-10 items-center justify-center rounded-full border-2 border-dashed border-current transition-transform duration-200 group-hover/add:scale-110 group-hover/add:rotate-90">
+        <Plus className="size-4.5" />
       </span>
       <span className="flex flex-col text-center">
         <span className="text-sm font-semibold">Add account</span>
@@ -422,20 +447,21 @@ export function AccountsWorkspace() {
     <div className="flex min-w-0 flex-col gap-5 px-1 lg:flex-row lg:items-start">
       <div className="flex min-w-0 flex-1 flex-col gap-5">
         <AccountsHeader onAdd={openAdd} />
-        <AccountsStats accountCount={accountsOverviewList.length} />
+        <AccountsStats accountCount={moneyAccounts.length} />
 
         <section aria-label="My accounts" className="flex flex-col gap-3">
           <AccountsToolbar
-            count={accountsOverviewList.length}
+            count={moneyAccounts.length}
             search={search}
             onSearchChange={setSearch}
             type={type}
             onTypeChange={setType}
             view={view}
             onViewChange={setView}
+            types={accountTypeChips}
           />
 
-          {accountsOverviewList.length === 0 ? (
+          {moneyAccounts.length === 0 ? (
             <div className="flex flex-col items-center justify-center gap-2 rounded-[10px] border border-dashed border-border-strong bg-card py-12 text-center">
               <p className="font-heading text-base font-semibold text-foreground">No accounts yet</p>
               <p className="text-sm text-muted-foreground">Add your first bank, wallet or cash account to get started.</p>
@@ -463,7 +489,7 @@ export function AccountsWorkspace() {
               </button>
             </div>
           ) : view === "grid" ? (
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            <Stagger className="grid grid-cols-1 gap-3 sm:grid-cols-[repeat(auto-fill,minmax(15rem,1fr))]">
               {filtered.map((account) => (
                 <AccountTile
                   key={account.id}
@@ -476,9 +502,9 @@ export function AccountsWorkspace() {
                 />
               ))}
               {addTile}
-            </div>
+            </Stagger>
           ) : (
-            <div className="flex flex-col divide-y divide-border-strong/40 overflow-hidden rounded-[10px] border border-border-strong/70 bg-card shadow-e1">
+            <div className="flex flex-col divide-y divide-border-strong/40 overflow-hidden rounded-[14px] border border-border-strong/60 bg-card shadow-e1">
               {filtered.map((account) => (
                 <AccountTile
                   key={account.id}
@@ -495,6 +521,63 @@ export function AccountsWorkspace() {
             </div>
           )}
         </section>
+
+        {cardAccounts.length > 0 && (
+          <section aria-label="Credit cards" className="flex flex-col gap-2">
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="inline-flex items-center gap-1.5 text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">
+                <CreditCard className="size-3.5 text-foreground" strokeWidth={1.75} />
+                Credit cards · {cardAccounts.length}
+              </h2>
+              <Link
+                href="/credit-cards"
+                className="inline-flex items-center gap-1 text-xs font-semibold text-primary-accent-text hover:underline"
+              >
+                Manage in Credit Cards
+                <ArrowRight className="size-3.5" />
+              </Link>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Card balances are what you owe, so they aren&apos;t counted in Total balance. Statements, limits and payments live in Credit Cards.
+            </p>
+            <div className="flex flex-col divide-y divide-border-strong/40 overflow-hidden rounded-[10px] border border-border-strong/70 bg-card shadow-e1">
+              {cardAccounts.map((card) => {
+                const owed = Math.max(0, -card.balance);
+                return (
+                  <button
+                    key={card.id}
+                    type="button"
+                    onClick={() => {
+                      setSelectedId(card.id);
+                      setOverviewOpen(true);
+                    }}
+                    className={cn(
+                      "flex items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-secondary",
+                      card.id === effectiveId && overviewOpen && "bg-primary/10",
+                    )}
+                  >
+                    <span
+                      className={cn("flex size-8 shrink-0 items-center justify-center rounded-[8px] border border-black/10", ACCOUNT_COLOR[card.color].onGradient)}
+                      style={{ background: ACCOUNT_COLOR[card.color].gradient }}
+                    >
+                      <CreditCard className="size-4" strokeWidth={1.75} />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-semibold text-foreground">{card.name}</span>
+                      {card.mask && <span className="block text-xs text-muted-foreground">•••• {card.mask}</span>}
+                    </span>
+                    <span className="flex flex-col items-end">
+                      <span className="text-[11px] text-muted-foreground">Outstanding</span>
+                      <span className={cn("text-sm font-semibold tabular-nums", owed > 0 ? "text-expense" : "text-foreground")}>
+                        {formatCurrency(owed)}
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+        )}
 
         <RecentAccountTransactions />
       </div>
@@ -532,16 +615,17 @@ export function AccountsWorkspace() {
               nameInputRef.current.focus();
             }
           }}
+          overlayClassName="bg-black/20 backdrop-blur-none dark:bg-black/45"
           className={cn(
-            "flex flex-col gap-0 overflow-hidden border border-border bg-card p-0 shadow-[var(--shadow-e4)] ring-0",
-            // Phone: full-height sheet. Desktop: centered panel — same surface as the Loan & EMI dialogs.
-            "top-0 left-0 h-[100dvh] max-h-[100dvh] max-w-none translate-x-0 translate-y-0 rounded-none",
-            "sm:top-1/2 sm:left-1/2 sm:h-auto sm:max-h-[min(90vh,48rem)] sm:max-w-2xl",
-            "sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-[10px]",
+            "flex flex-col gap-0 overflow-hidden bg-card p-0 ring-0",
+            // Right-side drawer (same experience as Add Transaction): slides in from the edge over the current screen, full height.
+            "top-0 right-0 left-auto h-dvh max-h-dvh w-full max-w-full translate-x-0 translate-y-0 rounded-none border-0 border-l border-border-strong",
+            "shadow-[-24px_0_60px_-20px_rgba(0,0,0,0.45)] duration-300 ease-out data-open:slide-in-from-right data-closed:slide-out-to-right data-closed:duration-200",
+            "sm:max-w-[620px] sm:rounded-l-[16px] sm:transition-[max-width]",
           )}
         >
-          <DialogHeader className="flex shrink-0 flex-row items-center gap-3 border-b border-border bg-card py-3 pr-14 pl-5 text-left">
-            <span className={cn(LE_RADIUS.control, "flex size-8 shrink-0 items-center justify-center bg-primary text-primary-foreground")}>
+          <DialogHeader className="flex shrink-0 flex-row items-center gap-3 border-b border-border bg-gradient-to-b from-primary/25 via-primary/[0.07] to-transparent pt-5 pr-14 pb-4 pl-5 text-left sm:pl-6">
+            <span className={cn(LE_RADIUS.control, "flex size-10 shrink-0 items-center justify-center rounded-[10px] bg-primary text-primary-foreground shadow-[0_6px_14px_-6px_rgba(0,0,0,0.35)]")}>
               <Landmark className="size-4" strokeWidth={2} />
             </span>
             <div className="flex min-w-0 flex-1 flex-col gap-0">
@@ -556,7 +640,7 @@ export function AccountsWorkspace() {
 
           {/* Real <form> (display: contents keeps the layout): Enter in a single-line field saves via the same handler as the primary button. */}
           <form className="contents" noValidate onSubmit={submitAccount} onKeyDown={handleEnterAdvance}>
-          <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto bg-card px-5 py-4 text-sm [&>*+*]:border-t [&>*+*]:border-border [&>*+*]:pt-4">
+          <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto overscroll-contain scroll-smooth scroll-pt-4 scroll-pb-24 bg-card px-5 py-5 text-sm sm:px-6 [&>*+*]:border-t [&>*+*]:border-border [&>*+*]:pt-5">
             {/* Live preview with the colour picker beside it — what you pick is what you see. */}
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
               <div className={cn(LE_RADIUS.card, "flex min-w-0 items-center gap-3 border border-border bg-secondary px-3 py-2.5 sm:w-60 sm:shrink-0")}>
@@ -752,18 +836,13 @@ export function AccountsWorkspace() {
                   {visibility.linkedBankAccount && (
                     <label className={AC_FIELD}>
                       <span className={AC_LABEL}>Linked Bank Account</span>
-                      <select
+                      <AccountSelect
                         className={AC_INPUT}
+                        accounts={linkableBankAccounts}
                         value={form.linkedAccountId ?? ""}
-                        onChange={(e) => setForm((f) => ({ ...f, linkedAccountId: e.target.value || null }))}
-                      >
-                        <option value="">Select a bank account…</option>
-                        {linkableBankAccounts.map((a) => (
-                          <option key={a.id} value={a.id}>
-                            {a.name}
-                          </option>
-                        ))}
-                      </select>
+                        onChange={(id) => setForm((f) => ({ ...f, linkedAccountId: id || null }))}
+                        placeholder="Select a bank account…"
+                      />
                       {linkableBankAccounts.length === 0 && (
                         <span className={AC_HINT}>Add a bank account first to link a debit card to it.</span>
                       )}
@@ -1026,14 +1105,14 @@ export function AccountsWorkspace() {
             )}
           </div>
 
-          <div className="flex shrink-0 items-center justify-end gap-2 border-t border-border bg-secondary px-5 pt-2.5 pb-[max(0.625rem,env(safe-area-inset-bottom))] sm:pb-2.5">
-            <ClayButton variant="secondary" className="h-9 rounded-[6px] border-border-strong font-medium" onClick={closeAccountDialog} disabled={saving}>
+          <div className="flex shrink-0 items-center justify-end gap-2 border-t border-border bg-card px-5 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:rounded-bl-[16px] sm:px-6 sm:pb-3">
+            <ClayButton variant="secondary" className="h-10 rounded-[8px] border-border-strong px-4 font-medium" onClick={closeAccountDialog} disabled={saving}>
               Cancel
             </ClayButton>
             <ClayButton
               type="submit"
               variant="primary"
-              className="h-9 min-w-28 flex-1 gap-1.5 rounded-[6px] border-primary-accent-text font-semibold sm:flex-none"
+              className="h-10 min-w-36 flex-1 gap-1.5 rounded-[8px] border-primary-accent-text font-semibold sm:flex-none"
               disabled={saving}
               aria-busy={saving}
             >
@@ -1050,7 +1129,7 @@ export function AccountsWorkspace() {
             aria-label="Close"
             className={cn(
               LE_RADIUS.control,
-              "absolute top-3 right-4 flex size-8 items-center justify-center border border-transparent text-muted-foreground outline-none transition-colors duration-150 hover:border-border hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
+              "absolute top-5 right-4 flex size-8 items-center justify-center border border-transparent text-muted-foreground outline-none transition-colors duration-150 hover:border-border hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
             )}
           >
             <XIcon className="size-4" strokeWidth={1.75} />

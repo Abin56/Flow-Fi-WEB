@@ -393,8 +393,8 @@ export function PeopleWorkspace() {
           </section>
         </>
       ) : ledgerRows.length === 0 ? (
-        <section className={cn(LE_RADIUS.panel, "flex flex-col items-center gap-4 border border-dashed border-border bg-card px-6 py-12 text-center")}>
-          <span className="flex size-11 items-center justify-center rounded-full bg-secondary text-muted-foreground">
+        <section className="flex flex-col items-center gap-4 rounded-[16px] border-2 border-dashed border-border bg-gradient-to-b from-success/10 to-card px-6 py-12 text-center">
+          <span className="flex size-14 items-center justify-center rounded-full bg-success/15 text-success ring-8 ring-success/10">
             <Users className="size-5" strokeWidth={1.75} />
           </span>
           <div>
@@ -434,7 +434,7 @@ export function PeopleWorkspace() {
               onFilterChange={setFilter}
               counts={counts}
             />
-            <div className={cn(LE_RADIUS.panel, "overflow-hidden border border-border bg-card shadow-e1")}>
+            <div className="overflow-hidden rounded-[16px] border border-border bg-card shadow-e1">
               {visible.length === 0 ? (
                 <div className="px-6 py-12 text-center">
                   <p className="text-sm font-semibold text-foreground">

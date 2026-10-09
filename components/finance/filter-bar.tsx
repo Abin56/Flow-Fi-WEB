@@ -13,6 +13,8 @@ import { cn } from "@/lib/utils";
 export interface FilterOption {
   value: string;
   label: string;
+  /** Optional leading visual (e.g. an account's bank logo) shown beside the label. */
+  icon?: React.ReactNode;
 }
 
 export interface FilterDef {
@@ -44,6 +46,7 @@ export function FilterBar({ filters, onClearAll, className }: FilterBarProps) {
             <DropdownMenuTrigger asChild>
               <ClayButton variant="secondary" size="sm" className="gap-1.5">
                 <span className="text-muted-foreground">{filter.label}</span>
+                {activeOption?.icon}
                 {activeOption && <span className="font-semibold">{activeOption.label}</span>}
                 <ChevronDown className="size-3.5 text-muted-foreground" />
               </ClayButton>
@@ -51,7 +54,10 @@ export function FilterBar({ filters, onClearAll, className }: FilterBarProps) {
             <DropdownMenuContent align="start">
               {filter.options.map((option) => (
                 <DropdownMenuItem key={option.value} onSelect={() => filter.onChange(option.value)}>
-                  {option.label}
+                  <span className="flex min-w-0 items-center gap-2">
+                    {option.icon}
+                    <span className="truncate">{option.label}</span>
+                  </span>
                 </DropdownMenuItem>
               ))}
             </DropdownMenuContent>

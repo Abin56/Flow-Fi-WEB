@@ -1,26 +1,26 @@
 "use client";
 
-import { AnimatePresence, motion } from "framer-motion";
+import { motion, useReducedMotion } from "framer-motion";
 import { usePathname } from "next/navigation";
 
+/**
+ * A quick fade-in of the new page — nothing else. No exit animation (the old page unmounts at once instead of
+ * rendering alongside the new one), and opacity only: a transform here would make this wrapper the containing
+ * block for every `position: fixed`/sticky element in the page.
+ */
 export function PageTransition({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const reduceMotion = useReducedMotion();
 
   return (
-    // mode="popLayout" (not "wait") — the incoming page mounts and starts fetching immediately
-    // instead of waiting out the exiting page's exit animation first; the exiting page is pulled
-    // out of layout flow via position:absolute so there's no height jump during the brief overlap.
-    <AnimatePresence mode="popLayout">
-      <motion.div
-        key={pathname}
-        className="flex min-h-0 min-w-0 flex-1 flex-col"
-        initial={{ opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
-        exit={{ opacity: 0, y: -8 }}
-        transition={{ duration: 0.18, ease: "easeOut" }}
-      >
-        {children}
-      </motion.div>
-    </AnimatePresence>
+    <motion.div
+      key={pathname}
+      className="flex min-h-0 min-w-0 flex-1 flex-col"
+      initial={reduceMotion ? false : { opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.14, ease: "easeOut" }}
+    >
+      {children}
+    </motion.div>
   );
 }

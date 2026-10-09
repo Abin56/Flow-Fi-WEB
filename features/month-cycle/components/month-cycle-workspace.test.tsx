@@ -51,6 +51,8 @@ const data = {
   savingsRatePercent: 0,
 };
 vi.mock("@/features/month-cycle/hooks/use-month-cycle-data", () => ({ useMonthCycleData: () => data }));
+// Account list only feeds the bank logos on the account-outflow rows.
+vi.mock("@/hooks/use-accounts", () => ({ useAccounts: () => ({ data: [] }) }));
 
 const { MonthCycleWorkspace } = await import("./month-cycle-workspace");
 afterEach(cleanup);

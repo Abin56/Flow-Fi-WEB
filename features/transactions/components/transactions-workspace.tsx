@@ -23,6 +23,7 @@ import {
   Pencil,
   Plus,
   Receipt,
+  Scale,
   Search,
   Shapes,
   Split,
@@ -397,7 +398,12 @@ export function TransactionsWorkspace() {
         setAccountFilter(v);
         setPage(1);
       },
-      options: accounts.map((a) => ({ value: a.id, label: a.name })),
+      options: accounts.map((a) => ({
+        value: a.id,
+        // Last 4 tells same-named accounts apart (e.g. two "Freedom" cards); the logo shows the bank.
+        label: a.accountNumberLast4 ? `${a.name} •••• ${a.accountNumberLast4}` : a.name,
+        icon: <AccountMark account={a} size={18} />,
+      })),
     },
     {
       id: "category",
@@ -666,10 +672,13 @@ export function TransactionsWorkspace() {
         </div>
       </header>
 
+      {/* ── What the current list adds up to ── */}
+      {hasTransactions && <ViewSummary rows={filtered} />}
+
       {/* ── Toolbar: search · date · filters · view ── */}
       <div className="flex flex-col gap-2.5">
         <div className="flex flex-wrap items-center gap-2">
-          <label className="flex h-9 w-full min-w-0 items-center gap-2 rounded-[6px] border border-border-strong bg-card px-3 text-sm transition-colors focus-within:border-primary-accent-text focus-within:ring-2 focus-within:ring-ring sm:w-72 dark:bg-input">
+          <label className="flex h-9 w-full min-w-0 items-center gap-2 rounded-full border border-border-strong bg-card px-3.5 text-sm transition-colors focus-within:border-primary-accent-text focus-within:ring-2 focus-within:ring-ring sm:w-72 dark:bg-input">
             <Search className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.75} />
             <input
               type="text"
@@ -746,7 +755,7 @@ export function TransactionsWorkspace() {
           ))}
 
           <div className="ml-auto flex items-center gap-1.5">
-            <div role="radiogroup" aria-label="View" className="flex items-center rounded-[6px] border border-border-strong bg-card p-0.5">
+            <div role="radiogroup" aria-label="View" className="flex items-center rounded-full border border-border-strong bg-card p-0.5">
               {(
                 [
                   { value: "list", icon: List, label: "List view" },
@@ -761,7 +770,7 @@ export function TransactionsWorkspace() {
                   aria-label={v.label}
                   onClick={() => setViewMode(v.value)}
                   className={cn(
-                    "flex size-7 items-center justify-center rounded-[4px] transition-colors",
+                    "flex size-8 items-center justify-center rounded-full transition-colors",
                     viewMode === v.value ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-secondary hover:text-foreground",
                   )}
                 >
@@ -774,7 +783,7 @@ export function TransactionsWorkspace() {
               onClick={() => setFullscreen((v) => !v)}
               aria-label={fullscreen ? "Exit full screen" : "Full screen"}
               title={fullscreen ? "Exit full screen (Esc)" : "Full screen"}
-              className={cn(TX_UTILITY, "border border-border-strong bg-card")}
+              className={cn(TX_UTILITY, "rounded-full border border-border-strong bg-card")}
             >
               {fullscreen ? <Minimize2 className="size-4" strokeWidth={1.75} /> : <Maximize2 className="size-4" strokeWidth={1.75} />}
               <span className="hidden lg:inline">{fullscreen ? "Exit" : "Expand"}</span>
@@ -785,7 +794,7 @@ export function TransactionsWorkspace() {
         {activeChips.length > 0 && (
           <div className="flex flex-wrap items-center gap-1.5">
             {activeChips.map((c) => (
-              <span key={c.key} className="inline-flex h-7 items-center gap-1 rounded-[6px] border border-primary-accent-text/40 bg-primary/15 pr-1 pl-2 text-xs font-medium text-foreground">
+              <span key={c.key} className="inline-flex h-7 items-center gap-1 rounded-full border border-primary-accent-text/40 bg-primary/20 pr-1 pl-2.5 text-xs font-semibold text-foreground">
                 {c.label}
                 <button
                   type="button"
@@ -794,7 +803,7 @@ export function TransactionsWorkspace() {
                     c.clear();
                     setPage(1);
                   }}
-                  className="flex size-5 items-center justify-center rounded-[4px] text-muted-foreground hover:bg-card hover:text-foreground"
+                  className="flex size-5 items-center justify-center rounded-full text-foreground/60 hover:bg-card hover:text-foreground"
                 >
                   <X className="size-3" strokeWidth={2} />
                 </button>
@@ -809,8 +818,8 @@ export function TransactionsWorkspace() {
 
       {/* ── Ledger ── */}
       {!hasTransactions ? (
-        <div className="flex flex-col items-center gap-3 rounded-[10px] border border-dashed border-border-strong bg-card px-6 py-14 text-center">
-          <span className="flex size-11 items-center justify-center rounded-full bg-secondary text-muted-foreground">
+        <div className="flex flex-col items-center gap-3 rounded-[16px] border-2 border-dashed border-border-strong bg-gradient-to-b from-primary/10 to-card px-6 py-14 text-center">
+          <span className="flex size-14 items-center justify-center rounded-full bg-primary/25 text-foreground ring-8 ring-primary/10 dark:text-primary-accent-text">
             <Receipt className="size-5" strokeWidth={1.75} />
           </span>
           <div>
@@ -822,7 +831,7 @@ export function TransactionsWorkspace() {
       ) : (
         <section
           aria-label="Transactions"
-          className={cn("flex min-h-0 flex-col overflow-hidden rounded-[10px] border border-border-strong/70 bg-card shadow-e1", fullscreen && "flex-1")}
+          className={cn("flex min-h-0 flex-col overflow-hidden rounded-[16px] border border-border-strong/60 bg-card shadow-e1", fullscreen && "flex-1")}
         >
           {count === 0 ? (
             <div className="flex flex-col items-center gap-2 px-6 py-14 text-center">
@@ -1195,7 +1204,7 @@ const TX_UTILITY =
   "flex h-9 items-center gap-1.5 rounded-[6px] px-2.5 text-sm font-medium text-foreground outline-none transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:text-muted-foreground disabled:hover:bg-transparent [&_svg]:text-muted-foreground";
 const SOON = "rounded-[4px] bg-secondary px-1 py-px text-[10px] font-semibold tracking-wide text-muted-foreground uppercase";
 const TX_FILTER =
-  "flex h-9 max-w-full min-w-0 items-center gap-1.5 rounded-[6px] border border-border-strong bg-card px-2.5 text-sm font-medium text-foreground outline-none transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:border-primary-accent-text dark:bg-input";
+  "flex h-9 max-w-full min-w-0 items-center gap-1.5 rounded-full border border-border-strong bg-card px-3 text-sm font-medium text-foreground outline-none transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:border-primary-accent-text dark:bg-input";
 const TX_FILTER_ACTIVE = "border-primary-accent-text bg-primary/15 dark:bg-primary/10";
 const TX_INPUT =
   "h-9 rounded-[6px] border border-border-strong bg-card px-2.5 text-sm text-foreground outline-none focus:border-primary-accent-text focus:ring-2 focus:ring-ring dark:bg-input";
@@ -1214,8 +1223,8 @@ const monthKeyOf = (d: Date) => d.getFullYear() * 12 + d.getMonth();
 const dayKeyOf = (d: Date) => monthKeyOf(d) * 32 + d.getDate();
 
 const TH =
-  "sticky top-0 z-[2] border-r border-b border-r-border-strong/40 border-b-border-strong bg-secondary px-2 py-2 text-left text-[11px] font-semibold tracking-[0.06em] whitespace-nowrap text-muted-foreground uppercase last:border-r-0 sm:px-3";
-const TD = "border-r border-b border-r-border-strong/30 border-b-border-strong/40 px-2 py-2.5 align-middle last:border-r-0 sm:px-3";
+  "sticky top-0 z-[2] border-b border-b-border-strong/70 bg-secondary/90 px-2 py-2.5 text-left text-[11px] font-semibold tracking-[0.06em] whitespace-nowrap text-foreground/65 uppercase backdrop-blur sm:px-3";
+const TD = "border-b border-b-border-strong/30 px-2 py-2.5 align-middle sm:px-3";
 const COLS = 7;
 
 function shortDate(d: Date): string {
@@ -1236,6 +1245,7 @@ function FilterMenu({ filter, label }: { filter: FilterDef; label: string }) {
       <DropdownMenuTrigger asChild>
         <button type="button" className={cn(TX_FILTER, active && TX_FILTER_ACTIVE)}>
           <span className={cn(active && "text-muted-foreground")}>{label}</span>
+          {active?.icon}
           {active && <span className="max-w-32 truncate font-semibold">{active.label}</span>}
           <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" strokeWidth={2} />
         </button>
@@ -1247,11 +1257,73 @@ function FilterMenu({ filter, label }: { filter: FilterDef; label: string }) {
         <DropdownMenuSeparator />
         {filter.options.map((option) => (
           <DropdownMenuItem key={option.value} onSelect={() => filter.onChange(option.value)} className={cn(option.value === filter.value && "font-semibold")}>
-            {option.label}
+            <span className="flex min-w-0 items-center gap-2">
+              {option.icon}
+              <span className="truncate">{option.label}</span>
+            </span>
           </DropdownMenuItem>
         ))}
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+/**
+ * Tally of the rows currently listed (after search/filters) — money in, money out, net and counts. Uses the
+ * list's own `flowOf`: transfers between your accounts and loan / people movements are counted separately,
+ * never as income or spending; rows excluded from calculations are skipped. A view summary, not a report.
+ */
+function ViewSummary({ rows }: { rows: { transaction: Transaction }[] }) {
+  let moneyIn = 0;
+  let moneyOut = 0;
+  let transfers = 0;
+  let other = 0;
+  for (const { transaction: t } of rows) {
+    if (t.excludeFromCalculations) continue;
+    const flow = flowOf(t);
+    if (flow === "in") moneyIn += t.amount;
+    else if (flow === "out") moneyOut += t.amount;
+    else if (flow === "transfer") transfers += 1;
+    else other += 1;
+  }
+  const net = moneyIn - moneyOut;
+  const tiles = [
+    { label: "Money in", value: formatCurrency(moneyIn), icon: ArrowDownLeft, chip: "bg-success/12 text-success", tone: "text-success" },
+    { label: "Money out", value: formatCurrency(moneyOut), icon: ArrowUpRight, chip: "bg-expense/10 text-expense", tone: "text-foreground" },
+    {
+      label: "Net",
+      value: `${net < 0 ? "−" : net > 0 ? "+" : ""}${formatCurrency(Math.abs(net))}`,
+      icon: Scale,
+      chip: net < 0 ? "bg-expense/10 text-expense" : "bg-primary/25 text-foreground dark:text-primary-accent-text",
+      tone: net < 0 ? "text-expense" : "text-foreground",
+    },
+    {
+      label: "Transactions",
+      value: String(rows.length),
+      icon: Receipt,
+      chip: "bg-purple/12 text-purple",
+      tone: "text-foreground",
+      meta: [transfers > 0 ? `${transfers} transfer${transfers === 1 ? "" : "s"}` : null, other > 0 ? `${other} loan/people` : null].filter(Boolean).join(" · "),
+    },
+  ];
+  return (
+    <section aria-label="This view" className="grid grid-cols-2 gap-2.5 lg:grid-cols-4">
+      {tiles.map((tile) => (
+        <div key={tile.label} className="flex min-w-0 items-center gap-3 rounded-[14px] border border-border-strong/60 bg-card px-3.5 py-3 shadow-e1">
+          <span className={cn("flex size-10 shrink-0 items-center justify-center rounded-full", tile.chip)}>
+            <tile.icon className="size-4.5" strokeWidth={2} />
+          </span>
+          <div className="min-w-0">
+            <p className="truncate text-[11px] font-semibold tracking-[0.06em] text-foreground/65 uppercase">
+              {tile.label}
+              <span className="ml-1 font-medium tracking-normal normal-case text-foreground/45">· in this view</span>
+            </p>
+            <p className={cn("truncate text-lg leading-tight font-bold tabular-nums", tile.tone)}>{tile.value}</p>
+            {"meta" in tile && tile.meta ? <p className="truncate text-[11px] text-foreground/60">{tile.meta}</p> : null}
+          </div>
+        </div>
+      ))}
+    </section>
   );
 }
 

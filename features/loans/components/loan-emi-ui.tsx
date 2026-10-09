@@ -809,8 +809,8 @@ export const LOAN_EMI_INPUT =
 
 /**
  * The focused creation/edit dialog for Loans and EMIs: one defined surface — header, a scrolling body whose
- * sections are split by solid dividers, and a footer with the single primary CTA. A centered panel on
- * desktop; a full-height sheet on phones.
+ * sections are split by solid dividers, and a footer with the single primary CTA. A right-side drawer that
+ * slides in over the current screen (full screen on phones).
  *
  * While `loading`/`success` the surface locks: the body is inert (entered values are kept, not editable),
  * Cancel/close and the primary action are disabled. `operation` (from `useOperation()`) renders the shared
@@ -862,18 +862,20 @@ export function LoanEmiFormDialog({
         showCloseButton={false}
         // Enter in any single-line field runs the same primary action as the button (not while busy / invalid).
         onKeyDown={(e) => handleEnterKey(e, onEnter ?? onConfirm, { enabled: !busy && !confirmDisabled })}
+        // Light scrim, no blur: the page behind stays readable.
+        overlayClassName="bg-black/20 backdrop-blur-none dark:bg-black/45"
         className={cn(
-          "flex flex-col gap-0 overflow-hidden border border-border bg-card p-0 shadow-[var(--shadow-e4)] ring-0",
-          // Phone: full-height sheet. Desktop: centered panel.
-          "top-0 left-0 h-[100dvh] max-h-[100dvh] max-w-none translate-x-0 translate-y-0 rounded-none",
-          "sm:top-1/2 sm:left-1/2 sm:h-auto sm:max-h-[min(90vh,52rem)]",
-          size === "compact" ? "sm:max-w-lg" : "sm:max-w-2xl",
-          "sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-[10px]",
+          "flex flex-col gap-0 overflow-hidden bg-card p-0 ring-0",
+          // Right-side drawer (same experience as Add Transaction / Account / Card): slides in from the edge, full height.
+          "top-0 right-0 left-auto h-dvh max-h-dvh w-full max-w-full translate-x-0 translate-y-0 rounded-none border-0 border-l border-border-strong",
+          "shadow-[-24px_0_60px_-20px_rgba(0,0,0,0.45)] duration-300 ease-out data-open:slide-in-from-right data-closed:slide-out-to-right data-closed:duration-200",
+          size === "compact" ? "sm:max-w-[520px]" : "sm:max-w-[640px]",
+          "sm:rounded-l-[16px]",
         )}
       >
-        <div className="flex shrink-0 items-center gap-3 border-b border-border bg-card px-5 py-3.5 sm:px-6">
+        <div className="flex shrink-0 items-center gap-3 border-b border-border bg-gradient-to-b from-primary/25 via-primary/[0.07] to-transparent px-5 pt-5 pb-4 sm:px-6">
           {Icon && (
-            <span className={cn(LE_RADIUS.control, "flex size-9 shrink-0 items-center justify-center bg-primary text-primary-foreground")}>
+            <span className={cn(LE_RADIUS.control, "flex size-10 shrink-0 items-center justify-center rounded-[10px] bg-primary text-primary-foreground shadow-[0_6px_14px_-6px_rgba(0,0,0,0.35)]")}>
               <Icon className="size-[18px]" strokeWidth={2} />
             </span>
           )}
@@ -899,7 +901,7 @@ export function LoanEmiFormDialog({
           inert={busy}
           aria-busy={busy}
           className={cn(
-            "flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto bg-card px-5 py-5 text-sm transition-opacity duration-150 sm:px-6 [&>*+*]:border-t [&>*+*]:border-border [&>*+*]:pt-5",
+            "flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto overscroll-contain scroll-smooth scroll-pt-4 scroll-pb-24 bg-card px-5 py-5 text-sm transition-opacity duration-150 sm:px-6 [&>*+*]:border-t [&>*+*]:border-border [&>*+*]:pt-5",
             busy && "opacity-70",
           )}
         >
@@ -913,14 +915,14 @@ export function LoanEmiFormDialog({
           </div>
         )}
 
-        <div className="flex shrink-0 items-center justify-end gap-2.5 border-t border-border bg-secondary px-5 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-6 sm:pb-3">
-          <ClayButton variant="secondary" className="rounded-[6px] border-border-strong font-medium" onClick={() => onOpenChange(false)} disabled={busy}>
+        <div className="flex shrink-0 items-center justify-end gap-2.5 border-t border-border bg-card px-5 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:rounded-bl-[16px] sm:px-6 sm:pb-3">
+          <ClayButton variant="secondary" className="h-10 rounded-[8px] border-border-strong px-4 font-medium" onClick={() => onOpenChange(false)} disabled={busy}>
             {cancelLabel}
           </ClayButton>
           <ClayButton
             variant="primary"
             className={cn(
-              "min-w-32 flex-1 gap-1.5 rounded-[6px] border-primary-accent-text font-semibold transition-[background-color,opacity] duration-200 sm:flex-none",
+              "h-10 min-w-36 flex-1 gap-1.5 rounded-[8px] border-primary-accent-text font-semibold transition-[background-color,opacity] duration-200 sm:flex-none",
               // Success keeps full opacity (it's a confirmation, not a disabled state).
               success && "disabled:opacity-100",
             )}
