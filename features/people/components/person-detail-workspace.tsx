@@ -85,7 +85,10 @@ const HEADER_BUTTON =
   "flex h-8 shrink-0 items-center gap-1.5 rounded-[6px] border border-border-strong bg-card px-2.5 text-sm font-medium text-foreground outline-none transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring [&_svg]:text-muted-foreground";
 
 /** A compact secondary Person action — quieter than Add, the same 32px height as the ledger's controls. */
-const ACTION_SECONDARY = cn(WS_SECONDARY, "h-8 gap-1.5 px-2.5 text-[13px] [&>svg]:text-muted-foreground");
+const ACTION_SECONDARY = cn(
+  WS_SECONDARY,
+  "h-9 gap-1.5 rounded-full px-3 text-[13px] [&>svg]:text-foreground/70 lg:h-auto lg:flex-col lg:gap-1 lg:rounded-[14px] lg:py-2.5 lg:text-xs lg:[&>svg]:size-4.5",
+);
 
 function DetailRow({ icon: Icon, label, children }: { icon: typeof Calendar; label: string; children: React.ReactNode }) {
   return (
@@ -250,6 +253,9 @@ export function PersonDetailWorkspace({
       : null;
   // Primary transactions only — a payment recorded against a transaction is its history, not another transaction.
   const primaryCount = allRows.length;
+  // Hero accents follow the overall direction — green when they owe you, red when you owe them.
+  const heroRing = person.breakdown.toGive > person.breakdown.toReceive ? "ring-expense/70" : person.breakdown.toReceive > 0 ? "ring-success/70" : "ring-white/40";
+  const heroGlow = person.breakdown.toGive > person.breakdown.toReceive ? "bg-expense/25" : "bg-success/25";
   const subline = [`${primaryCount} ${primaryCount === 1 ? "transaction" : "transactions"}`, contact].filter(Boolean).join(" · ");
 
   const bulkPlan = useMemo(() => planBulkDeletion(ledgerEntries, cashLegIds), [ledgerEntries, cashLegIds]);
@@ -546,7 +552,7 @@ export function PersonDetailWorkspace({
         aria-expanded={inline === "settle"}
         aria-controls="person-inline-settle"
         title="Record money received from, or paid to, this person"
-        className={cn(WS_PRIMARY, "lg:w-full", inline === "settle" && "ring-2 ring-primary-accent-text/40")}
+        className={cn(WS_PRIMARY, "h-11 rounded-full px-5 text-[15px] shadow-[0_8px_20px_-10px_rgba(120,160,20,0.7)] lg:w-full", inline === "settle" && "ring-2 ring-primary-accent-text/40")}
       >
         <HandCoins className="size-4" strokeWidth={2} />
         {inline === "settle" ? "Close" : "Record payment"}
@@ -607,9 +613,15 @@ export function PersonDetailWorkspace({
   const balanceSummary = (b.toGive > 0 || b.toReceive > 0 || hasAdvance) && (
     <div aria-label="Balance summary" className="text-[13px] tabular-nums">
       <p className="text-[11px] font-bold tracking-[0.08em] text-foreground/75 uppercase">Overall with {person.name.split(" ")[0]}</p>
-      <dl className="mt-1">
+      <dl className="mt-1.5 grid grid-cols-1 gap-1.5 sm:grid-cols-2">
         {summaryLines.map((l) => (
-          <div key={l.label} className="flex items-baseline justify-between gap-3 py-0.5">
+          <div
+            key={l.label}
+            className={cn(
+              "flex items-baseline justify-between gap-3 rounded-[12px] px-3 py-2 ring-1",
+              l.amount > 0 ? (l.tone === "expense" ? "bg-expense/6 ring-expense/20" : "bg-success/8 ring-success/20") : "bg-secondary/50 ring-border",
+            )}
+          >
             <dt className="font-medium text-foreground">{l.label}</dt>
             <dd className={cn("font-semibold", l.amount > 0 ? (l.tone === "expense" ? "text-expense" : "text-success") : "text-foreground/60")}>
               {formatCurrency(l.amount)}
@@ -617,7 +629,7 @@ export function PersonDetailWorkspace({
           </div>
         ))}
         {hasAdvance && (
-          <div className="flex items-baseline justify-between gap-3 py-0.5">
+          <div className="flex items-baseline justify-between gap-3 rounded-[12px] bg-primary/10 px-3 py-2 ring-1 ring-primary-accent-text/25 sm:col-span-2">
             <dt className="font-medium text-foreground">{b.advance < 0 ? "Advance held (not applied)" : "Advance you paid (not applied)"}</dt>
             <dd className="font-semibold text-foreground">{formatCurrency(Math.abs(b.advance))}</dd>
           </div>
@@ -654,7 +666,7 @@ export function PersonDetailWorkspace({
     <div className="flex flex-col gap-5">
       <div>
         {/* Financial context — position (hero) · statement · actions, divided by rules, not boxes */}
-        <div className="grid gap-x-8 gap-y-4 border-b border-border-strong/75 pb-5 lg:grid-cols-[minmax(0,1fr)_15.5rem]">
+        <div className="grid gap-x-8 gap-y-4 rounded-[20px] border border-border bg-card p-4 shadow-e1 sm:p-5 lg:grid-cols-[minmax(0,1fr)_16rem]">
           <PersonCycleStatementSection
             statement={statement}
             isLoading={isLoading}
@@ -669,7 +681,7 @@ export function PersonDetailWorkspace({
               </>
             }
           />
-          <div className="min-w-0 lg:border-l lg:border-border-strong/75 lg:pl-7">{actionBar}</div>
+          <div className="min-w-0 lg:border-l lg:border-border lg:pl-6">{actionBar}</div>
         </div>
         {/* Inline actions — open as a workspace state right under the position, full width; one at a time */}
         <div id="person-inline-add">
@@ -733,7 +745,7 @@ export function PersonDetailWorkspace({
       </div>
 
       {/* Activity — the main body, full width */}
-      <section aria-label="Activity" className="flex min-w-0 flex-col">
+      <section aria-label="Activity" className="flex min-w-0 flex-col rounded-[20px] border border-border bg-card p-3 shadow-e1 sm:p-4">
         <PersonActivityFeed
           personId={person.id}
           personName={person.name}
@@ -947,19 +959,23 @@ export function PersonDetailWorkspace({
     <div ref={rootRef} onKeyDown={onKeyDown} className="flex min-w-0 scroll-mt-6 flex-col gap-4 px-1">
       {/* Identity — who, always visible; every mode renders below it. Navigation sits with the actions on the right. */}
       <div>
-        <header className="flex items-center gap-3 border-b border-border-strong/75 pb-3.5">
-          <ClayAvatar name={person.name} size={40} />
-          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-            <h1 className="truncate font-heading text-2xl leading-tight font-bold tracking-tight text-foreground">{person.name}</h1>
-            <p className="truncate text-sm text-muted-foreground">{subline}</p>
+        <header className="relative flex items-center gap-3.5 overflow-hidden rounded-[20px] bg-gradient-to-br from-[#1d2330] via-[#262e3d] to-[#323b4d] px-4 py-4 text-white shadow-e1 sm:px-5">
+          <span aria-hidden className={cn("pointer-events-none absolute -top-20 -right-16 size-56 rounded-full blur-3xl", heroGlow)} />
+          <span aria-hidden className="pointer-events-none absolute -bottom-24 -left-16 size-52 rounded-full border border-white/10" />
+          <span className={cn("relative shrink-0 rounded-full ring-2 ring-offset-2 ring-offset-[#262e3d]", heroRing)}>
+            <ClayAvatar name={person.name} size={52} />
+          </span>
+          <div className="relative flex min-w-0 flex-1 flex-col gap-0.5">
+            <h1 className="truncate font-heading text-2xl leading-tight font-bold tracking-tight">{person.name}</h1>
+            <p className="truncate text-sm text-white/70">{subline}</p>
           </div>
-          <div className="flex shrink-0 items-center gap-1">
+          <div className="relative flex shrink-0 items-center gap-1 [&_button]:border-white/20 [&_button]:bg-white/10 [&_button]:text-white [&_button:hover]:bg-white/20 [&_svg]:text-white!">
             <button type="button" onClick={onBack} title="Back to People Ledger" className={BACK_BUTTON}>
               <ArrowLeft className="size-4" strokeWidth={2} />
               <span className="hidden sm:inline">People Ledger</span>
               <span className="sr-only sm:hidden">Back to People Ledger</span>
             </button>
-            <span className="mx-1 h-5 w-px bg-border-strong/75" aria-hidden />
+            <span className="mx-1 h-5 w-px bg-white/25" aria-hidden />
             {onEditPerson && rawPerson && (
               <button
                 type="button"
