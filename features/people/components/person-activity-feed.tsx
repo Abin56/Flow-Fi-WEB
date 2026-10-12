@@ -1,6 +1,6 @@
 "use client";
 
-import { Maximize2, Plus, Search } from "lucide-react";
+import { CheckCircle2, History, Maximize2, Plus, Search } from "lucide-react";
 import { useState } from "react";
 import type { EntryEditValues, EntrySettleValues } from "@/features/people/components/workspace/ledger-ui";
 import { WS_SECONDARY } from "@/features/people/components/workspace/person-workspace-ui";
@@ -17,27 +17,56 @@ import { cn } from "@/lib/utils";
 export type LedgerScope = "cycle" | "all";
 
 /**
- * "Previous pending ₹500 · carried forward" — the selected cycle's opening balance from earlier cycles
- * (the engine's `previousPending`), so old unpaid money never reads as new activity. Shown when no
- * individual open item from earlier cycles can be listed (e.g. a lump balance).
+ * The selected cycle's starting balance from earlier cycles. `amount` is the engine's `previousPending`
+ * (unsigned); `left` is what of it is still unpaid today — the open remaining of the earlier items, never
+ * recomputed here. Display only.
  */
-export function CarriedForwardNote({
-  carried,
-  personName,
-  className,
-}: {
-  carried: { amount: number; direction: "theyOwe" | "iOwe" } | null;
-  personName: string;
-  className?: string;
-}) {
+export interface CarriedForward {
+  amount: number;
+  direction: "theyOwe" | "iOwe";
+  left: number;
+}
+
+/**
+ * One compact line about money from before this cycle, in either direction — so old money never reads as new
+ * activity, and money already paid never reads as still owed:
+ *   still unpaid → "Previous unpaid amount ₹745.49 · Sojan still needs to pay you this"
+ *   part paid    → "Previous unpaid amount ₹545.49 left of ₹745.49 · …"
+ *   paid since   → "✓ From previous months ₹745.49 · Sojan owed you this when the cycle started · Now fully paid"
+ * Shown when no individual open item from earlier cycles is listed in the table.
+ */
+export function CarriedForwardNote({ carried, personName, className }: { carried: CarriedForward | null; personName: string; className?: string }) {
   if (carried == null) return null;
   const first = personName.split(" ")[0];
+  const theirs = carried.direction === "theyOwe";
+  const left = Math.min(carried.amount, Math.max(0, carried.left));
+  const paid = left < 0.005;
+  if (paid) {
+    return (
+      <div className={cn("flex flex-wrap items-center gap-x-2 gap-y-0.5 rounded-[6px] border border-border-strong/70 bg-card px-3 py-1.5 text-xs", className)}>
+        <CheckCircle2 className="size-3.5 shrink-0 text-success" strokeWidth={2.25} aria-hidden />
+        <span className="font-bold tracking-[0.06em] whitespace-nowrap text-foreground/70 uppercase">From previous months</span>
+        <span className="font-heading text-sm font-semibold whitespace-nowrap text-foreground/80 tabular-nums">{money(carried.amount)}</span>
+        <span className="font-medium text-foreground/70">
+          {theirs ? `${first} owed you this when the cycle started` : `You owed ${first} this when the cycle started`}
+        </span>
+        <span className="font-semibold whitespace-nowrap text-foreground">· Now fully paid</span>
+      </div>
+    );
+  }
+  const tone = theirs
+    ? { box: "border-settle-receivable-edge bg-settle-receivable-tint", text: "text-settle-receivable-text" }
+    : { box: "border-settle-payable-edge bg-settle-payable-tint", text: "text-settle-payable-text" };
   return (
-    <div className={cn("flex flex-wrap items-baseline gap-x-2 gap-y-0.5 rounded-[6px] border-l-[3px] border-settle-carried-edge bg-settle-carried-tint px-3 py-1.5 text-xs", className)}>
-      <span className="font-bold tracking-[0.06em] text-settle-carried-text uppercase">Brought forward</span>
-      <span className="font-heading text-sm font-bold text-foreground tabular-nums">{money(carried.amount)}</span>
+    <div className={cn("flex flex-wrap items-center gap-x-2 gap-y-0.5 rounded-[6px] border-l-[3px] px-3 py-1.5 text-xs", tone.box, className)}>
+      <History className={cn("size-3.5 shrink-0", tone.text)} strokeWidth={2.25} aria-hidden />
+      <span className={cn("font-bold tracking-[0.06em] whitespace-nowrap uppercase", tone.text)}>Previous unpaid amount</span>
+      <span className="whitespace-nowrap">
+        <span className="font-heading text-sm font-bold text-foreground tabular-nums">{money(left)}</span>
+        {left < carried.amount - 0.005 && <span className="ml-1 font-medium text-foreground/70 tabular-nums">left of {money(carried.amount)}</span>}
+      </span>
       <span className="font-medium text-foreground/75">
-        {carried.direction === "theyOwe" ? `You need to receive from ${first}` : `You need to give to ${first}`} · from earlier cycles — not new activity
+        {theirs ? `${first} still needs to pay you this` : `You still need to pay ${first} this`} · from before this cycle
       </span>
     </div>
   );
@@ -144,7 +173,7 @@ export function PersonActivityFeed({
   statement: PersonCycleStatement | null;
   cycleLabelOf: (d: Date) => string;
   /** The selected cycle's previous pending (engine value). */
-  carriedForward?: { amount: number; direction: "theyOwe" | "iOwe" } | null;
+  carriedForward?: CarriedForward | null;
 }) {
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState<SettlementStatusFilter>("all");

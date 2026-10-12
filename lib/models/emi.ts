@@ -421,7 +421,7 @@ export function emiToFirestore(emi: Emi): DocumentData {
     purchaseTransactionId: emi.purchaseTransactionId,
     beneficiaryPersonId: emi.beneficiaryPersonId ?? null,
     ...(emi.beneficiaryRepaysInstallments === true ? { beneficiaryRepaysInstallments: true } : {}),
-    ...(emi.ownershipShares != null && emi.ownershipShares.length > 0 ? { ownershipShares: emi.ownershipShares.map((x) => ({ personId: x.personId, amount: x.amount })) } : {}),
+    ...(emi.ownershipShares != null && emi.ownershipShares.length > 0 ? { ownershipShares: emi.ownershipShares.map((x) => ({ personId: x.personId, amount: x.amount, ...(x.installmentAmount != null ? { installmentAmount: x.installmentAmount } : {}) })) } : {}),
     dueDayOfMonth: emi.dueDayOfMonth,
     deletedAt: emi.deletedAt == null ? null : Timestamp.fromDate(emi.deletedAt),
     lastEditedAt: emi.lastEditedAt == null ? null : Timestamp.fromDate(emi.lastEditedAt),

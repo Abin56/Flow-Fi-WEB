@@ -211,6 +211,17 @@ describe("nested money-bearing subcollections inherit the same owner-scoping", (
     await assertSucceeds(deleteDoc(ref));
   });
 
+  it("People payment deferrals (web-only timing metadata) are owner-only", async () => {
+    const ownerDb = testEnv.authenticatedContext(OWNER_UID).firestore();
+    const ref = doc(ownerDb, "users", OWNER_UID, "people", "person-1", "paymentDeferrals", "ledger%3Ashare");
+    await assertSucceeds(setDoc(ref, { obligationKey: "ledger:share", state: "active", revision: 1 }));
+    await assertSucceeds(getDoc(ref));
+    const foreign = doc(testEnv.authenticatedContext(OTHER_UID).firestore(), "users", OWNER_UID, "people", "person-1", "paymentDeferrals", "ledger%3Ashare");
+    await assertFails(getDoc(foreign));
+    await assertFails(setDoc(foreign, { state: "cleared" }));
+    await assertFails(getDoc(doc(testEnv.unauthenticatedContext().firestore(), "users", OWNER_UID, "people", "person-1", "paymentDeferrals", "ledger%3Ashare")));
+  });
+
   it("owner can read/write their own bill occurrence", async () => {
     const ownerDb = testEnv.authenticatedContext(OWNER_UID).firestore();
     const ref = doc(ownerDb, "users", OWNER_UID, "bills", "bill-1", "occurrences", "occ-1");

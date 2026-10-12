@@ -180,7 +180,7 @@ export function interestLabel(interest: DebtInterest): string {
     return interest.statedRatePercent != null ? `${interest.statedRatePercent}% stated · not modeled` : "Interest not modeled";
   }
   const period = interest.period === "yearly" ? "p.a." : "p.m.";
-  return `${interest.ratePercent}% ${period} ${interest.type === "flat" ? "flat" : "reducing"}`;
+  return `${+interest.ratePercent.toFixed(2)}% ${period} ${interest.type === "flat" ? "flat" : "reducing"}`;
 }
 
 /** Annualized nominal rate, for ordering only. Null when FlowFi has no usable rate. */

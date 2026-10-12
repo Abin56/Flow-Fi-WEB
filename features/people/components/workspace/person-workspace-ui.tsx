@@ -73,7 +73,7 @@ export function ModeHeader({
 }) {
   if (onClose) {
     return (
-      <div className={cn(WS_PAD, "flex items-start justify-between gap-4 border-b border-border-strong/60 pt-4 pb-3.5 sm:pt-5")}>
+      <div className={cn(WS_PAD, "sticky top-0 z-20 flex items-start justify-between gap-4 border-b border-border bg-card pt-4 pb-3.5 sm:pt-5")}>
         <div className="min-w-0">
           <h2 className="font-heading text-lg leading-tight font-semibold tracking-tight text-foreground sm:text-xl">{title}</h2>
           {subtitle && <p className="mt-0.5 text-[13px] text-muted-foreground">{subtitle}</p>}

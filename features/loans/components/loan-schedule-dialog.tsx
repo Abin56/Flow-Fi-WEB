@@ -131,7 +131,7 @@ export function LoanScheduleDialog({ open, onOpenChange, row, onEdit, onDelete, 
           <DialogTitle className="font-heading text-lg font-semibold">{loanDisplayName(row)}</DialogTitle>
           <DialogDescription className="text-muted-foreground">
             {row.lenderName}
-            {interest ? ` · ${interest.ratePercent}% p.a. ${interest.type === "flat" ? "flat" : "reducing"}` : " · No interest"}
+            {interest ? ` · ${+interest.ratePercent.toFixed(2)}% ${interest.period === "monthly" ? "p.m." : "p.a."} ${interest.type === "flat" ? "flat" : "reducing"}` : " · No interest"}
           </DialogDescription>
         </DialogHeader>
 

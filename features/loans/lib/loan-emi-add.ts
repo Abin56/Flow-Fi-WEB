@@ -18,8 +18,8 @@
  */
 
 import type { CreateLoanFormParams } from "@/features/loans/hooks/use-loans-data";
-import type { InterestType } from "@/lib/engines/interest-calculator";
-import { allocateOwnership, type AllocationMode, type AllocationResult } from "@/lib/engines/debt-ownership";
+import type { InterestPeriod, InterestType } from "@/lib/engines/interest-calculator";
+import { allocateOwnership, fromPaise, installmentWeights, splitByOwnership, splitPaise, toPaise, type AllocationMode, type AllocationResult } from "@/lib/engines/debt-ownership";
 import type { Emi, EmiLoanType } from "@/lib/models/emi";
 import type { Loan, LoanCategory } from "@/lib/models/loan";
 import type { ScheduleType } from "@/lib/models/payment-schedule";
@@ -37,6 +37,8 @@ export interface AllocationFormRow {
   personId: string | null;
   /** ₹ (custom) or % (percentage); ignored for equal. */
   value: string;
+  /** Custom only — this person's own EMI (optional; blank on every row = in proportion to their share). */
+  emi?: string;
 }
 
 export interface LoanEmiAddForm {
@@ -57,6 +59,12 @@ export interface LoanEmiAddForm {
   count: string;
   hasInterest: boolean;
   ratePercent: string;
+  /** What `ratePercent` is quoted per — many app lenders quote a monthly rate (e.g. 1.73% p.m.). */
+  ratePeriod: InterestPeriod;
+  /** "rate": the user types the rate. "emi": they type the EMI they actually pay and the rate is derived from it. */
+  rateInput: "rate" | "emi";
+  /** The real per-installment amount (rateInput "emi") — covers lender extras like GST on interest. */
+  emiAmount: string;
   interestType: InterestType;
   /** Purchase only — store / finance provider (EMI `lenderName`). */
   provider: string;
@@ -103,6 +111,9 @@ export function emptyLoanEmiAddForm(kind: AddKind | null = null, idempotencyKey 
     count: "12",
     hasInterest: false,
     ratePercent: "",
+    ratePeriod: "yearly",
+    rateInput: "rate",
+    emiAmount: "",
     interestType: "reducingBalance",
     provider: "",
     emiType: "other",
@@ -186,7 +197,12 @@ export function loanEmiAddError(form: LoanEmiAddForm): string | null {
   if (parseDateInput(form.firstEmiDate) == null) return "Choose the first EMI date";
   const count = Number(form.count);
   if (!(Number.isInteger(count) && count >= 1)) return "Enter the number of installments";
-  if (form.hasInterest && !(form.ratePercent.trim() !== "" && Number(form.ratePercent) >= 0)) return "Enter the interest rate";
+  if (form.hasInterest && form.rateInput === "rate" && !(form.ratePercent.trim() !== "" && Number(form.ratePercent) >= 0)) return "Enter the interest rate";
+  if (form.hasInterest && form.rateInput === "emi") {
+    const emi = Number(form.emiAmount);
+    if (!(emi > 0)) return "Enter the EMI amount";
+    if (emi * count < Number(form.amount)) return "EMI × installments can't be less than the amount";
+  }
   if (s.account && form.useAccount && form.accountId === "") return "Choose the account";
   if (s.whoFor && form.ownership === "someoneElse" && form.beneficiaryPersonId === "") return "Choose who this is for";
   if (s.whoFor && form.ownership === "shared") {
@@ -197,13 +213,78 @@ export function loanEmiAddError(form: LoanEmiAddForm): string | null {
   return null;
 }
 
-/** The live allocation of the principal for the "shared" choice — the form shows it continuously. */
-export function allocationOf(form: Pick<LoanEmiAddForm, "amount" | "allocationMode" | "allocationRows">): AllocationResult {
-  return allocateOwnership(
-    Number(form.amount) > 0 ? Number(form.amount) : 0,
-    form.allocationMode,
-    form.allocationRows.map((r) => ({ personId: r.personId, value: r.value.trim() === "" ? 0 : Number(r.value) })),
-  );
+type AllocationForm = Pick<LoanEmiAddForm, "amount" | "allocationMode" | "allocationRows"> & Partial<RateForm>;
+
+/** The loan's per-installment amount — 0 until the repayment section is complete. */
+export function totalInstallmentOf(form: AllocationForm): number {
+  if (form.count == null || form.frequency == null) return 0;
+  return previewInstallment(form as RateForm)?.perInstallment ?? 0;
+}
+
+/** Custom mode with at least one EMI typed — then blank EMIs share what's left of the loan's EMI. */
+export function usesCustomEmis(form: Pick<LoanEmiAddForm, "allocationMode" | "allocationRows">): boolean {
+  return form.allocationMode === "custom" && form.allocationRows.some((r) => (r.emi ?? "").trim() !== "");
+}
+
+const isBlank = (v: string | undefined) => (v ?? "").trim() === "";
+
+/**
+ * Typed values stay fixed; blank rows share what's left of `total` (paise-exact) by `weights` (equal when
+ * omitted). Blank rows get 0 when nothing is left — the caller reports it. Returns the filled-in values.
+ */
+function fillBlanks(typed: readonly (string | undefined)[], total: number, weights?: readonly number[]): number[] {
+  const values = typed.map((v) => (isBlank(v) ? 0 : Number(v) || 0));
+  const blanks = typed.map((v, i) => (isBlank(v) ? i : -1)).filter((i) => i >= 0);
+  const leftPaise = toPaise(total) - values.reduce((sum, v) => sum + toPaise(v), 0);
+  if (blanks.length === 0 || leftPaise <= 0) return values;
+  const parts = splitPaise(leftPaise, blanks.map((i) => (weights ? weights[i] : 1)));
+  blanks.forEach((i, k) => (values[i] = fromPaise(parts[k])));
+  return values;
+}
+
+/**
+ * The live allocation of the principal for the "shared" choice — the form shows it continuously and it
+ * re-derives on every change. Custom ₹ / %: typed rows are fixed, blank rows share the rest. Per-person EMIs
+ * (custom): typed EMIs are fixed, blank ones share the rest of the loan's EMI in proportion to their shares.
+ */
+export function allocationOf(form: AllocationForm): AllocationResult {
+  const principal = Number(form.amount) > 0 ? Number(form.amount) : 0;
+  const typed = form.allocationRows.map((r) => r.value);
+  const values =
+    form.allocationMode === "custom"
+      ? fillBlanks(typed, principal)
+      : form.allocationMode === "percentage"
+        ? fillBlanks(typed, 100)
+        : typed.map(() => 0);
+  const rows = form.allocationRows.map((r, i) => ({ personId: r.personId, value: values[i] }));
+  const result = allocateOwnership(principal, form.allocationMode, rows);
+  if (!usesCustomEmis(form)) return result;
+
+  const total = totalInstallmentOf(form);
+  if (!(total > 0)) return { ...result, error: result.error ?? "Fill in the repayment details first" };
+  const emiTyped = form.allocationRows.map((r) => r.emi);
+  const emis = fillBlanks(emiTyped, total, result.shares.map((x) => x.amount));
+  // Each person's own EMI rides on their share; the engine splits installments by these (installmentWeights).
+  const shares = result.shares.map((x, i) => ({ ...x, installmentAmount: emis[i] }));
+  const emiSum = emis.reduce((sum, v) => sum + v, 0);
+  // Within ₹1 — the loan's EMI is usually fractional (₹5,046.98) while people type whole rupees.
+  const gap = Math.round((total - emiSum) * 100) / 100;
+  const emiError =
+    gap <= -1
+      ? `EMIs are ₹${(-gap).toLocaleString("en-IN")} more than the loan's EMI`
+      : emis.some((v) => !(v > 0))
+        ? "No EMI left for the blank rows — lower the typed EMIs"
+        : gap >= 1
+          ? `EMIs are ₹${gap.toLocaleString("en-IN")} short of the loan's EMI`
+          : null;
+  return { ...result, shares, error: result.error ?? emiError };
+}
+
+/** Each person's part of one installment — the same split the engine applies to the schedule. */
+export function installmentSharesOf(form: AllocationForm, shares: AllocationResult["shares"]): number[] {
+  const total = totalInstallmentOf(form);
+  if (!(total > 0) || !shares.some((s) => s.amount > 0)) return shares.map(() => 0);
+  return splitByOwnership(total, installmentWeights(shares)).map((s) => s.amount);
 }
 
 function sharesOf(form: LoanEmiAddForm) {
@@ -218,8 +299,44 @@ export function parseDateInput(value: string): Date | null {
 }
 
 function interestOf(form: LoanEmiAddForm) {
-  return form.hasInterest ? { type: form.interestType, ratePercent: Number(form.ratePercent), period: "yearly" as const } : null;
+  const rate = effectiveRate(form);
+  return rate ? { type: form.interestType, ...rate } : null;
 }
+
+type RateForm = Pick<LoanEmiAddForm, "amount" | "count" | "frequency" | "hasInterest" | "ratePercent" | "ratePeriod" | "rateInput" | "emiAmount" | "interestType">;
+
+/**
+ * The rate that is saved: the typed one, or — when the user typed their EMI — the rate that reproduces that EMI
+ * exactly (so the engine's schedule matches what the lender actually debits, GST and all). Null = no interest.
+ */
+export function effectiveRate(form: RateForm): { ratePercent: number; period: InterestPeriod } | null {
+  if (!form.hasInterest) return null;
+  if (form.rateInput === "rate") return { ratePercent: Number(form.ratePercent), period: form.ratePeriod };
+  const principal = Number(form.amount);
+  const count = Math.floor(Number(form.count));
+  const emi = Number(form.emiAmount);
+  if (!(principal > 0) || !(count > 0) || !(emi * count > principal)) return null;
+  const periodic = form.interestType === "flat" ? (emi * count - principal) / (principal * count) : reducingRateForEmi(principal, count, emi);
+  // Monthly installments: quote per month (reads like the lender's "1.73% p.m."). Weekly: per year.
+  return form.frequency === "weekly"
+    ? { ratePercent: round6(periodic * 52 * 100), period: "yearly" }
+    : { ratePercent: round6(periodic * 100), period: "monthly" };
+}
+
+/** Periodic rate r where principal·r / (1 − (1+r)^−count) = emi — bisection; the payment rises with r. */
+function reducingRateForEmi(principal: number, count: number, emi: number): number {
+  const payment = (r: number) => (principal * r) / (1 - Math.pow(1 + r, -count));
+  let lo = 1e-9;
+  let hi = 1;
+  for (let i = 0; i < 200; i++) {
+    const mid = (lo + hi) / 2;
+    if (payment(mid) < emi) lo = mid;
+    else hi = mid;
+  }
+  return (lo + hi) / 2;
+}
+
+const round6 = (n: number) => Math.round(n * 1e6) / 1e6;
 
 function beneficiaryOf(form: LoanEmiAddForm): string | null {
   return addSections(form).whoFor && form.ownership === "someoneElse" && form.beneficiaryPersonId !== "" ? form.beneficiaryPersonId : null;
@@ -293,12 +410,20 @@ export function buildLoanEmiCreateRequest(form: LoanEmiAddForm): LoanEmiCreateRe
 
 /** Rough per-installment figure for the form preview — the real schedule is built by the engine on save. */
 export function previewInstallment(
-  form: Pick<LoanEmiAddForm, "amount" | "count" | "frequency" | "hasInterest" | "ratePercent" | "interestType">,
+  form: RateForm,
 ): { perInstallment: number; interest: number } | null {
   const principal = Number(form.amount);
   const count = Math.floor(Number(form.count));
   if (!(principal > 0) || !(count > 0)) return null;
-  const annual = form.hasInterest ? Number(form.ratePercent) / 100 : 0;
+  if (form.hasInterest && form.rateInput === "emi") {
+    const emi = Number(form.emiAmount);
+    if (!(emi > 0) || emi * count < principal) return null;
+    if (toPaise(emi * count) === toPaise(principal)) return { perInstallment: emi, interest: 0 };
+  }
+  const rate = effectiveRate(form);
+  const quoted = rate ? rate.ratePercent / 100 : 0;
+  // Same conversion as the engine's computePeriodicRate: a monthly quote is 12× per year.
+  const annual = rate?.period === "monthly" ? quoted * 12 : quoted;
   if (!(annual > 0)) return { perInstallment: principal / count, interest: 0 };
   const periodsPerYear = form.frequency === "weekly" ? 52 : 12;
   if (form.interestType === "flat") {

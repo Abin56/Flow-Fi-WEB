@@ -178,6 +178,7 @@ export function PeopleWorkspace() {
         receivedStatus: "yetToReceive",
       },
       params.accountId,
+      params.categoryId,
     );
   }
 

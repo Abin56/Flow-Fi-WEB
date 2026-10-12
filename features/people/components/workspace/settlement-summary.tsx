@@ -264,7 +264,7 @@ export function SettledCycleNote({ statement, personName }: { statement: PersonC
   const paid = pos.lines.filter((l) => l.key === "received" || l.key === "paid" || l.key === "advanceApplied").reduce((s, l) => s + l.value, 0);
   if (statement.direction !== "settled" || (obligations < 0.005 && paid < 0.005)) return null;
   return (
-    <div className="flex flex-wrap items-center gap-x-6 gap-y-1 rounded-[8px] border border-success/60 bg-settle-receivable-tint px-3 py-2">
+    <div className="flex flex-wrap items-center gap-x-6 gap-y-1 rounded-[8px] border border-success/60 bg-success/10 px-3 py-2">
       <p className="flex items-center gap-1.5 text-[13px] font-bold tracking-[0.05em] text-success uppercase">
         <CircleCheckBig className="size-4" strokeWidth={2.25} />
         Settled
@@ -366,7 +366,7 @@ function PaymentGroup({
     head.category === "advanceApplied" || head.category === "advance"
       ? "border-l-settle-advance-edge"
       : inbound
-        ? "border-l-settle-receivable-edge"
+        ? "border-l-success"
         : "border-l-settle-carried-edge";
   const applied = rows.filter((r) => r.category !== "advance");
   const held = rows.filter((r) => r.category === "advance");

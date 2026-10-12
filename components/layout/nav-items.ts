@@ -12,6 +12,7 @@ import {
   Users,
   Wallet,
   FileBarChart,
+  HandCoins,
   FileStack,
   History,
   LineChart,
@@ -38,6 +39,7 @@ export type NavSection = "Overview" | "Daily Money" | "Plan" | "Debt" | "Import"
 
 export const NAV_ITEMS: NavItem[] = [
   { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard, section: "Overview" },
+  { label: "My Money", href: "/my-money", icon: HandCoins, section: "Overview" },
   { label: "Month Cycle", href: "/month-cycle", icon: CalendarRange, section: "Overview" },
 
   { label: "Transactions", href: "/transactions", icon: Receipt, section: "Daily Money" },

@@ -1,8 +1,9 @@
 "use client";
 
 import { Plus, User, UserPlus, Users, X } from "lucide-react";
+import { useState } from "react";
 import { SegmentedControl, LOAN_EMI_INPUT } from "@/features/loans/components/loan-emi-ui";
-import { allocationOf, type AddOwnership, type AllocationFormRow, type LoanEmiAddForm } from "@/features/loans/lib/loan-emi-add";
+import { allocationOf, installmentSharesOf, totalInstallmentOf, usesCustomEmis, type AddOwnership, type AllocationFormRow, type LoanEmiAddForm } from "@/features/loans/lib/loan-emi-add";
 import type { AllocationMode } from "@/lib/engines/debt-ownership";
 import { formatCurrency } from "@/lib/format";
 import type { Person } from "@/lib/models/person";
@@ -25,6 +26,13 @@ const MODES: { value: AllocationMode; label: string }[] = [
   { value: "equal", label: "Equal" },
   { value: "custom", label: "Custom amount" },
   { value: "percentage", label: "Percentage" },
+];
+
+type EmiSplit = "auto" | "manual";
+
+const EMI_SPLITS: { value: EmiSplit; label: string }[] = [
+  { value: "auto", label: "Auto" },
+  { value: "manual", label: "Manual" },
 ];
 
 type Patch = Partial<Pick<LoanEmiAddForm, "ownership" | "beneficiaryPersonId" | "beneficiaryRepays" | "allocationMode" | "allocationRows">>;
@@ -93,21 +101,61 @@ function AllocationTable({ form, people, onChange }: { form: LoanEmiAddForm; peo
   const setRow = (i: number, patch: Partial<AllocationFormRow>) => onChange({ allocationRows: rows.map((r, j) => (j === i ? { ...r, ...patch } : r)) });
   const removeRow = (i: number) => onChange({ allocationRows: rows.filter((_, j) => j !== i) });
   const principal = Number(form.amount) > 0 ? Number(form.amount) : 0;
-  const balanced = result.remaining === 0 && principal > 0;
+  const balanced = result.error == null && principal > 0;
+  const custom = form.allocationMode === "custom";
+  const customEmis = usesCustomEmis(form);
+  // Auto: every EMI follows its share (no typed EMIs). Manual: each person's EMI is typed, checked against the loan EMI.
+  const [emiSplit, setEmiSplit] = useState<EmiSplit>(() => (customEmis ? "manual" : "auto"));
+  const manualEmi = custom && emiSplit === "manual";
+  const perUnit = form.frequency === "weekly" ? "wk" : "mo";
+  const totalInstallment = totalInstallmentOf(form);
+  // What each person pays per installment: their own EMI when typed, else in proportion to their share.
+  const installmentShares = installmentSharesOf(form, result.shares);
+  const allocatedEmi = Math.round(installmentShares.reduce((s, v) => s + v, 0) * 100) / 100;
+  // A blank box shows (as its placeholder) the value it was auto-filled with — what's left, shared out.
+  const autoShare = (i: number) => {
+    const amount = result.shares[i]?.amount ?? 0;
+    if (!(amount > 0) || !(principal > 0)) return undefined;
+    return form.allocationMode === "percentage" ? String(Math.round((amount / principal) * 10000) / 100) : String(amount);
+  };
+  const autoEmi = (i: number) => (installmentShares[i] ? String(Math.round(installmentShares[i] * 100) / 100) : "EMI");
+  const changeEmiSplit = (v: EmiSplit) => {
+    setEmiSplit(v);
+    // Manual starts from the auto figures so nothing jumps; Auto drops every typed EMI.
+    onChange({ allocationRows: rows.map((r, i) => ({ ...r, emi: v === "manual" && installmentShares[i] ? String(Math.round(installmentShares[i] * 100) / 100) : "" })) });
+  };
+  const cols = "min-w-[31rem] grid-cols-[minmax(8rem,1fr)_7rem_6.5rem_7rem_2rem]";
 
   return (
     <div className="flex flex-col gap-2.5">
-      <SegmentedControl ariaLabel="How to split" size="sm" options={MODES} value={form.allocationMode} onChange={(v) => onChange({ allocationMode: v, allocationRows: rows.map((r) => ({ ...r, value: "" })) })} />
+      <SegmentedControl ariaLabel="How to split" size="sm" options={MODES} value={form.allocationMode} onChange={(v) => {
+          setEmiSplit("auto");
+          onChange({ allocationMode: v, allocationRows: rows.map((r) => ({ ...r, value: "", emi: "" })) });
+        }}
+      />
 
-      <div className="overflow-hidden rounded-[6px] border border-border-strong bg-card">
-        <div className="grid grid-cols-[minmax(0,1fr)_8rem_7rem_2rem] items-center gap-0 border-b border-border-strong bg-secondary px-0 text-[11px] font-bold tracking-wide text-foreground uppercase">
+      {custom && (
+        <div className="flex flex-wrap items-center gap-2.5">
+          <span className="text-xs font-semibold text-foreground">EMI split</span>
+          <SegmentedControl ariaLabel="EMI split" size="sm" options={EMI_SPLITS} value={emiSplit} onChange={changeEmiSplit} />
+          <span className="text-xs text-foreground/80">
+            {emiSplit === "auto" ? "Each person's EMI follows their share." : "Type each person's EMI — they must add up to the loan EMI."}
+          </span>
+        </div>
+      )}
+
+      <div className="overflow-x-auto rounded-[6px] border border-border-strong bg-card">
+        <div className={cn("grid items-center gap-0 border-b border-border-strong bg-secondary px-0 text-[11px] font-bold tracking-wide text-foreground uppercase", cols)}>
           <span className="px-3 py-1.5">Person</span>
-          <span className="border-l border-border px-3 py-1.5">{form.allocationMode === "percentage" ? "Share %" : form.allocationMode === "custom" ? "Share ₹" : "Split"}</span>
+          <span className="border-l border-border px-3 py-1.5">
+            {form.allocationMode === "percentage" ? "Share %" : custom ? "Share ₹" : "Split"}
+          </span>
           <span className="border-l border-border px-3 py-1.5 text-right">Amount</span>
+          <span className={cn("border-l border-border px-3 py-1.5", !manualEmi && "text-right")}>EMI ₹ / {perUnit}</span>
           <span />
         </div>
         {rows.map((r, i) => (
-          <div key={i} className="grid grid-cols-[minmax(0,1fr)_8rem_7rem_2rem] items-center border-b border-border last:border-b-0">
+          <div key={i} className={cn("grid items-center border-b border-border last:border-b-0", cols)}>
             <div className="px-2 py-1.5">
               {r.personId === null ? (
                 <span className="flex h-9 items-center px-1 text-sm font-semibold text-foreground">Me</span>
@@ -139,6 +187,7 @@ function AllocationTable({ form, people, onChange }: { form: LoanEmiAddForm; peo
                   min="0"
                   step={form.allocationMode === "percentage" ? "0.01" : "1"}
                   aria-label={`${r.personId === null ? "My" : "Person " + (i + 1)} share`}
+                  placeholder={autoShare(i) ?? (form.allocationMode === "percentage" ? "%" : "₹")}
                   value={r.value}
                   onChange={(e) => setRow(i, { value: e.target.value })}
                   className={cn(LOAN_EMI_INPUT, "h-9 tabular-nums")}
@@ -146,6 +195,26 @@ function AllocationTable({ form, people, onChange }: { form: LoanEmiAddForm; peo
               )}
             </div>
             <span className="border-l border-border px-3 py-1.5 text-right text-sm font-semibold text-foreground tabular-nums">{formatCurrency(result.shares[i]?.amount ?? 0)}</span>
+            {manualEmi ? (
+              // Their own EMI, independent of the share. A blank box takes what's left (the placeholder).
+              <div className="border-l border-border px-2 py-1.5">
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  min="0"
+                  step="0.01"
+                  aria-label={`${r.personId === null ? "My" : "Person " + (i + 1)} EMI`}
+                  placeholder={autoEmi(i)}
+                  value={r.emi ?? ""}
+                  onChange={(e) => setRow(i, { emi: e.target.value })}
+                  className={cn(LOAN_EMI_INPUT, "h-9 tabular-nums")}
+                />
+              </div>
+            ) : (
+              <span className="border-l border-border px-3 py-1.5 text-right text-sm font-medium text-foreground/85 tabular-nums">
+                {installmentShares[i] ? formatCurrency(installmentShares[i]) : "—"}
+              </span>
+            )}
             <button
               type="button"
               aria-label="Remove row"
@@ -162,7 +231,7 @@ function AllocationTable({ form, people, onChange }: { form: LoanEmiAddForm; peo
       <div className="flex flex-wrap gap-2">
         <button
           type="button"
-          onClick={() => onChange({ allocationRows: [...rows, { personId: "", value: "" }] })}
+          onClick={() => onChange({ allocationRows: [...rows, { personId: "", value: "", emi: "" }] })}
           disabled={people.length === 0 || used.size >= people.length}
           className="inline-flex h-8 items-center gap-1.5 rounded-[6px] border border-border-strong bg-card px-3 text-[13px] font-semibold text-foreground outline-none hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
         >
@@ -172,7 +241,7 @@ function AllocationTable({ form, people, onChange }: { form: LoanEmiAddForm; peo
         {!hasMe && (
           <button
             type="button"
-            onClick={() => onChange({ allocationRows: [{ personId: null, value: "" }, ...rows] })}
+            onClick={() => onChange({ allocationRows: [{ personId: null, value: "", emi: "" }, ...rows] })}
             className="inline-flex h-8 items-center gap-1.5 rounded-[6px] border border-border-strong bg-card px-3 text-[13px] font-semibold text-foreground outline-none hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring"
           >
             <Plus className="size-3.5" />
@@ -185,6 +254,18 @@ function AllocationTable({ form, people, onChange }: { form: LoanEmiAddForm; peo
         <Line label="Loan amount" amount={principal} />
         <Line label="Allocated" amount={result.allocated} />
         <Line label="Remaining to allocate" amount={result.remaining} tone={result.remaining !== 0 ? "expense" : undefined} strong />
+        {customEmis && (
+          <>
+            <Line label={`Loan EMI / ${perUnit === "wk" ? "week" : "month"}`} amount={totalInstallment} />
+            <Line label="EMIs allocated" amount={allocatedEmi} />
+            <Line
+              label="EMI remaining"
+              amount={Math.round((totalInstallment - allocatedEmi) * 100) / 100}
+              tone={Math.abs(totalInstallment - allocatedEmi) >= 1 ? "expense" : undefined}
+              strong
+            />
+          </>
+        )}
       </dl>
       {result.error && principal > 0 && (
         <p role="alert" className="text-xs font-semibold text-expense">

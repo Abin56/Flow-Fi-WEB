@@ -85,7 +85,7 @@ export function EmiScheduleDialog({ open, onOpenChange, row, onDelete, onRecordP
           <DialogTitle className="font-heading text-lg font-semibold">{row.emi.name}</DialogTitle>
           <DialogDescription className="text-muted-foreground">
             {row.emi.lenderName ?? EMI_TYPE_LABEL[row.emi.loanType]}
-            {interest ? ` · ${interest.ratePercent}% p.a. ${interest.type === "flat" ? "flat" : "reducing"}` : " · No interest"}
+            {interest ? ` · ${+interest.ratePercent.toFixed(2)}% ${interest.period === "monthly" ? "p.m." : "p.a."} ${interest.type === "flat" ? "flat" : "reducing"}` : " · No interest"}
           </DialogDescription>
         </DialogHeader>
 

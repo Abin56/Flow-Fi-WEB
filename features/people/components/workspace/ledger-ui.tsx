@@ -64,6 +64,55 @@ export function InlineReveal({ open, children, className }: { open: boolean; chi
   );
 }
 
+const PEOPLE_DRAWER_WIDTH = { md: "sm:max-w-[640px]", lg: "sm:max-w-[920px]", xl: "sm:max-w-[1040px]" } as const;
+
+/**
+ * Right-side drawer for a person's actions (Record payment, Add, Split, Share) — the same slide-in experience as
+ * Add Transaction / Account / Card / Loan. The panel inside keeps its own header, close button and footer; the
+ * drawer flattens its outer card (no margin, border or radius) so the panel *is* the drawer surface.
+ */
+export function PeopleDrawer({
+  open,
+  onOpenChange,
+  title,
+  width = "md",
+  id,
+  children,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** Screen-reader title (the panel shows its own visible heading). */
+  title: string;
+  width?: keyof typeof PEOPLE_DRAWER_WIDTH;
+  id?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        id={id}
+        showCloseButton={false}
+        overlayClassName="bg-black/20 backdrop-blur-none dark:bg-black/45"
+        className={cn(
+          "flex flex-col gap-0 overflow-hidden bg-card p-0",
+          // One hairline all round (a ring follows the rounded corner evenly; a left-only border thins out on the curve).
+          "top-0 right-0 left-auto h-dvh max-h-dvh w-full max-w-full translate-x-0 translate-y-0 rounded-none border-0 ring-1 ring-black/[0.06] dark:ring-white/10",
+          "shadow-[-24px_0_60px_-20px_rgba(0,0,0,0.45)] duration-300 ease-out data-open:slide-in-from-right data-closed:slide-out-to-right data-closed:duration-200",
+          "sm:rounded-l-[16px]",
+          PEOPLE_DRAWER_WIDTH[width],
+        )}
+      >
+        <DialogTitle className="sr-only">{title}</DialogTitle>
+        <DialogDescription className="sr-only">{title}</DialogDescription>
+        {/* No accent strip: each panel's own header is the top edge, so the drawer reads as one calm surface. */}
+        <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain scroll-smooth scroll-pt-4 scroll-pb-24 [&>*]:mt-0! [&>*]:min-h-full [&>*]:overflow-visible! [&>*]:rounded-none! [&>*]:border-0!">
+          {children}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 /** The frame of an inline action panel — title, one line of context, a close button. */
 export function InlinePanel({
   title,
@@ -82,16 +131,16 @@ export function InlinePanel({
   className?: string;
 }) {
   return (
-    <div className={cn("mt-4 overflow-hidden rounded-[8px] border border-border-strong bg-card", className)}>
-      <div className="flex items-start justify-between gap-3 border-b border-border px-4 py-3">
+    <div className={cn("mt-4 flex flex-col overflow-hidden rounded-[8px] border border-border-strong bg-card", className)}>
+      <div className="sticky top-0 z-10 flex items-start justify-between gap-3 border-b border-border bg-card bg-gradient-to-b from-primary/20 to-card px-4 py-3.5 sm:px-5">
         <div className="min-w-0">
-          <h3 className="font-heading text-[15px] leading-tight font-semibold tracking-tight text-foreground">{title}</h3>
+          <h3 className="font-heading text-base leading-tight font-semibold tracking-tight text-foreground">{title}</h3>
           {subtitle && <p className="mt-0.5 text-xs text-foreground/70">{subtitle}</p>}
         </div>
         <WsCloseButton onClick={onClose} className="-my-0.5" />
       </div>
-      <div className="px-4 pt-3.5 pb-3">{children}</div>
-      <div className="flex items-center justify-end gap-2 border-t border-border px-4 py-2.5">{footer}</div>
+      <div className="flex-1 px-4 pt-4 pb-4 sm:px-5">{children}</div>
+      <div className="sticky bottom-0 z-10 flex items-center justify-end gap-2 border-t border-border bg-card px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-5">{footer}</div>
     </div>
   );
 }
@@ -278,7 +327,7 @@ export function AccountField({
         <SelectContent>
           {choice.accounts.map((a) => (
             <SelectItem key={a.id} value={a.id}>
-              <AccountLabel account={a} />
+              <AccountLabel account={a} suffix={a.accountNumberLast4 ? `•••• ${a.accountNumberLast4}` : undefined} />
             </SelectItem>
           ))}
         </SelectContent>

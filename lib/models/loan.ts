@@ -353,7 +353,7 @@ export function loanToFirestore(loan: Loan): DocumentData {
     payerPersonId: loan.payerPersonId ?? null,
     beneficiaryPersonId: loan.beneficiaryPersonId ?? null,
     ...(loan.beneficiaryRepaysInstallments === true ? { beneficiaryRepaysInstallments: true } : {}),
-    ...(loan.ownershipShares != null && loan.ownershipShares.length > 0 ? { ownershipShares: loan.ownershipShares.map((x) => ({ personId: x.personId, amount: x.amount })) } : {}),
+    ...(loan.ownershipShares != null && loan.ownershipShares.length > 0 ? { ownershipShares: loan.ownershipShares.map((x) => ({ personId: x.personId, amount: x.amount, ...(x.installmentAmount != null ? { installmentAmount: x.installmentAmount } : {}) })) } : {}),
     loanAmount: loan.loanAmount,
     interest: loan.interest == null ? null : loanInterestToMap(loan.interest),
     loanDate: Timestamp.fromDate(loan.loanDate),

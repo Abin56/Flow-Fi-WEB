@@ -82,9 +82,9 @@ function setup() {
 }
 
 const amountInput = () => screen.getByLabelText(/^Amount received$/);
-const applyInput = () => screen.getByLabelText("Apply to balance") as HTMLInputElement;
+const applyInput = () => screen.getByLabelText("Total paying now") as HTMLInputElement;
 const cta = () => screen.getByRole("button", { name: /^Record|Saving/ });
-const linesOf = (input: RecordPaymentInput) => Object.fromEntries(input.lines.map((l) => [l.key, l.amount]));
+const linesOf =(input: RecordPaymentInput) => Object.fromEntries(input.lines.map((l) => [l.key, l.amount]));
 
 describe("timingOf — selected People cycle (inclusive boundaries)", () => {
   it("before start = carried, inside (incl. 17 Sep and 16 Oct) = cycle, after 16 Oct = later", () => {
@@ -98,7 +98,7 @@ describe("timingOf — selected People cycle (inclusive boundaries)", () => {
 describe("Record Payment from a selected cycle — scope is that cycle's due, never all-time", () => {
   it("Due shows ₹4,000 (carried ₹1,000 + this cycle ₹3,000), not the ₹6,000 all-time balance", () => {
     setup();
-    expect(screen.getByText("Due from AMMA").parentElement?.textContent).toContain("4,000");
+    expect(screen.getByTestId("rp-due-total").textContent).toContain("4,000");
     expect(screen.queryByText(/6,000/)).toBeNull();
   });
 
@@ -140,7 +140,7 @@ describe("Record Payment from a selected cycle — scope is that cycle's due, ne
     await user.type(amountInput(), "6000");
     expect(applyInput().value).toBe("4000");
     await user.click(screen.getByRole("button", { name: /Show 1 upcoming item/ }));
-    await user.click(screen.getByLabelText("Apply to ledger:oct-next"));
+    await user.click(screen.getByRole("button", { name: "Pay ledger:oct-next in full" }));
     expect(applyInput().value).toBe("6000");
     await user.click(cta());
     expect(linesOf(onSubmit.mock.calls[0][0])).toEqual({ "ledger:aug-carried": 1000, "ledger:sep-share": 3000, "ledger:oct-next": 2000 });
@@ -164,7 +164,7 @@ describe("Record Payment from a selected cycle — scope is that cycle's due, ne
     );
     await user.clear(amountInput());
     await user.type(amountInput(), "3000");
-    await user.click(screen.getByRole("button", { name: /Settle full/ }));
+    await user.click(screen.getByRole("button", { name: "Oldest first" }));
     await user.click(screen.getByRole("button", { name: /^Save|^Update|Saving/ }));
     const [input, id] = onSubmit.mock.calls[0];
     expect(id).toBe("p1");
@@ -205,8 +205,8 @@ describe("Remainders and reminders from the selected cycle — future ₹2,000 a
   it("B. income remainder: ₹10,000 → ₹4,000 settles the cycle, ₹6,000 recorded as income", async () => {
     const { user, onSubmit } = setup();
     await user.type(amountInput(), "10000");
-    await user.click(screen.getByRole("radio", { name: /Record as income/ }));
-    await user.selectOptions(screen.getByLabelText("Category *"), "gift");
+    await user.selectOptions(screen.getAllByLabelText(/^Use for —/)[0], "income");
+    await user.selectOptions(screen.getByLabelText("Income category"), "gift");
     await user.click(cta());
     const input = onSubmit.mock.calls[0][0];
     expect(linesOf(input)).toEqual({ "ledger:aug-carried": 1000, "ledger:sep-share": 3000 });
@@ -216,8 +216,8 @@ describe("Remainders and reminders from the selected cycle — future ₹2,000 a
   it("C. purpose remainder: ₹10,000 → ₹4,000 settles the cycle, ₹6,000 set aside", async () => {
     const { user, onSubmit } = setup();
     await user.type(amountInput(), "10000");
-    await user.click(screen.getByRole("radio", { name: /Set aside for something/ }));
-    await user.type(screen.getByLabelText("What is this money for? *"), "Hospital");
+    await user.selectOptions(screen.getAllByLabelText(/^Use for —/)[0], "purpose");
+    await user.type(screen.getByLabelText("What is this money for?"), "Hospital");
     await user.clear(screen.getByLabelText("Purpose amount"));
     await user.type(screen.getByLabelText("Purpose amount"), "6000");
     await user.click(cta());

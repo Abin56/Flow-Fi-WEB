@@ -89,6 +89,7 @@ import { PersonPaymentRepository } from "./person-payment-repository";
 import { PurposeFundRepository } from "./purpose-fund-repository";
 import { purposeFundFromFirestore, purposeFundToFirestore, type PurposeFund } from "@/lib/models/purpose-fund";
 import { personFollowUpFromFirestore, personFollowUpToFirestore, type PersonFollowUp } from "@/lib/models/person-follow-up";
+import { paymentDeferralFromFirestore, paymentDeferralToFirestore, type PersonPaymentDeferral } from "@/lib/models/person-payment-deferral";
 import { SavingsRepository } from "./savings-repository";
 import { InstallmentPaymentRepository, InstallmentRepository, PaymentScheduleRepository } from "./payment-schedule-repository";
 import { TransactionRepository } from "./transaction-repository";
@@ -607,6 +608,18 @@ const personFollowUpConverter: FirestoreDataConverter<PersonFollowUp> = {
 export function createPersonFollowUpsCollection(uid: string, personId: string) {
   return collection(db, FirestoreCollections.users, uid, FirestoreCollections.people, personId, FirestoreCollections.followUps).withConverter(
     personFollowUpConverter,
+  );
+}
+
+const paymentDeferralConverter: FirestoreDataConverter<PersonPaymentDeferral> = {
+  toFirestore: paymentDeferralToFirestore,
+  fromFirestore: paymentDeferralFromFirestore,
+};
+
+/** Payment deferrals (`PersonPaymentDeferral`) — a per-person `people/{personId}/paymentDeferrals` subcollection, timing metadata only. Written only by `PaymentDeferralRepository`. */
+export function createPaymentDeferralsCollection(uid: string, personId: string) {
+  return collection(db, FirestoreCollections.users, uid, FirestoreCollections.people, personId, FirestoreCollections.paymentDeferrals).withConverter(
+    paymentDeferralConverter,
   );
 }
 

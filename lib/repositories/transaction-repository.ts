@@ -24,6 +24,7 @@ import {
   balanceEffect,
   hasAccountLeg,
   PERSON_FUNDED_ACCOUNT_ID,
+  transferFeeIdFor,
   type Transaction,
   type TransactionSource,
   type TransactionStatus,
@@ -327,6 +328,36 @@ export interface TransferPairParams {
    * full-outstanding / beyond-statement payment and for an ordinary Add Transfer.
    */
   cardStatementIntent?: CardStatementIntent | null;
+  /**
+   * A fee/charge paid for this transfer (e.g. a payment app's fee for moving card money into my bank). It is
+   * recorded as its own ordinary expense (`Transaction.transferFeeForId`), in the SAME Firestore transaction as
+   * both legs, so the transfer and its fee land, are deleted and are restored together. `chargedTo`:
+   *  - "source"      — charged on top of `amount` to the From account (card charged amount + fee);
+   *  - "destination" — deducted from what arrived (To account receives amount − fee).
+   * `amount` is always the transfer principal, identical on both legs.
+   */
+  fee?: TransferFeeParams | null;
+}
+
+export interface TransferFeeParams {
+  amount: number;
+  chargedTo: "source" | "destination";
+  categoryId: string;
+  description?: string;
+}
+
+/** Thrown when a transfer fee can't be recorded as given — nothing is written. */
+export class TransferFeeInvalidError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TransferFeeInvalidError";
+  }
+}
+
+function assertTransferFeeValid(amount: number, fee: TransferFeeParams): void {
+  if (!(fee.amount > 0) || Math.round(fee.amount * 100) / 100 !== fee.amount) throw new TransferFeeInvalidError("Enter a fee greater than 0 with at most 2 decimal places.");
+  if (fee.chargedTo === "destination" && fee.amount >= amount) throw new TransferFeeInvalidError("A fee deducted from the amount received must be less than the transfer amount.");
+  if (!fee.categoryId) throw new TransferFeeInvalidError("Select a category for the fee.");
 }
 
 const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
@@ -552,21 +583,48 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
       sourceLeg = { ...sourceLeg, id: ids.sourceLegId };
       destinationLeg = { ...destinationLeg, id: ids.destinationLegId };
     }
+    const fee = params.fee ?? null;
+    if (fee) assertTransferFeeValid(params.amount, fee);
+    // The fee is an ordinary counted expense (no transferId) on the account that actually paid it.
+    const feeTransaction: Transaction | null = fee
+      ? {
+          ...TransactionRepository.buildTransaction({
+            type: "expense",
+            amount: fee.amount,
+            dateTime: params.dateTime,
+            accountId: fee.chargedTo === "source" ? params.sourceAccountId : params.destinationAccountId,
+            categoryId: fee.categoryId,
+            description: fee.description ?? "Transfer fee",
+            notes: params.notes ?? "",
+            accountingMonth: params.accountingMonth,
+            isBusiness: params.isBusiness,
+          }),
+          id: transferFeeIdFor(transferId),
+          transferFeeForId: transferId,
+        }
+      : null;
 
     return runTransaction(this.collection.firestore, async (tx): Promise<[Transaction, Transaction]> => {
       const sourceLegRef = doc(this.collection, sourceLeg.id);
       const destinationLegRef = doc(this.collection, destinationLeg.id);
+      const feeRef = doc(this.collection, transferFeeIdFor(transferId));
       if (ids) {
         // Already recorded by this same action → return it; nothing is written twice.
-        const [outSnap, inSnap] = [await tx.get(sourceLegRef), await tx.get(destinationLegRef)];
+        const [outSnap, inSnap, feeSnap] = [await tx.get(sourceLegRef), await tx.get(destinationLegRef), await tx.get(feeRef)];
         if (outSnap.exists() && inSnap.exists()) {
           const [out, inn] = [outSnap.data(), inSnap.data()];
-          // Only the SAME operation is returned; edited amount / accounts / date after an uncertain save is refused.
+          const savedFee = feeSnap.exists() ? feeSnap.data() : null;
+          // Only the SAME operation is returned; edited amount / accounts / date / fee after an uncertain save is refused.
+          const sameFee =
+            feeTransaction == null
+              ? savedFee == null
+              : savedFee != null && Math.abs(savedFee.amount - feeTransaction.amount) < 0.005 && savedFee.accountId === feeTransaction.accountId;
           const same =
             Math.abs(out.amount - params.amount) < 0.005 &&
             out.accountId === params.sourceAccountId &&
             inn.accountId === params.destinationAccountId &&
-            out.dateTime.getTime() === params.dateTime.getTime();
+            out.dateTime.getTime() === params.dateTime.getTime() &&
+            sameFee;
           if (!same) throw new TransferRetryMismatchError(out);
           return [out, inn];
         }
@@ -577,10 +635,15 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
       const destinationSnap = await tx.get(destinationRef);
       if (!sourceSnap.exists() || !destinationSnap.exists()) throw new Error("Account not found");
       await this.guardCardPayment(tx, destinationLeg, destinationSnap.data(), params.peopleGateAcknowledgement, params.cardStatementIntent);
-      tx.set(sourceRef, this.accountRepository.applyBalanceDelta(sourceSnap.data(), balanceEffect(sourceLeg)));
-      tx.set(destinationRef, this.accountRepository.applyBalanceDelta(destinationSnap.data(), balanceEffect(destinationLeg)));
+      // --- writes --- (the fee's effect is netted into the same account write as its leg)
+      const feeEffect = feeTransaction ? balanceEffect(feeTransaction) : 0;
+      const sourceDelta = balanceEffect(sourceLeg) + (fee?.chargedTo === "source" ? feeEffect : 0);
+      const destinationDelta = balanceEffect(destinationLeg) + (fee?.chargedTo === "destination" ? feeEffect : 0);
+      tx.set(sourceRef, this.accountRepository.applyBalanceDelta(sourceSnap.data(), sourceDelta));
+      tx.set(destinationRef, this.accountRepository.applyBalanceDelta(destinationSnap.data(), destinationDelta));
       tx.set(sourceLegRef, sourceLeg);
       tx.set(destinationLegRef, destinationLeg);
+      if (feeTransaction) tx.set(feeRef, feeTransaction);
       return [sourceLeg, destinationLeg];
     });
   }
@@ -598,7 +661,7 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
     }
     // A card bill payment (or any keyed action) never takes the two-write path below: it must be atomic
     // and pass the card People gate before anything changes. Ordinary transfers are unchanged.
-    if (params.idempotencyKey != null || (this.cardPaymentGuard != null && (await this.accountRepository.getByKey(params.destinationAccountId))?.type === "card")) {
+    if (params.idempotencyKey != null || params.fee != null || (this.cardPaymentGuard != null && (await this.accountRepository.getByKey(params.destinationAccountId))?.type === "card")) {
       return this.createTransferPairAtomic(params);
     }
 
@@ -988,7 +1051,19 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
       throw new LoanPaymentTransactionRestrictedError();
     }
     const db = this.collection.firestore;
+    // A transfer's fee only exists alongside its transfer: while the transfer is deleted, the fee comes back
+    // with it (`restoreTransferPair`), never alone as a stray expense.
+    const feeOf = transaction.transferFeeForId ?? null;
+    const transferLegs = feeOf != null ? safeDocs((await getDocs(query(this.collection, where("transferId", "==", feeOf), limit(4)))).docs) : [];
     await runTransaction(db, async (tx) => {
+      if (feeOf != null) {
+        let transferLive = false;
+        for (const t of transferLegs) {
+          const fresh = await this.getInTransaction(tx, t.id);
+          if (fresh != null && fresh.deletedAt == null) transferLive = true;
+        }
+        if (!transferLive) throw new TransferFeeInvalidError("This fee belongs to a transfer that is deleted. Restore the transfer instead — its fee comes back with it.");
+      }
       await this.restoreTransactionInTransaction(tx, transaction);
     });
   }
@@ -1023,15 +1098,26 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
    */
   async deleteTransferPair(transaction: Transaction): Promise<void> {
     const sibling = await this.findTransferSibling(transaction);
+    const feeId = transaction.transferId != null ? transferFeeIdFor(transaction.transferId) : null;
+    const feeOwnerCandidates = feeId != null ? await this.splitOwnerCandidates(feeId) : [];
     await runTransaction(this.collection.firestore, async (tx) => {
       const leg = await this.getInTransaction(tx, transaction.id);
       if (leg == null) throw new Error("Transaction not found");
       if (leg.deletedAt == null && moneyFieldsDiffer(leg, transaction)) throw new TransactionChangedError();
       const other = sibling ? await this.getInTransaction(tx, sibling.id) : null;
-      const live = [leg, other].filter(
+      const pairLegs = [leg, other].filter(
         (t): t is Transaction => t != null && t.deletedAt == null && t.transferId != null && t.transferId === leg.transferId,
       );
-      if (live.length === 0) return;
+      if (pairLegs.length === 0) return;
+      // The transfer's fee (if any, and still live) goes with it — never left behind as a stray expense. A fee
+      // since handed to People / a split is owned there: refuse rather than orphan that owner's state.
+      const fee = feeId != null ? await this.getInTransaction(tx, feeId) : null;
+      const liveFee = fee != null && fee.deletedAt == null && fee.transferFeeForId === leg.transferId ? fee : null;
+      if (liveFee) {
+        const owner = declaredTransactionOwner(liveFee) ?? ((await this.splitOwnedInTransaction(tx, liveFee.id, feeOwnerCandidates)) ? "split" : null);
+        if (owner != null) throw new OwnedTransactionDeleteError(owner);
+      }
+      const live = liveFee ? [...pairLegs, liveFee] : pairLegs;
       const accounts = new Map<string, Account>();
       for (const id of new Set(live.filter(hasAccountLeg).map((t) => t.accountId))) {
         const snap = await tx.get(this.accountRepository.docRef(id));
@@ -1058,10 +1144,16 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
       const leg = await this.getInTransaction(tx, transaction.id);
       if (leg == null) throw new Error("Transaction not found");
       const other = sibling ? await this.getInTransaction(tx, sibling.id) : null;
-      const trashed = [leg, other].filter(
+      const pairLegs = [leg, other].filter(
         (t): t is Transaction => t != null && t.deletedAt != null && t.transferId != null && t.transferId === leg.transferId,
       );
-      if (trashed.length === 0) return;
+      if (pairLegs.length === 0) return;
+      // The fee comes back only when it was deleted TOGETHER with the transfer (same `deletedAt`, written by
+      // `deleteTransferPair`) — a fee the user reversed on its own beforehand stays reversed.
+      const fee = leg.transferId != null ? await this.getInTransaction(tx, transferFeeIdFor(leg.transferId)) : null;
+      const deletedTogether =
+        fee != null && fee.deletedAt != null && fee.transferFeeForId === leg.transferId && leg.deletedAt != null && fee.deletedAt.getTime() === leg.deletedAt.getTime();
+      const trashed = deletedTogether ? [...pairLegs, fee] : pairLegs;
       const accounts = new Map<string, Account>();
       for (const id of new Set(trashed.filter(hasAccountLeg).map((t) => t.accountId))) {
         const snap = await tx.get(this.accountRepository.docRef(id));

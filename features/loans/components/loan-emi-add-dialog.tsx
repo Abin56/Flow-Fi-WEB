@@ -42,6 +42,7 @@ import {
   buildLoanEmiCreateRequest,
   emptyLoanEmiAddForm,
   loanEmiAddError,
+  effectiveRate,
   previewInstallment,
   type AddKind,
   type CardEmiKind,
@@ -326,11 +327,13 @@ export function LoanEmiAddDialog({ open, onOpenChange, initialKind = null }: Loa
             icon={CalendarClock}
             aside={
               preview && (
-                <span className="flex items-baseline gap-1 text-xs text-muted-foreground">
-                  ≈ <Money amount={preview.perInstallment} className="text-sm text-foreground" /> / {form.frequency === "weekly" ? "week" : "month"}
+                <span className="text-xs text-muted-foreground">
+                  {form.frequency === "weekly" ? "Weekly" : "EMI"} ≈ <Money amount={preview.perInstallment} className="text-sm text-foreground" /> / {form.frequency === "weekly" ? "week" : "month"}
                   {preview.interest > 0 && (
                     <>
-                      <span aria-hidden>·</span> + <Money amount={preview.interest} className="text-xs text-foreground" /> interest
+                      {" "}
+                      {/* Total over the whole loan — already inside the EMI above, not added on top of it. */}
+                      <span aria-hidden>·</span> total interest <Money amount={preview.interest} className="text-xs text-foreground" />
                     </>
                   )}
                 </span>
@@ -404,16 +407,71 @@ export function LoanEmiAddDialog({ open, onOpenChange, initialKind = null }: Loa
             </div>
             {form.hasInterest && (
               <Reveal className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <Field label="Interest rate (% per year)">
-                  <input
-                    type="number"
-                    inputMode="decimal"
-                    className={LOAN_EMI_INPUT}
-                    placeholder="e.g. 10.5"
-                    value={form.ratePercent}
-                    onChange={(e) => set({ ratePercent: e.target.value })}
+                <FieldGroup
+                  label={form.rateInput === "emi" ? "EMI I actually pay" : "Interest rate (%)"}
+                  hint={
+                    form.rateInput === "emi"
+                      ? (() => {
+                          const r = effectiveRate(form);
+                          if (r) return `Works out to ${r.ratePercent.toFixed(2)}% ${r.period === "monthly" ? "per month" : "per year"}, incl. GST/fees.`;
+                          const emi = Number(form.emiAmount);
+                          const count = Math.floor(Number(form.count));
+                          // Re-checked on every change to amount / installments, not just on save.
+                          if (emi > 0 && count > 0 && emi * count < Number(form.amount)) {
+                            return `₹${emi.toLocaleString("en-IN")} × ${count} is less than the amount — check the EMI or installments.`;
+                          }
+                          return "Exactly what's debited each time — GST and fees included.";
+                        })()
+                      : "Rates like 1.5–3% from loan apps are usually per month."
+                  }
+                >
+                  <SegmentedControl<"rate" | "emi">
+                    ariaLabel="I know the"
+                    size="sm"
+                    className="mb-2"
+                    options={[
+                      { value: "rate", label: "I know the rate" },
+                      { value: "emi", label: "I know my EMI" },
+                    ]}
+                    value={form.rateInput}
+                    onChange={(v) => set({ rateInput: v })}
                   />
-                </Field>
+                  {form.rateInput === "emi" ? (
+                    <input
+                      type="number"
+                      inputMode="decimal"
+                      aria-label="EMI amount"
+                      className={LOAN_EMI_INPUT}
+                      placeholder="e.g. 5683"
+                      value={form.emiAmount}
+                      onChange={(e) => set({ emiAmount: e.target.value })}
+                    />
+                  ) : (
+                  /* Wraps the toggle under the input when the column is narrow, so the number never gets squeezed. */
+                  <div className="flex flex-wrap gap-2">
+                    <input
+                      type="number"
+                      inputMode="decimal"
+                      aria-label="Interest rate"
+                      className={cn(LOAN_EMI_INPUT, "min-w-[7rem] flex-1 basis-28")}
+                      placeholder={form.ratePeriod === "monthly" ? "e.g. 1.5" : "e.g. 10.5"}
+                      value={form.ratePercent}
+                      onChange={(e) => set({ ratePercent: e.target.value })}
+                    />
+                    <SegmentedControl<"yearly" | "monthly">
+                      ariaLabel="Rate quoted per"
+                      size="sm"
+                      className="shrink-0"
+                      options={[
+                        { value: "yearly", label: "/ year" },
+                        { value: "monthly", label: "/ month" },
+                      ]}
+                      value={form.ratePeriod}
+                      onChange={(v) => set({ ratePeriod: v })}
+                    />
+                  </div>
+                  )}
+                </FieldGroup>
                 <FieldGroup label="Interest type" hint="Most bank loans use reducing balance.">
                   <SegmentedControl<InterestType>
                     ariaLabel="Interest type"

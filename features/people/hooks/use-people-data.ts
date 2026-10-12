@@ -601,11 +601,12 @@ export function usePeopleActions() {
           obligationRef?: string | null;
         },
         accountId: string,
+        /** Category the user picked for the cash leg; omitted = Personal Loan. */
+        categoryId?: string,
       ) => {
         const ledgerRepository = createLedgerRepository(uid, person.id, personRepository);
         const transactionRepository = createTransactionRepository(uid, accountRepository);
-        const categoryRepository = createCategoryRepository(uid);
-        const category = await categoryRepository.getOrCreatePersonalLoanCategory();
+        const category = categoryId ? { id: categoryId } : await createCategoryRepository(uid).getOrCreatePersonalLoanCategory();
         // "borrowed"/"receivedBack" is cash coming IN (income); "gave"/"repaid" is cash going OUT (expense).
         const transactionType: TransactionType = params.type === "borrowed" || params.type === "receivedBack" ? "income" : "expense";
         return ledgerRepository.addEntryWithTransaction(

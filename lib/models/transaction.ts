@@ -144,6 +144,20 @@ export interface Transaction extends SoftDeletableEntity {
    * document the mobile app writes behaves exactly as before. See `isPersonFunded`.
    */
   fundedByPersonId?: string | null;
+  /**
+   * Set only on the fee/charge expense recorded together with a transfer between my own accounts (e.g. a
+   * payment app's fee for moving credit-card money into my bank account): the `transferId` of that transfer.
+   * The fee itself is an ordinary, counted expense (My Spend, categories, card statement when it sits on the
+   * card) — only the transfer's principal is neutral. Its document id is always `transferFeeIdFor(transferId)`,
+   * so the transfer's delete/restore can find it inside one Firestore transaction. Additive, web-only,
+   * optional: absent/null on every other document, which keeps its exact shape.
+   */
+  transferFeeForId?: string | null;
+}
+
+/** The document id of the fee expense belonging to the transfer `transferId` (see `Transaction.transferFeeForId`). */
+export function transferFeeIdFor(transferId: string): string {
+  return `${transferId}_fee`;
 }
 
 /** The `accountId` stored on a person-funded expense — it has no account (never a real account id). */
@@ -279,6 +293,7 @@ export function transactionFromFirestore(
       data.paymentAllocationType == null ? null : paymentAllocationTypeFromName(data.paymentAllocationType as string),
     isPersonLedgerMovement: (data.isPersonLedgerMovement as boolean | undefined) ?? false,
     fundedByPersonId: (data.fundedByPersonId as string | undefined) ?? null,
+    transferFeeForId: (data.transferFeeForId as string | undefined) ?? null,
     deletedAt: (data.deletedAt as Timestamp | undefined)?.toDate() ?? null,
     lastEditedAt: (data.lastEditedAt as Timestamp | undefined)?.toDate() ?? null,
     editHistory: ((data.editHistory as Record<string, unknown>[] | undefined) ?? []).map(auditEntryFromMap),
@@ -313,6 +328,7 @@ export function transactionToFirestore(transaction: Transaction): DocumentData {
     isPersonLedgerMovement: transaction.isPersonLedgerMovement,
     // Written only when set — legacy / account-funded documents keep their exact shape.
     ...(transaction.fundedByPersonId != null ? { fundedByPersonId: transaction.fundedByPersonId } : {}),
+    ...(transaction.transferFeeForId != null ? { transferFeeForId: transaction.transferFeeForId } : {}),
     deletedAt: transaction.deletedAt == null ? null : Timestamp.fromDate(transaction.deletedAt),
     lastEditedAt: transaction.lastEditedAt == null ? null : Timestamp.fromDate(transaction.lastEditedAt),
     editHistory: transaction.editHistory.map(auditEntryToMap),

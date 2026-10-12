@@ -1,22 +1,23 @@
 "use client";
 
 /**
- * Record Payment → "What should happen to this money?" — the extra divided across destinations
- * (keep for a purpose, record as income, keep as advance), each a compact row with Edit / Remove, and a
- * live summary (extra received · assigned · left to assign). Nothing here moves money: it only decides
- * what the one receipt means. Numbers and validation come from `planExtraAllocation`.
+ * Record Payment → "What to do with the money left" — the received money not applied to bills, divided across
+ * destinations (keep as advance, add as income, set aside for something). One compact row per destination,
+ * edited in place: what it is, its amount, remove; a purpose's optional details (and an income's description)
+ * open under their row on request. Nothing here moves money: it only decides what the one receipt means.
+ * Numbers and validation come from `planExtraAllocation`.
  */
 
-import { Check, ChevronDown, CircleAlert, Pencil, PiggyBank, Plus, ReceiptText, Target, X } from "lucide-react";
-import { useId, useRef, useState } from "react";
+import { Check, ChevronDown, CircleAlert, Plus, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { DateInput } from "@/components/forms/date-input";
 import { money } from "@/lib/engines/person-cycle-statement-share";
 import { addableKinds, planExtraAllocation, type ExtraAllocation, type ExtraAllocationKind, type ExtraAllocationPlan } from "@/lib/engines/extra-allocation";
 import { round2, type PaymentDirection } from "@/lib/engines/person-payment";
 import type { PurposeLink, PurposeLinkKind } from "@/lib/models/purpose-fund";
 import { cn } from "@/lib/utils";
-import { CompactAmountInput } from "./ledger-ui";
-import { WS_FIELD, WS_GHOST, WS_SECONDARY, WsField } from "./person-workspace-ui";
+import { CompactAmountInput, InlineReveal } from "./ledger-ui";
+import { WS_FIELD, WS_GHOST, WsField } from "./person-workspace-ui";
 
 /** What the user is typing — converted to `ExtraAllocation`s by `draftsToAllocations`. */
 export interface AllocationDraft {
@@ -83,53 +84,19 @@ export function draftsToAllocations(drafts: readonly AllocationDraft[], linkOpti
   });
 }
 
-/**
- * Semantic colour per destination — teal = advance (held), green = income, amber = purpose (reserved).
- * Selected state is edge + inset ring + check + bold label, never a pale tint alone.
- */
-const KIND_META: Record<
-  ExtraAllocationKind,
-  { label: string; title: string; icon: typeof Target; edge: string; tone: string; selected: string; chip: string; dot: string }
-> = {
-  advance: {
-    label: "Advance",
-    title: "Keep as advance",
-    icon: PiggyBank,
-    edge: "border-l-settle-advance-edge",
-    tone: "text-settle-advance-text",
-    selected: "border-settle-advance-edge bg-settle-advance-tint/60 shadow-[inset_0_0_0_1px_var(--color-settle-advance-edge)]",
-    chip: "bg-settle-advance-tint text-settle-advance-text",
-    dot: "border-settle-advance-edge bg-settle-advance-edge",
-  },
-  income: {
-    label: "Income",
-    title: "Record as income",
-    icon: ReceiptText,
-    edge: "border-l-success",
-    tone: "text-success",
-    selected: "border-success bg-success/10 shadow-[inset_0_0_0_1px_var(--color-success)]",
-    chip: "bg-success/12 text-success",
-    dot: "border-success bg-success",
-  },
-  purpose: {
-    label: "Set aside",
-    title: "Set aside for something",
-    icon: Target,
-    edge: "border-l-settle-emi-edge",
-    tone: "text-settle-emi-text",
-    selected: "border-settle-emi-edge bg-settle-emi-tint/70 shadow-[inset_0_0_0_1px_var(--color-settle-emi-edge)]",
-    chip: "bg-settle-emi-tint text-settle-emi-text",
-    dot: "border-settle-emi-edge bg-settle-emi-edge",
-  },
+/** Plain names per destination, and its quiet colour (a 3px edge + the dot in the summary). */
+export const KIND_META: Record<ExtraAllocationKind, { label: string; add: string; first: string; edge: string; dot: string }> = {
+  advance: { label: "Advance", add: "Add advance", first: "Keep as advance", edge: "border-l-settle-advance-edge", dot: "bg-settle-advance-edge" },
+  income: { label: "Income", add: "Add income", first: "Add as income", edge: "border-l-success", dot: "bg-success" },
+  purpose: { label: "Set aside", add: "Add purpose", first: "Set aside for something", edge: "border-l-settle-emi-edge", dot: "bg-settle-emi-edge" },
 };
 
 const shortDate = (d: Date) => d.toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
 
 /**
- * "What should happen to this money?" — one decision (three cards), then the destinations it produced as
- * compact rows. Picking a card points the whole remainder at that destination; "Add …" splits it across
- * several. Drafts of a kind you switch away from are kept aside and restored if you switch back, so
- * arrowing through the cards never loses a typed purpose.
+ * The money left, as a short editable list. Adding a destination gives it whatever is still unassigned, so a
+ * split is typed top to bottom (₹444 income, ₹9,500 SBI EMI, the rest Monthly needs) without arithmetic.
+ * A row's kind can be changed in place; an Add or a kind change moves focus to the one field still needed.
  */
 export function ExtraAllocationEditor({
   extra,
@@ -139,7 +106,6 @@ export function ExtraAllocationEditor({
   onChange,
   linkOptions,
   incomeCategories,
-  accountName,
 }: {
   extra: number;
   direction: PaymentDirection;
@@ -148,318 +114,273 @@ export function ExtraAllocationEditor({
   onChange: (next: AllocationDraft[]) => void;
   linkOptions: readonly PurposeLink[];
   incomeCategories: readonly { id: string; name: string }[];
-  accountName: string;
 }) {
   const allocations = draftsToAllocations(drafts, linkOptions);
   const plan = planExtraAllocation({ extra, direction, allocations, money });
-  const [openKey, setOpenKey] = useState<string | null>(null);
-  const stash = useRef<Partial<Record<ExtraAllocationKind, AllocationDraft[]>>>({});
-  const group = useId();
+  const listRef = useRef<HTMLUListElement>(null);
+  // The row whose first needed field takes focus once (after an Add or a kind change) — presentation only.
+  const pendingFocus = useRef<string | null>(null);
+  useEffect(() => {
+    const key = pendingFocus.current;
+    if (!key) return;
+    pendingFocus.current = null;
+    listRef.current?.querySelector<HTMLElement>(`[data-draft="${key}"] [data-first-field]`)?.focus();
+  });
   const addable = addableKinds(direction, allocations);
-  const update = (key: string, patch: Partial<AllocationDraft>) => onChange(drafts.map((d) => (d.key === key ? { ...d, ...patch } : d)));
-
-  const kinds: ExtraAllocationKind[] = direction === "theyPaid" ? ["advance", "income", "purpose"] : ["advance"];
-  const present = new Set(drafts.map((d) => d.kind));
-  const mode: ExtraAllocationKind | "split" | null = drafts.length === 0 ? null : present.size === 1 ? drafts[0].kind : "split";
-
-  function pick(kind: ExtraAllocationKind) {
-    if (mode === kind) return;
-    for (const k of present) if (k !== kind) stash.current[k] = drafts.filter((d) => d.kind === k);
-    const same = drafts.filter((d) => d.kind === kind);
-    const kept = same.length > 0 ? same : (stash.current[kind] ?? []);
-    const next =
-      kept.length === 0
-        ? [newAllocationDraft(kind, extra, kind === "income" ? { description: `Extra money from ${firstName}` } : {})]
-        : kind === "purpose"
-          ? kept
-          : [{ ...kept[0], amount: String(round2(extra)) }];
-    onChange(next);
-    setOpenKey(kind !== "advance" && next.length === 1 ? next[0].key : null);
-  }
+  // Income and set-aside first: they are the choices that need a word from the user; advance is the default.
+  const order: ExtraAllocationKind[] = ["income", "purpose", "advance"];
+  const kindDefaults = (kind: ExtraAllocationKind): Partial<AllocationDraft> => (kind === "income" ? { description: `Extra money from ${firstName}` } : {});
 
   function add(kind: ExtraAllocationKind) {
-    const left = Math.max(0, plan.left);
-    const d = newAllocationDraft(kind, left, kind === "income" ? { description: `Extra money from ${firstName}` } : {});
+    const d = newAllocationDraft(kind, Math.max(0, plan.left), kindDefaults(kind));
     onChange([...drafts, d]);
-    setOpenKey(d.key);
+    if (kind !== "advance") pendingFocus.current = d.key;
   }
 
-  const description: Record<ExtraAllocationKind, string> = {
-    advance: direction === "theyPaid" ? `Use this toward ${firstName}'s future obligations.` : `Counts toward what you'll owe ${firstName} later.`,
-    income: "This money is yours and will be recorded as income.",
-    purpose: "Keep it in your account, but track what it's meant for.",
-  };
+  function changeKind(key: string, kind: ExtraAllocationKind) {
+    onChange(drafts.map((d) => (d.key === key ? { ...newAllocationDraft(kind, 0, kindDefaults(kind)), key: d.key, amount: d.amount } : d)));
+    if (kind !== "advance") pendingFocus.current = key;
+  }
+
+  const update = (key: string, patch: Partial<AllocationDraft>) => onChange(drafts.map((x) => (x.key === key ? { ...x, ...patch } : x)));
+  const kindsTaken = (except: string) => new Set(drafts.filter((d) => d.key !== except).map((d) => d.kind));
+  const offered = order.filter((k) => addable.includes(k));
 
   return (
-    <div className="mt-2.5 space-y-2.5">
-      <fieldset>
-        <legend className="sr-only">What should happen to this money?</legend>
-        <div className={cn("grid gap-2", kinds.length === 3 ? "md:grid-cols-3" : "md:max-w-sm")}>
-          {kinds.map((k) => {
-            const meta = KIND_META[k];
-            const Icon = meta.icon;
-            const checked = mode === k;
-            return (
-              <label
-                key={k}
-                className={cn(
-                  "relative flex min-h-11 cursor-pointer items-start gap-2.5 rounded-[6px] border px-3 py-2.5 transition-colors has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring",
-                  checked ? meta.selected : "border-border-strong bg-card hover:border-muted-foreground hover:bg-secondary/50",
-                )}
-              >
-                <input type="radio" name={group} value={k} checked={checked} onChange={() => pick(k)} className="sr-only" />
-                <span className={cn("mt-px flex size-7 shrink-0 items-center justify-center rounded-[6px]", checked ? meta.chip : "bg-secondary text-foreground/70")}>
-                  <Icon className="size-4" strokeWidth={2} aria-hidden />
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className={cn("block text-sm leading-snug text-foreground", checked ? "font-bold" : "font-semibold")}>{meta.title}</span>
-                  <span className="mt-0.5 block text-xs leading-snug text-foreground/75">{description[k]}</span>
-                </span>
-                <span
-                  aria-hidden
-                  className={cn(
-                    "mt-1 flex size-4 shrink-0 items-center justify-center rounded-full border-2 transition-colors",
-                    checked ? cn(meta.dot, "text-white") : "border-border-strong bg-card",
-                  )}
-                >
-                  {checked && <Check className="size-2.5" strokeWidth={3.5} />}
-                </span>
-              </label>
-            );
-          })}
-        </div>
-      </fieldset>
-
-      {mode === "split" && (
-        <p className="text-xs font-semibold text-foreground/85">
-          Split across {drafts.length} destinations — pick a card above to send all {money(plan.extra)} to one place instead.
-        </p>
+    <div className="overflow-hidden rounded-[10px] border border-border bg-card">
+      {drafts.length > 0 && (
+        <ul ref={listRef} className="divide-y divide-border" aria-label="Uses of the money left">
+          {drafts.map((d, i) => (
+            <DestinationRow
+              key={d.key}
+              d={d}
+              a={allocations[i]}
+              direction={direction}
+              firstName={firstName}
+              linkOptions={linkOptions}
+              incomeCategories={incomeCategories}
+              taken={kindsTaken(d.key)}
+              onKind={(k) => changeKind(d.key, k)}
+              update={(patch) => update(d.key, patch)}
+              onRemove={() => onChange(drafts.filter((x) => x.key !== d.key))}
+            />
+          ))}
+        </ul>
       )}
-
-      <div className="overflow-hidden rounded-[6px] border border-border-strong bg-card">
-        {drafts.length > 0 && (
-          <ul className="divide-y divide-border-strong/70">
-            {drafts.map((d, i) => {
-              const a = allocations[i];
-              const meta = KIND_META[d.kind];
-              const Icon = meta.icon;
-              // Required fields still empty keep the editor open — nothing to collapse to yet.
-              const needsInput = (d.kind === "purpose" && !d.title.trim()) || (d.kind === "income" && !d.categoryId);
-              const open = openKey === d.key || needsInput;
-              const name =
-                a.kind === "purpose"
-                  ? a.title.trim() || "Purpose — not named yet"
-                  : a.kind === "income"
-                    ? a.description.trim() || `Extra money from ${firstName}`
-                    : direction === "theyPaid"
-                      ? `Advance from ${firstName}`
-                      : `Advance paid to ${firstName}`;
-              const detail =
-                a.kind === "purpose"
-                  ? [a.dueDate ? `Due ${shortDate(a.dueDate)}` : "No due date", a.link ? `For ${a.link.label}` : null].filter(Boolean).join(" · ")
-                  : a.kind === "income"
-                    ? `Income · ${incomeCategories.find((c) => c.id === a.categoryId)?.name ?? "choose a category"}`
-                    : direction === "theyPaid"
-                      ? `Held for ${firstName}'s future obligations`
-                      : `Counts toward what you'll owe ${firstName}`;
-              return (
-                <li key={d.key} className={cn("border-l-[3px]", meta.edge)}>
-                  <div className="flex items-center gap-2.5 px-3 py-2">
-                    <Icon className={cn("size-4 shrink-0", meta.tone)} strokeWidth={2.25} aria-hidden />
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-semibold text-foreground">{name}</p>
-                      <p className="truncate text-xs font-medium text-foreground/75">
-                        <span className={cn("font-semibold", meta.tone)}>{meta.label}</span> · {detail}
-                      </p>
-                    </div>
-                    <span className="shrink-0 font-heading text-[15px] font-bold text-foreground tabular-nums">{money(a.amount)}</span>
-                    {!needsInput && (
-                      <button
-                        type="button"
-                        onClick={() => setOpenKey(open ? null : d.key)}
-                        aria-expanded={open}
-                        aria-label={`Edit ${name}`}
-                        className="flex h-8 items-center gap-1 rounded-[5px] px-2 text-xs font-semibold text-foreground/85 outline-none hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring"
-                      >
-                        <Pencil className="size-3.5" aria-hidden /> {open ? "Done" : "Edit"}
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onChange(drafts.filter((x) => x.key !== d.key));
-                        if (open) setOpenKey(null);
-                      }}
-                      aria-label={`Remove ${name}`}
-                      className="flex size-8 items-center justify-center rounded-[5px] text-foreground/85 outline-none hover:bg-secondary hover:text-expense focus-visible:ring-2 focus-visible:ring-ring"
-                    >
-                      <X className="size-4" aria-hidden />
-                    </button>
-                  </div>
-                  {open && (
-                    <div className="border-t border-border-strong/60 bg-secondary/35 px-3 py-2.5">
-                      {d.kind === "purpose" && <PurposeFields d={d} update={(p) => update(d.key, p)} linkOptions={linkOptions} />}
-                      {d.kind === "income" && (
-                        <div className="grid gap-2 sm:grid-cols-[8.5rem_minmax(0,1fr)_minmax(0,1fr)]">
-                          <WsField label="Amount *">
-                            <CompactAmountInput label="Income amount" value={d.amount} onChange={(v) => update(d.key, { amount: v })} />
-                          </WsField>
-                          <WsField label="Description *">
-                            <input className={WS_FIELD} value={d.description} onChange={(e) => update(d.key, { description: e.target.value })} placeholder={`Extra money from ${firstName}`} />
-                          </WsField>
-                          <WsField label="Category *">
-                            <select className={WS_FIELD} value={d.categoryId} onChange={(e) => update(d.key, { categoryId: e.target.value })}>
-                              <option value="">Choose…</option>
-                              {incomeCategories.map((c) => (
-                                <option key={c.id} value={c.id}>
-                                  {c.name}
-                                </option>
-                              ))}
-                            </select>
-                          </WsField>
-                          <p className="text-xs text-foreground/75 sm:col-span-3">
-                            Part of the money already received into <span className="font-semibold text-foreground">{accountName}</span> — classified as income, not received again.
-                          </p>
-                        </div>
-                      )}
-                      {d.kind === "advance" && (
-                        <div className="grid gap-2 sm:grid-cols-[8.5rem_minmax(0,1fr)] sm:items-end">
-                          <WsField label="Amount *">
-                            <CompactAmountInput label="Advance amount" value={d.amount} onChange={(v) => update(d.key, { amount: v })} />
-                          </WsField>
-                          <p className="pb-2 text-xs text-foreground/75">
-                            {direction === "theyPaid" ? `Use this against ${firstName}'s future obligations.` : `Counts toward what you'll owe ${firstName}.`} Applied only when you
-                            choose to.
-                          </p>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
+      <div className={cn("flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 bg-secondary/40 px-3 py-1.5", drafts.length > 0 && "border-t border-border")}>
+        <AllocationSummary plan={plan} />
+        {offered.length > 0 && (
+          <div className="flex flex-wrap gap-1">
+            {offered.map((k) => (
+              <button key={k} type="button" onClick={() => add(k)} className={cn(WS_GHOST, "h-8 px-2 text-xs font-semibold text-foreground/85")}>
+                <Plus className="size-3.5" aria-hidden />
+                {drafts.length === 0 ? KIND_META[k].first : k === "purpose" && drafts.some((x) => x.kind === "purpose") ? "Add another purpose" : KIND_META[k].add}
+              </button>
+            ))}
+          </div>
         )}
-
-        <div className={cn("flex flex-wrap items-center justify-between gap-x-3 gap-y-2 bg-secondary/40 px-3 py-2", drafts.length > 0 && "border-t border-border-strong")}>
-          <AllocationSummary plan={plan} />
-          {addable.length > 0 && (
-            <div className="flex flex-wrap gap-1.5">
-              {addable.map((k) => (
-                <button key={k} type="button" onClick={() => add(k)} className={cn(WS_SECONDARY, "h-8 px-2.5 text-xs font-semibold")}>
-                  <Plus className={cn("size-3.5", KIND_META[k].tone)} aria-hidden />
-                  {k === "purpose" ? (present.has("purpose") ? "Add another purpose" : "Add purpose") : k === "income" ? "Add income" : "Add advance"}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
       </div>
     </div>
   );
 }
 
-/** Purpose + Amount up front; due date, connection and note behind "More details" (summarised when closed). */
-function PurposeFields({ d, update, linkOptions }: { d: AllocationDraft; update: (p: Partial<AllocationDraft>) => void; linkOptions: readonly PurposeLink[] }) {
+/** One destination on one line: its kind, the one thing it needs (a name / a category), its amount, remove. */
+function DestinationRow({
+  d,
+  a,
+  direction,
+  firstName,
+  linkOptions,
+  incomeCategories,
+  taken,
+  onKind,
+  update,
+  onRemove,
+}: {
+  d: AllocationDraft;
+  a: ExtraAllocation;
+  direction: PaymentDirection;
+  firstName: string;
+  linkOptions: readonly PurposeLink[];
+  incomeCategories: readonly { id: string; name: string }[];
+  taken: ReadonlySet<ExtraAllocationKind>;
+  onKind: (k: ExtraAllocationKind) => void;
+  update: (patch: Partial<AllocationDraft>) => void;
+  onRemove: () => void;
+}) {
+  const name = allocationName(a, direction, firstName);
   const [more, setMore] = useState(d.due !== "" || d.note !== "" || d.connectKind !== "");
-  const kinds = (Object.keys(CONNECT_KINDS) as ConnectKind[]).filter((k) => linkOptions.some((o) => CONNECT_KINDS[k].includes(o.kind)));
-  const items = d.connectKind ? linkOptions.filter((o) => connectKindOf(o.kind) === d.connectKind) : [];
+  const kinds: ExtraAllocationKind[] = direction === "theyPaid" ? ["advance", "income", "purpose"] : ["advance"];
   const linked = d.link ? linkOptions.find((o) => encodeLink(o) === d.link) : null;
-  const moreSummary = [d.due ? `Due ${shortDate(fromInputDate(d.due))}` : null, linked ? `Linked to ${linked.label}` : null, d.note.trim() ? "Note added" : null]
-    .filter(Boolean)
-    .join(" · ");
+  const moreSummary =
+    d.kind === "purpose"
+      ? [d.due ? `Use by ${shortDate(fromInputDate(d.due))}` : null, linked ? linked.label : null, d.note.trim() ? "Note" : null].filter(Boolean).join(" · ")
+      : "";
+
   return (
-    <div className="grid gap-2">
-      <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_9rem]">
-        <WsField label="What is this money for? *">
-          <input className={WS_FIELD} value={d.title} onChange={(e) => update({ title: e.target.value })} placeholder="e.g. KSEB bill" />
-        </WsField>
-        <WsField label="Amount *">
-          <CompactAmountInput label="Purpose amount" value={d.amount} onChange={(v) => update({ amount: v })} />
-        </WsField>
-      </div>
+    <li data-draft={d.key} className={cn("border-l-[3px] px-3 py-2 duration-200 ease-out animate-in fade-in slide-in-from-top-1", KIND_META[d.kind].edge)}>
+      <div className="grid grid-cols-[minmax(0,1fr)_7.5rem_auto] items-center gap-x-2 gap-y-1.5 sm:grid-cols-[7.5rem_minmax(0,1fr)_8rem_auto]">
+        <select
+          aria-label={`Use for — ${name}`}
+          value={d.kind}
+          onChange={(e) => onKind(e.target.value as ExtraAllocationKind)}
+          disabled={kinds.length === 1}
+          className={cn(WS_FIELD, "h-9 px-2 font-semibold disabled:opacity-100")}
+        >
+          {kinds.map((k) => (
+            <option key={k} value={k} disabled={k !== "purpose" && taken.has(k)}>
+              {KIND_META[k].label}
+            </option>
+          ))}
+        </select>
 
-      <button
-        type="button"
-        onClick={() => setMore((v) => !v)}
-        aria-expanded={more}
-        className="-mx-1 flex h-8 w-fit items-center gap-1 rounded-[5px] px-1 text-xs font-semibold text-foreground/85 outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-      >
-        <ChevronDown className={cn("size-3.5 transition-transform", more && "rotate-180")} aria-hidden />
-        More details
-        <span className="font-medium text-foreground/65">{moreSummary ? `· ${moreSummary}` : "· due date, link, note (optional)"}</span>
-      </button>
-
-      {more && (
-        <div className="grid gap-2.5 sm:grid-cols-2">
-          <WsField label="Use by (optional)" hint="FlowFi can remind you when this money should be used.">
-            <div className="flex items-center gap-1.5">
-              <DateInput className={WS_FIELD} value={d.due} onChange={(e) => update({ due: e.target.value })} aria-label="Date to use it by" />
-              {d.due && (
-                <button type="button" onClick={() => update({ due: "" })} className={cn(WS_GHOST, "h-9 shrink-0 px-2 text-xs")}>
-                  No date
-                </button>
-              )}
-            </div>
-          </WsField>
-          <div className="flex min-w-0 flex-col gap-1">
-            <span className="text-[11px] font-medium text-muted-foreground">Connect to FlowFi item (optional)</span>
+        {/* The one field the destination needs — under the kind on phones, between kind and amount from sm. */}
+        <div className="order-last col-span-3 min-w-0 sm:order-none sm:col-span-1">
+          {d.kind === "advance" ? (
+            <p className="truncate text-xs text-foreground/75">{direction === "theyPaid" ? `Held for ${firstName}'s future dues` : `Counts toward what you'll owe ${firstName}`}</p>
+          ) : d.kind === "income" ? (
             <select
+              data-first-field
+              aria-label="Income category"
               className={WS_FIELD}
-              value={d.connectKind}
-              onChange={(e) => update({ connectKind: e.target.value as ConnectKind | "", link: "" })}
-              aria-label="Connect to FlowFi item"
+              value={d.categoryId}
+              aria-invalid={!d.categoryId || undefined}
+              onChange={(e) => update({ categoryId: e.target.value })}
             >
-              <option value="">Not linked — standalone purpose</option>
-              {kinds.map((k) => (
-                <option key={k} value={k}>
-                  {CONNECT_LABEL[k]}
+              <option value="">Choose income category…</option>
+              {incomeCategories.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
                 </option>
               ))}
             </select>
-            {d.connectKind && (
-              <select className={WS_FIELD} value={d.link} onChange={(e) => update({ link: e.target.value })} aria-label={CONNECT_LABEL[d.connectKind]}>
-                <option value="">Choose {CONNECT_LABEL[d.connectKind].toLowerCase()}…</option>
-                {items.map((o) => (
-                  <option key={encodeLink(o)} value={encodeLink(o)}>
-                    {o.label}
-                    {d.connectKind === "loanEmi" ? ` · ${o.kind === "loan" ? "Loan" : "EMI"}` : ""}
-                  </option>
-                ))}
-              </select>
-            )}
-            <span className="text-xs text-muted-foreground">
-              {d.connectKind
-                ? "Tracks this money against the chosen item."
-                : "Link this purpose to an existing bill, loan, EMI, card or person payment to track what the money is meant for. Leave it as standalone otherwise."}
-            </span>
-          </div>
-          <WsField label="Note (optional)" className="sm:col-span-2">
-            <input className={WS_FIELD} value={d.note} onChange={(e) => update({ note: e.target.value })} placeholder="e.g. Pay before the 15th" />
-          </WsField>
+          ) : (
+            <input
+              data-first-field
+              aria-label="What is this money for?"
+              className={WS_FIELD}
+              value={d.title}
+              aria-invalid={!d.title.trim() || undefined}
+              onChange={(e) => update({ title: e.target.value })}
+              placeholder="What is it for? e.g. SBI EMI"
+            />
+          )}
         </div>
+
+        <CompactAmountInput
+          label={d.kind === "purpose" ? "Purpose amount" : d.kind === "income" ? "Income amount" : "Advance amount"}
+          value={d.amount}
+          onChange={(v) => update({ amount: v })}
+          invalid={!(Number(d.amount) > 0) || undefined}
+        />
+
+        <div className="flex items-center">
+          {d.kind !== "advance" && (
+            <button
+              type="button"
+              onClick={() => setMore((v) => !v)}
+              aria-expanded={more}
+              aria-label={`More details — ${name}`}
+              title={d.kind === "purpose" ? "Use-by date, link, note" : "Description"}
+              className="flex size-8 shrink-0 items-center justify-center rounded-[6px] text-foreground/70 outline-none hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <ChevronDown className={cn("size-4 transition-transform duration-200", more && "rotate-180")} aria-hidden />
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onRemove}
+            aria-label={`Remove ${name}`}
+            className="flex size-8 shrink-0 items-center justify-center rounded-[6px] text-foreground/70 outline-none hover:bg-secondary hover:text-expense focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <X className="size-4" aria-hidden />
+          </button>
+        </div>
+      </div>
+      {!more && moreSummary && <p className="mt-1 truncate text-[11px] text-foreground/65">{moreSummary}</p>}
+
+      {d.kind !== "advance" && (
+        <InlineReveal open={more}>
+          {d.kind === "income" ? (
+            <div className="pt-2">
+              <WsField label="Description">
+                <input className={WS_FIELD} value={d.description} onChange={(e) => update({ description: e.target.value })} placeholder={`Extra money from ${firstName}`} />
+              </WsField>
+            </div>
+          ) : (
+            <PurposeDetails d={d} update={update} linkOptions={linkOptions} />
+          )}
+        </InlineReveal>
       )}
+    </li>
+  );
+}
+
+export const draftNeedsInput = (d: AllocationDraft) => (d.kind === "purpose" && !d.title.trim()) || (d.kind === "income" && !d.categoryId);
+
+export function allocationName(a: ExtraAllocation, direction: PaymentDirection, firstName: string) {
+  return a.kind === "purpose"
+    ? a.title.trim() || "Purpose — not named yet"
+    : a.kind === "income"
+      ? a.description.trim() || `Extra money from ${firstName}`
+      : direction === "theyPaid"
+        ? `Advance from ${firstName}`
+        : `Advance paid to ${firstName}`;
+}
+
+/** A purpose's optional details: use-by date, a FlowFi item it is for, a note. */
+function PurposeDetails({ d, update, linkOptions }: { d: AllocationDraft; update: (p: Partial<AllocationDraft>) => void; linkOptions: readonly PurposeLink[] }) {
+  const kinds = (Object.keys(CONNECT_KINDS) as ConnectKind[]).filter((k) => linkOptions.some((o) => CONNECT_KINDS[k].includes(o.kind)));
+  const items = d.connectKind ? linkOptions.filter((o) => connectKindOf(o.kind) === d.connectKind) : [];
+  return (
+    <div className="grid gap-2.5 pt-2 sm:grid-cols-2">
+      <WsField label="Use by (optional)">
+        <div className="flex items-center gap-1.5">
+          <DateInput className={WS_FIELD} value={d.due} onChange={(e) => update({ due: e.target.value })} aria-label="Date to use it by" />
+          {d.due && (
+            <button type="button" onClick={() => update({ due: "" })} className={cn(WS_GHOST, "h-9 shrink-0 px-2 text-xs")}>
+              No date
+            </button>
+          )}
+        </div>
+      </WsField>
+      <div className="flex min-w-0 flex-col gap-1">
+        <span className="text-[11px] font-medium text-muted-foreground">Connect to FlowFi item (optional)</span>
+        <select className={WS_FIELD} value={d.connectKind} onChange={(e) => update({ connectKind: e.target.value as ConnectKind | "", link: "" })} aria-label="Connect to FlowFi item">
+          <option value="">Not linked — standalone purpose</option>
+          {kinds.map((k) => (
+            <option key={k} value={k}>
+              {CONNECT_LABEL[k]}
+            </option>
+          ))}
+        </select>
+        {d.connectKind && (
+          <select className={WS_FIELD} value={d.link} onChange={(e) => update({ link: e.target.value })} aria-label={CONNECT_LABEL[d.connectKind]}>
+            <option value="">Choose {CONNECT_LABEL[d.connectKind].toLowerCase()}…</option>
+            {items.map((o) => (
+              <option key={encodeLink(o)} value={encodeLink(o)}>
+                {o.label}
+                {d.connectKind === "loanEmi" ? ` · ${o.kind === "loan" ? "Loan" : "EMI"}` : ""}
+              </option>
+            ))}
+          </select>
+        )}
+      </div>
+      <WsField label="Note (optional)" className="sm:col-span-2">
+        <input className={WS_FIELD} value={d.note} onChange={(e) => update({ note: e.target.value })} placeholder="e.g. Pay before the 15th" />
+      </WsField>
     </div>
   );
 }
 
-/** Assigned · still available — status in words and an icon, never colour alone. */
+/** Status of the money left — in words and an icon, never colour alone. */
 export function AllocationSummary({ plan }: { plan: ExtraAllocationPlan }) {
   const over = plan.status === "over";
   const full = plan.status === "full";
   return (
-    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm" aria-live="polite">
-      <span className="text-foreground/80">
-        Assigned <span className="font-heading font-bold text-foreground tabular-nums">{money(plan.assigned)}</span>
-      </span>
-      <span className="text-foreground/80">
-        Still available{" "}
-        <span className={cn("font-heading font-bold tabular-nums", over ? "text-expense" : full ? "text-success" : "text-warning")}>{money(Math.max(0, plan.left))}</span>
-      </span>
-      <span className={cn("flex items-center gap-1 text-xs font-bold", over ? "text-expense" : full ? "text-success" : "text-foreground")}>
-        {full ? <Check className="size-3.5" aria-hidden /> : <CircleAlert className="size-3.5" aria-hidden />}
-        {full ? "Fully assigned" : over ? `${money(-plan.left)} over the available amount` : `${money(plan.left)} still needs a destination`}
-      </span>
-    </div>
+    <p className={cn("flex items-center gap-1 text-xs font-bold", over ? "text-expense" : full ? "text-success" : "text-warning")} aria-live="polite" data-testid="rp-left-status">
+      {full ? <Check className="size-3.5" aria-hidden /> : <CircleAlert className="size-3.5" aria-hidden />}
+      {full ? "All assigned" : over ? `${money(-plan.left)} more than the money left` : `${money(plan.left)} not yet assigned`}
+    </p>
   );
 }

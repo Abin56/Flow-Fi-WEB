@@ -41,7 +41,7 @@ export function LoanCard({ row, tag, onClick }: LoanCardProps) {
   const hasOwnName = Boolean(loan.name?.trim());
   const sourceParts = [
     hasOwnName ? lenderName : tag ? null : row.category === "personal" ? "Personal loan" : "Bank loan",
-    loan.interest ? `${loan.interest.ratePercent}% p.a.` : null,
+    loan.interest ? `${+loan.interest.ratePercent.toFixed(2)}% ${loan.interest.period === "monthly" ? "p.m." : "p.a."}` : null,
   ].filter(Boolean);
   const isClosed = row.status === "closed";
   const overdue = row.status === "overdue" || (nextDueDate != null && daysUntil(nextDueDate) < 0);

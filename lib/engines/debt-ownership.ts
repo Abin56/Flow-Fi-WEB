@@ -21,6 +21,25 @@ export interface OwnershipShare {
   personId: string | null;
   /** This party's share of the principal, in rupees (2 dp). */
   amount: number;
+  /**
+   * Optional fixed part of each installment (their own EMI), independent of the principal share. Set on every
+   * share or none: when set, installments split by these instead of by `amount` (see `installmentWeights`).
+   */
+  installmentAmount?: number;
+}
+
+/** Carry `installmentAmount` only when it is a real positive figure — never write an empty key. */
+const withInstallment = (s: OwnershipShare, base: OwnershipShare): OwnershipShare =>
+  s.installmentAmount != null && s.installmentAmount > 0 ? { ...base, installmentAmount: s.installmentAmount } : base;
+
+/**
+ * Weights for splitting one installment: each party's own EMI when every share has one, else the principal
+ * shares. Custom EMIs that add up to the loan's EMI give each party exactly their EMI; a different installment
+ * (a rounded last one, a re-amortised one) is shared in the same ratio.
+ */
+export function installmentWeights(shares: readonly OwnershipShare[]): OwnershipShare[] {
+  const custom = shares.length > 0 && shares.every((s) => s.installmentAmount != null && s.installmentAmount > 0);
+  return shares.map((s) => ({ personId: s.personId, amount: custom ? s.installmentAmount! : s.amount }));
 }
 
 export type AllocationMode = "equal" | "custom" | "percentage";
@@ -114,7 +133,7 @@ export function hasOwnershipShares(source: OwnershipSource): boolean {
  * resolve from the beneficiary opt-in only (see file header).
  */
 export function resolveOwnership(source: OwnershipSource, principal: number): OwnershipShare[] {
-  if (hasOwnershipShares(source)) return source.ownershipShares!.map((s) => ({ personId: s.personId, amount: s.amount }));
+  if (hasOwnershipShares(source)) return source.ownershipShares!.map((s) => withInstallment(s, { personId: s.personId, amount: s.amount }));
   if (source.beneficiaryPersonId && source.beneficiaryRepaysInstallments === true) return [{ personId: source.beneficiaryPersonId, amount: principal }];
   return [{ personId: null, amount: principal }];
 }
@@ -131,7 +150,7 @@ export function personInstallmentShare(source: OwnershipSource, installmentAmoun
   if (!hasOwnershipShares(source)) {
     return source.beneficiaryPersonId === personId && source.beneficiaryRepaysInstallments === true ? installmentAmount : 0;
   }
-  const split = splitByOwnership(installmentAmount, source.ownershipShares!);
+  const split = splitByOwnership(installmentAmount, installmentWeights(source.ownershipShares!));
   return split.find((s) => s.personId === personId)?.amount ?? 0;
 }
 
@@ -141,9 +160,10 @@ export function ownershipSharesFromData(value: unknown): OwnershipShare[] | null
   const shares: OwnershipShare[] = [];
   for (const v of value) {
     if (v == null || typeof v !== "object") return null;
-    const { personId, amount } = v as Record<string, unknown>;
+    const { personId, amount, installmentAmount } = v as Record<string, unknown>;
     if (typeof amount !== "number" || !(personId == null || typeof personId === "string")) return null;
-    shares.push({ personId: (personId as string | null) ?? null, amount });
+    const share: OwnershipShare = { personId: (personId as string | null) ?? null, amount };
+    shares.push(typeof installmentAmount === "number" ? withInstallment({ ...share, installmentAmount }, share) : share);
   }
   return shares;
 }
@@ -223,5 +243,10 @@ export function splitPaymentByOwnership(amount: number, ownership: DebtOwnership
 export function checkedOwnership(principal: number, shares: readonly OwnershipShare[]): OwnershipShare[] {
   const error = validateOwnership(principal, shares);
   if (error != null) throw new Error(`Invalid loan allocation: ${error}`);
-  return shares.map((s) => ({ personId: s.personId, amount: fromPaise(toPaise(s.amount)) }));
+  return shares.map((s) =>
+    withInstallment(
+      { ...s, installmentAmount: s.installmentAmount != null ? fromPaise(toPaise(s.installmentAmount)) : undefined },
+      { personId: s.personId, amount: fromPaise(toPaise(s.amount)) },
+    ),
+  );
 }

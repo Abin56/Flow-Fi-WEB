@@ -374,7 +374,7 @@ export function SplitExpenseMode({
                   <SelectContent>
                     {accounts.map((a) => (
                       <SelectItem key={a.id} value={a.id}>
-                        <AccountLabel account={a} />
+                        <AccountLabel account={a} suffix={a.accountNumberLast4 ? `•••• ${a.accountNumberLast4}` : undefined} />
                       </SelectItem>
                     ))}
                   </SelectContent>

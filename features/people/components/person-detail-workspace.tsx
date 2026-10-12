@@ -25,10 +25,10 @@ import { useSettlementLookups } from "@/features/people/hooks/use-settlement-loo
 import { buildLedgerRows, cycleShowingNewEntry, type LedgerRow, type PaymentRecord } from "@/features/people/lib/person-ledger-rows";
 import type { PendingSplitParticipant } from "@/lib/engines/person-pending-split-participants";
 import { PersonCycleStatementSection } from "@/features/people/components/cycle-statement/person-cycle-statement-section";
-import { PersonActivityFeed, type LedgerRowHandlers, type LedgerScope } from "@/features/people/components/person-activity-feed";
+import { PersonActivityFeed, type CarriedForward, type LedgerRowHandlers, type LedgerScope } from "@/features/people/components/person-activity-feed";
 import { AddEntryPanel, type AddEntryParams } from "@/features/people/components/workspace/add-entry-panel";
 import { EditPersonMode, type EditPersonPatch } from "@/features/people/components/workspace/edit-person-mode";
-import { InlineReveal, LedgerConfirmDialog, type EntryEditValues, type EntrySettleValues } from "@/features/people/components/workspace/ledger-ui";
+import { InlineReveal, LedgerConfirmDialog, PeopleDrawer, type EntryEditValues, type EntrySettleValues } from "@/features/people/components/workspace/ledger-ui";
 import { LE_RADIUS } from "@/features/loans/components/loan-emi-ui";
 import { WS_PRIMARY, WS_SECONDARY, WsLabel } from "@/features/people/components/workspace/person-workspace-ui";
 import { paymentInitialFor, RecordPaymentPanel, type RecordPaymentInitial } from "@/features/people/components/workspace/record-payment-panel";
@@ -42,6 +42,9 @@ import { advanceRemaining, PAYMENT_EPSILON, type AdvanceUse } from "@/lib/engine
 import { followUpStatus } from "@/lib/models/person-follow-up";
 import { useAllPersonFollowUps, usePersonFollowUpActions } from "@/features/people/hooks/use-person-follow-ups";
 import { FollowUpContext, type FollowUpContextValue } from "@/features/people/components/workspace/follow-up";
+import { DeferralContext, DeferralCycleSummary, type DeferralContextValue } from "@/features/people/components/workspace/payment-deferral";
+import { usePaymentDeferralActions, usePersonPaymentDeferrals } from "@/features/people/hooks/use-payment-deferrals";
+import { cycleName, deferralView, type DeferralView } from "@/lib/engines/person-payment-deferral";
 import { isInAppPath } from "@/lib/engines/linked-people-readiness";
 import { peopleLedgerHref } from "@/features/people/lib/people-return-link";
 import type { RecordPaymentInput } from "@/lib/repositories/person-payment-repository";
@@ -246,11 +249,14 @@ export function PersonDetailWorkspace({
   // The cycle view is always the cycle picked with ‹ › (shared by the statement, the list and the expanded ledger).
   const cycleLabel = "Selected cycle";
   const rowsLoading = isLoading || statement == null;
-  // The selected cycle's previous pending — the engine's carried-forward balance (FlowFi sign: + they owe me).
-  const carriedForward =
-    statement && Math.abs(statement.previousPending) >= 0.005
-      ? { amount: Math.abs(statement.previousPending), direction: statement.previousPending > 0 ? ("theyOwe" as const) : ("iOwe" as const) }
-      : null;
+  // The selected cycle's previous pending — the engine's carried-forward balance (FlowFi sign: + they owe me) —
+  // and what of it is still unpaid today: the earlier items' open remaining, as the rows already carry it.
+  const carriedForward: CarriedForward | null = (() => {
+    if (!statement || Math.abs(statement.previousPending) < 0.005) return null;
+    const direction = statement.previousPending > 0 ? "theyOwe" : "iOwe";
+    const left = carriedRows.filter((r) => r.direction === direction).reduce((s, r) => s + (r.remaining ?? 0), 0);
+    return { amount: Math.abs(statement.previousPending), direction, left };
+  })();
   // Primary transactions only — a payment recorded against a transaction is its history, not another transaction.
   const primaryCount = allRows.length;
   // Hero accents follow the overall direction — green when they owe you, red when you owe them.
@@ -331,10 +337,17 @@ export function PersonDetailWorkspace({
         preselectKey={paying?.preselectKey}
         initial={paying?.initial}
         onCancel={closePayment}
-        onSubmit={async (input, paymentId) => {
+        onSubmit={async (input, paymentId, options) => {
           await onRecordPayment(input, paymentId);
           const back = settleReturnRef.current;
+          // The panel still postpones what stays unpaid — it closes itself (onComplete) once that is done.
+          if (options?.keepOpen) return void toast.success("Payment recorded");
           toast.success(paymentId ? "Payment updated" : back ? "Payment recorded — back to your payment" : "Payment recorded");
+          closePayment();
+          if (back) router.push(back);
+        }}
+        onComplete={() => {
+          const back = settleReturnRef.current;
           closePayment();
           if (back) router.push(back);
         }}
@@ -379,6 +392,33 @@ export function PersonDetailWorkspace({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- actions are stateless wrappers over the signed-in uid
   }, [allRows, personFollowUps, cycleStartDay, person.id]);
+
+  // Payment deferrals — expected-collection timing on open rows; status derived from each row's live remaining.
+  const { deferrals } = usePersonPaymentDeferrals(person.id);
+  const deferralActions = usePaymentDeferralActions();
+  const deferralContext = useMemo<DeferralContextValue>(() => {
+    const remainingByKey = new Map(allRows.map((r) => [r.key, r.remaining ?? 0]));
+    const byKey = new Map<string, DeferralView>();
+    for (const d of deferrals) {
+      const view = deferralView(d, remainingByKey.get(d.obligationKey), cycleStartDay);
+      if (view) byKey.set(d.obligationKey, view);
+    }
+    return {
+      byKey,
+      revisionByKey: new Map(deferrals.map((d) => [d.obligationKey, d.revision])),
+      cycleStartDay,
+      personName: person.name,
+      onApply: async (request, options) => {
+        const result = await deferralActions.apply({ ...request, personId: person.id, startDay: cycleStartDay, now: new Date() });
+        // A multi-item postpone reports one consolidated result itself.
+        if (result.outcome === "written" && !options?.silent) {
+          if (request.action === "postpone") toast.success(`Payment moved to the ${cycleName(request.target)} cycle`, "Still owed — the original transaction and totals are unchanged.");
+          else toast.success("Postponement undone");
+        }
+        return result.outcome;
+      },
+    };
+  }, [allRows, deferrals, cycleStartDay, person.id, person.name, deferralActions]);
   const heldSides = advanceSides(advanceAvailable);
   const deletingRow = deleting?.row ?? null;
   const rowPlan = deleting?.plan ?? null;
@@ -677,6 +717,7 @@ export function PersonDetailWorkspace({
             footnote={
               <>
                 {balanceSummary}
+                <DeferralCycleSummary cycle={cycle} />
                 {loansNote}
               </>
             }
@@ -684,17 +725,15 @@ export function PersonDetailWorkspace({
           <div className="min-w-0 lg:border-l lg:border-border lg:pl-6">{actionBar}</div>
         </div>
         {/* Inline actions — open as a workspace state right under the position, full width; one at a time */}
-        <div id="person-inline-add">
-          <InlineReveal open={inline === "add" && onAddEntry != null}>
-            {onAddEntry && (
-              <AddEntryPanel
-                personName={person.name}
-                onCancel={() => setInline(null)}
-                onSave={saveNewEntry}
-              />
-            )}
-          </InlineReveal>
-        </div>
+        <PeopleDrawer id="person-inline-add" open={inline === "add" && onAddEntry != null} onOpenChange={(o) => !o && setInline(null)} title={`Add transaction with ${person.name}`}>
+          {onAddEntry && (
+            <AddEntryPanel
+              personName={person.name}
+              onCancel={() => setInline(null)}
+              onSave={saveNewEntry}
+            />
+          )}
+        </PeopleDrawer>
         {/* Money to use — received money held for specific purposes (not income, not advance) */}
         {rawPerson && <MoneyToUseSection person={rawPerson} entries={ledgerEntries} onRevertPayment={onRevertPayment} />}
         {onApplyAdvance &&
@@ -714,34 +753,23 @@ export function PersonDetailWorkspace({
               }}
             />
           ))}
-        <div id="person-inline-settle">
-          <InlineReveal open={inline === "settle" && rawPerson != null}>
-            {rawPerson && inline === "settle" && paymentPanel}
-          </InlineReveal>
-        </div>
+        <PeopleDrawer id="person-inline-settle" width="lg" open={inline === "settle" && rawPerson != null && paymentPanel != null} onOpenChange={(o) => !o && closePayment()} title={`Record payment — ${person.name}`}>
+          {rawPerson && inline === "settle" && paymentPanel}
+        </PeopleDrawer>
         {/* Split is the one focused popup — the person page stays underneath, unchanged */}
-        <Dialog open={inline === "split" && rawPerson != null} onOpenChange={(o) => !o && setInline(null)}>
-          <DialogContent
-            id="person-inline-split"
-            showCloseButton={false}
-            className="flex max-h-[min(92vh,56rem)] flex-col gap-0 overflow-hidden rounded-[10px] border border-border bg-card p-0 shadow-[var(--shadow-e4)] ring-0 sm:max-w-5xl"
-          >
-            <DialogTitle className="sr-only">Split expense with {person.name}</DialogTitle>
-            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-              {rawPerson && (
-                <SplitExpenseMode
-                  person={rawPerson}
-                  accounts={accounts}
-                  categories={categories}
-                  people={people}
-                  closeable
-                  onBack={() => setInline(null)}
-                  onDone={() => setInline(null)}
-                />
-              )}
-            </div>
-          </DialogContent>
-        </Dialog>
+        <PeopleDrawer id="person-inline-split" width="xl" open={inline === "split" && rawPerson != null} onOpenChange={(o) => !o && setInline(null)} title={`Split expense with ${person.name}`}>
+          {rawPerson && (
+            <SplitExpenseMode
+              person={rawPerson}
+              accounts={accounts}
+              categories={categories}
+              people={people}
+              closeable
+              onBack={() => setInline(null)}
+              onDone={() => setInline(null)}
+            />
+          )}
+        </PeopleDrawer>
       </div>
 
       {/* Activity — the main body, full width */}
@@ -956,6 +984,7 @@ export function PersonDetailWorkspace({
 
   return (
     <FollowUpContext.Provider value={followUpContext}>
+    <DeferralContext.Provider value={deferralContext}>
     <div ref={rootRef} onKeyDown={onKeyDown} className="flex min-w-0 scroll-mt-6 flex-col gap-4 px-1">
       {/* Identity — who, always visible; every mode renders below it. Navigation sits with the actions on the right. */}
       <div>
@@ -1045,17 +1074,9 @@ export function PersonDetailWorkspace({
       </div>
 
       {/* Share statement — preview, WhatsApp, copy and PDF in a focused popup over the person page */}
-      <Dialog open={mode.kind === "share" && statement != null} onOpenChange={(o) => !o && back()}>
-        <DialogContent
-          showCloseButton={false}
-          className="flex max-h-[min(92vh,60rem)] flex-col gap-0 overflow-hidden rounded-[10px] border border-border bg-card p-0 shadow-[var(--shadow-e4)] ring-0 sm:max-w-4xl"
-        >
-          <DialogTitle className="sr-only">Share {person.name}&apos;s statement</DialogTitle>
-          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-            {mode.kind === "share" && content}
-          </div>
-        </DialogContent>
-      </Dialog>
+      <PeopleDrawer width="lg" open={mode.kind === "share" && statement != null} onOpenChange={(o) => !o && back()} title={`Share ${person.name}'s statement`}>
+        {mode.kind === "share" && content}
+      </PeopleDrawer>
 
       {/* Expanded ledger — just the transactions, in a large focused popup over the person page */}
       <Dialog open={mode.kind === "ledger"} onOpenChange={(o) => !o && back()}>
@@ -1194,6 +1215,7 @@ export function PersonDetailWorkspace({
           {rawPerson && Math.abs(rawPerson.openingBalance) >= 0.005 && <p>The opening balance of {money(Math.abs(rawPerson.openingBalance))} stays.</p>}
         </LedgerConfirmDialog>
     </div>
+    </DeferralContext.Provider>
     </FollowUpContext.Provider>
   );
 }

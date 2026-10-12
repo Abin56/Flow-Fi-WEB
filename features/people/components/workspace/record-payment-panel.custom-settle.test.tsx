@@ -7,7 +7,7 @@ import type { RecordPaymentInput } from "@/lib/repositories/person-payment-repos
 import { RecordPaymentPanel } from "./record-payment-panel";
 
 /**
- * Record Payment — "use only ₹X to settle", the decision-first order, and the follow-up reminder.
+ * Record Payment — "pay only ₹X now" (the list total), Skip, amounts the user takes over, and the reminder.
  * AMMA owes ₹5,400 across three items and sends ₹29,800 into SBI; ₹4,000 settles (oldest first),
  * ₹1,400 stays owed, ₹25,800 is kept as advance.
  */
@@ -77,23 +77,27 @@ function setup() {
 }
 
 const amountInput = () => screen.getByLabelText(/^Amount received$/);
-const applyInput = () => screen.getByLabelText("Apply to balance") as HTMLInputElement;
+// The list's total: typing it pays that much in total, oldest first, across the chosen items.
+const applyInput = () => screen.getByLabelText("Total paying now") as HTMLInputElement;
 const cta = () => screen.getByRole("button", { name: /^Record|Saving/ });
+const useFor = () => screen.getAllByLabelText(/^Use for —/)[0] as HTMLSelectElement;
 
-describe("Record Payment — custom settlement amount", () => {
-  it("₹29,800 received, ₹4,000 applied: ₹1,400 still owed and ₹25,800 kept as advance — two separate numbers", async () => {
+describe("Record Payment — custom amount paying now", () => {
+  it("₹29,800 received, ₹4,000 paying now: ₹1,400 still owed and ₹25,800 kept as advance — two separate numbers", async () => {
     const { user, onSubmit } = setup();
     await user.type(amountInput(), "29800");
-    // Default unchanged: settles everything selected (₹5,400).
+    // Default unchanged: pays everything due (₹5,400).
     expect(applyInput().value).toBe("5400");
     await user.clear(applyInput());
     await user.type(applyInput(), "4000");
     expect(screen.getByTestId("rp-still-owed").textContent).toMatch(/1,400/);
     expect(screen.getByTestId("rp-left-over").textContent).toMatch(/25,800/);
     // Canonical oldest-first order — the share stays partial, nothing new is invented.
-    expect(screen.getByText("Partially paid")).toBeTruthy();
+    expect(screen.getByText("₹1,400 left")).toBeTruthy();
     expect(screen.getAllByText("Paid in full")).toHaveLength(2);
-    expect((screen.getByRole("radio", { name: /Keep as advance/ }) as HTMLInputElement).checked).toBe(true);
+    // On the same screen: the money left reads as kept as advance (the default, unchanged).
+    expect(useFor().value).toBe("advance");
+    expect((screen.getByLabelText("Advance amount") as HTMLInputElement).value).toBe("25800");
     await user.click(cta());
     expect(onSubmit).toHaveBeenCalledTimes(1);
     const input = onSubmit.mock.calls[0][0];
@@ -123,23 +127,30 @@ describe("Record Payment — custom settlement amount", () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
-  it("₹0 settles nothing: the whole receipt goes through the remaining-money choice", async () => {
+  it("Skip all settles nothing: the whole receipt goes through the money-left choice", async () => {
     const { user, onSubmit } = setup();
     await user.type(amountInput(), "29800");
-    await user.click(screen.getByRole("button", { name: "Settle nothing now" }));
+    await user.click(screen.getByRole("button", { name: "Skip all" }));
     expect(screen.getByTestId("rp-still-owed").textContent).toMatch(/5,400/);
     expect(screen.getByTestId("rp-left-over").textContent).toMatch(/29,800/);
+    expect(screen.getAllByText(/unpaid$/)).toHaveLength(3);
     await user.click(cta());
     const input = onSubmit.mock.calls[0][0];
     expect(input.lines).toEqual([]);
     expect(input.extra).toEqual({ kind: "advance", amount: 29800 });
   });
 
-  it("decision comes before the long allocation list", () => {
-    setup();
-    const decide = screen.getByRole("heading", { name: "Settle what AMMA owes you" });
-    const list = screen.getByRole("heading", { name: "Payment allocation" });
-    expect(decide.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  it("Skip one item: the rest stay oldest first; the skipped one stays unpaid; its money joins the money left", async () => {
+    const { user, onSubmit } = setup();
+    await user.type(amountInput(), "29800");
+    await user.click(screen.getByRole("button", { name: "Skip Loan installment" }));
+    expect(screen.getByRole("button", { name: "Skip Loan installment" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByText("₹2,000 unpaid")).toBeTruthy();
+    expect(applyInput().value).toBe("3400");
+    expect(screen.getByTestId("rp-still-owed").textContent).toMatch(/2,000/);
+    expect(screen.getByTestId("rp-left-over").textContent).toMatch(/26,400/);
+    await user.click(cta());
+    expect(onSubmit.mock.calls[0][0].lines.map((l) => l.key)).toEqual(["ledger:exam", "ledger:share"]);
   });
 
   it("reminder for what is still owed is saved only after the payment, once, on the still-open item", async () => {
@@ -159,7 +170,7 @@ describe("Record Payment — custom settlement amount", () => {
     expect(when.remindOn.getDate()).toBe(17);
   });
 
-  it("per-item amounts take over from the custom amount", async () => {
+  it("per-item amounts take over from the custom total", async () => {
     const { user, onSubmit } = setup();
     await user.type(amountInput(), "29800");
     await user.clear(applyInput());
@@ -170,6 +181,25 @@ describe("Record Payment — custom settlement amount", () => {
     expect(applyInput().value).toBe("5400");
     await user.click(cta());
     expect(onSubmit.mock.calls[0][0].extra).toEqual({ kind: "advance", amount: 24400 });
+  });
+
+  it("amounts the user took over stay when the received amount changes — an overflow is reported, never re-spread", async () => {
+    const { user, onSubmit } = setup();
+    await user.type(amountInput(), "29800");
+    await user.click(screen.getByRole("button", { name: "Pay part of Expense share" }));
+    await user.keyboard("1000");
+    expect(screen.getByRole("button", { name: "Oldest first" })).toBeTruthy();
+    await user.clear(amountInput());
+    await user.type(amountInput(), "3000");
+    // Exam 1,000 + Loan 2,000 + Share 1,000 = 4,000 chosen against 3,000 received: blocked, values untouched.
+    expect((screen.getByLabelText("Paying now for Expense share") as HTMLInputElement).value).toBe("1000");
+    expect(screen.getByTestId("rp-blocker").textContent).toMatch(/more than the payment/);
+    expect((cta() as HTMLButtonElement).disabled).toBe(true);
+    // One tap back to the automatic order.
+    await user.click(screen.getByRole("button", { name: "Oldest first" }));
+    expect(applyInput().value).toBe("3000");
+    await user.click(cta());
+    expect(onSubmit).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -184,10 +214,11 @@ describe("Record Payment — scope is what's due through the selected cycle", ()
 
   it("previous ₹1,000 + this cycle ₹2,000 = ₹3,000 due; the future ₹4,000 EMI is not selected", async () => {
     const { user, onSubmit } = setup();
-    expect(screen.getByText(/^Due from AMMA$/).closest("div")!.textContent).toMatch(/3,000/);
-    expect(screen.queryByLabelText("Apply to EMI · November")).toBeNull(); // hidden behind "Show upcoming"
+    expect(screen.getByTestId("rp-due-total").textContent).toMatch(/3,000/);
+    expect(screen.queryByLabelText("Paying now for EMI · November")).toBeNull(); // hidden behind "Show upcoming"
     await user.type(amountInput(), "5000");
-    expect(screen.getByRole("button", { name: /Settle full ₹3,000/ })).toBeTruthy();
+    expect(screen.queryByLabelText("Paying now for EMI · November")).toBeNull();
+    expect(screen.getByRole("button", { name: "Pay all due" }).getAttribute("aria-pressed")).toBe("true");
     expect(applyInput().value).toBe("3000");
     expect(screen.getByTestId("rp-left-over").textContent).toMatch(/2,000/);
     await user.click(cta());
@@ -196,7 +227,7 @@ describe("Record Payment — scope is what's due through the selected cycle", ()
     expect(input.extra).toEqual({ kind: "advance", amount: 2000 });
   });
 
-  it("settle only ₹2,000: oldest first, ₹1,000 still owed on this cycle's EMI; reminder targets it", async () => {
+  it("pay only ₹2,000: oldest first, ₹1,000 still owed on this cycle's EMI; reminder targets it", async () => {
     const { user, onSubmit, onSetReminder } = setup();
     await user.type(amountInput(), "2000");
     await user.clear(applyInput());

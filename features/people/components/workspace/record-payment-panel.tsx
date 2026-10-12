@@ -1,13 +1,14 @@
 "use client";
 
-import { ArrowDownLeft, ArrowUpRight, Check, CircleAlert, CircleDashed } from "lucide-react";
-import { useMemo, useRef, useState } from "react";
+import { Bell, CalendarClock, CalendarDays, Check, ChevronDown, CircleAlert, Loader2, RotateCcw } from "lucide-react";
+import { useContext, useEffect, useMemo, useRef, useState } from "react";
 import { EmiBadge } from "@/features/people/components/cycle-statement/statement-parts";
 import type { LedgerRow } from "@/features/people/lib/person-ledger-rows";
 import { obligationSourceLabel, paymentLines, routeFor, settlementProjection, timingOf, type PayableObligation } from "@/features/people/lib/person-payment-obligations";
 import { useCategories } from "@/hooks/use-categories";
 import { formatStatementDate } from "@/lib/engines/person-cycle-statement";
 import { money } from "@/lib/engines/person-cycle-statement-share";
+import { cycleName } from "@/lib/engines/person-payment-deferral";
 import {
   allocatePayment,
   PAYMENT_EPSILON,
@@ -21,13 +22,15 @@ import {
 } from "@/lib/engines/person-payment";
 import type { PaymentExtraInput, RecordPaymentInput } from "@/lib/repositories/person-payment-repository";
 import { cn } from "@/lib/utils";
-import { AccountField, CompactAmountInput, useAccountChoice } from "./ledger-ui";
-import { WS_FIELD, WS_GHOST, WS_PRIMARY, WsCloseButton, WsField, WsSegmented } from "./person-workspace-ui";
+import { AccountField, useAccountChoice } from "./ledger-ui";
+import { WS_FIELD, WS_GHOST, WS_PRIMARY, WsField } from "./person-workspace-ui";
 import { usePurposeLinkOptions } from "./purpose-money";
 import { draftsToAllocations, ExtraAllocationEditor, newAllocationDraft, type AllocationDraft } from "./extra-allocation-editor";
 import { planExtraAllocation } from "@/lib/engines/extra-allocation";
 import { DateInput } from "@/components/forms/date-input";
 import { ReminderPicker, type ReminderWhen } from "./follow-up";
+import { FlowSwitch, flowText, HeroAmount, PanelHeader } from "./flow-switch";
+import { canPostponeRow, DeferralContext, PostponeFields, usePostponeDraft, type PostponeItem } from "./payment-deferral";
 
 /** An existing payment, for editing: its lines per obligation key, advance, account and date. */
 export interface RecordPaymentInitial {
@@ -48,11 +51,21 @@ const fromInputDate = (s: string) => {
   return new Date(y, m - 1, d);
 };
 
+type PayChoice = "full" | "part" | "skip";
+
 /**
  * Record payment — one real payment between me and a person, allocated across the exact obligations it
  * pays. Every figure is `allocatePayment`'s (the one rule shared with Flutter); saving writes exactly
- * those lines atomically. Extra money is never classified silently: keep it as advance, record it as
- * income, or tick another obligation so it is applied there.
+ * those lines atomically. Money not applied to bills is never classified silently: it is kept as advance
+ * (the default), added as income, or set aside for a purpose — the user's choice, row by row.
+ *
+ * Presentation: one screen, top to bottom.
+ *  A. Money received — amount, account, date, and the total outstanding.
+ *  B. Choose what to pay now — every due item as a row with Full / Part / Skip and its own amount. Amounts fill
+ *     oldest first until the user takes over a row; skipped items stay unpaid, and (only on request) the rest of
+ *     an item can be postponed through the existing Postpone payment write after the receipt is saved.
+ *  C. What to do with the money left — a short list of destinations.
+ * The summary — the receipt's buckets, and separately what the person still owes — and the action stay pinned below.
  */
 export function RecordPaymentPanel({
   personName,
@@ -63,6 +76,7 @@ export function RecordPaymentPanel({
   cycleLabel,
   onCancel,
   onSubmit,
+  onComplete,
   onSetReminder,
   cycleStartDay = 1,
 }: {
@@ -75,7 +89,13 @@ export function RecordPaymentPanel({
   cycle: { start: Date; end: Date };
   cycleLabel: string;
   onCancel: () => void;
-  onSubmit: (input: RecordPaymentInput, paymentId: string | null) => Promise<void>;
+  /**
+   * Saves the payment. `keepOpen`: the panel still has follow-up work (postponing what stays unpaid) — the host
+   * must not close it; the panel calls `onComplete` once that work is done.
+   */
+  onSubmit: (input: RecordPaymentInput, paymentId: string | null, options?: { keepOpen?: boolean }) => Promise<void>;
+  /** After a `keepOpen` save: everything is done (or the user closed the result) — defaults to `onCancel`. */
+  onComplete?: () => void;
   /** Saves a follow-up reminder on each item left open — called only after the payment itself is saved. */
   onSetReminder?: (targets: { key: string; title: string }[], when: ReminderWhen) => Promise<void>;
   /** Settings → Month Cycle start day — "Next cycle" resolves against it. */
@@ -84,7 +104,7 @@ export function RecordPaymentPanel({
   const first = personName.split(" ")[0];
   const account = useAccountChoice(initial?.accountId);
   const { data: categories = [] } = useCategories();
-  const incomeCategories = categories.filter((c) => c.deletedAt == null && c.type !== "expense");
+  const incomeCategories = useMemo(() => categories.filter((c) => c.deletedAt == null && c.type !== "expense"), [categories]);
 
   // When editing, this payment's own lines count as open again — the edit reverts it in the same write.
   const projection = useMemo(() => settlementProjection(rows, cycle), [rows, cycle]);
@@ -139,6 +159,7 @@ export function RecordPaymentPanel({
     }
     return [...byKey.values()].sort((a, b) => a.date.getTime() - b.date.getTime() || a.createdAt.getTime() - b.createdAt.getTime());
   }, [rows, initial, projection, cycle]);
+  const rowByKey = useMemo(() => new Map(rows.map((r) => [r.key, r])), [rows]);
 
   const preselected = obligations.find((o) => o.key === preselectKey);
   // "Due now" = brought forward + this cycle; later items (e.g. upcoming EMIs) stay available but aren't due yet.
@@ -163,12 +184,13 @@ export function RecordPaymentPanel({
   const elsewhere = projection.elsewhere.filter((o) => o.side === side && o.timing !== "later");
   const [amountText, setAmountText] = useState(() => (initial ? String(initial.amount) : preselected ? String(preselected.outstanding) : ""));
   const [date, setDate] = useState(() => toInputDate(initial?.date ?? new Date()));
+  // Per-item amounts once the user takes over a row (Full / Part / typing). null = automatic, oldest first.
   // Editing shows the payment exactly as it was allocated (not re-allocated oldest first).
   const [manual, setManual] = useState<Record<string, string> | null>(() =>
     initial && Object.keys(initial.lines).length > 0 ? Object.fromEntries(Object.entries(initial.lines).map(([k, v]) => [k, String(v)])) : null,
   );
-  // The extra, divided across destinations (purpose / income / advance). null = the default: all of it
-  // kept as advance (recommended) — following the extra as it changes, still shown before anything is recorded.
+  // The money left, divided across destinations (purpose / income / advance). null = the default: all of it
+  // kept as advance — following the money left as it changes, still shown before anything is recorded.
   const linkOptions = usePurposeLinkOptions();
   const [extraDrafts, setExtraDrafts] = useState<AllocationDraft[] | null>(() => {
     if (!initial || (!(initial.advance > 0) && !initial.income)) return null;
@@ -183,7 +205,7 @@ export function RecordPaymentPanel({
   const accountId = account.accountId;
 
   const amount = Number(amountText) || 0;
-  // "Use only ₹X to settle" — null = the default (settle as much as the payment covers, or the per-line amounts).
+  // "Pay ₹X in total, oldest first" — typed into the list's total. null = the default (as much as the payment covers).
   const [settleText, setSettleText] = useState<string | null>(null);
   const capped =
     settleText == null
@@ -204,24 +226,79 @@ export function RecordPaymentPanel({
     : extraPlan.advance > PAYMENT_EPSILON || extraPlan.purposes.length > 0
       ? { kind: "advance" }
       : { kind: "income", categoryId: extraPlan.income?.categoryId ?? "", description: extraPlan.income?.description ?? "" };
-  const blocker = capped?.error ?? (hasExtra ? extraPlan.error : null) ?? paymentBlocker({
-    direction,
-    amount,
-    allocation,
-    resolution,
-    accountId,
-  });
-  const lineByKey = new Map(allocation.lines.map((l) => [l.key, l]));
-  // The selected items this payment leaves open — where a "remind me" goes (each keeps its own remaining).
-  const reminderTargets = allocation.unpaid > PAYMENT_EPSILON
-    ? options
-        .filter((o) => selected.has(o.key) && (lineByKey.get(o.key)?.remainingAfter ?? o.outstanding) > PAYMENT_EPSILON)
-        .map((o) => ({ key: o.key, title: o.title }))
-    : [];
-  const [reminder, setReminder] = useState<ReminderWhen | null>(null);
-  const allSelected = options.some((o) => o.timing !== "later") && options.filter((o) => o.timing !== "later").every((o) => selected.has(o.key));
-  const unselected = options.filter((o) => !selected.has(o.key));
   const theyPaid = direction === "theyPaid";
+
+  // ── Per item: what this payment does to it ──
+  const lineByKey = new Map(allocation.lines.map((l) => [l.key, l]));
+  const payingOf = (o: PayableObligation) => (selected.has(o.key) ? (lineByKey.get(o.key)?.amount ?? 0) : 0);
+  const afterOf = (o: PayableObligation) => round2(Math.max(0, o.outstanding - payingOf(o)));
+  const choiceOf = (o: PayableObligation): PayChoice | null => {
+    if (!selected.has(o.key)) return "skip";
+    const paying = payingOf(o);
+    if (paying > PAYMENT_EPSILON && paying >= o.outstanding - PAYMENT_EPSILON) return "full";
+    if (paying > PAYMENT_EPSILON || (manual != null && o.key in manual)) return "part";
+    return null; // selected, but the money ran out before it (automatic order)
+  };
+  // What this person still owes after the payment: everything due now, plus any later item chosen to pay early.
+  const owedRows = options.filter((o) => o.timing !== "later" || selected.has(o.key));
+  const stillOwed = round2(owedRows.reduce((t, o) => t + afterOf(o), 0));
+  // A selected item that vanished or changed while this was open (paid elsewhere, deleted) — never silently dropped.
+  const vanished = [...selected].filter((k) => !options.some((o) => o.key === k && o.outstanding > PAYMENT_EPSILON));
+
+  // ── Postpone what stays unpaid (optional) — the existing deferral write, after the receipt is saved ──
+  const deferrals = useContext(DeferralContext);
+  const canPostponeAfter = !!deferrals && !initial && theyPaid;
+  const postponeRowOf = (o: PayableObligation) => {
+    if (!canPostponeAfter || o.timing === "later") return null;
+    const row = rowByKey.get(o.key);
+    return row && canPostponeRow(row) ? row : null;
+  };
+  const [postponeAfter, setPostponeAfter] = useState<ReadonlySet<string>>(() => new Set());
+  // Each item's live remaining after this payment — what the postponement will expect (never more than is owed).
+  const liveAfterItems: PostponeItem[] = owedRows.flatMap((o) => {
+    if (!postponeAfter.has(o.key)) return [];
+    const row = postponeRowOf(o);
+    const left = row ? round2((row.remaining ?? 0) - payingOf(o)) : 0;
+    return row && left > PAYMENT_EPSILON ? [{ row: { ...row, remaining: left }, title: o.title }] : [];
+  });
+  // Frozen when the payment is saved: the live rows change under it, and a retry must re-send the same items.
+  const [frozenAfter, setFrozenAfter] = useState<PostponeItem[] | null>(null);
+  const afterItems = frozenAfter ?? liveAfterItems;
+  const afterDraft = usePostponeDraft(afterItems);
+  const postponeTotal = round2(afterItems.reduce((t, i) => t + (i.row.remaining ?? 0), 0));
+  const [recorded, setRecorded] = useState(false);
+
+  const blocker =
+    (vanished.length > 0 ? "Some items changed while this was open — review the list." : null) ??
+    capped?.error ??
+    (hasExtra ? extraPlan.error : null) ??
+    paymentBlocker({ direction, amount, allocation, resolution, accountId }) ??
+    (liveAfterItems.length > 0 && !afterDraft.ready ? "Choose a reminder date for the postponement." : null);
+  // The items this payment leaves open — where a "remind me" goes (each keeps its own remaining). A postponed
+  // item carries its own reminder choice instead.
+  const reminderTargets = owedRows.filter((o) => afterOf(o) > PAYMENT_EPSILON && !liveAfterItems.some((i) => i.row.key === o.key)).map((o) => ({ key: o.key, title: o.title }));
+  const [reminder, setReminder] = useState<ReminderWhen | null>(null);
+
+  // "Hasn't paid yet": no money changes hands, so nothing is recorded — the open receivables are postponed
+  // through the existing Postpone payment write (private timing metadata). Offered only inside a ledger.
+  const postponable = useMemo<PostponeItem[]>(() => {
+    if (!deferrals || initial) return [];
+    const pick = preselected?.side === "theyOwe" ? [preselected] : projection.payable.filter((o) => o.side === "theyOwe" && o.timing !== "later");
+    return pick.flatMap((o) => {
+      const row = rowByKey.get(o.key);
+      return row && canPostponeRow(row) ? [{ row, title: o.title }] : [];
+    });
+  }, [deferrals, initial, rowByKey, projection, preselected]);
+  const [intent, setIntent] = useState<"received" | "postpone">("received");
+  const [postponeOff, setPostponeOff] = useState<ReadonlySet<string>>(() => new Set());
+  const postponeItems = useMemo(() => postponable.filter((i) => !postponeOff.has(i.row.key)), [postponable, postponeOff]);
+  const postponeDraft = usePostponeDraft(postponeItems);
+  const canPostpone = theyPaid && postponable.length > 0;
+  const postponing = canPostpone && intent === "postpone";
+  async function submitPostpone() {
+    if (!postponing) return;
+    if (await postponeDraft.submit()) onCancel();
+  }
 
   /** One direction at a time — each side's obligations are settled on their own, never netted. */
   function switchDirection(d: PaymentDirection) {
@@ -231,12 +308,70 @@ export function RecordPaymentPanel({
     setManual(null);
     setSettleText(null);
     setExtraDrafts(null);
+    setPostponeAfter(new Set());
   }
   // The opposite side, shown for information only — it never reduces this side's outstanding or Full payment.
   const otherSideTotal = theyPaid ? iOweTotal : theyOweTotal;
 
-  const toggle = (key: string) =>
+  // ── Row actions. A row the user takes over turns the whole list into per-item amounts (seeded from what is
+  // shown), so a later change to the received amount never re-spreads the user's choices behind their back. ──
+  const seedManual = () => manual ?? Object.fromEntries(allocation.lines.map((l) => [l.key, String(l.amount)]));
+  const select = (key: string, on: boolean) =>
     setSelected((s) => {
+      if (s.has(key) === on) return s;
+      const next = new Set(s);
+      if (on) next.add(key);
+      else next.delete(key);
+      return next;
+    });
+  const inputRefs = useRef(new Map<string, HTMLInputElement>());
+  const focusKey = useRef<string | null>(null);
+  useEffect(() => {
+    const key = focusKey.current;
+    if (!key) return;
+    focusKey.current = null;
+    const el = inputRefs.current.get(key);
+    el?.focus();
+    el?.select();
+  });
+  function payFull(o: PayableObligation) {
+    // Already paid in full by the automatic order — nothing to change.
+    if (manual == null && settleText == null && choiceOf(o) === "full") return;
+    setManual({ ...seedManual(), [o.key]: String(o.outstanding) });
+    setSettleText(null);
+    select(o.key, true);
+  }
+  function payPart(o: PayableObligation) {
+    const paying = payingOf(o);
+    setManual({ ...seedManual(), [o.key]: paying > PAYMENT_EPSILON && paying < o.outstanding - PAYMENT_EPSILON ? String(paying) : "" });
+    setSettleText(null);
+    select(o.key, true);
+    focusKey.current = o.key;
+  }
+  function skip(o: PayableObligation) {
+    if (manual != null || settleText != null) {
+      setManual(Object.fromEntries(Object.entries(seedManual()).filter(([k]) => k !== o.key)));
+      setSettleText(null);
+    }
+    select(o.key, false);
+  }
+  function typeAmount(o: PayableObligation, value: string) {
+    setManual({ ...seedManual(), [o.key]: value });
+    setSettleText(null);
+    select(o.key, true);
+  }
+  function payAllDue() {
+    setManual(null);
+    setSettleText(null);
+    setSelected(new Set(options.filter((o) => o.timing !== "later").map((o) => o.key)));
+  }
+  function skipAll() {
+    setManual(null);
+    setSettleText(null);
+    setSelected(new Set());
+  }
+  const togglePostpone = (key: string) =>
+    setPostponeAfter((s) => {
       const next = new Set(s);
       if (next.has(key)) next.delete(key);
       else next.add(key);
@@ -246,11 +381,16 @@ export function RecordPaymentPanel({
   const submittedRef = useRef(false);
   async function submit() {
     // A ref, not state: a double click lands before the re-render that disables the button. Once saved, the
-    // panel closes — it never records the same payment twice.
-    if (blocker || saving || submittedRef.current) return;
+    // payment is never sent again — a failed postponement afterwards is retried on its own.
+    // A no-money postponement records nothing — this payment path never runs for it.
+    if (postponing || recorded || blocker || saving || submittedRef.current) return;
     submittedRef.current = true;
     setSaving(true);
     setError(null);
+    const toPostpone = liveAfterItems;
+    // This render's postpone form (items, cycle, reminder as shown when the user pressed Record).
+    const postponeNow = afterDraft.submit;
+    const keepOpen = toPostpone.length > 0;
     try {
       const input: RecordPaymentInput = {
         direction,
@@ -272,28 +412,25 @@ export function RecordPaymentPanel({
           };
         })(),
       };
-      await onSubmit(input, initial?.paymentId ?? null);
-      // Metadata only, after the payment is safely recorded — a failed reminder never undoes the payment.
-      if (reminder && onSetReminder && reminderTargets.length > 0) await onSetReminder(reminderTargets, reminder).catch(() => {});
+      if (keepOpen) setFrozenAfter(toPostpone);
+      await onSubmit(input, initial?.paymentId ?? null, keepOpen ? { keepOpen: true } : undefined);
     } catch (e) {
       submittedRef.current = false;
+      setFrozenAfter(null);
       setError(e instanceof Error ? e.message : "Couldn't record the payment.");
-    } finally {
       setSaving(false);
+      return;
     }
+    if (keepOpen) setRecorded(true);
+    // Metadata only, after the payment is safely recorded — a failed reminder never undoes the payment.
+    if (reminder && onSetReminder && reminderTargets.length > 0) await onSetReminder(reminderTargets, reminder).catch(() => {});
+    if (keepOpen && (await postponeNow())) (onComplete ?? onCancel)();
+    setSaving(false);
   }
-
-  const outcomeLabel =
-    allocation.outcome === "full"
-      ? { text: "Settles everything selected", tone: "text-success" }
-      : allocation.outcome === "partial"
-        ? { text: "Partial payment", tone: "text-warning" }
-        : allocation.outcome === "over"
-          ? {
-              text: "More than selected — decide the extra below",
-              tone: "text-settle-advance-text",
-            }
-          : null;
+  /** After the receipt is saved: re-sends only the postponements not saved yet (same request ids). */
+  async function retryPostpone() {
+    if (await afterDraft.submit()) (onComplete ?? onCancel)();
+  }
 
   // Every rupee of this payment, in exactly one bucket — the same reconciliation the history shows.
   const recon = reconcilePayment({
@@ -303,13 +440,46 @@ export function RecordPaymentPanel({
     income: hasExtra ? (extraPlan.income?.amount ?? 0) : 0,
     purpose: hasExtra ? round2(extraPlan.purposes.reduce((t, x) => t + x.amount, 0)) : 0,
   });
-  const accountName = account.accounts.find((a) => a.id === accountId)?.name ?? "the chosen account";
-  const seedManual = () => Object.fromEntries(allocation.lines.map((l) => [l.key, String(l.amount)]));
+  const accountName = account.accounts.find((a) => a.id === accountId)?.name ?? "The chosen account";
   const dueTotal = theyPaid ? theyOweTotal : iOweTotal;
   // The same Due, split by the timing it already has — brought forward vs added this cycle. Presentation only.
   const dueByTiming = (t: "carried" | "cycle") => round2(options.filter((o) => o.timing === t).reduce((sum, o) => sum + o.outstanding, 0));
   const duePrevious = dueByTiming("carried");
   const dueThisCycle = round2(dueTotal - duePrevious);
+
+  // A single destination that held the whole money left keeps holding it when the amount or the bills change
+  // (the user's choice of *where* is kept; only its size follows). Split amounts are the user's, left alone.
+  const [extraSeen, setExtraSeen] = useState(allocation.extra);
+  if (extraSeen !== allocation.extra) {
+    setExtraSeen(allocation.extra);
+    setExtraDrafts((ds) =>
+      ds && ds.length === 1 && Math.abs((Number(ds[0].amount) || 0) - extraSeen) <= PAYMENT_EPSILON
+        ? [{ ...ds[0], amount: allocation.extra > 0 ? String(round2(allocation.extra)) : "" }]
+        : ds,
+    );
+  }
+  const waiting = amount <= 0;
+  const automatic = manual == null && settleText == null;
+  const allSkipped = options.length > 0 && selected.size === 0;
+  const dueKeys = options.filter((o) => o.timing !== "later").map((o) => o.key);
+  const allDueAuto = automatic && dueKeys.length > 0 && dueKeys.every((k) => selected.has(k));
+  const ready = amount > 0 && !blocker && recon.balanced;
+
+  if (recorded) {
+    return (
+      <PostponeResult
+        personName={personName}
+        first={first}
+        amount={amount}
+        theyPaid={theyPaid}
+        items={afterItems}
+        draft={afterDraft}
+        saving={saving}
+        onRetry={() => void retryPostpone()}
+        onDone={onComplete ?? onCancel}
+      />
+    );
+  }
 
   return (
     // A real <form>: Enter in a single-line field records through the same submit() as the primary button,
@@ -318,536 +488,779 @@ export function RecordPaymentPanel({
       noValidate
       onSubmit={(e) => {
         e.preventDefault();
-        if (e.target !== e.currentTarget || !recon.balanced) return;
+        if (e.target !== e.currentTarget) return;
+        if (postponing) return void submitPostpone();
+        if (!recon.balanced) return;
         void submit();
       }}
-      aria-label={initial ? `Edit payment — ${personName}` : `Record payment — ${personName}`}
-      className="mt-4 overflow-hidden rounded-[8px] border border-border-strong bg-card"
+      aria-label={initial ? `Edit payment — ${personName}` : postponing ? `Postpone payment — ${personName}` : `Record payment — ${personName}`}
+      // A column that fills its host (the drawer gives it full height): header pinned on top, footer on the bottom.
+      className="mt-4 flex min-h-full flex-col rounded-[12px] border border-border-strong bg-card"
     >
-      {/* Hero — the one question: how much came in, from whom; then what it's against */}
-      <div className="border-b border-border-strong px-4 pt-3 pb-3">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h3 className="text-[11px] font-bold tracking-[0.07em] text-foreground/75 uppercase">
-              {initial ? "Edit payment" : "Record payment"} — {personName}
-            </h3>
-            <p className="mt-0.5 flex flex-wrap items-baseline gap-x-2">
-              <span className="font-heading text-[26px] leading-tight font-bold tracking-tight text-foreground tabular-nums" data-testid="rp-hero-amount">
-                {money(amount)}
-              </span>
-              <span className="text-sm font-semibold text-foreground/85">{theyPaid ? `received from ${personName}` : `paid to ${personName}`}</span>
-            </p>
-            <p className="mt-0.5 text-xs font-medium text-foreground/75">
-              {initial ? `Recorded ${formatStatementDate(initial.date, true)}` : `Cycle · ${cycleLabel}`}
-              <span aria-hidden> · </span>
-              {theyPaid ? "Into" : "From"} {accountName}
-              <span aria-hidden> · </span>
-              {date ? formatStatementDate(fromInputDate(date), true) : "No date"}
-            </p>
-            {initial && <p className="mt-0.5 text-xs font-medium text-foreground/75">Changes will update the existing payment and its linked allocations.</p>}
-          </div>
-          <WsCloseButton onClick={onCancel} className="shrink-0" />
-        </div>
+      <PanelHeader
+        title={initial ? "Edit payment" : "Record payment"}
+        personName={personName}
+        tone={theyPaid ? "in" : "out"}
+        onClose={onCancel}
+        context={
+          <>
+            <CalendarDays className="size-3 shrink-0" aria-hidden />
+            <span className="truncate">{initial ? `Recorded ${formatStatementDate(initial.date, true)}` : cycleLabel}</span>
+          </>
+        }
+      />
 
-        {/* Live figures — every number here is `allocatePayment`'s */}
-        <dl className="mt-2.5 grid grid-cols-3 gap-2 sm:max-w-xl">
-          <Indicator label={theyPaid ? `Due from ${first}` : `Due to ${first}`} value={money(dueTotal)} tone={dueTotal > PAYMENT_EPSILON ? (theyPaid ? "text-settle-receivable-text" : "text-settle-payable-text") : undefined} />
-          <Indicator label="Settles balance" value={money(allocation.allocated)} tone={allocation.allocated > PAYMENT_EPSILON ? "text-settle-split-text" : undefined} />
-          <Indicator label="Money left to decide" value={money(allocation.extra)} emphasis={hasExtra} />
-        </dl>
-        {/* Only when Due includes brought-forward money — otherwise the single Due figure says it all. */}
-        {duePrevious > PAYMENT_EPSILON && (
-          <dl className="mt-2 grid max-w-xs gap-0.5 rounded-[6px] border border-border-strong px-2.5 py-1.5 text-xs" data-testid="rp-due-breakdown">
-            <div className="flex items-baseline justify-between gap-3">
-              <dt className="text-foreground/80">Previous pending</dt>
-              <dd className="font-semibold text-foreground tabular-nums">{money(duePrevious)}</dd>
-            </div>
-            <div className="flex items-baseline justify-between gap-3">
-              <dt className="text-foreground/80">Added this cycle</dt>
-              <dd className="font-semibold text-foreground tabular-nums">{money(dueThisCycle)}</dd>
-            </div>
-            <div className="mt-0.5 flex items-baseline justify-between gap-3 border-t border-border-strong pt-1">
-              <dt className="font-semibold text-foreground">Due through this cycle</dt>
-              <dd className="font-heading text-[13px] font-bold text-foreground tabular-nums">{money(dueTotal)}</dd>
-            </div>
-          </dl>
-        )}
-      </div>
-
-      <div className="grid lg:grid-cols-[minmax(0,1fr)_19rem]">
-        <div className="min-w-0 px-4 pt-3 pb-4">
-          {/* Who paid whom, how much, where it moved, when */}
-          <WsSegmented
+      <div className="flex-1 space-y-6 px-4 pt-4 pb-6 sm:px-6">
+        {/* ── A. The money: direction, amount, account, date, what's outstanding ── */}
+        <section aria-labelledby="rp-money-heading" className="space-y-3">
+          <h4 id="rp-money-heading" className="sr-only">
+            {theyPaid ? "Money received" : "Money paid"}
+          </h4>
+          <FlowSwitch
             label="Direction"
             value={direction}
             onChange={switchDirection}
-            className="sm:max-w-md"
-            options={[
-              { value: "theyPaid", label: `Money received from ${first}`, icon: ArrowDownLeft },
-              { value: "iPaid", label: `Money paid to ${first}`, icon: ArrowUpRight },
-            ]}
+            locked={!!initial}
+            options={(
+              [
+                { value: "theyPaid", tone: "in", title: "Received", sub: `from ${first}`, label: `Money received from ${first}`, due: theyOweTotal },
+                { value: "iPaid", tone: "out", title: "Paid", sub: `to ${first}`, label: `Money paid to ${first}`, due: iOweTotal },
+              ] as const
+            ).map(({ due, ...o }) => ({
+              ...o,
+              meta:
+                due > PAYMENT_EPSILON ? (
+                  <>
+                    <span className={cn("font-semibold tabular-nums", o.value === direction && flowText(o.tone))}>{money(due)}</span> due
+                  </>
+                ) : (
+                  "Nothing due"
+                ),
+            }))}
           />
-          <div className="mt-2.5 grid gap-2.5 sm:grid-cols-[minmax(0,10rem)_minmax(0,1fr)_minmax(0,10rem)] sm:items-end">
-            <WsField label={theyPaid ? "Amount received" : "Amount paid"}>
-              <CompactAmountInput label={theyPaid ? "Amount received" : "Amount paid"} value={amountText} onChange={setAmountText} autoFocus />
-            </WsField>
-            <AccountField choice={account} label={theyPaid ? "Receive into account" : "Pay from account"} />
-            <WsField label="Date">
-              <DateInput className={WS_FIELD} value={date} onChange={(e) => setDate(e.target.value)} />
-            </WsField>
-          </div>
-
-          {/* 1. The money decision first: how much settles the balance… */}
-          {options.length > 0 && (
-            <section aria-labelledby="rp-decide-heading" className="mt-4">
-              <h4 id="rp-decide-heading" className="text-sm font-bold text-foreground">
-                {theyPaid ? `Settle what ${first} owes you` : `Settle what you owe ${first}`}
-              </h4>
-              <p className="text-xs font-medium text-foreground/70">
-                How much of the {money(amount)} {theyPaid ? "received" : "paid"} should settle {theyPaid ? `${first}'s balance` : `what you owe ${first}`}? Applied oldest first.
-              </p>
-              <div className="mt-2 grid gap-2.5 sm:grid-cols-[minmax(0,12rem)_minmax(0,1fr)] sm:items-end">
-                <WsField label={theyPaid ? `Apply to ${first}'s balance` : `Apply to what you owe`}>
-                  <input
-                    type="number"
-                    inputMode="decimal"
-                    min={0}
-                    aria-label="Apply to balance"
-                    aria-invalid={capped?.error ? true : undefined}
-                    value={settleText ?? String(allocation.allocated)}
-                    onChange={(e) => {
-                      setManual(null);
-                      setSettleText(e.target.value);
-                    }}
-                    className={cn(WS_FIELD, "h-9 w-full text-right font-semibold tabular-nums")}
-                  />
-                </WsField>
-                <div className="flex flex-wrap gap-1.5">
-                  <button
-                    type="button"
-                    aria-pressed={settleText == null && manual == null}
-                    onClick={() => {
-                      setManual(null);
-                      setSettleText(null);
-                    }}
-                    className="h-8 rounded-[6px] border border-border-strong px-2.5 text-xs font-semibold text-foreground outline-none hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring aria-pressed:border-settle-split-edge aria-pressed:bg-settle-split-tint/50"
-                  >
-                    Settle full {money(Math.min(amount, allocation.selectedTotal))}
-                  </button>
-                  <button
-                    type="button"
-                    aria-pressed={settleText != null && Number(settleText) === 0 && settleText.trim() !== ""}
-                    onClick={() => {
-                      setManual(null);
-                      setSettleText("0");
-                    }}
-                    className="h-8 rounded-[6px] border border-border-strong px-2.5 text-xs font-semibold text-foreground outline-none hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring aria-pressed:border-settle-split-edge aria-pressed:bg-settle-split-tint/50"
-                  >
-                    Settle nothing now
-                  </button>
+          {canPostpone && (
+            <div role="radiogroup" aria-label={`Did ${first} pay?`} className="grid grid-cols-2 gap-1 rounded-[10px] bg-secondary/60 p-1">
+              {(
+                [
+                  { value: "received", label: "Money received", sub: "Record what was paid" },
+                  { value: "postpone", label: "Hasn't paid yet", sub: "Postpone · nothing recorded" },
+                ] as const
+              ).map((o) => (
+                <button
+                  key={o.value}
+                  type="button"
+                  role="radio"
+                  aria-checked={intent === o.value}
+                  onClick={() => setIntent(o.value)}
+                  className={cn(
+                    "min-w-0 rounded-[8px] px-3 py-1.5 text-left outline-none transition-[background-color,box-shadow] duration-150 focus-visible:ring-2 focus-visible:ring-ring",
+                    intent === o.value ? "bg-card shadow-sm ring-1 ring-border-strong" : "hover:bg-card/60",
+                  )}
+                >
+                  <span className="block truncate text-[13px] font-semibold text-foreground">{o.label}</span>
+                  <span className="block truncate text-[11px] text-foreground/70">{o.sub}</span>
+                </button>
+              ))}
+            </div>
+          )}
+          {postponing && (
+            <div className="rounded-[12px] border border-border-strong px-3 py-3" data-testid="rp-postpone">
+              {postponable.length > 1 && (
+                <fieldset className="mb-2.5">
+                  <legend className="mb-1 text-[11.5px] font-semibold text-foreground/75">Items to postpone</legend>
+                  <ul className="space-y-1">
+                    {postponable.map(({ row, title }) => (
+                      <li key={row.key}>
+                        <label className="flex min-w-0 items-center gap-2 text-[13px] text-foreground">
+                          <input
+                            type="checkbox"
+                            className="size-4 accent-[var(--color-primary)]"
+                            checked={!postponeOff.has(row.key)}
+                            // Already postponed in this attempt — stays ticked; a retry skips it.
+                            disabled={postponeDraft.doneKeys.has(row.key) || postponeDraft.busy}
+                            onChange={() =>
+                              setPostponeOff((s) => {
+                                const next = new Set(s);
+                                if (next.has(row.key)) next.delete(row.key);
+                                else next.add(row.key);
+                                return next;
+                              })
+                            }
+                          />
+                          <span className="min-w-0 truncate font-medium">{title}</span>
+                          {postponeDraft.doneKeys.has(row.key) ? (
+                            <span className="shrink-0 text-[11px] font-semibold text-foreground/70">Postponed</span>
+                          ) : postponeDraft.failures.some((f) => f.key === row.key) ? (
+                            <span className="shrink-0 text-[11px] font-semibold text-expense">Not postponed</span>
+                          ) : null}
+                          <span className="ml-auto shrink-0 font-semibold tabular-nums">{money(row.remaining ?? 0)}</span>
+                        </label>
+                      </li>
+                    ))}
+                  </ul>
+                </fieldset>
+              )}
+              <PostponeFields draft={postponeDraft} noMoneyNote />
+            </div>
+          )}
+          {!postponing && (
+            <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,16rem)]">
+              <div className="min-w-0">
+                <HeroAmount label={theyPaid ? "Amount received" : "Amount paid"} value={amountText} onChange={setAmountText} />
+                <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-foreground/75">
+                  <span>
+                    Total outstanding{" "}
+                    <span className={cn("font-semibold tabular-nums", dueTotal > PAYMENT_EPSILON ? (theyPaid ? "text-settle-receivable-text" : "text-settle-payable-text") : "text-foreground")} data-testid="rp-due-total">
+                      {money(dueTotal)}
+                    </span>
+                  </span>
+                  {/* Convenience only: types the outstanding figure into the amount — the same as typing it. */}
+                  {dueTotal > PAYMENT_EPSILON && amount !== dueTotal && (
+                    <button
+                      type="button"
+                      onClick={() => setAmountText(String(dueTotal))}
+                      className="h-6 rounded-full px-2 font-semibold text-foreground ring-1 ring-border-strong outline-none transition-[box-shadow] duration-150 hover:ring-settle-split-edge focus-visible:ring-2 focus-visible:ring-ring"
+                    >
+                      Use {money(dueTotal)}
+                    </button>
+                  )}
+                  {duePrevious > PAYMENT_EPSILON && (
+                    <details className="group basis-full">
+                      <summary className="flex w-fit cursor-pointer list-none items-center gap-1 rounded-[4px] font-semibold text-foreground/75 outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+                        <ChevronDown className="size-3.5 transition-transform group-open:rotate-180" aria-hidden />
+                        {money(duePrevious)} brought forward
+                      </summary>
+                      <dl className="mt-1.5 grid max-w-xs gap-0.5 rounded-[8px] bg-secondary/50 px-2.5 py-1.5" data-testid="rp-due-breakdown">
+                        <div className="flex items-baseline justify-between gap-3">
+                          <dt className="text-foreground/80">Previous pending</dt>
+                          <dd className="font-semibold text-foreground tabular-nums">{money(duePrevious)}</dd>
+                        </div>
+                        <div className="flex items-baseline justify-between gap-3">
+                          <dt className="text-foreground/80">Added this cycle</dt>
+                          <dd className="font-semibold text-foreground tabular-nums">{money(dueThisCycle)}</dd>
+                        </div>
+                        <div className="mt-0.5 flex items-baseline justify-between gap-3 border-t border-border-strong pt-1">
+                          <dt className="font-semibold text-foreground">Due through this cycle</dt>
+                          <dd className="font-semibold text-foreground tabular-nums">{money(dueTotal)}</dd>
+                        </div>
+                      </dl>
+                    </details>
+                  )}
                 </div>
               </div>
-              {capped?.error && (
-                <p className="mt-1 text-xs font-semibold text-warning" role="alert">
-                  {capped.error}
-                </p>
-              )}
-              {/* Two different "remaining" numbers — never mixed: a debt still owed vs money still to classify. */}
-              <dl className="mt-2.5 grid gap-2 sm:max-w-xl sm:grid-cols-2">
-                <div className="rounded-[6px] border border-border-strong px-2.5 py-1.5">
-                  <dt className="text-[10.5px] font-bold tracking-[0.06em] text-foreground/75 uppercase">{theyPaid ? `Still owed by ${first}` : `Still owed to ${first}`}</dt>
-                  <dd className={cn("font-heading text-[15px] font-semibold tabular-nums", allocation.unpaid > PAYMENT_EPSILON ? "text-warning" : "text-success")} data-testid="rp-still-owed">
-                    {money(allocation.unpaid)}
-                  </dd>
-                  <p className="text-[11px] text-foreground/65">Stays open on the same items — not advance, not income.</p>
-                </div>
-                <div className="rounded-[6px] border border-border-strong px-2.5 py-1.5">
-                  <dt className="text-[10.5px] font-bold tracking-[0.06em] text-foreground/75 uppercase">{theyPaid ? "Remaining received money" : "Remaining paid money"}</dt>
-                  <dd className="font-heading text-[15px] font-semibold text-foreground tabular-nums" data-testid="rp-left-over">
-                    {money(allocation.extra)}
-                  </dd>
-                  <p className="text-[11px] text-foreground/65">{hasExtra ? "Decide what it is below." : "Nothing left to decide."}</p>
-                </div>
-              </dl>
-            </section>
+              <div className="grid content-start gap-3 sm:grid-cols-2 md:grid-cols-1">
+                <AccountField choice={account} label={theyPaid ? "Receive into account" : "Pay from account"} />
+                <WsField label="Date">
+                  <DateInput className={WS_FIELD} value={date} onChange={(e) => setDate(e.target.value)} />
+                </WsField>
+              </div>
+            </div>
           )}
+        </section>
 
-          {/* 2. …then what the rest of the money is — a first-class decision, never silently classified */}
-          {hasExtra && (
-            <section aria-labelledby="rp-remaining-heading" className="mt-4 border-t border-border-strong pt-3.5">
-              <p className="flex flex-wrap items-baseline gap-x-2">
-                <span className="font-heading text-[20px] leading-tight font-bold text-foreground tabular-nums">{money(allocation.extra)}</span>
-                <span className="text-sm font-semibold text-foreground/85">{allocation.allocated > PAYMENT_EPSILON ? "left after settling" : "remaining"}</span>
-              </p>
-              <h4 id="rp-remaining-heading" className="text-sm font-bold text-foreground">
-                What should happen to this money?
-              </h4>
-              <p className="text-xs font-medium text-foreground/70">
-                {accountName} still {theyPaid ? "receives" : "pays"} {money(amount)} once — this only decides what the money means.
-              </p>
-              <ExtraAllocationEditor
-                extra={allocation.extra}
-                direction={direction}
-                firstName={first}
-                drafts={effectiveDrafts}
-                onChange={setExtraDrafts}
-                linkOptions={linkOptions}
-                incomeCategories={incomeCategories}
-                accountName={accountName}
-              />
-              {unselected.length > 0 && (
-                <div className="mt-2.5">
-                  <p className="text-xs font-semibold text-foreground/80">Or use it to settle another item:</p>
-                  <div className="mt-1.5 flex flex-wrap gap-1.5">
-                    {unselected.map((o) => (
-                      <button
-                        key={o.key}
-                        type="button"
-                        onClick={() => {
-                          setManual(null);
-                          setSettleText(null);
-                          toggle(o.key);
-                        }}
-                        className="h-8 rounded-full border border-border-strong bg-card px-2.5 text-xs font-semibold text-foreground outline-none hover:border-settle-split-edge hover:bg-settle-split-tint/50 focus-visible:ring-2 focus-visible:ring-ring"
-                      >
-                        + {o.title} · {formatStatementDate(o.date, true)} · {money(o.outstanding)}
+        {!postponing && (
+          <>
+            {/* ── B. Choose what to pay now — every due item, decided on its own row ── */}
+            <section aria-labelledby="rp-settle-heading">
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+                <div className="min-w-0">
+                  <h4 id="rp-settle-heading" className="text-[13px] font-bold text-foreground">
+                    {options.length === 0 ? (theyPaid ? `Nothing to receive from ${first} right now` : `Nothing to give to ${first} right now`) : "Choose what to pay now"}
+                  </h4>
+                  {options.length > 0 && (
+                    <p className="text-xs text-foreground/70">
+                      {automatic ? "Filled oldest first. Skip anything not being paid now." : "Your amounts — the received amount no longer re-fills them."}
+                    </p>
+                  )}
+                </div>
+                {options.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-1">
+                    {!automatic && (
+                      <button type="button" onClick={() => { setManual(null); setSettleText(null); }} className={LIST_ACTION}>
+                        <RotateCcw className="size-3.5" aria-hidden />
+                        Oldest first
                       </button>
+                    )}
+                    <button type="button" aria-pressed={allDueAuto} onClick={payAllDue} className={LIST_ACTION}>
+                      Pay all due
+                    </button>
+                    <button type="button" aria-pressed={allSkipped} onClick={skipAll} className={LIST_ACTION}>
+                      Skip all
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {options.length === 0 ? (
+                <p className="rounded-[10px] bg-secondary/50 px-3 py-2 text-xs text-foreground/75">The whole amount is money left to use — choose what it is for below.</p>
+              ) : (
+                <div className={cn("overflow-hidden rounded-[10px] border border-border-strong transition-opacity duration-200", waiting && "opacity-70")}>
+                  <ul className="divide-y divide-border" aria-label="Items to pay">
+                    {visible.map((o) => (
+                      <ObligationRow
+                        key={o.key}
+                        o={o}
+                        first={first}
+                        choice={choiceOf(o)}
+                        paying={payingOf(o)}
+                        after={afterOf(o)}
+                        value={selected.has(o.key) ? (manual ? (manual[o.key] ?? "") : capped || payingOf(o) > PAYMENT_EPSILON ? String(payingOf(o)) : "") : ""}
+                        inputRef={(el) => {
+                          if (el) inputRefs.current.set(o.key, el);
+                          else inputRefs.current.delete(o.key);
+                        }}
+                        onFull={() => payFull(o)}
+                        onPart={() => payPart(o)}
+                        onSkip={() => skip(o)}
+                        onType={(v) => typeAmount(o, v)}
+                        postpone={
+                          postponeRowOf(o) && afterOf(o) > PAYMENT_EPSILON
+                            ? { on: postponeAfter.has(o.key), toggle: () => togglePostpone(o.key), cycle: liveAfterItems.length > 0 ? cycleName(afterDraft.target) : null }
+                            : null
+                        }
+                      />
                     ))}
+                    {laterCount > 0 && (
+                      <li className="px-3 py-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setShowLater((v) => !v)}
+                          className="text-xs font-semibold text-foreground/80 underline underline-offset-2 outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                        >
+                          {showLater ? "Hide upcoming items" : `Show ${laterCount} upcoming ${laterCount === 1 ? "item" : "items"} after this cycle`}
+                        </button>
+                      </li>
+                    )}
+                  </ul>
+                  {/* The list's total — typing it pays that much in total, oldest first, across the chosen items. */}
+                  <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 border-t border-border-strong bg-secondary/50 px-3 py-2">
+                    <label className="flex items-center gap-2 text-xs font-semibold text-foreground">
+                      Paying now
+                      <span className="relative">
+                        <span aria-hidden className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-xs font-semibold text-muted-foreground">
+                          ₹
+                        </span>
+                        <input
+                          type="number"
+                          inputMode="decimal"
+                          step="0.01"
+                          min={0}
+                          aria-label="Total paying now"
+                          aria-invalid={capped?.error ? true : undefined}
+                          value={settleText ?? String(allocation.allocated)}
+                          onChange={(e) => {
+                            setManual(null);
+                            setSettleText(e.target.value);
+                          }}
+                          className={cn(WS_FIELD, "h-8 w-32 pl-6 text-right font-semibold tabular-nums [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none")}
+                        />
+                      </span>
+                    </label>
+                    <span className="text-xs text-foreground/70 tabular-nums">of {money(allocation.selectedTotal)} chosen</span>
                   </div>
                 </div>
               )}
-            </section>
-          )}
 
-          {/* 3. Optional follow-up on what is still owed — a reminder only, it moves no money */}
-          {onSetReminder && reminderTargets.length > 0 && (
-            <section aria-labelledby="rp-reminder-heading" className="mt-4 border-t border-border-strong pt-3.5">
-              <h4 id="rp-reminder-heading" className="text-sm font-bold text-foreground">
-                Remind me about the {money(allocation.unpaid)} still owed
-              </h4>
-              <p className="text-xs font-medium text-foreground/70">A personal reminder — it doesn&apos;t change what is owed and isn&apos;t shown on shared statements.</p>
-              <ReminderPicker value={reminder} onChange={setReminder} cycleStartDay={cycleStartDay} className="mt-2" />
-            </section>
-          )}
-
-          {/* 4. The detail: exactly which items this payment settles */}
-          <section aria-labelledby="rp-settle-heading" className="mt-4 border-t border-border-strong pt-3.5">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <h4 id="rp-settle-heading" className="text-sm font-bold text-foreground">
-                Payment allocation
-              </h4>
-              <div className="flex items-center gap-1">
-                {manual && (
-                  <button
-                    type="button"
-                    onClick={() => setManual(null)}
-                    className="h-8 rounded-[6px] px-2 text-xs font-semibold text-foreground/80 outline-none hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring"
-                  >
-                    Allocate automatically (oldest first)
-                  </button>
-                )}
-                {options.length > 0 && (
+              {capped?.error && <Notice tone="warning" role="alert">{capped.error}</Notice>}
+              {vanished.length > 0 && (
+                <Notice tone="warning" role="alert">
+                  {vanished.length === 1 ? "An item you chose" : `${vanished.length} items you chose`} changed or got settled elsewhere while this was open.{" "}
                   <button
                     type="button"
                     onClick={() => {
-                      setManual(null);
-                      setSelected(allSelected ? new Set() : new Set(options.filter((o) => o.timing !== "later").map((o) => o.key)));
+                      setSelected((s) => new Set([...s].filter((k) => !vanished.includes(k))));
+                      if (manual) setManual(Object.fromEntries(Object.entries(manual).filter(([k]) => !vanished.includes(k))));
                     }}
-                    className="h-8 rounded-[6px] border border-border-strong px-2.5 text-xs font-semibold text-foreground outline-none hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring"
+                    className="font-semibold underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   >
-                    {allSelected ? "Clear selection" : "Select all due"}
+                    Review the list
                   </button>
-                )}
-              </div>
-            </div>
-            {options.length === 0 ? (
-              <p className="mt-1.5 flex items-center gap-1.5 text-sm font-semibold text-foreground">
-                <Check className="size-4 shrink-0 text-success" strokeWidth={2.75} aria-hidden />
-                {theyPaid ? `Nothing to receive from ${first} right now` : `Nothing to give to ${first} right now`}
-                <span className="font-medium text-foreground/70">— decide what happens to the money below.</span>
-              </p>
-            ) : (
-              <div className="mt-2 overflow-hidden rounded-[6px] border border-border-strong">
-                <div
-                  aria-hidden
-                  className="hidden grid-cols-[1.25rem_minmax(0,1fr)_7rem_7.5rem_8rem] gap-x-3 border-b border-border-strong bg-secondary px-3 py-1.5 text-[11px] font-bold tracking-[0.05em] text-foreground/75 uppercase sm:grid"
-                >
-                  <span />
-                  <span>Item</span>
-                  <span className="text-right">Due</span>
-                  <span className="text-right">Paying now</span>
-                  <span className="text-right">After</span>
-                </div>
-                <ul className="divide-y divide-border">
-                  {visible.map((o) => {
-                    const on = selected.has(o.key);
-                    const line = lineByKey.get(o.key);
-                    const paying = line?.amount ?? 0;
-                    const remaining = on ? (line?.remainingAfter ?? o.outstanding) : o.outstanding;
-                    const result = !on || paying <= PAYMENT_EPSILON ? null : remaining <= PAYMENT_EPSILON ? "full" : "partial";
-                    return (
-                      <li
-                        key={o.key}
-                        data-selected={on || undefined}
-                        className={cn(
-                          "grid grid-cols-[1.25rem_minmax(0,1fr)] items-center gap-x-3 gap-y-1.5 px-3 py-2 transition-colors sm:grid-cols-[1.25rem_minmax(0,1fr)_7rem_7.5rem_8rem]",
-                          on ? "bg-settle-split-tint/50 shadow-[inset_3px_0_0_var(--color-settle-split-edge)]" : "hover:bg-secondary/60",
-                        )}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={on}
-                          onChange={() => {
-                            setManual(null);
-                            toggle(o.key);
-                          }}
-                          aria-label={`Apply to ${o.title}`}
-                          className="size-4 accent-[var(--color-settle-split-edge)]"
-                        />
-                        <div className="min-w-0">
-                          <p className="flex min-w-0 items-center gap-1.5 text-sm font-semibold text-foreground">
-                            <span className="truncate">{o.title}</span>
-                            {o.isEmi && <EmiBadge />}
-                            {o.timing === "carried" && (
-                              <span className="shrink-0 rounded-[4px] bg-settle-carried-badge px-1.5 text-[10px] leading-4 font-bold text-settle-carried-text uppercase">
-                                Carried forward
-                              </span>
-                            )}
-                            {o.timing === "later" && (
-                              <span className="shrink-0 rounded-[4px] bg-secondary px-1.5 text-[10px] leading-4 font-bold text-foreground/75 uppercase">Upcoming</span>
-                            )}
-                          </p>
-                          <p className="truncate text-xs font-medium text-foreground/75">
-                            {obligationSourceLabel(o, first)} · {formatStatementDate(o.date, true)}
-                          </p>
-                        </div>
-                        {/* On phones the three figures sit in a row under the title; from sm they're grid columns. */}
-                        <div className="col-start-2 grid grid-cols-3 items-center gap-2 sm:contents">
-                          <div className="text-left sm:text-right">
-                            <span className="block text-[10px] font-bold tracking-[0.05em] text-foreground/65 uppercase sm:hidden">Due</span>
-                            <span className="block text-sm font-semibold text-foreground tabular-nums">{money(o.outstanding)}</span>
-                            {o.amount > o.outstanding + PAYMENT_EPSILON && <span className="block text-[11px] text-foreground/65 tabular-nums">of {money(o.amount)}</span>}
-                          </div>
-                          <div className="sm:text-right">
-                            <span className="block text-[10px] font-bold tracking-[0.05em] text-foreground/65 uppercase sm:hidden">Paying now</span>
-                            {on ? (
-                              <input
-                                type="number"
-                                inputMode="decimal"
-                                min={0}
-                                aria-label={`Paying now for ${o.title}`}
-                                value={manual ? (manual[o.key] ?? "") : String(paying)}
-                                onChange={(e) => {
-                                  // Per-item amounts take over from "Apply to balance" (seeded from its lines).
-                                  const seed = seedManual();
-                                  setSettleText(null);
-                                  setManual((m) => ({
-                                    ...(m ?? seed),
-                                    [o.key]: e.target.value,
-                                  }));
-                                }}
-                                className={cn(WS_FIELD, "h-8 w-full text-right font-semibold tabular-nums sm:w-28 sm:justify-self-end")}
-                              />
-                            ) : (
-                              <span className="block text-sm text-foreground/55">—</span>
-                            )}
-                          </div>
-                          <div className="text-right">
-                            <span className="block text-[10px] font-bold tracking-[0.05em] text-foreground/65 uppercase sm:hidden">After</span>
-                            <span
-                              className={cn(
-                                "block text-sm font-semibold tabular-nums",
-                                result === "partial" ? "text-warning" : result === "full" ? "text-success" : "text-foreground",
-                              )}
-                            >
-                              {money(remaining)}
-                            </span>
-                            {result === "full" ? (
-                              <span className="inline-flex items-center gap-1 text-[11px] font-bold text-success">
-                                <Check className="size-3" strokeWidth={3} aria-hidden />
-                                Paid in full
-                              </span>
-                            ) : result === "partial" ? (
-                              <span className="inline-flex items-center gap-1 text-[11px] font-bold text-warning">
-                                <CircleDashed className="size-3" strokeWidth={2.75} aria-hidden />
-                                Partially paid
-                              </span>
-                            ) : (
-                              <span className="text-[11px] font-medium text-foreground/60">{on ? "Nothing applied" : "Not selected"}</span>
-                            )}
-                          </div>
-                        </div>
-                      </li>
-                    );
-                  })}
-                  {laterCount > 0 && (
-                    <li className="px-3 py-1.5">
+                </Notice>
+              )}
+              {theyPaid && allSkipped && amount > PAYMENT_EPSILON && !initial && (
+                <p className="mt-2 rounded-[8px] bg-warning/10 px-2.5 py-1.5 text-xs leading-snug text-foreground" data-testid="rp-settle-nothing-note">
+                  <span className="font-semibold tabular-nums">{money(amount)}</span> will still be recorded as received from {first} — none of it reduces what {first} owes.{" "}
+                  {canPostpone ? (
+                    <>
+                      If {first} hasn&apos;t paid,{" "}
                       <button
                         type="button"
-                        onClick={() => setShowLater((v) => !v)}
-                        className="text-xs font-semibold text-foreground/80 underline underline-offset-2 outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                        onClick={() => setIntent("postpone")}
+                        className="font-semibold text-primary-accent-text underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       >
-                        {showLater ? "Hide upcoming items" : `Show ${laterCount} upcoming ${laterCount === 1 ? "item" : "items"} after this cycle`}
+                        postpone instead
                       </button>
-                    </li>
+                      .
+                    </>
+                  ) : (
+                    <>Only use this when money was actually received.</>
                   )}
-                </ul>
-                <div className="flex flex-wrap items-center justify-end gap-x-5 gap-y-1 border-t border-border-strong bg-secondary/60 px-3 py-1.5 text-xs font-semibold text-foreground">
-                  <span>
-                    Selected <span className="tabular-nums">{money(allocation.selectedTotal)}</span>
-                  </span>
-                  <span>
-                    Paying <span className="tabular-nums">{money(allocation.allocated)}</span>
-                  </span>
-                  <span className={allocation.unpaid > PAYMENT_EPSILON ? "text-warning" : "text-success"}>
-                    Still open <span className="tabular-nums">{money(allocation.unpaid)}</span>
-                  </span>
+                </p>
+              )}
+
+              {/* Postponing the unpaid rest — chosen per row above; its options appear only once one is chosen. */}
+              {liveAfterItems.length > 0 && (
+                <div className="mt-3 rounded-[10px] border border-border-strong px-3 py-3 duration-200 animate-in fade-in" data-testid="rp-postpone-after">
+                  <p className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-foreground">
+                    <CalendarClock className="size-3.5 text-foreground/70" aria-hidden />
+                    Postpone after recording · {liveAfterItems.length} {liveAfterItems.length === 1 ? "item" : "items"}
+                  </p>
+                  <PostponeFields draft={afterDraft} />
                 </div>
-              </div>
-            )}
-
-            {elsewhere.length > 0 && (
-              <div className="mt-2 border-l-[3px] border-border-strong pl-3">
-                <p className="text-xs font-bold text-foreground/85">
-                  Also outstanding — settled at the source ({money(elsewhere.reduce((sum, e) => sum + e.outstanding, 0))})
-                </p>
-                <ul className="mt-0.5 space-y-0.5 text-xs">
-                  {elsewhere.map((e) => (
-                    <li key={e.key} className="flex flex-wrap items-baseline justify-between gap-x-3">
-                      <span className="font-semibold text-foreground">
-                        {formatStatementDate(e.date, true)} · {e.title} · {money(e.outstanding)}
-                      </span>
-                      <span className="text-foreground/75">
-                        {e.reason}
-                        {e.loanId && (
-                          <>
-                            {" · "}
-                            <a href={`/loans?agreement=${encodeURIComponent(e.loanId)}`} className="font-semibold text-foreground underline underline-offset-2">
-                              Open Loan
-                            </a>
-                          </>
-                        )}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </section>
-        </div>
-
-        {/* Sticky payment summary + the action */}
-        <aside aria-label="Payment summary" className="border-t border-border-strong bg-secondary/40 px-4 py-3.5 lg:border-t-0 lg:border-l">
-          <div className="lg:sticky lg:top-3">
-            <p className="text-[11px] font-bold tracking-[0.08em] text-foreground/80 uppercase">Payment summary</p>
-            <dl className="mt-2 space-y-1 text-sm">
-              <SummaryLine label={theyPaid ? "Received" : "Paid"} value={money(recon.received)} strong />
-              <div className="my-1.5 border-t border-border-strong" />
-              <SummaryLine label="Settled obligations" value={money(recon.allocated)} dot="bg-settle-split-edge" muted={recon.allocated <= PAYMENT_EPSILON} />
-              {theyPaid && (
-                <>
-                  <SummaryLine label="Set aside" value={money(recon.purpose)} dot="bg-settle-emi-edge" muted={recon.purpose <= PAYMENT_EPSILON} />
-                  {hasExtra && extraPlan.purposes.length > 0 && (
-                    <div className="ml-4 space-y-0.5 border-l border-border-strong pl-2.5 text-xs">
-                      {extraPlan.purposes.map((p, i) => (
-                        <div key={i} className="flex items-baseline justify-between gap-3">
-                          <dt className="truncate text-foreground/80">{p.title || "Unnamed purpose"}</dt>
-                          <dd className="font-semibold text-foreground tabular-nums">{money(p.amount)}</dd>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  <SummaryLine label="Income" value={money(recon.income)} dot="bg-success" muted={recon.income <= PAYMENT_EPSILON} />
-                </>
               )}
-              <SummaryLine label="Advance" value={money(recon.advance)} dot="bg-settle-advance-edge" muted={recon.advance <= PAYMENT_EPSILON} />
-              <div className="my-1.5 border-t border-border-strong" />
-              <div className="flex items-baseline justify-between gap-3">
-                <dt className="font-semibold text-foreground">Unassigned</dt>
-                <dd
-                  className={cn(
-                    "flex items-center gap-1 font-heading text-[15px] font-bold tabular-nums",
-                    recon.balanced ? "text-success" : recon.unallocated < 0 ? "text-expense" : "text-warning",
-                  )}
-                >
-                  {money(recon.unallocated)}
-                  {recon.balanced ? <Check className="size-4" strokeWidth={3} aria-label="Balanced" /> : <CircleAlert className="size-4" aria-label="Not balanced" />}
-                </dd>
-              </div>
-              {selected.size > 0 && (
-                <SummaryLine
-                  label={theyPaid ? `Still owed by ${first}` : `Still owed to ${first}`}
-                  value={money(allocation.unpaid)}
-                  tone={allocation.unpaid > PAYMENT_EPSILON ? "text-warning" : "text-success"}
+
+              {/* Optional follow-up on what is still owed — a reminder only, it moves no money */}
+              {onSetReminder && reminderTargets.length > 0 && amount > PAYMENT_EPSILON && (
+                <div className="mt-3 flex flex-wrap items-center gap-x-2.5 gap-y-1.5">
+                  <span className="flex items-center gap-1.5 text-xs font-semibold text-foreground" title="Personal only — doesn't change what is owed or appear on shared statements.">
+                    <Bell className="size-3.5 text-foreground/70" aria-hidden />
+                    Remind me about the {money(round2(reminderTargets.reduce((t, r) => t + afterOf(options.find((o) => o.key === r.key)!), 0)))} still owed
+                  </span>
+                  <ReminderPicker value={reminder} onChange={setReminder} cycleStartDay={cycleStartDay} />
+                  <p className="basis-full text-[11.5px] text-foreground/70" data-testid="rp-reminder-note">
+                    {reminder ? `You'll be reminded on ${formatStatementDate(reminder.remindOn)}, after this payment is recorded. ` : ""}
+                    A reminder only — it doesn&apos;t postpone what is owed.
+                  </p>
+                </div>
+              )}
+
+              {elsewhere.length > 0 && (
+                <details className="group mt-2 text-xs">
+                  <summary className="flex w-fit cursor-pointer list-none items-center gap-1 rounded-[4px] font-semibold text-foreground/70 outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+                    <ChevronDown className="size-3.5 transition-transform group-open:rotate-180" aria-hidden />
+                    Also outstanding — settled at the source ({money(elsewhere.reduce((sum, e) => sum + e.outstanding, 0))})
+                  </summary>
+                  <ul className="mt-1 space-y-0.5 border-l-[3px] border-border-strong pl-3">
+                    {elsewhere.map((e) => (
+                      <li key={e.key} className="flex flex-wrap items-baseline justify-between gap-x-3">
+                        <span className="font-semibold text-foreground">
+                          {formatStatementDate(e.date, true)} · {e.title} · {money(e.outstanding)}
+                        </span>
+                        <span className="text-foreground/75">
+                          {e.reason}
+                          {e.loanId && (
+                            <>
+                              {" · "}
+                              <a href={`/loans?agreement=${encodeURIComponent(e.loanId)}`} className="font-semibold text-foreground underline underline-offset-2">
+                                Open Loan
+                              </a>
+                            </>
+                          )}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+            </section>
+
+            {/* ── C. What to do with the money left — only when some of the payment isn't applied to bills ── */}
+            {hasExtra && (
+              <section aria-labelledby="rp-remaining-heading" className="duration-200 animate-in fade-in">
+                <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
+                  <h4 id="rp-remaining-heading" className="text-[13px] font-bold text-foreground">
+                    What to do with the money left
+                  </h4>
+                  <p className="text-xs text-foreground/70">
+                    <span className="font-heading text-[15px] font-bold text-settle-advance-text tabular-nums" data-testid="rp-left-over">
+                      {money(allocation.extra)}
+                    </span>{" "}
+                    left to use
+                  </p>
+                </div>
+                <ExtraAllocationEditor
+                  extra={allocation.extra}
+                  direction={direction}
+                  firstName={first}
+                  drafts={effectiveDrafts}
+                  onChange={setExtraDrafts}
+                  linkOptions={linkOptions}
+                  incomeCategories={incomeCategories}
                 />
-              )}
-            </dl>
-            {outcomeLabel && <p className={cn("mt-2 text-xs font-bold", outcomeLabel.tone)}>{outcomeLabel.text}</p>}
-            <p className="mt-1.5 text-xs leading-relaxed text-foreground/75">
-              {theyPaid ? `${accountName} goes up` : `${accountName} goes down`} by exactly {money(amount)} — one payment, never counted twice.
-            </p>
-            {otherSideTotal > PAYMENT_EPSILON && (
-              <div className="mt-2 border-l-[3px] border-border-strong pl-2.5 text-xs">
-                <p className="font-semibold text-foreground">
-                  {theyPaid ? `You also need to give ${first} ${money(otherSideTotal)}` : `${first} also needs to give you ${money(otherSideTotal)}`}
+                <p className="mt-1.5 text-[11.5px] text-foreground/65">
+                  {accountName} {theyPaid ? "receives" : "pays"} {money(amount)} once — this only decides what the money is for.
                 </p>
-                <p className="text-foreground/70">Tracked separately — not subtracted from this payment.</p>
+              </section>
+            )}
+
+            {otherSideTotal > PAYMENT_EPSILON && (
+              <p className="text-xs text-foreground/75" title="Tracked separately — not subtracted from this payment.">
+                {theyPaid ? `You also need to give ${first} ${money(otherSideTotal)}.` : `${first} also needs to give you ${money(otherSideTotal)}.`}{" "}
                 {!initial && (
                   <button
                     type="button"
                     onClick={() => switchDirection(theyPaid ? "iPaid" : "theyPaid")}
-                    className="mt-0.5 font-semibold text-primary-accent-text underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+                    className="font-semibold text-primary-accent-text underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
                   >
                     {theyPaid ? "View amount to give →" : "View amount to receive →"}
                   </button>
                 )}
-              </div>
+              </p>
             )}
-            {(error || blocker) && (
-              <p className={cn("mt-2 text-xs font-semibold", error ? "text-expense" : "text-foreground/85")} role={error ? "alert" : undefined}>
+          </>
+        )}
+      </div>
+
+      {/* ── Always-visible footer: where the money goes, what is still owed (separately), and the action ── */}
+      <aside
+        aria-label="Payment summary"
+        className="sticky bottom-0 z-10 mt-auto border-t border-border-strong bg-card px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-[0_-8px_24px_-12px_rgb(0_0_0/0.18)] sm:px-6"
+      >
+        {postponing ? (
+          <>
+            <div className="flex items-center justify-between gap-3">
+              <p className="min-w-0 truncate text-xs text-foreground/70">
+                <span className="font-heading text-[15px] font-bold text-foreground tabular-nums" data-testid="rp-hero-amount">
+                  {money(0)}
+                </span>{" "}
+                received · <span className="font-semibold text-foreground tabular-nums">{money(postponeDraft.remaining)}</span> still owed
+              </p>
+              <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-secondary px-2 py-0.5 text-[11px] font-bold text-foreground/75">
+                <CalendarClock className="size-3" aria-hidden />
+                No money recorded
+              </span>
+            </div>
+            {postponeDraft.error && (
+              <p className="mt-2 flex items-center gap-1.5 text-xs font-semibold text-expense" role="alert">
+                <CircleAlert className="size-3.5 shrink-0" aria-hidden />
+                {postponeDraft.error}
+              </p>
+            )}
+            {postponable.length > 1 && postponeDraft.failures.length > 0 && (
+              <ul className="mt-1 space-y-0.5 pl-5 text-xs text-foreground/80" aria-label="Not postponed">
+                {postponeDraft.failures.map((f) => (
+                  <li key={f.key}>
+                    <span className="font-semibold text-foreground">{f.title}</span> — {f.message}
+                  </li>
+                ))}
+              </ul>
+            )}
+            <div className="mt-3 flex items-center gap-2">
+              <button type="button" onClick={onCancel} disabled={postponeDraft.busy} className={cn(WS_GHOST, "shrink-0")}>
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={!postponeDraft.ready}
+                aria-busy={postponeDraft.busy}
+                className={cn(WS_PRIMARY, "h-10 min-w-0 flex-1 truncate whitespace-nowrap transition-[opacity,transform] duration-150 active:scale-[0.985]")}
+              >
+                {postponeDraft.busy && <Loader2 className="size-4 shrink-0 animate-spin" aria-hidden />}
+                <span className="truncate">
+                  {postponeDraft.busy
+                    ? "Postponing…"
+                    : postponeDraft.retrying
+                      ? `Retry ${money(postponeDraft.pendingRemaining)}`
+                      : `Postpone ${money(postponeDraft.pendingRemaining)}`}
+                </span>
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            {/* The receipt, every rupee in one bucket — received = applied + income + set aside + advance + unassigned. */}
+            <dl className="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-xs" aria-label="Where the money goes">
+              <Figure label={theyPaid ? "Received" : "Paid"} value={money(recon.received)} testId="rp-hero-amount" strong />
+              <Figure label="Applied to bills" value={money(recon.allocated)} testId="rp-applied" dot="bg-settle-split-edge" />
+              {recon.income > PAYMENT_EPSILON && <Figure label="Income" value={money(recon.income)} testId="rp-income" dot="bg-success" />}
+              {recon.purpose > PAYMENT_EPSILON && <Figure label="Set aside" value={money(recon.purpose)} testId="rp-set-aside" dot="bg-settle-emi-edge" />}
+              {recon.advance > PAYMENT_EPSILON && <Figure label="Advance" value={money(recon.advance)} testId="rp-advance" dot="bg-settle-advance-edge" />}
+              <Figure
+                label="Not yet assigned"
+                value={money(recon.unallocated)}
+                testId="rp-unassigned"
+                tone={recon.balanced ? "text-success" : recon.unallocated < 0 ? "text-expense" : "text-warning"}
+              />
+            </dl>
+            {/* A different balance — what the person owes after this payment. Never added to the receipt above. */}
+            {options.length > 0 && (
+              <p className="mt-1.5 flex flex-wrap items-baseline gap-x-2 border-t border-border pt-1.5 text-xs text-foreground/75" title="Not part of this payment — what is still owed after it.">
+                <span className="font-semibold text-foreground">{theyPaid ? `Still owed by ${first}` : `Still owed to ${first}`}</span>
+                <span className={cn("font-heading text-[14px] font-bold tabular-nums", stillOwed > PAYMENT_EPSILON ? "text-warning" : "text-success")} data-testid="rp-still-owed">
+                  {money(stillOwed)}
+                </span>
+                {postponeTotal > PAYMENT_EPSILON && (
+                  <span data-testid="rp-postpone-total">
+                    · {money(postponeTotal)} to be moved to the {cycleName(afterDraft.target)} cycle
+                  </span>
+                )}
+              </p>
+            )}
+
+            {(error || (blocker && amount > 0)) && (
+              <p
+                className={cn("mt-2 flex items-center gap-1.5 text-xs font-semibold duration-200 animate-in fade-in slide-in-from-bottom-1", error ? "text-expense" : "text-warning")}
+                role={error ? "alert" : undefined}
+                data-testid="rp-blocker"
+              >
+                <CircleAlert className="size-3.5 shrink-0" aria-hidden />
                 {error ?? blocker}
               </p>
             )}
-            <div className="mt-3 flex items-center gap-2">
+            <div className="mt-2.5 flex items-center gap-2">
               <button type="button" onClick={onCancel} disabled={saving} className={cn(WS_GHOST, "shrink-0")}>
                 Cancel
               </button>
-              <button type="submit" disabled={!!blocker || saving || !recon.balanced} className={cn(WS_PRIMARY, "min-w-0 flex-1 truncate whitespace-nowrap")}>
-                {saving ? "Saving…" : initial ? "Save changes" : theyPaid ? `Record ${money(amount)} received` : `Record ${money(amount)} paid`}
+              <button
+                type="submit"
+                disabled={!ready || saving}
+                className={cn(WS_PRIMARY, "h-10 min-w-0 flex-1 truncate whitespace-nowrap transition-[opacity,transform,box-shadow] duration-150 active:scale-[0.985] enabled:hover:shadow-[0_6px_18px_-8px_var(--color-primary)]")}
+              >
+                {saving && <Loader2 className="size-4 shrink-0 animate-spin" aria-hidden />}
+                <span className="truncate">
+                  {saving
+                    ? "Saving…"
+                    : initial
+                      ? "Save changes"
+                      : `Record ${money(amount)} ${theyPaid ? "received" : "paid"}${postponeTotal > PAYMENT_EPSILON ? ` · postpone ${money(postponeTotal)}` : ""}`}
+                </span>
               </button>
             </div>
-          </div>
-        </aside>
-      </div>
+          </>
+        )}
+      </aside>
     </form>
   );
 }
 
-function Indicator({ label, value, tone, emphasis }: { label: string; value: string; tone?: string; emphasis?: boolean }) {
+const LIST_ACTION =
+  "inline-flex h-7 items-center gap-1 rounded-full border border-border-strong px-2.5 text-xs font-semibold text-foreground/85 outline-none transition-colors duration-150 hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring aria-pressed:border-settle-split-edge aria-pressed:bg-settle-split-tint/60 aria-pressed:text-settle-split-text";
+
+/**
+ * One item to pay: what it is and what's due; Full / Part / Skip; the amount paying now (typed directly);
+ * and what stays after — with "Postpone" for an unpaid rest, when the item can be postponed.
+ */
+function ObligationRow({
+  o,
+  first,
+  choice,
+  paying,
+  after,
+  value,
+  inputRef,
+  onFull,
+  onPart,
+  onSkip,
+  onType,
+  postpone,
+}: {
+  o: PayableObligation;
+  first: string;
+  choice: PayChoice | null;
+  paying: number;
+  after: number;
+  value: string;
+  inputRef: (el: HTMLInputElement | null) => void;
+  onFull: () => void;
+  onPart: () => void;
+  onSkip: () => void;
+  onType: (v: string) => void;
+  postpone: { on: boolean; toggle: () => void; cycle: string | null } | null;
+}) {
+  const active = choice === "full" || choice === "part";
+  const choices: { k: PayChoice; text: string; label: string; act: () => void }[] = [
+    { k: "full", text: "Full", label: `Pay ${o.title} in full`, act: onFull },
+    { k: "part", text: "Part", label: `Pay part of ${o.title}`, act: onPart },
+    { k: "skip", text: "Skip", label: `Skip ${o.title}`, act: onSkip },
+  ];
   return (
-    <div
+    <li
+      data-choice={choice ?? "none"}
       className={cn(
-        "min-w-0 rounded-[6px] border px-2.5 py-1.5",
-        emphasis ? "border-primary-accent-text bg-primary/10 shadow-[inset_3px_0_0_var(--color-primary-accent-text)]" : "border-border-strong",
+        "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 px-3 py-2.5 transition-colors sm:grid-cols-[minmax(0,1fr)_auto_7.5rem_7rem]",
+        active ? "shadow-[inset_3px_0_0_var(--color-settle-split-edge)]" : "",
       )}
     >
-      <dt className="truncate text-[10.5px] font-bold tracking-[0.06em] text-foreground/75 uppercase">{label}</dt>
-      <dd className={cn("truncate font-heading tabular-nums", emphasis ? "text-[17px] font-bold text-foreground" : "text-[15px] font-semibold", !emphasis && (tone ?? "text-foreground"))}>
+      <div className="col-span-2 min-w-0 sm:col-span-1">
+        <p className={cn("flex min-w-0 items-center gap-1.5 text-sm font-semibold", choice === "skip" ? "text-foreground/70" : "text-foreground")}>
+          <span className="truncate">{o.title}</span>
+          {o.isEmi && <EmiBadge />}
+          {o.timing === "carried" && (
+            <span className="shrink-0 rounded-[4px] bg-settle-carried-badge px-1.5 text-[10px] leading-4 font-bold text-settle-carried-text uppercase">Carried forward</span>
+          )}
+          {o.timing === "later" && <span className="shrink-0 rounded-[4px] bg-secondary px-1.5 text-[10px] leading-4 font-bold text-foreground/75 uppercase">Upcoming</span>}
+        </p>
+        <p className="truncate text-xs text-foreground/70">
+          {obligationSourceLabel(o, first)} · {formatStatementDate(o.date, true)} ·{" "}
+          <span className="font-semibold text-foreground tabular-nums">{money(o.outstanding)}</span> due
+          {o.amount > o.outstanding + PAYMENT_EPSILON && <span className="tabular-nums"> of {money(o.amount)}</span>}
+        </p>
+      </div>
+
+      <div role="group" aria-label={`How much of ${o.title}`} className="inline-flex shrink-0 rounded-[8px] bg-secondary p-0.5">
+        {choices.map(({ k, text, label, act }) => (
+          <button
+            key={k}
+            type="button"
+            aria-pressed={choice === k}
+            aria-label={label}
+            onClick={act}
+            className={cn(
+              "h-7 rounded-[6px] px-2.5 text-xs font-semibold outline-none transition-[background-color,color,box-shadow] duration-150 focus-visible:ring-2 focus-visible:ring-ring",
+              choice === k
+                ? k === "skip"
+                  ? "bg-card text-foreground shadow-sm ring-1 ring-border-strong"
+                  : "bg-card text-settle-split-text shadow-sm ring-1 ring-settle-split-edge"
+                : "text-foreground/70 hover:text-foreground",
+            )}
+          >
+            {text}
+          </button>
+        ))}
+      </div>
+
+      <div className="relative">
+        <span aria-hidden className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-xs font-semibold text-muted-foreground">
+          ₹
+        </span>
+        <input
+          ref={inputRef}
+          type="number"
+          inputMode="decimal"
+          step="0.01"
+          min={0}
+          aria-label={`Paying now for ${o.title}`}
+          placeholder="0"
+          value={value}
+          onChange={(e) => onType(e.target.value)}
+          className={cn(
+            WS_FIELD,
+            "h-8 pl-6 text-right font-semibold tabular-nums [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none",
+            !active && "text-foreground/60",
+          )}
+        />
+      </div>
+
+      <div className="min-w-0 text-right">
+        {choice === "full" ? (
+          <span className="inline-flex items-center gap-1 text-xs font-bold text-success">
+            <Check className="size-3.5" strokeWidth={3} aria-hidden />
+            Paid in full
+          </span>
+        ) : (
+          <span className={cn("block text-xs font-semibold tabular-nums", choice === "part" && paying > PAYMENT_EPSILON ? "text-warning" : "text-foreground/75")}>
+            {choice === "skip" ? `${money(after)} unpaid` : choice === "part" ? `${money(after)} left` : `${money(after)} not covered`}
+          </span>
+        )}
+        {postpone && (
+          <label className="mt-0.5 inline-flex cursor-pointer items-center gap-1 text-[11px] font-semibold text-foreground/75 hover:text-foreground">
+            <input type="checkbox" checked={postpone.on} onChange={postpone.toggle} aria-label={`Postpone the rest of ${o.title}`} className="size-3.5 accent-[var(--color-primary)]" />
+            {postpone.on && postpone.cycle ? `To ${postpone.cycle} cycle` : "Postpone"}
+          </label>
+        )}
+      </div>
+    </li>
+  );
+}
+
+function Notice({ tone, role, children }: { tone: "warning"; role?: "alert"; children: React.ReactNode }) {
+  return (
+    <p className={cn("mt-2 flex items-start gap-1.5 text-xs font-semibold duration-200 animate-in fade-in", tone === "warning" && "text-warning")} role={role}>
+      <CircleAlert className="mt-px size-3.5 shrink-0" aria-hidden />
+      <span>{children}</span>
+    </p>
+  );
+}
+
+/** One bucket of the receipt in the pinned summary — label, then amount. */
+function Figure({ label, value, testId, tone, dot, strong }: { label: string; value: string; testId: string; tone?: string; dot?: string; strong?: boolean }) {
+  return (
+    <div className="flex items-baseline gap-1.5">
+      <dt className="flex items-center gap-1.5 text-foreground/70">
+        {dot && <span aria-hidden className={cn("size-2 shrink-0 rounded-full", dot)} />}
+        {label}
+      </dt>
+      <dd className={cn("font-semibold tabular-nums", strong ? "font-heading text-[15px] font-bold text-foreground" : (tone ?? "text-foreground"))} data-testid={testId}>
         {value}
       </dd>
     </div>
   );
 }
 
-function SummaryLine({ label, value, tone, strong, dot, muted }: { label: string; value: string; tone?: string; strong?: boolean; dot?: string; muted?: boolean }) {
+/**
+ * After the receipt is saved, when postponing what stays unpaid didn't fully succeed: the payment is done (said
+ * once, plainly); each item says whether it was postponed; Retry re-sends only the ones not saved yet.
+ */
+function PostponeResult({
+  personName,
+  first,
+  amount,
+  theyPaid,
+  items,
+  draft,
+  saving,
+  onRetry,
+  onDone,
+}: {
+  personName: string;
+  first: string;
+  amount: number;
+  theyPaid: boolean;
+  items: readonly PostponeItem[];
+  draft: ReturnType<typeof usePostponeDraft>;
+  saving: boolean;
+  onRetry: () => void;
+  onDone: () => void;
+}) {
+  const busy = saving || draft.busy;
   return (
-    <div className="flex items-baseline justify-between gap-3">
-      <dt className={cn("flex items-center gap-2", strong ? "font-semibold text-foreground" : "text-foreground/80")}>
-        {dot && <span aria-hidden className={cn("size-2 shrink-0 rounded-full", dot, muted && "opacity-40")} />}
-        {label}
-      </dt>
-      <dd className={cn("tabular-nums", strong ? "font-heading text-[16px] font-bold" : "font-semibold", muted ? "text-foreground/55" : (tone ?? "text-foreground"))}>{value}</dd>
-    </div>
+    <form
+      noValidate
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (!busy && draft.ready) onRetry();
+      }}
+      aria-label={`Payment recorded — ${personName}`}
+      className="mt-4 flex min-h-full flex-col rounded-[12px] border border-border-strong bg-card"
+    >
+      <PanelHeader title="Payment recorded" personName={personName} tone={theyPaid ? "in" : "out"} onClose={onDone} />
+      <div className="flex-1 space-y-4 px-4 pt-4 pb-6 sm:px-6">
+        <p role="status" className="flex items-center gap-2 rounded-[10px] bg-success/10 px-3 py-2 text-sm font-semibold text-foreground">
+          <Check className="size-4 shrink-0 text-success" strokeWidth={3} aria-hidden />
+          {money(amount)} {theyPaid ? `received from ${first}` : `paid to ${first}`} is recorded.
+        </p>
+        <section aria-labelledby="rp-result-postpone">
+          <h4 id="rp-result-postpone" className="mb-1.5 text-[13px] font-bold text-foreground">
+            Postponing what stays unpaid
+          </h4>
+          <ul className="divide-y divide-border rounded-[10px] border border-border-strong" aria-label="Postponements">
+            {items.map(({ row, title }) => {
+              const done = draft.doneKeys.has(row.key);
+              const failure = draft.failures.find((f) => f.key === row.key);
+              return (
+                <li key={row.key} className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 px-3 py-2 text-sm">
+                  <span className="min-w-0 truncate font-medium text-foreground">{title}</span>
+                  <span className="tabular-nums text-foreground/80">{money(row.remaining ?? 0)}</span>
+                  <span className={cn("basis-full text-xs font-semibold", done ? "text-success" : failure ? "text-expense" : "text-foreground/70")}>
+                    {done ? "Postponed" : failure ? `Not postponed — ${failure.message}` : busy ? "Postponing…" : "Not postponed yet"}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+          {draft.error && (
+            <p className="mt-2 flex items-center gap-1.5 text-xs font-semibold text-expense" role="alert">
+              <CircleAlert className="size-3.5 shrink-0" aria-hidden />
+              {draft.error}
+            </p>
+          )}
+          {draft.doneKeys.size < items.length && (
+            <div className="mt-3 rounded-[10px] border border-border px-3 py-3">
+              <PostponeFields draft={draft} />
+            </div>
+          )}
+        </section>
+      </div>
+      <div className="sticky bottom-0 z-10 mt-auto flex items-center gap-2 border-t border-border-strong bg-card px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-6">
+        <button type="button" onClick={onDone} disabled={busy} className={cn(WS_GHOST, "shrink-0")}>
+          Close
+        </button>
+        <button type="submit" disabled={busy || !draft.ready} aria-busy={busy} className={cn(WS_PRIMARY, "h-10 min-w-0 flex-1 truncate whitespace-nowrap")}>
+          {busy && <Loader2 className="size-4 shrink-0 animate-spin" aria-hidden />}
+          <span className="truncate">{busy ? "Postponing…" : `Retry postponing ${money(draft.pendingRemaining)}`}</span>
+        </button>
+      </div>
+    </form>
   );
 }
 

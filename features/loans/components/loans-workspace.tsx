@@ -65,6 +65,8 @@ interface LoanFormState {
   direction: LoanDirection;
   principal: string;
   ratePercent: string;
+  /** Edit only — the period the saved rate is quoted in (kept as-is on save). */
+  ratePeriod?: "monthly" | "yearly";
   interestType: InterestType;
   installmentFrequency: ScheduleType;
   installmentCount: string;
@@ -124,6 +126,7 @@ function formFromRow(row: LoanRow): LoanFormState {
     direction: row.direction,
     principal: String(row.loan.loanAmount),
     ratePercent: String(row.loan.interest?.ratePercent ?? ""),
+    ratePeriod: row.loan.interest?.period,
     interestType: row.loan.interest?.type ?? "reducingBalance",
     installmentFrequency: row.loan.installmentFrequency ?? "monthly",
     installmentCount: String(row.loan.installmentCount ?? row.totalInstallments),
@@ -252,7 +255,7 @@ export function LoansWorkspace({ openRequest = null, trashRequest = 0 }: LoansWo
         // save.
         const rate = form.ratePercent.trim() === "" ? null : Number(form.ratePercent);
         const newInterest =
-          rate != null && Number.isFinite(rate) && rate >= 0 ? { type: form.interestType, ratePercent: rate, period: "yearly" as const } : null;
+          rate != null && Number.isFinite(rate) && rate >= 0 ? { type: form.interestType, ratePercent: rate, period: activeRow.loan.interest?.period ?? ("yearly" as const) } : null;
         const newInstallmentCount = Number(form.installmentCount) || activeRow.totalInstallments;
         const newLoanAmount = Number(form.principal);
         const originalInterest = activeRow.loan.interest;
@@ -838,7 +841,7 @@ function LoanFormFields({
             />
           </FieldGroup>
           <Field
-            label="Interest rate (% per year)"
+            label={form.ratePeriod === "monthly" ? "Interest rate (% per month)" : "Interest rate (% per year)"}
             hint={isEdit ? "Re-amortizes the remaining balance over the unpaid installments." : "Leave empty if there's no interest."}
           >
             <input

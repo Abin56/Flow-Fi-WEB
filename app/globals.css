@@ -263,14 +263,17 @@
   --debt-strong: oklch(0.45 0.23 293);
   /* People settlement semantic families - text (>= 4.5:1 on card), strong edge, a solid row tint that
      stays visible on low-contrast displays, and a badge surface. Lime stays the action accent. */
-  --settle-receivable-text: oklch(0.45 0.14 149);
-  --settle-receivable-edge: oklch(0.58 0.16 149);
-  --settle-receivable-tint: oklch(0.955 0.035 149);
-  --settle-receivable-badge: oklch(0.9 0.07 149);
-  --settle-payable-text: oklch(0.5 0.2 25);
-  --settle-payable-edge: oklch(0.6 0.21 25);
-  --settle-payable-tint: oklch(0.955 0.03 25);
-  --settle-payable-badge: oklch(0.9 0.065 25);
+  /* "Owed to you / expected" is a muted steel blue, not green: green (--success) is kept for money that
+     has actually been received or settled, so an unpaid receivable never reads as paid. */
+  --settle-receivable-text: oklch(0.43 0.08 250);
+  --settle-receivable-edge: oklch(0.58 0.1 250);
+  --settle-receivable-tint: oklch(0.955 0.016 250);
+  --settle-receivable-badge: oklch(0.9 0.04 250);
+  /* "You owe" (not overdue) is a restrained warm clay, not red: strong red (--expense) is kept for overdue. */
+  --settle-payable-text: oklch(0.45 0.08 45);
+  --settle-payable-edge: oklch(0.6 0.09 45);
+  --settle-payable-tint: oklch(0.955 0.015 50);
+  --settle-payable-badge: oklch(0.9 0.035 50);
   --settle-emi-text: oklch(0.48 0.13 62);
   --settle-emi-edge: oklch(0.72 0.16 65);
   --settle-emi-tint: oklch(0.96 0.045 80);
@@ -472,14 +475,14 @@
   --debt-border: oklch(0.68 0.17 293);
   --debt-text: oklch(0.8 0.12 293);
   --debt-strong: oklch(0.74 0.19 293);
-  --settle-receivable-text: oklch(0.8 0.15 149);
-  --settle-receivable-edge: oklch(0.7 0.16 149);
-  --settle-receivable-tint: oklch(0.27 0.045 149);
-  --settle-receivable-badge: oklch(0.34 0.07 149);
-  --settle-payable-text: oklch(0.8 0.14 25);
-  --settle-payable-edge: oklch(0.7 0.18 25);
-  --settle-payable-tint: oklch(0.27 0.045 25);
-  --settle-payable-badge: oklch(0.35 0.08 25);
+  --settle-receivable-text: oklch(0.82 0.07 250);
+  --settle-receivable-edge: oklch(0.68 0.1 250);
+  --settle-receivable-tint: oklch(0.27 0.025 250);
+  --settle-receivable-badge: oklch(0.35 0.045 250);
+  --settle-payable-text: oklch(0.82 0.07 50);
+  --settle-payable-edge: oklch(0.68 0.08 50);
+  --settle-payable-tint: oklch(0.27 0.02 50);
+  --settle-payable-badge: oklch(0.35 0.04 50);
   --settle-emi-text: oklch(0.85 0.13 75);
   --settle-emi-edge: oklch(0.78 0.15 70);
   --settle-emi-tint: oklch(0.28 0.045 70);

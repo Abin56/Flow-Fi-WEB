@@ -3,7 +3,7 @@
 import { ArrowDownLeft, ArrowLeft, ArrowUpRight, Check, ChevronLeft, ChevronRight, HandCoins, ListX, Plus, Search, Split } from "lucide-react";
 import { useLayoutEffect, useRef, useState } from "react";
 import { CyclePicker } from "@/features/people/components/people-ledger-list";
-import { CarriedForwardNote, ScopeSwitch, type LedgerRowHandlers, type LedgerScope } from "@/features/people/components/person-activity-feed";
+import { CarriedForwardNote, ScopeSwitch, type CarriedForward, type LedgerRowHandlers, type LedgerScope } from "@/features/people/components/person-activity-feed";
 import type { SettlementLookupsWithAccounts } from "@/features/people/hooks/use-settlement-lookups";
 import { filterLedgerRows, type LedgerRow } from "@/features/people/lib/person-ledger-rows";
 import type { SettlementStatusFilter, SettlementTypeFilter } from "@/features/people/lib/settlement-presentation";
@@ -133,7 +133,7 @@ export function TransactionLedgerMode({
   renderSplit?: (back: () => void) => React.ReactNode;
   deleteAllCount: number;
   /** The selected cycle's previous pending (engine value) — shown while viewing that cycle. */
-  carriedForward?: { amount: number; direction: "theyOwe" | "iOwe" } | null;
+  carriedForward?: CarriedForward | null;
   onDeleteAll?: () => void;
 }) {
   const [status, setStatus] = useState<SettlementStatusFilter>("all");

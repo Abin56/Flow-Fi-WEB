@@ -73,7 +73,18 @@ import { isSplit, type Expense, type SplitType } from "@/lib/models/expense";
 import type { Account, AccountType } from "@/lib/models/account";
 import type { Category, CategoryType } from "@/lib/models/category";
 import type { LedgerEntryType, Person } from "@/lib/models/person";
-import { PERSON_FUNDED_ACCOUNT_ID, type Transaction } from "@/lib/models/transaction";
+import { PERSON_FUNDED_ACCOUNT_ID, transferFeeIdFor, type Transaction } from "@/lib/models/transaction";
+import {
+  defaultFeeCategoryId,
+  parseFee,
+  transferCategoryId,
+  transferDescription,
+  transferEffect,
+  transferFeeParams,
+  transferFeeProblem,
+  type TransferFeeChargedTo,
+} from "@/features/transactions/lib/transfer-effect";
+import { LinkedTransferSummary, TransferEffectPreview, TransferFeeFields } from "./transfer-own-account-panel";
 import type { ExpenseParticipantInput } from "@/lib/repositories/expense-repository";
 import { CardStatementChangedError, type EditTransactionParams } from "@/lib/repositories/transaction-repository";
 import { formatMonthYear, isSameMonth, transactionFlagFor } from "@/features/transactions/lib/transaction-flag";
@@ -427,11 +438,12 @@ function CategorySelect({
 type FormKind = TxnFormKind;
 
 const FORM_KINDS: FormKind[] = ["expense", "income", "transfer"];
-/** Kinds offered when adding a brand-new transaction — Transfer is intentionally left off: a new
- *  transfer can only be started from a flow that opens this popup with `defaultKind: "transfer"`
- *  (card Pay bill), which keeps all three so the Transfer mode has its own visible identity. An
- *  existing transfer still opens/edits exactly as before (Edit mode shows all three, locked). */
-const ADD_MODE_FORM_KINDS: FormKind[] = ["expense", "income"];
+/** Kinds offered when adding a brand-new transaction. Transfer records money moved between my own
+ *  accounts (e.g. a credit card charged through a payment app into my bank) as one linked pair — never
+ *  income or spending — with an optional fee. Paying a card bill still starts from the card's Pay bill,
+ *  which opens this popup with `defaultKind: "transfer"` and the card as the To account. An existing
+ *  transfer opens/edits exactly as before (Edit mode shows all three, locked). */
+const ADD_MODE_FORM_KINDS: FormKind[] = ["expense", "income", "transfer"];
 
 /** The amount's sign — money out, money in, or none for a transfer (neither income nor expense). */
 function kindSign(kind: FormKind): string {
@@ -490,7 +502,11 @@ export function TransactionDetailsModal({
   paymentScope = null,
   statementIntent = null,
   onRefreshBill = null,
+  cardAvailableCredit = null,
 }: {
+  /** Add mode + transfer — each credit card ACCOUNT's current available credit (canonical card standings),
+   *  so the preview can warn when a transfer out of a card goes beyond it. Display only. */
+  cardAvailableCredit?: ReadonlyMap<string, number> | null;
   /** Card Pay bill — "Refresh bill": an authoritative fresh read of the card's bill (Firestore, canonical
    *  scope + People). Resolves to the statement normal Pay Now would pay now (null: nothing payable). Never saves. */
   onRefreshBill?: ((accountId: string) => Promise<{ accountId: string; statementId: string; remaining: number } | null>) | null;
@@ -537,6 +553,11 @@ export function TransactionDetailsModal({
   const [notes, setNotes] = useState("");
   const [accountId, setAccountId] = useState("");
   const [destinationAccountId, setDestinationAccountId] = useState("");
+  // Add mode + transfer between my own accounts only — see `transfer-effect.ts`.
+  const [transferFee, setTransferFee] = useState("");
+  const [feeChargedTo, setFeeChargedTo] = useState<TransferFeeChargedTo>("source");
+  const [feeCategoryId, setFeeCategoryId] = useState("");
+  const [viaApp, setViaApp] = useState("");
   const [categoryId, setCategoryId] = useState("");
   const [exclude, setExclude] = useState(false);
   const [reassign, setReassign] = useState(false);
@@ -655,6 +676,10 @@ export function TransactionDetailsModal({
       setNotes("");
       setAccountId(firstAccount?.id ?? "");
       setDestinationAccountId(defaultKind === "transfer" ? (initialDestinationAccountId ?? "") : "");
+      setTransferFee("");
+      setFeeChargedTo("source");
+      setFeeCategoryId(defaultFeeCategoryId(categories));
+      setViaApp("");
       setCategoryId(firstCategory?.id ?? "");
       setExclude(false);
       setReassign(false);
@@ -709,6 +734,22 @@ export function TransactionDetailsModal({
   const filteredAccounts = kind === "income" || borrowsCash ? accounts.filter((a) => a.type !== "card") : accounts;
   const destinationAccount = kind === "transfer" ? accounts.find((a) => a.id === destinationAccountId) : undefined;
   const paysCardBill = destinationAccount?.type === "card";
+  /** A new transfer between my own accounts that is NOT a card bill payment (e.g. Credit Card → my bank):
+   *  offers the optional fee / payment app and previews the exact effect. Card bill payments are unchanged. */
+  const ownTransfer = !transaction && kind === "transfer" && !paysCardBill;
+  const sourceAccount = accounts.find((a) => a.id === accountId);
+  const ownTransferEffect = ownTransfer
+    ? transferEffect({
+        amount: Number(amount) || 0,
+        fee: parseFee(transferFee),
+        chargedTo: feeChargedTo,
+        availableCredit: sourceAccount?.type === "card" ? (cardAvailableCredit?.get(sourceAccount.id) ?? null) : null,
+      })
+    : null;
+  // A saved transfer leg or transfer fee: its linked records, from the already-loaded list (no extra read).
+  const linkedTransferId = transaction?.transferId ?? transaction?.transferFeeForId ?? null;
+  const linkedTransferLegs = linkedTransferId != null ? existingTransactions.filter((t) => t.transferId === linkedTransferId) : [];
+  const linkedTransferFee = linkedTransferId != null ? (existingTransactions.find((t) => t.id === transferFeeIdFor(linkedTransferId)) ?? null) : null;
 
   // People settlement gate — only a new transfer paying the gated card. Obligations linked to that bill
   // (by key, from the caller's readiness) gate it; nothing else about the person does.
@@ -833,6 +874,13 @@ export function TransactionDetailsModal({
       if (!destinationAccountId) return fail("destination", "Select a destination account.");
       if (destinationAccountId === accountId) return fail("destination", "Source and destination accounts must differ.");
     }
+    if (ownTransfer) {
+      const feeCheck = { amount: amountValue, feeText: transferFee, chargedTo: feeChargedTo };
+      const feeProblem = transferFeeProblem({ ...feeCheck, feeCategoryId: feeCategoryId || "-" });
+      if (feeProblem) return fail("fee", feeProblem);
+      const categoryProblem = transferFeeProblem({ ...feeCheck, feeCategoryId });
+      if (categoryProblem) return fail("feeCategory", categoryProblem);
+    }
     // Assigning to a person needs an explicit direction — never defaulted for the user.
     if (!transaction && kind === "expense" && personId != null && !splitOpen && !personEntryType) {
       return fail("personDirection", "Select Money given or Money borrowed.");
@@ -947,6 +995,8 @@ export function TransactionDetailsModal({
 
     const amountValue = Number(amount);
     const dateTime = new Date(date);
+    // Own-account transfer: the payment app rides on both legs' description (the duplicate check sees the same text).
+    const legDescription = ownTransfer ? transferDescription(description, viaApp) : description;
 
     // Pre-save duplicate gate — Add mode only (editing an existing transaction doesn't create a
     // new one, so there's nothing to check). A transfer writes two legs — an expense on the
@@ -963,7 +1013,7 @@ export function TransactionDetailsModal({
         kind === "transfer"
           ? await duplicateGuard.guardBatch([
               {
-                description,
+                description: legDescription,
                 amount: amountValue,
                 date: dateTime,
                 direction: "debit",
@@ -972,7 +1022,7 @@ export function TransactionDetailsModal({
                 requireDescriptionMatch: false,
                 ignoreAccountIds: isCardBillPayment ? [destinationAccountId] : undefined,
               },
-              { description, amount: amountValue, date: dateTime, direction: "credit", accountId: destinationAccountId, referenceNumber: null, requireDescriptionMatch: false },
+              { description: legDescription, amount: amountValue, date: dateTime, direction: "credit", accountId: destinationAccountId, referenceNumber: null, requireDescriptionMatch: false },
             ])
           : await duplicateGuard.guard({
               description,
@@ -1031,7 +1081,20 @@ export function TransactionDetailsModal({
           const intent = intentSnapshot.intent;
           const cardStatementIntent =
             intent != null && intent.accountId === destinationAccountId && amountValue <= intent.remaining + 0.005 ? { statementId: intent.statementId } : null;
-          await actions.createTransferPair({ amount: amountValue, dateTime, sourceAccountId: accountId, destinationAccountId, categoryId, description, notes, idempotencyKey: transferKey, cardStatementIntent });
+          await actions.createTransferPair({
+            amount: amountValue,
+            dateTime,
+            sourceAccountId: accountId,
+            destinationAccountId,
+            // Own-account transfer: legs file under "Transfer" when the user has it; the fee (if any) is its own
+            // counted expense written in the same atomic save. A card bill payment is saved exactly as before.
+            categoryId: ownTransfer ? transferCategoryId(categories, categoryId) : categoryId,
+            description: legDescription,
+            notes,
+            idempotencyKey: transferKey,
+            cardStatementIntent,
+            fee: ownTransfer ? transferFeeParams({ feeText: transferFee, chargedTo: feeChargedTo, feeCategoryId, viaApp }) : null,
+          });
         } else {
           const newTransaction = await actions.createTransaction({
             type: kind,
@@ -1650,6 +1713,9 @@ export function TransactionDetailsModal({
                 </p>
               </div>
             )}
+            {transaction && linkedTransferId != null && (
+              <LinkedTransferSummary legs={linkedTransferLegs} fee={linkedTransferFee} accounts={accounts} current={transaction} />
+            )}
 
             <TxnModeSwitch
               value={kind}
@@ -1851,6 +1917,25 @@ export function TransactionDetailsModal({
               );
             })()}
             </FormSection>
+
+            {ownTransfer && ownTransferEffect && (
+              <FormSection accent={kind} icon={Info} title="Fee & preview" aside={<span className="text-[11px] font-medium text-foreground/70">Optional</span>}>
+                <TransferFeeFields
+                  fee={transferFee}
+                  onFeeChange={setTransferFee}
+                  chargedTo={feeChargedTo}
+                  onChargedToChange={setFeeChargedTo}
+                  viaApp={viaApp}
+                  onViaAppChange={setViaApp}
+                  source={sourceAccount}
+                  feeError={fieldError("fee") ?? fieldError("feeCategory")}
+                  feeCategoryPicker={
+                    <CategorySelect categories={categories.filter((c) => c.type !== "income")} value={feeCategoryId} onChange={setFeeCategoryId} type="expense" />
+                  }
+                />
+                <TransferEffectPreview effect={ownTransferEffect} source={sourceAccount} destination={destinationAccount} />
+              </FormSection>
+            )}
 
             {gateActive && (gateLoading || (gateReadiness?.people.length ?? 0) > 0) && (
               <div className="px-4 py-4 sm:px-6">
@@ -2491,7 +2576,7 @@ export function TransactionDetailsModal({
             <DialogTitle>{isTransferLeg ? "Delete this transfer?" : "Delete this transaction?"}</DialogTitle>
             <DialogDescription>
               {isTransferLeg
-                ? "This removes both linked transactions and reverses the balance change on both accounts. This action cannot be undone."
+                ? `This removes both linked transactions${linkedTransferFee != null && linkedTransferFee.deletedAt == null ? " and the transfer's fee" : ""} and reverses the balance change on both accounts. This action cannot be undone.`
                 : "This action cannot be undone."}
             </DialogDescription>
           </DialogHeader>

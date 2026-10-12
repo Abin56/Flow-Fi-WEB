@@ -1,6 +1,6 @@
 "use client";
 
-import { BellRing, X } from "lucide-react";
+import { BellRing, Lock, X } from "lucide-react";
 import { createContext, useContext, useState } from "react";
 import { DateInput } from "@/components/forms/date-input";
 import { formatStatementDate } from "@/lib/engines/person-cycle-statement";
@@ -104,7 +104,9 @@ export interface FollowUpContextValue {
   onRemove: (key: string) => Promise<void>;
 }
 
-export const FollowUpContext = createContext<FollowUpContextValue | null>(null);
+const PRIVATE_NOTE = "Private to you — doesn't change what is owed or appear on shared statements.";
+
+export const FollowUpContext =createContext<FollowUpContextValue | null>(null);
 
 export function followUpText(f: Pick<PersonFollowUp, "kind" | "remindOn">, status: FollowUpStatus): string {
   const day = formatStatementDate(f.remindOn);
@@ -152,10 +154,10 @@ export function FollowUpControl({ rowKey, title, open }: { rowKey: string; title
   };
   const btn = "h-7 rounded-[6px] border border-border-strong bg-card px-2 text-[12px] font-semibold text-foreground outline-none hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50";
   return (
-    <div className="mt-2.5 border-t border-border-strong/60 pt-2" onClick={(e) => e.stopPropagation()}>
-      <p className="mb-1 text-[10.5px] font-bold tracking-[0.08em] text-foreground/65 uppercase">Follow-up</p>
+    <div className={cn("min-w-0", editing && "basis-full")} onClick={(e) => e.stopPropagation()}>
       {!editing ? (
         <div className="flex flex-wrap items-center gap-1.5">
+          <span className="mr-0.5 text-[10.5px] font-bold tracking-[0.08em] text-foreground/65 uppercase">Follow-up</span>
           {active ? <FollowUpNote rowKey={rowKey} className="mr-1" /> : <span className="mr-1 text-[12px] text-foreground/65">No reminder</span>}
           <button
             type="button"
@@ -184,9 +186,14 @@ export function FollowUpControl({ rowKey, title, open }: { rowKey: string; title
               </button>
             </>
           )}
+          <span title={PRIVATE_NOTE} className="inline-flex items-center gap-1 text-[11px] text-foreground/55">
+            <Lock className="size-3" aria-hidden />
+            Private
+          </span>
         </div>
       ) : (
         <div className="flex flex-wrap items-center gap-1.5">
+          <span className="mr-0.5 text-[10.5px] font-bold tracking-[0.08em] text-foreground/65 uppercase">Follow-up</span>
           <ReminderPicker value={active ? { kind: active.followUp.kind, remindOn: active.followUp.remindOn } : null} onChange={setWhen} cycleStartDay={ctx.cycleStartDay} allowNone={false} />
           <button
             type="button"
@@ -201,7 +208,7 @@ export function FollowUpControl({ rowKey, title, open }: { rowKey: string; title
           </button>
         </div>
       )}
-      <p className="mt-1 text-[11px] text-foreground/60">Private to you — doesn&apos;t change what is owed or appear on shared statements.</p>
+      {editing && <p className="mt-1 text-[11px] text-foreground/60">{PRIVATE_NOTE}</p>}
     </div>
   );
 }

@@ -73,6 +73,7 @@ import {
   type TransactionRow,
 } from "@/features/transactions/hooks/use-transactions-data";
 import { TransactionDetailsModal } from "@/features/transactions/components/transaction-details-modal";
+import { useCreditCardStandings } from "@/features/credit-cards/hooks/use-credit-cards-data";
 import { transactionFlagFor } from "@/features/transactions/lib/transaction-flag";
 import { loanTransactionLabel } from "@/features/loans/lib/loan-labels";
 import { findSameAmountDateDuplicateIds } from "@/features/transactions/lib/same-amount-date-duplicates";
@@ -191,6 +192,9 @@ type FormKind = "expense" | "income" | "transfer";
 
 export function TransactionsWorkspace() {
   const { rows, accounts, categories, isLoading } = useTransactionRows();
+  // Canonical card standings (shared limits pooled) — only for the Add Transfer preview's available-credit warning.
+  const { standings: cardStandings } = useCreditCardStandings();
+  const cardAvailableCredit = useMemo(() => new Map(cardStandings.map((s) => [s.card.accountId, s.available])), [cardStandings]);
   const actions = useTransactionActions();
   const { data: people = [] } = usePeople();
   const { data: expenses = [], isLoading: expensesLoading } = useExpenses();
@@ -606,6 +610,10 @@ export function TransactionsWorkspace() {
           <ArrowDownLeft strokeWidth={1.75} />
           Income
         </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => openAdd("transfer")}>
+          <ArrowLeftRight strokeWidth={1.75} />
+          Transfer to my account
+        </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={openSplit}>
           <Split strokeWidth={1.75} />
@@ -974,6 +982,7 @@ export function TransactionsWorkspace() {
         defaultKind={detailDefaultKind}
         autoFocusAssign={autoFocusAssign}
         existingTransactions={rows.map((r) => r.transaction)}
+        cardAvailableCredit={cardAvailableCredit}
       />
 
       <ConfirmDialog
@@ -1221,6 +1230,18 @@ const FILTER_LABEL: Record<string, string> = {
 
 const monthKeyOf = (d: Date) => d.getFullYear() * 12 + d.getMonth();
 const dayKeyOf = (d: Date) => monthKeyOf(d) * 32 + d.getDate();
+
+/**
+ * Month heading colours — rotated by calendar month, so neighbouring months never share one and the start of a
+ * new month (a new bill) is obvious at a glance while scrolling. Presentation only.
+ */
+const MONTH_BANDS = [
+  "border-l-sky-500 from-sky-400/30 via-sky-300/15 to-sky-200/5 dark:from-sky-500/30 dark:via-sky-500/10 dark:to-transparent",
+  "border-l-amber-500 from-amber-400/30 via-amber-300/15 to-amber-200/5 dark:from-amber-500/30 dark:via-amber-500/10 dark:to-transparent",
+  "border-l-violet-500 from-violet-400/30 via-violet-300/15 to-violet-200/5 dark:from-violet-500/30 dark:via-violet-500/10 dark:to-transparent",
+  "border-l-emerald-500 from-emerald-400/30 via-emerald-300/15 to-emerald-200/5 dark:from-emerald-500/30 dark:via-emerald-500/10 dark:to-transparent",
+] as const;
+const monthBand = (d: Date) => MONTH_BANDS[monthKeyOf(d) % MONTH_BANDS.length];
 
 const TH =
   "sticky top-0 z-[2] border-b border-b-border-strong/70 bg-secondary/90 px-2 py-2.5 text-left text-[11px] font-semibold tracking-[0.06em] whitespace-nowrap text-foreground/65 uppercase backdrop-blur sm:px-3";
@@ -1556,7 +1577,12 @@ function LedgerTable({
                 <tr>
                   <td
                     colSpan={7}
-                    className="border-b border-border bg-muted/60 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+                    className={cn(
+                      // Glass band: a translucent colour gradient over the table, frosted, with a light top sheen.
+                      "border-y border-l-4 border-y-white/40 bg-gradient-to-r px-3 py-2 text-xs font-bold text-foreground uppercase tracking-wide backdrop-blur-md backdrop-saturate-150",
+                      "shadow-[inset_0_1px_0_rgb(255_255_255/0.55),inset_0_-1px_0_rgb(0_0_0/0.04)] dark:border-y-white/10 dark:shadow-[inset_0_1px_0_rgb(255_255_255/0.08)]",
+                      monthBand(t.dateTime),
+                    )}
                   >
                     {t.dateTime.toLocaleDateString("en-IN", { month: "long", year: "numeric" })}
                   </td>

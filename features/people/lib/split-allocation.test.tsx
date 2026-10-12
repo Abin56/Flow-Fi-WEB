@@ -301,9 +301,9 @@ describe("People Ledger — compact row and expanded row", () => {
     expect(within(details).getByText(money(4000))).toBeTruthy();
     for (const n of ["You", "TRIPTHEE", "ANU"]) expect(within(details).getByText(n)).toBeTruthy();
     expect(within(details).getByText("Their share")).toBeTruthy();
-    expect(within(details).queryByText(`AMMA's responsibility`)).toBeNull(); // settlement is its own section, not inside the allocation
+    expect(within(details).queryByText(`AMMA has to pay`)).toBeNull(); // settlement is its own section, not inside the allocation
     expect(screen.getAllByText(`AMMA's settlement`).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(`AMMA's responsibility`).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(`AMMA has to pay`).length).toBeGreaterThan(0);
   });
 
   it("deleted expense: expanded row shows no breakdown", () => {

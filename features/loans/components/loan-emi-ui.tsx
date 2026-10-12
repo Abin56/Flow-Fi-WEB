@@ -93,7 +93,8 @@ const MONEY_FORMAT = new Intl.NumberFormat("en-IN", { style: "currency", currenc
 export function Money({ amount, className }: { amount: number; className?: string }) {
   const parts = MONEY_FORMAT.formatToParts(amount);
   return (
-    <span className={cn("inline-flex items-baseline font-heading font-bold tracking-tight whitespace-nowrap tabular-nums", className)}>
+    // Inline (not flex) so copying the figure gives "₹5,580", not one line per part.
+    <span className={cn("inline-block font-heading font-bold tracking-tight whitespace-nowrap tabular-nums", className)}>
       {parts.map((p, i) =>
         p.type === "currency" ? (
           <span key={i} className="mr-[0.08em] text-[0.72em] font-semibold text-muted-foreground">

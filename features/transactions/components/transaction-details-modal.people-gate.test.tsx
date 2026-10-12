@@ -119,14 +119,14 @@ const nothingSaved = () => {
 };
 
 describe("Add Expense — every field and function retained", () => {
-  it("renders amount, mode switch (no Transfer), details, Paid from, People & Split, notes and more options", async () => {
+  it("renders amount, mode switch (Transfer offered, not selected), details, Paid from, People & Split, notes and more options", async () => {
     const user = userEvent.setup();
     renderAdd();
     expect(screen.getByRole("heading", { name: "Add Expense" })).toBeTruthy();
     const modes = within(screen.getByRole("group", { name: "Transaction type" }));
     expect(modes.getByRole("button", { name: /expense/i }).getAttribute("aria-pressed")).toBe("true");
     expect(modes.getByRole("button", { name: /income/i }).getAttribute("aria-pressed")).toBe("false");
-    expect(modes.queryByRole("button", { name: /transfer/i })).toBeNull();
+    expect(modes.getByRole("button", { name: /transfer/i }).getAttribute("aria-pressed")).toBe("false");
 
     expect(amountInput()).toBeTruthy();
     expect(screen.getByPlaceholderText("e.g. Blue Tokai Coffee")).toBeTruthy();
