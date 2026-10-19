@@ -9,6 +9,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { usePathname } from "next/navigation";
 import { PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -44,7 +45,11 @@ import { ValidationPanel } from "./validation-panel";
 
 export function TransactionStudio({ initialDocumentId }: { initialDocumentId: string }) {
   const uid = useAuthStore((s) => s.user?.uid);
-  const [documentId, setDocumentId] = useState(initialDocumentId);
+  // Static hosting serves a placeholder ("_") page for this dynamic route; the real id is in the URL.
+  const pathname = usePathname();
+  const [documentId, setDocumentId] = useState(() =>
+    initialDocumentId === "_" ? (pathname.split("/").filter(Boolean).pop() ?? initialDocumentId) : initialDocumentId,
+  );
   const [search, setSearch] = useState("");
   const [filters, setFilters] = useState<StudioFilters>(DEFAULT_STUDIO_FILTERS);
   const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set());

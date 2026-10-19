@@ -227,11 +227,11 @@ export function monthlySettlementView(statement: PersonCycleStatement, options: 
     if (prev.length > 0) {
       const sum = prev.reduce((s, a) => s + paise(a.amountValue), 0);
       const left = prev.reduce((s, a) => s + paise(a.leftValue ?? 0), 0);
-      lines.push({ label: prev.length === 1 ? `Earlier balance · ${byNo.get(prev[0].ref!)?.emiLabel ?? prev[0].label}` : `Earlier balance · ${plural(prev.length, "item")}`, amount: money(fromPaise(sum)), tail: left >= SAME ? `${money(fromPaise(left))} left` : "cleared", cleared: left < SAME });
+      lines.push({ label: prev.length === 1 ? `Earlier balance · ${tidyTitle(byNo.get(prev[0].ref!)?.emiLabel ?? prev[0].label)}` : `Earlier balance · ${plural(prev.length, "item")}`, amount: money(fromPaise(sum)), tail: left >= SAME ? `${money(fromPaise(left))} left` : "cleared", cleared: left < SAME });
     }
     for (const a of p.applied.filter((x) => x.ref == null || !carriedNos.has(x.ref))) {
       const row = a.ref ? byNo.get(a.ref) : undefined;
-      lines.push({ label: row?.emiLabel ?? a.label, amount: a.amount, tail: a.note, cleared: a.note === "cleared" });
+      lines.push({ label: tidyTitle(row?.emiLabel ?? a.label), amount: a.amount, tail: a.note, cleared: a.note === "cleared" });
     }
     if (p.single) lines.push({ label: p.single, amount: null, tail: null, cleared: false });
     if (p.held) lines.push({ label: "Held as advance", amount: p.held, tail: null, cleared: false });

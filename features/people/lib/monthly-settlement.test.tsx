@@ -175,6 +175,8 @@ describe("Monthly Settlement — the SANJU-shaped October (01 Oct – 31 Oct)", 
     const { width, height } = doc.getPage(0).getSize();
     expect([Math.round(width), Math.round(height)]).toEqual([595, 842]);
     write("sanju-oct", await renderMonthlySettlementPdf(statement, { ...options, ...fonts() }));
+    write("sanju-oct-sbi", await renderMonthlySettlementPdf(statement, { ...options, accountForEntry: () => "SBI", ...fonts() }));
+    write("sanju-oct-spaced-account", await renderMonthlySettlementPdf(statement, { ...options, accountForEntry: () => "S B I", ...fonts() }));
   });
 });
 
