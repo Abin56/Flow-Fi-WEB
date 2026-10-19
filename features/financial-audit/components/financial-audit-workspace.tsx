@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { db } from "@/lib/firebase/client";
 import { auditReportToJson, runFinancialAudit, type AuditReport, type Finding } from "@/lib/engines/financial-audit";
+import { inspectLegacyCaseA, type LegacyCaseAReport } from "@/lib/engines/legacy-card-emi-inspection";
 import { formatCurrencyPrecise } from "@/lib/format";
 import { useAuthStore } from "@/store/auth-store";
 import { loadAuditData } from "../lib/load-audit-data";
@@ -61,9 +62,71 @@ function FindingRow({ f }: { f: Finding }) {
   );
 }
 
+/** Read-only: old card-EMI payments that billed the principal again on top of the recorded purchase. Nothing here writes. */
+function LegacyCaseASection({ report }: { report: LegacyCaseAReport }) {
+  return (
+    <Card data-testid="legacy-case-a">
+      <CardHeader>
+        <CardTitle>Card EMI payments that may have billed principal twice</CardTitle>
+        <CardDescription>
+          Read-only. For an EMI whose purchase is already on the card, older payments charged the whole installment to the card — the principal again. Nothing is changed or reconciled here.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3 text-sm">
+        {report.rows.length === 0 && report.unknown.length === 0 ? (
+          <p className="text-muted-foreground">None found.</p>
+        ) : (
+          <>
+            {report.cards.map((c) => (
+              <div key={c.cardId} className="rounded-xl border border-border p-3" data-testid="legacy-case-a-card">
+                <p className="font-medium text-foreground">{c.cardName}: {formatCurrencyPrecise(c.excessPrincipal)} billed twice across {c.affectedPayments} payment(s)</p>
+                <dl className="mt-1 grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground sm:grid-cols-4">
+                  <div><dt className="inline">Liability now: </dt><dd className="inline text-foreground">{formatCurrencyPrecise(c.liabilityNow)}</dd></div>
+                  <div><dt className="inline">After removing it: </dt><dd className="inline text-foreground">{formatCurrencyPrecise(c.liabilityAfterRemoval)}</dd></div>
+                  <div><dt className="inline">Available now: </dt><dd className="inline text-foreground">{c.availableNow == null ? "shared limit" : formatCurrencyPrecise(c.availableNow)}</dd></div>
+                  <div><dt className="inline">Available after: </dt><dd className="inline text-foreground">{c.availableAfter == null ? `+${formatCurrencyPrecise(c.excessPrincipal)} (pooled)` : formatCurrencyPrecise(c.availableAfter)}</dd></div>
+                </dl>
+                {c.complication && <p className="mt-2 text-xs text-destructive">{c.complication}</p>}
+              </div>
+            ))}
+            <ul className="flex flex-col gap-2">
+              {report.rows.map((r) => (
+                <li key={r.paymentId} className="rounded-xl border border-border p-3" data-testid="legacy-case-a-row">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant="outline">{r.confidence} confidence</Badge>
+                    <span className="font-medium text-foreground">{r.emiName} · {r.cardName} · {fmt(r.paymentDate)}</span>
+                  </div>
+                  <dl className="mt-1 grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground sm:grid-cols-3">
+                    <div><dt className="inline">Purchase: </dt><dd className="inline text-foreground">{r.purchase.description || "purchase"} {formatCurrencyPrecise(r.purchase.amount)} ({fmt(r.purchase.date)})</dd></div>
+                    <div><dt className="inline">Card charge: </dt><dd className="inline text-foreground">{formatCurrencyPrecise(r.originalCardCharge)}</dd></div>
+                    <div><dt className="inline">Principal in it: </dt><dd className="inline text-foreground">{formatCurrencyPrecise(r.principalPaid)}</dd></div>
+                    <div><dt className="inline">Interest &amp; fees: </dt><dd className="inline text-foreground">{formatCurrencyPrecise(r.interestAndFees)}</dd></div>
+                    <div><dt className="inline">Current rule would charge: </dt><dd className="inline text-foreground">{formatCurrencyPrecise(r.expectedCardCharge)}</dd></div>
+                    <div><dt className="inline">Excess: </dt><dd className="inline font-semibold text-destructive">{formatCurrencyPrecise(r.excessPrincipal)}</dd></div>
+                  </dl>
+                  {r.notes.map((n) => <p key={n} className="mt-1 text-xs text-muted-foreground">{n}</p>)}
+                </li>
+              ))}
+            </ul>
+            {report.unknown.length > 0 && (
+              <div className="rounded-xl border border-border p-3" data-testid="legacy-case-a-unknown">
+                <p className="font-medium text-foreground">Could not be assessed ({report.unknown.length})</p>
+                <ul className="mt-1 list-disc pl-5 text-xs text-muted-foreground">
+                  {report.unknown.map((u) => <li key={u.paymentId}>{u.emiName}: {u.reason}</li>)}
+                </ul>
+              </div>
+            )}
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 export function FinancialAuditWorkspace() {
   const uid = useAuthStore((s) => s.user?.uid);
   const [report, setReport] = useState<AuditReport | null>(null);
+  const [legacyCaseA, setLegacyCaseA] = useState<LegacyCaseAReport | null>(null);
   const [meta, setMeta] = useState<{ skipped: Record<string, number>; counts: Record<string, number> } | null>(null);
   const [state, setState] = useState<"idle" | "loading" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
@@ -77,6 +140,16 @@ export function FinancialAuditWorkspace() {
     try {
       const loaded = await loadAuditData(db, uid);
       setReport(runFinancialAudit(loaded.input));
+      setLegacyCaseA(
+        inspectLegacyCaseA({
+          emis: loaded.input.emis,
+          cards: loaded.cardEmi.cards,
+          accounts: loaded.input.accounts,
+          transactions: loaded.input.transactions,
+          payments: loaded.input.payments,
+          breakdowns: loaded.cardEmi.breakdowns,
+        }),
+      );
       setMeta({ skipped: loaded.skipped, counts: loaded.counts });
       setState("idle");
     } catch (e) {
@@ -206,10 +279,12 @@ export function FinancialAuditWorkspace() {
             </CardContent>
           </Card>
 
+          {legacyCaseA && <LegacyCaseASection report={legacyCaseA} />}
+
           <p className="text-xs text-muted-foreground">
             Read {Object.entries(meta?.counts ?? {}).map(([k, v]) => `${v} ${k}`).join(", ")}.
             {Object.keys(meta?.skipped ?? {}).length > 0 && ` Could not read: ${Object.entries(meta!.skipped).map(([k, v]) => `${v} ${k}`).join(", ")}.`}{" "}
-            Not covered: bill payments, card statements, savings, EMI breakdowns. Generated {report.generatedAt.toLocaleString()}.
+            Not covered: bill payments, card statements, savings (EMI breakdowns are read only for card-linked EMIs). Generated {report.generatedAt.toLocaleString()}.
           </p>
         </>
       )}

@@ -121,7 +121,7 @@ export async function reseed(page) {
 
 /** Adds an opt-in fixture from the portal (must be on /dev/qa): "shared-emi", "card-emi" or "history". */
 export async function addFixture(page, which) {
-  const testId = which === "shared-emi" ? "qa-seed-shared-emi" : which === "card-emi" ? "qa-seed-card-emi" : "qa-seed-history";
+  const testId = which === "shared-emi" ? "qa-seed-shared-emi" : which === "card-emi" ? "qa-seed-card-emi" : which === "card-emi-a" ? "qa-seed-card-emi-a" : "qa-seed-history";
   await page.click(`[data-testid="${testId}"]`);
   await page.waitForSelector('[data-testid="qa-seed-steps"]', { timeout: 120000 });
   await page.waitForFunction((id) => !document.querySelector(`[data-testid="${id}"]`)?.textContent?.includes("Adding"), testId, { timeout: 120000 });

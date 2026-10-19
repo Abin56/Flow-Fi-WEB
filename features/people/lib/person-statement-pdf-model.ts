@@ -104,6 +104,18 @@ export interface StatementViewRow {
    * item is paid, postponed, not yet dated, or carries no settlement state.
    */
   age: { label: string; tone: "fresh" | "aging" | "old" } | null;
+  /** Engine values behind the strings, for the monthly settlement's sums. */
+  amountValue: number;
+  /** What was paid on it at the statement date; null for a payment / advance row. */
+  paidValue: number | null;
+  dateValue: Date;
+  /** The obligation is postponed to a later cycle (`deferredTo`, e.g. "Nov") — still owed, not collectible now. */
+  postponed: boolean;
+  deferredTo: string | null;
+  /** "Bajaj Finance · EMI #13" for an EMI / Loan installment; null for everything else. */
+  emiLabel: string | null;
+  /** Brought-forward rows only: what was still open on the item when the cycle began. */
+  openAtStart?: number;
 }
 
 /**
@@ -156,7 +168,9 @@ export interface StatementViewPayment {
    * Where the money went, item by item, in the table's order: `ref` is the item's # in the table, `date` its date,
    * `note` what that payment left on it ("cleared" / "₹21.82 left").
    */
-  applied: { ref: string | null; date: string | null; label: string; amount: string; note: string | null }[];
+  applied: { ref: string | null; date: string | null; label: string; amount: string; amountValue: number; leftValue: number | null; note: string | null }[];
+  /** The cash amount as a number (`amount` is its display). */
+  amountValue: number;
   appliedTotal: string | null;
   held: string | null;
   /** A quiet qualifier: "Received earlier · recorded later" for a receipt entered after the fact. */
@@ -375,6 +389,12 @@ function viewRow(
     owedBy: row.state == null ? null : row.direction === "theyOwe" ? "them" : row.direction === "iOwe" ? "owner" : null,
     remainingValue: row.state == null ? null : (row.remaining ?? 0),
     age: openAge(row, kind, ageIdx, moved != null),
+    amountValue: row.amount,
+    paidValue: paid,
+    dateValue: row.date,
+    postponed: moved != null && deferral?.status === "postponed",
+    deferredTo: moved != null && deferral?.status === "postponed" ? deferral.name : null,
+    emiLabel: row.statementRow?.emi ? `${row.statementRow.emi.sourceName} · EMI #${row.statementRow.emi.installmentNumber}` : null,
   };
 }
 
@@ -507,6 +527,7 @@ export function statementView(statement: PersonCycleStatement, options: Statemen
   const carriedView = carriedRows.map((r, i) => ({
     ...viewRow(r, i + 1, name, lookups, now, total, statement.personId, owner, asOfIdx, deferralFor(r.key, r.date), dayOf(asOfDate)),
     carried: true,
+    openAtStart: openAtStart(r, start),
     fromCycle: `${formatCycleLabel(cycleContaining(r.date, options.cycleStartDay), false)} cycle`,
   }));
   const listed = ledgerRows.map((r, i) => viewRow(r, carriedRows.length + i + 1, name, lookups, now, total, statement.personId, owner, asOfIdx, deferralFor(r.key, r.date), dayOf(asOfDate)));
@@ -571,6 +592,7 @@ export function statementView(statement: PersonCycleStatement, options: Statemen
         label: paymentGroupLabel(g, name, ownerShort),
         account: head.category === "advanceApplied" ? null : account(entryId),
         amount: money(g.length > 1 ? cash.reduce((s, r) => s + r.amount, 0) : head.amount),
+        amountValue: g.length > 1 ? cash.reduce((s, r) => s + r.amount, 0) : head.amount,
         inbound: isInboundPayment(head),
         advance: head.category === "advance" || head.category === "advanceApplied",
         single: listAll ? null : allocationLine(head, money),
@@ -585,6 +607,8 @@ export function statementView(statement: PersonCycleStatement, options: Statemen
                   date: it ? statementDate(statement, it.date).day : null,
                   label: r.settles?.title ?? "Overall balance",
                   amount: money(r.amount),
+                  amountValue: r.amount,
+                  leftValue: r.settles ? left : null,
                   note: r.settles ? (left >= SAME ? `${money(left)} left` : "cleared") : null,
                 };
               })

@@ -5,6 +5,7 @@ import { useContext, useMemo, useState, type ReactNode } from "react";
 import { usePersonCycleStatement } from "@/features/people/hooks/use-person-cycle-statement";
 import { usePersonPendingSplitParticipants } from "@/features/people/hooks/use-person-pending-split-participants";
 import { useSettlementLookups } from "@/features/people/hooks/use-settlement-lookups";
+import { renderMonthlySettlementPdf } from "@/features/people/lib/monthly-settlement-pdf";
 import { loadStatementAmountFonts, loadStatementTextFonts, renderPersonStatementPdf, type StatementOrientation } from "@/features/people/lib/person-statement-pdf";
 import { useMonthCycleStartDay } from "@/features/settings/hooks/use-user-preferences";
 import {
@@ -83,18 +84,22 @@ export function ShareStatementMode({
     }
   };
 
-  const downloadPdf = async () => {
+  /** "monthly": the short settlement for this cycle (what gets shared). "full": the complete statement shown in the preview. */
+  const downloadPdf = async (mode: "monthly" | "full" = "monthly") => {
     setPdfBusy(true);
     try {
       // Words in Plus Jakarta Sans, amounts in Geist Mono with the real ₹; if a font can't load, the PDF still
       // renders (Helvetica, "Rs.").
       const [amountFonts, textFonts] = await Promise.all([loadStatementAmountFonts(), loadStatementTextFonts()]);
-      const bytes = await renderPersonStatementPdf(statement, { ...options, orientation: statementOrientation(), amountFonts, textFonts });
+      const bytes =
+        mode === "monthly"
+          ? await renderMonthlySettlementPdf(statement, { ...options, amountFonts, textFonts })
+          : await renderPersonStatementPdf(statement, { ...options, orientation: statementOrientation(), amountFonts, textFonts });
       const blob = new Blob([bytes as BlobPart], { type: "application/pdf" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `FlowFi-${statement.personName.replace(/[^\w]+/g, "-")}-${statement.cycleLabel.replace(/[^\w]+/g, "-")}.pdf`;
+      a.download = `FlowFi-${statement.personName.replace(/[^\w]+/g, "-")}-${statement.cycleLabel.replace(/[^\w]+/g, "-")}${mode === "full" ? "-Full" : ""}.pdf`;
       a.click();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch {
@@ -132,7 +137,7 @@ export function ShareStatementMode({
             <WsLabel>Sent as</WsLabel>
             <p className="mt-1.5 text-sm font-medium text-foreground">“{sharedPositionLine(statement)}”</p>
             <p className="mt-2 text-xs text-foreground/70">
-              The PDF contains the full statement shown here. The WhatsApp / text message is a short summary.
+              Monthly PDF is the short settlement for this cycle — the one to share. Full PDF is the complete statement shown here. The WhatsApp / text message is a short summary.
             </p>
             <button
               type="button"
@@ -164,9 +169,13 @@ export function ShareStatementMode({
           <Copy className="size-4" strokeWidth={1.75} />
           Copy Text
         </button>
-        <button type="button" onClick={downloadPdf} disabled={pdfBusy} className={cn(WS_SECONDARY, "flex-1 sm:flex-none")}>
+        <button type="button" onClick={() => downloadPdf("full")} disabled={pdfBusy} className={cn(WS_SECONDARY, "flex-1 sm:flex-none")}>
           <FileDown className="size-4" strokeWidth={1.75} />
-          {pdfBusy ? "Creating…" : "PDF"}
+          Full PDF
+        </button>
+        <button type="button" onClick={() => downloadPdf("monthly")} disabled={pdfBusy} className={cn(WS_SECONDARY, "flex-1 sm:flex-none")}>
+          <FileDown className="size-4" strokeWidth={1.75} />
+          {pdfBusy ? "Creating…" : "Monthly PDF"}
         </button>
         <button
           type="button"

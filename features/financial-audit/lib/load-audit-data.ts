@@ -18,7 +18,8 @@ import type { AuditInput } from "@/lib/engines/financial-audit";
 import { FirestoreCollections as C } from "@/lib/firestore/collections";
 import { accountFromFirestore, accountToFirestore } from "@/lib/models/account";
 import { creditCardProfileFromFirestore, creditCardProfileToFirestore } from "@/lib/models/credit-card";
-import { emiFromFirestore, emiToFirestore } from "@/lib/models/emi";
+import { emiFromFirestore, emiPaymentBreakdownFromFirestore, emiPaymentBreakdownToFirestore, emiToFirestore, type EmiPaymentBreakdown } from "@/lib/models/emi";
+import type { CreditCardProfile } from "@/lib/models/credit-card";
 import { expenseFromFirestore, expenseToFirestore } from "@/lib/models/expense";
 import { loanFromFirestore, loanToFirestore } from "@/lib/models/loan";
 import {
@@ -35,6 +36,8 @@ import { transactionFromFirestore, transactionToFirestore } from "@/lib/models/t
 
 export interface LoadedAuditData {
   input: AuditInput;
+  /** Read-only extras for the legacy Case A card-EMI inspection (`legacy-card-emi-inspection.ts`). */
+  cardEmi: { cards: CreditCardProfile[]; breakdowns: EmiPaymentBreakdown[] };
   /** Documents that could not be read/converted (kind → count). */
   skipped: Record<string, number>;
   counts: Record<string, number>;
@@ -101,9 +104,16 @@ export async function loadAuditData(db: Firestore, uid: string): Promise<LoadedA
     }),
   );
 
+  // Payment breakdowns (principal / interest split) of the card-linked EMIs only — read, never written.
+  const breakdownConverter = converter(emiPaymentBreakdownFromFirestore, emiPaymentBreakdownToFirestore);
+  const breakdowns = (
+    await Promise.all(emis.filter((e) => e.linkedCreditCardId != null).map((e) => read("emiPaymentBreakdowns", user(C.emis, e.id, C.paymentBreakdowns).withConverter(breakdownConverter))))
+  ).flat();
+
   return {
     skipped,
     counts,
+    cardEmi: { cards, breakdowns },
     input: {
       accounts,
       transactions,

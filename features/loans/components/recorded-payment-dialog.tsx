@@ -11,6 +11,7 @@ import { ClayBadge } from "@/components/clay/clay-badge";
 import { useOperation } from "@/components/feedback/operation-progress";
 import { useEmiActions, type EmiRow } from "@/features/emi/hooks/use-emi-data";
 import { emiCardLabel } from "@/features/emi/components/emi-card";
+import { cardEmiCase, describeEmiPostedFunding } from "@/features/emi/lib/emi-card-funding";
 import { planEmiPaymentEdit } from "@/features/emi/lib/emi-payment-allocation";
 import {
   AmountInput,
@@ -176,6 +177,14 @@ export function RecordedPaymentDialog({
   // A card-linked EMI paid straight from a bank account has its debit on that account (not the card's).
   const emiPostedTransaction = emiPostedLegs.find((t) => t.accountId !== emiRow?.linkedCard?.accountId) ?? emiPostedLegs[0] ?? null;
   const bankPaidEmi = emiRow?.linkedCard != null && emiPostedTransaction != null && emiPostedTransaction.accountId !== emiRow.linkedCard.accountId;
+  // What this card-linked payment actually posted (its legs), not just "it has a card" — drives every message below.
+  const postedFunding =
+    emiRow?.linkedCard != null && !earlierMark
+      ? describeEmiPostedFunding({ legs: emiPostedLegs, cardAccountId: emiRow.linkedCard.accountId, paymentAmount: action.amount })
+      : null;
+  const cardName = emiRow ? emiCardLabel(emiRow) : null;
+  const purchaseOnCard = emiRow?.linkedCard != null && cardEmiCase(emiRow.emi, emiRow.linkedCard.accountId, (transactions as Transaction[]).find((t) => t.id === emiRow.emi.purchaseTransactionId) ?? null) === "A";
+  const fmt = formatCurrencyExact;
   const emiAccountLabel = emiPostedTransaction ? (accounts.find((a) => a.id === emiPostedTransaction.accountId)?.name ?? "Account") : null;
   const sourceLabel = earlierMark
     ? loanRow
@@ -183,7 +192,15 @@ export function RecordedPaymentDialog({
       : "Paid before FlowFi · no balance change"
     : loanRow
       ? (accounts.find((a) => a.id === originalTransaction?.accountId)?.name ?? (action.transactionId ? "Account" : "Not linked to an account"))
-      : ((bankPaidEmi ? emiAccountLabel : emiCardLabel(emiRow!)) ?? emiAccountLabel ?? "Schedule only (no account)");
+      : postedFunding?.kind === "noCardCharge"
+        ? purchaseOnCard
+          ? "None — the principal is already on the card from the purchase"
+          : "None recorded"
+        : postedFunding?.kind === "cardPartial"
+          ? `${cardName} · ${fmt(postedFunding.cardCharge)} interest & fees (principal already on the card)`
+          : postedFunding?.kind === "bank" && postedFunding.principalToCard > 0
+            ? `${emiAccountLabel} · ${fmt(postedFunding.principalToCard)} of it paid to ${cardName}`
+            : ((bankPaidEmi ? emiAccountLabel : emiCardLabel(emiRow!)) ?? emiAccountLabel ?? "Schedule only (no account)");
   // A past payment's edit keeps it past (the repositories carry the mark) — its People shares were never gated on it.
   const peopleGateAcknowledgement = earlierMark ? RECORDED_EARLIER_PEOPLE_ACK : undefined;
 
@@ -338,7 +355,7 @@ export function RecordedPaymentDialog({
   const unpaidAgain = Array.from(new Set(action.portions.map((p) => p.installmentId)))
     .map((id) => afterUnpay.find((i) => i.id === id))
     .filter((i): i is Installment => i != null);
-  const cardLabel = emiRow && !bankPaidEmi ? emiCardLabel(emiRow) : null;
+  const cardLabel = emiRow && !bankPaidEmi && postedFunding?.kind !== "noCardCharge" ? emiCardLabel(emiRow) : null;
   const canUnpay = eligibility.ok && !originalReversed;
 
   async function markUnpaid() {
@@ -409,6 +426,9 @@ export function RecordedPaymentDialog({
       const name = accounts.find((x) => x.id === t?.accountId)?.name ?? "its account";
       return lent ? `${formatCurrencyExact(a.amount)} comes back out of ${name}` : `${formatCurrencyExact(a.amount)} goes back to ${name}`;
     }
+    if (postedFunding?.kind === "noCardCharge") return "No card charge to remove";
+    if (postedFunding?.kind === "cardPartial") return `${fmt(postedFunding.cardCharge)} interest & fees removed from ${cardLabel}`;
+    if (postedFunding?.kind === "bank" && postedFunding.principalToCard > 0) return `${fmt(postedFunding.bankDebit)} goes back to ${emiAccountLabel}; ${cardName}'s balance goes back up by ${fmt(postedFunding.principalToCard)}`;
     if (cardLabel) return `Charge removed from ${cardLabel}`;
     const posted = (transactions as Transaction[]).find((t) => t.deletedAt == null && t.emiId === emiRow?.emi.id && a.portions.some((p) => p.id === t.installmentPaymentId));
     return posted ? `${formatCurrencyExact(a.amount)} goes back to ${accounts.find((x) => x.id === posted.accountId)?.name ?? "its account"}` : "No balance change";
@@ -523,10 +543,16 @@ export function RecordedPaymentDialog({
         ? lent
           ? `${formatCurrencyExact(action.amount)} comes back out of ${sourceLabel}.`
           : `${formatCurrencyExact(action.amount)} goes back to ${sourceLabel}.`
-        : cardLabel
-          ? `The ${formatCurrencyExact(action.amount)} charge is removed from ${cardLabel}, and its available credit adjusts.`
-          : emiAccountLabel
-            ? `${formatCurrencyExact(action.amount)} goes back to ${emiAccountLabel}.`
+        : postedFunding?.kind === "noCardCharge"
+          ? "Only the schedule changes — no card charge was recorded for this payment."
+          : postedFunding?.kind === "cardPartial"
+            ? `The ${fmt(postedFunding.cardCharge)} interest & fees charge is removed from ${cardLabel}, and its available credit adjusts.`
+            : postedFunding?.kind === "bank" && postedFunding.principalToCard > 0
+              ? `${fmt(postedFunding.bankDebit)} goes back to ${emiAccountLabel}, and ${cardName}'s balance goes back up by ${fmt(postedFunding.principalToCard)} (the principal it had been paid).`
+              : cardLabel
+                ? `The ${formatCurrencyExact(action.amount)} charge is removed from ${cardLabel}, and its available credit adjusts.`
+                : emiAccountLabel
+                  ? `${formatCurrencyExact(action.amount)} goes back to ${emiAccountLabel}.`
             : "Only the schedule changes — no account balance moves.";
     return (
       <LoanEmiFormDialog
@@ -633,7 +659,7 @@ export function RecordedPaymentDialog({
               { label: "Installment", value: installmentRangeLabel(action.installmentSeqs) + (total ? ` of ${total}` : "") },
               emiRow && originalBreakdowns.length > 0 ? { label: "Principal", value: formatCurrencyExact(principalPaid) } : null,
               emiRow && originalBreakdowns.length > 0 ? { label: "Interest", value: formatCurrencyExact(interestPaid) } : null,
-              { label: loanRow ? (lent ? "Received into" : "Paid from") : "Charged to", value: sourceLabel },
+              { label: loanRow ? (lent ? "Received into" : "Paid from") : postedFunding?.kind === "bank" ? "Paid from" : postedFunding?.kind === "noCardCharge" ? "Card charge" : "Charged to", value: sourceLabel },
               {
                 label: "Left after payment",
                 value: action.overflow ? "—" : action.remainingAfter != null && action.remainingAfter > 0 ? `${formatCurrencyExact(action.remainingAfter)} on #${action.installmentSeqs[action.installmentSeqs.length - 1]}` : "Installment settled",
@@ -855,8 +881,12 @@ export function RecordedPaymentDialog({
             ? "The original is replaced and the schedule is recalculated. It stays recorded as already paid earlier — no account balance moves."
             : loanRow
               ? "The original payment is replaced: its account movement and installment allocation are undone and the corrected payment is applied once."
-              : emiCardLabel(emiRow!)
-                ? "The original payment is replaced: the schedule, the card transaction and the card's available credit are recalculated."
+              : postedFunding?.kind === "noCardCharge"
+                ? "The original payment is replaced and the schedule is recalculated. Only interest & fees, if any, are charged to the card."
+                : postedFunding?.kind === "bank"
+                  ? "The original payment is replaced: the schedule and every bank / card movement it made are recalculated, and it stays paid from the same account."
+                  : emiCardLabel(emiRow!)
+                    ? "The original payment is replaced: the schedule, the card transaction and the card's available credit are recalculated."
                 : "The original payment is replaced and the schedule is recalculated."}
       </p>
     </LoanEmiFormDialog>

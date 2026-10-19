@@ -124,3 +124,36 @@ export function buildCardEmiTransactions(p: {
   }
   return out;
 }
+
+export type EmiPostedFunding =
+  /** Paid from a bank account; `principalToCard` > 0 when part of it was transferred to the card (Case A). */
+  | { kind: "bank"; bankAccountId: string; bankDebit: number; principalToCard: number }
+  /** The whole installment was charged to the card. */
+  | { kind: "card"; cardCharge: number }
+  /** Only part of it (interest & fees) was charged to the card. */
+  | { kind: "cardPartial"; cardCharge: number }
+  /** Nothing was posted on the card or a bank (Case A with no interest / fees). */
+  | { kind: "noCardCharge" };
+
+/**
+ * What a recorded card-linked EMI payment ACTUALLY posted, read from its transaction legs — the source of truth for
+ * every message about it (details, edit, mark as unpaid). Never inferred from "the EMI has a card".
+ */
+export function describeEmiPostedFunding(p: {
+  legs: readonly Pick<Transaction, "accountId" | "type" | "amount" | "transferId">[];
+  cardAccountId: string;
+  paymentAmount: number;
+}): EmiPostedFunding {
+  const bankOut = p.legs.filter((t) => t.accountId !== p.cardAccountId && t.type === "expense");
+  if (bankOut.length > 0) {
+    return {
+      kind: "bank",
+      bankAccountId: bankOut[0].accountId,
+      bankDebit: round2(bankOut.reduce((s, t) => s + t.amount, 0)),
+      principalToCard: round2(p.legs.filter((t) => t.accountId === p.cardAccountId && t.type === "income" && t.transferId != null).reduce((s, t) => s + t.amount, 0)),
+    };
+  }
+  const cardCharge = round2(p.legs.filter((t) => t.accountId === p.cardAccountId && t.type === "expense" && t.transferId == null).reduce((s, t) => s + t.amount, 0));
+  if (cardCharge <= 0.005) return { kind: "noCardCharge" };
+  return cardCharge < p.paymentAmount - 0.005 ? { kind: "cardPartial", cardCharge } : { kind: "card", cardCharge };
+}

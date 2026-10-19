@@ -118,8 +118,9 @@ scenario("card-emi-bank-funded", "Card EMI paid from savings: the dialog offers 
   await page.getByRole("option", { name: /QA Bank/ }).click();
   await page.waitForTimeout(500);
   const effect = await dlg.getByTestId("account-movement").innerText();
+  const impact = await f.flat(dlg.getByTestId("card-impact"));
   await h.shot(page, "card-emi-bank-funded-dialog");
-  chk("the effect is shown before confirming: taken from QA Bank, nothing charged to the card", /taken from QA Bank/.test(effect) && /Nothing is charged to Card/.test(effect), effect);
+  chk("the effect is shown before confirming: taken from QA Bank, nothing new charged to the card", /taken from QA Bank/.test(effect) && /Charged to card \| Nothing new/.test(impact), `${effect} // ${impact}`);
   await page.evaluate(() => window.__reset());
   await dlg.getByRole("button", { name: PAY3000 }).evaluate((b) => { b.click(); b.click(); });
   await dlg.waitFor({ state: "hidden", timeout: 25000 });
@@ -133,8 +134,8 @@ scenario("card-emi-bank-funded", "Card EMI paid from savings: the dialog offers 
   await page.getByRole("button", { name: /Installment 1.*(edit or mark unpaid|view payment)/ }).click();
   const det = page.getByRole("dialog", { name: /Recorded payment/ });
   await det.waitFor();
-  const charged = (((await f.flat(det)).match(/Charged to \| ([^|]*)/) ?? [])[1] ?? "?").trim();
-  chk("details: 'Charged to' names QA Bank, not the card", /QA Bank/.test(charged) && !/••9090/.test(charged), charged);
+  const charged = (((await f.flat(det)).match(/Paid from \| ([^|]*)/) ?? [])[1] ?? "?").trim();
+  chk("details: 'Paid from' names QA Bank, not the card", /QA Bank/.test(charged) && !/••9090/.test(charged), charged);
   await det.getByRole("button", { name: "Mark as unpaid" }).click();
   const confirm = page.getByRole("dialog").last();
   await confirm.getByText("This installment goes back to unpaid").waitFor();
@@ -142,4 +143,121 @@ scenario("card-emi-bank-funded", "Card EMI paid from savings: the dialog offers 
   await page.waitForTimeout(4500);
   chk("mark unpaid restores QA Bank exactly once; card still untouched (persisted)", f.close2(await f.bal("QA Bank"), bank0) && f.close2(await cardBal(), card0), `${await f.bal("QA Bank")} / ${await cardBal()}`);
   chk("no active EMI transaction; installment unpaid (persisted)", (await emiTxns()).length === 0 && JSON.stringify(await paidList()) === JSON.stringify([0, 0, 0, 0]));
+});
+
+// ── Case A (purchase already on the card): the payment details / unpay wording follows the legs actually posted ──
+const A_CARD = "QA Case A Card";
+const aBal = async () => (await h.accountBalance(A_CARD)).currentBalance;
+const aTxns = async (name) => {
+  const id = (await h.list("emis")).find((e) => e.name === name).id;
+  return f.txns((t) => t.emiId === id);
+};
+async function openAPay(page, name) {
+  await h.go(page, "/loans-installments");
+  await page.getByText(name).first().click();
+  await page.getByRole("button", { name: "Record Payment" }).click();
+  const dlg = page.getByRole("dialog", { name: /Pay EMI/ });
+  await dlg.getByText("TO PAY LENDER").waitFor();
+  return dlg;
+}
+async function openDetails(page) {
+  await page.getByRole("button", { name: /Installment 1.*(edit or mark unpaid|view payment)/ }).click();
+  const det = page.getByRole("dialog", { name: /Recorded payment/ });
+  await det.waitFor();
+  return det;
+}
+async function unpay(page, det) {
+  await det.getByRole("button", { name: "Mark as unpaid" }).click();
+  const confirm = page.getByRole("dialog").last();
+  await confirm.getByText("This installment goes back to unpaid").waitFor();
+  const text = await f.flat(confirm);
+  await confirm.getByRole("button", { name: "Mark as unpaid" }).evaluate((b) => { b.click(); b.click(); });
+  await page.waitForTimeout(4500);
+  return text;
+}
+
+scenario("card-emi-case-a-wording", "Case A card EMI (interest + interest-free): effect, details and Mark-as-unpaid wording follow the legs actually posted", async ({ page }, chk) => {
+  await h.addFixture(page, "card-emi-a");
+  const card0 = await aBal(); // −18,000: both purchases
+  // — interest EMI, charge to card: only the interest is charged —
+  let dlg = await openAPay(page, "QA Case A EMI");
+  const effect = await dlg.getByTestId("account-movement").innerText();
+  const impactA = await f.flat(dlg.getByTestId("card-impact"));
+  chk("the effect says only interest & fees are charged and the principal is already in the card balance", /₹120 interest & fees will be charged to Card ••9191/.test(effect) && /Principal · already in card balance/.test(impactA) && /you settle it with the card bill/.test(impactA), `${effect} // ${impactA}`);
+  await h.shot(page, "card-emi-case-a-dialog");
+  await dlg.getByRole("button", { name: /^Pay ₹3,075\.37/ }).click();
+  await dlg.waitFor({ state: "hidden", timeout: 25000 });
+  await page.waitForTimeout(1500);
+  const txs = await aTxns("QA Case A EMI");
+  chk("persisted: ONE card charge of exactly ₹120 (interest), card liability ₹18,120", txs.length === 1 && txs[0].amount === 120 && f.close2(Math.abs(card0 - (await aBal())), 120), `${txs.map((t) => t.amount)} ${card0} -> ${await aBal()}`);
+  let det = await openDetails(page);
+  const dText = await f.flat(det);
+  const charged = ((dText.match(/Charged to \| ([^|]*)/) ?? [])[1] ?? "?").trim();
+  await h.shot(page, "card-emi-case-a-details");
+  chk("details show the ACTUAL card charge (₹120 interest & fees), not the ₹3,075.37 EMI", /₹120\b/.test(charged) && /interest & fees/.test(charged) && !/3,075\.37/.test(charged), charged);
+  let unpayText = await unpay(page, det);
+  chk("Mark as unpaid names the ₹120 interest & fees charge only", /₹120 interest & fees charge is removed/.test(unpayText), unpayText.slice(0, 300));
+  chk("reversal restores the card exactly (persisted)", f.close2(await aBal(), card0) && (await aTxns("QA Case A EMI")).length === 0, `${await aBal()} (base ${card0})`);
+
+  // — interest-free EMI, charge to card: nothing is charged at all —
+  dlg = await openAPay(page, "QA Case A Free EMI");
+  const effect0 = await dlg.getByTestId("account-movement").innerText();
+  const impact0 = await f.flat(dlg.getByTestId("card-impact"));
+  chk("interest-free: the effect says nothing new is charged", /Nothing new is charged to Card ••9191/.test(effect0) && /Charged to card \| Nothing new/.test(impact0), `${effect0} // ${impact0}`);
+  await dlg.getByRole("button", { name: /^Pay ₹1,500/ }).click();
+  await dlg.waitFor({ state: "hidden", timeout: 25000 });
+  await page.waitForTimeout(1500);
+  chk("persisted: NO transaction, card unchanged, installment paid", (await aTxns("QA Case A Free EMI")).length === 0 && f.close2(await aBal(), card0));
+  det = await openDetails(page);
+  const d0 = await f.flat(det);
+  await h.shot(page, "card-emi-case-a-zero-details");
+  chk("details do NOT say 'Charged to' the card — 'Card charge | None — principal already on the card'", !/Charged to/.test(d0) && /Card charge \| None/.test(d0), d0.slice(0, 400));
+  unpayText = await unpay(page, det);
+  chk("Mark as unpaid says only the schedule changes — no card charge", /Only the schedule changes — no card charge was recorded/.test(unpayText) && !/charge is removed from/.test(unpayText), unpayText.slice(0, 300));
+});
+
+scenario("card-emi-case-a-bank", "Case A card EMI paid from QA Bank: interest on the bank + principal paid to the card; details and unpay say exactly that", async ({ page }, chk) => {
+  await h.addFixture(page, "card-emi-a");
+  const bank0 = await f.bal("QA Bank");
+  const card0 = await aBal();
+  const dlg = await openAPay(page, "QA Case A EMI");
+  await dlg.getByRole("radio", { name: "Pay from a bank account" }).click();
+  await dlg.getByText("Choose paying account").click();
+  await page.getByRole("option", { name: /QA Bank/ }).click();
+  await page.waitForTimeout(500);
+  const effect = await dlg.getByTestId("account-movement").innerText();
+  const impactB = await f.flat(dlg.getByTestId("card-impact"));
+  chk("effect: taken from QA Bank; ₹2,955.37 paid toward the card balance; interest & fees shown; available credit +₹2,955.37", /₹3,075\.37 will be taken from QA Bank/.test(effect) && /Paid toward card balance \| ₹2,955\.37/.test(impactB) && /Interest & fees \| ₹120/.test(impactB) && /available credit \| .*2,955\.37/.test(impactB), `${effect} // ${impactB}`);
+  await dlg.getByRole("button", { name: /^Pay ₹3,075\.37/ }).click();
+  await dlg.waitFor({ state: "hidden", timeout: 25000 });
+  await page.waitForTimeout(1500);
+  chk("persisted: QA Bank −₹3,075.37 once; card liability −₹2,955.37 (principal paid to the card)", f.close2(bank0 - (await f.bal("QA Bank")), 3075.37) && f.close2((await aBal()) - card0, 2955.37), `${bank0} -> ${await f.bal("QA Bank")}; ${card0} -> ${await aBal()}`);
+  const det = await openDetails(page);
+  const dText = await f.flat(det);
+  const paidFrom = ((dText.match(/Paid from \| ([^|]*)/) ?? [])[1] ?? "?").trim();
+  await h.shot(page, "card-emi-case-a-bank-details");
+  chk("details: 'Paid from QA Bank · ₹2,955.37 of it paid to the card'", /QA Bank/.test(paidFrom) && /2,955\.37/.test(paidFrom), paidFrom);
+  const unpayText = await unpay(page, det);
+  chk("Mark as unpaid: money goes back to QA Bank and the card balance goes back up by the principal", /3,075\.37 goes back to QA Bank/.test(unpayText) && /balance goes back up by .*2,955\.37/.test(unpayText), unpayText.slice(0, 320));
+  chk("reversal restores both exactly (persisted)", f.close2(await f.bal("QA Bank"), bank0) && f.close2(await aBal(), card0) && (await aTxns("QA Case A EMI")).length === 0);
+});
+
+scenario("card-emi-legacy-inspection-readonly", "Financial Audit: the legacy Case A section renders read-only (current-model Case A payments are NOT flagged) and no balance moves", async ({ page }, chk) => {
+  await h.addFixture(page, "card-emi-a");
+  const dlg = await openAPay(page, "QA Case A EMI");
+  await dlg.getByRole("button", { name: /^Pay ₹3,075\.37/ }).click();
+  await dlg.waitFor({ state: "hidden", timeout: 25000 });
+  await page.waitForTimeout(1500);
+  const bank0 = await f.bal("QA Bank");
+  const card0 = await aBal();
+  await h.go(page, "/financial-audit");
+  await page.getByTestId("run-audit").click();
+  const sec = page.getByTestId("legacy-case-a");
+  await sec.waitFor({ timeout: 30000 });
+  const text = await f.flat(sec);
+  await h.shot(page, "card-emi-legacy-inspection");
+  chk("the section is shown and says Read-only", /Read-only/.test(text) && /billed principal twice/.test(text), text.slice(0, 240));
+  chk("a payment made under the current rule (interest-only ₹120 card charge) is NOT flagged", /None found/.test(text), text.slice(0, 240));
+  chk("no button in the section writes anything (no action buttons)", (await sec.getByRole("button").count()) === 0);
+  chk("running the audit moved no balance (persisted)", f.close2(await f.bal("QA Bank"), bank0) && f.close2(await aBal(), card0));
 });

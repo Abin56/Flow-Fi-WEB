@@ -18,7 +18,7 @@ import { scheduleOnlyLoanFlows } from "@/lib/engines/loan-cash-flow";
 import { useExpenseInstallmentsBySchedule, useExpenses } from "@/hooks/use-expenses";
 import { useFirestoreWatch } from "@/hooks/use-firestore-watch";
 import { cashFlowThisMonth, moneyReceivedThisMonth as moneyReceivedInMonth, type CashFlowSummary } from "@/lib/engines/cash-flow";
-import { cashFlowTransactions as toCashFlowTransactions } from "@/lib/engines/cycle-transaction-mapping";
+import { cardLinkedEmiIds, cashFlowTransactions as toCashFlowTransactions } from "@/lib/engines/cycle-transaction-mapping";
 import { effectiveMonth, type Transaction } from "@/lib/models/transaction";
 import { isSplit, type Expense } from "@/lib/models/expense";
 import { createAccountRepository, createTransactionRepository } from "@/lib/repositories/repository-factory";
@@ -117,7 +117,7 @@ export function useCashFlowThisMonth(): CashFlowSummary {
   const now = new Date();
 
   const creditCardAccountIds = new Set((creditCards ?? []).map((c) => c.accountId));
-  const cashFlowTransactions = toCashFlowTransactions(transactions ?? [], creditCardAccountIds);
+  const cashFlowTransactions = toCashFlowTransactions(transactions ?? [], creditCardAccountIds, cardLinkedEmiIds(emis ?? []));
   const cardLinkedEmiScheduleIds = new Set((emis ?? []).filter((e) => e.linkedCreditCardId != null).map((e) => e.scheduleId));
 
   const monthRange = { start: new Date(now.getFullYear(), now.getMonth(), 1), end: new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999) };

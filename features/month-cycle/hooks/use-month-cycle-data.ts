@@ -24,9 +24,10 @@
 
 import { useMemo, useState } from "react";
 import { useAccounts } from "@/hooks/use-accounts";
-import { useAllCreditCardStatements, useCreditCards } from "@/hooks/use-credit-cards";
+import { useAllCreditCardStatements, useCreditCards, useEmis } from "@/hooks/use-credit-cards";
+import type { Emi } from "@/lib/models/emi";
 import { useAllEmiInstallments } from "@/hooks/use-emis";
-import { countsAsEmiCashOut, useEmiInstallmentPayments } from "@/hooks/use-emi-installment-payments";
+import { useEmiInstallmentPayments } from "@/hooks/use-emi-installment-payments";
 import { useExpenses } from "@/hooks/use-expenses";
 import { useLoanScheduledPayments } from "@/hooks/use-loan-scheduled-payments";
 import { dashboardLoanPaidRows } from "@/lib/engines/loan-cash-flow";
@@ -66,7 +67,7 @@ import { cardBillsDueInCycle, cardBillsForCard } from "@/lib/engines/card-cycle-
 import { isSplit, myShare, type Expense } from "@/lib/models/expense";
 import { useMySpendContext } from "@/hooks/use-my-spend-context";
 import { mySpendRows, summarizeMySpend } from "@/lib/engines/my-spend";
-import { monthCycleDashboardTransactions } from "@/lib/engines/cycle-transaction-mapping";
+import { caseAEmis, monthCycleDashboardTransactions, monthCycleEmiPaymentRows } from "@/lib/engines/cycle-transaction-mapping";
 import { compareTransactionsNewestFirst, isNonIncomeExpenseMovement, isPersonFunded, type Transaction } from "@/lib/models/transaction";
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -180,6 +181,7 @@ export function useMonthCycleData() {
   const { data: transactions = [], isLoading: transactionsLoading } = useTransactions();
   const { data: accounts = [], isLoading: accountsLoading } = useAccounts();
   const { data: creditCards = [], isLoading: creditCardsLoading } = useCreditCards();
+  const { data: emis = [], isLoading: emisLoading } = useEmis();
   const { data: statements = [], isLoading: statementsLoading } = useAllCreditCardStatements();
   const { isLoading: emiInstallmentsLoading } = useAllEmiInstallments();
   const { payments: emiPayments, isLoading: emiPaymentsLoading } = useEmiInstallmentPayments();
@@ -202,6 +204,7 @@ export function useMonthCycleData() {
     mySpendLoading ||
     accountsLoading ||
     creditCardsLoading ||
+    emisLoading ||
     statementsLoading ||
     emiInstallmentsLoading ||
     emiPaymentsLoading ||
@@ -244,9 +247,12 @@ export function useMonthCycleData() {
     // The real previous cycle (same start day), not a window shifted by this one's length (WFI-P3-03).
     const previousRange: DateRange = adjacentCycleRange(monthCycleStartDay, range, -1);
 
+    // Case A EMIs (purchase already recorded on the card): their principal was spent at the purchase — see `caseAEmis`.
+    const caseA = caseAEmis(emis as Emi[], creditCards as CreditCardProfile[], transactions as Transaction[]);
     const dashboardTransactions: DashboardTransaction[] = monthCycleDashboardTransactions(
       transactions as Transaction[],
       new Set((creditCards as CreditCardProfile[]).map((c) => c.accountId)),
+      new Set(caseA.map((e) => e.id)),
     );
     const dashboardExpenses: DashboardExpense[] = (expenses as Expense[]).map((e) => ({
       transactionId: e.transactionId,
@@ -259,7 +265,7 @@ export function useMonthCycleData() {
     const dashboardBillOccurrences: DashboardBillOccurrence[] = [];
     // One row per EMI payment, dated by when it was PAID (WFI-P2-11) — an advance / late payment lands in its real cycle.
     // A payment recorded as already made before FlowFi settled the schedule but was never cash out here.
-    const dashboardEmiInstallments: DashboardInstallment[] = emiPayments.filter(countsAsEmiCashOut).map((p) => ({ dueDate: p.date, amountPaid: p.amount }));
+    const dashboardEmiInstallments: DashboardInstallment[] = monthCycleEmiPaymentRows(emiPayments, new Set(caseA.map((e) => e.scheduleId))).map((p) => ({ dueDate: p.date, amountPaid: p.amount }));
     // Only schedule-only (legacy, unlinked) payments on money I borrowed — modern Loan payments are
     // already counted through their linked Transaction, and lent-loan repayments are not spending.
     const dashboardLoanInstallments: DashboardInstallment[] = dashboardLoanPaidRows(loanScheduledPayments);
@@ -298,7 +304,7 @@ export function useMonthCycleData() {
     const mySpentChangePercent = percentChange(mySpent, myPreviousSpent);
 
     return { spent, spentBreakdown, previousSpent, income, net, spentChangePercent, mySpent, myPreviousSpent, myNet, mySpentChangePercent };
-  }, [isCustomCycle, cycleRange, monthCycleStartDay, transactions, creditCards, expenses, emiPayments, loanScheduledPayments, mySpendCtx]);
+  }, [isCustomCycle, cycleRange, monthCycleStartDay, transactions, creditCards, emis, expenses, emiPayments, loanScheduledPayments, mySpendCtx]);
 
   const savingsRatePercent = financialView.income > 0 ? Math.round((financialView.net / financialView.income) * 100) : 0;
 

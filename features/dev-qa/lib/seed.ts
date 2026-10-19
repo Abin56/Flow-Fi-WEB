@@ -356,6 +356,56 @@ export async function seedCardEmi(user: User): Promise<SeedResult> {
 }
 
 /**
+ * OPT-IN extra fixture: a CASE A card EMI — a ₹12,000 purchase already recorded on its own synthetic card ("QA Case A
+ * Card") and linked to the EMI (`purchaseTransactionId`), at 12% reducing over 4 months. Lets card-EMI funding /
+ * wording be checked where the principal is already card liability. Only needs the synthetic QA user.
+ */
+export async function seedCardEmiCaseA(user: User): Promise<SeedResult> {
+  assertQaEnvironment();
+  if (user.email !== QA_USER_EMAIL) throw new Error("QA guard blocked: not the synthetic QA user");
+  const uid = user.uid;
+  const steps: SeedStep[] = [];
+  const ids: Record<string, string> = {};
+  const t0 = performance.now();
+  try {
+    const accounts = createAccountRepository(uid);
+    const account = await accounts.createAccount({ name: "QA Case A Card", type: "card", openingBalance: 0, colorValue: 0xff00695c, cardSubtype: "credit", accountNumberLast4: "9191", accountHolderName: "QA Tester" });
+    const card = await createCreditCardRepository(uid).createCard({ accountId: account.id, statementDay: 1, paymentDueDay: 20, creditLimit: 100000, cardNetwork: null, cardHolderName: "QA Tester", lastFourDigits: "9191", sharedLimitId: null });
+    const purchase = await createTransactionRepository(uid, accounts).createTransaction({ type: "expense", amount: 12000, dateTime: new Date(), accountId: account.id, categoryId: "shopping", description: "QA Case A phone" });
+    const emi = await createEmiRepository(uid).createEmi({
+      name: "QA Case A EMI",
+      principalAmount: 12000,
+      startDate: daysFromNow(4),
+      installmentFrequency: "monthly",
+      installmentCount: 4,
+      lenderName: "QA Card Lender",
+      interest: { type: "reducingBalance", ratePercent: 12, period: "yearly" },
+      linkedCreditCardId: card.id,
+      purchaseTransactionId: purchase.id,
+    });
+    ids.caseAEmiId = emi.id;
+    ids.caseAAccountId = account.id;
+    // A second, interest-FREE Case A EMI on the same card: its payments charge the card nothing (principal already billed).
+    const freePurchase = await createTransactionRepository(uid, accounts).createTransaction({ type: "expense", amount: 6000, dateTime: new Date(), accountId: account.id, categoryId: "shopping", description: "QA Case A free phone" });
+    await createEmiRepository(uid).createEmi({
+      name: "QA Case A Free EMI",
+      principalAmount: 6000,
+      startDate: daysFromNow(5),
+      installmentFrequency: "monthly",
+      installmentCount: 4,
+      lenderName: "QA Card Lender",
+      interest: null,
+      linkedCreditCardId: card.id,
+      purchaseTransactionId: freePurchase.id,
+    });
+    steps.push({ name: "Case A card EMIs ₹12,000 @12% and ₹6,000 interest-free (purchases already on QA Case A Card)", ok: true, ms: Math.round(performance.now() - t0) });
+  } catch (e) {
+    steps.push({ name: "Case A card EMI", ok: false, ms: Math.round(performance.now() - t0), detail: e instanceof Error ? e.message : String(e) });
+  }
+  return { steps, ids };
+}
+
+/**
  * OPT-IN extra fixture: 36 posted transactions on QA Bank spread over earlier days, including four that share ONE
  * exact timestamp (ties), so a statement needs "Show more" and its same-time ordering can be checked. Written through
  * the normal repository, so balances move exactly as they do for real entries.

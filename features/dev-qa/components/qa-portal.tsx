@@ -17,7 +17,7 @@ import { ClayButton } from "@/components/clay/clay-button";
 import { auth } from "@/lib/firebase/client";
 import { cn } from "@/lib/utils";
 import { isQaUser, runGuard, QA_USER_EMAIL, type GuardReport } from "../lib/guard";
-import { ensureQaUser, resetEmulatorData, seedCardEmi, seedFixtures, seedSharedEmi, seedSharedHistoryEmi, seedStatementHistory, type SeedStep } from "../lib/seed";
+import { ensureQaUser, resetEmulatorData, seedCardEmi, seedCardEmiCaseA, seedFixtures, seedSharedEmi, seedSharedHistoryEmi, seedStatementHistory, type SeedStep } from "../lib/seed";
 
 type Verdict = "not-tested" | "pass" | "fail" | "not-executed";
 interface Result {
@@ -288,6 +288,21 @@ export function QaPortal() {
             data-testid="qa-seed-card-emi"
           >
             {busy === "cardEmi" ? "Adding…" : "Add card EMI"}
+          </ClayButton>
+          <ClayButton
+            size="sm"
+            variant="secondary"
+            disabled={busy != null || !signedIn}
+            onClick={() =>
+              run("cardEmiA", async () => {
+                const user = auth.currentUser;
+                if (!user) throw new Error("Sign in first");
+                setSteps((await seedCardEmiCaseA(user)).steps);
+              })
+            }
+            data-testid="qa-seed-card-emi-a"
+          >
+            {busy === "cardEmiA" ? "Adding…" : "Add Case A card EMI"}
           </ClayButton>
           <ClayButton
             size="sm"
