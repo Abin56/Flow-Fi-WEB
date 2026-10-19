@@ -27,6 +27,7 @@ import { useMySpendContext } from "@/hooks/use-my-spend-context";
 import { useTransactions } from "@/hooks/use-transactions";
 import { useAllBillOccurrences } from "@/features/bills/hooks/use-bill-occurrence-history";
 import { useBillRows } from "@/features/bills/hooks/use-bills-data";
+import { billObligationsInCycle, outstandingBillOccurrences } from "@/lib/engines/bill-obligations";
 import { useBillPayments } from "@/features/history/hooks/use-history-payment-sources";
 import { useEmiRows } from "@/features/emi/hooks/use-emi-data";
 import { useLoanRows } from "@/features/loans/hooks/use-loans-data";
@@ -39,13 +40,12 @@ import { emiPurchaseRepresentedOnCard } from "@/lib/engines/credit-utilization";
 import { hasOwnershipShares } from "@/lib/engines/debt-ownership";
 import { linkedPeopleForCard, linkedPeopleForInstallments, peopleLedgerHref } from "@/lib/engines/linked-people-readiness";
 import { loanCycleDues } from "@/lib/engines/loan-cycle-dues";
-import { adjacentCycleRange, cycleRangeFor, cycleRangeForMonth, isInCycle, isOwedInCycle, mySpendBucketDate } from "@/lib/engines/month-cycle-range";
+import { adjacentCycleRange, cycleRangeFor, cycleRangeForMonth, isInCycle, mySpendBucketDate } from "@/lib/engines/month-cycle-range";
 import { mySpendRows, summarizeMySpend } from "@/lib/engines/my-spend";
 import type { PersonCycleStatement, StatementCategory, StatementCycle } from "@/lib/engines/person-cycle-statement";
 import { peopleDirectionSides } from "@/lib/engines/person-position";
 import { isCardBillPaymentLeg } from "@/lib/repositories/credit-card-repository";
 import type { Account } from "@/lib/models/account";
-import { billOccurrenceRemainingAmount, billOccurrenceStatus } from "@/lib/models/bill";
 import type { Category } from "@/lib/models/category";
 import type { CreditCardProfile, Statement } from "@/lib/models/credit-card";
 import type { Person } from "@/lib/models/person";
@@ -128,7 +128,7 @@ export function useMyMoneyData() {
   const { data: statements = [], isLoading: statementsLoading } = useAllCreditCardStatements();
   const { rows: loanRows, isLoading: loansLoading } = useLoanRows();
   const { rows: emiRows, isLoading: emisLoading } = useEmiRows();
-  const { rows: billRows, isLoading: billsLoading } = useBillRows();
+  const { rows: billRows, cycles: billCycles, isLoading: billsLoading } = useBillRows();
   const { occurrences: billOccurrences, isLoading: occurrencesLoading } = useAllBillOccurrences();
   const { paymentsByBillId: billPaymentsByBillId, isLoading: billPaymentsLoading } = useBillPayments();
   const { payments: loanPayments, isLoading: loanPaymentsLoading } = useLoanScheduledPayments();
@@ -284,17 +284,15 @@ export function useMyMoneyData() {
       }
     }
 
-    for (const row of billRows) {
-      const occurrence = row.occurrence;
-      if (!occurrence || occurrence.deletedAt != null) continue;
-      const state = billOccurrenceStatus(occurrence, now);
-      if (state === "paid" || state === "skipped") continue;
-      if (!isOwedInCycle(occurrence.dueDate, cycleRange, now)) continue;
-      const remaining = round2(billOccurrenceRemainingAmount(occurrence));
+    // Bills: every outstanding cycle (a cycle reopened by a cancelled payment is owed again), once each.
+    const billById = new Map(billRows.map((r) => [r.bill.id, r]));
+    for (const { billId, occurrence, remaining } of billObligationsInCycle(outstandingBillOccurrences(billCycles, now), cycleRange, now).items) {
+      const row = billById.get(billId);
+      if (!row) continue;
       items.push({
-        key: `bill:${row.bill.id}:${occurrence.id}`,
+        key: `bill:${billId}:${occurrence.id}`,
         kind: "bill",
-        sourceId: row.bill.id,
+        sourceId: billId,
         title: row.bill.name,
         detail: row.category?.name ?? "Bill",
         dueDate: occurrence.dueDate,
@@ -313,7 +311,7 @@ export function useMyMoneyData() {
     }
 
     return items.sort(compareObligations);
-  }, [cardList, txns, statements, accountList, cycleRange, now, entriesByPersonId, peopleStatements, cardLookup, loanRows, emiRows, billRows]);
+  }, [cardList, txns, statements, accountList, cycleRange, now, entriesByPersonId, peopleStatements, cardLookup, loanRows, emiRows, billRows, billCycles]);
 
   const toPay = useMemo(() => summarizeToPay(obligations), [obligations]);
 

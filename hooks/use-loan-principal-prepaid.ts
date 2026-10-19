@@ -33,24 +33,31 @@ export function useLoanPrincipalPrepaid(): { prepaidByLoanId: Map<string, number
     enabled: !!uid && loans.length > 0,
     staleTime: Infinity,
     placeholderData: (previous) => previous,
-    queryFn: async (): Promise<Map<string, number>> => {
-      const result = new Map<string, number>();
-      if (!uid) return result;
-      await Promise.all(
-        (loans as Loan[]).map(async (loan) => {
-          const installmentRepository = createInstallmentRepositoryFor(uid, loan.scheduleId);
-          const all = [...(await installmentRepository.getAll()), ...(await installmentRepository.getTrash())];
-          const payments = await Promise.all(
-            all.map((installment) =>
-              createInstallmentPaymentRepositoryFor(uid, loan.scheduleId, installment.id, installmentRepository).getAll(),
-            ),
-          );
-          result.set(loan.id, principalPrepaidFor(payments.flat()));
-        }),
-      );
-      return result;
-    },
+    queryFn: () => (uid ? fetchPrincipalPrepaidByLoan(uid, loans as Loan[]) : Promise.resolve(new Map<string, number>())),
   });
 
   return { prepaidByLoanId: query.data ?? new Map(), isLoading: loans.length > 0 && query.isLoading };
+}
+
+/**
+ * Reads every loan's installments (active AND retired) and their payments, then derives the active extra
+ * principal per loan. The active and retired installment reads are independent, so they are issued together —
+ * this runs after every Loan/EMI payment (and the payment dialog waits for it), so each avoidable sequential
+ * round trip is felt.
+ */
+export async function fetchPrincipalPrepaidByLoan(uid: string, loans: readonly Loan[]): Promise<Map<string, number>> {
+  const result = new Map<string, number>();
+  await Promise.all(
+    loans.map(async (loan) => {
+      const installmentRepository = createInstallmentRepositoryFor(uid, loan.scheduleId);
+      const [active, retired] = await Promise.all([installmentRepository.getAll(), installmentRepository.getTrash()]);
+      const payments = await Promise.all(
+        [...active, ...retired].map((installment) =>
+          createInstallmentPaymentRepositoryFor(uid, loan.scheduleId, installment.id, installmentRepository).getAll(),
+        ),
+      );
+      result.set(loan.id, principalPrepaidFor(payments.flat()));
+    }),
+  );
+  return result;
 }

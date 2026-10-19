@@ -12,6 +12,7 @@ import type { ExpenseParticipant, ReceivedStatus, SplitType } from "@/lib/models
 import type { Person } from "@/lib/models/person";
 import { ExpenseRepository, type ExpenseParticipantInput } from "@/lib/repositories/expense-repository";
 import { useTransactionActions } from "@/features/transactions/hooks/use-transactions-data";
+import { initialAddAccountId } from "@/features/transactions/lib/initial-account";
 import { cn } from "@/lib/utils";
 import { CompactAmountInput } from "./ledger-ui";
 import {
@@ -131,6 +132,7 @@ export function SplitExpenseMode({
   onDone,
   backLabel,
   closeable = false,
+  initialAccountId = null,
 }: {
   person: Person;
   accounts: Account[];
@@ -142,6 +144,8 @@ export function SplitExpenseMode({
   backLabel?: string;
   /** Shown as a popup: "× Close" top-right instead of the back link. */
   closeable?: boolean;
+  /** The account the user explicitly opened this form from, if any. The only way it starts with an account. */
+  initialAccountId?: string | null;
 }) {
   const actions = useTransactionActions();
 
@@ -162,8 +166,10 @@ export function SplitExpenseMode({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  // Defaults resolve once the lists have loaded — same picks the dialog made on open.
-  const accountId = accountIdState || accounts[0]?.id || "";
+  // The paying account is the user's deliberate choice — never "the first one Firestore returned". It starts
+  // empty unless the form was opened from an explicit account context (`initialAccountId`), and a choice
+  // whose account has since disappeared from the list counts as no choice.
+  const accountId = accounts.some((a) => a.id === accountIdState) ? accountIdState : initialAddAccountId({ kind: "expense", accounts, contextAccountId: initialAccountId });
   const categoryId = categoryIdState || categories.find((c) => c.type !== "income")?.id || "";
   const firstName = person.name.split(" ")[0];
   const selectablePeople = people.filter((p) => p.id !== person.id);
@@ -186,7 +192,7 @@ export function SplitExpenseMode({
     if (!description.trim()) e.description = "Description is required.";
     const total = Number(amount);
     if (!amount.trim() || Number.isNaN(total) || total <= 0) e.amount = "Enter an amount greater than 0.";
-    if (!accountId) e.account = "Select an account.";
+    if (!accountId) e.account = "Select the account this expense was paid from.";
     if (!categoryId) e.category = "Select a category.";
     if (!date) e.date = "Select a date.";
     if (assignFully) return e;

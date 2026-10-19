@@ -235,8 +235,7 @@ export function useTransactionActions() {
         transaction,
         {
           transactionRepository,
-          findExpense: async (transactionId) =>
-            (await expenseRepository.getAll()).find((e) => e.transactionId === transactionId && e.deletedAt == null) ?? null,
+          findExpense: (transactionId) => expenseRepository.findActiveByTransactionId(transactionId),
           deleteExpense: (e) => expenseRepository.deleteExpense(e),
           deletePersonLinked: (t) =>
             deletePersonCashLegTransaction({

@@ -28,7 +28,7 @@ import { InstallmentPaymentRepository, InstallmentRepository, PaymentScheduleRep
 import { LedgerRepository, PersonRepository } from "./person-repository";
 import { TransactionRepository } from "./transaction-repository";
 import type { Transaction } from "@/lib/models/transaction";
-import { type CollectionReference, runTransaction } from "firebase/firestore";
+import { type CollectionReference, getDocs, query, runTransaction, where } from "firebase/firestore";
 
 /**
  * A single participant's raw input before shares are resolved — the UI
@@ -269,6 +269,16 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
     private readonly ledgerRepositoryFor: (personId: string) => LedgerRepository,
   ) {
     super(collection);
+  }
+
+  /**
+   * The active Expense whose backing transaction is `transactionId`, or null. An indexed equality lookup
+   * (the same `transactionId ==` query the owner guard already runs) — callers used to read the WHOLE
+   * expenses collection and `find` in memory, which grew with the user's history on every delete / rename.
+   */
+  async findActiveByTransactionId(transactionId: string): Promise<Expense | null> {
+    const snapshot = await getDocs(query(this.collection, where("transactionId", "==", transactionId)));
+    return snapshot.docs.map((d) => d.data()).find((e) => e.deletedAt == null) ?? null;
   }
 
   /**

@@ -163,10 +163,12 @@ describe("status vocabulary and colour families", () => {
       ["Partially paid", "partial"],
       ["Paid in full", "paid"],
     ]);
-    const advance = s.view.rows.find((r) => r.kind === "advance")!;
-    expect([advance.status, advance.chip, advance.statusNote]).toEqual(["Advance held", "advance", ""]);
-    // A detail that only restates the direction and Paid / Remaining is not repeated under the chip.
-    expect(by("Item 1").statusNote).toBe("");
+    // An advance is money paid, not something owed: it is listed once, in Payment history, never as a transaction.
+    expect(s.view.rows.some((r) => r.kind === "advance")).toBe(false);
+    expect(s.view.payments.find((p) => p.advance)).toMatchObject({ amount: money(500), single: "Held as advance — for the next obligations" });
+    // A detail that only restates the direction and Paid / Remaining is not repeated under the chip — only when it was paid.
+    expect(by("Item 1").statusNote).toBe("Last paid 25 Sep");
+    expect(by("Item 2").statusNote).toBe("Cleared 25 Sep");
   });
 });
 

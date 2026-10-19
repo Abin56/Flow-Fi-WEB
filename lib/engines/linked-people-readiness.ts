@@ -277,6 +277,28 @@ export function peopleSettlementGate(readiness: LinkedPeopleReadiness | null): P
   };
 }
 
+/**
+ * People Ledger deep link that opens the person's existing Apply advance panel with this obligation preselected
+ * (`applyAdvance=1`). Applying moves no cash and credits no account — the advance already did when received.
+ */
+export function peopleApplyAdvanceHref(personId: string, obligationKey: string, returnTo?: string): string {
+  const q = new URLSearchParams({ person: personId, applyAdvance: "1" });
+  if (obligationKey) q.set("obligation", obligationKey);
+  if (returnTo && isInAppPath(returnTo)) q.set("return", returnTo);
+  return `/people?${q.toString()}`;
+}
+
+/**
+ * People Ledger deep link straight into "Postpone collection" for this obligation (People Record payment with
+ * `intent=postpone`). Postponing only moves when the money is expected — it records nothing and never touches
+ * the lender's installment.
+ */
+export function peoplePostponeHref(personId: string, obligationKey: string, returnTo?: string): string {
+  const q = new URLSearchParams({ person: personId, obligation: obligationKey, settle: "1", intent: "postpone" });
+  if (returnTo && isInAppPath(returnTo)) q.set("return", returnTo);
+  return `/people?${q.toString()}`;
+}
+
 /** Only same-origin app paths are followed back — never an absolute or protocol-relative URL. */
 export function isInAppPath(path: string): boolean {
   return path.startsWith("/") && !path.startsWith("//") && !path.startsWith("/\\");

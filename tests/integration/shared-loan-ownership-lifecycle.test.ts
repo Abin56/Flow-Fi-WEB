@@ -61,7 +61,7 @@ import {
 } from "@/lib/models/person";
 import { classifyForMySpend, mySpendContextFromRecords } from "@/lib/engines/my-spend";
 import { PeopleSettlementPendingError } from "@/lib/engines/linked-people-readiness";
-import { isLoanPrincipalDisbursement, transactionFromFirestore, transactionToFirestore, type Transaction } from "@/lib/models/transaction";
+import { balanceEffect, isLoanPrincipalDisbursement, transactionFromFirestore, transactionToFirestore, type Transaction } from "@/lib/models/transaction";
 import { AccountRepository } from "@/lib/repositories/account-repository";
 import { LoanAdvancePaymentRepository, type LoanAdvancePaymentResult } from "@/lib/repositories/loan-advance-payment-repository";
 import { LoanRepository, OriginationDeleteBlockedError } from "@/lib/repositories/loan-repository";
@@ -69,6 +69,12 @@ import { InstallmentRepository, PaymentScheduleRepository } from "@/lib/reposito
 import { PersonPaymentRepository, StalePersonPaymentError, type RecordPaymentInput } from "@/lib/repositories/person-payment-repository";
 import { LedgerRepository, PersonRepository } from "@/lib/repositories/person-repository";
 import { TransactionRepository } from "@/lib/repositories/transaction-repository";
+import { installmentBreakdown, lenderFirstReason } from "@/lib/engines/installment-participants";
+import { cycleContaining, shiftCycle } from "@/lib/engines/person-cycle-statement";
+import { PaymentDeferralRepository } from "@/lib/repositories/payment-deferral-repository";
+import { RECORDED_EARLIER_PEOPLE_ACK, RecordedEarlierError } from "@/lib/engines/recorded-earlier";
+import { countsFromSchedule } from "@/lib/engines/loan-cash-flow";
+import { historicalCandidates, planBulkRecordedEarlier, runBulkRecordedEarlier, type BulkItem } from "@/lib/engines/bulk-recorded-earlier";
 
 const PROJECT_ID = "flowfi-shared-loan-ownership-audit";
 const UID = "e2e-owner-uid";
@@ -1032,4 +1038,421 @@ describe("§8 — AMMA misses #1, #2 falls due, she pays ₹1,500", () => {
     expect([await cash(w), nw.peopleReceivable, nw.peoplePayable, nw.netWorth]).toEqual([36_500, 2_500, 0, 9_000]); // cash +1,500, receivable −1,500
     expect(await monthCycleIncome(w)).toBe(0);
   }, 30_000);
+});
+
+// ═══════════════════════════ Lender-first payment + carried, postponed shares ═══════════════════════════
+
+describe("lender-first: owner pays the installment, A reimbursed, B postponed and carried", () => {
+  const ALL = { start: new Date(1970, 0, 1), end: new Date(2200, 0, 1) };
+  const MAR_12 = new Date(2026, 2, 12);
+  async function breakdownAt(w: World, seq: number, now: Date) {
+    const insts = await liveInstallments(w);
+    const statements = await Promise.all([w.aId, w.bId].map((id) => statement(w, id, now, ALL)));
+    return installmentBreakdown({ statements, installments: insts, installmentId: insts.find((i) => i.sequenceNumber === seq)!.id, sourceKind: "loan", source: await loanNow(w) })!;
+  }
+
+  it("one lender outflow, People untouched, deferral only moves timing, Loan/EMI and People agree", async () => {
+    const w = await world();
+    expect(await cash(w)).toBe(35_000);
+    await personPays(w, w.aId, 1_000, FEB_12); // A reimburses #1 before the lender is paid
+    expect(await cash(w)).toBe(36_000);
+
+    // The dialog's lender-first path: B is still open, so the payment carries the explicit acknowledgement.
+    const ack = { acknowledgedUnsettledPeople: true as const, reason: lenderFirstReason([{ personName: "Person B", remaining: 1_000 }]) };
+    const args = async () => ({ loan: await loanNow(w), scheduleInstallments: await liveInstallments(w) });
+    const first = await w.lender.record({ ...(await args()), accountId: w.accountId, amount: 3_000, date: FEB_15, idempotencyKey: "lender-first-1", peopleGateAcknowledgement: ack });
+    // Retry / double submit with the same key never moves cash twice.
+    await w.lender.record({ ...(await args()), accountId: w.accountId, amount: 3_000, date: FEB_15, idempotencyKey: "lender-first-1", peopleGateAcknowledgement: ack });
+    expect(await cash(w)).toBe(33_000); // −₹3,000 once
+    expect(first.transactionId).toBeTruthy();
+    const lenderTxs = (await getDocs(w.transactionsRef)).docs.map((d) => d.data()).filter((t) => t.deletedAt == null && t.type === "expense");
+    expect(lenderTxs).toHaveLength(1);
+
+    const feb = await breakdownAt(w, 1, FEB_15);
+    expect(feb).toMatchObject({ installmentAmount: 3_000, lenderPaid: 3_000, lenderRemaining: 0, yourShare: 1_000, othersOwe: 1_000 });
+    const byId = (b: typeof feb, id: string) => b.participants.find((p) => p.personId === id)!;
+    expect(byId(feb, w.aId).current).toMatchObject({ received: 1_000, state: "received" });
+    expect(byId(feb, w.bId).current).toMatchObject({ remaining: 1_000, state: "pending" }); // lender payment settled nobody
+
+    // Postpone B's #1 reimbursement to the March cycle: only timing metadata changes.
+    const inst1 = (await liveInstallments(w))[0];
+    const before = JSON.stringify([await liveInstallments(w), await ledgerEntries(w, w.bId), await cash(w)]);
+    const target = shiftCycle(cycleContaining(FEB_15, 1), 1, 1);
+    await new PaymentDeferralRepository(w.db, UID).apply({
+      action: "postpone", requestId: "b-1", expectedRevision: 0, personId: w.bId, obligationKey: `loan-inst:${inst1.id}`, obligationTitle: "Shared loan",
+      now: FEB_15, startDay: 1, obligationDate: inst1.dueDate, remaining: 1_000, target, reason: "unableNow", note: null, reminder: null,
+    });
+    expect(JSON.stringify([await liveInstallments(w), await ledgerEntries(w, w.bId), await cash(w)])).toBe(before);
+    expect((await liveInstallments(w))[0].dueDate).toEqual(FIRST_DUE); // the lender's due date never moves
+
+    // March: #2 adds a separate share; B owes #1 + #2 = ₹2,000, identical to the People Ledger's open rows.
+    const mar = await breakdownAt(w, 2, MAR_12);
+    expect(byId(mar, w.bId)).toMatchObject({ outstanding: 2_000, carried: [{ sequenceNumber: 1, remaining: 1_000 }], current: { remaining: 1_000 } });
+    // Record payment reads the whole-history rows (the March cycle view shows #1 as previous pending).
+    const allB = await statement(w, w.bId, MAR_12, ALL);
+    const bRows = buildLedgerRows({ statement: allB, history: allB, entries: await ledgerEntries(w, w.bId), pending: [], now: MAR_12, advanceApplications: await applications(w, w.bId) });
+    const peopleOpen = payableObligations(bRows).filter((o) => o.key.startsWith("loan-inst:") && o.date <= MAR_12);
+    expect(peopleOpen.reduce((t, o) => t + o.outstanding, 0)).toBe(2_000);
+    expect(peopleOpen).toHaveLength(2);
+
+    // Without the acknowledgement the write gate still refuses a lender payment over open shares.
+    await expect(payLender(w, 3_000, MAR_12, "no-ack")).rejects.toBeInstanceOf(PeopleSettlementPendingError);
+  }, 30_000);
+});
+
+// ═══════════════ Own-money lender payment and "Already paid earlier" (2026-10-13) ═══════════════
+
+/** Every payment doc on the schedule (live and soft-deleted). */
+async function paymentDocs(w: World) {
+  const all = await allInstallments(w);
+  return (await Promise.all(all.map((i) => getDocs(w.paymentsRef(w.scheduleId, i.id))))).flatMap((s) => s.docs.map((d) => d.data()));
+}
+async function loanTransactions(w: World) {
+  return (await getDocs(query(w.transactionsRef, where("loanId", "==", w.loanId)))).docs.map((d) => d.data() as Transaction);
+}
+/**
+ * Cash Flow's loan money-out: counted Transactions (live, not excluded, not a principal disbursement) plus
+ * schedule-only payments (`countsFromSchedule`, the legacy path) — what `useTransactions` / Month Cycle add up.
+ */
+async function loanCashOut(w: World): Promise<number> {
+  const txs = (await loanTransactions(w)).filter((t) => t.deletedAt == null && !t.excludeFromCalculations && !isLoanPrincipalDisbursement(t) && t.type === "expense");
+  const scheduleOnly = (await paymentDocs(w)).filter(countsFromSchedule);
+  return txs.reduce((s, t) => s + t.amount, 0) + scheduleOnly.reduce((s, p) => s + p.amount, 0);
+}
+async function seqPaid(w: World, seq: number) {
+  return (await liveInstallments(w)).find((i) => i.sequenceNumber === seq)!.amountPaid;
+}
+/** What the dialog sends for "Already paid earlier": installments only, pinned to the first one it showed. */
+async function payEarlier(w: World, amount: number, date: Date, key: string, opts: { dateKnown?: boolean; expected?: string | null; accountId?: string } = {}) {
+  const insts = await liveInstallments(w);
+  return w.lender.record({
+    loan: await loanNow(w),
+    scheduleInstallments: insts,
+    accountId: opts.accountId ?? w.accountId,
+    amount,
+    date,
+    idempotencyKey: key,
+    includeUpcomingInstallments: true,
+    peopleGateAcknowledgement: RECORDED_EARLIER_PEOPLE_ACK,
+    recordedEarlier: { dateKnown: opts.dateKnown ?? true },
+    expectedFirstInstallmentId: opts.expected === undefined ? insts.find((i) => i.amountPaid < i.amountDue)!.id : opts.expected,
+  });
+}
+
+describe("Scenario A — ₹9,000 installment: AMMA reimbursed, Sanju unpaid, owner pays the lender from own money", () => {
+  it("SBI −₹9,000 once; Sanju still owes ₹3,000; AMMA stays settled; installment paid; nothing else created", async () => {
+    const w = await world({ loanAmount: 90_000 }); // 10 × ₹9,000; Me / A (AMMA) / B (Sanju) ⅓ each = ₹3,000 per installment
+    expect(await cash(w)).toBe(95_000);
+    await personPays(w, w.aId, 3_000, FEB_12); // AMMA reimburses her share of #1
+    expect(await cash(w)).toBe(98_000);
+    const ledgerBefore = [(await ledgerEntries(w, w.aId)).length, (await ledgerEntries(w, w.bId)).length];
+
+    // Default path: the write gate still refuses while Sanju's share is open — nothing moves.
+    await expect(payLender(w, 9_000, FEB_15, "a-no-ack")).rejects.toBeInstanceOf(PeopleSettlementPendingError);
+    expect(await cash(w)).toBe(98_000);
+
+    // "Pay using my own money": the explicit acknowledgement; the reason/note go in the payment note.
+    const ack = { acknowledgedUnsettledPeople: true as const, reason: `${lenderFirstReason([{ personName: "Person B", remaining: 3_000 }])} — Payment delayed` };
+    const pay = async () =>
+      w.lender.record({
+        loan: await loanNow(w), scheduleInstallments: await liveInstallments(w), accountId: w.accountId, amount: 9_000, date: FEB_15,
+        idempotencyKey: "a-own-money", note: "Paid from my own money — Payment delayed", peopleGateAcknowledgement: ack,
+      });
+    const first = await pay();
+    const retry = await pay(); // double submit / retry after a lost response
+    expect(retry.alreadyRecorded).toBe(true);
+
+    expect(await cash(w)).toBe(89_000); // −₹9,000 exactly once
+    expect(await seqPaid(w, 1)).toBe(9_000);
+    expect((await position(w, w.bId, FEB_15)).net).toBe(3_000); // Sanju still owes
+    expect((await position(w, w.aId, FEB_15)).net).toBe(0); // AMMA settled
+    expect([(await ledgerEntries(w, w.aId)).length, (await ledgerEntries(w, w.bId)).length]).toEqual(ledgerBefore); // no receivable / settlement written
+    const lenderTxs = (await loanTransactions(w)).filter((t) => t.deletedAt == null && !isLoanPrincipalDisbursement(t));
+    expect(lenderTxs).toHaveLength(1);
+    expect(lenderTxs[0]).toMatchObject({ id: first.transactionId, amount: 9_000, type: "expense", excludeFromCalculations: false });
+    expect((await paymentDocs(w)).find((p) => p.id === first.paymentIds[0])).toMatchObject({ note: "Paid from my own money — Payment delayed", recordedEarlier: null });
+    expect(await monthCycleIncome(w)).toBe(0); // AMMA's reimbursement is not income
+  }, 30_000);
+});
+
+describe("Scenario B — Already paid earlier (no account movement)", () => {
+  it("installment paid, balance untouched, no counted cash movement, People shares untouched; retries never duplicate", async () => {
+    const w = await world();
+    const nwBefore = (await netWorth(w, FEB_15)).netWorth;
+    const r = await payEarlier(w, 3_000, FIRST_DUE, "hist-1");
+
+    expect(await cash(w)).toBe(35_000); // unchanged
+    expect(await seqPaid(w, 1)).toBe(3_000);
+    expect(await outstanding(w)).toBe(27_000);
+    const txn = (await loanTransactions(w)).find((t) => t.id === r.transactionId)!;
+    expect(txn).toMatchObject({ excludeFromCalculations: true, amount: 3_000, deletedAt: null });
+    expect(txn.description).toMatch(/already paid earlier/);
+    expect(balanceEffect(txn)).toBe(0);
+    const doc1 = (await paymentDocs(w)).find((p) => p.id === r.paymentIds[0])!;
+    expect(doc1).toMatchObject({ recordedEarlier: { dateKnown: true }, transactionId: r.transactionId, date: FIRST_DUE });
+    expect(countsFromSchedule(doc1)).toBe(false);
+    expect(await loanCashOut(w)).toBe(0); // Cash Flow / Month Cycle / Dashboard see no money out
+    // Net Worth: the liability falls by ₹3,000 while cash stays — the correction the user asked for.
+    expect((await netWorth(w, FEB_15)).netWorth).toBe(nwBefore + 3_000);
+    // People: the lender payment settled nobody.
+    expect([(await position(w, w.aId, FEB_15)).net, (await position(w, w.bId, FEB_15)).net]).toEqual([1_000, 1_000]);
+    expect([(await ledgerEntries(w, w.aId)).length, (await ledgerEntries(w, w.bId)).length]).toEqual([0, 0]);
+
+    // Retry of the same action: nothing twice.
+    expect((await payEarlier(w, 3_000, FIRST_DUE, "hist-1", { expected: doc1.installmentId })).alreadyRecorded).toBe(true);
+    // A second action (new key, stale screen) for the same installment: refused, never spilled onto #2.
+    await expect(payEarlier(w, 3_000, FIRST_DUE, "hist-1-dup", { expected: doc1.installmentId })).rejects.toBeInstanceOf(RecordedEarlierError);
+    expect([await seqPaid(w, 1), await seqPaid(w, 2), await cash(w)]).toEqual([3_000, 0, 35_000]);
+
+    // A later normal payment still moves the account exactly once.
+    await payLenderAnyway(w, 3_000, new Date(2026, 2, 12), "after-hist");
+    expect(await cash(w)).toBe(32_000);
+    expect(await loanCashOut(w)).toBe(3_000);
+  }, 30_000);
+
+  it("partial, unknown date → edit (amount, date, account) → mark unpaid: no balance moves at any step", async () => {
+    const w = await world();
+    const icici = await w.accounts.createAccount({ name: "ICICI", type: "bank", openingBalance: 1_000, colorValue: 0 });
+    const i1 = (await liveInstallments(w))[0];
+    const r = await payEarlier(w, 1_500, i1.dueDate, "hist-p", { dateKnown: false });
+    expect([await cash(w), await seqPaid(w, 1)]).toEqual([35_000, 1_500]);
+    expect((await paymentDocs(w)).find((p) => p.id === r.paymentIds[0])).toMatchObject({ recordedEarlier: { dateKnown: false }, date: i1.dueDate });
+
+    // Correct it: full amount, the real date, a different account — the edit keeps it "paid earlier".
+    const FEB_8 = new Date(2026, 1, 8);
+    await w.lender.editPayment({
+      loan: await loanNow(w), scheduleInstallments: await liveInstallments(w),
+      original: { transactionId: r.transactionId, paymentIds: r.paymentIds, installmentIds: r.installmentIds },
+      accountId: icici.id, amount: 3_000, date: FEB_8, idempotencyKey: "hist-p-edit", peopleGateAcknowledgement: RECORDED_EARLIER_PEOPLE_ACK,
+    });
+    expect([await cash(w), (await w.accounts.getByKey(icici.id))!.currentBalance, await seqPaid(w, 1)]).toEqual([35_000, 1_000, 3_000]);
+    const txs = await loanTransactions(w);
+    expect(txs.find((t) => t.id === r.transactionId)!.deletedAt).not.toBeNull();
+    const corrected = txs.find((t) => t.id === "adv_hist-p-edit_txn")!;
+    expect(corrected).toMatchObject({ excludeFromCalculations: true, accountId: icici.id, deletedAt: null });
+    const live = (await paymentDocs(w)).filter((p) => p.deletedAt == null);
+    expect(live).toHaveLength(1);
+    expect(live[0]).toMatchObject({ amount: 3_000, date: FEB_8, recordedEarlier: { dateKnown: true } }); // the real date is now known
+    expect(await loanCashOut(w)).toBe(0);
+
+    // Mark as unpaid: the installment is owed again; no account gets money that FlowFi never took.
+    await w.lender.reversePayment({
+      loan: await loanNow(w), transactionId: corrected.id, paymentIds: [live[0].id], installmentIds: [live[0].installmentId], reversalIdempotencyKey: "hist-p-undo",
+    });
+    expect([await cash(w), (await w.accounts.getByKey(icici.id))!.currentBalance, await seqPaid(w, 1)]).toEqual([35_000, 1_000, 0]);
+    expect((await loanTransactions(w)).find((t) => t.id === corrected.id)!.deletedAt).not.toBeNull();
+
+    // The installment can then be paid normally — one real outflow.
+    await payLenderAnyway(w, 3_000, FEB_15, "after-undo");
+    expect([await cash(w), await seqPaid(w, 1)]).toEqual([32_000, 3_000]);
+  }, 30_000);
+
+  it("guards: future date, extra principal, and an edit into extra principal are refused with nothing written", async () => {
+    const w = await world();
+    const txCount = async () => (await loanTransactions(w)).length;
+    const before = await txCount();
+    const tomorrow = new Date(Date.now() + 2 * 86_400_000);
+    await expect(payEarlier(w, 3_000, tomorrow, "hist-future")).rejects.toBeInstanceOf(RecordedEarlierError);
+    await expect(payEarlier(w, 40_000, FIRST_DUE, "hist-extra")).rejects.toBeInstanceOf(RecordedEarlierError); // > ₹30,000 owed
+    expect([await txCount(), await cash(w), await seqPaid(w, 1)]).toEqual([before, 35_000, 0]);
+
+    const r = await payEarlier(w, 3_000, FIRST_DUE, "hist-g");
+    await expect(
+      w.lender.editPayment({
+        loan: await loanNow(w), scheduleInstallments: await liveInstallments(w),
+        original: { transactionId: r.transactionId, paymentIds: r.paymentIds, installmentIds: r.installmentIds },
+        accountId: w.accountId, amount: 45_000, date: FIRST_DUE, idempotencyKey: "hist-g-edit", peopleGateAcknowledgement: RECORDED_EARLIER_PEOPLE_ACK,
+      }),
+    ).rejects.toBeInstanceOf(RecordedEarlierError);
+    // The original is intact — the refusal came before anything was reversed.
+    expect((await loanTransactions(w)).find((t) => t.id === r.transactionId)!.deletedAt).toBeNull();
+    expect([await cash(w), await seqPaid(w, 1)]).toEqual([35_000, 3_000]);
+  }, 30_000);
+
+  it("two tabs record the same past installment at once → exactly one lands; nothing spills onto #2", async () => {
+    const w = await world();
+    const i1 = (await liveInstallments(w))[0];
+    const results = await Promise.allSettled([
+      payEarlier(w, 3_000, FIRST_DUE, "tab-1", { expected: i1.id }),
+      payEarlier(w, 3_000, FIRST_DUE, "tab-2", { expected: i1.id }),
+    ]);
+    expect(results.filter((x) => x.status === "fulfilled")).toHaveLength(1);
+    const rejected = results.find((x) => x.status === "rejected") as PromiseRejectedResult;
+    expect(rejected.reason).toBeInstanceOf(RecordedEarlierError);
+    expect([await seqPaid(w, 1), await seqPaid(w, 2), await cash(w)]).toEqual([3_000, 0, 35_000]);
+    expect((await paymentDocs(w)).filter((p) => p.deletedAt == null)).toHaveLength(1);
+  }, 30_000);
+});
+
+describe("Bulk — several old installments marked as already paid (shared loan)", () => {
+  const TODAY = new Date(2026, 9, 13); // #1–#9 (Feb 10 … Oct 10) are due; #10 isn't
+  const recordVia = (w: World, results: Map<string, LoanAdvancePaymentResult>) => async (item: BulkItem) => {
+    const r = await w.lender.record({
+      loan: await loanNow(w),
+      scheduleInstallments: await liveInstallments(w),
+      accountId: w.accountId,
+      amount: item.amount,
+      date: item.date,
+      idempotencyKey: item.idempotencyKey,
+      includeUpcomingInstallments: true,
+      peopleGateAcknowledgement: RECORDED_EARLIER_PEOPLE_ACK,
+      recordedEarlier: { dateKnown: item.dateKnown },
+      onlyInstallmentId: item.installment.id,
+    });
+    results.set(item.installment.id, r);
+    return r;
+  };
+
+  it("non-consecutive picks, partial + already-recorded rows, a failure and its retry: no money moves, nothing twice, People untouched", async () => {
+    const w = await world();
+    const cashBefore = await cash(w);
+    const owedBefore = await outstanding(w);
+    const peopleBefore = [(await position(w, w.aId, TODAY)).net, (await position(w, w.bId, TODAY)).net];
+    const insts = await liveInstallments(w);
+    const bySeq = (n: number) => insts.find((i) => i.sequenceNumber === n)!;
+    const done = new Map<string, LoanAdvancePaymentResult>();
+
+    // Before: #4 was already marked paid earlier, and #2 part-paid (₹1,000) the same way.
+    const pre = recordVia(w, done);
+    const mk = (seq: number, amount: number, key: string): BulkItem => ({ installment: bySeq(seq), amount, date: bySeq(seq).dueDate, dateKnown: false, idempotencyKey: key });
+    await pre(mk(4, 3_000, "pre-4"));
+    await pre(mk(2, 1_000, "pre-2"));
+
+    const candidates = historicalCandidates(await liveInstallments(w), await paymentDocs(w), TODAY);
+    expect(candidates.map((c) => c.installment.sequenceNumber)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    const c = (seq: number) => candidates.find((x) => x.installment.sequenceNumber === seq)!;
+    expect([c(4).status, c(4).importedEarlier, c(4).eligible]).toEqual(["paid", true, false]);
+    expect([c(2).status, c(2).remaining, c(2).importedEarlier]).toEqual(["partial", 2_000, true]);
+
+    // Jan–Sep style pick: everything due except the already-recorded #4 → 8 installments.
+    const picks = candidates.filter((x) => x.eligible).map((x) => ({ installmentId: x.installment.id, amount: "", date: "" }));
+    picks.find((p) => p.installmentId === bySeq(5).id)!.amount = "2500"; // a short payment
+    picks.find((p) => p.installmentId === bySeq(6).id)!.date = "2026-07-12"; // a known date
+    const plan = planBulkRecordedEarlier({ candidates, draft: picks, batchId: "b1", today: TODAY });
+    if (!plan.ok) throw new Error(JSON.stringify(plan.errors));
+    expect([plan.items.length, plan.total]).toEqual([8, 3_000 * 6 + 2_000 + 2_500]);
+
+    // #7 fails once (network); everything else commits.
+    const record = recordVia(w, done);
+    let failOnce = true;
+    const flaky = async (item: BulkItem) => {
+      if (item.installment.sequenceNumber === 7 && failOnce) {
+        failOnce = false;
+        throw new Error("network");
+      }
+      return record(item);
+    };
+    const first = await runBulkRecordedEarlier(plan.items, flaky);
+    expect(Object.values(first).filter((r) => r.status === "failed")).toHaveLength(1);
+    expect(await seqPaid(w, 7)).toBe(0);
+
+    // Retry: only #7 is written; a full re-run of the batch is a no-op for what already committed.
+    const second = await runBulkRecordedEarlier(plan.items, record, { previous: first });
+    expect(second[bySeq(7).id]).toEqual({ status: "recorded" });
+    const rerun = await runBulkRecordedEarlier(plan.items, record);
+    expect(Object.values(rerun).every((r) => r.status === "alreadyRecorded")).toBe(true);
+
+    const paid = await Promise.all([1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => seqPaid(w, n)));
+    expect(paid).toEqual([3_000, 3_000, 3_000, 3_000, 2_500, 3_000, 3_000, 3_000, 3_000, 0]);
+    expect(await cash(w)).toBe(cashBefore); // today's balance untouched
+    expect(await loanCashOut(w)).toBe(0);
+    expect(owedBefore - (await outstanding(w))).toBeCloseTo(3_000 * 8 + 2_500, 2);
+    const docs = (await paymentDocs(w)).filter((p) => p.deletedAt == null);
+    expect(docs).toHaveLength(10); // 2 earlier + 8 bulk, one each
+    expect(docs.find((p) => p.installmentId === bySeq(6).id)).toMatchObject({ recordedEarlier: { dateKnown: true }, date: new Date(2026, 6, 12, 12) });
+    expect(docs.find((p) => p.installmentId === bySeq(8).id)).toMatchObject({ recordedEarlier: { dateKnown: false }, date: bySeq(8).dueDate });
+    // People: the lender payments settled nobody.
+    expect([(await position(w, w.aId, TODAY)).net, (await position(w, w.bId, TODAY)).net]).toEqual(peopleBefore);
+    expect([(await ledgerEntries(w, w.aId)).length, (await ledgerEntries(w, w.bId)).length]).toEqual([0, 0]);
+
+    // A new batch can't record a paid installment again, and an amount above what's left never spills over.
+    await expect(record(mk(1, 3_000, "b2-1"))).rejects.toBeInstanceOf(RecordedEarlierError);
+    await expect(record(mk(5, 1_000, "b2-5"))).rejects.toBeInstanceOf(RecordedEarlierError);
+    expect([await seqPaid(w, 5), await seqPaid(w, 6), await seqPaid(w, 10)]).toEqual([2_500, 3_000, 0]);
+
+    // Mark the latest one (#7, the retry) unpaid again — the existing latest-first reversal rule applies
+    // unchanged: owed again, and no account receives money FlowFi never took.
+    await revertLender(w, done.get(bySeq(7).id)!, "undo-7");
+    expect([await seqPaid(w, 7), await seqPaid(w, 6), await cash(w)]).toEqual([0, 3_000, cashBefore]);
+  }, 60_000);
+});
+
+describe("Bulk — several overdue installments paid from my account (shared loan)", () => {
+  const TODAY = new Date(2026, 9, 13);
+  const OWN_MONEY_ACK = { acknowledgedUnsettledPeople: true as const, reason: "Bulk payment from my account — people's shares stay owed" };
+  const payOne = (w: World, seq: number, amount: number, key: string, opts: { ack?: boolean } = {}) => async () =>
+    w.lender.record({
+      loan: await loanNow(w),
+      scheduleInstallments: await liveInstallments(w),
+      accountId: w.accountId,
+      amount,
+      date: TODAY,
+      idempotencyKey: key,
+      includeUpcomingInstallments: true,
+      peopleGateAcknowledgement: opts.ack === false ? null : OWN_MONEY_ACK,
+      onlyInstallmentId: (await liveInstallments(w)).find((i) => i.sequenceNumber === seq)!.id,
+    });
+
+  it("SHAN-style: a receipt first, then non-consecutive lender payments — account debited once per installment, People untouched, reversible", async () => {
+    const w = await world();
+    const startCash = await cash(w); // ₹35,000
+    // AMMA reimburses her ₹1,000 share of #1 as NEW money: the account is credited exactly once.
+    await personPays(w, w.aId, 1_000, FEB_12);
+    expect(await cash(w)).toBe(startCash + 1_000);
+    const peopleBefore = [(await position(w, w.aId, TODAY)).net, (await position(w, w.bId, TODAY)).net];
+    const ledgerBefore = [(await ledgerEntries(w, w.aId)).length, (await ledgerEntries(w, w.bId)).length];
+
+    // Without the explicit own-money acknowledgement the write gate still refuses — nothing moves.
+    await expect(payOne(w, 1, 3_000, "ac-noack", { ack: false })()).rejects.toBeInstanceOf(PeopleSettlementPendingError);
+    expect(await cash(w)).toBe(startCash + 1_000);
+
+    // Pick #1, #2 and #4 (not #3): three single-installment writes, ₹9,000 in all.
+    // The dialog's preview (balance − planned total) is computed from this same plan.
+    const cands = historicalCandidates(await liveInstallments(w), await paymentDocs(w), TODAY);
+    const seqId = (n: number) => cands.find((c) => c.installment.sequenceNumber === n)!.installment.id;
+    const preview = planBulkRecordedEarlier({ candidates: cands, draft: [1, 2, 4].map((n) => ({ installmentId: seqId(n), amount: "", date: "2026-10-13" })), batchId: "prev", today: TODAY });
+    if (!preview.ok) throw new Error(JSON.stringify(preview.errors));
+    const balanceBeforeBulk = await cash(w);
+    const results = [await payOne(w, 1, 3_000, "ac-1")(), await payOne(w, 2, 3_000, "ac-2")(), await payOne(w, 4, 3_000, "ac-4")()];
+    expect(await cash(w)).toBe(balanceBeforeBulk - preview.total); // preview == actual recorded balance change
+    expect(await cash(w)).toBe(startCash + 1_000 - 9_000);
+    expect(await Promise.all([1, 2, 3, 4].map((n) => seqPaid(w, n)))).toEqual([3_000, 3_000, 0, 3_000]); // #3 never touched
+    const txs = (await loanTransactions(w)).filter((t) => t.deletedAt == null && !isLoanPrincipalDisbursement(t));
+    expect(txs).toHaveLength(3);
+    expect(txs.every((t) => t.type === "expense" && t.excludeFromCalculations === false && t.amount === 3_000)).toBe(true);
+    expect(await loanCashOut(w)).toBe(9_000);
+
+    // Paying the lender never settles anyone: People positions and ledger are exactly as before.
+    expect([(await position(w, w.aId, TODAY)).net, (await position(w, w.bId, TODAY)).net]).toEqual(peopleBefore);
+    expect([(await ledgerEntries(w, w.aId)).length, (await ledgerEntries(w, w.bId)).length]).toEqual(ledgerBefore);
+
+    // Duplicate submission of the whole batch: nothing twice.
+    const again = [await payOne(w, 1, 3_000, "ac-1")(), await payOne(w, 2, 3_000, "ac-2")(), await payOne(w, 4, 3_000, "ac-4")()];
+    expect(again.every((r) => r.alreadyRecorded)).toBe(true);
+    expect(await cash(w)).toBe(startCash + 1_000 - 9_000);
+
+    // Reverse the latest one: its debit comes back, the others stand, People is still untouched.
+    await revertLender(w, results[2], "ac-undo-4");
+    expect([await seqPaid(w, 4), await seqPaid(w, 2), await cash(w)]).toEqual([0, 3_000, startCash + 1_000 - 6_000]);
+    expect([(await position(w, w.aId, TODAY)).net, (await position(w, w.bId, TODAY)).net]).toEqual(peopleBefore);
+  }, 60_000);
+
+  it("interrupted batch: the failed item is retried alone; a stale or part-paid-elsewhere installment writes nothing", async () => {
+    const w = await world();
+    const startCash = await cash(w);
+    await payOne(w, 1, 3_000, "ac-s1")();
+    expect(await cash(w)).toBe(startCash - 3_000);
+
+    // #1 was paid elsewhere meanwhile → a new-key write for it is refused, no debit.
+    await expect(payOne(w, 1, 3_000, "ac-s1-dup")()).rejects.toBeInstanceOf(RecordedEarlierError);
+    // #2 was part-paid elsewhere (₹1,000) → a ₹3,000 write for it is refused rather than becoming a prepayment.
+    await payOne(w, 2, 1_000, "ac-s2-part")();
+    await expect(payOne(w, 2, 3_000, "ac-s2-full")()).rejects.toThrow(/paid in part elsewhere/);
+    expect([await seqPaid(w, 1), await seqPaid(w, 2), await cash(w)]).toEqual([3_000, 1_000, startCash - 4_000]);
+    expect((await paymentDocs(w)).filter((p) => p.deletedAt == null && p.allocationType === "principalPrepayment")).toHaveLength(0);
+
+    // Retry of the rest at what is still owed lands once.
+    await payOne(w, 2, 2_000, "ac-s2-rest")();
+    expect([await seqPaid(w, 2), await cash(w)]).toEqual([3_000, startCash - 6_000]);
+  }, 60_000);
 });

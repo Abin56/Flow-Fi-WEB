@@ -34,6 +34,23 @@ function PrimaryBadge() {
   );
 }
 
+function ExplainLink({ onClick, name, className }: { onClick: () => void; name: string; className?: string }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={`View ${name} balance breakdown`}
+      className={cn(
+        "inline-flex items-center gap-0.5 rounded-full border border-border-strong/60 bg-card px-2.5 py-1 text-xs font-semibold text-primary-accent-text outline-none transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring",
+        className,
+      )}
+    >
+      Breakdown
+      <ChevronRight className="size-3.5" strokeWidth={2.25} />
+    </button>
+  );
+}
+
 /**
  * One account. `variant="grid"` is a compact card with the account's colour as a top strip;
  * `variant="list"` is a ledger-style row (identity left, balance right). Selecting opens the overview.
@@ -42,11 +59,14 @@ export function AccountTile({
   account,
   active,
   onSelect,
+  onExplain,
   variant = "grid",
 }: {
   account: AccountOverviewItem;
   active: boolean;
   onSelect: () => void;
+  /** Opens the balance breakdown for this account (a sibling control — a button can't nest in the tile button). */
+  onExplain?: () => void;
   variant?: "grid" | "list";
 }) {
   const palette = ACCOUNT_COLOR[account.color];
@@ -56,6 +76,7 @@ export function AccountTile({
 
   if (variant === "list") {
     return (
+      <div className="relative">
       <button
         type="button"
         onClick={onSelect}
@@ -80,11 +101,13 @@ export function AccountTile({
         </span>
         <ChevronRight className={cn("size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5", active && "text-foreground")} strokeWidth={1.75} />
       </button>
+      {onExplain && <ExplainLink onClick={onExplain} name={account.name} className="absolute top-1/2 right-11 -translate-y-1/2 sm:right-12" />}
+      </div>
     );
   }
 
   return (
-    <StaggerItem className="h-full">
+    <StaggerItem className="relative h-full">
       <motion.button
         type="button"
         onClick={onSelect}
@@ -125,7 +148,7 @@ export function AccountTile({
         </div>
 
         {/* Balance */}
-        <div className="flex flex-1 items-end justify-between gap-3 px-4 pt-3 pb-4">
+        <div className={cn("flex flex-1 items-end justify-between gap-3 px-4 pt-3 pb-4", onExplain && "pb-11")}>
           <div className="min-w-0">
             <p className="text-[11px] font-semibold tracking-[0.06em] text-foreground/65 uppercase">{account.balanceLabel}</p>
             <p className="mt-0.5 text-[20px] leading-tight font-bold tracking-tight text-foreground tabular-nums @[13rem]:text-[24px]">{formatCurrency(account.balance)}</p>
@@ -145,6 +168,7 @@ export function AccountTile({
           )}
         </div>
       </motion.button>
+      {onExplain && <ExplainLink onClick={onExplain} name={account.name} className="absolute bottom-3 left-4" />}
     </StaggerItem>
   );
 }

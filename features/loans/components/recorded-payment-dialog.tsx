@@ -4,6 +4,9 @@ import { AccountSelect } from "@/components/finance/account-label";
 import { ArrowRight, CalendarClock, Info, Pencil, Receipt, RotateCcw, Wallet } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
+import { usePathname } from "next/navigation";
+import { InstallmentPeoplePanel } from "@/features/loans/components/installment-people-panel";
+import { useInstallmentBreakdown } from "@/features/loans/hooks/use-installment-breakdown";
 import { ClayBadge } from "@/components/clay/clay-badge";
 import { useOperation } from "@/components/feedback/operation-progress";
 import { useEmiActions, type EmiRow } from "@/features/emi/hooks/use-emi-data";
@@ -25,9 +28,11 @@ import { useLoanActions, type LoanRow } from "@/features/loans/hooks/use-loans-d
 import { EMI_PAYMENT_HISTORY_KEY } from "@/features/loans/hooks/use-payment-history";
 import { friendlyLoanError } from "@/features/loans/lib/loan-live-state";
 import { createPaymentSubmission, stageBand } from "@/features/loans/lib/payment-submission";
+import { closeAfterRefresh, refreshHandler } from "@/features/loans/lib/payment-refresh-notice";
 import {
   editEligibility,
   installmentRangeLabel,
+  undoChain,
   originalRefs,
   paymentTypeLabel,
   type RecordedPaymentAction,
@@ -38,7 +43,8 @@ import { useAccounts } from "@/hooks/use-accounts";
 import { useTransactions } from "@/hooks/use-transactions";
 import { planLoanPaymentCore, type LoanPaymentCore } from "@/lib/engines/loan-payment-core";
 import { reversePaymentPortions } from "@/lib/engines/payment-correction";
-import { formatCurrency } from "@/lib/format";
+import { RECORDED_EARLIER_PEOPLE_ACK } from "@/lib/engines/recorded-earlier";
+import { formatCurrencyExact } from "@/lib/format";
 import type { EmiPaymentBreakdown } from "@/lib/models/emi";
 import { installmentStatus, remainingAmount, type Installment } from "@/lib/models/payment-schedule";
 import { SUCCESS_HOLD_MS } from "@/lib/operation-progress/operation-progress";
@@ -108,7 +114,9 @@ export function RecordedPaymentDialog({
   const originalTransaction = action?.transactionId ? ((transactions as Transaction[]).find((t) => t.id === action.transactionId) ?? null) : null;
   const originalBreakdowns = target?.source === "emi" ? target.breakdowns.filter((b) => action!.portions.some((p) => p.id === b.paymentId)) : [];
 
-  const [mode, setMode] = useState<"details" | "edit" | "unpay">("details");
+  const [mode, setMode] = useState<"details" | "edit" | "unpay" | "unpayChain">("details");
+  // "Mark as unpaid" on an older payment: the later payments undone so far (newest first) — a retry resumes here.
+  const [chainDone, setChainDone] = useState<ReadonlySet<string>>(() => new Set());
   const [amount, setAmount] = useState(() => (action ? String(action.amount) : ""));
   const [date, setDate] = useState(() => (action ? dateInput(action.date) : ""));
   const [note, setNote] = useState(() => action?.note ?? "");
@@ -123,6 +131,7 @@ export function RecordedPaymentDialog({
   const [submission] = useState(createPaymentSubmission);
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const operation = useOperation();
   // Each view starts clean — a failure shown under Edit must not follow the user into Mark as unpaid.
   const goTo = (next: typeof mode) => {
@@ -132,6 +141,20 @@ export function RecordedPaymentDialog({
   // Set once a Loan re-plan correction reversed the original but didn't finish — the live schedule already
   // excludes the original, so the preview must not take it out a second time.
   const [originalReversed, setOriginalReversed] = useState(false);
+  // People shares of the last installment this payment touched — read-only. The lender side (this payment) and the
+  // People side (what each person paid me) are separate: recording or editing this payment never changes a share.
+  const peopleInstallmentId = action?.portions[action.portions.length - 1]?.installmentId ?? null;
+  const pathname = usePathname();
+  const { breakdown: peopleBreakdown, isLoading: peopleLoading } = useInstallmentBreakdown(
+    target && peopleInstallmentId && !(target.source === "loan" && target.row.direction === "given")
+      ? {
+          sourceKind: target.source,
+          source: target.source === "loan" ? target.row.loan : target.row.emi,
+          installments: target.row.installments,
+          installmentId: peopleInstallmentId,
+        }
+      : null,
+  );
 
   if (!target || !action) return null;
   const { row } = target;
@@ -142,10 +165,27 @@ export function RecordedPaymentDialog({
   const eligibility = editEligibility(action, target.all, { closed });
   const installments = row.installments;
   const total = loanRow ? loanRow.totalInstallments : emiRow!.emi.installmentCount;
-  const accountId = pickedAccountId || originalTransaction?.accountId || (accounts.find((a) => a.isDefault)?.id ?? accounts[0]?.id ?? "");
-  const sourceLabel = loanRow
-    ? (accounts.find((a) => a.id === originalTransaction?.accountId)?.name ?? (action.transactionId ? "Account" : "Not linked to an account"))
-    : emiCardLabel(emiRow!) ?? "Schedule only (no account)";
+  // The payment's own account unless the user picks another — never a silent default.
+  const accountId = pickedAccountId || originalTransaction?.accountId || "";
+  const earlierMark = action.recordedEarlier;
+  // An EMI payment's funding is the Transaction it posted (found by its stored payment link) — never the current
+  // account selection. No such Transaction (and not a card EMI) means it genuinely only touched the schedule.
+  const emiPostedLegs = emiRow
+    ? (transactions as Transaction[]).filter((t) => t.deletedAt == null && t.emiId === emiRow.emi.id && action.portions.some((p) => p.id === t.installmentPaymentId))
+    : [];
+  // A card-linked EMI paid straight from a bank account has its debit on that account (not the card's).
+  const emiPostedTransaction = emiPostedLegs.find((t) => t.accountId !== emiRow?.linkedCard?.accountId) ?? emiPostedLegs[0] ?? null;
+  const bankPaidEmi = emiRow?.linkedCard != null && emiPostedTransaction != null && emiPostedTransaction.accountId !== emiRow.linkedCard.accountId;
+  const emiAccountLabel = emiPostedTransaction ? (accounts.find((a) => a.id === emiPostedTransaction.accountId)?.name ?? "Account") : null;
+  const sourceLabel = earlierMark
+    ? loanRow
+      ? `${accounts.find((a) => a.id === originalTransaction?.accountId)?.name ?? "Account"} · no balance change`
+      : "Paid before FlowFi · no balance change"
+    : loanRow
+      ? (accounts.find((a) => a.id === originalTransaction?.accountId)?.name ?? (action.transactionId ? "Account" : "Not linked to an account"))
+      : ((bankPaidEmi ? emiAccountLabel : emiCardLabel(emiRow!)) ?? emiAccountLabel ?? "Schedule only (no account)");
+  // A past payment's edit keeps it past (the repositories carry the mark) — its People shares were never gated on it.
+  const peopleGateAcknowledgement = earlierMark ? RECORDED_EARLIER_PEOPLE_ACK : undefined;
 
   // ── Details figures ──
   const principalPaid = originalBreakdowns.reduce((s, b) => s + b.principalPaid, 0);
@@ -236,6 +276,9 @@ export function RecordedPaymentDialog({
               note: note.trim() || undefined,
               includeUpcomingInstallments: loanExtraAtDue > 0 && treatment === "payUpcoming",
               idempotencyKey,
+              peopleGateAcknowledgement,
+              // Re-checks the NET change on the fresh balance inside the write (the original is refunded first).
+              enforceFunds: !earlierMark && !lent,
               onStage: (s) =>
                 stage(
                   s === "reversing"
@@ -256,6 +299,9 @@ export function RecordedPaymentDialog({
               gst: gst ? Number(gst) : undefined,
               processingFee: processingFee ? Number(processingFee) : undefined,
               idempotencyKey,
+              peopleGateAcknowledgement,
+              // Net extra debit only, on the fresh balance; card-linked and already-paid-earlier records are never checked.
+              enforceFunds: !earlierMark,
             });
           }
         },
@@ -266,10 +312,11 @@ export function RecordedPaymentDialog({
           setSaving(phase === "saving");
           setSuccess(phase === "success");
         },
+        onRefresh: refreshHandler(setRefreshing),
         onProgress: (p) => op.stage(stageBand(p.current ?? 0, stages.length), stages[p.current ?? 0]),
         onSuccess: () => {
-          op.succeed({ toast: { title: "Payment updated successfully", description: `${formatCurrency(action.amount)} → ${formatCurrency(amountNum)}` } });
-          window.setTimeout(() => onOpenChange(false), SUCCESS_HOLD_MS);
+          op.succeed({ toast: { title: "Payment updated successfully", description: `${formatCurrencyExact(action.amount)} → ${formatCurrencyExact(amountNum)}` } });
+          window.setTimeout(() => void closeAfterRefresh(submission, () => onOpenChange(false)), SUCCESS_HOLD_MS);
         },
         onError: (e) => {
           if (e instanceof PaymentEditIncompleteError) {
@@ -291,7 +338,7 @@ export function RecordedPaymentDialog({
   const unpaidAgain = Array.from(new Set(action.portions.map((p) => p.installmentId)))
     .map((id) => afterUnpay.find((i) => i.id === id))
     .filter((i): i is Installment => i != null);
-  const cardLabel = emiRow ? emiCardLabel(emiRow) : null;
+  const cardLabel = emiRow && !bankPaidEmi ? emiCardLabel(emiRow) : null;
   const canUnpay = eligibility.ok && !originalReversed;
 
   async function markUnpaid() {
@@ -325,6 +372,7 @@ export function RecordedPaymentDialog({
           setSaving(phase === "saving");
           setSuccess(phase === "success");
         },
+        onRefresh: refreshHandler(setRefreshing),
         onProgress: (p) => op.stage(stageBand(p.current ?? 0, unpayStages.length), unpayStages[p.current ?? 0]),
         onSuccess: () => {
           const skipped = restoreSkipped;
@@ -334,7 +382,7 @@ export function RecordedPaymentDialog({
           } else {
             op.succeed({ toast: { title: "Payment marked as unpaid", description: dueAgain } });
           }
-          window.setTimeout(() => onOpenChange(false), SUCCESS_HOLD_MS);
+          window.setTimeout(() => void closeAfterRefresh(submission, () => onOpenChange(false)), SUCCESS_HOLD_MS);
         },
         onError: (e) => {
           if (e instanceof PaymentReversalBlockedError) {
@@ -348,14 +396,138 @@ export function RecordedPaymentDialog({
     );
   }
 
+  // ── Mark as unpaid for an OLDER payment: undo every later payment first, newest first (same reversal each time) ──
+  const chainPlan = undoChain(action, target.all, { closed });
+  const chain = chainPlan.ok ? chainPlan.chain : [];
+  // Offered when this payment isn't the latest; once started it stays available (after a refresh the original may
+  // already be the latest, and the rest of the chain is just the ordinary reversal).
+  const canUnpayChain = chainPlan.ok && !originalReversed && (mode === "unpayChain" || (!eligibility.ok && chain.length > 1));
+  const chainMoney = (a: RecordedPaymentAction) => {
+    if (a.recordedEarlier) return "No balance change (paid before FlowFi)";
+    if (a.source === "loan") {
+      const t = (transactions as Transaction[]).find((x) => x.id === a.transactionId);
+      const name = accounts.find((x) => x.id === t?.accountId)?.name ?? "its account";
+      return lent ? `${formatCurrencyExact(a.amount)} comes back out of ${name}` : `${formatCurrencyExact(a.amount)} goes back to ${name}`;
+    }
+    if (cardLabel) return `Charge removed from ${cardLabel}`;
+    const posted = (transactions as Transaction[]).find((t) => t.deletedAt == null && t.emiId === emiRow?.emi.id && a.portions.some((p) => p.id === t.installmentPaymentId));
+    return posted ? `${formatCurrencyExact(a.amount)} goes back to ${accounts.find((x) => x.id === posted.accountId)?.name ?? "its account"}` : "No balance change";
+  };
+
+  async function markUnpaidChain() {
+    if (submission.inFlight || !canUnpayChain || !target || !action) return;
+    const todo = chain.filter((a) => !chainDone.has(a.id));
+    const chainStages = [...todo.map((a, i) => `Undoing ${i + 1} of ${todo.length}: installment ${installmentRangeLabel(a.installmentSeqs)}`), "Refreshing balances"];
+    const done = new Set(chainDone);
+    const op = operation.start({ label: "Marking as unpaid", successLabel: "Marked as unpaid", errorLabel: "Couldn't finish marking as unpaid", detail: "Undoing the latest payment first" });
+    await submission.run(
+      {
+        label: "Marking as unpaid…",
+        stages: chainStages,
+        write: async ({ stage }) => {
+          for (const [i, a] of todo.entries()) {
+            stage(i);
+            const refs = originalRefs(a);
+            if (loanRow) {
+              if (!loanActions) throw new Error("Not signed in");
+              // One key per payment: a retry of a reversal that already landed is recognised, never repeated.
+              await loanActions.reversePayment({ loan: loanRow.loan, transactionId: a.transactionId!, ...refs, reversalIdempotencyKey: `${reversalKey}_${a.id}` });
+            } else if (emiRow) {
+              if (!emiActions) throw new Error("Not signed in");
+              await emiActions.reversePayment(emiRow.emi, { original: { paymentIds: refs.paymentIds, installmentIds: refs.installmentIds } });
+            }
+            done.add(a.id);
+            setChainDone(new Set(done));
+          }
+        },
+        refresh: () => Promise.all(DERIVED_QUERY_PREFIXES.map((key) => queryClient.invalidateQueries({ queryKey: [key], exact: false }))),
+      },
+      {
+        onPhase: (phase) => {
+          setSaving(phase === "saving");
+          setSuccess(phase === "success");
+        },
+        onRefresh: refreshHandler(setRefreshing),
+        onProgress: (p) => op.stage(stageBand(p.current ?? 0, chainStages.length), chainStages[p.current ?? 0]),
+        onSuccess: () => {
+          op.succeed({ toast: { title: `${done.size} payment${done.size === 1 ? "" : "s"} marked as unpaid`, description: `Installments ${installmentRangeLabel(chain.flatMap((a) => a.installmentSeqs))} are due again.` } });
+          window.setTimeout(() => void closeAfterRefresh(submission, () => onOpenChange(false)), SUCCESS_HOLD_MS);
+        },
+        onError: (e) => {
+          const undone = done.size;
+          const where = undone > 0 ? `${undone} of ${chain.length} already undone — retry continues from there. ` : "Nothing was changed. ";
+          const detail = loanRow ? friendlyLoanError(e) : e instanceof Error ? e.message : undefined;
+          if (e instanceof PaymentReversalBlockedError) op.fail({ label: "This payment can't be undone", detail: `${where}${e.message}` });
+          else op.fail({ detail: `${where}${detail ?? ""}`.trim(), retry: markUnpaidChain });
+        },
+      },
+    );
+  }
+
+  if (mode === "unpayChain") {
+    return (
+      <LoanEmiFormDialog
+        open={open}
+        onOpenChange={(next) => {
+          if (!next && chainDone.size === 0) goTo("details");
+          else if (!next) onOpenChange(false);
+        }}
+        size="compact"
+        icon={RotateCcw}
+        title="Mark as unpaid?"
+        description={`Later payments are undone first — ${chain.length} in all`}
+        onConfirm={markUnpaidChain}
+        confirmLabel={saving ? "Marking as unpaid…" : chainDone.size > 0 ? `Continue (${chain.length - chainDone.size} left)` : `Mark ${chain.length} payments as unpaid`}
+        cancelLabel={chainDone.size > 0 ? "Close" : "Keep payments"}
+        loading={saving}
+        success={success}
+        refreshing={refreshing}
+        operation={operation.snapshot}
+      >
+        <section className="flex flex-col gap-2">
+          <span className="text-xs font-medium text-foreground">Undone in this order (newest first)</span>
+          <ol className={cn(LE_RADIUS.card, "flex flex-col divide-y divide-border border border-border")} data-testid="undo-chain">
+            {chain.map((a, i) => (
+              <li key={a.id} className="flex items-center justify-between gap-3 px-3.5 py-2">
+                <span className="flex min-w-0 flex-col gap-0.5">
+                  <span className={cn("text-sm font-medium", a.id === action.id ? "text-foreground" : "text-foreground/85")}>
+                    {i + 1}. Installment {installmentRangeLabel(a.installmentSeqs)}
+                    {a.id === action.id && <span className="font-normal text-muted-foreground"> · this one</span>}
+                  </span>
+                  <span className="text-[11px] text-muted-foreground">{chainMoney(a)}</span>
+                </span>
+                <span className="flex shrink-0 flex-col items-end gap-0.5">
+                  <Money exact amount={a.amount} className="text-sm text-foreground" />
+                  <span className={cn("text-[11px]", chainDone.has(a.id) ? "font-semibold text-success" : "text-muted-foreground")}>
+                    {chainDone.has(a.id) ? "Undone" : a.date.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
+                  </span>
+                </span>
+              </li>
+            ))}
+          </ol>
+        </section>
+        <section className="flex flex-col gap-1.5 text-xs text-muted-foreground">
+          <p className="flex items-start gap-2">
+            <Info className="mt-px size-3.5 shrink-0" strokeWidth={1.75} />
+            Each payment is undone on its own, latest first. They stay in history marked Reversed — record again whichever were right.
+          </p>
+        </section>
+      </LoanEmiFormDialog>
+    );
+  }
+
   if (mode === "unpay") {
-    const moneyLine = loanRow
-      ? lent
-        ? `${formatCurrency(action.amount)} comes back out of ${sourceLabel}.`
-        : `${formatCurrency(action.amount)} goes back to ${sourceLabel}.`
-      : cardLabel
-        ? `The ${formatCurrency(action.amount)} charge is removed from ${cardLabel}, and its available credit adjusts.`
-        : "Only the schedule changes — no account balance moves.";
+    const moneyLine = earlierMark
+      ? "Only the schedule changes — this was recorded as already paid earlier, so no account balance moves."
+      : loanRow
+        ? lent
+          ? `${formatCurrencyExact(action.amount)} comes back out of ${sourceLabel}.`
+          : `${formatCurrencyExact(action.amount)} goes back to ${sourceLabel}.`
+        : cardLabel
+          ? `The ${formatCurrencyExact(action.amount)} charge is removed from ${cardLabel}, and its available credit adjusts.`
+          : emiAccountLabel
+            ? `${formatCurrencyExact(action.amount)} goes back to ${emiAccountLabel}.`
+            : "Only the schedule changes — no account balance moves.";
     return (
       <LoanEmiFormDialog
         open={open}
@@ -365,12 +537,13 @@ export function RecordedPaymentDialog({
         size="compact"
         icon={RotateCcw}
         title="Mark as unpaid?"
-        description={`${formatCurrency(action.amount)} recorded ${action.date.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}`}
+        description={`${formatCurrencyExact(action.amount)} recorded ${action.date.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}`}
         onConfirm={markUnpaid}
         confirmLabel={saving ? "Marking as unpaid…" : "Mark as unpaid"}
         cancelLabel="Keep payment"
         loading={saving}
         success={success}
+        refreshing={refreshing}
         operation={operation.snapshot}
       >
         <section className="flex flex-col gap-2">
@@ -389,7 +562,7 @@ export function RecordedPaymentDialog({
                     </span>
                   </span>
                   <span className="flex shrink-0 flex-col items-end gap-0.5">
-                    <Money amount={remainingAmount(i)} className="text-sm text-foreground" />
+                    <Money exact amount={remainingAmount(i)} className="text-sm text-foreground" />
                     <span className="text-[11px] text-muted-foreground">left to pay</span>
                   </span>
                 </li>
@@ -398,7 +571,7 @@ export function RecordedPaymentDialog({
             {action.overflow && (
               <li className="flex items-center justify-between gap-3 px-3.5 py-2.5">
                 <span className="text-sm text-muted-foreground">Extra principal · schedule re-plan undone</span>
-                <Money amount={action.overflow.amount} className="text-sm text-foreground" />
+                <Money exact amount={action.overflow.amount} className="text-sm text-foreground" />
               </li>
             )}
           </ul>
@@ -434,10 +607,15 @@ export function RecordedPaymentDialog({
         <section className="flex flex-col gap-2">
           <span className="text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">{lent ? "Amount received" : "Amount paid"}</span>
           <div className="flex flex-wrap items-center gap-2">
-            <Money amount={action.amount} className="text-[30px] leading-none text-foreground" />
+            <Money exact amount={action.amount} className="text-[30px] leading-none text-foreground" />
             <ClayBadge tone="neutral" className="rounded-[4px] px-1.5 py-0.5 text-[11px] font-medium">
               {paymentTypeLabel(action)}
             </ClayBadge>
+            {earlierMark && (
+              <ClayBadge tone="neutral" className="rounded-[4px] px-1.5 py-0.5 text-[11px] font-medium">
+                {lent ? "Received earlier" : "Already paid earlier"}
+              </ClayBadge>
+            )}
           </div>
         </section>
 
@@ -445,14 +623,20 @@ export function RecordedPaymentDialog({
           <FactGrid
             className="sm:grid-cols-2"
             facts={[
-              { label: lent ? "Received on" : "Paid on", value: action.date.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }) },
+              {
+                label: lent ? "Received on" : "Paid on",
+                value:
+                  earlierMark && !earlierMark.dateKnown
+                    ? "Date not known"
+                    : action.date.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }),
+              },
               { label: "Installment", value: installmentRangeLabel(action.installmentSeqs) + (total ? ` of ${total}` : "") },
-              emiRow && originalBreakdowns.length > 0 ? { label: "Principal", value: formatCurrency(principalPaid) } : null,
-              emiRow && originalBreakdowns.length > 0 ? { label: "Interest", value: formatCurrency(interestPaid) } : null,
+              emiRow && originalBreakdowns.length > 0 ? { label: "Principal", value: formatCurrencyExact(principalPaid) } : null,
+              emiRow && originalBreakdowns.length > 0 ? { label: "Interest", value: formatCurrencyExact(interestPaid) } : null,
               { label: loanRow ? (lent ? "Received into" : "Paid from") : "Charged to", value: sourceLabel },
               {
                 label: "Left after payment",
-                value: action.overflow ? "—" : action.remainingAfter != null && action.remainingAfter > 0 ? `${formatCurrency(action.remainingAfter)} on #${action.installmentSeqs[action.installmentSeqs.length - 1]}` : "Installment settled",
+                value: action.overflow ? "—" : action.remainingAfter != null && action.remainingAfter > 0 ? `${formatCurrencyExact(action.remainingAfter)} on #${action.installmentSeqs[action.installmentSeqs.length - 1]}` : "Installment settled",
               },
             ]}
           />
@@ -464,23 +648,48 @@ export function RecordedPaymentDialog({
                     Installment #{action.installmentSeqs[i]}
                     {p.allocationType === "advanceEmi" ? " · advance" : ""}
                   </span>
-                  <Money amount={p.amount} className="text-xs font-semibold text-foreground" />
+                  <Money exact amount={p.amount} className="text-xs font-semibold text-foreground" />
                 </li>
               ))}
               {action.overflow && (
                 <li className="flex items-center justify-between gap-3 px-3 py-2 text-xs">
                   <span className="text-muted-foreground">Extra principal</span>
-                  <Money amount={action.overflow.amount} className="text-xs font-semibold text-foreground" />
+                  <Money exact amount={action.overflow.amount} className="text-xs font-semibold text-foreground" />
                 </li>
               )}
             </ul>
           )}
           {action.note && <p className="text-xs text-muted-foreground">Note: {action.note}</p>}
+          {(peopleLoading || (peopleBreakdown?.participants.length ?? 0) > 0) && (
+            <div className="flex flex-col gap-1.5 rounded-[6px] border border-border px-3 py-2.5" data-testid="recorded-payment-people">
+              <p className="text-xs text-muted-foreground">
+                {lent ? "Repayment" : "Lender payment"} recorded above. Each person&apos;s share is tracked separately in People — this payment didn&apos;t mark anyone as paid.
+              </p>
+              <InstallmentPeoplePanel
+                breakdown={peopleBreakdown}
+                loading={peopleLoading}
+                returnTo={pathname ? `${pathname}?agreement=${encodeURIComponent(loanRow?.loan.id ?? emiRow!.emi.id)}` : undefined}
+              />
+            </div>
+          )}
           {!eligibility.ok && (
             <p className="flex items-start gap-2 text-xs text-muted-foreground">
               <Info className="mt-px size-3.5 shrink-0" strokeWidth={1.75} />
               {eligibility.reason}
             </p>
+          )}
+          {canUnpayChain && (
+            <button
+              type="button"
+              onClick={() => goTo("unpayChain")}
+              className={cn(
+                LE_RADIUS.control,
+                "flex h-10 items-center justify-center gap-1.5 border border-border-strong bg-card px-3 text-sm font-medium text-foreground transition-colors outline-none hover:border-expense hover:text-expense focus-visible:ring-2 focus-visible:ring-ring",
+              )}
+            >
+              <RotateCcw className="size-4" strokeWidth={1.75} />
+              Mark as unpaid · with {chain.length - 1} later payment{chain.length - 1 === 1 ? "" : "s"}
+            </button>
           )}
           {canUnpay && (
             <button
@@ -505,7 +714,7 @@ export function RecordedPaymentDialog({
               )}
             >
               <Wallet className="size-4" strokeWidth={1.75} />
-              Pay remaining {formatCurrency(liveRemainingOnLast)} on #{lastInstallment.sequenceNumber}
+              Pay remaining {formatCurrencyExact(liveRemainingOnLast)} on #{lastInstallment.sequenceNumber}
             </button>
           )}
         </section>
@@ -513,7 +722,7 @@ export function RecordedPaymentDialog({
     );
   }
 
-  const confirmLabel = saving ? "Updating payment…" : originalReversed ? "Finish correction" : unchanged ? "No changes" : `Save ${amountValid ? formatCurrency(amountNum) : "correction"}`;
+  const confirmLabel = saving ? "Updating payment…" : originalReversed ? "Finish correction" : unchanged ? "No changes" : `Save ${amountValid ? formatCurrencyExact(amountNum) : "correction"}`;
 
   return (
     <LoanEmiFormDialog
@@ -527,12 +736,13 @@ export function RecordedPaymentDialog({
       size="compact"
       icon={Pencil}
       title="Edit payment"
-      description={`Originally ${formatCurrency(action.amount)} on ${action.date.toLocaleDateString("en-IN", { day: "numeric", month: "short" })}`}
+      description={`Originally ${formatCurrencyExact(action.amount)} on ${action.date.toLocaleDateString("en-IN", { day: "numeric", month: "short" })}`}
       onConfirm={saveEdit}
       confirmLabel={confirmLabel}
       confirmDisabled={error != null || unchanged || !eligibility.ok}
       loading={saving}
       success={success}
+      refreshing={refreshing}
       operation={operation.snapshot}
     >
       <section className="flex flex-col gap-2">
@@ -547,7 +757,7 @@ export function RecordedPaymentDialog({
         {loanRow && loanExtraAtDue > 0 && loanRow.loan.repaymentType !== "oneTime" && (
           <Reveal className="flex flex-col gap-2 pt-1">
             <span className="text-xs font-medium text-foreground">
-              <Money amount={loanExtraAtDue} className="text-xs" /> is more than what was due. Apply it to:
+              <Money exact amount={loanExtraAtDue} className="text-xs" /> is more than what was due. Apply it to:
             </span>
             <SegmentedControl<ExtraTreatment>
               ariaLabel="Apply the extra amount to"
@@ -570,9 +780,9 @@ export function RecordedPaymentDialog({
               <div key={p.seq} className="flex items-center justify-between gap-3 text-xs">
                 <span className="text-muted-foreground">
                   Installment #{p.seq}
-                  {p.left > 0 ? ` · ${formatCurrency(p.left)} left` : " · paid"}
+                  {p.left > 0 ? ` · ${formatCurrencyExact(p.left)} left` : " · paid"}
                 </span>
-                <Money amount={p.amount} className="text-xs text-foreground" />
+                <Money exact amount={p.amount} className="text-xs text-foreground" />
               </div>
             ))}
             {loanCore?.payments.map((p) => {
@@ -581,19 +791,19 @@ export function RecordedPaymentDialog({
                 <div key={p.id} className="flex items-center justify-between gap-3 text-xs">
                   <span className="text-muted-foreground">
                     Installment #{inst?.sequenceNumber ?? "?"}
-                    {(p.remainingBalanceAfterPayment ?? 0) > 0 ? ` · ${formatCurrency(p.remainingBalanceAfterPayment!)} left` : " · paid"}
+                    {(p.remainingBalanceAfterPayment ?? 0) > 0 ? ` · ${formatCurrencyExact(p.remainingBalanceAfterPayment!)} left` : " · paid"}
                   </span>
-                  <Money amount={p.amount} className="text-xs text-foreground" />
+                  <Money exact amount={p.amount} className="text-xs text-foreground" />
                 </div>
               );
             })}
             {loanCore && loanCore.overflow > 0 && (
               <div className="flex items-center justify-between gap-3 text-xs">
                 <span className="text-muted-foreground">Extra principal · schedule re-planned</span>
-                <Money amount={loanCore.overflow} className="text-xs text-foreground" />
+                <Money exact amount={loanCore.overflow} className="text-xs text-foreground" />
               </div>
             )}
-            {emiAfter && <PreviewLine label="Outstanding" before={<Money amount={emiAfter.remainingBefore} />} after={<Money amount={emiAfter.remainingAfter} />} />}
+            {emiAfter && <PreviewLine label="Outstanding" before={<Money exact amount={emiAfter.remainingBefore} />} after={<Money exact amount={emiAfter.remainingAfter} />} />}
           </div>
         )}
       </section>
@@ -603,6 +813,7 @@ export function RecordedPaymentDialog({
           <span className="inline-flex items-center gap-1.5 text-xs font-medium text-foreground">
             <Wallet className="size-3.5" strokeWidth={1.75} />
             {lent ? "Received into" : "Paid from"}
+            {earlierMark && <span className="font-normal text-muted-foreground">· for your records</span>}
           </span>
           <AccountSelect
             className={LOAN_EMI_INPUT}
@@ -640,11 +851,13 @@ export function RecordedPaymentDialog({
         <Info className="mt-px size-3.5 shrink-0" strokeWidth={1.75} />
         {originalReversed
           ? "The original payment is already reversed — saving records the corrected one."
-          : loanRow
-            ? "The original payment is replaced: its account movement and installment allocation are undone and the corrected payment is applied once."
-            : emiCardLabel(emiRow!)
-              ? "The original payment is replaced: the schedule, the card transaction and the card's available credit are recalculated."
-              : "The original payment is replaced and the schedule is recalculated."}
+          : earlierMark
+            ? "The original is replaced and the schedule is recalculated. It stays recorded as already paid earlier — no account balance moves."
+            : loanRow
+              ? "The original payment is replaced: its account movement and installment allocation are undone and the corrected payment is applied once."
+              : emiCardLabel(emiRow!)
+                ? "The original payment is replaced: the schedule, the card transaction and the card's available credit are recalculated."
+                : "The original payment is replaced and the schedule is recalculated."}
       </p>
     </LoanEmiFormDialog>
   );

@@ -38,10 +38,17 @@ beforeAll(() => {
   };
 });
 afterEach(cleanup);
+/** The From account is never preselected for a transfer / bill payment — the user chooses it. */
+const chooseFrom = async (user: ReturnType<typeof userEvent.setup>, name: RegExp) => {
+  const trigger = screen.getAllByRole("combobox").find((c) => /Select account/i.test(c.textContent ?? ""))!;
+  await user.click(trigger);
+  await user.click(await screen.findByRole("option", { name }));
+};
+
 
 const accounts = [
-  { id: "hdfc-card", name: "HDFC Credit Card", type: "card" },
-  { id: "sbi", name: "SBI Savings", type: "bank", bankId: null },
+  { id: "hdfc-card", name: "HDFC Credit Card", type: "card", currentBalance: 0 },
+  { id: "sbi", name: "SBI Savings", type: "bank", bankId: null, currentBalance: 100000 },
 ] as unknown as Account[];
 const categories = [
   { id: "food", name: "Food", type: "expense", deletedAt: null },
@@ -93,9 +100,24 @@ describe("Add Transaction → Transfer to my account", () => {
     expect(modes.getByRole("button", { name: /transfer/i })).toBeTruthy();
   });
 
+  it("Add Expense starts with NO account — never the first one in Firestore order — and says so", () => {
+    renderTransfer({ defaultKind: "expense", initialDestinationAccountId: undefined });
+    expect(screen.getAllByRole("combobox").some((c) => /Select account/i.test(c.textContent ?? ""))).toBe(true);
+    expect(screen.queryByText("HDFC Credit Card")).toBeNull();
+  });
+
+  it("an account the user explicitly opened the form from IS the starting account, and switching to Transfer keeps it as their From account", async () => {
+    const user = userEvent.setup();
+    renderTransfer({ defaultKind: "expense", initialDestinationAccountId: undefined, initialAccountId: "hdfc-card" });
+    expect(screen.getAllByText("HDFC Credit Card").length).toBeGreaterThan(0);
+    await user.click(within(screen.getByRole("group", { name: "Transaction type" })).getByRole("button", { name: /transfer/i }));
+    expect(screen.getAllByText("HDFC Credit Card").length).toBeGreaterThan(0);
+  });
+
   it("A. no fee: previews card dues +20,000 / bank +20,000, and saves one linked pair with no fee", async () => {
     const user = userEvent.setup();
     renderTransfer();
+    await chooseFrom(user, /HDFC Credit Card/);
     await user.type(amountInput(), "20000");
     const preview = within(screen.getByTestId("transfer-preview"));
     expect(preview.getByText("HDFC Credit Card · added to card dues")).toBeTruthy();
@@ -115,6 +137,7 @@ describe("Add Transaction → Transfer to my account", () => {
   it("B. fee added to the card + payment app: card charged 20,400; one atomic save carries the fee", async () => {
     const user = userEvent.setup();
     renderTransfer();
+    await chooseFrom(user, /HDFC Credit Card/);
     await user.type(amountInput(), "20000");
     await user.type(screen.getByRole("textbox", { name: "Transfer fee" }), "400");
     await user.type(screen.getByRole("textbox", { name: "Payment app" }), "CRED");
@@ -139,6 +162,7 @@ describe("Add Transaction → Transfer to my account", () => {
   it("C. fee cut from the amount received: bank receives 19,600", async () => {
     const user = userEvent.setup();
     renderTransfer();
+    await chooseFrom(user, /HDFC Credit Card/);
     await user.type(amountInput(), "20000");
     await user.type(screen.getByRole("textbox", { name: "Transfer fee" }), "400");
     await user.click(screen.getByRole("radio", { name: "Cut from amount received" }));
@@ -152,6 +176,7 @@ describe("Add Transaction → Transfer to my account", () => {
   it("an invalid deducted fee blocks Save with a message; nothing is sent", async () => {
     const user = userEvent.setup();
     renderTransfer();
+    await chooseFrom(user, /HDFC Credit Card/);
     await user.type(amountInput(), "400");
     await user.type(screen.getByRole("textbox", { name: "Transfer fee" }), "400");
     await user.click(screen.getByRole("radio", { name: "Cut from amount received" }));
@@ -163,6 +188,7 @@ describe("Add Transaction → Transfer to my account", () => {
   it("warns (without blocking) when the card's available credit is exceeded", async () => {
     const user = userEvent.setup();
     renderTransfer();
+    await chooseFrom(user, /HDFC Credit Card/);
     await user.type(amountInput(), "60000");
     expect(screen.getByText(/more than the card's available credit/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: /add transfer/i }));
@@ -174,6 +200,7 @@ describe("Add Transaction → Transfer to my account", () => {
     let release!: () => void;
     actions.createTransferPair.mockImplementation(() => new Promise<void>((r) => (release = r)));
     renderTransfer();
+    await chooseFrom(user, /HDFC Credit Card/);
     await user.type(amountInput(), "20000");
     const save = screen.getByRole("button", { name: /add transfer/i });
     await user.dblClick(save);

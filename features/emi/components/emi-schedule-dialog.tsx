@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowUpRight, Building2, CreditCard, Lock, LockOpen, Trash2, UserRound, Wallet, X } from "lucide-react";
+import { ArrowUpRight, Building2, CreditCard, History, Lock, LockOpen, Trash2, UserRound, Wallet, X } from "lucide-react";
 import Link from "next/link";
 import { ClayButton } from "@/components/clay/clay-button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -11,6 +11,8 @@ import { InstallmentList, PaymentHistoryList } from "@/features/loans/components
 import type { RecordedPaymentAction } from "@/features/loans/lib/recorded-payments";
 import type { EmiRow } from "@/features/emi/hooks/use-emi-data";
 import { EMI_TYPE_LABEL, emiBadges, emiCardLabel } from "@/features/emi/components/emi-card";
+import { hasPastDue } from "@/features/loans/lib/record-payment";
+import { useInstallmentPeopleStatus } from "@/features/loans/hooks/use-installment-people-status";
 import { DetailHero, DetailSectionTitle, FactGrid, LinkedList, LinkedRow, daysUntil, dueLabel } from "@/features/loans/components/loan-emi-ui";
 
 interface EmiScheduleDialogProps {
@@ -19,6 +21,8 @@ interface EmiScheduleDialogProps {
   row: EmiRow | null;
   onDelete: (row: EmiRow) => void;
   onRecordPayment: (row: EmiRow, installment: Installment) => void;
+  /** Opens "Record past payments" — EMIs paid before FlowFi, recorded without moving any account or card. */
+  onRecordPastPayments?: (row: EmiRow) => void;
   onToggleClose: (row: EmiRow) => void;
   /** True while a Close/Reopen write is in flight — blocks a double click. */
   statusBusy?: boolean;
@@ -44,7 +48,9 @@ function GoTo({ href, label }: { href: string; label: string }) {
 /** EMI details, laid out exactly like `LoanScheduleDialog` — outstanding balance first, key facts,
  *  what it's linked to, then the installment schedule. `row` is resolved live by the parent from
  *  Firestore-backed rows, so every persisted change re-renders it in place. */
-export function EmiScheduleDialog({ open, onOpenChange, row, onDelete, onRecordPayment, onToggleClose, statusBusy = false, paymentActions, historyLoading, onViewPayment }: EmiScheduleDialogProps) {
+export function EmiScheduleDialog({ open, onOpenChange, row, onDelete, onRecordPayment, onRecordPastPayments, onToggleClose, statusBusy = false, paymentActions, historyLoading, onViewPayment }: EmiScheduleDialogProps) {
+  // Shared EMI: each installment's People side on its row, next to (never merged with) the lender status.
+  const peopleStatus = useInstallmentPeopleStatus(row ? { sourceKind: "emi", source: row.emi, installments: row.installments } : null);
   if (!row) return null;
 
   const totalPaid = row.installments.reduce((sum, i) => sum + i.amountPaid, 0);
@@ -149,6 +155,8 @@ export function EmiScheduleDialog({ open, onOpenChange, row, onDelete, onRecordP
               actions={paymentActions}
               onPay={(i) => onRecordPayment(row, i)}
               onViewPayment={onViewPayment}
+              fallbackSourceLabel={emiCardLabel(row)}
+              peopleStatus={peopleStatus}
             />
           </div>
           <div className="border-t border-border px-6 py-5">
@@ -175,15 +183,28 @@ export function EmiScheduleDialog({ open, onOpenChange, row, onDelete, onRecordP
               </ClayButton>
             </div>
 
-            <ClayButton
-              variant="primary"
-              className="gap-1.5 rounded-[6px] border-primary-accent-text font-semibold"
-              disabled={isClosed || nextPayable == null}
-              onClick={() => nextPayable && onRecordPayment(row, nextPayable)}
-            >
-              <Wallet className="size-3.5" />
-              Record Payment
-            </ClayButton>
+            <div className="flex flex-wrap items-center gap-2">
+              {onRecordPastPayments && !isClosed && hasPastDue(row.installments) && (
+                <ClayButton
+                  variant="secondary"
+                  className="gap-1.5 rounded-[6px] border-border-strong font-medium text-foreground hover:bg-card"
+                  onClick={() => onRecordPastPayments(row)}
+                  title="EMIs paid before you used FlowFi — recorded without changing any account or card balance"
+                >
+                  <History className="size-3.5" />
+                  Record past payments
+                </ClayButton>
+              )}
+              <ClayButton
+                variant="primary"
+                className="gap-1.5 rounded-[6px] border-primary-accent-text font-semibold"
+                disabled={isClosed || nextPayable == null}
+                onClick={() => nextPayable && onRecordPayment(row, nextPayable)}
+              >
+                <Wallet className="size-3.5" />
+                Record Payment
+              </ClayButton>
+            </div>
           </div>
         </DialogFooter>
       </DialogContent>

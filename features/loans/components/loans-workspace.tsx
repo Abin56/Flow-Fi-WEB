@@ -195,9 +195,22 @@ export function LoansWorkspace({ openRequest = null, trashRequest = 0 }: LoansWo
   const [trashOpen, setTrashOpen] = useState(false);
   // Record Payment resolves its loan live from `rows` (like `activeRow`), so the open surface shows the
   // balance the listener just delivered; `seq` gives each open a fresh mount + idempotency key.
-  const [payment, setPayment] = useState<{ loanId: string; seq: number } | null>(null);
+  // `installmentId`: the schedule row the user pressed Pay on; `view: "past"` opens "Record past payments".
+  const [payment, setPayment] = useState<{ loanId: string; seq: number; installmentId?: string | null; view?: "pay" | "past" } | null>(null);
   const [paymentSeq, setPaymentSeq] = useState(0);
   const paymentRow = useMemo(() => (payment ? (rows.find((r) => r.loan.id === payment.loanId) ?? null) : null), [rows, payment]);
+  // Back from People (`?agreement=<id>&pay=1[&installment=<id>]`): reopen Record Payment for that loan once, when it has loaded.
+  const payHandoffRef = useRef(searchParams.get("pay") === "1" ? { loanId: searchParams.get("agreement"), installmentId: searchParams.get("installment") } : null);
+  useEffect(() => {
+    const handoff = payHandoffRef.current;
+    if (!handoff?.loanId || !rows.some((r) => r.loan.id === handoff.loanId)) return;
+    payHandoffRef.current = null;
+    const params = new URLSearchParams(window.location.search);
+    params.delete("pay");
+    params.delete("installment");
+    window.history.replaceState(window.history.state, "", `${window.location.pathname}?${params.toString()}`);
+    requestAnimationFrame(() => setPayment({ loanId: handoff.loanId!, seq: 0, installmentId: handoff.installmentId }));
+  }, [rows]);
   const [adjustment, setAdjustment] = useState<{ row: LoanRow; kind: "disbursement" } | null>(null);
   // Recorded payments of the open loan, grouped per payment action — live-keyed, see `useLoanPaymentHistory`.
   const historyQuery = useLoanPaymentHistory(activeRow);
@@ -459,9 +472,13 @@ export function LoansWorkspace({ openRequest = null, trashRequest = 0 }: LoansWo
         }}
         deleteLabel={activeRow != null && originationUiFor(activeRow.loan.id).moneyActive ? "Reverse & Delete" : undefined}
         linkedAccountName={activeRow ? originationAccountName(activeRow.loan.id) : null}
-        onRecordPayment={(row) => {
+        onRecordPayment={(row, installment) => {
           setPaymentSeq((n) => n + 1);
-          setPayment({ loanId: row.loan.id, seq: paymentSeq + 1 });
+          setPayment({ loanId: row.loan.id, seq: paymentSeq + 1, installmentId: installment?.id ?? null });
+        }}
+        onRecordPastPayments={(row) => {
+          setPaymentSeq((n) => n + 1);
+          setPayment({ loanId: row.loan.id, seq: paymentSeq + 1, view: "past" });
         }}
         onAdditionalDisbursement={(row) => setAdjustment({ row, kind: "disbursement" })}
         onToggleClose={handleToggleClose}
@@ -502,7 +519,8 @@ export function LoansWorkspace({ openRequest = null, trashRequest = 0 }: LoansWo
 
       <RecordPaymentDialog
         key={payment ? `pay-${payment.loanId}-${payment.seq}` : "pay-closed"}
-        target={paymentRow ? { kind: "loan", row: paymentRow } : null}
+        target={paymentRow ? { kind: "loan", row: paymentRow, installment: paymentRow.installments.find((i) => i.id === payment?.installmentId) ?? null } : null}
+        initialView={payment?.view}
         open={payment != null && paymentRow != null}
         onOpenChange={(open) => !open && setPayment(null)}
       />

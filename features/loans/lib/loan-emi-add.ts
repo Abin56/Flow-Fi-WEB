@@ -162,6 +162,8 @@ export interface AddSections {
   whoFor: boolean;
   payer: boolean;
   bankReferences: boolean;
+  /** Purchase / Card EMI — optional lender reference (the EMI's stored `loanNumber`). */
+  emiReference: boolean;
 }
 
 export function addSections(form: Pick<LoanEmiAddForm, "kind" | "borrowedFrom">): AddSections {
@@ -179,6 +181,7 @@ export function addSections(form: Pick<LoanEmiAddForm, "kind" | "borrowedFrom">)
     whoFor: kind === "borrowed" || kind === "purchase" || kind === "creditCard",
     payer: borrowed,
     bankReferences: borrowed && form.borrowedFrom === "institutional",
+    emiReference: kind === "purchase" || kind === "creditCard",
   };
 }
 
@@ -395,11 +398,14 @@ export function buildLoanEmiCreateRequest(form: LoanEmiAddForm): LoanEmiCreateRe
       lenderName: card ? null : form.provider.trim() || null,
       loanType: card ? "creditCard" : form.emiType,
       linkedCreditCardId: card ? form.cardId : null,
+      loanNumber: form.loanNumber.trim() || null,
       beneficiaryPersonId: beneficiaryOf(form),
       beneficiaryRepaysInstallments: beneficiaryOf(form) != null && form.beneficiaryRepays,
       ownershipShares: sharesOf(form),
       principalAmount: Number(form.amount),
       startDate: firstEmiDate,
+      // A card EMI records when the loan was taken / the item bought (reference only — the schedule runs from the first EMI date).
+      ...(card ? { disbursementDate: date } : {}),
       installmentFrequency: form.frequency,
       installmentCount: Number(form.count),
       interest: interestOf(form),

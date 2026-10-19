@@ -45,14 +45,28 @@ import type { LedgerRepository, PersonRepository } from "@/lib/repositories/pers
 import type { TransactionRepository } from "@/lib/repositories/transaction-repository";
 import { generateId } from "@/lib/utils/id-generator";
 import { TxSession } from "@/lib/firestore/tx-session";
+import { assertRecordedEarlierDate } from "@/lib/engines/recorded-earlier";
 
 export { TxSession };
+
+/** The payment id an idempotency key maps to (see `RecordPaymentInput.idempotencyKey`). */
+export function personPaymentIdFor(idempotencyKey: string): string {
+  return `pp_${idempotencyKey}`;
+}
 
 /** The person changed after the payment screen was built — e.g. the same payment was already saved. */
 export class StalePersonPaymentError extends Error {
   constructor(name: string) {
     super(`${name}'s balance changed since this payment was opened — it may already be saved. Check the ledger, then try again.`);
     this.name = "StalePersonPaymentError";
+  }
+}
+
+/** A date-only edit named a payment that is no longer as the caller saw it (edited, re-dated or reverted elsewhere). */
+export class PersonPaymentChangedError extends Error {
+  constructor() {
+    super("This payment changed in another tab or device since you opened it — nothing was changed. Refresh and try again.");
+    this.name = "PersonPaymentChangedError";
   }
 }
 
@@ -91,6 +105,11 @@ export interface RecordPaymentInput {
   date: Date;
   /** Received into (they paid me) / paid from (I paid them). */
   accountId: string;
+  /**
+   * Money I paid out (`iPaid`): re-checks the paid-from account's balance FRESH inside the write and refuses
+   * (`InsufficientFundsError`, nothing saved) when it would go below zero. Money received is never checked.
+   */
+  enforceFunds?: boolean;
   note?: string;
   lines: PaymentLineInput[];
   extra: PaymentExtraInput | null;
@@ -104,6 +123,25 @@ export interface RecordPaymentInput {
    * income nor advance. `extra` then holds only an explicit remainder (advance / income), if any.
    */
   purposes?: PurposeInput[];
+  /**
+   * "Already included in my account": money the person paid me BEFORE it was recorded here, which the
+   * account balance already reflects. Settles the chosen obligations with a cash leg posted
+   * `excludeFromCalculations: true` (zero `balanceEffect` — the account is never credited twice; reverting
+   * it subtracts nothing) and marks each entry `recordedEarlier`. Money received only — settlement lines
+   * only (no advance / income / purpose), never dated in the future. An edit keeps the stored mark.
+   */
+  recordedEarlier?: boolean;
+  /**
+   * False: the date the person paid isn't known — `date` is only a placeholder, and every entry is marked
+   * `receivedDateKnown: false`. An edit keeps the mark while the date is left as it was.
+   */
+  dateKnown?: boolean;
+  /**
+   * Makes the write happen at most once: the payment id and its entry ids derive from this key, and a
+   * repeat (double submit, retry after a lost response) finds the first entry already written and writes
+   * nothing. Used by the Loan / EMI historical reconciliation.
+   */
+  idempotencyKey?: string;
 }
 
 export interface PurposeInput {
@@ -148,9 +186,14 @@ export class PersonPaymentRepository {
    * cash twice or over-settling an EMI/Loan share whose open amount the transaction cannot re-derive.
    */
   async recordPayment(person: Person, input: RecordPaymentInput): Promise<string> {
-    const paymentId = generateId();
+    const paymentId = input.idempotencyKey ? personPaymentIdFor(input.idempotencyKey) : generateId();
     await runTransaction(this.db, async (tx) => {
       const session = new TxSession(tx);
+      if (input.idempotencyKey) {
+        // Already recorded by an earlier attempt with this key — nothing more to write.
+        const first = await session.get(this.deps.ledgerRepository.docRef(`${paymentId}_0`));
+        if (first.exists()) return;
+      }
       const fresh = await session.get(this.deps.personRepository.docRef(person.id));
       if (fresh.exists() && Math.abs(fresh.data().currentBalance - person.currentBalance) > PAYMENT_EPSILON) {
         throw new StalePersonPaymentError(person.name);
@@ -203,10 +246,20 @@ export class PersonPaymentRepository {
       );
     }
     const newPaymentId = generateId();
+    // The original's treatment is kept: a payment recorded as already in the account stays one (still no
+    // account movement), and an ordinary one can't become one by editing.
+    // An unknown received date stays unknown until the user actually changes the date.
+    const unknownDate = pre.entries.find((e) => e.receivedDateKnown === false);
+    const carried: RecordPaymentInput = {
+      ...input,
+      recordedEarlier: pre.entries.some((e) => e.recordedEarlier === true),
+      dateKnown: !(unknownDate != null && unknownDate.date.getTime() === input.date.getTime()),
+      idempotencyKey: undefined,
+    };
     await runTransaction(this.db, async (tx) => {
       const session = new TxSession(tx);
       await this.revertInSession(session, person, pre);
-      const { advanceEntryId } = await this.recordInSession(session, person, input, newPaymentId);
+      const { advanceEntryId } = await this.recordInSession(session, person, carried, newPaymentId);
       if (advanceEntryId) {
         for (const a of pre.applications) {
           if (a.deletedAt != null) continue;
@@ -217,6 +270,76 @@ export class PersonPaymentRepository {
       session.flush();
     });
     return newPaymentId;
+  }
+
+  /**
+   * Changes ONLY the date of a recorded payment, in place: the `paymentId`, the cash-leg Transaction id, the
+   * amounts, the account and every settlement allocation stay exactly as they are — no revert, no re-record,
+   * no account or balance write (the cash leg's date is edited with a zero balance delta).
+   *
+   * The write names the payment AS THE CALLER SAW IT (`expectedDate`) and re-reads every entry inside the
+   * transaction: a payment that was edited, reverted or re-dated meanwhile (another tab / device) is refused
+   * with `PersonPaymentChangedError` and nothing is written. Purpose money has its own dates — such a payment
+   * is changed by reverting it and recording it again.
+   */
+  async editPaymentDate(person: Person, paymentId: string, params: { date: Date; expectedDate: Date }): Promise<void> {
+    const { date, expectedDate } = params;
+    if (Number.isNaN(date.getTime())) throw new Error("Choose a valid date.");
+    const pre = await this.preloadGroup(paymentId);
+    if (pre.funds.length > 0) throw new Error("This payment keeps money for purposes — revert it and record it again to change its date.");
+    await runTransaction(this.db, async (tx) => {
+      const session = new TxSession(tx);
+      const personSnap = await session.get(this.deps.personRepository.docRef(person.id));
+      if (!personSnap.exists()) throw new Error("Person not found");
+
+      const fresh: LedgerEntry[] = [];
+      for (const e of pre.entries) {
+        const snap = await session.get(this.deps.ledgerRepository.docRef(e.id));
+        const live = snap.exists() ? snap.data() : null;
+        if (!live || live.deletedAt != null || live.paymentId !== paymentId || live.personId !== person.id || live.date.getTime() !== expectedDate.getTime()) {
+          throw new PersonPaymentChangedError();
+        }
+        fresh.push(live);
+      }
+      if (fresh.length === 0) throw new PersonPaymentChangedError();
+      if (date.getTime() === expectedDate.getTime()) return;
+      if (fresh.some((e) => e.recordedEarlier === true)) assertRecordedEarlierDate(date);
+
+      const tx2 = session.asTransaction();
+      // Reads first: the cash legs this payment owns and any separate income part.
+      const cashIds = [...new Set(fresh.flatMap((e) => (e.transactionRef ? [e.transactionRef] : [])))];
+      const incomeIds = [...new Set(fresh.flatMap((e) => (e.incomeTransactionRef ? [e.incomeTransactionRef] : [])))];
+      const cashLegs: Transaction[] = [];
+      for (const id of cashIds) {
+        const t = await this.deps.transactionRepository.getInTransaction(tx2, id);
+        if (!t || t.deletedAt != null || !t.isPersonLedgerMovement || t.linkedPersonId !== person.id) throw new PersonPaymentChangedError();
+        cashLegs.push(t);
+      }
+      const incomes: Transaction[] = [];
+      for (const id of incomeIds) {
+        const t = await this.deps.transactionRepository.getInTransaction(tx2, id);
+        if (t && t.deletedAt == null) incomes.push(t);
+      }
+      const splitPayments: { ref: DocumentReference<InstallmentPayment>; payment: InstallmentPayment }[] = [];
+      for (const e of fresh) {
+        if (!e.installmentPaymentRef) continue;
+        const [scheduleId, installmentId, paymentDocId] = e.installmentPaymentRef.split("/");
+        const ref = this.deps.installmentPaymentDocRef(scheduleId, installmentId, paymentDocId);
+        const snap = await session.get(ref);
+        if (snap.exists() && snap.data().deletedAt == null) splitPayments.push({ ref, payment: snap.data() });
+      }
+
+      // Writes: the cash leg's date moves with zero balance delta (same account, same amount, same exclusion).
+      for (const leg of cashLegs) await this.deps.transactionRepository.editTransactionInTransaction(tx2, leg, { dateTime: date }, { owner: "people" });
+      for (const t of incomes) await this.deps.transactionRepository.editTransactionInTransaction(tx2, t, { dateTime: date });
+      for (const { ref, payment } of splitPayments) session.set(ref, { ...payment, date });
+      for (const e of fresh) {
+        // A date the person never confirmed becomes a real one once the user sets it.
+        const moved = recordEdit(e, "date", e.date.toISOString(), date.toISOString());
+        session.set(this.deps.ledgerRepository.docRef(e.id), { ...moved, date, ...(e.receivedDateKnown === false ? { receivedDateKnown: true } : {}) });
+      }
+      session.flush();
+    });
   }
 
   /**
@@ -338,6 +461,14 @@ export class PersonPaymentRepository {
       if (purposes.some((p) => !p.title || !(p.amount > 0))) throw new Error("Every purpose needs a description and an amount.");
     }
     if (!accountId) throw new Error(direction === "theyPaid" ? "Choose the account it was received into." : "Choose the account it was paid from.");
+    const earlier = input.recordedEarlier === true;
+    if (earlier) {
+      if (direction !== "theyPaid") throw new Error("Only money received can be recorded as already in your account.");
+      if (extraParts.length > 0 || purposes.length > 0 || lines.length === 0) {
+        throw new Error("Money already in your account can only settle what they owe — nothing extra was recorded.");
+      }
+      assertRecordedEarlierDate(date);
+    }
 
     const personRef = this.deps.personRepository.docRef(person.id);
     const personSnap = await session.get(personRef);
@@ -375,6 +506,9 @@ export class PersonPaymentRepository {
         linkedPersonId: person.id,
         owesPersonToggle: false,
         isPersonLedgerMovement: true,
+        // Already in the balance: kept as the payment's record and reversal anchor, never moving the account.
+        ...(earlier ? { excludeFromCalculations: true } : {}),
+        enforceFunds: input.enforceFunds === true && !cashIn && !earlier,
       });
     }
     let income: Transaction | null = null;
@@ -400,6 +534,8 @@ export class PersonPaymentRepository {
       paymentId,
       incomeTransactionRef: income?.id ?? null,
       receivedStatus: "received" as const,
+      ...(earlier ? { recordedEarlier: true } : {}),
+      ...(input.dateKnown === false ? { receivedDateKnown: false } : {}),
       createdAt: new Date(),
       deletedAt: null,
       lastEditedAt: null,
@@ -407,6 +543,8 @@ export class PersonPaymentRepository {
     };
     const type = cashIn ? ("receivedBack" as const) : ("repaid" as const);
     const entries: LedgerEntry[] = [];
+    // Deterministic entry ids under an idempotency key (the first one is the "already recorded" sentinel).
+    const entryId = () => (input.idempotencyKey ? `${paymentId}_${entries.length}` : generateId());
 
     for (const line of lines) {
       const route = line.route;
@@ -416,7 +554,7 @@ export class PersonPaymentRepository {
       }
       entries.push({
         ...base,
-        id: generateId(),
+        id: entryId(),
         type,
         amount: line.amount,
         parentEntryId: route.kind === "derived" || route.kind === "opening" ? null : route.parentEntryId,
@@ -427,7 +565,7 @@ export class PersonPaymentRepository {
     }
     let advanceEntryId: string | null = null;
     if (advancePart) {
-      advanceEntryId = generateId();
+      advanceEntryId = entryId();
       entries.push({ ...base, id: advanceEntryId, type, amount: advancePart.amount, parentEntryId: null, obligationRef: null, sourceKind: "advance", installmentPaymentRef: null });
     }
 

@@ -133,6 +133,7 @@ export function ApplyAdvancePanel({
   onOpenChange,
   onConfirm,
   cycle,
+  preselectKey,
 }: {
   personName: string;
   side: "theyOwe" | "iOwe";
@@ -147,6 +148,8 @@ export function ApplyAdvancePanel({
    * is allowed) but never pre-selected — advance only reaches a future item when the user ticks it.
    */
   cycle?: { start: Date; end: Date };
+  /** Obligation key to preselect when opened from a lender payment. */
+  preselectKey?: string | null;
 }) {
   const first = personName.split(" ")[0];
   const options = obligations.filter((o) => o.side === side);
@@ -154,6 +157,14 @@ export function ApplyAdvancePanel({
   const [selected, setSelected] = useState<Set<string>>(() => new Set(options.filter((o) => !isLater(o)).map((o) => o.key)));
   const upcomingTotal = round2(options.filter(isLater).reduce((s, o) => s + o.outstanding, 0));
   const [manual, setManual] = useState<Record<string, string> | null>(null);
+  // A deep link from a lender payment names the one obligation to apply to — only that one starts ticked.
+  const hasPreselect = preselectKey != null && options.some((o) => o.key === preselectKey);
+  const [appliedPreselect, setAppliedPreselect] = useState<string | null>(null);
+  if (open && hasPreselect && appliedPreselect !== preselectKey) {
+    setAppliedPreselect(preselectKey!);
+    setSelected(new Set([preselectKey!]));
+    setManual(null);
+  }
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const plan = planAdvanceApplication({

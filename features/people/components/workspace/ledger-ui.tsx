@@ -1,6 +1,7 @@
 "use client";
 
 import { AccountLabel } from "@/components/finance/account-label";
+import { PaymentSourceSummary, isUnderfunded } from "@/components/finance/payment-source-summary";
 import { Landmark, Trash2, Undo2 } from "lucide-react";
 import Link from "next/link";
 import { useMemo, useState } from "react";
@@ -297,27 +298,39 @@ function toDateInput(d: Date): string {
 
 /**
  * The account a manual People entry's cash leg posts to — Add and per-entry Settle post a real
- * Transaction alongside the LedgerEntry (`addLedgerEntryWithTransaction`). Until the user picks one,
- * the default account (else the first) is used, so `useAccountChoice` also works when accounts load
- * after mount.
+ * Transaction alongside the LedgerEntry (`addLedgerEntryWithTransaction`). The account is always the user's
+ * explicit choice — never a silent default — so the form stays blocked until one is picked.
  */
 export function useAccountChoice(initialAccountId?: string | null) {
   const { data: allAccounts = [] } = useAccounts();
   const accounts = useMemo(() => allAccounts.filter((a) => a.deletedAt == null), [allAccounts]);
   const [picked, setPicked] = useState(initialAccountId ?? "");
-  const accountId = picked || (accounts.find((a) => a.isDefault)?.id ?? accounts[0]?.id ?? "");
-  return { accounts, accountId, setAccountId: setPicked };
+  const accountId = accounts.some((a) => a.id === picked) ? picked : "";
+  const selected = accounts.find((a) => a.id === accountId) ?? null;
+  return { accounts, accountId, selected, setAccountId: setPicked };
+}
+
+/** The account as it will stand once an edited payment's original debit is given back (same account only). */
+export function withRefund<T extends { id: string; currentBalance: number }>(account: T, refund?: { accountId: string | null; amount: number }): T {
+  return refund && refund.accountId === account.id ? { ...account, currentBalance: Math.round((account.currentBalance + refund.amount) * 100) / 100 } : account;
 }
 
 export function AccountField({
   choice,
   label = "Account",
   className,
+  outflow,
+  refund,
 }: {
   choice: ReturnType<typeof useAccountChoice>;
   label?: string;
   className?: string;
+  /** Money that LEAVES this account (a payment): shows each balance and the balance after. `null` = amount not entered yet. Omit for money received. */
+  outflow?: number | null;
+  /** Editing a payment I made: its original debit on `accountId` is refunded first, so only the net extra is previewed. */
+  refund?: { accountId: string | null; amount: number };
 }) {
+  const paying = outflow !== undefined;
   return (
     <WsField label={label} className={className}>
       <Select value={choice.accountId} onValueChange={choice.setAccountId}>
@@ -327,11 +340,22 @@ export function AccountField({
         <SelectContent>
           {choice.accounts.map((a) => (
             <SelectItem key={a.id} value={a.id}>
-              <AccountLabel account={a} suffix={a.accountNumberLast4 ? `•••• ${a.accountNumberLast4}` : undefined} />
+              <AccountLabel
+                account={a}
+                suffix={[a.accountNumberLast4 ? `•••• ${a.accountNumberLast4}` : null, paying && a.type !== "card" ? formatCurrency(a.currentBalance) : null].filter(Boolean).join(" · ") || undefined}
+              />
             </SelectItem>
           ))}
         </SelectContent>
       </Select>
+      {paying && choice.selected && choice.selected.type !== "card" && (
+        <PaymentSourceSummary
+          className="mt-1.5"
+          account={withRefund(choice.selected, refund)}
+          amount={outflow}
+          paymentLabel={refund && refund.accountId === choice.selected.id ? "Edited payment (original refunded)" : undefined}
+        />
+      )}
     </WsField>
   );
 }
@@ -369,6 +393,10 @@ export function EntrySettleForm({
   const account = useAccountChoice();
   const firstName = personName.split(" ")[0];
   const effect = row.direction === "iOwe" ? `You pay ${firstName}` : `${firstName} pays you`;
+  // When I pay (I owe them) the money leaves the chosen account; when they pay me it is received into it.
+  const paysOut = needsAccount && row.direction === "iOwe";
+  const enteredAmount = Number(amount);
+  const outflow = Number.isFinite(enteredAmount) && enteredAmount > 0 ? enteredAmount : null;
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -384,6 +412,10 @@ export function EntrySettleForm({
     }
     if (needsAccount && !account.accountId) {
       setError("Select an account.");
+      return;
+    }
+    if (paysOut && isUnderfunded(account.selected, value)) {
+      setError("Not enough balance in the chosen account — choose another account or lower the amount.");
       return;
     }
     setError(null);
@@ -411,7 +443,7 @@ export function EntrySettleForm({
         <WsField label="Date">
           <DateInput className={WS_FIELD} value={date} onChange={(e) => setDate(e.target.value)} />
         </WsField>
-        {needsAccount && <AccountField choice={account} label={row.direction === "iOwe" ? "Paid from" : "Received into"} />}
+        {needsAccount && <AccountField choice={account} label={row.direction === "iOwe" ? "Paid from" : "Received into"} outflow={paysOut ? outflow : undefined} />}
       </div>
       {error && (
         <p className="mt-1.5 text-xs font-medium text-expense" role="alert">
@@ -422,7 +454,7 @@ export function EntrySettleForm({
         <button type="button" onClick={onCancel} disabled={saving} className={cn(WS_GHOST, "h-8")}>
           Cancel
         </button>
-        <button type="submit" disabled={saving} className={cn(WS_PRIMARY, "h-8")}>
+        <button type="submit" disabled={saving || (paysOut && isUnderfunded(account.selected, outflow))} className={cn(WS_PRIMARY, "h-8")}>
           {saving ? "Recording…" : "Record payment"}
         </button>
       </div>

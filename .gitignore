@@ -62,3 +62,6 @@ firebase-debug.log
 
 # Cloud Functions emulator secrets (local only)
 functions/.secret.local
+
+# Browser QA run output (screenshots, results.json)
+tests/e2e-qa/.results/

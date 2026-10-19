@@ -17,7 +17,6 @@
  * path that already synced (e.g. `editExpense`, same-person `changeExpenseFunding`) is unaffected.
  */
 
-import type { Expense } from "@/lib/models/expense";
 import type { Transaction } from "@/lib/models/transaction";
 import type { ExpenseRepository } from "@/lib/repositories/expense-repository";
 import type { LedgerRepository, PersonRepository } from "@/lib/repositories/person-repository";
@@ -31,7 +30,7 @@ export function followsDescription(note: string, oldDescription: string, newDesc
 }
 
 export interface DescriptionSyncDeps {
-  expenseRepository: Pick<ExpenseRepository, "getAll" | "syncDescription">;
+  expenseRepository: Pick<ExpenseRepository, "findActiveByTransactionId" | "syncDescription">;
   personRepository: Pick<PersonRepository, "getByKey">;
   ledgerRepositoryFor: (personId: string) => Pick<LedgerRepository, "getByTransactionRef" | "editEntry">;
 }
@@ -45,7 +44,7 @@ export async function syncLinkedDescription(deps: DescriptionSyncDeps, transacti
   const next = newDescription.trim();
   if (next === "" || next === transaction.description.trim()) return;
 
-  const expense = ((await deps.expenseRepository.getAll()) as Expense[]).find((e) => e.transactionId === transaction.id && e.deletedAt == null) ?? null;
+  const expense = await deps.expenseRepository.findActiveByTransactionId(transaction.id);
   if (expense != null) await deps.expenseRepository.syncDescription(expense, next);
 
   const personIds = new Set([transaction.linkedPersonId, transaction.fundedByPersonId].filter((id): id is string => id != null));

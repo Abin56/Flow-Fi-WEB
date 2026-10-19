@@ -11,6 +11,9 @@
     "test": "vitest run",
     "test:rules": "firebase emulators:exec --only firestore,storage \"cross-env VITEST_RULES=1 vitest run tests/rules\"",
     "test:functions": "firebase emulators:exec --only firestore \"npm --prefix functions test\"",
+    "test:perf": "firebase emulators:exec --only firestore \"cross-env VITEST_PERF=1 vitest run tests/perf\"",
+    "test:e2e-qa": "node tests/e2e-qa/run.mjs",
+    "test:qa-bundle": "node tests/e2e-qa/check-prod-bundle.mjs",
     "test:integration": "firebase emulators:exec --only firestore,storage \"cross-env VITEST_INTEGRATION=1 vitest run tests/integration\""
   },
   "dependencies": {

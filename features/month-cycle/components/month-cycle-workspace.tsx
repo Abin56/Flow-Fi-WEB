@@ -961,7 +961,7 @@ export function MonthCycleWorkspace() {
         <StatCell icon={CreditCard} label="Credit card bills" amount={data.cards.total} meta={`${data.cards.count} bills due`} accent="expense" href="/credit-cards" />
         <StatCell icon={Users} label="You need to give" amount={data.peopleSides.totalToGive} meta={`${data.peopleSides.giveCount} people`} accent="warning" href="/people" />
         <StatCell icon={Users} label="You need to receive" amount={data.peopleSides.totalToReceive} meta={`${data.peopleSides.receiveCount} people`} accent="success" href="/people" />
-        <StatCell icon={Receipt} label="Bills (utility & others)" amount={data.bills.total} meta={`${data.bills.count} bills due`} accent="success" href="/bills" />
+        <StatCell icon={Receipt} label="Bills (utility & others)" amount={data.bills.total} meta={data.bills.overdueCount > 0 ? `${formatCurrency(data.bills.total - data.bills.overdueTotal)} this cycle · ${formatCurrency(data.bills.overdueTotal)} overdue` : `${data.bills.count} bills due`} accent="success" href="/bills" />
       </section>
       </Reveal>
 

@@ -22,14 +22,15 @@ import {
 } from "@/lib/engines/person-payment";
 import type { PaymentExtraInput, RecordPaymentInput } from "@/lib/repositories/person-payment-repository";
 import { cn } from "@/lib/utils";
-import { AccountField, useAccountChoice } from "./ledger-ui";
+import { isUnderfunded } from "@/components/finance/payment-source-summary";
+import { AccountField, useAccountChoice, withRefund } from "./ledger-ui";
 import { WS_FIELD, WS_GHOST, WS_PRIMARY, WsField } from "./person-workspace-ui";
 import { usePurposeLinkOptions } from "./purpose-money";
 import { draftsToAllocations, ExtraAllocationEditor, newAllocationDraft, type AllocationDraft } from "./extra-allocation-editor";
 import { planExtraAllocation } from "@/lib/engines/extra-allocation";
 import { DateInput } from "@/components/forms/date-input";
 import { ReminderPicker, type ReminderWhen } from "./follow-up";
-import { FlowSwitch, flowText, HeroAmount, PanelHeader } from "./flow-switch";
+import { FlowSwitch, flowText, HeroAmount, PanelHeader, type FlowSwitchOption } from "./flow-switch";
 import { canPostponeRow, DeferralContext, PostponeFields, usePostponeDraft, type PostponeItem } from "./payment-deferral";
 
 /** An existing payment, for editing: its lines per obligation key, advance, account and date. */
@@ -52,6 +53,9 @@ const fromInputDate = (s: string) => {
 };
 
 type PayChoice = "full" | "part" | "skip";
+
+/** The one top-level choice: money received, money paid, or "not paid yet" (an action that records no money). */
+type IntentChoice = PaymentDirection | "postpone";
 
 /**
  * Record payment — one real payment between me and a person, allocated across the exact obligations it
@@ -79,7 +83,16 @@ export function RecordPaymentPanel({
   onComplete,
   onSetReminder,
   cycleStartDay = 1,
+  initialIntent,
+  advanceHeld = 0,
+  onApplyAdvance,
 }: {
+  /** Open straight into "Postpone collection" (a lender payment's Postpone link). */
+  initialIntent?: "received" | "postpone";
+  /** Money this person gave earlier that is still held as advance (not applied) — offered before new money. */
+  advanceHeld?: number;
+  /** Opens the existing Apply advance panel instead (applying moves no money). */
+  onApplyAdvance?: () => void;
   personName: string;
   /** The person's whole-history ledger rows — obligations are read from them. */
   rows: readonly LedgerRow[];
@@ -184,6 +197,10 @@ export function RecordPaymentPanel({
   const elsewhere = projection.elsewhere.filter((o) => o.side === side && o.timing !== "later");
   const [amountText, setAmountText] = useState(() => (initial ? String(initial.amount) : preselected ? String(preselected.outstanding) : ""));
   const [date, setDate] = useState(() => toInputDate(initial?.date ?? new Date()));
+  // "Already in my account balance": money received before FlowFi tracked it. It settles what they owe and moves
+  // no account (the repository's `recordedEarlier`: money received only, settlement lines only, never future-dated).
+  const [inBalance, setInBalance] = useState(false);
+  const [dateUnknown, setDateUnknown] = useState(false);
   // Per-item amounts once the user takes over a row (Full / Part / typing). null = automatic, oldest first.
   // Editing shows the payment exactly as it was allocated (not re-allocated oldest first).
   const [manual, setManual] = useState<Record<string, string> | null>(() =>
@@ -268,11 +285,32 @@ export function RecordPaymentPanel({
   const postponeTotal = round2(afterItems.reduce((t, i) => t + (i.row.remaining ?? 0), 0));
   const [recorded, setRecorded] = useState(false);
 
+  const earlier = theyPaid && inBalance && !initial;
+  const todayInput = toInputDate(new Date());
+  // An unknown receipt date is stored on the oldest item it settles (never later than today), flagged "date not known".
+  const earlierPlaceholderDate = (() => {
+    const today = fromInputDate(todayInput);
+    const oldest = options.filter((o) => selected.has(o.key)).map((o) => o.date).sort((a, b) => a.getTime() - b.getTime())[0];
+    return oldest && oldest.getTime() <= today.getTime() ? new Date(oldest.getFullYear(), oldest.getMonth(), oldest.getDate()) : today;
+  })();
+  const earlierBlocker = !earlier
+    ? null
+    : hasExtra
+      ? `Money already in your balance can only settle what ${first} owes — lower the amount to ${money(allocation.allocated)}, or untick “Already in my account balance”.`
+      : amount > PAYMENT_EPSILON && allocation.allocated <= PAYMENT_EPSILON
+        ? "Choose what this money settled."
+        : !dateUnknown && date > todayInput
+          ? "A payment already received can't be dated in the future."
+          : null;
+
   const blocker =
     (vanished.length > 0 ? "Some items changed while this was open — review the list." : null) ??
+    earlierBlocker ??
     capped?.error ??
     (hasExtra ? extraPlan.error : null) ??
     paymentBlocker({ direction, amount, allocation, resolution, accountId }) ??
+    // Money I pay out must be covered by the chosen account (an edit refunds its own payment first — the write checks that case).
+    (direction === "iPaid" && account.selected && isUnderfunded(withRefund(account.selected, initial ? { accountId: initial.accountId, amount: initial.amount } : undefined), amount) ? "The chosen account doesn't have enough balance — choose another account or lower the amount." : null) ??
     (liveAfterItems.length > 0 && !afterDraft.ready ? "Choose a reminder date for the postponement." : null);
   // The items this payment leaves open — where a "remind me" goes (each keeps its own remaining). A postponed
   // item carries its own reminder choice instead.
@@ -289,15 +327,29 @@ export function RecordPaymentPanel({
       return row && canPostponeRow(row) ? [{ row, title: o.title }] : [];
     });
   }, [deferrals, initial, rowByKey, projection, preselected]);
-  const [intent, setIntent] = useState<"received" | "postpone">("received");
+  const [intent, setIntent] = useState<"received" | "postpone">(initialIntent ?? "received");
   const [postponeOff, setPostponeOff] = useState<ReadonlySet<string>>(() => new Set());
   const postponeItems = useMemo(() => postponable.filter((i) => !postponeOff.has(i.row.key)), [postponable, postponeOff]);
   const postponeDraft = usePostponeDraft(postponeItems);
   const canPostpone = theyPaid && postponable.length > 0;
   const postponing = canPostpone && intent === "postpone";
+  // "Not paid yet" is offered beside Received / Paid whenever there is something to postpone. It is an action, not a
+  // direction: choosing it keeps the receivable side (theyPaid) and only switches which form is shown.
+  const postponeOffered = postponable.length > 0;
+  function selectIntent(v: IntentChoice) {
+    if (v === "postpone") {
+      if (!theyPaid) switchDirection("theyPaid");
+      setIntent("postpone");
+      return;
+    }
+    setIntent("received");
+    if (v !== direction) switchDirection(v);
+  }
+  // The optional follow-ups (postpone the unpaid rest, reminder) live in one collapsed section.
+  const [afterOpen, setAfterOpen] = useState(false);
   async function submitPostpone() {
     if (!postponing) return;
-    if (await postponeDraft.submit()) onCancel();
+    if (await postponeDraft.submit()) (onComplete ?? onCancel)();
   }
 
   /** One direction at a time — each side's obligations are settled on their own, never netted. */
@@ -395,9 +447,10 @@ export function RecordPaymentPanel({
       const input: RecordPaymentInput = {
         direction,
         amount,
-        date: fromInputDate(date),
+        date: earlier && dateUnknown ? earlierPlaceholderDate : fromInputDate(date),
         accountId: accountId!,
         lines: paymentLines(options, allocation.lines),
+        ...(earlier ? { recordedEarlier: true, ...(dateUnknown ? { dateKnown: false } : {}) } : {}),
         ...(() => {
           if (!hasExtra) return { extra: null };
           // One receipt, each part through its existing path: advance entry, Income transaction, purpose docs.
@@ -465,6 +518,18 @@ export function RecordPaymentPanel({
   const allDueAuto = automatic && dueKeys.length > 0 && dueKeys.every((k) => selected.has(k));
   const ready = amount > 0 && !blocker && recon.balanced;
 
+  // Step 2's live summary: how much of what is owed (due now + any later item chosen early) this payment covers.
+  const owedBefore = round2(owedRows.reduce((t, o) => t + o.outstanding, 0));
+  // Step 4 (optional): items whose unpaid rest can be postponed, and whether a reminder can be set.
+  const postponeRows = owedRows.filter((o) => postponeRowOf(o) && afterOf(o) > PAYMENT_EPSILON);
+  const reminderOffered = !!onSetReminder && reminderTargets.length > 0 && amount > PAYMENT_EPSILON;
+  const followUpOffered = postponeRows.length > 0 || reminderOffered;
+  const followUpOpen = afterOpen || liveAfterItems.length > 0;
+  // Presentation-only sanity hints (never block saving): a likely typo in the amount, and money left over while a
+  // bill stays unpaid — the one-tap fix reuses the existing "Pay all due" action.
+  const amountLooksHigh = dueTotal > PAYMENT_EPSILON && amount > dueTotal * 10 && amount - dueTotal >= 10_000;
+  const leftoverWhileOwed = hasExtra && !earlier && stillOwed > PAYMENT_EPSILON && !(theyPaid && allSkipped && !initial);
+
   if (recorded) {
     return (
       <PostponeResult
@@ -480,6 +545,22 @@ export function RecordPaymentPanel({
       />
     );
   }
+
+  const dueMeta = (due: number, tone: "in" | "out", active: boolean) =>
+    due > PAYMENT_EPSILON ? (
+      <>
+        <span className={cn("font-semibold tabular-nums", active && flowText(tone))}>{money(due)}</span> due
+      </>
+    ) : (
+      "Nothing due"
+    );
+  const intentOptions: FlowSwitchOption<IntentChoice>[] = [
+    { value: "theyPaid", tone: "in", title: "Received", sub: `from ${first}`, label: `Money received from ${first}`, meta: dueMeta(theyOweTotal, "in", direction === "theyPaid" && !postponing) },
+    { value: "iPaid", tone: "out", title: "Paid", sub: `to ${first}`, label: `Money paid to ${first}`, meta: dueMeta(iOweTotal, "out", direction === "iPaid") },
+    ...(postponeOffered
+      ? [{ value: "postpone", tone: "wait", title: "Not paid yet", label: `Not paid yet — postpone collection from ${first}`, meta: "Move to a later cycle" } satisfies FlowSwitchOption<IntentChoice>]
+      : []),
+  ];
 
   return (
     // A real <form>: Enter in a single-line field records through the same submit() as the primary button,
@@ -498,9 +579,9 @@ export function RecordPaymentPanel({
       className="mt-4 flex min-h-full flex-col rounded-[12px] border border-border-strong bg-card"
     >
       <PanelHeader
-        title={initial ? "Edit payment" : "Record payment"}
+        title={initial ? "Edit payment" : postponing ? "Postpone collection" : "Record payment"}
         personName={personName}
-        tone={theyPaid ? "in" : "out"}
+        tone={postponing ? "wait" : theyPaid ? "in" : "out"}
         onClose={onCancel}
         context={
           <>
@@ -510,64 +591,29 @@ export function RecordPaymentPanel({
         }
       />
 
-      <div className="flex-1 space-y-6 px-4 pt-4 pb-6 sm:px-6">
-        {/* ── A. The money: direction, amount, account, date, what's outstanding ── */}
-        <section aria-labelledby="rp-money-heading" className="space-y-3">
-          <h4 id="rp-money-heading" className="sr-only">
-            {theyPaid ? "Money received" : "Money paid"}
-          </h4>
+      <div className="flex-1 space-y-7 px-4 pt-4 pb-6 sm:px-6">
+        {/* ── What happened: one top-level choice — money received, money paid, or "not paid yet" (postpone) ── */}
+        <section aria-label="What happened" className="space-y-3">
           <FlowSwitch
-            label="Direction"
-            value={direction}
-            onChange={switchDirection}
+            label={postponeOffered ? "What happened" : "Direction"}
+            value={postponing ? "postpone" : direction}
+            onChange={selectIntent}
             locked={!!initial}
-            options={(
-              [
-                { value: "theyPaid", tone: "in", title: "Received", sub: `from ${first}`, label: `Money received from ${first}`, due: theyOweTotal },
-                { value: "iPaid", tone: "out", title: "Paid", sub: `to ${first}`, label: `Money paid to ${first}`, due: iOweTotal },
-              ] as const
-            ).map(({ due, ...o }) => ({
-              ...o,
-              meta:
-                due > PAYMENT_EPSILON ? (
-                  <>
-                    <span className={cn("font-semibold tabular-nums", o.value === direction && flowText(o.tone))}>{money(due)}</span> due
-                  </>
-                ) : (
-                  "Nothing due"
-                ),
-            }))}
+            options={intentOptions}
           />
-          {canPostpone && (
-            <div role="radiogroup" aria-label={`Did ${first} pay?`} className="grid grid-cols-2 gap-1 rounded-[10px] bg-secondary/60 p-1">
-              {(
-                [
-                  { value: "received", label: "Money received", sub: "Record what was paid" },
-                  { value: "postpone", label: "Hasn't paid yet", sub: "Postpone · nothing recorded" },
-                ] as const
-              ).map((o) => (
-                <button
-                  key={o.value}
-                  type="button"
-                  role="radio"
-                  aria-checked={intent === o.value}
-                  onClick={() => setIntent(o.value)}
-                  className={cn(
-                    "min-w-0 rounded-[8px] px-3 py-1.5 text-left outline-none transition-[background-color,box-shadow] duration-150 focus-visible:ring-2 focus-visible:ring-ring",
-                    intent === o.value ? "bg-card shadow-sm ring-1 ring-border-strong" : "hover:bg-card/60",
-                  )}
-                >
-                  <span className="block truncate text-[13px] font-semibold text-foreground">{o.label}</span>
-                  <span className="block truncate text-[11px] text-foreground/70">{o.sub}</span>
-                </button>
-              ))}
-            </div>
-          )}
           {postponing && (
-            <div className="rounded-[12px] border border-border-strong px-3 py-3" data-testid="rp-postpone">
+            <div className="overflow-hidden rounded-[12px] border border-border-strong" data-testid="rp-postpone">
+              <div className="flex items-start gap-2.5 border-b border-border bg-secondary/40 px-4 py-2.5">
+                <CalendarClock className="mt-0.5 size-4 shrink-0 text-foreground/70" aria-hidden />
+                <div className="min-w-0">
+                  <p className="text-[13px] font-bold text-foreground">Move when you expect {first}&apos;s payment</p>
+                  <p className="text-xs text-foreground/70">Nothing is recorded — only the expected cycle changes.</p>
+                </div>
+              </div>
+              <div className="px-4 py-3.5">
               {postponable.length > 1 && (
-                <fieldset className="mb-2.5">
-                  <legend className="mb-1 text-[11.5px] font-semibold text-foreground/75">Items to postpone</legend>
+                <fieldset className="mb-3">
+                  <legend className="mb-1 text-xs font-bold text-foreground/85">Items to postpone</legend>
                   <ul className="space-y-1">
                     {postponable.map(({ row, title }) => (
                       <li key={row.key}>
@@ -601,95 +647,183 @@ export function RecordPaymentPanel({
                 </fieldset>
               )}
               <PostponeFields draft={postponeDraft} noMoneyNote />
+              </div>
             </div>
           )}
-          {!postponing && (
-            <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,16rem)]">
-              <div className="min-w-0">
-                <HeroAmount label={theyPaid ? "Amount received" : "Amount paid"} value={amountText} onChange={setAmountText} />
-                <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-foreground/75">
-                  <span>
-                    Total outstanding{" "}
-                    <span className={cn("font-semibold tabular-nums", dueTotal > PAYMENT_EPSILON ? (theyPaid ? "text-settle-receivable-text" : "text-settle-payable-text") : "text-foreground")} data-testid="rp-due-total">
-                      {money(dueTotal)}
-                    </span>
-                  </span>
-                  {/* Convenience only: types the outstanding figure into the amount — the same as typing it. */}
-                  {dueTotal > PAYMENT_EPSILON && amount !== dueTotal && (
-                    <button
-                      type="button"
-                      onClick={() => setAmountText(String(dueTotal))}
-                      className="h-6 rounded-full px-2 font-semibold text-foreground ring-1 ring-border-strong outline-none transition-[box-shadow] duration-150 hover:ring-settle-split-edge focus-visible:ring-2 focus-visible:ring-ring"
-                    >
-                      Use {money(dueTotal)}
-                    </button>
-                  )}
-                  {duePrevious > PAYMENT_EPSILON && (
-                    <details className="group basis-full">
-                      <summary className="flex w-fit cursor-pointer list-none items-center gap-1 rounded-[4px] font-semibold text-foreground/75 outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
-                        <ChevronDown className="size-3.5 transition-transform group-open:rotate-180" aria-hidden />
-                        {money(duePrevious)} brought forward
-                      </summary>
-                      <dl className="mt-1.5 grid max-w-xs gap-0.5 rounded-[8px] bg-secondary/50 px-2.5 py-1.5" data-testid="rp-due-breakdown">
-                        <div className="flex items-baseline justify-between gap-3">
-                          <dt className="text-foreground/80">Previous pending</dt>
-                          <dd className="font-semibold text-foreground tabular-nums">{money(duePrevious)}</dd>
-                        </div>
-                        <div className="flex items-baseline justify-between gap-3">
-                          <dt className="text-foreground/80">Added this cycle</dt>
-                          <dd className="font-semibold text-foreground tabular-nums">{money(dueThisCycle)}</dd>
-                        </div>
-                        <div className="mt-0.5 flex items-baseline justify-between gap-3 border-t border-border-strong pt-1">
-                          <dt className="font-semibold text-foreground">Due through this cycle</dt>
-                          <dd className="font-semibold text-foreground tabular-nums">{money(dueTotal)}</dd>
-                        </div>
-                      </dl>
-                    </details>
-                  )}
-                </div>
-              </div>
-              <div className="grid content-start gap-3 sm:grid-cols-2 md:grid-cols-1">
-                <AccountField choice={account} label={theyPaid ? "Receive into account" : "Pay from account"} />
-                <WsField label="Date">
-                  <DateInput className={WS_FIELD} value={date} onChange={(e) => setDate(e.target.value)} />
-                </WsField>
-              </div>
+          {/* Money this person already gave is held as advance — applying it settles without recording new money. */}
+          {theyPaid && !initial && !postponing && onApplyAdvance && advanceHeld > PAYMENT_EPSILON && (
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-[10px] border border-settle-advance-edge/70 bg-settle-advance-tint px-3 py-2 text-xs text-foreground" data-testid="rp-advance-held">
+              <span className="min-w-0 flex-1">
+                <span className="font-semibold">
+                  {first} already gave you {money(advanceHeld)}
+                </span>{" "}
+                — it&apos;s held as an advance. Apply it to what {first} owes first: no new money is recorded and no account changes.
+              </span>
+              <button
+                type="button"
+                onClick={onApplyAdvance}
+                className="h-7 shrink-0 rounded-full border border-settle-advance-edge px-2.5 font-semibold text-settle-advance-text outline-none hover:bg-card focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                Apply advance instead
+              </button>
             </div>
           )}
         </section>
 
         {!postponing && (
           <>
-            {/* ── B. Choose what to pay now — every due item, decided on its own row ── */}
-            <section aria-labelledby="rp-settle-heading">
-              <div className="mb-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+            {/* ── Step 1. Money details: amount, account, funding mode, date, what's outstanding ── */}
+            <section aria-labelledby="rp-money-heading">
+              <StepHeading id="rp-money-heading" n={1} title="Money details" hint={theyPaid ? "How much came in, where it went, and when." : "How much went out, from which account, and when."} />
+              <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,12rem)]">
                 <div className="min-w-0">
-                  <h4 id="rp-settle-heading" className="text-[13px] font-bold text-foreground">
-                    {options.length === 0 ? (theyPaid ? `Nothing to receive from ${first} right now` : `Nothing to give to ${first} right now`) : "Choose what to pay now"}
-                  </h4>
-                  {options.length > 0 && (
-                    <p className="text-xs text-foreground/70">
-                      {automatic ? "Filled oldest first. Skip anything not being paid now." : "Your amounts — the received amount no longer re-fills them."}
-                    </p>
-                  )}
-                </div>
-                {options.length > 0 && (
-                  <div className="flex flex-wrap items-center gap-1">
-                    {!automatic && (
-                      <button type="button" onClick={() => { setManual(null); setSettleText(null); }} className={LIST_ACTION}>
-                        <RotateCcw className="size-3.5" aria-hidden />
-                        Oldest first
+                  <HeroAmount label={theyPaid ? "Amount received" : "Amount paid"} value={amountText} onChange={setAmountText} />
+                  <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-foreground/75">
+                    <span>
+                      Total outstanding{" "}
+                      <span className={cn("font-semibold tabular-nums", dueTotal > PAYMENT_EPSILON ? (theyPaid ? "text-settle-receivable-text" : "text-settle-payable-text") : "text-foreground")} data-testid="rp-due-total">
+                        {money(dueTotal)}
+                      </span>
+                    </span>
+                    {/* Convenience only: types the outstanding figure into the amount — the same as typing it. */}
+                    {dueTotal > PAYMENT_EPSILON && amount !== dueTotal && (
+                      <button
+                        type="button"
+                        onClick={() => setAmountText(String(dueTotal))}
+                        className="h-6 rounded-full px-2 font-semibold text-foreground ring-1 ring-border-strong outline-none transition-[box-shadow] duration-150 hover:ring-settle-split-edge focus-visible:ring-2 focus-visible:ring-ring"
+                      >
+                        Use {money(dueTotal)}
                       </button>
                     )}
-                    <button type="button" aria-pressed={allDueAuto} onClick={payAllDue} className={LIST_ACTION}>
-                      Pay all due
-                    </button>
-                    <button type="button" aria-pressed={allSkipped} onClick={skipAll} className={LIST_ACTION}>
-                      Skip all
-                    </button>
+                    {/* The typed number, grouped the Indian way — so ₹5,75,47,654 can't be mistaken for ₹57,547. */}
+                    {amount >= 100_000 && (
+                      <span className="ml-auto text-foreground/70">
+                        <span aria-hidden>= </span>
+                        <span className="font-semibold text-foreground tabular-nums" data-testid="rp-amount-readout">
+                          {money(amount)}
+                        </span>
+                      </span>
+                    )}
+                    {amountLooksHigh && (
+                      <p role="status" className="flex basis-full items-start gap-1.5 rounded-[8px] bg-warning/10 px-2.5 py-1.5 font-medium text-foreground" data-testid="rp-amount-high">
+                        <CircleAlert className="mt-px size-3.5 shrink-0 text-warning" aria-hidden />
+                        <span>
+                          That&apos;s much more than the {money(dueTotal)} {theyPaid ? `${first} owes` : `you owe ${first}`} — check the amount. Anything not applied to bills goes to Remaining money.
+                        </span>
+                      </p>
+                    )}
+                    {duePrevious > PAYMENT_EPSILON && (
+                      <details className="group basis-full">
+                        <summary className="flex w-fit cursor-pointer list-none items-center gap-1 rounded-[4px] font-semibold text-foreground/75 outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+                          <ChevronDown className="size-3.5 transition-transform group-open:rotate-180" aria-hidden />
+                          {money(duePrevious)} brought forward
+                        </summary>
+                        <dl className="mt-1.5 grid max-w-xs gap-0.5 rounded-[8px] bg-secondary/50 px-2.5 py-1.5" data-testid="rp-due-breakdown">
+                          <div className="flex items-baseline justify-between gap-3">
+                            <dt className="text-foreground/80">Previous pending</dt>
+                            <dd className="font-semibold text-foreground tabular-nums">{money(duePrevious)}</dd>
+                          </div>
+                          <div className="flex items-baseline justify-between gap-3">
+                            <dt className="text-foreground/80">Added this cycle</dt>
+                            <dd className="font-semibold text-foreground tabular-nums">{money(dueThisCycle)}</dd>
+                          </div>
+                          <div className="mt-0.5 flex items-baseline justify-between gap-3 border-t border-border-strong pt-1">
+                            <dt className="font-semibold text-foreground">Due through this cycle</dt>
+                            <dd className="font-semibold text-foreground tabular-nums">{money(dueTotal)}</dd>
+                          </div>
+                        </dl>
+                      </details>
+                    )}
                   </div>
+                </div>
+                <div className="flex min-w-0 flex-col gap-1.5">
+                  <WsField label={earlier ? "Date received" : "Date"}>
+                    <DateInput
+                      className={WS_FIELD}
+                      value={earlier && dateUnknown ? "" : date}
+                      max={earlier ? todayInput : undefined}
+                      disabled={earlier && dateUnknown}
+                      aria-label={earlier ? "Date received" : undefined}
+                      onChange={(e) => setDate(e.target.value)}
+                    />
+                  </WsField>
+                  {earlier && (
+                    <label className="flex items-center gap-2 text-xs text-foreground">
+                      <input type="checkbox" className="size-3.5 shrink-0 accent-[var(--color-primary)]" checked={dateUnknown} onChange={(e) => setDateUnknown(e.target.checked)} />
+                      I don&apos;t know the exact date
+                    </label>
+                  )}
+                </div>
+              </div>
+              {/* Where the money went — the account and, beside it, the funding mode (through FlowFi, or already in the balance). */}
+              <div className="mt-3 grid items-end gap-3 sm:grid-cols-2">
+                <AccountField
+                  choice={account}
+                  label={earlier ? "Received into · for your records" : theyPaid ? "Receive into account" : "Pay from account"} outflow={theyPaid ? undefined : amount > 0 ? amount : null}
+                  refund={initial && !theyPaid ? { accountId: initial.accountId, amount: initial.amount } : undefined}
+                />
+                {theyPaid && !initial && (
+                  <label
+                    className={cn(
+                      "flex cursor-pointer items-start gap-2.5 rounded-[10px] border px-3 py-2 transition-[background-color,border-color] duration-150 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring",
+                      inBalance ? "border-settle-split-edge bg-settle-split-tint/40" : "border-border-strong hover:bg-secondary/50",
+                    )}
+                    data-testid="rp-in-balance"
+                  >
+                    <input type="checkbox" className="mt-0.5 size-4 shrink-0 accent-[var(--color-primary)]" checked={inBalance} onChange={(e) => setInBalance(e.target.checked)} />
+                    <span className="min-w-0 text-xs text-foreground">
+                      <span className="block text-[13px] font-semibold">Already in my account balance</span>
+                      <span className="block text-[11.5px] text-foreground/75">Received before FlowFi — only lowers what {first} owes.</span>
+                    </span>
+                  </label>
                 )}
               </div>
+            </section>
+
+            {/* ── Step 2. Apply to bills — every due item, decided on its own row ── */}
+            <section aria-labelledby="rp-settle-heading">
+              <StepHeading
+                id="rp-settle-heading"
+                n={2}
+                title="Apply to bills"
+                hint={
+                  options.length === 0
+                    ? theyPaid
+                      ? `Nothing to receive from ${first} right now`
+                      : `Nothing to give to ${first} right now`
+                    : automatic
+                      ? "Choose what to pay now — filled oldest first. Skip anything not being paid now."
+                      : "Choose what to pay now — your amounts; the received amount no longer re-fills them."
+                }
+                right={
+                  options.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-1">
+                      <span
+                        aria-live="polite"
+                        data-testid="rp-alloc-mode"
+                        className={cn(
+                          "inline-flex h-7 items-center rounded-full px-2.5 text-[11px] font-bold",
+                          automatic ? "bg-secondary text-foreground/75" : "bg-settle-split-tint/70 text-settle-split-text ring-1 ring-settle-split-edge/60",
+                        )}
+                      >
+                        {automatic ? "Auto · oldest first" : "Manual amounts"}
+                      </span>
+                      {!automatic && (
+                        <button type="button" onClick={() => { setManual(null); setSettleText(null); }} className={LIST_ACTION}>
+                          <RotateCcw className="size-3.5" aria-hidden />
+                          Oldest first
+                        </button>
+                      )}
+                      <button type="button" aria-pressed={allDueAuto} onClick={payAllDue} className={LIST_ACTION}>
+                        Pay all due
+                      </button>
+                      <button type="button" aria-pressed={allSkipped} onClick={skipAll} className={LIST_ACTION}>
+                        Skip all
+                      </button>
+                    </div>
+                  )
+                }
+              />
 
               {options.length === 0 ? (
                 <p className="rounded-[10px] bg-secondary/50 px-3 py-2 text-xs text-foreground/75">The whole amount is money left to use — choose what it is for below.</p>
@@ -713,11 +847,6 @@ export function RecordPaymentPanel({
                         onPart={() => payPart(o)}
                         onSkip={() => skip(o)}
                         onType={(v) => typeAmount(o, v)}
-                        postpone={
-                          postponeRowOf(o) && afterOf(o) > PAYMENT_EPSILON
-                            ? { on: postponeAfter.has(o.key), toggle: () => togglePostpone(o.key), cycle: liveAfterItems.length > 0 ? cycleName(afterDraft.target) : null }
-                            : null
-                        }
                       />
                     ))}
                     {laterCount > 0 && (
@@ -732,8 +861,10 @@ export function RecordPaymentPanel({
                       </li>
                     )}
                   </ul>
-                  {/* The list's total — typing it pays that much in total, oldest first, across the chosen items. */}
-                  <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 border-t border-border-strong bg-secondary/50 px-3 py-2">
+                  {/* The list's total — typing it pays that much in total, oldest first, across the chosen items — and the live result. */}
+                  <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t border-border-strong bg-secondary/50 px-3 py-2">
+                    {/* With a single bill the total is that row's amount — shown once, on the row. */}
+                    {(visible.length > 1 || settleText != null) && (
                     <label className="flex items-center gap-2 text-xs font-semibold text-foreground">
                       Paying now
                       <span className="relative">
@@ -756,11 +887,37 @@ export function RecordPaymentPanel({
                         />
                       </span>
                     </label>
-                    <span className="text-xs text-foreground/70 tabular-nums">of {money(allocation.selectedTotal)} chosen</span>
+                    )}
+                    <div className="flex min-w-0 flex-wrap items-baseline justify-end gap-x-3 gap-y-1">
+                      <p className="text-xs text-foreground/80 tabular-nums" data-testid="rp-bills-summary">
+                        <span className="font-semibold text-foreground">{money(allocation.allocated)}</span> of {money(owedBefore)} applied to bills ·{" "}
+                        <span className={cn("font-semibold", stillOwed > PAYMENT_EPSILON ? "text-warning" : "text-success")}>{money(stillOwed)}</span> still owed
+                      </p>
+                      {followUpOffered && !followUpOpen && stillOwed > PAYMENT_EPSILON && (
+                        <button
+                          type="button"
+                          onClick={() => setAfterOpen(true)}
+                          className="text-xs font-semibold text-primary-accent-text underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+                        >
+                          Remind or postpone the rest ›
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
               )}
 
+              {leftoverWhileOwed && (
+                <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-[8px] bg-warning/10 px-2.5 py-1.5 text-xs text-foreground" data-testid="rp-leftover-while-owed">
+                  <CircleAlert className="size-3.5 shrink-0 text-warning" aria-hidden />
+                  <span className="min-w-0 flex-1">
+                    <span className="font-semibold tabular-nums">{money(stillOwed)}</span> stays unpaid while <span className="font-semibold tabular-nums">{money(allocation.extra)}</span> goes to Remaining money.
+                  </span>
+                  <button type="button" onClick={payAllDue} className={cn(LIST_ACTION, "bg-card")}>
+                    Apply to bills first
+                  </button>
+                </div>
+              )}
               {capped?.error && <Notice tone="warning" role="alert">{capped.error}</Notice>}
               {vanished.length > 0 && (
                 <Notice tone="warning" role="alert">
@@ -785,7 +942,7 @@ export function RecordPaymentPanel({
                       If {first} hasn&apos;t paid,{" "}
                       <button
                         type="button"
-                        onClick={() => setIntent("postpone")}
+                        onClick={() => selectIntent("postpone")}
                         className="font-semibold text-primary-accent-text underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       >
                         postpone instead
@@ -796,32 +953,6 @@ export function RecordPaymentPanel({
                     <>Only use this when money was actually received.</>
                   )}
                 </p>
-              )}
-
-              {/* Postponing the unpaid rest — chosen per row above; its options appear only once one is chosen. */}
-              {liveAfterItems.length > 0 && (
-                <div className="mt-3 rounded-[10px] border border-border-strong px-3 py-3 duration-200 animate-in fade-in" data-testid="rp-postpone-after">
-                  <p className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-foreground">
-                    <CalendarClock className="size-3.5 text-foreground/70" aria-hidden />
-                    Postpone after recording · {liveAfterItems.length} {liveAfterItems.length === 1 ? "item" : "items"}
-                  </p>
-                  <PostponeFields draft={afterDraft} />
-                </div>
-              )}
-
-              {/* Optional follow-up on what is still owed — a reminder only, it moves no money */}
-              {onSetReminder && reminderTargets.length > 0 && amount > PAYMENT_EPSILON && (
-                <div className="mt-3 flex flex-wrap items-center gap-x-2.5 gap-y-1.5">
-                  <span className="flex items-center gap-1.5 text-xs font-semibold text-foreground" title="Personal only — doesn't change what is owed or appear on shared statements.">
-                    <Bell className="size-3.5 text-foreground/70" aria-hidden />
-                    Remind me about the {money(round2(reminderTargets.reduce((t, r) => t + afterOf(options.find((o) => o.key === r.key)!), 0)))} still owed
-                  </span>
-                  <ReminderPicker value={reminder} onChange={setReminder} cycleStartDay={cycleStartDay} />
-                  <p className="basis-full text-[11.5px] text-foreground/70" data-testid="rp-reminder-note">
-                    {reminder ? `You'll be reminded on ${formatStatementDate(reminder.remindOn)}, after this payment is recorded. ` : ""}
-                    A reminder only — it doesn&apos;t postpone what is owed.
-                  </p>
-                </div>
               )}
 
               {elsewhere.length > 0 && (
@@ -854,32 +985,133 @@ export function RecordPaymentPanel({
               )}
             </section>
 
-            {/* ── C. What to do with the money left — only when some of the payment isn't applied to bills ── */}
-            {hasExtra && (
-              <section aria-labelledby="rp-remaining-heading" className="duration-200 animate-in fade-in">
-                <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
-                  <h4 id="rp-remaining-heading" className="text-[13px] font-bold text-foreground">
-                    What to do with the money left
-                  </h4>
-                  <p className="text-xs text-foreground/70">
-                    <span className="font-heading text-[15px] font-bold text-settle-advance-text tabular-nums" data-testid="rp-left-over">
-                      {money(allocation.extra)}
-                    </span>{" "}
-                    left to use
+            {/* ── Step 3. Remaining money — always here: the editor when some is left, a calm state when not ── */}
+            <section aria-labelledby="rp-remaining-heading">
+              <StepHeading
+                id="rp-remaining-heading"
+                n={3}
+                title="Remaining money"
+                hint={hasExtra && !earlier ? "Not applied to bills — choose what it is for." : undefined}
+                right={
+                  hasExtra && !earlier ? (
+                    <p className="text-xs text-foreground/70">
+                      <span className="font-heading text-[15px] font-bold text-settle-advance-text tabular-nums" data-testid="rp-left-over">
+                        {money(allocation.extra)}
+                      </span>{" "}
+                      left to use
+                    </p>
+                  ) : undefined
+                }
+              />
+              {earlier ? (
+                <p className="rounded-[10px] bg-secondary/50 px-3 py-2.5 text-xs text-foreground/80" data-testid="rp-remaining-none">
+                  <span className="font-semibold text-foreground">Nothing to assign.</span> Money already in your balance only settles what {first} owes — it can&apos;t become advance, income or a purpose.
+                </p>
+              ) : hasExtra ? (
+                <div className="duration-200 animate-in fade-in">
+                  <ExtraAllocationEditor
+                    extra={allocation.extra}
+                    direction={direction}
+                    firstName={first}
+                    drafts={effectiveDrafts}
+                    onChange={setExtraDrafts}
+                    linkOptions={linkOptions}
+                    incomeCategories={incomeCategories}
+                  />
+                  <p className="mt-1.5 text-[11.5px] text-foreground/70">
+                    {accountName} {theyPaid ? "receives" : "pays"} {money(amount)} once — this only decides what the money is for.
                   </p>
                 </div>
-                <ExtraAllocationEditor
-                  extra={allocation.extra}
-                  direction={direction}
-                  firstName={first}
-                  drafts={effectiveDrafts}
-                  onChange={setExtraDrafts}
-                  linkOptions={linkOptions}
-                  incomeCategories={incomeCategories}
-                />
-                <p className="mt-1.5 text-[11.5px] text-foreground/65">
-                  {accountName} {theyPaid ? "receives" : "pays"} {money(amount)} once — this only decides what the money is for.
+              ) : (
+                <p className="flex items-center gap-2 rounded-[10px] bg-secondary/50 px-3 py-2.5 text-xs text-foreground/80" data-testid="rp-remaining-none">
+                  <Check className="size-3.5 shrink-0 text-success" strokeWidth={3} aria-hidden />
+                  <span>
+                    <span className="font-semibold text-foreground">Nothing left to assign.</span>{" "}
+                    {amount > PAYMENT_EPSILON ? `All ${money(amount)} goes to bills.` : "Enter an amount to see what is left."}
+                  </span>
                 </p>
+              )}
+            </section>
+
+            {/* ── After recording (optional): postpone what stays unpaid, set a reminder. One collapsed section. ── */}
+            {followUpOffered && (
+              <section aria-label="After recording (optional)" className="rounded-[10px] border border-border-strong">
+                <button
+                  type="button"
+                  aria-expanded={followUpOpen}
+                  aria-controls="rp-after-body"
+                  onClick={() => {
+                    if (liveAfterItems.length === 0) setAfterOpen((v) => !v);
+                  }}
+                  className="flex w-full items-center gap-2 rounded-[10px] px-3 py-2.5 text-left outline-none hover:bg-secondary/40 focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <CalendarClock className="size-4 shrink-0 text-foreground/70" aria-hidden />
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[13px] font-bold text-foreground">After recording (optional)</span>
+                    <span className="block text-xs text-foreground/70">Postpone what stays unpaid, or set a reminder — moves no money.</span>
+                  </span>
+                  {reminder && reminderOffered && <span className="shrink-0 rounded-full bg-secondary px-2 py-0.5 text-[11px] font-bold text-foreground/80">Reminder set</span>}
+                  {liveAfterItems.length > 0 && (
+                    <span className="shrink-0 rounded-full bg-secondary px-2 py-0.5 text-[11px] font-bold text-foreground/80">
+                      {liveAfterItems.length} to postpone
+                    </span>
+                  )}
+                  <ChevronDown className={cn("size-4 shrink-0 text-foreground/70 transition-transform duration-200", followUpOpen && "rotate-180")} aria-hidden />
+                </button>
+                {followUpOpen && (
+                  <div id="rp-after-body" className="space-y-3 border-t border-border px-3 py-3 duration-200 animate-in fade-in">
+                    {postponeRows.length > 0 && (
+                      <fieldset>
+                        <legend className="text-xs font-bold text-foreground">Postpone what stays unpaid</legend>
+                        <p className="mb-1.5 text-[11.5px] text-foreground/70">Moves the unpaid rest to a later cycle once this payment is recorded.</p>
+                        <ul className="space-y-1">
+                          {postponeRows.map((o) => (
+                            <li key={o.key}>
+                              <label className="flex min-w-0 cursor-pointer items-center gap-2 text-[13px] text-foreground">
+                                <input
+                                  type="checkbox"
+                                  checked={postponeAfter.has(o.key)}
+                                  onChange={() => togglePostpone(o.key)}
+                                  aria-label={`Postpone the rest of ${o.title}`}
+                                  className="size-4 shrink-0 accent-[var(--color-primary)]"
+                                />
+                                <span className="min-w-0 truncate font-medium">{o.title}</span>
+                                <span className="ml-auto shrink-0 text-xs font-semibold tabular-nums text-foreground/80">
+                                  {money(afterOf(o))}
+                                  {postponeAfter.has(o.key) && liveAfterItems.length > 0 ? ` → ${cycleName(afterDraft.target)} cycle` : ""}
+                                </span>
+                              </label>
+                            </li>
+                          ))}
+                        </ul>
+                      </fieldset>
+                    )}
+                    {/* Postponing the unpaid rest — chosen above; its options appear only once one is chosen. */}
+                    {liveAfterItems.length > 0 && (
+                      <div className="rounded-[10px] border border-border-strong px-3 py-3 duration-200 animate-in fade-in" data-testid="rp-postpone-after">
+                        <p className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-foreground">
+                          <CalendarClock className="size-3.5 text-foreground/70" aria-hidden />
+                          Postpone after recording · {liveAfterItems.length} {liveAfterItems.length === 1 ? "item" : "items"}
+                        </p>
+                        <PostponeFields draft={afterDraft} />
+                      </div>
+                    )}
+                    {/* Optional follow-up on what is still owed — a reminder only, it moves no money */}
+                    {reminderOffered && (
+                      <div className={cn("flex flex-wrap items-center gap-x-2.5 gap-y-1.5", postponeRows.length > 0 && "border-t border-border pt-3")}>
+                        <span className="flex items-center gap-1.5 text-xs font-semibold text-foreground" title="Personal only — doesn't change what is owed or appear on shared statements.">
+                          <Bell className="size-3.5 text-foreground/70" aria-hidden />
+                          Remind me about the {money(round2(reminderTargets.reduce((t, r) => t + afterOf(options.find((o) => o.key === r.key)!), 0)))} still owed
+                        </span>
+                        <ReminderPicker value={reminder} onChange={setReminder} cycleStartDay={cycleStartDay} />
+                        <p className="basis-full text-[11.5px] text-foreground/70" data-testid="rp-reminder-note">
+                          {reminder ? `You'll be reminded on ${formatStatementDate(reminder.remindOn)}, after this payment is recorded. ` : ""}
+                          A reminder only — it doesn&apos;t postpone what is owed.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )}
               </section>
             )}
 
@@ -889,7 +1121,7 @@ export function RecordPaymentPanel({
                 {!initial && (
                   <button
                     type="button"
-                    onClick={() => switchDirection(theyPaid ? "iPaid" : "theyPaid")}
+                    onClick={() => selectIntent(theyPaid ? "iPaid" : "theyPaid")}
                     className="font-semibold text-primary-accent-text underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
                   >
                     {theyPaid ? "View amount to give →" : "View amount to receive →"}
@@ -959,34 +1191,43 @@ export function RecordPaymentPanel({
         ) : (
           <>
             {/* The receipt, every rupee in one bucket — received = applied + income + set aside + advance + unassigned. */}
-            <dl className="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-xs" aria-label="Where the money goes">
-              <Figure label={theyPaid ? "Received" : "Paid"} value={money(recon.received)} testId="rp-hero-amount" strong />
-              <Figure label="Applied to bills" value={money(recon.allocated)} testId="rp-applied" dot="bg-settle-split-edge" />
-              {recon.income > PAYMENT_EPSILON && <Figure label="Income" value={money(recon.income)} testId="rp-income" dot="bg-success" />}
-              {recon.purpose > PAYMENT_EPSILON && <Figure label="Set aside" value={money(recon.purpose)} testId="rp-set-aside" dot="bg-settle-emi-edge" />}
-              {recon.advance > PAYMENT_EPSILON && <Figure label="Advance" value={money(recon.advance)} testId="rp-advance" dot="bg-settle-advance-edge" />}
-              <Figure
-                label="Not yet assigned"
-                value={money(recon.unallocated)}
-                testId="rp-unassigned"
-                tone={recon.balanced ? "text-success" : recon.unallocated < 0 ? "text-expense" : "text-warning"}
-              />
-            </dl>
-            {/* A different balance — what the person owes after this payment. Never added to the receipt above. */}
-            {options.length > 0 && (
-              <p className="mt-1.5 flex flex-wrap items-baseline gap-x-2 border-t border-border pt-1.5 text-xs text-foreground/75" title="Not part of this payment — what is still owed after it.">
-                <span className="font-semibold text-foreground">{theyPaid ? `Still owed by ${first}` : `Still owed to ${first}`}</span>
-                <span className={cn("font-heading text-[14px] font-bold tabular-nums", stillOwed > PAYMENT_EPSILON ? "text-warning" : "text-success")} data-testid="rp-still-owed">
-                  {money(stillOwed)}
-                </span>
-                {postponeTotal > PAYMENT_EPSILON && (
-                  <span data-testid="rp-postpone-total">
-                    · {money(postponeTotal)} to be moved to the {cycleName(afterDraft.target)} cycle
+            <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
+              <dl className="flex flex-wrap items-baseline gap-x-3.5 gap-y-1 text-xs" aria-label="Where the money goes">
+                <Figure label={theyPaid ? "Received" : "Paid"} value={money(recon.received)} testId="rp-hero-amount" strong />
+                <Figure label="Applied to bills" value={money(recon.allocated)} testId="rp-applied" dot="bg-settle-split-edge" />
+                {recon.income > PAYMENT_EPSILON && <Figure label="Income" value={money(recon.income)} testId="rp-income" dot="bg-success" />}
+                {recon.purpose > PAYMENT_EPSILON && <Figure label="Set aside" value={money(recon.purpose)} testId="rp-set-aside" dot="bg-settle-emi-edge" />}
+                {recon.advance > PAYMENT_EPSILON && <Figure label="Advance" value={money(recon.advance)} testId="rp-advance" dot="bg-settle-advance-edge" />}
+                {/* Only worth a glance when something is off; when balanced it stays for screen readers only. */}
+                <Figure
+                  label="Not yet assigned"
+                  value={money(recon.unallocated)}
+                  testId="rp-unassigned"
+                  tone={recon.balanced ? "text-foreground/60" : recon.unallocated < 0 ? "text-expense" : "text-warning"}
+                  className={recon.balanced && Math.abs(recon.unallocated) <= PAYMENT_EPSILON ? "sr-only" : undefined}
+                />
+              </dl>
+              {/* A different balance — what the person owes after this payment. Never added to the receipt beside it. */}
+              {options.length > 0 && (
+                <p className="flex flex-wrap items-baseline gap-x-2 text-xs text-foreground/75" title="Not part of this payment — what is still owed after it.">
+                  <span className="font-semibold text-foreground">{theyPaid ? `Still owed by ${first}` : `Still owed to ${first}`}</span>
+                  <span className={cn("font-heading text-[14px] font-bold tabular-nums", stillOwed > PAYMENT_EPSILON ? "text-warning" : "text-success")} data-testid="rp-still-owed">
+                    {money(stillOwed)}
                   </span>
-                )}
+                  {postponeTotal > PAYMENT_EPSILON && (
+                    <span data-testid="rp-postpone-total">
+                      · {money(postponeTotal)} to be moved to the {cycleName(afterDraft.target)} cycle
+                    </span>
+                  )}
+                </p>
+              )}
+            </div>
+
+            {earlier && (
+              <p className="mt-1.5 text-xs font-medium text-foreground/80" data-testid="rp-in-balance-effect">
+                Already in your balance — no account changes. Only what {first} owes goes down.
               </p>
             )}
-
             {(error || (blocker && amount > 0)) && (
               <p
                 className={cn("mt-2 flex items-center gap-1.5 text-xs font-semibold duration-200 animate-in fade-in slide-in-from-bottom-1", error ? "text-expense" : "text-warning")}
@@ -1012,7 +1253,7 @@ export function RecordPaymentPanel({
                     ? "Saving…"
                     : initial
                       ? "Save changes"
-                      : `Record ${money(amount)} ${theyPaid ? "received" : "paid"}${postponeTotal > PAYMENT_EPSILON ? ` · postpone ${money(postponeTotal)}` : ""}`}
+                      : `Record ${money(amount)} ${earlier ? "received earlier" : theyPaid ? "received" : "paid"}${postponeTotal > PAYMENT_EPSILON ? ` · postpone ${money(postponeTotal)}` : ""}`}
                 </span>
               </button>
             </div>
@@ -1028,7 +1269,7 @@ const LIST_ACTION =
 
 /**
  * One item to pay: what it is and what's due; Full / Part / Skip; the amount paying now (typed directly);
- * and what stays after — with "Postpone" for an unpaid rest, when the item can be postponed.
+ * and what stays after. (Postponing the unpaid rest is chosen in "After recording (optional)".)
  */
 function ObligationRow({
   o,
@@ -1042,7 +1283,6 @@ function ObligationRow({
   onPart,
   onSkip,
   onType,
-  postpone,
 }: {
   o: PayableObligation;
   first: string;
@@ -1055,7 +1295,6 @@ function ObligationRow({
   onPart: () => void;
   onSkip: () => void;
   onType: (v: string) => void;
-  postpone: { on: boolean; toggle: () => void; cycle: string | null } | null;
 }) {
   const active = choice === "full" || choice === "part";
   const choices: { k: PayChoice; text: string; label: string; act: () => void }[] = [
@@ -1067,8 +1306,8 @@ function ObligationRow({
     <li
       data-choice={choice ?? "none"}
       className={cn(
-        "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 px-3 py-2.5 transition-colors sm:grid-cols-[minmax(0,1fr)_auto_7.5rem_7rem]",
-        active ? "shadow-[inset_3px_0_0_var(--color-settle-split-edge)]" : "",
+        "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2.5 px-3 py-3 transition-colors sm:grid-cols-[minmax(0,1fr)_auto_7.5rem_8.5rem]",
+        active ? "bg-settle-split-tint/20 shadow-[inset_3px_0_0_var(--color-settle-split-edge)]" : "",
       )}
     >
       <div className="col-span-2 min-w-0 sm:col-span-1">
@@ -1142,14 +1381,26 @@ function ObligationRow({
             {choice === "skip" ? `${money(after)} unpaid` : choice === "part" ? `${money(after)} left` : `${money(after)} not covered`}
           </span>
         )}
-        {postpone && (
-          <label className="mt-0.5 inline-flex cursor-pointer items-center gap-1 text-[11px] font-semibold text-foreground/75 hover:text-foreground">
-            <input type="checkbox" checked={postpone.on} onChange={postpone.toggle} aria-label={`Postpone the rest of ${o.title}`} className="size-3.5 accent-[var(--color-primary)]" />
-            {postpone.on && postpone.cycle ? `To ${postpone.cycle} cycle` : "Postpone"}
-          </label>
-        )}
       </div>
     </li>
+  );
+}
+
+/** A step's heading: a "Step n" chip (decorative — the heading's name is just the title), the title, and a quiet hint. */
+function StepHeading({ id, n, title, hint, right }: { id: string; n: number; title: string; hint?: string; right?: React.ReactNode }) {
+  return (
+    <div className="mb-2.5 flex flex-wrap items-start justify-between gap-x-3 gap-y-1.5">
+      <div className="min-w-0">
+        <h4 id={id} className="flex items-center gap-2 text-[14px] font-bold text-foreground">
+          <span aria-hidden className="inline-flex h-5 shrink-0 items-center rounded-full bg-secondary px-2 text-[10.5px] font-bold tracking-wide text-foreground/75 uppercase ring-1 ring-border-strong ring-inset">
+            Step {n}
+          </span>
+          {title}
+        </h4>
+        {hint && <p className="mt-0.5 text-xs text-foreground/70">{hint}</p>}
+      </div>
+      {right}
+    </div>
   );
 }
 
@@ -1163,9 +1414,9 @@ function Notice({ tone, role, children }: { tone: "warning"; role?: "alert"; chi
 }
 
 /** One bucket of the receipt in the pinned summary — label, then amount. */
-function Figure({ label, value, testId, tone, dot, strong }: { label: string; value: string; testId: string; tone?: string; dot?: string; strong?: boolean }) {
+function Figure({ label, value, testId, tone, dot, strong, className }: { label: string; value: string; testId: string; tone?: string; dot?: string; strong?: boolean; className?: string }) {
   return (
-    <div className="flex items-baseline gap-1.5">
+    <div className={cn("flex items-baseline gap-1.5", className)}>
       <dt className="flex items-center gap-1.5 text-foreground/70">
         {dot && <span aria-hidden className={cn("size-2 shrink-0 rounded-full", dot)} />}
         {label}

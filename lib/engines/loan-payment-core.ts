@@ -11,9 +11,10 @@
  */
 
 import { planInstallmentSettlement } from "@/lib/engines/installment-settlement";
+import { RECORDED_EARLIER_DESCRIPTION_SUFFIX, RecordedEarlierError } from "@/lib/engines/recorded-earlier";
 import { recordEdit } from "@/lib/firestore/soft-deletable";
 import type { Loan } from "@/lib/models/loan";
-import { remainingAmount, type Installment, type InstallmentPayment, type PaymentAllocationType } from "@/lib/models/payment-schedule";
+import { remainingAmount, type Installment, type InstallmentPayment, type PaymentAllocationType, type RecordedEarlier } from "@/lib/models/payment-schedule";
 import type { Transaction } from "@/lib/models/transaction";
 
 export interface LoanPaymentCoreInput {
@@ -28,6 +29,19 @@ export interface LoanPaymentCoreInput {
   idempotencyKey: string;
   note?: string;
   includeUpcomingInstallments?: boolean;
+  /**
+   * "Already paid earlier": the payment happened before it was tracked here. Every document is stamped with
+   * it, and the backing Transaction is posted with `excludeFromCalculations: true` — kept (it is the action's
+   * idempotency sentinel and reversal anchor, and with it Cash Flow never counts the payment from the
+   * schedule as a legacy movement) but with a zero `balanceEffect` and outside every income/expense total.
+   */
+  recordedEarlier?: RecordedEarlier | null;
+  /**
+   * Bulk "already paid earlier": the payment covers exactly this installment and nothing else — not the
+   * oldest unpaid one, never the next one. Already paid is refused here; an amount above what it still owes
+   * becomes overflow, which the recorded-earlier guard refuses.
+   */
+  onlyInstallmentId?: string | null;
   now?: Date;
 }
 
@@ -51,6 +65,7 @@ export function loanTransactionId(idempotencyKey: string): string {
 
 export function planLoanPaymentCore(input: LoanPaymentCoreInput): LoanPaymentCore {
   const { loan, fresh, amount, date, idempotencyKey, accountId, note = "", includeUpcomingInstallments = false } = input;
+  const recordedEarlier = input.recordedEarlier ? { dateKnown: input.recordedEarlier.dateKnown } : null;
   const now = input.now ?? new Date();
   const transactionId = loanTransactionId(idempotencyKey);
   const overflowPaymentId = `adv_${idempotencyKey}_principal`;
@@ -58,9 +73,14 @@ export function planLoanPaymentCore(input: LoanPaymentCoreInput): LoanPaymentCor
   const eligible = fresh.filter((i) => remainingAmount(i) > 0 && !i.isSkipped);
   if (eligible.length === 0) throw new Error("This loan is already fully paid");
   const dueNow = eligible.filter((i) => !(i.dueDate.getTime() > date.getTime()));
-  const scope = includeUpcomingInstallments ? eligible : dueNow.length > 0 ? dueNow : [eligible[0]];
+  const only = input.onlyInstallmentId != null ? eligible.filter((i) => i.id === input.onlyInstallmentId) : null;
+  if (only && only.length === 0) throw new RecordedEarlierError("This installment is already paid — nothing was recorded. Close this and check the schedule.");
+  const scope = only ?? (includeUpcomingInstallments ? eligible : dueNow.length > 0 ? dueNow : [eligible[0]]);
   const plan = planInstallmentSettlement(scope, amount);
   const overflow = plan.unallocated;
+  // A single-installment write never spills into extra principal: another tab may have paid part of it meanwhile,
+  // and a bulk payment must not turn that into a silent prepayment (recorded-earlier has its own guard).
+  if (only && !recordedEarlier && overflow > 0) throw new Error("This installment was paid in part elsewhere — nothing was recorded. Reopen the schedule and try again.");
   if (loan.repaymentType === "oneTime" && overflow > 0) {
     throw new Error("Amount is more than what's still owed on this loan");
   }
@@ -95,6 +115,7 @@ export function planLoanPaymentCore(input: LoanPaymentCoreInput): LoanPaymentCor
       prepaymentPolicyApplied: null,
       reamortizationEventId: null,
       transactionId,
+      ...(recordedEarlier ? { recordedEarlier } : {}),
       deletedAt: null,
       lastEditedAt: null,
       editHistory: [],
@@ -123,6 +144,7 @@ export function planLoanPaymentCore(input: LoanPaymentCoreInput): LoanPaymentCor
       prepaymentPolicyApplied: null,
       reamortizationEventId: null,
       transactionId,
+      ...(recordedEarlier ? { recordedEarlier } : {}),
       deletedAt: null,
       lastEditedAt: null,
       editHistory: [],
@@ -138,11 +160,11 @@ export function planLoanPaymentCore(input: LoanPaymentCoreInput): LoanPaymentCor
     // TODO(Phase 1): point at the real seeded "Loan Payment"/"EMI Payment" system category once that
     // seeding mechanism exists.
     categoryId: "loan_payment",
-    description: loan.name ? `Loan payment — ${loan.name}` : "Loan payment",
+    description: `${loan.name ? `Loan payment — ${loan.name}` : "Loan payment"}${recordedEarlier ? RECORDED_EARLIER_DESCRIPTION_SUFFIX : ""}`,
     notes: "",
     receiptPurpose: null,
     transferId: null,
-    excludeFromCalculations: false,
+    excludeFromCalculations: recordedEarlier != null,
     accountingMonth: null,
     linkedPersonId: null,
     owesPersonToggle: false,

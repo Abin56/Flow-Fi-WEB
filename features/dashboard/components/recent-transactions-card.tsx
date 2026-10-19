@@ -1,6 +1,7 @@
 import { ArrowDownLeft, ArrowUpRight, Receipt } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { DashEmpty, DashPanel, DashPanelHeader } from "@/features/dashboard/components/dash-ui";
+import { HISTORICAL_PAYMENT_LABEL, HISTORICAL_PAYMENT_SHORT, historicalPaymentExplanation } from "@/features/loans/lib/historical-payment";
 import { formatCurrency } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -11,6 +12,8 @@ export interface RecentTransactionsCardProps {
     category: string;
     date: string;
     amount: number;
+    /** An "Already paid earlier" Loan payment — no account was debited. */
+    historical?: boolean;
   }[];
   isLoading?: boolean;
 }
@@ -43,9 +46,14 @@ export function RecentTransactionsCard({ recentTransactions, isLoading }: Recent
                   <p className="truncate text-xs text-muted-foreground">
                     {txn.category} · {txn.date}
                   </p>
+                  {txn.historical && (
+                    <p className="truncate text-xs font-medium text-muted-foreground" title={historicalPaymentExplanation(incoming)}>
+                      {HISTORICAL_PAYMENT_LABEL} · {HISTORICAL_PAYMENT_SHORT.toLowerCase()}
+                    </p>
+                  )}
                 </div>
-                <p className={cn("shrink-0 text-[16px] font-bold tabular-nums", incoming ? "text-success" : "text-foreground")}>
-                  {incoming ? "+" : "−"}
+                <p className={cn("shrink-0 text-[16px] font-bold tabular-nums", txn.historical ? "text-muted-foreground" : incoming ? "text-success" : "text-foreground")}>
+                  {txn.historical ? "" : incoming ? "+" : "−"}
                   {formatCurrency(Math.abs(txn.amount))}
                 </p>
               </div>

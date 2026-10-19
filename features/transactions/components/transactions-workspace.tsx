@@ -8,6 +8,7 @@ import {
   ArrowRight,
   ArrowUpDown,
   ArrowUpRight,
+  Ban,
   Calendar,
   ChevronDown,
   ChevronLeft,
@@ -15,6 +16,7 @@ import {
   Copy,
   CreditCard,
   Download,
+  FileText,
   Landmark,
   LayoutGrid,
   List,
@@ -37,12 +39,11 @@ import {
   Check,
   CheckCircle2,
 } from "lucide-react";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Fragment, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { readPeopleReturnContext, type PeopleReturnContext } from "@/features/people/lib/people-return-link";
 import { toast } from "@/store/toast-store";
 import { ClayButton } from "@/components/clay/clay-button";
-import { ACCOUNT_FILTER_PARAM, resolveAccountFilter } from "@/features/transactions/lib/account-filter-param";
 import { usePeopleLedgerEntries } from "@/features/people/hooks/use-people-data";
 import { getTransactionPresentation, type RowTreatment, type TransactionPresentation } from "@/features/transactions/lib/transaction-presentation";
 import {
@@ -55,7 +56,7 @@ import { formatCurrency } from "@/lib/format";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useLoans } from "@/hooks/use-loans";
+import { useAllLoanInstallments, useLoans } from "@/hooks/use-loans";
 import { usePeople } from "@/hooks/use-people";
 import { paidFromLabel } from "@/features/transactions/lib/funding-label";
 import { useExpenses } from "@/hooks/use-expenses";
@@ -72,15 +73,22 @@ import {
   useTransactionRows,
   type TransactionRow,
 } from "@/features/transactions/hooks/use-transactions-data";
+import { initialAddAccountId } from "@/features/transactions/lib/initial-account";
 import { TransactionDetailsModal } from "@/features/transactions/components/transaction-details-modal";
 import { useCreditCardStandings } from "@/features/credit-cards/hooks/use-credit-cards-data";
 import { transactionFlagFor } from "@/features/transactions/lib/transaction-flag";
+import { useAccountFilter } from "@/features/transactions/hooks/use-account-filter";
+import { Banner } from "@/components/feedback/banner";
+import { HISTORICAL_PAYMENT_LABEL, HISTORICAL_PAYMENT_SHORT, historicalPaymentExplanation } from "@/features/loans/lib/historical-payment";
+import { HistoricalPaymentFlagsProvider, useHistoricalPaymentFlags, useIsHistoricalPayment } from "@/features/loans/hooks/use-historical-payment-flags";
 import { loanTransactionLabel } from "@/features/loans/lib/loan-labels";
 import { findSameAmountDateDuplicateIds } from "@/features/transactions/lib/same-amount-date-duplicates";
 import { amountMatches, parseAmountQuery } from "@/features/transactions/lib/amount-search";
 import { useDuplicateGuardedCreate } from "@/lib/services/duplicate-detection/use-duplicate-guarded-create";
 import { cn } from "@/lib/utils";
 import { DateInput } from "@/components/forms/date-input";
+import { StatementFootnote, StatementHeader, StatementNeedsAccount, StatementTable } from "@/features/transactions/components/transactions-statement-view";
+import { buildTransactionStatementView } from "@/features/transactions/lib/transaction-statement";
 
 /**
  * Corner-ribbon tag for a Loan/EMI-generated transaction card — "EMI" only for a payment tied to
@@ -217,35 +225,35 @@ export function TransactionsWorkspace() {
     isAssignedToPerson(t) ? (personNameById.get(t.linkedPersonId!) ?? "a person") : null;
   // Loan-generated rows read as "Loan EMI — Home Loan" / "Extra Principal Payment — …" from their
   // persisted loan metadata instead of the raw stored description; every other row is unchanged.
+  // Display only: an unnamed loan reads by its lender (as on the Loans page), and an installment payment
+  // names the installment it paid ("· #4") — nothing stored is changed.
   const { data: loans = [] } = useLoans();
-  const loanById = useMemo(() => new Map(loans.map((l) => [l.id, l])), [loans]);
+  // Which Loan payments are "already paid earlier" — from the payment's structured flag (see historical-payment.ts).
+  const listedTransactions = useMemo(() => rows.map((r) => r.transaction), [rows]);
+  const isHistoricalPayment = useHistoricalPaymentFlags(listedTransactions, loans);
+  const { data: loanInstallments = [] } = useAllLoanInstallments();
+  const loanById = useMemo(() => new Map(loans.map((l) => [l.id, { direction: l.direction, name: l.name?.trim() || l.institutionName || (l.personId ? personNameById.get(l.personId) : null) || null }])), [loans, personNameById]);
+  const installmentSeqById = useMemo(() => new Map(loanInstallments.map((i) => [i.id, i.sequenceNumber])), [loanInstallments]);
   const displayDescription = useMemo(() => {
-    return (t: Transaction) =>
-      (t.loanId != null ? loanTransactionLabel(t, loanById.get(t.loanId) ?? null) : null) ?? t.description;
-  }, [loanById]);
+    return (t: Transaction) => {
+      const label = t.loanId != null ? loanTransactionLabel(t, loanById.get(t.loanId) ?? null) : null;
+      if (label == null) return t.description;
+      const seq = t.installmentId != null && t.paymentAllocationType !== "principalPrepayment" ? installmentSeqById.get(t.installmentId) : undefined;
+      return seq != null ? `${label} · #${seq}` : label;
+    };
+  }, [loanById, installmentSeqById]);
 
   const [search, setSearch] = useState("");
   const deferredSearch = useDeferredValue(search);
-  // `?account=<accountId>` (from Accounts / Credit Cards "View transactions") pre-selects the EXISTING account
-  // filter — same filter, same list; a card is an account, so one param covers both.
+  // `?account=<accountId>` (from Accounts / Credit Cards "View transactions", or a direct link) drives the EXISTING
+  // account filter — same filter, same list; a card is an account, so one param covers both. The URL is the source
+  // of truth (refresh and back/forward work) and the id is validated against the signed-in user's own accounts
+  // before it counts as Add Transaction context; an invalid id gives a notice, never another account.
   const searchParams = useSearchParams();
   const router = useRouter();
-  const pathname = usePathname();
-  const [accountFilter, setAccountFilter] = useState<string | null>(() => searchParams.get(ACCOUNT_FILTER_PARAM));
-  // A stale/deleted id from the URL falls back to the unfiltered list once accounts are known.
-  const resolvedAccountFilter = resolveAccountFilter(accountFilter, accounts, isLoading);
-  if (resolvedAccountFilter !== accountFilter) setAccountFilter(resolvedAccountFilter);
-  // Keep the URL in step with the filter (replace, not push): clearing the chip clears the param, so a
-  // refresh doesn't silently re-filter and Back still returns to the page the user came from.
-  useEffect(() => {
-    const current = searchParams.get(ACCOUNT_FILTER_PARAM);
-    if (current === accountFilter) return;
-    const next = new URLSearchParams(searchParams.toString());
-    if (accountFilter) next.set(ACCOUNT_FILTER_PARAM, accountFilter);
-    else next.delete(ACCOUNT_FILTER_PARAM);
-    const qs = next.toString();
-    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
-  }, [accountFilter, searchParams, router, pathname]);
+  const accountFilterState = useAccountFilter(accounts);
+  const accountFilter = accountFilterState.appliedId;
+  const setAccountFilter = accountFilterState.setAccountId;
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
   const [typeFilter, setTypeFilter] = useState<string | null>(null);
   const [paymentMethodFilter, setPaymentMethodFilter] = useState<string | null>(null);
@@ -253,7 +261,7 @@ export function TransactionsWorkspace() {
   const [dateTo, setDateTo] = useState("");
   const [page, setPage] = useState(1);
   const [rowsPerPage, setRowsPerPage] = useState(20);
-  const [viewMode, setViewMode] = useState<"list" | "grid">("list");
+  const [viewMode, setViewMode] = useState<"list" | "grid" | "statement">("list");
 
   const [detailRow, setDetailRow] = useState<TransactionRow | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
@@ -362,10 +370,35 @@ export function TransactionsWorkspace() {
     [entriesByPersonId],
   );
 
-  const count = filtered.length;
+  // Statement view: one account's running balance, built from that account's FULL history (never from `filtered`).
+  // The page's filters only choose which finished statement rows are shown. No single account → no statement.
+  const statementMode = viewMode === "statement";
+  const statementView = useMemo(() => {
+    if (!statementMode || !accountFilter) return null;
+    return buildTransactionStatementView({
+      account: accounts.find((a) => a.id === accountFilter),
+      transactions: listedTransactions,
+      visibleIds: new Set(filtered.map((r) => r.transaction.id)),
+    });
+  }, [statementMode, accountFilter, accounts, listedTransactions, filtered]);
+  const rowById = useMemo(() => new Map(rows.map((r) => [r.transaction.id, r])), [rows]);
+  // A transfer leg with no description reads "Transfer to/from <other account>" from its stored pair (same transferId).
+  const describeStatementRow = (row: TransactionRow, fallback: string): string => {
+    const t = row.transaction;
+    const label = displayDescription(t).trim();
+    if (label) return label;
+    if (t.transferId) {
+      const mate = rows.find((r) => r.transaction.transferId === t.transferId && r.transaction.id !== t.id);
+      return mate?.account ? `Transfer ${transferSideOf(t) === "sent" ? "to" : "from"} ${mate.account.name}` : TRANSFER_SIDE_LABEL[transferSideOf(t)];
+    }
+    return fallback;
+  };
+
+  const count = statementMode ? (statementView?.rows.length ?? 0) : filtered.length;
   const totalPages = Math.max(1, Math.ceil(count / rowsPerPage));
   const safePage = Math.min(page, totalPages);
   const pageRows = filtered.slice((safePage - 1) * rowsPerPage, safePage * rowsPerPage);
+  const statementPageRows = statementView?.rows.slice((safePage - 1) * rowsPerPage, safePage * rowsPerPage) ?? [];
   const rangeStart = count === 0 ? 0 : (safePage - 1) * rowsPerPage + 1;
   const rangeEnd = Math.min(safePage * rowsPerPage, count);
 
@@ -454,7 +487,7 @@ export function TransactionsWorkspace() {
   function openSplit() {
     const firstCategory = categories.find((c) => c.type !== "income");
     setSplitError(null);
-    setSplitForm(emptySplitForm(accounts[0]?.id ?? "", firstCategory?.id ?? ""));
+    setSplitForm(emptySplitForm(initialAddAccountId({ kind: "expense", accounts, contextAccountId: accountFilterState.contextId }), firstCategory?.id ?? ""));
     setSplitOpen(true);
   }
 
@@ -579,7 +612,7 @@ export function TransactionsWorkspace() {
   }
 
   const hasTransactions = rows.length > 0;
-  const accountName = (id: string) => accounts.find((a) => a.id === id)?.name ?? "Account";
+  const accountName = (id: string) => accounts.find((a) => a.id === id)?.name ?? (accountFilterState.lookedUp?.id === id ? accountFilterState.lookedUp.name : "Account");
   const categoryName = (id: string) => categories.find((c) => c.id === id)?.name ?? "Category";
   const activeChips: { key: string; label: string; clear: () => void }[] = [
     ...(search.trim() ? [{ key: "search", label: `“${search.trim()}”`, clear: () => setSearch("") }] : []),
@@ -587,7 +620,7 @@ export function TransactionsWorkspace() {
       ? [{ key: "date", label: dateRangeLabel(dateFrom, dateTo), clear: () => (setDateFrom(""), setDateTo("")) }]
       : []),
     ...(typeFilter ? [{ key: "type", label: `Type: ${typeFilter === "income" ? "Income" : "Expense"}`, clear: () => setTypeFilter(null) }] : []),
-    ...(accountFilter ? [{ key: "account", label: `${accounts.find((a) => a.id === accountFilter)?.type === "card" ? "Card" : "Account"}: ${accountName(accountFilter)}`, clear: () => setAccountFilter(null) }] : []),
+    ...(accountFilter ? [{ key: "account", label: `${(accounts.find((a) => a.id === accountFilter) ?? accountFilterState.lookedUp)?.type === "card" ? "Card" : "Account"}: ${accountName(accountFilter)}`, clear: () => setAccountFilter(null) }] : []),
     ...(categoryFilter ? [{ key: "category", label: `Category: ${categoryName(categoryFilter)}`, clear: () => setCategoryFilter(null) }] : []),
     ...(paymentMethodFilter ? [{ key: "method", label: `Method: ${paymentMethodFilter}`, clear: () => setPaymentMethodFilter(null) }] : []),
   ];
@@ -651,6 +684,7 @@ export function TransactionsWorkspace() {
   }
 
   return (
+    <HistoricalPaymentFlagsProvider value={isHistoricalPayment}>
     <div
       className={cn(
         "flex min-w-0 flex-col gap-4",
@@ -766,8 +800,9 @@ export function TransactionsWorkspace() {
             <div role="radiogroup" aria-label="View" className="flex items-center rounded-full border border-border-strong bg-card p-0.5">
               {(
                 [
-                  { value: "list", icon: List, label: "List view" },
-                  { value: "grid", icon: LayoutGrid, label: "Grid view" },
+                  { value: "list", icon: List, label: "List view", text: "List" },
+                  { value: "grid", icon: LayoutGrid, label: "Grid view", text: "Grid" },
+                  { value: "statement", icon: FileText, label: "Statement view", text: "Statement" },
                 ] as const
               ).map((v) => (
                 <button
@@ -776,13 +811,15 @@ export function TransactionsWorkspace() {
                   role="radio"
                   aria-checked={viewMode === v.value}
                   aria-label={v.label}
+                  title={v.value === "statement" ? "Statement — Debit, Credit and running balance for one account" : v.label}
                   onClick={() => setViewMode(v.value)}
                   className={cn(
-                    "flex size-8 items-center justify-center rounded-full transition-colors",
-                    viewMode === v.value ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-secondary hover:text-foreground",
+                    "flex h-8 items-center gap-1.5 rounded-full px-2.5 text-xs font-semibold transition-colors sm:px-3",
+                    viewMode === v.value ? "bg-primary text-primary-foreground shadow-e1" : "text-muted-foreground hover:bg-secondary hover:text-foreground",
                   )}
                 >
-                  <v.icon className="size-4" strokeWidth={1.75} />
+                  <v.icon className="size-3.5" strokeWidth={2} />
+                  {v.text}
                 </button>
               ))}
             </div>
@@ -798,6 +835,15 @@ export function TransactionsWorkspace() {
             </button>
           </div>
         </div>
+
+        {accountFilterState.invalidId && (
+          <Banner
+            tone="warning"
+            title="That account wasn't found"
+            description="The account in this link isn't one of your active accounts, so no account filter was applied — all transactions are shown."
+            onDismiss={accountFilterState.dismissInvalid}
+          />
+        )}
 
         {activeChips.length > 0 && (
           <div className="flex flex-wrap items-center gap-1.5">
@@ -841,7 +887,44 @@ export function TransactionsWorkspace() {
           aria-label="Transactions"
           className={cn("flex min-h-0 flex-col overflow-hidden rounded-[16px] border border-border-strong/60 bg-card shadow-e1", fullscreen && "flex-1")}
         >
-          {count === 0 ? (
+          {statementMode && !statementView ? (
+            <StatementNeedsAccount
+              accounts={accounts}
+              onPick={(id) => {
+                setAccountFilter(id);
+                setPage(1);
+              }}
+            />
+          ) : statementMode && statementView ? (
+            <>
+              <StatementHeader view={statementView} />
+              {count === 0 ? (
+                <div className="flex flex-col items-center gap-2 px-6 py-10 text-center">
+                  <p className="text-sm font-semibold text-foreground">
+                    {statementView.statement.rows.length === 0 ? "Nothing has moved this account yet — its balance is just the opening balance." : "No statement rows match these filters."}
+                  </p>
+                  {statementView.narrowed ? (
+                    <button type="button" onClick={clearFilters} className="text-sm font-semibold text-primary-accent-text hover:underline">
+                      Clear filters
+                    </button>
+                  ) : null}
+                </div>
+              ) : (
+                <div className={cn("min-h-0 overflow-auto overscroll-contain", fullscreen ? "flex-1" : "max-h-[calc(100dvh-24rem)] min-h-[18rem]")}>
+                  <StatementTable
+                    view={statementView}
+                    rows={statementPageRows}
+                    showOpening={safePage === totalPages && !statementView.narrowed}
+                    rowFor={(id) => rowById.get(id)}
+                    describe={describeStatementRow}
+                    onOpen={openDetails}
+                    onDelete={setQuickDeleteRow}
+                  />
+                </div>
+              )}
+              <StatementFootnote view={statementView} />
+            </>
+          ) : count === 0 ? (
             <div className="flex flex-col items-center gap-2 px-6 py-14 text-center">
               <p className="text-sm font-semibold text-foreground">No transactions match these filters.</p>
               <button type="button" onClick={clearFilters} className="text-sm font-semibold text-primary-accent-text hover:underline">
@@ -980,6 +1063,8 @@ export function TransactionsWorkspace() {
         categories={categories}
         actions={actions!}
         defaultKind={detailDefaultKind}
+        // Only when the list is filtered to one account: that visible filter is the user's explicit account context.
+        initialAccountId={accountFilterState.contextId}
         autoFocusAssign={autoFocusAssign}
         existingTransactions={rows.map((r) => r.transaction)}
         cardAvailableCredit={cardAvailableCredit}
@@ -1020,6 +1105,7 @@ export function TransactionsWorkspace() {
 
       {splitDuplicateGuard.dialog}
     </div>
+    </HistoricalPaymentFlagsProvider>
   );
 }
 
@@ -1390,25 +1476,35 @@ function Amount({
   size?: "md" | "lg";
 }) {
   const { incoming, row, settled, status } = presentation;
+  // "Already paid earlier": a real payment, but no account was debited — muted, unsigned and captioned so it never reads as money out.
+  const isHistoricalPayment = useIsHistoricalPayment();
+  const historical = isHistoricalPayment(transaction);
   // Borrowed: the note points at the obligation ('repay', outward), not at the money coming in.
   const Icon = settled ? Check : row === "borrowed" ? ArrowUpRight : incoming ? ArrowDownLeft : ArrowUpRight;
   return (
-    <span className="flex shrink-0 flex-col items-end gap-0.5">
+    <span className="flex shrink-0 flex-col items-end gap-1">
       <span
         className={cn(
           "font-bold tracking-tight whitespace-nowrap tabular-nums",
-          size === "lg" ? "text-[15px] leading-tight sm:text-[18px]" : "text-[15px] leading-tight",
+          size === "lg" ? "text-[15px] leading-tight sm:text-[16px]" : "text-[15px] leading-tight",
           // Only real income is green; a paid obligation is money out, shown in strong neutral text.
-          row === "income" ? "text-success" : "text-foreground",
+          historical ? "text-muted-foreground" : row === "income" ? "text-success" : "text-foreground",
         )}
+        title={historical ? historicalPaymentExplanation(incoming) : undefined}
       >
-        {incoming ? "+" : "−"}
+        {historical ? "" : incoming ? "+" : "−"}
         {formatCurrency(transaction.amount)}
       </span>
-      {withLabel && (
+      {withLabel && historical && (
+        <span className="inline-flex items-center gap-0.5 text-[11px] leading-tight font-medium whitespace-nowrap text-muted-foreground">
+          <Ban className="size-3" strokeWidth={2} aria-hidden />
+          {HISTORICAL_PAYMENT_SHORT}
+        </span>
+      )}
+      {withLabel && !historical && (
         <span
           className={cn(
-            "inline-flex items-center gap-0.5 text-[11px]",
+            "inline-flex items-center gap-0.5 text-[11px] leading-tight whitespace-nowrap",
             settled
               ? "rounded-[4px] border border-success/60 bg-success/12 px-1 font-bold tracking-wide text-success uppercase"
               : row === "borrowed"
@@ -1451,8 +1547,11 @@ function TxnBadges({
   hideLoan?: boolean;
 }) {
   const loanTag = hideLoan ? null : loanTagFor(transaction);
-  const flag = transactionFlagFor(transaction);
-  if (!loanTag && !flag && !isSplit && !assignedTo && !isDuplicate && !transaction.transferId) return null;
+  const isHistoricalPayment = useIsHistoricalPayment();
+  const historical = isHistoricalPayment(transaction);
+  // The generic "Not counted" flag is replaced by the specific reason for a historical payment.
+  const flag = historical ? null : transactionFlagFor(transaction);
+  if (!loanTag && !flag && !historical && !isSplit && !assignedTo && !isDuplicate && !transaction.transferId) return null;
   return (
     <span className="flex flex-wrap items-center gap-1">
       {loanTag && (
@@ -1474,9 +1573,15 @@ function TxnBadges({
         </span>
       )}
       {transaction.transferId && (
-        <span className={cn(BADGE, "border-border-strong bg-secondary text-foreground")}>
+        // The Type column carries this at xl+; the badge only fills in where that column is hidden.
+        <span className={cn(BADGE, "border-border-strong bg-secondary text-foreground xl:hidden")}>
           <ArrowLeftRight className="size-3" aria-hidden />
           Transfer
+        </span>
+      )}
+      {historical && (
+        <span className={cn(BADGE, "border-dashed border-border-strong bg-transparent text-foreground/80")} title={historicalPaymentExplanation(transaction.type === "income")}>
+          {HISTORICAL_PAYMENT_LABEL} · {HISTORICAL_PAYMENT_SHORT.toLowerCase()}
         </span>
       )}
       {flag && <span className={cn(BADGE, "border-warning/50 bg-warning/15 text-warning-foreground dark:text-warning")}>{flag.label}</span>}
@@ -1536,7 +1641,7 @@ function LedgerTable({
           <th className={TH}>Description</th>
           <th className={cn(TH, "hidden w-28 xl:table-cell")}>Type</th>
           <th className={cn(TH, "hidden w-40 lg:table-cell")}>Account</th>
-          <th className={cn(TH, "w-24 text-right sm:w-36")}>Amount</th>
+          <th className={cn(TH, "w-28 text-right sm:w-40")}>Amount</th>
           {/* Edit / Delete move into the expanded row wherever the table is narrow (phones, and the md range where the
               sidebar takes a third of the screen) — tap a row — so Description keeps room. */}
           <th className={cn(TH, "hidden w-[7.25rem] sm:table-cell md:hidden lg:table-cell")}>
@@ -1621,12 +1726,13 @@ function LedgerTable({
                     edge,
                   )}
                 >
-                  {role === "first" && route && <TransferCenterLine route={route} />}
+                  {role === "first" && route && <TransferCenterLine route={route} isCardPayment={presentation.kind === "cardPayment"} />}
                   <p className="text-sm leading-tight font-semibold text-foreground">{shortDate(t.dateTime)}</p>
                   <p className="text-[11px] leading-tight text-muted-foreground">{t.dateTime.getFullYear()}</p>
                 </td>
-                <td className={cn(TD, "relative max-w-0", loanTag && "pr-20")}>
-                  {loanTag && <CornerTag label={loanTag.label} />}
+                <td className={cn(TD, "relative max-w-0", loanTag && "pr-20 xl:pr-3")}>
+                  {/* The Type column already names the loan/EMI kind at xl+, so the corner tag only shows where Type is hidden. */}
+                  {loanTag && <CornerTag label={loanTag.label} className="xl:hidden" />}
                   <div className="flex min-w-0 items-center gap-2.5">
                     <span className={cn("hidden size-8 shrink-0 items-center justify-center rounded-[8px] sm:flex", TONE_ICON_CLASS[categoryToneFor(iconKey)])}>
                       <Icon className="size-4" />
@@ -1640,10 +1746,15 @@ function LedgerTable({
                               : TRANSFER_SIDE_LABEL[side]
                             : "(No description)")}
                       </p>
-                      <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
+                      <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
+                        {/* One metadata line: category · account (when the Account column is hidden) · markers.
+                            "Uncategorized" is noise on transfers/loans/people rows, so it only shows on plain income/expense. */}
                         <span className="truncate text-xs text-muted-foreground">
-                          {row.category?.name ?? "Uncategorized"}
-                          <span className="lg:hidden"> · {paidFromLabel(row.transaction, row.account?.name) ?? "Unknown account"}</span>
+                          {row.category?.name ?? (tone === "income" || tone === "expense" ? "Uncategorized" : null)}
+                          <span className="lg:hidden">
+                            {row.category || tone === "income" || tone === "expense" ? " · " : ""}
+                            {paidFromLabel(row.transaction, row.account?.name) ?? "Unknown account"}
+                          </span>
                         </span>
                         <TxnBadges transaction={t} isSplit={isSplit(t.id)} assignedTo={assigneeFor(t)} isDuplicate={isDuplicate} hideLoan />
                       </div>
@@ -1749,20 +1860,20 @@ const BORROWED_OUTLINE =
 const ROW_TONE: Record<RowTone, { edge: string; rest: string; open: string }> = {
   income: {
     edge: "border-l-success",
-    rest: "bg-success/[0.12] hover:bg-success/[0.18] dark:bg-success/[0.16] dark:hover:bg-success/[0.22]",
-    open: "bg-success/[0.2] dark:bg-success/[0.24]",
+    rest: "bg-success/[0.07] hover:bg-success/[0.12] dark:bg-success/[0.12] dark:hover:bg-success/[0.18]",
+    open: "bg-success/[0.16] dark:bg-success/[0.22]",
   },
   expense: { edge: "border-l-transparent", rest: "hover:bg-secondary/70", open: "bg-secondary" },
   transfer: {
     edge: "border-l-muted-foreground",
-    rest: "bg-foreground/[0.06] hover:bg-foreground/[0.09] dark:bg-foreground/[0.08] dark:hover:bg-foreground/[0.12]",
+    rest: "bg-foreground/[0.035] hover:bg-foreground/[0.07] dark:bg-foreground/[0.06] dark:hover:bg-foreground/[0.1]",
     open: "bg-foreground/[0.1] dark:bg-foreground/[0.13]",
   },
   // Loan/People cash IN (borrowed, received from person) — debt created: a clearly visible soft violet
   // surface (the old ~11% read as white on low-contrast FHD panels), never Income green.
   debt: {
     edge: "border-l-debt-border",
-    rest: "bg-debt-surface hover:bg-debt-surface-hover",
+    rest: "bg-debt-surface/60 hover:bg-debt-surface-hover/80",
     open: "bg-debt-surface-hover",
   },
   // Borrowed money in (People "Borrowed", Loan principal taken) — NOT income: a neutral row whose 2px
@@ -1777,7 +1888,7 @@ const ROW_TONE: Record<RowTone, { edge: string; rest: string; open: string }> = 
   // with a thick, high-contrast success rail + the ✓ status chip — never Income's filled green. The wash
   // is only a whisper so the rail, icon and wording carry the meaning on low-contrast screens.
   settled: {
-    edge: "border-l-[5px] border-l-success",
+    edge: "border-l-[3px] border-l-success",
     rest: "bg-success/[0.035] hover:bg-secondary/70 dark:bg-success/[0.05]",
     open: "bg-secondary",
   },
@@ -1787,7 +1898,9 @@ const ROW_TONE: Record<RowTone, { edge: string; rest: string; open: string }> = 
 /** Type column tag — label + icon + tone, so meaning never rests on colour alone. Transfer legs read as
  *  "Sent"/"Received" in the neutral transfer tone, never as Income/Expense. */
 function TypeTag({ transaction, presentation = getTransactionPresentation(transaction) }: { transaction: Transaction; presentation?: TransactionPresentation }) {
-  const { row, label, detail } = presentation;
+  const { row, label } = presentation;
+  // A second line that just repeats the badge ("Loan repayment" / "Loan repayment") is dropped.
+  const detail = presentation.detail === label ? "" : presentation.detail;
   if (row === "transfer") {
     return (
       <span className="inline-flex flex-col gap-0.5">
@@ -1795,7 +1908,7 @@ function TypeTag({ transaction, presentation = getTransactionPresentation(transa
           <ArrowLeftRight className="size-3" strokeWidth={2} aria-hidden />
           {label}
         </span>
-        <span className="text-[11px] font-medium text-foreground/70">{detail}</span>
+        <span className="text-[11px] leading-tight font-medium whitespace-nowrap text-foreground/70">{detail}</span>
       </span>
     );
   }
@@ -1807,7 +1920,7 @@ function TypeTag({ transaction, presentation = getTransactionPresentation(transa
           <CheckCircle2 className="size-3 text-success" strokeWidth={2.5} aria-hidden />
           {label}
         </span>
-        <span className="text-[11px] font-medium text-foreground/75">{detail}</span>
+        <span className="text-[11px] leading-tight font-medium whitespace-nowrap text-foreground/75">{detail}</span>
       </span>
     );
   }
@@ -1819,7 +1932,7 @@ function TypeTag({ transaction, presentation = getTransactionPresentation(transa
           <ArrowDownLeft className="size-3" strokeWidth={2.5} aria-hidden />
           {label}
         </span>
-        <span className="text-[11px] font-medium text-foreground/75">{detail}</span>
+        <span className="text-[11px] leading-tight font-medium whitespace-nowrap text-foreground/75">{detail}</span>
       </span>
     );
   }
@@ -1830,7 +1943,7 @@ function TypeTag({ transaction, presentation = getTransactionPresentation(transa
           <Landmark className="size-3" strokeWidth={2} aria-hidden />
           {label}
         </span>
-        <span className="text-[11px] font-medium text-foreground/70">{detail}</span>
+        <span className="text-[11px] leading-tight font-medium whitespace-nowrap text-foreground/70">{detail}</span>
       </span>
     );
   }
@@ -1851,16 +1964,16 @@ function TypeTag({ transaction, presentation = getTransactionPresentation(transa
  * row but positioned against the (relative) `<tr>`, zero-height, so it adds no row height and never
  * blocks clicks. Presentation only — each leg stays its own clickable row with its own actions.
  */
-function TransferCenterLine({ route }: { route: string }) {
+function TransferCenterLine({ route, isCardPayment = false }: { route: string; isCardPayment?: boolean }) {
   return (
     <span aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex h-0 items-center gap-2 px-3">
-      <span className="flex-1 border-t border-dashed border-border-strong" />
-      <span className="inline-flex h-5 min-w-0 items-center gap-1.5 border border-border-strong bg-card px-2 text-[10.5px] font-medium whitespace-nowrap text-foreground/85">
-        <ArrowUpDown className="size-3 shrink-0" strokeWidth={1.75} />
-        Transfer
-        <span className="hidden text-muted-foreground sm:inline">· {route}</span>
+      <span className="flex-1 border-t border-dashed border-border-strong/70" />
+      <span className="inline-flex h-5 min-w-0 items-center gap-1.5 rounded-full border border-border-strong bg-card px-2.5 text-[10.5px] font-semibold whitespace-nowrap text-foreground shadow-[0_1px_2px_rgb(0_0_0/0.08)]">
+        {isCardPayment ? <CreditCard className="size-3 shrink-0" strokeWidth={1.75} /> : <ArrowUpDown className="size-3 shrink-0" strokeWidth={1.75} />}
+        {isCardPayment ? "Card bill payment" : "Transfer"}
+        <span className="hidden font-medium text-muted-foreground sm:inline">· one linked movement · {route}</span>
       </span>
-      <span className="flex-1 border-t border-dashed border-border-strong" />
+      <span className="flex-1 border-t border-dashed border-border-strong/70" />
     </span>
   );
 }
@@ -1952,6 +2065,7 @@ function RowDetails({
   isDuplicate: boolean;
 }) {
   const t = row.transaction;
+  const isHistoricalPayment = useIsHistoricalPayment();
   const flow = flowOf(t);
   const hero = FLOW_HERO[flow];
   const FlowIcon =
@@ -1968,9 +2082,10 @@ function RowDetails({
             {flow === "debt" ? debtLabel(t) : FLOW_LABEL[flow]}
           </span>
           <p className={cn("relative font-heading text-[30px] leading-none font-bold tracking-tight tabular-nums", hero.amount)}>
-            {flow === "in" || (flow === "debt" && t.type === "income") ? "+" : flow === "out" || flow === "debt" ? "−" : ""}
+            {isHistoricalPayment(t) ? "" : flow === "in" || (flow === "debt" && t.type === "income") ? "+" : flow === "out" || flow === "debt" ? "−" : ""}
             {formatCurrency(t.amount)}
           </p>
+          {isHistoricalPayment(t) && <p className="relative text-xs font-medium text-foreground/70">{historicalPaymentExplanation(t.type === "income")}</p>}
           <div className="relative min-w-0">
             <p className="truncate text-[15px] font-semibold text-foreground">{displayDescription(t) || (t.transferId ? TRANSFER_SIDE_LABEL[transferSideOf(t)] : "(No description)")}</p>
             <p className="mt-1 flex items-center gap-1.5 text-xs font-medium text-foreground/70 tabular-nums">

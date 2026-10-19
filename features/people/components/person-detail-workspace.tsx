@@ -30,7 +30,8 @@ import { AddEntryPanel, type AddEntryParams } from "@/features/people/components
 import { EditPersonMode, type EditPersonPatch } from "@/features/people/components/workspace/edit-person-mode";
 import { InlineReveal, LedgerConfirmDialog, PeopleDrawer, type EntryEditValues, type EntrySettleValues } from "@/features/people/components/workspace/ledger-ui";
 import { LE_RADIUS } from "@/features/loans/components/loan-emi-ui";
-import { WS_PRIMARY, WS_SECONDARY, WsLabel } from "@/features/people/components/workspace/person-workspace-ui";
+import { DateInput } from "@/components/forms/date-input";
+import { WS_FIELD, WS_PRIMARY, WS_SECONDARY, WsLabel } from "@/features/people/components/workspace/person-workspace-ui";
 import { paymentInitialFor, RecordPaymentPanel, type RecordPaymentInitial } from "@/features/people/components/workspace/record-payment-panel";
 import { paymentImpact } from "@/lib/engines/person-payment-impact";
 import { ApplyAdvancePanel, PaymentRevertDetails } from "@/features/people/components/workspace/payment-extras";
@@ -38,7 +39,7 @@ import { MoneyToUseSection } from "@/features/people/components/workspace/purpos
 import { usePersonPurposeFunds } from "@/features/people/hooks/use-purpose-funds";
 import { purposeCashOf } from "@/lib/engines/purpose-funds";
 import { advanceSources, payableObligations, routeFor } from "@/features/people/lib/person-payment-obligations";
-import { advanceRemaining, PAYMENT_EPSILON, type AdvanceUse } from "@/lib/engines/person-payment";
+import { advanceRemaining, PAYMENT_EPSILON, round2, type AdvanceUse } from "@/lib/engines/person-payment";
 import { followUpStatus } from "@/lib/models/person-follow-up";
 import { useAllPersonFollowUps, usePersonFollowUpActions } from "@/features/people/hooks/use-person-follow-ups";
 import { FollowUpContext, type FollowUpContextValue } from "@/features/people/components/workspace/follow-up";
@@ -53,6 +54,8 @@ import { SplitExpenseMode } from "@/features/people/components/workspace/split-e
 import { TransactionLedgerMode, type LedgerView } from "@/features/people/components/workspace/transaction-ledger-mode";
 import { cn } from "@/lib/utils";
 import { toast } from "@/store/toast-store";
+
+const toInputDate = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
 /** Settles one manual "gave"/"borrowed" entry — a "repaid"/"receivedBack" entry with `parentEntryId` set. */
 export interface SettleEntryParams {
@@ -140,6 +143,7 @@ export function PersonDetailWorkspace({
   onRevertPayment,
   onRemoveAdvanceApplications,
   onRecordPayment,
+  onEditPaymentDate,
   onApplyAdvance,
   onEditPerson,
   onDelete,
@@ -167,6 +171,8 @@ export function PersonDetailWorkspace({
   onUndoSplitReceived?: (pending: PendingSplitParticipant) => Promise<void>;
   /** Reverts one recorded payment as a whole (every obligation line, its cash leg and any advance). */
   onRevertPayment?: (paymentId: string) => Promise<void>;
+  /** Changes only the date of one recorded payment, in place (`PersonPaymentRepository.editPaymentDate`). */
+  onEditPaymentDate?: (paymentId: string, params: { date: Date; expectedDate: Date }) => Promise<void>;
   /** Un-applies advance from an obligation — the advance becomes available again. */
   onRemoveAdvanceApplications?: (applications: AdvanceApplication[]) => Promise<void>;
   /** Record payment — records (paymentId null) or edits one real payment (`PersonPaymentRepository`). */
@@ -195,8 +201,12 @@ export function PersonDetailWorkspace({
   const [undoing, setUndoing] = useState<{ row: LedgerRow; payment: PaymentRecord } | null>(null);
   const [undoOpen, setUndoOpen] = useState(false);
   /** The Record payment workspace: which obligation it opened for, or the payment being edited. */
-  const [paying, setPaying] = useState<{ preselectKey?: string | null; initial?: RecordPaymentInitial | null } | null>(null);
+  const [paying, setPaying] = useState<{ preselectKey?: string | null; initial?: RecordPaymentInitial | null; intent?: "received" | "postpone" } | null>(null);
   const [advanceOpen, setAdvanceOpen] = useState<"theyOwe" | "iOwe" | null>(null);
+  // The obligation the Apply advance panel opens on (a lender payment's deep link, or Record payment's
+  // "Apply advance instead"), and where to go once it is applied — the lender payment that sent the user here.
+  const [advanceKey, setAdvanceKey] = useState<string | null>(null);
+  const advanceReturnRef = useRef<string | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const { statement, allTimeStatement, ledgerEntries, isLoading, linkedEmis, setRepays, advanceApplications } = usePersonCycleStatement(person.id, cycle);
   const { pending, trackedShareRefs: trackedAll, isLoading: sharesLoading } = usePersonPendingSplitParticipants(person.id);
@@ -292,7 +302,7 @@ export function PersonDetailWorkspace({
   const undoImpact = undoImpactId ? impactOf(undoImpactId) : null;
 
   /** Record payment opens in place: inline on the page, or as the expanded ledger's own view. */
-  function openPayment(next: { preselectKey?: string | null; initial?: RecordPaymentInitial | null }) {
+  function openPayment(next: { preselectKey?: string | null; initial?: RecordPaymentInitial | null; intent?: "received" | "postpone" }) {
     setPaying(next);
     setSettlingKey(null);
     setEditingKey(null);
@@ -309,8 +319,9 @@ export function PersonDetailWorkspace({
     setLedgerView("transactions");
   };
 
-  // Deep link from a lender-payment gate (`?obligation=<key>&settle=1[&return=<path>]`): open Record payment with
-  // that exact obligation preselected, once. Once it is recorded, go back to the lender payment it unblocks.
+  // Deep link from a lender-payment gate (`?obligation=<key>&settle=1[&intent=postpone][&return=<path>]`): open
+  // Record payment (or straight into "Postpone collection") with that exact obligation preselected, once. Once it
+  // is recorded / postponed, go back to the lender payment it came from.
   const settleReturnRef = useRef<string | null>(null);
   const settleDeepLinkedRef = useRef(false);
   useEffect(() => {
@@ -320,22 +331,88 @@ export function PersonDetailWorkspace({
     if (params.get("settle") !== "1" || !key || !allRows.some((r) => r.key === key)) return;
     settleDeepLinkedRef.current = true;
     const back = params.get("return");
+    const intent = params.get("intent") === "postpone" ? ("postpone" as const) : undefined;
     requestAnimationFrame(() => {
-      openPayment({ preselectKey: key });
+      openPayment({ preselectKey: key, intent });
       settleReturnRef.current = back && isInAppPath(back) ? back : null;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot on load; `openPayment` is render-scoped
   }, [isLoading, allRows, onRecordPayment]);
+  // Deep link from a Transaction's "Edit in People Ledger" (`?paymentTx=<cash-leg transaction id>`): opens that
+  // exact payment's date dialog, once. Resolved from the live ledger — a payment that no longer exists says so.
+  const [dateEdit, setDateEdit] = useState<{ paymentId: string; expectedDate: Date; amount: number; value: string } | null>(null);
+  const [dateEditOpen, setDateEditOpen] = useState(false);
+  const paymentTxHandledRef = useRef(false);
+  const paymentTxTimerRef = useRef<number | null>(null);
+  useEffect(() => () => { if (paymentTxTimerRef.current != null) window.clearTimeout(paymentTxTimerRef.current); }, []);
+  useEffect(() => {
+    if (paymentTxHandledRef.current || isLoading || typeof window === "undefined") return;
+    const txId = new URLSearchParams(window.location.search).get("paymentTx");
+    if (!txId) return;
+    const consume = () => {
+      paymentTxHandledRef.current = true;
+      const params = new URLSearchParams(window.location.search);
+      params.delete("paymentTx");
+      const rest = params.toString();
+      window.history.replaceState(window.history.state, "", `${window.location.pathname}${rest ? `?${rest}` : ""}`);
+    };
+    const group = ledgerEntries.filter((e) => e.deletedAt == null && e.paymentId != null && e.transactionRef === txId);
+    if (group.length === 0) {
+      if (ledgerEntries.some((e) => e.deletedAt == null && e.transactionRef === txId)) {
+        consume();
+        toast.error("This is a ledger entry, not a recorded payment", "Edit it from its row in this ledger.");
+      } else if (paymentTxTimerRef.current == null) {
+        // The ledger may still be loading on a fresh page open — only say it is gone after giving it time.
+        paymentTxTimerRef.current = window.setTimeout(() => {
+          if (paymentTxHandledRef.current) return;
+          consume();
+          toast.error("That payment isn't in this ledger any more", "It may have been edited or reverted. Check the ledger.");
+        }, 8000);
+      }
+      return;
+    }
+    consume();
+    const paymentId = group[0].paymentId!;
+    const all = ledgerEntries.filter((e) => e.deletedAt == null && e.paymentId === paymentId);
+    const amount = round2(all.reduce((sum, e) => sum + e.amount, 0));
+    requestAnimationFrame(() => {
+      setDateEdit({ paymentId, expectedDate: group[0].date, amount, value: toInputDate(group[0].date) });
+      setDateEditOpen(true);
+    });
+  }, [isLoading, ledgerEntries]);
+  // Advance held for / by this person, and the oldest obligation it could settle right now.
+  const advanceAvailable = useMemo(() => advanceRemaining(advanceSources(ledgerEntries), advanceApplications), [ledgerEntries, advanceApplications]);
+  const openObligations = useMemo(() => payableObligations(allRows), [allRows]);
+  // Money this person already gave me that is still held (not applied) — Record payment offers applying it first.
+  const advanceHeldFromThem = round2(advanceAvailable.filter((a) => a.side === "theyOwe").reduce((t, a) => t + a.remaining, 0));
+
   const paymentPanel =
     onRecordPayment != null ? (
       <RecordPaymentPanel
-        key={`${paying?.preselectKey ?? ""}|${paying?.initial?.paymentId ?? ""}|${cycle.start.getTime()}`}
+        key={`${paying?.preselectKey ?? ""}|${paying?.initial?.paymentId ?? ""}|${paying?.intent ?? ""}|${cycle.start.getTime()}`}
         cycle={cycle}
         cycleLabel={formatCycleLabel(cycle)}
         personName={person.name}
         rows={allRows}
         preselectKey={paying?.preselectKey}
         initial={paying?.initial}
+        initialIntent={paying?.intent}
+        advanceHeld={onApplyAdvance ? advanceHeldFromThem : 0}
+        onApplyAdvance={() => {
+          // Applying moves no money (the advance already did). The lender payment this came from stays the way back.
+          const back = settleReturnRef.current;
+          const key = paying?.preselectKey ?? null;
+          closePayment();
+          // The Apply advance panel lives on the person's overview, under the expanded ledger.
+          if (mode.kind === "ledger") {
+            setDirection("back");
+            setMode({ kind: "overview" });
+          }
+          advanceReturnRef.current = back;
+          setAdvanceKey(key);
+          setAdvanceOpen("theyOwe");
+          rootRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+        }}
         onCancel={closePayment}
         onSubmit={async (input, paymentId, options) => {
           await onRecordPayment(input, paymentId);
@@ -362,10 +439,6 @@ export function PersonDetailWorkspace({
         }}
       />
     ) : null;
-
-  // Advance held for / by this person, and the oldest obligation it could settle right now.
-  const advanceAvailable = useMemo(() => advanceRemaining(advanceSources(ledgerEntries), advanceApplications), [ledgerEntries, advanceApplications]);
-  const openObligations = useMemo(() => payableObligations(allRows), [allRows]);
 
   // Follow-up reminders — metadata on open rows; status derived from each row's live remaining.
   const { followUpsByPersonId } = useAllPersonFollowUps();
@@ -420,6 +493,45 @@ export function PersonDetailWorkspace({
     };
   }, [allRows, deferrals, cycleStartDay, person.id, person.name, deferralActions]);
   const heldSides = advanceSides(advanceAvailable);
+  // Deep link from a lender payment (`?applyAdvance=1&obligation=<key>`): opens the existing Apply advance panel
+  // with that obligation preselected, once. Nothing is applied until the user confirms.
+  const advanceDeepLinkedRef = useRef(false);
+  const advanceTimerRef = useRef<number | null>(null);
+  useEffect(() => () => { if (advanceTimerRef.current != null) window.clearTimeout(advanceTimerRef.current); }, []);
+  const heldTheyOwe = heldSides.includes("theyOwe");
+  useEffect(() => {
+    if (advanceDeepLinkedRef.current || isLoading || typeof window === "undefined") return;
+    if (new URLSearchParams(window.location.search).get("applyAdvance") !== "1") return;
+    const consume = () => {
+      advanceDeepLinkedRef.current = true;
+      const params = new URLSearchParams(window.location.search);
+      params.delete("applyAdvance");
+      params.delete("obligation");
+      const rest = params.toString();
+      window.history.replaceState(window.history.state, "", `${window.location.pathname}${rest ? `?${rest}` : ""}`);
+    };
+    if (!onApplyAdvance || !heldTheyOwe) {
+      // The ledger may still be loading on a fresh page open — only say there is none after giving it time.
+      if (advanceTimerRef.current == null) {
+        advanceTimerRef.current = window.setTimeout(() => {
+          if (advanceDeepLinkedRef.current) return;
+          consume();
+          toast.error("No advance is available to apply", "Check the person's ledger for the receipt.");
+        }, 8000);
+      }
+      return;
+    }
+    const params = new URLSearchParams(window.location.search);
+    const key = params.get("obligation");
+    const back = params.get("return");
+    consume();
+    requestAnimationFrame(() => {
+      advanceReturnRef.current = back && isInAppPath(back) ? back : null;
+      setAdvanceKey(key);
+      setAdvanceOpen("theyOwe");
+      rootRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }, [isLoading, onApplyAdvance, heldTheyOwe]);
   const deletingRow = deleting?.row ?? null;
   const rowPlan = deleting?.plan ?? null;
   const frozenBulk = bulkDelete ?? bulkPlan;
@@ -746,14 +858,21 @@ export function PersonDetailWorkspace({
               obligations={openObligations}
               cycle={cycle}
               open={advanceOpen === side}
-              onOpenChange={(o) => setAdvanceOpen(o ? side : null)}
+              preselectKey={side === "theyOwe" ? advanceKey : null}
+              onOpenChange={(o) => {
+                setAdvanceOpen(o ? side : null);
+                if (!o) advanceReturnRef.current = null;
+              }}
               onConfirm={async (targets) => {
                 await onApplyAdvance({ targets, date: new Date() });
-                toast.success("Advance applied");
+                const back = advanceReturnRef.current;
+                advanceReturnRef.current = null;
+                toast.success(back ? "Advance applied — no money moved. Back to your payment" : "Advance applied");
+                if (back) router.push(back);
               }}
             />
           ))}
-        <PeopleDrawer id="person-inline-settle" width="lg" open={inline === "settle" && rawPerson != null && paymentPanel != null} onOpenChange={(o) => !o && closePayment()} title={`Record payment — ${person.name}`}>
+        <PeopleDrawer id="person-inline-settle" width="lg" open={inline === "settle" && rawPerson != null && paymentPanel != null} onOpenChange={(o) => !o && closePayment()} title={`${paying?.intent === "postpone" ? "Postpone collection" : "Record payment"} — ${person.name}`}>
           {rawPerson && inline === "settle" && paymentPanel}
         </PeopleDrawer>
         {/* Split is the one focused popup — the person page stays underneath, unchanged */}
@@ -992,7 +1111,7 @@ export function PersonDetailWorkspace({
           <span aria-hidden className={cn("pointer-events-none absolute -top-20 -right-16 size-56 rounded-full blur-3xl", heroGlow)} />
           <span aria-hidden className="pointer-events-none absolute -bottom-24 -left-16 size-52 rounded-full border border-white/10" />
           <span className={cn("relative shrink-0 rounded-full ring-2 ring-offset-2 ring-offset-[#262e3d]", heroRing)}>
-            <ClayAvatar name={person.name} size={52} />
+            <ClayAvatar name={person.name} size={52} fallbackClassName="bg-white/15 text-lg font-semibold text-white" />
           </span>
           <div className="relative flex min-w-0 flex-1 flex-col gap-0.5">
             <h1 className="truncate font-heading text-2xl leading-tight font-bold tracking-tight">{person.name}</h1>
@@ -1104,6 +1223,39 @@ export function PersonDetailWorkspace({
         </DialogContent>
       </Dialog>
 
+        <LedgerConfirmDialog
+          open={dateEditOpen && dateEdit != null && onEditPaymentDate != null}
+          onOpenChange={setDateEditOpen}
+          variant="reverse"
+          title="Change payment date"
+          confirmLabel="Save date"
+          busyLabel="Saving…"
+          disabled={dateEdit == null || dateEdit.value === "" || dateEdit.value === toInputDate(dateEdit.expectedDate)}
+          onConfirm={async () => {
+            if (!dateEdit || !onEditPaymentDate) return;
+            try {
+              const [y, m, d] = dateEdit.value.split("-").map(Number);
+              await onEditPaymentDate(dateEdit.paymentId, { date: new Date(y, m - 1, d), expectedDate: dateEdit.expectedDate });
+              toast.success("Payment date updated");
+            } catch (e) {
+              toast.error("Couldn't change the date", e instanceof Error ? e.message : "Please try again.");
+              throw e;
+            }
+          }}
+        >
+          {dateEdit && (
+            <>
+              <p className="font-medium text-foreground">
+                {money(dateEdit.amount)} · currently {formatStatementDate(dateEdit.expectedDate, true)}
+              </p>
+              <label className="flex flex-col gap-1 text-xs font-medium text-muted-foreground">
+                New date
+                <DateInput className={WS_FIELD} value={dateEdit.value} onChange={(e) => setDateEdit({ ...dateEdit, value: e.target.value })} />
+              </label>
+              <p>Only the date changes. The amount, account balance and what this payment settled stay exactly as they are.</p>
+            </>
+          )}
+        </LedgerConfirmDialog>
         <LedgerConfirmDialog
           open={undoOpen}
           onOpenChange={setUndoOpen}

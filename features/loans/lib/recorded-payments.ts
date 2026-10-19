@@ -9,7 +9,7 @@
  * Pure.
  */
 
-import type { InstallmentPayment, Installment, PaymentAllocationType } from "@/lib/models/payment-schedule";
+import type { InstallmentPayment, Installment, PaymentAllocationType, RecordedEarlier } from "@/lib/models/payment-schedule";
 
 export type PaymentSource = "loan" | "emi";
 
@@ -31,6 +31,8 @@ export interface RecordedPaymentAction {
   remainingAfter: number | null;
   /** Soft-deleted — reversed, or replaced by an edit. Shown in history, never editable. */
   reversed: boolean;
+  /** Recorded as "already paid earlier" (before FlowFi) — it never moved an account balance. */
+  recordedEarlier: RecordedEarlier | null;
 }
 
 export type EditEligibility = { ok: true } | { ok: false; reason: string };
@@ -74,6 +76,7 @@ export function groupRecordedPayments(payments: InstallmentPayment[], installmen
       installmentSeqs: portions.map((p) => seqById.get(p.installmentId)).filter((n): n is number => n != null),
       remainingAfter: last?.remainingBalanceAfterPayment ?? null,
       reversed: lead.deletedAt != null,
+      recordedEarlier: lead.recordedEarlier ?? null,
     };
   });
   return actions.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime() || b.date.getTime() - a.date.getTime());
@@ -94,6 +97,28 @@ export function editEligibility(action: RecordedPaymentAction, all: RecordedPaym
     return { ok: false, reason: "Only the latest payment can be edited — a later payment was recorded after this one." };
   }
   return { ok: true };
+}
+
+/**
+ * "Mark as unpaid" for an OLDER payment: the existing latest-first rule is kept by undoing, one at a time and
+ * newest first, every active payment recorded after it, then it. Each step is the ordinary single reversal
+ * (the repositories still check "latest" on every one), so this is orchestration — not a new accounting path.
+ * `chain[0]` is the newest; the last element is `action` itself.
+ */
+export type UndoChain = { ok: true; chain: RecordedPaymentAction[] } | { ok: false; reason: string };
+
+export function undoChain(action: RecordedPaymentAction, all: RecordedPaymentAction[], opts: { closed: boolean }): UndoChain {
+  if (action.reversed) return { ok: false, reason: "This payment was reversed or replaced by a correction." };
+  if (opts.closed) return { ok: false, reason: `Reopen this ${action.source === "loan" ? "loan" : "EMI"} to change its payments.` };
+  const chain = all
+    .filter((a) => !a.reversed && a.source === action.source && (a.id === action.id || a.createdAt > action.createdAt))
+    .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  if (chain[chain.length - 1]?.id !== action.id) return { ok: false, reason: "This payment can't be found any more — refresh and try again." };
+  // A Loan payment recorded before account tracking has no Transaction to reverse — the chain can't pass it.
+  if (chain.some((a) => a.source === "loan" && a.transactionId == null)) {
+    return { ok: false, reason: "A payment in between was recorded before account tracking and can't be undone automatically." };
+  }
+  return { ok: true, chain };
 }
 
 /** The latest active payment action that touched `installmentId` — what tapping a paid installment opens. */

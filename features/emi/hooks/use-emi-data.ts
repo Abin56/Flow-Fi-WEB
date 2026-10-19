@@ -30,10 +30,13 @@ import {
   emiOverallAllocationType,
   emiPaymentId,
   emiScheduleFigures,
+  payableEmiInstallments,
   planEmiPaymentAllocation,
   planEmiPaymentEdit,
   planEmiPaymentReversal,
 } from "@/features/emi/lib/emi-payment-allocation";
+import { assertEmiReversalStillValid, planEmiReversalPreflight } from "@/features/emi/lib/emi-reversal-guard";
+import { PaymentReversalBlockedError } from "@/lib/repositories/loan-advance-payment-repository";
 import { useCategories } from "@/hooks/use-categories";
 import { useCreditCards, useEmis } from "@/hooks/use-credit-cards";
 import { useAllEmiInstallments } from "@/hooks/use-emis";
@@ -49,7 +52,11 @@ import {
 } from "@/lib/repositories/agreement-deletion";
 import type { Account } from "@/lib/models/account";
 import { emiStatusGiven, type Emi, type EmiLoanType, type EmiPaymentBreakdown, type EmiStatus } from "@/lib/models/emi";
-import type { Installment, InstallmentPayment, PaymentAllocationType } from "@/lib/models/payment-schedule";
+import type { Installment, InstallmentPayment, PaymentAllocationType, RecordedEarlier } from "@/lib/models/payment-schedule";
+import { assertFundsAvailable } from "@/lib/engines/payment-funding";
+import { buildCardEmiTransactions, cardEmiCase, planCardEmiLegs, type CardFundingMode } from "@/features/emi/lib/emi-card-funding";
+import { assertReviewedAllocation, StaleInstallmentError } from "@/lib/engines/stale-installment";
+import { assertRecordedEarlierDate, assertRecordedEarlierSingle, assertRecordedEarlierTarget, carriedRecordedEarlier } from "@/lib/engines/recorded-earlier";
 import type { Transaction } from "@/lib/models/transaction";
 import { netBalanceDeltas } from "@/lib/engines/payment-correction";
 import { TransactionRepository } from "@/lib/repositories/transaction-repository";
@@ -133,10 +140,23 @@ export interface RecordEmiPaymentParams {
    * bank balance and Net Worth move with the EMI. Ignored for a card-linked EMI (it posts on the card).
    */
   accountId?: string | null;
+  /**
+   * Card-linked EMI only — how the installment is funded (default "card"). "card": billed to the card (Case A bills
+   * only its interest / fees, see `emi-card-funding.ts`). "bank": paid from `accountId` (required, never a card) —
+   * the bank is debited once, with `enforceFunds`, and nothing extra is billed to the card. On an edit the original's
+   * mode is kept unless this says otherwise.
+   */
+  fundingMode?: CardFundingMode;
   /** One per user action (generated when the payment surface opens), reused verbatim on a retry. */
   idempotencyKey: string;
   /** The installment the user chose to pay — filled first; defaults to the next unpaid one. */
   targetInstallmentId?: string | null;
+  /**
+   * The installments the user reviewed the payment against (in order). Checked against the allocation computed from
+   * the FRESH in-transaction reads: if another tab changed them (paid, or part-paid so the amount would spill onto
+   * the next one) nothing is written and a stale-installment error is thrown — never silently re-aimed.
+   */
+  expectedInstallmentIds?: string[] | null;
   date: Date;
   note?: string;
   principalPaid?: number;
@@ -153,9 +173,23 @@ export interface RecordEmiPaymentParams {
    * the People settlement gate is enforced inside the payment transaction (`people-settlement-gate.ts`).
    */
   peopleGateAcknowledgement?: UnsettledPeopleAcknowledgement | null;
+  /**
+   * Re-checks the paid-from account's balance FRESH inside the payment transaction and refuses
+   * (`InsufficientFundsError`, nothing saved) when it would go below zero. A card-linked EMI posts on its card
+   * (no bank debit) and is never checked. See `lib/engines/payment-funding.ts`.
+   */
+  enforceFunds?: boolean;
+  /**
+   * "Already paid earlier" (`lib/engines/recorded-earlier.ts`): settles the schedule with NO Transaction — no
+   * bank or card movement — and must land on `targetInstallmentId` exactly (nothing is written if it is
+   * already paid). Dated today or earlier.
+   */
+  recordedEarlier?: RecordedEarlier | null;
+  /** Bulk "already paid earlier": the amount must stay on `targetInstallmentId` — never spill into the next one. */
+  onlyTargetInstallment?: boolean;
 }
 
-export interface EditEmiPaymentParams extends Omit<RecordEmiPaymentParams, "targetInstallmentId" | "principalPaid" | "interestPaid"> {
+export interface EditEmiPaymentParams extends Omit<RecordEmiPaymentParams, "targetInstallmentId" | "principalPaid" | "interestPaid" | "recordedEarlier"> {
   /** The recorded action being corrected: its payments and the installments they sit under (parallel arrays). */
   original: { paymentIds: string[]; installmentIds: string[] };
 }
@@ -183,6 +217,28 @@ export function useEmiActions() {
     const cardById = new Map((cards as CreditCardProfile[]).map((c) => [c.id, c]));
     const accountRepository = createAccountRepository(uid);
     const transactionRepository = createTransactionRepository(uid, accountRepository);
+    const cardAccountIds = new Set((cards as CreditCardProfile[]).map((c) => c.accountId));
+    type Tx = Parameters<Parameters<typeof runTransaction>[1]>[0];
+    /** The EMI's linked purchase, read INSIDE the payment transaction — Case A / B is decided on the fresh record. */
+    const readPurchase = async (tx: Tx, emi: Emi): Promise<Transaction | null> => {
+      if (emi.purchaseTransactionId == null) return null;
+      const snap = await tx.get(transactionRepository.docRef(emi.purchaseTransactionId));
+      return snap.exists() ? snap.data() : null;
+    };
+    const assertBankFundingAccount = (accountId: string | null): string => {
+      if (accountId == null || accountId === "") throw new Error("Choose the bank or savings account this payment is made from");
+      if (cardAccountIds.has(accountId)) throw new Error("A credit card can't fund its own EMI — choose a bank or savings account, or charge it to the card");
+      return accountId;
+    };
+    const readAccounts = async (tx: Tx, ids: Iterable<string>): Promise<Map<string, Account>> => {
+      const accounts = new Map<string, Account>();
+      for (const id of new Set(ids)) {
+        const snap = await tx.get(accountRepository.docRef(id));
+        if (!snap.exists()) throw new Error("Account not found");
+        accounts.set(id, snap.data());
+      }
+      return accounts;
+    };
 
     return {
       createEmi: async (params: CreateEmiParams & { loanType?: EmiLoanType }) => {
@@ -237,6 +293,8 @@ export function useEmiActions() {
         const breakdownRepository = createEmiPaymentBreakdownRepository(uid, emi.id);
         const linkedCard = emi.linkedCreditCardId ? cardById.get(emi.linkedCreditCardId) : undefined;
         const ids = scheduleInstallments.map((i) => i.id);
+        const recordedEarlier = params.recordedEarlier ? { dateKnown: params.recordedEarlier.dateKnown } : null;
+        if (recordedEarlier) assertRecordedEarlierDate(params.date);
 
         return runTransaction(db, async (tx) => {
           // --- All reads first (Firestore transaction constraint). ---
@@ -248,6 +306,11 @@ export function useEmiActions() {
             if (snap.exists()) fresh.push(snap.data());
           }
 
+          // The confirmed installment must still be payable. Past payments keep their own "already paid" refusal.
+          if (params.targetInstallmentId != null && !payableEmiInstallments(fresh).some((i) => i.id === params.targetInstallmentId)) {
+            if (recordedEarlier) assertRecordedEarlierTarget(undefined, params.targetInstallmentId);
+            throw new StaleInstallmentError();
+          }
           const allocation = planEmiPaymentAllocation({
             installments: fresh,
             amount: params.amount,
@@ -255,6 +318,12 @@ export function useEmiActions() {
             targetInstallmentId: params.targetInstallmentId,
           });
           if (!allocation.ok) throw new Error(allocation.error);
+          assertReviewedAllocation({
+            actualInstallmentIds: allocation.portions.map((p) => p.installment.id),
+            expectedInstallmentIds: params.expectedInstallmentIds,
+          });
+          if (recordedEarlier) assertRecordedEarlierTarget(allocation.portions[0]?.installment.id, params.targetInstallmentId);
+          if (params.onlyTargetInstallment) assertRecordedEarlierSingle(allocation.portions.length);
           await assertLinkedPeopleSettled({
             firestore: db,
             uid,
@@ -273,11 +342,43 @@ export function useEmiActions() {
             principalPaid: params.principalPaid,
             interestPaid: params.interestPaid,
             charges: params,
+            recordedEarlier,
           });
 
           // Reads the paying account and then writes — so it runs before the writes below. A card-linked EMI posts
-          // on its card; any other EMI on the chosen paid-from account (WFI-P1-08).
-          const payingAccountId = linkedCard?.accountId ?? params.accountId ?? null;
+          // on its card; any other EMI on the chosen paid-from account (WFI-P1-08). A payment already made
+          // earlier posts nothing: the bank / card already reflects it.
+          // A card-linked EMI's legs (`emi-card-funding.ts`) are decided on the fresh purchase record and posted below,
+          // after every read. A non-card EMI keeps its single paid-from expense.
+          let linkedLegs: Transaction[] = [];
+          let linkedAccounts = new Map<string, Account>();
+          if (linkedCard && !recordedEarlier) {
+            const mode = params.fundingMode ?? "card";
+            const bankId = mode === "bank" ? assertBankFundingAccount(params.accountId ?? null) : null;
+            const plan = planCardEmiLegs({
+              emiCase: cardEmiCase(emi, linkedCard.accountId, await readPurchase(tx, emi)),
+              mode,
+              applied: allocation.applied,
+              principal: writes.breakdowns.reduce((sum, b) => sum + b.principalPaid, 0),
+            });
+            linkedLegs = buildCardEmiTransactions({
+              plan,
+              emi,
+              cardAccountId: linkedCard.accountId,
+              bankAccountId: bankId,
+              date: params.date,
+              note: params.note,
+              installmentId: writes.payments[0].installmentId,
+              installmentPaymentId: writes.payments[0].id,
+            });
+            linkedAccounts = await readAccounts(tx, linkedLegs.map((t) => t.accountId));
+            if (bankId != null) {
+              if (linkedAccounts.size > 0 && linkedAccounts.get(bankId)?.type === "card") throw new Error("A credit card can't fund its own EMI — choose a bank or savings account");
+              // One check on the TOTAL bank debit (every bank leg), on the fresh balance.
+              if (params.enforceFunds === true && plan.bankDebit > 0) assertFundsAvailable(linkedAccounts.get(bankId)!, plan.bankDebit);
+            }
+          }
+          const payingAccountId = recordedEarlier || linkedCard ? null : (params.accountId ?? null);
           if (payingAccountId) {
             await transactionRepository.createTransactionInTransaction(tx, {
               type: "expense",
@@ -291,6 +392,7 @@ export function useEmiActions() {
               installmentId: writes.payments[0].installmentId,
               installmentPaymentId: writes.payments[0].id,
               paymentAllocationType: "regularEmi",
+              enforceFunds: params.enforceFunds === true,
             });
           }
 
@@ -298,6 +400,10 @@ export function useEmiActions() {
           for (const installment of writes.installments) tx.set(installmentRepository.docRef(installment.id), installment);
           for (const payment of writes.payments) tx.set(paymentRepositoryFor(payment.installmentId).docRef(payment.id), payment);
           for (const breakdown of writes.breakdowns) tx.set(breakdownRepository.docRef(breakdown.id), breakdown);
+          for (const t of linkedLegs) tx.set(transactionRepository.docRef(t.id), t);
+          for (const [id, delta] of netBalanceDeltas([], linkedLegs)) {
+            if (delta !== 0) tx.set(accountRepository.docRef(id), accountRepository.applyBalanceDelta(linkedAccounts.get(id)!, delta));
+          }
 
           return { alreadyRecorded: false, applied: allocation.applied, allocationType: emiOverallAllocationType(allocation.portions) };
         });
@@ -346,15 +452,18 @@ export function useEmiActions() {
             const snap = await tx.get(transactionRepository.docRef(id));
             if (snap.exists() && snap.data().deletedAt == null) oldCardTransactions.push(snap.data());
           }
-          // The card for a card-linked EMI; otherwise the chosen paid-from account, else the one the original used.
-          const payingAccountId = linkedCard?.accountId ?? params.accountId ?? oldCardTransactions[0]?.accountId ?? null;
-          const accountIds = new Set([...oldCardTransactions.map((t) => t.accountId), ...(payingAccountId ? [payingAccountId] : [])]);
-          const accounts = new Map<string, Account>();
-          for (const id of accountIds) {
-            const snap = await tx.get(accountRepository.docRef(id));
-            if (!snap.exists()) throw new Error("Account not found");
-            accounts.set(id, snap.data());
-          }
+          // The correction keeps the original's treatment (read from the stored payment, not the caller): one
+          // recorded as already paid earlier stays balance-neutral — no card or bank Transaction is posted.
+          const recordedEarlier = carriedRecordedEarlier(original[0], params.date);
+          if (recordedEarlier) assertRecordedEarlierDate(params.date);
+          // A card-linked EMI keeps the original's funding (a bank account other than the card among the old legs → bank
+          // mode) unless the caller says otherwise; a non-card EMI uses the chosen paid-from account, else the original's.
+          const cardAccountId = linkedCard?.accountId ?? null;
+          const originalBankId = cardAccountId ? (oldCardTransactions.find((t) => t.accountId !== cardAccountId)?.accountId ?? null) : null;
+          const linkedMode: CardFundingMode = linkedCard && !recordedEarlier ? (params.fundingMode ?? (originalBankId ? "bank" : "card")) : "card";
+          const linkedBankId = linkedMode === "bank" ? assertBankFundingAccount(params.accountId ?? originalBankId) : null;
+          const purchase = linkedCard && !recordedEarlier ? await readPurchase(tx, emi) : null;
+          const payingAccountId = recordedEarlier || linkedCard ? null : (params.accountId ?? oldCardTransactions[0]?.accountId ?? null);
 
           const plan = planEmiPaymentEdit({
             installments: fresh,
@@ -364,6 +473,7 @@ export function useEmiActions() {
             idempotencyKey: params.idempotencyKey,
             note: params.note,
             charges: params,
+            recordedEarlier,
           });
           if (!plan.ok) throw new Error(plan.error);
           // A correction may reach installments the original did not — those are gated like a new payment.
@@ -379,16 +489,28 @@ export function useEmiActions() {
             acknowledgement: params.peopleGateAcknowledgement,
           });
 
-          // --- Then all writes. ---
-          const now = new Date();
-          for (const installment of plan.writes.installments) tx.set(installmentRepository.docRef(installment.id), installment);
-          for (const payment of original) tx.set(paymentRepositoryFor(payment.installmentId).docRef(payment.id), { ...payment, deletedAt: now });
-          for (const breakdown of originalBreakdowns) tx.set(breakdownRepository.docRef(breakdown.id), { ...breakdown, deletedAt: now });
-          for (const payment of plan.writes.payments) tx.set(paymentRepositoryFor(payment.installmentId).docRef(payment.id), payment);
-          for (const breakdown of plan.writes.breakdowns) tx.set(breakdownRepository.docRef(breakdown.id), breakdown);
-
-          const corrected = payingAccountId
-            ? TransactionRepository.buildTransaction({
+          // The corrected legs, from the same rule the original was posted with (still reads — before any write).
+          let corrected: Transaction[] = [];
+          if (linkedCard && !recordedEarlier) {
+            const legPlan = planCardEmiLegs({
+              emiCase: cardEmiCase(emi, linkedCard.accountId, purchase),
+              mode: linkedMode,
+              applied: plan.allocation.applied,
+              principal: plan.writes.breakdowns.reduce((sum, b) => sum + b.principalPaid, 0),
+            });
+            corrected = buildCardEmiTransactions({
+              plan: legPlan,
+              emi,
+              cardAccountId: linkedCard.accountId,
+              bankAccountId: linkedBankId,
+              date: params.date,
+              note: params.note,
+              installmentId: plan.writes.payments[0].installmentId,
+              installmentPaymentId: plan.writes.payments[0].id,
+            });
+          } else if (payingAccountId) {
+            corrected = [
+              TransactionRepository.buildTransaction({
                 type: "expense",
                 amount: plan.allocation.applied,
                 dateTime: params.date,
@@ -400,12 +522,26 @@ export function useEmiActions() {
                 installmentId: plan.writes.payments[0].installmentId,
                 installmentPaymentId: plan.writes.payments[0].id,
                 paymentAllocationType: "regularEmi",
-              })
-            : null;
+              }),
+            ];
+          }
+          const accounts = await readAccounts(tx, [...oldCardTransactions.map((t) => t.accountId), ...corrected.map((t) => t.accountId)]);
+          if (linkedBankId != null && accounts.get(linkedBankId)?.type === "card") throw new Error("A credit card can't fund its own EMI — choose a bank or savings account");
+
+          // --- Then all writes. ---
+          const now = new Date();
+          for (const installment of plan.writes.installments) tx.set(installmentRepository.docRef(installment.id), installment);
+          for (const payment of original) tx.set(paymentRepositoryFor(payment.installmentId).docRef(payment.id), { ...payment, deletedAt: now });
+          for (const breakdown of originalBreakdowns) tx.set(breakdownRepository.docRef(breakdown.id), { ...breakdown, deletedAt: now });
+          for (const payment of plan.writes.payments) tx.set(paymentRepositoryFor(payment.installmentId).docRef(payment.id), payment);
+          for (const breakdown of plan.writes.breakdowns) tx.set(breakdownRepository.docRef(breakdown.id), breakdown);
+
           for (const old of oldCardTransactions) tx.set(transactionRepository.docRef(old.id), { ...old, deletedAt: now });
-          if (corrected) tx.set(transactionRepository.docRef(corrected.id), corrected);
-          // The card account moves by the difference only — the original movement undone, the corrected one applied.
-          for (const [id, delta] of netBalanceDeltas(oldCardTransactions, corrected ? [corrected] : [])) {
+          for (const t of corrected) tx.set(transactionRepository.docRef(t.id), t);
+          // Each account moves by the difference only — the original legs undone, the corrected ones applied.
+          for (const [id, delta] of netBalanceDeltas(oldCardTransactions, corrected)) {
+            // Bank-funded only (never the card's own account): validate the NET extra debit on the fresh balance (the original is refunded first).
+            if (params.enforceFunds === true && id !== cardAccountId && delta < 0) assertFundsAvailable(accounts.get(id)!, -delta);
             if (delta !== 0) tx.set(accountRepository.docRef(id), accountRepository.applyBalanceDelta(accounts.get(id)!, delta));
           }
 
@@ -425,22 +561,40 @@ export function useEmiActions() {
         const paymentRepositoryFor = (installmentId: string) =>
           createInstallmentPaymentRepositoryFor(uid, emi.scheduleId, installmentId, installmentRepository);
         const breakdownRepository = createEmiPaymentBreakdownRepository(uid, emi.id);
+        if (params.original.paymentIds.length !== params.original.installmentIds.length) {
+          throw new Error("paymentIds and installmentIds must be the same length");
+        }
         // Queries can't run inside a client transaction — find the card Transaction first, re-read it inside.
         const firstId = params.original.paymentIds[0];
         const cardTransactionIds = firstId
           ? (await transactionRepository.findByInstallmentPaymentId(firstId)).filter((t) => t.emiId === emi.id).map((t) => t.id)
           : [];
+        // Write-time eligibility (`emi-reversal-guard.ts`): only the latest active payment action may be undone.
+        // Checked here on fresh reads, then re-verified inside the transaction below.
+        const scheduleInstallments = [...(await installmentRepository.getAll()), ...(await installmentRepository.getTrash())];
+        const activePayments = (await Promise.all(scheduleInstallments.map((i) => paymentRepositoryFor(i.id).getAll()))).flat();
+        const { preflight, block } = planEmiReversalPreflight({ installments: scheduleInstallments, activePayments, targetPaymentIds: params.original.paymentIds });
+        if (block) throw new PaymentReversalBlockedError(block);
 
         return runTransaction(db, async (tx) => {
           // --- All reads first. ---
           const original: InstallmentPayment[] = [];
+          const freshTargets: (InstallmentPayment | null)[] = [];
           const breakdowns: EmiPaymentBreakdown[] = [];
           for (let i = 0; i < params.original.paymentIds.length; i++) {
             const snap = await tx.get(paymentRepositoryFor(params.original.installmentIds[i]).docRef(params.original.paymentIds[i]));
+            freshTargets.push(snap.exists() ? snap.data() : null);
             if (snap.exists() && snap.data().deletedAt == null) original.push(snap.data());
             const breakdown = await tx.get(breakdownRepository.docRef(params.original.paymentIds[i]));
             if (breakdown.exists() && breakdown.data().deletedAt == null) breakdowns.push(breakdown.data());
           }
+          // Every installment the preflight saw, read inside `tx` so a payment committing concurrently forces a retry.
+          const freshInstallments = new Map<string, Installment | null>();
+          const installmentSnaps = await Promise.all([...preflight.installments.keys()].map((id) => tx.get(installmentRepository.docRef(id))));
+          installmentSnaps.forEach((snap) => freshInstallments.set(snap.id, snap.exists() ? snap.data() : null));
+          const validity = assertEmiReversalStillValid({ preflight, freshTargets, freshInstallments });
+          if (!validity.ok) throw new PaymentReversalBlockedError(validity.message);
+          if (validity.outcome === "alreadyReversed") return { alreadyReversed: true };
           const fresh: Installment[] = [];
           for (const id of new Set(original.map((p) => p.installmentId))) {
             const snap = await tx.get(installmentRepository.docRef(id));

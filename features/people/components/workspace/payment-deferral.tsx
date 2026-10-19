@@ -391,7 +391,7 @@ export function PostponeFields({ draft, noMoneyNote = false }: { draft: Postpone
         {single && <span className="text-foreground/70"> · now expected {cycleName(single.cycle)} cycle</span>}
       </p>
 
-      <p className="mt-2 mb-1 text-[11.5px] font-semibold text-foreground/75">Move expected payment to</p>
+      <p className="mt-3 mb-1.5 text-xs font-bold text-foreground/85">Move expected payment to</p>
       <div role="radiogroup" aria-label="Expected cycle" className="flex flex-wrap items-center gap-1.5">
         {options.slice(0, chipCount).map((c, i) => (
           <button key={c.start.getTime()} type="button" role="radio" aria-checked={targetIdx === i} title={rangeLabel(c)} className={chip(targetIdx === i)} onClick={() => setTargetIdx(i)}>
@@ -414,7 +414,7 @@ export function PostponeFields({ draft, noMoneyNote = false }: { draft: Postpone
       </div>
       <p className="mt-1 text-[11.5px] text-foreground/65 tabular-nums">{rangeLabel(target)}</p>
 
-      <p className="mt-2 mb-1 text-[11.5px] font-semibold text-foreground/75">
+      <p className="mt-3.5 mb-1.5 text-xs font-bold text-foreground/85">
         Reason <span className="font-normal text-foreground/60">(optional)</span>
       </p>
       <div role="radiogroup" aria-label="Reason" className="flex flex-wrap items-center gap-1.5">
@@ -428,7 +428,7 @@ export function PostponeFields({ draft, noMoneyNote = false }: { draft: Postpone
         )}
       </div>
 
-      <p className="mt-2 mb-1 text-[11.5px] font-semibold text-foreground/75">
+      <p className="mt-3.5 mb-1.5 text-xs font-bold text-foreground/85">
         Reminder <span className="font-normal text-foreground/60">(optional)</span>
       </p>
       <div role="radiogroup" aria-label="Reminder" className="flex flex-wrap items-center gap-1.5">
@@ -460,10 +460,13 @@ export function PostponeFields({ draft, noMoneyNote = false }: { draft: Postpone
         </p>
       )}
 
-      <p className="mt-2.5 rounded-[6px] border border-border-strong/70 bg-secondary/60 px-2.5 py-1.5 text-[12.5px] leading-snug text-foreground" data-testid="postpone-preview">
-        <span className="font-semibold tabular-nums">{money(remaining)}</span> will remain unpaid and will be expected in the{" "}
-        <span className="font-semibold">{cycleName(target, today)} cycle</span> ({rangeLabel(target)}).{" "}
-        {noMoneyNote ? "No money will be recorded and your balances will not change." : "The original transaction and your financial totals will not change."}
+      <p className="mt-4 flex items-start gap-2 rounded-[8px] border border-settle-split-edge/50 bg-settle-split-tint/40 px-3 py-2 text-[12.5px] leading-snug text-foreground" data-testid="postpone-preview">
+        <CalendarClock className="mt-0.5 size-3.5 shrink-0 text-settle-split-text" aria-hidden />
+        <span>
+          <span className="font-semibold tabular-nums">{money(remaining)}</span> will remain unpaid and will be expected in the{" "}
+          <span className="font-semibold">{cycleName(target, today)} cycle</span> ({rangeLabel(target)}).{" "}
+          {noMoneyNote ? "No money will be recorded and your balances will not change." : "The original transaction and your financial totals will not change."}
+        </span>
       </p>
     </>
   );

@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, ChevronDown, ChevronRight, Landmark, Loader2, ShoppingBag, X, type LucideIcon } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Landmark, Loader2, ShoppingBag, Users, X, type LucideIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { ClayButton } from "@/components/clay/clay-button";
 import { OperationProgressView } from "@/components/feedback/operation-progress";
@@ -9,6 +9,8 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/compone
 import { ClayBadge } from "@/components/clay/clay-badge";
 import { StaggerItem } from "@/components/foundation/animated-container";
 import { cn } from "@/lib/utils";
+import { formatCurrency } from "@/lib/format";
+import { hasOwnershipShares, resolveOwnership, type OwnershipSource } from "@/lib/engines/debt-ownership";
 import { handleEnterKey } from "@/components/ui/enter-key";
 
 /**
@@ -85,13 +87,14 @@ export function dueLabel(date: Date): string {
 // Same options as `formatCurrency` (lib/format.ts) — split into parts only so the ₹ and any decimals can
 // be sized separately from the digits. The rendered figure is identical to `formatCurrency(amount)`.
 const MONEY_FORMAT = new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 });
+const MONEY_FORMAT_EXACT = new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 /**
  * A monetary figure in the Loan & EMI financial style: bold heading face, tabular digits, a slightly
  * smaller solid-grey ₹ so the digits carry the weight. Inherits font size from `className`.
  */
-export function Money({ amount, className }: { amount: number; className?: string }) {
-  const parts = MONEY_FORMAT.formatToParts(amount);
+export function Money({ amount, className, exact = false }: { amount: number; className?: string; /** Show paise when the amount has them (payment confirmation). Default: whole rupees. */ exact?: boolean }) {
+  const parts = (exact && Math.round(amount * 100) % 100 !== 0 ? MONEY_FORMAT_EXACT : MONEY_FORMAT).formatToParts(amount);
   return (
     // Inline (not flex) so copying the figure gives "₹5,580", not one line per part.
     <span className={cn("inline-block font-heading font-bold tracking-tight whitespace-nowrap tabular-nums", className)}>
@@ -175,6 +178,9 @@ export interface DebtCardProps {
   badges?: DebtCardBadge[];
   outstandingLabel: string;
   outstanding: number;
+  /** The original amount borrowed / financed — shown under the outstanding balance so the card reads in full. */
+  totalAmount?: number | null;
+  totalLabel?: string;
   nextAmount: number | null;
   nextDate: Date | null;
   /** "month" / "week" — shown as "₹X / month". */
@@ -188,6 +194,28 @@ export interface DebtCardProps {
   links?: { icon: LucideIcon; label: string }[];
   muted?: boolean;
   onClick: () => void;
+}
+
+/**
+ * Who the principal belongs to, as card chips: "SANJU ₹1,52,790". Empty when it is all mine, so a plain loan
+ * keeps its card. Display only — the split comes from `resolveOwnership`, never recomputed here.
+ */
+export function ownershipChips(
+  source: OwnershipSource,
+  principal: number,
+  nameOf: (personId: string) => string | undefined,
+): { icon: LucideIcon; label: string }[] {
+  const shares = resolveOwnership(source, principal);
+  if (shares.every((s) => s.personId == null)) return [];
+  const shared = hasOwnershipShares(source) || shares.length > 1;
+  return shares
+    .filter((s) => s.amount > 0 || s.personId != null)
+    .map((s) => {
+      const amount = formatCurrency(s.amount);
+      if (s.personId == null) return { icon: Users, label: `You ${amount}` };
+      const name = nameOf(s.personId) ?? "Someone";
+      return { icon: Users, label: shared ? `${name} ${amount}` : `${name} repays ${amount}` };
+    });
 }
 
 /** "month" / "week" for a schedule frequency, or null when it isn't a regular cadence. */
@@ -207,6 +235,8 @@ export function DebtCard({
   badges = [],
   outstandingLabel,
   outstanding,
+  totalAmount = null,
+  totalLabel = "Loan amount",
   nextAmount,
   nextDate,
   cadence,
@@ -218,6 +248,9 @@ export function DebtCard({
   muted = false,
   onClick,
 }: DebtCardProps) {
+  const hasNext = nextDate != null && nextAmount != null;
+  // The original amount only earns its box when it differs from what's left (or sits beside the next payment).
+  const hasTotal = totalAmount != null && totalAmount > 0 && (hasNext || Math.abs(totalAmount - outstanding) >= 0.005);
   return (
     <StaggerItem>
       <div
@@ -267,32 +300,42 @@ export function DebtCard({
           )}
         </div>
 
-        <div className="flex flex-col gap-1.5">
+        <div className="flex flex-col gap-2">
           <FigureLabel>{outstandingLabel}</FigureLabel>
           <AmountDisplay amount={outstanding} className={cn(muted && "text-muted-foreground")} />
-          {nextDate && nextAmount != null && (
-            <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-[13px]">
-              <span className="font-semibold text-foreground">
-                <Money amount={nextAmount} />
-                {cadence ? <span className="font-normal text-muted-foreground"> / {cadence}</span> : null}
-              </span>
-              <span aria-hidden className="text-muted-foreground">
-                ·
-              </span>
-              <span className={cn("font-medium", overdue ? "font-semibold text-expense" : "text-muted-foreground")}>
-                {overdue ? dueLabel(nextDate) : `Due ${formatDueDate(nextDate)}`}
-              </span>
-            </div>
-          )}
         </div>
+
+        {(hasTotal || hasNext) && (
+          <dl className={cn(LE_RADIUS.control, "grid divide-x divide-border border border-border bg-secondary/60 py-2", hasTotal && hasNext ? "grid-cols-2" : "grid-cols-1")}>
+            {hasTotal && (
+              <div className="flex min-w-0 flex-col gap-0.5 px-3">
+                <dt className="text-[10.5px] font-medium tracking-[0.06em] text-muted-foreground uppercase">{totalLabel}</dt>
+                <dd className="text-[13px] font-semibold text-foreground tabular-nums">{formatCurrency(totalAmount!)}</dd>
+              </div>
+            )}
+            {hasNext && (
+              <div className="flex min-w-0 flex-col gap-0.5 px-3">
+                <dt className="text-[10.5px] font-medium tracking-[0.06em] text-muted-foreground uppercase">{cadence ? `Every ${cadence}` : "Next payment"}</dt>
+                <dd className="flex flex-wrap items-baseline gap-x-1.5 text-[13px]">
+                  <span className="font-semibold text-foreground tabular-nums">
+                    <Money amount={nextAmount!} />
+                  </span>
+                  <span className={cn("text-xs", overdue ? "font-semibold text-expense" : "text-muted-foreground")}>
+                    {overdue ? dueLabel(nextDate!) : `Due ${formatDueDate(nextDate!)}`}
+                  </span>
+                </dd>
+              </div>
+            )}
+          </dl>
+        )}
 
         {total > 1 && <InstallmentProgress paid={paid} total={total} partial={partial} />}
 
         {links.length > 0 && (
-          <div className="mt-auto flex flex-wrap gap-x-3 gap-y-1 border-t border-border pt-2.5">
+          <div className="mt-auto flex flex-wrap gap-1.5 border-t border-border pt-3">
             {links.map(({ icon: LinkIcon, label }) => (
-              <span key={label} className="inline-flex max-w-full items-center gap-1 text-xs font-medium text-muted-foreground">
-                <LinkIcon className="size-3.5 shrink-0" strokeWidth={1.75} />
+              <span key={label} className="inline-flex max-w-full items-center gap-1 rounded-full border border-border bg-secondary px-2.5 py-1 text-xs font-medium text-foreground">
+                <LinkIcon className="size-3.5 shrink-0 text-muted-foreground" strokeWidth={1.75} />
                 <span className="truncate">{label}</span>
               </span>
             ))}
@@ -830,6 +873,7 @@ export function LoanEmiFormDialog({
   loading = false,
   confirmDisabled = false,
   success = false,
+  refreshing = false,
   operation = null,
   cancelLabel = "Cancel",
   size = "default",
@@ -850,11 +894,13 @@ export function LoanEmiFormDialog({
   confirmDisabled?: boolean;
   /** Brief post-save confirmation: the primary button turns into a check + label before the dialog closes. */
   success?: boolean;
+  /** After `success`: the write is committed but balances are still being re-read — the check reads "Updating balances…". */
+  refreshing?: boolean;
   /** The running — or just failed / succeeded — write, from `useOperation()`. */
   operation?: OperationSnapshot | null;
   cancelLabel?: string;
-  /** "compact" — a narrower panel for focused actions such as Record Payment. */
-  size?: "default" | "compact";
+  /** "compact" — a narrower panel for focused actions such as Record Payment; "wide" — a roomier one for multi-column forms. */
+  size?: "default" | "compact" | "wide";
 }) {
   const busy = loading || success;
   return (
@@ -870,7 +916,7 @@ export function LoanEmiFormDialog({
           // Right-side drawer (same experience as Add Transaction / Account / Card): slides in from the edge, full height.
           "top-0 right-0 left-auto h-dvh max-h-dvh w-full max-w-full translate-x-0 translate-y-0 rounded-none border-0 border-l border-border-strong",
           "shadow-[-24px_0_60px_-20px_rgba(0,0,0,0.45)] duration-300 ease-out data-open:slide-in-from-right data-closed:slide-out-to-right data-closed:duration-200",
-          size === "compact" ? "sm:max-w-[520px]" : "sm:max-w-[640px]",
+          size === "compact" ? "sm:max-w-[520px]" : size === "wide" ? "sm:max-w-[820px]" : "sm:max-w-[640px]",
           "sm:rounded-l-[16px]",
         )}
       >
@@ -934,7 +980,7 @@ export function LoanEmiFormDialog({
             {success ? (
               <>
                 <Check className="size-4 animate-in zoom-in-50 fade-in-0 duration-200" strokeWidth={3} />
-                Done
+                {refreshing ? "Saved · Updating balances…" : "Done"}
               </>
             ) : loading ? (
               <>

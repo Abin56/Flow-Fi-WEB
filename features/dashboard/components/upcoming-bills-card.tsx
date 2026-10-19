@@ -24,6 +24,7 @@ export interface UpcomingBillsCardProps {
     name: string;
     date: string;
     daysLeft: number;
+    overdue?: boolean;
   }[];
   isLoading?: boolean;
 }
@@ -65,8 +66,8 @@ export function UpcomingBillsCard({ upcomingBills, isLoading }: UpcomingBillsCar
                 <p className="truncate text-sm font-medium text-foreground">{bill.name}</p>
                 <p className="text-xs text-muted-foreground">{bill.date}</p>
               </div>
-              <Badge className={cn("shrink-0 border-0 text-[10px]", chipClass(bill.daysLeft))}>
-                {bill.daysLeft} days left
+              <Badge className={cn("shrink-0 border-0 text-[10px]", bill.overdue ? "bg-expense/12 text-expense" : chipClass(bill.daysLeft))}>
+                {bill.overdue ? `${Math.abs(bill.daysLeft)} days overdue` : `${bill.daysLeft} days left`}
               </Badge>
             </div>
           );

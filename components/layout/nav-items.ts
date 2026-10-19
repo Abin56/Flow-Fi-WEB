@@ -17,6 +17,7 @@ import {
   History,
   LineChart,
   TrendingDown,
+  ScanSearch,
 } from "lucide-react";
 
 export interface NavItem {
@@ -58,8 +59,9 @@ export const NAV_ITEMS: NavItem[] = [
 
   { label: "Reports", href: "/reports", icon: FileBarChart, section: "Insights" },
   { label: "Analytics", href: "/analytics", icon: LineChart, section: "Insights" },
-  { label: "History", href: "/history", icon: History, section: "Insights" },
+  { label: "Activity", href: "/activity", icon: History, section: "Insights" },
 
   { label: "Settings", href: "/settings", icon: Settings, section: "System" },
+  { label: "Financial Audit", href: "/financial-audit", icon: ScanSearch, section: "System" },
   { label: "Help & Support", href: "/help", icon: LifeBuoy, section: "System" },
 ];

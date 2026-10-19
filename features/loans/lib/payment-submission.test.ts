@@ -112,6 +112,84 @@ describe("payment submission", () => {
     expect(handlers.onError).not.toHaveBeenCalled();
   });
 
+  it("confirms as soon as the write commits, while a slow refresh is still running", async () => {
+    const submission = createPaymentSubmission();
+    const { phases, handlers } = recorder();
+    const refreshStates: string[] = [];
+    const h = { ...handlers, onRefresh: (s: string) => refreshStates.push(s) };
+    const slow = deferred();
+    const refresh = vi.fn(() => slow.promise);
+    const run = submission.run({ label: "x", stages: ["a", "b"], write: async () => "ok", refresh }, h);
+    // Let the write settle; the refresh is pending and has not been awaited by the confirmation.
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(phases).toEqual(["saving", "success"]);
+    expect(handlers.onSuccess).toHaveBeenCalledWith("ok");
+    expect(refreshStates).toEqual(["refreshing"]);
+    expect(refresh).toHaveBeenCalledTimes(1);
+
+    slow.resolve();
+    await run;
+    expect(refreshStates).toEqual(["refreshing", "done"]);
+    expect(handlers.onError).not.toHaveBeenCalled();
+  });
+
+  it("a refresh failure is surfaced as a refresh failure — the committed write is never retried or reported as failed", async () => {
+    const submission = createPaymentSubmission();
+    const { phases, handlers } = recorder();
+    const refreshStates: Array<[string, unknown]> = [];
+    const offline = new Error("offline");
+    const write = vi.fn(async () => "ok");
+    await submission.run(
+      { label: "x", stages: ["a", "b"], write, refresh: async () => Promise.reject(offline) },
+      { ...handlers, onRefresh: (s, e) => refreshStates.push([s, e]) },
+    );
+    expect(phases).toEqual(["saving", "success"]);
+    expect(refreshStates).toEqual([["refreshing", undefined], ["failed", offline]]);
+    expect(handlers.onError).not.toHaveBeenCalled();
+    expect(await submission.refreshSettled(50)).toBe("failed");
+    // Locked: nothing can record the payment a second time.
+    expect(await submission.run({ label: "x", stages: ["a", "b"], write, refresh: async () => {} }, handlers)).toBe(false);
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+
+  it("a click while the refresh is still running cannot start a second write", async () => {
+    const submission = createPaymentSubmission();
+    const { handlers } = recorder();
+    const slow = deferred();
+    const write = vi.fn(async () => "ok");
+    const opts = { label: "x", stages: ["a", "b"], write, refresh: () => slow.promise };
+    const first = submission.run(opts, handlers);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(handlers.onSuccess).toHaveBeenCalledTimes(1);
+    expect(submission.inFlight).toBe(true); // refresh transition: still locked
+    expect(await submission.run(opts, handlers)).toBe(false);
+    slow.resolve();
+    await first;
+    expect(submission.inFlight).toBe(true); // and after it
+    expect(await submission.run(opts, handlers)).toBe(false);
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshSettled gives up after its cap so a hung refresh can't hold a dialog open", async () => {
+    vi.useFakeTimers();
+    try {
+      const submission = createPaymentSubmission();
+      const { handlers } = recorder();
+      const never = new Promise<void>(() => undefined);
+      void submission.run({ label: "x", stages: ["a", "b"], write: async () => "ok", refresh: () => never }, handlers);
+      await vi.advanceTimersByTimeAsync(0);
+      const waiting = submission.refreshSettled(8000);
+      await vi.advanceTimersByTimeAsync(8000);
+      expect(await waiting).toBe("timeout");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("14. refresh invalidates the payment-derived queries before success is shown", async () => {
     const queryClient = new QueryClient();
     const prefixes = ["loan-financial-history", "loanPrincipalPrepaid", "loanScheduledPayments", "cardLinkedEmiPayments"];

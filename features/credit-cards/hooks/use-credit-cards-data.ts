@@ -61,6 +61,7 @@ import type { Account } from "@/lib/models/account";
 import { compareTransactionsNewestFirst, type Transaction } from "@/lib/models/transaction";
 import {
   cardPaymentTotal,
+  isCardBillPaymentLeg,
   settleCardPayments,
   statementPeriodTotal,
   statementWindowForDate,
@@ -439,6 +440,8 @@ export interface CreditCardTransactionRow {
   amount: number;
   date: Date;
   card: CreditCardProfile;
+  /** A bill payment into the card (transfer income leg) — can be cancelled as a recorded payment. */
+  isBillPayment?: boolean;
 }
 
 /**
@@ -469,6 +472,7 @@ export function useRecentCreditCardTransactions(limit = 6): { rows: CreditCardTr
           amount: t.amount,
           date: t.dateTime,
           card,
+          isBillPayment: isCardBillPaymentLeg(t),
         };
       });
   }, [cards, transactions, limit]);

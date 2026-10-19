@@ -201,6 +201,16 @@ export interface PaymentRecord extends SoftDeletableEntity {
   date: Date;
   note: string;
   createdAt: Date;
+  /**
+   * How this payment relates to money (additive, web-only; absent on every legacy record):
+   *  - `transactionId` set: an account-funded payment — the one canonical cash debit it owns.
+   *  - `recordedEarlier: true`: already inside the account balance when recorded — NO debit, never cash movement;
+   *    `date` is the real (historical) payment date.
+   *  - neither (legacy, or a Flutter payment): treated as historical/neutral — it never posted a Transaction.
+   */
+  transactionId?: string | null;
+  accountId?: string | null;
+  recordedEarlier?: boolean;
 }
 
 // --- Firestore converters ---
@@ -316,6 +326,9 @@ export function paymentRecordFromFirestore(
     date: (data.date as Timestamp).toDate(),
     note: (data.note as string | undefined) ?? "",
     occurrenceId: (data.occurrenceId as string | undefined) ?? null,
+    transactionId: (data.transactionId as string | undefined) ?? null,
+    accountId: (data.accountId as string | undefined) ?? null,
+    recordedEarlier: (data.recordedEarlier as boolean | undefined) ?? false,
     createdAt: (data.createdAt as Timestamp).toDate(),
     deletedAt: (data.deletedAt as Timestamp | undefined)?.toDate() ?? null,
     lastEditedAt: (data.lastEditedAt as Timestamp | undefined)?.toDate() ?? null,
@@ -330,6 +343,9 @@ export function paymentRecordToFirestore(payment: PaymentRecord): DocumentData {
     date: Timestamp.fromDate(payment.date),
     note: payment.note,
     occurrenceId: payment.occurrenceId,
+    ...(payment.transactionId != null ? { transactionId: payment.transactionId } : {}),
+    ...(payment.accountId != null ? { accountId: payment.accountId } : {}),
+    ...(payment.recordedEarlier ? { recordedEarlier: true } : {}),
     createdAt: Timestamp.fromDate(payment.createdAt),
     deletedAt: payment.deletedAt == null ? null : Timestamp.fromDate(payment.deletedAt),
     lastEditedAt: payment.lastEditedAt == null ? null : Timestamp.fromDate(payment.lastEditedAt),

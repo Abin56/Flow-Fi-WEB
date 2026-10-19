@@ -6,6 +6,7 @@ import {
   OwnedTransactionDeleteError,
   OwnedTransactionEditError,
   TransactionChangedError,
+  TransactionDeletedError,
   TransferEditRestrictedError,
   TransferRetryMismatchError,
 } from "@/lib/repositories/transaction-repository";
@@ -31,6 +32,7 @@ const USER_FACING_ERROR_TYPES = [
   OwnedTransactionEditError,
   OwnedTransactionDeleteError,
   TransactionChangedError,
+  TransactionDeletedError,
   LoanPaymentTransactionRestrictedError,
   ReceivedWithoutCashError,
 ] as const;

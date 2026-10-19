@@ -11,14 +11,12 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { useCreditCards } from "@/hooks/use-credit-cards";
-import { useEmiInstallmentPayments, type EmiPaidRow } from "@/hooks/use-emi-installment-payments";
+import { countsAsEmiCashOut, useEmiInstallmentPayments, type EmiPaidRow } from "@/hooks/use-emi-installment-payments";
 import { useEmis } from "@/hooks/use-credit-cards";
 import { useLoanScheduledPayments } from "@/hooks/use-loan-scheduled-payments";
 import { scheduleOnlyLoanFlows } from "@/lib/engines/loan-cash-flow";
 import { useExpenseInstallmentsBySchedule, useExpenses } from "@/hooks/use-expenses";
 import { useFirestoreWatch } from "@/hooks/use-firestore-watch";
-import { useAllBillOccurrences } from "@/features/bills/hooks/use-bill-occurrence-history";
-import { billsPaid as billsPaidInRange, type DashboardBillOccurrence } from "@/lib/engines/dashboard-aggregation";
 import { cashFlowThisMonth, moneyReceivedThisMonth as moneyReceivedInMonth, type CashFlowSummary } from "@/lib/engines/cash-flow";
 import { cashFlowTransactions as toCashFlowTransactions } from "@/lib/engines/cycle-transaction-mapping";
 import { effectiveMonth, type Transaction } from "@/lib/models/transaction";
@@ -97,11 +95,9 @@ function paidThisMonth(payments: readonly EmiPaidRow[], now: Date): number {
 }
 
 /**
- * This month's cash flow. EMI/Loan/Bills paid-this-month figures are all
- * real now, sourced from the already-fetched installment/occurrence streams
- * (`billsPaidThisMonth` via `useAllBillOccurrences` +
- * `lib/engines/dashboard-aggregation.ts`'s ported `billsPaid`, bucketed by
- * each occurrence's due date, matching `_billsPaidThisMonthProvider`).
+ * This month's cash flow. EMI/Loan paid-this-month figures come from the already-fetched installment streams.
+ * Bills are NOT summed from occurrences: a bill paid from an account is an ordinary expense Transaction (counted
+ * once with the other expenses); a bill recorded as paid earlier moved no money (audit MFI-P1-03).
  * `moneyReceivedThisMonth` is real too — see `moneyReceivedForRange`'s doc
  * comment in `lib/engines/cash-flow.ts` for why it's split-expense
  * settlement collections, not a `receiptPurpose` transaction sum.
@@ -113,7 +109,6 @@ export function useCashFlowThisMonth(): CashFlowSummary {
   // Payment-level (not installment-level) so each Loan money movement counts once: payments with a
   // linked Transaction are already in `transactions`; only legacy unlinked ones come from here.
   const { payments: loanScheduledPayments } = useLoanScheduledPayments();
-  const { occurrences: billOccurrences } = useAllBillOccurrences();
   const { data: expenses } = useExpenses();
   const { installmentsByScheduleId } = useExpenseInstallmentsBySchedule();
 
@@ -125,10 +120,6 @@ export function useCashFlowThisMonth(): CashFlowSummary {
   const cashFlowTransactions = toCashFlowTransactions(transactions ?? [], creditCardAccountIds);
   const cardLinkedEmiScheduleIds = new Set((emis ?? []).filter((e) => e.linkedCreditCardId != null).map((e) => e.scheduleId));
 
-  const dashboardBillOccurrences: DashboardBillOccurrence[] = (billOccurrences ?? []).map((o) => ({
-    dueDate: o.dueDate,
-    amountPaid: o.amountPaid,
-  }));
   const monthRange = { start: new Date(now.getFullYear(), now.getMonth(), 1), end: new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999) };
 
   const transactionsById = useMemo(
@@ -149,10 +140,12 @@ export function useCashFlowThisMonth(): CashFlowSummary {
     transactions: cashFlowTransactions,
     // A card-linked EMI is cash out only when its card bill is paid (counted as a card payment) — never at
     // EMI-payment time too (WFI-P1-06). Every other EMI is cash out here, once (its bank row is dropped above).
-    emiPaidThisMonth: paidThisMonth(emiPayments.filter((p) => !cardLinkedEmiScheduleIds.has(p.scheduleId)), now),
+    emiPaidThisMonth: paidThisMonth(emiPayments.filter((p) => !cardLinkedEmiScheduleIds.has(p.scheduleId) && countsAsEmiCashOut(p)), now),
     loanPaidThisMonth: loanScheduleFlows.moneyOut,
     loanReceivedThisMonth: loanScheduleFlows.moneyIn,
-    billsPaidThisMonth: billsPaidInRange(dashboardBillOccurrences, monthRange),
+    // A bill is cash out only through the account debit its payment posts (a normal expense in `transactions`,
+    // counted once above). A paid-earlier or legacy bill moved no money, so occurrences are never summed here.
+    billsPaidThisMonth: 0,
     moneyReceivedThisMonth: moneyReceivedInMonth(
       {
         expenses: ((expenses ?? []) as Expense[]).map((e) => ({

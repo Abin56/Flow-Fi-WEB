@@ -22,6 +22,8 @@ export default defineConfig({
       "functions/**",
       ...(process.env.VITEST_RULES ? [] : ["tests/rules/**"]),
       ...(process.env.VITEST_INTEGRATION ? [] : ["tests/integration/**"]),
+      // Latency-injected workflow timing (tests/perf) — opt-in, needs the emulator: `npm run test:perf`.
+      ...(process.env.VITEST_PERF ? [] : ["tests/perf/**"]),
     ],
   },
 });

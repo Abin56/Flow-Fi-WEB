@@ -30,3 +30,11 @@ const preciseCurrencyFormatter = new Intl.NumberFormat("en-IN", {
 export function formatCurrencyPrecise(amount: number) {
   return preciseCurrencyFormatter.format(amount);
 }
+
+/**
+ * The exact amount: whole rupees as `₹5,331`, anything with paise as `₹5,330.93`. For payment confirmation UI,
+ * where a rounded headline would differ from what is actually debited. Display only — the amount itself is never rounded.
+ */
+export function formatCurrencyExact(amount: number) {
+  return Math.round(amount * 100) % 100 === 0 ? formatCurrency(amount) : formatCurrencyPrecise(amount);
+}

@@ -30,6 +30,8 @@
  *    available now rather than fake the Expense join.
  */
 
+import { useHistoricalPaymentFlags } from "@/features/loans/hooks/use-historical-payment-flags";
+import { useLoans } from "@/hooks/use-loans";
 import { useMemo } from "react";
 import { useAccounts } from "@/hooks/use-accounts";
 import { useLoanBalanceSheet } from "@/hooks/use-loan-balance-sheet";
@@ -40,7 +42,9 @@ import {
   useCreditCardStandings,
   type CreditCardStandingView,
 } from "@/features/credit-cards/hooks/use-credit-cards-data";
-import { useBills } from "@/hooks/use-bills";
+import { useBillRows } from "@/features/bills/hooks/use-bills-data";
+import { outstandingBillOccurrences } from "@/lib/engines/bill-obligations";
+import { dashboardBillAttention, dashboardBillRows } from "@/features/dashboard/lib/bill-obligation-items";
 import { useCategories } from "@/hooks/use-categories";
 import {
   useAllCreditCardStatements,
@@ -51,7 +55,6 @@ import {
 } from "@/hooks/use-credit-cards";
 import { useCashFlowThisMonth, useTransactions } from "@/hooks/use-transactions";
 import type { Account } from "@/lib/models/account";
-import type { Bill } from "@/lib/models/bill";
 import type { Category } from "@/lib/models/category";
 import { useExpenses } from "@/hooks/use-expenses";
 import type { CreditCardProfile, Statement } from "@/lib/models/credit-card";
@@ -111,7 +114,9 @@ export interface DashboardNeedsAttentionItem {
 export function useDashboardData() {
   const { data: accounts = [], isLoading: accountsLoading } = useAccounts();
   const { data: transactions = [], isLoading: transactionsLoading } = useTransactions();
-  const { data: bills = [], isLoading: billsLoading } = useBills();
+  // Bills come from the stored billing cycles (every outstanding cycle, an older one reopened by a cancel included) —
+  // the same occurrence-level rule as Bills Stats / Month Cycle / My Money.
+  const { rows: billRows, cycles: billCycles, isLoading: billsLoading } = useBillRows();
   const { data: categories = [], isLoading: categoriesLoading } = useCategories();
   const { isLoading: expensesLoading } = useExpenses();
   const { data: creditCards = [], isLoading: creditCardsLoading } = useCreditCards();
@@ -292,38 +297,43 @@ export function useDashboardData() {
   }, [transactions, categories, now, personalAmount]);
 
   // --- Recent Transactions (direct Transaction field reads; signedAmount matches mock's +income/-expense convention) ---
+  const recentRaw = useMemo(
+    () =>
+      (transactions as Transaction[])
+        .filter((t) => t.deletedAt == null)
+        .slice()
+        .sort(compareTransactionsNewestFirst)
+        .slice(0, 5),
+    [transactions],
+  );
+  const { data: dashboardLoans = [] } = useLoans();
+  // Structured "already paid earlier" flag of the payment each recent Loan transaction settled (see historical-payment.ts).
+  const isHistoricalPayment = useHistoricalPaymentFlags(recentRaw, dashboardLoans);
   const recentTransactions = useMemo(() => {
-    return (transactions as Transaction[])
-      .filter((t) => t.deletedAt == null)
-      .slice()
-      .sort(compareTransactionsNewestFirst)
-      .slice(0, 5)
+    return recentRaw
       .map((t) => ({
         id: t.id,
         merchant: t.description || categoryNameFor(t.categoryId, categories as Category[]),
         category: categoryNameFor(t.categoryId, categories as Category[]),
         date: formatShortDate(t.dateTime, now),
         amount: signedAmount(t),
+        // "Already paid earlier" Loan payment: shown, but explained as not debiting an account.
+        historical: isHistoricalPayment(t),
       }));
-  }, [transactions, categories, now]);
+  }, [recentRaw, categories, now, isHistoricalPayment]);
 
-  // --- Upcoming Bills (direct Bill.nextDueDate field read — see createBillRepository's doc comment for why
-  //     per-occurrence due dates aren't used here) ---
-  const upcomingBills = useMemo(() => {
-    return (bills as Bill[])
-      .slice()
-      .sort((a, b) => a.nextDueDate.getTime() - b.nextDueDate.getTime())
-      .slice(0, 4)
-      .map((bill) => {
-        const daysLeft = Math.ceil((bill.nextDueDate.getTime() - now.getTime()) / MS_PER_DAY);
-        return {
-          id: bill.id,
-          name: bill.name,
-          date: formatLongDate(bill.nextDueDate),
-          daysLeft,
-        };
-      });
-  }, [bills, now]);
+  // --- Outstanding bill cycles (shared rule: `lib/engines/bill-obligations.ts`), soonest / most overdue first ---
+  const outstandingBills = useMemo(() => outstandingBillOccurrences(billCycles, now), [billCycles, now]);
+  const billItems = useMemo(
+    () => dashboardBillRows(outstandingBills, new Map(billRows.map((r) => [r.bill.id, r.bill.name])), now),
+    [outstandingBills, billRows, now],
+  );
+
+  // --- Upcoming Bills (soonest 4 outstanding cycles; overdue ones are flagged, not worded as "days left") ---
+  const upcomingBills = useMemo(
+    () => billItems.slice(0, 4).map((r) => ({ id: r.id, name: r.name, date: formatLongDate(r.dueDate), daysLeft: r.daysLeft, overdue: r.overdue })),
+    [billItems],
+  );
 
   // --- Credit Card Utilization — the SAME standings the Credit Cards page uses (one facility = one row) ---
   const utilization = useMemo(() => {
@@ -370,19 +380,17 @@ export function useDashboardData() {
 
   // --- Upcoming Payments (Bill.nextDueDate + unpaid Statement.dueDate, merged and sorted soonest-first) ---
   const upcomingPayments = useMemo(() => {
-    const billItems = (bills as Bill[]).map((bill) => {
-      const daysLeft = Math.ceil((bill.nextDueDate.getTime() - now.getTime()) / MS_PER_DAY);
-      return {
-        id: `bill-${bill.id}`,
-        type: "bill" as const,
-        title: bill.name,
-        subtitle: "Bill",
-        amount: bill.amount,
-        date: formatLongDate(bill.nextDueDate),
-        daysLeft,
-        dueDate: bill.nextDueDate,
-      };
-    });
+    const billPaymentItems = billItems.map((r) => ({
+      id: r.id,
+      type: "bill" as const,
+      title: r.name,
+      subtitle: r.overdue ? (r.partPaid ? "Bill · Overdue · part paid" : "Bill · Overdue") : r.partPaid ? "Bill · part paid" : "Bill",
+      amount: r.amount,
+      date: formatLongDate(r.dueDate),
+      daysLeft: r.daysLeft,
+      overdue: r.overdue,
+      dueDate: r.dueDate,
+    }));
 
     // Card bills from the canonical chain (`cardBillsForCard`, same as Pay bill / Month Cycle): live totals, payments
     // settled oldest-first, and closed cycles with no stored statement included. The stored `Statement.amountPaid`
@@ -408,31 +416,17 @@ export function useDashboardData() {
         })),
     );
 
-    return [...billItems, ...statementItems]
+    return [...billPaymentItems, ...statementItems]
       .sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime())
       .slice(0, 5)
       .map(({ dueDate: _dueDate, ...item }) => item);
-  }, [bills, creditCards, statements, transactions, now]);
+  }, [billItems, creditCards, statements, transactions, now]);
 
-  // --- Needs Your Attention (bill alerts only — see gap note above) ---
-  const needsAttention = useMemo(() => {
-    const items: DashboardNeedsAttentionItem[] = [];
-
-    const nextBill = upcomingBills[0];
-    if (nextBill) {
-      items.push({
-        id: `attn-bill-${nextBill.id}`,
-        type: "bill",
-        title: "Upcoming Bill",
-        subtitle: nextBill.name,
-        amount: (bills as Bill[]).find((b) => b.id === nextBill.id)?.amount ?? 0,
-        note: nextBill.daysLeft <= 0 ? "Due today" : `Due in ${nextBill.daysLeft} day${nextBill.daysLeft === 1 ? "" : "s"}`,
-        cta: "Pay Now",
-      });
-    }
-
-    return items;
-  }, [upcomingBills, bills]);
+  // --- Needs Your Attention (bill alerts only — see gap note above): the overdue total and the next upcoming bill ---
+  const needsAttention = useMemo(
+    () => dashboardBillAttention(billItems, outstandingBills, now, formatLongDate) as DashboardNeedsAttentionItem[],
+    [billItems, outstandingBills, now],
+  );
 
   return {
     isLoading,

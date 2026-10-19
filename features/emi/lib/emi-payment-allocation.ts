@@ -19,6 +19,7 @@
 
 import { planInstallmentSettlement } from "@/lib/engines/installment-settlement";
 import { mergeInstallmentWrites, reversePaymentPortions } from "@/lib/engines/payment-correction";
+import { STALE_INSTALLMENT_MESSAGE } from "@/lib/engines/stale-installment";
 import { recordEdit } from "@/lib/firestore/soft-deletable";
 import { defaultEmiPaymentSplit, type EmiPaymentBreakdown } from "@/lib/models/emi";
 import {
@@ -27,6 +28,7 @@ import {
   type Installment,
   type InstallmentPayment,
   type PaymentAllocationType,
+  type RecordedEarlier,
 } from "@/lib/models/payment-schedule";
 
 const round2 = (v: number) => Math.round(v * 100) / 100;
@@ -82,7 +84,10 @@ export function planEmiPaymentAllocation(params: {
   const payable = payableEmiInstallments(params.installments);
   if (payable.length === 0) return { ok: false, error: "Nothing is left to pay on this EMI." };
 
-  const target = payable.find((i) => i.id === params.targetInstallmentId) ?? payable[0];
+  // An explicit target is never swapped for another installment: if it is paid / skipped / removed, refuse.
+  // Only a caller that names no target gets the next unpaid one.
+  const target = params.targetInstallmentId != null ? payable.find((i) => i.id === params.targetInstallmentId) : payable[0];
+  if (!target) return { ok: false, error: STALE_INSTALLMENT_MESSAGE };
   const order = [target, ...payable.filter((i) => i.id !== target.id)];
   const remainingBefore = emiTotalRemaining(order);
   const rounded = round2(amount);
@@ -154,9 +159,12 @@ export function buildEmiPaymentWrites(params: {
   principalPaid?: number;
   interestPaid?: number;
   charges?: EmiPaymentCharges;
+  /** "Already paid earlier" — stamped on every payment (see `InstallmentPayment.recordedEarlier`). */
+  recordedEarlier?: RecordedEarlier | null;
   now?: Date;
 }): EmiPaymentWrites {
   const { portions, date, note = "", charges = {} } = params;
+  const recordedEarlier = params.recordedEarlier ? { dateKnown: params.recordedEarlier.dateKnown } : null;
   const now = params.now ?? new Date();
   const bankSplit = portions.length === 1 && params.principalPaid != null;
   const writes: EmiPaymentWrites = { installments: [], payments: [], breakdowns: [] };
@@ -185,6 +193,7 @@ export function buildEmiPaymentWrites(params: {
       prepaymentPolicyApplied: null,
       reamortizationEventId: null,
       transactionId: null,
+      ...(recordedEarlier ? { recordedEarlier } : {}),
       deletedAt: null,
       lastEditedAt: null,
       editHistory: [],
@@ -258,6 +267,7 @@ export function planEmiPaymentEdit(params: {
   principalPaid?: number;
   interestPaid?: number;
   charges?: EmiPaymentCharges;
+  recordedEarlier?: RecordedEarlier | null;
 }): EmiPaymentEditPlan {
   if (params.original.length === 0) return { ok: false, error: "This payment was already changed — reopen it and try again." };
   const reversed = reversePaymentPortions(params.installments, params.original);

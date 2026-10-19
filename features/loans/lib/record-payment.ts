@@ -24,7 +24,11 @@ import { previewPrincipalPrepayment } from "@/features/loans/lib/loan-adjustment
 import type { Loan } from "@/lib/models/loan";
 import { remainingAmount, type Installment, type PaymentAllocationType } from "@/lib/models/payment-schedule";
 
-export type PayChoice = "installment" | "allDue" | "remaining" | "custom";
+/**
+ * "through": a Loan installment picked further down the schedule — Loan installments are paid in order, so this
+ * pays every unpaid one up to it (exactly their remaining amounts, `includeUpcomingInstallments`), never just it.
+ */
+export type PayChoice = "installment" | "allDue" | "through" | "remaining" | "custom";
 /** What a loan payment above the currently-due amount does — both are existing repository behaviours. */
 export type ExtraTreatment = "reducePrincipal" | "payUpcoming";
 
@@ -40,6 +44,22 @@ export function payableInstallments(installments: Installment[]): Installment[] 
   return installments
     .filter((i) => i.deletedAt == null && !i.isSkipped && remainingAmount(i) > 0)
     .sort((a, b) => a.sequenceNumber - b.sequenceNumber);
+}
+
+/** Some installment due up to today still owes money — what "Record past payments" can record. */
+export function hasPastDue(installments: readonly Installment[], today: Date = new Date()): boolean {
+  const end = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59, 999).getTime();
+  return installments.some((i) => i.deletedAt == null && !i.isSkipped && remainingAmount(i) > 0.005 && i.dueDate.getTime() <= end);
+}
+
+/**
+ * Where People sends the user back to after recording / postponing / applying an advance for a share: this
+ * agreement's page with its Record Payment reopened (`pay=1`) on the same installment.
+ */
+export function paymentReturnPath(pathname: string, agreementId: string, installmentId?: string | null): string {
+  const q = new URLSearchParams({ agreement: agreementId, pay: "1" });
+  if (installmentId) q.set("installment", installmentId);
+  return `${pathname}?${q.toString()}`;
 }
 
 export function totalRemainingOf(installments: Installment[]): number {
@@ -83,21 +103,40 @@ export function loanQuickOptions(loan: Loan, figures: LoanPaymentFigures): Quick
   const { next } = figures;
   if (next == null) return [];
   const options: QuickOption[] = [
-    { choice: "installment", label: "Pay installment", hint: `#${next.sequenceNumber}`, amount: remainingAmount(next) },
+    { choice: "installment", label: "Pay this installment", hint: `#${next.sequenceNumber}`, amount: remainingAmount(next) },
   ];
   if (figures.dueCount > 1 && !near(figures.dueAmount, options[0].amount)) {
-    options.push({ choice: "allDue", label: "Pay everything due", hint: `${figures.dueCount} installments`, amount: figures.dueAmount });
+    options.push({ choice: "allDue", label: "Pay overdue installments", hint: `${figures.dueCount} installments`, amount: figures.dueAmount });
   }
   const largest = Math.max(...options.map((o) => o.amount));
   if (loan.repaymentType !== "oneTime" && figures.totalRemaining > largest + 0.5) {
+    // Not a payoff / foreclosure quote: it fills every remaining installment as scheduled (see `loan-labels.ts`).
+    const interest = loan.interest != null && loan.interest.ratePercent > 0;
     options.push({
       choice: "remaining",
-      label: "Pay all remaining",
-      hint: `${figures.payableCount} installments${loan.interest && loan.interest.ratePercent > 0 ? " · incl. scheduled interest" : ""}`,
+      label: "All remaining installments",
+      hint: `${figures.payableCount} installments${interest ? " · includes scheduled future interest — not a bank closure amount" : ""}`,
       amount: figures.totalRemaining,
     });
   }
   return options;
+}
+
+/**
+ * A Loan installment the user picked from the schedule that is NOT the oldest unpaid one: Loan installments are
+ * paid in order, so paying it means paying every unpaid installment before it too. Null when the pick is the
+ * oldest unpaid one (or no longer owes anything) — then it is simply "this installment".
+ */
+export function loanThroughOption(installments: Installment[], pickedId: string | null | undefined): (QuickOption & { first: number; last: number; count: number }) | null {
+  if (!pickedId) return null;
+  const payable = payableInstallments(installments);
+  const index = payable.findIndex((i) => i.id === pickedId);
+  if (index <= 0) return null;
+  const covered = payable.slice(0, index + 1);
+  const amount = Math.round(covered.reduce((sum, i) => sum + remainingAmount(i), 0) * 100) / 100;
+  const first = covered[0].sequenceNumber;
+  const last = covered[covered.length - 1].sequenceNumber;
+  return { choice: "through", label: `Installments #${first}–#${last}`, hint: `${covered.length} installments, in order, up to the one you picked`, amount, first, last, count: covered.length };
 }
 
 export type LoanPaymentPlan =
@@ -110,9 +149,16 @@ export function planLoanPayment(input: {
   choice: PayChoice;
   customAmount: string;
   treatment: ExtraTreatment;
+  /** For `through`: the option from `loanThroughOption`. */
+  through?: QuickOption | null;
 }): LoanPaymentPlan {
   const { loan, figures, choice } = input;
   if (figures.next == null) return { ok: false, error: "Nothing is left to pay on this loan." };
+  if (choice === "through") {
+    if (!input.through) return { ok: false, error: "Choose how much to pay." };
+    // Exactly the remaining amounts up to the picked installment, filled in order — never extra principal.
+    return { ok: true, amount: input.through.amount, includeUpcomingInstallments: true, extra: 0 };
+  }
   if (choice !== "custom") {
     const option = loanQuickOptions(loan, figures).find((o) => o.choice === choice);
     if (!option) return { ok: false, error: "Choose how much to pay." };
@@ -141,14 +187,14 @@ export function loanPaymentSuccessTitle(type: PaymentAllocationType): string {
 
 export type EmiPaymentPlan = { ok: true; amount: number; allocation: Extract<EmiPaymentAllocation, { ok: true }> } | { ok: false; error: string };
 
-/** "Pay installment" for the chosen (else next) installment, plus "Pay all remaining" when more is owed. */
+/** "Pay installment" for the chosen (else next) installment, plus "Pay off remaining EMI" when more is owed. */
 export function emiQuickOptions(next: Installment | null, installments: Installment[] = []): QuickOption[] {
   if (!next) return [];
-  const options: QuickOption[] = [{ choice: "installment", label: "Pay installment", hint: `#${next.sequenceNumber}`, amount: remainingAmount(next) }];
+  const options: QuickOption[] = [{ choice: "installment", label: "Pay this installment", hint: `#${next.sequenceNumber}`, amount: remainingAmount(next) }];
   const payable = payableEmiInstallments(installments);
   const total = emiTotalRemaining(installments);
   if (payable.length > 1 && total > options[0].amount + 0.5) {
-    options.push({ choice: "remaining", label: "Pay all remaining", hint: `${payable.length} installments · settles this EMI`, amount: total });
+    options.push({ choice: "remaining", label: "All remaining installments", hint: `${payable.length} installments · the scheduled total, incl. interest`, amount: total });
   }
   return options;
 }

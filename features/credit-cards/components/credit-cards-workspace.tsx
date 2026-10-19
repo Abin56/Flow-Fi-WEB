@@ -32,6 +32,7 @@ import { createPortal } from "react-dom";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Cell, Pie, PieChart, ResponsiveContainer } from "recharts";
 import { ClayButton } from "@/components/clay/clay-button";
+import { CardPaymentCancelDialog } from "@/features/credit-cards/components/card-payment-cancel-dialog";
 import { transactionsHrefForAccount } from "@/features/transactions/lib/account-filter-param";
 import { Stagger } from "@/components/foundation/animated-container";
 import {
@@ -248,6 +249,8 @@ export function CreditCardsWorkspace() {
   // One-time repair of stored statement totals written by the old credit-as-charge formula (writes only when provably affected).
   useStoredStatementTotalRepair();
   const [payCard, setPayCard] = useState<CreditCardViewItem | null>(null);
+  // The bill payment being cancelled (its card-side transaction id) — opens the compact "Cancel recorded payment" dialog.
+  const [cancelPaymentId, setCancelPaymentId] = useState<string | null>(null);
   // Pay bill defaults to what the CLOSED statements still owe (card statement cycle); paying the whole
   // outstanding is a separate, explicit choice.
   const [payChoice, setPayChoice] = useState<PayBillChoice>("statement");
@@ -1475,6 +1478,14 @@ export function CreditCardsWorkspace() {
                                   </DropdownMenuTrigger>
                                   <DropdownMenuContent align="end" className="min-w-52 rounded-[8px]">
                                     <DropdownMenuItem onSelect={() => selectCard(card.id)}>View details</DropdownMenuItem>
+                                    <DropdownMenuItem
+                                      onSelect={() => {
+                                        selectCard(card.id);
+                                        setActivityTab("transactions");
+                                      }}
+                                    >
+                                      View payment history
+                                    </DropdownMenuItem>
                                     {card.ownUsage > scope.statementDue + 0.005 && (
                                       <DropdownMenuItem
                                         onSelect={() => {
@@ -1545,7 +1556,7 @@ export function CreditCardsWorkspace() {
                           <p className="flex min-w-0 items-center gap-1.5 truncate text-xs text-foreground/70">
                             <span className="tabular-nums">{txn.date.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}</span>
                             <span aria-hidden>·</span>
-                            <span>{incoming ? "Credit" : "Debit"}</span>
+                            <span>{txn.isBillPayment ? "Bill payment" : incoming ? "Credit" : "Debit"}</span>
                             {(activityAllCards || !activeCard) && cardView && (
                               <>
                                 <span aria-hidden>·</span>
@@ -1560,6 +1571,21 @@ export function CreditCardsWorkspace() {
                           {incoming ? "+" : "−"}
                           {formatCurrency(txn.amount)}
                         </span>
+                        {txn.isBillPayment && (
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <button type="button" aria-label="Payment actions" className="flex size-7 shrink-0 items-center justify-center rounded-[6px] text-foreground/70 hover:bg-secondary hover:text-foreground">
+                                <MoreHorizontal className="size-4" strokeWidth={1.75} />
+                              </button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end" className="min-w-52 rounded-[8px]">
+                              <DropdownMenuItem className="text-expense" onSelect={() => setCancelPaymentId(txn.id)}>
+                                Cancel recorded payment
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onSelect={() => router.push(transactionsHrefForAccount(txn.card.accountId))}>View history</DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        )}
                       </motion.li>
                     </Fragment>
                     );
@@ -1634,6 +1660,8 @@ export function CreditCardsWorkspace() {
       )}
 
       {cardFormDialog}
+
+      {cancelPaymentId != null && <CardPaymentCancelDialog transactionId={cancelPaymentId} onClose={() => setCancelPaymentId(null)} />}
 
       <DestructiveDeleteDialog
         open={deletingCard != null}

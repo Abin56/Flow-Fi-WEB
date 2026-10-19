@@ -4,11 +4,13 @@ import {
   type Firestore,
   getFirestore,
   initializeFirestore,
+  memoryLocalCache,
   persistentLocalCache,
   persistentMultipleTabManager,
 } from "firebase/firestore";
 import { type Functions, getFunctions } from "firebase/functions";
 import { type FirebaseStorage, getStorage } from "firebase/storage";
+import { connectQaEmulators, qaEmulatorRequested } from "./qa-emulator";
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
@@ -37,6 +39,9 @@ export const auth: Auth = getAuth(firebaseApp);
  * instead of the default single-tab exclusive lock.
  */
 function createFirestore(): Firestore {
+  // Local manual-QA emulator mode only (dev build + explicit flag + demo project): no persistent cache, so a
+  // fixture reset can never be shadowed by a stale IndexedDB copy. Inert everywhere else.
+  if (qaEmulatorRequested()) return initializeFirestore(firebaseApp, { localCache: memoryLocalCache() });
   try {
     return initializeFirestore(firebaseApp, {
       localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
@@ -49,3 +54,6 @@ function createFirestore(): Firestore {
 export const db: Firestore = createFirestore();
 export const storage: FirebaseStorage = getStorage(firebaseApp);
 export const functions: Functions = getFunctions(firebaseApp);
+
+// Local manual-QA only — a no-op unless the dev-only emulator flags are all set (see ./qa-emulator).
+connectQaEmulators({ auth, db, storage, functions });

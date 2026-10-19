@@ -153,6 +153,11 @@ export interface Transaction extends SoftDeletableEntity {
    * optional: absent/null on every other document, which keeps its exact shape.
    */
   transferFeeForId?: string | null;
+  /**
+   * Set only on the account debit a Bill payment posted (`BillPaymentRepository.payFromAccount`): the id of the
+   * bill `PaymentRecord` that owns this money. Additive, web-only, optional — absent on every other document.
+   */
+  billPaymentId?: string | null;
 }
 
 /** The document id of the fee expense belonging to the transfer `transferId` (see `Transaction.transferFeeForId`). */
@@ -294,6 +299,7 @@ export function transactionFromFirestore(
     isPersonLedgerMovement: (data.isPersonLedgerMovement as boolean | undefined) ?? false,
     fundedByPersonId: (data.fundedByPersonId as string | undefined) ?? null,
     transferFeeForId: (data.transferFeeForId as string | undefined) ?? null,
+    billPaymentId: (data.billPaymentId as string | undefined) ?? null,
     deletedAt: (data.deletedAt as Timestamp | undefined)?.toDate() ?? null,
     lastEditedAt: (data.lastEditedAt as Timestamp | undefined)?.toDate() ?? null,
     editHistory: ((data.editHistory as Record<string, unknown>[] | undefined) ?? []).map(auditEntryFromMap),
@@ -329,6 +335,7 @@ export function transactionToFirestore(transaction: Transaction): DocumentData {
     // Written only when set — legacy / account-funded documents keep their exact shape.
     ...(transaction.fundedByPersonId != null ? { fundedByPersonId: transaction.fundedByPersonId } : {}),
     ...(transaction.transferFeeForId != null ? { transferFeeForId: transaction.transferFeeForId } : {}),
+    ...(transaction.billPaymentId != null ? { billPaymentId: transaction.billPaymentId } : {}),
     deletedAt: transaction.deletedAt == null ? null : Timestamp.fromDate(transaction.deletedAt),
     lastEditedAt: transaction.lastEditedAt == null ? null : Timestamp.fromDate(transaction.lastEditedAt),
     editHistory: transaction.editHistory.map(auditEntryToMap),

@@ -65,6 +65,14 @@ describe("purchaseTransactionId — persistence", () => {
     expect((await emis.getByKey(emi.id))?.purchaseTransactionId).toBe("txn-1");
   });
 
+  it("a reference number (loanNumber) round-trips on create and survives an edit of other fields", async () => {
+    const { emis } = setup();
+    const emi = await emis.createEmi({ ...baseEmi, linkedCreditCardId: "card-1", loanNumber: "EMI-778" });
+    expect((await emis.getByKey(emi.id))?.loanNumber).toBe("EMI-778");
+    await emis.editEmi(emi, { hasPayments: false, name: "Renamed" });
+    expect((await emis.getByKey(emi.id))?.loanNumber).toBe("EMI-778");
+  });
+
   it("a purchase link without a credit card is refused", async () => {
     const { emis } = setup();
     await expect(emis.createEmi({ ...baseEmi, purchaseTransactionId: "txn-1" })).rejects.toThrow(/credit card/);

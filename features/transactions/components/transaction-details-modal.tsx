@@ -20,6 +20,7 @@
  * as before.
  */
 
+import { accountAfterKindSwitch, initialAddAccountId } from "@/features/transactions/lib/initial-account";
 import { useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -60,10 +61,15 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input, INPUT_BASE_CLASS } from "@/components/ui/input";
 import { DateInput } from "@/components/forms/date-input";
+import { peoplePaymentHref } from "@/features/people/lib/people-return-link";
+import { cycleContaining } from "@/lib/engines/person-cycle-statement";
+import { useMonthCycleStartDay } from "@/features/settings/hooks/use-user-preferences";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { BankLogo } from "@/components/finance/bank-logo";
+import { PaymentSourceSummary } from "@/components/finance/payment-source-summary";
+import { accountAllowsNegative, previewFunds } from "@/lib/engines/payment-funding";
 import { ClayButton } from "@/components/clay/clay-button";
 import { durations, easings, springs } from "@/lib/motion/tokens";
 import { cn } from "@/lib/utils";
@@ -86,13 +92,14 @@ import {
 } from "@/features/transactions/lib/transfer-effect";
 import { LinkedTransferSummary, TransferEffectPreview, TransferFeeFields } from "./transfer-own-account-panel";
 import type { ExpenseParticipantInput } from "@/lib/repositories/expense-repository";
-import { CardStatementChangedError, type EditTransactionParams } from "@/lib/repositories/transaction-repository";
+import { CardStatementChangedError, OwnedTransactionEditError, type EditTransactionParams } from "@/lib/repositories/transaction-repository";
 import { formatMonthYear, isSameMonth, transactionFlagFor } from "@/features/transactions/lib/transaction-flag";
 import { useDuplicateGuardedCreate } from "@/lib/services/duplicate-detection/use-duplicate-guarded-create";
 import { resolveMixedSplit } from "@/lib/split/mixed-split";
 import { WS_FIELD, WS_GHOST, WS_PRIMARY, WS_SECONDARY, WS_SELECT_TRIGGER } from "@/features/people/components/workspace/person-workspace-ui";
 import { choiceClass } from "@/features/loans/components/loan-emi-ui";
 import { MonthYearStepper } from "./month-year-stepper";
+import { CardPaymentCancelDialog } from "@/features/credit-cards/components/card-payment-cancel-dialog";
 import { ManageCategoriesDialog } from "./manage-categories-dialog";
 import {
   categoryIconFor,
@@ -132,6 +139,20 @@ const TXN_TRIGGER = cn(WS_SELECT_TRIGGER, "h-10 rounded-[8px]");
 
 /** Matches `ExpenseRepository`'s own rounding — only used here for the live split running-total
  *  preview, never for the values actually sent to save. */
+/** Where to edit a transaction another record owns, when a save was refused for that reason (else null). */
+function ownerEditLinkFor(error: unknown, transaction: Transaction | null | undefined): { href: string; label: string } | null {
+  if (!(error instanceof OwnedTransactionEditError)) return null;
+  if (error.owner === "people") {
+    return transaction?.linkedPersonId != null
+      ? { href: `/people?person=${encodeURIComponent(transaction.linkedPersonId)}`, label: "Open in People" }
+      : { href: "/people", label: "Open People" };
+  }
+  if (error.owner === "loan") return { href: "/loans", label: "Open Loan & EMI" };
+  if (error.owner === "emi") return { href: "/emi", label: "Open Loan & EMI" };
+  if (error.owner === "bill") return { href: "/bills", label: "Open Bills" };
+  return null;
+}
+
 function round2(v: number): number {
   return Math.round(v * 100) / 100;
 }
@@ -459,8 +480,16 @@ interface ParticipantForm {
   locked: boolean;
 }
 
+/** The calendar day as the user sees it (local) — the UTC day is a day earlier for anything dated before 5:30 am in India. */
 function toDateInputValue(date: Date): string {
-  return date.toISOString().slice(0, 10);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+/** `yyyy-mm-dd` → midnight on that local day. */
+function localDateFromInput(value: string): Date {
+  const [y, m, d] = value.split("-").map(Number);
+  return new Date(y, m - 1, d);
 }
 
 /** A lender payment's People settlement gate, computed by the caller from live People data. */
@@ -494,6 +523,7 @@ export function TransactionDetailsModal({
   defaultKind = "expense",
   autoFocusAssign = false,
   existingTransactions = [],
+  initialAccountId,
   initialDestinationAccountId,
   initialAmount,
   peopleGate = null,
@@ -533,6 +563,9 @@ export function TransactionDetailsModal({
   autoFocusAssign?: boolean;
   /** All of the user's transactions, used only for the pre-save `DuplicateDetectionService` check in Add mode — never sent anywhere, never mutated. */
   existingTransactions?: Transaction[];
+  /** Add mode only — the account the user explicitly opened this form from (e.g. a list filtered to one account).
+   *  The only way the form starts with an account; used for expense / income when that account is eligible. */
+  initialAccountId?: string | null;
   /** Add mode + `defaultKind: "transfer"` only — pre-fills the transfer's destination account (e.g. a credit card being paid off). */
   initialDestinationAccountId?: string;
   /** Add mode only — pre-fills the amount field (e.g. a statement's total due). */
@@ -552,6 +585,8 @@ export function TransactionDetailsModal({
   const [date, setDate] = useState(() => toDateInputValue(new Date()));
   const [notes, setNotes] = useState("");
   const [accountId, setAccountId] = useState("");
+  // Whether the user themselves picked the From account — an account that was only pre-filled for another kind is never carried into a transfer.
+  const [accountPicked, setAccountPicked] = useState(false);
   const [destinationAccountId, setDestinationAccountId] = useState("");
   // Add mode + transfer between my own accounts only — see `transfer-effect.ts`.
   const [transferFee, setTransferFee] = useState("");
@@ -581,6 +616,9 @@ export function TransactionDetailsModal({
   const [justSaved, setJustSaved] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const cycleStartDay = useMonthCycleStartDay();
+  /** Where the owning feature edits this transaction, when the save was refused because another record owns it. */
+  const [ownerEditLink, setOwnerEditLink] = useState<{ href: string; label: string } | null>(null);
   // Pay bill Save was refused because the statement changed (another tab / device) — offers "Refresh bill".
   const [billChanged, setBillChanged] = useState(false);
   // Which field the last failed submit pointed at — highlighted only while that field is still the first problem.
@@ -660,21 +698,16 @@ export function TransactionDetailsModal({
       setAddingPerson(autoFocusAssign && transaction.linkedPersonId == null);
     } else {
       const firstCategory = categories.find((c) => (defaultKind === "income" ? c.type !== "expense" : c.type !== "income"));
-      // Paying a card bill: fund it from a bank/cash account — never pre-pick another credit card (a
-      // card-to-card transfer stays possible, but only when the user explicitly selects it).
-      const paysCardOnOpen = defaultKind === "transfer" && accounts.find((a) => a.id === initialDestinationAccountId)?.type === "card";
-      const firstAccount =
-        defaultKind === "income"
-          ? accounts.find((a) => a.type !== "card")
-          : paysCardOnOpen
-            ? accounts.find((a) => a.type !== "card" && a.id !== initialDestinationAccountId)
-            : accounts[0];
+      // The account is always the user's deliberate choice — never "the first one in Firestore order". The form
+      // starts with an account only when it was opened from a specific account's context (`initialAccountId`).
+      const startAccountId = initialAddAccountId({ kind: defaultKind, accounts, contextAccountId: initialAccountId });
       setKind(defaultKind);
       setDescription("");
       setAmount(initialAmount != null ? String(initialAmount) : "");
       setDate(toDateInputValue(new Date()));
       setNotes("");
-      setAccountId(firstAccount?.id ?? "");
+      setAccountId(startAccountId);
+      setAccountPicked(startAccountId !== "");
       setDestinationAccountId(defaultKind === "transfer" ? (initialDestinationAccountId ?? "") : "");
       setTransferFee("");
       setFeeChargedTo("source");
@@ -749,6 +782,9 @@ export function TransactionDetailsModal({
   // A saved transfer leg or transfer fee: its linked records, from the already-loaded list (no extra read).
   const linkedTransferId = transaction?.transferId ?? transaction?.transferFeeForId ?? null;
   const linkedTransferLegs = linkedTransferId != null ? existingTransactions.filter((t) => t.transferId === linkedTransferId) : [];
+  /** A saved card bill payment (transfer into a credit card): cancelled as a "recorded payment" with its own impact preview. */
+  const isCardBillPaymentRecord =
+    transaction?.transferId != null && linkedTransferLegs.some((l) => l.deletedAt == null && l.type === "income" && accounts.find((a) => a.id === l.accountId)?.type === "card");
   const linkedTransferFee = linkedTransferId != null ? (existingTransactions.find((t) => t.id === transferFeeIdFor(linkedTransferId)) ?? null) : null;
 
   // People settlement gate — only a new transfer paying the gated card. Obligations linked to that bill
@@ -874,6 +910,12 @@ export function TransactionDetailsModal({
       if (!destinationAccountId) return fail("destination", "Select a destination account.");
       if (destinationAccountId === accountId) return fail("destination", "Source and destination accounts must differ.");
     }
+    // A new transfer / card bill payment can't take its source account below zero (the write re-checks this on the fresh balance).
+    if (kind === "transfer" && !transaction && sourceAccount && !accountAllowsNegative(sourceAccount)) {
+      const out = ownTransferEffect ? ownTransferEffect.sourceOut : amountValue;
+      const funds = previewFunds(sourceAccount, out);
+      if (funds.status === "insufficient") return fail("account", `${sourceAccount.name} has ${formatCurrency(funds.before)} — short by ${formatCurrency(funds.shortfall)}.`);
+    }
     if (ownTransfer) {
       const feeCheck = { amount: amountValue, feeText: transferFee, chargedTo: feeChargedTo };
       const feeProblem = transferFeeProblem({ ...feeCheck, feeCategoryId: feeCategoryId || "-" });
@@ -952,11 +994,13 @@ export function TransactionDetailsModal({
   const offeredKinds = transaction || defaultKind === "transfer" ? FORM_KINDS : ADD_MODE_FORM_KINDS;
   function switchKind(next: FormKind) {
     setKind(next);
-    // Switching to Income while a credit card account is selected would otherwise leave
-    // the picker pointing at an option `filteredAccounts` no longer offers for that kind.
-    if (next === "income" && accounts.find((a) => a.id === accountId)?.type === "card") {
-      setAccountId(accounts.find((a) => a.type !== "card")?.id ?? "");
-    }
+    // A transfer / card bill payment moves money out of its From account: one that was merely pre-filled for an
+    // expense is dropped, so the user chooses it (and sees its balance) rather than it being assumed.
+    if (next === "transfer" && !transaction && !accountPicked) setAccountId("");
+    // Switching to Income while a credit card account is selected would otherwise leave the picker pointing at
+    // an option `filteredAccounts` no longer offers for that kind: the selection is cleared, never replaced by
+    // "the first eligible account" (that would be a silent choice).
+    if (!transaction && next !== "transfer") setAccountId((current) => accountAfterKindSwitch({ next, currentId: current, accounts }));
   }
   // A field-validation banner clears together with its field's highlight once that field is fixed.
   const showFormError = formError != null && (invalidField == null || liveInvalid?.field === invalidField);
@@ -991,10 +1035,13 @@ export function TransactionDetailsModal({
       return;
     }
     setFormError(null);
+    setOwnerEditLink(null);
     setInvalidField(null);
 
     const amountValue = Number(amount);
-    const dateTime = new Date(date);
+    // Editing: an untouched day keeps the stored timestamp exactly, so a save that doesn't change the date is never
+    // treated as a date change (owned People / Loan transactions refuse those outside their owner's write path).
+    const dateTime = transaction ? (date === toDateInputValue(transaction.dateTime) ? transaction.dateTime : localDateFromInput(date)) : new Date(date);
     // Own-account transfer: the payment app rides on both legs' description (the duplicate check sees the same text).
     const legDescription = ownTransfer ? transferDescription(description, viaApp) : description;
 
@@ -1092,6 +1139,7 @@ export function TransactionDetailsModal({
             description: legDescription,
             notes,
             idempotencyKey: transferKey,
+            enforceFunds: true,
             cardStatementIntent,
             fee: ownTransfer ? transferFeeParams({ feeText: transferFee, chargedTo: feeChargedTo, feeCategoryId, viaApp }) : null,
           });
@@ -1278,6 +1326,7 @@ export function TransactionDetailsModal({
       op.dismiss();
       setFormError(e instanceof Error ? e.message : "Could not save this transaction");
       setBillChanged(e instanceof CardStatementChangedError);
+      setOwnerEditLink(ownerEditLinkFor(e, transaction));
     } finally {
       setSaving(false);
     }
@@ -1375,6 +1424,16 @@ export function TransactionDetailsModal({
               </div>
             )}
             <div className="flex shrink-0 items-center gap-1.5">
+              {transaction?.isPersonLedgerMovement && transaction.linkedPersonId != null && view === "form" && (
+                <Button asChild variant="outline" size="sm" className="h-7 gap-1 px-2 text-xs">
+                  <Link
+                    href={peoplePaymentHref({ personId: transaction.linkedPersonId, cycle: cycleContaining(transaction.dateTime, cycleStartDay), transactionId: transaction.id })}
+                    title="This movement belongs to a People entry — open that payment in the person's ledger"
+                  >
+                    Edit in People Ledger
+                  </Link>
+                </Button>
+              )}
               {returnLabel && view === "form" && (
                 <Button
                   variant="ghost"
@@ -1692,6 +1751,11 @@ export function TransactionDetailsModal({
               >
                 <Info className="mt-px size-3.5 shrink-0" strokeWidth={2} />
                 <span className="flex-1">{formError}</span>
+                {ownerEditLink != null && (
+                  <Link href={ownerEditLink.href} className="shrink-0 font-semibold underline underline-offset-2">
+                    {ownerEditLink.label}
+                  </Link>
+                )}
                 {billChanged && (
                   <button
                     type="button"
@@ -1891,7 +1955,22 @@ export function TransactionDetailsModal({
                     })()}
                   </div>
                 ) : (
-                  <AccountSelect accounts={filteredAccounts} value={accountId} onChange={setAccountId} />
+                  <AccountSelect
+                    accounts={filteredAccounts}
+                    value={accountId}
+                    onChange={(id) => {
+                      setAccountPicked(true);
+                      setAccountId(id);
+                    }}
+                  />
+                )}
+                {kind === "transfer" && !transaction && sourceAccount && sourceAccount.type !== "card" && (
+                  <PaymentSourceSummary
+                    className="mt-2"
+                    account={sourceAccount}
+                    amount={ownTransferEffect ? ownTransferEffect.sourceOut : Number(amount) > 0 ? Number(amount) : null}
+                    paymentLabel={paysCardBill ? "Card bill payment" : "Transfer"}
+                  />
                 )}
               </FormRow>
               );
@@ -2490,7 +2569,7 @@ export function TransactionDetailsModal({
               <>
                 {transaction ? (
                   <Button variant="ghost" size="sm" className="shrink-0 text-danger hover:bg-danger/10 hover:text-danger" onClick={() => setConfirmDeleteOpen(true)}>
-                    <Trash2 className="size-3.5" /> {isTransferLeg ? "Delete Transfer" : "Delete"}
+                    <Trash2 className="size-3.5" /> {isCardBillPaymentRecord ? "Cancel recorded payment" : isTransferLeg ? "Delete Transfer" : "Delete"}
                   </Button>
                 ) : gateBlocked && settlement.next ? (
                   // Step 1 is People, step 2 the bill — say why the bill can't be paid yet, in one line.
@@ -2570,7 +2649,14 @@ export function TransactionDetailsModal({
         </DialogContent>
       </Dialog>
 
-      <Dialog open={confirmDeleteOpen} onOpenChange={setConfirmDeleteOpen}>
+      {isCardBillPaymentRecord && confirmDeleteOpen && transaction && (
+        <CardPaymentCancelDialog
+          transactionId={transaction.id}
+          onClose={() => setConfirmDeleteOpen(false)}
+          onCancelled={() => onOpenChange(false)}
+        />
+      )}
+      <Dialog open={confirmDeleteOpen && !isCardBillPaymentRecord} onOpenChange={setConfirmDeleteOpen}>
         <DialogContent onKeyDown={(e) => handleEnterKey(e, handleDelete, { enabled: !deleting, fromButtons: true })}>
           <DialogHeader>
             <DialogTitle>{isTransferLeg ? "Delete this transfer?" : "Delete this transaction?"}</DialogTitle>

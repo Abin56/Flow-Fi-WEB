@@ -316,6 +316,10 @@ export function PeopleWorkspace() {
                 if (!selectedRaw || !actions) throw new Error("Not signed in");
                 await actions.applyPersonAdvance(selectedRaw, params);
               }}
+              onEditPaymentDate={async (paymentId, params) => {
+                if (!selectedRaw || !actions) throw new Error("Not signed in");
+                await actions.editPersonPaymentDate(selectedRaw, paymentId, params);
+              }}
               onRevertPayment={async (paymentId) => {
                 if (!selectedRaw || !actions) throw new Error("Not signed in");
                 await actions.revertPersonPayment(selectedRaw, paymentId);

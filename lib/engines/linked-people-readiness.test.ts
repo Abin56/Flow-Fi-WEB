@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildPersonCycleStatement, type StatementInstallment, type StatementEmiSource, type StatementLoanSource } from "@/lib/engines/person-cycle-statement";
-import { linkedPeopleForCard, linkedPeopleForInstallment, peopleLedgerHref } from "@/lib/engines/linked-people-readiness";
+import { linkedPeopleForCard, linkedPeopleForInstallment, peopleApplyAdvanceHref, peopleLedgerHref, peoplePostponeHref } from "@/lib/engines/linked-people-readiness";
 import type { LinkedFundsTransaction } from "@/lib/engines/linked-funds";
 import type { AdvanceApplication, LedgerEntry } from "@/lib/models/person";
 
@@ -215,5 +215,18 @@ describe("linkedPeopleForInstallment — shared Loan / EMI readiness", () => {
 
   it("deep link targets the person and the obligation", () => {
     expect(peopleLedgerHref("amma", "emi-inst:i1")).toBe("/people?person=amma&obligation=emi-inst%3Ai1");
+  });
+});
+
+describe("People deep links from a lender payment — each operation named, each with the way back", () => {
+  it("postpone opens People straight into 'Postpone collection' for that obligation", () => {
+    expect(peoplePostponeHref("p1", "emi-inst:i1", "/loans-installments?agreement=e1&pay=1")).toBe(
+      "/people?person=p1&obligation=emi-inst%3Ai1&settle=1&intent=postpone&return=%2Floans-installments%3Fagreement%3De1%26pay%3D1",
+    );
+  });
+  it("apply advance carries the return path; an outside URL is never followed back", () => {
+    expect(peopleApplyAdvanceHref("p1", "emi-inst:i1", "/emi?agreement=e1&pay=1")).toContain("return=%2Femi%3Fagreement%3De1%26pay%3D1");
+    expect(peopleApplyAdvanceHref("p1", "emi-inst:i1", "https://evil.example")).not.toContain("return=");
+    expect(peopleApplyAdvanceHref("p1", "emi-inst:i1")).toBe("/people?person=p1&applyAdvance=1&obligation=emi-inst%3Ai1");
   });
 });

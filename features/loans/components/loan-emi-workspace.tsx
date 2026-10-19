@@ -104,6 +104,7 @@ export function LoanEmiWorkspace() {
       activeCount: activeBorrowed.length + activeLent.length + activeEmis.length,
       closedCount: loanRows.length + emiRows.length - (activeBorrowed.length + activeLent.length + activeEmis.length),
       next: upcoming[0] ?? null,
+      overdueCount: activeBorrowed.filter((r) => r.status === "overdue").length + activeEmis.filter((r) => r.status === "overdue").length,
     };
   }, [loanRows, emiRows]);
 
@@ -227,13 +228,16 @@ export function LoanEmiWorkspace() {
                 )}
               </Metric>
               <Metric label="Due" icon={CalendarClock}>
-                {summary.next && nextDays != null ? (
-                  <span className={cn("font-semibold", nextDays < 0 ? "text-expense" : nextDays <= 3 ? "text-warning-foreground dark:text-warning" : "text-foreground")}>
-                    {dueLabel(summary.next.date)}
-                  </span>
-                ) : (
-                  <span className="font-normal text-muted-foreground">—</span>
-                )}
+                <span className="flex min-w-0 flex-col">
+                  {summary.next && nextDays != null ? (
+                    <span className={cn("font-semibold", nextDays < 0 ? "text-expense" : nextDays <= 3 ? "text-warning-foreground dark:text-warning" : "text-foreground")}>
+                      {dueLabel(summary.next.date)}
+                    </span>
+                  ) : (
+                    <span className="font-normal text-muted-foreground">—</span>
+                  )}
+                  {summary.overdueCount > 0 && <span className="text-xs font-semibold text-expense">{summary.overdueCount} overdue</span>}
+                </span>
               </Metric>
               <Metric label="Active" icon={ListChecks}>
                 <span className="font-heading text-lg font-semibold">{summary.activeCount}</span>

@@ -3,6 +3,7 @@
 import { CreditCard, Landmark, Wallet } from "lucide-react";
 import { BankLogo } from "@/components/finance/bank-logo";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { formatCurrency } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 /** The bits of an account (or anything account-like) needed to show it with its bank's logo. */
@@ -63,15 +64,22 @@ export function AccountSelect({
   placeholder = "Choose account",
   className,
   ariaLabel,
+  showBalance = false,
 }: {
-  accounts: (AccountLabelSource & { id: string; accountNumberLast4?: string | null })[];
+  accounts: (AccountLabelSource & { id: string; accountNumberLast4?: string | null; currentBalance?: number })[];
   value: string;
   onChange: (id: string) => void;
   placeholder?: string;
   className?: string;
   ariaLabel?: string;
+  /** Paying-account pickers: shows each account's recorded balance next to its name, so the choice is informed. */
+  showBalance?: boolean;
 }) {
-  const suffix = (a: { accountNumberLast4?: string | null }) => (a.accountNumberLast4 ? `•••• ${a.accountNumberLast4}` : undefined);
+  const suffix = (a: { accountNumberLast4?: string | null; currentBalance?: number }) => {
+    const last4 = a.accountNumberLast4 ? `•••• ${a.accountNumberLast4}` : null;
+    const balance = showBalance && a.currentBalance != null ? formatCurrency(a.currentBalance) : null;
+    return [last4, balance].filter(Boolean).join(" · ") || undefined;
+  };
   return (
     <Select value={value || undefined} onValueChange={onChange}>
       <SelectTrigger aria-label={ariaLabel} className={cn("w-full justify-between", className)}>

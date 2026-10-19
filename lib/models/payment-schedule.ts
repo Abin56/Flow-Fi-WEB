@@ -241,6 +241,25 @@ export interface InstallmentPayment extends SoftDeletableEntity {
    * this write path.
    */
   transactionId: string | null;
+  /**
+   * Web-only, additive (absent on every older document and on anything the mobile app writes): set when the
+   * user recorded a payment that was ALREADY made before it was tracked in FlowFi ("Already paid earlier").
+   * Such a payment settles the schedule but never moves an account: a Loan's backing Transaction carries
+   * `excludeFromCalculations: true` (so `balanceEffect` is 0 when it is posted, reversed or edited), and an
+   * EMI posts no Transaction at all. Absent/null = an ordinary payment.
+   */
+  recordedEarlier?: RecordedEarlier | null;
+}
+
+/** See `InstallmentPayment.recordedEarlier`. */
+export interface RecordedEarlier {
+  /** False when the user did not know the exact date — `date` then holds the installment's due date. */
+  dateKnown: boolean;
+}
+
+function recordedEarlierFromMap(value: unknown): RecordedEarlier | null {
+  if (value == null || typeof value !== "object") return null;
+  return { dateKnown: (value as Record<string, unknown>).dateKnown !== false };
 }
 
 // --- Firestore converters ---
@@ -368,6 +387,7 @@ export function installmentPaymentFromFirestore(
     prepaymentPolicyApplied: (data.prepaymentPolicyApplied as string | undefined) ?? null,
     reamortizationEventId: (data.reamortizationEventId as string | undefined) ?? null,
     transactionId: (data.transactionId as string | undefined) ?? null,
+    recordedEarlier: recordedEarlierFromMap(data.recordedEarlier),
     deletedAt: (data.deletedAt as Timestamp | undefined)?.toDate() ?? null,
     lastEditedAt: (data.lastEditedAt as Timestamp | undefined)?.toDate() ?? null,
     editHistory: ((data.editHistory as Record<string, unknown>[] | undefined) ?? []).map(auditEntryFromMap),
@@ -392,6 +412,8 @@ export function installmentPaymentToFirestore(payment: InstallmentPayment): Docu
     prepaymentPolicyApplied: payment.prepaymentPolicyApplied,
     reamortizationEventId: payment.reamortizationEventId,
     transactionId: payment.transactionId,
+    // Written only when present — ordinary payment documents keep their exact shape.
+    ...(payment.recordedEarlier ? { recordedEarlier: { dateKnown: payment.recordedEarlier.dateKnown } } : {}),
     deletedAt: payment.deletedAt == null ? null : Timestamp.fromDate(payment.deletedAt),
     lastEditedAt: payment.lastEditedAt == null ? null : Timestamp.fromDate(payment.lastEditedAt),
     editHistory: payment.editHistory.map(auditEntryToMap),

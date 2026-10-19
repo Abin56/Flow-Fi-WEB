@@ -283,6 +283,8 @@ export class LedgerRepository extends FirestoreCrudRepository<LedgerEntry> {
       accountId: string;
       categoryId: string;
       description?: string;
+      /** Cash going OUT of the account: re-check its balance fresh inside the write (see `CreateTransactionParams.enforceFunds`). */
+      enforceFunds?: boolean;
     },
     transactionRepository: TransactionRepository,
   ): Promise<{ entry: LedgerEntry; transaction: Transaction }> {
@@ -304,6 +306,7 @@ export class LedgerRepository extends FirestoreCrudRepository<LedgerEntry> {
 
       transaction = await transactionRepository.createTransactionInTransaction(tx, {
         type: transactionParams.type,
+        enforceFunds: transactionParams.enforceFunds === true && transactionParams.type === "expense",
         amount: params.amount,
         dateTime: params.date,
         accountId: transactionParams.accountId,
@@ -587,6 +590,12 @@ export class LedgerRepository extends FirestoreCrudRepository<LedgerEntry> {
       if (!entrySnap.exists()) throw new Error("Ledger entry not found");
 
       const fresh = entrySnap.data();
+      // Write-boundary checks on the document as it is NOW (a stale tab's copy proves nothing): it must belong
+      // to this person, still be live (a trashed entry's effect was already reversed), and not be owned by a
+      // Record Payment (those change only through edit / revert payment). Refused before any write.
+      if (fresh.personId !== person.id) throw new Error("This entry belongs to a different person — nothing was changed.");
+      if (fresh.deletedAt != null) throw new Error("This entry was deleted in another tab or device — nothing was changed.");
+      if (fresh.paymentId != null) throw new Error("This entry belongs to a recorded payment. Edit or revert the payment instead — nothing was changed.");
       const cashLeg =
         transactionRepository != null && fresh.transactionRef != null && (fresh.type === "borrowed" || fresh.type === "gave")
           ? await transactionRepository.getInTransaction(tx, fresh.transactionRef)

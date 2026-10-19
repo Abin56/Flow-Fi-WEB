@@ -26,15 +26,15 @@ import { useMemo, useState } from "react";
 import { useAccounts } from "@/hooks/use-accounts";
 import { useAllCreditCardStatements, useCreditCards } from "@/hooks/use-credit-cards";
 import { useAllEmiInstallments } from "@/hooks/use-emis";
-import { useEmiInstallmentPayments } from "@/hooks/use-emi-installment-payments";
+import { countsAsEmiCashOut, useEmiInstallmentPayments } from "@/hooks/use-emi-installment-payments";
 import { useExpenses } from "@/hooks/use-expenses";
 import { useLoanScheduledPayments } from "@/hooks/use-loan-scheduled-payments";
 import { dashboardLoanPaidRows } from "@/lib/engines/loan-cash-flow";
 import { useBudgets } from "@/hooks/use-budgets";
 import { useCategories } from "@/hooks/use-categories";
 import { useTransactions } from "@/hooks/use-transactions";
-import { useAllBillOccurrences } from "@/features/bills/hooks/use-bill-occurrence-history";
 import { useBillRows } from "@/features/bills/hooks/use-bills-data";
+import { billObligationsInCycle, outstandingBillOccurrences } from "@/lib/engines/bill-obligations";
 import { useAccountsStats } from "@/features/accounts/hooks/use-accounts-data";
 import { useCreditCardTotals } from "@/features/credit-cards/hooks/use-credit-cards-data";
 import { useEmiRows } from "@/features/emi/hooks/use-emi-data";
@@ -44,7 +44,7 @@ import { formatCurrency } from "@/lib/format";
 import { usePeopleRows, usePeopleStats } from "@/features/people/hooks/use-people-data";
 import { peopleDirectionSides } from "@/lib/engines/person-position";
 import { useMonthCycleStartDay } from "@/features/settings/hooks/use-user-preferences";
-import { adjacentCycleRange, cycleRangeFor, cycleRangeForMonth, isInCycle, isOwedInCycle, mySpendBucketDate } from "@/lib/engines/month-cycle-range";
+import { adjacentCycleRange, cycleRangeFor, cycleRangeForMonth, isInCycle, mySpendBucketDate } from "@/lib/engines/month-cycle-range";
 import {
   amountFor,
   breakdownFor,
@@ -59,7 +59,6 @@ import {
 } from "@/lib/engines/dashboard-aggregation";
 import { computeBudgetInsight, resolveBudgetPeriod } from "@/lib/engines/budget-insight";
 import type { Account } from "@/lib/models/account";
-import { billOccurrenceRemainingAmount, billOccurrenceStatus, type Bill } from "@/lib/models/bill";
 import type { Budget } from "@/lib/models/budget";
 import type { Category } from "@/lib/models/category";
 import type { CreditCardProfile, Statement } from "@/lib/models/credit-card";
@@ -185,14 +184,13 @@ export function useMonthCycleData() {
   const { isLoading: emiInstallmentsLoading } = useAllEmiInstallments();
   const { payments: emiPayments, isLoading: emiPaymentsLoading } = useEmiInstallmentPayments();
   const { payments: loanScheduledPayments, isLoading: loanInstallmentsLoading } = useLoanScheduledPayments();
-  const { occurrences: billOccurrences = [], isLoading: billOccurrencesLoading } = useAllBillOccurrences();
   const { data: expenses = [], isLoading: expensesLoading } = useExpenses();
   const { data: categories = [], isLoading: categoriesLoading } = useCategories();
   const { data: budgets = [], isLoading: budgetsLoading } = useBudgets();
 
   const { rows: emiRows, isLoading: emiLoading } = useEmiRows();
   const { rows: loanRows, isLoading: loanLoading } = useLoanRows();
-  const { rows: billRows, isLoading: billRowsLoading } = useBillRows();
+  const { rows: billRows, cycles: billCycles, isLoading: billRowsLoading } = useBillRows();
   const { rows: peopleRows, isLoading: peopleRowsLoading } = usePeopleRows();
   const { stats: peopleStats, isLoading: peopleStatsLoading } = usePeopleStats();
   const { totals: cardTotals, isLoading: cardTotalsLoading } = useCreditCardTotals();
@@ -208,7 +206,6 @@ export function useMonthCycleData() {
     emiInstallmentsLoading ||
     emiPaymentsLoading ||
     loanInstallmentsLoading ||
-    billOccurrencesLoading ||
     expensesLoading ||
     categoriesLoading ||
     budgetsLoading ||
@@ -257,12 +254,12 @@ export function useMonthCycleData() {
       isSplit: isSplit(e),
       myShare: myShare(e),
     }));
-    const dashboardBillOccurrences: DashboardBillOccurrence[] = billOccurrences.map((o) => ({
-      dueDate: o.dueDate,
-      amountPaid: o.amountPaid,
-    }));
+    // A bill is outflow only through the account debit its payment posts (a normal expense Transaction, already in
+    // `transactions`). Occurrence `amountPaid` is never summed: paid-earlier / legacy bills moved no money.
+    const dashboardBillOccurrences: DashboardBillOccurrence[] = [];
     // One row per EMI payment, dated by when it was PAID (WFI-P2-11) — an advance / late payment lands in its real cycle.
-    const dashboardEmiInstallments: DashboardInstallment[] = emiPayments.map((p) => ({ dueDate: p.date, amountPaid: p.amount }));
+    // A payment recorded as already made before FlowFi settled the schedule but was never cash out here.
+    const dashboardEmiInstallments: DashboardInstallment[] = emiPayments.filter(countsAsEmiCashOut).map((p) => ({ dueDate: p.date, amountPaid: p.amount }));
     // Only schedule-only (legacy, unlinked) payments on money I borrowed — modern Loan payments are
     // already counted through their linked Transaction, and lent-loan repayments are not spending.
     const dashboardLoanInstallments: DashboardInstallment[] = dashboardLoanPaidRows(loanScheduledPayments);
@@ -301,7 +298,7 @@ export function useMonthCycleData() {
     const mySpentChangePercent = percentChange(mySpent, myPreviousSpent);
 
     return { spent, spentBreakdown, previousSpent, income, net, spentChangePercent, mySpent, myPreviousSpent, myNet, mySpentChangePercent };
-  }, [isCustomCycle, cycleRange, monthCycleStartDay, transactions, creditCards, expenses, billOccurrences, emiPayments, loanScheduledPayments, mySpendCtx]);
+  }, [isCustomCycle, cycleRange, monthCycleStartDay, transactions, creditCards, expenses, emiPayments, loanScheduledPayments, mySpendCtx]);
 
   const savingsRatePercent = financialView.income > 0 ? Math.round((financialView.net / financialView.income) * 100) : 0;
 
@@ -437,31 +434,27 @@ export function useMonthCycleData() {
     return { items, total: round2(total), carriedOverdue: round2(carriedOverdue), count: items.length };
   }, [creditCards, statements, transactions, now, cycleRange]);
 
-  // --- Bills & reminders due this month, unpaid ---
+  // --- Bills due this cycle, unpaid — every outstanding CYCLE (not only each bill's latest one), so a cycle reopened by
+  //     a cancelled payment is owed here too; same occurrence-level rule as Bills Stats (`lib/engines/bill-obligations.ts`). ---
   const billsThisMonth = useMemo(() => {
+    const billById = new Map(billRows.map((r) => [r.bill.id, r]));
+    const owed = billObligationsInCycle(outstandingBillOccurrences(billCycles, now), cycleRange, now);
     const items: MonthCycleUpcomingItem[] = [];
-    let total = 0;
-    for (const row of billRows) {
-      const occurrence = row.occurrence;
-      if (!occurrence) continue;
-      const status = billOccurrenceStatus(occurrence, now);
-      if (status === "paid" || status === "skipped") continue;
-      if (!isOwedInCycle(occurrence.dueDate, cycleRange, now)) continue;
-      const remaining = billOccurrenceRemainingAmount(occurrence);
-      total += remaining;
+    for (const { billId, occurrence, remaining, isOverdue } of owed.items) {
+      const row = billById.get(billId);
+      if (!row) continue;
       items.push({
-        id: (row.bill as Bill).id,
+        id: `${billId}:${occurrence.id}`,
         title: row.bill.name,
         subtitle: row.category?.name ?? "Bill",
         amount: remaining,
         dueDate: occurrence.dueDate,
         daysLeft: daysLeftIn(occurrence.dueDate, now),
-        metaLabel: `Due on ${formatShortDate(occurrence.dueDate)}`,
+        metaLabel: isOverdue ? `Overdue · due ${formatShortDate(occurrence.dueDate)}` : `Due on ${formatShortDate(occurrence.dueDate)}`,
       });
     }
-    items.sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime());
-    return { items, total, count: items.length };
-  }, [billRows, now, cycleRange]);
+    return { items, total: owed.total, count: items.length, overdueTotal: owed.overdueTotal, overdueCount: owed.overdueCount };
+  }, [billRows, billCycles, now, cycleRange]);
 
   // --- People: who you need to give money to / who you need to receive money from ---
   //     Sides come from each person's GROSS breakdown (`peopleDirectionSides`), not the net: a borrowing

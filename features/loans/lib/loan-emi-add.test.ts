@@ -117,3 +117,19 @@ describe("'They repay me each installment' opt-in at creation", () => {
     expect(req.params).toMatchObject({ beneficiaryPersonId: "pA", beneficiaryRepaysInstallments: true });
   });
 });
+
+describe("EMI reference number", () => {
+  const card = { kind: "creditCard" as const, cardId: "card-1", name: "Phone", amount: "12000", count: "6" };
+  it("is offered for Purchase and Card EMIs only", () => {
+    expect(addSections(form({ kind: "purchase" })).emiReference).toBe(true);
+    expect(addSections(form(card)).emiReference).toBe(true);
+    expect(addSections(form({ kind: "borrowed" })).emiReference).toBe(false);
+    expect(addSections(form({ kind: "lent" })).emiReference).toBe(false);
+  });
+  it("is saved trimmed as the EMI loanNumber, and blank saves null", () => {
+    const withRef = buildLoanEmiCreateRequest(form({ ...card, loanNumber: "  EMI-778 " }));
+    const blank = buildLoanEmiCreateRequest(form(card));
+    expect(withRef.path === "emi" && withRef.params.loanNumber).toBe("EMI-778");
+    expect(blank.path === "emi" && blank.params.loanNumber).toBeNull();
+  });
+});

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "next/navigation";
 import { EmiScheduleDialog } from "@/features/emi/components/emi-schedule-dialog";
@@ -11,7 +11,7 @@ import { RecordPaymentDialog } from "@/features/loans/components/record-payment-
 import { RecordedPaymentDialog } from "@/features/loans/components/recorded-payment-dialog";
 import { EMI_PAYMENT_HISTORY_KEY, useEmiPaymentHistory } from "@/features/loans/hooks/use-payment-history";
 import { groupRecordedPayments, type RecordedPaymentAction } from "@/features/loans/lib/recorded-payments";
-import type { Installment } from "@/lib/models/payment-schedule";
+import { remainingAmount, type Installment } from "@/lib/models/payment-schedule";
 import { errorDetail } from "@/lib/operation-progress/operation-progress";
 import { startOperation } from "@/store/operation-progress-store";
 
@@ -36,6 +36,8 @@ export function EmiWorkspace({ openRequest = null }: EmiWorkspaceProps = {}) {
   // Incremented per open so each Record Payment gets a fresh mount (clean form, new guard state).
   const [paySeq, setPaySeq] = useState(0);
   const [payTarget, setPayTarget] = useState<Installment | null>(null);
+  // "past": the dialog opens on "Record past payments" instead of paying now.
+  const [payView, setPayView] = useState<"pay" | "past">("pay");
   const [statusBusy, setStatusBusy] = useState(false);
 
   const activeRowFresh = useMemo(() => {
@@ -51,10 +53,26 @@ export function EmiWorkspace({ openRequest = null }: EmiWorkspaceProps = {}) {
     if (target) setActiveRow(target);
   }
 
-  function openPay(installment: Installment) {
+  function openPay(installment: Installment, view: "pay" | "past" = "pay") {
     setPaySeq((n) => n + 1);
+    setPayView(view);
     setPayTarget(installment);
   }
+
+  // Back from People (`?agreement=<id>&pay=1[&installment=<id>]`): reopen Record Payment on that installment once.
+  const payHandoffRef = useRef(searchParams.get("pay") === "1" ? { emiId: searchParams.get("agreement"), installmentId: searchParams.get("installment") } : null);
+  useEffect(() => {
+    const handoff = payHandoffRef.current;
+    const row = handoff?.emiId ? rows.find((r) => r.emi.id === handoff.emiId) : undefined;
+    if (!handoff || !row) return;
+    payHandoffRef.current = null;
+    const params = new URLSearchParams(window.location.search);
+    params.delete("pay");
+    params.delete("installment");
+    window.history.replaceState(window.history.state, "", `${window.location.pathname}?${params.toString()}`);
+    const installment = row.installments.find((i) => i.id === handoff.installmentId) ?? row.nextInstallment;
+    if (installment) requestAnimationFrame(() => openPay(installment));
+  }, [rows]);
 
   const deleteId = activeRowFresh?.emi.id ?? null;
   const loadDeleteImpact = useCallback(
@@ -127,6 +145,10 @@ export function EmiWorkspace({ openRequest = null }: EmiWorkspaceProps = {}) {
         row={detail}
         onDelete={() => setDeleteOpen(true)}
         onRecordPayment={(_row, installment) => openPay(installment)}
+        onRecordPastPayments={(row) => {
+          const first = [...row.installments].filter((i) => i.deletedAt == null && !i.isSkipped && remainingAmount(i) > 0.005).sort((a, b) => a.sequenceNumber - b.sequenceNumber)[0];
+          if (first) openPay(first, "past");
+        }}
         onToggleClose={handleToggleClose}
         statusBusy={statusBusy}
         paymentActions={paymentActions}
@@ -148,6 +170,7 @@ export function EmiWorkspace({ openRequest = null }: EmiWorkspaceProps = {}) {
       <RecordPaymentDialog
         key={`emi-pay-${paySeq}`}
         target={payTarget && detail ? { kind: "emi", row: detail, installment: payTarget } : null}
+        initialView={payView}
         open={payTarget != null && detail != null}
         onOpenChange={(open) => !open && setPayTarget(null)}
       />

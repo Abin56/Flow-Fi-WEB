@@ -14,13 +14,10 @@
  * rolls-forward exactly as the ported repository already implements — no
  * new business logic here, only composition.
  *
- * Paying a bill (`markPaid`/`recordPayment`) never creates a `Transaction`
- * or touches `Account.currentBalance` — it only ever updates
- * `BillOccurrence.amountPaid` and writes a `PaymentRecord`, exactly mirroring
- * Flutter's `BillOccurrenceRepository`/`PaymentRepository` (the source of
- * truth: `Finance_App/lib/features/bills/data/`), which never reference
- * `Account`/`Transaction` either. `Bill.accountId` is a purely descriptive/
- * suggested-account field — it is never used to auto-post a transaction.
+ * Paying a bill is an explicit choice (`BillPaymentRepository`, audit MFI-P1-03): `payFromAccount` posts ONE real
+ * account debit and marks the bill paid in the same atomic write; `recordPaidEarlier` marks it paid with NO debit
+ * (already in the balance). `Bill.accountId` stays a suggestion only — it never pays anything by itself. The old
+ * ambiguous `markPaid` is no longer wired to any UI.
  */
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -30,9 +27,11 @@ import { useAccounts } from "@/hooks/use-accounts";
 import { useBills } from "@/hooks/use-bills";
 import { useCategories } from "@/hooks/use-categories";
 import type { Account } from "@/lib/models/account";
-import type { Bill, BillOccurrence } from "@/lib/models/bill";
+import type { Bill, BillOccurrence, PaymentRecord } from "@/lib/models/bill";
 import type { Category } from "@/lib/models/category";
 import { createBillRepository } from "@/lib/repositories/repository-factory";
+import { BillPaymentRepository, type EditBillPaymentParams, type PayEarlierParams, type PayFromAccountParams, type ReverseBillPaymentParams } from "@/lib/repositories/bill-payment-repository";
+import { db } from "@/lib/firebase/client";
 import type { CreateBillParams, EditBillParams } from "@/lib/repositories/bill-repository";
 import { createBillOccurrenceRepository, createPaymentRepository } from "@/features/bills/lib/bill-occurrence-factory";
 import { useAuthStore } from "@/store/auth-store";
@@ -48,8 +47,25 @@ export interface BillRow {
   category: Category | undefined;
 }
 
-/** Live bill templates + their current (lazily materialized) occurrence, joined with account/category. */
-export function useBillRows(): { rows: BillRow[]; isLoading: boolean } {
+/** One persisted billing cycle with the bill it belongs to — what obligation reporting sums (`lib/engines/bill-obligations.ts`). */
+export interface BillCycleRef {
+  billId: string;
+  occurrence: BillOccurrence;
+}
+
+interface BillCycles {
+  /** What the Bills page shows: the latest cycle (materialized / rolled forward as needed). */
+  current: BillOccurrence;
+  /** Every persisted cycle of the bill, the current one included — an older cycle can be unpaid again after a cancel. */
+  all: BillOccurrence[];
+}
+
+/**
+ * Live bill templates + their current (lazily materialized) occurrence, joined with account/category.
+ * `cycles` is EVERY non-deleted cycle of every bill (same single read per bill — no extra queries), for reporting that must
+ * not assume only the latest cycle can be outstanding.
+ */
+export function useBillRows(): { rows: BillRow[]; cycles: BillCycleRef[]; isLoading: boolean } {
   const uid = useAuthStore((s) => s.user?.uid);
   const { data: bills = [], isLoading: billsLoading } = useBills();
   const { data: accounts = [], isLoading: accountsLoading } = useAccounts();
@@ -60,17 +76,19 @@ export function useBillRows(): { rows: BillRow[]; isLoading: boolean } {
   const occurrencesQuery = useQuery({
     queryKey: billOccurrencesQueryKey(uid, billIds),
     queryFn: async () => {
-      if (!uid) return {} as Record<string, BillOccurrence>;
+      if (!uid) return {} as Record<string, BillCycles>;
       const billRepository = createBillRepository(uid);
       const entries = await Promise.all(
         (bills as Bill[]).map(async (bill) => {
           const occurrenceRepository = createBillOccurrenceRepository(uid, bill.id, billRepository);
           const existing = await occurrenceRepository.getAll();
           const current = await occurrenceRepository.ensureCurrentOccurrence(bill, existing);
-          return [bill.id, current] as const;
+          // `current` may have just been created by a roll-forward, so it is not in `existing` yet.
+          const all = existing.some((o) => o.id === current.id) ? existing : [...existing, current];
+          return [bill.id, { current, all: all.filter((o) => o.deletedAt == null) }] as const;
         }),
       );
-      return Object.fromEntries(entries) as Record<string, BillOccurrence>;
+      return Object.fromEntries(entries) as Record<string, BillCycles>;
     },
     enabled: !!uid && billIds.length > 0,
     staleTime: 60_000,
@@ -82,14 +100,20 @@ export function useBillRows(): { rows: BillRow[]; isLoading: boolean } {
     const occurrenceByBillId = occurrencesQuery.data ?? {};
     return (bills as Bill[]).map((bill) => ({
       bill,
-      occurrence: occurrenceByBillId[bill.id] ?? null,
+      occurrence: occurrenceByBillId[bill.id]?.current ?? null,
       account: bill.accountId ? accountById.get(bill.accountId) : undefined,
       category: bill.categoryId ? categoryById.get(bill.categoryId) : undefined,
     }));
   }, [bills, accounts, categories, occurrencesQuery.data]);
 
+  const cycles = useMemo(
+    () => Object.entries(occurrencesQuery.data ?? {}).flatMap(([billId, c]) => c.all.map((occurrence) => ({ billId, occurrence }))),
+    [occurrencesQuery.data],
+  );
+
   return {
     rows,
+    cycles,
     isLoading: billsLoading || accountsLoading || categoriesLoading || (billIds.length > 0 && occurrencesQuery.isLoading),
   };
 }
@@ -116,10 +140,36 @@ export function useBillActions() {
       deleteBill: async (bill: Bill) => {
         await billRepository.softDelete(bill);
       },
-      markPaid: async (bill: Bill, occurrence: BillOccurrence) => {
-        const occurrenceRepository = createBillOccurrenceRepository(uid, bill.id, billRepository);
-        await occurrenceRepository.markPaid(occurrence);
+      /** "Pay from my account now" — one debit + paid status, atomic, funds enforced in the write. */
+      payFromAccount: async (params: PayFromAccountParams) => {
+        const result = await new BillPaymentRepository(db, uid).payFromAccount(params);
         await invalidateOccurrences();
+        return result;
+      },
+      /** "Already paid earlier" — paid status + the real date; no debit. */
+      recordPaidEarlier: async (params: PayEarlierParams) => {
+        const result = await new BillPaymentRepository(db, uid).recordPaidEarlier(params);
+        await invalidateOccurrences();
+        return result;
+      },
+      editBillPayment: async (params: EditBillPaymentParams) => {
+        const result = await new BillPaymentRepository(db, uid).editPayment(params);
+        await invalidateOccurrences();
+        return result;
+      },
+      cancelBillPayment: async (params: ReverseBillPaymentParams) => {
+        const result = await new BillPaymentRepository(db, uid).reversePayment(params);
+        await invalidateOccurrences();
+        return result;
+      },
+      /** The payment records of one bill (live + cancelled) — to show / cancel / edit a payment. */
+      listPayments: async (billId: string): Promise<PaymentRecord[]> => {
+        const occurrenceRepository = createBillOccurrenceRepository(uid, billId, billRepository);
+        return createPaymentRepository(uid, billId, occurrenceRepository).getAll();
+      },
+      /** Every cycle (occurrence) of one bill — to label each payment with the exact cycle it paid. */
+      listOccurrences: async (billId: string): Promise<BillOccurrence[]> => {
+        return createBillOccurrenceRepository(uid, billId, billRepository).getAll();
       },
       skipOccurrence: async (bill: Bill, occurrence: BillOccurrence) => {
         const occurrenceRepository = createBillOccurrenceRepository(uid, bill.id, billRepository);

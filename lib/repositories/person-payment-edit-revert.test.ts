@@ -65,8 +65,8 @@ vi.mock("@/lib/firebase/client", () => ({ firebaseApp: {}, auth: {}, db: {}, sto
 
 import { AccountRepository } from "@/lib/repositories/account-repository";
 import { LedgerRepository, PersonRepository } from "@/lib/repositories/person-repository";
-import { TransactionRepository } from "@/lib/repositories/transaction-repository";
-import { PersonPaymentRepository, type PaymentExtraInput, type PaymentLineInput, type RecordPaymentInput } from "@/lib/repositories/person-payment-repository";
+import { OwnedTransactionEditError, TransactionRepository } from "@/lib/repositories/transaction-repository";
+import { PersonPaymentChangedError, PersonPaymentRepository, type PaymentExtraInput, type PaymentLineInput, type RecordPaymentInput } from "@/lib/repositories/person-payment-repository";
 import { advanceRemaining, drawAdvance } from "@/lib/engines/person-payment";
 import { buildPersonCycleStatement, cycleContaining, shiftCycle, type StatementCycle } from "@/lib/engines/person-cycle-statement";
 import { buildLedgerRows } from "@/features/people/lib/person-ledger-rows";
@@ -627,5 +627,69 @@ describe("EMI-linked People items — Record Payment from the selected cycle (ov
     expect(balanceOf("sbi")).toBe(10_000);
     expect(liveTx()).toHaveLength(0);
     expectConsistent();
+  });
+});
+
+describe("Date-only edit of a recorded People payment", () => {
+  beforeEach(() => {
+    installments = [emiInst("i1", 1, d(9, 30), 2000)];
+    setup();
+  });
+  const ids = () => ({ entries: ledger().filter((e) => e.paymentId != null).map((e) => e.id).sort(), tx: liveTx().map((t) => t.id).sort() });
+
+  it("moves the date in place: same payment/transaction ids, amounts, account and allocation; no balance write", async () => {
+    const id = await payments.recordPayment(person(), input([KSEB(1000), EMI(2000)], ADV(500)));
+    const before = ids();
+    const balances = { sbi: balanceOf("sbi"), person: person().currentBalance };
+    await payments.editPaymentDate(person(), id, { date: d(10, 25), expectedDate: d(10, 2) });
+    expect(ids()).toEqual(before);
+    expect(ledger().filter((e) => e.paymentId === id)).toHaveLength(3);
+    expect(ledger().filter((e) => e.paymentId != null).every((e) => e.date.getTime() === d(10, 25).getTime())).toBe(true);
+    expect((liveTx()[0] as unknown as { dateTime: Date }).dateTime.getTime()).toBe(d(10, 25).getTime());
+    expect(liveTx()[0].amount).toBe(3500);
+    expect({ sbi: balanceOf("sbi"), person: person().currentBalance }).toEqual(balances);
+    expect(row("ledger:kseb").remaining).toBe(0);
+    expect(row("emi-inst:i1").remaining).toBe(0);
+    expectConsistent();
+  });
+
+  it("the cycle follows the new date: cash received leaves the old cycle and lands in the new one", async () => {
+    const id = await payments.recordPayment(person(), input([KSEB(1000), EMI(2000)]));
+    expect(statement(SEP).cashReceived).toBe(3000);
+    expect(statement(OCT).cashReceived).toBe(0);
+    await payments.editPaymentDate(person(), id, { date: d(10, 25), expectedDate: d(10, 2) });
+    expect(statement(SEP).cashReceived).toBe(0);
+    expect(statement(OCT).cashReceived).toBe(3000);
+    expectConsistent();
+  });
+
+  it("rejects a stale edit (date moved or payment reverted elsewhere): nothing is written", async () => {
+    const id = await payments.recordPayment(person(), input([KSEB(1000), EMI(2000)]));
+    await payments.editPaymentDate(person(), id, { date: d(10, 20), expectedDate: d(10, 2) });
+    const before = snapshot();
+    await expect(payments.editPaymentDate(person(), id, { date: d(10, 25), expectedDate: d(10, 2) })).rejects.toBeInstanceOf(PersonPaymentChangedError);
+    expect(snapshot()).toEqual(before);
+    await payments.revertPayment(person(), id);
+    const reverted = snapshot();
+    await expect(payments.editPaymentDate(person(), id, { date: d(10, 25), expectedDate: d(10, 20) })).rejects.toThrow();
+    expect(snapshot()).toEqual(reverted);
+  });
+
+  it("keeps the 'already in my account' treatment: no account movement, and never a future date", async () => {
+    const id = await payments.recordPayment(person(), { ...input([KSEB(1000)]), recordedEarlier: true });
+    const sbi = balanceOf("sbi");
+    await payments.editPaymentDate(person(), id, { date: d(10, 3), expectedDate: d(10, 2) });
+    expect(balanceOf("sbi")).toBe(sbi);
+    const future = new Date();
+    future.setFullYear(future.getFullYear() + 1);
+    await expect(payments.editPaymentDate(person(), id, { date: future, expectedDate: d(10, 3) })).rejects.toThrow(/future/);
+  });
+
+  it("the generic Transaction edit still refuses a date change on the People cash leg", async () => {
+    await payments.recordPayment(person(), input([KSEB(1000)]));
+    const accountRepository = new AccountRepository(col(`${U}/accounts`));
+    const generic = new TransactionRepository(col(`${U}/transactions`), accountRepository);
+    const leg = liveTx()[0] as unknown as Parameters<TransactionRepository["editTransaction"]>[0];
+    await expect(generic.editTransaction(leg, { dateTime: d(10, 25) })).rejects.toBeInstanceOf(OwnedTransactionEditError);
   });
 });

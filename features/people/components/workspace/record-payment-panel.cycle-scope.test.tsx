@@ -15,6 +15,13 @@ import { RecordPaymentPanel } from "./record-payment-panel";
 vi.mock("@/lib/firebase/client", () => ({ firebaseApp: {}, auth: {}, db: {}, storage: {} }));
 vi.mock("next/link", () => ({ default: ({ children }: { children: React.ReactNode }) => children }));
 vi.mock("@/hooks/use-accounts", () => ({ useAccounts: () => ({ data: [{ id: "sbi", name: "SBI", isDefault: true, deletedAt: null }] }) }));
+// These tests are about allocation, not the account step: SBI is chosen up front. Choosing the paying account
+// explicitly (never a default) is covered in record-payment-panel.account.test.tsx.
+vi.mock("./ledger-ui", async (orig) => {
+  const actual = await orig<typeof import("./ledger-ui")>();
+  const sbi = { id: "sbi", name: "SBI", type: "bank", currentBalance: 10_000_000, deletedAt: null };
+  return { ...actual, useAccountChoice: () => ({ accounts: [sbi], accountId: "sbi", selected: sbi, setAccountId: () => {} }) };
+});
 vi.mock("@/hooks/use-categories", () => ({ useCategories: () => ({ data: [{ id: "gift", name: "Gift", type: "income", deletedAt: null }] }) }));
 vi.mock("@/features/people/components/workspace/purpose-money", () => ({ usePurposeLinkOptions: () => [] }));
 
@@ -195,6 +202,7 @@ describe("Remainders and reminders from the selected cycle — future ₹2,000 a
   it("A. reminder: partial ₹2,500 → reminder on the still-open current item only, never the future one", async () => {
     const { user, onSubmit, onSetReminder } = setup();
     await user.type(amountInput(), "2500");
+    await user.click(screen.getByRole("button", { name: /After recording/ }));
     await user.click(within(screen.getByRole("radiogroup", { name: "Reminder" })).getByRole("radio", { name: /Next cycle/ }));
     await user.click(cta());
     expect(linesOf(onSubmit.mock.calls[0][0])).toEqual({ "ledger:aug-carried": 1000, "ledger:sep-share": 1500 });

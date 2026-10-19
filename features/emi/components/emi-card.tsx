@@ -1,7 +1,8 @@
 "use client";
 
 import { Banknote, Briefcase, Car, CreditCard, GraduationCap, Home, User, UserRound } from "lucide-react";
-import { DebtCard, EMI_ICON, cadenceLabel, daysUntil, type DebtCardBadge } from "@/features/loans/components/loan-emi-ui";
+import { DebtCard, EMI_ICON, cadenceLabel, daysUntil, ownershipChips, type DebtCardBadge } from "@/features/loans/components/loan-emi-ui";
+import { useLoanPersons } from "@/hooks/use-loans";
 import type { EmiRow } from "@/features/emi/hooks/use-emi-data";
 import type { EmiLoanType } from "@/lib/models/emi";
 import { remainingAmount } from "@/lib/models/payment-schedule";
@@ -46,8 +47,10 @@ export function emiBadges(row: EmiRow): DebtCardBadge[] {
       return [{ label: "Completed", tone: "success" }];
     case "closed":
       return [{ label: "Closed", tone: "neutral" }];
-    default:
-      return [];
+    default: {
+      const next = row.nextInstallment?.dueDate;
+      return next && daysUntil(next) >= 0 && daysUntil(next) <= 3 ? [{ label: "Due soon", tone: "warning" }] : [];
+    }
   }
 }
 
@@ -61,8 +64,11 @@ interface EmiCardProps {
 /** Same card as LoanCard (see `DebtCard`) — installment-count progress, outstanding amount first. */
 export function EmiCard({ row, tag, onClick }: EmiCardProps) {
   const { emi, status, installmentsPaid, remainingBalance, nextInstallment } = row;
+  const { data: persons = [] } = useLoanPersons();
+  const chips = ownershipChips(emi, emi.principalAmount, (id) => persons.find((p) => p.id === id)?.name);
   const cardLabel = emiCardLabel(row);
-  const source = emi.lenderName ?? cardLabel ?? row.category?.name ?? EMI_TYPE_LABEL[emi.loanType];
+  const baseSource = emi.lenderName ?? cardLabel ?? row.category?.name ?? EMI_TYPE_LABEL[emi.loanType];
+  const source = [baseSource, emi.loanNumber ? `Ref ${emi.loanNumber}` : null].filter(Boolean).join(" · ");
   const done = status === "closed" || status === "completed";
 
   return (
@@ -74,6 +80,8 @@ export function EmiCard({ row, tag, onClick }: EmiCardProps) {
       badges={emiBadges(row)}
       outstandingLabel="Outstanding"
       outstanding={remainingBalance}
+      totalAmount={emi.principalAmount}
+      totalLabel="EMI amount"
       nextAmount={done || !nextInstallment ? null : remainingAmount(nextInstallment)}
       nextDate={done ? null : (nextInstallment?.dueDate ?? null)}
       cadence={cadenceLabel(emi.installmentFrequency)}
@@ -82,8 +90,8 @@ export function EmiCard({ row, tag, onClick }: EmiCardProps) {
       total={emi.installmentCount}
       partial={installmentProgress(row.installments).partial}
       links={[
-        cardLabel && cardLabel !== source ? { icon: CreditCard, label: cardLabel } : null,
-        emi.beneficiaryPersonId ? { icon: UserRound, label: `For ${row.beneficiaryName ?? "someone else"}` } : null,
+        cardLabel && cardLabel !== baseSource ? { icon: CreditCard, label: cardLabel } : null,
+        ...(chips.length > 0 ? chips : [emi.beneficiaryPersonId ? { icon: UserRound, label: `For ${row.beneficiaryName ?? "someone else"}` } : null]),
       ].filter((l) => l != null)}
       muted={status === "closed"}
       onClick={onClick}

@@ -1,7 +1,8 @@
 "use client";
 
-import { Bell, Coins, Landmark, Wallet } from "lucide-react";
+import { Bell, ChevronRight, Coins, Info, Landmark, Wallet } from "lucide-react";
 import { motion, useReducedMotion } from "framer-motion";
+import type { BalanceScope } from "@/features/accounts/components/balance-breakdown-sheet";
 import { useAccountsStats } from "@/features/accounts/hooks/use-accounts-data";
 import { formatCurrency } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -13,7 +14,7 @@ const LABEL = "text-[11px] font-semibold tracking-[0.06em] text-muted-foreground
  * The change-vs-last-month and upcoming figures aren't computed yet (`useAccountsStats` reports 0 for
  * them), so they're shown as not tracked rather than as a real "0%" / "₹0".
  */
-export function AccountsStats({ accountCount }: { accountCount?: number }) {
+export function AccountsStats({ accountCount, onExplain }: { accountCount?: number; onExplain?: (scope: BalanceScope) => void }) {
   const { stats } = useAccountsStats();
 
   return (
@@ -28,7 +29,32 @@ export function AccountsStats({ accountCount }: { accountCount?: number }) {
           <Wallet className="size-3.5" strokeWidth={1.9} />
           Total balance
         </span>
-        <p className="relative text-[36px] leading-none font-bold tracking-tight tabular-nums sm:text-[40px]">{formatCurrency(stats.totalBalance)}</p>
+        {onExplain ? (
+          <button
+            type="button"
+            onClick={() => onExplain({ kind: "total" })}
+            aria-label="Explain total balance"
+            title="View breakdown"
+            className="group/explain relative flex w-fit items-center gap-2 rounded-[8px] text-left outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+          >
+            <span className="text-[36px] leading-none font-bold tracking-tight tabular-nums underline decoration-white/0 decoration-dashed underline-offset-8 transition-[text-decoration-color] group-hover/explain:decoration-white/60 sm:text-[40px]">
+              {formatCurrency(stats.totalBalance)}
+            </span>
+            <Info className="size-4 text-white/85 transition-colors group-hover/explain:text-white" strokeWidth={1.9} />
+          </button>
+        ) : (
+          <p className="relative text-[36px] leading-none font-bold tracking-tight tabular-nums sm:text-[40px]">{formatCurrency(stats.totalBalance)}</p>
+        )}
+        {onExplain && (
+          <button
+            type="button"
+            onClick={() => onExplain({ kind: "total" })}
+            className="relative mt-1 inline-flex w-fit items-center gap-1 rounded-full border border-white/40 bg-white/10 px-3 py-1 text-xs font-semibold text-white outline-none transition-colors hover:bg-white/20 focus-visible:ring-2 focus-visible:ring-white/80"
+          >
+            View breakdown
+            <ChevronRight className="size-3.5" strokeWidth={2.25} />
+          </button>
+        )}
         {accountCount != null && (
           <p className="relative text-xs text-white/70">
             Across <span className="font-semibold text-white">{accountCount}</span> {accountCount === 1 ? "account" : "accounts"}
@@ -38,8 +64,8 @@ export function AccountsStats({ accountCount }: { accountCount?: number }) {
       </div>
 
       <div className="grid min-w-0 flex-1 grid-cols-1 gap-2.5 p-3 @xl:grid-cols-3 @4xl:p-4">
-        <Figure icon={Landmark} tone="bg-success/12 text-success" label="In banks" value={formatCurrency(stats.totalInBanks)} />
-        <Figure icon={Coins} tone="bg-warning/20 text-warning-foreground dark:text-warning" label="Cash on hand" value={formatCurrency(stats.cashOnHand)} />
+        <Figure icon={Landmark} tone="bg-success/12 text-success" label="In banks" value={formatCurrency(stats.totalInBanks)} onExplain={onExplain && (() => onExplain({ kind: "banks" }))} />
+        <Figure icon={Coins} tone="bg-warning/20 text-warning-foreground dark:text-warning" label="Cash on hand" value={formatCurrency(stats.cashOnHand)} onExplain={onExplain && (() => onExplain({ kind: "cash" }))} />
         <Figure icon={Bell} tone="bg-purple/12 text-purple" label="Upcoming · 7 days" value={null} />
       </div>
      </div>
@@ -84,9 +110,16 @@ function BalanceSplit({ total, banks, cash, onDark }: { total: number; banks: nu
   );
 }
 
-function Figure({ icon: Icon, tone, label, value }: { icon: typeof Bell; tone: string; label: string; value: string | null }) {
+function Figure({ icon: Icon, tone, label, value, onExplain }: { icon: typeof Bell; tone: string; label: string; value: string | null; onExplain?: () => void }) {
+  const Wrapper = onExplain ? "button" : "div";
   return (
-    <div className="flex items-center gap-3 rounded-[12px] border border-border-strong/50 bg-secondary/40 px-3.5 py-3 transition-colors hover:bg-secondary/70">
+    <Wrapper
+      {...(onExplain ? { type: "button" as const, onClick: onExplain, "aria-label": `Explain ${label.toLowerCase()}`, title: "See how this is calculated" } : {})}
+      className={cn(
+        "flex items-center gap-3 rounded-[12px] border border-border-strong/50 bg-secondary/40 px-3.5 py-3 text-left transition-colors hover:bg-secondary/70",
+        onExplain && "outline-none focus-visible:ring-2 focus-visible:ring-ring",
+      )}
+    >
       <span className={cn("flex size-11 shrink-0 items-center justify-center rounded-full", tone)}>
         <Icon className="size-4" strokeWidth={1.75} />
       </span>
@@ -98,6 +131,12 @@ function Figure({ icon: Icon, tone, label, value }: { icon: typeof Bell; tone: s
           <p className="mt-0.5 text-sm font-medium text-muted-foreground">Not tracked yet</p>
         )}
       </div>
-    </div>
+      {onExplain && (
+        <span className="ml-auto inline-flex shrink-0 items-center gap-0.5 text-xs font-semibold text-primary-accent-text">
+          Breakdown
+          <ChevronRight className="size-3.5" strokeWidth={2.25} />
+        </span>
+      )}
+    </Wrapper>
   );
 }

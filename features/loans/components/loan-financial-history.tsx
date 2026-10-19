@@ -45,6 +45,7 @@ export function LoanFinancialHistory({
     <PaymentHistoryList
       actions={actions}
       extras={extras}
+      lent={row.direction === "given"}
       onOpen={onOpen}
       titleFor={(action) =>
         historyEntryTitle({ kind: "payment", allocationType: action.allocationType, partial: action.overflow == null && (action.remainingAfter ?? 0) > 0 }, row.direction)

@@ -20,3 +20,4 @@ export * from "@/components/finance/destructive-delete-dialog";
 export * from "@/components/finance/bank-combobox";
 export * from "@/components/finance/bank-logo";
 export * from "@/components/finance/account-label";
+export * from "@/components/finance/payment-source-summary";

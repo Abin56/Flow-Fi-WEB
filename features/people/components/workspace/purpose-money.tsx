@@ -35,6 +35,7 @@ import type { PurposeFund, PurposeLink, PurposeLinkKind } from "@/lib/models/pur
 import type { Transaction } from "@/lib/models/transaction";
 import { cn } from "@/lib/utils";
 import { toast } from "@/store/toast-store";
+import { isUnderfunded } from "@/components/finance/payment-source-summary";
 import { AccountField, CompactAmountInput, useAccountChoice } from "./ledger-ui";
 import { WS_FIELD, WS_GHOST, WS_PRIMARY, WS_SECONDARY, WsField, WsLabel } from "./person-workspace-ui";
 
@@ -617,6 +618,7 @@ function RecordUseDialog({ person, view, funds, onClose }: { person: Person; vie
     purposeUseBlocker(view, amount, mode === "link" ? (chosen?.free ?? 0) : null) ??
     (mode === "link" && !chosen ? "Choose the payment." : null) ??
     (mode !== "link" && !account.accountId ? "Choose the account you paid from." : null) ??
+    (mode !== "link" && isUnderfunded(account.selected, amount) ? "The chosen account doesn't have enough balance — choose another account or lower the amount." : null) ??
     (mode === "new" && classification === "expense" && !categoryId ? "Choose an expense category." : null);
 
   async function submit() {
@@ -631,7 +633,8 @@ function RecordUseDialog({ person, view, funds, onClose }: { person: Person; vie
       else await actions.recordUse(person, view.fund.id, { mode: "new", accountId: account.accountId, amount, date: when, description, classification, categoryId });
       // A Bill's own "paid" state lives in Bills (it never posts cash) — marked there, through its own action.
       if (billRow?.occurrence && billOpen && markBillPaid && billActions && amount >= view.remaining - PAYMENT_EPSILON) {
-        await billActions.markPaid(billRow.bill, billRow.occurrence);
+        // The money already left through the payment recorded above — so the bill is "paid earlier": status only, no second debit.
+        await billActions.recordPaidEarlier({ billId: billRow.bill.id, occurrenceId: billRow.occurrence.id, date: when, idempotencyKey: `purpose-bill-${view.fund.id}-${billRow.occurrence.id}`.replace(/[^A-Za-z0-9_-]/g, "-") });
       }
       toast.success(amount >= view.remaining - PAYMENT_EPSILON ? "Purpose completed" : "Use recorded");
       onClose();
@@ -717,7 +720,7 @@ function RecordUseDialog({ person, view, funds, onClose }: { person: Person; vie
           )
         ) : (
           <div className="grid gap-2.5 sm:grid-cols-2">
-            <AccountField choice={account} label="Paid from account" />
+            <AccountField choice={account} label="Paid from account" outflow={amount > 0 ? amount : null} />
             <WsField label="Date">
               <DateInput className={WS_FIELD} value={date} onChange={(e) => setDate(e.target.value)} />
             </WsField>

@@ -159,6 +159,18 @@ export interface LedgerEntry extends SoftDeletableEntity {
   retiredBy?: string | null;
   /** When part of the payment was recorded as separate income: that Income `Transaction`'s id. */
   incomeTransactionRef?: string | null;
+  /**
+   * Web-only, additive (written only when true): a settlement for money the person paid me BEFORE it was
+   * recorded here, which my account balance already includes ("Already included in my account"). Its
+   * payment's cash leg is posted with `excludeFromCalculations: true` — zero `balanceEffect` when posted,
+   * reverted or edited — so the obligation is settled without crediting the account twice.
+   */
+  recordedEarlier?: boolean;
+  /**
+   * Web-only, additive (written only when false): the person paid on a date the user doesn't know. `date` then
+   * holds a placeholder (the installment's due date) that is never shown as a real payment date.
+   */
+  receivedDateKnown?: boolean;
   createdAt: Date;
   /**
    * Whether this entry has actually been settled — independent of `type`/
@@ -302,6 +314,8 @@ export function ledgerEntryFromFirestore(
     installmentPaymentRef: (data.installmentPaymentRef as string | undefined) ?? null,
     retiredBy: (data.retiredBy as string | undefined) ?? null,
     incomeTransactionRef: (data.incomeTransactionRef as string | undefined) ?? null,
+    ...(data.recordedEarlier === true ? { recordedEarlier: true } : {}),
+    ...(data.receivedDateKnown === false ? { receivedDateKnown: false } : {}),
     increasesBalance: (data.increasesBalance as boolean) ?? true,
     createdAt: (data.createdAt as Timestamp).toDate(),
     receivedStatus: receivedStatusFromName(data.receivedStatus as string | undefined),
@@ -326,6 +340,8 @@ export function ledgerEntryToFirestore(entry: LedgerEntry): DocumentData {
     ...(entry.installmentPaymentRef == null ? {} : { installmentPaymentRef: entry.installmentPaymentRef }),
     ...(entry.retiredBy == null ? {} : { retiredBy: entry.retiredBy }),
     ...(entry.incomeTransactionRef == null ? {} : { incomeTransactionRef: entry.incomeTransactionRef }),
+    ...(entry.recordedEarlier ? { recordedEarlier: true } : {}),
+    ...(entry.receivedDateKnown === false ? { receivedDateKnown: false } : {}),
     increasesBalance: entry.increasesBalance,
     createdAt: Timestamp.fromDate(entry.createdAt),
     receivedStatus: entry.receivedStatus,

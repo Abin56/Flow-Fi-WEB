@@ -51,6 +51,17 @@ export function peopleLedgerHref(params: { personId: string; cycle: StatementCyc
   return `/people?${q.toString()}`;
 }
 
+export const PAYMENT_TX_PARAM = "paymentTx";
+
+/**
+ * `/people?person=<id>&cycle=<start>&paymentTx=<cash-leg transaction id>` — opens that exact recorded payment's
+ * date dialog in the person's ledger (People resolves the payment from its own entries; nothing is guessed here).
+ */
+export function peoplePaymentHref(params: { personId: string; cycle: StatementCycle; transactionId: string }): string {
+  const q = new URLSearchParams({ person: params.personId, [CYCLE_PARAM]: formatCycleParam(params.cycle), [PAYMENT_TX_PARAM]: params.transactionId });
+  return `/people?${q.toString()}`;
+}
+
 /** `/transactions?transaction=<id>` plus the return context when one is given. */
 export function transactionHref(transactionId: string, origin?: PeopleReturnContext | null): string {
   const q = new URLSearchParams({ transaction: transactionId });

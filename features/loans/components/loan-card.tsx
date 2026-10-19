@@ -1,7 +1,8 @@
 "use client";
 
 import { HandCoins, UserRound } from "lucide-react";
-import { DebtCard, LOAN_ICON, cadenceLabel, daysUntil, type DebtCardBadge } from "@/features/loans/components/loan-emi-ui";
+import { DebtCard, LOAN_ICON, cadenceLabel, daysUntil, ownershipChips, type DebtCardBadge } from "@/features/loans/components/loan-emi-ui";
+import { useLoanPersons } from "@/hooks/use-loans";
 import type { LoanRow } from "@/features/loans/hooks/use-loans-data";
 import { installmentStatus, remainingAmount } from "@/lib/models/payment-schedule";
 import { installmentProgress } from "@/lib/engines/installment-progress";
@@ -32,16 +33,22 @@ export function loanBadges(row: LoanRow): DebtCardBadge[] {
   if (row.status === "closed") badges.push({ label: "Closed", tone: "neutral" });
   // Loans have no persisted "completed" status; derived from the schedule so a settled loan reads as done.
   else if (loanNextDueAmount(row) == null) badges.push({ label: "Fully paid", tone: "success" });
+  else if (row.status !== "overdue" && row.nextDueDate != null && daysUntil(row.nextDueDate) >= 0 && daysUntil(row.nextDueDate) <= 3) {
+    badges.push({ label: "Due soon", tone: "warning" });
+  }
   return badges;
 }
 
 /** Installment-count progress (not an amount ratio, which reducing-balance amortization skews early on). */
 export function LoanCard({ row, tag, onClick }: LoanCardProps) {
   const { loan, lenderName, outstandingPrincipal, nextDueDate, installmentsPaid, totalInstallments } = row;
+  const { data: persons = [] } = useLoanPersons();
+  const chips = ownershipChips(loan, loan.loanAmount, (id) => persons.find((p) => p.id === id)?.name);
   const hasOwnName = Boolean(loan.name?.trim());
   const sourceParts = [
     hasOwnName ? lenderName : tag ? null : row.category === "personal" ? "Personal loan" : "Bank loan",
     loan.interest ? `${+loan.interest.ratePercent.toFixed(2)}% ${loan.interest.period === "monthly" ? "p.m." : "p.a."}` : null,
+    loan.loanNumber ? `Ref ${loan.loanNumber}` : null,
   ].filter(Boolean);
   const isClosed = row.status === "closed";
   const overdue = row.status === "overdue" || (nextDueDate != null && daysUntil(nextDueDate) < 0);
@@ -55,6 +62,7 @@ export function LoanCard({ row, tag, onClick }: LoanCardProps) {
       badges={tag ? loanBadges(row).filter((b) => b.label !== "Loan I Gave") : loanBadges(row)}
       outstandingLabel={row.direction === "given" ? "Still to receive" : "Outstanding"}
       outstanding={outstandingPrincipal}
+      totalAmount={loan.loanAmount}
       nextAmount={isClosed ? null : loanNextDueAmount(row)}
       nextDate={isClosed ? null : nextDueDate}
       cadence={cadenceLabel(loan.installmentFrequency)}
@@ -63,7 +71,7 @@ export function LoanCard({ row, tag, onClick }: LoanCardProps) {
       total={totalInstallments}
       partial={installmentProgress(row.installments).partial}
       links={[
-        row.beneficiaryPersonId ? { icon: UserRound, label: `For ${row.beneficiaryName ?? "someone else"}` } : null,
+        ...(chips.length > 0 ? chips : [row.beneficiaryPersonId ? { icon: UserRound, label: `For ${row.beneficiaryName ?? "someone else"}` } : null]),
         row.payerName ? { icon: HandCoins, label: `Paid by ${row.payerName}` } : null,
       ].filter((l) => l != null)}
       muted={isClosed}

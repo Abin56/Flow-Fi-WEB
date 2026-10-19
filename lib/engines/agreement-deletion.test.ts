@@ -101,6 +101,17 @@ describe("permanent Loan/EMI deletion — what is reversed", () => {
     expect(deltas(base({ transactions }))).toEqual({ hdfc: -15122.55, icici: 17438.72 });
   });
 
+  it("a payment recorded as already paid earlier (excluded Transaction) gives back nothing FlowFi never took", () => {
+    const transactions = [
+      txn("orig", { type: "income", amount: 100000, loanId: "loan-1" }),
+      txn("hist", { amount: 3000, loanId: "loan-1", paymentAllocationType: "regularEmi", excludeFromCalculations: true }),
+      txn("pay", { amount: 3000, loanId: "loan-1", paymentAllocationType: "regularEmi" }),
+    ];
+    const plan = planAgreementDeletion(base({ transactions }));
+    expect(plan.ownedTransactions.map((t) => t.id)).toContain("hist"); // removed with the loan…
+    expect(Object.fromEntries(plan.accountDeltas)).toEqual({ hdfc: -97000 }); // …but only real movements are undone
+  });
+
   it("6/extra principal. an extra-principal payment's Transaction is reversed like any other", () => {
     const transactions = [txn("pre", { amount: 30000, loanId: "loan-1", paymentAllocationType: "principalPrepayment" })];
     expect(deltas(base({ transactions }))).toEqual({ hdfc: 30000 });

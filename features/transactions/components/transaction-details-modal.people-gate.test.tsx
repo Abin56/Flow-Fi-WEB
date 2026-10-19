@@ -44,11 +44,18 @@ beforeAll(() => {
   };
 });
 afterEach(cleanup);
+/** The From account is never preselected for a transfer / bill payment — the user chooses it. */
+const chooseFrom = async (user: ReturnType<typeof userEvent.setup>, name: RegExp) => {
+  const trigger = screen.getAllByRole("combobox").find((c) => /Select account/i.test(c.textContent ?? ""))!;
+  await user.click(trigger);
+  await user.click(await screen.findByRole("option", { name }));
+};
+
 
 const accounts = [
-  { id: "sbi", name: "SBI", type: "bank", bankId: null },
-  { id: "octane", name: "OCTANE", type: "card" },
-  { id: "hdfc-card", name: "HDFC CARD", type: "card" },
+  { id: "sbi", name: "SBI", type: "bank", bankId: null, currentBalance: 100000 },
+  { id: "octane", name: "OCTANE", type: "card", currentBalance: 0 },
+  { id: "hdfc-card", name: "HDFC CARD", type: "card", currentBalance: 0 },
 ] as unknown as Account[];
 const categories = [
   { id: "food", name: "Food", type: "expense" },
@@ -103,6 +110,8 @@ function renderAdd(props: Partial<Parameters<typeof TransactionDetailsModal>[0]>
       accounts={accounts}
       categories={categories}
       actions={actions as never}
+      // Opened from an explicit account context — the form never picks an account on its own.
+      initialAccountId={accounts[0].id}
       {...props}
     />,
   );
@@ -201,7 +210,9 @@ describe("Add Transfer — transfer identity, From → To, card bill", () => {
   it("fast double Save writes ONE card payment (one transfer pair)", async () => {
     let finish!: () => void;
     actions.createTransferPair.mockImplementationOnce(() => new Promise<void>((r) => (finish = r)));
+    const user = userEvent.setup();
     renderCardBill(gateOf(readinessOf(1000, [])));
+    await chooseFrom(user, /SBI/);
     const pay = screen.getByRole("button", { name: /pay ₹1,000/i });
     fireEvent.click(pay);
     await waitFor(() => expect(actions.createTransferPair).toHaveBeenCalledTimes(1));
@@ -219,6 +230,7 @@ describe("Add Transfer — transfer identity, From → To, card bill", () => {
     const stale: LinkedPerson = { personId: "amma", personName: "AMMA", share: 1000, received: 0, remaining: 1000, state: "pending", obligations: [] };
     actions.createTransferPair.mockRejectedValueOnce(new PeopleSettlementPendingError(peopleSettlementGate(readinessOf(1000, [stale])), "card-bill"));
     renderCardBill(gateOf(readinessOf(1000, [])));
+    await chooseFrom(user, /SBI/);
     await user.click(screen.getByRole("button", { name: /pay ₹1,000/i }));
     await waitFor(() => expect(actions.createTransferPair).toHaveBeenCalled());
     expect(screen.getByRole("alert").textContent).toBe("Some people-linked amounts in this bill still need to be settled (₹1,000 from AMMA). Review them before paying.");
@@ -231,6 +243,7 @@ describe("Add Transfer — transfer identity, From → To, card bill", () => {
     const stale: LinkedPerson = { personId: "amma", personName: "AMMA", share: 1000, received: 0, remaining: 1000, state: "pending", obligations: [] };
     actions.createTransferPair.mockRejectedValueOnce(new PeopleSettlementPendingError(peopleSettlementGate(readinessOf(1000, [stale])), "card-bill"));
     renderCardBill(gateOf(readinessOf(1000, [])));
+    await chooseFrom(user, /SBI/);
     await user.click(screen.getByRole("button", { name: /pay ₹1,000/i }));
     await screen.findByRole("alert");
     await user.click(screen.getByRole("button", { name: /pay ₹1,000/i }));
@@ -240,17 +253,42 @@ describe("Add Transfer — transfer identity, From → To, card bill", () => {
     expect(second).toBe(first);
   });
 
-  it("card bill funding defaults to a bank account — never another credit card listed first", async () => {
+  it("card bill: the paying account is never preselected; choosing it shows balance → payment → after, and Pay asks the write to re-check funds", async () => {
     const user = userEvent.setup();
     renderCardBill(gateOf(readinessOf(1000, [])), { accounts: [accounts[2], accounts[1], accounts[0]] as never });
+    expect(screen.queryByTestId("payment-source-summary")).toBeNull();
+    expect(screen.getAllByRole("combobox").some((c) => /Select account/i.test(c.textContent ?? ""))).toBe(true);
+    await chooseFrom(user, /SBI/);
+    expect(screen.getByTestId("payment-source-summary").textContent).toContain("₹1,00,000");
+    expect(screen.getByTestId("payment-source-after").textContent).toBe("₹99,000");
     await user.click(screen.getByRole("button", { name: /pay ₹1,000/i }));
     await waitFor(() => expect(actions.createTransferPair).toHaveBeenCalledTimes(1));
-    expect(actions.createTransferPair).toHaveBeenCalledWith(expect.objectContaining({ sourceAccountId: "sbi", destinationAccountId: "octane" }));
+    expect(actions.createTransferPair).toHaveBeenCalledWith(expect.objectContaining({ sourceAccountId: "sbi", destinationAccountId: "octane", enforceFunds: true }));
+  });
+
+  it("card bill from an account that can't cover it: shortfall shown, Save blocked, nothing sent", async () => {
+    const user = userEvent.setup();
+    renderCardBill(gateOf(readinessOf(1000, [])), { accounts: [{ ...accounts[0], currentBalance: 400 }, accounts[1], accounts[2]] as never });
+    await chooseFrom(user, /SBI/);
+    expect(screen.getByTestId("payment-source-insufficient").textContent).toContain("short by ₹600");
+    await user.click(screen.getByRole("button", { name: /pay ₹1,000/i }));
+    await new Promise((r) => setTimeout(r, 30));
+    nothingSaved();
+  });
+
+  it("a payment equal to the account balance is allowed (₹0 after)", async () => {
+    const user = userEvent.setup();
+    renderCardBill(gateOf(readinessOf(1000, [])), { accounts: [{ ...accounts[0], currentBalance: 1000 }, accounts[1], accounts[2]] as never });
+    await chooseFrom(user, /SBI/);
+    expect(screen.getByTestId("payment-source-after").textContent).toBe("₹0");
+    await user.click(screen.getByRole("button", { name: /pay ₹1,000/i }));
+    await waitFor(() => expect(actions.createTransferPair).toHaveBeenCalledTimes(1));
   });
 
   it("card bill with no linked People: Pay is available and writes ONE transfer pair (never income / expense)", async () => {
     const user = userEvent.setup();
     renderCardBill(gateOf(readinessOf(1000, [])));
+    await chooseFrom(user, /SBI/);
     expect(settlementCard()).toBeNull();
     await user.click(screen.getByRole("button", { name: /pay ₹1,000/i }));
     await waitFor(() => expect(actions.createTransferPair).toHaveBeenCalledTimes(1));
@@ -305,6 +343,7 @@ describe("Card bill — People settlement gate", () => {
   it("fully settled → the card turns into PEOPLE SETTLED and Pay saves once", async () => {
     const user = userEvent.setup();
     renderCardBill(gateOf(readinessOf(1000, [person("amma", "AMMA", 1000, 1000)])));
+    await chooseFrom(user, /SBI/);
     const card = settlementCard()!;
     expect(card.dataset.state).toBe("settled");
     expect(within(card).getByText("People settled")).toBeTruthy();
@@ -355,6 +394,7 @@ describe("Card bill — People settlement gate", () => {
     const user = userEvent.setup();
     const onDestinationAccountChange = vi.fn();
     renderCardBill(gateOf(readinessOf(1000, [person("amma", "AMMA", 1000, 0)])), { onDestinationAccountChange });
+    await chooseFrom(user, /SBI/);
     expect(footerSettle()).not.toBeNull();
 
     const toTrigger = screen
@@ -403,6 +443,7 @@ describe("Pay bill — stale statement: refused, then an explicit Refresh bill (
         statementIntent: { accountId: "octane", statementId: "stmt-A", remaining },
       }) satisfies Parameters<typeof TransactionDetailsModal>[0];
     const view = render(<TransactionDetailsModal {...props(10000)} />);
+    await chooseFrom(user, /SBI/);
 
     await user.click(screen.getByRole("button", { name: /pay ₹10,000/i }));
     await waitFor(() => expect(actions.createTransferPair).toHaveBeenCalledTimes(1));
@@ -434,6 +475,7 @@ describe("Pay bill — Refresh bill is an authoritative fresh read (onRefreshBil
       statementIntent: { accountId: "octane", statementId: "stmt-A", remaining: 10000 },
       onRefreshBill,
     });
+    await chooseFrom(user, /SBI/);
     await user.click(screen.getByRole("button", { name: /pay ₹10,000/i }));
     await waitFor(() => expect(actions.createTransferPair).toHaveBeenCalledTimes(1));
     return user;

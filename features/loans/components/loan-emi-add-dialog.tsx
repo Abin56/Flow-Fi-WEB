@@ -133,6 +133,8 @@ export function LoanEmiAddDialog({ open, onOpenChange, initialKind = null }: Loa
   const { data: cards = [] } = useCreditCards();
   const [form, setForm] = useState<LoanEmiAddForm>(() => emptyLoanEmiAddForm(initialKind, crypto.randomUUID()));
   const [saving, setSaving] = useState(false);
+  // Tracks whether the "Other" box is being typed in, so typing "3" on the way to "33" doesn't snap to the 3 preset.
+  const [customCount, setCustomCount] = useState(false);
   const operation = useOperation();
   // Synchronous double-submit guard — a second fast click can land before `saving` re-renders the button.
   const inFlight = useRef(false);
@@ -207,6 +209,7 @@ export function LoanEmiAddDialog({ open, onOpenChange, initialKind = null }: Loa
       onOpenChange={onOpenChange}
       icon={kindMeta?.icon ?? Wallet}
       title="Add to Loan & EMI"
+      size="wide"
       description={kindMeta ? kindMeta.fullLabel : "Choose what this is — only the fields you need will appear."}
       onConfirm={handleSave}
       confirmLabel={saving ? (isEmi ? "Saving EMI…" : "Saving loan…") : "Save"}
@@ -310,8 +313,8 @@ export function LoanEmiAddDialog({ open, onOpenChange, initialKind = null }: Loa
                 </Field>
               )}
               {amountField}
-              {!isEmi && (
-                <Field label={kind === "lent" ? "Loan given on" : "Loan taken on"}>
+              {(!isEmi || s.card) && (
+                <Field label={kind === "lent" ? "Loan given on" : s.card && !cardLoan ? "Purchased on" : "Loan taken on"}>
                   <DateInput className={LOAN_EMI_INPUT} value={form.date} onChange={(e) => set({ date: e.target.value })} />
                 </Field>
               )}
@@ -344,13 +347,16 @@ export function LoanEmiAddDialog({ open, onOpenChange, initialKind = null }: Loa
               <FieldGroup label="Number of installments">
                 <div className="flex flex-wrap items-center gap-1.5">
                   {INSTALLMENT_PRESETS.map((n) => {
-                    const active = form.count === String(n);
+                    const active = !customCount && form.count === String(n);
                     return (
                       <button
                         key={n}
                         type="button"
                         aria-pressed={active}
-                        onClick={() => set({ count: String(n) })}
+                        onClick={() => {
+                          setCustomCount(false);
+                          set({ count: String(n) });
+                        }}
                         className={cn(
                           LE_RADIUS.input,
                           "h-10 min-w-10 border px-2.5 text-sm tabular-nums transition-[background-color,border-color,color] duration-150 outline-none focus-visible:ring-2 focus-visible:ring-ring",
@@ -368,8 +374,11 @@ export function LoanEmiAddDialog({ open, onOpenChange, initialKind = null }: Loa
                     aria-label="Custom number of installments"
                     placeholder="Other"
                     className={cn(LOAN_EMI_INPUT, "w-20 text-center")}
-                    value={INSTALLMENT_PRESETS.includes(Number(form.count)) ? "" : form.count}
-                    onChange={(e) => set({ count: e.target.value })}
+                    value={customCount || !INSTALLMENT_PRESETS.includes(Number(form.count)) ? form.count : ""}
+                    onChange={(e) => {
+                      setCustomCount(true);
+                      set({ count: e.target.value });
+                    }}
                   />
                 </div>
               </FieldGroup>
@@ -541,10 +550,10 @@ export function LoanEmiAddDialog({ open, onOpenChange, initialKind = null }: Loa
                 ? "Name, who pays, loan references, notes"
                 : "Name, who pays, notes"
               : kind === "purchase"
-                ? "Type, notes"
+                ? "Type, reference, notes"
                 : kind === "lent"
                   ? "Name, notes"
-                  : "Notes"
+                  : "Reference, notes"
           }
         >
           {(kind === "borrowed" || kind === "lent" || s.payer) && (
@@ -593,6 +602,11 @@ export function LoanEmiAddDialog({ open, onOpenChange, initialKind = null }: Loa
                 onChange={(emiType) => set({ emiType })}
               />
             </FieldGroup>
+          )}
+          {s.emiReference && (
+            <Field label="Reference number" hint="Optional — the lender's or card's EMI / loan reference.">
+              <input className={LOAN_EMI_INPUT} value={form.loanNumber} onChange={(e) => set({ loanNumber: e.target.value })} />
+            </Field>
           )}
           <Field label="Notes">
             <textarea

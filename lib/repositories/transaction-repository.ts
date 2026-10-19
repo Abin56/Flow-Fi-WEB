@@ -13,8 +13,11 @@ import {
   type DocumentReference,
   getDocs,
   limit,
+  orderBy,
   query,
+  type QueryDocumentSnapshot,
   runTransaction,
+  startAfter,
   type Transaction as FirestoreTransaction,
   where,
 } from "firebase/firestore";
@@ -40,6 +43,7 @@ import {
 import { generateId } from "@/lib/utils/id-generator";
 import type { Account } from "@/lib/models/account";
 import type { AccountRepository } from "./account-repository";
+import { assertFundsAvailable } from "@/lib/engines/payment-funding";
 import { hasPeopleGateAcknowledgement, PeopleSettlementPendingError, type UnsettledPeopleAcknowledgement } from "@/lib/engines/linked-people-readiness";
 
 /** Fresh reads for {@link TransactionRepository.writeSoftDeleteMany} — see {@link TransactionRepository.readSoftDeleteMany}. */
@@ -88,6 +92,12 @@ export interface CreateTransactionParams {
    * `LedgerRepository.createPersonFundedExpense` passes this (it also writes the People obligation).
    */
   fundedByPersonId?: string | null;
+  /**
+   * A payment out of the paying account: re-checks the account's balance FRESH inside this write and refuses
+   * (`InsufficientFundsError`, nothing saved) when it would go below zero. Account types that run negative
+   * (credit and debit cards — the model has no overdraft flag) are never blocked. Opt-in so ordinary transaction entry is unchanged.
+   */
+  enforceFunds?: boolean;
 }
 
 /** Thrown when a person-funded expense is given an account, or an account-funded one is given none. */
@@ -177,14 +187,15 @@ export class TransferRetryMismatchError extends Error {
  * edit/delete: the account would move while the owner (installment, ledger entry, expense shares) did not.
  * Only the owning feature's own write path (which passes `owner`) may change it.
  */
-export type TransactionOwnerKind = "loan" | "emi" | "people" | "split";
+export type TransactionOwnerKind = "loan" | "emi" | "people" | "split" | "bill";
 
 /** The owner the Transaction document itself declares (`split` needs the Expense lookup — see `withExpenseOwnerLookup`). */
 export function declaredTransactionOwner(
-  t: Pick<Transaction, "loanId" | "emiId" | "isPersonLedgerMovement" | "fundedByPersonId">,
+  t: Pick<Transaction, "loanId" | "emiId" | "isPersonLedgerMovement" | "fundedByPersonId" | "billPaymentId">,
 ): TransactionOwnerKind | null {
   if (t.loanId != null) return "loan";
   if (t.emiId != null) return "emi";
+  if (t.billPaymentId != null) return "bill";
   if (t.isPersonLedgerMovement || t.fundedByPersonId != null) return "people";
   return null;
 }
@@ -194,6 +205,7 @@ const OWNER_EDIT_MESSAGE: Record<TransactionOwnerKind, string> = {
   emi: "This payment is managed by Loan & EMI. Edit it there — nothing was changed.",
   people: "This money movement belongs to a People entry. Edit it from that person's ledger in People — nothing was changed.",
   split: "This expense is shared with people. Change its amount, date or account through the split so every share stays in step — nothing was changed.",
+  bill: "This is a bill payment. Edit or cancel it from Bills so the bill stays in step — nothing was changed.",
 };
 
 /** A generic edit tried to change the money of a transaction another record owns (see `TransactionOwnerKind`). */
@@ -212,7 +224,9 @@ export class OwnedTransactionDeleteError extends Error {
         ? "This expense is shared with people. Delete it from the transaction itself so its shares go with it — nothing was deleted."
         : owner === "people"
           ? "This money movement belongs to a People entry. Delete it from that person's ledger in People — nothing was deleted."
-          : "This payment is managed by Loan & EMI. Reverse it there — nothing was deleted.",
+          : owner === "bill"
+            ? "This is a bill payment. Cancel it from Bills so the bill is marked unpaid again — nothing was deleted."
+            : "This payment is managed by Loan & EMI. Reverse it there — nothing was deleted.",
     );
     this.name = "OwnedTransactionDeleteError";
   }
@@ -228,6 +242,14 @@ export class TransactionChangedError extends Error {
   constructor() {
     super("This transaction changed in another tab or device since you opened it. Refresh and try again — nothing was deleted.");
     this.name = "TransactionChangedError";
+  }
+}
+
+/** An edit targeted a transaction that is in the trash (deleted in another tab / device). Nothing was written. */
+export class TransactionDeletedError extends Error {
+  constructor() {
+    super("This transaction was deleted in another tab or device — nothing was changed. Restore it first if you want to edit it.");
+    this.name = "TransactionDeletedError";
   }
 }
 
@@ -337,6 +359,8 @@ export interface TransferPairParams {
    * `amount` is always the transfer principal, identical on both legs.
    */
   fee?: TransferFeeParams | null;
+  /** Re-checks the From account's balance FRESH inside the write (see `CreateTransactionParams.enforceFunds`). */
+  enforceFunds?: boolean;
 }
 
 export interface TransferFeeParams {
@@ -467,6 +491,17 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
    * a transaction to precede every write, and this method writes.
    */
   /** Active Transactions that reference `installmentPaymentId` — e.g. the card Transaction of a card-linked EMI payment. */
+  /**
+   * One page of every transaction (live AND soft-deleted), newest recorded first — the Activity feed's read.
+   * One-shot (no listener); `cursor` is the opaque value the previous page returned. Ordered by the single
+   * field `createdAt`, so it needs no composite index. Unreadable legacy docs are skipped (`safeDocs`).
+   */
+  async pageByCreatedAt(pageSize: number, cursor: QueryDocumentSnapshot<Transaction> | null): Promise<{ items: Transaction[]; cursor: QueryDocumentSnapshot<Transaction> | null }> {
+    const page = cursor ? [orderBy("createdAt", "desc"), startAfter(cursor), limit(pageSize)] : [orderBy("createdAt", "desc"), limit(pageSize)];
+    const snap = await getDocs(query(this.collection, ...page));
+    return { items: safeDocs(snap.docs), cursor: snap.docs.length < pageSize ? null : snap.docs[snap.docs.length - 1] };
+  }
+
   async findByInstallmentPaymentId(installmentPaymentId: string): Promise<Transaction[]> {
     const snap = await getDocs(query(this.collection, where("installmentPaymentId", "==", installmentPaymentId)));
     return snap.docs.map((d) => d.data()).filter((t) => t.deletedAt == null);
@@ -535,6 +570,7 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
 
       const accountSnap = await tx.get(accountRef);
       if (!accountSnap.exists()) throw new Error("Account not found");
+      if (params.enforceFunds && delta < 0) assertFundsAvailable(accountSnap.data(), -delta);
       if (delta !== 0) {
         tx.set(accountRef, this.accountRepository.applyBalanceDelta(accountSnap.data(), delta));
       }
@@ -638,6 +674,7 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
       // --- writes --- (the fee's effect is netted into the same account write as its leg)
       const feeEffect = feeTransaction ? balanceEffect(feeTransaction) : 0;
       const sourceDelta = balanceEffect(sourceLeg) + (fee?.chargedTo === "source" ? feeEffect : 0);
+      if (params.enforceFunds && sourceDelta < 0) assertFundsAvailable(sourceSnap.data(), -sourceDelta);
       const destinationDelta = balanceEffect(destinationLeg) + (fee?.chargedTo === "destination" ? feeEffect : 0);
       tx.set(sourceRef, this.accountRepository.applyBalanceDelta(sourceSnap.data(), sourceDelta));
       tx.set(destinationRef, this.accountRepository.applyBalanceDelta(destinationSnap.data(), destinationDelta));
@@ -661,7 +698,7 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
     }
     // A card bill payment (or any keyed action) never takes the two-write path below: it must be atomic
     // and pass the card People gate before anything changes. Ordinary transfers are unchanged.
-    if (params.idempotencyKey != null || params.fee != null || (this.cardPaymentGuard != null && (await this.accountRepository.getByKey(params.destinationAccountId))?.type === "card")) {
+    if (params.idempotencyKey != null || params.fee != null || params.enforceFunds || (this.cardPaymentGuard != null && (await this.accountRepository.getByKey(params.destinationAccountId))?.type === "card")) {
       return this.createTransferPairAtomic(params);
     }
 
@@ -754,6 +791,9 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
     const freshSnap = await tx.get(transactionRef);
     if (!freshSnap.exists()) throw new Error("Transaction not found");
     const fresh = freshSnap.data();
+    // A trashed transaction's balance effect was already reversed when it was deleted: editing it from a stale
+    // copy would apply a second delta to the account. Refused before anything is read or written below.
+    if (fresh.deletedAt != null) throw new TransactionDeletedError();
 
     if (fresh.transferId != null) {
       const amountChanged = params.amount != null && params.amount !== fresh.amount;
@@ -1109,6 +1149,9 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
         (t): t is Transaction => t != null && t.deletedAt == null && t.transferId != null && t.transferId === leg.transferId,
       );
       if (pairLegs.length === 0) return;
+      // A bank → card principal payment posted by a card-linked EMI payment belongs to that payment: it is undone
+      // with the EMI payment ("Mark as unpaid" / edit), never alone — the schedule would stay paid.
+      if (pairLegs.some((t) => t.emiId != null)) throw new LoanPaymentTransactionRestrictedError();
       // The transfer's fee (if any, and still live) goes with it — never left behind as a stray expense. A fee
       // since handed to People / a split is owned there: refuse rather than orphan that owner's state.
       const fee = feeId != null ? await this.getInTransaction(tx, feeId) : null;

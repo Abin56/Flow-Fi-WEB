@@ -61,6 +61,9 @@ import { AccountRepository } from "./account-repository";
 import { TransactionRepository } from "./transaction-repository";
 import { cardBillsForCard, cardStatementPaymentScope, payBillAmount } from "@/lib/engines/card-cycle-bills";
 import { computeCreditCardStandings } from "@/features/credit-cards/hooks/use-credit-cards-data";
+import { cashFlowThisMonth } from "@/lib/engines/cash-flow";
+import { transfers as dashboardTransfers } from "@/lib/engines/dashboard-aggregation";
+import { cardPaymentCancellationPreview } from "@/features/credit-cards/lib/card-payment-cancellation";
 import { buildMySpendContext, classifyForMySpend } from "@/lib/engines/my-spend";
 import { calculateNetWorth } from "@/lib/engines/net-worth";
 import type { Account } from "@/lib/models/account";
@@ -187,6 +190,75 @@ describe("Card Pay bill write path — persisted and reloaded", () => {
     r = reload();
     expect(r.scope(C1).statementDue).toBe(0);
     expect(r.balance("sbi")).toBe(before.balance("sbi") - 8000);
+  });
+
+  it("Cancel recorded payment: the preview matches the persisted result; only that payment is reversed; a repeat changes nothing; shared facility follows", async () => {
+    const [outflow3000, inflow3000] = await pay(3000);
+    await pay(1000);
+    const before = reload();
+    const preview = cardPaymentCancellationPreview({
+      transactionId: inflow3000.id,
+      transactions: before.transactions,
+      accounts: [...store.entries()].filter(([k]) => k.startsWith(`${U}/accounts/`)).map(([, v]) => v as unknown as Account),
+      cards: [C1, C2],
+      sharedLimits: [{ id: "facility", name: "SBI", creditLimit: 50_000, createdAt: d(1, 1), ...audit } as never],
+      statements: [],
+      utilizationEmis: [],
+      now: NOW,
+    });
+    expect(preview.state).toBe("ready");
+
+    await txRepo.deleteTransferPair(outflow3000);
+    const after = reload();
+    expect(preview.statementDue).toEqual({ before: before.scope(C1).statementDue, after: after.scope(C1).statementDue });
+    expect(preview.outstanding).toEqual({ before: before.standing("c1").ownOutstanding, after: after.standing("c1").ownOutstanding });
+    expect(preview.available).toEqual({ before: before.standing("c1").available, after: after.standing("c1").available });
+    expect(preview.paidFrom).toMatchObject({ before: before.balance("sbi"), after: after.balance("sbi") });
+    expect(after.standing("c2").available).toBe(after.standing("c1").available); // one facility
+    expect(after.scope(C2)).toMatchObject({ statementDue: 7000 }); // sibling untouched
+    // The other ₹1,000 payment and the earlier ₹2,000 one are still applied.
+    expect(after.transactions.filter((t) => t.deletedAt == null && t.type === "income" && t.transferId != null && t.accountId === "acc-c1").map((t) => t.amount).sort()).toEqual([1000, 2000]);
+
+    // Duplicate cancel (second click / second tab): no balance moves a second time, and the preflight says so.
+    await txRepo.deleteTransferPair(outflow3000);
+    await txRepo.deleteTransferPair(inflow3000);
+    const again = reload();
+    expect([again.balance("sbi"), again.balance("acc-c1")]).toEqual([after.balance("sbi"), after.balance("acc-c1")]);
+    expect(again.netWorth).toBe(after.netWorth);
+    expect(
+      cardPaymentCancellationPreview({ transactionId: inflow3000.id, transactions: again.transactions, accounts: [], cards: [C1, C2], sharedLimits: [], statements: [], utilizationEmis: [], now: NOW }).state,
+    ).toBe("gone");
+  });
+
+  it("Cancel recorded payment: Dashboard transfers, monthly cash out, My Spend and Net Worth all follow the stored state", async () => {
+    const monthOf = (t: Transaction) => new Date(t.dateTime.getFullYear(), t.dateTime.getMonth(), 1);
+    const views = () => {
+      const r = reload();
+      const cardIds = new Set(["acc-c1", "acc-c2"]);
+      const live = r.transactions.filter((t) => t.deletedAt == null);
+      const range = { start: new Date(2026, 9, 1), end: new Date(2026, 9, 31, 23, 59, 59) };
+      const dash = live.map((t) => ({ id: t.id, type: t.type as "income" | "expense", amount: t.amount, dateTime: t.dateTime, effectiveMonth: monthOf(t), isTransfer: t.transferId != null, accountId: t.accountId }));
+      const flow = cashFlowThisMonth({
+        transactions: r.transactions.map((t) => ({
+          type: t.type, amount: t.amount, effectiveMonth: monthOf(t), isDeleted: t.deletedAt != null, isTransfer: t.transferId != null,
+          isCreditCardAccount: cardIds.has(t.accountId), isCreditCardPayment: t.transferId != null && t.type === "expense" && !cardIds.has(t.accountId),
+        })),
+        emiPaidThisMonth: 0, loanPaidThisMonth: 0, billsPaidThisMonth: 0, moneyReceivedThisMonth: 0, now: NOW,
+      });
+      return { r, transfers: dashboardTransfers(dash, { kind: "range" } as never, range as never), moneyOut: flow.moneyOut };
+    };
+    const base = views();
+    const [outflow] = await pay(3000, d(10, 2));
+    const paid = views();
+    expect(paid.moneyOut).toBe(base.moneyOut + 3000);
+    expect(paid.transfers).toBe(base.transfers + 3000);
+    await txRepo.deleteTransferPair(outflow);
+    const cancelled = views();
+    expect(cancelled.moneyOut).toBe(base.moneyOut);
+    expect(cancelled.transfers).toBe(base.transfers);
+    expect(cancelled.r.mySpend).toBe(base.r.mySpend);
+    expect(cancelled.r.netWorth).toBe(base.r.netWorth);
+    expect(cancelled.r.scope(C1).statementDue).toBe(base.r.scope(C1).statementDue);
   });
 
   it("two unpaid closed statements: Pay bill = the oldest (₹2,000) only; payments still settle oldest first", async () => {

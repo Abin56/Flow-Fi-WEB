@@ -1,15 +1,17 @@
 "use client";
 
-import { ArrowDownLeft, ArrowUpRight, Check, X } from "lucide-react";
+import { ArrowDownLeft, ArrowUpRight, CalendarClock, Check, X } from "lucide-react";
 import { useRef } from "react";
 import { cn } from "@/lib/utils";
 
 /** Which way money moves for an option — decides its icon and colour (literal classes, so Tailwind sees them). */
-export type FlowTone = "in" | "out";
+export type FlowTone = "in" | "out" | "wait";
 
 const TONE = {
   in: { icon: ArrowDownLeft, solid: "bg-settle-receivable-text text-white", text: "text-settle-receivable-text" },
   out: { icon: ArrowUpRight, solid: "bg-settle-payable-text text-white", text: "text-settle-payable-text" },
+  // Not a money direction — "nothing paid yet": neutral, never red or green.
+  wait: { icon: CalendarClock, solid: "bg-foreground text-card", text: "text-foreground" },
 } as const;
 
 export interface FlowSwitchOption<T extends string> {
@@ -52,13 +54,16 @@ export function FlowSwitch<T extends string>({
   const index = options.findIndex((o) => o.value === value);
   const chosen = index >= 0 ? options[index] : null;
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
+  // Three or more choices stack icon over text on phones so each one stays readable.
+  const compact = options.length > 2;
   return (
     <div
       role="radiogroup"
       aria-label={label}
       aria-invalid={invalid || undefined}
+      style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))` }}
       className={cn(
-        "relative grid grid-cols-2 rounded-[14px] bg-secondary p-1 ring-1 ring-black/[0.05] ring-inset transition-shadow duration-200 dark:ring-white/[0.06]",
+        "relative grid rounded-[14px] bg-secondary p-1 ring-1 ring-black/[0.05] ring-inset transition-shadow duration-200 dark:ring-white/[0.06]",
         invalid && "ring-2 ring-warning/60 dark:ring-warning/60",
         className,
       )}
@@ -67,10 +72,10 @@ export function FlowSwitch<T extends string>({
       <span
         aria-hidden
         className={cn(
-          "absolute inset-y-1 left-1 w-[calc(50%-4px)] rounded-[11px] bg-card shadow-[0_1px_2px_rgb(0_0_0/0.06),0_6px_16px_-8px_rgb(0_0_0/0.22)] ring-1 ring-black/[0.04] transition-[transform,opacity] duration-300 ease-[var(--ease-spring)] dark:ring-white/[0.07]",
+          "absolute inset-y-1 left-1 rounded-[11px] bg-card shadow-[0_1px_2px_rgb(0_0_0/0.06),0_6px_16px_-8px_rgb(0_0_0/0.22)] ring-1 ring-black/[0.04] transition-[transform,opacity] duration-300 ease-[var(--ease-spring)] dark:ring-white/[0.07]",
           chosen ? "opacity-100" : "opacity-0",
         )}
-        style={{ transform: `translateX(${Math.max(0, index) * 100}%)` }}
+        style={{ width: `calc((100% - 8px) / ${options.length})`, transform: `translateX(${Math.max(0, index) * 100}%)` }}
       />
       {options.map((o, i) => {
         const active = o.value === value;
@@ -100,7 +105,8 @@ export function FlowSwitch<T extends string>({
               refs.current[next]?.focus();
             }}
             className={cn(
-              "relative z-10 flex min-w-0 items-center gap-3 rounded-[11px] px-3 py-2.5 text-left outline-none transition-[opacity,transform,background-color] duration-150 focus-visible:ring-2 focus-visible:ring-ring sm:px-3",
+              "relative z-10 flex min-w-0 rounded-[11px] px-3 py-2.5 text-left outline-none transition-[opacity,transform,background-color] duration-150 focus-visible:ring-2 focus-visible:ring-ring sm:px-3",
+              compact ? "flex-col items-start gap-1.5 sm:flex-row sm:items-center sm:gap-3" : "items-center gap-3",
               disabled ? "cursor-not-allowed opacity-45" : "active:scale-[0.98]",
               !active && !disabled && "hover:bg-card/50",
             )}
@@ -115,11 +121,11 @@ export function FlowSwitch<T extends string>({
               <Icon className="size-4" strokeWidth={2.5} />
             </span>
             <span className="min-w-0 flex-1">
-              <span className={cn("block truncate text-[13px] leading-tight transition-colors", active ? "font-bold text-foreground" : "font-semibold text-foreground/90")}>
+              <span className={cn("block text-[13px] leading-tight transition-colors", compact ? "break-words sm:truncate" : "truncate", active ? "font-bold text-foreground" : "font-semibold text-foreground/90")}>
                 {o.title}
                 {o.sub && <span className="font-medium text-foreground/75"> {o.sub}</span>}
               </span>
-              {o.meta != null && <span className="block truncate text-[11px] mt-0.5 leading-tight text-foreground/75">{o.meta}</span>}
+              {o.meta != null && <span className={cn("mt-0.5 block text-[11px] leading-tight text-foreground/75", compact ? "break-words sm:truncate" : "truncate")}>{o.meta}</span>}
             </span>
             {active && <Check aria-hidden className={cn("hidden size-4 shrink-0 duration-200 animate-in zoom-in-50 sm:block", tone.text)} strokeWidth={3} />}
           </button>
@@ -204,7 +210,7 @@ export function PanelHeader({
   const t = tone ? TONE[tone] : null;
   const Badge = t?.icon;
   return (
-    <div className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-border bg-card px-4 py-3.5 sm:px-6">
+    <div className="sticky top-0 z-30 flex items-center justify-between gap-3 rounded-t-[12px] border-b border-border bg-card px-4 py-3.5 shadow-[0_6px_12px_-10px_rgb(0_0_0/0.25)] sm:px-6">
       <div className="flex min-w-0 items-center gap-3">
         <span aria-hidden className="relative shrink-0">
           <span

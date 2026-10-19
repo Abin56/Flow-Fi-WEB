@@ -16,6 +16,8 @@ interface FormDialogProps {
   loadingLabel?: string;
   loading?: boolean;
   cancelLabel?: string;
+  /** Disables the primary action while the form can't be submitted (the caller still validates in `onConfirm`). */
+  confirmDisabled?: boolean;
   /** Extra classes for DialogContent — e.g. a wider `sm:max-w-lg` for a form with a richer layout. */
   contentClassName?: string;
 }
@@ -35,6 +37,7 @@ export function FormDialog({
   loadingLabel = "Saving...",
   loading = false,
   cancelLabel = "Cancel",
+  confirmDisabled = false,
   contentClassName,
 }: FormDialogProps) {
   const handleSubmit = useGuardedSubmit(onConfirm, loading);
@@ -60,7 +63,7 @@ export function FormDialog({
             >
               {cancelLabel}
             </ClayButton>
-            <ClayButton type="submit" variant="primary" disabled={loading}>
+            <ClayButton type="submit" variant="primary" disabled={loading || confirmDisabled}>
               {loading ? loadingLabel : confirmLabel}
             </ClayButton>
           </DialogFooter>

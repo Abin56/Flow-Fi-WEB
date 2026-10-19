@@ -19,6 +19,8 @@ export interface UpcomingPaymentItem {
   amount: number;
   date: string;
   daysLeft: number;
+  /** A bill cycle already past due — shown as "Nd overdue", never as "due today" / "N days left". */
+  overdue?: boolean;
 }
 
 export interface UpcomingPaymentsCardProps {
@@ -67,8 +69,8 @@ export function UpcomingPaymentsCard({ payments, isLoading }: UpcomingPaymentsCa
                 </div>
                 <div className="flex shrink-0 flex-col items-end gap-0.5">
                   <p className="text-[16px] font-bold text-foreground tabular-nums">{formatCurrency(payment.amount)}</p>
-                  <span className={cn("rounded-[4px] px-1.5 text-[10.5px] font-semibold", chipClass(payment.daysLeft))}>
-                    {payment.daysLeft <= 0 ? "Due today" : `${payment.daysLeft}d left`}
+                  <span className={cn("rounded-[4px] px-1.5 text-[10.5px] font-semibold", payment.overdue ? "bg-expense/12 text-expense" : chipClass(payment.daysLeft))}>
+                    {payment.overdue ? `${Math.abs(payment.daysLeft)}d overdue` : payment.daysLeft <= 0 ? "Due today" : `${payment.daysLeft}d left`}
                   </span>
                 </div>
               </div>

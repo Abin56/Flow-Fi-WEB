@@ -117,7 +117,8 @@ export class PurposeFundRepository {
         await this.deps.transactionRepository.assertCardPaymentAllowedInTransaction(tx, input.cardAccountId, amount);
         const transferId = generateId();
         const common = { amount, dateTime: input.date, categoryId: input.categoryId || this.deps.cashLegCategoryId, description: input.description.trim() || fund.title, notes: `From ${person.name}'s money — ${fund.title}`, transferId };
-        const out = await this.deps.transactionRepository.createTransactionInTransaction(tx, { ...common, type: "expense", accountId: input.accountId });
+        // A real debit of the paying account: re-checked on its fresh balance inside this write.
+        const out = await this.deps.transactionRepository.createTransactionInTransaction(tx, { ...common, type: "expense", accountId: input.accountId, enforceFunds: true });
         await this.deps.transactionRepository.createTransactionInTransaction(tx, { ...common, type: "income", accountId: input.cardAccountId });
         transactionId = out.id;
       } else {
@@ -128,6 +129,7 @@ export class PurposeFundRepository {
           amount,
           dateTime: input.date,
           accountId: input.accountId,
+          enforceFunds: true,
           categoryId: behalf ? this.deps.cashLegCategoryId : input.categoryId!,
           description: input.description.trim() || fund.title,
           notes: `From ${person.name}'s money — ${fund.title}`,

@@ -65,6 +65,8 @@ function renderAdd() {
       accounts={accounts}
       categories={categories}
       actions={actions as never}
+      // Opened from an explicit account context — the form never picks an account on its own.
+      initialAccountId={accounts[0].id}
     />,
   );
 }

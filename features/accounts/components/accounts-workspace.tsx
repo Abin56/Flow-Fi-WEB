@@ -35,6 +35,7 @@ import { AccountsHeader } from "@/features/accounts/components/accounts-header";
 import { AccountsStats } from "@/features/accounts/components/accounts-stats";
 import { AccountsToolbar } from "@/features/accounts/components/accounts-toolbar";
 import { AccountTile } from "@/features/accounts/components/account-tile";
+import { BalanceBreakdownSheet, type BalanceScope } from "@/features/accounts/components/balance-breakdown-sheet";
 import { RecentAccountTransactions } from "@/features/accounts/components/recent-account-transactions";
 import { ACCOUNT_COLOR } from "@/features/accounts/lib/account-colors";
 import {
@@ -199,6 +200,19 @@ export function AccountsWorkspace() {
   // `?account=<id>` reopens that account — so Back from its filtered Transactions lands where the user was.
   const [selectedId, setSelectedId] = useState<string | undefined>(() => searchParams.get("account") ?? undefined);
   const [overviewOpen, setOverviewOpen] = useState(true);
+  const [breakdownScope, setBreakdownScope] = useState<BalanceScope | null>(null);
+  // The breakdown and the Account Overview are both side panels: opening one parks the other, closing it brings it back.
+  const [restoreOverview, setRestoreOverview] = useState(false);
+  const openBreakdown = (scope: BalanceScope) => {
+    setRestoreOverview(overviewOpen);
+    setOverviewOpen(false);
+    setBreakdownScope(scope);
+  };
+  const closeBreakdown = () => {
+    setBreakdownScope(null);
+    if (restoreOverview) setOverviewOpen(true);
+    setRestoreOverview(false);
+  };
 
   const { items: accountsOverviewList, isLoading } = useAccountsOverview();
   const { data: rawAccounts = [] } = useAccounts();
@@ -447,7 +461,7 @@ export function AccountsWorkspace() {
     <div className="flex min-w-0 flex-col gap-5 px-1 lg:flex-row lg:items-start">
       <div className="flex min-w-0 flex-1 flex-col gap-5">
         <AccountsHeader onAdd={openAdd} />
-        <AccountsStats accountCount={moneyAccounts.length} />
+        <AccountsStats accountCount={moneyAccounts.length} onExplain={openBreakdown} />
 
         <section aria-label="My accounts" className="flex flex-col gap-3">
           <AccountsToolbar
@@ -499,6 +513,7 @@ export function AccountsWorkspace() {
                     setSelectedId(account.id);
                     setOverviewOpen(true);
                   }}
+                  onExplain={() => openBreakdown({ kind: "account", accountId: account.id })}
                 />
               ))}
               {addTile}
@@ -515,6 +530,7 @@ export function AccountsWorkspace() {
                     setSelectedId(account.id);
                     setOverviewOpen(true);
                   }}
+                  onExplain={() => openBreakdown({ kind: "account", accountId: account.id })}
                 />
               ))}
               {addTile}
@@ -587,6 +603,8 @@ export function AccountsWorkspace() {
           account={selected}
           linkedFunds={linkedPendingForAccount(linkedFunds, selected.id)}
           onClose={() => setOverviewOpen(false)}
+          // Card accounts hold what you owe, not money — their breakdown lives in Credit Cards.
+          onExplainBalance={cardAccountIds.has(selected.id) ? undefined : () => openBreakdown({ kind: "account", accountId: selected.id })}
           onViewTransactions={() => {
             router.replace(`/accounts?account=${encodeURIComponent(selected.id)}`, { scroll: false });
             router.push(transactionsHrefForAccount(selected.id));
@@ -1136,6 +1154,8 @@ export function AccountsWorkspace() {
           </button>
         </DialogContent>
       </Dialog>
+
+      <BalanceBreakdownSheet scope={breakdownScope} onClose={closeBreakdown} />
 
       <DestructiveDeleteDialog
         open={deletingAccount != null}

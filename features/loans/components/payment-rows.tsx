@@ -1,16 +1,21 @@
 "use client";
 
+import { HISTORICAL_PAYMENT_LABEL, historicalPaymentExplanation } from "@/features/loans/lib/historical-payment";
+import type { InstallmentPeopleStatus } from "@/features/loans/hooks/use-installment-people-status";
 import { ArrowRight, Check, ChevronRight, Receipt, RotateCcw, type LucideIcon } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { ClayBadge } from "@/components/clay/clay-badge";
 import { FilterTabs, LE_RADIUS, Money, dueLabel } from "@/features/loans/components/loan-emi-ui";
 import {
+  editEligibility,
   installmentRangeLabel,
   installmentRowAction,
   paymentTypeLabel,
   type RecordedPaymentAction,
 } from "@/features/loans/lib/recorded-payments";
-import { formatCurrency } from "@/lib/format";
+import { useAccounts } from "@/hooks/use-accounts";
+import { useTransactions } from "@/hooks/use-transactions";
+import { formatCurrency, formatCurrencyExact } from "@/lib/format";
 import { installmentStatus, remainingAmount, type Installment, type InstallmentStatus } from "@/lib/models/payment-schedule";
 import { cn } from "@/lib/utils";
 
@@ -108,14 +113,38 @@ export function InstallmentList({
   actions,
   onPay,
   onViewPayment,
+  fallbackSourceLabel,
+  lent = false,
+  peopleStatus,
 }: {
+  /**
+   * Shared Loan / EMI: each installment's People side ("Priya: ₹1,000 to receive"), shown under the lender status —
+   * the two are separate (paying the lender never marks a person as paid).
+   */
+  peopleStatus?: ReadonlyMap<string, InstallmentPeopleStatus>;
   installments: Installment[];
   total: number;
   closed: boolean;
   actions: RecordedPaymentAction[];
   onPay: (installment: Installment) => void;
   onViewPayment: (action: RecordedPaymentAction) => void;
+  /** Shown as "from …" when a payment has no account of its own (e.g. an EMI paid on a credit card). */
+  fallbackSourceLabel?: string | null;
+  /** A Loan I gave — a paid-earlier repayment says "no account credit" instead of "no account debit". */
+  lent?: boolean;
 }) {
+  const { data: accounts = [] } = useAccounts();
+  const { data: transactions = [] } = useTransactions();
+  const accountNameByTxn = useMemo(() => {
+    // "HDFC Savings ••1234" — the last 4 digits tell apart two accounts at the same bank.
+    const names = new Map(accounts.map((a) => [a.id, a.accountNumberLast4 ? `${a.name} ••${a.accountNumberLast4}` : a.name]));
+    const byTxn = new Map<string, string>();
+    for (const t of transactions) {
+      const name = t.accountId ? names.get(t.accountId) : undefined;
+      if (name) byTxn.set(t.id, name);
+    }
+    return byTxn;
+  }, [accounts, transactions]);
   const [tab, setTab] = useState<ScheduleTab>("all");
   const upcoming = installments.filter((i) => !i.isSkipped && remainingAmount(i) > 0);
   const paid = installments.filter((i) => i.amountPaid > 0);
@@ -145,7 +174,11 @@ export function InstallmentList({
             const status = installmentStatus(i);
             const rowAction = installmentRowAction(i, actions, closed);
             const recorded = rowAction?.kind === "view" ? rowAction.action : null;
+            // The latest payment can be edited / marked unpaid directly; an older one opens its details (where it
+            // can be marked unpaid together with the later payments).
+            const editable = recorded != null && editEligibility(recorded, actions, { closed }).ok;
             const remaining = remainingAmount(i);
+            const paidFrom = recorded ? ((recorded.transactionId ? accountNameByTxn.get(recorded.transactionId) : null) ?? fallbackSourceLabel ?? null) : null;
             const canPay = !closed && !i.isSkipped && remaining > 0;
             const dateLine =
               status === "paid"
@@ -157,6 +190,14 @@ export function InstallmentList({
                   : status === "skipped"
                     ? `Was due ${shortDate(i.dueDate)}`
                     : dueLabel(i.dueDate);
+            // A payment recorded as "already paid earlier" never moved an account, so it must not read "from <account>".
+            const earlier = recorded?.recordedEarlier ?? null;
+            const people = peopleStatus?.get(i.id) ?? null;
+            const dateText = earlier
+              ? `${earlier.dateKnown ? dateLine : "Date not known"} · ${HISTORICAL_PAYMENT_LABEL.toLowerCase()} — ${lent ? "no account credit" : "no account debit"}`
+              : paidFrom && (status === "paid" || status === "partiallyPaid")
+                ? `${dateLine} · from ${paidFrom}`
+                : dateLine;
 
             const content = (
               <>
@@ -164,14 +205,26 @@ export function InstallmentList({
                   <span className="flex min-w-0 items-baseline gap-1.5">
                     <span className="truncate text-sm font-semibold text-foreground">Installment {i.sequenceNumber}</span>
                     {total > 0 && <span className="shrink-0 text-xs text-muted-foreground tabular-nums">of {total}</span>}
+                    <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-foreground/70">
+                      {i.dueDate.toLocaleDateString("en-IN", { month: "short", year: "numeric" })}
+                    </span>
                   </span>
-                  <span className={cn("truncate text-xs", status === "overdue" ? "font-medium text-expense" : "text-muted-foreground")}>{dateLine}</span>
+                  <span className={cn("truncate text-xs", status === "overdue" ? "font-medium text-expense" : "text-muted-foreground")}>{dateText}</span>
+                  {people && (
+                    <span
+                      className={cn("truncate text-xs", people.tone === "received" ? "text-success" : "text-settle-receivable-text")}
+                      data-testid={`installment-people-${i.sequenceNumber}`}
+                      title="People's shares — separate from the lender payment"
+                    >
+                      {people.text}
+                    </span>
+                  )}
                 </span>
                 <span className="flex shrink-0 flex-col items-end gap-1.5">
                   <Money amount={i.amountDue} className={cn("text-[15px] leading-none", status === "skipped" ? "text-muted-foreground" : "text-foreground")} />
                   <StatusText status={status} />
                 </span>
-                {recorded && <OpenHint label="Details" />}
+                {recorded && <OpenHint label={editable ? "Edit" : "Details"} />}
               </>
             );
 
@@ -182,7 +235,7 @@ export function InstallmentList({
                     type="button"
                     className={cn(ROW, ACTIONABLE, "min-w-0 flex-1")}
                     onClick={() => onViewPayment(recorded)}
-                    aria-label={`Installment ${i.sequenceNumber}: view payment details`}
+                    aria-label={`Installment ${i.sequenceNumber} for ${i.dueDate.toLocaleDateString("en-IN", { month: "long", year: "numeric" })}: ${editable ? "edit or mark unpaid" : "view payment details"}`}
                   >
                     {content}
                   </button>
@@ -220,8 +273,11 @@ export function PaymentHistoryList({
   titleFor,
   detailFor,
   extras = [],
+  lent = false,
   onOpen,
 }: {
+  /** A Loan I gave — repayments are money received, so the historical note says "credit", not "debit". */
+  lent?: boolean;
   actions: RecordedPaymentAction[];
   titleFor?: (action: RecordedPaymentAction) => string;
   detailFor?: (action: RecordedPaymentAction) => string | null;
@@ -246,6 +302,7 @@ export function PaymentHistoryList({
             ? (detailFor?.(item.action) ?? (item.action.installmentSeqs.length > 0 ? `Installment ${installmentRangeLabel(item.action.installmentSeqs)}` : null))
             : item.extra.detail;
         const amount = item.kind === "action" ? item.action.amount : item.extra.amount;
+        const earlierMark = item.kind === "action" ? item.action.recordedEarlier : null;
         const content = (
           <>
             <RowIcon icon={reversed ? RotateCcw : Receipt} />
@@ -257,13 +314,19 @@ export function PaymentHistoryList({
                     Reversed
                   </ClayBadge>
                 )}
+                {earlierMark && (
+                  <ClayBadge tone="neutral" className="rounded-[4px] px-1.5 py-0 text-[10.5px] font-medium" title={historicalPaymentExplanation(lent)}>
+                    {HISTORICAL_PAYMENT_LABEL}
+                  </ClayBadge>
+                )}
               </span>
               <span className="truncate text-xs text-muted-foreground">
-                {item.date.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
+                {earlierMark && !earlierMark.dateKnown ? "Date not known" : item.date.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
                 {detail ? ` · ${detail}` : ""}
+                {earlierMark ? ` · ${lent ? "no account credit" : "no account debit"} recorded` : ""}
               </span>
             </span>
-            <Money amount={amount} className={cn("text-sm font-semibold", reversed ? "text-muted-foreground" : "text-foreground")} />
+            <Money exact amount={amount} className={cn("text-sm font-semibold", reversed ? "text-muted-foreground" : "text-foreground")} />
             {item.kind === "action" && !reversed && <OpenHint label="View" />}
           </>
         );
@@ -271,7 +334,7 @@ export function PaymentHistoryList({
         return (
           <li key={key}>
             {item.kind === "action" && !reversed ? (
-              <button type="button" className={cn(ROW, ACTIONABLE)} onClick={() => onOpen(item.action)} aria-label={`${title}, ${formatCurrency(amount)}: view payment`}>
+              <button type="button" className={cn(ROW, ACTIONABLE)} onClick={() => onOpen(item.action)} aria-label={`${title}, ${formatCurrencyExact(amount)}: view payment`}>
                 {content}
               </button>
             ) : (

@@ -5,6 +5,7 @@ import { useRef, useState } from "react";
 import type { LedgerEntryType } from "@/lib/models/person";
 import { money } from "@/lib/engines/person-cycle-statement-share";
 import { cn } from "@/lib/utils";
+import { isUnderfunded } from "@/components/finance/payment-source-summary";
 import { AccountField, useAccountChoice } from "./ledger-ui";
 import { WS_FIELD, WS_GHOST, WS_PRIMARY, WS_SELECT_TRIGGER, WsField } from "./person-workspace-ui";
 import { FlowSwitch, flowText, HeroAmount, PanelHeader, type FlowTone } from "./flow-switch";
@@ -81,6 +82,10 @@ export function AddEntryPanel({
     }
     if (!account.accountId) {
       setError("Select an account.");
+      return;
+    }
+    if (type === "gave" && isUnderfunded(account.selected, value)) {
+      setError("The chosen account doesn't have enough balance — choose another account or lower the amount.");
       return;
     }
     setSaving(true);
@@ -163,7 +168,11 @@ export function AddEntryPanel({
             </WsField>
           </div>
           <div className="grid content-start gap-3 sm:grid-cols-2 md:grid-cols-1">
-            <AccountField choice={account} label={type === "borrowed" ? "Receive into account" : type === "gave" ? "Pay from account" : "Account"} />
+            <AccountField
+              choice={account}
+              label={type === "borrowed" ? "Receive into account" : type === "gave" ? "Pay from account" : "Account"}
+              outflow={type === "gave" ? (Number(amount) > 0 ? Number(amount) : null) : undefined}
+            />
             <WsField label="Date">
               <DateInput className={WS_FIELD} value={date} onChange={(e) => setDate(e.target.value)} />
             </WsField>

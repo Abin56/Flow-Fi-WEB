@@ -325,7 +325,7 @@ describe("settlement states", () => {
     expect(s.view.rows.map((r) => r.title).join()).toContain("ZOMATO");
     const text = await pdfText(s);
     expect(text).toContain("PREVIOUS BALANCE");
-    expect(text).toContain("Outstanding from earlier cycles");
+    expect(text).toContain("1 item open on");
     expect(text.indexOf("BEVCO")).toBeLessThan(text.indexOf("ZOMATO"));
   });
 

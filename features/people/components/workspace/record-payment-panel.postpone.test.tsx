@@ -10,7 +10,7 @@ import { DeferralContext, type DeferralContextValue, type DeferralSubmit } from 
 import { RecordPaymentPanel } from "./record-payment-panel";
 
 /**
- * Record payment — "Money received" vs "Hasn't paid yet". SHAMBU owes ₹375 (a REAL ledger row). A no-money
+ * Record payment — "Yes — record money received" vs "Not yet — postpone collection". SHAMBU owes ₹375 (a REAL ledger row). A no-money
  * postponement must go through the existing deferral write only — never `onSubmit` (the payment write that
  * moves an account and creates receipts / advance / income). Real received payments keep today's allocation.
  */
@@ -18,6 +18,13 @@ import { RecordPaymentPanel } from "./record-payment-panel";
 vi.mock("@/lib/firebase/client", () => ({ firebaseApp: {}, auth: {}, db: {}, storage: {} }));
 vi.mock("next/link", () => ({ default: ({ children }: { children: React.ReactNode }) => children }));
 vi.mock("@/hooks/use-accounts", () => ({ useAccounts: () => ({ data: [{ id: "sbi", name: "SBI", isDefault: true, deletedAt: null }] }) }));
+// These tests are about allocation, not the account step: SBI is chosen up front. Choosing the paying account
+// explicitly (never a default) is covered in record-payment-panel.account.test.tsx.
+vi.mock("./ledger-ui", async (orig) => {
+  const actual = await orig<typeof import("./ledger-ui")>();
+  const sbi = { id: "sbi", name: "SBI", type: "bank", currentBalance: 10_000_000, deletedAt: null };
+  return { ...actual, useAccountChoice: () => ({ accounts: [sbi], accountId: "sbi", selected: sbi, setAccountId: () => {} }) };
+});
 vi.mock("@/hooks/use-categories", () => ({ useCategories: () => ({ data: [{ id: "gift", name: "Gift", type: "income", deletedAt: null }] }) }));
 vi.mock("@/features/people/components/workspace/purpose-money", () => ({ usePurposeLinkOptions: () => [] }));
 const toasts = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), warning: vi.fn() }));
@@ -109,7 +116,7 @@ function setup({ entries = [lent], value = ctx(), preselectKey = "ledger:lent" a
 }
 
 const primary = () => screen.getAllByRole("button").find((b) => b.getAttribute("type") === "submit")!;
-const hasntPaid = () => screen.getByRole("radio", { name: /hasn't paid yet/i });
+const hasntPaid = () => screen.getByRole("radio", { name: /not paid yet — postpone collection/i });
 
 describe("No money received — postpone (case 1, 7, 8, 9, 12)", () => {
   it("₹375 owed, ₹0 received, Next cycle → one deferral request; no payment, account, advance or income", async () => {
@@ -290,6 +297,7 @@ describe("Money received — existing allocation preserved (cases 2–6, 10)", (
     expect(note.textContent).toContain("₹500 will still be recorded as received from SHAMBU");
     expect(primary().textContent).toBe("Record ₹500 received");
     // The follow-up reminder is described as a reminder, not a postponement.
+    fireEvent.click(screen.getByRole("button", { name: /After recording/ }));
     expect(screen.getByTestId("rp-reminder-note").textContent).toContain("A reminder only — it doesn't postpone what is owed.");
     fireEvent.click(screen.getByRole("radio", { name: /next cycle/i }));
     expect(screen.getByTestId("rp-reminder-note").textContent).toMatch(/^You'll be reminded on 18 Oct/);
@@ -319,5 +327,42 @@ describe("Money received — existing allocation preserved (cases 2–6, 10)", (
     await act(async () => fireEvent.click(primary()));
     expect(onSubmit.mock.calls[0][0]).toMatchObject({ amount: 375, extra: null });
     expect(value.onApply).not.toHaveBeenCalled();
+  });
+});
+
+describe("One top-level intent: Received / Paid / Not paid yet", () => {
+  const radios = () => screen.getAllByRole("radio").filter((r) => /^(Money received|Money paid|Not paid yet)/.test(r.getAttribute("aria-label") ?? ""));
+  const checked = () => radios().filter((r) => r.getAttribute("aria-checked") === "true").map((r) => r.getAttribute("aria-label"));
+
+  it("offers all three choices and exactly one is selected; postponing keeps the receivable side (postpone is an action, not a direction)", () => {
+    setup();
+    expect(radios().map((r) => r.getAttribute("aria-label"))).toEqual(["Money received from SHAMBU", "Money paid to SHAMBU", "Not paid yet — postpone collection from SHAMBU"]);
+    expect(checked()).toEqual(["Money received from SHAMBU"]);
+    fireEvent.click(hasntPaid());
+    expect(checked()).toEqual(["Not paid yet — postpone collection from SHAMBU"]);
+    // Back to Received restores the money form with the same prefilled bill.
+    fireEvent.click(screen.getByRole("radio", { name: /money received from SHAMBU/i }));
+    expect(checked()).toEqual(["Money received from SHAMBU"]);
+    expect(primary().textContent).toBe("Record ₹375 received");
+  });
+
+  it("Paid → Not paid yet lands on the postpone form; Paid again returns to paying, never stuck in postpone", () => {
+    setup();
+    fireEvent.click(screen.getByRole("radio", { name: /money paid to SHAMBU/i }));
+    expect(screen.getByLabelText(/^Amount paid$/)).toBeTruthy();
+    fireEvent.click(hasntPaid());
+    expect(screen.queryByLabelText(/^Amount (paid|received)$/)).toBeNull();
+    expect(screen.getByTestId("rp-postpone")).toBeTruthy();
+    fireEvent.click(screen.getByRole("radio", { name: /money paid to SHAMBU/i }));
+    expect(screen.getByLabelText(/^Amount paid$/)).toBeTruthy();
+    expect(screen.queryByTestId("rp-postpone")).toBeNull();
+    fireEvent.click(screen.getByRole("radio", { name: /money received from SHAMBU/i }));
+    expect(screen.getByLabelText(/^Amount received$/)).toBeTruthy();
+    expect(screen.queryByTestId("rp-postpone")).toBeNull();
+  });
+
+  it("without anything to postpone, only Received / Paid are offered", () => {
+    setup({ withContext: false });
+    expect(radios().map((r) => r.getAttribute("aria-label"))).toEqual(["Money received from SHAMBU", "Money paid to SHAMBU"]);
   });
 });

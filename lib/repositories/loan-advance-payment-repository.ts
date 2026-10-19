@@ -43,6 +43,7 @@ import {
   where,
   writeBatch,
 } from "firebase/firestore";
+import { assertFundsAvailable } from "@/lib/engines/payment-funding";
 import { FirestoreCollections } from "@/lib/firestore/collections";
 import { recordEdit } from "@/lib/firestore/soft-deletable";
 import { accountFromFirestore, accountToFirestore, type Account } from "@/lib/models/account";
@@ -64,6 +65,7 @@ import {
   type InstallmentPayment,
   type PaymentAllocationType,
   type PaymentSchedule,
+  type RecordedEarlier,
   type ScheduleType,
 } from "@/lib/models/payment-schedule";
 import {
@@ -98,6 +100,13 @@ import { mergeInstallmentWrites, netBalanceDeltas, reversePaymentPortions } from
 import { principalPrepaidFor } from "@/lib/engines/loan-outstanding";
 import { assertLinkedPeopleSettled } from "@/lib/repositories/people-settlement-gate";
 import type { UnsettledPeopleAcknowledgement } from "@/lib/engines/linked-people-readiness";
+import {
+  assertRecordedEarlierDate,
+  assertRecordedEarlierNoExtra,
+  assertRecordedEarlierTarget,
+  carriedRecordedEarlier,
+} from "@/lib/engines/recorded-earlier";
+import { assertReviewedAllocation } from "@/lib/engines/stale-installment";
 import { generateId } from "@/lib/utils/id-generator";
 
 /** What a reversal's eligibility depends on per installment: paid amount and whether it is live. */
@@ -163,6 +172,27 @@ export interface RecordAdvancePaymentParams {
    * bank already debited it). Absent → the People settlement gate is enforced here, at the write layer.
    */
   peopleGateAcknowledgement?: UnsettledPeopleAcknowledgement | null;
+  /**
+   * Re-checks the paying account's balance FRESH inside the write and refuses (`InsufficientFundsError`,
+   * nothing saved) when this payment would take it below zero (see `lib/engines/payment-funding.ts`). Never
+   * applies to "already paid earlier" (no account movement) or to money received.
+   */
+  enforceFunds?: boolean;
+  /**
+   * "Already paid earlier" (see `lib/engines/recorded-earlier.ts`): settles the schedule with NO account
+   * movement — the Transaction is posted excluded from calculations. Must be dated today or earlier, covers
+   * installments only, and must start on `expectedFirstInstallmentId` when given.
+   */
+  recordedEarlier?: RecordedEarlier | null;
+  /** The installment the user picked — a stale screen whose pick was paid meanwhile writes nothing. */
+  expectedFirstInstallmentId?: string | null;
+  /**
+   * The installments (and extra principal) the user reviewed. A normal payment whose fresh allocation no longer
+   * matches — paid / part-paid in another tab — is refused with `StaleInstallmentError`, nothing saved.
+   */
+  expectedAllocation?: { installmentIds: string[]; overflow: number; amounts?: number[] | null } | null;
+  /** Bulk "already paid earlier": cover exactly this one installment (see `LoanPaymentCoreInput.onlyInstallmentId`). */
+  onlyInstallmentId?: string | null;
 }
 
 interface CoreResult {
@@ -235,6 +265,8 @@ export interface EditLoanPaymentParams {
    * bank already debited it). Absent → the People settlement gate is enforced here, at the write layer.
    */
   peopleGateAcknowledgement?: UnsettledPeopleAcknowledgement | null;
+  /** Re-checks each account's NET balance change fresh inside the write (see `RecordAdvancePaymentParams.enforceFunds`). */
+  enforceFunds?: boolean;
 }
 
 export interface EditLoanPaymentResult {
@@ -304,6 +336,8 @@ export interface RecordAdditionalDisbursementParams {
   /** Must be generated once per user action and reused verbatim on any retry. */
   idempotencyKey: string;
   note?: string;
+  /** More money LENT (a "given" loan): re-checks the account's balance fresh inside the write and refuses with `InsufficientFundsError`. Money borrowed is never checked. */
+  enforceFunds?: boolean;
 }
 
 export interface ReverseAdditionalDisbursementParams {
@@ -407,6 +441,26 @@ export class LoanAdvancePaymentRepository {
     return principalPrepaidFor(payments.flat());
   }
 
+  /**
+   * Reads these installments fresh inside `tx`, all at once. The reads are independent of each other, and a
+   * Firestore transaction still tracks every one of them (a concurrent change to any makes the commit retry),
+   * so this is the same read set as reading them one by one — but one network round trip instead of one per
+   * installment, which on a long schedule was most of the payment's wait. Missing documents are left out.
+   */
+  private async readInstallmentsInTransaction(
+    tx: FirestoreTransaction,
+    scheduleId: string,
+    installmentIds: Iterable<string>,
+  ): Promise<Map<string, Installment>> {
+    const ids = [...installmentIds];
+    const snaps = await Promise.all(ids.map((id) => tx.get(doc(this.installments(scheduleId), id))));
+    const byId = new Map<string, Installment>();
+    snaps.forEach((snap, i) => {
+      if (snap.exists()) byId.set(ids[i], snap.data());
+    });
+    return byId;
+  }
+
   private reamortizationEvents(loanId: string): CollectionReference<LoanReamortizationEvent> {
     return collection(this.loanRef(loanId), FirestoreCollections.reamortizationEvents).withConverter({
       toFirestore: loanReamortizationEventToFirestore,
@@ -438,6 +492,7 @@ export class LoanAdvancePaymentRepository {
     if (amount <= 0) {
       throw new Error("Payment amount must be greater than 0");
     }
+    if (params.recordedEarlier) assertRecordedEarlierDate(date);
     // One-time loans ARE paid through this method (full or partial payments against their single
     // installment — account movement, Transaction, idempotency and reversal exactly like an
     // installment loan). They only refuse an overflow (see below): with no schedule to re-plan,
@@ -476,11 +531,11 @@ export class LoanAdvancePaymentRepository {
       if (!accountSnap.exists()) throw new Error("Account not found");
       const account = accountSnap.data();
 
-      const freshById = new Map<string, Installment>();
-      for (const known of knownIds) {
-        const snap = await tx.get(doc(this.installments(loan.scheduleId), known.id));
-        if (snap.exists()) freshById.set(known.id, snap.data());
-      }
+      const freshById = await this.readInstallmentsInTransaction(
+        tx,
+        loan.scheduleId,
+        knownIds.map((k) => k.id),
+      );
 
       // --- Classification/allocation, computed from FRESH state only (shared with `editPayment`). ---
       const freshSorted = knownIds
@@ -497,7 +552,22 @@ export class LoanAdvancePaymentRepository {
         idempotencyKey,
         note,
         includeUpcomingInstallments,
+        recordedEarlier: params.recordedEarlier,
+        onlyInstallmentId: params.onlyInstallmentId ?? null,
       });
+      if (params.recordedEarlier) {
+        assertRecordedEarlierNoExtra(core.overflow);
+        assertRecordedEarlierTarget(core.payments[0]?.installmentId, params.expectedFirstInstallmentId);
+      } else if (params.expectedAllocation) {
+        assertReviewedAllocation({
+          actualInstallmentIds: core.installmentIds,
+          expectedInstallmentIds: params.expectedAllocation.installmentIds,
+          actualOverflow: core.overflow,
+          expectedOverflow: params.expectedAllocation.overflow,
+          actualAmounts: core.payments.map((p) => p.amount),
+          expectedAmounts: params.expectedAllocation.amounts,
+        });
+      }
 
       // People settlement gate — authoritative, from current documents (see `people-settlement-gate.ts`).
       await assertLinkedPeopleSettled({
@@ -516,7 +586,9 @@ export class LoanAdvancePaymentRepository {
       for (const payment of core.payments) tx.set(this.paymentRef(loan.scheduleId, payment.installmentId, payment.id), payment);
       if (core.overflowPayment) tx.set(this.paymentRef(loan.scheduleId, lastKnownInstallmentId, core.overflowPayment.id), core.overflowPayment);
       tx.set(this.transactionRef(transactionId), core.transaction);
-      tx.set(this.accountRef(accountId), this.withBalanceDelta(account, balanceEffect(core.transaction)));
+      const paymentEffect = balanceEffect(core.transaction);
+      if (params.enforceFunds && !params.recordedEarlier && paymentEffect < 0) assertFundsAvailable(account, -paymentEffect);
+      tx.set(this.accountRef(accountId), this.withBalanceDelta(account, paymentEffect));
 
       return {
         alreadyRecorded: false,
@@ -668,6 +740,7 @@ export class LoanAdvancePaymentRepository {
       tx.set(this.transactionRef(transactionId), transactionDoc);
 
       const delta = isIncome ? amount : -amount;
+      if (params.enforceFunds && delta < 0) assertFundsAvailable(account, -delta);
       const newBalance = account.currentBalance + delta;
       let updatedAccount = recordEdit(account, "currentBalance", String(account.currentBalance), String(newBalance));
       updatedAccount = { ...updatedAccount, currentBalance: newBalance };
@@ -769,22 +842,19 @@ export class LoanAdvancePaymentRepository {
       if (!freshAccountSnap.exists()) throw new Error("Account not found");
       const account = freshAccountSnap.data();
 
-      const freshInstallments = new Map<string, Installment>();
-      for (const installmentId of new Set(installmentIds)) {
-        const snap = await tx.get(doc(this.installments(loan.scheduleId), installmentId));
-        if (snap.exists()) freshInstallments.set(installmentId, snap.data());
-      }
-
+      // Independent reads, issued together (see `readInstallmentsInTransaction`).
+      const [freshInstallments, paymentSnaps, overflowSnap] = await Promise.all([
+        this.readInstallmentsInTransaction(tx, loan.scheduleId, new Set(installmentIds)),
+        Promise.all(paymentIds.map((paymentId, i) => tx.get(this.paymentRef(loan.scheduleId, installmentIds[i], paymentId)))),
+        overflowPaymentId != null && overflowInstallmentId != null
+          ? tx.get(this.paymentRef(loan.scheduleId, overflowInstallmentId, overflowPaymentId))
+          : Promise.resolve(null),
+      ]);
       const freshPayments = new Map<string, InstallmentPayment>();
-      for (let i = 0; i < paymentIds.length; i++) {
-        const snap = await tx.get(this.paymentRef(loan.scheduleId, installmentIds[i], paymentIds[i]));
+      paymentSnaps.forEach((snap, i) => {
         if (snap.exists()) freshPayments.set(paymentIds[i], snap.data());
-      }
-      let freshOverflowPayment: InstallmentPayment | null = null;
-      if (overflowPaymentId != null && overflowInstallmentId != null) {
-        const snap = await tx.get(this.paymentRef(loan.scheduleId, overflowInstallmentId, overflowPaymentId));
-        freshOverflowPayment = snap.exists() ? snap.data() : null;
-      }
+      });
+      const freshOverflowPayment: InstallmentPayment | null = overflowSnap != null && overflowSnap.exists() ? overflowSnap.data() : null;
 
       // --- Then all writes. ---
       for (let i = 0; i < paymentIds.length; i++) {
@@ -974,15 +1044,19 @@ export class LoanAdvancePaymentRepository {
     const oldSnap = await getDoc(this.transactionRef(original.transactionId));
     if (!oldSnap.exists()) throw new Error("The original payment could not be found");
     const oldTransaction = oldSnap.data();
+    // The correction keeps the original's treatment, read from the stored payment (never from the caller):
+    // a payment recorded as already paid earlier stays one, so its edit moves no account either.
+    const recordedEarlier = await this.originalRecordedEarlier(loan, original, params.date);
+    if (recordedEarlier) assertRecordedEarlierDate(params.date);
 
     // A previous attempt already reversed the original (re-plan path) — only the corrected payment is left.
-    if (oldTransaction.deletedAt != null) return this.recordCorrection(params, false);
+    if (oldTransaction.deletedAt != null) return this.recordCorrection(params, false, recordedEarlier);
 
     if (original.overflowPaymentId == null) {
       await this.assertReversible(loan, oldTransaction, null);
       try {
         onStage?.("recording");
-        const overallAllocationType = await this.editAtomically(params, oldTransaction.accountId);
+        const overallAllocationType = await this.editAtomically(params, oldTransaction.accountId, recordedEarlier);
         return { alreadyRecorded: false, atomic: true, overallAllocationType, reamortization: null };
       } catch (e) {
         if (!(e instanceof NeedsReplanError)) throw e;
@@ -1000,10 +1074,19 @@ export class LoanAdvancePaymentRepository {
       overflowInstallmentId: original.overflowInstallmentId ?? null,
       reversalIdempotencyKey: `edit_${idempotencyKey}`,
     });
-    return this.recordCorrection(params, true);
+    return this.recordCorrection(params, true, recordedEarlier);
   }
 
-  private async recordCorrection(params: EditLoanPaymentParams, justReversed: boolean): Promise<EditLoanPaymentResult> {
+  /** The original action's "already paid earlier" mark (its first payment doc — soft-deleted or not), carried to `newDate`. */
+  private async originalRecordedEarlier(loan: Loan, original: EditLoanPaymentParams["original"], newDate: Date): Promise<RecordedEarlier | null> {
+    const paymentId = original.paymentIds[0] ?? original.overflowPaymentId ?? null;
+    const installmentId = original.installmentIds[0] ?? original.overflowInstallmentId ?? null;
+    if (paymentId == null || installmentId == null) return null;
+    const snap = await getDoc(this.paymentRef(loan.scheduleId, installmentId, paymentId));
+    return carriedRecordedEarlier(snap.exists() ? snap.data() : null, newDate);
+  }
+
+  private async recordCorrection(params: EditLoanPaymentParams, justReversed: boolean, recordedEarlier: RecordedEarlier | null): Promise<EditLoanPaymentResult> {
     const { loan, onStage } = params;
     onStage?.("recording");
     try {
@@ -1020,6 +1103,8 @@ export class LoanAdvancePaymentRepository {
         includeUpcomingInstallments: params.includeUpcomingInstallments,
         onReamortizing: () => onStage?.("reamortizing"),
         peopleGateAcknowledgement: params.peopleGateAcknowledgement,
+        recordedEarlier,
+        enforceFunds: params.enforceFunds,
       });
       return { alreadyRecorded: result.alreadyRecorded, atomic: false, overallAllocationType: result.overallAllocationType, reamortization: result.reamortization };
     } catch (e) {
@@ -1033,7 +1118,7 @@ export class LoanAdvancePaymentRepository {
   }
 
   /** The one-transaction edit — see `editPayment`. Throws `NeedsReplanError` (nothing written) when the correction has extra principal. */
-  private async editAtomically(params: EditLoanPaymentParams, oldAccountId: string): Promise<PaymentAllocationType> {
+  private async editAtomically(params: EditLoanPaymentParams, oldAccountId: string, recordedEarlier: RecordedEarlier | null): Promise<PaymentAllocationType> {
     const { loan, original } = params;
     const knownIds = [...params.scheduleInstallments].sort((a, b) => a.sequenceNumber - b.sequenceNumber);
     if (knownIds.length === 0) throw new Error("This loan has no installment schedule");
@@ -1051,15 +1136,19 @@ export class LoanAdvancePaymentRepository {
         if (!snap.exists()) throw new Error("Account not found");
         accounts.set(id, snap.data());
       }
-      const fresh: Installment[] = [];
-      for (const known of knownIds) {
-        const snap = await tx.get(doc(this.installments(loan.scheduleId), known.id));
-        if (snap.exists()) fresh.push(snap.data());
-      }
+      // Independent reads, issued together (see `readInstallmentsInTransaction`); results keep their input order.
+      const [freshById, oldPaymentSnaps] = await Promise.all([
+        this.readInstallmentsInTransaction(
+          tx,
+          loan.scheduleId,
+          knownIds.map((k) => k.id),
+        ),
+        Promise.all(original.paymentIds.map((paymentId, i) => tx.get(this.paymentRef(loan.scheduleId, original.installmentIds[i], paymentId)))),
+      ]);
+      const fresh: Installment[] = knownIds.map((k) => freshById.get(k.id)).filter((i): i is Installment => i != null);
       fresh.sort((a, b) => a.sequenceNumber - b.sequenceNumber);
       const oldPayments: InstallmentPayment[] = [];
-      for (let i = 0; i < original.paymentIds.length; i++) {
-        const snap = await tx.get(this.paymentRef(loan.scheduleId, original.installmentIds[i], original.paymentIds[i]));
+      for (const snap of oldPaymentSnaps) {
         if (snap.exists() && snap.data().deletedAt == null) oldPayments.push(snap.data());
       }
 
@@ -1075,7 +1164,10 @@ export class LoanAdvancePaymentRepository {
         idempotencyKey: params.idempotencyKey,
         note: params.note,
         includeUpcomingInstallments: params.includeUpcomingInstallments,
+        recordedEarlier,
       });
+      // Refused here, before anything is written — the re-plan path would reverse the original first.
+      if (recordedEarlier) assertRecordedEarlierNoExtra(core.overflow);
       if (core.overflow > 0) throw new NeedsReplanError();
       // A correction may reach installments the original did not — those are gated like a new payment.
       const originallyTouched = new Set(original.installmentIds);
@@ -1104,6 +1196,7 @@ export class LoanAdvancePaymentRepository {
       tx.set(this.transactionRef(core.transactionId), core.transaction);
       // Net account effect: the original movement undone, the corrected one applied — once each.
       for (const [id, delta] of netBalanceDeltas([oldTransaction], [core.transaction])) {
+        if (params.enforceFunds && !recordedEarlier && delta < 0) assertFundsAvailable(accounts.get(id)!, -delta);
         if (delta !== 0) tx.set(this.accountRef(id), this.withBalanceDelta(accounts.get(id)!, delta));
       }
       return core.overallType;
@@ -1138,8 +1231,9 @@ export class LoanAdvancePaymentRepository {
     const allInstallments = await getDocs(this.installments(loan.scheduleId));
     // What the check saw — re-verified INSIDE the reversal transaction (`assertScheduleUnchanged`, WFI-P2-09).
     const seen = new Map(allInstallments.docs.map((d) => [d.id, installmentFingerprint(d.data())]));
-    for (const installmentDoc of allInstallments.docs) {
-      const paymentsSnap = await getDocs(this.payments(loan.scheduleId, installmentDoc.id));
+    // One payments read per installment, issued together (read-only; the checks below run in the same order).
+    const paymentSnaps = await Promise.all(allInstallments.docs.map((d) => getDocs(this.payments(loan.scheduleId, d.id))));
+    for (const paymentsSnap of paymentSnaps) {
       for (const paymentDoc of paymentsSnap.docs) {
         const payment = paymentDoc.data();
         if (payment.deletedAt != null) continue;
@@ -1178,12 +1272,15 @@ export class LoanAdvancePaymentRepository {
    * transaction retry and land on the refusal (WFI-P2-09).
    */
   private async assertScheduleUnchanged(tx: FirestoreTransaction, loan: Loan, seen: ReadonlyMap<string, string>): Promise<void> {
-    for (const [id, fingerprint] of seen) {
-      const snap = await tx.get(doc(this.installments(loan.scheduleId), id));
+    const entries = [...seen];
+    // Every installment is still read inside `tx` (so each is tracked for conflicts) — just together, not one by one.
+    const snaps = await Promise.all(entries.map(([id]) => tx.get(doc(this.installments(loan.scheduleId), id))));
+    entries.forEach(([, fingerprint], i) => {
+      const snap = snaps[i];
       if (!snap.exists() || installmentFingerprint(snap.data()) !== fingerprint) {
         throw new PaymentReversalBlockedError("This loan changed while reversing (another payment was recorded) — refresh and try again");
       }
-    }
+    });
   }
 
   /**

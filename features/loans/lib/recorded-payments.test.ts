@@ -7,6 +7,7 @@ import {
   installmentRowAction,
   originalRefs,
   paymentTypeLabel,
+  undoChain,
 } from "./recorded-payments";
 
 function inst(n: number, amountPaid = 0, amountDue = 5000): Installment {
@@ -136,5 +137,39 @@ describe("14. installment rows are actionable in both states", () => {
   it("a closed record still lets you view payments, but not pay", () => {
     expect(installmentRowAction(installments[0], actions, true)).toMatchObject({ kind: "view" });
     expect(installmentRowAction(installments[2], actions, true)).toBeNull();
+  });
+});
+
+describe("undoChain — marking an older payment unpaid undoes the later ones first", () => {
+  const at = (day: number) => new Date(2026, 9, day, 10);
+  const four = groupRecordedPayments(
+    [
+      pay("p1", "i1", 5000, { transactionId: "t1", createdAt: at(1) }),
+      pay("p2", "i2", 5000, { transactionId: "t2", createdAt: at(2) }),
+      pay("p3", "i3", 5000, { transactionId: "t3", createdAt: at(3) }),
+      pay("p4", "i4", 5000, { transactionId: "t4", createdAt: at(4) }),
+      pay("old", "i4", 5000, { transactionId: "t0", createdAt: at(5), deletedAt: at(6) }), // reversed — never part of it
+    ],
+    [inst(1, 5000), inst(2, 5000), inst(3, 5000), inst(4, 5000)],
+    "loan",
+  );
+  const byTxn = (t: string) => four.find((a) => a.transactionId === t && !a.reversed)!;
+
+  it("lists this payment and every later active one, newest first, ending with this one", () => {
+    const r = undoChain(byTxn("t1"), four, { closed: false });
+    expect(r.ok && r.chain.map((a) => a.transactionId)).toEqual(["t4", "t3", "t2", "t1"]);
+  });
+
+  it("the latest payment is a chain of one (the ordinary Mark as unpaid)", () => {
+    const r = undoChain(byTxn("t4"), four, { closed: false });
+    expect(r.ok && r.chain.map((a) => a.transactionId)).toEqual(["t4"]);
+  });
+
+  it("refuses when closed, reversed, or a Loan payment in between has no account record", () => {
+    expect(undoChain(byTxn("t1"), four, { closed: true }).ok).toBe(false);
+    const reversed = four.find((a) => a.reversed)!;
+    expect(undoChain(reversed, four, { closed: false }).ok).toBe(false);
+    const legacy = groupRecordedPayments([pay("p1", "i1", 5000, { transactionId: "t1", createdAt: at(1) }), pay("lg", "i2", 5000, { createdAt: at(2) })], [inst(1, 5000), inst(2, 5000)], "loan");
+    expect(undoChain(legacy.find((a) => a.transactionId === "t1")!, legacy, { closed: false })).toMatchObject({ ok: false, reason: expect.stringMatching(/account tracking/) });
   });
 });

@@ -2,7 +2,7 @@
 
 import { AccountLabel } from "@/components/finance/account-label";
 import { CalendarClock, Plus, StickyNote, Wallet } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ClayBadge } from "@/components/clay/clay-badge";
 import { ClayButton } from "@/components/clay/clay-button";
 import { Stagger } from "@/components/foundation/animated-container";
@@ -21,7 +21,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useAccounts } from "@/hooks/use-accounts";
 import { useCategories } from "@/hooks/use-categories";
 import { formatCurrency } from "@/lib/format";
-import { billOccurrenceStatus, billOccurrenceRemainingAmount, type Bill, type BillRecurrence } from "@/lib/models/bill";
+import { billObligationStats, outstandingBillOccurrences } from "@/lib/engines/bill-obligations";
+import { billOccurrenceStatus, billOccurrenceRemainingAmount, type Bill, type BillOccurrence, type BillRecurrence, type PaymentRecord } from "@/lib/models/bill";
+import { BillPaymentDialog } from "@/features/bills/components/bill-payment-dialog";
+import { BillPaymentCancelDialog, type CancelTarget } from "@/features/bills/components/bill-payment-cancel-dialog";
+import { BillPaymentHistory } from "@/features/bills/components/bill-payment-history";
 import type { Account } from "@/lib/models/account";
 import type { Category } from "@/lib/models/category";
 import { Receipt } from "lucide-react";
@@ -72,7 +76,7 @@ function formFromBill(bill: Bill): BillFormState {
 }
 
 export function BillsWorkspace() {
-  const { rows, isLoading } = useBillRows();
+  const { rows, cycles, isLoading } = useBillRows();
   const actions = useBillActions();
   const { data: accounts = [] } = useAccounts();
   const { data: categories = [] } = useCategories();
@@ -83,30 +87,70 @@ export function BillsWorkspace() {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [form, setForm] = useState<BillFormState>(emptyForm);
   const [saving, setSaving] = useState(false);
+  const [payOpen, setPayOpen] = useState(false);
+  const [editingPayment, setEditingPayment] = useState<PaymentRecord | null>(null);
+  const [payments, setPayments] = useState<PaymentRecord[]>([]);
+  const [occurrences, setOccurrences] = useState<BillOccurrence[]>([]);
+  const [paymentsVersion, setPaymentsVersion] = useState(0);
+  // The cycle a pay / edit dialog acts on — always the payment's own cycle, never "whatever the page shows".
+  const [payOccurrence, setPayOccurrence] = useState<BillOccurrence | null>(null);
+  const [cancelTarget, setCancelTarget] = useState<CancelTarget | null>(null);
+  const [cancelling, setCancelling] = useState(false);
 
-  const stats = useMemo(() => {
-    let dueThisMonth = 0;
-    let overdueCount = 0;
-    let paidCount = 0;
-    let upcomingCount = 0;
-    const now = new Date();
-    for (const { occurrence } of rows) {
-      if (!occurrence) continue;
-      const status = billOccurrenceStatus(occurrence, now);
-      if (status === "overdue") overdueCount += 1;
-      if (status === "paid") paidCount += 1;
-      if (status === "upcoming" || status === "dueToday") upcomingCount += 1;
-      if (
-        occurrence.dueDate.getFullYear() === now.getFullYear() &&
-        occurrence.dueDate.getMonth() === now.getMonth() &&
-        status !== "paid" &&
-        status !== "skipped"
-      ) {
-        dueThisMonth += billOccurrenceRemainingAmount(occurrence);
-      }
+  // The open bill's live payments (every cycle) and its cycles — what the Payment history can edit / cancel.
+  const activeBillId = activeRow?.bill.id;
+  const activeOccurrenceId = activeRow?.occurrence?.id;
+  const activePaid = activeRow?.occurrence?.amountPaid;
+  useEffect(() => {
+    let cancelled = false;
+    if (!actions || !activeBillId) return;
+    void Promise.all([actions.listPayments(activeBillId), actions.listOccurrences(activeBillId)])
+      .then(([all, occs]) => {
+        if (cancelled) return;
+        setPayments(all.filter((p) => p.deletedAt == null));
+        setOccurrences(occs);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setPayments([]);
+        setOccurrences([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeBillId, activeOccurrenceId, activePaid, paymentsVersion]);
+
+  const shownPayments = activeBillId ? payments : [];
+  const shownOccurrences = activeBillId ? occurrences : [];
+  const accountName = useCallback((id: string | null | undefined) => (id ? (accounts as Account[]).find((a) => a.id === id)?.name : undefined), [accounts]);
+
+  const cancelPayment = useCallback(async () => {
+    if (!actions || !activeBillId || !cancelTarget || cancelling) return;
+    setCancelling(true);
+    try {
+      const { alreadyReversed } = await actions.cancelBillPayment({ billId: activeBillId, paymentId: cancelTarget.payment.id });
+      setPaymentsVersion((v) => v + 1);
+      setCancelTarget(null);
+      setActiveRow(null);
+      if (alreadyReversed) toast.info("Already cancelled", "This payment was cancelled already — nothing was refunded twice.");
+      else toast.success("Payment cancelled", cancelTarget.payment.transactionId ? "The debit was refunded and that billing cycle is unpaid again." : "That billing cycle is unpaid again.");
+    } catch (e) {
+      setPaymentsVersion((v) => v + 1);
+      toast.error("Couldn't cancel the payment", e instanceof Error ? e.message : "Please try again.");
+    } finally {
+      setCancelling(false);
     }
-    return { dueThisMonth, overdueCount, paidCount, upcomingCount };
-  }, [rows]);
+  }, [actions, activeBillId, cancelTarget, cancelling]);
+
+  // Occurrence-level: every unpaid / part-paid cycle counts once, including an older cycle reopened by a cancelled
+  // payment — the same figures Month Cycle uses (`lib/engines/bill-obligations.ts`). "Paid" is still per bill (its current cycle).
+  const stats = useMemo(() => {
+    const now = new Date();
+    const obligations = billObligationStats(outstandingBillOccurrences(cycles, now), now);
+    const paidCount = rows.filter(({ occurrence }) => occurrence && billOccurrenceStatus(occurrence, now) === "paid").length;
+    return { ...obligations, paidCount };
+  }, [rows, cycles]);
 
   function openAdd() {
     setActiveRow(null);
@@ -163,13 +207,10 @@ export function BillsWorkspace() {
     }
   }
 
-  async function handleMarkPaid(row: BillRow) {
-    if (!actions || !row.occurrence) return;
-    try {
-      await actions.markPaid(row.bill, row.occurrence);
-    } catch (e) {
-      toast.error("Couldn't mark bill as paid", e instanceof Error ? e.message : "Please try again.");
-    }
+  function openPay(payment: PaymentRecord | null, occurrence: BillOccurrence | null = null) {
+    setEditingPayment(payment);
+    setPayOccurrence(occurrence);
+    setPayOpen(true);
   }
 
   async function handleSkip(row: BillRow) {
@@ -224,6 +265,7 @@ export function BillsWorkspace() {
         <div className="flex flex-col gap-2 rounded-3xl border border-expense/20 bg-expense/8 p-4">
           <p className="text-xs font-medium text-muted-foreground">Overdue</p>
           <p className="font-mono text-xl font-semibold tabular-nums text-expense">{stats.overdueCount}</p>
+          {stats.overdueCount > 0 && <p className="font-mono text-xs tabular-nums text-expense">{formatCurrency(stats.overdueAmount)} outstanding</p>}
         </div>
         <div className="flex flex-col gap-2 rounded-3xl border border-success/20 bg-success/8 p-4">
           <p className="text-xs font-medium text-muted-foreground">Paid</p>
@@ -254,7 +296,7 @@ export function BillsWorkspace() {
       )}
 
       <DetailDrawer
-        open={activeRow != null && !editOpen && !deleteOpen}
+        open={activeRow != null && !editOpen && !deleteOpen && !payOpen && cancelTarget == null}
         onOpenChange={(open) => !open && setActiveRow(null)}
         title={activeRow?.bill.name ?? ""}
         description={activeRow ? RECURRENCE_LABEL[activeRow.bill.recurrence] : undefined}
@@ -262,8 +304,8 @@ export function BillsWorkspace() {
           activeRow && (
             <div className="flex flex-col gap-2">
               <div className="flex gap-2">
-                <ClayButton variant="secondary" className="flex-1" onClick={() => handleMarkPaid(activeRow)}>
-                  Mark Paid
+                <ClayButton variant="secondary" className="flex-1" disabled={!activeRow.occurrence || billOccurrenceRemainingAmount(activeRow.occurrence) <= 0 || activeRow.occurrence.isSkipped} onClick={() => openPay(null)}>
+                  Pay…
                 </ClayButton>
                 <ClayButton variant="secondary" className="flex-1" onClick={() => handleSkip(activeRow)}>
                   Skip
@@ -321,6 +363,20 @@ export function BillsWorkspace() {
                     <span className="font-medium text-foreground">{category.name}</span>
                   </div>
                 )}
+                <BillPaymentHistory
+                  currentOccurrenceId={occurrence?.id ?? null}
+                  occurrences={shownOccurrences}
+                  payments={shownPayments}
+                  accountName={accountName}
+                  onEdit={(p, occ) => openPay(p, occ)}
+                  onCancel={(p, occ) => setCancelTarget({ payment: p, occurrence: occ })}
+                  onPay={(occ) => openPay(null, occ)}
+                />
+                {occurrence && occurrence.amountPaid > 0 && !shownPayments.some((p) => p.occurrenceId === occurrence.id) && (
+                  <p className="border-t border-border/60 pt-4 text-xs text-muted-foreground">
+                    Marked paid before payments tracked money — treated as already in your balance. No account was changed.
+                  </p>
+                )}
                 {bill.notes && (
                   <div className="flex flex-col gap-1 border-t border-border/60 pt-4">
                     <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Notes</span>
@@ -331,6 +387,34 @@ export function BillsWorkspace() {
             );
           })()}
       </DetailDrawer>
+
+      {activeRow?.occurrence && (
+        <BillPaymentDialog
+          open={payOpen}
+          onOpenChange={(o) => {
+            setPayOpen(o);
+            if (!o) {
+              setPayOccurrence(null);
+              setPaymentsVersion((v) => v + 1);
+              setActiveRow(null);
+            }
+          }}
+          bill={activeRow.bill}
+          occurrence={payOccurrence ?? activeRow.occurrence}
+          editing={editingPayment}
+        />
+      )}
+
+      {activeRow && (
+        <BillPaymentCancelDialog
+          bill={activeRow.bill}
+          target={cancelTarget}
+          accountName={accountName(cancelTarget?.payment.accountId)}
+          loading={cancelling}
+          onOpenChange={(o) => !o && setCancelTarget(null)}
+          onConfirm={() => void cancelPayment()}
+        />
+      )}
 
       <FormDialog
         open={addOpen}

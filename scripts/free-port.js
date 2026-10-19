@@ -1,3 +1,4 @@
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const { execSync } = require("child_process");
 
 const port = process.env.PORT || 3000;

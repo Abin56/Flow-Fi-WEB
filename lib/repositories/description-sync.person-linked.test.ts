@@ -85,7 +85,7 @@ function setup() {
   const ammaLedger = ledgerFor("amma");
   const deps = {
     // No split/assigned Expense in these scenarios.
-    expenseRepository: { getAll: async () => [], syncDescription: vi.fn(async () => {}) },
+    expenseRepository: { findActiveByTransactionId: async () => null, syncDescription: vi.fn(async () => {}) },
     personRepository: people,
     ledgerRepositoryFor: ledgerFor,
   };

@@ -612,7 +612,8 @@ export function usePeopleActions() {
         return ledgerRepository.addEntryWithTransaction(
           person,
           params,
-          { type: transactionType, accountId, categoryId: category.id, description: person.name },
+          // Cash going out (gave / repaid) must be covered by the chosen account — re-checked inside the write.
+          { type: transactionType, accountId, categoryId: category.id, description: person.name, enforceFunds: transactionType === "expense" },
           transactionRepository,
         );
       },
@@ -631,11 +632,17 @@ export function usePeopleActions() {
       /** Record Payment — one real payment, allocated and written atomically (`PersonPaymentRepository`). */
       recordPersonPayment: async (person: Person, input: RecordPaymentInput) => {
         const category = await createCategoryRepository(uid).getOrCreatePersonalLoanCategory();
-        return createPersonPaymentRepository(uid, person.id, category.id).recordPayment(person, input);
+        // Money I pay out must be covered by the chosen account — re-checked inside the write.
+        return createPersonPaymentRepository(uid, person.id, category.id).recordPayment(person, { ...input, enforceFunds: input.direction === "iPaid" });
       },
       editPersonPayment: async (person: Person, paymentId: string, input: RecordPaymentInput) => {
         const category = await createCategoryRepository(uid).getOrCreatePersonalLoanCategory();
-        return createPersonPaymentRepository(uid, person.id, category.id).editPayment(person, paymentId, input);
+        return createPersonPaymentRepository(uid, person.id, category.id).editPayment(person, paymentId, { ...input, enforceFunds: input.direction === "iPaid" });
+      },
+      /** Date-only edit of one recorded payment — in place, no revert / re-record, no money moves. */
+      editPersonPaymentDate: async (person: Person, paymentId: string, params: { date: Date; expectedDate: Date }) => {
+        const category = await createCategoryRepository(uid).getOrCreatePersonalLoanCategory();
+        await createPersonPaymentRepository(uid, person.id, category.id).editPaymentDate(person, paymentId, params);
       },
       revertPersonPayment: async (person: Person, paymentId: string) => {
         const category = await createCategoryRepository(uid).getOrCreatePersonalLoanCategory();

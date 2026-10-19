@@ -4,6 +4,9 @@ import type { Installment } from "@/lib/models/payment-schedule";
 import {
   emiPaymentOutcome,
   emiQuickOptions,
+  hasPastDue,
+  loanThroughOption,
+  paymentReturnPath,
   loanPaymentFigures,
   loanPaymentSuccessTitle,
   loanQuickOptions,
@@ -159,5 +162,47 @@ describe("paymentCoverage — the pre-save preview's regrouping of the allocator
   it("a partial-only payment has no settled group; ₹5 is kept exactly", async () => {
     const { paymentCoverage } = await import("./record-payment");
     expect(paymentCoverage([{ sequenceNumber: 7, amount: 5, remainingAfter: 995 }])).toEqual({ settled: null, partial: { sequenceNumber: 7, amount: 5, left: 995 } });
+  });
+});
+
+describe("Phase 2 helpers — pay in order, the way back, past-due", () => {
+  const four = () => [installment(1, "2026-02-01", 1000), installment(2, "2026-03-01"), installment(3, "2026-04-01", 400), installment(4, "2026-05-01")];
+
+  it("loanThroughOption: a later pick pays every unpaid installment up to it, in order, at their remaining amounts", () => {
+    const o = loanThroughOption(four(), "installment-4");
+    expect(o).toMatchObject({ choice: "through", amount: 2600, first: 2, last: 4, count: 3, label: "Installments #2–#4" });
+  });
+
+  it("loanThroughOption: the oldest unpaid pick, a paid one, or none → null (it is just 'this installment')", () => {
+    expect(loanThroughOption(four(), "installment-2")).toBeNull();
+    expect(loanThroughOption(four(), "installment-1")).toBeNull();
+    expect(loanThroughOption(four(), null)).toBeNull();
+  });
+
+  it("planLoanPayment('through') is exactly that amount filled in order — never extra principal", () => {
+    const installments = four();
+    const figures = loanPaymentFigures(loan, installments, new Date("2026-03-15T12:00:00Z"));
+    const through = loanThroughOption(installments, "installment-4");
+    expect(planLoanPayment({ loan, figures, choice: "through", customAmount: "", treatment: "reducePrincipal", through })).toEqual({ ok: true, amount: 2600, includeUpcomingInstallments: true, extra: 0 });
+  });
+
+  it("'All remaining installments' replaces 'Pay off remaining loan' and says it is not a closure amount when interest applies", () => {
+    const installments = four();
+    const figures = loanPaymentFigures(loan, installments, new Date("2026-03-15T12:00:00Z"));
+    const withInterest = { ...loan, interest: { ratePercent: 12, period: "yearly", type: "reducing" } } as unknown as Loan;
+    const remaining = loanQuickOptions(withInterest, figures).find((o) => o.choice === "remaining")!;
+    expect(remaining.label).toBe("All remaining installments");
+    expect(remaining.hint).toContain("not a bank closure amount");
+  });
+
+  it("paymentReturnPath reopens the same agreement's payment on the same installment", () => {
+    expect(paymentReturnPath("/loans-installments", "emi-9", "inst-3")).toBe("/loans-installments?agreement=emi-9&pay=1&installment=inst-3");
+    expect(paymentReturnPath("/loans", "loan-1", null)).toBe("/loans?agreement=loan-1&pay=1");
+  });
+
+  it("hasPastDue: something due up to today still owes money", () => {
+    const today = new Date("2026-03-15T12:00:00Z");
+    expect(hasPastDue(four(), today)).toBe(true);
+    expect(hasPastDue([installment(1, "2026-02-01", 1000), installment(2, "2026-04-01")], today)).toBe(false);
   });
 });

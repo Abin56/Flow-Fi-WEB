@@ -48,6 +48,7 @@ import { useLoanPrincipalPrepaid } from "@/hooks/use-loan-principal-prepaid";
 import {
   installmentStatus,
   type Installment,
+  type RecordedEarlier,
   type ScheduleType,
 } from "@/lib/models/payment-schedule";
 import {
@@ -74,6 +75,8 @@ import {
 } from "@/lib/repositories/agreement-deletion";
 import { useAllLoanInstallments, useLoanPersons, useLoans, useTrashedLoans } from "@/hooks/use-loans";
 import { useAuthStore } from "@/store/auth-store";
+import { expectedAllocationForLumpSum, type ReviewedLumpSum } from "@/lib/engines/stale-installment";
+import type { UnsettledPeopleAcknowledgement } from "@/lib/engines/linked-people-readiness";
 import {
   reverseLoanLedgerEntries,
   restoreLoanLedgerEntries,
@@ -430,10 +433,25 @@ export function useLoanActions() {
           idempotencyKey: string;
           includeUpcomingInstallments?: boolean;
           onReamortizing?: () => void;
+          /** Explicit "pay the lender now; People shares stay owed" — required by the write gate while shares are open. */
+          peopleGateAcknowledgement?: UnsettledPeopleAcknowledgement | null;
+          /** Re-check the paying account's balance inside the write — refuses with InsufficientFundsError, nothing saved. */
+          enforceFunds?: boolean;
+          /** "Already paid earlier" — settles the schedule with no account movement (see `recorded-earlier.ts`). */
+          recordedEarlier?: RecordedEarlier | null;
+          expectedFirstInstallmentId?: string | null;
+          /** What the user reviewed — a stale tab whose installments changed is refused (see `StaleInstallmentError`). */
+          expectedAllocation?: { installmentIds: string[]; overflow: number } | null;
+          /** Bulk "already paid earlier": exactly this one installment. */
+          onlyInstallmentId?: string | null;
         },
       ) => {
         const paymentRepository = new LoanAdvancePaymentRepository(db, uid);
         const result = await paymentRepository.record({
+          recordedEarlier: params.recordedEarlier,
+          expectedFirstInstallmentId: params.expectedFirstInstallmentId,
+          expectedAllocation: params.expectedAllocation,
+          onlyInstallmentId: params.onlyInstallmentId,
           loan,
           scheduleInstallments,
           accountId: params.accountId,
@@ -443,6 +461,8 @@ export function useLoanActions() {
           includeUpcomingInstallments: params.includeUpcomingInstallments,
           idempotencyKey: params.idempotencyKey,
           onReamortizing: params.onReamortizing,
+          peopleGateAcknowledgement: params.peopleGateAcknowledgement,
+          enforceFunds: params.enforceFunds,
         });
         // No People-ledger entry: the Loan payment itself lowers the Person's Loan balance.
         return result;
@@ -469,6 +489,7 @@ export function useLoanActions() {
       ) => {
         const paymentRepository = new LoanAdvancePaymentRepository(db, uid);
         return paymentRepository.recordAdditionalDisbursement({
+          enforceFunds: true,
           loan,
           scheduleInstallments,
           accountId: params.accountId,
@@ -481,12 +502,15 @@ export function useLoanActions() {
       // Wraps `planInstallmentSettlement` (port of `InstallmentSettlement.plan`) — fans one entered
       // amount across the oldest unpaid installments, recording one payment per installment touched.
       // `installments` must be sorted oldest-due-first by the caller, same contract as the ported
-      // function itself.
+      // function itself. The caller MUST pass the allocation the user reviewed (exact installments and
+      // amounts, plus any extra principal): it is re-validated inside the payment transaction against fresh
+      // reads, and a stale / substituted / redistributed split is refused with nothing written.
       recordLumpSumSettlement: async (
         loan: Loan,
         installments: Installment[],
-        params: { accountId: string; amount: number; date: Date; note?: string; idempotencyKey: string },
+        params: { accountId: string; amount: number; date: Date; note?: string; idempotencyKey: string; reviewedAllocation: ReviewedLumpSum },
       ) => {
+        const expectedAllocation = expectedAllocationForLumpSum(params.reviewedAllocation, params.amount);
         const paymentRepository = new LoanAdvancePaymentRepository(db, uid);
         const result = await paymentRepository.record({
           loan,
@@ -497,6 +521,7 @@ export function useLoanActions() {
           note: params.note,
           includeUpcomingInstallments: true,
           idempotencyKey: params.idempotencyKey,
+          expectedAllocation,
         });
         // No People-ledger entry: the Loan payment itself lowers the Person's Loan balance.
         return result;

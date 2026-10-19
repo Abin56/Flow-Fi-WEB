@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { ArrowRight, Landmark, TrendingDown } from "lucide-react";
 import { FLAT_INPUT, FormDialog, SectionLabel } from "@/components/finance";
+import { isUnderfunded } from "@/components/finance/payment-source-summary";
 import type { Account } from "@/lib/models/account";
 import type { LoanRow } from "@/features/loans/hooks/use-loans-data";
 import { previewAdditionalDisbursement, previewPrincipalPrepayment } from "@/features/loans/lib/loan-adjustment-preview";
@@ -27,9 +28,14 @@ const money = (value: number) => `₹${value.toLocaleString("en-IN", { maximumFr
 
 export function LoanAdjustmentDialog({ open, onOpenChange, kind, row, accounts, onConfirm }: LoanAdjustmentDialogProps) {
   const [amount, setAmount] = useState("");
-  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
+  // Today in the user's own time zone — `toISOString()` is UTC and showed yesterday before 05:30 IST.
+  const [date, setDate] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  });
   const [note, setNote] = useState("");
-  const [accountId, setAccountId] = useState(() => accounts.find((account) => account.isDefault)?.id ?? accounts[0]?.id ?? "");
+  // The account that pays (or receives) is always the user's explicit choice — never a silent default.
+  const [accountId, setAccountId] = useState("");
   const [idempotencyKey] = useState(generateId);
   const [saving, setSaving] = useState(false);
   const parsed = Number(amount);
@@ -49,11 +55,14 @@ export function LoanAdjustmentDialog({ open, onOpenChange, kind, row, accounts, 
   const copy = isPrepayment ? PAY_EXTRA_PRINCIPAL : additionalAmountCopy(row.direction);
   const movedAmount = isPrepayment ? prepaymentPreview?.transactionAmount ?? 0 : Number.isFinite(parsed) ? parsed : 0;
   const accountAfter = selectedAccount == null ? null : selectedAccount.currentBalance + (moneyIn ? movedAmount : -movedAmount);
+  // Money I lend out must be covered by the chosen account (the write re-checks on the fresh balance).
+  const underfunded = !moneyIn && isUnderfunded(selectedAccount, movedAmount);
 
   async function submit() {
     if (saving) return;
     if (!Number.isFinite(parsed) || parsed <= 0) return toast.error("Invalid amount", "Enter an amount greater than zero.");
     if (!accountId) return toast.error("Choose an account", "Select where the money should move.");
+    if (underfunded) return toast.error("Not enough balance", `${selectedAccount?.name ?? "The chosen account"} can't cover ${money(movedAmount)}. Choose another account or lower the amount.`);
     if (!preview) return;
     setSaving(true);
     try {
@@ -96,7 +105,7 @@ export function LoanAdjustmentDialog({ open, onOpenChange, kind, row, accounts, 
           <label className="space-y-1"><span className="text-xs font-medium text-muted-foreground">{isPrepayment ? "Extra principal" : row.direction === "given" ? "Additional amount I gave" : "Additional amount I received"}</span><input aria-label={isPrepayment ? "Extra principal" : "Additional amount"} type="number" min="0.01" step="0.01" className={FLAT_INPUT} value={amount} onChange={(event) => setAmount(event.target.value)} autoFocus /></label>
           <label className="space-y-1"><span className="text-xs font-medium text-muted-foreground">Date</span><DateInput aria-label="Operation date" className={FLAT_INPUT} value={date} onChange={(event) => setDate(event.target.value)} /></label>
         </div>
-        <label className="space-y-1"><span className="text-xs font-medium text-muted-foreground">{moneyIn ? "Into account" : "From account"}</span><select aria-label="Payment account" className={FLAT_INPUT} value={accountId} onChange={(event) => setAccountId(event.target.value)}><option value="">Select account</option>{accounts.map((account) => <option key={account.id} value={account.id}>{account.name}{account.accountNumberLast4 ? ` ••${account.accountNumberLast4}` : ""}</option>)}</select></label>
+        <label className="space-y-1"><span className="text-xs font-medium text-muted-foreground">{moneyIn ? "Into account" : "From account"}</span><select aria-label="Payment account" className={FLAT_INPUT} value={accountId} onChange={(event) => setAccountId(event.target.value)}><option value="">Select account</option>{accounts.map((account) => <option key={account.id} value={account.id}>{account.name}{account.accountNumberLast4 ? ` ••${account.accountNumberLast4}` : ""}{!moneyIn && account.type !== "card" ? ` · ${money(account.currentBalance)}` : ""}</option>)}</select></label>
         <label className="space-y-1"><span className="text-xs font-medium text-muted-foreground">Note (optional)</span><input className={FLAT_INPUT} value={note} onChange={(event) => setNote(event.target.value)} /></label>
         {preview && <div className="rounded-2xl border border-border bg-muted/25 p-4 text-sm">
           <SectionLabel icon={isPrepayment ? TrendingDown : Landmark}>Preview</SectionLabel>
@@ -110,6 +119,7 @@ export function LoanAdjustmentDialog({ open, onOpenChange, kind, row, accounts, 
           <PreviewRow label="Remaining principal" before={money(preview.principalBefore)} after={money(preview.principalAfter)} />
           {solved && <PreviewRow label={isPrepayment ? "Remaining installments" : "Installment amount"} before={isPrepayment ? String(prepaymentPreview!.installmentCountBefore) : money(disbursementPreview?.currentInstallmentAmount ?? 0)} after={isPrepayment ? String(solved.remainingInstallmentCount) : money(solved.installmentAmount)} />}
           {selectedAccount && accountAfter != null && <PreviewRow label={selectedAccount.name} before={money(selectedAccount.currentBalance)} after={money(accountAfter)} />}
+          {underfunded && <p role="alert" className="mt-3 text-xs font-semibold text-expense">Not enough balance in {selectedAccount?.name} — choose another account or lower the amount.</p>}
           {preview.outcome?.kind === "unsolvable" && <p className="mt-3 text-xs text-warning-foreground">Automatic schedule adjustment is unavailable. The money can still be recorded; update loan terms manually afterward.</p>}
         </div>}
       </div>

@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowUpRight, Building2, CheckCircle2, HandCoins, Lock, LockOpen, Pencil, Trash2, UserRound, Wallet, X } from "lucide-react";
+import { ArrowUpRight, Building2, CheckCircle2, HandCoins, History, Lock, LockOpen, Pencil, Trash2, UserRound, Wallet, X } from "lucide-react";
 import Link from "next/link";
 import { ClayButton } from "@/components/clay/clay-button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -14,6 +14,8 @@ import { InstallmentList } from "@/features/loans/components/payment-rows";
 import type { LoanPaymentHistory } from "@/features/loans/hooks/use-payment-history";
 import type { RecordedPaymentAction } from "@/features/loans/lib/recorded-payments";
 import { additionalAmountCopy } from "@/features/loans/lib/loan-labels";
+import { hasPastDue } from "@/features/loans/lib/record-payment";
+import { useInstallmentPeopleStatus } from "@/features/loans/hooks/use-installment-people-status";
 
 /** Port of `LoanDetailScreen._remainingInterest`. "Loan Amount Left" (the principal counterpart)
  *  now reads `row.outstandingPrincipal` directly instead of a second, locally-recomputed formula —
@@ -38,7 +40,9 @@ interface LoanScheduleDialogProps {
   /** Name of the Account the loan's money moved through when it was created, if any. */
   linkedAccountName?: string | null;
   /** Opens the unified Record Payment surface (installment, partial, advance, extra principal, pay-all). */
-  onRecordPayment: (row: LoanRow) => void;
+  onRecordPayment: (row: LoanRow, installment?: Installment) => void;
+  /** Opens "Record past payments" — installments paid before FlowFi, recorded without moving any account. */
+  onRecordPastPayments?: (row: LoanRow) => void;
   onAdditionalDisbursement: (row: LoanRow) => void;
   onToggleClose: (row: LoanRow) => void;
   /** True while a Close/Reopen write is in flight — blocks a double click. */
@@ -67,7 +71,9 @@ function GoTo({ href, label }: { href: string; label: string }) {
  *  schedule and history. One primary money action (Record Payment); the less common ones sit under "More
  *  payment options"; loan management (Edit/Close/Delete) stays visually quieter. `row` is resolved live by
  *  the parent from Firestore-backed rows, so every persisted change re-renders it in place. */
-export function LoanScheduleDialog({ open, onOpenChange, row, onEdit, onDelete, deleteLabel = "Delete Loan", linkedAccountName, onRecordPayment, onAdditionalDisbursement, onToggleClose, statusBusy = false, history, historyLoading, paymentActions, onViewPayment }: LoanScheduleDialogProps) {
+export function LoanScheduleDialog({ open, onOpenChange, row, onEdit, onDelete, deleteLabel = "Delete Loan", linkedAccountName, onRecordPayment, onRecordPastPayments, onAdditionalDisbursement, onToggleClose, statusBusy = false, history, historyLoading, paymentActions, onViewPayment }: LoanScheduleDialogProps) {
+  // Shared loan: each installment's People side on its row (a loan I gave has no People shares).
+  const peopleStatus = useInstallmentPeopleStatus(row && row.direction !== "given" ? { sourceKind: "loan", source: row.loan, installments: row.installments } : null);
   if (!row) return null;
 
   const totalReceived = row.installments.reduce((sum, i) => sum + i.amountPaid, 0);
@@ -200,8 +206,10 @@ export function LoanScheduleDialog({ open, onOpenChange, row, onEdit, onDelete, 
               total={row.totalInstallments}
               closed={isClosed}
               actions={paymentActions}
-              onPay={() => onRecordPayment(row)}
+              onPay={(i) => onRecordPayment(row, i)}
               onViewPayment={onViewPayment}
+              lent={row.direction === "given"}
+              peopleStatus={peopleStatus}
             />
           </div>
           <div className="border-t border-border px-6 py-5">
@@ -232,6 +240,17 @@ export function LoanScheduleDialog({ open, onOpenChange, row, onEdit, onDelete, 
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
+              {onRecordPastPayments && !isClosed && hasPastDue(row.installments) && (
+                <ClayButton
+                  variant="secondary"
+                  className="gap-1.5 rounded-[6px] border-border-strong font-medium text-foreground hover:bg-card"
+                  onClick={() => onRecordPastPayments(row)}
+                  title="Installments paid before you used FlowFi — recorded without changing any account balance"
+                >
+                  <History className="size-3.5" />
+                  {lent ? "Record past repayments" : "Record past payments"}
+                </ClayButton>
+              )}
               <ClayButton
                 variant="secondary"
                 className="gap-1.5 rounded-[6px] border-border-strong font-medium text-foreground hover:bg-card"

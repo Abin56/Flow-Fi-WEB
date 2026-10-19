@@ -144,7 +144,10 @@ export function ExtraAllocationEditor({
 
   const update = (key: string, patch: Partial<AllocationDraft>) => onChange(drafts.map((x) => (x.key === key ? { ...x, ...patch } : x)));
   const kindsTaken = (except: string) => new Set(drafts.filter((d) => d.key !== except).map((d) => d.kind));
-  const offered = order.filter((k) => addable.includes(k));
+  // Nothing left to assign → nothing to add (a new row would start empty and invalid). Lower a row's amount first.
+  const hasLeft = plan.left > 0.005;
+  const canAdd = order.filter((k) => addable.includes(k));
+  const offered = hasLeft ? canAdd : [];
 
   return (
     <div className="overflow-hidden rounded-[10px] border border-border bg-card">
@@ -178,6 +181,11 @@ export function ExtraAllocationEditor({
               </button>
             ))}
           </div>
+        )}
+        {offered.length === 0 && canAdd.length > 0 && plan.status === "full" && drafts.length > 0 && (
+          <p className="text-[11.5px] text-foreground/70" data-testid="rp-add-hint">
+            To split it, lower an amount first.
+          </p>
         )}
       </div>
     </div>

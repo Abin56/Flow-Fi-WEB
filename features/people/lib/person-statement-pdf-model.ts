@@ -5,7 +5,7 @@
  * reading engine values.
  */
 
-import { buildLedgerRows, type LedgerRow } from "@/features/people/lib/person-ledger-rows";
+import { buildLedgerRows, type LedgerRow, type PaymentRecord } from "@/features/people/lib/person-ledger-rows";
 import {
   allocationLine,
   cyclePosition,
@@ -28,13 +28,15 @@ import {
   type SettlementStatusTone,
   type SettlementTone,
 } from "@/features/people/lib/settlement-presentation";
-import { cycleContaining, formatCycleLabel, formatStatementDate, type PersonCycleStatement } from "@/lib/engines/person-cycle-statement";
+import { cycleContaining, formatCycleLabel, formatStatementDate, type PersonCycleStatement, type StatementRow } from "@/lib/engines/person-cycle-statement";
 import { money } from "@/lib/engines/person-cycle-statement-share";
 import type { LedgerEntry } from "@/lib/models/person";
 import { splitAllocation, splitCountLabel, type SplitAllocation } from "@/lib/split/split-allocation";
 import type { StatementChip } from "@/features/people/lib/statement-palette";
 
 export interface StatementViewRow {
+  /** The statement row key (`ledger:{id}`, `emi-inst:{id}` …) — what a payment's allocation points at. */
+  key: string;
   no: string;
   date: string;
   title: string;
@@ -92,6 +94,40 @@ export interface StatementViewRow {
   fromCycle?: string;
   /** "August 2026" — the month heading the row is grouped under when a statement spans months. */
   month: string;
+  /** Who still owes this row's Remaining — the person ("them"), the owner, or neither (no settlement state). */
+  owedBy: "them" | "owner" | null;
+  /** Remaining as a number (engine value read at the statement date), for the section subtotals; null without a state. */
+  remainingValue: number | null;
+  /**
+   * How long a still-open item has been open at the statement date ("Open 86 days") — a fact from its own date, never
+   * a due date (splits have none). The tone deepens with age: fresh < 30 days, aging < 60, old after. Null when the
+   * item is paid, postponed, not yet dated, or carries no settlement state.
+   */
+  age: { label: string; tone: "fresh" | "aging" | "old" } | null;
+}
+
+/**
+ * The table's sum, so its Remaining column adds up to the answer on the page: each section's still-open subtotal,
+ * anything not tied to one item (an unlinked payment, an adjustment), and the balance due they make.
+ */
+export interface StatementTotals {
+  /** "Still open from earlier cycles" — under the brought-forward rows; null without any, or when it is the only figure. */
+  carried: string | null;
+  /** "Still open from this cycle" — under this cycle's rows; null without any, or when it is the only figure. */
+  current: string | null;
+  /** Payments / adjustments not tied to one item: reduce ("−") or add to ("+") the items' sum. */
+  other: { label: string; value: string; op: "+" | "−" } | null;
+  /** The closing line — always the engine's balance. */
+  total: { label: string; value: string };
+}
+
+/** A postponement agreed on one obligation (web-only `paymentDeferrals`) — when payment is now expected, never an amount. */
+export interface StatementDeferral {
+  status: "postponed" | "expectedNow" | "lapsed";
+  /** The cycle payment is now expected in ("Nov"). */
+  name: string;
+  /** The cycle the obligation was first due in ("Sep"). */
+  from: string;
 }
 
 export interface StatementViewLine {
@@ -114,11 +150,17 @@ export interface StatementViewPayment {
   amount: string;
   inbound: boolean;
   advance: boolean;
-  /** One line for a single-row payment; null when the payment was split across obligations. */
+  /** One line for a payment not tied to a listed item (an advance, an unlinked payment); null when `applied` says it. */
   single: string | null;
-  applied: { label: string; amount: string }[];
+  /**
+   * Where the money went, item by item, in the table's order: `ref` is the item's # in the table, `date` its date,
+   * `note` what that payment left on it ("cleared" / "₹21.82 left").
+   */
+  applied: { ref: string | null; date: string | null; label: string; amount: string; note: string | null }[];
   appliedTotal: string | null;
   held: string | null;
+  /** A quiet qualifier: "Received earlier · recorded later" for a receipt entered after the fact. */
+  note: string | null;
 }
 
 export interface StatementView {
@@ -158,6 +200,16 @@ export interface StatementView {
    * label uses figures the statement already shows. Null when nothing was due or the balance changed sides.
    */
   settleProgress: { ratio: number; label: string } | null;
+  /** The Previous balance band's line: "13 items open on 01 Oct". */
+  previousNote: string;
+  /** Items still open at the statement date (carried + this cycle). */
+  openCount: number;
+  /**
+   * The table's closing sum — earlier cycles' open amount + this cycle's + anything not tied to an item = the
+   * balance due — so the Remaining column adds up to the answer on the page. Null when rows run both ways (some
+   * owed by the person, some by the owner): one column can't add those.
+   */
+  totals: StatementTotals | null;
 }
 
 export interface StatementViewOptions {
@@ -175,6 +227,8 @@ export interface StatementViewOptions {
    * cell is named, never "You"; without a name it falls back to `OWNER_FALLBACK`.
    */
   ownerName?: string | null;
+  /** The live postponement on an obligation (Postpone payment), by statement row key — wording only, never a figure. */
+  deferralFor?: (rowKey: string, rowDate: Date) => StatementDeferral | null;
 }
 
 /** Section and empty-state copy shared by the PDF and the Share preview (plain words for the person reading it). */
@@ -216,7 +270,60 @@ export function ownerShortName(ownerName: string): string {
   return ownerName === OWNER_FALLBACK ? ownerName : ownerName.trim().split(/\s+/)[0] || ownerName;
 }
 
-function viewRow(row: LedgerRow, n: number, personName: string, lookups: SettlementLookups, now: Date, total: number, personId: string, ownerName: string): StatementViewRow {
+const round2 = (n: number) => Math.round(n * 100) / 100;
+const dayOf = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+const stateFor = (amount: number, remaining: number): LedgerRow["state"] => (remaining < SAME ? "settled" : remaining < amount - SAME ? "partial" : "open");
+
+/**
+ * The row read at the statement date: payments dated after it are taken back out of Paid / Remaining (and
+ * returned as `later`, for a note), so a closed cycle's rows agree with its own summary. Engine values only —
+ * the row's remaining plus the later payments' own amounts, capped at the row amount.
+ */
+function rowAt(row: LedgerRow, asOfIdx: number): { row: LedgerRow; later: PaymentRecord[] } {
+  if (row.state == null || row.remaining == null) return { row, later: [] };
+  const later = row.payments.filter((p) => dayOf(p.date) > asOfIdx);
+  if (later.length === 0) return { row, later };
+  const remaining = Math.min(row.amount, round2(row.remaining + later.reduce((s, p) => s + p.amount, 0)));
+  const state = stateFor(row.amount, remaining);
+  return {
+    row: { ...row, state, remaining: state === "settled" ? 0 : remaining, paid: round2(row.amount - remaining), payments: row.payments.filter((p) => dayOf(p.date) <= asOfIdx) },
+    later,
+  };
+}
+
+/** What was still open on an obligation when the cycle began (its remaining plus everything paid on it since). */
+function openAtStart(row: LedgerRow, startIdx: number): number {
+  if (row.remaining == null) return 0;
+  return Math.min(row.amount, round2(row.remaining + row.payments.filter((p) => dayOf(p.date) >= startIdx).reduce((s, p) => s + p.amount, 0)));
+}
+
+/** Postponement wording: the status a moved obligation shows, and the note under it. */
+function deferredStatus(row: LedgerRow, d: StatementDeferral): { label: string; note: string; chip: StatementChip } | null {
+  if (row.state === "settled") return null;
+  if (d.status === "postponed") {
+    return row.state === "partial"
+      ? { label: `Rest in ${d.name} cycle`, note: `Part paid · rest moved from ${d.from} cycle`, chip: "upcoming" }
+      : { label: `Moved to ${d.name} cycle`, note: `First due in ${d.from} cycle`, chip: "upcoming" };
+  }
+  if (d.status === "lapsed") return { label: "Overdue", note: `Was promised for ${d.name} cycle`, chip: "overdue" };
+  return { label: row.state === "partial" ? "Partially paid" : "Payment due", note: `Moved here from ${d.from} cycle`, chip: row.state === "partial" ? "partial" : "due" };
+}
+
+function viewRow(
+  source: LedgerRow,
+  n: number,
+  personName: string,
+  lookups: SettlementLookups,
+  now: Date,
+  total: number,
+  personId: string,
+  ownerName: string,
+  asOfIdx: number,
+  deferral: StatementDeferral | null,
+  /** The page's "as of" day — what an item's age is counted to. */
+  ageIdx: number = asOfIdx,
+): StatementViewRow {
+  const { row, later } = rowAt(source, asOfIdx);
   const kind = settlementKind(row, lookups);
   const ctx = kind === "split" || kind === "assigned" ? splitContext(row, lookups, personId) : null;
   const ownerShort = ownerShortName(ownerName);
@@ -226,11 +333,21 @@ function viewRow(row: LedgerRow, n: number, personName: string, lookups: Settlem
   const allocation = kind === "split" || kind === "assigned" ? splitAllocation(linkedExpense(row, lookups), personId, ownerName) : null;
   // The original total earns a column only when it says something new — it differs from the amount this row tracks.
   const showPurchase = allocation != null && Math.abs(allocation.original - row.amount) >= SAME;
-  const label = STATUS_WORDS[status.label] ?? status.label;
+  const moved = deferral ? deferredStatus(row, deferral) : null;
+  const label = moved?.label ?? STATUS_WORDS[status.label] ?? status.label;
   const amountName = amountLabel(row.amount, allocation, personName, ownerName);
   const relation = relationLine(row, kind, personName, money, ownerShort);
   const typeLabel = kindLabel(kind, personName, ownerShort);
+  // When it was paid — the last payment up to the statement date, unless its date was never known.
+  const dateOf = (p: PaymentRecord) => (p.entryId != null && lookups.entriesById.get(p.entryId)?.receivedDateKnown === false ? null : formatStatementDate(p.date));
+  const last = row.payments.length > 0 ? row.payments[row.payments.length - 1] : null;
+  const paidNote = last == null ? "" : row.state === "settled" ? `Cleared ${dateOf(last) ?? "· date not known"}` : row.state === "partial" ? `Last paid ${dateOf(last) ?? "· date not known"}` : "";
+  const laterNote = later.length ? `${money(round2(later.reduce((s, p) => s + p.amount, 0)))} paid later · ${dateOf(later[later.length - 1]) ?? "date not known"}` : "";
+  // "Amma owes Abin ₹70" / "From Amma" only restate the direction and the Paid / Remaining columns.
+  const baseNote = status.tone === "upcoming" || status.tone === "neutral" || kind === "advanceApplied" ? (status.detail ?? "") : "";
+  const statusNote = [moved?.note ?? baseNote, moved ? "" : paidNote, laterNote].filter(Boolean).join(" · ");
   return {
+    key: row.key,
     no: String(n).padStart(Math.max(2, String(total).length), "0"),
     date: formatStatementDate(row.date, true),
     title: settlementTitle(row, kind, personName),
@@ -248,15 +365,26 @@ function viewRow(row: LedgerRow, n: number, personName: string, lookups: Settlem
     purchase: showPurchase ? money(allocation.original) : null,
     purchaseNote: showPurchase ? splitCountLabel(allocation) : null,
     shareLabel: showPurchase ? amountName : null,
-    chip: kind === "advance" || kind === "advanceApplied" ? "advance" : CHIP[status.tone],
-    // "Amma owes Abin ₹70" / "From Amma" only restate the direction and the Paid / Remaining columns.
-    statusNote: status.tone === "upcoming" || status.tone === "neutral" || kind === "advanceApplied" ? (status.detail ?? "") : "",
+    chip: moved?.chip ?? (kind === "advance" || kind === "advanceApplied" ? "advance" : CHIP[status.tone]),
+    statusNote,
     metaLine: metaLine(row, kind, typeLabel, relation, personName.split(" ")[0], ownerShort),
     progress: row.state === "partial" && row.amount > SAME ? clamp01(1 - (row.remaining ?? 0) / row.amount) : null,
     splitNote: ctx ? `${splitContextLine(ctx, money)} · ${personName.split(" ")[0]}'s share ${money(ctx.personShare ?? row.amount)}` : null,
     allocation,
     month: MONTH.format(row.date),
+    owedBy: row.state == null ? null : row.direction === "theyOwe" ? "them" : row.direction === "iOwe" ? "owner" : null,
+    remainingValue: row.state == null ? null : (row.remaining ?? 0),
+    age: openAge(row, kind, ageIdx, moved != null),
   };
+}
+
+/** "Open 86 days" for a still-open item, counted from its own date to the statement date (see `StatementViewRow.age`). */
+function openAge(row: LedgerRow, kind: SettlementKind, ageIdx: number, moved: boolean): StatementViewRow["age"] {
+  if (moved || isPayment(kind) || (row.state !== "open" && row.state !== "partial")) return null;
+  const days = Math.round((ageIdx - dayOf(row.date)) / 86_400_000);
+  if (days < 0) return null;
+  const label = days === 0 ? "Added today" : `Open ${days} ${days === 1 ? "day" : "days"}`;
+  return { label, tone: days >= 60 ? "old" : days >= 30 ? "aging" : "fresh" };
 }
 
 /**
@@ -355,22 +483,33 @@ export function statementView(statement: PersonCycleStatement, options: Statemen
   const first = name.split(" ")[0];
   const pos = cyclePosition(statement, name);
 
-  // Oldest first reads as a statement; payments against a listed obligation are that row's "Paid".
-  const ledgerRows = buildLedgerRows({ statement, history: options.history ?? statement, entries: options.entries ?? [], pending: [], now }).reverse();
-  // Obligations dated before this cycle that are still open — where the previous pending comes from.
-  const start = new Date(statement.cycle.start.getFullYear(), statement.cycle.start.getMonth(), statement.cycle.start.getDate()).getTime();
+  // The rows are read at the cycle's end — the same cut-off as the summary — so a closed cycle's rows agree with
+  // its own balance: a payment made after it is a note on the row ("paid later"), never a figure. The page says
+  // "as of" today while the cycle is running, its last day once it has closed.
+  const start = dayOf(statement.cycle.start);
+  const asOfIdx = dayOf(statement.cycle.end);
+  const asOfDate = dayOf(now) > asOfIdx ? statement.cycle.end : now;
+  const deferralFor = options.deferralFor ?? (() => null);
+
+  // Transactions are what is owed; a payment is listed once, in Payment history, and shows on the items it paid
+  // as their "Paid". Oldest first reads as a statement.
+  const ledgerRows = buildLedgerRows({ statement, history: options.history ?? statement, entries: options.entries ?? [], pending: [], now })
+    .filter((r) => r.statementRow?.kind !== "settlement")
+    .reverse();
+  // Everything still open when the cycle began — the items the Previous balance is made of — kept on the
+  // statement even once paid this cycle, so the brought-forward list always adds up to the Previous balance.
   const carriedRows = options.history
     ? buildLedgerRows({ statement: options.history, entries: options.entries ?? [], pending: [], now })
-        .filter((r) => r.statementRow?.kind === "obligation" && r.date.getTime() < start && (r.state === "open" || r.state === "partial"))
+        .filter((r) => r.statementRow?.kind === "obligation" && dayOf(r.date) < start && r.state != null && openAtStart(r, start) >= SAME)
         .reverse()
     : [];
   const total = carriedRows.length + ledgerRows.length;
   const carriedView = carriedRows.map((r, i) => ({
-    ...viewRow(r, i + 1, name, lookups, now, total, statement.personId, owner),
+    ...viewRow(r, i + 1, name, lookups, now, total, statement.personId, owner, asOfIdx, deferralFor(r.key, r.date), dayOf(asOfDate)),
     carried: true,
     fromCycle: `${formatCycleLabel(cycleContaining(r.date, options.cycleStartDay), false)} cycle`,
   }));
-  const listed = ledgerRows.map((r, i) => viewRow(r, carriedRows.length + i + 1, name, lookups, now, total, statement.personId, owner));
+  const listed = ledgerRows.map((r, i) => viewRow(r, carriedRows.length + i + 1, name, lookups, now, total, statement.personId, owner, asOfIdx, deferralFor(r.key, r.date), dayOf(asOfDate)));
   // When every amount listed is the person's own share, the column header says so once ("Shambu's share") and the
   // per-row caption goes; any other kind of amount keeps the plain "Amount" header and its captions.
   const amounts = [...carriedView, ...listed].filter((r) => r.original);
@@ -409,25 +548,78 @@ export function statementView(statement: PersonCycleStatement, options: Statemen
   } else for (const l of reconciliation) l.op = null;
   const receivedApplied = line("received")?.value ?? 0;
 
-  const payments: StatementViewPayment[] = paymentGroups(statement).map((g) => {
-    const head = g[0];
-    const entryId = head.key.startsWith("ledger:") ? head.key.slice("ledger:".length) : null;
-    const cash = g.filter((r) => r.category !== "advanceApplied");
-    const applied = g.filter((r) => r.category !== "advance");
-    const held = g.filter((r) => r.category === "advance").reduce((s, r) => s + r.amount, 0);
-    return {
-      date: formatStatementDate(head.date, true),
-      label: paymentGroupLabel(g, name, ownerShort),
-      account: head.category === "advanceApplied" ? null : account(entryId),
-      amount: money(g.length > 1 ? cash.reduce((s, r) => s + r.amount, 0) : head.amount),
-      inbound: isInboundPayment(head),
-      advance: head.category === "advance" || head.category === "advanceApplied",
-      single: g.length === 1 ? allocationLine(head, money) : null,
-      applied: g.length > 1 ? applied.map((r) => ({ label: r.settles?.title ?? "Overall balance", amount: money(r.amount) })) : [],
-      appliedTotal: g.length > 1 ? money(applied.reduce((s, r) => s + r.amount, 0)) : null,
-      held: g.length > 1 && held > 0 ? money(held) : null,
-    };
-  });
+  // Each payment's allocation points at the item it paid — by its # and date in the table, so two items with the
+  // same name ("KERALA STATE BEVERAGES" ×3) are never confused — and is listed in the table's order.
+  const byKey = new Map([...carried, ...rows].map((r) => [r.key, r]));
+  const entryOf = (r: StatementRow) => (r.key.startsWith("ledger:") ? lookups.entriesById.get(r.key.slice("ledger:".length)) : undefined);
+  const payments: StatementViewPayment[] = paymentGroups(statement)
+    .reverse()
+    .map((g) => {
+      const head = g[0];
+      const entryId = head.key.startsWith("ledger:") ? head.key.slice("ledger:".length) : null;
+      const cash = g.filter((r) => r.category !== "advanceApplied");
+      const linked = g.filter((r) => r.category !== "advance" && r.settles != null);
+      const applied = g.filter((r) => r.category !== "advance");
+      const held = g.filter((r) => r.category === "advance").reduce((s, r) => s + r.amount, 0);
+      const item = (r: StatementRow) => (r.settlesKey ? byKey.get(r.settlesKey) : undefined);
+      const order = (r: StatementRow) => Number(item(r)?.no ?? Number.MAX_SAFE_INTEGER);
+      const entry = entryOf(head);
+      // A lone payment against one item is said by its allocation line; only an advance / unlinked payment keeps a sentence.
+      const listAll = g.length > 1 || linked.length === 1;
+      return {
+        date: entry?.receivedDateKnown === false ? "Date not known" : formatStatementDate(head.date, true),
+        label: paymentGroupLabel(g, name, ownerShort),
+        account: head.category === "advanceApplied" ? null : account(entryId),
+        amount: money(g.length > 1 ? cash.reduce((s, r) => s + r.amount, 0) : head.amount),
+        inbound: isInboundPayment(head),
+        advance: head.category === "advance" || head.category === "advanceApplied",
+        single: listAll ? null : allocationLine(head, money),
+        applied: listAll
+          ? [...applied]
+              .sort((a, b) => order(a) - order(b))
+              .map((r) => {
+                const it = item(r);
+                const left = r.settles?.remainingAfter ?? 0;
+                return {
+                  ref: it?.no ?? null,
+                  date: it ? statementDate(statement, it.date).day : null,
+                  label: r.settles?.title ?? "Overall balance",
+                  amount: money(r.amount),
+                  note: r.settles ? (left >= SAME ? `${money(left)} left` : "cleared") : null,
+                };
+              })
+          : [],
+        appliedTotal: applied.length > 1 ? money(applied.reduce((s, r) => s + r.amount, 0)) : null,
+        held: g.length > 1 && held > 0 ? money(held) : null,
+        note: entry?.recordedEarlier === true ? "Received earlier · recorded later" : null,
+      };
+    });
+
+  // The table's closing sum, read in the balance's direction: each section's open items, then anything not tied to
+  // one item (an unlinked payment, an adjustment, an opening balance without items), equal to the balance due.
+  const listedAll = [...carried, ...rows];
+  const sign = statement.direction === "iOwe" ? -1 : 1;
+  const mixed = listedAll.some((r) => (r.remainingValue ?? 0) >= SAME && r.owedBy != null && (r.owedBy === "them" ? 1 : -1) !== sign);
+  const openOf = (list: StatementViewRow[]) => round2(list.reduce((s, r) => s + (r.remainingValue ?? 0), 0));
+  const carriedOpen = openOf(carried);
+  const currentOpen = openOf(rows);
+  const other = round2(statement.amount - carriedOpen - currentOpen);
+  const hasOther = Math.abs(other) >= SAME;
+  // A section's subtotal is drawn only beside another figure — alone, it would just restate the closing line. And
+  // the closing line itself only when it sums something, or Payment history stands between the table and the
+  // Ending balance; otherwise the Ending balance right under the table already says it.
+  const sumsSomething = (carried.length > 0 && rows.length > 0) || hasOther;
+  const totals: StatementTotals | null =
+    mixed || listedAll.length === 0 || (!sumsSomething && payments.length === 0)
+      ? null
+      : {
+          carried: carried.length && (rows.length || hasOther) ? money(carriedOpen) : null,
+          current: rows.length && (carried.length || hasOther) ? money(currentOpen) : null,
+          other: hasOther ? { label: "Payments & adjustments not tied to one item", value: money(Math.abs(other)), op: other < 0 ? "−" : "+" } : null,
+          total: { label: statement.direction === "settled" ? "Settled" : "Balance due", value: money(statement.amount) },
+        };
+  const openCount = listedAll.filter((r) => (r.remainingValue ?? 0) >= SAME).length;
+  const carriedOpenAtStart = carriedRows.length;
 
   return {
     personName: name,
@@ -454,7 +646,7 @@ export function statementView(statement: PersonCycleStatement, options: Statemen
     payments,
     totalReceived: pos.cashReceived > 0 ? money(pos.cashReceived) : null,
     totalPaid: pos.cashPaid > 0 ? money(pos.cashPaid) : null,
-    asOf: formatStatementDate(now, true),
+    asOf: formatStatementDate(asOfDate, true),
     currentPending: statement.currentPending,
     amountHeader,
     settleProgress:
@@ -463,5 +655,11 @@ export function statementView(statement: PersonCycleStatement, options: Statemen
         : statement.direction === "settled"
           ? { ratio: 1, label: "Fully settled" }
           : { ratio: clamp01(1 - statement.amount / Math.abs(totalDue)), label: `${money(statement.amount)} of ${money(Math.abs(totalDue))} still to settle` },
+    previousNote:
+      carriedOpenAtStart > 0
+        ? `${carriedOpenAtStart} ${carriedOpenAtStart === 1 ? "item" : "items"} open on ${formatStatementDate(statement.cycle.start)} · listed below by cycle`
+        : STATEMENT_COPY.carried.note,
+    openCount,
+    totals,
   };
 }

@@ -44,3 +44,34 @@ export function usePaymentDeferralActions() {
     [uid],
   );
 }
+
+/** Several people's deferrals, LIVE, keyed by person id — e.g. everyone sharing one Loan / EMI installment. */
+export function usePeoplePaymentDeferrals(personIds: readonly string[]) {
+  const uid = useAuthStore((s) => s.user?.uid);
+  const ids = [...new Set(personIds)].sort();
+  const idsKey = ids.join(",");
+  const query = useFirestoreWatch<Record<string, PersonPaymentDeferral[]>>({
+    queryKey: ["people-payment-deferrals-many", uid, idsKey] as const,
+    enabled: !!uid && ids.length > 0,
+    hookName: "usePeoplePaymentDeferrals",
+    emptyValue: {},
+    deps: [uid, idsKey],
+    subscribe: (onData, onError) => {
+      if (!uid) return () => {};
+      const byPerson: Record<string, PersonPaymentDeferral[]> = {};
+      const unsubs = ids.map((personId) =>
+        onSnapshot(
+          createPaymentDeferralsCollection(uid, personId),
+          (snapshot) => {
+            byPerson[personId] = snapshot.docs.map((d) => d.data());
+            // Publish once everyone has loaded, so "nobody postponed" is never a loading artefact.
+            if (ids.every((id) => byPerson[id] != null)) onData({ ...byPerson });
+          },
+          onError,
+        ),
+      );
+      return () => unsubs.forEach((u) => u());
+    },
+  });
+  return { deferralsByPerson: query.data ?? {}, isLoading: ids.length > 0 && query.data === undefined };
+}

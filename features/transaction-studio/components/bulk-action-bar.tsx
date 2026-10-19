@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { CheckCheck, Download, Tag, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -13,6 +13,7 @@ import type { Transaction } from "@/lib/models/transaction";
 import type { TransactionRepository } from "@/lib/repositories/transaction-repository";
 import type { StagedRecordPatch, TransactionStudioMutations } from "@/hooks/use-transaction-studio-mutations";
 import { toast } from "@/store/toast-store";
+import { startOperation } from "@/store/operation-progress-store";
 import { useTransactionActions } from "@/features/transactions/hooks/use-transactions-data";
 import { ACTION_GROUPS, ACTION_META, actionToAxesPatch } from "../lib/action-metadata";
 import { applyToCommittedRows, describeBulkFailures, partitionRowsByCommitStatus, resolveCategoryId, type BulkRowFailure } from "../lib/committed-transaction-sync";
@@ -68,6 +69,9 @@ export function BulkActionBar({
 }) {
   const transactionActions = useTransactionActions();
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+  // Synchronous guard (state updates are async) so a second click can't start the same delete again while one is running.
+  const deletingRef = useRef(false);
+  const [deleting, setDeleting] = useState(false);
   const count = selectedRowIds.size;
   const committedTransactionsById = useMemo(() => new Map(liveTransactions.map((t) => [t.id, t])), [liveTransactions]);
   if (count === 0) return null;
@@ -210,8 +214,28 @@ export function BulkActionBar({
     }
   }
 
+  /** Shows progress for the whole delete (one write per row, so it can take a while) and blocks a repeat start. */
   async function handleConfirmDelete() {
+    if (deletingRef.current) return;
+    deletingRef.current = true;
+    setDeleting(true);
     setConfirmDeleteOpen(false);
+    const op = startOperation({
+      label: count === 1 ? "Deleting transaction" : `Deleting ${count} transactions`,
+      errorLabel: "Couldn't delete transactions",
+    });
+    try {
+      op.stage("submit", count === 1 ? "Removing the row and reversing its effect" : `Removing ${count} rows and reversing their effects`);
+      await deleteSelectedRows();
+    } finally {
+      // The result is reported by the toasts below (success, or the per-row failures with the rows left selected).
+      op.dismiss();
+      deletingRef.current = false;
+      setDeleting(false);
+    }
+  }
+
+  async function deleteSelectedRows() {
     let succeededCount = 0;
     const failures: BulkRowFailure[] = [];
 
@@ -319,7 +343,7 @@ export function BulkActionBar({
         >
           <Download /> Export
         </Button>
-        <Button variant="destructive" size="sm" onClick={() => setConfirmDeleteOpen(true)}>
+        <Button variant="destructive" size="sm" disabled={deleting} onClick={() => setConfirmDeleteOpen(true)}>
           <Trash2 /> Delete
         </Button>
 
@@ -347,7 +371,7 @@ export function BulkActionBar({
             <Button variant="outline" onClick={() => setConfirmDeleteOpen(false)}>
               Cancel
             </Button>
-            <Button variant="destructive" onClick={() => void handleConfirmDelete()}>
+            <Button variant="destructive" disabled={deleting} onClick={() => void handleConfirmDelete()}>
               Delete {count} row{count === 1 ? "" : "s"}
             </Button>
           </DialogFooter>

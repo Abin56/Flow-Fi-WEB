@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Bell, Check, ChevronRight, Copy, Download, EyeOff, Eye, Landmark, Pencil, Receipt, RefreshCcw, Star, Trash2, TrendingUp, Wallet, X } from "lucide-react";
+import { Bell, Check, ChevronRight, Copy, Download, EyeOff, Eye, Info, Landmark, Pencil, Receipt, RefreshCcw, Star, Trash2, TrendingUp, Wallet, X } from "lucide-react";
 import { motion, useReducedMotion } from "framer-motion";
 import { useState } from "react";
 import { Line, LineChart, ResponsiveContainer } from "recharts";
@@ -57,10 +57,13 @@ export function AccountOverviewPanel({
   onEdit,
   onDelete,
   onViewTransactions,
+  onExplainBalance,
   linkedFunds,
 }: {
   account: AccountOverviewItem;
   onClose: () => void;
+  /** Opens the balance breakdown for this account. */
+  onExplainBalance?: () => void;
   /** Opens the central Transactions workspace filtered to this account. */
   onViewTransactions?: () => void;
   onEdit?: () => void;
@@ -121,7 +124,22 @@ export function AccountOverviewPanel({
         </div>
 
         <p className="relative mt-4 text-[11px] font-semibold tracking-[0.06em] uppercase opacity-85">{account.balanceLabel}</p>
-        <p className="relative text-[30px] leading-tight font-bold tracking-tight tabular-nums">{formatCurrency(account.balance)}</p>
+        {onExplainBalance ? (
+          <button
+            type="button"
+            onClick={onExplainBalance}
+            aria-label={`Explain ${account.name} balance`}
+            title="See how this is calculated"
+            className="group/explain relative flex w-fit items-center gap-2 rounded-[8px] text-left outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+          >
+            <span className="text-[30px] leading-tight font-bold tracking-tight tabular-nums underline decoration-current/0 decoration-dashed underline-offset-6 transition-[text-decoration-color] group-hover/explain:decoration-current/50">
+              {formatCurrency(account.balance)}
+            </span>
+            <Info className="size-4 opacity-70 transition-opacity group-hover/explain:opacity-100" />
+          </button>
+        ) : (
+          <p className="relative text-[30px] leading-tight font-bold tracking-tight tabular-nums">{formatCurrency(account.balance)}</p>
+        )}
         {account.sparkline && (
           <div className="relative mt-2 h-10">
             <ResponsiveContainer width="100%" height="100%">

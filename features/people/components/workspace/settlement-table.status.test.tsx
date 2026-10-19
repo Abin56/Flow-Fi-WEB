@@ -7,7 +7,7 @@ import { buildPersonCycleStatement, cycleContaining } from "@/lib/engines/person
 import { deferralView, planDeferralWrite, type DeferralView } from "@/lib/engines/person-payment-deferral";
 import type { LedgerEntry, LedgerEntryType } from "@/lib/models/person";
 import { DeferralContext, type DeferralContextValue } from "./payment-deferral";
-import { completionLabel, SettlementTable, tableStatus, viewOf } from "./settlement-table";
+import { completionLabel, receivedEarlierStatus, SettlementTable, tableStatus, viewOf } from "./settlement-table";
 
 /**
  * The collapsed row's status at a glance: paid rows are struck through and say "Received ₹375", unpaid rows
@@ -83,7 +83,7 @@ describe("table status wording", () => {
     const views = new Map(rowsFor(ENTRIES).map((r) => [r.key, viewOf(r, "SHAMBU", lookupsFor(ENTRIES))]));
     expect(views.get("ledger:paid")!.status.label).toBe("Received ₹375");
     expect(views.get("ledger:part")!.status.label).toBe("Got ₹200 · ₹175 left");
-    expect(views.get("ledger:open")!.status.label).toBe("₹2,000 still to pay");
+    expect(views.get("ledger:open")!.status.label).toBe("₹2,000 to receive");
     expect(views.get("ledger:open")!.status.detail).toBe("SHAMBU owes you ₹2,000");
     const owed = { ...rowsFor(ENTRIES).find((r) => r.key === "ledger:open")!, direction: "iOwe" as const };
     expect(tableStatus(owed, "moneyReceived", "SHAMBU").label).toBe("You need to pay ₹2,000");
@@ -110,7 +110,7 @@ describe("collapsed row treatments", () => {
     expect(within(phone).queryByText("Fully paid")).toBeNull();
     // The received row itself sits on the neutral surface; only Status carries the success colour.
     expect(tableRow("ledger:paid").className).not.toMatch(/bg-success/);
-    const left = within(tableRow("ledger:open")).getByText("₹2,000 still to pay");
+    const left = within(tableRow("ledger:open")).getByText("₹2,000 to receive");
     expect(left.className).not.toMatch(/success/);
     expect(within(tableRow("ledger:part")).getByText("Got ₹200 · ₹175 left").className).not.toMatch(/bg-success/);
   });
@@ -185,5 +185,30 @@ describe("payments that complete an item", () => {
       expect(within(tr).queryByTestId("completion-stamp")).toBeNull();
       expect(within(tr).getByText("Received")).toBeTruthy();
     }
+  });
+});
+
+describe("People table: a reimbursement already in my account reads as received earlier", () => {
+  it("labels only a payment row whose entry carries the mark", () => {
+    const lookups = { ...NO_LOOKUPS, entriesById: new Map([["e1", { sourceKind: undefined, transactionRef: "t", recordedEarlier: true }], ["e2", { sourceKind: undefined, transactionRef: "t" }]]) };
+    expect(receivedEarlierStatus({ entryId: "e1" }, "paymentReceived", lookups)?.label).toBe("Received earlier");
+    expect(receivedEarlierStatus({ entryId: "e2" }, "paymentReceived", lookups)).toBeNull();
+    expect(receivedEarlierStatus({ entryId: "e1" }, "emi", lookups)).toBeNull();
+  });
+});
+
+describe("People table: an unknown received date is never shown as a real date", () => {
+  it("a receipt marked date-not-known reads 'Date not known' in the item's payment history", () => {
+    const entries = [
+      entry("lent", "gave", 3000, d(9, 5), { note: "Share" }),
+      entry("back", "receivedBack", 1000, d(9, 5), { parentEntryId: "lent", receivedDateKnown: false, recordedEarlier: true }),
+      entry("back2", "receivedBack", 500, d(10, 1), { parentEntryId: "lent" }),
+    ];
+    const rows = rowsFor(entries);
+    const lookups = lookupsFor(entries);
+    const item = viewOf(rows.find((r) => r.key === "ledger:lent")!, "SHAMBU", lookups);
+    expect([...item.unknownDates]).toEqual(["back"]);
+    // The known-date receipt keeps its date; only the unknown one is replaced.
+    expect(item.row.payments.map((p) => p.entryId).sort()).toEqual(["back", "back2"]);
   });
 });

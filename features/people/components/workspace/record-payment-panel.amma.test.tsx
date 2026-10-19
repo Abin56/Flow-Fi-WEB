@@ -21,6 +21,13 @@ import { RecordPaymentPanel } from "./record-payment-panel";
 vi.mock("@/lib/firebase/client", () => ({ firebaseApp: {}, auth: {}, db: {}, storage: {} }));
 vi.mock("next/link", () => ({ default: ({ children }: { children: React.ReactNode }) => children }));
 vi.mock("@/hooks/use-accounts", () => ({ useAccounts: () => ({ data: [{ id: "sbi", name: "SBI", isDefault: true, deletedAt: null }] }) }));
+// These tests are about allocation, not the account step: SBI is chosen up front. Choosing the paying account
+// explicitly (never a default) is covered in record-payment-panel.account.test.tsx.
+vi.mock("./ledger-ui", async (orig) => {
+  const actual = await orig<typeof import("./ledger-ui")>();
+  const sbi = { id: "sbi", name: "SBI", type: "bank", currentBalance: 10_000_000, deletedAt: null };
+  return { ...actual, useAccountChoice: () => ({ accounts: [sbi], accountId: "sbi", selected: sbi, setAccountId: () => {} }) };
+});
 vi.mock("@/hooks/use-categories", () => ({ useCategories: () => ({ data: [{ id: "pocket", name: "Pocket money", type: "income", deletedAt: null }] }) }));
 vi.mock("@/features/people/components/workspace/purpose-money", () => ({ usePurposeLinkOptions: () => [] }));
 const toasts = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), warning: vi.fn() }));
@@ -201,6 +208,7 @@ describe("AMMA — ₹29,444 received against ₹30,744.06 outstanding", () => {
     expect(screen.getByText("₹4,308 left")).toBeTruthy();
     expect(fig("rp-still-owed")).toBe("₹12,308");
 
+    fireEvent.click(screen.getByRole("button", { name: /After recording/ }));
     fireEvent.click(screen.getByLabelText("Postpone the rest of Rent share"));
     fireEvent.click(screen.getByLabelText("Postpone the rest of Medicine"));
     expect(screen.getByTestId("rp-postpone-after")).toBeTruthy();
@@ -228,6 +236,7 @@ describe("AMMA — ₹29,444 received against ₹30,744.06 outstanding", () => {
     });
     const { onSubmit, onComplete } = setup({ value: ctx({ onApply }) });
     receiveAndChooseBills();
+    fireEvent.click(screen.getByRole("button", { name: /After recording/ }));
     fireEvent.click(screen.getByLabelText("Postpone the rest of Rent share"));
     fireEvent.click(screen.getByLabelText("Postpone the rest of Medicine"));
     await act(async () => fireEvent.click(primary()));
@@ -258,6 +267,7 @@ describe("AMMA — ₹29,444 received against ₹30,744.06 outstanding", () => {
     });
     const { value, onComplete } = setup({ onSubmit });
     receiveAndChooseBills();
+    fireEvent.click(screen.getByRole("button", { name: /After recording/ }));
     fireEvent.click(screen.getByLabelText("Postpone the rest of Rent share"));
     await act(async () => fireEvent.click(primary()));
     expect(screen.getByRole("alert").textContent).toBe("Network down");
