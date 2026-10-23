@@ -8,7 +8,7 @@
  */
 import fontkit from "@pdf-lib/fontkit";
 import { PDFDocument, PDFName, PDFNull, StandardFonts, setCharacterSpacing, rgb, type PDFFont, type PDFPage, type RGB } from "pdf-lib";
-import { monthlySettlementView, type MonthlyItem, type MonthlyPayment } from "@/features/people/lib/monthly-settlement-model";
+import { money2, monthlySettlementView, tidyAccount, type MonthlyItem, type MonthlyPayment } from "@/features/people/lib/monthly-settlement-model";
 import { pdfSafe, type StatementAmountFonts, type StatementTextFonts } from "@/features/people/lib/person-statement-pdf";
 import type { StatementViewOptions } from "@/features/people/lib/person-statement-pdf-model";
 import { hexToUnit, STATEMENT_CHIP, STATEMENT_INK, type StatementChip } from "@/features/people/lib/statement-palette";
@@ -49,10 +49,6 @@ const S = { title: 10, money: 9.6, meta: 8.2, label: 6.8 } as const;
 const TRACK = 0.8;
 const FOOTER_H = 48;
 const BOTTOM = FOOTER_H + 10;
-/** Every rupee amount is drawn with paise ("₹4,630" → "₹4,630.00") so figures line up and read consistently. */
-const money2 = (s: string) => s.replace(/₹\d[\d,]*(\.\d+)?/g, (m, dec) => (dec ? m : `${m}.00`));
-/** Display-only: "S B I" (single capitals spaced apart) reads as "SBI". Stored names are never changed. */
-const tidyAccount = (s: string) => s.replace(/\b[A-Z](?: [A-Z]){2,}\b/g, (m) => m.replace(/ /g, ""));
 const GENERATED = new Intl.DateTimeFormat("en-IN", { day: "2-digit", month: "short", year: "numeric" });
 
 export async function renderMonthlySettlementPdf(

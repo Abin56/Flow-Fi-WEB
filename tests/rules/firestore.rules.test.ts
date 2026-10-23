@@ -490,6 +490,135 @@ describe("smsTransactionCandidates (SMS Transaction Intelligence, Phase 3)", () 
   });
 });
 
+describe("smsCandidateTombstones + resurrection guard (SMS background cloud sync proposal, 2026-10-23)", () => {
+  // Finance_App/docs/sms-background-cloud-sync-architecture.md, §1/§5. The
+  // tombstone is the durable "handled" marker written atomically with the
+  // candidate delete on import/dismiss; `create` on a candidate is denied
+  // once a tombstone with that id exists — the one server-side backstop
+  // against a resurrected candidate, independent of any client logic bug.
+  it("owner can create and read their own tombstone", async () => {
+    const ownerDb = testEnv.authenticatedContext(OWNER_UID).firestore();
+    const ref = doc(ownerDb, "users", OWNER_UID, "smsCandidateTombstones", "sms-1");
+    await assertSucceeds(setDoc(ref, { outcome: "imported", transactionId: "txn-1", handledAt: new Date() }));
+    await assertSucceeds(getDoc(ref));
+  });
+
+  it("a tombstone is immutable once written — even the owner cannot update it", async () => {
+    const ownerDb = testEnv.authenticatedContext(OWNER_UID).firestore();
+    const ref = doc(ownerDb, "users", OWNER_UID, "smsCandidateTombstones", "sms-1");
+    await assertSucceeds(setDoc(ref, { outcome: "dismissed", transactionId: null, handledAt: new Date() }));
+    await assertFails(updateDoc(ref, { outcome: "imported" }));
+  });
+
+  it("a tombstone cannot be deleted, even by the owner (Phase B security review, 2026-10-24: no approved workflow ever deletes one — retention is 'keep indefinitely')", async () => {
+    const ownerDb = testEnv.authenticatedContext(OWNER_UID).firestore();
+    const ref = doc(ownerDb, "users", OWNER_UID, "smsCandidateTombstones", "sms-1");
+    await assertSucceeds(setDoc(ref, { outcome: "dismissed", transactionId: null, handledAt: new Date() }));
+    await assertFails(deleteDoc(ref));
+    await assertSucceeds(getDoc(ref)); // still there
+  });
+
+  it("verification (Phase B security review): the candidate `update` rule cannot undermine the handled-state invariant under any write path this app actually uses — it is only ever reachable while no tombstone exists, because the delete+tombstone batch is atomic", async () => {
+    const ownerDb = testEnv.authenticatedContext(OWNER_UID).firestore();
+    // Android's ordinary full-document re-sync of a still-pending candidate: no tombstone exists, so
+    // `update` succeeding here is exactly the intended, safe behavior.
+    await setDoc(doc(ownerDb, "users", OWNER_UID, "smsTransactionCandidates", "sms-1"), { amount: 100 });
+    await assertSucceeds(setDoc(doc(ownerDb, "users", OWNER_UID, "smsTransactionCandidates", "sms-1"), { amount: 200 }));
+
+    // The only way to reach "a tombstone exists AND the candidate still exists" at all is by bypassing
+    // every normal write path (this app's own code never does this — `markHandled` always writes both
+    // in one atomic batch). This disabled-rules setup exists purely to show WHY `update` is not gated
+    // on the tombstone the way `create` is: unlike `create` (which is reachable the instant Android's
+    // next sync runs), this inconsistent state is not reachable through any approved caller, so there is
+    // no case to protect against today. It is documented here, not silently assumed.
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "users", OWNER_UID, "smsCandidateTombstones", "sms-1"), {
+        outcome: "dismissed",
+        handledAt: new Date(),
+      });
+    });
+    await assertSucceeds(setDoc(doc(ownerDb, "users", OWNER_UID, "smsTransactionCandidates", "sms-1"), { amount: 300 }));
+  });
+
+  it("a different signed-in user cannot read, create, or delete another user's tombstone", async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "users", OWNER_UID, "smsCandidateTombstones", "sms-1"), {
+        outcome: "dismissed",
+        handledAt: new Date(),
+      });
+    });
+    const otherDb = testEnv.authenticatedContext(OTHER_UID).firestore();
+    await assertFails(getDoc(doc(otherDb, "users", OWNER_UID, "smsCandidateTombstones", "sms-1")));
+    await assertFails(
+      setDoc(doc(otherDb, "users", OWNER_UID, "smsCandidateTombstones", "sms-2"), {
+        outcome: "dismissed",
+        handledAt: new Date(),
+      }),
+    );
+    await assertFails(deleteDoc(doc(otherDb, "users", OWNER_UID, "smsCandidateTombstones", "sms-1")));
+  });
+
+  it("a signed-out client cannot read or write any tombstone", async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "users", OWNER_UID, "smsCandidateTombstones", "sms-1"), {
+        outcome: "dismissed",
+        handledAt: new Date(),
+      });
+    });
+    const anonDb = testEnv.unauthenticatedContext().firestore();
+    await assertFails(getDoc(doc(anonDb, "users", OWNER_UID, "smsCandidateTombstones", "sms-1")));
+  });
+
+  it("owner CAN create a candidate when no tombstone exists for that id (regression: ordinary Android upload/re-sync still works)", async () => {
+    const ownerDb = testEnv.authenticatedContext(OWNER_UID).firestore();
+    await assertSucceeds(
+      setDoc(doc(ownerDb, "users", OWNER_UID, "smsTransactionCandidates", "sms-1"), { amount: 499 }),
+    );
+  });
+
+  it("owner CANNOT create (resurrect) a candidate once a tombstone exists for that id — the import case", async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "users", OWNER_UID, "smsCandidateTombstones", "sms-1"), {
+        outcome: "imported",
+        transactionId: "txn-1",
+        handledAt: new Date(),
+      });
+    });
+    const ownerDb = testEnv.authenticatedContext(OWNER_UID).firestore();
+    await assertFails(setDoc(doc(ownerDb, "users", OWNER_UID, "smsTransactionCandidates", "sms-1"), { amount: 499 }));
+  });
+
+  it("owner CANNOT create (resurrect) a candidate once a tombstone exists for that id — the dismiss case", async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "users", OWNER_UID, "smsCandidateTombstones", "sms-1"), {
+        outcome: "dismissed",
+        transactionId: null,
+        handledAt: new Date(),
+      });
+    });
+    const ownerDb = testEnv.authenticatedContext(OWNER_UID).firestore();
+    await assertFails(setDoc(doc(ownerDb, "users", OWNER_UID, "smsTransactionCandidates", "sms-1"), { amount: 499 }));
+  });
+
+  it("owner CAN still update (full-overwrite re-sync) a candidate that already exists, tombstone or not", async () => {
+    // Covers Android's existing full-document `.set()` re-sync of a still-pending SMS: this is an
+    // `update` (the doc already exists), never a `create`, so the resurrection guard above — which
+    // only gates `create` — does not and should not apply to it.
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "users", OWNER_UID, "smsTransactionCandidates", "sms-1"), { amount: 499 });
+    });
+    const ownerDb = testEnv.authenticatedContext(OWNER_UID).firestore();
+    await assertSucceeds(
+      setDoc(doc(ownerDb, "users", OWNER_UID, "smsTransactionCandidates", "sms-1"), { amount: 501 }),
+    );
+  });
+
+  it("a different signed-in user cannot create a candidate under another user's tombstone-free path either (ownership still gates create)", async () => {
+    const otherDb = testEnv.authenticatedContext(OTHER_UID).firestore();
+    await assertFails(setDoc(doc(otherDb, "users", OWNER_UID, "smsTransactionCandidates", "sms-99"), { amount: 1 }));
+  });
+});
+
 describe("documentTypeRegistry (Architecture §3, backlog M1-T2)", () => {
   it("any signed-in user can read a registry entry", async () => {
     await testEnv.withSecurityRulesDisabled(async (ctx) => {

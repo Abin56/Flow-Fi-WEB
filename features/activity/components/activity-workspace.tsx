@@ -10,6 +10,7 @@ import { ChevronRight, History as HistoryIcon, Loader2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { EmptyState } from "@/components/finance/empty-state";
 import { StatusChip } from "@/components/finance/status-chip";
+import { ScrollNav } from "@/components/layout/scroll-nav";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ActivityDrawer, formatDay } from "@/features/activity/components/activity-drawer";
@@ -191,6 +192,7 @@ export function ActivityWorkspace() {
       )}
 
       <ActivityDrawer item={open} names={feed.names} accounts={feed.accounts} onClose={() => setOpenId(null)} />
+      <ScrollNav />
     </div>
   );
 }

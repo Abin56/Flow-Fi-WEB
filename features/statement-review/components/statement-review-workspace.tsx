@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { ClayButton } from "@/components/clay/clay-button";
 import { EmptyState, SmartToolbar } from "@/components/finance";
+import { ScrollNav } from "@/components/layout/scroll-nav";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Stagger } from "@/components/foundation/animated-container";
 import { useCreditCards } from "@/hooks/use-credit-cards";
@@ -115,6 +116,7 @@ export function StatementReviewWorkspace() {
           onUploaded={(documentId, fileName) => setActiveFlow({ documentId, fileName })}
         />
       )}
+      <ScrollNav />
     </div>
   );
 }

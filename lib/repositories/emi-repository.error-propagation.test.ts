@@ -20,10 +20,11 @@ vi.mock("firebase/firestore", () => ({
   query: vi.fn((...args: unknown[]) => ({ args })),
   where: vi.fn((...args: unknown[]) => ({ args })),
   setDoc: vi.fn(),
+  runTransaction: vi.fn(),
   writeBatch: vi.fn(() => ({ delete: vi.fn(), commit: vi.fn().mockRejectedValue(new Error("Firestore unavailable")) })),
 }));
 
-import { getDocs, setDoc, writeBatch } from "firebase/firestore";
+import { getDocs, runTransaction, setDoc, writeBatch } from "firebase/firestore";
 
 function emi(overrides: Partial<Emi> = {}): Emi {
   return {
@@ -110,6 +111,9 @@ describe("EMI mutations propagate a genuine Firestore failure (not swallowed)", 
   beforeEach(() => {
     vi.mocked(setDoc).mockReset();
     vi.mocked(setDoc).mockRejectedValue(new Error("Firestore unavailable"));
+    // Whole-document EMI writes now run in a transaction (they read the stored ownership confirmation); a failure there must surface too.
+    vi.mocked(runTransaction).mockReset();
+    vi.mocked(runTransaction).mockRejectedValue(new Error("Firestore unavailable"));
     vi.mocked(getDocs).mockReset();
     vi.mocked(getDocs).mockResolvedValue({ docs: [] } as never);
   });

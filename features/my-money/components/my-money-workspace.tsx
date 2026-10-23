@@ -13,10 +13,13 @@ import {
   Info,
   Landmark,
   type LucideIcon,
+  HandCoins,
   Receipt,
   RotateCcw,
+  ShoppingBag,
   Smartphone,
   Users,
+  Wallet,
 } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -24,6 +27,9 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { formatCurrency } from "@/lib/format";
 import { ordinalDay } from "@/lib/engines/month-cycle-range";
 import { cn } from "@/lib/utils";
+import { useCompactHeader } from "@/components/layout/compact-header";
+import { ScrollNav } from "@/components/layout/scroll-nav";
+import { MyMoneyCompactBar } from "@/features/my-money/components/my-money-compact-bar";
 import { categoryIconFor, categoryToneFor, type ToneName } from "@/features/transactions/hooks/use-transactions-data";
 import { useMyMoneyData, type CollectItem, type MyMoneyData } from "@/features/my-money/hooks/use-my-money-data";
 import { daysUntil, type CompletedGroup, type ObligationItem, type ObligationKind, type ObligationStatus, type SharedPerson } from "@/features/my-money/lib/my-money";
@@ -61,6 +67,14 @@ const TONE_BADGE: Record<ToneName, string> = {
   purple: "bg-purple/12 text-purple",
   neutral: "bg-muted text-foreground/70",
 };
+
+const AVATAR_TONES: ToneName[] = ["primary", "success", "purple", "warning", "expense"];
+/** Stable per-name colour so people are recognisable at a glance. */
+function avatarTone(name: string): string {
+  let h = 0;
+  for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return TONE_BADGE[AVATAR_TONES[h % AVATAR_TONES.length]];
+}
 
 function shortDate(d: Date): string {
   return d.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
@@ -109,6 +123,41 @@ function DateTile({ date, status, muted }: { date: Date; status: ObligationStatu
 
 function Chip({ className, children }: { className: string; children: React.ReactNode }) {
   return <span className={cn("inline-flex h-5 shrink-0 items-center rounded-full px-2 text-[11px] font-semibold whitespace-nowrap", className)}>{children}</span>;
+}
+
+/** One header for every panel so titles, icons and "go to" links line up. */
+function PanelHeader({
+  id,
+  icon: Icon,
+  title,
+  subtitle,
+  action,
+}: {
+  id: string;
+  icon: LucideIcon;
+  title: string;
+  subtitle: React.ReactNode;
+  action?: { href: string; label: string };
+}) {
+  return (
+    <div className="flex items-start gap-3 border-b border-border-strong/50 px-4 py-3.5 sm:px-5">
+      <span aria-hidden className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-[9px] bg-primary/10 text-primary-accent-text">
+        <Icon className="size-4" strokeWidth={1.9} />
+      </span>
+      <div className="min-w-0 flex-1">
+        <h2 id={id} className="font-heading text-base leading-tight font-semibold text-foreground">
+          {title}
+        </h2>
+        <div className="mt-0.5 space-y-0.5 text-xs text-foreground/70">{subtitle}</div>
+      </div>
+      {action && (
+        <Link href={action.href} className="group inline-flex shrink-0 items-center gap-1 rounded-[6px] py-1 text-xs font-semibold text-primary-accent-text hover:underline focus-visible:ring-2 focus-visible:ring-primary-accent-text focus-visible:outline-none">
+          {action.label}
+          <ArrowRight className="size-3 transition-transform group-hover:translate-x-0.5" strokeWidth={2.2} />
+        </Link>
+      )}
+    </div>
+  );
 }
 
 function InfoTip({ label, children }: { label: string; children: React.ReactNode }) {
@@ -187,11 +236,11 @@ function PeriodPicker({ data }: { data: MyMoneyData }) {
   );
 }
 
-function Header({ data }: { data: MyMoneyData }) {
+function Header({ data, titleRef }: { data: MyMoneyData; /** Callback ref on the title block — what the compact bar watches. */ titleRef?: (el: HTMLDivElement | null) => void }) {
   return (
     <header className="flex flex-wrap items-end justify-between gap-3">
-      <div className="min-w-0">
-        <h1 className="font-heading text-2xl font-bold tracking-tight text-foreground">My Money</h1>
+      <div ref={titleRef} className="min-w-0">
+        <h1 className="font-heading text-2xl font-bold tracking-tight text-foreground sm:text-[1.75rem]">My Money</h1>
         <p className="mt-0.5 text-sm text-foreground/70">Your spending, upcoming payments, and money to collect — all in one place.</p>
       </div>
       <div className="flex flex-wrap items-center gap-2">
@@ -228,6 +277,7 @@ function Header({ data }: { data: MyMoneyData }) {
 
 function SummaryCell({
   label,
+  icon: Icon,
   amount,
   tone,
   meta,
@@ -236,6 +286,7 @@ function SummaryCell({
   accent = "bg-border-strong/70",
 }: {
   className?: string;
+  icon: LucideIcon;
   /** Thin top bar signalling the figure's state. */
   accent?: string;
   label: string;
@@ -245,13 +296,14 @@ function SummaryCell({
   tip: string;
 }) {
   return (
-    <div className={cn("relative flex min-w-0 flex-col gap-1 border-border-strong/50 px-4 pt-4 pb-3.5 sm:px-5", className)}>
+    <div className={cn("relative flex min-w-0 flex-col gap-1.5 border-border-strong/50 px-4 pt-4 pb-3.5 transition-colors hover:bg-secondary/25 sm:px-5", className)}>
       <span aria-hidden className={cn("absolute inset-x-0 top-0 h-[3px]", accent)} />
-      <div className="flex items-center gap-1">
+      <div className="flex items-center gap-1.5">
+        <Icon aria-hidden className="size-3.5 shrink-0 text-foreground/55" strokeWidth={2} />
         <span className={LABEL}>{label}</span>
         <InfoTip label={`What ${label} means`}>{tip}</InfoTip>
       </div>
-      <span className={cn("font-heading text-[1.3rem] leading-none font-bold tracking-tight break-words text-foreground tabular-nums sm:text-[1.6rem]", tone)}>{formatCurrency(amount)}</span>
+      <span className={cn("font-heading text-[1.4rem] leading-none font-bold tracking-tight break-words text-foreground tabular-nums sm:text-[1.75rem]", tone)}>{formatCurrency(amount)}</span>
       <span className="min-h-[1rem] text-xs leading-snug text-foreground/70">{meta}</span>
     </div>
   );
@@ -262,12 +314,14 @@ function Summary({ data }: { data: MyMoneyData }) {
   const next = toPay.next;
   const comparison = spending.comparison;
   return (
-    <section aria-label="Period summary" className={PANEL}>
+    <section id="mm-summary" aria-label="Period summary" className={PANEL}>
       <div className="grid grid-cols-2 lg:grid-cols-4">
         <SummaryCell
           label="To pay"
+          icon={Wallet}
           className="border-r border-b lg:border-b-0"
           amount={toPay.total}
+          tone={toPay.count === 0 ? "text-success" : toPay.overdue > 0 ? "text-expense" : undefined}
           accent={toPay.overdue > 0 ? "bg-expense" : toPay.dueSoon > 0 ? "bg-warning" : toPay.count === 0 ? "bg-success" : "bg-primary"}
           meta={
             toPay.count === 0 ? (
@@ -286,6 +340,7 @@ function Summary({ data }: { data: MyMoneyData }) {
         />
         <SummaryCell
           label="To collect"
+          icon={HandCoins}
           className="border-b lg:border-r lg:border-b-0"
           amount={collect.total}
           tone={collect.total > 0 ? "text-success" : undefined}
@@ -295,6 +350,7 @@ function Summary({ data }: { data: MyMoneyData }) {
         />
         <SummaryCell
           label="My spending"
+          icon={ShoppingBag}
           className="border-r"
           accent="bg-primary"
           amount={spending.mySpend}
@@ -317,6 +373,7 @@ function Summary({ data }: { data: MyMoneyData }) {
         />
         <SummaryCell
           label="Completed"
+          icon={CheckCircle2}
           accent="bg-success/60"
           amount={completed.total}
           meta={completed.groups.length === 0 ? "No payments yet" : `${completed.groups.length} obligation${completed.groups.length === 1 ? "" : "s"} paid`}
@@ -431,7 +488,12 @@ function ObligationRow({ item, now }: { item: ObligationItem; now: Date }) {
   const muted = !item.countsTowardTotal;
   const urgentChip = item.status === "overdue" || item.status === "dueToday" || item.status === "dueSoon";
   return (
-    <li className="px-4 py-3 transition-colors hover:bg-secondary/40 sm:px-5">
+    <li
+      className={cn(
+        "border-l-[3px] px-4 py-3 transition-colors hover:bg-secondary/40 sm:px-5",
+        muted ? "border-l-transparent" : item.status === "overdue" ? "border-l-expense" : item.status === "dueToday" || item.status === "dueSoon" ? "border-l-warning" : "border-l-transparent",
+      )}
+    >
       <div className="flex items-start gap-3">
         <DateTile date={item.dueDate} status={item.status} muted={muted} />
         <div className="min-w-0 flex-1">
@@ -541,33 +603,39 @@ function ToPayPanel({ data }: { data: MyMoneyData }) {
   const elsewhere = data.obligations.filter((i) => !i.countsTowardTotal);
   const { toPay, collect } = data;
   return (
-    <section aria-labelledby="mm-to-pay" className={PANEL}>
-      <div className="flex flex-wrap items-end justify-between gap-2 border-b border-border-strong/50 px-4 py-3 sm:px-5">
-        <div>
-          <h2 id="mm-to-pay" className="font-heading text-base font-semibold text-foreground">
-            Payments this period
-          </h2>
-          <p className="text-xs text-foreground/70">
+    <section id="mm-to-pay-section" aria-labelledby="mm-to-pay" className={PANEL}>
+      <PanelHeader
+        id="mm-to-pay"
+        icon={CalendarDays}
+        title="Payments this period"
+        subtitle={
+          <p>
             {toPay.count === 0 ? "Nothing to pay" : `${formatCurrency(toPay.total)} across ${toPay.count} payment${toPay.count === 1 ? "" : "s"}`}
             {toPay.othersStillOwe > 0 && <> · {formatCurrency(toPay.othersStillOwe)} of it is others&apos; share to collect</>}
           </p>
-        </div>
-        {collect.totalToGive > 0 && (
-          <Link href="/people" className="text-xs font-semibold text-primary-accent-text hover:underline">
-            You also owe people {formatCurrency(collect.totalToGive)}
-          </Link>
-        )}
-      </div>
+        }
+      />
+      {collect.totalToGive > 0 && (
+        <Link
+          href="/people"
+          className="group flex items-center gap-2 border-b border-border-strong/50 bg-warning/[0.08] px-4 py-2 text-xs transition-colors hover:bg-warning/[0.14] focus-visible:ring-2 focus-visible:ring-primary-accent-text focus-visible:outline-none focus-visible:ring-inset sm:px-5"
+        >
+          <Users aria-hidden className="size-3.5 shrink-0 text-warning-foreground" />
+          <span className="font-semibold text-foreground">You also owe people {formatCurrency(collect.totalToGive)}</span>
+          <span className="ml-auto flex items-center gap-1 font-semibold text-primary-accent-text">
+            Review
+            <ArrowRight className="size-3 transition-transform group-hover:translate-x-0.5" strokeWidth={2.2} />
+          </span>
+        </Link>
+      )}
 
       {data.obligations.length === 0 ? (
-        <div className="flex items-center gap-3 px-5 py-8">
-          <span className="flex size-10 items-center justify-center rounded-full bg-success/12 text-success">
+        <div className="flex flex-col items-center gap-2 px-5 py-9 text-center">
+          <span className="flex size-11 items-center justify-center rounded-full bg-success/12 text-success">
             <CheckCircle2 className="size-5" />
           </span>
-          <div>
-            <p className="text-sm font-semibold text-foreground">No card bills, installments or bills due</p>
-            <p className="text-xs text-foreground/70">Nothing is scheduled or overdue for this period.</p>
-          </div>
+          <p className="text-sm font-semibold text-foreground">No card bills, installments or bills due</p>
+          <p className="max-w-xs text-xs text-foreground/70">Nothing is scheduled or overdue for this period.</p>
         </div>
       ) : (
         <div className="[&>*:first-child>h3]:border-t-0 [&>*:first-child>button]:border-t-0">
@@ -583,11 +651,14 @@ function ToPayPanel({ data }: { data: MyMoneyData }) {
 // ─────────────────────────── completed ───────────────────────────
 
 function CompletedPanel({ data }: { data: MyMoneyData }) {
-  const [open, setOpen] = useState(false);
+  // Collapsed while there are payments to act on; open when nothing is pending so the page isn't mostly empty.
+  const [userOpen, setUserOpen] = useState<boolean | null>(null);
   const { groups, total } = data.completed;
   if (groups.length === 0) return null;
+  const open = userOpen ?? data.obligations.length === 0;
+  const setOpen = (fn: (o: boolean) => boolean) => setUserOpen(fn(open));
   return (
-    <section aria-label="Completed payments" className={PANEL}>
+    <section id="mm-completed" aria-label="Completed payments" className={PANEL}>
       <button
         type="button"
         aria-expanded={open}
@@ -661,21 +732,21 @@ function CollectPanel({ data }: { data: MyMoneyData }) {
   const { collect } = data;
   const shown = showAll ? collect.items : collect.items.slice(0, COLLECT_PREVIEW);
   return (
-    <section aria-labelledby="mm-collect" className={PANEL}>
-      <div className="flex items-end justify-between gap-2 border-b border-border-strong/50 px-4 py-3">
-        <div>
-          <h2 id="mm-collect" className="font-heading text-base font-semibold text-foreground">
-            Money to collect
-          </h2>
-          <p className="text-xs text-foreground/70">
-            {formatCurrency(collect.total)} outstanding today{data.isCurrent ? "" : " — not limited to this period"}
-          </p>
-          {collect.collectedInPeriod > 0 && <p className="text-xs text-foreground/70">{formatCurrency(collect.collectedInPeriod)} received in this period</p>}
-        </div>
-        <Link href="/people" className="text-xs font-semibold text-primary-accent-text hover:underline">
-          People Ledger
-        </Link>
-      </div>
+    <section id="mm-collect-section" aria-labelledby="mm-collect" className={PANEL}>
+      <PanelHeader
+        id="mm-collect"
+        icon={HandCoins}
+        title="Money to collect"
+        action={{ href: "/people", label: "People Ledger" }}
+        subtitle={
+          <>
+            <p>
+              {formatCurrency(collect.total)} outstanding today{data.isCurrent ? "" : " — not limited to this period"}
+            </p>
+            {collect.collectedInPeriod > 0 && <p className="font-medium text-success">{formatCurrency(collect.collectedInPeriod)} received in this period</p>}
+          </>
+        }
+      />
 
       {collect.items.length === 0 ? (
         <p className="px-4 py-5 text-sm text-foreground/75">No one owes you money right now.</p>
@@ -685,8 +756,8 @@ function CollectPanel({ data }: { data: MyMoneyData }) {
             const expected = p.expected ? expectedText(p.expected) : null;
             return (
               <li key={p.personId}>
-                <Link href={p.href} className="flex items-start gap-3 px-4 py-2.5 transition-colors hover:bg-secondary/40 focus-visible:bg-secondary/60 focus-visible:outline-none">
-                  <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full bg-success/12 text-xs font-bold text-success" aria-hidden>
+                <Link href={p.href} className="group flex items-start gap-3 px-4 py-3 transition-colors hover:bg-secondary/40 focus-visible:bg-secondary/60 focus-visible:outline-none">
+                  <span className={cn("mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full text-xs font-bold", avatarTone(p.name))} aria-hidden>
                     {p.name.trim().charAt(0).toUpperCase() || "?"}
                   </span>
                   <span className="min-w-0 flex-1">
@@ -700,7 +771,10 @@ function CollectPanel({ data }: { data: MyMoneyData }) {
                       </span>
                     )}
                   </span>
-                  <span className="shrink-0 text-sm font-bold text-success tabular-nums">{formatCurrency(p.amount)}</span>
+                  <span className="flex shrink-0 items-center gap-1">
+                    <span className="text-sm font-bold text-success tabular-nums">{formatCurrency(p.amount)}</span>
+                    <ChevronRight aria-hidden className="size-3.5 -mr-1 text-foreground/30 transition-all group-hover:translate-x-0.5 group-hover:text-foreground/70" />
+                  </span>
                 </Link>
               </li>
             );
@@ -714,12 +788,16 @@ function CollectPanel({ data }: { data: MyMoneyData }) {
           onClick={() => setShowAll((s) => !s)}
           className="w-full border-t border-border-strong/50 px-4 py-2 text-xs font-semibold text-primary-accent-text transition-colors hover:bg-primary/10 focus-visible:ring-2 focus-visible:ring-primary-accent-text focus-visible:outline-none focus-visible:ring-inset"
         >
-          {showAll ? "Show fewer" : `Show all ${collect.items.length}`}
+          <span className="inline-flex items-center justify-center gap-1">
+            {showAll ? "Show fewer" : `Show all ${collect.items.length}`}
+            <ChevronDown className={cn("size-3.5 transition-transform", showAll && "rotate-180")} />
+          </span>
         </button>
       )}
       {collect.advanceHeld > 0 && (
-        <p className="border-t border-border-strong/50 bg-secondary/40 px-4 py-2 text-xs text-foreground/75">
-          You&apos;re holding <span className="font-semibold text-foreground tabular-nums">{formatCurrency(collect.advanceHeld)}</span> in advances that haven&apos;t been applied yet.
+        <p className="flex items-start gap-2 border-t border-border-strong/50 bg-secondary/40 px-4 py-2.5 text-xs text-foreground/75">
+          <Info aria-hidden className="mt-0.5 size-3.5 shrink-0 text-foreground/55" />
+          <span>You&apos;re holding <span className="font-semibold text-foreground tabular-nums">{formatCurrency(collect.advanceHeld)}</span> in advances that haven&apos;t been applied yet.</span>
         </p>
       )}
     </section>
@@ -737,17 +815,7 @@ function SpendingPanel({ data }: { data: MyMoneyData }) {
   const categories = showAll ? spending.topCategories : spending.topCategories.slice(0, CATEGORY_PREVIEW);
   return (
     <section aria-labelledby="mm-spending" className={PANEL}>
-      <div className="flex items-end justify-between gap-2 border-b border-border-strong/50 px-4 py-3">
-        <div>
-          <h2 id="mm-spending" className="font-heading text-base font-semibold text-foreground">
-            Where your money went
-          </h2>
-          <p className="text-xs text-foreground/70">Your own spending, by category</p>
-        </div>
-        <Link href="/transactions" className="text-xs font-semibold text-primary-accent-text hover:underline">
-          Transactions
-        </Link>
-      </div>
+      <PanelHeader id="mm-spending" icon={ShoppingBag} title="Where your money went" subtitle={<p>Your own spending, by category</p>} action={{ href: "/transactions", label: "Transactions" }} />
 
       {categories.length > 0 && (
         <ul className="flex flex-col gap-2.5 px-4 py-3">
@@ -761,7 +829,10 @@ function SpendingPanel({ data }: { data: MyMoneyData }) {
                 <span className="min-w-0 flex-1">
                   <span className="flex items-baseline justify-between gap-2">
                     <span className="truncate text-sm font-medium text-foreground">{c.name}</span>
-                    <span className="shrink-0 text-sm font-semibold text-foreground tabular-nums">{formatCurrency(c.amount)}</span>
+                    <span className="shrink-0 text-sm font-semibold text-foreground tabular-nums">
+                      {formatCurrency(c.amount)}
+                      <span className="ml-1.5 text-[11px] font-medium text-foreground/60">{c.percent}%</span>
+                    </span>
                   </span>
                   <span className="mt-1 block h-1 overflow-hidden rounded-full bg-secondary">
                     <span className="block h-full rounded-full bg-primary-accent-text/70" style={{ width: `${Math.max(2, c.percent)}%` }} />
@@ -778,7 +849,10 @@ function SpendingPanel({ data }: { data: MyMoneyData }) {
           onClick={() => setShowAll((s) => !s)}
           className="w-full border-t border-border-strong/50 px-4 py-2 text-xs font-semibold text-primary-accent-text transition-colors hover:bg-primary/10 focus-visible:ring-2 focus-visible:ring-primary-accent-text focus-visible:outline-none focus-visible:ring-inset"
         >
-          {showAll ? "Show fewer" : `All ${spending.topCategories.length} categories`}
+          <span className="inline-flex items-center justify-center gap-1">
+            {showAll ? "Show fewer" : `All ${spending.topCategories.length} categories`}
+            <ChevronDown className={cn("size-3.5 transition-transform", showAll && "rotate-180")} />
+          </span>
         </button>
       )}
 
@@ -808,10 +882,16 @@ function LoadingState() {
   return (
     <div className="flex min-w-0 flex-col gap-4 px-1">
       <Skeleton className="h-12 w-full max-w-md rounded-[10px]" />
-      <Skeleton className="h-36 w-full rounded-[14px]" />
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,22rem)]">
-        <Skeleton className="h-80 rounded-[14px]" />
-        <Skeleton className="h-64 rounded-[14px]" />
+      <Skeleton className="h-40 w-full rounded-[14px]" />
+      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,22rem)]">
+        <div className="flex flex-col gap-4">
+          <Skeleton className="h-64 rounded-[14px]" />
+          <Skeleton className="h-16 rounded-[14px]" />
+        </div>
+        <div className="flex flex-col gap-4">
+          <Skeleton className="h-72 rounded-[14px]" />
+          <Skeleton className="h-48 rounded-[14px]" />
+        </div>
       </div>
     </div>
   );
@@ -819,10 +899,12 @@ function LoadingState() {
 
 export function MyMoneyWorkspace() {
   const data = useMyMoneyData();
+  const { watch: watchTitle, progress: barProgress, reduceMotion: barReduceMotion, barTop } = useCompactHeader();
   if (data.isLoading) return <LoadingState />;
   return (
     <div className="flex min-w-0 flex-col gap-4 px-1">
-      <Header data={data} />
+      <MyMoneyCompactBar progress={barProgress} reduceMotion={barReduceMotion} top={barTop} data={data} next={data.toPay.next} />
+      <Header data={data} titleRef={watchTitle} />
       <Summary data={data} />
       <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,22rem)]">
         <div className="flex min-w-0 flex-col gap-4">
@@ -834,6 +916,7 @@ export function MyMoneyWorkspace() {
           <SpendingPanel data={data} />
         </div>
       </div>
+      <ScrollNav />
     </div>
   );
 }

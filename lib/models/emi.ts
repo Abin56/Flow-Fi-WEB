@@ -24,6 +24,7 @@ import type { DocumentData, QueryDocumentSnapshot, SnapshotOptions } from "fireb
 import { Timestamp } from "firebase/firestore";
 import type { AuditEntry, SoftDeletableEntity } from "@/lib/firestore/soft-deletable";
 import { ownershipSharesFromData, type OwnershipShare } from "@/lib/engines/debt-ownership";
+import { ownershipConfirmationFromData, ownershipConfirmationToData, type OwnershipConfirmation } from "@/lib/models/ownership-confirmation";
 import type { InterestPeriod, InterestType } from "@/lib/engines/interest-calculator";
 import type { Installment, ScheduleType } from "@/lib/models/payment-schedule";
 import { installmentStatus, remainingAmount } from "@/lib/models/payment-schedule";
@@ -177,6 +178,13 @@ export interface Emi extends SoftDeletableEntity {
    * creation so historical installment shares can never be rewritten. Written only when present.
    */
   ownershipShares?: OwnershipShare[] | null;
+
+  /**
+   * "This EMI is mine" — the user's explicit confirmation of a legacy record with no ownership data. Read only by
+   * the My EMI Commitments classification, and ignored whenever shares or a repay opt-in exist. See
+   * `lib/models/ownership-confirmation.ts`. Written only when present.
+   */
+  ownershipConfirmedMine?: OwnershipConfirmation | null;
 
   /** Locked once any payment has been recorded — see `EmiRepository.editEmi`. */
   principalAmount: number;
@@ -353,6 +361,7 @@ export function emiFromFirestore(
     lenderName: (data.lenderName as string | undefined) ?? null,
     beneficiaryRepaysInstallments: data.beneficiaryRepaysInstallments === true,
     ownershipShares: ownershipSharesFromData(data.ownershipShares),
+    ownershipConfirmedMine: ownershipConfirmationFromData(data.ownershipConfirmedMine),
     categoryId: (data.categoryId as string | undefined) ?? null,
     principalAmount: data.principalAmount as number,
     interest: data.interest == null ? null : emiInterestFromMap(data.interest as Record<string, unknown>),
@@ -421,6 +430,7 @@ export function emiToFirestore(emi: Emi): DocumentData {
     purchaseTransactionId: emi.purchaseTransactionId,
     beneficiaryPersonId: emi.beneficiaryPersonId ?? null,
     ...(emi.beneficiaryRepaysInstallments === true ? { beneficiaryRepaysInstallments: true } : {}),
+    ...ownershipConfirmationToData(emi.ownershipConfirmedMine),
     ...(emi.ownershipShares != null && emi.ownershipShares.length > 0 ? { ownershipShares: emi.ownershipShares.map((x) => ({ personId: x.personId, amount: x.amount, ...(x.installmentAmount != null ? { installmentAmount: x.installmentAmount } : {}) })) } : {}),
     dueDayOfMonth: emi.dueDayOfMonth,
     deletedAt: emi.deletedAt == null ? null : Timestamp.fromDate(emi.deletedAt),

@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, ChevronDown, ChevronRight, Landmark, Loader2, ShoppingBag, Users, X, type LucideIcon } from "lucide-react";
+import { CalendarClock, Check, ChevronDown, ChevronRight, Landmark, Loader2, ShoppingBag, Users, X, type LucideIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { ClayButton } from "@/components/clay/clay-button";
 import { OperationProgressView } from "@/components/feedback/operation-progress";
@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 import { formatCurrency } from "@/lib/format";
 import { hasOwnershipShares, resolveOwnership, type OwnershipSource } from "@/lib/engines/debt-ownership";
 import { handleEnterKey } from "@/components/ui/enter-key";
+import { OWNERSHIP_LABEL, type OwnershipKind } from "@/features/loans/lib/my-commitments";
 
 /**
  * Shared presentation for the Loan & EMI section — one card, one detail hero, one fact grid and one
@@ -167,6 +168,13 @@ export interface DebtCardBadge {
   tone: "neutral" | "primary" | "success" | "expense" | "warning";
 }
 
+/** A linked-record chip. With `person`, it renders as the highlighted "who repays this" band instead of a chip. */
+export interface DebtCardLink {
+  icon: LucideIcon;
+  label: string;
+  person?: { name: string; role: string; amount?: string };
+}
+
 export interface DebtCardProps {
   icon: LucideIcon;
   name: string;
@@ -174,6 +182,8 @@ export interface DebtCardProps {
   source: string;
   /** Small record-type tag before the source — "Bank Loan", "Credit Card EMI", … */
   tag?: string;
+  /** Stored interest terms, already formatted ("10.5% p.a.") — see `interestRateLabel`. Omitted when none. */
+  rate?: string | null;
   /** Only non-routine states (Overdue, Closed, Completed, Money I Lent) — "Active" is the default and gets no badge. */
   badges?: DebtCardBadge[];
   outstandingLabel: string;
@@ -191,10 +201,14 @@ export interface DebtCardProps {
   /** Installments only partly paid (not counted in `paid`). */
   partial?: number;
   /** Small linked-record chips — card, person. */
-  links?: { icon: LucideIcon; label: string }[];
+  links?: DebtCardLink[];
+  /** Ownership indicator (see `classifyOwnership`) + my share of the next installment — only for confirmed allocations. */
+  ownership?: { kind: OwnershipKind; myShare: number | null; action?: { label: string; onClick: () => void } };
   muted?: boolean;
   onClick: () => void;
 }
+
+const OWNERSHIP_TONE: Record<OwnershipKind, DebtCardBadge["tone"]> = { mine: "success", shared: "primary", others: "neutral", review: "warning" };
 
 /**
  * Who the principal belongs to, as card chips: "SANJU ₹1,52,790". Empty when it is all mine, so a plain loan
@@ -204,7 +218,7 @@ export function ownershipChips(
   source: OwnershipSource,
   principal: number,
   nameOf: (personId: string) => string | undefined,
-): { icon: LucideIcon; label: string }[] {
+): DebtCardLink[] {
   const shares = resolveOwnership(source, principal);
   if (shares.every((s) => s.personId == null)) return [];
   const shared = hasOwnershipShares(source) || shares.length > 1;
@@ -212,10 +226,19 @@ export function ownershipChips(
     .filter((s) => s.amount > 0 || s.personId != null)
     .map((s) => {
       const amount = formatCurrency(s.amount);
-      if (s.personId == null) return { icon: Users, label: `You ${amount}` };
+      if (s.personId == null) return { icon: Users, label: `You ${amount}`, person: { name: "You", role: "Your share", amount } };
       const name = nameOf(s.personId) ?? "Someone";
-      return { icon: Users, label: shared ? `${name} ${amount}` : `${name} repays ${amount}` };
+      return {
+        icon: Users,
+        label: shared ? `${name} ${amount}` : `${name} repays ${amount}`,
+        person: { name, role: shared ? "Share" : "Repays this loan", amount },
+      };
     });
+}
+
+/** "10.5% p.a." / "1.2% p.m." from a record's stored interest terms, or null when it has none. */
+export function interestRateLabel(interest: { ratePercent: number; period: string } | null | undefined): string | null {
+  return interest ? `${+interest.ratePercent.toFixed(2)}% ${interest.period === "monthly" ? "p.m." : "p.a."}` : null;
 }
 
 /** "month" / "week" for a schedule frequency, or null when it isn't a regular cadence. */
@@ -223,15 +246,31 @@ export function cadenceLabel(frequency: string | null | undefined): string | nul
   return frequency === "monthly" ? "month" : frequency === "weekly" ? "week" : null;
 }
 
+/** "today" / "tomorrow" / "in 3 days" / "2 days overdue" — only near or past dates get one; null otherwise. */
+function relativeDue(days: number): string | null {
+  if (days < 0) return `${-days} day${days === -1 ? "" : "s"} overdue`;
+  if (days === 0) return "today";
+  if (days === 1) return "tomorrow";
+  return days <= 7 ? `in ${days} days` : null;
+}
+
+/** Small uppercase label above a card metric. */
+function MetricLabel({ children, className }: { children: React.ReactNode; className?: string }) {
+  return <span className={cn("block text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase", className)}>{children}</span>;
+}
+
 /**
- * The Loan/EMI list card. Icon + name + status → outstanding (largest) → "₹X / month · Due …" → progress →
- * linked records. A defined white surface with a solid border; hover lifts the border and shadow slightly.
+ * The Loan/EMI list card. Header (icon, name, type · source · rate, status, chevron) → two metrics side by
+ * side (Outstanding with the original amount under it; Next EMI with its actual due date) → installment
+ * progress → who it's assigned to in the People Ledger. Flat white surface, no tinted metric boxes; hover
+ * lifts the border and shadow slightly. Every figure is passed in already derived — nothing computed here.
  */
 export function DebtCard({
   icon: Icon,
   name,
   source,
   tag,
+  rate,
   badges = [],
   outstandingLabel,
   outstanding,
@@ -245,12 +284,24 @@ export function DebtCard({
   total,
   partial = 0,
   links = [],
+  ownership,
   muted = false,
   onClick,
 }: DebtCardProps) {
   const hasNext = nextDate != null && nextAmount != null;
-  // The original amount only earns its box when it differs from what's left (or sits beside the next payment).
+  // The original amount only earns its line when it differs from what's left (or sits beside the next payment).
   const hasTotal = totalAmount != null && totalAmount > 0 && (hasNext || Math.abs(totalAmount - outstanding) >= 0.005);
+  const days = hasNext ? daysUntil(nextDate!) : null;
+  const relative = days != null ? relativeDue(days) : null;
+  const late = overdue || (days != null && days < 0);
+  const soon = !late && days != null && days <= 3;
+  const people = links.filter((l) => l.person);
+  const chips = links.filter((l) => !l.person);
+  const left = Math.max(total - paid - partial, 0);
+  const paidPct = total > 0 ? Math.min(100, (paid / total) * 100) : 0;
+  const partialPct = total > 0 ? Math.min(100 - paidPct, (partial / total) * 100) : 0;
+  const meta = [source, rate].filter(Boolean).join(" · ");
+
   return (
     <StaggerItem>
       <div
@@ -265,80 +316,199 @@ export function DebtCard({
         }}
         className={cn(
           LE_RADIUS.card,
-          "group flex h-full cursor-pointer flex-col gap-3.5 border border-border bg-card px-4 py-4 shadow-e1 outline-none",
+          "group @container flex cursor-pointer flex-col gap-4 border border-border bg-card p-4 shadow-e1 outline-none",
           "transition-[border-color,box-shadow,transform] duration-150 ease-out hover:border-border-strong hover:shadow-e2 motion-safe:hover:-translate-y-px",
           "focus-visible:border-primary-accent-text focus-visible:ring-2 focus-visible:ring-ring",
           muted && "bg-secondary",
         )}
       >
-        <div className="flex flex-wrap items-start gap-x-3 gap-y-1.5">
+        {/* Header — status and chevron share the name's line (the name truncates, full name on hover); the
+            type · source · rate line runs full width beneath, wrapping the source down rather than hiding it. */}
+        <div className="flex items-start gap-3">
           <span className={cn(LE_RADIUS.control, "flex size-9 shrink-0 items-center justify-center border border-border bg-secondary text-foreground")}>
             <Icon className="size-[18px]" strokeWidth={1.75} />
           </span>
-          {/* min-w keeps the name readable: a status badge that doesn't fit beside it drops below instead of squeezing it to "L…". */}
-          <div className="flex min-w-[8rem] flex-1 flex-col gap-0.5">
-            <h3 className={cn("truncate font-heading text-[15px] leading-snug font-semibold", muted ? "text-muted-foreground" : "text-foreground")}>{name}</h3>
-            <p className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-              {tag && (
-                <span className="shrink-0 rounded-[4px] border border-border bg-secondary px-1.5 py-px text-[10.5px] font-medium text-foreground">
-                  {tag}
-                </span>
-              )}
-              <span className="truncate">{source}</span>
-            </p>
-          </div>
-          {badges.length > 0 ? (
-            <div className="ml-auto flex shrink-0 flex-col items-end gap-1">
+          <div className="flex min-w-0 flex-1 flex-col gap-1">
+            <div className="flex min-w-0 items-center gap-1.5">
+              <h3
+                title={name}
+                className={cn("min-w-0 flex-1 truncate font-heading text-[15px] leading-tight font-semibold", muted ? "text-muted-foreground" : "text-foreground")}
+              >
+                {name}
+              </h3>
               {badges.map((b) => (
-                <ClayBadge key={b.label} tone={b.tone} className="rounded-[5px] px-2 py-0.5 text-[11px] font-semibold">
+                <ClayBadge key={b.label} tone={b.tone} className="shrink-0 rounded-[5px] px-2 py-0.5 text-[11px] font-semibold whitespace-nowrap">
                   {b.label}
                 </ClayBadge>
               ))}
+              <ChevronRight
+                aria-hidden
+                className="size-4 shrink-0 text-muted-foreground transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-foreground"
+              />
             </div>
-          ) : (
-            <ChevronRight className="mt-1 size-4 shrink-0 text-muted-foreground transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-foreground" />
+            <p className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-muted-foreground">
+              {tag && (
+                <span className="shrink-0 rounded-[4px] border border-border bg-secondary px-1.5 py-px text-[11px] font-medium text-foreground">{tag}</span>
+              )}
+              {ownership && (
+                <ClayBadge
+                  tone={OWNERSHIP_TONE[ownership.kind]}
+                  title={ownership.kind === "review" ? "Who owes this EMI isn't confirmed, so it isn't counted in My EMI — Confirmed." : undefined}
+                  className={cn("shrink-0 rounded-[4px] px-1.5 py-px text-[11px] font-semibold whitespace-nowrap", ownership.kind === "review" && "dark:text-warning")}
+                >
+                  {OWNERSHIP_LABEL[ownership.kind]}
+                </ClayBadge>
+              )}
+              {ownership?.action && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    ownership.action!.onClick();
+                  }}
+                  // The card itself handles Enter / Space; keep them from opening the record behind the dialog.
+                  onKeyDown={(e) => e.stopPropagation()}
+                  // A 24px (32px on touch widths) target; the negative margin gives the height back so the row, and the card, keep their size.
+                  className="-my-1 inline-flex min-h-6 shrink-0 items-center px-1 text-[11px] font-semibold text-primary-accent-text underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring max-sm:-my-2 max-sm:min-h-8"
+                >
+                  {ownership.action.label}
+                </button>
+              )}
+              {meta && (
+                <span className="max-w-full min-w-0 truncate" title={meta}>
+                  {meta}
+                </span>
+              )}
+            </p>
+          </div>
+        </div>
+
+        {/* Primary metrics — two columns split by a hairline, not boxed tiles. */}
+        <dl className={cn("grid gap-x-4", hasNext ? "grid-cols-2" : "grid-cols-1")}>
+          <div className="flex min-w-0 flex-col gap-1.5">
+            <dt>
+              <MetricLabel>{outstandingLabel}</MetricLabel>
+            </dt>
+            <dd className="flex min-w-0 flex-col gap-1">
+              <Money amount={outstanding} className={cn("text-[22px] leading-none", muted ? "text-muted-foreground" : "text-foreground")} />
+              {hasTotal && (
+                <span className="truncate text-xs text-muted-foreground">
+                  {totalLabel} <span className="font-semibold text-foreground tabular-nums">{formatCurrency(totalAmount!)}</span>
+                </span>
+              )}
+            </dd>
+          </div>
+          {hasNext && (
+            <div className="flex min-w-0 flex-col gap-1.5 border-l border-border pl-4">
+              <dt>
+                <MetricLabel className={cn(late && "text-expense")}>{cadence ? "Next EMI" : "Next payment"}</MetricLabel>
+              </dt>
+              <dd className="flex min-w-0 flex-col gap-1">
+                <Money amount={nextAmount!} className={cn("text-[22px] leading-none", late ? "text-expense" : "text-foreground")} />
+                {/* Date, then how near it is — inline on a wide card, stacked under the date on a narrow one. */}
+                <span className="flex min-w-0 flex-col gap-0.5 text-xs @[26rem]:flex-row @[26rem]:items-center @[26rem]:gap-1">
+                  <span className="flex items-center gap-1">
+                    <CalendarClock aria-hidden className={cn("size-3.5 shrink-0", late ? "text-expense" : "text-muted-foreground")} strokeWidth={1.75} />
+                    <span className={cn("font-semibold whitespace-nowrap", late ? "text-expense" : "text-foreground")}>{formatDueDate(nextDate!)}</span>
+                  </span>
+                  {relative && (
+                    <span
+                      className={cn(
+                        "whitespace-nowrap",
+                        late ? "font-semibold text-expense" : soon ? "font-semibold text-warning-foreground dark:text-warning" : "text-muted-foreground",
+                      )}
+                    >
+                      <span aria-hidden className="hidden @[26rem]:inline">
+                        ·{" "}
+                      </span>
+                      {relative}
+                    </span>
+                  )}
+                </span>
+                {hasNext && ownership?.myShare != null && (
+                  <span className="text-xs text-muted-foreground">
+                    My share <span className="font-semibold text-foreground tabular-nums">{formatCurrency(ownership.myShare)}</span>
+                  </span>
+                )}
+              </dd>
+            </div>
           )}
-        </div>
+        </dl>
 
-        <div className="flex flex-col gap-2">
-          <FigureLabel>{outstandingLabel}</FigureLabel>
-          <AmountDisplay amount={outstanding} className={cn(muted && "text-muted-foreground")} />
-        </div>
-
-        {(hasTotal || hasNext) && (
-          <dl className={cn(LE_RADIUS.control, "grid divide-x divide-border border border-border bg-secondary/60 py-2", hasTotal && hasNext ? "grid-cols-2" : "grid-cols-1")}>
-            {hasTotal && (
-              <div className="flex min-w-0 flex-col gap-0.5 px-3">
-                <dt className="text-[10.5px] font-medium tracking-[0.06em] text-muted-foreground uppercase">{totalLabel}</dt>
-                <dd className="text-[13px] font-semibold text-foreground tabular-nums">{formatCurrency(totalAmount!)}</dd>
+        {(total > 1 || links.length > 0) && (
+          <div className="flex flex-col gap-3">
+            {/* Installment completion — a count of installments, deliberately not a share of principal repaid. */}
+            {total > 1 && (
+              <div className="flex flex-col gap-1.5">
+                <div className="flex items-baseline justify-between gap-2 text-xs">
+                  <span className="font-medium text-muted-foreground">Installments paid</span>
+                  <span className="text-right text-muted-foreground tabular-nums">
+                    <span className="font-semibold text-foreground">
+                      {paid} of {total}
+                    </span>
+                    {/* A partly covered installment (e.g. an advance's remainder) is never counted as paid. */}
+                    {partial > 0 && <> · {partial} partial</>} · {left} left
+                  </span>
+                </div>
+                <div
+                  className="flex h-1.5 w-full overflow-hidden rounded-[2px] bg-border"
+                  role="progressbar"
+                  aria-valuemin={0}
+                  aria-valuemax={total}
+                  aria-valuenow={paid}
+                  aria-label={`${paid} of ${total} installments paid${partial > 0 ? `, ${partial} partly paid` : ""}, ${left} left`}
+                >
+                  <div className="h-full bg-primary-accent-text transition-[width] duration-700 ease-out" style={{ width: `${paidPct}%` }} />
+                  {partialPct > 0 && <div className="h-full bg-primary-accent-text/40" style={{ width: `${partialPct}%` }} />}
+                </div>
               </div>
             )}
-            {hasNext && (
-              <div className="flex min-w-0 flex-col gap-0.5 px-3">
-                <dt className="text-[10.5px] font-medium tracking-[0.06em] text-muted-foreground uppercase">{cadence ? `Every ${cadence}` : "Next payment"}</dt>
-                <dd className="flex flex-wrap items-baseline gap-x-1.5 text-[13px]">
-                  <span className="font-semibold text-foreground tabular-nums">
-                    <Money amount={nextAmount!} />
+
+            {/* People Ledger assignment + linked records — one compact wrapping row, only when there are any. */}
+            {links.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5 border-t border-border pt-3">
+                {people.length > 0 && (
+                  <span className="mr-0.5 text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">
+                    {people.length > 1 ? "Split between" : people[0].person!.role}
                   </span>
-                  <span className={cn("text-xs", overdue ? "font-semibold text-expense" : "text-muted-foreground")}>
-                    {overdue ? dueLabel(nextDate!) : `Due ${formatDueDate(nextDate!)}`}
+                )}
+                {people.map(({ label, person }) => {
+                  const isYou = person!.name === "You";
+                  return (
+                    <span
+                      key={label}
+                      title={label}
+                      className={cn(
+                        "inline-flex max-w-full min-w-0 items-center gap-1.5 rounded-full border py-0.5 pr-2.5 pl-0.5 text-xs",
+                        isYou ? "border-border bg-secondary text-muted-foreground" : "border-success/40 bg-success/10 text-foreground",
+                      )}
+                    >
+                      <span
+                        aria-hidden
+                        className={cn(
+                          "flex size-5 shrink-0 items-center justify-center rounded-full text-[10.5px] font-bold uppercase",
+                          isYou ? "bg-border text-foreground" : "bg-success text-white",
+                        )}
+                      >
+                        {person!.name.trim().charAt(0) || "?"}
+                      </span>
+                      <span className="max-w-[9rem] truncate font-bold uppercase">{person!.name}</span>
+                      {person!.amount && <span className={cn("shrink-0 font-semibold tabular-nums", !isYou && "text-success")}>{person!.amount}</span>}
+                    </span>
+                  );
+                })}
+                {chips.map(({ icon: LinkIcon, label }) => (
+                  <span
+                    key={label}
+                    title={label}
+                    className="inline-flex max-w-full min-w-0 items-center gap-1 rounded-full border border-border bg-secondary px-2.5 py-0.5 text-xs font-medium text-foreground"
+                  >
+                    <LinkIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" strokeWidth={1.75} />
+                    <span className="truncate">{label}</span>
                   </span>
-                </dd>
+                ))}
               </div>
             )}
-          </dl>
-        )}
-
-        {total > 1 && <InstallmentProgress paid={paid} total={total} partial={partial} />}
-
-        {links.length > 0 && (
-          <div className="mt-auto flex flex-wrap gap-1.5 border-t border-border pt-3">
-            {links.map(({ icon: LinkIcon, label }) => (
-              <span key={label} className="inline-flex max-w-full items-center gap-1 rounded-full border border-border bg-secondary px-2.5 py-1 text-xs font-medium text-foreground">
-                <LinkIcon className="size-3.5 shrink-0 text-muted-foreground" strokeWidth={1.75} />
-                <span className="truncate">{label}</span>
-              </span>
-            ))}
           </div>
         )}
       </div>

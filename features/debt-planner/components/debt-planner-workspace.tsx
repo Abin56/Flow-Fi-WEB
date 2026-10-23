@@ -4,6 +4,7 @@ import { AlertTriangle, ArrowUpRight, CalendarRange, Calculator, Info, ShieldChe
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { EmptyState } from "@/components/finance/empty-state";
+import { ScrollNav } from "@/components/layout/scroll-nav";
 import { Skeleton } from "@/components/ui/skeleton";
 import { LE_RADIUS } from "@/features/loans/components/loan-emi-ui";
 import type { PayoffStrategy } from "@/lib/engines/debt-payoff";
@@ -171,6 +172,7 @@ export function DebtPlannerWorkspace() {
           </div>
         </>
       )}
+      <ScrollNav />
     </div>
   );
 }

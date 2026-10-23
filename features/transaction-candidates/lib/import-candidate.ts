@@ -2,32 +2,36 @@
  * Import/dismiss orchestrator — turns one reviewed `SmsTransactionCandidate`
  * into a real `Transaction` via the existing `TransactionRepository`, never
  * the other way around: `TransactionRepository.createTransaction` must
- * succeed FIRST; only then is the cloud candidate document deleted.
+ * succeed FIRST; only then is the cloud candidate document removed.
  *
- * Unlike the earlier, incorrect model this replaces, there is no `status`
- * field to write on the candidate itself — this collection has no
- * web-writable state machine at all (see `sms-transaction-candidate.ts`'s
+ * There is still no `status` field on the candidate itself — this collection
+ * has no web-writable state machine (see `sms-transaction-candidate.ts`'s
  * module doc: Android's `SmsCandidateCloudSync` does a full-document
  * overwrite on every sync, so anything the web app wrote in place would be
  * silently clobbered the next time the source SMS is still locally pending
- * on Android). "No longer needs review" can only be expressed by deleting
- * the document, exactly mirroring what Android's own sync already does once
- * an SMS is no longer pending on-device.
+ * on Android). "No longer needs review" is expressed by
+ * `SmsTransactionCandidateRepository.markHandled`: one atomic batch that
+ * deletes the candidate AND creates its sibling
+ * `smsCandidateTombstones/{id}` (see
+ * `Finance_App/docs/sms-background-cloud-sync-architecture.md`).
  *
- * KNOWN CROSS-PLATFORM LIFECYCLE GAP (see docs/sms-candidate-contract.md):
- * deleting a candidate here only removes it from Firestore. It does not,
- * and cannot, update the on-device Android `SmsInboxItem.status` that
- * `SmsCandidateCloudSync.sync()` reads to decide what to re-upload. If the
- * user later opens the Android app's SMS Inbox screen before separately
- * resolving that SMS there too, Android will re-sync the *same* candidate
- * (same document id) because its local record still reads `pending`. This
- * is a real, inherent gap in the current two-repo design that cannot be
- * closed from the web side alone without an Android-side change (out of
- * scope here). The mitigation implemented on the web side is
- * `evaluateCandidateDuplicate`: a resurrected candidate whose fields match
- * an already-created `Transaction` (`source: "sms"`) is flagged "Possible
- * Duplicate" and blocked from one-click import, turning a silent double
- * import into a visible, user-confirmed decision.
+ * CROSS-PLATFORM LIFECYCLE GAP — narrowed, not yet fully closed (see
+ * docs/sms-candidate-contract.md and the architecture doc above): the
+ * tombstone this now writes is the durable signal Android needs to stop
+ * re-uploading a handled candidate, but Android doesn't read it yet — that
+ * lands in a later phase (background upload is still disabled via
+ * `kSmsAutoSyncCloudUploadEnabled`). Until then, the same resurrection this
+ * comment used to describe can still happen in practice, with one change:
+ * once Android does read tombstones, `firestore.rules` denies the
+ * resurrecting `create` outright (server-side, not just a UI warning). Until
+ * then, `evaluateCandidateDuplicate` remains the mitigation in place: a
+ * resurrected candidate whose fields match an already-created `Transaction`
+ * (`source: "sms"`) is flagged "Possible Duplicate" and blocked from
+ * one-click import, turning a silent double import into a visible,
+ * user-confirmed decision. This stays as a second guard even after Android
+ * reads tombstones — it also covers the multi-device case the tombstone
+ * design explicitly does not solve (see the architecture doc's "Unresolved
+ * decisions," #1).
  *
  * DUPLICATE GATE (the actual write-path check, not just a UI-level hint):
  * unless `params.skipDuplicateCheck` is set, this function itself runs the
@@ -59,6 +63,7 @@ import {
   type DuplicateDetectionResult,
   type ExistingTransactionForDuplicateCheck,
 } from "@/lib/services/duplicate-detection/duplicate-detection-service";
+import { candidateImportKey, importedTransactionId, isKeyedTransactionChangedError } from "./candidate-import-key";
 
 /**
  * Assigns the brand-new transaction to a person, or splits it across several, in the same single
@@ -93,13 +98,34 @@ export interface ImportCandidateParams {
   skipDuplicateCheck?: boolean;
 }
 
+export type ImportFollowUpStep = "person_split" | "candidate_delete";
+
 export type ImportOutcome =
-  | { status: "success"; transactionId: string }
+  /** `created` is the new transaction in duplicate-check shape, so a batch can compare later candidates against it. */
+  | { status: "success"; transactionId: string; created?: ExistingTransactionForDuplicateCheck }
   | { status: "validation_failed"; reason: string }
   /** The candidate matched an existing transaction closely enough to warrant a warning — no writes have happened yet. Re-call with `skipDuplicateCheck: true` to proceed anyway. */
   | { status: "duplicate_detected"; result: DuplicateDetectionResult }
   | { status: "transaction_create_failed"; error: unknown }
-  | { status: "imported_not_deleted"; transactionId: string; error: unknown };
+  /**
+   * The transaction EXISTS (and its account balance effect is applied) but a follow-up step failed. `failedStep` says which:
+   * - `"person_split"`: the person/split wasn't applied. `ExpenseRepository` rolls back its own partial split writes and
+   *   leaves the transaction in place as a plain expense (unless the error text says the rollback itself failed). The
+   *   candidate was never deleted. Re-importing is safe (idempotent `already_imported`) but will NOT re-apply the split.
+   * - `"candidate_delete"`: everything was written; only removing the candidate document failed.
+   */
+  | { status: "imported_not_deleted"; failedStep: ImportFollowUpStep; transactionId: string; error: unknown; created?: ExistingTransactionForDuplicateCheck; reusedExisting?: boolean }
+  /**
+   * This exact candidate (same idempotency key) was already imported earlier — no new transaction and no
+   * balance change was made, and no person/split was re-applied. The candidate document is removed.
+   * `changed` is true when the saved transaction's amount/account/date was edited since, so it no longer
+   * matches this candidate.
+   */
+  | { status: "already_imported"; transactionId: string; changed: boolean; created?: ExistingTransactionForDuplicateCheck };
+
+function toDuplicateCheckShape(t: Transaction): ExistingTransactionForDuplicateCheck {
+  return { id: t.id, description: t.description, amount: t.amount, dateTime: t.dateTime, accountId: t.accountId, type: t.type };
+}
 
 /**
  * Adapts one SMS candidate + its resolved destination account into the shared `checkForDuplicates`
@@ -205,7 +231,48 @@ async function applyPersonAssignment(
  * Transaction, then applies any person/split assignment, then (only once the
  * transaction fully reflects the user's choices) deletes the cloud candidate.
  */
-export async function importCandidate(
+/**
+ * Candidate ids with an import currently running in this tab — a second call for the same candidate
+ * (double-click, Enter + click, bulk + single) joins the first instead of starting another. Cross-tab and
+ * post-reload repeats are covered by the idempotency key, not by this.
+ */
+const importsInFlight = new Map<string, Promise<ImportOutcome>>();
+
+export function importCandidate(
+  params: ImportCandidateParams,
+  transactionRepository: TransactionRepository,
+  candidateRepository: SmsTransactionCandidateRepository,
+  expenseRepository: ExpenseRepository,
+): Promise<ImportOutcome> {
+  const candidateId = params.candidate.id;
+  const running = importsInFlight.get(candidateId);
+  if (running) return running;
+  const attempt: Promise<ImportOutcome> = runImport(params, transactionRepository, candidateRepository, expenseRepository).finally(() => {
+    if (importsInFlight.get(candidateId) === attempt) importsInFlight.delete(candidateId);
+  });
+  importsInFlight.set(candidateId, attempt);
+  return attempt;
+}
+
+/** The transaction for this candidate already exists: remove the (resurrected) candidate, create nothing. */
+async function settleAlreadyImported(
+  candidate: SmsTransactionCandidate,
+  candidateRepository: SmsTransactionCandidateRepository,
+  transactionId: string,
+  changed: boolean,
+  created?: ExistingTransactionForDuplicateCheck,
+): Promise<ImportOutcome> {
+  try {
+    await candidateRepository.markHandled(candidate.id, "imported", transactionId);
+    return { status: "already_imported", transactionId, changed, created };
+  } catch (error) {
+    console.error("importCandidate: candidate was already imported but its delete failed", { candidateId: candidate.id, transactionId, error });
+    // `reusedExisting`: the transaction was created by an earlier attempt, so no person/split follow-up ran this time.
+    return { status: "imported_not_deleted", failedStep: "candidate_delete", transactionId, error, created, reusedExisting: true };
+  }
+}
+
+async function runImport(
   params: ImportCandidateParams,
   transactionRepository: TransactionRepository,
   candidateRepository: SmsTransactionCandidateRepository,
@@ -222,6 +289,8 @@ export async function importCandidate(
     if (duplicateResult) return { status: "duplicate_detected", result: duplicateResult };
   }
 
+  const idempotencyKey = await candidateImportKey(candidate.id);
+  const startedAt = Date.now();
   let transaction: Transaction;
   try {
     transaction = await transactionRepository.createTransaction({
@@ -233,12 +302,25 @@ export async function importCandidate(
       description: candidate.merchant ?? candidate.bankName ?? "SMS transaction",
       notes: params.notes ?? "",
       source: "sms",
+      idempotencyKey,
     });
   } catch (error) {
+    // The saved transaction for this candidate was edited (amount/account/date) after import: still the
+    // same SMS, already imported — never a second transaction.
+    if (isKeyedTransactionChangedError(error)) {
+      return settleAlreadyImported(candidate, candidateRepository, importedTransactionId(idempotencyKey), true);
+    }
     // Candidate document is untouched — still present, still safely retryable.
     return { status: "transaction_create_failed", error };
   }
   const transactionId = transaction.id;
+
+  // The repository returns the earlier transaction (created before this call began) for a repeated key.
+  // Person/split follow-ups ran — or deliberately didn't — on that earlier attempt; never re-apply them.
+  if (transaction.createdAt instanceof Date && transaction.createdAt.getTime() < startedAt) {
+    return settleAlreadyImported(candidate, candidateRepository, transactionId, false, toDuplicateCheckShape(transaction));
+  }
+  const created = toDuplicateCheckShape(transaction);
 
   if (params.personAssignment) {
     try {
@@ -263,13 +345,13 @@ export async function importCandidate(
         transactionId,
         error,
       });
-      return { status: "imported_not_deleted", transactionId, error };
+      return { status: "imported_not_deleted", failedStep: "person_split", transactionId, error, created };
     }
   }
 
   try {
-    await candidateRepository.deleteById(candidate.id);
-    return { status: "success", transactionId };
+    await candidateRepository.markHandled(candidate.id, "imported", transactionId);
+    return { status: "success", transactionId, created };
   } catch (error) {
     // The transaction now exists, but the candidate doc wasn't deleted — it will
     // still show up on next load. `evaluateCandidateDuplicate` is the safety net
@@ -279,14 +361,15 @@ export async function importCandidate(
       transactionId,
       error,
     });
-    return { status: "imported_not_deleted", transactionId, error };
+    return { status: "imported_not_deleted", failedStep: "candidate_delete", transactionId, error, created };
   }
 }
 
 /**
- * Dismisses a candidate without creating a Transaction — deletes the cloud
- * document only. Never calls `createTransaction`. Subject to the same
- * cross-platform resurrection gap documented above, but harmless here since
+ * Dismisses a candidate without creating a Transaction — records a
+ * `"dismissed"` tombstone and deletes the candidate. Never calls
+ * `createTransaction`. Subject to the same cross-platform lifecycle gap
+ * documented above until Android reads tombstones, but harmless here since
  * no Transaction is ever created by this path: at worst the SMS reappears
  * for review again after Android's next sync.
  */
@@ -294,7 +377,7 @@ export async function ignoreCandidate(
   candidate: SmsTransactionCandidate,
   candidateRepository: SmsTransactionCandidateRepository,
 ): Promise<void> {
-  await candidateRepository.deleteById(candidate.id);
+  await candidateRepository.markHandled(candidate.id, "dismissed", null);
 }
 
 export interface BulkIgnoreResult {
@@ -375,8 +458,16 @@ export async function bulkImportCandidates(
   personAssignment?: CandidatePersonAssignment | null,
 ): Promise<BulkImportResult[]> {
   const results: BulkImportResult[] = [];
+  // Transactions this very batch has already created. Each later candidate is compared against the stored
+  // transactions AND these, so two messages for one real payment can't both slip past a check that only
+  // ever saw the list as it was before the batch started. A flagged candidate is never dropped — it comes
+  // back as `duplicate_detected` for the user to review; genuinely repeated purchases stay importable.
+  const acceptedInBatch: ExistingTransactionForDuplicateCheck[] = [];
   for (const candidate of candidates) {
     const resolvedPersonAssignment = candidate.direction === "debit" ? (personAssignment ?? null) : null;
+    const knownIds = new Set(existingTransactions.map((t) => t.id));
+    const existingForThisCandidate =
+      acceptedInBatch.length === 0 ? existingTransactions : [...existingTransactions, ...acceptedInBatch.filter((t) => !knownIds.has(t.id))];
     let outcome: ImportOutcome;
     if (forcedDestination) {
       outcome = await importCandidate(
@@ -386,7 +477,7 @@ export async function bulkImportCandidates(
           matchedCard: forcedDestination.matchedCard,
           categoryId,
           personAssignment: resolvedPersonAssignment,
-          existingTransactions,
+          existingTransactions: existingForThisCandidate,
           skipDuplicateCheck,
         },
         transactionRepository,
@@ -405,7 +496,7 @@ export async function bulkImportCandidates(
                 matchedCard,
                 categoryId,
                 personAssignment: resolvedPersonAssignment,
-                existingTransactions,
+                existingTransactions: existingForThisCandidate,
                 skipDuplicateCheck,
               },
               transactionRepository,
@@ -413,6 +504,7 @@ export async function bulkImportCandidates(
               expenseRepository,
             );
     }
+    if ("created" in outcome && outcome.created) acceptedInBatch.push(outcome.created);
     results.push({ candidateId: candidate.id, outcome });
   }
   return results;

@@ -31,7 +31,8 @@ import { BankCombobox, DestructiveDeleteDialog, type DestructiveDeleteImpactRow 
 import { useGuardedSubmit } from "@/components/finance/use-guarded-submit";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AccountOverviewPanel } from "@/features/accounts/components/account-overview-panel";
-import { AccountsHeader } from "@/features/accounts/components/accounts-header";
+import { useCompactHeader } from "@/components/layout/compact-header";
+import { AccountsCompactBar, AccountsHeader } from "@/features/accounts/components/accounts-header";
 import { AccountsStats } from "@/features/accounts/components/accounts-stats";
 import { AccountsToolbar } from "@/features/accounts/components/accounts-toolbar";
 import { AccountTile } from "@/features/accounts/components/account-tile";
@@ -44,6 +45,7 @@ import {
   colorValueForAccountColor,
   useAccountActions,
   useAccountsOverview,
+  useAccountsStats,
   type AccountDeletionImpact,
 } from "@/features/accounts/hooks/use-accounts-data";
 import { useCreditCardActions, type CreditCardDeletionImpact } from "@/features/credit-cards/hooks/use-credit-cards-data";
@@ -213,6 +215,10 @@ export function AccountsWorkspace() {
     if (restoreOverview) setOverviewOpen(true);
     setRestoreOverview(false);
   };
+
+  // Compact bar: shown once the page title has scrolled out of view. Reads the same Total balance the summary shows.
+  const { watch: watchTitle, progress: barProgress, reduceMotion: barReduceMotion, barTop } = useCompactHeader();
+  const { stats: accountsStats } = useAccountsStats();
 
   const { items: accountsOverviewList, isLoading } = useAccountsOverview();
   const { data: rawAccounts = [] } = useAccounts();
@@ -460,7 +466,8 @@ export function AccountsWorkspace() {
   return (
     <div className="flex min-w-0 flex-col gap-5 px-1 lg:flex-row lg:items-start">
       <div className="flex min-w-0 flex-1 flex-col gap-5">
-        <AccountsHeader onAdd={openAdd} />
+        <AccountsCompactBar progress={barProgress} reduceMotion={barReduceMotion} top={barTop} totalBalance={accountsStats.totalBalance} onAdd={openAdd} />
+        <AccountsHeader onAdd={openAdd} titleRef={watchTitle} />
         <AccountsStats accountCount={moneyAccounts.length} onExplain={openBreakdown} />
 
         <section aria-label="My accounts" className="flex flex-col gap-3">

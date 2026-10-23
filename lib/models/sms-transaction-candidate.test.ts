@@ -105,3 +105,23 @@ describe("smsCandidateEventTypeLabel", () => {
     expect(smsCandidateEventTypeLabel("somethingNew" as SmsTransactionCandidate["eventType"])).toBe("Transaction");
   });
 });
+
+describe("event types", () => {
+  it("labels every event type Android can send, including cashback / interest / bank fee / recharge", () => {
+    expect(smsCandidateEventTypeLabel("cashback")).toBe("Cashback");
+    expect(smsCandidateEventTypeLabel("interestCredit")).toBe("Interest credit");
+    expect(smsCandidateEventTypeLabel("bankFee")).toBe("Bank fee");
+    expect(smsCandidateEventTypeLabel("recharge")).toBe("Recharge");
+  });
+
+  it("reads those new Android names through unchanged", () => {
+    const candidate = smsTransactionCandidateFromFirestore(fakeSnapshot({ ...baseFirestoreData, eventType: "bankFee" }));
+    expect(candidate.eventType).toBe("bankFee");
+  });
+
+  it("reads a name this app doesn't know as 'unknown' — same as Android's fromName — never a raw unlabelled string", () => {
+    const candidate = smsTransactionCandidateFromFirestore(fakeSnapshot({ ...baseFirestoreData, eventType: "somethingNew" }));
+    expect(candidate.eventType).toBe("unknown");
+    expect(smsCandidateEventTypeLabel(candidate.eventType)).toBe("Transaction");
+  });
+});

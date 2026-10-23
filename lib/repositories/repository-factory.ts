@@ -524,7 +524,8 @@ export function createSmsTransactionCandidateRepository(uid: string): SmsTransac
   const ref = collection(db, FirestoreCollections.users, uid, FirestoreCollections.smsTransactionCandidates).withConverter(
     smsTransactionCandidateConverter,
   );
-  return new SmsTransactionCandidateRepository(ref);
+  const tombstoneRef = collection(db, FirestoreCollections.users, uid, FirestoreCollections.smsCandidateTombstones);
+  return new SmsTransactionCandidateRepository(ref, tombstoneRef);
 }
 
 /** Flat, uid-scoped `paymentSchedules` collection — shared by Loan/EMI/Bill/split-Expense (`ownerType` discriminates), same physical collection `createEmiRepository`/`createLoanRepository` already build a scoped instance of inline. Exposed standalone for callers (like the Transaction Studio commit orchestrator) that need one without also constructing a whole Emi/Loan repository. */

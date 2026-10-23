@@ -127,6 +127,16 @@ export function FinanceTable<T>({
                   role={onRowClick ? "button" : undefined}
                   tabIndex={onRowClick ? 0 : undefined}
                   onClick={() => onRowClick?.(row)}
+                  onKeyDown={
+                    onRowClick
+                      ? (e) => {
+                          // Only when the row ITSELF has focus — Enter/Space on a checkbox or button inside it keeps its own meaning.
+                          if (e.target !== e.currentTarget || (e.key !== "Enter" && e.key !== " ")) return;
+                          e.preventDefault();
+                          onRowClick(row);
+                        }
+                      : undefined
+                  }
                   style={gridLines ? { borderBottomColor: "var(--grid-line-strong)" } : undefined}
                   className={cn(
                     "flex items-center gap-4 overflow-hidden border-b px-4 py-3.5 text-sm transition-[transform,background-color] duration-150 last:border-b-0",

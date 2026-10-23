@@ -55,7 +55,7 @@ export const NAV_ITEMS: NavItem[] = [
   { label: "Debt Planner", href: "/debt-planner", icon: TrendingDown, section: "Debt" },
 
   { label: "Statement Review", href: "/statement-review", icon: FileStack, section: "Import" },
-  { label: "SMS Candidates", href: "/transaction-candidates", icon: MessageSquareText, section: "Import" },
+  { label: "Transaction Inbox", href: "/transaction-candidates", icon: MessageSquareText, section: "Import" },
 
   { label: "Reports", href: "/reports", icon: FileBarChart, section: "Insights" },
   { label: "Analytics", href: "/analytics", icon: LineChart, section: "Insights" },

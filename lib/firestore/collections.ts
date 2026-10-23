@@ -60,6 +60,13 @@ export const FirestoreCollections = {
   // authenticated owner; the web app only reads and deletes (see
   // docs/sms-candidate-contract.md and lib/models/sms-transaction-candidate.ts).
   smsTransactionCandidates: "smsTransactionCandidates",
+
+  // Durable "handled" marker for an imported/dismissed SMS candidate — see
+  // lib/models/sms-candidate-tombstone.ts and
+  // Finance_App/docs/sms-background-cloud-sync-architecture.md (§1). Same
+  // document id as the candidate it replaces. Web-written only; immutable
+  // once created (firestore.rules denies update outright).
+  smsCandidateTombstones: "smsCandidateTombstones",
 } as const;
 
 /** Top-level (not user-scoped) collections — config/global data only. */

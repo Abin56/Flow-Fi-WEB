@@ -1,7 +1,8 @@
 "use client";
 
 import { Banknote, Briefcase, Car, CreditCard, GraduationCap, Home, User, UserRound } from "lucide-react";
-import { DebtCard, EMI_ICON, cadenceLabel, daysUntil, ownershipChips, type DebtCardBadge } from "@/features/loans/components/loan-emi-ui";
+import { DebtCard, EMI_ICON, cadenceLabel, daysUntil, interestRateLabel, ownershipChips, type DebtCardBadge } from "@/features/loans/components/loan-emi-ui";
+import { classifyOwnership, myShareOfInstallment, ownershipActionMode } from "@/features/loans/lib/my-commitments";
 import { useLoanPersons } from "@/hooks/use-loans";
 import type { EmiRow } from "@/features/emi/hooks/use-emi-data";
 import type { EmiLoanType } from "@/lib/models/emi";
@@ -59,10 +60,12 @@ interface EmiCardProps {
   /** Record-type tag from the unified Loan & EMI list. */
   tag?: string;
   onClick: () => void;
+  /** Opens the one-at-a-time "This EMI is mine" / "Remove confirmation" dialog. */
+  onOwnershipAction?: (mode: "confirm" | "remove") => void;
 }
 
 /** Same card as LoanCard (see `DebtCard`) — installment-count progress, outstanding amount first. */
-export function EmiCard({ row, tag, onClick }: EmiCardProps) {
+export function EmiCard({ row, tag, onClick, onOwnershipAction }: EmiCardProps) {
   const { emi, status, installmentsPaid, remainingBalance, nextInstallment } = row;
   const { data: persons = [] } = useLoanPersons();
   const chips = ownershipChips(emi, emi.principalAmount, (id) => persons.find((p) => p.id === id)?.name);
@@ -70,6 +73,8 @@ export function EmiCard({ row, tag, onClick }: EmiCardProps) {
   const baseSource = emi.lenderName ?? cardLabel ?? row.category?.name ?? EMI_TYPE_LABEL[emi.loanType];
   const source = [baseSource, emi.loanNumber ? `Ref ${emi.loanNumber}` : null].filter(Boolean).join(" · ");
   const done = status === "closed" || status === "completed";
+  const mode = onOwnershipAction && !done ? ownershipActionMode(emi) : null;
+  const action = mode && onOwnershipAction ? { label: mode === "confirm" ? "This EMI is mine" : "Remove confirmation", onClick: () => onOwnershipAction(mode) } : undefined;
 
   return (
     <DebtCard
@@ -77,6 +82,7 @@ export function EmiCard({ row, tag, onClick }: EmiCardProps) {
       name={emi.name}
       source={source}
       tag={tag}
+      rate={interestRateLabel(emi.interest)}
       badges={emiBadges(row)}
       outstandingLabel="Outstanding"
       outstanding={remainingBalance}
@@ -91,8 +97,9 @@ export function EmiCard({ row, tag, onClick }: EmiCardProps) {
       partial={installmentProgress(row.installments).partial}
       links={[
         cardLabel && cardLabel !== baseSource ? { icon: CreditCard, label: cardLabel } : null,
-        ...(chips.length > 0 ? chips : [emi.beneficiaryPersonId ? { icon: UserRound, label: `For ${row.beneficiaryName ?? "someone else"}` } : null]),
+        ...(chips.length > 0 ? chips : [emi.beneficiaryPersonId ? { icon: UserRound, label: `For ${row.beneficiaryName ?? "someone else"}`, person: { name: row.beneficiaryName ?? "Someone else", role: "For" } } : null]),
       ].filter((l) => l != null)}
+      ownership={{ kind: classifyOwnership(emi).kind, myShare: done || !nextInstallment ? null : myShareOfInstallment(emi, nextInstallment.amountDue), action }}
       muted={status === "closed"}
       onClick={onClick}
     />

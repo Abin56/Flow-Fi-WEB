@@ -41,6 +41,8 @@ import type {
 } from "@/lib/repositories/payment-schedule-repository";
 import { generateId } from "@/lib/utils/id-generator";
 import { checkedOwnership, type OwnershipShare } from "@/lib/engines/debt-ownership";
+import { ownershipConfirmationBlocker } from "@/lib/models/ownership-confirmation";
+import { writeKeepingStoredConfirmation } from "@/lib/repositories/ownership-confirmation-write";
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
@@ -444,18 +446,54 @@ export class EmiRepository extends FirestoreCrudRepository<Emi> {
       );
     }
     // Not via `updateField`, which ignores null — switching back to "For me" must be able to clear it.
+    let ownershipChanged = false;
     const currentBeneficiary = updated.beneficiaryPersonId ?? null;
     if (beneficiaryPersonId !== undefined && beneficiaryPersonId !== currentBeneficiary) {
       updated = recordEdit(updated, "beneficiaryPersonId", currentBeneficiary ?? "none", beneficiaryPersonId ?? "none");
       updated = { ...updated, beneficiaryPersonId };
+      ownershipChanged = true;
     }
     const currentRepays = updated.beneficiaryRepaysInstallments === true;
     if (beneficiaryRepaysInstallments !== undefined && beneficiaryRepaysInstallments !== currentRepays) {
       updated = recordEdit(updated, "beneficiaryRepaysInstallments", String(currentRepays), String(beneficiaryRepaysInstallments));
       updated = { ...updated, beneficiaryRepaysInstallments };
+      ownershipChanged = true;
     }
-    await this.update(updated);
+    // A change to who is "for" / who repays voids the STORED `ownershipConfirmedMine`. The confirmation itself is
+    // always read from the stored document, never from `emi`.
+    await writeKeepingStoredConfirmation(this.collection, updated, ownershipChanged);
   }
+
+  /**
+   * Every other whole-document write in this repository goes through here, so none of them can let a stale copy of the
+   * EMI decide `ownershipConfirmedMine` (see `writeKeepingStoredConfirmation`). All other fields are written as given.
+   */
+  override async update(entity: Emi): Promise<void> {
+    await writeKeepingStoredConfirmation(this.collection, entity, false);
+  }
+
+  /**
+   * "This EMI is mine": records the user's explicit confirmation on a record with no ownership data. Applied to the
+   * FRESH document inside a transaction (`updateFresh`), so a stale in-memory copy never overwrites an unrelated
+   * change, and a concurrent write makes Firestore retry the callback against the newer document. Repeating it is a
+   * no-op. Touches nothing but this field (and its audit entry): no schedule, payment, account or People data.
+   */
+  async confirmOwnershipMine(id: string): Promise<void> {
+    await this.updateFresh(id, (fresh) => {
+      if (fresh.ownershipConfirmedMine != null) return fresh;
+      const blocker = ownershipConfirmationBlocker(fresh);
+      if (blocker != null) throw new Error(blocker);
+      return recordEdit({ ...fresh, ownershipConfirmedMine: { at: new Date() } }, "ownershipConfirmedMine", "none", "confirmed mine");
+    });
+  }
+
+  /** Reverses `confirmOwnershipMine` — clears only the confirmation. Allowed on any record, and a no-op when absent. */
+  async clearOwnershipConfirmation(id: string): Promise<void> {
+    await this.updateFresh(id, (fresh) =>
+      fresh.ownershipConfirmedMine == null ? fresh : recordEdit({ ...fresh, ownershipConfirmedMine: null }, "ownershipConfirmedMine", "confirmed mine", "none"),
+    );
+  }
+
 
   /**
    * Changes `interest`/`installmentFrequency`/`installmentCount` on an EMI

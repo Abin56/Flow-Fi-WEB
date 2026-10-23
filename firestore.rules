@@ -136,7 +136,50 @@ service cloud.firestore {
     // There is no status/state-machine field on this document at all — an
     // earlier version of this rule invented one; that was never real,
     // corrected once the actual Android-side model was found and audited.
-    match /users/{uid}/smsTransactionCandidates/{document=**} { allow read, write: if isOwner(uid); }
+    //
+    // smsCandidateTombstones proposal (2026-10-23, docs/sms-candidate-contract.md
+    // + Finance_App/docs/sms-background-cloud-sync-architecture.md): a durable
+    // "handled" marker, same id as the candidate it replaces. `create` on the
+    // candidate is denied once a tombstone with that id exists — the one
+    // server-side backstop against a resurrected candidate, independent of
+    // any client-side (Android transaction / web batch) logic. This only
+    // guards `create` (the doc not previously existing): Web's delete +
+    // tombstone write is a single atomic WriteBatch, so no reader — including
+    // this rule evaluation — can ever observe "tombstone exists but candidate
+    // doc still exists" as an intermediate state from that batch. It does
+    // NOT by itself make the Android-side upload race-safe; that still
+    // requires Android's own `runTransaction` (reads the tombstone inside the
+    // same transaction that writes the candidate) — see the architecture doc,
+    // §2/§5.
+    match /users/{uid}/smsTransactionCandidates/{candidateId} {
+      allow read, delete: if isOwner(uid);
+      allow create: if isOwner(uid) &&
+        !exists(/databases/$(database)/documents/users/$(uid)/smsCandidateTombstones/$(candidateId));
+      allow update: if isOwner(uid);
+    }
+
+    // Handled-state record for an imported or dismissed SMS candidate — see
+    // the `smsTransactionCandidates` comment above. Fully immutable once
+    // written: a dismissed candidate can never later be silently rewritten
+    // as imported or vice versa, and nothing can delete the record either.
+    // Same id as the candidate document it replaces.
+    //
+    // `delete` is deliberately NOT granted (Phase B security review,
+    // 2026-10-24): no approved workflow — Web's import/dismiss, nor any
+    // planned Android read — ever deletes a tombstone, and the approved
+    // retention policy is "keep indefinitely, no automatic TTL" (see the
+    // architecture doc, §1). Owner-write delete access here would be a
+    // standing capability with no legitimate caller, and a real risk if a
+    // compromised/buggy client ever used it: deleting a tombstone re-opens
+    // exactly the resurrection window the `!exists()` guard on
+    // `smsTransactionCandidates.create` exists to close. A future admin-side
+    // retention/TTL job (if the "revisit later" decision above ever adds
+    // one) would run via the Admin SDK, which isn't subject to these rules
+    // at all — so it needs no client delete permission either.
+    match /users/{uid}/smsCandidateTombstones/{candidateId} {
+      allow read, create: if isOwner(uid);
+      allow update, delete: if false;
+    }
 
     // Personal merchant mapping corrections (Architecture §11.2, write-side
     // learning loop, backlog M13-T1) — plain owner-scoped CRUD, same as the

@@ -29,6 +29,8 @@ import {
 import { Fragment, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { AnimatePresence, motion, useDragControls, useReducedMotion } from "framer-motion";
 import { createPortal } from "react-dom";
+import { useCompactHeader } from "@/components/layout/compact-header";
+import { CreditCardsCompactBar } from "@/features/credit-cards/components/credit-cards-compact-bar";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Cell, Pie, PieChart, ResponsiveContainer } from "recharts";
 import { ClayButton } from "@/components/clay/clay-button";
@@ -242,6 +244,8 @@ export function CreditCardsWorkspace() {
   const { data: sharedLimits = [] } = useSharedCreditLimits();
   const actions = useCreditCardActions();
   const router = useRouter();
+  // Compact bar: shown once the page title has scrolled out of view (the bar itself renders only in the main branch).
+  const { watch: watchTitle, progress: barProgress, reduceMotion: barReduceMotion, barTop, stackTop } = useCompactHeader();
 
   const { data: people = [] } = usePeople();
   const { rows: transactionRows, accounts: txnAccounts, categories: txnCategories } = useTransactionRows();
@@ -1009,9 +1013,19 @@ export function CreditCardsWorkspace() {
     </Dialog>
   );
 
+  // "View statements" lives in the activity sheet's Bills tab (`#upcoming-statements`), which only exists while that sheet is open —
+  // so open the existing sheet on Bills for the selected card, then bring that section to the top once it has mounted.
+  const viewStatements = () => {
+    openActivitySheet("bills", false);
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => document.getElementById("upcoming-statements")?.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "start" })),
+    );
+  };
+  const scrollToCards = () => document.getElementById("my-credit-cards")?.scrollIntoView({ behavior: "smooth", block: "start" });
+
   const header = (
     <header className="flex flex-wrap items-start justify-between gap-3">
-      <div className="min-w-0">
+      <div ref={watchTitle} className="min-w-0">
         <h1 className="font-heading text-2xl font-bold tracking-tight text-foreground">Credit Cards</h1>
         <p className="mt-0.5 text-sm text-muted-foreground">Limits, spending, statements and due dates — all your cards.</p>
       </div>
@@ -1019,17 +1033,17 @@ export function CreditCardsWorkspace() {
         {creditCards.length > 0 && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <button type="button" className={CC_UTILITY}>
+              <button type="button" aria-label="More actions" className={CC_UTILITY}>
                 <MoreHorizontal className="size-4" strokeWidth={1.75} />
                 <span className="hidden sm:inline">More</span>
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="min-w-48 rounded-[8px]">
-              <DropdownMenuItem onSelect={() => document.getElementById("upcoming-statements")?.scrollIntoView({ behavior: "smooth", block: "start" })}>
+              <DropdownMenuItem onSelect={viewStatements}>
                 <FileText strokeWidth={1.75} />
                 View statements
               </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => document.getElementById("my-credit-cards")?.scrollIntoView({ behavior: "smooth", block: "start" })}>
+              <DropdownMenuItem onSelect={scrollToCards}>
                 <Settings2 strokeWidth={1.75} />
                 Manage cards
               </DropdownMenuItem>
@@ -1092,6 +1106,18 @@ export function CreditCardsWorkspace() {
 
   return (
     <div className="flex min-w-0 flex-col gap-5 px-1">
+      {/* ── Compact bar: zero-height sticky slot, a sibling of (never inside) the scaled card grid below; figures are the summary's own ── */}
+      <CreditCardsCompactBar
+        progress={barProgress}
+        reduceMotion={barReduceMotion}
+        top={barTop}
+        creditUsed={totals.usedCredit}
+        utilizationPercent={totalUtilization}
+        available={totals.available}
+        onAdd={openAdd}
+        onViewStatements={viewStatements}
+        onManageCards={scrollToCards}
+      />
       {header}
 
       {/* ── Summary — one panel: what's used leads, limit / available / this month support it ── */}
@@ -1132,7 +1158,8 @@ export function CreditCardsWorkspace() {
       >
         {/* ── Card selection ── */}
         <div className="flex min-w-0 flex-col gap-6 xl:col-start-1 xl:row-start-1">
-          <section id="my-credit-cards" aria-label="My credit cards" className="flex scroll-mt-4 flex-col gap-3">
+          {/* scroll-mt-20: "Manage cards" (More menu) scrolls here, and the compact bar covers the top 56px */}
+          <section id="my-credit-cards" aria-label="My credit cards" className="flex scroll-mt-20 flex-col gap-3">
             <div className="flex flex-wrap items-center gap-2 border-b border-border-strong/50 pb-3">
               <h2 className="mr-auto font-heading text-base font-semibold text-foreground">
                 My credit cards <span className="ml-0.5 text-sm font-semibold text-muted-foreground tabular-nums">{creditCards.length}</span>
@@ -1242,7 +1269,7 @@ export function CreditCardsWorkspace() {
           </section>
         </div>
 
-        <aside className="flex min-w-0 flex-col gap-5 xl:sticky xl:top-0 xl:col-start-2 xl:row-span-2 xl:row-start-1">
+        <aside style={{ top: stackTop }} className="flex min-w-0 flex-col gap-5 xl:sticky xl:col-start-2 xl:row-span-2 xl:row-start-1">
           {activeCard && (
             <SelectedCardPanel
               card={activeCard}

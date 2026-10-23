@@ -369,6 +369,9 @@ export function useLoanActions() {
       // frequency, or tenure (installment count) after creation, since those require re-amortizing the
       // *outstanding* principal and regenerating the unpaid tail of the schedule (see that method's
       // doc comment).
+      // "This EMI is mine" — a fresh transactional write of the confirmation field only (see the repository).
+      confirmOwnershipMine: (id: string) => loanRepository.confirmOwnershipMine(id),
+      clearOwnershipConfirmation: (id: string) => loanRepository.clearOwnershipConfirmation(id),
       editLoanTerms: async (
         loan: Loan,
         params: {

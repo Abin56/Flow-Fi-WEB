@@ -18,7 +18,7 @@ import { formatMatchedAccountLabel, formatUnresolvedAccountHint } from "./candid
 import { deriveCandidateStatus } from "./candidate-status";
 import { evaluateCandidateDuplicate } from "./candidate-duplicate";
 import { importCandidate } from "./import-candidate";
-import { applyCandidateSearchAndFilters, applyCandidateTabFilter, DEFAULT_CANDIDATE_FILTERS, type DuplicatesByCandidateId } from "./filters";
+import { applyCandidateSearchAndFilters, DEFAULT_CANDIDATE_FILTERS, type LaneByCandidateId } from "./filters";
 
 vi.mock("firebase/firestore", () => ({
   doc: vi.fn((_collection: unknown, id: string) => ({ id })),
@@ -29,6 +29,18 @@ vi.mock("firebase/firestore", () => ({
 }));
 
 import { deleteDoc, doc } from "firebase/firestore";
+
+/**
+ * Stands in for `SmsTransactionCandidateRepository.markHandled` at the orchestration-test level — this
+ * file exercises `import-candidate.ts`'s own logic (write ordering, duplicate gate), not the
+ * repository's atomic-batch/tombstone mechanics, which have their own dedicated coverage:
+ * `lib/repositories/sms-transaction-candidate-repository.test.ts` (unit, mocked `writeBatch`) and
+ * `tests/integration/sms-candidate-lifecycle.integration.test.ts` (real Firestore emulator + rules —
+ * resurrection-denied, import-vs-dismiss races, repeated clicks, offline/retry).
+ */
+const markHandled = vi.fn(async (id: string) => {
+  await deleteDoc(doc({} as never, id));
+});
 
 function firestoreSnapshot(id: string, data: Record<string, unknown>) {
   return { id, data: () => data } as unknown as Parameters<typeof smsTransactionCandidateFromFirestore>[0];
@@ -98,7 +110,7 @@ function mockRepos(createTransactionImpl?: () => Promise<Transaction>) {
   return {
     transactionRepository: { createTransaction } as unknown as import("@/lib/repositories/transaction-repository").TransactionRepository,
     candidateRepository: {
-      deleteById: (id: string) => deleteDoc(doc({} as never, id)),
+      markHandled,
     } as unknown as import("@/lib/repositories/sms-transaction-candidate-repository").SmsTransactionCandidateRepository,
     expenseRepository: {} as unknown as import("@/lib/repositories/expense-repository").ExpenseRepository,
     createTransaction,
@@ -109,6 +121,7 @@ describe("SMS candidate pipeline (integration)", () => {
   beforeEach(() => {
     vi.mocked(doc).mockClear();
     vi.mocked(deleteDoc).mockClear();
+    markHandled.mockClear();
   });
 
   it("candidate appears: a Firestore document in the real Android shape parses into a candidate ready for display", () => {
@@ -133,8 +146,8 @@ describe("SMS candidate pipeline (integration)", () => {
     );
 
     expect(candidate.id).toBe("sms-appear-1");
-    expect(deriveCandidateStatus(candidate, null)).toMatchObject({ label: "Ready to Import" });
-    expect(formatMatchedAccountLabel(candidate, [], [card()])).toBe("Credit Card •••• 4821");
+    expect(deriveCandidateStatus(candidate, null)).toMatchObject({ label: "No issues flagged" });
+    expect(formatMatchedAccountLabel(candidate, [account({ id: "acc-hdfc-card", name: "Credit Card" })], [card()])).toBe("Credit Card •••• 4821");
   });
 
   it("account/card resolution: accountId resolves against accounts, cardId resolves against creditCards, no web-side matching involved", () => {
@@ -142,14 +155,14 @@ describe("SMS candidate pipeline (integration)", () => {
     expect(formatMatchedAccountLabel(bankMatch, [account()], [])).toBe("SBI Savings •••• 9981");
 
     const cardMatch: SmsTransactionCandidate = { ...baseCandidate(), accountId: null, cardId: "card-hdfc" };
-    expect(formatMatchedAccountLabel(cardMatch, [], [card()])).toBe("Credit Card •••• 4821");
+    expect(formatMatchedAccountLabel(cardMatch, [account({ id: "acc-hdfc-card", name: "Credit Card" })], [card()])).toBe("Credit Card •••• 4821");
   });
 
   it("unresolved account fallback: rawLastFour is shown, never an invented account", () => {
     const unresolved: SmsTransactionCandidate = { ...baseCandidate(), accountId: null, cardId: null, rawLastFour: "7743", bankName: "AXIS" };
     expect(formatMatchedAccountLabel(unresolved, [account()], [card()])).toBeNull();
-    expect(formatUnresolvedAccountHint(unresolved)).toBe("Unmatched • •••• 7743");
-    expect(deriveCandidateStatus(unresolved, null).label).toBe("Unmatched Account");
+    expect(formatUnresolvedAccountHint(unresolved)).toBe("Not matched • •••• 7743");
+    expect(deriveCandidateStatus(unresolved, null).label).toBe("Account not matched");
   });
 
   it("needs-review reasons surface verbatim from Android, both in status derivation and in filtering", () => {
@@ -163,8 +176,9 @@ describe("SMS candidate pipeline (integration)", () => {
     expect(status.label).toBe("Needs Review");
     expect(status.reasons).toEqual(["Parsed by a generic, lower-confidence parser rather than a bank-specific one."]);
 
-    const noDuplicates: DuplicatesByCandidateId = new Map();
-    const filtered = applyCandidateSearchAndFilters([needsReview, baseCandidate()], "", applyCandidateTabFilter(DEFAULT_CANDIDATE_FILTERS, "needsReview"), noDuplicates);
+    const clean = baseCandidate({ id: "sms-clean" });
+    const laneById: LaneByCandidateId = new Map([[needsReview.id, deriveCandidateStatus(needsReview, null).lane], [clean.id, deriveCandidateStatus(clean, null).lane]]);
+    const filtered = applyCandidateSearchAndFilters([needsReview, clean], "", { ...DEFAULT_CANDIDATE_FILTERS, lane: "needsReview" }, laneById);
     expect(filtered.map((c) => c.id)).toEqual([needsReview.id]);
   });
 
@@ -174,7 +188,7 @@ describe("SMS candidate pipeline (integration)", () => {
 
     const result = await importCandidate({ candidate, accountId: "acc-sbi", matchedCard: null, categoryId: "cat-1" }, transactionRepository, candidateRepository, expenseRepository);
 
-    expect(result).toEqual({ status: "success", transactionId: "txn-success-1" });
+    expect(result).toMatchObject({ status: "success", transactionId: "txn-success-1" });
     expect(createTransaction).toHaveBeenCalledWith(expect.objectContaining({ source: "sms", accountId: "acc-sbi" }));
     expect(deleteDoc).toHaveBeenCalledTimes(1);
     expect(doc).toHaveBeenCalledWith(expect.anything(), "sms-commit-1");
@@ -198,10 +212,11 @@ describe("SMS candidate pipeline (integration)", () => {
 
     await importCandidate({ candidate, accountId: "acc-sbi", matchedCard: null, categoryId: "cat-1" }, transactionRepository, candidateRepository, expenseRepository);
 
-    // deleteDoc is the mocked SDK call the repository's deleteById routes through — confirming no
-    // updateDoc/setDoc ("mark confirmed") call exists is implicit: `candidateRepository` here only
-    // exposes `deleteById`, matching the real SmsTransactionCandidateRepository's API surface.
-    expect(deleteDoc).toHaveBeenCalledTimes(1);
+    // deleteDoc is the mocked SDK call this file's `markHandled` stand-in routes through — confirming
+    // no updateDoc/setDoc ("mark confirmed") call exists on the candidate itself. The real
+    // `markHandled`'s own atomic delete+tombstone mechanics are covered separately — see this file's
+    // module doc.
+    expect(markHandled).toHaveBeenCalledTimes(1);
   });
 
   it("duplicate protection: a candidate matching an already-committed sms Transaction is flagged, not silently reimportable", () => {
@@ -247,7 +262,7 @@ describe("SMS candidate pipeline (integration)", () => {
 
     const status = deriveCandidateStatus(resurrected, duplicateResult);
     expect(status.label).toBe("Possible Duplicate");
-    expect(status.reasons[0]).toContain("txn-resurrection-1");
+    expect(status.reasons[0]).not.toContain("txn-resurrection-1"); // internal ids are never shown to the reviewer
   });
 });
 

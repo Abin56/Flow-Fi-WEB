@@ -16,6 +16,7 @@ import { useMemo, useState } from "react";
 import { ClayBadge } from "@/components/clay/clay-badge";
 import { ClayButton } from "@/components/clay/clay-button";
 import { ConfirmDialog, CurrencyCell, DetailDrawer, EmptyState, FormDialog, SectionLabel } from "@/components/finance";
+import { ScrollNav } from "@/components/layout/scroll-nav";
 import { Skeleton } from "@/components/ui/skeleton";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { ProgressRing } from "@/components/foundation/progress-ring";
@@ -542,6 +543,7 @@ export function SavingsWorkspace() {
         confirmLabel="Delete"
         onConfirm={handleDelete}
       />
+      <ScrollNav />
     </div>
   );
 }

@@ -38,3 +38,20 @@ export function handleEnterKey(event: KeyboardEvent<HTMLElement>, run: () => unk
   void run();
   return true;
 }
+
+/**
+ * Ctrl/Cmd+Enter — the deliberate "commit this" chord for actions too consequential for a bare Enter (a financial
+ * import). Unlike {@link handleEnterKey} it fires from any control INSIDE the panel, including multi-line text, but
+ * not from content portalled out of `currentTarget` (an open select list), not on a held key, and not mid-IME
+ * composition. Returns whether it ran `run`.
+ */
+export function handleModEnterKey(event: KeyboardEvent<HTMLElement>, run: () => unknown, options: { enabled?: boolean } = {}): boolean {
+  const { enabled = true } = options;
+  if (event.key !== "Enter" || !(event.ctrlKey || event.metaKey) || event.repeat || event.altKey || event.shiftKey) return false;
+  if (event.nativeEvent.isComposing || event.defaultPrevented) return false;
+  if (!event.currentTarget.contains(event.target as Node)) return false;
+  if (!enabled) return false;
+  event.preventDefault();
+  void run();
+  return true;
+}

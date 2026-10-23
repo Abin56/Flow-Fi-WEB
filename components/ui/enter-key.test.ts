@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { KeyboardEvent } from "react";
-import { handleEnterKey } from "./enter-key";
+import { handleEnterKey, handleModEnterKey } from "./enter-key";
 
 type Kind = "input" | "textarea" | "button" | "radio" | "combobox" | "close";
 
@@ -83,5 +83,39 @@ describe("handleEnterKey", () => {
     const run = vi.fn();
     expect(handleEnterKey(fakeEvent("radio").event, run)).toBe(true);
     expect(run).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("handleModEnterKey", () => {
+  it("runs only for Ctrl/Cmd+Enter — a bare Enter never commits", () => {
+    const bare = vi.fn();
+    expect(handleModEnterKey(fakeEvent("input").event, bare)).toBe(false);
+    expect(bare).not.toHaveBeenCalled();
+
+    for (const overrides of [{ ctrlKey: true }, { metaKey: true }]) {
+      const run = vi.fn();
+      const { event, preventDefault } = fakeEvent("textarea", overrides);
+      expect(handleModEnterKey(event, run)).toBe(true);
+      expect(run).toHaveBeenCalledTimes(1);
+      expect(preventDefault).toHaveBeenCalled();
+    }
+  });
+
+  it("ignores held keys, Shift/Alt combos, IME composition, handled events, portalled content and a disabled action", () => {
+    for (const overrides of [
+      { ctrlKey: true, repeat: true },
+      { ctrlKey: true, shiftKey: true },
+      { ctrlKey: true, altKey: true },
+      { ctrlKey: true, nativeEvent: { isComposing: true } },
+      { ctrlKey: true, defaultPrevented: true },
+      { ctrlKey: true, currentTarget: { contains: () => false } },
+    ]) {
+      const run = vi.fn();
+      expect(handleModEnterKey(fakeEvent("input", overrides).event, run)).toBe(false);
+      expect(run).not.toHaveBeenCalled();
+    }
+    const run = vi.fn();
+    expect(handleModEnterKey(fakeEvent("input", { ctrlKey: true }).event, run, { enabled: false })).toBe(false);
+    expect(run).not.toHaveBeenCalled();
   });
 });

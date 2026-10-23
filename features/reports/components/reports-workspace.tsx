@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import dynamic from "next/dynamic";
+import { ScrollNav } from "@/components/layout/scroll-nav";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useReportsData } from "@/features/reports/hooks/use-reports-data";
@@ -64,25 +65,28 @@ export function ReportsWorkspace() {
   }
 
   return (
-    <Tabs value={tab} onValueChange={(v) => setTab(v as typeof tab)} className="gap-6">
-      <TabsList className="clay-pressed h-auto w-fit max-w-full justify-start gap-0.5 overflow-x-auto rounded-2xl bg-transparent p-1">
-        {TABS.map((t) => (
-          <TabsTrigger
-            key={t.value}
-            value={t.value}
-            className="shrink-0 rounded-xl px-3.5 py-1.5 text-xs font-medium text-muted-foreground data-active:bg-card data-active:text-foreground data-active:shadow-e1"
-          >
-            {t.label}
-          </TabsTrigger>
-        ))}
-      </TabsList>
+    <>
+      <Tabs value={tab} onValueChange={(v) => setTab(v as typeof tab)} className="gap-6">
+        <TabsList className="clay-pressed h-auto w-fit max-w-full justify-start gap-0.5 overflow-x-auto rounded-2xl bg-transparent p-1">
+          {TABS.map((t) => (
+            <TabsTrigger
+              key={t.value}
+              value={t.value}
+              className="shrink-0 rounded-xl px-3.5 py-1.5 text-xs font-medium text-muted-foreground data-active:bg-card data-active:text-foreground data-active:shadow-e1"
+            >
+              {t.label}
+            </TabsTrigger>
+          ))}
+        </TabsList>
 
-      <TabsContent value="overview">{tab === "overview" && <OverviewTab data={data} />}</TabsContent>
-      <TabsContent value="cash-flow">{tab === "cash-flow" && <CashFlowTab data={data} />}</TabsContent>
-      <TabsContent value="net-worth">{tab === "net-worth" && <NetWorthTab data={data} />}</TabsContent>
-      <TabsContent value="spending">{tab === "spending" && <SpendingTab data={data} />}</TabsContent>
-      <TabsContent value="categories">{tab === "categories" && <CategoriesTab data={data} />}</TabsContent>
-      <TabsContent value="trends">{tab === "trends" && <TrendsTab data={data} />}</TabsContent>
-    </Tabs>
+        <TabsContent value="overview">{tab === "overview" && <OverviewTab data={data} />}</TabsContent>
+        <TabsContent value="cash-flow">{tab === "cash-flow" && <CashFlowTab data={data} />}</TabsContent>
+        <TabsContent value="net-worth">{tab === "net-worth" && <NetWorthTab data={data} />}</TabsContent>
+        <TabsContent value="spending">{tab === "spending" && <SpendingTab data={data} />}</TabsContent>
+        <TabsContent value="categories">{tab === "categories" && <CategoriesTab data={data} />}</TabsContent>
+        <TabsContent value="trends">{tab === "trends" && <TrendsTab data={data} />}</TabsContent>
+      </Tabs>
+      <ScrollNav />
+    </>
   );
 }

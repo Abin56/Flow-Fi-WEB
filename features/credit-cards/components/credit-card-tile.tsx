@@ -1,6 +1,6 @@
 "use client";
 
-import { Link2, MoreVertical, Wifi } from "lucide-react";
+import { Link2, Lock, MoreVertical, Wifi } from "lucide-react";
 import { motion, useMotionTemplate, useMotionValue, useReducedMotion, useSpring, useTransform } from "framer-motion";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { StaggerItem } from "@/components/foundation/animated-container";
@@ -110,11 +110,13 @@ export function CreditCardTile({ card, bankId, active, partnerHighlighted, onHov
             rotateY: reduceMotion ? 0 : rotateY,
           }}
           className={cn(
-            "group/tile relative flex h-full cursor-pointer flex-col gap-2.5 overflow-hidden rounded-[12px] p-3.5 text-white shadow-e2 outline-none transition-shadow duration-300 hover:shadow-[0_18px_40px_-12px_rgba(0,0,0,0.45)] focus-visible:ring-2 focus-visible:ring-ring",
+            "group/tile relative flex h-full cursor-pointer flex-col gap-2.5 overflow-hidden rounded-[16px] p-3.5 text-white shadow-[0_10px_28px_-12px_rgba(0,0,0,0.55),0_2px_6px_-2px_rgba(0,0,0,0.25),inset_0_1px_0_rgba(255,255,255,0.35),inset_0_0_0_1px_rgba(255,255,255,0.12)] outline-none transition-shadow duration-300 hover:shadow-[0_22px_44px_-14px_rgba(0,0,0,0.6),0_4px_10px_-4px_rgba(0,0,0,0.3),inset_0_1px_0_rgba(255,255,255,0.45),inset_0_0_0_1px_rgba(255,255,255,0.18)] focus-visible:ring-2 focus-visible:ring-ring",
             active && "shadow-[0_14px_34px_-14px_rgba(0,0,0,0.5)] ring-2 ring-primary-accent-text ring-offset-2 ring-offset-background",
             partnerHighlighted && !active && "ring-2 ring-white/70 ring-offset-2 ring-offset-background",
           )}
         >
+          {/* glass top-light: a soft white wash fading down the face */}
+          <span className="pointer-events-none absolute inset-x-0 top-0 h-1/2 bg-gradient-to-b from-white/[0.16] to-transparent" aria-hidden />
           {/* soft sheen, like card stock */}
           <span className="pointer-events-none absolute -top-16 -right-10 size-40 rounded-full bg-white/10 blur-2xl" aria-hidden />
           {/* faint guilloche rings, like printed card art */}
@@ -140,16 +142,21 @@ export function CreditCardTile({ card, bankId, active, partnerHighlighted, onHov
                 {bankId && <BankLogo bankId={bankId} size={22} className="shadow-sm ring-white/40" />}
                 <h3 className="truncate font-heading text-[15px] font-semibold">{card.name}</h3>
               </div>
-              <p className="mt-0.5 text-xs tracking-[0.18em] text-white/75 tabular-nums">•••• {card.last4}</p>
-              {card.sharedLimit && (
-                <p className="mt-1 inline-flex items-center gap-1 rounded-[5px] bg-white/15 px-1.5 py-0.5 text-[10.5px] font-semibold text-white/90 backdrop-blur-sm">
-                  <span className="relative flex size-3 items-center justify-center">
-                    <Link2 className="size-3" strokeWidth={2.25} />
-                    {partnerHighlighted && <span className="absolute inset-0 animate-ping rounded-full bg-white/40" aria-hidden />}
-                  </span>
-                  Shared limit{card.sharedLimit.siblings.length > 0 ? ` · with •••• ${card.sharedLimit.siblings.map((s) => s.last4).join(", ")}` : ""}
-                </p>
-              )}
+              {/* number + shared-limit pill share one row, so cards stay compact and aligned */}
+              <div className="mt-1 flex min-h-[22px] min-w-0 items-center gap-2">
+                <p className="shrink-0 text-xs tracking-[0.18em] text-white/75 tabular-nums">•••• {card.last4}</p>
+                {card.sharedLimit && (
+                  <p className="inline-flex min-w-0 items-center gap-1 rounded-full bg-white/15 px-2 py-0.5 text-[10.5px] font-semibold text-white/90 ring-1 ring-white/20 backdrop-blur-sm">
+                    <span className="relative flex size-3 shrink-0 items-center justify-center">
+                      <Link2 className="size-3" strokeWidth={2.25} />
+                      {partnerHighlighted && <span className="absolute inset-0 animate-ping rounded-full bg-white/40" aria-hidden />}
+                    </span>
+                    <span className="truncate">
+                      Shared{card.sharedLimit.siblings.length > 0 ? ` · ${card.sharedLimit.siblings.map((s) => s.last4).join(", ")}` : ""}
+                    </span>
+                  </p>
+                )}
+              </div>
             </div>
             <div className="flex shrink-0 items-center gap-1.5">
               <span className="text-[11px] font-bold tracking-wide text-white/75 italic uppercase">{card.network}</span>
@@ -174,44 +181,68 @@ export function CreditCardTile({ card, bankId, active, partnerHighlighted, onHov
             </div>
           </div>
 
-          <div className="relative flex items-end justify-between gap-3">
-            <div className="min-w-0">
-              <p className="text-[10.5px] font-semibold tracking-[0.08em] text-white/65 uppercase">Credit used</p>
-              <p className="text-[20px] leading-tight font-bold tracking-tight tabular-nums">{formatCurrency(card.usedCredit)}</p>
-              {card.lockedEmiPrincipal > 0 && (
-                <p className="text-[11px] text-white/75 tabular-nums">incl. {formatCurrency(card.lockedEmiPrincipal)} EMI locked</p>
-              )}
-            </div>
-            <div className="flex flex-col items-end gap-1.5 text-right">
-              {/* chip + contactless, like a physical card */}
-              <span className="flex items-center gap-1.5" aria-hidden>
-                <Wifi className="size-3.5 rotate-90 text-white/60" strokeWidth={2.25} />
-                <span className="h-4 w-5.5 rounded-[3px] border border-white/35 bg-gradient-to-br from-amber-200/90 to-amber-500/70" />
-              </span>
-              <p className="text-[10.5px] font-semibold tracking-[0.08em] text-white/65 uppercase">{card.sharedLimit ? "Shared limit" : "Limit"}</p>
-              <p className="text-sm font-semibold text-white/90 tabular-nums">{formatCurrency(card.creditLimit)}</p>
+          {/* frosted-glass panel holding the money figures */}
+          <div className="relative rounded-[12px] bg-white/[0.11] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.25),0_4px_14px_-6px_rgba(0,0,0,0.35)] ring-1 ring-white/20 backdrop-blur-md">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-[10.5px] font-semibold tracking-[0.08em] text-white/65 uppercase">Credit used</p>
+            {/* chip + contactless, like a physical card */}
+            <span className="flex items-center gap-1.5" aria-hidden>
+              <Wifi className="size-3.5 rotate-90 text-white/60" strokeWidth={2.25} />
+              <span className="h-4 w-5.5 rounded-[3px] border border-white/40 bg-gradient-to-br from-amber-100 via-amber-300/90 to-amber-500/70 shadow-[0_1px_3px_rgba(0,0,0,0.35),inset_0_1px_0_rgba(255,255,255,0.6)]" />
+            </span>
+          </div>
+          {/* used amount and limit share one baseline, so figures line up on every card */}
+          <div className="mt-1 flex items-end justify-between gap-3">
+            <p className="min-w-0 truncate text-[24px] leading-none font-bold tracking-tight tabular-nums">{formatCurrency(card.usedCredit)}</p>
+            <div className="shrink-0 text-right leading-none">
+              <p className="text-[9.5px] font-semibold tracking-[0.08em] text-white/60 uppercase">{card.sharedLimit ? "Shared limit" : "Limit"}</p>
+              <p className="mt-1 text-sm font-semibold text-white/90 tabular-nums">{formatCurrency(card.creditLimit)}</p>
             </div>
           </div>
+          <div className="mt-2 flex min-h-[20px] items-center">
+            {card.lockedEmiPrincipal > 0 && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-black/20 px-2 py-0.5 text-[10.5px] font-medium text-white/85 tabular-nums ring-1 ring-white/15">
+                <Lock className="size-3" strokeWidth={2.25} />
+                {formatCurrency(card.lockedEmiPrincipal)} EMI locked
+              </span>
+            )}
+          </div>
 
-          <div className="relative">
+          <div className="mt-2">
             <div className="flex items-center justify-between text-xs text-white/75">
               <span>Utilization</span>
-              <span className="font-semibold text-white">{utilization}%</span>
+              <span className="inline-flex items-center gap-1.5 font-semibold text-white">
+                <span className={cn("size-1.5 rounded-full", highUtilization ? "bg-red-400" : utilization >= 50 ? "bg-amber-300" : "bg-emerald-300")} aria-hidden />
+                {utilization}%
+                <span className="font-medium text-white/65">· {highUtilization ? "High" : utilization >= 50 ? "Moderate" : "Healthy"}</span>
+              </span>
             </div>
-            <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-white/20">
+            <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-black/25 shadow-[inset_0_1px_2px_rgba(0,0,0,0.3)]">
               <motion.div
-                className={cn("h-full rounded-full", highUtilization ? "bg-red-400" : "bg-white")}
+                className={cn(
+                  "h-full rounded-full",
+                  highUtilization
+                    ? "bg-red-400 shadow-[0_0_10px_rgba(248,113,113,0.7)]"
+                    : utilization >= 50
+                      ? "bg-amber-300 shadow-[0_0_10px_rgba(252,211,77,0.6)]"
+                      : "bg-white shadow-[0_0_10px_rgba(255,255,255,0.55)]",
+                )}
                 initial={reduceMotion ? false : { width: 0 }}
                 animate={{ width: `${utilization}%` }}
                 transition={{ duration: 0.8, ease: [0.22, 1, 0.36, 1], delay: 0.15 }}
               />
             </div>
+            <div className="mt-2 flex items-center justify-between text-xs text-white/75">
+              <span>Available{card.sharedLimit ? " (shared)" : ""}</span>
+              <span className="font-semibold text-white tabular-nums">{formatCurrency(Math.max(0, card.available))}</span>
+            </div>
+          </div>
           </div>
 
-          <div className="relative mt-auto flex items-center justify-between border-t border-white/15 pt-2 text-[11.5px]">
+          <div className="relative mt-auto flex items-center justify-between border-t border-white/15 pt-2.5 text-[11.5px]">
             <span className="text-white/70">{card.dueDate ? `Due on ${formatDueDate(card.dueDate)}` : "No statement due"}</span>
             {dueInDays != null && (
-              <span className={cn("flex items-center gap-1.5 font-semibold", urgent ? "text-red-300" : "text-white/70")}>
+              <span className={cn("flex items-center gap-1.5 font-semibold", urgent ? "rounded-full bg-red-500/25 px-2 py-0.5 text-red-100 ring-1 ring-red-300/40" : "text-white/70")}>
                 {urgent && <span className="size-1.5 animate-pulse rounded-full bg-red-300" aria-hidden />}
                 {dueInDays <= 0 ? "Due today" : `${dueInDays} days left`}
               </span>

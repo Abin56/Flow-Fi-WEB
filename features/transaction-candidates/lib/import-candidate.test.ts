@@ -48,13 +48,13 @@ function baseParams(overrides: Partial<ImportCandidateParams> = {}): ImportCandi
 function mockRepos(createTransactionImpl?: () => Promise<Transaction>) {
   const createTransaction = vi.fn(createTransactionImpl ?? (async () => ({ id: "txn-created-1" }) as Transaction));
   const editTransaction = vi.fn(async () => undefined);
-  const deleteById = vi.fn(async () => undefined);
+  const markHandled = vi.fn(async () => undefined);
   const convertToAssigned = vi.fn(async () => undefined);
   const convertToSplit = vi.fn(async () => undefined);
   return {
     transactionRepository: { createTransaction, editTransaction } as unknown as import("@/lib/repositories/transaction-repository").TransactionRepository,
     candidateRepository: {
-      deleteById,
+      markHandled,
     } as unknown as import("@/lib/repositories/sms-transaction-candidate-repository").SmsTransactionCandidateRepository,
     expenseRepository: {
       convertToAssigned,
@@ -62,7 +62,7 @@ function mockRepos(createTransactionImpl?: () => Promise<Transaction>) {
     } as unknown as import("@/lib/repositories/expense-repository").ExpenseRepository,
     createTransaction,
     editTransaction,
-    deleteById,
+    markHandled,
     convertToAssigned,
     convertToSplit,
   };
@@ -70,11 +70,11 @@ function mockRepos(createTransactionImpl?: () => Promise<Transaction>) {
 
 describe("importCandidate", () => {
   it("fails validation without any writes when accountId is missing", async () => {
-    const { transactionRepository, candidateRepository, expenseRepository, createTransaction, deleteById } = mockRepos();
+    const { transactionRepository, candidateRepository, expenseRepository, createTransaction, markHandled } = mockRepos();
     const result = await importCandidate(baseParams({ accountId: null }), transactionRepository, candidateRepository, expenseRepository);
     expect(result.status).toBe("validation_failed");
     expect(createTransaction).not.toHaveBeenCalled();
-    expect(deleteById).not.toHaveBeenCalled();
+    expect(markHandled).not.toHaveBeenCalled();
   });
 
   it("fails validation without any writes when categoryId is missing", async () => {
@@ -112,41 +112,64 @@ describe("importCandidate", () => {
 
   it("on success: creates the transaction first, then deletes the candidate document", async () => {
     const calls: string[] = [];
-    const { transactionRepository, candidateRepository, expenseRepository, deleteById } = mockRepos(async () => {
+    const { transactionRepository, candidateRepository, expenseRepository, markHandled } = mockRepos(async () => {
       calls.push("createTransaction");
       return { id: "txn-created-1" } as Transaction;
     });
-    deleteById.mockImplementation(async () => {
-      calls.push("deleteById");
+    markHandled.mockImplementation(async () => {
+      calls.push("markHandled");
     });
 
     const result = await importCandidate(baseParams(), transactionRepository, candidateRepository, expenseRepository);
 
-    expect(result).toEqual({ status: "success", transactionId: "txn-created-1" });
-    expect(deleteById).toHaveBeenCalledWith("sms-1");
-    expect(calls).toEqual(["createTransaction", "deleteById"]);
+    expect(result).toMatchObject({ status: "success", transactionId: "txn-created-1" });
+    expect(markHandled).toHaveBeenCalledWith("sms-1", "imported", "txn-created-1");
+    expect(calls).toEqual(["createTransaction", "markHandled"]);
   });
 
   it("leaves the candidate document untouched when createTransaction throws", async () => {
-    const { transactionRepository, candidateRepository, expenseRepository, deleteById } = mockRepos(async () => {
+    const { transactionRepository, candidateRepository, expenseRepository, markHandled } = mockRepos(async () => {
       throw new Error("network error");
     });
 
     const result = await importCandidate(baseParams(), transactionRepository, candidateRepository, expenseRepository);
 
     expect(result.status).toBe("transaction_create_failed");
-    expect(deleteById).not.toHaveBeenCalled();
+    expect(markHandled).not.toHaveBeenCalled();
   });
 
   it("surfaces a distinct outcome when the transaction is created but the candidate delete fails", async () => {
-    const { transactionRepository, candidateRepository, expenseRepository, deleteById } = mockRepos(async () => ({ id: "txn-created-1" }) as Transaction);
-    deleteById.mockImplementation(async () => {
+    const { transactionRepository, candidateRepository, expenseRepository, markHandled } = mockRepos(async () => ({ id: "txn-created-1" }) as Transaction);
+    markHandled.mockImplementation(async () => {
       throw new Error("delete failed");
     });
 
     const result = await importCandidate(baseParams(), transactionRepository, candidateRepository, expenseRepository);
 
-    expect(result).toMatchObject({ status: "imported_not_deleted", transactionId: "txn-created-1" });
+    expect(result).toMatchObject({ status: "imported_not_deleted", failedStep: "candidate_delete", transactionId: "txn-created-1" });
+  });
+
+  it("a failed split leaves the transaction in place, reports failedStep 'person_split', never deletes the candidate and never retries or recreates anything", async () => {
+    const { transactionRepository, candidateRepository, expenseRepository, createTransaction, markHandled, convertToSplit } = mockRepos(
+      async () => ({ id: "txn-created-1", createdAt: new Date(Date.now() + 60_000) }) as Transaction,
+    );
+    convertToSplit.mockImplementation(async () => {
+      throw new Error("Choose at least one person to share with");
+    });
+
+    const result = await importCandidate(
+      baseParams({
+        personAssignment: { kind: "split", splitType: "equal", participantInputs: [{ personId: null, name: "Asha", value: null }] },
+      }),
+      transactionRepository,
+      candidateRepository,
+      expenseRepository,
+    );
+
+    expect(result).toMatchObject({ status: "imported_not_deleted", failedStep: "person_split", transactionId: "txn-created-1" });
+    expect(createTransaction).toHaveBeenCalledTimes(1); // exactly one transaction, no automatic retry
+    expect(convertToSplit).toHaveBeenCalledTimes(1);
+    expect(markHandled).not.toHaveBeenCalled(); // candidate stays until the user resolves it
   });
 });
 
@@ -185,7 +208,7 @@ describe("importCandidate — duplicate detection", () => {
 
   // A. Existing manual transaction → SMS Candidate
   it("A: flags a candidate matching an already-existing MANUALLY created transaction, and writes nothing", async () => {
-    const { transactionRepository, candidateRepository, expenseRepository, createTransaction, deleteById } = mockRepos();
+    const { transactionRepository, candidateRepository, expenseRepository, createTransaction, markHandled } = mockRepos();
     const existing = [existingTransaction()]; // stands in for a manually created transaction — the check has no notion of "source"
 
     const result = await importCandidate(
@@ -200,7 +223,7 @@ describe("importCandidate — duplicate detection", () => {
       expect(result.result.bestMatch?.transactionId).toBe("txn-existing-1");
     }
     expect(createTransaction).not.toHaveBeenCalled();
-    expect(deleteById).not.toHaveBeenCalled();
+    expect(markHandled).not.toHaveBeenCalled();
   });
 
   // B. Existing PDF transaction → SMS Candidate
@@ -267,7 +290,7 @@ describe("importCandidate — duplicate detection", () => {
   // candidate must be blocked by importCandidate itself when checked against the transaction the
   // first import already created, not silently reimportable into a second transaction.
   it("resurrection: a candidate re-imported after Android resyncs the same id is blocked against the transaction its own earlier import created", async () => {
-    const { transactionRepository, candidateRepository, expenseRepository, createTransaction, deleteById } = mockRepos(
+    const { transactionRepository, candidateRepository, expenseRepository, createTransaction, markHandled } = mockRepos(
       async () => ({ id: "txn-resurrection-1" }) as Transaction,
     );
     const original = matchingCandidate({ id: "sms-resurrect-1" });
@@ -279,8 +302,8 @@ describe("importCandidate — duplicate detection", () => {
       candidateRepository,
       expenseRepository,
     );
-    expect(firstImport).toEqual({ status: "success", transactionId: "txn-resurrection-1" });
-    expect(deleteById).toHaveBeenCalledTimes(1);
+    expect(firstImport).toMatchObject({ status: "success", transactionId: "txn-resurrection-1" });
+    expect(markHandled).toHaveBeenCalledTimes(1);
 
     // Step 2: Android re-syncs the identical candidate id/fields — the resurrected candidate is
     // checked again, now against the transaction step 1 just created (as a live hook would supply).
@@ -304,7 +327,7 @@ describe("importCandidate — duplicate detection", () => {
 
   // D. Cancel — caller simply never re-invokes with skipDuplicateCheck; nothing was ever written.
   it("D: cancelling after a duplicate warning creates no transaction and leaves the candidate untouched", async () => {
-    const { transactionRepository, candidateRepository, expenseRepository, createTransaction, deleteById } = mockRepos();
+    const { transactionRepository, candidateRepository, expenseRepository, createTransaction, markHandled } = mockRepos();
     const existing = [existingTransaction()];
 
     const result = await importCandidate(
@@ -316,12 +339,12 @@ describe("importCandidate — duplicate detection", () => {
 
     expect(result.status).toBe("duplicate_detected");
     expect(createTransaction).not.toHaveBeenCalled();
-    expect(deleteById).not.toHaveBeenCalled(); // candidate remains — never deleted for a blocked import
+    expect(markHandled).not.toHaveBeenCalled(); // candidate remains — never deleted for a blocked import
   });
 
   // E. Import Anyway
   it("E: 'Import anyway' (skipDuplicateCheck) creates the new transaction with source 'sms', leaves the old transaction alone, and still deletes the candidate", async () => {
-    const { transactionRepository, candidateRepository, expenseRepository, createTransaction, deleteById } = mockRepos(
+    const { transactionRepository, candidateRepository, expenseRepository, createTransaction, markHandled } = mockRepos(
       async () => ({ id: "txn-new-from-sms" }) as Transaction,
     );
     const existing = [existingTransaction()];
@@ -333,10 +356,10 @@ describe("importCandidate — duplicate detection", () => {
       expenseRepository,
     );
 
-    expect(result).toEqual({ status: "success", transactionId: "txn-new-from-sms" });
+    expect(result).toMatchObject({ status: "success", transactionId: "txn-new-from-sms" });
     expect(createTransaction).toHaveBeenCalledWith(expect.objectContaining({ source: "sms", accountId: "acc-1" }));
     // The old transaction is never touched by importCandidate — no edit/delete repository call exists for it.
-    expect(deleteById).toHaveBeenCalledWith("sms-match-1"); // only the candidate document is deleted
+    expect(markHandled).toHaveBeenCalledWith("sms-match-1", "imported", "txn-new-from-sms"); // only the candidate document is deleted
   });
 
   // F. Fresh-state scenario: the matching transaction is supplied at call time, exactly like a live
@@ -371,7 +394,7 @@ describe("importCandidate — duplicate detection", () => {
       expenseRepository,
     );
 
-    expect(result).toEqual({ status: "success", transactionId: "txn-unique" });
+    expect(result).toMatchObject({ status: "success", transactionId: "txn-unique" });
     expect(createTransaction).toHaveBeenCalledTimes(1);
   });
 
@@ -514,17 +537,17 @@ describe("bulkImportCandidates — duplicate detection", () => {
     ];
 
     const createTransaction = vi.fn(async () => ({ id: "txn-clean-1" }) as Transaction);
-    const deleteById = vi.fn(async () => undefined);
+    const markHandled = vi.fn(async () => undefined);
     const transactionRepository = { createTransaction } as unknown as import("@/lib/repositories/transaction-repository").TransactionRepository;
-    const candidateRepository = { deleteById } as unknown as import("@/lib/repositories/sms-transaction-candidate-repository").SmsTransactionCandidateRepository;
+    const candidateRepository = { markHandled } as unknown as import("@/lib/repositories/sms-transaction-candidate-repository").SmsTransactionCandidateRepository;
     const expenseRepository = {} as unknown as import("@/lib/repositories/expense-repository").ExpenseRepository;
 
     const results = await bulkImportCandidates([clean, dup], "cat-1", [], transactionRepository, candidateRepository, expenseRepository, existing, false);
 
-    expect(results.find((r) => r.candidateId === "clean-1")?.outcome).toEqual({ status: "success", transactionId: "txn-clean-1" });
+    expect(results.find((r) => r.candidateId === "clean-1")?.outcome).toMatchObject({ status: "success", transactionId: "txn-clean-1" });
     expect(results.find((r) => r.candidateId === "dup-1")?.outcome.status).toBe("duplicate_detected");
     expect(createTransaction).toHaveBeenCalledTimes(1); // the flagged row never reached createTransaction
-    expect(deleteById).toHaveBeenCalledTimes(1); // only the clean row's candidate was deleted
+    expect(markHandled).toHaveBeenCalledTimes(1); // only the clean row's candidate was deleted
   });
 
   it("re-running only the flagged candidates with skipDuplicateCheck imports them without re-touching the already-succeeded row", async () => {
@@ -533,41 +556,41 @@ describe("bulkImportCandidates — duplicate detection", () => {
       { id: "txn-existing", description: "Amazon", amount: 500, dateTime: new Date("2026-08-20T00:00:00.000Z"), accountId: "acc-1", type: "expense" },
     ];
     const createTransaction = vi.fn(async () => ({ id: "txn-dup-1" }) as Transaction);
-    const deleteById = vi.fn(async () => undefined);
+    const markHandled = vi.fn(async () => undefined);
     const transactionRepository = { createTransaction } as unknown as import("@/lib/repositories/transaction-repository").TransactionRepository;
-    const candidateRepository = { deleteById } as unknown as import("@/lib/repositories/sms-transaction-candidate-repository").SmsTransactionCandidateRepository;
+    const candidateRepository = { markHandled } as unknown as import("@/lib/repositories/sms-transaction-candidate-repository").SmsTransactionCandidateRepository;
     const expenseRepository = {} as unknown as import("@/lib/repositories/expense-repository").ExpenseRepository;
 
     const results = await bulkImportCandidates([dup], "cat-1", [], transactionRepository, candidateRepository, expenseRepository, existing, true);
 
-    expect(results[0].outcome).toEqual({ status: "success", transactionId: "txn-dup-1" });
+    expect(results[0].outcome).toMatchObject({ status: "success", transactionId: "txn-dup-1" });
     expect(createTransaction).toHaveBeenCalledWith(expect.objectContaining({ source: "sms" }));
-    expect(deleteById).toHaveBeenCalledWith("dup-1");
+    expect(markHandled).toHaveBeenCalledWith("dup-1", "imported", "txn-dup-1");
   });
 });
 
 describe("ignoreCandidate", () => {
   it("only deletes the candidate document, never touches transactions", async () => {
-    const { candidateRepository, deleteById } = mockRepos();
+    const { candidateRepository, markHandled } = mockRepos();
     await ignoreCandidate(candidate(), candidateRepository);
-    expect(deleteById).toHaveBeenCalledWith("sms-1");
+    expect(markHandled).toHaveBeenCalledWith("sms-1", "dismissed", null);
   });
 });
 
 describe("bulkIgnoreCandidates", () => {
   it("dismisses every candidate when all succeed", async () => {
-    const { candidateRepository, deleteById } = mockRepos();
+    const { candidateRepository, markHandled } = mockRepos();
     const results = await bulkIgnoreCandidates([candidate({ id: "c1" }), candidate({ id: "c2" })], candidateRepository);
     expect(results).toEqual([
       { candidateId: "c1", ok: true },
       { candidateId: "c2", ok: true },
     ]);
-    expect(deleteById).toHaveBeenCalledTimes(2);
+    expect(markHandled).toHaveBeenCalledTimes(2);
   });
 
   it("one candidate's failure doesn't stop the rest of the batch, and is reported per-row", async () => {
-    const { candidateRepository, deleteById } = mockRepos();
-    deleteById.mockRejectedValueOnce(new Error("network error")).mockResolvedValueOnce(undefined);
+    const { candidateRepository, markHandled } = mockRepos();
+    markHandled.mockRejectedValueOnce(new Error("network error")).mockResolvedValueOnce(undefined);
     const results = await bulkIgnoreCandidates([candidate({ id: "c1" }), candidate({ id: "c2" })], candidateRepository);
     expect(results[0]).toMatchObject({ candidateId: "c1", ok: false });
     expect(results[1]).toEqual({ candidateId: "c2", ok: true });
@@ -586,20 +609,20 @@ describe("bulkImportCandidates", () => {
       if (call === 1) return { id: "txn-ready" } as Transaction;
       throw new Error("network error");
     });
-    const deleteById = vi.fn(async () => undefined);
+    const markHandled = vi.fn(async () => undefined);
     const transactionRepository = { createTransaction } as unknown as import("@/lib/repositories/transaction-repository").TransactionRepository;
     const candidateRepository = {
-      deleteById,
+      markHandled,
     } as unknown as import("@/lib/repositories/sms-transaction-candidate-repository").SmsTransactionCandidateRepository;
     const expenseRepository = {} as unknown as import("@/lib/repositories/expense-repository").ExpenseRepository;
 
     const results = await bulkImportCandidates([ready, unresolved, willFailCreate], "cat-1", [], transactionRepository, candidateRepository, expenseRepository);
 
-    expect(results[0]).toEqual({ candidateId: "ready", outcome: { status: "success", transactionId: "txn-ready" } });
+    expect(results[0]).toMatchObject({ candidateId: "ready", outcome: { status: "success", transactionId: "txn-ready" } });
     expect(results[1].outcome.status).toBe("validation_failed"); // no account/card resolved — no writes
     expect(results[2].outcome.status).toBe("transaction_create_failed"); // candidate left untouched, still present
     expect(createTransaction).toHaveBeenCalledTimes(2); // never called for the unresolved row
-    expect(deleteById).toHaveBeenCalledTimes(1); // only the successful row's candidate is deleted
+    expect(markHandled).toHaveBeenCalledTimes(1); // only the successful row's candidate is deleted
   });
 
   it("resolves a matched card to its underlying accountId, not the card's own id", async () => {
@@ -608,7 +631,7 @@ describe("bulkImportCandidates", () => {
     const createTransaction = vi.fn(async () => ({ id: "txn-1" }) as Transaction);
     const transactionRepository = { createTransaction } as unknown as import("@/lib/repositories/transaction-repository").TransactionRepository;
     const candidateRepository = {
-      deleteById: vi.fn(async () => undefined),
+      markHandled: vi.fn(async () => undefined),
     } as unknown as import("@/lib/repositories/sms-transaction-candidate-repository").SmsTransactionCandidateRepository;
     const expenseRepository = {} as unknown as import("@/lib/repositories/expense-repository").ExpenseRepository;
 
@@ -622,7 +645,7 @@ describe("bulkImportCandidates", () => {
     const createTransaction = vi.fn(async () => ({ id: "txn-1" }) as Transaction);
     const transactionRepository = { createTransaction } as unknown as import("@/lib/repositories/transaction-repository").TransactionRepository;
     const candidateRepository = {
-      deleteById: vi.fn(async () => undefined),
+      markHandled: vi.fn(async () => undefined),
     } as unknown as import("@/lib/repositories/sms-transaction-candidate-repository").SmsTransactionCandidateRepository;
     const expenseRepository = {} as unknown as import("@/lib/repositories/expense-repository").ExpenseRepository;
 

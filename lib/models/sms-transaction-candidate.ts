@@ -53,6 +53,10 @@ export type SmsCandidateEventType =
   | "loanEmiDebit"
   | "billPayment"
   | "autoDebit"
+  | "cashback"
+  | "interestCredit"
+  | "bankFee"
+  | "recharge"
   | "unknown";
 
 const EVENT_TYPE_LABELS: Record<SmsCandidateEventType, string> = {
@@ -71,8 +75,17 @@ const EVENT_TYPE_LABELS: Record<SmsCandidateEventType, string> = {
   loanEmiDebit: "Loan / EMI debit",
   billPayment: "Bill payment",
   autoDebit: "Auto debit",
+  cashback: "Cashback",
+  interestCredit: "Interest credit",
+  bankFee: "Bank fee",
+  recharge: "Recharge",
   unknown: "Transaction",
 };
+
+/** Mirrors Android's `SmsTransactionCategoryX.fromName`: a name this app doesn't know reads as `unknown`, never as a raw string the UI can't label. */
+function parseEventType(raw: unknown): SmsCandidateEventType {
+  return typeof raw === "string" && Object.prototype.hasOwnProperty.call(EVENT_TYPE_LABELS, raw) ? (raw as SmsCandidateEventType) : "unknown";
+}
 
 export function smsCandidateEventTypeLabel(eventType: SmsCandidateEventType): string {
   return EVENT_TYPE_LABELS[eventType] ?? EVENT_TYPE_LABELS.unknown;
@@ -138,7 +151,7 @@ export function smsTransactionCandidateFromFirestore(
     id: snapshot.id,
     amount: (data.amount as number) ?? 0,
     direction,
-    eventType: (data.eventType as SmsCandidateEventType | undefined) ?? "unknown",
+    eventType: parseEventType(data.eventType),
     transactionDate: (data.transactionDate as Timestamp).toDate(),
     merchant: (data.merchant as string | undefined) ?? null,
     bankName: (data.bankName as string | undefined) ?? null,

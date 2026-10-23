@@ -244,6 +244,9 @@ export function useEmiActions() {
       createEmi: async (params: CreateEmiParams & { loanType?: EmiLoanType }) => {
         return emiRepository.createEmi(params);
       },
+      // "This EMI is mine" — a fresh transactional write of the confirmation field only (see the repository).
+      confirmOwnershipMine: (id: string) => emiRepository.confirmOwnershipMine(id),
+      clearOwnershipConfirmation: (id: string) => emiRepository.clearOwnershipConfirmation(id),
       editEmi: async (emi: Emi, params: EditEmiParams) => {
         await emiRepository.editEmi(emi, params);
       },

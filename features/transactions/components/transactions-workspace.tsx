@@ -44,6 +44,7 @@ import { Fragment, useDeferredValue, useEffect, useMemo, useState } from "react"
 import { readPeopleReturnContext, type PeopleReturnContext } from "@/features/people/lib/people-return-link";
 import { toast } from "@/store/toast-store";
 import { ClayButton } from "@/components/clay/clay-button";
+import { ScrollNav } from "@/components/layout/scroll-nav";
 import { usePeopleLedgerEntries } from "@/features/people/hooks/use-people-data";
 import { getTransactionPresentation, type RowTreatment, type TransactionPresentation } from "@/features/transactions/lib/transaction-presentation";
 import {
@@ -1104,6 +1105,7 @@ export function TransactionsWorkspace() {
       </FormDialog>
 
       {splitDuplicateGuard.dialog}
+      {!fullscreen && <ScrollNav />}
     </div>
     </HistoricalPaymentFlagsProvider>
   );

@@ -1,4 +1,5 @@
 import { LifeBuoy, Mail, MessageCircle } from "lucide-react";
+import { ScrollNav } from "@/components/layout/scroll-nav";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
 const FAQS = [
@@ -66,6 +67,7 @@ export function HelpWorkspace() {
           </CardContent>
         </Card>
       </div>
+      <ScrollNav />
     </div>
   );
 }

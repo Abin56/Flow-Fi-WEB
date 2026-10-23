@@ -16,6 +16,7 @@ import {
   Landmark,
   ListChecks,
   type LucideIcon,
+  MoreHorizontal,
   PiggyBank,
   Plus,
   Receipt,
@@ -33,7 +34,9 @@ import { AnimatedNumber } from "@/components/foundation/animated-number";
 import { BankLogo } from "@/components/finance/bank-logo";
 import { useAccounts } from "@/hooks/use-accounts";
 import { ProgressRing } from "@/components/foundation/progress-ring";
+import { CompactHeaderBar, useCompactHeader } from "@/components/layout/compact-header";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuLabel, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -405,6 +408,7 @@ function CyclePicker({
   selected,
   onPick,
   onToday,
+  compact = false,
 }: {
   label: string;
   rangeLabel: string;
@@ -412,6 +416,8 @@ function CyclePicker({
   selected: Date;
   onPick: (year: number, month: number) => void;
   onToday: () => void;
+  /** The compact bar's one-line trigger — same popover and handlers; no `aria-live` (the page header's picker announces changes). */
+  compact?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [year, setYear] = useState(selected.getFullYear());
@@ -425,18 +431,29 @@ function CyclePicker({
       }}
     >
       <PopoverTrigger asChild>
-        <button
-          type="button"
-          aria-label="Choose cycle"
-          className="min-w-[10rem] rounded-[6px] px-2 py-0.5 text-center transition-colors hover:bg-secondary"
-          aria-live="polite"
-        >
-          <span className="flex items-center justify-center gap-1.5 text-sm leading-tight font-semibold text-foreground">
-            {label} cycle
-            <CalendarDays className="size-3.5 text-muted-foreground" />
-          </span>
-          <span className="block text-[11px] leading-tight text-muted-foreground tabular-nums">{rangeLabel}</span>
-        </button>
+        {compact ? (
+          <button
+            type="button"
+            aria-label="Choose cycle"
+            className="flex h-10 min-w-0 items-center justify-center gap-1.5 rounded-[6px] px-2 text-sm font-semibold whitespace-nowrap text-foreground transition-colors hover:bg-secondary"
+          >
+            <span className="truncate">{label}</span>
+            <CalendarDays className="size-3.5 shrink-0 text-muted-foreground" />
+          </button>
+        ) : (
+          <button
+            type="button"
+            aria-label="Choose cycle"
+            className="min-w-[10rem] rounded-[6px] px-2 py-0.5 text-center transition-colors hover:bg-secondary"
+            aria-live="polite"
+          >
+            <span className="flex items-center justify-center gap-1.5 text-sm leading-tight font-semibold text-foreground">
+              {label} cycle
+              <CalendarDays className="size-3.5 text-muted-foreground" />
+            </span>
+            <span className="block text-[11px] leading-tight text-muted-foreground tabular-nums">{rangeLabel}</span>
+          </button>
+        )}
       </PopoverTrigger>
       <PopoverContent align="start" className="w-64 p-3">
         <div className="mb-2 flex items-center justify-between">
@@ -678,7 +695,7 @@ function Reveal({ id, children }: { id: string; children: React.ReactNode }) {
   // No IntersectionObserver (old browsers, test DOM) → just show it; nothing to reveal on.
   if (reduceMotion || typeof IntersectionObserver === "undefined") {
     return (
-      <div id={id} className="scroll-mt-16">
+      <div id={id} className="scroll-mt-28">
         {children}
       </div>
     );
@@ -686,7 +703,7 @@ function Reveal({ id, children }: { id: string; children: React.ReactNode }) {
   return (
     <motion.div
       id={id}
-      className="scroll-mt-16"
+      className="scroll-mt-28"
       initial={reduceMotion ? false : { opacity: 0, y: 14 }}
       whileInView={{ opacity: 1, y: 0 }}
       viewport={{ once: true, margin: "-40px" }}
@@ -707,7 +724,7 @@ const SECTIONS = [
 ] as const;
 
 /** Pill bar that jumps to a section and highlights the one in view — pinned under the top bar. */
-function SectionNav() {
+function SectionNav({ top }: { top: number }) {
   const [current, setCurrent] = useState<string>(SECTIONS[0].id);
   useEffect(() => {
     const els = SECTIONS.map((s) => document.getElementById(s.id)).filter((e): e is HTMLElement => e != null);
@@ -725,7 +742,8 @@ function SectionNav() {
   return (
     <nav
       aria-label="Month cycle sections"
-      className="sticky top-0 z-attached -mx-1 flex gap-1 overflow-x-auto rounded-full border border-border-strong/60 bg-card/90 p-1 shadow-e1 backdrop-blur [scrollbar-width:none] supports-[backdrop-filter]:bg-card/75"
+      style={{ top }}
+      className="sticky z-attached -mx-1 flex gap-1 overflow-x-auto rounded-full border border-border-strong/60 bg-card/90 p-1 shadow-e1 backdrop-blur [scrollbar-width:none] supports-[backdrop-filter]:bg-card/75"
     >
       {SECTIONS.map(({ id, label, icon: Icon }) => {
         const active = current === id;
@@ -766,6 +784,8 @@ export function MonthCycleWorkspace() {
   const bankIdByAccount = new Map((allAccounts as { id: string; bankId: string | null }[]).map((a) => [a.id, a.bankId]));
   const [expenseView, setExpenseView] = useState<"combined" | "mine">("mine");
   const [showExpenseList, setShowExpenseList] = useState(false);
+  // Compact bar: shown once the page's original title has scrolled out of view, hidden again when it returns.
+  const { watch: watchTitle, progress: barProgress, reduceMotion: barReduceMotion, barTop, stackTop } = useCompactHeader();
 
   if (data.isLoading) {
     return (
@@ -789,13 +809,77 @@ export function MonthCycleWorkspace() {
   const changePercent = isMine ? financialView.mySpentChangePercent : financialView.spentChangePercent;
   const changeIsLess = changePercent != null && changePercent <= 0;
   const budgetPercent = data.budgetOverview ? Math.round(data.budgetOverview.usageRatio * 100) : null;
+  const cycleInfoText = data.isCustomCycle
+    ? `Cycle totals cover the ${ordinalDay(data.monthCycleStartDay)} of each month through the ${ordinalDay(data.monthCycleStartDay - 1)} of the next — change this in Settings.`
+    : "Cycle totals cover the current calendar month.";
+  const cycleStatusText = data.isCurrentCycle
+    ? `${data.daysLeftInMonth} day${data.daysLeftInMonth === 1 ? "" : "s"} left`
+    : data.daysLeftInMonth < 0
+      ? "Cycle ended"
+      : "Upcoming cycle";
+  const barButton = "flex size-10 shrink-0 items-center justify-center rounded-[6px] text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground";
 
   return (
     <div className="flex min-w-0 flex-col gap-5 px-1">
+      {/* ── Compact bar: zero-height sticky slot (no layout footprint); the same handlers as the header below ── */}
+      <CompactHeaderBar label="Month Cycle quick bar" progress={barProgress} reduceMotion={barReduceMotion} top={barTop}>
+        <span className="hidden min-w-0 shrink-0 truncate px-2 font-heading text-sm font-bold tracking-tight text-foreground min-[480px]:block">Month Cycle</span>
+        <div className="flex min-w-0 items-center">
+          <button type="button" onClick={data.goToPreviousCycle} aria-label="Previous cycle" className={barButton}>
+            <ChevronLeft className="size-4" strokeWidth={1.75} />
+          </button>
+          <CyclePicker
+            compact
+            label={data.monthLabel}
+            rangeLabel={data.monthRangeLabel}
+            selected={data.cycleRange.end}
+            onPick={data.goToCycleForMonth}
+            onToday={data.goToCurrentCycle}
+          />
+          <button type="button" onClick={data.goToNextCycle} aria-label="Next cycle" className={barButton}>
+            <ChevronRight className="size-4" strokeWidth={1.75} />
+          </button>
+        </div>
+        {!data.isCurrentCycle && (
+          <button type="button" onClick={data.goToCurrentCycle} aria-label="Back to current" title="Back to current" className={barButton}>
+            <RotateCcw className="size-4" strokeWidth={2} />
+          </button>
+        )}
+        <span className="hidden h-7 shrink-0 items-center rounded-[6px] bg-secondary px-2 text-xs font-semibold text-foreground md:inline-flex">{cycleStatusText}</span>
+        <div className="ml-auto flex min-w-0 items-center gap-1.5">
+          <span className="hidden min-w-0 flex-col items-end px-2 text-right leading-tight lg:flex">
+            <span className="text-[10px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">{isMine ? "My spend" : "Total outflow"}</span>
+            <span className="text-sm font-bold text-foreground tabular-nums">{formatCurrency(spent)}</span>
+          </span>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button type="button" aria-label="Cycle details" className={barButton}>
+                <MoreHorizontal className="size-4" strokeWidth={1.75} />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-64">
+              <DropdownMenuLabel className="md:hidden">{cycleStatusText}</DropdownMenuLabel>
+              <DropdownMenuLabel className="text-xs leading-snug font-normal text-muted-foreground">
+                <span className="mb-0.5 block text-sm font-semibold text-foreground">About this cycle</span>
+                {cycleInfoText}
+              </DropdownMenuLabel>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <Link
+            href="/transactions"
+            aria-label="New transaction"
+            className="flex h-10 min-w-10 shrink-0 items-center justify-center gap-1.5 rounded-[6px] border border-primary-accent-text bg-primary px-2.5 text-sm font-semibold text-primary-foreground transition-opacity hover:opacity-90 sm:px-3.5"
+          >
+            <Plus className="size-4" strokeWidth={2.25} />
+            <span className="hidden sm:inline">New transaction</span>
+          </Link>
+        </div>
+      </CompactHeaderBar>
+
       {/* ── Header: title · cycle navigator · primary action ── */}
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-2">
-          <div>
+          <div ref={watchTitle}>
             <h1 className="font-heading text-2xl font-bold tracking-tight text-foreground">Month Cycle</h1>
             <p className="mt-0.5 text-sm text-muted-foreground">Everything that moves your money this cycle.</p>
           </div>
@@ -851,11 +935,7 @@ export function MonthCycleWorkspace() {
                   <Info className="size-3.5" />
                 </button>
               </TooltipTrigger>
-              <TooltipContent>
-                {data.isCustomCycle
-                  ? `Cycle totals cover the ${ordinalDay(data.monthCycleStartDay)} of each month through the ${ordinalDay(data.monthCycleStartDay - 1)} of the next — change this in Settings.`
-                  : "Cycle totals cover the current calendar month."}
-              </TooltipContent>
+              <TooltipContent>{cycleInfoText}</TooltipContent>
             </Tooltip>
           </div>
         </div>
@@ -869,7 +949,7 @@ export function MonthCycleWorkspace() {
         </Link>
       </header>
 
-      <SectionNav />
+      <SectionNav top={stackTop} />
 
       <Reveal id="mc-overview">
       {/* ── Cycle summary: spend leads; income, net, budget and savings support it ── */}

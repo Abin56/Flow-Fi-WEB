@@ -18,6 +18,7 @@ import type { DocumentData, QueryDocumentSnapshot, SnapshotOptions } from "fireb
 import { Timestamp } from "firebase/firestore";
 import type { AuditEntry, SoftDeletableEntity } from "@/lib/firestore/soft-deletable";
 import { ownershipSharesFromData, type OwnershipShare } from "@/lib/engines/debt-ownership";
+import { ownershipConfirmationFromData, ownershipConfirmationToData, type OwnershipConfirmation } from "@/lib/models/ownership-confirmation";
 import type { InterestPeriod, InterestType } from "@/lib/engines/interest-calculator";
 import type { Installment, ScheduleType } from "@/lib/models/payment-schedule";
 import { installmentStatus } from "@/lib/models/payment-schedule";
@@ -199,6 +200,13 @@ export interface Loan extends SoftDeletableEntity {
    */
   ownershipShares?: OwnershipShare[] | null;
 
+  /**
+   * "This EMI is mine" — the user's explicit confirmation of a legacy record with no ownership data. Read only by
+   * the My EMI Commitments classification, and ignored whenever shares or a repay opt-in exist. See
+   * `lib/models/ownership-confirmation.ts`. Written only when present.
+   */
+  ownershipConfirmedMine?: OwnershipConfirmation | null;
+
   /** Locked once any payment has been recorded — see `LoanRepository.editLoan`. */
   loanAmount: number;
 
@@ -301,6 +309,7 @@ export function loanFromFirestore(
     linkedCreditCardId: (data.linkedCreditCardId as string | undefined) ?? null,
     beneficiaryRepaysInstallments: data.beneficiaryRepaysInstallments === true,
     ownershipShares: ownershipSharesFromData(data.ownershipShares),
+    ownershipConfirmedMine: ownershipConfirmationFromData(data.ownershipConfirmedMine),
     purchaseTransactionId: (data.purchaseTransactionId as string | undefined) ?? null,
     purchaseAmount: (data.purchaseAmount as number | undefined) ?? null,
     downPayment: (data.downPayment as number | undefined) ?? null,
@@ -353,6 +362,7 @@ export function loanToFirestore(loan: Loan): DocumentData {
     payerPersonId: loan.payerPersonId ?? null,
     beneficiaryPersonId: loan.beneficiaryPersonId ?? null,
     ...(loan.beneficiaryRepaysInstallments === true ? { beneficiaryRepaysInstallments: true } : {}),
+    ...ownershipConfirmationToData(loan.ownershipConfirmedMine),
     ...(loan.ownershipShares != null && loan.ownershipShares.length > 0 ? { ownershipShares: loan.ownershipShares.map((x) => ({ personId: x.personId, amount: x.amount, ...(x.installmentAmount != null ? { installmentAmount: x.installmentAmount } : {}) })) } : {}),
     loanAmount: loan.loanAmount,
     interest: loan.interest == null ? null : loanInterestToMap(loan.interest),

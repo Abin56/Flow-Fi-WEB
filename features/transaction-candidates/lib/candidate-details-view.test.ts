@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { Account } from "@/lib/models/account";
 import type { CreditCardProfile } from "@/lib/models/credit-card";
-import { buildDestinationOptions, initialImportDraft, initialNotes, isImportReady, resolveImportDestination } from "./candidate-details-view";
+import type { Category } from "@/lib/models/category";
+import { buildDestinationOptions, categoryOptionsForDirection, initialImportDraft, initialNotes, isImportReady, resolveImportDestination } from "./candidate-details-view";
 
 describe("initialNotes", () => {
   it("pre-fills from merchant when available", () => {
@@ -17,26 +18,62 @@ describe("initialNotes", () => {
   });
 });
 
+const liveAccounts = [{ id: "acc-1" }, { id: "acc-card-1" }] as unknown as Account[];
+const liveCards = [{ id: "card-1", accountId: "acc-card-1" }] as unknown as CreditCardProfile[];
+
+describe("initialImportDraft — deleted ids", () => {
+  it("leaves the destination empty when Android's account was deleted since the sync — never a blank picker with Import enabled", () => {
+    const draft = initialImportDraft({ accountId: "deleted-acc", cardId: null, merchant: null, bankName: null }, liveAccounts, liveCards);
+    expect(draft.destinationKey).toBeNull();
+    expect(isImportReady({ ...draft, categoryId: "cat-1" })).toBe(false);
+  });
+
+  it("leaves it empty when the matched card was deleted, or its account was", () => {
+    expect(initialImportDraft({ accountId: null, cardId: "deleted-card", merchant: null, bankName: null }, liveAccounts, liveCards).destinationKey).toBeNull();
+    expect(initialImportDraft({ accountId: null, cardId: "card-1", merchant: null, bankName: null }, [], liveCards).destinationKey).toBeNull();
+  });
+});
+
+describe("categoryOptionsForDirection", () => {
+  const categories = [
+    { id: "food", name: "Food", type: "expense" },
+    { id: "salary", name: "Salary", type: "income" },
+    { id: "misc", name: "Misc", type: "both" },
+  ] as unknown as Category[];
+
+  it("offers an income candidate only income and 'both' categories", () => {
+    expect(categoryOptionsForDirection(categories, "credit").map((c) => c.id)).toEqual(["salary", "misc"]);
+  });
+
+  it("offers an expense candidate only expense and 'both' categories", () => {
+    expect(categoryOptionsForDirection(categories, "debit").map((c) => c.id)).toEqual(["food", "misc"]);
+  });
+
+  it("offers everything when there is no direction yet", () => {
+    expect(categoryOptionsForDirection(categories, null)).toHaveLength(3);
+  });
+});
+
 describe("initialImportDraft", () => {
   it("pre-fills destinationKey from a resolved cardId, preferring it over accountId", () => {
-    const draft = initialImportDraft({ accountId: "acc-1", cardId: "card-1", merchant: null, bankName: null });
+    const draft = initialImportDraft({ accountId: "acc-1", cardId: "card-1", merchant: null, bankName: null }, liveAccounts, liveCards);
     expect(draft.destinationKey).toBe("card:card-1");
     expect(draft.categoryId).toBeNull();
     expect(draft.notes).toBe("");
   });
 
   it("pre-fills destinationKey from a resolved accountId when there's no card", () => {
-    const draft = initialImportDraft({ accountId: "acc-1", cardId: null, merchant: null, bankName: null });
+    const draft = initialImportDraft({ accountId: "acc-1", cardId: null, merchant: null, bankName: null }, liveAccounts, liveCards);
     expect(draft.destinationKey).toBe("account:acc-1");
   });
 
   it("leaves destinationKey null when neither is resolved — never invents an account", () => {
-    const draft = initialImportDraft({ accountId: null, cardId: null, merchant: null, bankName: null });
+    const draft = initialImportDraft({ accountId: null, cardId: null, merchant: null, bankName: null }, liveAccounts, liveCards);
     expect(draft.destinationKey).toBeNull();
   });
 
   it("pre-fills notes from the detected merchant", () => {
-    const draft = initialImportDraft({ accountId: null, cardId: null, merchant: "Amazon", bankName: null });
+    const draft = initialImportDraft({ accountId: null, cardId: null, merchant: "Amazon", bankName: null }, liveAccounts, liveCards);
     expect(draft.notes).toBe("Amazon");
   });
 });
@@ -48,7 +85,19 @@ describe("buildDestinationOptions", () => {
     const options = buildDestinationOptions(accounts, creditCards);
     expect(options).toEqual([
       { key: "account:acc-1", label: "SBI Savings •••• 1234" },
-      { key: "card:card-1", label: "Card •••• 9981" },
+      { key: "card:card-1", label: "Credit Card •••• 9981" },
+    ]);
+  });
+
+  it("lists a credit card once, named after its account, and not again as that account", () => {
+    const accounts = [
+      { id: "acc-1", name: "SBI Savings", accountNumberLast4: "1234" } as Account,
+      { id: "acc-card", name: "HDFC Regalia", accountNumberLast4: "4821" } as Account,
+    ];
+    const creditCards = [{ id: "card-1", accountId: "acc-card", lastFourDigits: "4821" } as CreditCardProfile];
+    expect(buildDestinationOptions(accounts, creditCards)).toEqual([
+      { key: "account:acc-1", label: "SBI Savings •••• 1234" },
+      { key: "card:card-1", label: "HDFC Regalia •••• 4821" },
     ]);
   });
 });

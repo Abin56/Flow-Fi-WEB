@@ -57,7 +57,8 @@ export type SmsCandidateEventType =
   | "upiPayment" | "upiReceive" | "bankDebit" | "bankCredit" | "atmWithdrawal"
   | "cardPurchase" | "creditCardPurchase" | "impsNeftRtgs" | "walletPayment"
   | "salaryCredit" | "refund" | "cashDeposit" | "loanEmiDebit" | "billPayment"
-  | "autoDebit" | "unknown";
+  | "autoDebit" | "cashback" | "interestCredit" | "bankFee" | "recharge"
+  | "unknown";
 
 export interface SmsTransactionCandidate {
   id: string; // == the Firestore document id == smsItemId, not a written field
@@ -151,10 +152,15 @@ risk exists there since dismissal never creates one.
 - `eventType`: Android's own `SmsTransactionCategory` taxonomy (see the enum
   list above) — the web app must not invent a second one.
 - `direction`: `"debit" | "credit"`.
-- Presentation status (what the user actually sees — "Ready to Import,"
-  "Needs Review," "Possible Duplicate," "Unmatched Account/Card") is
-  **derived**, never stored — see `deriveCandidateStatus` in
-  `features/transaction-candidates/lib/candidate-status.ts`.
+- Presentation status (what the user actually sees — "No issues flagged,"
+  "Needs Review" / "Review Recommended," "Possible Duplicate," "Account not
+  matched") is **derived**, never stored — see `deriveCandidateStatus` in
+  `features/transaction-candidates/lib/candidate-status.ts`. Each candidate is
+  in exactly one review lane (duplicate > needs account > needs review > no
+  issues flagged); the lane counts add up to the total. "No issues flagged" is
+  not "ready to import": a FlowFi category is always still required.
+- An `eventType` name this app doesn't know reads as `unknown` (Android's own
+  `fromName` does the same) — it never reaches the UI as a raw string.
 
 ## Status as of this writing
 
@@ -162,11 +168,10 @@ The Android Phase 3 implementation is real, merged, and tested
 (`Finance_App/test/features/sms_inbox/sms_transaction_candidate_cloud_test.dart`,
 `sms_candidate_cloud_sync_test.dart`,
 `sms_transaction_candidate_repository_test.dart`). The web side now consumes
-this exact contract. A development-only fixture generator
-(`features/transaction-candidates/dev/generate-mock-sms-candidates.ts`)
-remains available for local development without a signed-in Android device
-producing real data, gated behind `NODE_ENV === "development"` and never
-used as a production data source.
+this exact contract. There is currently no development fixture generator for this collection (an
+earlier version of this document referred to one that does not exist); the
+browser QA suite (`tests/e2e-qa/suites/sms-candidates.mjs`) seeds synthetic
+candidates into the Firestore emulator instead.
 
 **Not yet independently verified in this session:** an actual live
 Android → Firestore → web read, since doing so requires a signed-in mobile

@@ -52,6 +52,7 @@ import { SegmentedControl } from "@/components/forms/segmented-control";
 import { SliderField } from "@/components/forms/slider-field";
 import { TextField } from "@/components/forms/text-field";
 import { DeleteDialog } from "@/components/dialogs/delete-dialog";
+import { ScrollNav } from "@/components/layout/scroll-nav";
 import { NotificationSettingsRow } from "@/components/notifications/notification-settings-row";
 import { PermissionBanner } from "@/components/notifications/permission-banner";
 import { SettingsCard } from "@/components/settings/settings-card";
@@ -962,6 +963,7 @@ export function SettingsWorkspace() {
           toast.error("Data deletion is disabled in this preview.");
         }}
       />
+      <ScrollNav />
     </div>
   );
 }

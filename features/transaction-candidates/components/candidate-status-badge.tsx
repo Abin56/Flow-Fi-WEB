@@ -4,18 +4,22 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import type { RowStatusTone } from "@/features/transaction-studio/lib/row-status";
 import { deriveCandidateStatus } from "../lib/candidate-status";
+import type { CandidateDestinationState } from "../lib/candidate-account-matching";
 import type { CandidateDuplicateResult } from "../lib/candidate-duplicate";
 import type { SmsTransactionCandidate } from "@/lib/models/sms-transaction-candidate";
 
-/** Same tone→class mapping as Transaction Studio's `StatusCell` (`TONE_CLASS`/`DOT_CLASS`) — small,
- *  presentational, cheap to duplicate rather than importing a component from another feature folder. */
-const TONE_CLASS: Record<RowStatusTone, string> = {
-  success: "bg-success/20 text-success",
-  warning: "bg-warning/25 text-warning-foreground",
-  danger: "bg-danger/20 text-danger",
-  royal: "bg-royal/20 text-royal",
-  purple: "bg-purple/20 text-purple",
-  muted: "bg-muted text-muted-foreground",
+/**
+ * Text is ALWAYS the theme's foreground colour; meaning is carried by the dot, a tinted fill and an outline. The earlier
+ * per-tone text colours (`text-warning-foreground`, `text-success`) measured 1.6:1 in dark and 3.2–3.4:1 in light, because
+ * a tone-coloured text on a tone-tinted fill can't clear AA in both themes. Foreground on a light tint is >10:1 in both.
+ */
+const TONE_CHIP: Record<RowStatusTone, string> = {
+  success: "border-success/50 bg-success/12",
+  warning: "border-warning/60 bg-warning/20",
+  danger: "border-danger/50 bg-danger/12",
+  royal: "border-royal/50 bg-royal/12",
+  purple: "border-purple/50 bg-purple/12",
+  muted: "border-border bg-muted",
 };
 
 const DOT_CLASS: Record<RowStatusTone, string> = {
@@ -30,28 +34,36 @@ const DOT_CLASS: Record<RowStatusTone, string> = {
 export function CandidateStatusBadge({
   candidate,
   duplicate,
+  destinationState,
+  compact = false,
+  className,
 }: {
-  candidate: Pick<SmsTransactionCandidate, "needsReview" | "needsReviewReasons" | "confidenceLevel" | "accountId" | "cardId" | "rawLastFour" | "bankName">;
+  candidate: Pick<SmsTransactionCandidate, "needsReview" | "needsReviewReasons" | "confidenceLevel" | "accountId" | "cardId">;
   duplicate: CandidateDuplicateResult | null;
+  /** Whether Android's account/card match still resolves — omit only where the accounts aren't loaded. */
+  destinationState?: CandidateDestinationState;
+  /** Badge only — omits the reason line underneath, for spots that already list the reasons elsewhere. */
+  compact?: boolean;
+  className?: string;
 }) {
-  const status = deriveCandidateStatus(candidate, duplicate);
+  const status = deriveCandidateStatus(candidate, duplicate, destinationState);
   const reasonText = status.reasons.join(" ");
 
   return (
-    <div className="flex flex-col gap-0.5">
+    <div className={cn("flex min-w-0 flex-col gap-0.5", className)}>
       <Badge
         className={cn(
-          "min-w-0 max-w-full gap-1.5 border-0 px-2.5 py-1 text-[11px] font-medium",
-          status.dashed && "outline outline-dashed outline-1 outline-current/40",
-          TONE_CLASS[status.tone],
+          "h-auto max-w-full gap-1.5 rounded-full border px-2.5 py-1 text-[12px] leading-tight font-semibold whitespace-nowrap text-foreground",
+          status.dashed && "border-dashed",
+          TONE_CHIP[status.tone],
         )}
         variant="outline"
-        title={reasonText || status.label}
+        title={reasonText ? `${status.explanation} ${reasonText}` : status.explanation}
       >
-        <span className={cn("size-1.5 shrink-0 rounded-full", DOT_CLASS[status.tone])} aria-hidden />
-        <span className="truncate">{status.label}</span>
+        <span className={cn("size-2 shrink-0 rounded-full", DOT_CLASS[status.tone])} aria-hidden />
+        <span>{status.label}</span>
       </Badge>
-      {reasonText && <span className="truncate text-[10px] text-muted-foreground">{reasonText}</span>}
+      {reasonText && !compact && <span className="line-clamp-1 text-[11px] text-muted-foreground">{reasonText}</span>}
     </div>
   );
 }

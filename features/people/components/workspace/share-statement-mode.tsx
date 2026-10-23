@@ -5,7 +5,9 @@ import { useContext, useMemo, useState, type ReactNode } from "react";
 import { usePersonCycleStatement } from "@/features/people/hooks/use-person-cycle-statement";
 import { usePersonPendingSplitParticipants } from "@/features/people/hooks/use-person-pending-split-participants";
 import { useSettlementLookups } from "@/features/people/hooks/use-settlement-lookups";
+import { monthlySettlementView } from "@/features/people/lib/monthly-settlement-model";
 import { renderMonthlySettlementPdf } from "@/features/people/lib/monthly-settlement-pdf";
+import { COPY_FORMATS, monthlySettlementDetailedText, smartSettlementText, type CopyFormat } from "@/features/people/lib/monthly-settlement-text";
 import { loadStatementAmountFonts, loadStatementTextFonts, renderPersonStatementPdf, type StatementOrientation } from "@/features/people/lib/person-statement-pdf";
 import { useMonthCycleStartDay } from "@/features/settings/hooks/use-user-preferences";
 import {
@@ -47,6 +49,7 @@ export function ShareStatementMode({
 }) {
   const [pdfBusy, setPdfBusy] = useState(false);
   const [messageOpen, setMessageOpen] = useState(false);
+  const [format, setFormat] = useState<CopyFormat>("smart");
   // Read-only context that sharpens the wording (assigned vs split, later payments, accounts) — never a figure.
   const { allTimeStatement, ledgerEntries } = usePersonCycleStatement(statement.personId, statement.cycle);
   const { pending } = usePersonPendingSplitParticipants(statement.personId);
@@ -73,7 +76,13 @@ export function ShareStatementMode({
     [ledgerEntries, allTimeStatement, lookups, cycleStartDay, ownerName, deferrals],
   );
   const view = useMemo(() => statementView(statement, options), [statement, options]);
-  const text = statementShareText(statement);
+  // The copied / WhatsApp message: Smart Settlement and Detailed read the Monthly PDF's view model; Summary is the
+  // engine's short message.
+  const text = useMemo(() => {
+    if (format === "summary") return statementShareText(statement);
+    const monthly = monthlySettlementView(statement, options);
+    return format === "detailed" ? monthlySettlementDetailedText(monthly) : smartSettlementText(monthly);
+  }, [format, statement, options]);
 
   const copyText = async () => {
     try {
@@ -137,8 +146,26 @@ export function ShareStatementMode({
             <WsLabel>Sent as</WsLabel>
             <p className="mt-1.5 text-sm font-medium text-foreground">“{sharedPositionLine(statement)}”</p>
             <p className="mt-2 text-xs text-foreground/70">
-              Monthly PDF is the short settlement for this cycle — the one to share. Full PDF is the complete statement shown here. The WhatsApp / text message is a short summary.
+              Monthly PDF is the short settlement for this cycle — the one to share. Full PDF is the complete statement shown here.
             </p>
+            <div role="radiogroup" aria-label="Message format" className="mt-3 flex flex-wrap gap-1.5">
+              {COPY_FORMATS.map((f) => (
+                <button
+                  key={f.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={format === f.id}
+                  onClick={() => setFormat(f.id)}
+                  className={cn(
+                    "rounded-[6px] border px-2.5 py-1 text-xs font-medium transition-colors",
+                    format === f.id ? "border-foreground bg-foreground text-background" : "border-border text-foreground/70 hover:text-foreground",
+                  )}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+            <p className="mt-1.5 text-xs text-foreground/60">Copy Text and WhatsApp send this format.</p>
             <button
               type="button"
               aria-expanded={messageOpen}

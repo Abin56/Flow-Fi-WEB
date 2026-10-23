@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { PDFDocument } from "pdf-lib";
 import { describe, expect, it, vi } from "vitest";
 import { monthlySettlementView, paise, tidyTitle } from "@/features/people/lib/monthly-settlement-model";
+import { monthlySettlementDetailedText, smartSettlementText, waSafe } from "@/features/people/lib/monthly-settlement-text";
+import { statementShareText } from "@/lib/engines/person-cycle-statement-share";
 import { renderMonthlySettlementPdf } from "@/features/people/lib/monthly-settlement-pdf";
 import { renderPersonStatementPdf } from "@/features/people/lib/person-statement-pdf";
 import { statementView, type StatementViewOptions } from "@/features/people/lib/person-statement-pdf-model";
@@ -335,6 +337,235 @@ describe("the full-history statement is unchanged", () => {
   });
 });
 
+describe("copied WhatsApp message (same view model as the PDF)", () => {
+  const forSanju: StatementEmiSource = { ...bajaj, id: "emi-f", name: "For Sanju", scheduleId: "SF" };
+  /** Shaped like the reference SANJU October PDF: ₹16,828.88 = ₹10,380 due now + ₹6,448.88 moved to November. */
+  function referenceOctober() {
+    const b13 = inst("b13", "SB", d(10, 2), 4630, 13);
+    const sm1 = inst("sm1", "SS", d(10, 5), 3175, 1);
+    const f5 = inst("f5", "SF", d(10, 5), 1643.88, 5);
+    const entries = [
+      entry("gave", 10000, d(10, 16), { note: "Gived to sanju" }),
+      entry("gave", 380, d(10, 16), { note: "Interest for 10k" }),
+      ...EARLIER.map((i) => repay(i.id, 1643.88, d(10, 19))),
+      repay("b13", 3000, d(10, 19)),
+    ];
+    const moved = new Set(["emi-inst:b13", "emi-inst:sm1", "emi-inst:f5"]);
+    return scenario({
+      entries,
+      emis: [bajaj, superMoney, forSanju],
+      installments: [...EARLIER, b13, sm1, f5],
+      deferralFor: (key) => (moved.has(key) ? { status: "postponed", name: "Nov", from: "Oct" } : null),
+      accountForEntry: () => "S B I",
+    });
+  }
+  const text = (s: ReturnType<typeof scenario>) => smartSettlementText(s.monthly);
+  /** Visible width of a copied line on the phone, without WhatsApp's bold/italic markers. */
+  const visible = (line: string) => [...line.replace(/^[*_]+|[*_]+$/g, "")].length;
+  /** The block under a numbered section heading, up to the next divider. */
+  const sectionOf = (t: string, title: string) => t.split(/\n━+\n/).map((b) => b.trim()).find((b) => new RegExp(`^\\*\\d{2} {2}/ {2}${title}\\*`).test(b)) ?? "";
+
+  it("Smart Settlement V2 — the SANJU reference message, exactly", () => {
+    const t = text(referenceOctober());
+    writeText("copy-smart-reference-october", t);
+    expect(t).toBe(
+      [
+        "*FlowFi  /  SMART SETTLEMENT*",
+        "*SANJU*  •  OCT 2026",
+        "01–31 Oct  |  Updated 20 Oct",
+        "",
+        "━━━━━━━━━━━━━━━━━━━━",
+        "*PAYMENT DUE NOW*",
+        "*₹10,380.00*",
+        "",
+        "Total outstanding  ₹16,828.88",
+        "Moved to November  ₹6,448.88",
+        "━━━━━━━━━━━━━━━━━━━━",
+        "",
+        "*01  /  PAY THIS CYCLE*",
+        "",
+        "*Gived to sanju*",
+        "₹10,000.00",
+        "",
+        "*Interest for 10k*",
+        "₹380.00",
+        "",
+        "*TOTAL DUE  →  ₹10,380.00*",
+        "",
+        "━━━━━━━━━━━━━━━━━━━━",
+        "*02  /  MOVED TO NOVEMBER*",
+        "",
+        "*Bajaj Finance · EMI #13*",
+        "₹1,630.00 remaining",
+        "_Paid ₹3,000.00 / ₹4,630.00_",
+        "",
+        "*Super Money · EMI #1*",
+        "₹3,175.00 remaining",
+        "",
+        "*For Sanju · EMI #5*",
+        "₹1,643.88 remaining",
+        "",
+        "*TOTAL MOVED  →  ₹6,448.88*",
+        "_Postponed, not cancelled._",
+        "",
+        "━━━━━━━━━━━━━━━━━━━━",
+        "*03  /  PAYMENTS RECEIVED*",
+        "",
+        "✓ ₹6,575.52  •  19 Oct",
+        "   SBI  /  Previous balance cleared",
+        "",
+        "✓ ₹3,000.00  •  19 Oct",
+        "   SBI  /  Bajaj Finance · EMI #13",
+        "",
+        "*TOTAL RECEIVED  ₹9,575.52*",
+        "",
+        "━━━━━━━━━━━━━━━━━━━━",
+        "*04  /  BALANCE SUMMARY*",
+        "",
+        "Previous balance  ₹6,575.52",
+        "New this cycle  ₹19,828.88",
+        "Received  −₹9,575.52",
+        "────────────────────",
+        "*OUTSTANDING  ₹16,828.88*",
+        "",
+        "*SANJU  →  ABIN JOHN*",
+        "_Powered by FlowFi_",
+      ].join("\n"),
+    );
+  });
+
+  it("narrow phone: no code blocks, no padded columns, no stacked blank lines, short lines", () => {
+    const t = text(referenceOctober());
+    expect(t).not.toContain("```");
+    expect(t).not.toMatch(/\S {3,}\S/); // label/amount gaps are two spaces, never padding
+    expect(t).not.toMatch(/\n\n\n/);
+    for (const line of t.split("\n")) expect(visible(line)).toBeLessThanOrEqual(36);
+    for (const d of t.match(/^[━─]+$/gm) ?? []) expect([...d].length).toBe(20);
+    expect((t.match(/[✓↗]/g) ?? []).length).toBe(2); // the only symbols: one tick per receipt line
+  });
+
+  it("due now is the headline; due-now and moved items never mix; section totals are the model's split", () => {
+    const s = referenceOctober();
+    const t = text(s);
+    expect(t.indexOf("*PAYMENT DUE NOW*\n*₹10,380.00*")).toBeLessThan(t.indexOf("Total outstanding"));
+    const pay = sectionOf(t, "PAY THIS CYCLE");
+    const moved = sectionOf(t, "MOVED TO NOVEMBER");
+    expect(pay).toContain("Gived to sanju");
+    expect(pay).not.toMatch(/EMI #/);
+    expect(moved).toMatch(/EMI #13[\s\S]*EMI #1\*[\s\S]*EMI #5/);
+    expect(moved).not.toMatch(/Gived|Interest/);
+    // Grouping follows the model's own postponed flag, item for item.
+    for (const it of s.monthly.items.filter((i) => i.remainingPaise > 0)) expect((it.postponed ? moved : pay).includes(it.title)).toBe(true);
+    expect(pay).toContain("*TOTAL DUE  →  ₹10,380.00*");
+    expect(moved).toContain("*TOTAL MOVED  →  ₹6,448.88*");
+    expect(t.match(/₹16,828\.88/g)).toHaveLength(2); // secondary total + the balance summary's result
+    expect(t).not.toMatch(/EMI #(9|10|11|12)\b/); // earlier items cleared this cycle are not listed
+  });
+
+  it("the moved-to cycle label is dynamic, never a hardcoded November", () => {
+    const b = inst("bx", "SB", d(10, 2), 1000, 14);
+    const s = scenario({ entries: [entry("gave", 500, d(10, 3), { note: "Lunch" })], emis: [bajaj], installments: [b], deferralFor: (k) => (k === "emi-inst:bx" ? { status: "postponed", name: "Dec", from: "Oct" } : null) });
+    const t = text(s);
+    expect(s.monthly.split!.postponedTo).toBe("Moved to December");
+    expect(t).toContain("Moved to December  ₹1,000.00");
+    expect(t).toContain(`*02  /  ${s.monthly.split!.postponedTo.toUpperCase()}*`);
+    expect(t).not.toMatch(/November/i);
+  });
+
+  it("no postponement → total outstanding is the headline and items are listed as open items", () => {
+    const t = text(sanju({ postpone: false }));
+    expect(t).not.toMatch(/PAYMENT DUE NOW|PAY THIS CYCLE|MOVED TO|TOTAL DUE|Postponed/);
+    expect(t).toContain("*TOTAL OUTSTANDING*\n*₹16,828.88*");
+    expect(t).toContain("*01  /  OPEN ITEMS*");
+  });
+
+  it("custom 17th–16th cycle", () => {
+    const t = text(scenario({ entries: [entry("gave", 500, d(10, 16), { note: "On the 16th" })], startDay: 17, now: d(10, 20), cycleOf: d(10, 10) }));
+    expect(t).toContain("*SANJU*  •  OCT 2026\n17 Sep – 16 Oct  |  Updated 16 Oct");
+    expect(t).toContain("*On the 16th*\n₹500.00\n");
+  });
+
+  it("a genuinely open earlier balance stays (item + balance summary)", () => {
+    const t = text(scenario({ entries: [entry("gave", 2500, d(8, 12), { note: "Old loan" }), entry("gave", 300, d(10, 5), { note: "Lunch" })] }));
+    expect(t).toContain("*Old loan*\n₹2,500.00  •  earlier balance");
+    expect(t).toContain("Previous balance  ₹2,500.00");
+  });
+
+  it("partial payments only where relevant; fully paid items not listed; several receipts total up", () => {
+    const a = entry("gave", 1000, d(10, 3), { note: "A" });
+    const b = entry("gave", 2000, d(10, 4), { note: "B" });
+    const c = entry("gave", 700, d(10, 5), { note: "C" });
+    const t = text(scenario({ entries: [a, b, c, entry("receivedBack", 400, d(10, 8), { parentEntryId: a.id }), entry("receivedBack", 2000, d(10, 9), { parentEntryId: b.id })], accountForEntry: () => "HDFC Savings" }));
+    expect(t).toContain("*A*\n₹600.00 remaining\n_Paid ₹400.00 / ₹1,000.00_");
+    expect(t).toContain("*C*\n₹700.00\n\n");
+    expect(t).not.toContain("*B*");
+    expect(t).toContain("✓ ₹2,000.00  •  09 Oct\n   HDFC Savings  /  B · cleared");
+    expect(t).toContain("*TOTAL RECEIVED  ₹2,400.00*");
+  });
+
+  it("a historical receipt with no account is a record, not a new bank receipt", () => {
+    const a = entry("gave", 1000, d(10, 3), { note: "A" });
+    const b = entry("gave", 500, d(10, 4), { note: "B" });
+    const t = text(scenario({ entries: [a, b, entry("receivedBack", 1000, d(10, 6), { parentEntryId: a.id, recordedEarlier: true, receivedDateKnown: false })] }));
+    expect(t).toContain("✓ ₹1,000.00  •  Date not known\n   _Received earlier · recorded later · no new bank receipt_\n   A · cleared");
+    expect(t).not.toContain("TOTAL RECEIVED");
+  });
+
+  it("the owner owes the person", () => {
+    const t = text(scenario({ entries: [entry("borrowed", 1500, d(10, 5), { note: "Borrowed for rent" })] }));
+    expect(t).toContain("*ABIN JOHN  →  SANJU*");
+  });
+
+  it("owed both ways: each side named, a net — never one payable amount", () => {
+    const t = text(scenario({ entries: [entry("gave", 1000, d(10, 3), { note: "Lent" }), entry("borrowed", 300, d(10, 5), { note: "Borrowed" })] }));
+    expect(t).toContain("*NET BALANCE*\n*₹700.00*\n\nSanju owes  ₹1,000.00\nAbin owes  ₹300.00");
+    expect(t).toContain("₹300.00  •  Abin owes");
+    expect(t).toContain("*NET  SANJU  →  ABIN JOHN*");
+    expect(t).not.toMatch(/PAYMENT DUE NOW|TOTAL OUTSTANDING|BALANCE SUMMARY/);
+  });
+
+  it("zero outstanding", () => {
+    const a = entry("gave", 1000, d(10, 3), { note: "A" });
+    const t = text(scenario({ entries: [a, entry("receivedBack", 1000, d(10, 9), { parentEntryId: a.id })] }));
+    expect(t).toContain("*ALL SETTLED*\n*₹0.00*");
+    expect(t).toContain("*Nothing to pay — all settled.*");
+    expect(t).not.toMatch(/OPEN ITEMS|PAYMENT DUE NOW|  →  /);
+  });
+
+  it("WhatsApp markers in stored text can't break the formatting; the stored text is unchanged", () => {
+    const note = "50% *off* _deal_ ~x~ `code`";
+    const e = entry("gave", 100, d(10, 3), { note });
+    const t = text(scenario({ entries: [e] }));
+    expect(t).toContain("*50% ∗off∗ ˍdealˍ ∼x∼ ˋcodeˋ*");
+    expect(e.note).toBe(note);
+    expect(waSafe("a*b")).toBe("a∗b");
+  });
+
+  it("long names and descriptions stay inside a phone line; amounts are never shortened", () => {
+    const long = "Venkataraghavan Subramaniam Iyer";
+    const base = scenario({ entries: [entry("gave", 123456.78, d(10, 3), { note: "A very long description that keeps going well past what fits" }), entry("borrowed", 10, d(10, 4), { note: "Tiny" })] });
+    const view = { ...base.monthly, personName: long, ownerName: "Abhilash Krishnankutty" };
+    const t = smartSettlementText(view);
+    expect(t).toContain("*VENKATARAGHAVAN SUBRAMANIAM IYER*  •  OCT 2026");
+    expect(t).toContain("*A very long description that keep…*");
+    expect(t).toContain("Venkataraghavan owes  ₹1,23,456.78");
+    expect(t).toContain("*NET  VENKATARAGHAVAN SUBRAMANIAM IYER  →  ABHILASH KRISHNANKUTTY*");
+  });
+
+  it("Detailed and Summary formats are kept", () => {
+    const s = referenceOctober();
+    const detailed = monthlySettlementDetailedText(s.monthly);
+    writeText("copy-detailed-reference-october", detailed);
+    expect(detailed).toContain("*FlowFi Monthly Settlement*");
+    expect(detailed).toContain("*Due now:* ₹10,380.00");
+    expect(detailed).toContain("*Moved to November:* ₹6,448.88 (postponed — still owed, not cancelled)");
+    expect(detailed).toContain("19 Oct · ₹9,575.52 · received in SBI");
+    const summary = statementShareText(s.statement);
+    writeText("copy-summary-reference-october", summary);
+    expect(summary.startsWith("*FlowFi — Cycle Statement*")).toBe(true);
+  });
+});
+
 // ---- optional: write the PDFs for visual inspection ----
 function fonts() {
   try {
@@ -353,4 +584,11 @@ function write(name: string, bytes: Uint8Array) {
   if (!dir) return;
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, `${name}.pdf`), bytes);
+}
+
+function writeText(name: string, text: string) {
+  const dir = process.env.MONTHLY_PDF_OUT;
+  if (!dir) return;
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${name}.txt`), text);
 }

@@ -11,6 +11,7 @@ import { KpiGrid } from "@/components/analytics/kpi-grid";
 import { MetricCard } from "@/components/analytics/metric-card";
 import { EmptyState } from "@/components/finance/empty-state";
 import { FloatingCard } from "@/components/foundation/floating-card";
+import { ScrollNav } from "@/components/layout/scroll-nav";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAnalyticsData } from "@/features/analytics/hooks/use-analytics-data";
 import { axisStyle } from "@/lib/charts/theme";
@@ -149,6 +150,7 @@ export function AnalyticsWorkspace() {
           </div>
         )}
       </div>
+      <ScrollNav />
     </div>
   );
 }

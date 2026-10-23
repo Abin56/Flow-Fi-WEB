@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SmsTransactionCandidate } from "@/lib/models/sms-transaction-candidate";
 import type { CandidateDuplicateResult } from "./candidate-duplicate";
-import { deriveCandidateStatus } from "./candidate-status";
+import { deriveCandidateLane, deriveCandidateStatus } from "./candidate-status";
 
 function candidate(overrides: Partial<SmsTransactionCandidate> = {}): SmsTransactionCandidate {
   return {
@@ -34,53 +34,69 @@ function duplicate(overrides: Partial<CandidateDuplicateResult> = {}): Candidate
 }
 
 describe("deriveCandidateStatus", () => {
-  it("a matched, high-confidence, unreviewed, non-duplicate candidate reads as Ready to Import, with no reasons to explain", () => {
+  it("a matched, high-confidence, unreviewed, non-duplicate candidate reads as No issues flagged — not 'ready', a category is still required", () => {
     const status = deriveCandidateStatus(candidate(), noDuplicate);
-    expect(status).toMatchObject({ label: "Ready to Import", tone: "success" });
+    expect(status).toMatchObject({ lane: "noIssues", label: "No issues flagged", tone: "success" });
     expect(status.reasons).toEqual([]);
+    expect(status.explanation).toMatch(/category/i);
   });
 
   it("a possible duplicate wins outright, even over needsReview, and explains why via the duplicate's own reason", () => {
-    const status = deriveCandidateStatus(candidate({ needsReview: true, confidenceLevel: "low" }), duplicate({ reason: "Same merchant, amount, and date." }));
-    expect(status).toMatchObject({ label: "Possible Duplicate", tone: "warning", dashed: true });
+    const status = deriveCandidateStatus(candidate({ needsReview: true, confidenceLevel: "low" }), duplicate({ reason: "Same merchant, amount, and date." }), "unmatched");
+    expect(status).toMatchObject({ lane: "duplicate", label: "Possible Duplicate", tone: "warning", dashed: true });
     expect(status.reasons).toEqual(["Same merchant, amount, and date."]);
   });
 
-  it("an unmatched last-4 hint reads as Unmatched Account, using Android's own needsReviewReasons verbatim", () => {
+  it("an unmatched candidate reads as Account not matched, using Android's own needsReviewReasons verbatim", () => {
     const status = deriveCandidateStatus(
       candidate({ accountId: null, cardId: null, rawLastFour: "9999", bankName: null, needsReviewReasons: ["No matching account or card found for this message."] }),
       noDuplicate,
     );
-    expect(status).toMatchObject({ label: "Unmatched Account", tone: "danger" });
+    expect(status).toMatchObject({ lane: "needsAccount", label: "Account not matched", tone: "danger" });
     expect(status.reasons).toEqual(["No matching account or card found for this message."]);
   });
 
-  it("an unmatched bank-name-only hint (no last4) reads as Unmatched Card", () => {
+  it("never claims 'Unmatched Card' from a bank name alone — one neutral label whether or not a last-4 was seen", () => {
     const status = deriveCandidateStatus(candidate({ accountId: null, cardId: null, rawLastFour: null, bankName: "ICICI" }), noDuplicate);
-    expect(status).toMatchObject({ label: "Unmatched Card", tone: "danger" });
+    expect(status).toMatchObject({ lane: "needsAccount", label: "Account not matched" });
+  });
+
+  it("an Android-resolved id that no longer exists reads as Account not matched with its own explanation", () => {
+    const status = deriveCandidateStatus(candidate({ accountId: "deleted-acc", cardId: null }), noDuplicate, "missing");
+    expect(status).toMatchObject({ lane: "needsAccount", label: "Account not matched" });
+    expect(status.explanation).toMatch(/no longer exists/);
+  });
+
+  it("with no destination state given, resolved ids are trusted and absent ids count as unmatched", () => {
+    expect(deriveCandidateStatus(candidate({ accountId: null, cardId: null }), noDuplicate).lane).toBe("needsAccount");
+    expect(deriveCandidateStatus(candidate({ accountId: "acc-1", cardId: null }), noDuplicate).lane).toBe("noIssues");
   });
 
   it("low confidence (matched, needsReview true) reads as Needs Review", () => {
     const status = deriveCandidateStatus(candidate({ needsReview: true, confidenceLevel: "low", needsReviewReasons: ["Low confidence parse."] }), noDuplicate);
-    expect(status).toMatchObject({ label: "Needs Review", tone: "warning" });
+    expect(status).toMatchObject({ lane: "needsReview", label: "Needs Review", tone: "warning" });
     expect(status.reasons).toEqual(["Low confidence parse."]);
   });
 
-  it("medium confidence (matched, needsReview true) reads as Review Recommended", () => {
+  it("medium confidence reads as Review Recommended, and says so when Android gave no specific reason", () => {
     const status = deriveCandidateStatus(candidate({ needsReview: true, confidenceLevel: "medium" }), noDuplicate);
-    expect(status).toMatchObject({ label: "Review Recommended", tone: "warning" });
+    expect(status).toMatchObject({ lane: "needsReview", label: "Review Recommended", tone: "warning" });
+    expect(status.reasons).toEqual([]);
+    expect(status.explanation).toMatch(/no specific problem/);
   });
 
-  it("unmatched wins over a merely needsReview label when both are true", () => {
-    const status = deriveCandidateStatus(
-      candidate({ needsReview: true, confidenceLevel: "medium", accountId: null, cardId: null, rawLastFour: "1111" }),
-      noDuplicate,
-    );
-    expect(status).toMatchObject({ label: "Unmatched Account", tone: "danger" });
+  it("an unmatched account wins over a merely needsReview label when both are true", () => {
+    const status = deriveCandidateStatus(candidate({ needsReview: true, confidenceLevel: "medium", accountId: null, cardId: null, rawLastFour: "1111" }), noDuplicate);
+    expect(status).toMatchObject({ lane: "needsAccount", label: "Account not matched" });
   });
 
-  it("a resolved, high-confidence candidate with needsReview false never reads as Unmatched even if bankName/rawLastFour happen to be set", () => {
-    const status = deriveCandidateStatus(candidate({ accountId: "acc-1", cardId: null }), noDuplicate);
-    expect(status.label).toBe("Ready to Import");
+  it("every candidate lands in exactly one lane (the lane equals the badge's)", () => {
+    const cases = [
+      deriveCandidateLane(candidate(), null),
+      deriveCandidateLane(candidate({ needsReview: true }), null),
+      deriveCandidateLane(candidate({ cardId: null, accountId: null }), null),
+      deriveCandidateLane(candidate(), duplicate()),
+    ];
+    expect(cases).toEqual(["noIssues", "needsReview", "needsAccount", "duplicate"]);
   });
 });

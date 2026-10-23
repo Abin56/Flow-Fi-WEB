@@ -6,11 +6,15 @@ import { usePathname, useSearchParams } from "next/navigation";
 import { Plus, UserPlus, Users, X } from "lucide-react";
 import { ConfirmDialog } from "@/components/finance";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useCompactHeader } from "@/components/layout/compact-header";
+import { ScrollNav } from "@/components/layout/scroll-nav";
 import {
   AddPersonInline,
   type AddPersonValues,
 } from "@/features/people/components/add-person-inline";
+import { PeopleCompactBar } from "@/features/people/components/people-compact-bar";
 import {
+  cycleTotals,
   PeopleCycleControl,
   PeopleCycleSummary,
   PeopleCycleSummarySkeleton,
@@ -20,6 +24,8 @@ import {
   type PeopleFilter,
   type PeopleLedgerRow,
 } from "@/features/people/components/people-ledger-list";
+import { cycleContaining } from "@/lib/engines/person-cycle-statement";
+import { useMonthCycleStartDay } from "@/features/settings/hooks/use-user-preferences";
 import {
   PersonDetailWorkspace,
   type SettleEntryParams,
@@ -124,6 +130,10 @@ export function PeopleWorkspace() {
       requestAnimationFrame(() => el.scrollTo({ top }));
     }
   }, [selectedId]);
+  const { watch: watchTitle, progress: barProgress, reduceMotion: barReduceMotion, barTop } = useCompactHeader();
+  const startDay = useMonthCycleStartDay();
+  const currentCycle = useMemo(() => cycleContaining(new Date(), startDay), [startDay]);
+
   const [addPersonOpen, setAddPersonOpenState] = useState(false);
   /** Bumped on every open so the inline form starts empty. */
   const [addPersonKey, setAddPersonKey] = useState(0);
@@ -350,7 +360,19 @@ export function PeopleWorkspace() {
 
   return (
     <div className="flex min-w-0 flex-col gap-5 px-1 pb-10">
-      <div className="flex flex-col">
+      <PeopleCompactBar
+        progress={barProgress}
+        reduceMotion={barReduceMotion}
+        top={barTop}
+        cycle={cycle}
+        current={currentCycle}
+        onCycleChange={setCycle}
+        toReceive={cycleTotals(ledgerRows).toReceive}
+        addPersonOpen={addPersonOpen}
+        onToggleAddPerson={() => setAddPersonOpen(!addPersonOpen)}
+        addDisabled={!actions}
+      />
+      <div ref={watchTitle} className="flex flex-col">
         <header className="flex items-center justify-between gap-3">
           <div className="flex min-w-0 flex-col gap-0.5">
             <h1 className="font-heading text-2xl font-bold tracking-tight text-foreground">
@@ -465,6 +487,7 @@ export function PeopleWorkspace() {
       )}
 
       {deleteDialog}
+      <ScrollNav />
     </div>
   );
 }

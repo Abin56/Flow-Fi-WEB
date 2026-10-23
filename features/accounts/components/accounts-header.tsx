@@ -1,14 +1,17 @@
-import { Plus, RefreshCw, Users } from "lucide-react";
+import { MoreHorizontal, Plus, RefreshCw, Users } from "lucide-react";
+import { CompactHeaderBar } from "@/components/layout/compact-header";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { formatCurrency } from "@/lib/format";
 
 const UTILITY =
   "flex h-9 items-center gap-1.5 rounded-[6px] px-2.5 text-sm font-medium text-foreground outline-none transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:text-muted-foreground disabled:hover:bg-transparent [&_svg]:text-muted-foreground";
 const SOON = "rounded-[4px] bg-secondary px-1 py-px text-[10px] font-semibold tracking-wide text-muted-foreground uppercase";
 
 /** Title, the (not yet built) Refresh / Groups utilities — marked as such — and the primary Add Account. */
-export function AccountsHeader({ onAdd }: { onAdd?: () => void }) {
+export function AccountsHeader({ onAdd, titleRef }: { onAdd?: () => void; /** Callback ref on the title block — what the compact bar watches. */ titleRef?: (el: HTMLDivElement | null) => void }) {
   return (
     <header className="flex flex-wrap items-start justify-between gap-3">
-      <div className="min-w-0">
+      <div ref={titleRef} className="min-w-0">
         <h1 className="font-heading text-2xl font-bold tracking-tight text-foreground">Accounts</h1>
         <p className="mt-0.5 text-sm text-muted-foreground">Your banks, cards, wallets and cash — balances in one place.</p>
       </div>
@@ -39,5 +42,66 @@ export function AccountsHeader({ onAdd }: { onAdd?: () => void }) {
         )}
       </div>
     </header>
+  );
+}
+
+/**
+ * The compact Accounts bar: title, the same Total balance figure the summary shows, Add Account (same handler) and a ⋯ menu
+ * holding the two not-yet-built utilities — still disabled and marked "Soon". No new figures or actions.
+ */
+export function AccountsCompactBar({
+  progress,
+  reduceMotion,
+  top,
+  totalBalance,
+  onAdd,
+}: {
+  progress: number;
+  reduceMotion: boolean;
+  /** `barTop` from `useCompactHeader`. */
+  top: number;
+  totalBalance: number;
+  onAdd: () => void;
+}) {
+  return (
+    <CompactHeaderBar label="Accounts quick bar" progress={progress} reduceMotion={reduceMotion} top={top}>
+      <span className="min-w-0 shrink-0 truncate px-2 font-heading text-sm font-bold tracking-tight text-foreground">Accounts</span>
+      <span className="ml-auto flex min-w-0 flex-col items-end px-2 text-right leading-tight">
+        <span className="text-[10px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">Total balance</span>
+        <span className="text-sm font-bold text-foreground tabular-nums">{formatCurrency(totalBalance)}</span>
+      </span>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            aria-label="More actions"
+            className="flex size-10 shrink-0 items-center justify-center rounded-[6px] text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+          >
+            <MoreHorizontal className="size-4" strokeWidth={1.75} />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="min-w-44">
+          <DropdownMenuItem disabled>
+            <RefreshCw strokeWidth={1.75} />
+            Refresh
+            <span className={`${SOON} ml-auto`}>Soon</span>
+          </DropdownMenuItem>
+          <DropdownMenuItem disabled>
+            <Users strokeWidth={1.75} />
+            Groups
+            <span className={`${SOON} ml-auto`}>Soon</span>
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <button
+        type="button"
+        onClick={onAdd}
+        aria-label="Add Account"
+        className="flex h-10 min-w-10 shrink-0 items-center justify-center gap-1.5 rounded-[6px] border border-primary-accent-text bg-primary px-2.5 text-sm font-semibold text-primary-foreground outline-none transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring sm:px-3.5"
+      >
+        <Plus className="size-4" strokeWidth={2.25} />
+        <span className="hidden sm:inline">Add Account</span>
+      </button>
+    </CompactHeaderBar>
   );
 }

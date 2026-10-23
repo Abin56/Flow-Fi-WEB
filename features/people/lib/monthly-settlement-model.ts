@@ -51,6 +51,8 @@ export interface MonthlyItem {
   /** Remaining still owed (paise) and whether it is postponed — what the summary's due-now split reads. */
   remainingPaise: number;
   postponed: boolean;
+  /** Who owes this line's Remaining — only drawn when the balance runs both ways. */
+  owedBy: "them" | "owner" | null;
 }
 
 export interface MonthlyPaymentLine {
@@ -103,6 +105,11 @@ export interface MonthlySettlementView {
   payments: MonthlyPayment[];
   totalPaid: string | null;
   advance: StatementView["advance"];
+  /**
+   * Both sides owe something (gross receivable AND payable): the engine nets them into `outstanding`, so a single
+   * "payable" figure would be a guess. Null otherwise.
+   */
+  mixed: { theyOwe: string; ownerOwes: string } | null;
   /** Figures that tie out: previous + new − applied = outstanding, and the Remaining column adds up. */
   checks: { reconciles: boolean; itemsAddUp: boolean; unitemisedPaise: number };
 }
@@ -145,6 +152,11 @@ export function tidyTitle(raw: string): string {
   return t.length > 0 && /^[a-z]/.test(t) ? t[0].toUpperCase() + t.slice(1) : t;
 }
 
+/** Every rupee amount with paise ("₹4,630" → "₹4,630.00") so figures line up and read consistently. */
+export const money2 = (s: string) => s.replace(/₹\d[\d,]*(\.\d+)?/g, (m, dec) => (dec ? m : `${m}.00`));
+/** Display-only: "S B I" (single capitals spaced apart) reads as "SBI". Stored names are never changed. */
+export const tidyAccount = (s: string) => s.replace(/\b[A-Z](?: [A-Z]){2,}\b/g, (m) => m.replace(/ /g, ""));
+
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 export function monthlySettlementView(statement: PersonCycleStatement, options: StatementViewOptions = {}): MonthlySettlementView {
@@ -165,6 +177,7 @@ export function monthlySettlementView(statement: PersonCycleStatement, options: 
       chip: r.chip,
       remainingPaise: paise(r.remainingValue ?? 0),
       postponed: r.postponed,
+      owedBy: r.owedBy,
     };
   };
 
@@ -265,6 +278,7 @@ export function monthlySettlementView(statement: PersonCycleStatement, options: 
     payments,
     totalPaid: view.totalReceived ?? view.totalPaid,
     advance: view.advance,
+    mixed: statement.toReceive >= 0.005 && statement.toGive >= 0.005 ? { theyOwe: money(statement.toReceive), ownerOwes: money(statement.toGive) } : null,
     checks: {
       reconciles: previous + added - totalApplied === outstandingPaise || statement.direction === "settled" || mixedSides(statement),
       itemsAddUp: itemsAddUp === outstandingPaise,

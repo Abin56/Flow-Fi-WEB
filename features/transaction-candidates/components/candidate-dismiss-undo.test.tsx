@@ -72,12 +72,12 @@ function candidate(overrides: Partial<SmsTransactionCandidate> = {}): SmsTransac
 }
 
 function setup() {
-  const deleteById = vi.fn(async () => {});
-  const candidateRepository = { deleteById } as unknown as SmsTransactionCandidateRepository;
+  const markHandled = vi.fn(async () => {});
+  const candidateRepository = { markHandled } as unknown as SmsTransactionCandidateRepository;
   const hidden = new Set<string>();
   const onHide = vi.fn((id: string) => hidden.add(id));
   const onUnhide = vi.fn((id: string) => hidden.delete(id));
-  return { deleteById, candidateRepository, hidden, onHide, onUnhide };
+  return { markHandled, candidateRepository, hidden, onHide, onUnhide };
 }
 
 function renderPopup(ctx: ReturnType<typeof setup>, onOpenChange = vi.fn()) {
@@ -114,7 +114,7 @@ describe("candidate details popup — Dismiss with Undo", () => {
     const onOpenChange = renderPopup(ctx);
     dismissFromPopup();
     expect(ctx.hidden.has("sms-1")).toBe(true);
-    expect(ctx.deleteById).not.toHaveBeenCalled();
+    expect(ctx.markHandled).not.toHaveBeenCalled();
     expect(onOpenChange).toHaveBeenCalledWith(false);
     const dismissed = toastCalls.find((t) => t.title === "Candidate dismissed");
     expect(dismissed?.action?.label).toBe("Undo");
@@ -129,7 +129,7 @@ describe("candidate details popup — Dismiss with Undo", () => {
     await act(async () => {
       vi.advanceTimersByTime(DISMISS_UNDO_WINDOW_MS + 1000);
     });
-    expect(ctx.deleteById).not.toHaveBeenCalled();
+    expect(ctx.markHandled).not.toHaveBeenCalled();
   });
 
   it("4. without Undo the dismissal is committed exactly once after the window", async () => {
@@ -139,12 +139,12 @@ describe("candidate details popup — Dismiss with Undo", () => {
     await act(async () => {
       vi.advanceTimersByTime(DISMISS_UNDO_WINDOW_MS - 1);
     });
-    expect(ctx.deleteById).not.toHaveBeenCalled();
+    expect(ctx.markHandled).not.toHaveBeenCalled();
     await act(async () => {
       vi.advanceTimersByTime(1);
     });
-    expect(ctx.deleteById).toHaveBeenCalledTimes(1);
-    expect(ctx.deleteById).toHaveBeenCalledWith("sms-1");
+    expect(ctx.markHandled).toHaveBeenCalledTimes(1);
+    expect(ctx.markHandled).toHaveBeenCalledWith("sms-1", "dismissed", null);
   });
 
   it("6. a repeated confirm does not schedule a second dismissal", async () => {
@@ -158,7 +158,7 @@ describe("candidate details popup — Dismiss with Undo", () => {
       vi.advanceTimersByTime(DISMISS_UNDO_WINDOW_MS);
     });
     expect(ctx.onHide).toHaveBeenCalledTimes(1);
-    expect(ctx.deleteById).toHaveBeenCalledTimes(1);
+    expect(ctx.markHandled).toHaveBeenCalledTimes(1);
   });
 
   it("7. Import remains available alongside Dismiss", () => {
@@ -177,7 +177,7 @@ describe("5. list-level Dismiss (IgnoreCandidateButton) — unchanged semantics"
     await act(async () => {
       vi.advanceTimersByTime(DISMISS_UNDO_WINDOW_MS);
     });
-    expect(ctx.deleteById).toHaveBeenCalledTimes(1);
+    expect(ctx.markHandled).toHaveBeenCalledTimes(1);
   });
 
   it("Undo restores and cancels the delete", async () => {
@@ -189,6 +189,6 @@ describe("5. list-level Dismiss (IgnoreCandidateButton) — unchanged semantics"
       vi.advanceTimersByTime(DISMISS_UNDO_WINDOW_MS);
     });
     expect(ctx.hidden.has("sms-1")).toBe(false);
-    expect(ctx.deleteById).not.toHaveBeenCalled();
+    expect(ctx.markHandled).not.toHaveBeenCalled();
   });
 });

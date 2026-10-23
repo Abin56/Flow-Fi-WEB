@@ -16,6 +16,7 @@ import {
   SectionLabel,
   SmartToolbar,
 } from "@/components/finance";
+import { ScrollNav } from "@/components/layout/scroll-nav";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAccounts } from "@/hooks/use-accounts";
@@ -448,6 +449,7 @@ export function BillsWorkspace() {
         confirmLabel="Delete"
         onConfirm={handleDelete}
       />
+      <ScrollNav />
     </div>
   );
 }

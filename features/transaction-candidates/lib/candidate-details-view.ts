@@ -13,11 +13,13 @@
  */
 
 import type { Account } from "@/lib/models/account";
+import type { Category } from "@/lib/models/category";
 import type { CreditCardProfile } from "@/lib/models/credit-card";
 import type { SplitType } from "@/lib/models/expense";
 import type { Person } from "@/lib/models/person";
-import type { SmsTransactionCandidate } from "@/lib/models/sms-transaction-candidate";
+import type { SmsCandidateDirection, SmsTransactionCandidate } from "@/lib/models/sms-transaction-candidate";
 import type { ExpenseParticipantInput } from "@/lib/repositories/expense-repository";
+import { resolveCandidateDestinationKey } from "./candidate-account-matching";
 import type { CandidatePersonAssignment } from "./import-candidate";
 
 export interface CandidateSplitParticipantDraft {
@@ -49,11 +51,22 @@ export function initialNotes(candidate: Pick<SmsTransactionCandidate, "merchant"
   return candidate.merchant ?? candidate.bankName ?? "";
 }
 
-/** Pre-fills the destination from Android's own resolved `accountId`/`cardId` — never a guess. Category always starts empty: Android never resolves a FlowFi category (see `import-candidate.ts`). Notes pre-fill from the detected merchant/bank (`initialNotes`) but stay fully editable. Person/split always start unset — nothing about a fresh candidate implies who else was involved. */
-export function initialImportDraft(candidate: Pick<SmsTransactionCandidate, "accountId" | "cardId" | "merchant" | "bankName">): CandidateImportDraft {
+/**
+ * Pre-fills the destination from Android's own resolved `accountId`/`cardId` — never a guess, and only when that id
+ * still points at a real account/card (`resolveCandidateDestinationKey`): an id that was deleted since the sync
+ * leaves the destination empty so the reviewer has to choose, instead of showing a blank picker with Import enabled.
+ * Category always starts empty: Android never resolves a FlowFi category (see `import-candidate.ts`). Notes pre-fill
+ * from the detected merchant/bank (`initialNotes`) but stay fully editable. Person/split always start unset —
+ * nothing about a fresh candidate implies who else was involved.
+ */
+export function initialImportDraft(
+  candidate: Pick<SmsTransactionCandidate, "accountId" | "cardId" | "merchant" | "bankName">,
+  accounts: Account[],
+  creditCards: CreditCardProfile[],
+): CandidateImportDraft {
   return {
     categoryId: null,
-    destinationKey: candidate.cardId ? `card:${candidate.cardId}` : candidate.accountId ? `account:${candidate.accountId}` : null,
+    destinationKey: resolveCandidateDestinationKey(candidate, accounts, creditCards),
     notes: initialNotes(candidate),
     personId: null,
     owesPersonToggle: false,
@@ -63,22 +76,39 @@ export function initialImportDraft(candidate: Pick<SmsTransactionCandidate, "acc
   };
 }
 
+/**
+ * Categories that make sense for a candidate of this direction: an income (credit) candidate never offers
+ * expense-only categories and vice versa; "both" categories are always offered. `null` direction offers all.
+ */
+export function categoryOptionsForDirection(categories: Category[], direction: SmsCandidateDirection | null): Category[] {
+  if (direction === "credit") return categories.filter((c) => c.type !== "expense");
+  if (direction === "debit") return categories.filter((c) => c.type !== "income");
+  return categories;
+}
+
 export interface DestinationOption {
   key: string;
   label: string;
 }
 
-/** Same combined "account or card" option list `ImportCandidateDialog` builds. */
+/**
+ * The combined "account or card" option list. A credit card is listed ONCE, by the card (labelled with its account's name and the
+ * card's own last-4 — the same wording Android's match, the evidence block and the last-4 suggestions use); its backing account
+ * is not listed a second time, since importing "to the card" and "to its account" post to the same account.
+ */
 export function buildDestinationOptions(accounts: Account[], creditCards: CreditCardProfile[]): DestinationOption[] {
+  const cardAccountIds = new Set(creditCards.map((c) => c.accountId));
   return [
-    ...accounts.map((a) => ({
-      key: `account:${a.id}`,
-      label: a.accountNumberLast4 ? `${a.name} •••• ${a.accountNumberLast4}` : a.name,
-    })),
-    ...creditCards.map((c) => ({
-      key: `card:${c.id}`,
-      label: c.lastFourDigits ? `Card •••• ${c.lastFourDigits}` : "Credit Card",
-    })),
+    ...accounts
+      .filter((a) => !cardAccountIds.has(a.id))
+      .map((a) => ({
+        key: `account:${a.id}`,
+        label: a.accountNumberLast4 ? `${a.name} •••• ${a.accountNumberLast4}` : a.name,
+      })),
+    ...creditCards.map((c) => {
+      const base = accounts.find((a) => a.id === c.accountId)?.name ?? "Credit Card";
+      return { key: `card:${c.id}`, label: c.lastFourDigits ? `${base} •••• ${c.lastFourDigits}` : base };
+    }),
   ];
 }
 
@@ -170,4 +200,44 @@ const LONG_DIGIT_RUN = /\d{6,}/;
 export function looksLikeRawReference(merchant: string | null): boolean {
   if (!merchant) return false;
   return LONG_DIGIT_RUN.test(merchant);
+}
+
+/**
+ * True when the reviewer has changed anything in the import draft since it was last seeded for this candidate — the drawer
+ * asks before moving to another candidate so those edits are never discarded silently.
+ */
+export function isDraftDirty(draft: CandidateImportDraft, initial: CandidateImportDraft): boolean {
+  if (draft.categoryId !== initial.categoryId) return true;
+  if (draft.destinationKey !== initial.destinationKey) return true;
+  if (draft.notes !== initial.notes) return true;
+  if (draft.personId !== initial.personId || draft.owesPersonToggle !== initial.owesPersonToggle) return true;
+  if (draft.splitOpen !== initial.splitOpen) return true;
+  if (draft.splitOpen) {
+    if (draft.splitType !== initial.splitType) return true;
+    const filled = (p: CandidateSplitParticipantDraft) => p.personId != null || p.name.trim() !== "" || p.value.trim() !== "";
+    if (draft.participants.some(filled)) return true;
+  }
+  return false;
+}
+
+export type ImportFieldKey = "category" | "account" | "split";
+
+/**
+ * Per-field messages for the inline validation the drawer shows once the reviewer tries to import — one entry per field that
+ * blocks the import, in the form's top-to-bottom order. Mirrors `isImportReady` / `importBlockedReason`.
+ */
+export function importFieldErrors(
+  draft: CandidateImportDraft,
+  destinationState: "matched" | "unmatched" | "missing",
+): Partial<Record<ImportFieldKey, string>> {
+  const errors: Partial<Record<ImportFieldKey, string>> = {};
+  if (draft.categoryId == null) errors.category = "Choose a category to import this transaction.";
+  if (draft.destinationKey == null) {
+    errors.account =
+      destinationState === "missing"
+        ? "The account Android matched no longer exists — choose where this was paid from."
+        : "Choose the account or card this belongs to.";
+  }
+  if (!isSplitReady(draft)) errors.split = "Add at least one person to the split, or remove the split.";
+  return errors;
 }
