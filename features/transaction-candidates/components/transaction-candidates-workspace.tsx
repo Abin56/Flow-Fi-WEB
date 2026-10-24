@@ -21,11 +21,12 @@
  * again when confirming), so it always gets an individual review.
  */
 
-import { Maximize2, MessageSquareText, Minimize2, Search } from "lucide-react";
+import { Maximize2, Minimize2, Search } from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ConfirmDialog, EmptyState } from "@/components/finance";
 import { ScrollNav } from "@/components/layout/scroll-nav";
+import { SmsSyncOnboarding } from "@/features/transaction-candidates/components/sms-sync-onboarding";
 import { formatCurrencyExact } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useAccounts } from "@/hooks/use-accounts";
@@ -437,9 +438,14 @@ export function TransactionCandidatesWorkspace() {
         setBulkDuplicateState(null);
       }
 
-      const anythingToReport = summary.imported + summary.alreadyImported + summary.personSplitFailed + summary.deleteFailed + summary.notImported > 0;
+      const anythingToReport = summary.imported + summary.alreadyImported + summary.personSplitFailed + summary.deleteFailed + summary.notImported + summary.alreadyDismissed > 0;
       if (anythingToReport) {
-        const needsAttention = summary.personSplitFailed + summary.deleteFailed + summary.notImported > 0;
+        // tombstoneMismatched (Phase F2, 2026-10-24): not a failure — the Transaction is real — but
+        // worth the same non-routine toast style as other "needs a look" outcomes, never folded
+        // silently into a plain success. alreadyDismissed is NOT included here: it's an expected,
+        // clean outcome on the atomic path (nothing was created, nothing lost) — still reported in
+        // the summary text, just not styled as a problem.
+        const needsAttention = summary.personSplitFailed + summary.deleteFailed + summary.notImported + summary.tombstoneMismatched > 0;
         if (needsAttention) toast.error("Import finished with problems", bulkImportSummaryText(summary));
         else toast.success("Import complete", bulkImportSummaryText(summary));
       }
@@ -489,7 +495,13 @@ export function TransactionCandidatesWorkspace() {
           candidateId: c.id,
           hide: hideCandidate,
           unhide: unhideCandidate,
-          commitDelete: () => ignoreCandidate(c, repositories.candidateRepository),
+          commitDelete: async () => {
+            const { tombstoneMismatched } = await ignoreCandidate(c, repositories.candidateRepository);
+            if (tombstoneMismatched) {
+              // Phase F2 (2026-10-24): a concurrent Import (another tab/device) already won this race.
+              toast.info("Already imported elsewhere", `${c.merchant ?? c.bankName ?? "This transaction"} was imported in another tab or device — it wasn't dismissed.`);
+            }
+          },
           onDeleteFailed: (error) => {
             toast.error("Couldn't dismiss a candidate", error instanceof Error ? error.message : "Still pending, try again.");
           },
@@ -622,36 +634,42 @@ export function TransactionCandidatesWorkspace() {
         </button>
       </div>
 
-      <CandidateOverview
-        loading={viewState.phase !== "ready"}
-        waiting={candidates.length}
-        handled={handled}
-        counts={queueCounts}
-        active={filters.lane}
-        onSelect={(lane) => updateFilters((f) => ({ ...f, lane }))}
-      />
+      {/* The overview/views/toolbar are zero-value noise above a genuinely empty, unfiltered queue — hide them so the
+          onboarding card sits right under the page heading. They reappear the moment there's anything to count or filter. */}
+      {!(viewState.phase === "ready" && candidates.length === 0) && (
+        <>
+          <CandidateOverview
+            loading={viewState.phase !== "ready"}
+            waiting={candidates.length}
+            handled={handled}
+            counts={queueCounts}
+            active={filters.lane}
+            onSelect={(lane) => updateFilters((f) => ({ ...f, lane }))}
+          />
 
-      <div className="flex flex-col gap-3">
-        <CandidateViews active={filters.lane} counts={viewCounts} onSelect={(lane) => updateFilters((f) => ({ ...f, lane }))} />
-        <CandidateToolbar
-          searchText={searchText}
-          onSearchChange={updateSearch}
-          compact={compactToolbar}
-          months={monthOptions}
-          month={filters.month}
-          onMonth={(month) => updateFilters((f) => ({ ...f, month }))}
-          direction={filters.direction}
-          onDirection={(direction) => updateFilters((f) => ({ ...f, direction }))}
-          sortKey={sortKey}
-          onSort={updateSort}
-          activeFilterCount={activeFilterCount}
-          onOpenFilters={() => setFiltersOpen(true)}
-          chips={filterChips}
-          onRemoveChip={(chip) => updateFilters((f) => chip.clear(f))}
-          canClearAll={filtersActive}
-          onClearAll={clearFilters}
-        />
-      </div>
+          <div className="flex flex-col gap-3">
+            <CandidateViews active={filters.lane} counts={viewCounts} onSelect={(lane) => updateFilters((f) => ({ ...f, lane }))} />
+            <CandidateToolbar
+              searchText={searchText}
+              onSearchChange={updateSearch}
+              compact={compactToolbar}
+              months={monthOptions}
+              month={filters.month}
+              onMonth={(month) => updateFilters((f) => ({ ...f, month }))}
+              direction={filters.direction}
+              onDirection={(direction) => updateFilters((f) => ({ ...f, direction }))}
+              sortKey={sortKey}
+              onSort={updateSort}
+              activeFilterCount={activeFilterCount}
+              onOpenFilters={() => setFiltersOpen(true)}
+              chips={filterChips}
+              onRemoveChip={(chip) => updateFilters((f) => chip.clear(f))}
+              canClearAll={filtersActive}
+              onClearAll={clearFilters}
+            />
+          </div>
+        </>
+      )}
 
       <div ref={listRef} tabIndex={-1} className={cn("flex flex-col gap-3 outline-none", selectedCandidates.length > 0 && "pb-36 md:pb-0")}>
         <PartialImportNotices
@@ -679,13 +697,13 @@ export function TransactionCandidatesWorkspace() {
         ) : viewState.phase === "error" ? (
           <CandidatesLoadError error={listenerError} onRetry={retryListener} message="Couldn't load your SMS candidates." />
         ) : visibleCandidates.length === 0 ? (
-          <div className="rounded-2xl border border-border bg-card">
-            {candidates.length > 0 ? (
+          candidates.length > 0 ? (
+            <div className="rounded-2xl border border-border bg-card">
               <EmptyState icon={Search} title="No candidates match" description="Nothing fits the current search and filters." actionLabel="Clear filters" onAction={clearFilters} />
-            ) : (
-              <EmptyState icon={MessageSquareText} title="No SMS candidates" description="Once the Android app detects transactions from SMS, they'll show up here for review before they become real transactions." />
-            )}
-          </div>
+            </div>
+          ) : (
+            <SmsSyncOnboarding />
+          )
         ) : (
           <CandidateLedger
             groups={ledgerGroups}

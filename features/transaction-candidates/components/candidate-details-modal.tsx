@@ -368,20 +368,42 @@ export function CandidateDetailsModal({
     setPendingAdvance(false);
 
     if (result.status === "success" || result.status === "already_imported") {
-      if (result.status === "success") {
+      if (result.status === "success" && result.tombstoneMismatched) {
+        // Phase F2 (2026-10-24): a concurrent Dismiss (another tab/device) already won the tombstone
+        // race — the Transaction above is real and money moved, but the durable record says
+        // "dismissed." Tell the user plainly rather than a blanket "Imported" success toast.
+        toast.info(
+          "Imported, but flagged as dismissed elsewhere",
+          `${currentCandidate.merchant ?? currentCandidate.bankName ?? "Transaction"} — ${formatCurrencyPrecise(currentCandidate.amount)} was saved, but this candidate was also dismissed in another tab or device at nearly the same time. The transaction is real; no further action is needed.`,
+        );
+      } else if (result.status === "success") {
         toast.success("Imported", `${currentCandidate.merchant ?? currentCandidate.bankName ?? "Transaction"} — ${formatCurrencyPrecise(currentCandidate.amount)}`);
       } else {
         toast.info(
           "Already imported",
           result.changed
             ? "This message was imported before and that transaction has since been edited, so nothing new was created. It's been removed from the queue."
-            : "This message was already imported, so nothing new was created. It's been removed from the queue — open the transaction to adjust its person or split.",
+            : result.personAssignmentSkipped
+              ? "This message was already imported, so nothing new was created and the person/split you chose was NOT applied. It's been removed from the queue — open the transaction to assign or split it."
+              : "This message was already imported, so nothing new was created. It's been removed from the queue — open the transaction to adjust its person or split.",
         );
       }
       onImported?.(currentCandidate.id);
       // "Import & next" moves on ONLY here, after a successful import — every other outcome leaves the reviewer on this candidate.
       if (advanceId) navigation?.onGoTo(advanceId);
       // Close only if the drawer still shows the candidate that was just imported (or nothing): never a different one opened meanwhile.
+      else if (shownIdRef.current === importedId || shownIdRef.current == null) onOpenChange(false);
+    } else if (result.status === "already_dismissed") {
+      // Phase F2 (2026-10-24, importAtomically): a concurrent Dismiss (another tab/device) won the
+      // race BEFORE this import's money could move — nothing was created, no balance changed, and
+      // the candidate is already gone. Tell the user plainly; this is a clean, final outcome, not an
+      // error to retry.
+      toast.info(
+        "Already dismissed elsewhere",
+        `${currentCandidate.merchant ?? currentCandidate.bankName ?? "This transaction"} was dismissed in another tab or device before it could be imported — nothing was created.`,
+      );
+      onImported?.(currentCandidate.id);
+      if (advanceId) navigation?.onGoTo(advanceId);
       else if (shownIdRef.current === importedId || shownIdRef.current == null) onOpenChange(false);
     } else if (result.status === "validation_failed") {
       toast.error("Can't import yet", result.reason);
@@ -443,7 +465,16 @@ export function CandidateDetailsModal({
       candidateId: currentCandidate.id,
       hide: onHide,
       unhide: onUnhide,
-      commitDelete: () => ignoreCandidate(currentCandidate, candidateRepository),
+      commitDelete: async () => {
+        const { tombstoneMismatched } = await ignoreCandidate(currentCandidate, candidateRepository);
+        if (tombstoneMismatched) {
+          // Phase F2 (2026-10-24): a concurrent Import (another tab/device) already won this race.
+          toast.info(
+            "Already imported elsewhere",
+            `${currentCandidate.merchant ?? currentCandidate.bankName ?? "This transaction"} was imported in another tab or device while you were dismissing it — it wasn't dismissed.`,
+          );
+        }
+      },
       onDeleteFailed: (error) => {
         toast.error("Couldn't dismiss this candidate", error instanceof Error ? error.message : undefined);
       },

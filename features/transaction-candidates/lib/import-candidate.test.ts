@@ -11,6 +11,8 @@ import {
   type ImportCandidateParams,
 } from "./import-candidate";
 
+const HANDLED = { outcome: "imported" as const, mismatched: false };
+
 function candidate(overrides: Partial<SmsTransactionCandidate> = {}): SmsTransactionCandidate {
   return {
     id: "sms-1",
@@ -48,7 +50,7 @@ function baseParams(overrides: Partial<ImportCandidateParams> = {}): ImportCandi
 function mockRepos(createTransactionImpl?: () => Promise<Transaction>) {
   const createTransaction = vi.fn(createTransactionImpl ?? (async () => ({ id: "txn-created-1" }) as Transaction));
   const editTransaction = vi.fn(async () => undefined);
-  const markHandled = vi.fn(async () => undefined);
+  const markHandled = vi.fn(async () => HANDLED);
   const convertToAssigned = vi.fn(async () => undefined);
   const convertToSplit = vi.fn(async () => undefined);
   return {
@@ -118,6 +120,7 @@ describe("importCandidate", () => {
     });
     markHandled.mockImplementation(async () => {
       calls.push("markHandled");
+      return HANDLED;
     });
 
     const result = await importCandidate(baseParams(), transactionRepository, candidateRepository, expenseRepository);
@@ -537,7 +540,7 @@ describe("bulkImportCandidates — duplicate detection", () => {
     ];
 
     const createTransaction = vi.fn(async () => ({ id: "txn-clean-1" }) as Transaction);
-    const markHandled = vi.fn(async () => undefined);
+    const markHandled = vi.fn(async () => HANDLED);
     const transactionRepository = { createTransaction } as unknown as import("@/lib/repositories/transaction-repository").TransactionRepository;
     const candidateRepository = { markHandled } as unknown as import("@/lib/repositories/sms-transaction-candidate-repository").SmsTransactionCandidateRepository;
     const expenseRepository = {} as unknown as import("@/lib/repositories/expense-repository").ExpenseRepository;
@@ -556,7 +559,7 @@ describe("bulkImportCandidates — duplicate detection", () => {
       { id: "txn-existing", description: "Amazon", amount: 500, dateTime: new Date("2026-08-20T00:00:00.000Z"), accountId: "acc-1", type: "expense" },
     ];
     const createTransaction = vi.fn(async () => ({ id: "txn-dup-1" }) as Transaction);
-    const markHandled = vi.fn(async () => undefined);
+    const markHandled = vi.fn(async () => HANDLED);
     const transactionRepository = { createTransaction } as unknown as import("@/lib/repositories/transaction-repository").TransactionRepository;
     const candidateRepository = { markHandled } as unknown as import("@/lib/repositories/sms-transaction-candidate-repository").SmsTransactionCandidateRepository;
     const expenseRepository = {} as unknown as import("@/lib/repositories/expense-repository").ExpenseRepository;
@@ -582,18 +585,18 @@ describe("bulkIgnoreCandidates", () => {
     const { candidateRepository, markHandled } = mockRepos();
     const results = await bulkIgnoreCandidates([candidate({ id: "c1" }), candidate({ id: "c2" })], candidateRepository);
     expect(results).toEqual([
-      { candidateId: "c1", ok: true },
-      { candidateId: "c2", ok: true },
+      { candidateId: "c1", ok: true, tombstoneMismatched: false },
+      { candidateId: "c2", ok: true, tombstoneMismatched: false },
     ]);
     expect(markHandled).toHaveBeenCalledTimes(2);
   });
 
   it("one candidate's failure doesn't stop the rest of the batch, and is reported per-row", async () => {
     const { candidateRepository, markHandled } = mockRepos();
-    markHandled.mockRejectedValueOnce(new Error("network error")).mockResolvedValueOnce(undefined);
+    markHandled.mockRejectedValueOnce(new Error("network error")).mockResolvedValueOnce(HANDLED);
     const results = await bulkIgnoreCandidates([candidate({ id: "c1" }), candidate({ id: "c2" })], candidateRepository);
     expect(results[0]).toMatchObject({ candidateId: "c1", ok: false });
-    expect(results[1]).toEqual({ candidateId: "c2", ok: true });
+    expect(results[1]).toEqual({ candidateId: "c2", ok: true, tombstoneMismatched: false });
   });
 });
 
@@ -609,7 +612,7 @@ describe("bulkImportCandidates", () => {
       if (call === 1) return { id: "txn-ready" } as Transaction;
       throw new Error("network error");
     });
-    const markHandled = vi.fn(async () => undefined);
+    const markHandled = vi.fn(async () => HANDLED);
     const transactionRepository = { createTransaction } as unknown as import("@/lib/repositories/transaction-repository").TransactionRepository;
     const candidateRepository = {
       markHandled,
@@ -631,7 +634,7 @@ describe("bulkImportCandidates", () => {
     const createTransaction = vi.fn(async () => ({ id: "txn-1" }) as Transaction);
     const transactionRepository = { createTransaction } as unknown as import("@/lib/repositories/transaction-repository").TransactionRepository;
     const candidateRepository = {
-      markHandled: vi.fn(async () => undefined),
+      markHandled: vi.fn(async () => HANDLED),
     } as unknown as import("@/lib/repositories/sms-transaction-candidate-repository").SmsTransactionCandidateRepository;
     const expenseRepository = {} as unknown as import("@/lib/repositories/expense-repository").ExpenseRepository;
 
@@ -645,7 +648,7 @@ describe("bulkImportCandidates", () => {
     const createTransaction = vi.fn(async () => ({ id: "txn-1" }) as Transaction);
     const transactionRepository = { createTransaction } as unknown as import("@/lib/repositories/transaction-repository").TransactionRepository;
     const candidateRepository = {
-      markHandled: vi.fn(async () => undefined),
+      markHandled: vi.fn(async () => HANDLED),
     } as unknown as import("@/lib/repositories/sms-transaction-candidate-repository").SmsTransactionCandidateRepository;
     const expenseRepository = {} as unknown as import("@/lib/repositories/expense-repository").ExpenseRepository;
 
@@ -653,5 +656,105 @@ describe("bulkImportCandidates", () => {
 
     expect(results[0].outcome.status).toBe("validation_failed");
     expect(createTransaction).not.toHaveBeenCalled();
+  });
+});
+
+describe("importCandidate — atomic path (candidate repository with a tombstone collection)", () => {
+  function atomicRepos(opts: { dismissed?: boolean } = {}) {
+    const createTransactionInTransaction = vi.fn(async () => ({ id: "txn_atomic", createdAt: new Date(Date.now() + 1000) }) as unknown as Transaction);
+    const createTransaction = vi.fn(async () => ({ id: "txn-legacy" }) as Transaction);
+    const importAtomically = vi.fn(async (_id: string, _delete: boolean, work: (tx: never) => Promise<{ id: string }>) => {
+      if (opts.dismissed) return { status: "already_dismissed" as const };
+      return { status: "imported" as const, value: await work({} as never) };
+    });
+    const markHandled = vi.fn(async () => HANDLED);
+    return {
+      transactionRepository: { createTransaction, createTransactionInTransaction, editTransaction: vi.fn() } as unknown as import("@/lib/repositories/transaction-repository").TransactionRepository,
+      candidateRepository: { supportsAtomicImport: true, importAtomically, markHandled } as unknown as import("@/lib/repositories/sms-transaction-candidate-repository").SmsTransactionCandidateRepository,
+      expenseRepository: { convertToSplit: vi.fn(async () => undefined) } as unknown as import("@/lib/repositories/expense-repository").ExpenseRepository,
+      createTransaction,
+      createTransactionInTransaction,
+      importAtomically,
+      markHandled,
+    };
+  }
+
+  it("writes the money, tombstone and candidate delete in one atomic call — never the separate createTransaction/markHandled pair", async () => {
+    const r = atomicRepos();
+    const result = await importCandidate(baseParams({ candidate: candidate({ id: "atomic-1" }) }), r.transactionRepository, r.candidateRepository, r.expenseRepository);
+
+    expect(result).toMatchObject({ status: "success", transactionId: "txn_atomic", tombstoneMismatched: false });
+    expect(r.importAtomically).toHaveBeenCalledWith("atomic-1", true, expect.any(Function));
+    expect(r.createTransactionInTransaction).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ source: "sms", accountId: "acc-1" }));
+    expect(r.createTransaction).not.toHaveBeenCalled();
+    expect(r.markHandled).not.toHaveBeenCalled();
+  });
+
+  it("a Dismiss that already won: returns already_dismissed, creates nothing, never touches markHandled", async () => {
+    const r = atomicRepos({ dismissed: true });
+    const result = await importCandidate(baseParams({ candidate: candidate({ id: "atomic-2" }) }), r.transactionRepository, r.candidateRepository, r.expenseRepository);
+
+    expect(result).toEqual({ status: "already_dismissed" });
+    expect(r.createTransactionInTransaction).not.toHaveBeenCalled();
+    expect(r.markHandled).not.toHaveBeenCalled();
+  });
+
+  it("with a person/split step the candidate is NOT deleted atomically; markHandled finishes it after the follow-up succeeds", async () => {
+    const r = atomicRepos();
+    const result = await importCandidate(
+      baseParams({
+        candidate: candidate({ id: "atomic-3" }),
+        personAssignment: { kind: "split", splitType: "equal", participantInputs: [] } as never,
+      }),
+      r.transactionRepository,
+      r.candidateRepository,
+      r.expenseRepository,
+    );
+
+    expect(r.importAtomically).toHaveBeenCalledWith("atomic-3", false, expect.any(Function));
+    expect(result.status).toBe("success");
+    expect(r.markHandled).toHaveBeenCalledWith("atomic-3", "imported", "txn_atomic");
+  });
+
+  it("a failed person/split step leaves the candidate in place (tombstone already 'imported') and does not call markHandled", async () => {
+    const r = atomicRepos();
+    (r.expenseRepository as unknown as { convertToSplit: ReturnType<typeof vi.fn> }).convertToSplit.mockRejectedValueOnce(new Error("split failed"));
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const result = await importCandidate(
+      baseParams({ candidate: candidate({ id: "atomic-4" }), personAssignment: { kind: "split", splitType: "equal", participantInputs: [] } as never }),
+      r.transactionRepository,
+      r.candidateRepository,
+      r.expenseRepository,
+    );
+    consoleError.mockRestore();
+
+    expect(result).toMatchObject({ status: "imported_not_deleted", failedStep: "person_split", transactionId: "txn_atomic" });
+    expect(r.markHandled).not.toHaveBeenCalled();
+  });
+
+  it("retry after a failed person/split: reuses the transaction, removes the candidate, never re-applies the split, and says the split was skipped", async () => {
+    const r = atomicRepos();
+    // The earlier attempt's transaction: created before this call began.
+    r.createTransactionInTransaction.mockResolvedValueOnce({ id: "txn_atomic", createdAt: new Date(Date.now() - 60_000) } as unknown as Transaction);
+    const convertToSplit = (r.expenseRepository as unknown as { convertToSplit: ReturnType<typeof vi.fn> }).convertToSplit;
+    const result = await importCandidate(
+      baseParams({ candidate: candidate({ id: "atomic-5" }), personAssignment: { kind: "split", splitType: "equal", participantInputs: [] } as never }),
+      r.transactionRepository,
+      r.candidateRepository,
+      r.expenseRepository,
+    );
+
+    expect(result).toMatchObject({ status: "already_imported", transactionId: "txn_atomic", changed: false, personAssignmentSkipped: true });
+    expect(convertToSplit).not.toHaveBeenCalled();
+    expect(r.markHandled).toHaveBeenCalledWith("atomic-5", "imported", "txn_atomic");
+  });
+
+  it("an already-imported retry with no person/split requested does not claim one was skipped", async () => {
+    const r = atomicRepos();
+    r.createTransactionInTransaction.mockResolvedValueOnce({ id: "txn_atomic", createdAt: new Date(Date.now() - 60_000) } as unknown as Transaction);
+    const result = await importCandidate(baseParams({ candidate: candidate({ id: "atomic-6" }) }), r.transactionRepository, r.candidateRepository, r.expenseRepository);
+
+    expect(result).toMatchObject({ status: "already_imported" });
+    expect((result as { personAssignmentSkipped?: boolean }).personAssignmentSkipped).toBeFalsy();
   });
 });

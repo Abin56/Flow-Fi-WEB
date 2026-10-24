@@ -11,7 +11,6 @@
 
 import { Search, X } from "lucide-react";
 import { useId, useMemo, useState } from "react";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
@@ -28,7 +27,7 @@ import {
   type CandidateSortKey,
   type CandidateViewFilter,
 } from "../lib/filters";
-import { CHECKBOX_CLASS, FOCUS_RING } from "./candidate-row-parts";
+import { FOCUS_RING } from "./candidate-row-parts";
 
 export interface FilterSheetOptions {
   months: string[];
@@ -63,8 +62,8 @@ const amountText = (n: number | null) => (n == null ? "" : String(n));
 
 function Group({ title, children, id }: { title: string; children: React.ReactNode; id: string }) {
   return (
-    <fieldset className="flex flex-col gap-2 border-0 p-0" aria-labelledby={id}>
-      <legend id={id} className="mb-0.5 p-0 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+    <fieldset className="flex flex-col gap-2.5 rounded-xl border border-border/70 bg-card/60 p-3.5 sm:p-4" aria-labelledby={id}>
+      <legend id={id} className="px-0.5 text-xs font-bold tracking-wider text-muted-foreground uppercase">
         {title}
       </legend>
       {children}
@@ -79,9 +78,11 @@ function Chip({ on, onClick, children }: { on: boolean; onClick: () => void; chi
       aria-pressed={on}
       onClick={onClick}
       className={cn(
-        "inline-flex min-h-9 items-center rounded-lg border px-2.5 text-sm font-semibold transition-colors motion-reduce:transition-none",
+        "inline-flex min-h-9 items-center rounded-full border px-3.5 text-sm font-semibold transition-all motion-reduce:transition-none",
         FOCUS_RING,
-        on ? "border-foreground bg-foreground text-background" : "border-border-strong bg-card text-foreground hover:bg-secondary",
+        on
+          ? "border-foreground bg-foreground text-background shadow-sm"
+          : "border-border-strong bg-card text-foreground hover:border-foreground/40 hover:bg-secondary",
       )}
     >
       {children}
@@ -144,22 +145,25 @@ function SheetBody({
 
   return (
     <>
-      <div className="flex shrink-0 items-start justify-between gap-3 border-b border-border px-5 py-4">
+      <div className="flex shrink-0 items-start justify-between gap-3 border-b border-border bg-card px-5 py-4 sm:px-6">
         <div className="min-w-0">
-          <SheetTitle className="font-heading text-lg font-semibold text-foreground">Filters</SheetTitle>
+          <SheetTitle className="font-heading text-xl font-bold text-foreground">Filters</SheetTitle>
           <SheetDescription className="text-sm text-muted-foreground">Every filter below narrows the list together.</SheetDescription>
         </div>
         <button
           type="button"
           onClick={onClose}
           aria-label="Close filters"
-          className={cn("flex size-11 shrink-0 items-center justify-center rounded-[10px] text-foreground hover:bg-secondary", FOCUS_RING)}
+          className={cn("flex size-10 shrink-0 items-center justify-center rounded-full text-foreground hover:bg-secondary", FOCUS_RING)}
         >
           <X className="size-5" aria-hidden />
         </button>
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-5 py-5" data-testid="candidate-filter-sheet-body">
+      <div
+        className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto bg-secondary/30 px-5 py-5 sm:px-6"
+        data-testid="candidate-filter-sheet-body"
+      >
         <Group title="Review status" id={ids.status}>
           <div className="flex flex-wrap gap-1.5">
             {STATUS_OPTIONS.map((o) => (
@@ -171,7 +175,7 @@ function SheetBody({
         </Group>
 
         {/* Paired up on a wide sheet so these six groups cost four rows of scroll instead of six. */}
-        <div className="grid grid-cols-1 gap-x-6 gap-y-5 lg:grid-cols-2">
+        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
           <Group title="Direction" id={ids.dir}>
             <div className="flex gap-1.5">
               {([null, "debit", "credit"] as const).map((dir) => (
@@ -274,34 +278,35 @@ function SheetBody({
               />
             </div>
           )}
-          <ul className="flex max-h-56 flex-col overflow-y-auto rounded-xl border border-border bg-card">
-            {filteredAccountOptions.length === 0 ? (
-              <li className="px-3 py-3 text-sm text-muted-foreground">No account or card matches “{accountSearch}”.</li>
-            ) : (
-              filteredAccountOptions.map((o) => (
-                <li key={o.key} className="border-b border-border last:border-b-0">
-                  <label className="flex min-h-11 cursor-pointer items-center gap-3 px-3 text-sm font-medium text-foreground">
-                    <Checkbox
-                      className={CHECKBOX_CLASS}
-                      checked={draft.accountKeys.includes(o.key)}
-                      onCheckedChange={() => setDraft((d) => ({ ...d, accountKeys: toggle(d.accountKeys, o.key) }))}
-                    />
-                    <span className="min-w-0 truncate">{o.label}</span>
-                  </label>
-                </li>
-              ))
-            )}
-          </ul>
+          {filteredAccountOptions.length === 0 ? (
+            <p className="px-0.5 py-2 text-sm text-muted-foreground">No account or card matches “{accountSearch}”.</p>
+          ) : (
+            <ul className="flex flex-wrap gap-1.5">
+              {filteredAccountOptions.map((o) => {
+                const checked = draft.accountKeys.includes(o.key);
+                return (
+                  <li key={o.key}>
+                    <Chip on={checked} onClick={() => setDraft((d) => ({ ...d, accountKeys: toggle(d.accountKeys, o.key) }))}>
+                      {o.label}
+                    </Chip>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
           <p className="text-xs text-muted-foreground">Pick more than one to see candidates from any of them.</p>
         </Group>
       </div>
 
-      <div className="flex shrink-0 items-center gap-3 border-t border-border bg-card px-5 py-3">
+      <div className="flex shrink-0 items-center gap-3 border-t border-border bg-card px-5 py-3.5 shadow-[0_-4px_12px_-6px_rgba(0,0,0,0.08)] sm:px-6">
         <button
           type="button"
           onClick={reset}
           disabled={activeCount === 0 && sortKey === "newest"}
-          className={cn("inline-flex min-h-11 items-center rounded-[10px] px-3 text-sm font-semibold text-foreground underline-offset-2 hover:underline disabled:cursor-not-allowed disabled:opacity-50 disabled:no-underline", FOCUS_RING)}
+          className={cn(
+            "inline-flex min-h-11 items-center rounded-full px-3.5 text-sm font-semibold text-foreground underline-offset-2 hover:underline disabled:cursor-not-allowed disabled:opacity-50 disabled:no-underline",
+            FOCUS_RING,
+          )}
         >
           Clear all
         </button>
@@ -311,7 +316,7 @@ function SheetBody({
           onClick={() => onApply(effective, sortKey)}
           data-testid="apply-filters"
           className={cn(
-            "inline-flex min-h-11 flex-1 items-center justify-center rounded-[10px] bg-primary px-4 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none",
+            "inline-flex min-h-11 flex-1 items-center justify-center rounded-full bg-primary px-4 text-sm font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none",
             FOCUS_RING,
           )}
         >

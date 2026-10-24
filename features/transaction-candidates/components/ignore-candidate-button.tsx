@@ -30,7 +30,18 @@ export function IgnoreCandidateButton({
       candidateId: candidate.id,
       hide: onHide,
       unhide: onUnhide,
-      commitDelete: () => ignoreCandidate(candidate, candidateRepository),
+      commitDelete: async () => {
+        const { tombstoneMismatched } = await ignoreCandidate(candidate, candidateRepository);
+        if (tombstoneMismatched) {
+          // Phase F2 (2026-10-24): a concurrent Import (another tab/device) already won this race —
+          // the candidate is gone from the queue either way, but a real Transaction exists for it.
+          // Never claim it was dismissed.
+          toast.info(
+            "Already imported elsewhere",
+            `${candidate.merchant ?? candidate.bankName ?? "This transaction"} was imported in another tab or device while you were dismissing it — it wasn't dismissed.`,
+          );
+        }
+      },
       onDeleteFailed: (error) => {
         toast.error("Couldn't dismiss this candidate", "Try again.");
         console.error("IgnoreCandidateButton: ignoreCandidate failed", error);

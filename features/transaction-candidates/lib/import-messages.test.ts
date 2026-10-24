@@ -15,6 +15,19 @@ function notice(overrides: Partial<PartialImportNotice> = {}): PartialImportNoti
   };
 }
 
+describe("summarizeBulkImport — already imported with a skipped person/split", () => {
+  it("counts and words the skipped person/split so a retry is never read as a clean success", () => {
+    const results: BulkImportResult[] = [
+      { candidateId: "a", outcome: { status: "already_imported", transactionId: "t1", changed: false, personAssignmentSkipped: true } },
+      { candidateId: "b", outcome: { status: "already_imported", transactionId: "t2", changed: false } },
+    ];
+    const summary = summarizeBulkImport(results);
+    expect(summary.alreadyImported).toBe(2);
+    expect(summary.alreadyImportedPersonSkipped).toBe(1);
+    expect(bulkImportSummaryText(summary)).toContain("2 already imported earlier (1 without the person/split you chose");
+  });
+});
+
 describe("describePartialImport", () => {
   it("person/split failure: the transaction exists as a plain expense, balance updated, split not applied, nothing retried", () => {
     const d = describePartialImport(notice());

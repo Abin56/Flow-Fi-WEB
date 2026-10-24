@@ -20,6 +20,7 @@ import { assertFails, assertSucceeds, initializeTestEnvironment, type RulesTestE
 import { collection, deleteDoc, doc, getDoc, getDocs, setDoc, type FirestoreDataConverter } from "firebase/firestore";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
+import { candidateImportKey, importedTransactionId } from "@/features/transaction-candidates/lib/candidate-import-key";
 import { ignoreCandidate, importCandidate } from "@/features/transaction-candidates/lib/import-candidate";
 import { FirestoreCollections } from "@/lib/firestore/collections";
 import { accountFromFirestore, accountToFirestore, type Account } from "@/lib/models/account";
@@ -220,7 +221,10 @@ describe("dismiss lifecycle: tombstone + candidate removal, no Transaction ever 
     await s.seedCandidate(c);
 
     await s.dismissOne(c);
-    await expect(s.dismissOne(c)).resolves.toBeUndefined(); // candidate already gone; tombstone already exists — both idempotent no-ops
+    // Phase F2 (2026-10-24): ignoreCandidate now reports tombstoneMismatched rather than
+    // returning void, so the UI can tell a genuine dismiss apart from a lost race (see
+    // the "concurrency" describe block below) — false here, since both calls agree.
+    await expect(s.dismissOne(c)).resolves.toEqual({ tombstoneMismatched: false }); // candidate already gone; tombstone already exists — both idempotent no-ops
     expect(await s.tombstone(c.id)).toMatchObject({ outcome: "dismissed" });
   });
 
@@ -231,53 +235,159 @@ describe("dismiss lifecycle: tombstone + candidate removal, no Transaction ever 
     await deleteDoc(doc(s.candidatesRef, c.id)); // the owner can always delete their own candidate directly
     expect(await s.candidateExists(c.id)).toBe(false);
 
-    await expect(s.dismissOne(c)).resolves.toBeUndefined();
+    await expect(s.dismissOne(c)).resolves.toEqual({ tombstoneMismatched: false });
     expect(await s.tombstone(c.id)).toMatchObject({ outcome: "dismissed" });
   });
 });
 
 describe("concurrency: import vs. dismiss racing for the same candidate (two tabs / double actions)", () => {
-  it("exactly one outcome wins; the loser fails loudly (never silently corrupts state) or converges as a safe no-op", async () => {
-    const s = setup();
-    await s.seedAccount();
-    const c = smsCandidate();
-    await s.seedCandidate(c);
-
+  // Phase F2 (2026-10-24): money + "imported" tombstone + candidate delete are ONE Firestore transaction, and Dismiss
+  // is a transaction on the same tombstone document, so Firestore serializes the two. These tests assert the strict
+  // invariant — a Transaction exists IF AND ONLY IF the tombstone says "imported" — not just "at most one".
+  // Two independent `setup()` calls are two independent Firestore clients (two tabs / two devices).
+  it("import (tab A) vs dismiss (tab B), raced 16 times with staggered starts: a Transaction exists exactly when the tombstone says 'imported', and both sides report what really happened", async () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const wins = { imported: 0, dismissed: 0 };
 
-    const [importOutcome, dismissOutcome] = await Promise.allSettled([s.importOne(c), s.dismissOne(c)]);
+    for (let i = 0; i < 16; i++) {
+      await testEnv.clearFirestore();
+      const tabA = setup();
+      const tabB = setup();
+      await tabA.seedAccount();
+      const c = smsCandidate();
+      await tabA.seedCandidate(c);
 
-    // The candidate is always gone afterwards, and exactly one tombstone outcome is recorded —
-    // never both, never neither.
-    expect(await s.candidateExists(c.id)).toBe(false);
-    const tombstone = await s.tombstone(c.id);
-    expect(["imported", "dismissed"]).toContain(tombstone?.outcome);
+      // Stagger the Dismiss start (0..120ms) so the race lands on every interleaving, not just "Dismiss is faster".
+      const [importResult, dismissResult] = await Promise.all([tabA.importOne(c), sleep(i * 8).then(() => tabB.dismissOne(c))]);
 
-    // Whichever call "lost" either rejected outright (its batch commit denied/raced) or resolved having
-    // converged to a no-op — both are safe; what's NOT acceptable is a second, different-outcome
-    // tombstone, which the assertion above already rules out.
-    const settled = [importOutcome, dismissOutcome];
-    const rejected = settled.filter((r) => r.status === "rejected");
-    expect(rejected.length).toBeLessThanOrEqual(1);
+      const tombstone = await tabA.tombstone(c.id);
+      const transactions = await tabA.transactions();
+      expect(await tabA.candidateExists(c.id)).toBe(false);
 
-    // If import actually won AND a transaction exists, it must be exactly one — dismiss losing a race
-    // must never leave a stray second transaction or a double balance effect.
-    const transactions = await s.transactions();
-    expect(transactions.length).toBeLessThanOrEqual(1);
-    if (transactions.length === 1) {
-      expect(await s.balance()).toBe(OPENING - 500);
-    } else {
-      expect(await s.balance()).toBe(OPENING); // dismiss won; no money moved
+      if (tombstone?.outcome === "imported") {
+        wins.imported++;
+        expect(importResult.status).toBe("success");
+        expect((importResult as { tombstoneMismatched?: boolean }).tombstoneMismatched).toBe(false);
+        expect(transactions).toHaveLength(1);
+        expect(tombstone.transactionId).toBe(transactions[0].id);
+        expect(await tabA.balance()).toBe(OPENING - 500);
+        expect(dismissResult).toEqual({ tombstoneMismatched: true }); // the Dismiss is told it lost
+      } else {
+        wins.dismissed++;
+        expect(tombstone).toMatchObject({ outcome: "dismissed", transactionId: null });
+        expect(importResult).toEqual({ status: "already_dismissed" }); // never a silent "Imported"
+        expect(transactions).toHaveLength(0);
+        expect(await tabA.balance()).toBe(OPENING); // no money moved
+        expect(dismissResult).toEqual({ tombstoneMismatched: false });
+      }
     }
 
+    // Both orderings are legal; the point is that every run was consistent. (Logged, not asserted, to avoid a flaky test.)
+    console.info(`F2 import-vs-dismiss race: imported won ${wins.imported}, dismissed won ${wins.dismissed}`);
     consoleError.mockRestore();
+  }, 90_000);
+
+  it("dismiss committed first, then an import is attempted from another tab: nothing is written and no money moves", async () => {
+    const tabA = setup();
+    const tabB = setup();
+    await tabA.seedAccount();
+    const c = smsCandidate();
+    await tabA.seedCandidate(c);
+
+    await tabB.dismissOne(c);
+    const result = await tabA.importOne(c, { skipDuplicateCheck: true });
+
+    expect(result).toEqual({ status: "already_dismissed" });
+    expect(await tabA.transactions()).toHaveLength(0);
+    expect(await tabA.balance()).toBe(OPENING);
+    expect(await tabA.tombstone(c.id)).toMatchObject({ outcome: "dismissed" });
+  });
+
+  it("import committed first, then a Dismiss (e.g. the Undo window of another tab expiring): reports 'imported', never rewrites the tombstone, creates nothing", async () => {
+    const tabA = setup();
+    const tabB = setup();
+    await tabA.seedAccount();
+    const c = smsCandidate();
+    await tabA.seedCandidate(c);
+
+    const imported = await tabA.importOne(c);
+    expect(imported.status).toBe("success");
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(tabB.dismissOne(c)).resolves.toEqual({ tombstoneMismatched: true });
+    consoleError.mockRestore();
+
+    expect(await tabA.tombstone(c.id)).toMatchObject({ outcome: "imported" });
+    expect(await tabA.transactions()).toHaveLength(1);
+    expect(await tabA.balance()).toBe(OPENING - 500);
+  });
+
+  it("the same candidate imported from two tabs at once (bypassing the in-tab guard): exactly one Transaction, one balance effect, one 'imported' tombstone", async () => {
+    const tabA = setup();
+    const tabB = setup();
+    await tabA.seedAccount();
+    const c = smsCandidate();
+    await tabA.seedCandidate(c);
+    const key = await candidateImportKey(c.id);
+    const createParams = {
+      type: "expense" as const,
+      amount: c.amount,
+      dateTime: c.transactionDate,
+      accountId: "acc-1",
+      categoryId: "cat-1",
+      description: "Swiggy",
+      notes: "",
+      source: "sms" as const,
+      idempotencyKey: key,
+    };
+    const raceFrom = (tab: ReturnType<typeof setup>) =>
+      tab.candidateRepository.importAtomically(c.id, true, (tx) => tab.transactionRepository.createTransactionInTransaction(tx, createParams));
+
+    const results = await Promise.all([raceFrom(tabA), raceFrom(tabB), raceFrom(tabA), raceFrom(tabB)]);
+
+    expect(results.every((r) => r.status === "imported")).toBe(true);
+    const transactions = await tabA.transactions();
+    expect(transactions).toHaveLength(1);
+    expect(transactions[0].id).toBe(importedTransactionId(key));
+    expect(await tabA.balance()).toBe(OPENING - 500);
+    expect(await tabA.tombstone(c.id)).toMatchObject({ outcome: "imported", transactionId: transactions[0].id });
+    expect(await tabA.candidateExists(c.id)).toBe(false);
+  });
+
+  it("an import with a person/split step that fails: the tombstone is already 'imported' (so a Dismiss can't contradict it), the candidate stays in the queue", async () => {
+    const tabA = setup();
+    const tabB = setup();
+    await tabA.seedAccount();
+    const c = smsCandidate();
+    await tabA.seedCandidate(c);
+
+    // `expenseRepository` is `{}` in this harness, so the split step throws — the same observable as a real split failure.
+    const result = await tabA.importOne(c, {
+      personAssignment: { kind: "split", splitType: "equal", participantInputs: [] } as never,
+    });
+    expect(result).toMatchObject({ status: "imported_not_deleted", failedStep: "person_split" });
+    expect(await tabA.candidateExists(c.id)).toBe(true);
+    const transactions = await tabA.transactions();
+    expect(transactions).toHaveLength(1);
+    expect(await tabA.tombstone(c.id)).toMatchObject({ outcome: "imported", transactionId: transactions[0].id });
+
+    // Another tab dismissing it now is told the truth, creates nothing, and cannot rewrite the tombstone.
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(tabB.dismissOne(c)).resolves.toEqual({ tombstoneMismatched: true });
+    consoleError.mockRestore();
+    expect(await tabA.tombstone(c.id)).toMatchObject({ outcome: "imported" });
+    expect(await tabA.transactions()).toHaveLength(1);
+    expect(await tabA.candidateExists(c.id)).toBe(false);
   });
 
   it("if dismiss wins the race, the transaction import had already created (if any) is never silently lost — it's reported, not hidden", async () => {
-    // This is the one residual, narrow gap the architecture doc flags: markHandled cannot repair a
-    // tombstone's outcome once written (rules forbid update), so if dismiss's tombstone commits first,
-    // import's own later markHandled call for the SAME attempt will see a mismatched tombstone. We
-    // force that specific ordering here (rather than relying on timing) to pin exactly what happens.
+    // markHandled cannot repair a tombstone's outcome once written (rules forbid update), so if
+    // dismiss's tombstone commits first, import's own later markHandled call for the SAME attempt
+    // sees a mismatched tombstone. We force that specific ordering here (rather than relying on
+    // timing) to pin exactly what happens. Phase F2 (2026-10-24): markHandled now RETURNS this
+    // mismatch (`{ outcome, mismatched }`) instead of only logging it — import-candidate.ts's callers
+    // use this to show the user "Imported, but flagged as dismissed elsewhere" rather than a blanket
+    // success toast. See sms-transaction-candidate-repository.test.ts for focused coverage of the
+    // return value itself; this test keeps pinning the Firestore-level immutability guarantee.
     const s = setup();
     await s.seedAccount();
     const c = smsCandidate();
@@ -292,15 +402,18 @@ describe("concurrency: import vs. dismiss racing for the same candidate (two tab
     // and importCandidate's own duplicate-free path can't be driven through this exact interleaving
     // from the outside).
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-    await expect(s.candidateRepository.markHandled(c.id, "imported", "txn-hypothetical-1")).resolves.toBeUndefined();
+    await expect(s.candidateRepository.markHandled(c.id, "imported", "txn-hypothetical-1")).resolves.toEqual({
+      outcome: "dismissed",
+      mismatched: true,
+    });
     expect(consoleError).toHaveBeenCalledWith(
       expect.stringContaining("tombstone outcome mismatch"),
       expect.objectContaining({ candidateId: c.id, requestedOutcome: "imported", existingOutcome: "dismissed" }),
     );
     // The tombstone itself is untouched — immutability holds even though we "lost" information about
-    // the import attempt. This is the accepted, documented residual risk (architecture doc, Unresolved
-    // Decisions): not a silent financial error (no Transaction was actually created in this scenario),
-    // but a real audit-trail gap if a genuine import transaction existed. Flagged in the Phase B report.
+    // the import attempt. The audit-trail outcome stays "dismissed" permanently (rules forbid
+    // rewriting it) — but the caller is no longer left to assume success blindly: it now knows this
+    // specific attempt's outcome ("imported") lost the race.
     expect(await s.tombstone(c.id)).toMatchObject({ outcome: "dismissed" });
     consoleError.mockRestore();
   });

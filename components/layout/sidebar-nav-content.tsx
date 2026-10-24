@@ -89,7 +89,7 @@ export function SidebarNavContent({
     });
 
   return (
-    <div className="flex h-full min-h-0 flex-col py-5">
+    <div className="flex h-full min-h-0 flex-col py-3.5">
       {/* Slim loading bar along the top of the window while a page from the menu is opening. */}
       {pendingHref != null && (
         <div aria-hidden className="pointer-events-none fixed inset-x-0 top-0 z-command h-0.5 overflow-hidden">
@@ -108,13 +108,13 @@ export function SidebarNavContent({
           collapsed && "justify-center px-0",
         )}
       >
-        <div className="relative flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-gradient-to-br from-primary via-primary to-success/70 font-heading text-base font-bold text-primary-foreground shadow-[0_6px_16px_-6px_rgba(120,160,20,0.6)] ring-1 ring-primary-accent-text/30">
+        <div className="relative flex size-8.5 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-gradient-to-br from-primary via-primary to-success/70 font-heading text-sm font-bold text-primary-foreground shadow-[0_6px_16px_-6px_rgba(120,160,20,0.6)] ring-1 ring-primary-accent-text/30">
           <span aria-hidden className="absolute -top-3 -right-3 size-6 rounded-full bg-white/40 blur-md" />
           <span className="relative">F</span>
         </div>
         {!collapsed && (
           <div className="min-w-0">
-            <span className="flex items-center gap-1 font-heading text-lg leading-tight font-semibold tracking-tight">
+            <span className="flex items-center gap-1 font-heading text-base leading-tight font-semibold tracking-tight">
               FlowFi
               <Sparkles className="size-3.5 text-primary-accent-text" />
             </span>

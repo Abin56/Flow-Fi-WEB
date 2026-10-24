@@ -101,9 +101,22 @@ export interface ImportCandidateParams {
 export type ImportFollowUpStep = "person_split" | "candidate_delete";
 
 export type ImportOutcome =
-  /** `created` is the new transaction in duplicate-check shape, so a batch can compare later candidates against it. */
-  | { status: "success"; transactionId: string; created?: ExistingTransactionForDuplicateCheck }
+  /**
+   * `created` is the new transaction in duplicate-check shape, so a batch can compare later candidates
+   * against it. `tombstoneMismatched` (Phase F2, 2026-10-24) is true in the rare case where a concurrent
+   * Dismiss (another tab/device) won the tombstone-write race for this exact candidate AFTER this
+   * import's own Transaction was already created — the Transaction is real and money moved, but the
+   * candidate's durable record says "dismissed," not "imported" (tombstones are immutable; this can't
+   * be corrected after the fact — see `SmsTransactionCandidateRepository.markHandled`). The caller
+   * should tell the user plainly rather than show a silent "Imported" toast.
+   */
+  | { status: "success"; transactionId: string; created?: ExistingTransactionForDuplicateCheck; tombstoneMismatched?: boolean }
   | { status: "validation_failed"; reason: string }
+  /**
+   * A Dismiss (this or another tab/device) won this candidate before the import could — nothing was written and
+   * no money moved (Phase F2, 2026-10-24). The candidate is already gone from the queue.
+   */
+  | { status: "already_dismissed" }
   /** The candidate matched an existing transaction closely enough to warrant a warning — no writes have happened yet. Re-call with `skipDuplicateCheck: true` to proceed anyway. */
   | { status: "duplicate_detected"; result: DuplicateDetectionResult }
   | { status: "transaction_create_failed"; error: unknown }
@@ -119,9 +132,17 @@ export type ImportOutcome =
    * This exact candidate (same idempotency key) was already imported earlier — no new transaction and no
    * balance change was made, and no person/split was re-applied. The candidate document is removed.
    * `changed` is true when the saved transaction's amount/account/date was edited since, so it no longer
-   * matches this candidate.
+   * matches this candidate. `tombstoneMismatched` — see the `"success"` case's doc above; same meaning here.
    */
-  | { status: "already_imported"; transactionId: string; changed: boolean; created?: ExistingTransactionForDuplicateCheck };
+  | {
+      status: "already_imported";
+      transactionId: string;
+      changed: boolean;
+      created?: ExistingTransactionForDuplicateCheck;
+      tombstoneMismatched?: boolean;
+      /** The caller asked for a person/split on this attempt, but the transaction already existed so it was NOT applied (never re-run on a reused transaction). */
+      personAssignmentSkipped?: boolean;
+    };
 
 function toDuplicateCheckShape(t: Transaction): ExistingTransactionForDuplicateCheck {
   return { id: t.id, description: t.description, amount: t.amount, dateTime: t.dateTime, accountId: t.accountId, type: t.type };
@@ -261,10 +282,11 @@ async function settleAlreadyImported(
   transactionId: string,
   changed: boolean,
   created?: ExistingTransactionForDuplicateCheck,
+  personAssignmentSkipped = false,
 ): Promise<ImportOutcome> {
   try {
-    await candidateRepository.markHandled(candidate.id, "imported", transactionId);
-    return { status: "already_imported", transactionId, changed, created };
+    const { mismatched } = await candidateRepository.markHandled(candidate.id, "imported", transactionId);
+    return { status: "already_imported", transactionId, changed, created, tombstoneMismatched: mismatched, personAssignmentSkipped };
   } catch (error) {
     console.error("importCandidate: candidate was already imported but its delete failed", { candidateId: candidate.id, transactionId, error });
     // `reusedExisting`: the transaction was created by an earlier attempt, so no person/split follow-up ran this time.
@@ -291,24 +313,40 @@ async function runImport(
 
   const idempotencyKey = await candidateImportKey(candidate.id);
   const startedAt = Date.now();
+  const createParams = {
+    type: candidate.direction === "credit" ? ("income" as const) : ("expense" as const),
+    amount: candidate.amount,
+    dateTime: candidate.transactionDate,
+    accountId,
+    categoryId: params.categoryId,
+    description: candidate.merchant ?? candidate.bankName ?? "SMS transaction",
+    notes: params.notes ?? "",
+    source: "sms" as const,
+    idempotencyKey,
+  };
+  // Phase F2: with a tombstone collection the money write, the "imported" tombstone and (when no person/split
+  // step still has to run) the candidate delete commit as ONE Firestore transaction — a Dismiss in another tab
+  // or device can then never win the tombstone after money has moved, and an import can never move money for a
+  // candidate a Dismiss already won. Without one (older callers/tests) the original two-step path is unchanged.
+  const atomic = candidateRepository.supportsAtomicImport === true;
+  const finalizedAtomically = atomic && !params.personAssignment;
   let transaction: Transaction;
   try {
-    transaction = await transactionRepository.createTransaction({
-      type: candidate.direction === "credit" ? "income" : "expense",
-      amount: candidate.amount,
-      dateTime: candidate.transactionDate,
-      accountId,
-      categoryId: params.categoryId,
-      description: candidate.merchant ?? candidate.bankName ?? "SMS transaction",
-      notes: params.notes ?? "",
-      source: "sms",
-      idempotencyKey,
-    });
+    if (atomic) {
+      const atomicResult = await candidateRepository.importAtomically(candidate.id, finalizedAtomically, (tx) =>
+        transactionRepository.createTransactionInTransaction(tx, createParams),
+      );
+      // A Dismiss already won this candidate: nothing was written, no money moved.
+      if (atomicResult.status === "already_dismissed") return { status: "already_dismissed" };
+      transaction = atomicResult.value;
+    } else {
+      transaction = await transactionRepository.createTransaction(createParams);
+    }
   } catch (error) {
     // The saved transaction for this candidate was edited (amount/account/date) after import: still the
     // same SMS, already imported — never a second transaction.
     if (isKeyedTransactionChangedError(error)) {
-      return settleAlreadyImported(candidate, candidateRepository, importedTransactionId(idempotencyKey), true);
+      return settleAlreadyImported(candidate, candidateRepository, importedTransactionId(idempotencyKey), true, undefined, params.personAssignment != null);
     }
     // Candidate document is untouched — still present, still safely retryable.
     return { status: "transaction_create_failed", error };
@@ -318,7 +356,9 @@ async function runImport(
   // The repository returns the earlier transaction (created before this call began) for a repeated key.
   // Person/split follow-ups ran — or deliberately didn't — on that earlier attempt; never re-apply them.
   if (transaction.createdAt instanceof Date && transaction.createdAt.getTime() < startedAt) {
-    return settleAlreadyImported(candidate, candidateRepository, transactionId, false, toDuplicateCheckShape(transaction));
+    // Already finalized by the atomic write above (tombstone + candidate delete) — nothing left to settle.
+    if (finalizedAtomically) return { status: "already_imported", transactionId, changed: false, created: toDuplicateCheckShape(transaction), tombstoneMismatched: false };
+    return settleAlreadyImported(candidate, candidateRepository, transactionId, false, toDuplicateCheckShape(transaction), params.personAssignment != null);
   }
   const created = toDuplicateCheckShape(transaction);
 
@@ -349,9 +389,11 @@ async function runImport(
     }
   }
 
+  if (finalizedAtomically) return { status: "success", transactionId, created, tombstoneMismatched: false };
+
   try {
-    await candidateRepository.markHandled(candidate.id, "imported", transactionId);
-    return { status: "success", transactionId, created };
+    const { mismatched } = await candidateRepository.markHandled(candidate.id, "imported", transactionId);
+    return { status: "success", transactionId, created, tombstoneMismatched: mismatched };
   } catch (error) {
     // The transaction now exists, but the candidate doc wasn't deleted — it will
     // still show up on next load. `evaluateCandidateDuplicate` is the safety net
@@ -365,6 +407,17 @@ async function runImport(
   }
 }
 
+export interface IgnoreCandidateOutcome {
+  /**
+   * True when a concurrent Import (another tab/device) won the tombstone-write race for this exact
+   * candidate first — the candidate is still removed from the queue either way (that part always
+   * succeeds), but the durable record says "imported," not "dismissed": a real Transaction exists for
+   * this SMS. (Phase F2, 2026-10-24.) Callers must tell the user plainly rather than show a blanket
+   * "dismissed" success message — see `IgnoreCandidateButton`/`CandidateDetailsModal`.
+   */
+  tombstoneMismatched: boolean;
+}
+
 /**
  * Dismisses a candidate without creating a Transaction — records a
  * `"dismissed"` tombstone and deletes the candidate. Never calls
@@ -376,14 +429,16 @@ async function runImport(
 export async function ignoreCandidate(
   candidate: SmsTransactionCandidate,
   candidateRepository: SmsTransactionCandidateRepository,
-): Promise<void> {
-  await candidateRepository.markHandled(candidate.id, "dismissed", null);
+): Promise<IgnoreCandidateOutcome> {
+  const { mismatched } = await candidateRepository.markHandled(candidate.id, "dismissed", null);
+  return { tombstoneMismatched: mismatched };
 }
 
 export interface BulkIgnoreResult {
   candidateId: string;
   ok: boolean;
   error?: unknown;
+  tombstoneMismatched?: boolean;
 }
 
 /**
@@ -399,8 +454,8 @@ export async function bulkIgnoreCandidates(
   const results: BulkIgnoreResult[] = [];
   for (const candidate of candidates) {
     try {
-      await ignoreCandidate(candidate, candidateRepository);
-      results.push({ candidateId: candidate.id, ok: true });
+      const { tombstoneMismatched } = await ignoreCandidate(candidate, candidateRepository);
+      results.push({ candidateId: candidate.id, ok: true, tombstoneMismatched });
     } catch (error) {
       results.push({ candidateId: candidate.id, ok: false, error });
     }

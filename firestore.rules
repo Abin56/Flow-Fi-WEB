@@ -181,6 +181,19 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
+    // Runtime switch for Android's background SMS cloud upload (Phase F3,
+    // 2026-10-25) — one document, `backgroundUpload`, naming the single
+    // account-device pair allowed to upload (`enabled: true`, `deviceId`). The
+    // app only READS it (server read, fail-closed). Clients can NEVER write it,
+    // so a compromised or buggy client cannot switch uploads on for itself:
+    // it is created/edited/deleted only by an operator via the Firebase console
+    // or Admin SDK (neither is subject to these rules). Because it lives under
+    // users/{uid}, one account's document can never authorize another's.
+    match /users/{uid}/smsSyncConfig/{configId} {
+      allow read: if isOwner(uid);
+      allow write: if false;
+    }
+
     // Personal merchant mapping corrections (Architecture §11.2, write-side
     // learning loop, backlog M13-T1) — plain owner-scoped CRUD, same as the
     // pre-existing collections above.

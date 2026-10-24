@@ -886,7 +886,7 @@ export function TransactionsWorkspace() {
       ) : (
         <section
           aria-label="Transactions"
-          className={cn("flex min-h-0 flex-col overflow-hidden rounded-[16px] border border-border-strong/60 bg-card shadow-e1", fullscreen && "flex-1")}
+          className={cn("flex min-h-0 flex-col overflow-clip rounded-[16px] border border-border-strong/60 bg-card shadow-e1", fullscreen && "flex-1")}
         >
           {statementMode && !statementView ? (
             <StatementNeedsAccount
@@ -985,9 +985,9 @@ export function TransactionsWorkspace() {
             </div>
           )}
 
-          {/* ── Pagination — attached to the ledger ── */}
+          {/* ── Pagination — attached to the ledger; sticks to the bottom of the shell's scrolling <main> (section is overflow-clip, not a scroll container) ── */}
           {count > 0 && (
-            <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t border-border-strong/60 bg-secondary/40 px-3 py-2 sm:px-4">
+            <div className="sticky bottom-0 z-[3] flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t border-border-strong/60 bg-secondary px-3 py-2 shadow-[0_-4px_8px_-6px_rgb(0_0_0/0.15)] sm:px-4">
               <p className="text-xs text-muted-foreground tabular-nums">
                 Showing <span className="font-semibold text-foreground">{rangeStart}–{rangeEnd}</span> of <span className="font-semibold text-foreground">{count}</span>
               </p>

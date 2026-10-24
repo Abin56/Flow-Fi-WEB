@@ -72,7 +72,7 @@ function candidate(overrides: Partial<SmsTransactionCandidate> = {}): SmsTransac
 }
 
 function setup() {
-  const markHandled = vi.fn(async () => {});
+  const markHandled = vi.fn(async () => ({ outcome: "dismissed" as const, mismatched: false }));
   const candidateRepository = { markHandled } as unknown as SmsTransactionCandidateRepository;
   const hidden = new Set<string>();
   const onHide = vi.fn((id: string) => hidden.add(id));

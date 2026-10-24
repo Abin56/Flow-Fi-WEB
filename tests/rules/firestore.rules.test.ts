@@ -490,6 +490,62 @@ describe("smsTransactionCandidates (SMS Transaction Intelligence, Phase 3)", () 
   });
 });
 
+describe("smsSyncConfig — runtime switch for background SMS upload (Phase F3, 2026-10-25)", () => {
+  const CONFIG = { enabled: true, deviceId: "install-abc" };
+  const configRef = (db: Parameters<typeof doc>[0], uid = OWNER_UID) => doc(db, "users", uid, "smsSyncConfig", "backgroundUpload");
+
+  async function seedConfig() {
+    // Operator path (console / Admin SDK) — bypasses rules by design.
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(configRef(ctx.firestore() as never), CONFIG);
+    });
+  }
+
+  it("owner can read the operator-written switch document (what the background worker needs)", async () => {
+    await seedConfig();
+    const ownerDb = testEnv.authenticatedContext(OWNER_UID).firestore();
+    const snap = await assertSucceeds(getDoc(configRef(ownerDb as never)));
+    expect(snap.data()).toEqual(CONFIG);
+  });
+
+  it("owner can NOT create, update or delete it — a client can never switch uploads on for itself", async () => {
+    const ownerDb = testEnv.authenticatedContext(OWNER_UID).firestore();
+    await assertFails(setDoc(configRef(ownerDb as never), CONFIG));
+    await seedConfig();
+    await assertFails(updateDoc(configRef(ownerDb as never), { enabled: false }));
+    await assertFails(setDoc(configRef(ownerDb as never), { enabled: true, deviceId: "another-install" }));
+    await assertFails(deleteDoc(configRef(ownerDb as never)));
+    const snap = await assertSucceeds(getDoc(configRef(ownerDb as never)));
+    expect(snap.data()).toEqual(CONFIG); // unchanged
+  });
+
+  it("another signed-in user cannot read or write it (UID isolation)", async () => {
+    await seedConfig();
+    const otherDb = testEnv.authenticatedContext(OTHER_UID).firestore();
+    await assertFails(getDoc(configRef(otherDb as never)));
+    await assertFails(setDoc(configRef(otherDb as never), CONFIG));
+  });
+
+  it("another account's own path is independent: a document for the owner says nothing about OTHER_UID", async () => {
+    await seedConfig();
+    const otherDb = testEnv.authenticatedContext(OTHER_UID).firestore();
+    const snap = await assertSucceeds(getDoc(configRef(otherDb as never, OTHER_UID)));
+    expect(snap.exists()).toBe(false); // → the worker treats this as OFF
+  });
+
+  it("a signed-out client cannot read or write it", async () => {
+    await seedConfig();
+    const anonDb = testEnv.unauthenticatedContext().firestore();
+    await assertFails(getDoc(configRef(anonDb as never)));
+    await assertFails(setDoc(configRef(anonDb as never), CONFIG));
+  });
+
+  it("no other document id under smsSyncConfig is client-writable either", async () => {
+    const ownerDb = testEnv.authenticatedContext(OWNER_UID).firestore();
+    await assertFails(setDoc(doc(ownerDb, "users", OWNER_UID, "smsSyncConfig", "anything"), CONFIG));
+  });
+});
+
 describe("smsCandidateTombstones + resurrection guard (SMS background cloud sync proposal, 2026-10-23)", () => {
   // Finance_App/docs/sms-background-cloud-sync-architecture.md, §1/§5. The
   // tombstone is the durable "handled" marker written atomically with the

@@ -40,6 +40,7 @@ import { deleteDoc, doc } from "firebase/firestore";
  */
 const markHandled = vi.fn(async (id: string) => {
   await deleteDoc(doc({} as never, id));
+  return { outcome: "imported" as const, mismatched: false };
 });
 
 function firestoreSnapshot(id: string, data: Record<string, unknown>) {

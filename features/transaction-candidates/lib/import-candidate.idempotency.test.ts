@@ -60,6 +60,7 @@ function fakeRepos(opts: { failCreateFor?: Set<string>; failDelete?: boolean } =
   });
   const markHandled = vi.fn(async () => {
     if (opts.failDelete) throw new Error("permission denied");
+    return { outcome: "imported" as const, mismatched: false };
   });
   const editTransaction = vi.fn(async () => undefined);
   const convertToAssigned = vi.fn(async () => undefined);
