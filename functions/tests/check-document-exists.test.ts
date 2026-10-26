@@ -13,9 +13,9 @@
  * `firebase emulators:exec`).
  */
 
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { getApps, initializeApp } from "firebase-admin/app";
-import { getFirestore, type Firestore } from "firebase-admin/firestore";
+import { getFirestore, Timestamp, type Firestore } from "firebase-admin/firestore";
 import {
   checkDocumentExists,
   deterministicDocumentId,
@@ -153,5 +153,100 @@ describe("checkDocumentExists — CONCURRENT calls (RFC §28.9 Critical risk #1,
 
     const creators = results.filter((r) => !r.alreadyExists);
     expect(creators.length).toBe(1);
+  });
+});
+
+describe("checkDocumentExists — safe recovery of failed / interrupted documents", () => {
+  const input = { uid: UID, accountId: ACCOUNT_ID, documentType: "credit_card_statement", fileHash: FILE_HASH };
+  const docRef = () => db.collection("users").doc(UID).collection("financialDocuments").doc(deterministicDocumentId(ACCOUNT_ID, FILE_HASH));
+  const importRecords = () => db.collection("users").doc(UID).collection("documentImports").doc(deterministicDocumentId(ACCOUNT_ID, FILE_HASH)).collection("records");
+  const minutesAgo = (m: number) => Timestamp.fromMillis(Date.now() - m * 60 * 1000);
+
+  beforeEach(async () => {
+    await Promise.all((await importRecords().get()).docs.map((r) => r.ref.delete()));
+  });
+
+  afterEach(async () => {
+    // The parent documentImports doc is never created in these tests, so delete the records directly.
+    await Promise.all((await importRecords().get()).docs.map((r) => r.ref.delete()));
+  });
+
+  it("a FAILED document is reset to 'uploaded' in place (same document id) so the file can be re-uploaded", async () => {
+    await checkDocumentExists(db, input);
+    await docRef().update({ status: "failed", failureReason: "parsing_failed", failureMessage: "boom", storagePath: "users/x/y.pdf" });
+
+    const result = await checkDocumentExists(db, input);
+    expect(result).toMatchObject({ documentId: deterministicDocumentId(ACCOUNT_ID, FILE_HASH), alreadyExists: false, status: "uploaded", recovered: true });
+    const after = (await docRef().get()).data()!;
+    expect(after.status).toBe("uploaded");
+    expect(after.failureReason).toBeNull();
+    expect(after.storagePath).toBeNull();
+    expect(after.recoveryAttempts).toBe(1);
+    expect((await db.collection("users").doc(UID).collection("financialDocuments").get()).size).toBe(1);
+  });
+
+  it("an interrupted upload (still 'uploaded' long after creation) is recoverable without any write", async () => {
+    await checkDocumentExists(db, input);
+    await docRef().update({ uploadedAt: minutesAgo(30) });
+    const result = await checkDocumentExists(db, input);
+    expect(result).toMatchObject({ alreadyExists: false, status: "uploaded", recovered: true });
+  });
+
+  it("a freshly created 'uploaded' document (upload in flight) is NOT treated as interrupted", async () => {
+    await checkDocumentExists(db, input);
+    const result = await checkDocumentExists(db, input);
+    expect(result.alreadyExists).toBe(true);
+  });
+
+  it("a stale 'parsing' document is reset; a recently started one is left alone", async () => {
+    await checkDocumentExists(db, input);
+    await docRef().update({ status: "parsing", parsingStartedAt: minutesAgo(2) });
+    expect((await checkDocumentExists(db, input)).alreadyExists).toBe(true);
+
+    await docRef().update({ parsingStartedAt: minutesAgo(45) });
+    const result = await checkDocumentExists(db, input);
+    expect(result).toMatchObject({ alreadyExists: false, status: "uploaded", recovered: true });
+  });
+
+  it("never recovers a document whose staging already has a committed row (would allow a double import)", async () => {
+    await checkDocumentExists(db, input);
+    await docRef().update({ status: "failed" });
+    await importRecords().doc("1").set({ committedTransactionId: "txn-real", userEdited: false });
+
+    const result = await checkDocumentExists(db, input);
+    expect(result).toMatchObject({ alreadyExists: true, status: "failed" });
+    expect((await docRef().get()).get("status")).toBe("failed");
+  });
+
+  it("never recovers a document with user-edited staged rows", async () => {
+    await checkDocumentExists(db, input);
+    await docRef().update({ status: "failed" });
+    await importRecords().doc("1").set({ committedTransactionId: null, userEdited: true });
+    expect((await checkDocumentExists(db, input)).alreadyExists).toBe(true);
+  });
+
+  it("recovery is bounded — after the attempt cap the document stays failed", async () => {
+    await checkDocumentExists(db, input);
+    await docRef().update({ status: "failed", recoveryAttempts: 5 });
+    const result = await checkDocumentExists(db, input);
+    expect(result).toMatchObject({ alreadyExists: true, status: "failed" });
+  });
+
+  it("awaiting_password / parsed / needs_review documents are never reset", async () => {
+    await checkDocumentExists(db, input);
+    for (const status of ["awaiting_password", "parsed", "needs_review", "imported"]) {
+      await docRef().update({ status });
+      expect(await checkDocumentExists(db, input)).toMatchObject({ alreadyExists: true, status });
+    }
+  });
+
+  it("concurrent recovery calls on a failed document converge on exactly one document and one reset", async () => {
+    await checkDocumentExists(db, input);
+    await docRef().update({ status: "failed" });
+    await Promise.all(Array.from({ length: 5 }, () => checkDocumentExists(db, input)));
+    expect((await db.collection("users").doc(UID).collection("financialDocuments").get()).size).toBe(1);
+    const after = (await docRef().get()).data()!;
+    expect(after.status).toBe("uploaded");
+    expect(after.recoveryAttempts).toBe(1);
   });
 });

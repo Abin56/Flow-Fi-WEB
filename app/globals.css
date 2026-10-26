@@ -745,3 +745,26 @@
   20% { opacity: 1; }
   100% { transform: translateX(450%) skewX(-12deg); opacity: 0; }
 }
+
+/* /pair landing (FlowFi Connect): staggered entrance, and the web → phone hand-off illustration — a dot travels the
+   track while the phone's halo answers on arrival. Purely decorative (aria-hidden); it never stands for a real
+   connection. Transform/opacity only. The reduced-motion override above settles each on its final frame. */
+@keyframes pair-rise {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes pair-travel {
+  0% { transform: translateX(0); opacity: 0; }
+  12%, 82% { opacity: 1; }
+  100% { transform: translateX(100%); opacity: 0; }
+}
+@keyframes pair-halo {
+  0%, 70% { transform: scale(0.85); opacity: 0; }
+  80% { opacity: 0.55; }
+  100% { transform: scale(1.35); opacity: 0; }
+}
+@layer utilities {
+  .animate-pair-rise { animation: pair-rise 0.45s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+  .animate-pair-travel { animation: pair-travel 2.8s cubic-bezier(0.45, 0, 0.25, 1) infinite; }
+  .animate-pair-halo { animation: pair-halo 2.8s ease-out infinite; }
+}

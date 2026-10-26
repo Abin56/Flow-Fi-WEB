@@ -5,6 +5,14 @@
  * included row to the write path its Action implies, using the exact same
  * repositories mobile's real flows call.
  *
+ * Replay safety (Statement Review Phase 2): every row's money write carries a deterministic idempotency key
+ * derived from the statement document + staged row (`importTransferKey`), so the write that creates the
+ * transaction is recorded at most once no matter how many times Approve & Import is re-run. The staging
+ * acknowledgment (`committedTransactionId`) is written AFTER the money and can fail independently (network drop,
+ * tab closed) — that is no longer a double-write window: the retry finds the keyed transaction already there,
+ * skips every money write, and only re-acknowledges. Multi-write actions (EMI/loan/split) check for that keyed
+ * transaction FIRST so they never pay a second installment, create a second EMI/loan or a second split.
+ *
  * Failure handling, two layers (B3 — Transaction Studio commit atomicity):
  *  - Across rows: each row is attempted independently, and nothing here is a
  *    single Firestore transaction spanning multiple rows — see the
@@ -107,6 +115,14 @@ export interface CommitReviewImportParams {
   bills: Bill[];
   repositories: CommitRepositories;
   onRowCommitted: (recordId: string, transactionId: string) => Promise<void>;
+  /**
+   * The statement document being imported. Scopes every row's idempotency key to that document (staged row ids are
+   * only unique WITHIN a document — "1", "2", … — so two statements would otherwise collide). Always supplied by
+   * Transaction Studio; when omitted the commit still works but rows are not replay-safe.
+   */
+  documentId?: string;
+  /** Delay between attempts to persist `committedTransactionId` after the money landed. Defaults to 400ms; tests pass 0. */
+  linkRetryDelayMs?: number;
 }
 
 /** Pre-flight "block commit, require review" validation — the only commit path (architecture §7's locked decision: client-driven, no Cloud Function duplication), so this is the single source of truth for what blocks a commit. */
@@ -194,9 +210,40 @@ async function reverseInstallmentPayment(
   }
 }
 
-/** A staged record's transfer idempotency key (`transferPairIdsFor` charset, 8–128 chars). */
-export function importTransferKey(recordId: string): string {
-  return `imp_${recordId.replace(/[^A-Za-z0-9_-]/g, "-")}`.padEnd(8, "_").slice(0, 128);
+/** Two independent 53-bit string hashes (cyrb53), 28 hex chars — a compact, deterministic, collision-resistant-enough document scope for an idempotency key. */
+function documentScope(documentId: string): string {
+  const hash = (seed: number) => {
+    let h1 = 0xdeadbeef ^ seed;
+    let h2 = 0x41c6ce57 ^ seed;
+    for (let i = 0; i < documentId.length; i++) {
+      const ch = documentId.charCodeAt(i);
+      h1 = Math.imul(h1 ^ ch, 2654435761);
+      h2 = Math.imul(h2 ^ ch, 1597334677);
+    }
+    h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+    h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+    return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(16).padStart(14, "0");
+  };
+  return hash(1) + hash(2);
+}
+
+/**
+ * A staged record's idempotency key (`transferPairIdsFor`/`CreateTransactionParams.idempotencyKey` charset, 8–128
+ * chars). With `documentId` the key is scoped to that statement document, so the same row number in two statements
+ * can never collide; without it (legacy callers) it is just the record id.
+ */
+export function importTransferKey(recordId: string, documentId?: string): string {
+  const safeRecord = recordId.replace(/[^A-Za-z0-9_-]/g, "-");
+  const key = documentId == null ? `imp_${safeRecord}` : `imp_${documentScope(documentId)}_${safeRecord}`;
+  return key.padEnd(8, "_").slice(0, 128);
+}
+
+/** The transaction a previous attempt for this key already recorded (live only), or null. A keyed transaction that was since deleted/rolled back does not count. */
+async function findKeyedTransaction(repositories: CommitRepositories, key: string | undefined): Promise<Transaction | null> {
+  const repository = repositories.transactionRepository as Partial<Pick<TransactionRepository, "getByKey">>;
+  if (key == null || typeof repository.getByKey !== "function") return null;
+  const existing = await repository.getByKey(`txn_${key}`);
+  return existing != null && existing.deletedAt == null ? existing : null;
 }
 
 async function commitOneRow(row: StagedRecord, categoryId: string, params: CommitReviewImportParams): Promise<{ transactionId: string }> {
@@ -204,6 +251,22 @@ async function commitOneRow(row: StagedRecord, categoryId: string, params: Commi
   const action = deriveRecordAction(row);
   if (action == null) throw new Error("No Action chosen for this row — commit blocked.");
   const description = row.counterpartyNormalized ?? row.counterpartyRaw;
+  const key = params.documentId != null ? importTransferKey(row.id, params.documentId) : undefined;
+
+  // Replay of a row whose money already landed (the earlier attempt only failed to acknowledge it in staging):
+  // every multi-write action returns the recorded transaction WITHOUT writing anything again.
+  const replayed = action === "transfer" ? null : await findKeyedTransaction(repositories, key);
+  if (replayed != null) {
+    if (action === "shared_expense" || action === "someone_elses_expense") {
+      const expense = await repositories.expenseRepository.findActiveByTransactionId?.(replayed.id);
+      if (!expense) {
+        throw new Error(
+          `A previous attempt recorded this transaction (${replayed.id}) but not its split/people details. Delete that transaction in Transactions, then run Approve & Import again.`,
+        );
+      }
+    }
+    return { transactionId: replayed.id };
+  }
 
   switch (action) {
     case "shared_expense": {
@@ -228,6 +291,7 @@ async function commitOneRow(row: StagedRecord, categoryId: string, params: Commi
         excludeFromCalculations: row.excludeFromCalculations,
         accountingMonth: row.accountingMonth,
         isBusiness: row.modifiers.business,
+        idempotencyKey: key,
       });
       return { transactionId: expense.transactionId };
     }
@@ -247,6 +311,7 @@ async function commitOneRow(row: StagedRecord, categoryId: string, params: Commi
         excludeFromCalculations: row.excludeFromCalculations,
         accountingMonth: row.accountingMonth,
         isBusiness: row.modifiers.business,
+        idempotencyKey: key,
       });
       return { transactionId: expense.transactionId };
     }
@@ -259,7 +324,7 @@ async function commitOneRow(row: StagedRecord, categoryId: string, params: Commi
       // with the People gate explicitly acknowledged as historical (People obligations stay open, nothing is
       // auto-settled). Keyed by the staged record, a re-run of Approve & Import can never record it twice.
       const [sourceLeg] = await repositories.transactionRepository.createTransferPair({
-        idempotencyKey: importTransferKey(row.id),
+        idempotencyKey: importTransferKey(row.id, params.documentId),
         peopleGateAcknowledgement: {
           acknowledgedUnsettledPeople: true,
           reason: `Imported statement line ${row.id} — already paid at the bank`,
@@ -297,6 +362,7 @@ async function commitOneRow(row: StagedRecord, categoryId: string, params: Commi
           isBusiness: row.modifiers.business,
           excludeFromCalculations: row.excludeFromCalculations,
           accountingMonth: row.accountingMonth,
+          idempotencyKey: key,
         });
         return { transactionId: transaction.id };
       } catch (error) {
@@ -331,6 +397,7 @@ async function commitOneRow(row: StagedRecord, categoryId: string, params: Commi
           isBusiness: row.modifiers.business,
           excludeFromCalculations: row.excludeFromCalculations,
           accountingMonth: row.accountingMonth,
+          idempotencyKey: key,
         });
         return { transactionId: transaction.id };
       } catch (error) {
@@ -364,6 +431,7 @@ async function commitOneRow(row: StagedRecord, categoryId: string, params: Commi
           isBusiness: row.modifiers.business,
           excludeFromCalculations: row.excludeFromCalculations,
           accountingMonth: row.accountingMonth,
+          idempotencyKey: key,
         });
         return { transactionId: transaction.id };
       } catch (error) {
@@ -405,6 +473,7 @@ async function commitOneRow(row: StagedRecord, categoryId: string, params: Commi
           isBusiness: row.modifiers.business,
           excludeFromCalculations: row.excludeFromCalculations,
           accountingMonth: row.accountingMonth,
+          idempotencyKey: key,
         });
         return { transactionId: transaction.id };
       } catch (error) {
@@ -430,6 +499,7 @@ async function commitOneRow(row: StagedRecord, categoryId: string, params: Commi
         isBusiness: row.modifiers.business,
         excludeFromCalculations: row.excludeFromCalculations,
         accountingMonth: row.accountingMonth,
+        idempotencyKey: key,
       });
       return { transactionId: transaction.id };
     }
@@ -488,6 +558,9 @@ export interface FreshDuplicateWarning {
 /** Synthetic id prefix `detectFreshDuplicatesForCommit` gives an earlier same-batch row standing in as a "pending" existing transaction — never a real Firestore id, so it's always safe to detect and rewrite before this reaches user-facing text. */
 const PENDING_ROW_ID_PREFIX = "pending-row-";
 
+/** A bank posts a payment a day or two after the user logged it — card-payment duplicates are compared over this window. */
+const PAYMENT_MATCH_WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
+
 /**
  * `checkForDuplicates` has no notion of "this match is another row in the
  * same not-yet-committed batch, not a transaction that already exists" — it
@@ -534,8 +607,16 @@ function describeBatchInternalMatches(result: DuplicateDetectionResult): Duplica
  * `commitReviewImport` will actually commit them — so this pre-check's view
  * of "what will exist by the time this row commits" matches reality.
  */
-export function detectFreshDuplicatesForCommit(rows: StagedRecord[], existingTransactions: Transaction[], accountId: string): FreshDuplicateWarning[] {
-  const existing = existingTransactions.map((t) => ({ id: t.id, description: t.description, amount: t.amount, dateTime: t.dateTime, accountId: t.accountId, type: t.type }));
+export function detectFreshDuplicatesForCommit(
+  rows: StagedRecord[],
+  existingTransactions: Transaction[],
+  accountId: string,
+  /** The statement document being imported — lets a row whose own earlier attempt already recorded its keyed transaction replay silently instead of warning about itself. */
+  documentId?: string,
+): FreshDuplicateWarning[] {
+  const paymentLegs = existingTransactions.filter((t) => t.deletedAt == null && t.accountId === accountId && t.type === "income" && t.transferId != null);
+  // A soft-deleted transaction is not "already there" — it must never block (or be matched by) an import row.
+  const existing = existingTransactions.filter((t) => t.deletedAt == null).map((t) => ({ id: t.id, description: t.description, amount: t.amount, dateTime: t.dateTime, accountId: t.accountId, type: t.type }));
   const warnings: FreshDuplicateWarning[] = [];
 
   // Rows committed earlier in this same batch — grows as we walk `rows` in the same left-to-right
@@ -551,8 +632,10 @@ export function detectFreshDuplicatesForCommit(rows: StagedRecord[], existingTra
     // AGAINST by later rows below, since it will still produce a real Transaction once
     // its own duplicate is resolved and it commits.
     const alreadyFlaggedServerSide = row.duplicateOfTransactionId != null || row.duplicateCandidateOf != null;
+    const ownKeyedId = documentId != null ? `txn_${importTransferKey(row.id, documentId)}` : null;
+    const ownKeyedLive = ownKeyedId != null && existingTransactions.some((t) => t.id === ownKeyedId && t.deletedAt == null);
 
-    if (!alreadyFlaggedServerSide) {
+    if (!alreadyFlaggedServerSide && !ownKeyedLive) {
       // A blank counterparty column (no narration text parsed for this row) left no description to
       // anchor a substring match against — `checkForDuplicates` bails out before matching at all
       // whenever `requireDescriptionMatch` (its default) is true and the candidate text is empty, so
@@ -574,6 +657,25 @@ export function detectFreshDuplicatesForCommit(rows: StagedRecord[], existingTra
         [...existing, ...committedSoFar],
       );
       if (result.status === "duplicate_candidate") warnings.push({ recordId: row.id, result: describeBatchInternalMatches(result) });
+      else {
+        // A statement "payment received" line is matched on description + same day above, but a payment the user
+        // already logged by hand is usually titled differently and dated a day or two off (bank posting vs entry).
+        // Compare credit rows that will become card payments against the card's existing bill-payment legs on amount
+        // alone within a few days — informational, like every other warning here.
+        const paymentLike = row.direction === "credit" && (row.transferDetected || deriveRecordAction(row) === "transfer");
+        const legMatch = paymentLike ? paymentLegs.find((t) => Math.abs(t.amount - row.amount) < 0.005 && Math.abs(t.dateTime.getTime() - row.date.getTime()) <= PAYMENT_MATCH_WINDOW_MS) : undefined;
+        if (legMatch) {
+          const dayGap = Math.round(Math.abs(legMatch.dateTime.getTime() - row.date.getTime()) / 86_400_000);
+          const match = {
+            transactionId: legMatch.id,
+            confidence: dayGap === 0 ? 0.9 : 0.7,
+            sameAccount: true,
+            dayGap,
+            reason: `A card payment of the same amount (${row.amount}) is already recorded on this card (${legMatch.id}, ${dayGap} day(s) apart) — importing this line would record the payment twice.`,
+          };
+          warnings.push({ recordId: row.id, result: { status: "duplicate_candidate", bestMatch: match, matches: [match] } });
+        }
+      }
     }
 
     committedSoFar.push({
@@ -587,6 +689,23 @@ export function detectFreshDuplicatesForCommit(rows: StagedRecord[], existingTra
   }
 
   return warnings;
+}
+
+const LINK_ATTEMPTS = 3;
+
+async function acknowledgeWithRetry(params: CommitReviewImportParams, recordId: string, transactionId: string): Promise<void> {
+  const delayMs = params.linkRetryDelayMs ?? 400;
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= LINK_ATTEMPTS; attempt++) {
+    try {
+      await params.onRowCommitted(recordId, transactionId);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt < LINK_ATTEMPTS && delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs * attempt));
+    }
+  }
+  throw lastError;
 }
 
 export async function commitReviewImport(params: CommitReviewImportParams): Promise<CommitReviewImportResult> {
@@ -609,13 +728,30 @@ export async function commitReviewImport(params: CommitReviewImportParams): Prom
       continue;
     }
 
+    let transactionId: string;
     try {
       const categoryId = categoryIdByName.get(row.category!)!;
-      const { transactionId } = await commitOneRow(row, categoryId, params);
-      await params.onRowCommitted(row.id, transactionId);
-      results.push({ recordId: row.id, outcome: "committed", transactionId });
+      ({ transactionId } = await commitOneRow(row, categoryId, params));
     } catch (error) {
       results.push({ recordId: row.id, outcome: "failed", error: error instanceof Error ? error.message : "Unknown error" });
+      continue;
+    }
+
+    // The money is recorded. Persisting `committedTransactionId` is a separate write that can fail on its own, so
+    // it is retried; if it still fails the row is reported as failed WITH its transaction id, and a re-run replays
+    // idempotently (see the module doc) instead of writing the money again.
+    try {
+      await acknowledgeWithRetry(params, row.id, transactionId);
+      results.push({ recordId: row.id, outcome: "committed", transactionId });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "Unknown error";
+      const safeToRerun = params.documentId != null;
+      results.push({
+        recordId: row.id,
+        outcome: "failed",
+        transactionId,
+        error: `Saved as a transaction, but couldn't mark this row as imported (${detail}).${safeToRerun ? " Run Approve & Import again — it will not create a duplicate." : ""}`,
+      });
     }
   }
 

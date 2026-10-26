@@ -18,6 +18,7 @@ import {
   LineChart,
   TrendingDown,
   ScanSearch,
+  ScanText,
 } from "lucide-react";
 
 export interface NavItem {
@@ -56,6 +57,7 @@ export const NAV_ITEMS: NavItem[] = [
 
   { label: "Statement Review", href: "/statement-review", icon: FileStack, section: "Import" },
   { label: "Transaction Inbox", href: "/transaction-candidates", icon: MessageSquareText, section: "Import" },
+  { label: "Smart Capture", href: "/smart-capture", icon: ScanText, section: "Import" },
 
   { label: "Reports", href: "/reports", icon: FileBarChart, section: "Insights" },
   { label: "Analytics", href: "/analytics", icon: LineChart, section: "Insights" },

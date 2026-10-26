@@ -125,6 +125,13 @@ export interface CreateExpenseParams {
   isBusiness?: boolean;
   /** Internal authoritative origin of the generated Person ledger entries. */
   sourceKind?: Extract<LedgerSourceKind, "splitExpense" | "assignedExpense">;
+  /**
+   * Passed straight to the backing Transaction (`CreateTransactionParams.idempotencyKey`) so a caller that
+   * retries after an uncertain save (e.g. the statement import commit) gets the SAME transaction id back rather
+   * than a second one. The caller must still detect a replay itself — this does not make the split/ledger
+   * writes idempotent.
+   */
+  idempotencyKey?: string;
 }
 
 export interface AssignToPersonParams {
@@ -140,6 +147,8 @@ export interface AssignToPersonParams {
   excludeFromCalculations?: boolean;
   accountingMonth?: Date | null;
   isBusiness?: boolean;
+  /** See `CreateExpenseParams.idempotencyKey`. */
+  idempotencyKey?: string;
 }
 
 export interface ConvertToSplitParams {
@@ -552,6 +561,7 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
       notes: params.notes ?? "",
       excludeFromCalculations: params.excludeFromCalculations ?? false,
       accountingMonth: params.accountingMonth ?? null,
+      idempotencyKey: params.idempotencyKey,
     });
 
     const expenseId = generateId();
@@ -694,6 +704,7 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
       excludeFromCalculations: params.excludeFromCalculations,
       accountingMonth: params.accountingMonth,
       isBusiness: params.isBusiness,
+      idempotencyKey: params.idempotencyKey,
     });
   }
 

@@ -66,3 +66,9 @@ functions/.secret.local
 
 # Browser QA run output (screenshots, results.json)
 tests/e2e-qa/.results/
+
+# Signed Android sideload release staged into hosting by scripts/android-release.mjs (never commit APKs)
+/release/
+
+# Smart Capture OCR assets copied from node_modules by scripts/copy-ocr-assets.mjs
+/public/ocr/

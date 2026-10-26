@@ -24,7 +24,7 @@
 
 import { PdfDocumentError, type PdfDocumentHandle, type PdfDocumentProvider } from "../pdf/pdf-document-provider";
 import type { FailureReason } from "../domain/financial-document-status";
-import { fetchExistingStatementsForComparison, fetchExistingTransactionsForComparison } from "../duplicate/duplicate-lookup-repository";
+import { fetchExistingStatementsForComparison, fetchExistingTransactionsForComparison, resolveCardAccountId } from "../duplicate/duplicate-lookup-repository";
 import { extractHdfcStatement, isHdfcStatement } from "../parsing/hdfc/hdfc-statement-extractor";
 import { writeStagingDocuments } from "../staging/staging-writer";
 import { runStatementIntelligencePipeline } from "./statement-intelligence-pipeline";
@@ -117,11 +117,12 @@ export class HdfcCreditCardStatementPipeline implements DocumentPipeline {
 
       const billingStart = extraction.statementInfo.billingPeriodStart.value;
       const billingEnd = extraction.statementInfo.billingPeriodEnd.value;
+      const transactionAccountId = await resolveCardAccountId(this.db, context.uid, context.accountId);
       const [existingTransactions, existingStatements] = await Promise.all([
         billingStart && billingEnd
-          ? fetchExistingTransactionsForComparison(this.db, context.uid, context.accountId, billingStart, billingEnd)
+          ? fetchExistingTransactionsForComparison(this.db, context.uid, transactionAccountId, billingStart, billingEnd)
           : Promise.resolve([]),
-        fetchExistingStatementsForComparison(this.db, context.uid, context.accountId),
+        fetchExistingStatementsForComparison(this.db, context.uid, context.accountId, context.documentId),
       ]);
 
       const workspace = runStatementIntelligencePipeline({

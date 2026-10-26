@@ -293,3 +293,33 @@ describe("Duplicate Detection — performance on the Large fixture (400 transact
     expect(elapsedMs).toBeLessThan(500);
   });
 });
+
+describe("IST calendar-day matching (near-midnight)", () => {
+  // 2026-07-09 00:48 IST == 2026-07-08T19:18Z; a manual entry for the same IST day is stored at 12:00 IST (06:30Z).
+  const ISTSTAMP = (iso: string) => new Date(iso);
+
+  function row(date: Date): WorkspaceTransaction {
+    return txn({ merchant: "AMAZON PAY", amountValue: 100, day: 1, rowNumber: 1, date: { value: date, confidence: 1, source: "exact_match" } });
+  }
+
+  it("an after-midnight IST statement row matches a same-IST-day existing transaction (exact, not near)", () => {
+    const result = checkTransactionDuplicate(row(ISTSTAMP("2026-07-08T19:18:00.000Z")), [
+      { id: "manual", description: "AMAZON PAY", amount: 100, dateTime: ISTSTAMP("2026-07-09T06:30:00.000Z") },
+    ]);
+    expect(result.type).toBe("transaction_duplicate");
+  });
+
+  it("a late-evening IST statement row matches a same-IST-day existing transaction", () => {
+    const result = checkTransactionDuplicate(row(ISTSTAMP("2026-06-19T16:46:00.000Z")), [
+      { id: "manual", description: "AMAZON PAY", amount: 100, dateTime: ISTSTAMP("2026-06-19T06:30:00.000Z") },
+    ]);
+    expect(result.type).toBe("transaction_duplicate");
+  });
+
+  it("the next IST day is only a near-duplicate", () => {
+    const result = checkTransactionDuplicate(row(ISTSTAMP("2026-06-19T16:46:00.000Z")), [
+      { id: "manual", description: "AMAZON PAY", amount: 100, dateTime: ISTSTAMP("2026-06-20T06:30:00.000Z") },
+    ]);
+    expect(result.type).toBe("near_duplicate");
+  });
+});

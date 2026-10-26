@@ -162,4 +162,28 @@ describe("writeStagingDocuments", () => {
     const recordsSnap = await db.collection("users").doc(UID).collection("documentImports").doc(DOCUMENT_ID).collection("records").get();
     expect(recordsSnap.size).toBe(2);
   });
+
+  it("a re-run NEVER resets a committed row (would let the same statement row import twice)", async () => {
+    const workspace = buildWorkspace();
+    await writeStagingDocuments(db, { uid: UID, documentId: DOCUMENT_ID, accountId: ACCOUNT_ID, workspace });
+    const recordRef = db.collection("users").doc(UID).collection("documentImports").doc(DOCUMENT_ID).collection("records").doc("1");
+    await recordRef.update({ committedTransactionId: "txn-real" });
+
+    const result = await writeStagingDocuments(db, { uid: UID, documentId: DOCUMENT_ID, accountId: ACCOUNT_ID, workspace });
+
+    expect(result.skipped).toBe("already_reviewed_or_committed");
+    expect((await recordRef.get()).get("committedTransactionId")).toBe("txn-real");
+  });
+
+  it("a re-run does not discard a reviewer's edits", async () => {
+    const workspace = buildWorkspace();
+    await writeStagingDocuments(db, { uid: UID, documentId: DOCUMENT_ID, accountId: ACCOUNT_ID, workspace });
+    const recordRef = db.collection("users").doc(UID).collection("documentImports").doc(DOCUMENT_ID).collection("records").doc("2");
+    await recordRef.update({ userEdited: true, notes: "reviewed by me" });
+
+    const result = await writeStagingDocuments(db, { uid: UID, documentId: DOCUMENT_ID, accountId: ACCOUNT_ID, workspace });
+
+    expect(result.skipped).toBe("already_reviewed_or_committed");
+    expect((await recordRef.get()).get("notes")).toBe("reviewed by me");
+  });
 });

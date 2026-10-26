@@ -209,7 +209,7 @@ export function TransactionStudio({ initialDocumentId }: { initialDocumentId: st
     if (!uid || !activeDocument || !sourceAccountId) return;
 
     if (!skipDuplicateCheck) {
-      const warnings = detectFreshDuplicatesForCommit(rows, liveTransactions, sourceAccountId);
+      const warnings = detectFreshDuplicatesForCommit(rows, liveTransactions, sourceAccountId, activeDocument.id);
       if (warnings.length > 0) {
         setFreshDuplicateWarnings(warnings);
         return;
@@ -220,6 +220,7 @@ export function TransactionStudio({ initialDocumentId }: { initialDocumentId: st
     try {
       const accountRepository = createAccountRepository(uid);
       const result = await commitReviewImport({
+        documentId: activeDocument.id,
         rows,
         accountId: sourceAccountId,
         categories,

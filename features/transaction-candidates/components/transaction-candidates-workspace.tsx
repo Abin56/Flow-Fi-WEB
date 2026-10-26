@@ -26,13 +26,15 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ConfirmDialog, EmptyState } from "@/components/finance";
 import { ScrollNav } from "@/components/layout/scroll-nav";
-import { SmsSyncOnboarding } from "@/features/transaction-candidates/components/sms-sync-onboarding";
+import { SmsInboxEmptyState } from "@/features/transaction-candidates/components/sms-inbox-empty-state";
+import { SmsSyncStatusBar } from "@/features/transaction-candidates/components/sms-sync-status-bar";
 import { formatCurrencyExact } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useAccounts } from "@/hooks/use-accounts";
 import { useCategories } from "@/hooks/use-categories";
 import { useCreditCards } from "@/hooks/use-credit-cards";
 import { usePeople } from "@/hooks/use-people";
+import { useSmsSyncConfig } from "@/hooks/use-sms-sync-config";
 import { useSmsTransactionCandidates } from "@/hooks/use-sms-transaction-candidates";
 import { useTransactions } from "@/hooks/use-transactions";
 import {
@@ -107,6 +109,7 @@ export function TransactionCandidatesWorkspace() {
     retry: retryListener,
   } = useSmsTransactionCandidates();
   const viewState = deriveCandidatesViewState({ hasSnapshot, isError: listenerFailed });
+  const syncConfig = useSmsSyncConfig();
   const { data: accounts = [] } = useAccounts();
   const { data: creditCards = [] } = useCreditCards();
   const { data: categories = [] } = useCategories();
@@ -606,6 +609,22 @@ export function TransactionCandidatesWorkspace() {
 
   const filterChips: FilterChip[] = buildFilterChips(filters, (key) => destinationOptions.find((o) => o.key === key)?.label ?? key);
 
+  // SMS candidates are shown only while a phone is paired (the server-written `backgroundUpload` switch is on).
+  // Unpaired — never paired, or unpaired by Auto Sync OFF / Disconnect — the inbox shows only the pairing panel.
+  // Candidates already in the account are kept, not deleted, and reappear after pairing. A read error
+  // ("unknown") still shows the list rather than hiding the user's data.
+  if (syncConfig === "loading" || syncConfig === "not-configured") {
+    return (
+      <div className="flex min-w-0 flex-col gap-3 p-4 sm:gap-4 sm:p-6" data-testid="sms-inbox-unpaired">
+        <div className="min-w-0">
+          <h1 className="font-heading text-2xl font-semibold tracking-tight text-foreground">Transaction Inbox</h1>
+          <p className="mt-0.5 max-w-2xl text-sm text-muted-foreground">Pair your Android phone to see detected bank SMS here.</p>
+        </div>
+        {syncConfig === "loading" ? <CandidateLedgerSkeleton /> : <SmsInboxEmptyState />}
+      </div>
+    );
+  }
+
   return (
     <div
       ref={rootRef}
@@ -619,9 +638,7 @@ export function TransactionCandidatesWorkspace() {
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <h1 className="font-heading text-2xl font-semibold tracking-tight text-foreground">Transaction Inbox</h1>
-          <p className="mt-0.5 hidden max-w-2xl text-sm text-muted-foreground sm:block">
-            <span>Transactions detected from your SMS. Nothing is added to your books until you review and confirm it.</span>
-          </p>
+          <p className="mt-0.5 max-w-2xl text-sm text-muted-foreground">Detected transactions wait here for your review — nothing is added until you confirm it.</p>
         </div>
         <button
           type="button"
@@ -638,6 +655,7 @@ export function TransactionCandidatesWorkspace() {
           onboarding card sits right under the page heading. They reappear the moment there's anything to count or filter. */}
       {!(viewState.phase === "ready" && candidates.length === 0) && (
         <>
+          {viewState.phase === "ready" && visibleCandidates.length > 0 && <SmsSyncStatusBar />}
           <CandidateOverview
             loading={viewState.phase !== "ready"}
             waiting={candidates.length}
@@ -702,7 +720,7 @@ export function TransactionCandidatesWorkspace() {
               <EmptyState icon={Search} title="No candidates match" description="Nothing fits the current search and filters." actionLabel="Clear filters" onAction={clearFilters} />
             </div>
           ) : (
-            <SmsSyncOnboarding />
+            <SmsInboxEmptyState />
           )
         ) : (
           <CandidateLedger

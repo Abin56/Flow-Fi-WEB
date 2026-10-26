@@ -26,25 +26,26 @@ describe("extractHdfcTransactionFields — against every real transaction on the
 
   it("every row has a non-null date, matching its known real value", () => {
     const expectedDates = [
-      "2026-06-19T22:16:00.000Z",
-      "2026-06-19T00:00:00.000Z",
-      "2026-06-19T00:00:00.000Z",
-      "2026-06-25T12:40:00.000Z",
-      "2026-06-25T04:24:00.000Z",
-      "2026-06-30T04:51:00.000Z",
-      "2026-07-02T00:00:00.000Z",
-      "2026-07-03T16:21:00.000Z",
-      "2026-07-06T21:36:00.000Z",
-      "2026-07-09T00:48:00.000Z",
-      "2026-07-14T09:24:00.000Z",
-      "2026-07-14T02:20:00.000Z",
-      "2026-07-16T00:00:00.000Z",
-      "2026-07-19T00:00:00.000Z",
-      "2026-07-19T00:00:00.000Z",
-      "2026-07-19T00:00:00.000Z",
-      "2026-07-19T00:00:00.000Z",
-      "2026-07-02T00:00:00.000Z",
-      "2026-07-16T00:00:00.000Z",
+      // HDFC prints times in IST (UTC+05:30) — these are the real instants, i.e. printed wall-clock minus 5h30m.
+      "2026-06-19T16:46:00.000Z",
+      "2026-06-18T18:30:00.000Z",
+      "2026-06-18T18:30:00.000Z",
+      "2026-06-25T07:10:00.000Z",
+      "2026-06-24T22:54:00.000Z",
+      "2026-06-29T23:21:00.000Z",
+      "2026-07-01T18:30:00.000Z",
+      "2026-07-03T10:51:00.000Z",
+      "2026-07-06T16:06:00.000Z",
+      "2026-07-08T19:18:00.000Z",
+      "2026-07-14T03:54:00.000Z",
+      "2026-07-13T20:50:00.000Z",
+      "2026-07-15T18:30:00.000Z",
+      "2026-07-18T18:30:00.000Z",
+      "2026-07-18T18:30:00.000Z",
+      "2026-07-18T18:30:00.000Z",
+      "2026-07-18T18:30:00.000Z",
+      "2026-07-01T18:30:00.000Z",
+      "2026-07-15T18:30:00.000Z",
     ];
     expect(fields.map((f) => f.transactionDate.value?.toISOString())).toEqual(expectedDates);
   });
@@ -242,5 +243,23 @@ describe("extractHdfcTransactionFields — against every real transaction on the
   it("produces deterministic output across repeated runs against the same fixture", () => {
     const again = extractHdfcRawTransactionRows(detectHdfcTransactionTableRegions(pages)).map(extractHdfcTransactionFields);
     expect(again).toEqual(fields);
+  });
+});
+
+describe("extractHdfcTransactionFields — IST calendar day (near-midnight regression)", () => {
+  const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+  const istDay = (d: Date) => new Date(d.getTime() + IST_OFFSET_MS).toISOString().slice(0, 10);
+
+  it("every row lands on the calendar day printed on the statement, in IST — including 22:16 and 00:48 rows", () => {
+    for (const f of fields) {
+      const printed = /(\d{2})\/(\d{2})\/(\d{4})/.exec(f.originalRawText)!;
+      expect(istDay(f.transactionDate.value!)).toBe(`${printed[3]}-${printed[2]}-${printed[1]}`);
+    }
+  });
+
+  it("the late-evening row (22:16 IST) is not pushed into the next day for an IST viewer", () => {
+    const lateEvening = fields.find((f) => /19\/06\/2026\s*\|\s*22:16/.test(f.originalRawText))!;
+    expect(istDay(lateEvening.transactionDate.value!)).toBe("2026-06-19");
+    expect(lateEvening.transactionDate.value!.toISOString()).toBe("2026-06-19T16:46:00.000Z");
   });
 });

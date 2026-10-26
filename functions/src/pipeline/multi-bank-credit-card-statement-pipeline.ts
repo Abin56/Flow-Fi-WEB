@@ -17,13 +17,14 @@ import { PdfDocumentError, type PdfDocumentHandle, type PdfDocumentProvider } fr
 import type { FailureReason } from "../domain/financial-document-status";
 import type { BillingSummary, CardInfo, ExtractionDiagnostics, StatementInfo, WorkspaceTransaction } from "../workspace/statement-workspace-model";
 import type { PdfPageText } from "../pdf/pdf-document-provider";
-import { fetchExistingStatementsForComparison, fetchExistingTransactionsForComparison } from "../duplicate/duplicate-lookup-repository";
+import { fetchExistingStatementsForComparison, fetchExistingTransactionsForComparison, resolveCardAccountId } from "../duplicate/duplicate-lookup-repository";
 import { writeStagingDocuments } from "../staging/staging-writer";
 import { runStatementIntelligencePipeline } from "./statement-intelligence-pipeline";
 import { isHdfcStatement, extractHdfcStatement } from "../parsing/hdfc/hdfc-statement-extractor";
 import { isSbiStatement, extractSbiStatement } from "../parsing/sbi/sbi-statement-extractor";
 import { isGenericStatementMatch, extractGenericStatement } from "../parsing/generic/generic-statement-extractor";
 import { detectPossibleBankName } from "../parsing/generic/bank-name-guesser";
+import { hasUsableTextLayer } from "../parsing/generic/layout-analyzer";
 import type { DocumentPipeline, DocumentPipelineContext, DocumentPipelineResult } from "./document-pipeline";
 import type { Firestore } from "firebase-admin/firestore";
 
@@ -52,6 +53,13 @@ export const BANK_STATEMENT_EXTRACTORS: BankStatementExtractor[] = [
   { bankId: "sbi", isMatch: isSbiStatement, extract: extractSbiStatement },
   { bankId: "generic", isMatch: isGenericStatementMatch, extract: extractGenericStatement },
 ];
+
+/** Earliest-to-latest date across the extracted rows, or null when no row has a date. */
+export function transactionDateSpan(transactions: WorkspaceTransaction[]): { start: Date; end: Date } | null {
+  const times = transactions.map((t) => t.date.value?.getTime()).filter((t): t is number => t != null && Number.isFinite(t));
+  if (times.length === 0) return null;
+  return { start: new Date(Math.min(...times)), end: new Date(Math.max(...times)) };
+}
 
 function mapErrorToFailureReason(error: PdfDocumentError): FailureReason {
   switch (error.code) {
@@ -116,6 +124,12 @@ export class MultiBankCreditCardStatementPipeline implements DocumentPipeline {
       const pageCount = handle.pageCount;
       const pages = await handle.getAllPageText();
 
+      // Image-only (scanned) PDF: no text layer to read positions from. OCR is deliberately not run server-side (cost) —
+      // say so plainly instead of letting it fall through to a misleading "unrecognized bank" result.
+      if (!hasUsableTextLayer(pages)) {
+        return { outcome: "needs_review", reason: "scanned_pdf_no_text_layer" };
+      }
+
       const extractor = this.extractors.find((candidate) => candidate.isMatch(pages));
       if (!extractor) {
         // Reached only when even the generic fallback (last in `this.extractors`) couldn't find a plausible
@@ -132,11 +146,17 @@ export class MultiBankCreditCardStatementPipeline implements DocumentPipeline {
 
       const billingStart = extraction.statementInfo.billingPeriodStart.value;
       const billingEnd = extraction.statementInfo.billingPeriodEnd.value;
+      // A generic-parsed statement prints no recognized billing period. Without a window the existing-transaction
+      // lookup would be skipped and no row could ever be matched against a manual/SMS/earlier-statement transaction,
+      // so fall back to the span of the rows actually extracted (the lookup pads it by a few days).
+      const comparisonWindow = billingStart && billingEnd ? { start: billingStart, end: billingEnd } : transactionDateSpan(extraction.transactions);
+      // `context.accountId` is the credit-card PROFILE id; transactions carry the underlying Account id.
+      const transactionAccountId = await resolveCardAccountId(this.db, context.uid, context.accountId);
       const [existingTransactions, existingStatements] = await Promise.all([
-        billingStart && billingEnd
-          ? fetchExistingTransactionsForComparison(this.db, context.uid, context.accountId, billingStart, billingEnd)
+        comparisonWindow
+          ? fetchExistingTransactionsForComparison(this.db, context.uid, transactionAccountId, comparisonWindow.start, comparisonWindow.end)
           : Promise.resolve([]),
-        fetchExistingStatementsForComparison(this.db, context.uid, context.accountId),
+        fetchExistingStatementsForComparison(this.db, context.uid, context.accountId, context.documentId),
       ]);
 
       const workspace = runStatementIntelligencePipeline({

@@ -1,6 +1,7 @@
 import { LifeBuoy, Mail, MessageCircle } from "lucide-react";
 import { ScrollNav } from "@/components/layout/scroll-nav";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { CONTACT_EMAIL, CONTACT_MAILTO } from "@/lib/config/contact";
 
 const FAQS = [
   {
@@ -54,11 +55,11 @@ export function HelpWorkspace() {
           </CardHeader>
           <CardContent className="flex flex-col gap-2">
             <a
-              href="mailto:support@flowfi.app"
+              href={CONTACT_MAILTO}
               className="flex items-center gap-3 rounded-xl border border-border/60 px-3 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-muted/60"
             >
               <Mail className="size-4 text-primary-accent-text" />
-              support@flowfi.app
+              {CONTACT_EMAIL}
             </a>
             <div className="flex items-center gap-3 rounded-xl border border-border/60 px-3 py-2.5 text-sm text-muted-foreground">
               <MessageCircle className="size-4 text-primary-accent-text" />

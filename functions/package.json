@@ -10,7 +10,8 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc -p tsconfig.test.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "validate:statement": "node scripts/validate-real-statement.mjs"
   },
   "dependencies": {
     "firebase-admin": "^13.0.2",

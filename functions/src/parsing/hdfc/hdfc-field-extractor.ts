@@ -85,12 +85,19 @@ function unionBoundingBox(items: PdfPageTextItem[]): BoundingBox | undefined {
   return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
 }
 
-/** "19/06/2026| 22:16" → UTC Date, date+time both encoded (WorkspaceTransaction.date has no separate time field). */
+/** HDFC prints statement times in India Standard Time (UTC+05:30, no DST). */
+const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+
+/**
+ * "19/06/2026| 22:16" → the real instant, read as IST wall-clock time (WorkspaceTransaction.date has no separate
+ * time field). Previously the wall-clock digits were stored as if they were UTC, which put every row printed after
+ * 18:30 IST on the NEXT calendar day for an IST viewer (and every row before 05:30 IST on the wrong UTC day).
+ */
 function parseHdfcDateTime(raw: string): Date | null {
   const match = HDFC_DATE_TIME_PATTERN.exec(raw.trim());
   if (!match) return null;
   const [, day, month, year, hour, minute] = match;
-  return new Date(Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute)));
+  return new Date(Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute)) - IST_OFFSET_MS);
 }
 
 export interface HdfcExtractedTransactionFields {

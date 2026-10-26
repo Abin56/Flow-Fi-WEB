@@ -31,7 +31,7 @@ import {
   deleteDoc,
   where,
 } from "firebase/firestore";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, beforeEach } from "vitest";
 
 const PROJECT_ID = "flowfi-rules-test";
 const OWNER_UID = "owner-uid";
@@ -422,6 +422,12 @@ describe("documentImports staging (Architecture §10.1, backlog M8/M1-T1)", () =
 });
 
 describe("smsTransactionCandidates (SMS Transaction Intelligence, Phase 3)", () => {
+  // Candidate writes need an enabled pairing switch (server-written by the pairing functions) since 2026-10-25.
+  beforeEach(async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "users", OWNER_UID, "smsSyncConfig", "backgroundUpload"), { enabled: true, deviceId: "dev-1", source: "pairing" });
+    });
+  });
   // Plain owner-scoped CRUD — this must match Finance_App/firestore.rules'
   // `match /users/{uid}/smsTransactionCandidates/{document=**} { allow read, write: if isOwner(uid); }`
   // exactly, since both apps deploy rules to the same Firebase project
@@ -547,6 +553,12 @@ describe("smsSyncConfig — runtime switch for background SMS upload (Phase F3, 
 });
 
 describe("smsCandidateTombstones + resurrection guard (SMS background cloud sync proposal, 2026-10-23)", () => {
+  // Candidate writes need an enabled pairing switch (server-written by the pairing functions) since 2026-10-25.
+  beforeEach(async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "users", OWNER_UID, "smsSyncConfig", "backgroundUpload"), { enabled: true, deviceId: "dev-1", source: "pairing" });
+    });
+  });
   // Finance_App/docs/sms-background-cloud-sync-architecture.md, §1/§5. The
   // tombstone is the durable "handled" marker written atomically with the
   // candidate delete on import/dismiss; `create` on a candidate is denied

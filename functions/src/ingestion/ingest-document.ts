@@ -18,7 +18,7 @@
  * for it, know about it, or import anything from it.
  */
 
-import type { Firestore } from "firebase-admin/firestore";
+import { FieldValue, type Firestore } from "firebase-admin/firestore";
 import * as logger from "firebase-functions/logger";
 
 export interface IngestDocumentInput {
@@ -75,7 +75,7 @@ export async function ingestDocument(
       return { outcome: "already_in_progress", status: currentStatus };
     }
 
-    tx.update(ref, { status: "parsing", storagePath: input.storagePath });
+    tx.update(ref, { status: "parsing", storagePath: input.storagePath, parsingStartedAt: FieldValue.serverTimestamp() });
     return { outcome: "accepted", status: "parsing" };
   });
 

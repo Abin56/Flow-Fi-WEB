@@ -18,6 +18,9 @@ function needsReviewMessage(document: FinancialDocument): string {
       ? `Looks like it might be from ${document.detectedBankGuess} — support for this bank's statement format isn't built yet.`
       : "This statement's bank/format isn't recognized yet.";
   }
+  if (document.needsReviewReason === "scanned_pdf_no_text_layer") {
+    return "This PDF looks scanned (no readable text), so transactions can't be extracted automatically. Download a text-based statement PDF from your bank instead.";
+  }
   return document.needsReviewReason!;
 }
 

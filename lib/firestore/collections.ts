@@ -67,10 +67,28 @@ export const FirestoreCollections = {
   // document id as the candidate it replaces. Web-written only; immutable
   // once created (firestore.rules denies update outright).
   smsCandidateTombstones: "smsCandidateTombstones",
+
+  // Operator-written runtime switch for Android background SMS upload (the
+  // `backgroundUpload` document). Clients may only READ it (firestore.rules);
+  // the web uses it solely to word the empty Transaction Inbox.
+  smsSyncConfig: "smsSyncConfig",
+
+  // SMS Sync pairing (functions/src/sms-pairing): phones paired to this
+  // account (Cloud Functions-written only) and each phone's own reported
+  // health (permission/Auto Sync/last scan), keyed by the install's device id.
+  smsDevices: "smsDevices",
+  smsDeviceStatus: "smsDeviceStatus",
+  // Each signed-in install's live heartbeat (online, permission, Auto Sync, sync progress) — owner-written by the phone,
+  // before or after pairing. Grants nothing; pairing authority stays in smsDevices/backgroundUpload.
+  smsDevicePresence: "smsDevicePresence",
 } as const;
 
 /** Top-level (not user-scoped) collections — config/global data only. */
 export const GlobalFirestoreCollections = {
   documentTypeRegistry: "documentTypeRegistry",
   merchantMappings: "merchantMappings",
+  // QR pairing sessions (doc id = SHA-256 of the one-time token) and the
+  // operator's SMS Sync emergency switch — both Cloud Functions/operator-written.
+  smsPairingSessions: "smsPairingSessions",
+  smsSyncControl: "smsSyncControl",
 } as const;

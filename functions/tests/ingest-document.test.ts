@@ -60,6 +60,12 @@ describe("ingestDocument — happy path", () => {
     expect(snap.get("status")).toBe("parsing");
     expect(snap.get("storagePath")).toBe("users/owner-uid/documents/credit_card_statement/doc-1.pdf");
   });
+
+  it("stamps parsingStartedAt so an interrupted parse can later be recognised as stale", async () => {
+    await seedUploadedDocument("doc-ts");
+    await ingestDocument(db, { uid: UID, documentId: "doc-ts", storagePath: "users/owner-uid/documents/credit_card_statement/doc-ts.pdf" });
+    expect((await docRef("doc-ts").get()).get("parsingStartedAt")).toBeTruthy();
+  });
 });
 
 describe("ingestDocument — idempotency and resumability (docs/adr/ADR-004)", () => {

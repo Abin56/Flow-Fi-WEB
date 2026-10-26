@@ -54,12 +54,19 @@ function amountsMatch(a: number, b: number): boolean {
   return Math.abs(a - b) <= AMOUNT_EPSILON;
 }
 
+/**
+ * Calendar day in India Standard Time. Statement rows and manual/SMS transactions are all dated by the user's
+ * (IST) calendar day; keying on the UTC day split an evening/after-midnight IST transaction from its twin.
+ */
+const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 function dayKey(date: Date): string {
-  return date.toISOString().slice(0, 10);
+  return new Date(date.getTime() + IST_OFFSET_MS).toISOString().slice(0, 10);
 }
 
 function daysBetween(a: Date, b: Date): number {
-  return Math.abs(Math.round((a.getTime() - b.getTime()) / (24 * 60 * 60 * 1000)));
+  const dayMs = 24 * 60 * 60 * 1000;
+  const dayIndex = (d: Date) => Math.floor((d.getTime() + IST_OFFSET_MS) / dayMs);
+  return Math.abs(dayIndex(a) - dayIndex(b));
 }
 
 function uniqueResult(overrides: Partial<DuplicateCheckResult> = {}): DuplicateCheckResult {

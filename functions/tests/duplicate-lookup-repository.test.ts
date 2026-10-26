@@ -8,7 +8,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { getApps, initializeApp } from "firebase-admin/app";
 import { getFirestore, Timestamp, type Firestore } from "firebase-admin/firestore";
-import { fetchExistingStatementsForComparison, fetchExistingTransactionsForComparison } from "../src/duplicate/duplicate-lookup-repository";
+import { fetchExistingStatementsForComparison, fetchExistingTransactionsForComparison, resolveCardAccountId } from "../src/duplicate/duplicate-lookup-repository";
 
 const PROJECT_ID = "flowfi-functions-test";
 const UID = "owner-uid-duplicate-lookup";
@@ -26,8 +26,15 @@ beforeAll(() => {
 afterEach(async () => {
   const txSnap = await db.collection("users").doc(UID).collection("transactions").get();
   await Promise.all(txSnap.docs.map((d) => d.ref.delete()));
-  const stmtSnap = await db.collection("users").doc(UID).collection("creditCards").doc(CARD_ID).collection("statements").get();
-  await Promise.all(stmtSnap.docs.map((d) => d.ref.delete()));
+  for (const name of ["documentImports", "financialDocuments", "creditCards"]) {
+    const snap = await db.collection("users").doc(UID).collection(name).get();
+    await Promise.all(
+      snap.docs.map(async (d) => {
+        if (name === "documentImports") await Promise.all((await d.ref.collection("records").get()).docs.map((r) => r.ref.delete()));
+        await d.ref.delete();
+      }),
+    );
+  }
 });
 
 afterAll(async () => {
@@ -128,25 +135,79 @@ describe("fetchExistingTransactionsForComparison", () => {
   });
 });
 
-describe("fetchExistingStatementsForComparison", () => {
-  it("reads back a real statement record", async () => {
-    await db.collection("users").doc(UID).collection("creditCards").doc(CARD_ID).collection("statements").doc("stmt-1").set({
-      documentHash: "abc123",
-      billingPeriodStart: Timestamp.fromDate(new Date(Date.UTC(2026, 5, 1))),
-      billingPeriodEnd: Timestamp.fromDate(new Date(Date.UTC(2026, 5, 30))),
-      closingBalance: 5000,
+describe("fetchExistingTransactionsForComparison — soft delete", () => {
+  it("excludes a transaction soft-deleted with the real marker, deletedAt", async () => {
+    await db.collection("users").doc(UID).collection("transactions").doc("tx-deleted-at").set({
+      accountId: ACCOUNT_ID,
+      description: "TRASHED PURCHASE",
+      amount: 500,
+      dateTime: Timestamp.fromDate(new Date(Date.UTC(2026, 5, 19))),
+      deletedAt: Timestamp.now(),
     });
+    await db.collection("users").doc(UID).collection("transactions").doc("tx-live").set({
+      accountId: ACCOUNT_ID,
+      description: "LIVE PURCHASE",
+      amount: 500,
+      dateTime: Timestamp.fromDate(new Date(Date.UTC(2026, 5, 19))),
+      deletedAt: null,
+    });
+    const results = await fetchExistingTransactionsForComparison(db, UID, ACCOUNT_ID, new Date(Date.UTC(2026, 5, 1)), new Date(Date.UTC(2026, 5, 30)));
+    expect(results.map((r) => r.id)).toEqual(["tx-live"]);
+  });
+});
 
+describe("resolveCardAccountId", () => {
+  it("maps a credit-card profile id to its underlying Account id", async () => {
+    await db.collection("users").doc(UID).collection("creditCards").doc(CARD_ID).set({ accountId: "the-real-account" });
+    expect(await resolveCardAccountId(db, UID, CARD_ID)).toBe("the-real-account");
+  });
+
+  it("falls back to the given id when the profile is missing", async () => {
+    expect(await resolveCardAccountId(db, UID, "no-such-card")).toBe("no-such-card");
+  });
+});
+
+describe("fetchExistingStatementsForComparison (imported statements)", () => {
+  async function seedImport(id: string, opts: { committed: boolean; cardId?: string; hash?: string | null }) {
+    const importRef = db.collection("users").doc(UID).collection("documentImports").doc(id);
+    await importRef.set({
+      accountId: opts.cardId ?? CARD_ID,
+      status: "draft",
+      metadata: {
+        statementInfo: {
+          billingPeriodStart: { value: Timestamp.fromDate(new Date(Date.UTC(2026, 5, 1))) },
+          billingPeriodEnd: { value: Timestamp.fromDate(new Date(Date.UTC(2026, 5, 30))) },
+        },
+        billingSummary: { closingBalance: { value: 5000 } },
+      },
+    });
+    await importRef.collection("records").doc("1").set({ committedTransactionId: opts.committed ? "txn-1" : null });
+    if (opts.hash !== undefined) await db.collection("users").doc(UID).collection("financialDocuments").doc(id).set({ fileHash: opts.hash });
+  }
+
+  it("returns an imported statement with period, closing balance and hash from the persisted import", async () => {
+    await seedImport("doc-1", { committed: true, hash: "abc123" });
     const results = await fetchExistingStatementsForComparison(db, UID, CARD_ID);
     expect(results).toHaveLength(1);
-    expect(results[0]!.id).toBe("stmt-1");
+    expect(results[0]!.id).toBe("doc-1");
     expect(results[0]!.documentHash).toBe("abc123");
     expect(results[0]!.closingBalance).toBe(5000);
+    expect(results[0]!.billingPeriodStart!.toISOString()).toBe(new Date(Date.UTC(2026, 5, 1)).toISOString());
     expect(results[0]!.cardId).toBe(CARD_ID);
   });
 
-  it("returns an empty array for a card with no statements", async () => {
-    const results = await fetchExistingStatementsForComparison(db, UID, "card-with-no-statements");
-    expect(results).toHaveLength(0);
+  it("ignores a staged import with no committed rows", async () => {
+    await seedImport("doc-staged", { committed: false, hash: "x" });
+    expect(await fetchExistingStatementsForComparison(db, UID, CARD_ID)).toHaveLength(0);
+  });
+
+  it("ignores another card's imports and the excluded (current) document", async () => {
+    await seedImport("doc-other-card", { committed: true, cardId: "other-card", hash: "x" });
+    await seedImport("doc-current", { committed: true, hash: "y" });
+    expect(await fetchExistingStatementsForComparison(db, UID, CARD_ID, "doc-current")).toHaveLength(0);
+  });
+
+  it("returns an empty array for a card with no imports", async () => {
+    expect(await fetchExistingStatementsForComparison(db, UID, "card-with-no-imports")).toHaveLength(0);
   });
 });

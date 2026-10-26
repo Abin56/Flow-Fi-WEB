@@ -18,7 +18,7 @@
 import { readFileSync } from "node:fs";
 import { assertFails, assertSucceeds, initializeTestEnvironment, type RulesTestEnvironment } from "@firebase/rules-unit-testing";
 import { collection, deleteDoc, doc, getDoc, getDocs, setDoc, type FirestoreDataConverter } from "firebase/firestore";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { candidateImportKey, importedTransactionId } from "@/features/transaction-candidates/lib/candidate-import-key";
 import { ignoreCandidate, importCandidate } from "@/features/transaction-candidates/lib/import-candidate";
@@ -45,6 +45,13 @@ beforeAll(async () => {
 afterAll(async () => {
   await testEnv.cleanup();
 });
+// Candidate writes need the server-written pairing switch (firestore.rules backstop, 2026-10-25).
+beforeEach(async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), "users", UID, "smsSyncConfig", "backgroundUpload"), { enabled: true, deviceId: "dev-1", source: "pairing" });
+  });
+});
+
 afterEach(async () => {
   await testEnv.clearFirestore();
 });
@@ -251,6 +258,9 @@ describe("concurrency: import vs. dismiss racing for the same candidate (two tab
 
     for (let i = 0; i < 16; i++) {
       await testEnv.clearFirestore();
+      await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        await setDoc(doc(ctx.firestore(), "users", UID, "smsSyncConfig", "backgroundUpload"), { enabled: true, deviceId: "dev-1", source: "pairing" });
+      });
       const tabA = setup();
       const tabB = setup();
       await tabA.seedAccount();

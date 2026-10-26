@@ -146,10 +146,24 @@ export interface WriteStagingDocumentsInput {
   workspace: StatementWorkspaceModel;
 }
 
-export async function writeStagingDocuments(db: Firestore, input: WriteStagingDocumentsInput): Promise<{ importId: string; recordCount: number }> {
+export async function writeStagingDocuments(
+  db: Firestore,
+  input: WriteStagingDocumentsInput,
+): Promise<{ importId: string; recordCount: number; skipped?: "already_reviewed_or_committed" }> {
   const { uid, documentId, accountId, workspace } = input;
   const importRef = db.collection(USERS_COLLECTION).doc(uid).collection(DOCUMENT_IMPORTS_COLLECTION).doc(documentId);
   const recordsRef = importRef.collection(DOCUMENT_IMPORT_RECORDS_COLLECTION);
+
+  // A re-run (retry / recovery) overwrites staged rows by deterministic id. That is exactly right for an
+  // untouched draft, but must NEVER reset `committedTransactionId` (which would let the same row import twice)
+  // or discard a reviewer's edits — so once any row is committed or user-edited, the staging is left as is.
+  const [committedProbe, editedProbe] = await Promise.all([
+    recordsRef.where("committedTransactionId", "!=", null).limit(1).get(),
+    recordsRef.where("userEdited", "==", true).limit(1).get(),
+  ]);
+  if (!committedProbe.empty || !editedProbe.empty) {
+    return { importId: importRef.id, recordCount: 0, skipped: "already_reviewed_or_committed" };
+  }
 
   await importRef.set({
     userId: uid,

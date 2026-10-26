@@ -28,6 +28,15 @@ import { PdfDocumentError } from "./pdf/pdf-document-provider";
 import { PdfjsDocumentProvider } from "./pdf/pdfjs-document-provider";
 import { PDF_ANALYZER_VAULT_KEY } from "./pdf-analyzer/password-vault";
 import { assertOwnedStoragePath, readStorageObjectBytes, StoragePathOwnershipError } from "./storage";
+import {
+  approvePairing,
+  cancelPairing,
+  createPairingSession,
+  previewPairing,
+  revokeDevice,
+  SmsPairingError,
+  type SmsPairingErrorCode,
+} from "./sms-pairing/sms-pairing";
 
 /**
  * Every callable below wraps its work in this so an unexpected error never
@@ -337,3 +346,103 @@ export const checkAccessTokenCallable = onCall(
     return expiresAt === null ? { valid: false as const } : { valid: true as const, expiresAt };
   },
 );
+
+// ── SMS Sync device pairing — see src/sms-pairing/sms-pairing.ts ──
+
+const SMS_PAIRING_HTTPS_CODES: Record<SmsPairingErrorCode, ConstructorParameters<typeof HttpsError>[0]> = {
+  invalid: "not-found",
+  expired: "deadline-exceeded",
+  used: "already-exists",
+  canceled: "failed-precondition",
+  superseded: "failed-precondition",
+  wrong_account: "permission-denied",
+  sync_suspended: "unavailable",
+  rate_limited: "resource-exhausted",
+  invalid_device: "invalid-argument",
+  not_found: "not-found",
+};
+
+const SMS_PAIRING_MESSAGES: Record<SmsPairingErrorCode, string> = {
+  invalid: "This pairing code isn't valid.",
+  expired: "This pairing code has expired.",
+  used: "This pairing code has already been used.",
+  canceled: "This pairing was canceled.",
+  superseded: "A newer pairing code replaced this one.",
+  wrong_account: "This phone is signed in to a different FlowFi account.",
+  sync_suspended: "SMS sync is temporarily paused.",
+  rate_limited: "Too many attempts. Please try again later.",
+  invalid_device: "This device couldn't be identified.",
+  not_found: "No such device.",
+};
+
+/**
+ * `details.reason` carries the stable code clients switch on. Never forwards
+ * `request.data` — it contains the one-time pairing token.
+ */
+function toSmsPairingClientError(fnName: string, error: unknown): HttpsError {
+  if (error instanceof SmsPairingError) {
+    return new HttpsError(SMS_PAIRING_HTTPS_CODES[error.code], SMS_PAIRING_MESSAGES[error.code], { reason: error.code });
+  }
+  if (error instanceof HttpsError) return error;
+  logger.error(`${fnName}: unhandled error`, { error: error instanceof Error ? error.message : "unknown" });
+  return new HttpsError("internal", "Something went wrong on our end. Please try again.");
+}
+
+function requireUid(request: { auth?: { uid: string } }): string {
+  if (!request.auth) throw new HttpsError("unauthenticated", "Sign in required.");
+  return request.auth.uid;
+}
+
+/** Web: starts a pairing session and returns its one-time token (shown only as a QR). */
+export const createSmsPairingSessionCallable = onCall({ maxInstances: 10 }, async (request) => {
+  const uid = requireUid(request);
+  try {
+    return await createPairingSession(getDb(), { uid });
+  } catch (e) {
+    throw toSmsPairingClientError("createSmsPairingSessionCallable", e);
+  }
+});
+
+/** Android: validates a scanned token for the signed-in account without pairing. */
+export const previewSmsPairingCallable = onCall({ maxInstances: 10 }, async (request) => {
+  const uid = requireUid(request);
+  const { token, deviceId } = (request.data ?? {}) as { token?: unknown; deviceId?: unknown };
+  try {
+    return await previewPairing(getDb(), { uid, token, deviceId });
+  } catch (e) {
+    throw toSmsPairingClientError("previewSmsPairingCallable", e);
+  }
+});
+
+/** Android: the user's explicit approval. Registers the device and switches its uploads on. */
+export const approveSmsPairingCallable = onCall({ maxInstances: 10 }, async (request) => {
+  const uid = requireUid(request);
+  const { token, deviceId, deviceLabel, appVersion } = (request.data ?? {}) as Record<string, unknown>;
+  try {
+    return await approvePairing(getDb(), { uid, token, deviceId, deviceLabel, appVersion });
+  } catch (e) {
+    throw toSmsPairingClientError("approveSmsPairingCallable", e);
+  }
+});
+
+/** Android ("Not now", with the token) or Web (closing the QR, with the session id). */
+export const cancelSmsPairingCallable = onCall({ maxInstances: 10 }, async (request) => {
+  const uid = requireUid(request);
+  const { token, sessionId } = (request.data ?? {}) as { token?: unknown; sessionId?: unknown };
+  try {
+    return await cancelPairing(getDb(), { uid, token, sessionId, by: token !== undefined ? "phone" : "web" });
+  } catch (e) {
+    throw toSmsPairingClientError("cancelSmsPairingCallable", e);
+  }
+});
+
+/** Web or Android: user-initiated disconnect of one of the caller's own devices. */
+export const revokeSmsDeviceCallable = onCall({ maxInstances: 10 }, async (request) => {
+  const uid = requireUid(request);
+  const { deviceId } = (request.data ?? {}) as { deviceId?: unknown };
+  try {
+    return await revokeDevice(getDb(), { uid, deviceId });
+  } catch (e) {
+    throw toSmsPairingClientError("revokeSmsDeviceCallable", e);
+  }
+});

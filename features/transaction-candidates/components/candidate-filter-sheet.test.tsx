@@ -32,7 +32,7 @@ describe("CandidateFilterSheet", () => {
     const { onApply, dialog } = open();
     fireEvent.click(within(dialog).getByRole("button", { name: "Credit" }));
     fireEvent.click(within(dialog).getByRole("button", { name: "Low" }));
-    fireEvent.click(within(dialog).getByRole("checkbox", { name: /Unmatched/ }));
+    fireEvent.click(within(dialog).getByRole("button", { name: /Unmatched/ }));
     fireEvent.change(within(dialog).getByLabelText("Minimum"), { target: { value: "₹1,000" } });
     expect(onApply).not.toHaveBeenCalled();
     fireEvent.click(within(dialog).getByTestId("apply-filters"));
@@ -47,7 +47,8 @@ describe("CandidateFilterSheet", () => {
     const { dialog } = open(applied);
     expect(within(dialog).getByRole("button", { name: "Debit" }).getAttribute("aria-pressed")).toBe("true");
     expect((within(dialog).getByLabelText("Minimum") as HTMLInputElement).value).toBe("250");
-    expect(within(dialog).getByRole("checkbox", { name: /ICICI Card/ }).getAttribute("aria-checked")).toBe("true");
+    expect(within(dialog).getByRole("button", { name: /ICICI Card/ }).getAttribute("aria-pressed")).toBe("true");
+    expect(within(dialog).getByRole("button", { name: /HDFC Savings/ }).getAttribute("aria-pressed")).toBe("false");
   });
 
   it("previews how many rows the draft would list on the Apply button", () => {

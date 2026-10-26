@@ -25,7 +25,7 @@
 import { readFileSync } from "node:fs";
 import { assertSucceeds, initializeTestEnvironment, type RulesTestEnvironment } from "@firebase/rules-unit-testing";
 import { collection, doc, getDoc, getDocs, setDoc, type FirestoreDataConverter } from "firebase/firestore";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { actionToAxesPatch } from "@/features/transaction-studio/lib/action-metadata";
 import { commitReviewImport, detectFreshDuplicatesForCommit, type CommitRepositories } from "@/features/transaction-studio/lib/commit-review-import";
@@ -56,6 +56,13 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await testEnv.cleanup();
+});
+
+// Candidate writes need the server-written pairing switch (firestore.rules backstop, 2026-10-25).
+beforeEach(async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), "users", UID, "smsSyncConfig", "backgroundUpload"), { enabled: true, deviceId: "dev-1", source: "pairing" });
+  });
 });
 
 afterEach(async () => {

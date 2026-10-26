@@ -151,11 +151,37 @@ service cloud.firestore {
     // requires Android's own `runTransaction` (reads the tombstone inside the
     // same transaction that writes the candidate) — see the architecture doc,
     // §2/§5.
+    //
+    // SMS Sync pairing (2026-10-25): both writes (Android's `tx.set` is a
+    // create or an update) are also refused while an operator switch is set
+    // — the global emergency kill switch (`smsSyncControl/global`) or this
+    // account's hold (`smsSyncConfig/operatorHold`). Android's F3 gate checks
+    // the same documents first; this is the backstop that holds even for a
+    // modified client. Web never writes candidates, so its read/delete
+    // (import/dismiss) keeps working during an incident.
+    function smsUploadsSuspended(uid) {
+      let globalControl = /databases/$(database)/documents/smsSyncControl/global;
+      let hold = /databases/$(database)/documents/users/$(uid)/smsSyncConfig/operatorHold;
+      return (exists(globalControl) && get(globalControl).data.get('uploadsDisabled', false) == true) ||
+        (exists(hold) && get(hold).data.get('disabled', false) == true);
+    }
+
+    // Server-side pairing backstop (SMS Sync lifecycle, 2026-10-25): only the pairing Cloud Functions (or an
+    // operator) can switch `backgroundUpload` on, and Auto Sync OFF / Disconnect revokes it. Requiring it here means
+    // a queued or retrying upload from a phone that is no longer paired is refused even if its own gate was passed
+    // before the revocation landed. The Web never creates or updates candidates (it only deletes), so it is
+    // unaffected.
+    function smsUploadAuthorized(uid) {
+      let path = /databases/$(database)/documents/users/$(uid)/smsSyncConfig/backgroundUpload;
+      return exists(path) && get(path).data.get('enabled', false) == true;
+    }
+
     match /users/{uid}/smsTransactionCandidates/{candidateId} {
       allow read, delete: if isOwner(uid);
       allow create: if isOwner(uid) &&
-        !exists(/databases/$(database)/documents/users/$(uid)/smsCandidateTombstones/$(candidateId));
-      allow update: if isOwner(uid);
+        !exists(/databases/$(database)/documents/users/$(uid)/smsCandidateTombstones/$(candidateId)) &&
+        !smsUploadsSuspended(uid) && smsUploadAuthorized(uid);
+      allow update: if isOwner(uid) && !smsUploadsSuspended(uid) && smsUploadAuthorized(uid);
     }
 
     // Handled-state record for an imported or dismissed SMS candidate — see
@@ -189,9 +215,95 @@ service cloud.firestore {
     // it is created/edited/deleted only by an operator via the Firebase console
     // or Admin SDK (neither is subject to these rules). Because it lives under
     // users/{uid}, one account's document can never authorize another's.
+    //
+    // Since SMS Sync pairing (2026-10-25) the pairing Cloud Functions
+    // (functions/src/sms-pairing) also write `backgroundUpload`, via the Admin
+    // SDK, only after a signed-in user approved a single-use QR session on the
+    // phone. Clients still never write here. `operatorHold` (per-account
+    // operator stop) lives in this collection too and pairing never writes it.
     match /users/{uid}/smsSyncConfig/{configId} {
       allow read: if isOwner(uid);
       allow write: if false;
+    }
+
+    // Paired SMS Sync devices — written only by the pairing Cloud Functions
+    // (register on approval, `replaced` when another phone is paired,
+    // `revoked` on user disconnect). Clients read their own, never write.
+    match /users/{uid}/smsDevices/{deviceId} {
+      allow read: if isOwner(uid);
+      allow write: if false;
+    }
+
+    // Self-reported health from a paired phone (permission, Auto Sync, last
+    // scan/upload) — what the web setup progress shows. Only the owner, only
+    // for a device that is currently `active` in smsDevices, only this exact
+    // schema, and `reportedAt` must be the server's own time, so a "last
+    // reported" timestamp can't be forged or backdated. It is still the
+    // phone's own report, and the web words it that way.
+    function isActiveSmsDevice(uid, deviceId) {
+      let path = /databases/$(database)/documents/users/$(uid)/smsDevices/$(deviceId);
+      return exists(path) && get(path).data.status == 'active';
+    }
+
+    function isValidSmsDeviceStatus(deviceId) {
+      let d = request.resource.data;
+      let fields = ['deviceId', 'smsPermission', 'autoSyncEnabled', 'cloudSync', 'lastScanAt', 'lastScanOutcome',
+        'lastUploadAt', 'lastUploadOutcome', 'lastUploadedCount', 'pendingNotOwnedCount', 'appVersion', 'reportedAt'];
+      return d.keys().hasAll(fields) && d.keys().hasOnly(fields) &&
+        d.deviceId == deviceId &&
+        d.reportedAt == request.time &&
+        d.smsPermission in ['granted', 'denied', 'permanentlyDenied', 'unsupported', 'unknown'] &&
+        d.autoSyncEnabled is bool &&
+        (d.cloudSync == null || d.cloudSync in ['enabled', 'disabled', 'unverified']) &&
+        (d.lastScanAt == null || d.lastScanAt is timestamp) &&
+        (d.lastScanOutcome == null || d.lastScanOutcome in ['ok', 'permission', 'failed']) &&
+        (d.lastUploadAt == null || d.lastUploadAt is timestamp) &&
+        (d.lastUploadOutcome == null || d.lastUploadOutcome in ['ok', 'failed']) &&
+        d.lastUploadedCount is int && d.lastUploadedCount >= 0 && d.lastUploadedCount <= 100000 &&
+        d.pendingNotOwnedCount is int && d.pendingNotOwnedCount >= 0 && d.pendingNotOwnedCount <= 100000 &&
+        (d.appVersion == null || (d.appVersion is string && d.appVersion.size() <= 32));
+    }
+
+    match /users/{uid}/smsDeviceStatus/{deviceId} {
+      allow read: if isOwner(uid);
+      allow create, update: if isOwner(uid) && isActiveSmsDevice(uid, deviceId) && isValidSmsDeviceStatus(deviceId);
+      allow delete: if false;
+    }
+
+    // Live presence for FlowFi Web (SMS Sync lifecycle, 2026-10-25): any signed-in install of the owner may report
+    // its own heartbeat BEFORE pairing, so the web can show online / permission / Auto Sync / sync progress live.
+    // It grants nothing — pairing and upload authority stay in smsDevices + backgroundUpload, server-written only.
+    // Exact schema, enums and bounded counters only: no SMS text, sender, OTP, account or card details.
+    // `heartbeatAt` is the server's time, so a stale document can always be recognized as stale.
+    function isValidSmsDevicePresence(deviceId) {
+      let d = request.resource.data;
+      let fields = ['deviceId', 'label', 'platform', 'appVersion', 'appState', 'smsPermission', 'notificationAccess',
+        'autoSyncEnabled', 'syncPhase', 'syncTotal', 'syncDone', 'syncUploaded', 'syncSkipped', 'syncFailed',
+        'syncUpdatedAt', 'lastSyncAt', 'heartbeatAt'];
+      return d.keys().hasAll(fields) && d.keys().hasOnly(fields) &&
+        d.deviceId == deviceId && deviceId.size() <= 64 &&
+        d.heartbeatAt == request.time &&
+        (d.label == null || (d.label is string && d.label.size() <= 60)) &&
+        d.platform == 'android' &&
+        (d.appVersion == null || (d.appVersion is string && d.appVersion.size() <= 32)) &&
+        d.appState in ['foreground', 'background'] &&
+        d.smsPermission in ['granted', 'denied', 'permanentlyDenied', 'unsupported', 'unknown'] &&
+        d.notificationAccess in ['granted', 'denied', 'unsupported', 'unknown'] &&
+        d.autoSyncEnabled is bool &&
+        d.syncPhase in ['idle', 'scanning', 'uploading', 'done', 'failed'] &&
+        (d.syncTotal == null || (d.syncTotal is int && d.syncTotal >= 0 && d.syncTotal <= 100000)) &&
+        d.syncDone is int && d.syncDone >= 0 && d.syncDone <= 100000 &&
+        d.syncUploaded is int && d.syncUploaded >= 0 && d.syncUploaded <= 100000 &&
+        d.syncSkipped is int && d.syncSkipped >= 0 && d.syncSkipped <= 100000 &&
+        d.syncFailed is int && d.syncFailed >= 0 && d.syncFailed <= 100000 &&
+        (d.syncUpdatedAt == null || d.syncUpdatedAt is timestamp) &&
+        (d.lastSyncAt == null || d.lastSyncAt is timestamp);
+    }
+
+    match /users/{uid}/smsDevicePresence/{deviceId} {
+      allow read: if isOwner(uid);
+      allow create, update: if isOwner(uid) && isValidSmsDevicePresence(deviceId);
+      allow delete: if false;
     }
 
     // Personal merchant mapping corrections (Architecture §11.2, write-side
@@ -221,6 +333,24 @@ service cloud.firestore {
     }
 
     // --- Global, cross-user config/data — NOT under users/{uid} ---
+
+    // SMS Sync QR pairing sessions — created, opened, approved and canceled
+    // only by the pairing Cloud Functions. Top-level because the phone
+    // presents only the token (whose SHA-256 is this document's id), not the
+    // owner's uid. The owner may read their own session (the web's live
+    // progress); no one else can, and no client can write.
+    match /smsPairingSessions/{sessionId} {
+      allow read: if isSignedIn() && resource.data.uid == request.auth.uid;
+      allow write: if false;
+    }
+
+    // Operator-only emergency switches for SMS Sync (`global`:
+    // `uploadsDisabled`). Readable by any signed-in client so Android's gate
+    // can fail closed on it; written only via the Admin SDK / console.
+    match /smsSyncControl/{docId} {
+      allow read: if isSignedIn();
+      allow write: if false;
+    }
 
     // Document Type Registry (Architecture §3): defines the parsing
     // pipeline's behavior per document type. Deployed via CI using the
