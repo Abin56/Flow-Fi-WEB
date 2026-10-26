@@ -148,24 +148,28 @@ scenario(
     chk("summary: 5 captured, 4 new, 1 excluded", /^5/.test(await dlg.getByTestId("count-captured").innerText()) && /^4/.test(await dlg.getByTestId("count-new").innerText()));
     await dlg.getByTestId("approval-confirm").click();
 
+    // Genuine repeats need an explicit acknowledgement before they can import.
+    const repeats = dlg.getByTestId("approval-repeats");
+    chk("repeated identical rows are flagged, not silently imported", (await repeats.count()) === 1 && /2 rows/.test(await repeats.innerText()));
+    chk("approve stays disabled until the repeats are acknowledged", await dlg.getByTestId("approval-submit").isDisabled());
+    await repeats.getByRole("checkbox").check();
+
     // Offline: the server re-read fails → nothing written, Try again offered.
     await page.context().setOffline(true);
     await dlg.getByTestId("approval-submit").click();
-    const repeats = dlg.getByTestId("approval-repeats");
-    await dlg.getByTestId("approval-unavailable").or(repeats).first().waitFor({ timeout: 90000 });
+    await dlg.getByTestId("approval-unavailable").waitFor({ timeout: 90000 });
     await page.context().setOffline(false);
-    const offlineStopped = (await dlg.getByTestId("approval-unavailable").count()) === 1;
     chk("offline approval writes nothing", (await h.list("transactions")).length === txnsBefore);
-    if (offlineStopped) await dlg.getByRole("button", { name: "Try again" }).click();
-
-    // Genuine repeats need an explicit acknowledgement before they import.
-    await repeats.or(dlg.getByTestId("approval-result")).first().waitFor({ timeout: 90000 });
-    chk("repeated identical rows are flagged, not silently imported", (await repeats.count()) === 1 && /2 rows/.test(await repeats.innerText()));
-    chk("still nothing written before the repeat acknowledgement", (await h.list("transactions")).length === txnsBefore);
-    await repeats.getByRole("checkbox").check();
-    const confirm = dlg.getByTestId("approval-confirm");
-    if ((await confirm.count()) && !(await confirm.isChecked().catch(() => true))) await confirm.click();
-    await dlg.getByTestId("approval-submit").dblclick(); // retry, double-clicked
+    await h.shot(page, "relsafe-approve-offline");
+    await dlg.getByRole("button", { name: "Try again" }).dblclick(); // retry, double-clicked
+    const submit = dlg.getByTestId("approval-submit");
+    await submit.or(dlg.getByTestId("approval-result")).first().waitFor({ timeout: 90000 });
+    if ((await dlg.getByTestId("approval-result").count()) === 0) {
+      // Try again returned to the review: confirmations must be given again (never carried over silently).
+      if (!(await dlg.getByTestId("approval-confirm").isChecked())) await dlg.getByTestId("approval-confirm").click();
+      if ((await repeats.count()) && !(await repeats.getByRole("checkbox").isChecked())) await repeats.getByRole("checkbox").check();
+      await submit.dblclick();
+    }
     await dlg.getByTestId("approval-result").waitFor({ timeout: 90000 });
     chk("complete", (await dlg.getByTestId("approval-result").getAttribute("data-status")) === "complete");
     await h.shot(page, "relsafe-approve-result");
@@ -187,8 +191,7 @@ scenario(
 
     // A second tab comparing the same rows must see them as recorded, never as new.
     const tab = await ctx.newPage();
-    await tab.goto(page.url().replace(/\/reconciliation.*/, "/"), { waitUntil: "domcontentloaded" });
-    await tab.evaluate(() => window.next.router.push("/reconciliation"));
+    await tab.goto(new URL("/reconciliation", page.url()).href, { waitUntil: "domcontentloaded", timeout: 240000 });
     await tab.getByRole("heading", { name: "Reconciliation" }).waitFor({ timeout: 240000 });
     await tab.getByRole("textbox", { name: "Statement rows" }).fill([rows[1], rows[2], rows[4]].join("\n"));
     await tab.getByRole("button", { name: "Compare rows" }).click();

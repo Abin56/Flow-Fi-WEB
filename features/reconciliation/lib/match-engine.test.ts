@@ -210,7 +210,7 @@ describe("manual link", () => {
 describe("merchant normalizer (D3)", () => {
   it("drops rails, references and places; maps a few aliases", () => {
     expect(merchantTokens("POS 4821 AMZN MKTP IN BANGALORE")).toEqual(["AMAZON", "MKTP"]);
-    expect(merchantTokens("UPI/X7K2P9Q1/SWIGGY")).toEqual(["SWIGGY"]);
+    expect(merchantTokens("UPI/REF12345/SWIGGY")).toEqual(["SWIGGY"]);
   });
 
   it("scores containment and run-together names", () => {
