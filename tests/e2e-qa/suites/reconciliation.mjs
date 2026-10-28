@@ -53,7 +53,7 @@ const stateOf = (page, testId, id) => page.locator(`[data-testid="${testId}"][da
 
 scenario(
   "recon-desktop",
-  "Reconciliation (desktop 1600): advisory states, account boundary, D10 block, one-to-one link, keyboard, refresh recovery, zero writes",
+  "Reconciliation (desktop 1600): dual sheets, advisory states, account boundary, D10 block, one-to-one keep, keyboard, refresh recovery, zero writes",
   async ({ page }, chk) => {
     const before = await snapshot();
     await openStudio(page);
@@ -66,37 +66,63 @@ scenario(
     chk("the bank's ₹850 groceries is NOT matched across accounts", states.r5 === "no_match", states.r5);
     const mainText = await page.locator("main").evaluate((m) => { const c = m.cloneNode(true); c.querySelectorAll("header").forEach((h) => h.remove()); return c.textContent ?? ""; });
     chk("no 'duplicate' wording outside the step header", !/duplicate/i.test(mainText), (mainText.match(/.{0,60}duplicate.{0,40}/i) ?? [""])[0]);
-    chk("bulk Link offers nothing when the only exact match has a twin", await page.getByRole("button", { name: /Mark exact matches already recorded \(0\)/ }).isDisabled());
+    chk("bulk Link offers nothing when the only exact match has a twin", await page.getByRole("button", { name: /Keep existing for exact matches \(0\)/ }).isDisabled());
 
-    // r5's comparison names the other account as a note only.
+    // Dual sheets: New statement beside Existing FlowFi, each its own scroll region.
+    chk("both sheets side by side", (await page.getByTestId("statement-sheet").isVisible()) && (await page.getByTestId("existing-sheet").isVisible()));
+    const left = await page.getByTestId("statement-sheet").boundingBox();
+    const right = await page.getByTestId("existing-sheet").boundingBox();
+    chk("statement on the left, FlowFi on the right, same height band", left && right && left.x + left.width <= right.x + 1 && Math.abs(left.y - right.y) <= 2, JSON.stringify({ left, right }));
+
+    // r5's comparison: the other account never appears in the FlowFi sheet — only as a dock note.
     await page.locator('[data-testid="recon-row"][data-row-id="r5"]').click();
-    const aside = page.getByRole("complementary", { name: "Match comparison" });
-    chk("docked comparison panel on wide desktop", await aside.isVisible());
-    chk("other-account look-alike shown as a note", /QA Bank.*a different account/.test(await aside.innerText()));
+    await page.getByTestId("existing-mode-ledger").click();
+    chk("the bank's transaction is never in the card's FlowFi sheet", !/QA BANK GROCERIES/i.test(await page.getByTestId("existing-sheet").innerText()));
+    await page.getByTestId("existing-mode-matches").click();
+    await page.getByTestId("dock-notes").click();
+    chk("other-account look-alike shown as a note", /QA Bank.*a different account/.test(await page.locator("[data-radix-popper-content-wrapper]").innerText()));
+    await page.keyboard.press("Escape");
 
-    // D10: the closed-cycle row can't be imported as new.
+    // D10: the closed-cycle row can't be imported.
     await page.locator('[data-testid="recon-row"][data-row-id="r4"]').click();
-    chk("closed card bill blocks Import as new (D10)", (await aside.getByRole("button", { name: /^Add as (new|a separate) transaction$/ }).isDisabled()) && /already closed/.test(await aside.getByTestId("import-blocked").innerText()));
+    chk("closed card bill blocks Import new (D10)", (await page.getByTestId("resolve-import_new").isDisabled()) && /already closed/.test(await page.getByTestId("dock-import-blocked").innerText()));
 
-    // One-to-one: link r1, then r2 can't take the same purchase.
+    // Multiple: r1's FlowFi sheet lists the candidate; Replace/Merge are previews only.
     await page.locator('[data-testid="recon-row"][data-row-id="r1"]').click();
-    await aside.getByRole("button", { name: /Already recorded — skip import/ }).first().click();
-    chk("r1 linked in the draft", (await page.locator('[data-testid="recon-row"][data-row-id="r1"]').innerText()).includes("Already recorded"));
-    chk("r2 can no longer take the same transaction", (await stateOf(page, "recon-row", "r2")) === "conflict");
+    await page.getByTestId("resolve-merge_details").click();
+    const preview = page.getByTestId("resolution-preview");
+    chk("Merge details is a preview with commit disabled", (await preview.getByTestId("preview-commit").isDisabled()) && /can't do/.test(await preview.getByTestId("preview-unsupported").innerText()));
+    await h.shot(page, "recon-desktop-merge-preview");
+    await preview.getByRole("button", { name: "Close preview" }).click();
 
-    // Keyboard: J moves, I ignores.
+    // One-to-one: keep r1's match, then r2 can't keep the same purchase.
+    await page.getByTestId("resolve-keep_existing").click();
+    chk("r1 kept in the draft", (await page.locator('[data-testid="recon-row"][data-row-id="r1"]').innerText()).includes("Keep existing"));
+    chk("r2 can no longer take the same transaction", (await stateOf(page, "recon-row", "r2")) === "conflict");
+    await page.locator('[data-testid="recon-row"][data-row-id="r2"]').click();
+    chk("…its Keep existing is disabled with the reason", (await page.getByTestId("resolve-keep_existing").isDisabled()) && /Already kept by row 1/.test((await page.getByTestId("resolve-keep_existing").getAttribute("title")) ?? ""));
+    await h.shot(page, "recon-desktop-dual");
+
+    // Keyboard: J moves, I ignores (start from row 1 — the steps above left row 2 selected).
+    await page.locator('[data-testid="recon-row"][data-row-id="r1"]').click();
     await page.getByRole("grid", { name: "Statement rows" }).focus();
     await page.keyboard.press("j");
     await page.keyboard.press("j");
     await page.keyboard.press("i");
     chk("keyboard J/J/I ignores row 3", (await page.locator('[data-testid="recon-row"][data-row-id="r3"]').innerText()).includes("Skipped"));
+    await page.keyboard.press("z");
+    chk("Z undoes the last draft decision", (await page.locator('[data-testid="recon-row"][data-row-id="r3"]').innerText()).includes("Undecided"));
+    await page.keyboard.press("i");
+    await page.keyboard.press("ArrowRight");
+    chk("→ moves focus into the Existing FlowFi sheet", await page.getByRole("grid", { name: "Existing FlowFi transactions" }).evaluate((g) => g === document.activeElement));
+    await page.keyboard.press("ArrowLeft");
 
     // Layout: no sideways overflow; the sticky header never sits on top of the sticky status bar.
     const ov = await overflowX(page);
     chk("no horizontal overflow (page or main)", ov.doc <= 1 && ov.main <= 1, JSON.stringify(ov));
     await page.locator("main").evaluate((m) => m.scrollTo(0, m.scrollHeight / 2));
     await page.waitForTimeout(300);
-    const header = await page.locator('[role="grid"] > [role="row"]').first().boundingBox();
+    const header = await page.locator('[data-testid="recon-grid"] > [role="row"]').first().boundingBox();
     const bar = await page.getByTestId("status-bar").boundingBox();
     chk("sticky grid header and status bar don't overlap", header && bar && header.y + header.height <= bar.y, JSON.stringify({ header, bar }));
     await h.shot(page, "recon-desktop-mid");
@@ -107,7 +133,7 @@ scenario(
     await page.getByRole("heading", { name: "Reconciliation" }).waitFor({ timeout: 120000 });
     await page.getByText("Restored your review").waitFor({ timeout: 30000 });
     await page.waitForFunction(() => document.querySelector('[data-row-id="r1"]')?.getAttribute("data-state") !== "pending");
-    chk("refresh restores decisions", (await page.locator('[data-testid="recon-row"][data-row-id="r1"]').innerText()).includes("Already recorded"));
+    chk("refresh restores decisions", (await page.locator('[data-testid="recon-row"][data-row-id="r1"]').innerText()).includes("Keep existing"));
     const stored = await page.evaluate(() => Object.keys(sessionStorage).filter((k) => k.startsWith("flowfi.reconcile.v1.")).map((k) => sessionStorage.getItem(k)).join(""));
     chk("draft keeps no raw pasted line", stored.length > 0 && !stored.includes("QA CARD PURCHASE BLR        12,000.00") && !stored.includes("sourceText"));
     chk("privacy notice states the 12-hour, tab-only scope", /12 hours at most/.test(await page.getByTestId("privacy-notice").innerText()));
@@ -121,18 +147,19 @@ scenario(
 
 scenario(
   "recon-laptop",
-  "Reconciliation (laptop 1280): comparison opens in a drawer, expandable editor, edit → re-confirm, no overflow",
+  "Reconciliation (laptop 1280): dual sheets fit, full comparison opens in a drawer, expandable editor, edit → re-confirm, no overflow",
   async ({ page }, chk) => {
     const before = await snapshot();
     await openStudio(page);
     await pasteAndChooseCard(page);
-    chk("no docked panel below the wide breakpoint", (await page.getByRole("complementary", { name: "Match comparison" }).count()) === 0);
-    await page.getByRole("button", { name: "Compare row 3" }).click();
+    chk("both sheets render at 1280", (await page.getByTestId("statement-sheet").isVisible()) && (await page.getByTestId("existing-sheet").isVisible()));
+    await page.locator('[data-testid="recon-row"][data-row-id="r3"]').click();
+    await page.getByTestId("dock-details").click();
     const drawer = page.getByRole("dialog");
     await drawer.getByTestId("match-panel").waitFor();
     await page.waitForTimeout(500); // let the slide-in finish before measuring
     const box = await drawer.boundingBox();
-    chk("drawer is the 560px comparison width and fits the viewport", box && Math.round(box.width) === 560 && box.x >= 0 && box.x + box.width <= 1281, JSON.stringify(box));
+    chk("the full comparison is a full-width top sheet that fits the viewport", box && Math.round(box.x) === 0 && Math.round(box.width) === 1280 && Math.round(box.y) === 0 && box.height < 800, JSON.stringify(box));
     await page.keyboard.press("Escape");
 
     await page.getByRole("button", { name: "Expand row 3" }).click();
@@ -173,6 +200,13 @@ scenario(
     await h.shot(page, "recon-mobile-sheet");
     await page.keyboard.press("Escape");
     chk("decision shows on the card", (await page.locator('[data-testid="recon-card"][data-row-id="r3"]').innerText()).includes("Skipped"));
+    // The FlowFi tab keeps the selected row pinned.
+    await page.getByTestId("mobile-tab-existing").click();
+    chk("FlowFi tab pins the selected row", /Row 3/.test(await page.getByTestId("mobile-context").innerText()));
+    const ov2 = await overflowX(page);
+    chk("FlowFi tab has no horizontal overflow", ov2.doc <= 1 && ov2.main <= 1, JSON.stringify(ov2));
+    await h.shot(page, "recon-mobile-flowfi-tab");
+    await page.getByTestId("mobile-tab-statement").click();
     chk("NOTHING was written", JSON.stringify(before) === JSON.stringify(await snapshot()));
   },
   { viewport: { width: 390, height: 844 } },

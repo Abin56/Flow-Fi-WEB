@@ -97,25 +97,28 @@ scenario(
     chk("Reconciliation never imports by itself — nothing written after opening and comparing", (await h.list("transactions")).length === txnsBefore);
     chk("Review & approve is disabled while rows are undecided", await page.getByTestId("open-approval").isDisabled());
 
-    const aside = page.getByRole("complementary", { name: "Match comparison" });
     const rowBtn = (id) => page.locator(`[data-testid="recon-row"][data-row-id="${id}"]`);
-    const chooseCategory = async (id, name) => {
-      await page.getByRole("button", { name: new RegExp(`Expand row ${id.slice(1)}`) }).click();
-      await page.getByRole("combobox", { name: "Category" }).click();
-      await page.getByRole("option", { name, exact: true }).click();
-      await page.getByRole("button", { name: new RegExp(`Collapse row ${id.slice(1)}`) }).click();
+    /** Keep both (a match exists — acknowledged explicitly) or Import new, from the comparison dock. */
+    const importVia = async (id, category, creditAs) => {
+      await rowBtn(id).click();
+      const both = page.getByTestId("resolve-keep_both");
+      await ((await both.isEnabled()) ? both : page.getByTestId("resolve-import_new")).click();
+      const pop = page.getByTestId("import-confirm");
+      const ack = pop.getByRole("checkbox", { name: "These are separate transactions" });
+      if (await ack.count()) await ack.check();
+      await pop.getByLabel("Category for import").selectOption({ label: category });
+      if (creditAs) {
+        chk("a credit asks whether it is a refund or income — never assumed", (await pop.getByTestId("import-confirm-submit").isDisabled()) && (await pop.getByRole("radiogroup", { name: "What is this credit?" }).isVisible()));
+        await pop.getByRole("radio", { name: creditAs }).click();
+      }
+      await pop.getByTestId("import-confirm-submit").click();
     };
     await rowBtn("r1").click();
-    await aside.getByRole("button", { name: /Already recorded — skip import/ }).first().click();
+    await page.getByTestId("resolve-keep_existing").click();
     await rowBtn("r4").click();
-    await aside.getByRole("button", { name: "Skip this transaction" }).click();
-    await rowBtn("r2").click();
-    await aside.getByRole("button", { name: /^Add as (new|a separate) transaction$/ }).click();
-    await chooseCategory("r2", cats.expense);
-    await rowBtn("r3").click();
-    chk("a credit asks whether it is a refund or income — never assumed", await aside.getByTestId("credit-kind").isVisible());
-    await aside.getByRole("button", { name: "Refund", exact: true }).click();
-    await chooseCategory("r3", cats.income);
+    await page.getByTestId("resolve-skip").click();
+    await importVia("r2", cats.expense);
+    await importVia("r3", cats.income, "Refund");
     await h.shot(page, "recon-approve-decided");
 
     const dlg = await openApproval(page);

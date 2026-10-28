@@ -157,6 +157,8 @@ export function matchRows(rows: ReconRow[], ctx: MatchContext): RowMatch[] {
   const notesByRow = new Map<string, RowNote[]>();
   const conflictsByRow = new Map<string, string[]>();
   const alreadyImported = new Map<string, string | null>();
+  const deletedImports = new Map<string, string | null>();
+  const deletedIds = new Set(ctx.records.filter((r) => r.kind === "transaction" && r.deleted).map((r) => r.id));
 
   for (const row of rows) {
     const notes: RowNote[] = [];
@@ -165,6 +167,8 @@ export function matchRows(rows: ReconRow[], ctx: MatchContext): RowMatch[] {
     conflictsByRow.set(row.id, conflicts);
     const importedId = (importedIds.get(row.id) ?? []).find((id) => liveById.get(id)?.accountId === ctx.accountId) ?? null;
     alreadyImported.set(row.id, importedId);
+    // P0: the row's own key belongs to a soft-deleted transaction — reported, never matched, never re-imported.
+    if (!importedId) deletedImports.set(row.id, (importedIds.get(row.id) ?? []).find((id) => deletedIds.has(id)) ?? null);
     if (!row.include || !isComplete(row)) continue;
 
     const rowDay = calendarDayIndex(row.date!);
@@ -252,6 +256,7 @@ export function matchRows(rows: ReconRow[], ctx: MatchContext): RowMatch[] {
       pendingSms,
       suggestedRecordId,
       alreadyImportedId: alreadyImported.get(row.id) ?? null,
+      deletedImportId: deletedImports.get(row.id) ?? null,
       claimedBy: rowClaims,
       notes: notesByRow.get(row.id) ?? [],
     };

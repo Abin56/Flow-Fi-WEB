@@ -72,6 +72,7 @@ scenario("sms-9-split-fails-after-import", "Person/Split fails after the transac
     await d.getByText("Transaction Details").first().waitFor({ timeout: 20000 });
     await d.getByRole("combobox").nth(0).click();
     await page.getByRole("option").first().click();
+    await d.getByRole("radio", { name: "Someone else's expense" }).click(); // the person picker opens only on request
     await d.getByRole("combobox").nth(2).click();
     await page.getByRole("option", { name: /QA Priya/ }).click();
     await d.getByRole("switch").click();

@@ -19,7 +19,7 @@
  * and neutral: left exactly as stored, never counted as cash out, and not reversible here (nothing to give back).
  */
 
-import { collection, doc, runTransaction, type CollectionReference, type DocumentReference, type Firestore, type Transaction as FirestoreTransaction } from "firebase/firestore";
+import { collection, doc, getDocs, query, runTransaction, where, type CollectionReference, type DocumentReference, type Firestore, type Transaction as FirestoreTransaction } from "firebase/firestore";
 import { accountFromFirestore, accountToFirestore, type Account } from "@/lib/models/account";
 import { billFromFirestore, billOccurrenceFromFirestore, billOccurrenceToFirestore, billToFirestore, paymentRecordFromFirestore, paymentRecordToFirestore, type Bill, type BillOccurrence, type PaymentRecord } from "@/lib/models/bill";
 import { transactionFromFirestore, transactionToFirestore, balanceEffect, type Transaction } from "@/lib/models/transaction";
@@ -148,6 +148,33 @@ export class BillPaymentRepository {
     return { bill: billSnap.data(), occurrence: occSnap.data() };
   }
 
+  /**
+   * Historical duplicate cycles (same bill, same due calendar day — left by the old two-tab race) make "which one is this
+   * payment for?" ambiguous, and the Bills page may be showing the unpaid twin of an already-paid cycle. A web transaction
+   * cannot run a query, so this looks BEFORE the transaction; the verdict is applied inside it (`assertNoDuplicateCycle`).
+   * Read-only: it never merges, deletes, restores or rewrites a record.
+   */
+  private async duplicateCycleOf(billId: string, occurrenceId: string): Promise<{ count: number; dueDate: Date } | null> {
+    const col = collection(this.firestore, FirestoreCollections.users, this.uid, FirestoreCollections.bills, billId, FirestoreCollections.billOccurrences).withConverter({
+      toFirestore: billOccurrenceToFirestore,
+      fromFirestore: billOccurrenceFromFirestore,
+    });
+    const active = (await getDocs(query(col, where("deletedAt", "==", null)))).docs.map((d) => d.data());
+    const target = active.find((o) => o.id === occurrenceId);
+    if (target == null) return null;
+    const sameDay = (a: Date, b: Date) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+    const count = active.filter((o) => sameDay(o.dueDate, target.dueDate)).length;
+    return count > 1 ? { count, dueDate: target.dueDate } : null;
+  }
+
+  private static assertNoDuplicateCycle(duplicate: { count: number; dueDate: Date } | null) {
+    if (duplicate == null) return;
+    const day = duplicate.dueDate.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+    throw new BillPaymentError(
+      `This bill has ${duplicate.count} duplicate records for its ${day} cycle (left by an older version of the app). To avoid paying the same cycle twice, payment is blocked until they are reviewed — nothing was recorded.`,
+    );
+  }
+
   private static assertPayable(occurrence: BillOccurrence, amount: number) {
     if (occurrence.isSkipped) throw new BillPaymentError("This bill cycle was skipped. Un-skip it before paying — nothing was recorded.");
     const remaining = round2(occurrence.amount - occurrence.amountPaid);
@@ -197,9 +224,11 @@ export class BillPaymentRepository {
   async payFromAccount(params: PayFromAccountParams): Promise<BillPaymentResult> {
     const paymentId = billPaymentIdFor(params.idempotencyKey);
     const txnId = `txn_${paymentId}`;
+    const duplicate = await this.duplicateCycleOf(params.billId, params.occurrenceId);
     return runTransaction(this.firestore, async (tx): Promise<BillPaymentResult> => {
       const prior = await tx.get(this.paymentRef(params.billId, paymentId));
       if (prior.exists()) return { alreadyRecorded: true, paymentId, transactionId: prior.data().transactionId ?? null };
+      BillPaymentRepository.assertNoDuplicateCycle(duplicate);
       const { bill, occurrence } = await this.readTarget(tx, params.billId, params.occurrenceId);
       const amount = round2(params.amount ?? occurrence.amount - occurrence.amountPaid);
       BillPaymentRepository.assertPayable(occurrence, amount);
@@ -223,9 +252,11 @@ export class BillPaymentRepository {
   async recordPaidEarlier(params: PayEarlierParams): Promise<BillPaymentResult> {
     assertRecordedEarlierDate(params.date);
     const paymentId = billPaymentIdFor(params.idempotencyKey);
+    const duplicate = await this.duplicateCycleOf(params.billId, params.occurrenceId);
     return runTransaction(this.firestore, async (tx): Promise<BillPaymentResult> => {
       const prior = await tx.get(this.paymentRef(params.billId, paymentId));
       if (prior.exists()) return { alreadyRecorded: true, paymentId, transactionId: null };
+      BillPaymentRepository.assertNoDuplicateCycle(duplicate);
       const { bill, occurrence } = await this.readTarget(tx, params.billId, params.occurrenceId);
       const amount = round2(params.amount ?? occurrence.amount - occurrence.amountPaid);
       BillPaymentRepository.assertPayable(occurrence, amount);

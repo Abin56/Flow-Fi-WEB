@@ -11,14 +11,20 @@
  *  - Import as new is blocked for: unverified/edited-unconfirmed values (D6), an already-imported row, a card
  *    payment (D8), an EMI line, and a date in a closed or already-paid card bill (D10).
  *  - Bulk Link only for unique exact candidates, with confirmation and Undo (D5).
+ *  - P0: internal payments (card bill / CRED / card autopay / self-transfer / own account named) can't be imported;
+ *    an ambiguous NEFT / IMPS / UPI line needs the explicit "not my own account or card" confirmation; Keep both is
+ *    blocked when a possible match is a recorded transfer or card-payment leg; a row whose own import key is a
+ *    deleted transaction can't be imported again (internal-payment-guard.ts). The final approval re-runs all of it
+ *    against records re-read from the server.
  */
 
 import { applyRowPatch, confirmField, isComplete, openIssues, type RowPatch } from "@/features/smart-capture/lib/capture-review";
 import type { CaptureField } from "@/features/smart-capture/lib/parse-pasted-statement";
 import type { CaptureAction } from "@/features/smart-capture/lib/capture-review";
+import { internalPaymentVerdict, type OwnedAccountIdentity } from "./internal-payment-guard";
 import type { CycleInfo, DecisionKind, ReconRow, RowDecision, RowMatch } from "./types";
 
-export const EMPTY_DECISION: RowDecision = { kind: null, linkedRecordId: null, notSameAck: false, rejectedRecordIds: [], category: null, notes: "", bulkId: null, creditAs: null };
+export const EMPTY_DECISION: RowDecision = { kind: null, linkedRecordId: null, notSameAck: false, rejectedRecordIds: [], category: null, notes: "", bulkId: null, creditAs: null, notOwnTransferAck: false };
 
 export function decisionFor(decisions: Record<string, RowDecision>, rowId: string): RowDecision {
   return decisions[rowId] ?? EMPTY_DECISION;
@@ -28,6 +34,10 @@ export interface RowGateContext {
   /** True when the statement account is a card account. */
   isCardAccount: boolean;
   cycle: CycleInfo | null;
+  /** The user's other accounts and cards (name + masked last four) — a narration naming one is an internal payment. */
+  ownedAccounts?: OwnedAccountIdentity[];
+  /** Whether an existing record is one leg of a transfer / card payment between own accounts. */
+  isTransferLeg?: (recordId: string) => boolean;
 }
 
 /** Rows whose captured values still need attention before they may be imported (D6 + Smart Capture's gates). */
@@ -45,6 +55,14 @@ export function importBlockReasons(row: ReconRow, match: RowMatch, ctx: RowGateC
   if (match.state === "already_imported") reasons.push("This row is already imported — link it to that transaction instead.");
   if (ctx.isCardAccount && row.kind === "payment" && row.direction === "credit") reasons.push("Card payments can't be imported here. Link it to the payment already recorded, or record it from Pay bill.");
   if (row.kind === "emi") reasons.push("EMI lines can't be imported here — record them in Loan & EMI, or link to the recorded payment.");
+  if (match.deletedImportId && match.state !== "already_imported") {
+    reasons.push("This exact row was imported before, and that transaction is now deleted. It won't be imported again — restore it from Transactions → Trash if the deletion was a mistake, or choose Skip.");
+  }
+  const internal = internalPaymentVerdict(row, ctx);
+  if (internal.block) reasons.push(internal.block);
+  if (ctx.isTransferLeg && match.candidates.some((c) => c.kind === "transaction" && ctx.isTransferLeg!(c.recordId))) {
+    reasons.push("A possible match is a transfer or card payment already recorded in FlowFi — this row is most likely that same payment. Keep existing, or mark it “Not this one” if it truly isn't.");
+  }
   if (ctx.cycle && ctx.cycle.status !== "open") {
     reasons.push(
       ctx.cycle.status === "paid"
@@ -53,6 +71,11 @@ export function importBlockReasons(row: ReconRow, match: RowMatch, ctx: RowGateC
     );
   }
   return reasons;
+}
+
+/** The "not to/from my own account or card" confirmation an Import on this row needs (null = none needed). */
+export function ownTransferConfirmFor(row: ReconRow, ctx: RowGateContext): string | null {
+  return internalPaymentVerdict(row, ctx).confirm;
 }
 
 /**
@@ -85,6 +108,7 @@ export function decisionErrors(row: ReconRow, match: RowMatch, decision: RowDeci
       const errors = importBlockReasons(row, match, ctx);
       if (row.direction === "credit" && !decision.creditAs) errors.push("Say whether this credit is a refund or income.");
       if ((match.candidates.length > 0 || match.pendingSms.length > 0) && !decision.notSameAck) errors.push("Confirm this is a different transaction from the possible matches.");
+      if (ownTransferConfirmFor(row, ctx) && !decision.notOwnTransferAck) errors.push("Confirm this payment wasn't to or from your own account or card.");
       if (!decision.category) errors.push("Choose a category.");
       return errors;
     }
@@ -159,6 +183,7 @@ export function setDecision(decisions: Record<string, RowDecision>, rowId: strin
   if (patch.kind != null && patch.kind !== "import_new") {
     next.notSameAck = false;
     next.creditAs = null;
+    next.notOwnTransferAck = false;
   }
   return { ...decisions, [rowId]: next };
 }
@@ -196,5 +221,5 @@ export function confirmRowField(row: ReconRow, field: CaptureField): ReconRow {
 export function invalidateAfterEdit(decisions: Record<string, RowDecision>, rowId: string): Record<string, RowDecision> {
   const current = decisions[rowId];
   if (!current) return decisions;
-  return { ...decisions, [rowId]: { ...current, kind: current.kind === "link" || current.kind === "import_new" ? null : current.kind, linkedRecordId: null, notSameAck: false, creditAs: null, rejectedRecordIds: [], bulkId: null } };
+  return { ...decisions, [rowId]: { ...current, kind: current.kind === "link" || current.kind === "import_new" ? null : current.kind, linkedRecordId: null, notSameAck: false, creditAs: null, notOwnTransferAck: false, rejectedRecordIds: [], bulkId: null } };
 }

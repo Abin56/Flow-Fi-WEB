@@ -27,8 +27,8 @@ const ACTION_LABEL: Record<ImportAction, string> = { normal_expense: "Expense", 
 const OUTCOME_META: Record<RowOutcomeKind, { label: string; tone: "success" | "primary" | "muted" | "purple" | "danger" }> = {
   imported: { label: "Imported", tone: "success" },
   already_imported: { label: "Already imported", tone: "success" },
-  linked: { label: "Linked existing", tone: "primary" },
-  ignored: { label: "Ignored", tone: "muted" },
+  linked: { label: "Kept existing", tone: "primary" },
+  ignored: { label: "Skipped", tone: "muted" },
   inbox: { label: "Left in Inbox", tone: "purple" },
   failed: { label: "Failed — retry available", tone: "danger" },
 };
@@ -99,7 +99,7 @@ function Effects({ plan, account, isCard, label }: { plan: ApprovalPlan; account
             .
           </>
         )}{" "}
-        Linked, ignored and Inbox rows change nothing.
+        Kept-existing, skipped and Inbox rows change nothing.
       </p>
     </section>
   );
@@ -161,7 +161,7 @@ export function ApprovalDialog({
           <>
             <DialogHeader>
               <DialogTitle className="text-lg">Final approval</DialogTitle>
-              <DialogDescription>Nothing is written to FlowFi until you confirm below. Linked, ignored and Inbox rows are never written.</DialogDescription>
+              <DialogDescription>Nothing is written to FlowFi until you confirm below. Kept-existing, skipped and Inbox rows are never written.</DialogDescription>
             </DialogHeader>
 
             <p className="flex items-center gap-2 rounded-2xl bg-primary/10 px-3 py-2 text-sm text-foreground" data-testid="approval-account">
@@ -174,10 +174,10 @@ export function ApprovalDialog({
             <section aria-label="Review totals" className="grid grid-cols-2 gap-2 sm:grid-cols-3" data-testid="approval-counts">
               <Tile label="Captured rows" value={plan.counts.captured} testId="count-captured" />
               <Tile label="New to import" value={plan.counts.newImports} testId="count-new" />
-              <Tile label="Linked existing" value={plan.counts.linked} testId="count-linked" />
-              <Tile label="Ignored" value={plan.counts.ignored} testId="count-ignored" />
+              <Tile label="Kept existing" value={plan.counts.linked} testId="count-linked" />
+              <Tile label="Skipped" value={plan.counts.ignored} testId="count-ignored" />
               <Tile label="Left in Inbox" value={plan.counts.inbox} testId="count-inbox" />
-              <Tile label="Unresolved / investigate" value={plan.counts.unresolved} testId="count-unresolved" tone="warning" />
+              <Tile label="Unresolved / review later" value={plan.counts.unresolved} testId="count-unresolved" tone="warning" />
             </section>
             {(plan.counts.alreadyImported > 0 || plan.counts.excluded > 0) && (
               <p className="-mt-2 text-[11px] text-muted-foreground" data-testid="approval-extra-counts">
@@ -201,7 +201,7 @@ export function ApprovalDialog({
               </>
             ) : (
               <p className="flex items-start gap-2 rounded-2xl bg-muted/50 px-3 py-2.5 text-sm text-muted-foreground" data-testid="approval-nothing">
-                <Eye className="mt-px size-4 shrink-0" /> Nothing will be imported — every row is linked, ignored, in the Inbox or already imported. FlowFi stays exactly as it is.
+                <Eye className="mt-px size-4 shrink-0" /> Nothing will be imported — every row keeps its existing transaction, is skipped, is in the Inbox or was already imported. FlowFi stays exactly as it is.
               </p>
             )}
 
@@ -325,7 +325,7 @@ export function ApprovalDialog({
               </DialogTitle>
               <DialogDescription>
                 {result.status === "complete"
-                  ? "Every row is imported, already imported, linked, ignored or left in the Inbox."
+                  ? "Every row is imported, already imported, kept existing, skipped or left in the Inbox."
                   : "Rows that were imported are safe — retrying only attempts the failed ones, and nothing is written twice."}
               </DialogDescription>
             </DialogHeader>
@@ -334,7 +334,7 @@ export function ApprovalDialog({
             </section>
             <p className="flex items-center gap-3 text-[11px] text-muted-foreground">
               <span className="inline-flex items-center gap-1">
-                <Link2 className="size-3" /> Linked rows were not changed
+                <Link2 className="size-3" /> Kept-existing transactions were not changed
               </span>
               <span className="inline-flex items-center gap-1">
                 <Inbox className="size-3" /> Inbox rows stay in the Inbox

@@ -7,9 +7,9 @@
  * nothing here links, imports or edits anything in FlowFi: choices only change this tab's draft.
  */
 
-import { useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowUpRight, CalendarClock, Check, ChevronDown, ImageOff, Info, Link2, Maximize2, Search, ShieldCheck, Undo2, X } from "lucide-react";
+import { ArrowUpRight, CalendarClock, Check, ChevronDown, ChevronLeft, ChevronRight, ImageOff, Info, Link2, Maximize2, Search, ShieldCheck, TriangleAlert, Undo2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ClayButton } from "@/components/clay/clay-button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -18,10 +18,10 @@ import { formatCurrencyPrecise } from "@/lib/format";
 import type { OcrCapture } from "@/features/smart-capture/components/capture-input";
 import { RowZoom, ScreenshotDialog } from "@/features/smart-capture/components/ocr-source-view";
 import { describeAmountDelta, describeDayGap } from "../lib/amounts-and-days";
-import { decisionErrors, importBlockReasons, type RowGateContext } from "../lib/decisions";
+import { decisionErrors, importBlockReasons, ownTransferConfirmFor, type RowGateContext } from "../lib/decisions";
 import { manualLinkOptions } from "../lib/match-engine";
-import type { ExistingRecord, MatchCandidate, ReconRow, RowDecision, RowMatch } from "../lib/types";
-import { Chip, DECISION_META, Money, ORIGIN_LABEL, OWNER_LABEL, STRENGTH_LABEL, StateBadge, formatExistingDate, formatRowDate } from "./recon-ui";
+import type { DecisionKind, ExistingRecord, MatchCandidate, ReconRow, RowDecision, RowMatch } from "../lib/types";
+import { Chip, DECISION_META, KEEP_BOTH_LABEL, Money, ORIGIN_LABEL, OWNER_LABEL, STRENGTH_LABEL, StateBadge, formatExistingDate, formatRowDate } from "./recon-ui";
 
 export interface MatchPanelProps {
   row: ReconRow;
@@ -39,6 +39,8 @@ export interface MatchPanelProps {
   /** The screenshot handed over from Smart Capture (in memory only) — null after a refresh or for pasted text. */
   screenshot: OcrCapture | null;
   captureSource: "text" | "ocr";
+  /** Where this row sits in the rows now showing, with previous / next — absent when it isn't one of them. */
+  nav?: { position: number; total: number; onPrev?: () => void; onNext?: () => void };
 }
 
 const TIER_LABEL: Record<MatchCandidate["tier"], string> = { exact: "Same amount & day", same_merchant_date: "Same merchant & day", near: "Near — amount or date differs" };
@@ -154,17 +156,17 @@ function CandidateCard({
           {linked ? (
             <>
               <span className="inline-flex items-center gap-1 text-xs font-semibold text-success">
-                <Check className="size-3.5" /> Already recorded — this row won&apos;t be imported
+                <Check className="size-3.5" /> Keeping existing — this row won&apos;t be imported
               </span>
               <ClayButton variant="ghost" size="sm" onClick={onUnlink}>
                 <Undo2 className="size-3.5" /> Undo
               </ClayButton>
             </>
           ) : claimedRow != null ? (
-            <span className="text-xs text-muted-foreground">Linked to row {claimedRow} — it is already that row&apos;s match</span>
+            <span className="text-xs text-muted-foreground">Kept by row {claimedRow} — one FlowFi transaction backs one statement row</span>
           ) : (
-            <ClayButton size="sm" onClick={onLink} aria-label="Already recorded — skip import">
-              <Link2 className="size-3.5" /> Already recorded — skip import
+            <ClayButton size="sm" onClick={onLink} aria-label="Keep existing">
+              <Link2 className="size-3.5" /> Keep existing
             </ClayButton>
           )}
           {onReject && !linked && (
@@ -178,11 +180,62 @@ function CandidateCard({
   );
 }
 
-export function MatchPanel({ row, rowNumber, match, decision, gate, records, recordsById, accountId, accountName, rowNumberOf, onDecide, onReject, screenshot, captureSource }: MatchPanelProps) {
+/** One choice in the decision list: what it is, and — in plain words — what it does. Never writes anything itself. */
+function DecisionOption({
+  kind,
+  label,
+  hint,
+  selected,
+  disabled,
+  onClick,
+  children,
+}: {
+  kind: DecisionKind;
+  label: string;
+  hint: string;
+  selected: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+  children?: React.ReactNode;
+}) {
+  const hintId = useId();
+  const Icon = DECISION_META[kind].icon;
+  return (
+    <div className="flex flex-col gap-1.5" data-decision={kind}>
+      <button
+        type="button"
+        aria-pressed={selected}
+        aria-label={label}
+        aria-describedby={hintId}
+        disabled={disabled}
+        onClick={onClick}
+        className={cn(
+          "flex w-full items-center gap-3 rounded-xl border px-3 py-2 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-55",
+          selected ? "border-primary bg-primary/10" : "border-border bg-card hover:bg-muted/60 disabled:hover:bg-card",
+        )}
+      >
+        <span className={cn("grid size-7 shrink-0 place-items-center rounded-lg", selected ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground")}>
+          <Icon className="size-3.5" aria-hidden />
+        </span>
+        <span className="min-w-0 flex-1" aria-hidden>
+          <span className="block text-sm font-medium text-foreground">{label}</span>
+          <span id={hintId} className="block text-[11px] leading-snug text-muted-foreground">
+            {hint}
+          </span>
+        </span>
+        {selected && <Check className="size-4 shrink-0 text-primary-accent-text" aria-hidden />}
+      </button>
+      {children}
+    </div>
+  );
+}
+
+export function MatchPanel({ row, rowNumber, match, decision, gate, records, recordsById, accountId, accountName, rowNumberOf, onDecide, onReject, screenshot, captureSource, nav }: MatchPanelProps) {
   const [viewerOpen, setViewerOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
   const blockReasons = importBlockReasons(row, match, gate);
+  const ownTransferConfirm = ownTransferConfirmFor(row, gate);
   const errors = decisionErrors(row, match, decision, gate);
   const hasPossibleMatches = match.candidates.length > 0 || match.pendingSms.length > 0;
   const manual = useMemo(() => {
@@ -196,14 +249,139 @@ export function MatchPanel({ row, rowNumber, match, decision, gate, records, rec
   const statementAccount = accountName(accountId);
   const linkTo = (recordId: string) => onDecide({ kind: "link", linkedRecordId: recordId });
   const unlink = () => onDecide({ kind: null });
-  const addLabel = hasPossibleMatches ? "Add as a separate transaction" : DECISION_META.import_new.label;
+  const addLabel = hasPossibleMatches ? KEEP_BOTH_LABEL : "Import new";
+  // With nothing to compare, the decision is the whole job — it goes straight under the row instead of below the search.
+  const decisionFirst = !hasPossibleMatches && !imported;
+  const addBlocked = blockReasons.length > 0;
+
+  const decisionSection = (
+    <section aria-label="Decision" className="flex flex-col gap-2.5 rounded-xl border border-border bg-card p-3">
+      <h3 className="text-xs font-semibold text-foreground">Your decision for this row</h3>
+      {hasPossibleMatches && (
+        <p className="flex items-start gap-1.5 text-[11px] text-muted-foreground">
+          <ShieldCheck className="mt-px size-3.5 shrink-0" />
+          Possible matches are only suggestions until you decide. Nothing in FlowFi is edited or linked by these choices.
+        </p>
+      )}
+      {decision.kind === "link" && (
+        <p className="flex items-start gap-1.5 rounded-lg bg-success/10 px-2.5 py-1.5 text-xs text-success" data-testid="decision-link-note">
+          <Check className="mt-px size-3.5 shrink-0" /> Keeping the existing FlowFi transaction — this row won&apos;t be imported. Pick another option below to change it.
+        </p>
+      )}
+      {decision.kind === "inbox" && (
+        <p className="flex items-start gap-1.5 rounded-lg bg-purple/10 px-2.5 py-1.5 text-xs text-purple">
+          <Check className="mt-px size-3.5 shrink-0" /> Left for the Transaction Inbox — this row won&apos;t be imported here.
+        </p>
+      )}
+
+      <DecisionOption
+        kind="import_new"
+        label={addLabel}
+        hint={hasPossibleMatches ? "They're separate transactions — this one is added at final approval; FlowFi's stays as it is." : "Becomes a new transaction when you give final approval."}
+        selected={decision.kind === "import_new"}
+        disabled={addBlocked}
+        onClick={() => onDecide({ kind: "import_new", notSameAck: decision.kind === "import_new" ? decision.notSameAck : false })}
+      >
+        {addBlocked && (
+          <ul className="flex flex-col gap-1 rounded-lg bg-warning/10 px-2.5 py-1.5 text-[11px] leading-snug text-foreground" data-testid="import-blocked">
+            {blockReasons.map((r) => (
+              <li key={r} className="flex items-start gap-1.5">
+                <TriangleAlert className="mt-px size-3.5 shrink-0 text-warning" aria-hidden />
+                <span>Can&apos;t import: {r}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+        {(hasPossibleMatches || row.direction === "credit" || ownTransferConfirm) && (
+          <div className="ml-3 flex flex-col gap-2 border-l-2 border-border pl-3">
+            {ownTransferConfirm && (
+              <label className={cn("flex items-start gap-2 text-xs", addBlocked && "opacity-60")} data-testid="own-transfer-confirm">
+                <Checkbox
+                  checked={decision.kind === "import_new" && decision.notOwnTransferAck === true}
+                  disabled={addBlocked}
+                  onCheckedChange={(v) => onDecide({ kind: "import_new", notOwnTransferAck: v === true })}
+                  aria-label="Not a transfer to (or from) my own account or card"
+                />
+                <span>{ownTransferConfirm}</span>
+              </label>
+            )}
+            {hasPossibleMatches && (
+              <label className={cn("flex items-start gap-2 text-xs", addBlocked && "opacity-60")}>
+                <Checkbox
+                  checked={decision.kind === "import_new" && decision.notSameAck}
+                  disabled={addBlocked}
+                  onCheckedChange={(v) => onDecide({ kind: "import_new", notSameAck: v === true })}
+                  aria-label="These are separate transactions"
+                />
+                <span>I compared them — these are separate transactions.</span>
+              </label>
+            )}
+            {row.direction === "credit" && (
+              <div className="flex flex-col gap-1" role="group" aria-label="What is this credit?" data-testid="credit-kind">
+                <span className="text-[11px] text-muted-foreground">If added, this credit is a… (never assumed — a credit on a card isn&apos;t always a refund)</span>
+                <div className="flex gap-1.5">
+                  {(["refund", "income"] as const).map((kind) => (
+                    <button
+                      key={kind}
+                      type="button"
+                      aria-pressed={decision.creditAs === kind}
+                      disabled={addBlocked}
+                      onClick={() => onDecide({ kind: "import_new", creditAs: kind })}
+                      className={cn("rounded-lg px-3 py-1 text-xs font-medium transition-colors disabled:opacity-50", decision.creditAs === kind ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:text-foreground")}
+                    >
+                      {kind === "refund" ? "Refund" : "Income"}
+                    </button>
+                  ))}
+                  {row.kind === "refund" && <span className="self-center text-[11px] text-muted-foreground">Statement text says refund</span>}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </DecisionOption>
+      <DecisionOption kind="ignore" label={DECISION_META.ignore.label} hint="Leaves it out. Nothing is written for this row." selected={decision.kind === "ignore"} onClick={() => onDecide({ kind: "ignore" })} />
+      <DecisionOption
+        kind="investigate"
+        label={DECISION_META.investigate.label}
+        hint="Keeps the row open — final approval waits until you decide."
+        selected={decision.kind === "investigate"}
+        onClick={() => onDecide({ kind: "investigate" })}
+      />
+
+      {decision.kind && decision.kind !== "investigate" && errors.length > 0 && (
+        <div className="rounded-lg bg-warning/10 px-2.5 py-1.5">
+          <p className="text-[11px] font-semibold text-warning">Still needed before this row counts as decided</p>
+          <ul className="mt-0.5 list-inside list-disc space-y-0.5 text-[11px] text-warning" data-testid="decision-errors">
+            {errors.map((e) => (
+              <li key={e}>{e}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </section>
+  );
 
   return (
     <div className="flex flex-col gap-3" data-testid="match-panel" data-row-id={row.id}>
       <section className="rounded-xl border border-border bg-muted/40 px-3 py-2.5">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
-            <p className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">Statement row {rowNumber}</p>
+            <div className="flex items-center gap-1.5">
+              <p className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">Statement row {rowNumber}</p>
+              {nav && (
+                <span className="inline-flex items-center gap-0.5 text-[11px] text-muted-foreground" data-testid="panel-nav">
+                  <button type="button" aria-label="Previous row" disabled={!nav.onPrev} onClick={nav.onPrev} className="grid size-5 place-items-center rounded-md hover:bg-foreground/10 hover:text-foreground disabled:opacity-30 disabled:hover:bg-transparent">
+                    <ChevronLeft className="size-3.5" />
+                  </button>
+                  <span className="tabular-nums">
+                    {nav.position} of {nav.total}
+                  </span>
+                  <button type="button" aria-label="Next row" disabled={!nav.onNext} onClick={nav.onNext} className="grid size-5 place-items-center rounded-md hover:bg-foreground/10 hover:text-foreground disabled:opacity-30 disabled:hover:bg-transparent">
+                    <ChevronRight className="size-3.5" />
+                  </button>
+                </span>
+              )}
+            </div>
             <p className="mt-0.5 text-sm font-semibold break-words text-foreground">{row.description || "No description"}</p>
             <p className="text-xs text-muted-foreground">
               {formatRowDate(row.date, true)} · {statementAccount}
@@ -230,9 +408,9 @@ export function MatchPanel({ row, rowNumber, match, decision, gate, records, rec
             <ScreenshotDialog capture={screenshot} focused={row} open={viewerOpen} onOpenChange={setViewerOpen} />
           </section>
         ) : (
-          <p className="flex items-start gap-2 rounded-xl bg-muted/50 px-3 py-2 text-xs text-muted-foreground" data-testid="screenshot-unavailable">
-            <ImageOff className="mt-px size-4 shrink-0" />
-            <span>The screenshot isn&apos;t available here — it&apos;s never saved, so a refresh removes it. To compare against the image, go back to Smart Capture and read it again.</span>
+          <p className="flex items-start gap-1.5 px-1 text-[11px] leading-snug text-muted-foreground" data-testid="screenshot-unavailable">
+            <ImageOff className="mt-px size-3.5 shrink-0" />
+            <span>Screenshots are never saved, so the image is gone after a refresh. To compare against it, read it again in Smart Capture.</span>
           </p>
         ))}
 
@@ -240,8 +418,8 @@ export function MatchPanel({ row, rowNumber, match, decision, gate, records, rec
         <p role="note" className="flex items-start gap-2 rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-foreground">
           <CalendarClock className="mt-px size-4 shrink-0 text-warning" />
           <span>
-            This date is in the card bill for {formatRowDate(gate.cycle.periodStart)} – {formatRowDate(gate.cycle.periodEnd, true)}, which is {gate.cycle.status === "paid" ? "already paid" : "closed"}. Marking it already recorded
-            is fine; adding it as new is blocked until it&apos;s reviewed separately.
+            The card bill for {formatRowDate(gate.cycle.periodStart)} – {formatRowDate(gate.cycle.periodEnd, true)} is {gate.cycle.status === "paid" ? "already paid" : "closed"}. You can keep the existing transaction or skip this row; importing it is
+            blocked until that bill is reviewed separately.
           </span>
         </p>
       )}
@@ -264,6 +442,8 @@ export function MatchPanel({ row, rowNumber, match, decision, gate, records, rec
           ))}
         </ul>
       )}
+
+      {match.state !== "excluded" && decisionFirst && decisionSection}
 
       <section aria-label="Possible matches" className="flex flex-col gap-2">
         <div className="flex items-baseline justify-between gap-2">
@@ -332,7 +512,7 @@ export function MatchPanel({ row, rowNumber, match, decision, gate, records, rec
                         </p>
                       </div>
                       <span className="font-mono tabular-nums">{formatCurrencyPrecise(record.amount)}</span>
-                      <ClayButton size="sm" variant="secondary" onClick={() => linkTo(record.id)} disabled={!!match.claimedBy[record.id]} aria-label={`Already recorded as ${record.description || "this transaction"}`}>
+                      <ClayButton size="sm" variant="secondary" onClick={() => linkTo(record.id)} disabled={!!match.claimedBy[record.id]} aria-label={`Keep existing ${record.description || "transaction"}`}>
                         This one
                       </ClayButton>
                     </div>
@@ -378,80 +558,7 @@ export function MatchPanel({ row, rowNumber, match, decision, gate, records, rec
         </section>
       )}
 
-      {match.state !== "excluded" && (
-        <section aria-label="Decision" className="flex flex-col gap-2.5 rounded-xl border border-border bg-card p-3">
-          <h3 className="text-xs font-semibold text-foreground">Your decision for this row</h3>
-          {hasPossibleMatches && (
-            <p className="flex items-start gap-1.5 text-[11px] text-muted-foreground">
-              <ShieldCheck className="mt-px size-3.5 shrink-0" />
-              Possible matches are only suggestions until you decide. Nothing in FlowFi is edited or linked by these choices.
-            </p>
-          )}
-          {hasPossibleMatches && (
-            <label className={cn("flex items-start gap-2 text-xs", blockReasons.length > 0 && "opacity-60")}>
-              <Checkbox
-                checked={decision.kind === "import_new" && decision.notSameAck}
-                disabled={blockReasons.length > 0}
-                onCheckedChange={(v) => onDecide({ kind: "import_new", notSameAck: v === true })}
-                aria-label="This is a different transaction"
-              />
-              <span>I compared the possible matches — this is a different transaction.</span>
-            </label>
-          )}
-          {row.direction === "credit" && (
-            <div className="flex flex-col gap-1" role="group" aria-label="What is this credit?" data-testid="credit-kind">
-              <span className="text-[11px] text-muted-foreground">If added, this credit is a… (never assumed — a credit on a card isn&apos;t always a refund)</span>
-              <div className="flex gap-1.5">
-                {(["refund", "income"] as const).map((kind) => (
-                  <button
-                    key={kind}
-                    type="button"
-                    aria-pressed={decision.creditAs === kind}
-                    disabled={blockReasons.length > 0}
-                    onClick={() => onDecide({ kind: "import_new", creditAs: kind })}
-                    className={cn("rounded-lg px-3 py-1 text-xs font-medium transition-colors disabled:opacity-50", decision.creditAs === kind ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:text-foreground")}
-                  >
-                    {kind === "refund" ? "Refund" : "Income"}
-                  </button>
-                ))}
-                {row.kind === "refund" && <span className="self-center text-[11px] text-muted-foreground">Statement text says refund</span>}
-              </div>
-            </div>
-          )}
-          <div className="flex flex-wrap gap-2">
-            <ClayButton
-              size="sm"
-              variant={decision.kind === "import_new" ? "primary" : "secondary"}
-              disabled={blockReasons.length > 0}
-              onClick={() => onDecide({ kind: "import_new", notSameAck: decision.kind === "import_new" ? decision.notSameAck : false })}
-              aria-pressed={decision.kind === "import_new"}
-            >
-              {addLabel}
-            </ClayButton>
-            <ClayButton size="sm" variant={decision.kind === "ignore" ? "primary" : "secondary"} onClick={() => onDecide({ kind: "ignore" })} aria-pressed={decision.kind === "ignore"}>
-              {DECISION_META.ignore.label}
-            </ClayButton>
-            <ClayButton size="sm" variant={decision.kind === "investigate" ? "primary" : "secondary"} onClick={() => onDecide({ kind: "investigate" })} aria-pressed={decision.kind === "investigate"}>
-              {DECISION_META.investigate.label}
-            </ClayButton>
-          </div>
-          {blockReasons.length > 0 && (
-            <ul className="space-y-0.5 text-[11px] text-muted-foreground" data-testid="import-blocked">
-              {blockReasons.map((r) => (
-                <li key={r}>Can&apos;t add as new: {r}</li>
-              ))}
-            </ul>
-          )}
-          {decision.kind && errors.length > 0 && (
-            <ul className="space-y-0.5 text-[11px] text-warning" data-testid="decision-errors">
-              {errors.map((e) => (
-                <li key={e}>{e}</li>
-              ))}
-            </ul>
-          )}
-          {decision.kind === "investigate" && <p className="text-[11px] text-muted-foreground">Review later keeps this row open — final approval waits until you decide.</p>}
-        </section>
-      )}
+      {match.state !== "excluded" && !decisionFirst && decisionSection}
     </div>
   );
 }

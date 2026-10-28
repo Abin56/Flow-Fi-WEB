@@ -18,7 +18,7 @@
 
 import { BankLogo } from "@/components/finance/bank-logo";
 import { ArrowDownLeft, ArrowUpRight, ChevronDown, ChevronRight, CopyX, MessageSquareText, ScanSearch, TriangleAlert } from "lucide-react";
-import { useId, useState, type MouseEvent } from "react";
+import { memo, useEffect, useId, useMemo, useRef, useState, type MouseEvent } from "react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
 import { smsCandidateEventTypeLabel, type SmsTransactionCandidate } from "@/lib/models/sms-transaction-candidate";
@@ -207,7 +207,11 @@ function Dot() {
   );
 }
 
-function LedgerRow({ row, actions, showDate }: { row: CandidateRowModel; actions: RowActions; showDate: boolean }) {
+/**
+ * Memoized: opening the details sheet re-renders the whole workspace, and re-drawing every row of a long inbox at that
+ * moment is what made the sheet's slide-in stutter. A row only redraws when its own model (or the stable `actions`) changes.
+ */
+const LedgerRow = memo(function LedgerRow({ row, actions, showDate }: { row: CandidateRowModel; actions: RowActions; showDate: boolean }) {
   const { candidate, status } = row;
   const isDuplicate = status.lane === "duplicate";
   const unnamed = candidate.merchant == null;
@@ -317,11 +321,11 @@ function LedgerRow({ row, actions, showDate }: { row: CandidateRowModel; actions
       )}
     </li>
   );
-}
+});
 
 // ── groups ───────────────────────────────────────────────────────────────────────────────────────────────────────
 
-function LedgerGroupSection({ group, actions }: { group: LedgerGroup; actions: RowActions }) {
+const LedgerGroupSection = memo(function LedgerGroupSection({ group, actions }: { group: LedgerGroup; actions: RowActions }) {
   const headingId = useId();
   const count = group.rows.length;
   return (
@@ -342,7 +346,7 @@ function LedgerGroupSection({ group, actions }: { group: LedgerGroup; actions: R
       </ul>
     </section>
   );
-}
+});
 
 export function CandidateLedger({
   groups,
@@ -352,7 +356,7 @@ export function CandidateLedger({
   someSelected,
   selectAllDisabled,
   onToggleAll,
-  ...actions
+  ...liveActions
 }: {
   groups: LedgerGroup[];
   /** Rows currently shown / total in the queue — "Showing 12 of 126". */
@@ -363,6 +367,23 @@ export function CandidateLedger({
   selectAllDisabled: boolean;
   onToggleAll: (checked: boolean) => void;
 } & RowActions) {
+  // A stable `actions` object: its handlers always call the latest props, so the memoized rows never see a new identity
+  // (and never act on a stale closure). Only the repository — which rows read as a value — can change it.
+  const latest = useRef(liveActions);
+  useEffect(() => {
+    latest.current = liveActions;
+  });
+  const candidateRepository = liveActions.candidateRepository;
+  const actions: RowActions = useMemo(
+    () => ({
+      onToggle: (id, checked) => latest.current.onToggle(id, checked),
+      onReview: (id) => latest.current.onReview(id),
+      onHide: (id) => latest.current.onHide(id),
+      onUnhide: (id) => latest.current.onUnhide(id),
+      candidateRepository,
+    }),
+    [candidateRepository],
+  );
   return (
     <div className="@container flex flex-col" data-testid="candidates-ledger">
       <div className="flex min-h-10 items-center justify-between gap-3 px-1 sm:min-h-11">

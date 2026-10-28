@@ -18,9 +18,18 @@ function norm(text: string): string {
   return text.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
-function sameMerchant(description: string, merchant: string): boolean {
-  const d = norm(description);
-  const m = norm(merchant);
+/** Normalised descriptions, kept per transaction object: the history is scanned on every open and every Next, and re-lowercasing thousands of strings each time is what made it slow. Garbage-collected with the transactions. */
+const normalised = new WeakMap<object, string>();
+function normDescription(t: { description: string }): string {
+  let d = normalised.get(t);
+  if (d === undefined) {
+    d = norm(t.description);
+    normalised.set(t, d);
+  }
+  return d;
+}
+
+function sameMerchant(d: string, m: string): boolean {
   if (!d || !m) return false;
   if (d === m) return true;
   // A longer note that CONTAINS the merchant ("Swiggy order") counts, but a very short merchant would match everything.
@@ -40,11 +49,12 @@ export function suggestCategories(
   const merchant = candidate.merchant?.trim();
   if (!merchant) return [];
   const type: Transaction["type"] = candidate.direction === "credit" ? "income" : "expense";
+  const wanted = norm(merchant);
   const counts = new Map<string, number>();
   let total = 0;
   for (const t of transactions) {
     if (t.deletedAt != null || t.type !== type || !t.categoryId) continue;
-    if (!sameMerchant(t.description, merchant)) continue;
+    if (!sameMerchant(normDescription(t), wanted)) continue;
     total += 1;
     counts.set(t.categoryId, (counts.get(t.categoryId) ?? 0) + 1);
   }

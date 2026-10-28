@@ -33,9 +33,15 @@ import { Receipt } from "lucide-react";
 import { BillCard, RECURRENCE_LABEL } from "@/features/bills/components/bill-card";
 import { UpcomingDuesSection } from "@/features/bills/components/upcoming-dues-section";
 import { useBillActions, useBillRows, type BillRow } from "@/features/bills/hooks/use-bills-data";
+import { Banner } from "@/components/feedback/banner";
+import { dayToDate, toDay } from "@/features/bills/lib/bill-form-date";
+import { BillEditConflictError, billSkipBlockedReason } from "@/lib/repositories/bill-repository";
 import { toast } from "@/store/toast-store";
 import { cn } from "@/lib/utils";
 import { DateInput } from "@/components/forms/date-input";
+import { findDuplicateBillCycles } from "@/lib/engines/bill-duplicate-cycles";
+import { BillDuplicateReviewPanel } from "@/features/bills/components/bill-duplicate-review-panel";
+import { AlertTriangle } from "lucide-react";
 
 const RECURRENCE_OPTIONS: BillRecurrence[] = ["oneTime", "daily", "weekly", "monthly", "yearly", "custom"];
 
@@ -54,7 +60,7 @@ function emptyForm(): BillFormState {
   return {
     name: "",
     amount: "",
-    dueDate: new Date().toISOString().slice(0, 10),
+    dueDate: toDay(new Date()),
     recurrence: "monthly",
     customIntervalDays: "30",
     accountId: "",
@@ -67,7 +73,7 @@ function formFromBill(bill: Bill): BillFormState {
   return {
     name: bill.name,
     amount: String(bill.amount),
-    dueDate: bill.nextDueDate.toISOString().slice(0, 10),
+    dueDate: toDay(bill.nextDueDate),
     recurrence: bill.recurrence,
     customIntervalDays: String(bill.customIntervalDays ?? 30),
     accountId: bill.accountId ?? "",
@@ -77,12 +83,19 @@ function formFromBill(bill: Bill): BillFormState {
 }
 
 export function BillsWorkspace() {
-  const { rows, cycles, isLoading } = useBillRows();
+  const { rows, cycles, isLoading, refreshOccurrences } = useBillRows();
   const actions = useBillActions();
   const { data: accounts = [] } = useAccounts();
   const { data: categories = [] } = useCategories();
 
-  const [activeRow, setActiveRow] = useState<BillRow | null>(null);
+  const [activeSnapshot, setActiveRow] = useState<BillRow | null>(null);
+  // The open bill follows the LIVE list, so a change made in another tab shows up (and Edit seeds from current values).
+  // Falls back to the row as clicked if the bill has left the list.
+  const activeRow = useMemo(() => (activeSnapshot ? (rows.find((r) => r.bill.id === activeSnapshot.bill.id) ?? activeSnapshot) : null), [rows, activeSnapshot]);
+  // The bill the open edit form was SEEDED from. Conflict detection compares the form against this, never against the live
+  // copy — otherwise untouched-but-stale fields would look like edits and silently overwrite another tab.
+  const [editBase, setEditBase] = useState<Bill | null>(null);
+  const [editConflict, setEditConflict] = useState<string[] | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -97,6 +110,8 @@ export function BillsWorkspace() {
   const [payOccurrence, setPayOccurrence] = useState<BillOccurrence | null>(null);
   const [cancelTarget, setCancelTarget] = useState<CancelTarget | null>(null);
   const [cancelling, setCancelling] = useState(false);
+  const [skipping, setSkipping] = useState(false);
+  const [duplicatesOpen, setDuplicatesOpen] = useState(false);
 
   // The open bill's live payments (every cycle) and its cycles — what the Payment history can edit / cancel.
   const activeBillId = activeRow?.bill.id;
@@ -153,6 +168,20 @@ export function BillsWorkspace() {
     return { ...obligations, paidCount };
   }, [rows, cycles]);
 
+  // Read-only duplicate-cycle detection (`lib/engines/bill-duplicate-cycles.ts`) — same "same bill, same due calendar
+  // day" grouping `BillPaymentRepository` uses to BLOCK a payment. Payments aren't loaded here (every payment of
+  // every bill would be an extra read on every page visit); the review panel loads them only once opened.
+  const occurrencesByBillId = useMemo(() => {
+    const m = new Map<string, BillOccurrence[]>();
+    for (const { billId, occurrence } of cycles) m.set(billId, [...(m.get(billId) ?? []), occurrence]);
+    return m;
+  }, [cycles]);
+  const currentOccurrenceIdByBillId = useMemo(() => new Map(rows.map((r) => [r.bill.id, r.occurrence?.id ?? null])), [rows]);
+  const duplicateGroups = useMemo(
+    () => findDuplicateBillCycles(rows.map((r) => r.bill), occurrencesByBillId, new Map(), currentOccurrenceIdByBillId),
+    [rows, occurrencesByBillId, currentOccurrenceIdByBillId],
+  );
+
   function openAdd() {
     setActiveRow(null);
     setForm(emptyForm());
@@ -162,7 +191,17 @@ export function BillsWorkspace() {
   function openEdit(row: BillRow) {
     setActiveRow(row);
     setForm(formFromBill(row.bill));
+    setEditBase(row.bill);
+    setEditConflict(null);
     setEditOpen(true);
+  }
+
+  /** After a conflict: replace the form (and its base) with the CURRENT stored values — only on the user's explicit choice. */
+  function reloadLatest() {
+    if (!activeRow) return;
+    setForm(formFromBill(activeRow.bill));
+    setEditBase(activeRow.bill);
+    setEditConflict(null);
   }
 
   async function handleSave(isEdit: boolean) {
@@ -170,7 +209,7 @@ export function BillsWorkspace() {
     setSaving(true);
     try {
       const amount = Number(form.amount);
-      const dueDate = new Date(form.dueDate);
+      const dueDate = dayToDate(form.dueDate);
       const params = {
         name: form.name,
         amount,
@@ -183,7 +222,8 @@ export function BillsWorkspace() {
         notes: form.notes,
       };
       if (isEdit && activeRow) {
-        await actions.editBill(activeRow.bill, params);
+        await actions.editBill(editBase ?? activeRow.bill, params);
+        setEditConflict(null);
         setEditOpen(false);
       } else {
         await actions.createBill(params);
@@ -191,6 +231,7 @@ export function BillsWorkspace() {
       }
       setActiveRow(null);
     } catch (e) {
+      if (isEdit && e instanceof BillEditConflictError) setEditConflict(e.fields);
       toast.error(isEdit ? "Couldn't save changes" : "Couldn't add bill", e instanceof Error ? e.message : "Please try again.");
     } finally {
       setSaving(false);
@@ -215,12 +256,36 @@ export function BillsWorkspace() {
   }
 
   async function handleSkip(row: BillRow) {
-    if (!actions || !row.occurrence) return;
+    if (!actions || !row.occurrence || skipping) return;
+    setSkipping(true);
     try {
       await actions.skipOccurrence(row.bill, row.occurrence);
     } catch (e) {
       toast.error("Couldn't skip this bill", e instanceof Error ? e.message : "Please try again.");
+      await refreshOccurrences(); // the refusal may mean the panel was stale (e.g. paid in another tab) — show the real state
+    } finally {
+      setSkipping(false);
     }
+  }
+
+  async function handleUnskip(row: BillRow) {
+    if (!actions || !row.occurrence || skipping) return;
+    setSkipping(true);
+    try {
+      await actions.unskipOccurrence(row.bill, row.occurrence);
+      toast.success("Bill un-skipped", "It's due again and counted in your totals.");
+    } catch (e) {
+      toast.error("Couldn't un-skip this bill", e instanceof Error ? e.message : "Please try again.");
+      await refreshOccurrences();
+    } finally {
+      setSkipping(false);
+    }
+  }
+
+  /** Opening a bill reads occurrences fresh from the server (point-in-time, not a new listener) so Pay/Skip/Unskip reflect the latest write another tab made. */
+  function openRow(row: BillRow) {
+    setActiveRow(row);
+    void refreshOccurrences();
   }
 
   if (isLoading) {
@@ -251,10 +316,18 @@ export function BillsWorkspace() {
           </div>
         }
         actions={
-          <ClayButton size="sm" onClick={openAdd} className="gap-1.5">
-            <Plus className="size-3.5" />
-            Add Bill
-          </ClayButton>
+          <div className="flex items-center gap-2">
+            {duplicateGroups.length > 0 && (
+              <ClayButton size="sm" variant="secondary" onClick={() => setDuplicatesOpen(true)} className="gap-1.5 text-warning-foreground">
+                <AlertTriangle className="size-3.5" />
+                {duplicateGroups.length} duplicate cycle{duplicateGroups.length > 1 ? "s" : ""}
+              </ClayButton>
+            )}
+            <ClayButton size="sm" onClick={openAdd} className="gap-1.5">
+              <Plus className="size-3.5" />
+              Add Bill
+            </ClayButton>
+          </div>
         }
       />
 
@@ -291,7 +364,7 @@ export function BillsWorkspace() {
       ) : (
         <Stagger className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {rows.map((row) => (
-            <BillCard key={row.bill.id} row={row} onClick={() => setActiveRow(row)} />
+            <BillCard key={row.bill.id} row={row} onClick={() => openRow(row)} />
           ))}
         </Stagger>
       )}
@@ -305,12 +378,24 @@ export function BillsWorkspace() {
           activeRow && (
             <div className="flex flex-col gap-2">
               <div className="flex gap-2">
-                <ClayButton variant="secondary" className="flex-1" disabled={!activeRow.occurrence || billOccurrenceRemainingAmount(activeRow.occurrence) <= 0 || activeRow.occurrence.isSkipped} onClick={() => openPay(null)}>
+                <ClayButton variant="secondary" className="flex-1" disabled={!activeRow.occurrence || billOccurrenceRemainingAmount(activeRow.occurrence) <= 0 || activeRow.occurrence.isSkipped || skipping} onClick={() => openPay(null)}>
                   Pay…
                 </ClayButton>
-                <ClayButton variant="secondary" className="flex-1" onClick={() => handleSkip(activeRow)}>
-                  Skip
-                </ClayButton>
+                {activeRow.occurrence?.isSkipped ? (
+                  <ClayButton variant="secondary" className="flex-1" disabled={skipping} onClick={() => handleUnskip(activeRow)}>
+                    {skipping ? "Un-skipping…" : "Un-skip"}
+                  </ClayButton>
+                ) : (
+                  <ClayButton
+                    variant="secondary"
+                    className="flex-1"
+                    disabled={!activeRow.occurrence || skipping || billSkipBlockedReason(activeRow.occurrence) != null}
+                    title={activeRow.occurrence ? (billSkipBlockedReason(activeRow.occurrence) ?? undefined) : undefined}
+                    onClick={() => handleSkip(activeRow)}
+                  >
+                    {skipping ? "Skipping…" : "Skip"}
+                  </ClayButton>
+                )}
               </div>
               <div className="flex gap-2">
                 <ClayButton variant="secondary" className="flex-1" onClick={() => openEdit(activeRow)}>
@@ -437,6 +522,18 @@ export function BillsWorkspace() {
         confirmLabel={saving ? "Saving…" : "Save Changes"}
         contentClassName="sm:max-w-xl"
       >
+        {editConflict && (
+          <Banner
+            tone="warning"
+            title="This bill changed in another tab"
+            description={`Nothing was saved. What you typed is still here. The ${editConflict.join(", ")} changed since you opened this form — load the latest values to see them, then apply your change again.`}
+            action={
+              <ClayButton size="sm" variant="secondary" onClick={reloadLatest}>
+                Discard my edits and load the latest
+              </ClayButton>
+            }
+          />
+        )}
         <BillFormFields form={form} setForm={setForm} accounts={accounts} categories={categories} />
       </FormDialog>
 
@@ -448,6 +545,14 @@ export function BillsWorkspace() {
         variant="destructive"
         confirmLabel="Delete"
         onConfirm={handleDelete}
+      />
+      <BillDuplicateReviewPanel
+        open={duplicatesOpen}
+        onOpenChange={setDuplicatesOpen}
+        bills={rows.map((r) => r.bill)}
+        occurrencesByBillId={occurrencesByBillId}
+        currentOccurrenceIdByBillId={currentOccurrenceIdByBillId}
+        listPayments={actions?.listPayments ?? null}
       />
       <ScrollNav />
     </div>

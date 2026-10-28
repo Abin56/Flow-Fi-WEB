@@ -64,8 +64,12 @@ interface BillCycles {
  * Live bill templates + their current (lazily materialized) occurrence, joined with account/category.
  * `cycles` is EVERY non-deleted cycle of every bill (same single read per bill — no extra queries), for reporting that must
  * not assume only the latest cycle can be outstanding.
+ *
+ * `refreshOccurrences` re-runs the SAME query against the server instead of waiting out `staleTime` — used when the
+ * bill detail panel opens, so its Pay/Skip/Unskip button state reflects the latest write another tab made, without
+ * adding a permanent `onSnapshot` listener on occurrences (none exists today; this stays a point-in-time read).
  */
-export function useBillRows(): { rows: BillRow[]; cycles: BillCycleRef[]; isLoading: boolean } {
+export function useBillRows(): { rows: BillRow[]; cycles: BillCycleRef[]; isLoading: boolean; refreshOccurrences: () => Promise<void> } {
   const uid = useAuthStore((s) => s.user?.uid);
   const { data: bills = [], isLoading: billsLoading } = useBills();
   const { data: accounts = [], isLoading: accountsLoading } = useAccounts();
@@ -115,6 +119,9 @@ export function useBillRows(): { rows: BillRow[]; cycles: BillCycleRef[]; isLoad
     rows,
     cycles,
     isLoading: billsLoading || accountsLoading || categoriesLoading || (billIds.length > 0 && occurrencesQuery.isLoading),
+    refreshOccurrences: async () => {
+      await occurrencesQuery.refetch();
+    },
   };
 }
 
@@ -174,6 +181,12 @@ export function useBillActions() {
       skipOccurrence: async (bill: Bill, occurrence: BillOccurrence) => {
         const occurrenceRepository = createBillOccurrenceRepository(uid, bill.id, billRepository);
         await occurrenceRepository.skipOccurrence(occurrence);
+        await invalidateOccurrences();
+      },
+      /** Reverses Skip — same fresh-read transaction, refused if the cycle no longer exists or isn't skipped. */
+      unskipOccurrence: async (bill: Bill, occurrence: BillOccurrence) => {
+        const occurrenceRepository = createBillOccurrenceRepository(uid, bill.id, billRepository);
+        await occurrenceRepository.unskip(occurrence);
         await invalidateOccurrences();
       },
       /**

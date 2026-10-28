@@ -10,7 +10,9 @@ import { safeDocs } from "@/lib/firestore/safe-docs";
 import {
   type CollectionReference,
   doc,
+  type DocumentData,
   type DocumentReference,
+  getDoc,
   getDocs,
   limit,
   orderBy,
@@ -98,6 +100,39 @@ export interface CreateTransactionParams {
    * (credit and debit cards — the model has no overdraft flag) are never blocked. Opt-in so ordinary transaction entry is unchanged.
    */
   enforceFunds?: boolean;
+  /**
+   * What a keyed save does when its `txn_<idempotencyKey>` transaction exists but was soft-deleted. Default
+   * `"record_afresh"` (unchanged behaviour every existing caller relies on, e.g. a rolled-back attempt): a new
+   * transaction with a generated id. `"refuse"`: throw `KeyedTransactionDeletedError` inside the same Firestore
+   * transaction and write nothing — for statement imports, where a deleted import must never come back as a copy.
+   * `"replace_rolled_back"`: like "refuse", EXCEPT when the deleted keyed transaction carries an unconsumed
+   * import-rollback marker (`importRollbackMarkerRef` — written atomically by an import's own rollback, never by a
+   * user delete): then the SAME keyed id is written again and the marker is consumed, all in this Firestore
+   * transaction. A user-deleted import (no marker) is still refused.
+   */
+  onDeletedKey?: "record_afresh" | "refuse" | "replace_rolled_back";
+}
+
+/**
+ * Durable, auditable proof that a keyed import transaction was soft-deleted by the import's OWN rollback (a failed
+ * write part-way), not by the user — stored beside the transaction at `transactions/<id>/importAudit/rollback`.
+ * Written in the same Firestore transaction as that soft-delete; consumed (never deleted) when a retry re-records it.
+ */
+export interface ImportRollbackMarker {
+  kind: "import_rollback";
+  transactionId: string;
+  rolledBackAt: Date;
+  reason: string;
+  /** Set when a retry re-recorded the transaction under the same id; a consumed marker never authorizes another. */
+  consumedAt: Date | null;
+}
+
+/** A keyed save (`onDeletedKey: "refuse"`) found its transaction soft-deleted — nothing was written. */
+export class KeyedTransactionDeletedError extends Error {
+  constructor(readonly transactionId: string) {
+    super(`This was recorded before as transaction ${transactionId}, which is now deleted. It was not recorded again.`);
+    this.name = "KeyedTransactionDeletedError";
+  }
 }
 
 /** Thrown when a person-funded expense is given an account, or an account-funded one is given none. */
@@ -542,8 +577,34 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
     };
   }
 
+  /** Where an import-rollback marker for keyed transaction `transactionId` lives (see `ImportRollbackMarker`). */
+  importRollbackMarkerRef(transactionId: string): DocumentReference<DocumentData> {
+    return doc(this.collection.firestore, this.collection.path, transactionId, "importAudit", "rollback");
+  }
+
+  /** The import-rollback marker of `transactionId`, or null. Read-only. */
+  async getImportRollbackMarker(transactionId: string): Promise<ImportRollbackMarker | null> {
+    const snap = await getDoc(this.importRollbackMarkerRef(transactionId));
+    if (!snap.exists()) return null;
+    const d = snap.data();
+    const date = (v: unknown) => (v == null ? null : typeof (v as { toDate?: () => Date }).toDate === "function" ? (v as { toDate: () => Date }).toDate() : (v as Date));
+    return { kind: d.kind, transactionId: d.transactionId, reason: d.reason ?? "", rolledBackAt: date(d.rolledBackAt)!, consumedAt: date(d.consumedAt) };
+  }
+
+  /**
+   * Soft-deletes a keyed import transaction as the import's OWN rollback and records the marker that proves it, in
+   * the caller's Firestore transaction. Only for a transaction the failed operation itself just created.
+   */
+  async rollBackKeyedImportInTransaction(tx: FirestoreTransaction, transaction: Transaction, reason: string): Promise<boolean> {
+    const markerRef = this.importRollbackMarkerRef(transaction.id);
+    const deleted = await this.softDeleteTransactionInTransaction(tx, transaction);
+    if (deleted) tx.set(markerRef, { kind: "import_rollback", transactionId: transaction.id, rolledBackAt: new Date(), reason: reason.slice(0, 500), consumedAt: null });
+    return deleted;
+  }
+
   async createTransactionInTransaction(tx: FirestoreTransaction, params: CreateTransactionParams): Promise<Transaction> {
     let transaction = TransactionRepository.buildTransaction(params);
+    let consumeMarker: (() => void) | null = null;
     if (params.idempotencyKey != null) {
       if (!IDEMPOTENCY_KEY_PATTERN.test(params.idempotencyKey)) throw new Error("Transaction idempotency key must be 8–128 letters, digits, '-' or '_'");
       const keyedId = `txn_${params.idempotencyKey}`;
@@ -558,6 +619,17 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
           prior.dateTime.getTime() === transaction.dateTime.getTime();
         if (!same) throw new Error("This transaction was already saved with different details. Close and reopen it to edit the saved one.");
         return prior;
+      }
+      // Read in this same Firestore transaction, so a concurrent delete/restore of the keyed doc forces a retry.
+      if (existing.exists() && params.onDeletedKey === "refuse") throw new KeyedTransactionDeletedError(keyedId);
+      if (existing.exists() && params.onDeletedKey === "replace_rolled_back") {
+        const markerRef = this.importRollbackMarkerRef(keyedId);
+        const marker = await tx.get(markerRef);
+        const data = marker.exists() ? (marker.data() as { kind?: string; consumedAt?: unknown }) : null;
+        if (data?.kind !== "import_rollback" || data.consumedAt != null) throw new KeyedTransactionDeletedError(keyedId);
+        // Our own failed attempt (its balance effect was reversed by the rollback): record it again under the same id.
+        transaction = { ...transaction, id: keyedId };
+        consumeMarker = () => tx.set(markerRef, { consumedAt: new Date() }, { merge: true });
       }
       if (!existing.exists()) transaction = { ...transaction, id: keyedId };
     }
@@ -576,6 +648,7 @@ export class TransactionRepository extends FirestoreCrudRepository<Transaction> 
       }
     }
     tx.set(doc(this.collection, transaction.id), transaction);
+    consumeMarker?.();
 
     return transaction;
   }

@@ -88,6 +88,9 @@ function pickAccount(name = "QA Card") {
 const rowEl = (id: string) => screen.getAllByTestId("recon-row").find((r) => r.dataset.rowId === id)!;
 const states = () => Object.fromEntries(screen.getAllByTestId("recon-row").map((r) => [r.dataset.rowId, r.dataset.state]));
 
+/** Desktop: the full comparison (with the screenshot strip) opens from the dock's "Full details". */
+const openDetails = () => fireEvent.click(screen.getByTestId("dock-details"));
+
 describe("Smart Capture → Reconciliation handoff", () => {
   it("takes the verified rows with their own ids, keeps the excluded row excluded, and shows the existing SMS transaction as a candidate", () => {
     const cap = handOff();
@@ -102,8 +105,10 @@ describe("Smart Capture → Reconciliation handoff", () => {
     expect(states()[swiggy]).toBe("exact_candidate");
     // Rows verified in Smart Capture are not re-flagged here (confirmed issues are resolved, as there).
     expect(document.body.textContent).not.toMatch(/Check flagged values/);
+    openDetails();
     const panel = screen.getByTestId("match-panel");
     expect(within(panel).getByTestId("match-candidate").textContent).toMatch(/From SMS/);
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
     // Excluded in Smart Capture stays excluded — no Include switch here.
     fireEvent.click(screen.getByRole("button", { name: "Expand row 3" }));
     expect(screen.getByTestId("capture-excluded")).toBeTruthy();
@@ -114,6 +119,7 @@ describe("Smart Capture → Reconciliation handoff", () => {
     handOff();
     render(<ReconciliationWorkspace uid="u1" data={DATA} sync={LOADED} />);
     pickAccount();
+    openDetails();
     const zoom = within(screen.getByTestId("row-screenshot")).getByTestId("row-zoom");
     expect(zoom.querySelector("img")!.getAttribute("src")).toBe("blob:handoff-1");
   });
@@ -128,6 +134,7 @@ describe("Smart Capture → Reconciliation handoff", () => {
     pickAccount();
     expect(screen.getByText(/Restored your review/)).toBeTruthy();
     expect(screen.getAllByTestId("recon-row").map((r) => r.dataset.rowId)).toEqual(cap.rows.map((r) => r.id));
+    openDetails();
     expect(screen.getByTestId("screenshot-unavailable")).toBeTruthy();
   });
 

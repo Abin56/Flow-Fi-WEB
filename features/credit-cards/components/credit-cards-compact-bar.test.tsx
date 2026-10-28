@@ -85,16 +85,19 @@ describe("Credit Cards compact bar — accessibility", () => {
     expect(barEl().getAttribute("aria-hidden")).toBe("true");
   });
 
-  it("is not interactive while still sliding in (progress < 0.5)", () => {
+  it("snaps: stays fully hidden below 0.5 — never parked half-in", () => {
     renderBar({ progress: 0.3 });
     expect(barEl().hasAttribute("inert")).toBe(true);
-    expect(barEl().style.visibility).toBe("visible");
+    expect(barEl().style.visibility).toBe("hidden");
+    expect(barEl().style.transform).toContain("translateY(");
   });
 
-  it("slides (translate, opaque) and never fades", () => {
+  it("snaps fully in at 0.5+ (transition slide, opaque, never fades)", () => {
     renderBar({ progress: 0.6 });
+    expect(barEl().hasAttribute("inert")).toBe(false);
     expect(barEl().style.opacity).toBe("");
-    expect(barEl().style.transform).toContain("translateY(");
+    expect(barEl().style.transform).toBe("");
+    expect(barEl().style.transition).toContain("transform");
   });
 
   it("reduced motion: no slide, appears at once", () => {

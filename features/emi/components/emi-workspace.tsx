@@ -60,7 +60,7 @@ export function EmiWorkspace({ openRequest = null }: EmiWorkspaceProps = {}) {
   }
 
   // Back from People (`?agreement=<id>&pay=1[&installment=<id>]`): reopen Record Payment on that installment once.
-  const payHandoffRef = useRef(searchParams.get("pay") === "1" ? { emiId: searchParams.get("agreement"), installmentId: searchParams.get("installment") } : null);
+  const payHandoffRef = useRef(searchParams.get("pay") === "1" ? { emiId: searchParams.get("agreement"), installmentId: searchParams.get("installment"), view: searchParams.get("view") === "past" ? ("past" as const) : ("pay" as const) } : null);
   useEffect(() => {
     const handoff = payHandoffRef.current;
     const row = handoff?.emiId ? rows.find((r) => r.emi.id === handoff.emiId) : undefined;
@@ -69,9 +69,10 @@ export function EmiWorkspace({ openRequest = null }: EmiWorkspaceProps = {}) {
     const params = new URLSearchParams(window.location.search);
     params.delete("pay");
     params.delete("installment");
+    params.delete("view");
     window.history.replaceState(window.history.state, "", `${window.location.pathname}?${params.toString()}`);
     const installment = row.installments.find((i) => i.id === handoff.installmentId) ?? row.nextInstallment;
-    if (installment) requestAnimationFrame(() => openPay(installment));
+    if (installment) requestAnimationFrame(() => openPay(installment, handoff.view));
   }, [rows]);
 
   const deleteId = activeRowFresh?.emi.id ?? null;

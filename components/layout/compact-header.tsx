@@ -21,8 +21,11 @@ const SLIDE_DISTANCE = COMPACT_BAR_HEIGHT + COMPACT_BAR_INSET + 8;
 /** 21 steps, so `progress` moves in 5% increments — smooth enough to read as continuous, cheap enough to skip a scroll listener. */
 const THRESHOLDS = Array.from({ length: 21 }, (_, i) => i / 20);
 
-/** Below this progress the bar is still sliding in: visible, but not yet interactive. */
-const INTERACTIVE_AT = 0.5;
+/**
+ * The bar snaps: hidden below this progress, fully in at or above it. Tracking `progress` continuously left it parked
+ * half-in (clipped at the top edge, over a half-hidden title) whenever scrolling stopped mid-band.
+ */
+const SHOW_AT = 0.5;
 
 const useIsomorphicLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
 
@@ -143,12 +146,9 @@ export function CompactHeaderBar({
     };
   }, []);
 
-  const shown = held ? 1 : progress;
-  const gone = shown <= 0;
-  const interactive = shown >= INTERACTIVE_AT;
-  // Reduced motion: no slide — it simply appears once it would be interactive.
-  const offset = reduceMotion ? 0 : (1 - shown) * -SLIDE_DISTANCE;
-  const hiddenNow = gone || (reduceMotion && !interactive);
+  const shown = held || progress >= SHOW_AT;
+  // Reduced motion: no slide — it simply appears / disappears.
+  const offset = shown || reduceMotion ? 0 : -SLIDE_DISTANCE;
 
   return (
     <div ref={slotRef} className="pointer-events-none sticky z-hero h-0" style={{ top, marginBottom: -rowGap }}>
@@ -156,20 +156,21 @@ export function CompactHeaderBar({
         ref={barRef}
         role="region"
         aria-label={label}
-        aria-hidden={!interactive || undefined}
-        inert={!interactive}
+        aria-hidden={!shown || undefined}
+        inert={!shown}
         data-compact-bar=""
-        data-state={gone ? "hidden" : interactive ? "shown" : "entering"}
+        data-state={shown ? "shown" : "hidden"}
         style={{
           height: COMPACT_BAR_HEIGHT,
           transform: offset === 0 ? undefined : `translateY(${offset}px)`,
-          visibility: hiddenNow ? "hidden" : "visible",
-          transition: reduceMotion ? undefined : "transform 160ms ease-out",
+          visibility: shown ? "visible" : "hidden",
+          // visibility turns hidden only once the slide-out ends, and visible at once on the way in.
+          transition: reduceMotion ? undefined : "transform 160ms ease-out, visibility 160ms",
         }}
         className={cn(
           "absolute inset-x-0 top-0 flex items-center gap-1.5 rounded-[12px] border border-border-strong/60 bg-card px-2 shadow-e1",
           "before:absolute before:-inset-x-1 before:-top-6 before:h-6 before:bg-background before:content-[''] after:absolute after:-inset-x-1 after:top-full after:h-3 after:bg-background after:content-['']",
-          interactive && "pointer-events-auto",
+          shown && "pointer-events-auto",
         )}
       >
         {children}

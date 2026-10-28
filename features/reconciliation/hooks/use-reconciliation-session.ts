@@ -123,6 +123,8 @@ export function useReconciliationSession(uid: string | null | undefined, account
     reject: (rowId: string, recordId: string) => update((s) => ({ ...s, decisions: rejectCandidate(s.decisions, rowId, recordId) })),
     bulkLink: (pairs: { rowId: string; recordId: string }[], bulkId: string) => update((s) => ({ ...s, decisions: applyBulkLink(s.decisions, pairs, bulkId) })),
     undoBulk: (bulkId: string) => update((s) => ({ ...s, decisions: undoBulk(s.decisions, bulkId) })),
+    /** Draft Undo (decision-history.ts) — replaces the decisions map with one `undoLast` computed. */
+    replaceDecisions: (decisions: Record<string, RowDecision>) => update((s) => ({ ...s, decisions })),
     discard: () => {
       if (uid) clearReconciliationDraft(uid);
       setSession(null);

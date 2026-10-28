@@ -28,10 +28,16 @@
  * `addMonths`).
  */
 
-import { type CollectionReference, runTransaction } from "firebase/firestore";
+import { collection, doc, type CollectionReference, runTransaction } from "firebase/firestore";
 import { FirestoreCrudRepository } from "@/lib/firestore/firestore-crud-repository";
 import { recordEdit, updateField } from "@/lib/firestore/soft-deletable";
 import { CycleAnchor } from "@/lib/engines/cycle-engine";
+import { FirestoreCollections } from "@/lib/firestore/collections";
+import {
+  creditLimitCorrectionFromFirestore,
+  creditLimitCorrectionToFirestore,
+  type CreditLimitCorrection,
+} from "@/lib/models/credit-limit-correction";
 import {
   type BankIssuer,
   type CardNetwork,
@@ -131,6 +137,14 @@ export class CreditCardRepository extends FirestoreCrudRepository<CreditCardProf
     private readonly sharedCreditLimitRepository?: SharedCreditLimitRepository,
   ) {
     super(collection);
+  }
+
+  /** `limitCorrections` subcollection under this card — see `lib/models/credit-limit-correction.ts`. */
+  limitCorrections(cardId: string): CollectionReference<CreditLimitCorrection> {
+    return collection(doc(this.collection, cardId), FirestoreCollections.limitCorrections).withConverter({
+      toFirestore: creditLimitCorrectionToFirestore,
+      fromFirestore: creditLimitCorrectionFromFirestore,
+    });
   }
 
   async createCard(params: CreateCardParams): Promise<CreditCardProfile> {
@@ -370,6 +384,14 @@ function validateSharedLimit(params: { creditLimit: number; name: string }): voi
 export class SharedCreditLimitRepository extends FirestoreCrudRepository<SharedCreditLimit> {
   constructor(collection: CollectionReference<SharedCreditLimit>) {
     super(collection);
+  }
+
+  /** `limitCorrections` subcollection under this facility — see `lib/models/credit-limit-correction.ts`. */
+  limitCorrections(sharedLimitId: string): CollectionReference<CreditLimitCorrection> {
+    return collection(doc(this.collection, sharedLimitId), FirestoreCollections.limitCorrections).withConverter({
+      toFirestore: creditLimitCorrectionToFirestore,
+      fromFirestore: creditLimitCorrectionFromFirestore,
+    });
   }
 
   async createSharedLimit(params: CreateSharedLimitParams): Promise<SharedCreditLimit> {

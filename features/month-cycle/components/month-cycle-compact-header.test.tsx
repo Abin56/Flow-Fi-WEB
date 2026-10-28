@@ -113,10 +113,10 @@ describe("Month Cycle compact bar — hidden", () => {
     expect(screen.getAllByRole("button", { name: "Previous cycle" })).toHaveLength(1);
   });
 
-  it("while it is still fading in (title mostly in view) it is visible but not interactive", () => {
+  it("while the title is mostly in view it stays fully hidden — never parked half-in", () => {
     renderPage();
     titleVisible(0.7);
-    expect(barEl().style.visibility).toBe("visible");
+    expect(barEl().style.visibility).toBe("hidden");
     expect(barEl().hasAttribute("inert")).toBe(true);
     expect(barEl().getAttribute("aria-hidden")).toBe("true");
   });
@@ -256,7 +256,8 @@ describe("Month Cycle compact bar — spacing contract", () => {
   it("slides in (translate only, no opacity ghosting) while the title leaves", () => {
     renderPage();
     titleVisible(0.5);
-    expect(barEl().style.transform).toContain("translateY(");
+    expect(barEl().style.transform).toBe("");
+    expect(barEl().style.transition).toContain("transform");
     expect(barEl().style.opacity).toBe("");
   });
 });

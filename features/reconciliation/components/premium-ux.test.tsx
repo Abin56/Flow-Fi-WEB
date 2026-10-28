@@ -76,7 +76,8 @@ function tripwire() {
 
 const rowEl = (id: string) => screen.getAllByTestId("recon-row").find((r) => r.dataset.rowId === id)!;
 const states = () => Object.fromEntries(screen.getAllByTestId("recon-row").map((r) => [r.dataset.rowId, r.dataset.state]));
-const panel = () => screen.getByTestId("match-panel");
+/** Desktop: the full comparison (MatchPanel) opens in a drawer from the dock's "Full details"; phones show it in the row's sheet. */
+const panel = () => screen.queryByTestId("match-panel") ?? (fireEvent.click(screen.getByTestId("dock-details")), screen.getByTestId("match-panel"));
 const select = (id: string) => fireEvent.click(rowEl(id));
 const count = (key: string) => screen.getByTestId(`readiness-${key}`).querySelector("dd")!.textContent;
 
@@ -116,10 +117,10 @@ describe("statement account bar", () => {
     render(<ReconciliationWorkspace uid="u1" data={DATA} sync={LOADED} />);
     expect(states()).toMatchObject({ r1: "near_amount", r2: "no_match" }); // the bank's Netflix is never a card candidate
     select("r1");
-    fireEvent.click(within(panel()).getByRole("button", { name: "Already recorded — skip import" }));
+    fireEvent.click(screen.getByTestId("resolve-keep_existing"));
     select("r2");
-    fireEvent.click(within(panel()).getByRole("button", { name: "Skip this transaction" }));
-    expect(within(rowEl("r1")).getByText("Already recorded")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("resolve-skip"));
+    expect(within(rowEl("r1")).getByText("Keep existing")).toBeTruthy();
 
     pick("SBI Savings");
     const dialog = screen.getByRole("dialog");
@@ -158,14 +159,14 @@ describe("duplicate comparison", () => {
     seed("acc-card");
     render(<ReconciliationWorkspace uid="u1" data={DATA} sync={LOADED} />);
     select("r1");
-    for (const name of ["Already recorded — skip import", "Add as a separate transaction", "Not this match", "Review later"]) {
+    for (const name of ["Keep existing", "Keep both", "Not this match", "Review later"]) {
       expect(within(panel()).getByRole("button", { name })).toBeTruthy();
     }
     fireEvent.click(within(panel()).getByRole("button", { name: "Not this match" }));
     expect(within(panel()).queryAllByTestId("match-candidate")).toHaveLength(0);
     expect(rowEl("r1").dataset.state).toBe("no_match");
-    // With nothing to compare, the add action reads simply "Add as new transaction".
-    expect(within(panel()).getByRole("button", { name: "Add as new transaction" })).toBeTruthy();
+    // With nothing to compare, the add action reads simply "Import new".
+    expect(within(panel()).getByRole("button", { name: "Import new" })).toBeTruthy();
   });
 });
 
@@ -178,11 +179,11 @@ describe("readiness summary", () => {
     expect((screen.getByTestId("open-approval") as HTMLButtonElement).disabled).toBe(true);
 
     select("r5"); // in a closed card bill → can't be added; skipping it resolves the review
-    expect(within(panel()).getByTestId("import-blocked").textContent).toMatch(/Can't add as new/);
+    expect(within(panel()).getByTestId("import-blocked").textContent).toMatch(/Can't import/);
     fireEvent.click(within(panel()).getByRole("button", { name: "Skip this transaction" }));
     const hint = screen.getByTestId("approval-hint").textContent!;
     expect(hint).toMatch(/Final approval would add 1 new transaction;/);
-    expect(hint).toMatch(/already-recorded, skipped and Inbox rows are never written/);
+    expect(hint).toMatch(/kept-existing, skipped and Inbox rows are never written/);
     expect(hint).not.toMatch(/\ball\b/i);
     expect(count("blocked")).toBe("0");
   });
@@ -199,12 +200,19 @@ describe("draft-only editor and zero writes", () => {
     expect((screen.getByRole("switch", { name: /Split expense/ }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.change(screen.getByLabelText("Notes"), { target: { value: "checked with receipt" } });
     expect(sessionStorage.getItem(`${DRAFT_KEY_PREFIX}u1`)).toContain("checked with receipt");
+    // The row sheet is modal: close it before going back to the dock.
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
 
     // A full review pass — decisions, comparison, account change — still writes nothing.
     select("r1");
-    fireEvent.click(within(panel()).getByRole("button", { name: "Already recorded — skip import" }));
+    fireEvent.click(screen.getByTestId("resolve-merge_details"));
+    fireEvent.click(screen.getByRole("button", { name: "Close preview" }));
+    fireEvent.click(screen.getByTestId("resolve-keep_existing"));
     select("r3");
-    fireEvent.click(within(panel()).getByRole("button", { name: "Add as new transaction" }));
+    fireEvent.click(screen.getByTestId("resolve-import_new"));
+    fireEvent.change(screen.getByLabelText("Category for import"), { target: { value: "Food" } });
+    fireEvent.click(screen.getByTestId("import-confirm-submit"));
+    expect(within(rowEl("r3")).getByText("Import new")).toBeTruthy();
     pick("SBI Savings");
     fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Change account" }));
     expect(readData).not.toHaveBeenCalled();
@@ -213,11 +221,12 @@ describe("draft-only editor and zero writes", () => {
 });
 
 describe("layout contracts", () => {
-  it("desktop: the grid body is its own scroll region, the action bar is a fixed part of the workspace (not floating over rows)", () => {
+  it("desktop: each sheet's body is its own scroll region; the dock and action bar are fixed parts of the workspace (not floating over rows)", () => {
     seed("acc-card");
     render(<ReconciliationWorkspace uid="u1" data={DATA} sync={LOADED} />);
     expect(screen.getByTestId("recon-grid-body").className).toMatch(/overflow-y-auto/);
-    expect(screen.getByTestId("compare-aside").className).toMatch(/overflow-y-auto/);
+    expect(screen.getByTestId("existing-grid-body").className).toMatch(/overflow-y-auto/);
+    expect(screen.getByTestId("resolution-dock").className).toMatch(/shrink-0/);
     const bar = screen.getByTestId("status-bar");
     expect(bar.className).toMatch(/shrink-0/);
     expect(bar.className).not.toMatch(/sticky/);

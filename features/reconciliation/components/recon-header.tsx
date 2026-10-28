@@ -45,14 +45,14 @@ export function ReconAccountBar({
       aria-label="Statement account"
       data-testid="account-bar"
       data-selected={selected ? "true" : "false"}
-      className={cn("flex flex-wrap items-center gap-x-4 gap-y-2 rounded-2xl border px-3 py-2.5 sm:px-4", selected ? "border-border bg-card" : "border-warning/50 bg-warning/5")}
+      className={cn("flex flex-wrap items-center gap-x-4 gap-y-2 rounded-2xl border px-3 py-2.5 sm:px-4 lg:min-h-10 lg:flex-nowrap lg:gap-x-3 lg:rounded-xl lg:py-1", selected ? "border-border bg-card" : "border-warning/50 bg-warning/5")}
     >
-      <div className="flex min-w-0 flex-1 basis-72 items-center gap-3">
-        <span className={cn("grid size-9 shrink-0 place-items-center rounded-xl", selected ? "bg-primary/12 text-primary-accent-text" : "bg-warning/15 text-warning")}>
-          {selected ? <Icon className="size-4.5" /> : <AlertTriangle className="size-4.5" />}
+      <div className="flex min-w-0 flex-1 basis-72 items-center gap-3 lg:flex-initial lg:shrink-0 lg:basis-auto lg:gap-2.5">
+        <span className={cn("grid size-9 shrink-0 place-items-center rounded-xl lg:size-7 lg:rounded-lg", selected ? "bg-primary/12 text-primary-accent-text" : "bg-warning/15 text-warning")}>
+          {selected ? <Icon className="size-4.5 lg:size-4" /> : <AlertTriangle className="size-4.5 lg:size-4" />}
         </span>
-        <div className="min-w-0">
-          <p className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">Statement account</p>
+        <div className="min-w-0 lg:flex lg:items-baseline lg:gap-x-2.5">
+          <p className="shrink-0 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase lg:text-[10.5px]">Statement account</p>
           {status === "loading" && !selected ? (
             <p className="flex items-center gap-1.5 text-sm text-muted-foreground" data-testid="accounts-loading">
               <Loader2 className="size-3.5 animate-spin" /> Loading your accounts…
@@ -62,18 +62,18 @@ export function ReconAccountBar({
               Couldn&apos;t load your accounts, so none can be chosen yet.
             </p>
           ) : selected ? (
-            <p className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5" data-testid="selected-account">
-              <span className="truncate text-sm font-semibold text-foreground">{selected.name}</span>
-              <span className="rounded-md bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground">{selected.kind}</span>
-              {selected.last4 && <span className="font-mono text-xs text-muted-foreground tabular-nums">•••• {selected.last4}</span>}
+            <p className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 lg:flex-nowrap" data-testid="selected-account">
+              <span className="truncate text-sm font-semibold text-foreground lg:max-w-[18rem]">{selected.name}</span>
+              <span className="rounded-md bg-muted px-1.5 py-0.5 text-[11px] font-medium whitespace-nowrap text-muted-foreground">{selected.kind}</span>
+              {selected.last4 && <span className="font-mono text-xs whitespace-nowrap text-muted-foreground tabular-nums">•••• {selected.last4}</span>}
             </p>
           ) : (
-            <p className="text-sm text-foreground" data-testid="choose-account">
+            <p className="text-sm text-foreground lg:truncate" data-testid="choose-account">
               <span className="font-semibold">No account selected.</span>{" "}
               <span className="text-muted-foreground">{missing ? "The account chosen earlier no longer exists — choose another." : "Choose the card or account this statement belongs to. Nothing is pre-selected."}</span>
             </p>
           )}
-          {selected && <p className="text-[11px] text-muted-foreground">Matches are checked against this account only.</p>}
+          {selected && <p className="text-[11px] text-muted-foreground lg:hidden">Matches are checked against this account only.</p>}
         </div>
       </div>
 
@@ -130,19 +130,23 @@ export function ReconAccountBar({
         </Popover>
       )}
 
-      <div className="flex w-full min-w-0 flex-col gap-0.5 text-[11px] text-muted-foreground lg:w-auto lg:max-w-sm lg:text-right">
+      {/* Desktop: one quiet line (period · draft scope); the full privacy sentence stays readable on hover and for screen readers. */}
+      <div className="flex w-full min-w-0 flex-col gap-0.5 text-[11px] text-muted-foreground lg:ml-auto lg:w-auto lg:min-w-0 lg:flex-row lg:items-center lg:gap-3 lg:whitespace-nowrap">
         {period && (
-          <p>
-            Statement rows {formatRowDate(period.from)} – {formatRowDate(period.to, true)}
+          <p className="tabular-nums">
+            <span className="lg:hidden">Statement rows </span>
+            {formatRowDate(period.from)} – {formatRowDate(period.to, true)}
           </p>
         )}
-        <p className="flex items-start gap-1.5 lg:justify-end" data-testid="privacy-notice">
-          <Lock className="mt-px size-3 shrink-0" />
+        <p className="flex min-w-0 items-start gap-1.5 lg:items-center" data-testid="privacy-notice" title={storageFailed ? undefined : "Draft kept in this tab for 12 hours at most. Screenshots and raw text are never saved."}>
+          <Lock className="mt-px size-3 shrink-0 lg:mt-0" />
           {storageFailed ? (
-            <span>This browser isn&apos;t keeping a draft — your review lasts until you leave or refresh.</span>
+            <span className="lg:truncate">This browser isn&apos;t keeping a draft — your review lasts until you leave or refresh.</span>
           ) : (
-            <span>
-              Draft kept in this tab for 12 hours at most{expiresAt ? ` (until ${new Date(expiresAt).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })})` : ""}. Screenshots and raw text are never saved.
+            // relative: the screen-reader-only tail is clipped here instead of widening <main>'s scroll area.
+            <span className="lg:relative lg:truncate">
+              Draft kept in this tab for 12 hours at most{expiresAt ? ` (until ${new Date(expiresAt).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })})` : ""}
+              <span className="lg:sr-only">. Screenshots and raw text are never saved.</span>
             </span>
           )}
         </p>

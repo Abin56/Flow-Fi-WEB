@@ -23,6 +23,7 @@ import { ExpenseRepository, type ExpenseParticipantInput } from "@/lib/repositor
 import type { SplitParticipantDraft } from "@/lib/models/document-import";
 import { resolveMixedSplit } from "@/lib/split/mixed-split";
 import type { GridRow } from "../../lib/grid-types";
+import { addablePeople, repeatedParticipantError } from "../../lib/split-participant-identity";
 import { InspectorShell } from "./inspector-shell";
 
 type SplitMode = "equal" | "percentage" | "custom";
@@ -108,6 +109,8 @@ export function SharedExpenseInspector({
   );
 
   const { resolved, error } = useMemo(() => {
+    const repeated = repeatedParticipantError(participants, people);
+    if (repeated) return { resolved: null, error: repeated };
     if (isMixedMode) {
       if (mixed.error) return { resolved: null, error: mixed.error };
       const shares = participants.map((p) => ({
@@ -132,9 +135,11 @@ export function SharedExpenseInspector({
     } catch (e) {
       return { resolved: null, error: e instanceof Error ? e.message : "Invalid split" };
     }
-  }, [participants, mode, isMixedMode, row.amount, mixed]);
+  }, [participants, people, mode, isMixedMode, row.amount, mixed]);
 
   function commitIfValid(nextParticipants: DraftParticipant[], nextMode: SplitMode) {
+    // The same person twice (picked + typed) is never saved; the preview shows why.
+    if (repeatedParticipantError(nextParticipants, people)) return;
     try {
       if (nextMode !== "percentage") {
         const nextMixed = resolveMixedSplit(
@@ -218,7 +223,7 @@ export function SharedExpenseInspector({
     commitIfValid(next, mode);
   }
 
-  const availablePeople = people.filter((p) => !participants.some((d) => d.personId === p.id));
+  const availablePeople = addablePeople(people, participants);
 
   return (
     <InspectorShell title="Shared Expense" subtitle={`Total ${formatCurrencyPrecise(row.amount)}`} onClose={onClose} hideClose={hideClose} embedded={embedded}>

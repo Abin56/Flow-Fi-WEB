@@ -18,6 +18,7 @@ import { auditReportToJson, runFinancialAudit, type AuditReport, type Finding } 
 import { inspectLegacyCaseA, type LegacyCaseAReport } from "@/lib/engines/legacy-card-emi-inspection";
 import { formatCurrencyPrecise } from "@/lib/format";
 import { useAuthStore } from "@/store/auth-store";
+import { BalanceChecksSection } from "@/features/balance-control/components/balance-checks-section";
 import { loadAuditData } from "../lib/load-audit-data";
 
 type Filter = "all" | "confirmed" | "suspected";
@@ -197,6 +198,8 @@ export function FinancialAuditWorkspace() {
           <Download className="size-4" /> Export report
         </Button>
       </div>
+
+      <BalanceChecksSection />
 
       {state === "error" && <p className="rounded-xl border border-destructive/40 p-3 text-sm text-destructive">{error}</p>}
       {!report && state !== "loading" && (

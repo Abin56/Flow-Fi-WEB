@@ -79,6 +79,7 @@ import {
   StatementPaymentRepository,
   StatementRepository,
 } from "./credit-card-repository";
+import { CreditLimitCorrectionRepository } from "./credit-limit-correction-repository";
 import { DocumentImportRecordRepository } from "./document-import-record-repository";
 import { SmsTransactionCandidateRepository } from "./sms-transaction-candidate-repository";
 import { EmiPaymentBreakdownRepository, EmiRepository } from "./emi-repository";
@@ -280,6 +281,12 @@ export function createCreditCardRepository(
     creditCardConverter,
   );
   return new CreditCardRepository(ref, sharedCreditLimitRepository);
+}
+
+export function createCreditLimitCorrectionRepository(uid: string): CreditLimitCorrectionRepository {
+  const sharedLimits = createSharedCreditLimitRepository(uid);
+  const cards = createCreditCardRepository(uid, sharedLimits);
+  return new CreditLimitCorrectionRepository(cards, sharedLimits);
 }
 
 /**

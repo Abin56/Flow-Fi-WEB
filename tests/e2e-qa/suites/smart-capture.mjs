@@ -146,7 +146,12 @@ scenario("scap-paste", "Smart Capture: Continue hands verified rows to Reconcili
   chk("existing salary is an exact candidate", (await reconRow(page, "SALARY CREDIT").getAttribute("data-state")) === "exact_candidate");
   chk("the row excluded in Smart Capture stays excluded", (await reconRow(page, "CAFE NEW").getAttribute("data-state")) === "excluded");
   await reconRow(page, "QA GROCERIES").click();
-  await page.getByRole("complementary", { name: "Match comparison" }).getByRole("button", { name: /Already recorded — skip import/ }).first().click();
+  // Dual-Sheet UI: the comparison dock compares the row with the existing groceries expense; Keep existing = the old
+  // "Already recorded — skip import" (a draft Link, never a write).
+  const dock = page.getByTestId("resolution-dock");
+  chk("the dock compares the groceries row with an existing FlowFi transaction", (await dock.getAttribute("data-record-id")) != null);
+  await dock.getByTestId("resolve-keep_existing").click();
+  chk("Keep existing recorded as the draft decision", (await reconRow(page, "QA GROCERIES").innerText()).includes("Keep existing"));
   await h.shot(page, "scap-handoff-reconciliation");
 
   // Back → Smart Capture reopens the capture from memory.
@@ -156,14 +161,27 @@ scenario("scap-paste", "Smart Capture: Continue hands verified rows to Reconcili
   chk("…with the exclusion intact", (await page.getByTestId("review-row").nth(2).getAttribute("data-status")) === "excluded");
   await page.getByRole("button", { name: /Next: Check duplicates/ }).click();
   await page.getByTestId("handoff-notice").filter({ hasText: /nothing changed, your decisions are kept/ }).waitFor({ timeout: 60000 });
-  chk("re-Continue of the same capture keeps the link", (await reconRow(page, "QA GROCERIES").innerText()).includes("Already recorded"));
+  chk("re-Continue of the same capture keeps the link", (await reconRow(page, "QA GROCERIES").innerText()).includes("Keep existing"));
 
   // Refresh: the review survives from the tab draft.
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.getByText("Restored your review").waitFor({ timeout: 120000 });
   await page.waitForFunction(() => [...document.querySelectorAll('[data-testid="recon-row"]')].some((r) => r.getAttribute("data-state") === "exact_candidate"), null, { timeout: 60000 });
-  chk("refresh keeps the review and the link", (await reconRow(page, "QA GROCERIES").innerText()).includes("Already recorded"));
+  chk("refresh keeps the review and the link", (await reconRow(page, "QA GROCERIES").innerText()).includes("Keep existing"));
   chk("NOTHING was written", (await snapshotWrites()) === before, `${before} → ${await snapshotWrites()}`);
+
+  // Final approval of a review whose rows are all already in FlowFi: the summary says nothing will be imported, offers
+  // no import action at all, and FlowFi stays exactly as it is.
+  await reconRow(page, "SALARY CREDIT").click();
+  await page.getByTestId("resolution-dock").getByTestId("resolve-keep_existing").click();
+  chk("every included row decided", (await page.getByTestId("progress-count").innerText()).trim() === "2/2");
+  await page.getByTestId("open-approval").click();
+  const dlg = page.getByTestId("approval-dialog");
+  await dlg.getByTestId("approval-nothing").waitFor({ timeout: 60000 });
+  chk("approval summary: nothing will be imported", /Nothing will be imported/.test(await dlg.getByTestId("approval-nothing").innerText()));
+  chk("…and no import / approve action is offered", (await dlg.getByTestId("approval-submit").count()) === 0 && (await dlg.getByTestId("approval-confirm").count()) === 0);
+  await h.shot(page, "scap-handoff-approval");
+  chk("final approval of kept-existing rows wrote NOTHING", (await snapshotWrites()) === before, `${before} → ${await snapshotWrites()}`);
 });
 
 scenario("scap-ocr", "Smart Capture: screenshot OCR — self-hosted assets, timing, accuracy, bulk + individual gates", async ({ page, ctx }, chk, notes) => {
@@ -247,7 +265,9 @@ scenario("scap-ocr", "Smart Capture: screenshot OCR — self-hosted assets, timi
   await page.getByRole("button", { name: /(Choose|Change) statement account/ }).click();
   await page.getByRole("option", { name: /QA Credit Card/ }).click();
   await page.waitForFunction(() => [...document.querySelectorAll('[data-testid="recon-row"]')].every((r) => r.getAttribute("data-state") !== "pending"), null, { timeout: 60000 });
-  const aside = page.getByRole("complementary", { name: "Match comparison" });
+  // Dual-Sheet UI: the full comparison (with the row's screenshot strip) opens from the dock's "Full details".
+  await page.getByTestId("dock-details").click();
+  const aside = page.getByRole("dialog");
   const zoomImg = aside.getByTestId("row-zoom").locator("img");
   await zoomImg.waitFor({ timeout: 30000 });
   chk("the row's strip of the screenshot is shown beside the comparison", /^blob:/.test((await zoomImg.getAttribute("src")) ?? ""));
@@ -259,6 +279,8 @@ scenario("scap-ocr", "Smart Capture: screenshot OCR — self-hosted assets, timi
   // After a refresh the screenshot is gone (never stored) — and the page says so.
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.getByText("Restored your review").waitFor({ timeout: 120000 });
+  await page.waitForFunction(() => [...document.querySelectorAll('[data-testid="recon-row"]')].every((r) => r.getAttribute("data-state") !== "pending"), null, { timeout: 60000 });
+  await page.getByTestId("dock-details").click();
   await aside.getByTestId("screenshot-unavailable").waitFor({ timeout: 60000 });
   chk("after refresh: screenshot clearly marked unavailable", true);
   const stored = await page.evaluate(() => Object.keys(sessionStorage).map((k) => sessionStorage.getItem(k)).join(""));

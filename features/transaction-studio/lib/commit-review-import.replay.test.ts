@@ -257,15 +257,23 @@ describe("commit replay — network interruption after the money write, before t
     expect(store.createExpense).not.toHaveBeenCalled();
   });
 
-  it("a row whose earlier attempt's transaction was since DELETED is recorded afresh (replay never resurrects a deleted transaction)", async () => {
+  // P0 (2026-10-27): this used to "record afresh" under a generated id — a second copy of money the user deleted.
+  it("a row whose earlier import was since DELETED is blocked: nothing written, never resurrected, never a random-id copy", async () => {
     const store = memoryRepos();
     await commitReviewImport({ ...baseParams, documentId: DOC, rows: [row()], repositories: store.repositories, onRowCommitted: flakyAcknowledgement(3).onRowCommitted });
     const [only] = [...store.transactions.values()];
     (only as { deletedAt: Date | null }).deletedAt = new Date();
+    const createTransaction = store.createTransaction;
+    createTransaction.mockClear();
 
     const again = await commitReviewImport({ ...baseParams, documentId: DOC, rows: [row()], repositories: store.repositories, onRowCommitted: vi.fn() });
-    expect(again.committedCount).toBe(1);
-    expect([...store.transactions.values()].filter((t) => t.deletedAt == null)).toHaveLength(1);
+    expect(again.committedCount).toBe(0);
+    expect(again.blockedCount).toBe(1);
+    expect(again.results[0].blockingReasons?.[0]).toMatchObject({ code: "deleted_import" });
+    expect(again.results[0].blockingReasons?.[0].message).toMatch(/restore it from Transactions → Trash/);
+    expect(createTransaction).not.toHaveBeenCalled();
+    expect(store.transactions.size).toBe(1);
+    expect([...store.transactions.values()].filter((t) => t.deletedAt == null)).toHaveLength(0);
   });
 });
 

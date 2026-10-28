@@ -19,14 +19,14 @@ import {
   type ReceivedStatus,
   type SplitType,
 } from "@/lib/models/expense";
-import type { Installment } from "@/lib/models/payment-schedule";
+import type { Installment, PaymentSchedule } from "@/lib/models/payment-schedule";
 import { remainingAmount as installmentRemainingAmount } from "@/lib/models/payment-schedule";
 import { type LedgerEntry, type LedgerEntryType, type LedgerSourceKind, type Person, signedAmount } from "@/lib/models/person";
 import { TxSession } from "@/lib/firestore/tx-session";
 import { generateId } from "@/lib/utils/id-generator";
 import { InstallmentPaymentRepository, InstallmentRepository, PaymentScheduleRepository } from "./payment-schedule-repository";
 import { LedgerRepository, PersonRepository } from "./person-repository";
-import { TransactionRepository } from "./transaction-repository";
+import { KeyedTransactionDeletedError, TransactionRepository } from "./transaction-repository";
 import type { Transaction } from "@/lib/models/transaction";
 import { type CollectionReference, getDocs, query, runTransaction, where } from "firebase/firestore";
 
@@ -266,6 +266,104 @@ function assertNoCashlessReceipt(participants: readonly ExpenseParticipant[], pr
   if (offender) throw new ReceivedWithoutCashError(offender.name);
 }
 
+/**
+ * The same person twice in one keyed split — typically picked from People AND typed as a custom name that resolves to
+ * them. `resolveShares` can't see it (picked rows are compared by id, typed ones by name); left in, both shares would
+ * land on ONE deterministic ledger id (`led_<key>_<personId>`) while the balance moved twice. Nothing was written.
+ */
+export class DuplicateSplitParticipantError extends Error {
+  constructor(readonly personName: string) {
+    super(`${personName} is already in this split — the same person can't be added twice (once picked, once by name). Remove one of the rows. Nothing was recorded.`);
+    this.name = "DuplicateSplitParticipantError";
+  }
+}
+
+/** A person other than "Me" was given a zero or negative share — it would write a ₹0 obligation (nothing is owed). Nothing was written. */
+export class InvalidSplitShareError extends Error {
+  constructor(readonly personName: string) {
+    super(`${personName || "A person"} has a share of ₹0 or less — give them an amount above zero, or remove them from this split. Nothing was recorded.`);
+    this.name = "InvalidSplitShareError";
+  }
+}
+
+/** Throws `InvalidSplitShareError` for a non-"Me" participant whose share is not a positive amount. "Me" may be ₹0. */
+function assertPositiveShares(participants: readonly ExpenseParticipant[]): void {
+  const bad = participants.find((p) => !p.isMe && !(p.share >= 0.005));
+  if (bad) throw new InvalidSplitShareError(bad.name.trim());
+}
+
+/** Throws `DuplicateSplitParticipantError` when a non-"Me" person id appears more than once. */
+function assertDistinctPeople(participants: readonly ExpenseParticipant[]): void {
+  const seen = new Set<string>();
+  for (const p of participants) {
+    if (p.isMe || p.personId == null) continue;
+    if (seen.has(p.personId)) throw new DuplicateSplitParticipantError(p.name);
+    seen.add(p.personId);
+  }
+}
+
+/**
+ * A keyed (statement-import) split already exists under this import key, but NOT with the same money, account, date,
+ * participants or allocation — it is never silently reused or overwritten. Nothing was written.
+ */
+export class KeyedExpenseMismatchError extends Error {
+  constructor(readonly expenseId: string, detail: string) {
+    super(`This row was imported before as a split (${expenseId}) with different details (${detail}). Nothing was written — review it in People / Transactions.`);
+    this.name = "KeyedExpenseMismatchError";
+  }
+}
+
+/**
+ * The import key's bank transaction exists but its split/People details don't — an earlier, non-atomic attempt
+ * stopped part-way. Finding the transaction never proves the rest completed, so nothing is written automatically.
+ */
+export class KeyedExpenseIncompleteError extends Error {
+  constructor(readonly transactionId: string) {
+    super(`An earlier attempt recorded this row's transaction (${transactionId}) but not its split / People details. Nothing was written — review that transaction manually.`);
+    this.name = "KeyedExpenseIncompleteError";
+  }
+}
+
+/** Every document one keyed split import writes — derived from the import key, so a retry or a second tab addresses the SAME documents. */
+export function keyedSplitIds(idempotencyKey: string) {
+  return {
+    transactionId: `txn_${idempotencyKey}`,
+    expenseId: `exp_${idempotencyKey}`,
+    scheduleId: `sch_${idempotencyKey}`,
+    installmentId: (sequenceNumber: number) => `sch_${idempotencyKey}_i${sequenceNumber}`,
+    ledgerEntryId: (personId: string) => `led_${idempotencyKey}_${personId}`,
+  };
+}
+
+const sameMoney = (a: number, b: number) => Math.abs(a - b) < 0.005;
+const normalizedName = (name: string) => name.trim().toLowerCase();
+
+/**
+ * Why `expense` is NOT the keyed split `params` asked for (null = identical): amount, account, date, split type, the
+ * backing transaction, and every participant's role, identity (person id when the request names one, else name) and
+ * share — one-to-one.
+ */
+function keyedExpenseDifference(expense: Expense, params: CreateExpenseParams, requested: readonly ExpenseParticipant[], transactionId: string): string | null {
+  if (!sameMoney(expense.totalAmount, params.totalAmount)) return "amount";
+  if (expense.accountId !== params.accountId) return "account";
+  if (expense.date.getTime() !== params.date.getTime()) return "date";
+  if (expense.splitType !== params.splitType) return "split type";
+  if (expense.transactionId !== transactionId) return "transaction";
+  if (expense.participants.length !== requested.length) return "participants";
+  const unmatched = [...expense.participants];
+  for (const want of requested) {
+    const at = unmatched.findIndex(
+      (have) =>
+        have.isMe === want.isMe &&
+        sameMoney(have.share, want.share) &&
+        (want.isMe || (want.personId != null ? have.personId === want.personId : normalizedName(have.name) === normalizedName(want.name))),
+    );
+    if (at < 0) return "participants / allocation";
+    unmatched.splice(at, 1);
+  }
+  return null;
+}
+
 export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
   constructor(
     collection: CollectionReference<Expense>,
@@ -401,12 +499,25 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
    * picking an existing Person up front, so a `personId` is never null there
    * for a real ledger-bound participant.
    */
-  private async promoteCustomNameParticipants(participants: ExpenseParticipant[], journal?: SplitWriteJournal): Promise<ExpenseParticipant[]> {
+  private async promoteCustomNameParticipants(
+    participants: ExpenseParticipant[],
+    journal?: SplitWriteJournal,
+    /** Refuse (before creating any contact) a typed name that resolves to a person already picked in this split. */
+    rejectRepeats = false,
+  ): Promise<ExpenseParticipant[]> {
     const needsPromotion = participants.some((p) => !p.isMe && p.personId == null && p.name.trim() !== "");
     if (!needsPromotion) return participants;
 
     const existingPeople = await this.personRepository.getAll();
     const byNormalizedName = new Map(existingPeople.map((p) => [p.name.trim().toLowerCase(), p]));
+    if (rejectRepeats) {
+      const picked = new Set(participants.filter((p) => !p.isMe && p.personId != null).map((p) => p.personId));
+      for (const p of participants) {
+        if (p.isMe || p.personId != null) continue;
+        const match = byNormalizedName.get(p.name.trim().toLowerCase());
+        if (match != null && picked.has(match.id)) throw new DuplicateSplitParticipantError(p.name.trim());
+      }
+    }
     // Also de-dupes within this same split — two custom-name rows with the
     // same typed name resolve to the one Person created for the first.
     const createdThisCall = new Map<string, Person>();
@@ -611,9 +722,203 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
       // (retry sees no committed Expense, so it creates a second Transaction).
       // Every share, installment, schedule and auto-created person written so far is
       // undone too, so a failed split leaves zero partial financial state.
-      await this.rollbackSplitWrites(journal, { expenseId, transaction }, error);
+      await this.rollbackSplitWrites(journal, { expenseId, transaction, keyedImport: params.idempotencyKey != null }, error);
       throw error;
     }
+  }
+
+  /**
+   * Opt-in, for statement imports (`idempotencyKey` required): `createExpense`'s exact result — the account-affecting
+   * Transaction, its account balance, the PaymentSchedule + Installments, every People ledger entry and each person's
+   * balance, and the Expense — written in ONE Firestore transaction under ids derived from the key (`keyedSplitIds`).
+   * So it is all-or-nothing: a failure leaves nothing to roll back, a retry or a concurrent second tab finds the same
+   * documents, and:
+   *  - an identical split already there → returned, nothing written (replay);
+   *  - a different one → `KeyedExpenseMismatchError`, nothing written (never silently reused);
+   *  - the transaction there without its split (an older, non-atomic attempt) → `KeyedExpenseIncompleteError`;
+   *  - the transaction deleted by the user → `KeyedTransactionDeletedError`; deleted by an import's own rollback
+   *    (marker) → recorded again under the same id.
+   * Custom-name participants are promoted to People BEFORE the write (a zero-balance contact, reused by name — no
+   * financial effect). `createExpense`/`assignToPerson` are unchanged for every other caller.
+   */
+  async createExpenseAtomic(params: CreateExpenseParams & { idempotencyKey: string }): Promise<Expense> {
+    if (params.description.trim() === "") throw new Error("Expense description is required");
+    if (params.totalAmount <= 0) throw new Error("Total amount must be greater than 0");
+    const requested = ExpenseRepository.resolveShares({ type: params.splitType, total: params.totalAmount, inputs: params.participantInputs ?? [] });
+    assertNoCashlessReceipt(requested);
+    assertPositiveShares(requested); // before any contact is created or transaction started
+    const ids = keyedSplitIds(params.idempotencyKey);
+
+    // Replays never promote names; a first write promotes them once (reused by name on any retry).
+    const alreadyThere = (await this.getByKey(ids.expenseId)) != null;
+    const participants = alreadyThere ? requested : await this.promoteCustomNameParticipants(requested, undefined, true);
+    // Each person once: the ledger entry id is per person, so a repeat would overwrite one share yet move the balance twice.
+    assertDistinctPeople(participants);
+    const collectible = participants.filter((p) => !p.isMe);
+    if (participants.length > 0 && collectible.length === 0) throw new Error("Add at least one other person to share with");
+    // An expense an older, non-atomic attempt wrote under a generated id is looked up per attempt (queries can't run
+    // inside a transaction). A client transaction only validates its reads at commit, so a body that THROWS can have read a half-updated
+    // picture (another tab committed between two reads: "no expense" then "transaction live"). Those two verdicts are
+    // therefore re-checked with a fresh transaction before they are reported; a real partial state persists.
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await this.writeKeyedExpense(params, ids, requested, participants, collectible, await this.findActiveByTransactionId(ids.transactionId));
+      } catch (error) {
+        const raceable = error instanceof KeyedExpenseIncompleteError || (error instanceof KeyedExpenseMismatchError && error.message.includes("(transaction deleted)"));
+        if (!raceable || attempt >= 3) throw error;
+      }
+    }
+  }
+
+  private writeKeyedExpense(
+    params: CreateExpenseParams & { idempotencyKey: string },
+    ids: ReturnType<typeof keyedSplitIds>,
+    requested: ExpenseParticipant[],
+    participants: ExpenseParticipant[],
+    collectible: ExpenseParticipant[],
+    earlierExpense: Expense | null,
+  ): Promise<Expense> {
+    const expenseRef = this.docRef(ids.expenseId);
+    const transactionRef = this.transactionRepository.docRef(ids.transactionId);
+    return runTransaction(this.collection.firestore, async (tx) => {
+      // ---- reads (all before any write) ----
+      const [expenseSnap, transactionSnap] = [await tx.get(expenseRef), await tx.get(transactionRef)];
+      if (expenseSnap.exists()) {
+        const existing = expenseSnap.data();
+        if (existing.deletedAt != null) throw new KeyedTransactionDeletedError(ids.transactionId);
+        const liveTransaction = transactionSnap.exists() && transactionSnap.data().deletedAt == null;
+        const difference = liveTransaction ? keyedExpenseDifference(existing, params, requested, ids.transactionId) : "transaction deleted";
+        if (difference) throw new KeyedExpenseMismatchError(existing.id, difference);
+        return existing;
+      }
+      if (transactionSnap.exists() && transactionSnap.data().deletedAt == null) {
+        if (earlierExpense != null) {
+          const difference = keyedExpenseDifference(earlierExpense, params, requested, ids.transactionId);
+          if (difference) throw new KeyedExpenseMismatchError(earlierExpense.id, difference);
+          return earlierExpense;
+        }
+        throw new KeyedExpenseIncompleteError(ids.transactionId);
+      }
+      const people = new Map<string, Person>();
+      for (const p of collectible) {
+        if (p.personId == null || people.has(p.personId)) continue;
+        const snap = await tx.get(this.personRepository.docRef(p.personId));
+        if (!snap.exists() || snap.data().deletedAt != null) throw new Error(`${p.name} isn't in People any more — this split can't be recorded.`);
+        people.set(p.personId, snap.data());
+      }
+      // Reads the keyed slot (deleted → refused, or re-recorded only behind an unconsumed rollback marker) and the
+      // account, then writes the transaction + balance. Every write below comes after.
+      const transaction = await this.transactionRepository.createTransactionInTransaction(tx, {
+        type: "expense",
+        amount: params.totalAmount,
+        dateTime: params.date,
+        accountId: params.accountId,
+        categoryId: params.categoryId,
+        description: params.description,
+        isBusiness: params.isBusiness ?? false,
+        notes: params.notes ?? "",
+        excludeFromCalculations: params.excludeFromCalculations ?? false,
+        accountingMonth: params.accountingMonth ?? null,
+        idempotencyKey: params.idempotencyKey,
+        onDeletedKey: "replace_rolled_back",
+      });
+
+      // ---- writes ----
+      const now = new Date();
+      let scheduleId: string | null = null;
+      let resolved = participants;
+      if (participants.length > 0) {
+        const schedule: PaymentSchedule = {
+          id: ids.scheduleId,
+          ownerType: "splitExpense",
+          ownerId: ids.expenseId,
+          totalAmount: params.totalAmount,
+          scheduleType: "oneTime",
+          firstDueDate: params.dueDate ?? addDays(params.date, 7),
+          customIntervalDays: null,
+          installmentCount: collectible.length,
+          notes: "",
+          createdAt: now,
+          deletedAt: null,
+          lastEditedAt: null,
+          editHistory: [],
+        };
+        tx.set(this.paymentScheduleRepository.docRef(schedule.id), schedule);
+        scheduleId = schedule.id;
+        const installments = InstallmentRepository.buildInstallments(schedule, { precomputedAmounts: collectible.map((c) => ({ amountDue: c.share })), idFor: ids.installmentId });
+        const installmentRepository = this.installmentRepositoryFor(schedule.id);
+        for (const installment of installments) tx.set(installmentRepository.docRef(installment.id), installment);
+        let i = 0;
+        resolved = participants.map((p) => (p.isMe ? p : copyExpenseParticipant(p, { installmentId: installments[i++].id })));
+
+        const balances = new Map(people);
+        for (const p of resolved) {
+          if (p.isMe || p.personId == null) continue;
+          const person = balances.get(p.personId)!;
+          const entry: LedgerEntry = {
+            id: ids.ledgerEntryId(p.personId),
+            personId: p.personId,
+            type: "gave",
+            amount: p.share,
+            date: params.date,
+            note: `Split: ${params.description}`,
+            transactionRef: transaction.id,
+            parentEntryId: null,
+            sourceKind: params.sourceKind ?? "splitExpense",
+            obligationRef: null,
+            increasesBalance: true,
+            receivedStatus: "yetToReceive",
+            createdAt: now,
+            deletedAt: null,
+            lastEditedAt: null,
+            editHistory: [],
+          };
+          tx.set(this.ledgerRepositoryFor(p.personId).docRef(entry.id), entry);
+          balances.set(p.personId, this.personRepository.applyBalanceDelta(person, signedAmount(entry)));
+        }
+        for (const [personId, person] of balances) if (people.get(personId) !== person) tx.set(this.personRepository.docRef(personId), person);
+      }
+
+      const expense: Expense = {
+        id: ids.expenseId,
+        description: params.description,
+        totalAmount: params.totalAmount,
+        date: params.date,
+        categoryId: params.categoryId,
+        accountId: params.accountId,
+        transactionId: transaction.id,
+        splitType: params.splitType,
+        participants: resolved,
+        scheduleId,
+        notes: params.notes ?? "",
+        createdAt: now,
+        deletedAt: null,
+        lastEditedAt: null,
+        editHistory: [],
+      };
+      tx.set(expenseRef, expense);
+      return expense;
+    });
+  }
+
+  /** `assignToPerson` through `createExpenseAtomic` — the same single-participant split, all-or-nothing and keyed. */
+  assignToPersonAtomic(params: AssignToPersonParams & { idempotencyKey: string }): Promise<Expense> {
+    return this.createExpenseAtomic({
+      description: params.description,
+      totalAmount: params.totalAmount,
+      date: params.date,
+      categoryId: params.categoryId,
+      accountId: params.accountId,
+      splitType: "custom",
+      participantInputs: [{ personId: params.personId, name: params.personName, value: params.totalAmount }],
+      notes: params.notes,
+      dueDate: params.dueDate,
+      sourceKind: "assignedExpense",
+      excludeFromCalculations: params.excludeFromCalculations,
+      accountingMonth: params.accountingMonth,
+      isBusiness: params.isBusiness,
+      idempotencyKey: params.idempotencyKey,
+    });
   }
 
   /**
@@ -626,7 +931,7 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
    */
   private async rollbackSplitWrites(
     journal: SplitWriteJournal,
-    owned: { expenseId: string | null; transaction?: Transaction },
+    owned: { expenseId: string | null; transaction?: Transaction; /** The transaction is a keyed statement import — its rollback leaves the durable marker. */ keyedImport?: boolean },
     /** The failure being rolled back — its message is kept, so the real cause always surfaces. */
     original?: unknown,
   ): Promise<void> {
@@ -670,11 +975,19 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
     }
     if (owned.transaction) {
       const transaction = owned.transaction;
+      // L3: the retry marker vouches that EVERYTHING this attempt wrote was undone. If any step above failed (a ledger
+      // entry, installment, schedule, Expense or contact is still there), the transaction is soft-deleted WITHOUT it —
+      // the import then stays blocked ("deleted_import") for manual review, never retried automatically.
+      const fullyUndone = failures.length === 0;
       // Read fresh inside the same atomic write: an already-trashed Transaction is never reversed twice.
       await attempt(() =>
         runTransaction(this.collection.firestore, async (tx) => {
           const fresh = await this.transactionRepository.getInTransaction(tx, transaction.id);
-          if (fresh != null && fresh.deletedAt == null) await this.transactionRepository.softDeleteTransactionInTransaction(tx, fresh);
+          if (fresh == null || fresh.deletedAt != null) return;
+          // A keyed import's own rollback is recorded as such (atomically with the soft-delete), so a retry can tell it
+          // apart from the user deleting the import — see `ImportRollbackMarker`.
+          if (owned.keyedImport && fullyUndone) await this.transactionRepository.rollBackKeyedImportInTransaction(tx, fresh, original instanceof Error ? original.message : "split write failed");
+          else await this.transactionRepository.softDeleteTransactionInTransaction(tx, fresh);
         }),
       );
     }

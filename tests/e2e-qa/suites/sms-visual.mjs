@@ -178,7 +178,9 @@ for (const [vpName, vp] of Object.entries(VPS)) {
           return d;
         }
         async function closeDrawer(d) {
-          await d.getByLabel("Close").click();
+          await d.getByLabel("Close", { exact: true }).click();
+          const discard = page.getByRole("dialog").filter({ hasText: "Discard your changes?" });
+          if (await discard.isVisible().catch(() => false)) await discard.getByRole("button", { name: "Discard and close" }).click();
           await d.waitFor({ state: "detached", timeout: 10000 });
           await page.waitForTimeout(300);
         }
@@ -212,13 +214,13 @@ for (const [vpName, vp] of Object.entries(VPS)) {
         await page.waitForTimeout(300);
         await h.shot(page, tag("drawer-bottom"));
         // expand People & split on the expense
-        const splitBtn = d.getByRole("button", { name: /Split with more people/ });
+        const splitBtn = d.getByRole("radio", { name: "Split expense" });
         if (await splitBtn.isVisible().catch(() => false)) {
           await splitBtn.click();
           await page.waitForTimeout(300);
           chk("drawer: no horizontal overflow with the split editor open", (await d.evaluate((el) => el.scrollWidth - el.clientWidth)) <= 1);
           await h.shot(page, tag("drawer-split"));
-        } else notes.push("Split with more people button not visible (layout)");
+        } else notes.push("Split ownership option not visible (layout)");
         await closeDrawer(d);
 
         // ── duplicate candidate ──

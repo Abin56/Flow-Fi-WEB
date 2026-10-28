@@ -60,6 +60,9 @@ async function openDrawerFor(page, text) {
 }
 async function closeDrawer(page, d) {
   await d.getByLabel("Close", { exact: true }).click();
+  // Closing with edits asks first — discard them (nothing is ever imported by closing).
+  const discard = page.getByRole("dialog").filter({ hasText: "Discard your changes?" });
+  if (await discard.isVisible().catch(() => false)) await discard.getByRole("button", { name: "Discard and close" }).click();
   await d.waitFor({ state: "detached", timeout: 10000 });
   await page.waitForTimeout(300);
 }
@@ -100,7 +103,8 @@ scenario("sms-10-drawer-keyboard-navigation", "Keyboard-only drawer: focus trap,
   await page.keyboard.press("k");
   chk("K moves back (1 of 3)", /^1 of 3$/.test(await pos()), await pos());
   chk("navigating with the keyboard imported nothing", (await h.list("transactions")).length === txnsBefore);
-  // Typing J/K into a field is typing, not navigation.
+  // Typing J/K into a field is typing, not navigation. (Notes is folded by default — open it first.)
+  await d.getByRole("button", { name: /^Notes/ }).click();
   await d.getByRole("textbox").first().focus();
   await page.keyboard.type("jk");
   chk("typing 'jk' in Notes does not navigate", /^1 of 3$/.test(await pos()));

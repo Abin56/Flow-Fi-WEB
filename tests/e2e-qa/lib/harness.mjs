@@ -130,9 +130,23 @@ export async function addFixture(page, which) {
 }
 
 /** Client-side navigation — keeps the armed fault-injection hook (a reload would clear it). */
+/**
+ * Client-side navigation. `waitForURL` waits for a "load" event that a Next client-side route change never fires, so
+ * it hung; instead observe the route itself: the pathname (the app uses trailing slashes) and, when given, the query.
+ */
 export async function go(page, href) {
   await page.evaluate((h) => window.next.router.push(h), href);
-  await page.waitForURL(`**${href}*`, { timeout: 30000 });
+  await page.waitForFunction(
+    (target) => {
+      const want = new URL(target, location.origin);
+      const strip = (p) => p.replace(/\/+$/, "") || "/";
+      if (strip(location.pathname) !== strip(want.pathname)) return false;
+      const have = new URLSearchParams(location.search);
+      return [...want.searchParams].every(([k, v]) => have.get(k) === v);
+    },
+    href,
+    { timeout: 30000 },
+  );
 }
 
 export async function start(opts = {}) {

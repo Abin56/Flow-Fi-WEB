@@ -35,6 +35,25 @@
  *    isn't compensated, and fixing it is out of this file's scope since
  *    `ExpenseRepository` is shared app-wide, not Transaction-Studio-only;
  *    see B3's remaining-risks notes.
+ *
+ * Deleted imports (P0): a row whose deterministic key belongs to a transaction that was since soft-deleted is
+ * BLOCKED ("deleted_import") — never re-imported, never written under a generated id, never restored or overwritten.
+ * Checked before any write (so no EMI/loan/split step starts), and again inside the keyed write's own Firestore
+ * transaction (`onDeletedKey: "refuse"`), so a delete that lands between the two — or a second tab approving the same
+ * review — still can't produce a second copy.
+ *
+ * Splits and "someone else's expense" (SR-1/2/3): with a key they go through `ExpenseRepository.createExpenseAtomic` —
+ * transaction, balance, schedule, installments, People ledger + balances and the Expense in ONE Firestore transaction
+ * under key-derived ids. A retry or a second tab replays the identical split or is refused (never a second Expense or
+ * People obligation); a split that differs is never reused. A keyed transaction soft-deleted by an import's OWN
+ * rollback carries a durable marker (`ImportRollbackMarker`) and may be recorded again; a user-deleted one may not.
+ *
+ * Legacy keys (record-only `imp_<row>`, from builds before keys were scoped to the statement): a row without
+ * `committedTransactionId` whose legacy-keyed transaction is on the same account, of the same type, and within ±36 h
+ * of it (amount and description are NOT compared — a later edit must not bypass the guard; see
+ * `LEGACY_IMPORT_WINDOW_MS`) is BLOCKED for manual review ("import_review") — a match is evidence, not proof (another
+ * statement's row with the same number, or a same-day repeat), so it is never auto-acknowledged, skipped, restored or
+ * merged. Not complete protection: a date edited by more than 36 h, or an unkeyed legacy import, is not recognised.
  */
 
 import type { Account } from "@/lib/models/account";
@@ -51,7 +70,8 @@ import { ExpenseRepository } from "@/lib/repositories/expense-repository";
 import type { EmiRepository } from "@/lib/repositories/emi-repository";
 import type { LoanRepository } from "@/lib/repositories/loan-repository";
 import type { InstallmentRepository } from "@/lib/repositories/payment-schedule-repository";
-import type { TransactionRepository } from "@/lib/repositories/transaction-repository";
+import { KeyedTransactionDeletedError, transferPairIdsFor, type TransactionRepository } from "@/lib/repositories/transaction-repository";
+import { DuplicateSplitParticipantError, InvalidSplitShareError, KeyedExpenseIncompleteError, KeyedExpenseMismatchError } from "@/lib/repositories/expense-repository";
 import { checkForDuplicates, type DuplicateDetectionResult } from "@/lib/services/duplicate-detection/duplicate-detection-service";
 import { ACTION_META, actionDetailConsistencyError, deriveRecordAction, isCategoryApplicableForFlowType } from "./action-metadata";
 
@@ -65,7 +85,9 @@ export interface CommitBlockingReason {
     | "missing_detail"
     | "closed_target"
     | "unimplemented_action"
-    | "inconsistent_detail";
+    | "inconsistent_detail"
+    | "deleted_import"
+    | "import_review";
   message: string;
 }
 
@@ -246,6 +268,96 @@ async function findKeyedTransaction(repositories: CommitRepositories, key: strin
   return existing != null && existing.deletedAt == null ? existing : null;
 }
 
+/** The message every surface shows for a deleted import — what happened, and the two ways forward. */
+export function deletedImportMessage(transactionId: string): string {
+  return `This row was imported before (transaction ${transactionId}) and that transaction has since been deleted, so it is not imported again. If the deletion was a mistake, restore it from Transactions → Trash; otherwise leave this row out.`;
+}
+
+const SPLIT_ACTIONS: ReadonlySet<RecordAction> = new Set(["shared_expense", "someone_elses_expense"]);
+
+/** Whether the keyed split / person path is all-or-nothing here (the real ExpenseRepository; test fakes may lack it). */
+function atomicSplits(repositories: CommitRepositories): boolean {
+  return typeof (repositories.expenseRepository as Partial<ExpenseRepository>).createExpenseAtomic === "function";
+}
+
+/**
+ * P0 — the id of this row's earlier keyed import when that transaction is soft-deleted (null = none, or live). A split
+ * whose keyed transaction was soft-deleted by the import's OWN rollback (unconsumed marker) is not a deleted import:
+ * it is retryable, and the atomic write re-checks the marker inside its own Firestore transaction.
+ */
+async function deletedKeyedImport(repositories: CommitRepositories, row: StagedRecord, documentId: string): Promise<string | null> {
+  const repository = repositories.transactionRepository as Partial<Pick<TransactionRepository, "getByKey" | "getImportRollbackMarker">>;
+  if (typeof repository.getByKey !== "function") return null;
+  const key = importTransferKey(row.id, documentId);
+  const action = deriveRecordAction(row);
+  const id = action === "transfer" ? transferPairIdsFor(key).sourceLegId : `txn_${key}`;
+  const existing = await repository.getByKey(id);
+  if (existing == null || existing.deletedAt == null) return null;
+  if (action != null && SPLIT_ACTIONS.has(action) && atomicSplits(repositories) && typeof repository.getImportRollbackMarker === "function") {
+    const marker = await repository.getImportRollbackMarker(existing.id);
+    if (marker?.kind === "import_rollback" && marker.consumedAt == null) return null;
+  }
+  return existing.id;
+}
+
+/** Whether this row's CURRENT (statement-scoped) key already holds a transaction — then legacy keys are irrelevant. */
+async function scopedImportExists(repositories: CommitRepositories, row: StagedRecord, documentId: string): Promise<boolean> {
+  const repository = repositories.transactionRepository as Partial<Pick<TransactionRepository, "getByKey">>;
+  if (typeof repository.getByKey !== "function") return false;
+  const key = importTransferKey(row.id, documentId);
+  const ids = [`txn_${key}`, transferPairIdsFor(key).sourceLegId];
+  return (await Promise.all(ids.map((id) => repository.getByKey!(id)))).some((t) => t != null);
+}
+
+/**
+ * How far apart (in absolute time) a legacy-keyed transaction and a row may be and still be held for review. Wide
+ * enough for a day-boundary or UTC-vs-IST (+5:30) difference between the builds that wrote and now read the date,
+ * far narrower than the weeks between two statements' periods. Boundary included: exactly 36 h is held.
+ */
+export const LEGACY_IMPORT_WINDOW_MS = 36 * 60 * 60 * 1000;
+
+/**
+ * Phase C — a transaction written under this row's LEGACY record-only key (`imp_<row>`: `txn_imp_<row>` or the
+ * transfer leg `xfer_imp_<row>_out`), as a conservative MANUAL-REVIEW guard. It holds the row when that transaction is
+ * on the same account, of the same type (direction), and its timestamp is within ±LEGACY_IMPORT_WINDOW_MS of the
+ * row's. Amount and description are deliberately NOT compared: a later edit of either must not let the same
+ * purchase import twice. Dates are compared as absolute instants (`getTime()`), so UTC / IST parsing cannot matter
+ * beyond its 5:30 offset, which the window absorbs.
+ * Key generation is unchanged — the legacy key is `importTransferKey(row.id)`, exactly as those builds produced it.
+ * The slot is shared by every statement's row with that number, so a different account, a different direction, or a
+ * transaction more than 36 h away is another statement's row — ignored.
+ * Known limitation: an earlier import whose date was later edited by more than 36 h is not recognised, and an
+ * unkeyed legacy import is invisible here. This is NOT complete legacy duplicate protection.
+ */
+async function legacyImportMatch(repositories: CommitRepositories, row: StagedRecord, accountId: string): Promise<Transaction | null> {
+  const repository = repositories.transactionRepository as Partial<Pick<TransactionRepository, "getByKey">>;
+  if (typeof repository.getByKey !== "function") return null;
+  const legacyKey = importTransferKey(row.id);
+  const type = row.direction === "credit" ? "income" : "expense";
+  for (const id of [`txn_${legacyKey}`, transferPairIdsFor(legacyKey).sourceLegId]) {
+    const t = await repository.getByKey(id);
+    if (t != null && t.accountId === accountId && t.type === type && Math.abs(t.dateTime.getTime() - row.date.getTime()) <= LEGACY_IMPORT_WINDOW_MS) {
+      return t;
+    }
+  }
+  return null;
+}
+
+/** Whether the legacy transaction also agrees on amount, exact date and description (only changes the wording shown). */
+function legacyIsExact(t: Transaction, row: StagedRecord): boolean {
+  const description = (row.counterpartyNormalized ?? row.counterpartyRaw).trim().toLowerCase();
+  return Math.abs(t.amount - row.amount) < 0.005 && t.dateTime.getTime() === row.date.getTime() && t.description.trim().toLowerCase() === description;
+}
+
+export function legacyImportMessage(t: Pick<Transaction, "id" | "deletedAt">, exact = true): string {
+  if (!exact) {
+    return `An earlier import in an older format (transaction ${t.id}${t.deletedAt != null ? ", since deleted" : ""}) is on the same account, of the same kind and within 36 hours of this row, but its amount, date or description differs (it may have been edited). It may be this row. Nothing was imported — check Transactions: if it's this row, leave it out; if it's a different purchase, add it by hand.`;
+  }
+  return t.deletedAt != null
+    ? `An earlier import in an older format (transaction ${t.id}) has the same account, amount, date and description, and was later deleted. Nothing was imported — if this row is that purchase, leave it out; if it's a different one, add it by hand.`
+    : `An earlier import in an older format (transaction ${t.id}) has the same account, amount, date and description. It may already be this row, or a separate identical purchase. Nothing was imported — check Transactions: if it's this row, leave it out; if it's a different purchase, add it by hand.`;
+}
+
 async function commitOneRow(row: StagedRecord, categoryId: string, params: CommitReviewImportParams): Promise<{ transactionId: string }> {
   const { repositories } = params;
   const action = deriveRecordAction(row);
@@ -255,7 +367,10 @@ async function commitOneRow(row: StagedRecord, categoryId: string, params: Commi
 
   // Replay of a row whose money already landed (the earlier attempt only failed to acknowledge it in staging):
   // every multi-write action returns the recorded transaction WITHOUT writing anything again.
-  const replayed = action === "transfer" ? null : await findKeyedTransaction(repositories, key);
+  // Keyed splits replay inside createExpenseAtomic, which also verifies the split itself — finding the transaction
+  // alone never proves the Expense and People writes completed.
+  const atomicSplit = key != null && SPLIT_ACTIONS.has(action) && atomicSplits(repositories);
+  const replayed = action === "transfer" || atomicSplit ? null : await findKeyedTransaction(repositories, key);
   if (replayed != null) {
     if (action === "shared_expense" || action === "someone_elses_expense") {
       const expense = await repositories.expenseRepository.findActiveByTransactionId?.(replayed.id);
@@ -279,7 +394,7 @@ async function commitOneRow(row: StagedRecord, categoryId: string, params: Commi
         isMe: p.isMe,
         receivedStatus: p.receivedStatus,
       }));
-      const expense = await repositories.expenseRepository.createExpense({
+      const splitParams = {
         description,
         totalAmount: row.amount,
         date: row.date,
@@ -291,15 +406,17 @@ async function commitOneRow(row: StagedRecord, categoryId: string, params: Commi
         excludeFromCalculations: row.excludeFromCalculations,
         accountingMonth: row.accountingMonth,
         isBusiness: row.modifiers.business,
-        idempotencyKey: key,
-      });
+      };
+      const expense = atomicSplit
+        ? await repositories.expenseRepository.createExpenseAtomic({ ...splitParams, idempotencyKey: key! })
+        : await repositories.expenseRepository.createExpense({ ...splitParams, idempotencyKey: key });
       return { transactionId: expense.transactionId };
     }
 
     case "someone_elses_expense": {
       const detail = requireDetail(row.actionDetail, "someone_elses_expense");
       if (!detail || (!detail.personId && !detail.personName)) throw new Error("No person chosen — open this row's Inspector to pick who this was for.");
-      const expense = await repositories.expenseRepository.assignToPerson({
+      const assignParams = {
         description,
         totalAmount: row.amount,
         date: row.date,
@@ -311,8 +428,10 @@ async function commitOneRow(row: StagedRecord, categoryId: string, params: Commi
         excludeFromCalculations: row.excludeFromCalculations,
         accountingMonth: row.accountingMonth,
         isBusiness: row.modifiers.business,
-        idempotencyKey: key,
-      });
+      };
+      const expense = atomicSplit
+        ? await repositories.expenseRepository.assignToPersonAtomic({ ...assignParams, idempotencyKey: key! })
+        : await repositories.expenseRepository.assignToPerson({ ...assignParams, idempotencyKey: key });
       return { transactionId: expense.transactionId };
     }
 
@@ -363,6 +482,7 @@ async function commitOneRow(row: StagedRecord, categoryId: string, params: Commi
           excludeFromCalculations: row.excludeFromCalculations,
           accountingMonth: row.accountingMonth,
           idempotencyKey: key,
+          onDeletedKey: "refuse",
         });
         return { transactionId: transaction.id };
       } catch (error) {
@@ -398,6 +518,7 @@ async function commitOneRow(row: StagedRecord, categoryId: string, params: Commi
           excludeFromCalculations: row.excludeFromCalculations,
           accountingMonth: row.accountingMonth,
           idempotencyKey: key,
+          onDeletedKey: "refuse",
         });
         return { transactionId: transaction.id };
       } catch (error) {
@@ -432,6 +553,7 @@ async function commitOneRow(row: StagedRecord, categoryId: string, params: Commi
           excludeFromCalculations: row.excludeFromCalculations,
           accountingMonth: row.accountingMonth,
           idempotencyKey: key,
+          onDeletedKey: "refuse",
         });
         return { transactionId: transaction.id };
       } catch (error) {
@@ -474,6 +596,7 @@ async function commitOneRow(row: StagedRecord, categoryId: string, params: Commi
           excludeFromCalculations: row.excludeFromCalculations,
           accountingMonth: row.accountingMonth,
           idempotencyKey: key,
+          onDeletedKey: "refuse",
         });
         return { transactionId: transaction.id };
       } catch (error) {
@@ -500,6 +623,7 @@ async function commitOneRow(row: StagedRecord, categoryId: string, params: Commi
         excludeFromCalculations: row.excludeFromCalculations,
         accountingMonth: row.accountingMonth,
         idempotencyKey: key,
+        onDeletedKey: "refuse",
       });
       return { transactionId: transaction.id };
     }
@@ -730,9 +854,37 @@ export async function commitReviewImport(params: CommitReviewImportParams): Prom
 
     let transactionId: string;
     try {
+      // P0: an earlier import of this exact row that was since deleted blocks it — before any write is attempted.
+      const deletedId = params.documentId != null ? await deletedKeyedImport(params.repositories, row, params.documentId) : null;
+      if (deletedId != null) {
+        results.push({ recordId: row.id, outcome: "blocked", blockingReasons: [{ recordId: row.id, code: "deleted_import", message: deletedImportMessage(deletedId) }] });
+        continue;
+      }
+      // Phase C: an import made under the legacy record-only key, whose acknowledgement may have been lost.
+      if (params.documentId != null && !(await scopedImportExists(params.repositories, row, params.documentId))) {
+        const legacy = await legacyImportMatch(params.repositories, row, params.accountId);
+        if (legacy != null) {
+          results.push({ recordId: row.id, outcome: "blocked", blockingReasons: [{ recordId: row.id, code: "import_review", message: legacyImportMessage(legacy, legacyIsExact(legacy, row)) }] });
+          continue;
+        }
+      }
       const categoryId = categoryIdByName.get(row.category!)!;
       ({ transactionId } = await commitOneRow(row, categoryId, params));
     } catch (error) {
+      if (error instanceof KeyedExpenseMismatchError || error instanceof KeyedExpenseIncompleteError) {
+        results.push({ recordId: row.id, outcome: "blocked", blockingReasons: [{ recordId: row.id, code: "import_review", message: error.message }] });
+        continue;
+      }
+      if (error instanceof DuplicateSplitParticipantError || error instanceof InvalidSplitShareError) {
+        // Nothing was written; the row's split names one person twice, or gives someone ₹0 — the user must fix it, a retry can't.
+        results.push({ recordId: row.id, outcome: "blocked", blockingReasons: [{ recordId: row.id, code: "inconsistent_detail", message: error.message }] });
+        continue;
+      }
+      if (error instanceof KeyedTransactionDeletedError) {
+        // Deleted between the check above and the write (another tab, or a delete in flight) — refused atomically.
+        results.push({ recordId: row.id, outcome: "blocked", blockingReasons: [{ recordId: row.id, code: "deleted_import", message: deletedImportMessage(error.transactionId) }] });
+        continue;
+      }
       results.push({ recordId: row.id, outcome: "failed", error: error instanceof Error ? error.message : "Unknown error" });
       continue;
     }

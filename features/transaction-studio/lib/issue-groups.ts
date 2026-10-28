@@ -13,6 +13,8 @@ export const ISSUE_GROUP_LABEL: Record<CommitBlockingReason["code"], string> = {
   missing_detail: "Incomplete Details",
   closed_target: "Linked to a Closed Account",
   inconsistent_detail: "Inconsistent Details",
+  deleted_import: "Imported Before, Now Deleted",
+  import_review: "Earlier Import Needs Review",
 };
 
 /**
@@ -33,6 +35,8 @@ export const ISSUE_GROUP_TONE: Record<CommitBlockingReason["code"], RowStatusTon
   missing_detail: "warning",
   closed_target: "danger",
   inconsistent_detail: "danger",
+  deleted_import: "danger",
+  import_review: "danger",
 };
 
 /** Display order — the mock's four named groups first, then everything else. */
@@ -45,6 +49,8 @@ export const ISSUE_GROUP_ORDER: CommitBlockingReason["code"][] = [
   "missing_detail",
   "closed_target",
   "inconsistent_detail",
+  "deleted_import",
+  "import_review",
 ];
 
 /** Groups a flat list of blocking reasons by `code`, deduping a row that hits the same code twice. */

@@ -105,8 +105,15 @@ scenario("recon-layout-viewports", "Reconciliation fits the viewport on desktop,
     chk(`${tag}: the grid body is the scroll region`, m.listOverflowY === "auto" && m.listScrolls, JSON.stringify(m));
     const bar = await box(page, "status-bar");
     chk(`${tag}: action bar on screen without scrolling the page`, bar.y + bar.height <= m.vh + 1, JSON.stringify({ bar, vh: m.vh, mainOverflowY: m.mainOverflowY }));
-    const docked = (await page.getByTestId("compare-aside").count()) === 1;
-    chk(`${tag}: comparison ${vp.width >= 1536 ? "docked beside the grid" : "in a drawer"}`, docked === vp.width >= 1536);
+    const sheets = await Promise.all([box(page, "statement-sheet"), box(page, "existing-sheet")]);
+    chk(`${tag}: both sheets side by side`, sheets[0].x + sheets[0].width <= sheets[1].x + 1 && sheets[1].x + sheets[1].width <= vp.width + 1, JSON.stringify(sheets));
+    const existing = await page.getByTestId("existing-grid-body").evaluate((el) => getComputedStyle(el).overflowY);
+    chk(`${tag}: the FlowFi sheet body scrolls on its own`, existing === "auto", existing);
+    const dockBox = await box(page, "resolution-dock");
+    chk(`${tag}: comparison dock above the action bar, on screen`, dockBox.y + dockBox.height <= bar.y + 1, JSON.stringify({ dockBox, bar }));
+    const sideOverflow = await page.evaluate(() => ["statement-sheet", "existing-sheet", "resolution-dock"].map((id) => { const el = document.querySelector(`[data-testid="${id}"]`); return el.scrollWidth - el.clientWidth; }));
+    chk(`${tag}: no sideways scroll inside the sheets or dock`, sideOverflow.every((o) => o <= 1), JSON.stringify(sideOverflow));
+    const docked = false;
 
     // Keyboard: move down past the fold — the selected row stays inside the grid's visible body.
     await page.getByRole("grid", { name: "Statement rows" }).focus();

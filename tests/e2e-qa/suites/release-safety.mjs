@@ -117,28 +117,27 @@ scenario(
     await page.waitForTimeout(800);
 
     const row = (n) => page.locator('[data-testid="recon-row"]').nth(n - 1);
-    const aside = page.getByRole("complementary", { name: "Match comparison" });
     chk("near-amount row is a suggestion, not auto-decided", (await row(1).getAttribute("data-state")) === "near_amount", await row(1).getAttribute("data-state"));
     chk("excluded row stays excluded", (await row(4).getAttribute("data-state")) === "excluded");
 
-    const editRow = async (n, notes) => {
-      await page.getByRole("button", { name: new RegExp(`Expand row ${n}$`) }).click();
-      await page.getByRole("combobox", { name: "Category" }).click();
-      await page.getByRole("option", { name: expense.name, exact: true }).click();
-      if (notes) await page.getByLabel("Notes").fill(notes);
-      await page.getByRole("button", { name: new RegExp(`Collapse row ${n}$`) }).click();
-    };
-    for (const n of [2, 3, 5]) {
+    const importVia = async (n, ack) => {
       await row(n).click();
-      await aside.getByRole("button", { name: /^Add as (new|a separate) transaction$/ }).click();
-      await editRow(n, n === 5 ? "QA note — keep the receipt" : null);
-    }
-    await row(1).click();
-    await aside.getByRole("button", { name: /^Add as (new|a separate) transaction$/ }).click();
-    await editRow(1, null);
-    chk("near-amount Add is blocked until the user confirms it is different", await page.getByTestId("open-approval").isDisabled());
-    await row(1).click();
-    await aside.getByRole("checkbox", { name: "This is a different transaction" }).check();
+      await page.getByTestId(ack ? "resolve-keep_both" : "resolve-import_new").click();
+      const pop = page.getByTestId("import-confirm");
+      await pop.getByLabel("Category for import").selectOption({ label: expense.name });
+      if (ack) {
+        chk("near-amount Keep both can't be recorded until the user confirms they're separate", await pop.getByTestId("import-confirm-submit").isDisabled());
+        await pop.getByRole("checkbox", { name: "These are separate transactions" }).check();
+      }
+      await pop.getByTestId("import-confirm-submit").click();
+    };
+    for (const n of [2, 3, 5]) await importVia(n, false);
+    await page.getByRole("button", { name: /Expand row 5$/ }).click();
+    await page.getByLabel("Notes").fill("QA note — keep the receipt");
+    await page.getByRole("button", { name: "Done" }).click(); // the row sheet closes; the note is already in the draft
+    chk("near-amount row: Import new is not offered while a match exists", await (async () => { await row(1).click(); return page.getByTestId("resolve-import_new").isDisabled(); })());
+    chk("Review & approve waits for the near-amount row", await page.getByTestId("open-approval").isDisabled());
+    await importVia(1, true);
     chk("…and allowed once confirmed", await page.getByTestId("open-approval").isEnabled());
     chk("deciding wrote nothing", (await h.list("transactions")).length === txnsBefore);
 

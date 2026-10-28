@@ -94,17 +94,41 @@ export function WorkspaceHeader({
 }
 
 /** A quiet header action — sits on the dark header band. */
-export function HeaderAction({ icon: Icon, children, onClick, tone = "default", disabled, title, testId }: { icon?: LucideIcon; children: React.ReactNode; onClick: () => void; tone?: "default" | "danger"; disabled?: boolean; title?: string; testId?: string }) {
+export function HeaderAction({
+  icon: Icon,
+  children,
+  onClick,
+  tone = "default",
+  disabled,
+  title,
+  testId,
+  pressed,
+  ariaLabel,
+}: {
+  icon?: LucideIcon;
+  children: React.ReactNode;
+  onClick: () => void;
+  /** "accent" = a mode that is on (e.g. Focus Mode) — its exit stays easy to find. */
+  tone?: "default" | "danger" | "accent";
+  disabled?: boolean;
+  title?: string;
+  testId?: string;
+  pressed?: boolean;
+  ariaLabel?: string;
+}) {
   return (
     <button
       type="button"
       onClick={onClick}
       disabled={disabled}
       title={title}
+      aria-pressed={pressed}
+      aria-label={ariaLabel}
       data-testid={testId}
       className={cn(
         "inline-flex h-7 items-center gap-1.5 rounded-full border border-white/10 px-2.5 text-xs font-medium text-hero-foreground/80 transition-colors hover:bg-white/10 hover:text-hero-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:pointer-events-none disabled:opacity-40",
         tone === "danger" && "hover:border-danger/40 hover:bg-danger/15 hover:text-hero-foreground",
+        tone === "accent" && "border-primary/60 bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground",
       )}
     >
       {Icon && <Icon className="size-3.5" />}

@@ -13,6 +13,7 @@ import type { Transaction } from "@/lib/models/transaction";
 import { buildCycleResolver } from "./card-cycle-status";
 import type { RowGateContext } from "./decisions";
 import { buildExistingRecords } from "./existing-records";
+import { ownedAccountIdentities } from "./internal-payment-guard";
 import { matchRows } from "./match-engine";
 import type { DraftState } from "./reconciliation-draft";
 import { importedTransactionIdsFor } from "./session-key";
@@ -76,6 +77,10 @@ export function analyzeSession(session: DraftState, data: ReconciliationData, op
   const matches = accountId ? computeMatches({ session, accountId, records, siblingAccountIds: siblingAccountIdsFor(card, data.creditCards), accountLabel: options.accountLabel }) : new Map<string, RowMatch>();
   const cycleOf = buildCycleResolver({ card, transactions: data.transactions, statements: data.statements, now: options.now });
   const isCardAccount = account?.type === "card";
-  const gate = (row: ReconRow): RowGateContext => ({ isCardAccount, cycle: row.date ? cycleOf(row.date) : null });
+  // P0 internal-payment gates, from the same (server-read, at approval) accounts and records.
+  const ownedAccounts = ownedAccountIdentities(data.accounts, data.creditCards, accountId);
+  const transferLegIds = new Set(records.filter((r) => r.isTransferLeg && !r.deleted).map((r) => r.id));
+  const isTransferLeg = (recordId: string) => transferLegIds.has(recordId);
+  const gate = (row: ReconRow): RowGateContext => ({ isCardAccount, cycle: row.date ? cycleOf(row.date) : null, ownedAccounts, isTransferLeg });
   return { account, card, records, matches, gate, cycleOf };
 }

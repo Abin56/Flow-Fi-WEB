@@ -128,6 +128,11 @@ export interface RowMatch {
   suggestedRecordId: string | null;
   /** The transaction this exact row was already imported as (deterministic import key), if any. */
   alreadyImportedId: string | null;
+  /**
+   * P0: this row's own deterministic import key belongs to a transaction that is now soft-deleted. Re-importing it is
+   * blocked (the key can never be written again, and a random-id copy would double the money). Absent = none.
+   */
+  deletedImportId?: string | null;
   /** Candidate record id → the row whose Link decision already claimed it (one-to-one). */
   claimedBy: Record<string, string>;
   conflicts: string[];
@@ -152,6 +157,11 @@ export interface RowDecision {
   bulkId: string | null;
   /** Import as new on a Credit row: the user's explicit "this is a refund / this is income". Absent in drafts saved before Phase 4. */
   creditAs?: CreditKind | null;
+  /**
+   * P0: Import on an ambiguous NEFT / IMPS / UPI / mandate line needs the user's explicit "this was not to (or from)
+   * my own account or card". Absent in older drafts = not given.
+   */
+  notOwnTransferAck?: boolean;
 }
 
 /** Card-bill status of a row's date on the statement card (D10). */

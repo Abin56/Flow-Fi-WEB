@@ -391,10 +391,14 @@ scenario("sms-6-popup-destination-categories-keyboard", "Review popup: deleted a
   await dialog.getByLabel("Close").focus();
   await page.keyboard.press("Enter"); // a bare Enter on Close just closes — it must never import
   await sleep(600);
+  // The category was changed, so closing asks first — discard (still nothing imported).
+  const discard = page.getByRole("dialog").filter({ hasText: "Discard your changes?" });
+  if (await discard.isVisible().catch(() => false)) await discard.getByRole("button", { name: "Discard and close" }).click();
   check("a bare Enter never imports", (await h.list("transactions")).filter((t) => t.source === "sms").length === 0);
   await openRow(page, "Swiggy");
   dialog = page.getByRole("dialog").first();
   await pickFirstOption(page, dialog.getByRole("combobox").nth(0));
+  await dialog.getByRole("button", { name: /^Notes/ }).click(); // folded by default
   await dialog.getByRole("textbox").first().focus();
   await page.keyboard.press("Enter");
   await sleep(600);
@@ -638,7 +642,8 @@ scenario("sms-14-advanced-filters-url-scroll", "Advanced filters AND together, s
   await drawer.getByText("Transaction Details").first().waitFor({ timeout: 20000 });
   await h.shot(page, "sms-14-drawer");
   const dw = await drawer.boundingBox();
-  check("the drawer is a right-anchored slide-over of about 560px", !!dw && dw.width >= 540 && dw.width <= 580 && Math.abs(dw.x + dw.width - 1920) <= 1, dw ? `${Math.round(dw.width)}px at x=${Math.round(dw.x)}` : "none");
+  const vh = page.viewportSize().height;
+  check("the editor is a full-width top sheet that leaves the list visible below it", !!dw && Math.round(dw.x) === 0 && Math.round(dw.width) === 1920 && Math.round(dw.y) === 0 && dw.height < vh * 0.7, dw ? `${Math.round(dw.width)}x${Math.round(dw.height)} at y=${Math.round(dw.y)}` : "none");
   await page.keyboard.press("Escape");
   await drawer.waitFor({ state: "hidden", timeout: 10000 });
   await sleep(300);

@@ -25,6 +25,17 @@ const TONE: Record<Tone, string> = {
   muted: "bg-muted text-muted-foreground",
 };
 
+/** Text-only tones for the sheets' quiet marks (no fill — the grids stay calm; pills are for decisions). */
+const TONE_TEXT: Record<Tone, string> = {
+  neutral: "text-foreground",
+  primary: "text-primary-accent-text",
+  warning: "text-warning",
+  danger: "text-danger",
+  success: "text-success",
+  purple: "text-purple",
+  muted: "text-muted-foreground",
+};
+
 export const STATE_META: Record<MatchState, { label: string; short: string; tone: Tone; icon: LucideIcon; hint: string }> = {
   exact_candidate: { label: "Possible match · exact", short: "Exact", tone: "primary", icon: Copy, hint: "Same account, amount and day as one FlowFi transaction. Still only a possible match — you decide." },
   near_amount: { label: "Possible match · near", short: "Near", tone: "warning", icon: CircleDashed, hint: "Amount or date differs slightly. A suggestion only — compare before deciding." },
@@ -38,13 +49,14 @@ export const STATE_META: Record<MatchState, { label: string; short: string; tone
 };
 
 /**
- * Decision vocabulary in plain language. `label` is the action ("Add as new transaction"); `short` is how a made
- * decision reads in the grid ("Add as new"). The underlying kinds (link / import_new / ignore / investigate / inbox)
- * and their gates are unchanged.
+ * Decision vocabulary — Git-merge style. `label` is the action ("Keep existing — skip import"); `short` is how a made
+ * decision reads in the sheets ("Keep existing"). An Import on a row that HAS a possible match reads "Keep both"
+ * (see `decisionShort`). The underlying kinds (link / import_new / ignore / investigate / inbox) and their gates are
+ * unchanged.
  */
 export const DECISION_META: Record<DecisionKind, { label: string; short: string; icon: LucideIcon; tone: Tone }> = {
-  link: { label: "Already recorded — skip import", short: "Already recorded", icon: Link2, tone: "success" },
-  import_new: { label: "Add as new transaction", short: "Add as new", icon: Plus, tone: "primary" },
+  link: { label: "Keep existing — skip import", short: "Keep existing", icon: Link2, tone: "success" },
+  import_new: { label: "Import new transaction", short: "Import new", icon: Plus, tone: "primary" },
   ignore: { label: "Skip this transaction", short: "Skipped", icon: EyeOff, tone: "muted" },
   investigate: { label: "Review later", short: "Review later", icon: CircleHelp, tone: "warning" },
   inbox: { label: "Handle in Inbox", short: "Handle in Inbox", icon: Inbox, tone: "purple" },
@@ -89,12 +101,51 @@ export function StateBadge({ state, compact = false }: { state: MatchState; comp
   );
 }
 
-export function DecisionChip({ kind }: { kind: DecisionKind | null }) {
-  if (!kind) return <span className="text-xs text-muted-foreground">Undecided</span>;
+/** Both sheets' column header row: fixed over the scrolling body, slightly stronger rules than the body's. */
+export const SHEET_HEAD =
+  "grid h-8 shrink-0 items-stretch border-b border-border-strong/60 bg-muted/60 text-[10.5px] font-semibold tracking-[0.06em] text-muted-foreground uppercase [&>*:not(:first-child)]:border-border/60!";
+/** Both sheets' title bar — flat, one line. */
+export const SHEET_TITLE_BAR = "flex min-h-10 shrink-0 items-center gap-x-2 gap-y-1.5 border-b border-border-strong/60 bg-card px-3 py-1.5";
+
+/** A compact match indicator for dense grids: icon + label in the state's colour, no pill. Same words as StateBadge. */
+export function Mark({ tone = "neutral", icon: Icon, children, className, title }: { tone?: Tone; icon?: LucideIcon; children: React.ReactNode; className?: string; title?: string }) {
+  return (
+    <span title={title} className={cn("inline-flex max-w-full min-w-0 items-center gap-1 text-[11px] leading-4 font-semibold", TONE_TEXT[tone], className)}>
+      {Icon ? <Icon className="size-3 shrink-0" aria-hidden /> : <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-current" />}
+      <span className="truncate">{children}</span>
+    </span>
+  );
+}
+
+export function StateMark({ state, compact = false }: { state: MatchState; compact?: boolean }) {
+  const meta = STATE_META[state];
+  return (
+    <Mark tone={meta.tone} icon={meta.icon} title={meta.hint}>
+      {compact ? meta.short : meta.label}
+    </Mark>
+  );
+}
+
+/** "Keep both" when an Import was chosen although a possible match exists — the user confirmed they're separate. */
+export const KEEP_BOTH_LABEL = "Keep both";
+
+export function decisionShort(kind: DecisionKind, keepBoth = false): string {
+  return kind === "import_new" && keepBoth ? KEEP_BOTH_LABEL : DECISION_META[kind].short;
+}
+
+export function DecisionChip({ kind, keepBoth = false }: { kind: DecisionKind | null; keepBoth?: boolean }) {
+  if (!kind) {
+    return (
+      <span className="inline-flex items-center gap-1.5 text-xs font-medium text-warning">
+        <span aria-hidden className="size-1.5 rounded-full bg-warning" />
+        Undecided
+      </span>
+    );
+  }
   const meta = DECISION_META[kind];
   return (
     <Chip tone={meta.tone} icon={meta.icon} title={meta.label}>
-      {meta.short}
+      {decisionShort(kind, keepBoth)}
     </Chip>
   );
 }
@@ -105,7 +156,8 @@ export function Money({ amount, direction, className }: { amount: number | null;
     <span className={cn("font-mono text-sm font-semibold tabular-nums", direction === "credit" ? "text-success" : "text-foreground", className)}>
       {direction === "credit" ? "+" : direction === "debit" ? "−" : ""}
       {formatCurrencyPrecise(amount)}
-      <span className="ml-1 font-sans text-[10px] font-medium uppercase tracking-wide text-muted-foreground">{direction === "credit" ? "Cr" : direction === "debit" ? "Dr" : "?"}</span>
+      {/* Fixed-width Dr/Cr so right-aligned amounts line up on the decimal point down a column. */}
+      <span className="ml-1 inline-block w-[1.1rem] text-left font-sans text-[10px] font-medium tracking-wide text-muted-foreground uppercase">{direction === "credit" ? "Cr" : direction === "debit" ? "Dr" : "?"}</span>
     </span>
   );
 }

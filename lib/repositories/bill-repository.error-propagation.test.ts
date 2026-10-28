@@ -20,9 +20,10 @@ vi.mock("firebase/firestore", () => ({
   where: vi.fn((...args: unknown[]) => ({ args })),
   setDoc: vi.fn(),
   updateDoc: vi.fn(),
+  runTransaction: vi.fn(),
 }));
 
-import { setDoc } from "firebase/firestore";
+import { runTransaction, setDoc } from "firebase/firestore";
 
 function bill(overrides: Partial<Bill> = {}): Bill {
   return {
@@ -95,6 +96,9 @@ describe("Bill mutations propagate a genuine Firestore write failure (not swallo
   });
 
   it("editBill propagates the failure", async () => {
+    // editBill writes through a transaction (fresh read + field-limited update), not a whole-document setDoc.
+    vi.mocked(runTransaction).mockReset();
+    vi.mocked(runTransaction).mockRejectedValue(new Error("Firestore unavailable"));
     const repo = new BillRepository({ firestore: {} } as never);
     await expect(repo.editBill(bill(), { name: "New name" })).rejects.toThrow("Firestore unavailable");
   });

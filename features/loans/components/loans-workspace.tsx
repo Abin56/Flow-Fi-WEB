@@ -200,7 +200,7 @@ export function LoansWorkspace({ openRequest = null, trashRequest = 0 }: LoansWo
   const [paymentSeq, setPaymentSeq] = useState(0);
   const paymentRow = useMemo(() => (payment ? (rows.find((r) => r.loan.id === payment.loanId) ?? null) : null), [rows, payment]);
   // Back from People (`?agreement=<id>&pay=1[&installment=<id>]`): reopen Record Payment for that loan once, when it has loaded.
-  const payHandoffRef = useRef(searchParams.get("pay") === "1" ? { loanId: searchParams.get("agreement"), installmentId: searchParams.get("installment") } : null);
+  const payHandoffRef = useRef(searchParams.get("pay") === "1" ? { loanId: searchParams.get("agreement"), installmentId: searchParams.get("installment"), view: searchParams.get("view") === "past" ? ("past" as const) : ("pay" as const) } : null);
   useEffect(() => {
     const handoff = payHandoffRef.current;
     if (!handoff?.loanId || !rows.some((r) => r.loan.id === handoff.loanId)) return;
@@ -208,10 +208,23 @@ export function LoansWorkspace({ openRequest = null, trashRequest = 0 }: LoansWo
     const params = new URLSearchParams(window.location.search);
     params.delete("pay");
     params.delete("installment");
+    params.delete("view");
     window.history.replaceState(window.history.state, "", `${window.location.pathname}?${params.toString()}`);
-    requestAnimationFrame(() => setPayment({ loanId: handoff.loanId!, seq: 0, installmentId: handoff.installmentId }));
+    requestAnimationFrame(() => setPayment({ loanId: handoff.loanId!, seq: 0, installmentId: handoff.installmentId, view: handoff.view }));
   }, [rows]);
   const [adjustment, setAdjustment] = useState<{ row: LoanRow; kind: "disbursement" } | null>(null);
+  // From Balance Control's reconciliation guide (`?agreement=<id>&adjust=disbursement`): open Additional disbursement once.
+  const adjustHandoffRef = useRef(searchParams.get("adjust") === "disbursement" ? searchParams.get("agreement") : null);
+  useEffect(() => {
+    const loanId = adjustHandoffRef.current;
+    const row = loanId ? rows.find((r) => r.loan.id === loanId) : undefined;
+    if (!row) return;
+    adjustHandoffRef.current = null;
+    const params = new URLSearchParams(window.location.search);
+    params.delete("adjust");
+    window.history.replaceState(window.history.state, "", `${window.location.pathname}?${params.toString()}`);
+    requestAnimationFrame(() => setAdjustment({ row, kind: "disbursement" }));
+  }, [rows]);
   // Recorded payments of the open loan, grouped per payment action — live-keyed, see `useLoanPaymentHistory`.
   const historyQuery = useLoanPaymentHistory(activeRow);
   const paymentActions = useMemo(

@@ -1,8 +1,11 @@
 ﻿"use client";
 
 import {
+  Activity,
   ArrowRight,
   CalendarClock,
+  ChevronRight,
+  Layers,
   CreditCard as CreditCardIcon,
   Download,
   FileText,
@@ -14,6 +17,7 @@ import {
   Plus,
   Receipt,
   RefreshCw,
+  Scale,
   Settings,
   Settings2,
   ShieldCheck,
@@ -29,6 +33,7 @@ import {
 import { Fragment, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { AnimatePresence, motion, useDragControls, useReducedMotion } from "framer-motion";
 import { createPortal } from "react-dom";
+import Link from "next/link";
 import { useCompactHeader } from "@/components/layout/compact-header";
 import { CreditCardsCompactBar } from "@/features/credit-cards/components/credit-cards-compact-bar";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -345,7 +350,7 @@ export function CreditCardsWorkspace() {
     if (!sheetOpen) return;
     window.addEventListener("resize", measureSheet);
     return () => window.removeEventListener("resize", measureSheet);
-  });
+  }, [sheetOpen]);
   const openActivitySheet = (tab?: ActivityTab, all?: boolean) => {
     if (tab) setActivityTab(tab);
     if (all != null) setActivityAllCards(all);
@@ -1031,6 +1036,13 @@ export function CreditCardsWorkspace() {
       </div>
       <div className="flex flex-wrap items-center gap-1.5">
         {creditCards.length > 0 && (
+          <Link href="/balance-control" className={CC_UTILITY} data-testid="manage-limits-reconcile-link">
+            <Scale className="size-4" strokeWidth={1.75} />
+            <span className="hidden sm:inline">Manage Limits &amp; Reconcile</span>
+            <span className="sm:hidden">Limits</span>
+          </Link>
+        )}
+        {creditCards.length > 0 && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button type="button" aria-label="More actions" className={CC_UTILITY}>
@@ -1150,12 +1162,9 @@ export function CreditCardsWorkspace() {
        </div>
       </section>
 
-      {/* Eases back slightly while the activity panel is pushed up over it — one stacked layer, not a modal. */}
-      <motion.div
-        className="grid origin-top grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_20rem] xl:items-start"
-        animate={sheetOpen && !reduceMotion ? { scale: 0.985, opacity: 0.55 } : { scale: 1, opacity: 1 }}
-        transition={{ type: "spring", stiffness: 260, damping: 30 }}
-      >
+      {/* Stays perfectly still while the activity sheet slides over it — the dim comes from the sheet's own backdrop
+          (one cheap fixed layer), never from scaling/fading this grid, which repainted every card on each frame. */}
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_20rem] xl:items-start">
         {/* ── Card selection ── */}
         <div className="flex min-w-0 flex-col gap-6 xl:col-start-1 xl:row-start-1">
           {/* scroll-mt-20: "Manage cards" (More menu) scrolls here, and the compact bar covers the top 56px */}
@@ -1210,6 +1219,13 @@ export function CreditCardsWorkspace() {
                     }}
                   />
                 ))}
+                {/* Card activity as the grid's last tile, so it sits beside the cards instead of below the fold. */}
+                <ActivityLauncher
+                  card={activeCard}
+                  bankId={activeCard ? bankIdOf(activeCard) : null}
+                  onOpen={(tab, all) => openActivitySheet(tab, all)}
+                  className="h-full"
+                />
               </Stagger>
             ) : (
               <div className="overflow-hidden rounded-[10px] border border-border-strong/70 bg-card shadow-e1">
@@ -1322,13 +1338,16 @@ export function CreditCardsWorkspace() {
 
         </aside>
 
-        {/* ── Card activity: the selected card's bills, transactions and spending, one tab at a time ── */}
-        <ActivityLauncher
-          card={activeCard}
-          bankId={activeCard ? bankIdOf(activeCard) : null}
-          onOpen={(tab, all) => openActivitySheet(tab, all)}
-        />
-      </motion.div>
+        {/* ── Card activity (List view): the selected card's bills, transactions and spending — in Cards view it is a tile in the grid ── */}
+        {viewMode !== "grid" && (
+          <ActivityLauncher
+            card={activeCard}
+            bankId={activeCard ? bankIdOf(activeCard) : null}
+            onOpen={(tab, all) => openActivitySheet(tab, all)}
+            className="xl:col-start-1 xl:row-start-2"
+          />
+        )}
+      </div>
 
       {/* The activity bottom sheet — slides up over the page, so the summary and cards above never move. Portalled
           to <body> (the page sits inside a transformed container, which would trap `fixed`); on the app's
@@ -1341,11 +1360,11 @@ export function CreditCardsWorkspace() {
               key="activity-backdrop"
               aria-hidden
               style={sheetBox ? { top: sheetBox.mainTop, left: sheetBox.mainLeft, width: sheetBox.mainWidth, bottom: 0 } : undefined}
-              className="fixed z-attached bg-black/10"
+              className="fixed z-attached bg-gradient-to-t from-black/40 via-black/20 to-black/10 dark:from-black/60 dark:via-black/40 dark:to-black/25"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              transition={{ duration: reduceMotion ? 0 : 0.2 }}
+              transition={{ duration: reduceMotion ? 0 : 0.28, ease: "easeOut" }}
               onClick={() => setSheetOpen(false)}
             />
             <motion.section
@@ -1354,9 +1373,9 @@ export function CreditCardsWorkspace() {
               role="dialog"
               aria-label="Card activity"
               initial={reduceMotion ? { opacity: 0 } : { y: "100%" }}
-              animate={reduceMotion ? { opacity: 1 } : { y: 0 }}
-              exit={reduceMotion ? { opacity: 0 } : { y: "100%" }}
-              transition={{ type: "spring", stiffness: 320, damping: 34, mass: 0.9 }}
+              animate={reduceMotion ? { opacity: 1 } : { y: 0, transition: SHEET_OPEN }}
+              exit={reduceMotion ? { opacity: 0 } : { y: "100%", transition: SHEET_CLOSE }}
+              transition={reduceMotion ? { duration: 0.15 } : SHEET_OPEN}
               drag={reduceMotion ? false : "y"}
               dragListener={false}
               dragControls={sheetDrag}
@@ -1366,25 +1385,18 @@ export function CreditCardsWorkspace() {
                 if (info.offset.y > 110 || info.velocity.y > 600) setSheetOpen(false);
               }}
               style={sheetBox ? { top: sheetBox.top, left: sheetBox.left, width: sheetBox.width, bottom: 0 } : undefined}
-              className="fixed z-attached flex flex-col rounded-t-[18px] border border-b-0 border-border-strong/60 bg-card shadow-[0_-24px_60px_-20px_rgba(0,0,0,0.4)]"
+              // Its own compositor layer, and no backdrop-filter anywhere inside, so each frame of the slide is a plain transform.
+              className="fixed z-attached flex flex-col overflow-hidden rounded-t-[24px] bg-card shadow-[0_-28px_70px_-24px_rgba(0,0,0,0.45)] ring-1 ring-border-strong/60 will-change-transform [backface-visibility:hidden]"
             >
-              {/* Grab handle (drag down) + collapse back to the cards */}
-              <div className="relative flex shrink-0 items-center justify-center pt-2 pb-2">
+              {/* Grab handle (drag down) — floats over the hero */}
+              <div className="pointer-events-none absolute inset-x-0 top-0 z-[2] flex justify-center pt-2">
                 <button
                   type="button"
                   aria-label="Drag down to close"
                   onPointerDown={(e) => sheetDrag.start(e)}
-                  className="h-5 w-16 cursor-grab touch-none rounded-full outline-none active:cursor-grabbing focus-visible:ring-2 focus-visible:ring-ring"
+                  className="pointer-events-auto flex h-6 w-20 cursor-grab touch-none items-center justify-center rounded-full outline-none active:cursor-grabbing focus-visible:ring-2 focus-visible:ring-white"
                 >
-                  <span className="mx-auto block h-1.5 w-10 rounded-full bg-border-strong" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSheetOpen(false)}
-                  className="absolute top-1.5 right-3 flex h-8 items-center gap-1 rounded-full border border-border-strong/70 bg-card pr-3 pl-2 text-xs font-semibold text-foreground outline-none transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                  <ChevronDown className="size-4" strokeWidth={2.25} />
-                  Back to cards
+                  <span className="block h-1.5 w-11 rounded-full bg-white/60 shadow-[0_1px_2px_rgba(0,0,0,0.2)]" />
                 </button>
               </div>
               <div id="card-activity-body" className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-[env(safe-area-inset-bottom)]">
@@ -1396,16 +1408,18 @@ export function CreditCardsWorkspace() {
             allCards={activityAllCards}
             onAllCards={changeActivityScope}
             cardCount={creditCards.length}
+            onClose={() => setSheetOpen(false)}
           />
 
           {/* Only the chosen tab, for the chosen card and scope — a short fade when any of them changes. */}
           <AnimatePresence mode="wait" initial={false}>
             <motion.div
               key={`${activityTab}:${activityAllCards ? "all" : (activeCard?.id ?? "none")}`}
-              initial={reduceMotion ? false : { opacity: 0, y: 6 }}
+              initial={reduceMotion ? false : { opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               exit={reduceMotion ? undefined : { opacity: 0, y: -4 }}
-              transition={{ duration: 0.16, ease: "easeOut" }}
+              transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+              className="mx-auto w-full max-w-5xl px-4 pt-5 pb-8 sm:px-6"
             >
           {activityTab === "bills" && (
             <div id="upcoming-statements" className="scroll-mt-28">
@@ -1427,7 +1441,7 @@ export function CreditCardsWorkspace() {
                   }}
                 />
               ) : (
-                <div className="overflow-x-auto">
+                <div className="overflow-x-auto rounded-[16px] border border-border-strong/60 bg-card shadow-e1">
                   <table className="w-full table-fixed border-separate border-spacing-0 text-sm">
                     <thead>
                       <tr>
@@ -1542,87 +1556,21 @@ export function CreditCardsWorkspace() {
           )}
 
           {activityTab === "transactions" && (
-            <div className="flex flex-col">
-              {activityTransactions.length === 0 ? (
-                <ActivityEmpty
-                  icon={Receipt}
-                  title={recentLoading ? "Loading transactions…" : "No transactions in this activity preview"}
-                  detail={
-                    recentLoading
-                      ? undefined
-                      : activityAllCards || !activeCard
-                        ? "Card purchases and payments will appear here."
-                        : "Older or filtered transactions are in the full history below."
-                  }
-                />
-              ) : (
-                <ul className="flex flex-col">
-                  {activityTransactions.map((txn, i) => {
-                    const Icon = CATEGORY_ICON[txn.category] ?? Receipt;
-                    const cardView = creditCards.find((c) => c.id === txn.card.id);
-                    const incoming = txn.category === "Income";
-                  // Date heading whenever the day changes (Today / Yesterday / 12 Oct 2026).
-                  const day = activityDayLabel(txn.date);
-                  const newDay = i === 0 || activityDayLabel(activityTransactions[i - 1].date) !== day;
-                    return (
-                    <Fragment key={txn.id}>
-                      {newDay && (
-                        <li className="sticky top-[3.75rem] z-[1] bg-card/95 px-4 pt-3 pb-1 text-[11px] font-semibold tracking-[0.06em] text-foreground/60 uppercase backdrop-blur">{day}</li>
-                      )}
-                      <motion.li
-                        initial={reduceMotion ? false : { opacity: 0, y: 6 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ duration: 0.2, delay: Math.min(i, 10) * 0.03 }}
-                        className="mx-2 flex items-center gap-3 rounded-[10px] px-2 py-2.5 transition-colors hover:bg-secondary/60"
-                      >
-                        <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-[8px]", TONE_ICON_CLASS[categoryTone(txn.category)])}>
-                          <Icon className="size-4" />
-                        </span>
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate text-sm font-semibold text-foreground">{txn.merchant}</p>
-                          <p className="flex min-w-0 items-center gap-1.5 truncate text-xs text-foreground/70">
-                            <span className="tabular-nums">{txn.date.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}</span>
-                            <span aria-hidden>·</span>
-                            <span>{txn.isBillPayment ? "Bill payment" : incoming ? "Credit" : "Debit"}</span>
-                            {(activityAllCards || !activeCard) && cardView && (
-                              <>
-                                <span aria-hidden>·</span>
-                                <span className="truncate">
-                                  {cardView.name} •••• {cardView.last4}
-                                </span>
-                              </>
-                            )}
-                          </p>
-                        </div>
-                        <span className={cn("shrink-0 text-[15px] font-bold whitespace-nowrap tabular-nums", incoming ? "text-success" : "text-foreground")}>
-                          {incoming ? "+" : "−"}
-                          {formatCurrency(txn.amount)}
-                        </span>
-                        {txn.isBillPayment && (
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <button type="button" aria-label="Payment actions" className="flex size-7 shrink-0 items-center justify-center rounded-[6px] text-foreground/70 hover:bg-secondary hover:text-foreground">
-                                <MoreHorizontal className="size-4" strokeWidth={1.75} />
-                              </button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end" className="min-w-52 rounded-[8px]">
-                              <DropdownMenuItem className="text-expense" onSelect={() => setCancelPaymentId(txn.id)}>
-                                Cancel recorded payment
-                              </DropdownMenuItem>
-                              <DropdownMenuItem onSelect={() => router.push(transactionsHrefForAccount(txn.card.accountId))}>View history</DropdownMenuItem>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                        )}
-                      </motion.li>
-                    </Fragment>
-                    );
-                  })}
-                </ul>
-              )}
-              <div className="border-t border-border-strong/50 p-2">
-                <ActivityFooterLink
-                  label={activityAllCards || !activeCard ? "Full card transaction history" : `Full ${activeCard.name} •••• ${activeCard.last4} history`}
-                  note={activityPool.length > activityTransactions.length ? `Showing latest ${activityTransactions.length} of ${activityPool.length}` : undefined}
+            <div className="flex flex-col gap-4">
+              {/* Section bar — what is listed, and the way to the full history. */}
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                <div className="mr-auto min-w-0">
+                  <p className="font-heading text-base font-semibold text-foreground">
+                    {activityAllCards || !activeCard ? "Recent transactions · all cards" : "Recent transactions"}
+                  </p>
+                  <p className="text-xs text-foreground/60 tabular-nums">
+                    {activityPool.length > activityTransactions.length
+                      ? `Showing latest ${activityTransactions.length} of ${activityPool.length}`
+                      : `${activityTransactions.length} transaction${activityTransactions.length === 1 ? "" : "s"}`}
+                  </p>
+                </div>
+                <button
+                  type="button"
                   onClick={() => {
                     if (activityAllCards || !activeCard) {
                       router.push("/transactions");
@@ -1631,18 +1579,146 @@ export function CreditCardsWorkspace() {
                     router.replace(`/credit-cards?card=${encodeURIComponent(activeCard.id)}`, { scroll: false });
                     router.push(transactionsHrefForAccount(activeCard.card.accountId));
                   }}
-                />
+                  className="group flex h-9 items-center gap-1.5 rounded-full border border-border-strong/70 bg-card px-3.5 text-xs font-semibold text-foreground shadow-e1 outline-none transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  {activityAllCards || !activeCard ? "Full card transaction history" : `Full ${activeCard.name} •••• ${activeCard.last4} history`}
+                  <ArrowRight className="size-3.5 transition-transform group-hover:translate-x-0.5" strokeWidth={2} />
+                </button>
               </div>
+
+              {activityTransactions.length === 0 ? (
+                <div className="rounded-[16px] border border-dashed border-border-strong/70 bg-card">
+                  <ActivityEmpty
+                    icon={Receipt}
+                    title={recentLoading ? "Loading transactions…" : "No transactions in this activity preview"}
+                    detail={
+                      recentLoading
+                        ? undefined
+                        : activityAllCards || !activeCard
+                          ? "Card purchases and payments will appear here."
+                          : "Older or filtered transactions are in the full history."
+                    }
+                  />
+                </div>
+              ) : (
+                // One rounded group per day (Today / Yesterday / 12 Oct 2026); the day label stays pinned under the tabs.
+                activityTransactions
+                  .reduce<{ day: string; items: { txn: (typeof activityTransactions)[number]; i: number }[] }[]>((groups, txn, i) => {
+                    const day = activityDayLabel(txn.date);
+                    const last = groups[groups.length - 1];
+                    if (last && last.day === day) last.items.push({ txn, i });
+                    else groups.push({ day, items: [{ txn, i }] });
+                    return groups;
+                  }, [])
+                  .map((group) => (
+                    <section key={group.day} aria-label={group.day} className="flex flex-col gap-2">
+                      <h3 className="sticky top-[65px] z-[1] -mx-1 flex items-center gap-2 bg-card px-1 py-1.5 text-[11px] font-semibold tracking-[0.08em] text-foreground/55 uppercase">
+                        <span aria-hidden className="size-1.5 rounded-full bg-primary-accent-text" />
+                        {group.day}
+                        <span className="font-medium tracking-normal normal-case text-foreground/45">
+                          · {group.items.length} {group.items.length === 1 ? "transaction" : "transactions"}
+                        </span>
+                      </h3>
+                      <ul className="flex flex-col divide-y divide-border-strong/40 rounded-[16px] border border-border-strong/60 bg-card shadow-e1">
+                        {group.items.map(({ txn, i }) => {
+                          const Icon = CATEGORY_ICON[txn.category] ?? Receipt;
+                          const cardView = creditCards.find((c) => c.id === txn.card.id);
+                          const incoming = txn.category === "Income";
+                          const kind = txn.isBillPayment
+                            ? { label: "Bill payment", tone: "bg-primary/15 text-primary-accent-text" }
+                            : incoming
+                              ? { label: "Credit", tone: "bg-success/12 text-success" }
+                              : { label: "Debit", tone: "bg-secondary text-foreground/70" };
+                          return (
+                            <motion.li
+                              key={txn.id}
+                              initial={reduceMotion ? false : { opacity: 0, y: 6 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              transition={{ duration: 0.22, delay: Math.min(i, 10) * 0.03, ease: [0.22, 1, 0.36, 1] }}
+                              className="group/txn flex items-center gap-3.5 px-3.5 py-3 transition-colors first:rounded-t-[16px] last:rounded-b-[16px] hover:bg-secondary/50 sm:px-4"
+                            >
+                              {/* Category icon; on All cards a swatch of the card's own colour sits on its corner. */}
+                              <span className="relative shrink-0">
+                                <span className={cn("flex size-11 items-center justify-center rounded-[14px]", TONE_ICON_CLASS[categoryTone(txn.category)])}>
+                                  <Icon className="size-[18px]" />
+                                </span>
+                                {(activityAllCards || !activeCard) && cardView && (
+                                  <span
+                                    aria-hidden
+                                    className="absolute -right-1 -bottom-1 h-3.5 w-5 rounded-[4px] shadow-sm ring-2 ring-card"
+                                    style={{ background: CARD_GRADIENT[cardView.accent] }}
+                                  />
+                                )}
+                              </span>
+
+                              <div className="min-w-0 flex-1">
+                                <p className="truncate text-[15px] font-semibold text-foreground">{txn.merchant}</p>
+                                <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5">
+                                  <span className={cn("rounded-full px-2 py-0.5 text-[10.5px] font-semibold", kind.tone)}>{kind.label}</span>
+                                  {txn.category && !txn.isBillPayment && !incoming && (
+                                    <span className="max-w-[10rem] truncate rounded-full border border-border-strong/60 px-2 py-0.5 text-[10.5px] font-medium text-foreground/70">
+                                      {txn.category}
+                                    </span>
+                                  )}
+                                  {(activityAllCards || !activeCard) && cardView && (
+                                    <span className="flex min-w-0 items-center gap-1 rounded-full bg-secondary px-2 py-0.5 text-[10.5px] font-medium text-foreground/75">
+                                      <CreditCardIcon className="size-3 shrink-0" strokeWidth={2} />
+                                      <span className="truncate">
+                                        {cardView.name} •••• {cardView.last4}
+                                      </span>
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+
+                              <div className="flex shrink-0 flex-col items-end">
+                                <span className={cn("text-base font-bold tracking-tight whitespace-nowrap tabular-nums", incoming ? "text-success" : "text-foreground")}>
+                                  {incoming ? "+" : "−"}
+                                  {formatCurrency(txn.amount)}
+                                </span>
+                                <span className="text-[11px] text-foreground/55 tabular-nums">
+                                  {txn.date.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
+                                </span>
+                              </div>
+
+                              {txn.isBillPayment ? (
+                                <DropdownMenu>
+                                  <DropdownMenuTrigger asChild>
+                                    <button
+                                      type="button"
+                                      aria-label="Payment actions"
+                                      className="flex size-8 shrink-0 items-center justify-center rounded-full text-foreground/60 transition-colors hover:bg-secondary hover:text-foreground data-[state=open]:bg-secondary"
+                                    >
+                                      <MoreHorizontal className="size-4" strokeWidth={1.75} />
+                                    </button>
+                                  </DropdownMenuTrigger>
+                                  <DropdownMenuContent align="end" className="min-w-52 rounded-[8px]">
+                                    <DropdownMenuItem className="text-expense" onSelect={() => setCancelPaymentId(txn.id)}>
+                                      Cancel recorded payment
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem onSelect={() => router.push(transactionsHrefForAccount(txn.card.accountId))}>View history</DropdownMenuItem>
+                                  </DropdownMenuContent>
+                                </DropdownMenu>
+                              ) : (
+                                <span aria-hidden className="hidden size-8 shrink-0 sm:block" />
+                              )}
+                            </motion.li>
+                          );
+                        })}
+                      </ul>
+                    </section>
+                  ))
+              )}
             </div>
           )}
 
           {activityTab === "spending" && (
-            <div aria-label="Spending summary" className="p-4">
+            <div aria-label="Spending summary" className="rounded-[16px] border border-border-strong/60 bg-card p-5 shadow-e1 sm:p-6">
               {spendByCategory.length === 0 ? (
                 <ActivityEmpty icon={PieChartIcon} title="No spending to show yet" detail={`Purchases on ${activeCard?.name ?? "this card"} will be grouped by category here.`} />
               ) : (
-                <div className="grid grid-cols-1 items-center gap-5 sm:grid-cols-[10rem_minmax(0,1fr)]">
-                  <div className="relative mx-auto size-40">
+                <div className="grid grid-cols-1 items-center gap-6 sm:grid-cols-[13rem_minmax(0,1fr)]">
+                  <div className="relative mx-auto flex size-52 items-center justify-center rounded-full bg-secondary/60 p-4">
                     <ResponsiveContainer width="100%" height="100%">
                       <PieChart>
                         <Pie data={spendByCategory} dataKey="amount" nameKey="category" innerRadius="70%" outerRadius="100%" paddingAngle={2} stroke="none">
@@ -1653,20 +1729,20 @@ export function CreditCardsWorkspace() {
                       </PieChart>
                     </ResponsiveContainer>
                     <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-                      <span className="text-[10px] font-semibold tracking-wide text-foreground/65 uppercase">Total</span>
-                      <span className="text-base font-bold text-foreground tabular-nums">{formatCurrency(spendTotal)}</span>
+                      <span className="text-[10px] font-semibold tracking-[0.08em] text-foreground/60 uppercase">Total spent</span>
+                      <span className="text-xl font-bold tracking-tight text-foreground tabular-nums">{formatCurrency(spendTotal)}</span>
                     </div>
                   </div>
-                  <ul className="flex min-w-0 flex-col gap-3">
+                  <ul className="flex min-w-0 flex-col gap-2">
                     {spendByCategory.map((item) => (
-                      <li key={item.category} className="flex flex-col gap-1.5">
+                      <li key={item.category} className="flex flex-col gap-2 rounded-[12px] border border-border-strong/50 bg-secondary/30 px-3.5 py-3">
                         <div className="flex items-center gap-2 text-sm">
                           <span className="size-2.5 shrink-0 rounded-full" style={{ background: CATEGORY_CHART_COLOR[categoryTone(item.category)] }} />
                           <span className="min-w-0 flex-1 truncate font-medium text-foreground">{item.category}</span>
                           <span className="shrink-0 font-bold text-foreground tabular-nums">{formatCurrency(item.amount)}</span>
-                          <span className="w-10 shrink-0 text-right text-xs font-medium text-foreground/65 tabular-nums">{item.percent}%</span>
+                          <span className="w-12 shrink-0 rounded-full bg-card px-1.5 py-0.5 text-center text-[11px] font-semibold text-foreground/70 tabular-nums ring-1 ring-border-strong/50">{item.percent}%</span>
                         </div>
-                        <div className="h-1.5 overflow-hidden rounded-full bg-secondary">
+                        <div className="h-2 overflow-hidden rounded-full bg-secondary">
                           <div className="h-full rounded-full" style={{ width: `${item.percent}%`, background: CATEGORY_CHART_COLOR[categoryTone(item.category)] }} />
                         </div>
                       </li>
@@ -1812,11 +1888,22 @@ function activityDayLabel(date: Date): string {
   return date.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
 }
 
+/** Sheet motion: a critically damped spring in (no bounce, no wobble), a quicker ease out. */
+const SHEET_OPEN = { type: "spring", duration: 0.45, bounce: 0 } as const;
+const SHEET_CLOSE = { duration: 0.24, ease: [0.32, 0.72, 0, 1] } as const;
+
 const ACTIVITY_TABS: { value: ActivityTab; label: string; icon: LucideIcon }[] = [
   { value: "bills", label: "Bills", icon: FileText },
   { value: "transactions", label: "Transactions", icon: Receipt },
   { value: "spending", label: "Spending", icon: PieChartIcon },
 ];
+
+/** Activity launcher rows: icon tone + one-line hint per tab. */
+const LAUNCHER_ROW: Record<ActivityTab, { tone: string; hint: string }> = {
+  bills: { tone: "bg-purple/12 text-purple", hint: "Statements and due dates" },
+  transactions: { tone: "bg-success/12 text-success", hint: "Charges and payments" },
+  spending: { tone: "bg-warning/20 text-warning-foreground dark:text-warning", hint: "Where the money went" },
+};
 
 /**
  * Card activity header — which card (logo, name, network, last 4), the This card / All cards scope, the
@@ -1831,6 +1918,7 @@ function ActivityHeader({
   allCards,
   onAllCards,
   cardCount,
+  onClose,
 }: {
   card: CreditCardViewItem | undefined;
   bankId: string | null;
@@ -1839,6 +1927,7 @@ function ActivityHeader({
   allCards: boolean;
   onAllCards: (all: boolean) => void;
   cardCount: number;
+  onClose: () => void;
 }) {
   // Spending is always the selected card's, so the scope only applies to Bills and Transactions.
   const scoped = tab !== "spending";
@@ -1848,22 +1937,25 @@ function ActivityHeader({
   const context = showingAll ? `${tab === "bills" ? "Bills" : "Recent transactions"} across all ${cardCount} cards` : what;
   const dueIn = card?.dueDate ? daysUntil(card.dueDate) : null;
   const dueLabel = dueIn == null ? "No bill due" : dueIn <= 0 ? "Due today" : `Due in ${dueIn}d`;
+  const util = card ? Math.min(100, Math.round(card.utilizationPercent)) : 0;
 
   return (
     <>
       {/* Hero — the selected card's own colour, its identity and the three figures that matter. Scrolls away. */}
       <div
-        className="relative overflow-hidden px-5 pt-4 pb-4 text-white transition-[background] duration-300"
+        className="relative overflow-hidden px-4 pt-9 pb-5 text-white sm:px-6"
         style={{ background: !showingAll && card ? CARD_GRADIENT[card.accent] : "linear-gradient(135deg, #1f2430 0%, #3a4252 100%)" }}
       >
         <span aria-hidden className="pointer-events-none absolute -top-20 -right-16 size-56 rounded-full bg-white/10 blur-3xl" />
         <span aria-hidden className="pointer-events-none absolute -bottom-24 -left-10 size-48 rounded-full border border-white/10" />
+        <span aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-black/15 to-transparent" />
 
-        <div className="relative flex flex-wrap items-start gap-x-4 gap-y-3">
+        <div className="relative mx-auto max-w-5xl">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
           <div className="mr-auto flex min-w-0 items-center gap-3">
             {!showingAll && card ? (
               bankId ? (
-                <BankLogo bankId={bankId} size={40} className="shadow-md ring-2 ring-white/40" />
+                <BankLogo bankId={bankId} size={44} className="shadow-lg ring-2 ring-white/50" />
               ) : (
                 <span className="h-8 w-11 shrink-0 rounded-[6px] border border-white/30 bg-white/15" />
               )
@@ -1874,7 +1966,7 @@ function ActivityHeader({
             )}
             <div className="min-w-0">
               <p className="flex min-w-0 items-center gap-2">
-                <span className="truncate font-heading text-lg leading-tight font-semibold">{!showingAll && card ? card.name : "All cards"}</span>
+                <span className="truncate font-heading text-xl leading-tight font-bold tracking-tight">{!showingAll && card ? card.name : "All cards"}</span>
                 {!showingAll && network && (
                   <span className="shrink-0 rounded-[4px] bg-white/20 px-1.5 py-0.5 text-[10px] leading-none font-bold tracking-wide italic">{network}</span>
                 )}
@@ -1886,8 +1978,9 @@ function ActivityHeader({
             </div>
           </div>
 
+          <div className="flex items-center gap-2">
           {scoped && (
-            <div role="radiogroup" aria-label="Show activity for" className="flex items-center rounded-full bg-black/20 p-0.5 ring-1 ring-white/15 backdrop-blur-sm">
+            <div role="radiogroup" aria-label="Show activity for" className="flex items-center rounded-full bg-black/20 p-0.5 ring-1 ring-white/15">
               {[
                 { all: false, label: "This card", title: card ? `Only ${card.name} •••• ${card.last4}` : undefined },
                 { all: true, label: `All cards · ${cardCount}`, title: `All ${cardCount} cards` },
@@ -1912,27 +2005,47 @@ function ActivityHeader({
               })}
             </div>
           )}
+            <button
+              type="button"
+              onClick={onClose}
+              title="Back to cards"
+              className="flex h-9 items-center gap-1 rounded-full bg-white/15 pr-3 pl-2 text-xs font-semibold text-white ring-1 ring-white/25 outline-none transition-colors hover:bg-white/25 focus-visible:ring-2 focus-visible:ring-white"
+            >
+              <ChevronDown className="size-4" strokeWidth={2.25} />
+              <span className="max-sm:sr-only">Back to cards</span>
+            </button>
+          </div>
         </div>
 
         {!showingAll && card && (
-          <dl className="relative mt-4 grid grid-cols-3 gap-2">
-            {[
-              { label: card.sharedLimit ? "This card used" : "Used", value: formatCurrency(card.ownUsage) },
-              { label: card.sharedLimit ? "Shared available" : "Available", value: formatCurrency(card.available) },
-              { label: "Payment", value: dueLabel, warn: dueIn != null && dueIn <= 5 },
-            ].map((m) => (
-              <div key={m.label} className="min-w-0 rounded-[10px] bg-white/12 px-3 py-2 ring-1 ring-white/15 backdrop-blur-sm">
-                <dt className="truncate text-[10.5px] font-semibold tracking-[0.06em] text-white/75 uppercase">{m.label}</dt>
-                <dd className={cn("truncate text-[15px] font-bold tabular-nums", m.warn && "text-red-200")}>{m.value}</dd>
+          <div className="mt-5 overflow-hidden rounded-[16px] bg-white/[0.12] shadow-[inset_0_1px_0_rgba(255,255,255,0.2)] ring-1 ring-white/15">
+            <dl className="grid grid-cols-3 divide-x divide-white/15">
+              {[
+                { label: card.sharedLimit ? "This card used" : "Used", value: formatCurrency(card.ownUsage) },
+                { label: card.sharedLimit ? "Shared available" : "Available", value: formatCurrency(card.available) },
+                { label: "Payment", value: dueLabel, warn: dueIn != null && dueIn <= 5 },
+              ].map((m) => (
+                <div key={m.label} className="min-w-0 px-3 py-3 sm:px-4">
+                  <dt className="truncate text-[10.5px] font-semibold tracking-[0.08em] text-white/70 uppercase">{m.label}</dt>
+                  <dd className={cn("mt-1 truncate text-lg leading-tight font-bold tracking-tight tabular-nums sm:text-xl", m.warn && "text-red-200")}>{m.value}</dd>
+                </div>
+              ))}
+            </dl>
+            <div className="flex items-center gap-3 border-t border-white/12 px-3 py-2.5 sm:px-4">
+              <span className="text-[10.5px] font-semibold tracking-[0.08em] text-white/70 uppercase">{card.sharedLimit ? "Shared limit used" : "Limit used"}</span>
+              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-black/25">
+                <div className={cn("h-full rounded-full", util >= 80 ? "bg-red-300" : "bg-white")} style={{ width: `${util}%` }} />
               </div>
-            ))}
-          </dl>
+              <span className="text-xs font-bold tabular-nums">{util}%</span>
+            </div>
+          </div>
         )}
+        </div>
       </div>
 
       {/* Tabs — pinned while the content scrolls; on the app's `attached` layer, under dialogs. */}
-      <div className="sticky top-0 z-attached border-b border-border-strong/60 bg-card/95 px-3 py-2 backdrop-blur supports-[backdrop-filter]:bg-card/85">
-        <div role="tablist" aria-label="Card activity" className="relative grid grid-cols-3 gap-1 rounded-[10px] bg-secondary p-1">
+      <div className="sticky top-0 z-attached h-[65px] border-b border-border-strong/50 bg-card px-4 py-2.5 shadow-[0_6px_14px_-12px_rgba(0,0,0,0.35)]">
+        <div role="tablist" aria-label="Card activity" className="relative mx-auto grid max-w-lg grid-cols-3 gap-1 rounded-full bg-secondary p-1">
           {ACTIVITY_TABS.map(({ value, label, icon: Icon }) => {
             const selected = tab === value;
             return (
@@ -1943,7 +2056,7 @@ function ActivityHeader({
                 aria-selected={selected}
                 onClick={() => onTab(value)}
                 className={cn(
-                  "relative flex h-9 items-center justify-center gap-1.5 rounded-[8px] text-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+                  "relative flex h-9 items-center justify-center gap-1.5 rounded-full text-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
                   selected ? "font-semibold text-foreground" : "font-medium text-foreground/65 hover:text-foreground",
                 )}
               >
@@ -1951,7 +2064,7 @@ function ActivityHeader({
                   <motion.span
                     layoutId="card-activity-tab"
                     aria-hidden
-                    className="absolute inset-0 rounded-[8px] bg-card shadow-sm ring-1 ring-border-strong/60"
+                    className="absolute inset-0 rounded-full bg-card shadow-[0_2px_8px_-2px_rgba(0,0,0,0.18)] ring-1 ring-border-strong/50"
                     transition={{ type: "spring", stiffness: 500, damping: 40 }}
                   />
                 )}
@@ -1968,56 +2081,82 @@ function ActivityHeader({
 }
 
 /**
- * Slim in-page entry to the Card activity sheet — the selected card, then one button per tab and "All cards".
+ * In-page entry to the Card activity sheet — the selected card, then a stack of rows: one per tab, then "All cards".
  * Clicking a card opens the sheet too; this keeps it discoverable (and reopenable) without a click on a card.
  */
 function ActivityLauncher({
   card,
   bankId,
   onOpen,
+  className,
 }: {
   card: CreditCardViewItem | undefined;
   bankId: string | null;
   onOpen: (tab: ActivityTab, allCards: boolean) => void;
+  className?: string;
 }) {
   return (
-    <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 rounded-[10px] border border-border-strong/60 bg-card px-3 py-2.5 shadow-e1 xl:col-start-1 xl:row-start-2">
-      <div className="mr-auto flex min-w-0 items-center gap-2.5">
-        {card &&
-          (bankId ? (
-            <BankLogo bankId={bankId} size={26} />
-          ) : (
-            <span className="h-5 w-7 shrink-0 rounded-[4px]" style={{ background: CARD_GRADIENT[card.accent] }} />
-          ))}
-        <div className="min-w-0">
-          <p className="truncate text-sm font-semibold text-foreground">
-            {card ? `${card.name} •••• ${card.last4}` : "Card activity"}
+    <div
+      className={cn(
+        "relative flex min-w-0 flex-col overflow-hidden rounded-[16px] border border-border-strong/60 bg-card shadow-[0_10px_28px_-14px_rgba(0,0,0,0.25),0_2px_6px_-2px_rgba(0,0,0,0.08)]",
+        className,
+      )}
+    >
+      {/* Header — tinted with the selected card's own gradient, so it reads as "this card's activity". */}
+      <div className="relative flex min-w-0 items-center gap-3 px-4 pt-3.5 pb-3">
+        {card && <span aria-hidden className="pointer-events-none absolute inset-0 opacity-[0.12] dark:opacity-[0.22]" style={{ background: CARD_GRADIENT[card.accent] }} />}
+        {card && <span aria-hidden className="pointer-events-none absolute inset-x-0 top-0 h-[3px]" style={{ background: CARD_GRADIENT[card.accent] }} />}
+        <span className="relative flex size-9 shrink-0 items-center justify-center rounded-full bg-card shadow-e1 ring-1 ring-border-strong/50">
+          {card && bankId ? <BankLogo bankId={bankId} size={24} /> : <Activity className="size-4 text-foreground/70" strokeWidth={2} />}
+        </span>
+        <div className="relative min-w-0">
+          <p className={CC_LABEL}>Card activity</p>
+          <p className="truncate text-sm font-bold text-foreground">
+            {card ? (
+              <>
+                {card.name} <span className="font-semibold tracking-[0.12em] text-foreground/60">•••• {card.last4}</span>
+              </>
+            ) : (
+              "Select a card"
+            )}
           </p>
-          <p className="truncate text-xs text-foreground/70">Bills, transactions and spending — opens over the page</p>
         </div>
       </div>
-      <div className="flex flex-wrap items-center gap-1.5">
+
+      {/* Stacked rows: one per tab — each opens the activity sheet over the page. */}
+      <div className="flex flex-1 flex-col gap-1 px-2 pb-2">
         {ACTIVITY_TABS.map(({ value, label, icon: Icon }) => (
           <button
             key={value}
             type="button"
             disabled={!card}
             onClick={() => onOpen(value, false)}
-            className="flex h-8 items-center gap-1.5 rounded-[8px] border border-border-strong/70 bg-card px-3 text-xs font-semibold text-foreground outline-none transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+            className="group flex min-h-12 flex-1 items-center gap-3 rounded-[10px] px-2.5 py-1.5 text-left outline-none transition-colors hover:bg-secondary/70 focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
           >
-            <Icon className="size-3.5" strokeWidth={2} />
-            {label}
+            <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-[10px] transition-transform group-hover:scale-105", LAUNCHER_ROW[value].tone)}>
+              <Icon className="size-4" strokeWidth={1.9} />
+            </span>
+            <span className="mr-auto min-w-0">
+              <span className="block truncate text-sm font-semibold text-foreground">{label}</span>
+              <span className="block truncate text-[11px] text-muted-foreground">{LAUNCHER_ROW[value].hint}</span>
+            </span>
+            <span className="flex size-7 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-all group-hover:translate-x-0.5 group-hover:bg-card group-hover:text-foreground group-hover:shadow-e1">
+              <ChevronRight className="size-4" strokeWidth={2} />
+            </span>
           </button>
         ))}
-        <button
-          type="button"
-          onClick={() => onOpen("bills", true)}
-          className="flex h-8 items-center gap-1.5 rounded-[8px] px-3 text-xs font-semibold text-foreground/80 outline-none transition-colors hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          All cards
-          <ArrowRight className="size-3.5" strokeWidth={2} />
-        </button>
       </div>
+
+      {/* Footer — every card's activity at once. */}
+      <button
+        type="button"
+        onClick={() => onOpen("bills", true)}
+        className="group flex h-11 items-center gap-2 border-t border-border-strong/50 bg-secondary/40 px-4 text-left text-xs font-semibold text-foreground/80 outline-none transition-colors hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+      >
+        <Layers className="size-3.5" strokeWidth={2} />
+        <span className="mr-auto">Activity across all cards</span>
+        <ArrowRight className="size-3.5 transition-transform group-hover:translate-x-0.5" strokeWidth={2} />
+      </button>
     </div>
   );
 }
@@ -2025,13 +2164,13 @@ function ActivityLauncher({
 /** Compact, honest empty state for an activity tab. */
 function ActivityEmpty({ icon: Icon, title, detail }: { icon: LucideIcon; title: string; detail?: string }) {
   return (
-    <div className="flex items-center gap-3 px-4 py-6">
-      <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-secondary text-foreground/60">
-        <Icon className="size-4" strokeWidth={2} />
+    <div className="flex flex-col items-center gap-3 px-6 py-10 text-center">
+      <span className="flex size-14 items-center justify-center rounded-full bg-secondary text-foreground/55 ring-8 ring-secondary/40">
+        <Icon className="size-6" strokeWidth={1.75} />
       </span>
-      <div className="min-w-0">
+      <div className="max-w-sm">
         <p className="text-sm font-semibold text-foreground">{title}</p>
-        {detail && <p className="text-xs text-foreground/70">{detail}</p>}
+        {detail && <p className="mt-1 text-xs text-foreground/65">{detail}</p>}
       </div>
     </div>
   );
@@ -2068,43 +2207,51 @@ function SelectedCardBill({
 
   if (!bill) {
     return (
-      <div className="flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center">
-        <div className="flex min-w-0 flex-1 items-center gap-3">
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-secondary text-foreground/60">
-            <FileText className="size-4" strokeWidth={2} />
-          </span>
-          <div className="min-w-0">
-            <p className="text-sm font-semibold text-foreground">No bill due on this card</p>
-            <p className="text-xs text-foreground/70">
-              Next statement closes {formatShortDate(nextClose)}
-              {card.ownUsage > 0.005 ? ` · ${formatCurrency(card.ownUsage)} spent, not billed yet` : ""}
-            </p>
+      <div className="flex flex-col gap-4">
+        <div className="flex flex-col gap-4 rounded-[16px] border border-border-strong/60 bg-gradient-to-br from-success/[0.07] via-card to-card p-5 shadow-e1 sm:flex-row sm:items-center sm:p-6">
+          <div className="flex min-w-0 flex-1 items-center gap-4">
+            <span className="flex size-12 shrink-0 items-center justify-center rounded-full bg-success/12 text-success ring-4 ring-success/[0.06]">
+              <ShieldCheck className="size-6" strokeWidth={1.9} />
+            </span>
+            <div className="min-w-0">
+              <p className="font-heading text-base font-semibold text-foreground">You&apos;re all clear — no bill due</p>
+              <p className="mt-0.5 text-sm text-foreground/65">Nothing to pay on this card until the next statement is generated.</p>
+            </div>
+          </div>
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
+            {canPayFull && (
+              <button type="button" onClick={onPayFull} className={CC_ACTIVITY_SECONDARY}>
+                Pay full outstanding {formatCurrency(card.ownUsage)}
+              </button>
+            )}
+            <button type="button" onClick={onHistory} className={CC_ACTIVITY_GHOST}>
+              Statement history
+              <ArrowRight className="size-3.5" strokeWidth={2} />
+            </button>
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
-          {canPayFull && (
-            <button type="button" onClick={onPayFull} className={CC_ACTIVITY_SECONDARY}>
-              Pay full outstanding {formatCurrency(card.ownUsage)}
-            </button>
-          )}
-          <button type="button" onClick={onHistory} className={CC_ACTIVITY_GHOST}>
-            Statement history
-            <ArrowRight className="size-3.5" strokeWidth={2} />
-          </button>
-        </div>
+        <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <BillInfoTile icon={CalendarClock} tone="bg-purple/12 text-purple" label="Next statement closes" value={formatShortDate(nextClose)} />
+          <BillInfoTile
+            icon={ShoppingBag}
+            tone="bg-warning/20 text-warning-foreground dark:text-warning"
+            label="Spent, not billed yet"
+            value={formatCurrency(card.ownUsage > 0.005 ? card.ownUsage : 0)}
+          />
+        </dl>
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col gap-4 px-4 py-4">
-      <div className="flex flex-wrap items-end justify-between gap-3">
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-wrap items-end justify-between gap-4 rounded-[16px] border border-border-strong/60 bg-gradient-to-br from-primary/[0.08] via-card to-card p-5 shadow-e1 sm:p-6">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <span className={CC_LABEL}>Bill amount</span>
             <span className={cn("rounded-full px-2 py-0.5 text-[11px] font-semibold", status.tone)}>{status.label}</span>
           </div>
-          <p className={cn("mt-1 text-[28px] leading-none font-bold tracking-tight tabular-nums", scope.currentOverdue ? "text-expense" : "text-foreground")}>
+          <p className={cn("mt-2 text-[34px] leading-none font-bold tracking-tight tabular-nums", scope.currentOverdue ? "text-expense" : "text-foreground")}>
             {formatCurrency(scope.statementDue)}
           </p>
           {scope.cardOutstanding > scope.statementDue + 0.005 && (
@@ -2128,26 +2275,24 @@ function SelectedCardBill({
         </div>
       </div>
 
-      <dl className="grid grid-cols-2 gap-x-4 gap-y-3 border-t border-border-strong/40 pt-3 sm:grid-cols-4">
-        <div className="min-w-0">
-          <dt className={CC_LABEL}>Statement</dt>
-          <dd className="truncate text-sm font-semibold text-foreground tabular-nums">{billPeriodLabel(bill)}</dd>
-        </div>
-        <div className="min-w-0">
-          <dt className={CC_LABEL}>Due date</dt>
-          <dd className={cn("truncate text-sm font-semibold tabular-nums", scope.currentOverdue ? "text-expense" : "text-foreground")}>{formatShortDate(bill.dueDate)}</dd>
-        </div>
-        <div className="min-w-0">
-          <dt className={CC_LABEL}>Minimum due</dt>
-          <dd className="truncate text-sm font-semibold text-foreground tabular-nums">
-            {/* Only an issuer figure from a stored statement — never a made-up ₹0. */}
-            {bill.minimumDue != null ? formatCurrency(bill.minimumDue) : <span className="font-medium text-foreground/65">Not tracked</span>}
-          </dd>
-        </div>
-        <div className="min-w-0">
-          <dt className={CC_LABEL}>Next statement</dt>
-          <dd className="truncate text-sm font-semibold text-foreground tabular-nums">{formatShortDate(nextClose)}</dd>
-        </div>
+      <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <BillInfoTile icon={FileText} tone="bg-purple/12 text-purple" label="Statement" value={billPeriodLabel(bill)} />
+        <BillInfoTile
+          icon={CalendarClock}
+          tone={scope.currentOverdue ? "bg-expense/12 text-expense" : "bg-success/12 text-success"}
+          label="Due date"
+          value={formatShortDate(bill.dueDate)}
+          danger={scope.currentOverdue}
+        />
+        {/* Only an issuer figure from a stored statement — never a made-up ₹0. */}
+        <BillInfoTile
+          icon={Wallet}
+          tone="bg-warning/20 text-warning-foreground dark:text-warning"
+          label="Minimum due"
+          value={bill.minimumDue != null ? formatCurrency(bill.minimumDue) : "Not tracked"}
+          muted={bill.minimumDue == null}
+        />
+        <BillInfoTile icon={RefreshCw} tone="bg-secondary text-foreground/70" label="Next statement" value={formatShortDate(nextClose)} />
       </dl>
 
       <button type="button" onClick={onHistory} className={cn(CC_ACTIVITY_GHOST, "self-start")}>
@@ -2158,27 +2303,40 @@ function SelectedCardBill({
   );
 }
 
+/** One labelled figure in the bill view — tinted icon, small caps label, value. */
+function BillInfoTile({
+  icon: Icon,
+  tone,
+  label,
+  value,
+  danger,
+  muted,
+}: {
+  icon: LucideIcon;
+  tone: string;
+  label: string;
+  value: string;
+  danger?: boolean;
+  muted?: boolean;
+}) {
+  return (
+    <div className="flex min-w-0 items-center gap-3 rounded-[14px] border border-border-strong/50 bg-card px-4 py-3.5 shadow-e1">
+      <span className={cn("flex size-10 shrink-0 items-center justify-center rounded-[12px]", tone)}>
+        <Icon className="size-[18px]" strokeWidth={1.9} />
+      </span>
+      <div className="min-w-0">
+        <dt className={CC_LABEL}>{label}</dt>
+        <dd className={cn("mt-0.5 truncate text-[15px] font-bold tabular-nums", danger ? "text-expense" : muted ? "font-medium text-foreground/60" : "text-foreground")}>{value}</dd>
+      </div>
+    </div>
+  );
+}
+
 const CC_ACTIVITY_SECONDARY =
   "flex h-9 items-center rounded-[8px] border border-border-strong bg-card px-3 text-sm font-semibold text-foreground outline-none transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring";
 const CC_ACTIVITY_GHOST =
   "flex h-8 items-center gap-1 rounded-[6px] px-2 text-xs font-semibold text-foreground/80 outline-none transition-colors hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring";
 
-
-function ActivityFooterLink({ label, note, onClick }: { label: string; note?: string; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="flex min-h-9 items-center justify-between gap-3 rounded-[8px] border border-border-strong/70 bg-card px-3 py-1.5 text-left text-sm font-semibold text-foreground transition-colors hover:bg-secondary"
-    >
-      <span className="min-w-0 truncate">{label}</span>
-      <span className="flex shrink-0 items-center gap-2">
-        {note && <span className="text-xs font-medium text-muted-foreground tabular-nums">{note}</span>}
-        <ArrowRight className="size-3.5" strokeWidth={2} />
-      </span>
-    </button>
-  );
-}
 
 const NETWORK_NAME: Record<string, string> = { visa: "VISA", mastercard: "Mastercard", rupay: "RuPay", amex: "AMEX" };
 

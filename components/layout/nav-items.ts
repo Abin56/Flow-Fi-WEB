@@ -19,6 +19,7 @@ import {
   TrendingDown,
   ScanSearch,
   ScanText,
+  Scale,
 } from "lucide-react";
 
 export interface NavItem {
@@ -65,5 +66,6 @@ export const NAV_ITEMS: NavItem[] = [
 
   { label: "Settings", href: "/settings", icon: Settings, section: "System" },
   { label: "Financial Audit", href: "/financial-audit", icon: ScanSearch, section: "System" },
+  { label: "Balance Control", href: "/balance-control", icon: Scale, section: "System" },
   { label: "Help & Support", href: "/help", icon: LifeBuoy, section: "System" },
 ];

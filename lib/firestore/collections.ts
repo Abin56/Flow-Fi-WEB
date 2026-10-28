@@ -31,6 +31,7 @@ export const FirestoreCollections = {
   sharedCreditLimits: "sharedCreditLimits", // bank-issued facility shared by multiple creditCards
   statements: "statements", // subcollection under creditCards/{cardId}
   statementPayments: "statementPayments", // subcollection under statements/{statementId}
+  limitCorrections: "limitCorrections", // subcollection under creditCards/{cardId} or sharedCreditLimits/{sharedLimitId} — web-only, see lib/models/credit-limit-correction.ts
   paymentBreakdowns: "paymentBreakdowns", // subcollection under emis/{emiId}, doc id == paymentId
 
   // --- Financial Document Intelligence Engine (Architecture v1.0) ---

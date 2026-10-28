@@ -21,16 +21,19 @@ import {
   type DocumentReference,
   doc,
   getDoc,
+  runTransaction,
   updateDoc,
 } from "firebase/firestore";
 import { FirestoreCrudRepository } from "@/lib/firestore/firestore-crud-repository";
-import { recordEdit, updateField } from "@/lib/firestore/soft-deletable";
+import { recordEdit } from "@/lib/firestore/soft-deletable";
 import {
   type Bill,
   type BillOccurrence,
   type BillRecurrence,
   billOccurrenceStatus,
+  billOccurrenceToFirestore,
   billRecurrenceNextDueDate,
+  billToFirestore,
   type PaymentRecord,
 } from "@/lib/models/bill";
 import { generateId } from "@/lib/utils/id-generator";
@@ -81,6 +84,24 @@ export class BillRepository extends FirestoreCrudRepository<Bill> {
     super(collection);
   }
 
+  /**
+   * Moves the bill to trash. Sets `deletedAt` only, against the CURRENT stored bill in a transaction — deleting from a
+   * stale copy must not revert a rolled due date, a concurrent edit or the audit history. Refuses a bill that no longer
+   * exists instead of recreating it from the stale copy. Already-deleted bills are left as they are.
+   */
+  override async softDelete(bill: Bill): Promise<Bill> {
+    const deletedAt = new Date();
+    return runTransaction(this.collection.firestore, async (tx) => {
+      const ref = this.docRef(bill.id);
+      const snap = await tx.get(ref);
+      if (!snap.exists()) throw new Error("This bill no longer exists — refresh and try again");
+      const fresh = snap.data();
+      if (fresh.deletedAt != null) return fresh;
+      tx.update(ref, { deletedAt: billToFirestore({ ...fresh, deletedAt }).deletedAt });
+      return { ...fresh, deletedAt };
+    });
+  }
+
   async createBill(params: CreateBillParams): Promise<Bill> {
     if (params.amount <= 0) {
       throw new Error("Bill amount must be greater than 0");
@@ -118,82 +139,178 @@ export class BillRepository extends FirestoreCrudRepository<Bill> {
    * legitimately change (rent increases, due date shifts). Never touches an
    * already-materialized `BillOccurrence` — editing the template only
    * affects occurrences generated after this call.
+   *
+   * `bill` is the copy the edit form was SEEDED from, not necessarily the stored bill: the form submits every field,
+   * so a field is only treated as an edit when it differs from `bill`. Each edit is then applied to the CURRENT stored
+   * bill in one transaction (three-way merge, per field):
+   *   - the stored value still equals `bill`'s → apply the edit;
+   *   - the stored value already equals the edit → nothing to do;
+   *   - the stored value was changed by someone else to something different → CONFLICT: the whole save is refused
+   *     with `BillEditConflictError` (nothing applied, nothing silently discarded).
+   * Fields the user did not change are never written, so system-managed ones — notably `nextDueDate`, which a
+   * recurring roll advances — cannot be reverted by a stale form. Only the changed fields (plus the audit fields) are
+   * written, so unrelated stored fields are left exactly as they are.
    */
   async editBill(bill: Bill, params: EditBillParams): Promise<void> {
     if (params.amount != null && params.amount <= 0) {
       throw new Error("Bill amount must be greater than 0");
     }
-    const effectiveRecurrence = params.recurrence ?? bill.recurrence;
-    const effectiveCustomDays = params.customIntervalDays ?? bill.customIntervalDays;
-    if (
-      effectiveRecurrence === "custom" &&
-      (effectiveCustomDays == null || effectiveCustomDays <= 0)
-    ) {
-      throw new Error("Custom recurrence needs a repeat interval greater than 0 days");
-    }
+    assertCustomIntervalValid(params.recurrence ?? bill.recurrence, params.customIntervalDays ?? bill.customIntervalDays);
 
-    let updated = bill;
-    updated = updateField(updated, "name", updated.name, params.name, (e, v) => ({ ...e, name: v }));
-    updated = updateField(updated, "amount", updated.amount, params.amount, (e, v) => ({ ...e, amount: v }));
-    updated = updateField(
-      updated,
-      "nextDueDate",
-      updated.nextDueDate,
-      params.nextDueDate,
-      (e, v) => ({ ...e, nextDueDate: v }),
-    );
-    updated = updateField(
-      updated,
-      "recurrence",
-      updated.recurrence,
-      params.recurrence,
-      (e, v) => ({ ...e, recurrence: v }),
-    );
-    updated = updateField(
-      updated,
-      "accountId",
-      updated.accountId,
-      params.accountId,
-      (e, v) => ({ ...e, accountId: v }),
-    );
-    updated = updateField(
-      updated,
-      "categoryId",
-      updated.categoryId,
-      params.categoryId,
-      (e, v) => ({ ...e, categoryId: v }),
-    );
-    updated = updateField(
-      updated,
-      "customIntervalDays",
-      updated.customIntervalDays,
-      params.customIntervalDays,
-      (e, v) => ({ ...e, customIntervalDays: v }),
-    );
-    updated = updateField(updated, "notes", updated.notes, params.notes, (e, v) => ({ ...e, notes: v }));
-    if (params.reminderOffsets != null && !arraysEqual(updated.reminderOffsets, params.reminderOffsets)) {
-      updated = recordEdit(
-        updated,
-        "reminderOffsets",
-        String(updated.reminderOffsets),
-        String(params.reminderOffsets),
-      );
-      updated = { ...updated, reminderOffsets: params.reminderOffsets };
-    }
-    await this.update(updated);
+    await runTransaction(this.collection.firestore, async (tx) => {
+      const ref = this.docRef(bill.id);
+      const snap = await tx.get(ref);
+      if (!snap.exists()) throw new Error("This bill no longer exists — refresh and try again");
+      const fresh = snap.data();
+
+      let updated = fresh;
+      const written: (keyof Bill)[] = [];
+      const conflicts: string[] = [];
+      for (const f of EDITABLE_BILL_FIELDS) {
+        const wanted = params[f.param] as never;
+        if (wanted == null || f.equal(wanted, bill[f.field] as never)) continue; // not edited by the user
+        if (f.equal(wanted, fresh[f.field] as never)) continue; // already stored
+        if (!f.equal(fresh[f.field] as never, bill[f.field] as never)) {
+          conflicts.push(f.label); // someone else changed it to something else meanwhile
+          continue;
+        }
+        updated = recordEdit(updated, f.field, f.show(fresh[f.field] as never), f.show(wanted));
+        updated = { ...updated, [f.field]: wanted };
+        written.push(f.field);
+      }
+      if (conflicts.length > 0) throw new BillEditConflictError(conflicts);
+      if (written.length === 0) return;
+
+      assertCustomIntervalValid(updated.recurrence, updated.customIntervalDays);
+      const raw = billToFirestore(updated);
+      const patch: DocumentData = { lastEditedAt: raw.lastEditedAt, editHistory: raw.editHistory };
+      for (const field of written) patch[field] = raw[field];
+      tx.update(ref, patch);
+    });
   }
 
   /**
-   * Advances `Bill.nextDueDate` to `next` — called by
-   * `BillOccurrenceRepository` immediately after materializing a new
-   * occurrence at the template's current `nextDueDate`.
+   * Advances `Bill.nextDueDate` to `next`. Reads the CURRENT bill inside a transaction and writes only the due-date
+   * fields (`nextDueDate`, `lastEditedAt`, `editHistory`), so a name/amount/category edit made meanwhile — or by
+   * another tab holding a stale copy — is preserved. Never moves the date backwards.
    */
   async advanceNextDueDate(bill: Bill, next: Date): Promise<void> {
-    let updated = recordEdit(bill, "nextDueDate", String(bill.nextDueDate), String(next));
-    updated = { ...updated, nextDueDate: next };
-    await this.update(updated);
+    await runTransaction(this.collection.firestore, async (tx) => {
+      const ref = this.docRef(bill.id);
+      const snap = await tx.get(ref);
+      if (!snap.exists()) return;
+      const patch = nextDueDatePatch(snap.data(), next);
+      if (patch != null) tx.update(ref, patch);
+    });
   }
+}
 
+function assertCustomIntervalValid(recurrence: BillRecurrence, customIntervalDays: number | null | undefined): void {
+  if (recurrence === "custom" && (customIntervalDays == null || customIntervalDays <= 0)) {
+    throw new Error("Custom recurrence needs a repeat interval greater than 0 days");
+  }
+}
+
+/** Two due dates are the same when they fall on the same calendar day (local, or UTC as the edit form shows it). */
+function sameDueDay(a: Date, b: Date): boolean {
+  return (
+    sameCalendarDay(a, b) ||
+    (a.getUTCFullYear() === b.getUTCFullYear() && a.getUTCMonth() === b.getUTCMonth() && a.getUTCDate() === b.getUTCDate())
+  );
+}
+
+interface EditableBillField {
+  field: keyof Bill;
+  param: keyof EditBillParams;
+  /** Name shown in a conflict message. */
+  label: string;
+  equal: (a: never, b: never) => boolean;
+  show: (v: never) => string;
+}
+
+const strictField = (field: keyof Bill & keyof EditBillParams, label: string): EditableBillField => ({
+  field,
+  param: field,
+  label,
+  equal: ((a: unknown, b: unknown) => a === b) as never,
+  show: ((v: unknown) => String(v)) as never,
+});
+
+/** Every field the Bills edit form lets the user change. Anything not listed here (e.g. `createdAt`) is never written by an edit. */
+const EDITABLE_BILL_FIELDS: EditableBillField[] = [
+  strictField("name", "name"),
+  strictField("amount", "amount"),
+  {
+    field: "nextDueDate",
+    param: "nextDueDate",
+    label: "due date",
+    equal: ((a: Date, b: Date) => sameDueDay(a, b)) as never,
+    show: ((v: Date) => String(v)) as never,
+  },
+  strictField("recurrence", "repeat"),
+  strictField("accountId", "account"),
+  strictField("categoryId", "category"),
+  strictField("customIntervalDays", "repeat interval"),
+  strictField("notes", "notes"),
+  {
+    field: "reminderOffsets",
+    param: "reminderOffsets",
+    label: "reminders",
+    equal: ((a: number[], b: number[]) => arraysEqual(a, b)) as never,
+    show: ((v: number[]) => String(v)) as never,
+  },
+];
+
+/** Skip refused; nothing was written. The message is written for the user. */
+export class BillSkipError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BillSkipError";
+  }
+}
+
+/** Why `occurrence` cannot be skipped right now, or `null`. One rule for the repository and the Skip button. */
+export function billSkipBlockedReason(occurrence: Pick<BillOccurrence, "amountPaid">): string | null {
+  return occurrence.amountPaid > 0
+    ? "This bill cycle already has a payment recorded, so it can't be skipped. If the payment was a mistake, cancel it first."
+    : null;
+}
+
+/** Another tab changed the same bill field(s) to a different value — the save was refused in full. */
+export class BillEditConflictError extends Error {
+  constructor(readonly fields: string[]) {
+    super(
+      `This bill's ${fields.join(", ")} changed in another tab since you opened it. Nothing was saved — close this form, reopen the bill to see the latest, and apply your change again.`,
+    );
+    this.name = "BillEditConflictError";
+  }
+}
+
+/**
+ * The raw fields to write to advance `fresh.nextDueDate` to `next`, or `null` when the bill is already at or past
+ * `next`. Deliberately a partial patch (for `tx.update`) — never the whole bill — so every other property, including
+ * pre-migration fields `Bill` does not parse, is left exactly as stored.
+ */
+function nextDueDatePatch(fresh: Bill, next: Date): DocumentData | null {
+  if (fresh.nextDueDate.getTime() >= next.getTime()) return null;
+  const edited = recordEdit(fresh, "nextDueDate", String(fresh.nextDueDate), String(next));
+  const raw = billToFirestore({ ...edited, nextDueDate: next });
+  return { nextDueDate: raw.nextDueDate, lastEditedAt: raw.lastEditedAt, editHistory: raw.editHistory };
+}
+
+/**
+ * Deterministic identity of one bill cycle: the bill plus the calendar day it falls due. Two tabs/devices computing
+ * the same cycle therefore address the same document. Records created before this existed carry random ids, which is
+ * why occurrence creation also looks up the cycle by its due day (see `findCycleOnDay`).
+ */
+export function billCycleId(billId: string, dueDate: Date): string {
+  const mm = String(dueDate.getMonth() + 1).padStart(2, "0");
+  const dd = String(dueDate.getDate()).padStart(2, "0");
+  return `${billId}_${dueDate.getFullYear()}${mm}${dd}`;
+}
+
+function sameCalendarDay(a: Date, b: Date): boolean {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 }
 
 // --- LegacyBillOccurrenceState (bill_occurrence_repository.dart) ---
@@ -304,29 +421,18 @@ export class BillOccurrenceRepository extends FirestoreCrudRepository<BillOccurr
   }
 
   /**
-   * Adopts a pre-migration bill's in-progress state into exactly one new
-   * `BillOccurrence`, then backfills every existing `PaymentRecord`'s
-   * `occurrenceId` to point at it. Runs at most once per bill — guarded by
-   * `ensureCurrentOccurrence`'s "existing is non-empty" check.
+   * Adopts a pre-migration bill's in-progress state into exactly one `BillOccurrence`, then backfills every existing
+   * `PaymentRecord`'s `occurrenceId` to point at it. Idempotent: two tabs adopting at once converge on one occurrence.
    */
   private async adoptLegacy(
     bill: Bill,
     legacy: LegacyBillOccurrenceState,
     legacyPayments: PaymentRecord[],
   ): Promise<BillOccurrence> {
-    const occurrence: BillOccurrence = {
-      id: generateId(),
-      billId: bill.id,
-      dueDate: bill.nextDueDate,
-      amount: bill.amount,
+    const occurrence = await this.createCycleOnce(bill, bill.nextDueDate, {
       amountPaid: legacy.amountPaid,
       isSkipped: legacy.isSkipped,
-      createdAt: new Date(),
-      deletedAt: null,
-      lastEditedAt: null,
-      editHistory: [],
-    };
-    await this.add(occurrence.id, occurrence);
+    });
 
     for (const payment of legacyPayments) {
       if (payment.occurrenceId != null) continue;
@@ -342,47 +448,75 @@ export class BillOccurrenceRepository extends FirestoreCrudRepository<BillOccurr
    * nothing to advance the template past.
    */
   private async materializeFirst(bill: Bill, now?: Date): Promise<BillOccurrence> {
-    const occurrence: BillOccurrence = {
-      id: generateId(),
-      billId: bill.id,
-      dueDate: bill.nextDueDate,
-      amount: bill.amount,
-      amountPaid: 0,
-      isSkipped: false,
-      createdAt: now ?? new Date(),
-      deletedAt: null,
-      lastEditedAt: null,
-      editHistory: [],
-    };
-    await this.add(occurrence.id, occurrence);
-    return occurrence;
+    return this.createCycleOnce(bill, bill.nextDueDate, {}, now);
   }
 
   /**
-   * `settled` has just become paid/skipped — advances the template's
-   * `Bill.nextDueDate` past it, then materializes the next occurrence at
-   * that new date. Advancing happens *before* creating the new occurrence,
-   * since `settled`'s own due date is what's being advanced past, not the
-   * occurrence about to be created.
+   * `settled` has just become paid/skipped — advances the template's `Bill.nextDueDate` past it and materializes the
+   * next occurrence at that new date, both in one transaction (see `createCycleOnce`).
    */
   private async rollForward(bill: Bill, settled: BillOccurrence, now?: Date): Promise<BillOccurrence> {
     const next = billRecurrenceNextDueDate(bill.recurrence, settled.dueDate, bill.customIntervalDays);
-    await this.billRepository.advanceNextDueDate(bill, next);
+    const created = await this.createCycleOnce(bill, next, {}, now, next);
+    // A trashed record already holds this cycle's identity: never resurrect it, never write another.
+    return created.deletedAt != null ? settled : created;
+  }
 
-    const occurrence: BillOccurrence = {
-      id: generateId(),
-      billId: bill.id,
-      dueDate: next,
-      amount: bill.amount,
-      amountPaid: 0,
-      isSkipped: false,
-      createdAt: now ?? new Date(),
-      deletedAt: null,
-      lastEditedAt: null,
-      editHistory: [],
-    };
-    await this.add(occurrence.id, occurrence);
-    return occurrence;
+  /**
+   * The single place a cycle is created. Guarantees ONE occurrence per bill per due day, however many tabs/devices
+   * race, and that an existing one is never overwritten:
+   *   1. Looks the cycle up by calendar due day among the stored occurrences — this is what recognises a legacy
+   *      random-id record (a transaction cannot run a query, and a deterministic id alone would not match it). If one
+   *      exists it is adopted as-is: nothing is created, nothing is rewritten.
+   *   2. Otherwise, in a transaction: reads the CURRENT bill and the deterministic cycle document, and creates the
+   *      cycle only if that document is absent. The bill document is part of the transaction, so concurrent creators
+   *      conflict and retry — the loser then finds the winner's document and returns it.
+   *   3. When `advanceTo` is given, the same transaction moves `Bill.nextDueDate` forward by patching only the
+   *      due-date fields; every other bill property is left as stored. The new cycle's amount is the CURRENT bill
+   *      amount, not the caller's possibly stale copy.
+   */
+  private async createCycleOnce(
+    bill: Bill,
+    dueDate: Date,
+    init: { amountPaid?: number; isSkipped?: boolean },
+    now?: Date,
+    advanceTo?: Date,
+  ): Promise<BillOccurrence> {
+    const onThatDay = (await this.getAll()).find((o) => sameCalendarDay(o.dueDate, dueDate));
+    if (onThatDay != null) {
+      if (advanceTo != null) await this.billRepository.advanceNextDueDate(bill, advanceTo);
+      return onThatDay;
+    }
+
+    const billRef = this.billRepository.docRef(bill.id);
+    const occurrenceRef = this.docRef(billCycleId(bill.id, dueDate));
+    return runTransaction(this.collection.firestore, async (tx) => {
+      const billSnap = await tx.get(billRef);
+      const occurrenceSnap = await tx.get(occurrenceRef);
+      if (!billSnap.exists()) throw new Error("This bill no longer exists — refresh and try again");
+      const fresh = billSnap.data();
+
+      if (advanceTo != null) {
+        const patch = nextDueDatePatch(fresh, advanceTo);
+        if (patch != null) tx.update(billRef, patch);
+      }
+      if (occurrenceSnap.exists()) return occurrenceSnap.data();
+
+      const occurrence: BillOccurrence = {
+        id: occurrenceRef.id,
+        billId: bill.id,
+        dueDate,
+        amount: fresh.amount,
+        amountPaid: init.amountPaid ?? 0,
+        isSkipped: init.isSkipped ?? false,
+        createdAt: now ?? new Date(),
+        deletedAt: null,
+        lastEditedAt: null,
+        editHistory: [],
+      };
+      tx.set(occurrenceRef, occurrence);
+      return occurrence;
+    });
   }
 
   /**
@@ -418,19 +552,35 @@ export class BillOccurrenceRepository extends FirestoreCrudRepository<BillOccurr
     await this.update(updated);
   }
 
-  /** Marks `occurrence` skipped (not paid, not counted as overdue). */
+  /**
+   * Marks `occurrence` skipped (not paid, not counted as overdue). Refused when the CURRENT cycle already has a payment:
+   * skipping a paid cycle hides money that is owed again the moment the payment is cancelled. Reads the cycle fresh in a
+   * transaction and changes only `isSkipped` (+ audit), so a stale row can never overwrite a payment's `amountPaid`; a
+   * pay/skip race serialises in Firestore and exactly one of them wins.
+   */
   async skipOccurrence(occurrence: BillOccurrence): Promise<void> {
-    if (occurrence.isSkipped) return;
-    let updated = recordEdit(occurrence, "isSkipped", "false", "true");
-    updated = { ...updated, isSkipped: true };
-    await this.update(updated);
+    await this.setSkipped(occurrence.id, true);
   }
 
   async unskip(occurrence: BillOccurrence): Promise<void> {
-    if (!occurrence.isSkipped) return;
-    let updated = recordEdit(occurrence, "isSkipped", "true", "false");
-    updated = { ...updated, isSkipped: false };
-    await this.update(updated);
+    await this.setSkipped(occurrence.id, false);
+  }
+
+  private async setSkipped(id: string, skipped: boolean): Promise<void> {
+    await runTransaction(this.collection.firestore, async (tx) => {
+      const ref = this.docRef(id);
+      const snap = await tx.get(ref);
+      if (!snap.exists() || snap.data().deletedAt != null) throw new BillSkipError("This bill cycle no longer exists — refresh and try again.");
+      const fresh = snap.data();
+      if (fresh.isSkipped === skipped) return;
+      if (skipped) {
+        const blocked = billSkipBlockedReason(fresh);
+        if (blocked != null) throw new BillSkipError(blocked);
+      }
+      const edited = recordEdit(fresh, "isSkipped", String(!skipped), String(skipped));
+      const raw = billOccurrenceToFirestore({ ...edited, isSkipped: skipped });
+      tx.update(ref, { isSkipped: raw.isSkipped, lastEditedAt: raw.lastEditedAt, editHistory: raw.editHistory });
+    });
   }
 }
 

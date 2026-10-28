@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/firebase/client", () => ({ firebaseApp: {}, auth: {}, db: {} }));
 
@@ -151,6 +151,18 @@ function compute(params: {
 }
 
 const all = (m: Map<string, CreditCardStandingView>) => [...m.values()];
+
+// The fixtures' purchases are dated 28 Sep 2026 and the cards close on the 25th, so "this cycle" (current-cycle spend,
+// Month Cycle totals) means the 26 Sep – 25 Oct 2026 bill. Pin the clock inside it so the suite doesn't depend on the
+// day it runs (it started failing on 26 Oct 2026, when the real clock rolled into the next cycle).
+const FIXTURE_NOW = new Date("2026-10-10T12:00:00+05:30");
+beforeAll(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(FIXTURE_NOW);
+});
+afterAll(() => {
+  vi.useRealTimers();
+});
 
 describe("independent / legacy cards", () => {
   it("1/28: a card without sharedLimitId keeps its own limit and standing", () => {

@@ -18,20 +18,26 @@ interface BankLogoProps {
 
 const LOGO_DIR = "/banks/logos";
 
+/** bank id -> what is known after the first attempt. Module-level on purpose: it outlives remounts (the details sheet remounts per transaction). */
+const logoState = new Map<string, "png-loaded" | "svg-loaded" | "failed">();
+
 function shapeClass(shape: BankLogoShape) {
   return shape === "circle" ? "rounded-full" : "rounded-lg";
 }
 
 /** Colored-initials badge — used until a real logo file exists for a bank, and forever for "Other". */
 function MonogramBadge({ bank, size, shape, className }: { bank: BankInfo; size: number; shape: BankLogoShape; className?: string }) {
+  // Letters that fit the badge: four fill a large one, two keep a small one legible (an `HDFC` at 22px used to be cut to "DF").
+  const letters = bank.shortCode.slice(0, size < 30 ? 2 : 4);
+  const fontSize = Math.max(8, Math.min(Math.round(size * 0.36), Math.floor((size * 0.78) / (letters.length * 0.64))));
   return (
     <span
       role="img"
       aria-label={bank.name}
       className={cn("flex shrink-0 items-center justify-center font-bold text-white", shapeClass(shape), className)}
-      style={{ width: size, height: size, background: bank.color, fontSize: Math.max(9, Math.round(size * 0.3)) }}
+      style={{ width: size, height: size, background: bank.color, fontSize }}
     >
-      {bank.shortCode.slice(0, 4)}
+      {letters}
     </span>
   );
 }
@@ -60,9 +66,10 @@ function UnknownBadge({ size, shape, className }: { size: number; shape: BankLog
  */
 export function BankLogo({ bankId, size = 32, shape = "circle", className }: BankLogoProps) {
   const bank = bankById(bankId);
-  const [triedPng, setTriedPng] = useState(false);
-  const [imageFailed, setImageFailed] = useState(false);
-  const [imageLoaded, setImageLoaded] = useState(false);
+  const known = bank ? logoState.get(bank.id) : undefined;
+  const [triedPng, setTriedPng] = useState(known === "png-loaded");
+  const [imageFailed, setImageFailed] = useState(known === "failed");
+  const [imageLoaded, setImageLoaded] = useState(known === "png-loaded" || known === "svg-loaded");
 
   // Reset the onError fallback chain whenever the bank identity itself changes (e.g. switching
   // banks in the picker) — otherwise a previous bank's failed-image state would leak forward.
@@ -70,9 +77,10 @@ export function BankLogo({ bankId, size = 32, shape = "circle", className }: Ban
   const [lastBankId, setLastBankId] = useState(bank?.id);
   if (bank?.id !== lastBankId) {
     setLastBankId(bank?.id);
-    setTriedPng(false);
-    setImageFailed(false);
-    setImageLoaded(false);
+    const next = bank ? logoState.get(bank.id) : undefined;
+    setTriedPng(next === "png-loaded");
+    setImageFailed(next === "failed");
+    setImageLoaded(next === "png-loaded" || next === "svg-loaded");
   }
 
   if (!bank) return <UnknownBadge size={size} shape={shape} className={className} />;
@@ -103,10 +111,16 @@ export function BankLogo({ bankId, size = 32, shape = "circle", className }: Ban
         height={size}
         decoding="async"
         className={cn("relative size-full object-contain p-[14%]", !imageLoaded && "invisible")}
-        onLoad={() => setImageLoaded(true)}
+        onLoad={() => {
+          logoState.set(bank.id, triedPng ? "png-loaded" : "svg-loaded");
+          setImageLoaded(true);
+        }}
         onError={() => {
           if (!triedPng) setTriedPng(true);
-          else setImageFailed(true);
+          else {
+            logoState.set(bank.id, "failed");
+            setImageFailed(true);
+          }
         }}
       />
     </span>
