@@ -16,8 +16,8 @@
 import { forwardRef } from "react";
 import { PencilLine } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { openIssues } from "@/features/smart-capture/lib/capture-review";
 import { describeAmountDelta, describeDayGap } from "../lib/amounts-and-days";
+import { rowCheckLabel } from "../lib/decisions";
 import type { ReconRow, RowDecision, RowMatch } from "../lib/types";
 import { QuickDecideMenu, type QuickAction } from "./recon-decision-menu";
 import { DecisionChip, Money, SHEET_HEAD, StateMark, formatRowDate } from "./recon-ui";
@@ -114,7 +114,8 @@ export const ReconTable = forwardRef<HTMLDivElement, ReconTableProps>(function R
             const selected = row.id === selectedId;
             const expanded = row.id === expandedId;
             const related = !selected && (highlightIds?.has(row.id) ?? false);
-            const flagged = row.needsReconfirm || (row.include && openIssues(row).length > 0);
+            const checkLabel = rowCheckLabel(row);
+            const flagged = checkLabel != null;
             const keepBoth = !!match && (match.candidates.length > 0 || match.pendingSms.length > 0);
             // A left stripe shows the review's progress at a glance: amber = still needs a decision, green = decided.
             const stripe = !match || match.state === "excluded" || !row.include ? null : decision?.kind && decision.kind !== "investigate" ? "bg-success/70" : "bg-warning/80";
@@ -146,6 +147,10 @@ export const ReconTable = forwardRef<HTMLDivElement, ReconTableProps>(function R
                   data-testid="recon-row"
                   data-row-id={row.id}
                   data-state={match?.state ?? "pending"}
+                  data-amount={row.amount ?? ""}
+                  data-direction={row.direction ?? ""}
+                  data-description={row.description}
+                  data-decision={decision?.kind ?? ""}
                   data-related={related || undefined}
                   onClick={() => onSelect(row.id)}
                   onDoubleClick={(e) => {
@@ -178,7 +183,7 @@ export const ReconTable = forwardRef<HTMLDivElement, ReconTableProps>(function R
                       {row.description || "No description"}
                     </span>
                     {flagged ? (
-                      <span className="block truncate text-[11px] text-warning">{row.needsReconfirm ? "Edited — confirm values" : "Check flagged values"}</span>
+                      <span className="block truncate text-[11px] text-warning" data-testid="row-check-label">{checkLabel}</span>
                     ) : (
                       <span className={cn("block truncate text-[11px] text-muted-foreground", NARROW_ONLY)}>
                         <span className="@min-[34rem]:hidden">{formatRowDate(row.date)} · </span>

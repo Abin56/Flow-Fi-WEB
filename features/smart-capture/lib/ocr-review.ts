@@ -2,24 +2,45 @@
  * OCR safety layer for Smart Capture. Runs after the normal text parser on
  * text that came from a screenshot and makes the review stricter:
  *
- *  - every OCR row gets a blocking `ocr_unverified` issue — the user must
- *    confirm they checked it against the image;
+ *  - an OCR row with strong, unambiguous evidence on every field (date,
+ *    amount and a C/D marker — or the statement's own "only credits are
+ *    marked" convention — all read clearly, nothing else flagged) needs no
+ *    click at all — it goes straight to Ready;
+ *  - a value word read unclearly is re-read on its own (tesseract-ocr.ts
+ *    `recheck`); when that second, separate read agrees at a good
+ *    confidence, the word counts as clearly read. When it disagrees, the
+ *    field stays flagged and the user sees both readings;
+ *  - a row that still needs a look gets exactly one open ask: a field-level
+ *    fix/confirm when the problem is pinned to one field, otherwise a single
+ *    generic `ocr_unverified` "check against the image" — never both;
  *  - a date, amount or C/D (Cr/Dr) marker read below `LOW_CONFIDENCE` gets
  *    its own *strict* issue, cleared only by editing or confirming that field;
  *  - a row with no marker says plainly that its direction was inferred;
  *  - a sliver of a row cut off by the screenshot/crop edge is flagged and
  *    starts excluded (it is usually a partial copy of a neighbouring row);
- *  - two rows with the same date, merchant and amount are pointed out — but
- *    never merged or dropped, because same-amount purchases are real.
+ *  - two rows with the same date, merchant and amount are pointed out — and
+ *    always need their own look (blocking, never bulk-cleared), because
+ *    same-amount purchases are real and must neither be silently merged nor
+ *    silently imported twice.
  *
- * Confidence only ever adds flags — a high score never removes one.
+ * Evidence only decides whether a row needs the user; it never changes a
+ * value, and a parser flag is never removed by a high score.
  */
 
-import { matchLeadingDate, type CaptureIssue, type CaptureRow } from "./parse-pasted-statement";
+import { FIELD_ISSUE_CODES, matchLeadingDate, type CaptureIssue, type CaptureRow } from "./parse-pasted-statement";
 import type { OcrBox, OcrLine, OcrWord } from "./tesseract-ocr";
 
 /** Tesseract word confidence (0–100) below which a date/amount must be corrected or individually confirmed. */
 export const LOW_CONFIDENCE = 85;
+
+/**
+ * At/above this (and only this — see `annotateOcrRows` for the other conditions), OCR evidence on a row is strong
+ * enough that it doesn't need its own "checked against the image" click. Deliberately not the only gate: a row also
+ * needs a date, an amount and (when read) a Charge/Credit marker actually located on the line, and no other open
+ * flag (a possible repeat, a cut-off line, merged lines, anything already strict) — a confidence score alone is
+ * never trusted to wave through a genuine ambiguity.
+ */
+export const READY_CONFIDENCE = 90;
 
 /** A line shorter than this fraction of the page's median line height is a sliver cut by the image edge. */
 export const PARTIAL_LINE_RATIO = 0.6;
@@ -92,10 +113,33 @@ function pct(n: number): string {
   return `${Math.round(n)}%`;
 }
 
+/** Text a word is compared by: case, surrounding space and a trailing full stop don't matter ("Dr." = "DR"). */
+const tokenKey = (s: string) => s.trim().replace(/\.$/, "").toUpperCase();
+
+/** A second, separate read of the word agrees with the first at a good confidence. */
+function corroborated(w: OcrWord): boolean {
+  return w.recheck != null && tokenKey(w.recheck.text) === tokenKey(w.text) && w.recheck.confidence >= LOW_CONFIDENCE;
+}
+
+/** The confidence a word is judged by: its own, or — when a second read agrees — the better of the two. */
+function evidence(w: OcrWord): number {
+  return corroborated(w) ? Math.max(w.confidence, w.recheck!.confidence) : w.confidence;
+}
+
+/** ` A second read saw "…".` when the second read of these words disagreed — so the user sees both readings. */
+function secondReadNote(words: OcrWord[]): string {
+  const other = words.filter((w) => w.recheck && w.recheck.text && tokenKey(w.recheck.text) !== tokenKey(w.text));
+  return other.length ? ` A second read of the image saw "${other.map((w) => w.recheck!.text).join(" ")}".` : "";
+}
+
 const sameDay = (a: Date | null, b: Date | null) => a != null && b != null && a.getTime() === b.getTime();
 const merchantKey = (s: string) => s.replace(/[^a-z0-9]/gi, "").toUpperCase();
 
-export function annotateOcrRows(rows: CaptureRow[], lines: OcrLine[]): CaptureRow[] {
+/**
+ * `hasCreditMarkers`: the statement itself marks credits (some row reads "Cr"/"C"), so an unmarked row is a charge by
+ * the statement's own convention — evidence for its direction when nothing unread sits after its amount.
+ */
+export function annotateOcrRows(rows: CaptureRow[], lines: OcrLine[], { hasCreditMarkers = false }: { hasCreditMarkers?: boolean } = {}): CaptureRow[] {
   const typicalHeight = median(lines.map((l) => l.bbox.y1 - l.bbox.y0));
 
   const annotated = rows.map((row) => {
@@ -111,9 +155,9 @@ export function annotateOcrRows(rows: CaptureRow[], lines: OcrLine[]): CaptureRo
     const amounts = words.filter((w) => AMOUNT_WORD.test(w.text));
     const markerColumn = row.sourceOrder?.includes("direction") ?? false;
     const markers = rowLines.flatMap((l) => markerWords(l, markerColumn));
-    const lowDate = date.filter((w) => w.confidence < LOW_CONFIDENCE);
-    const lowAmount = amounts.filter((w) => w.confidence < LOW_CONFIDENCE);
-    const lowMarker = markers.filter((w) => w.confidence < LOW_CONFIDENCE);
+    const lowDate = date.filter((w) => evidence(w) < LOW_CONFIDENCE);
+    const lowAmount = amounts.filter((w) => evidence(w) < LOW_CONFIDENCE);
+    const lowMarker = markers.filter((w) => evidence(w) < LOW_CONFIDENCE);
 
     const firstHeight = rowLines[0].bbox.y1 - rowLines[0].bbox.y0;
     if (typicalHeight > 0 && firstHeight < typicalHeight * PARTIAL_LINE_RATIO) {
@@ -142,7 +186,7 @@ export function annotateOcrRows(rows: CaptureRow[], lines: OcrLine[]): CaptureRo
         field: "date",
         strict: true,
         blocking: true,
-        message: `Date read with low confidence ("${lowDate.map((w) => w.text).join(" ")}", ${pct(Math.min(...lowDate.map((w) => w.confidence)))}) — correct it or confirm it against the image.`,
+        message: `Date read unclearly ("${lowDate.map((w) => w.text).join(" ")}", ${pct(Math.min(...lowDate.map((w) => w.confidence)))}).${secondReadNote(lowDate)}`,
       });
     }
     if (lowAmount.length > 0) {
@@ -151,7 +195,7 @@ export function annotateOcrRows(rows: CaptureRow[], lines: OcrLine[]): CaptureRo
         field: "amount",
         strict: true,
         blocking: true,
-        message: `Amount read with low confidence ("${lowAmount.map((w) => w.text).join(" ")}", ${pct(Math.min(...lowAmount.map((w) => w.confidence)))}) — correct it or confirm it against the image.`,
+        message: `Amount read unclearly ("${lowAmount.map((w) => w.text).join(" ")}", ${pct(Math.min(...lowAmount.map((w) => w.confidence)))}).${secondReadNote(lowAmount)}`,
       });
     }
     if (lowMarker.length > 0) {
@@ -160,23 +204,44 @@ export function annotateOcrRows(rows: CaptureRow[], lines: OcrLine[]): CaptureRo
         field: "direction",
         strict: true,
         blocking: true,
-        message: `The C/D (Cr/Dr) marker was read with low confidence (${pct(Math.min(...lowMarker.map((w) => w.confidence)))}) — check Charge/Credit against the image.`,
+        message: `C/D marker read unclearly ("${lowMarker.map((w) => w.text).join(" ")}", ${pct(Math.min(...lowMarker.map((w) => w.confidence)))}).${secondReadNote(lowMarker)}`,
       });
     }
-    if (markers.length === 0 && row.direction != null && !issues.some((i) => i.code === "direction_unclear")) {
+    // Unmarked charge on a statement that marks its credits: supported by the statement's own convention — unless
+    // something unread sits after the amount on its line (where a misread "Cr" would be).
+    const lastAmount = [...amounts].sort((a, b) => a.bbox.x1 - b.bbox.x1).at(-1);
+    const nothingAfterAmount =
+      lastAmount != null && !words.some((w) => w !== lastAmount && w.bbox.x0 > lastAmount.bbox.x1 && Math.abs(w.bbox.y0 - lastAmount.bbox.y0) < lastAmount.bbox.y1 - lastAmount.bbox.y0);
+    const byConvention = markers.length === 0 && hasCreditMarkers && row.direction === "debit" && nothingAfterAmount && !issues.some((i) => i.code === "direction_unclear");
+    if (byConvention) {
+      notes.push("No C/D marker — a Charge by this statement's own convention (only credits are marked).");
+    } else if (markers.length === 0 && row.direction != null && !issues.some((i) => i.code === "direction_unclear")) {
       issues.push({
         code: "direction_inferred",
         blocking: false,
         message: `No C/D (Cr/Dr) marker was read on this row — shown as a ${row.direction === "credit" ? "Credit" : "Charge"}. Check it against the image.`,
       });
     }
-    issues.push({
-      code: "ocr_unverified",
-      blocking: true,
-      message: "Read from a screenshot — check the date, amount and Charge/Credit against the image, then confirm.",
-    });
 
     const checked = [...date, ...amounts, ...markers];
+    const minConfidence = checked.length ? Math.min(...checked.map(evidence)) : 0;
+    const blockingSoFar = issues.filter((i) => i.blocking);
+    // A row whose only open problems are field-specific already has its one ask per field — a separate generic
+    // check would be a second, redundant button for the same thing.
+    const onlyFieldSpecific = blockingSoFar.length > 0 && blockingSoFar.every((i) => FIELD_ISSUE_CODES.has(i.code));
+    const hasTwin = rows.some((o) => o.id !== row.id && sameDay(o.date, row.date) && o.amount != null && o.amount === row.amount && merchantKey(o.description) === merchantKey(row.description));
+    // Direction needs its own evidence — a marker actually read on the line, or the statement's convention above.
+    const directionEvidence = markers.length > 0 || byConvention;
+    const reliable = blockingSoFar.length === 0 && !hasTwin && date.length > 0 && amounts.length > 0 && directionEvidence && minConfidence >= READY_CONFIDENCE;
+
+    issues.push({
+      code: "ocr_unverified",
+      blocking: !reliable && !onlyFieldSpecific,
+      message: reliable
+        ? "Date, amount and Charge/Credit were all read clearly from the screenshot."
+        : "Read from a screenshot — compare the date, amount and Charge/Credit with the image.",
+    });
+
     return {
       ...row,
       issues,
@@ -185,8 +250,10 @@ export function annotateOcrRows(rows: CaptureRow[], lines: OcrLine[]): CaptureRo
       confidence: "low" as const,
       ocr: {
         box: unionBox(rowLines.map((l) => l.bbox)),
-        minConfidence: checked.length ? Math.min(...checked.map((w) => w.confidence)) : 0,
+        minConfidence,
         lowConfidenceWords: [...lowDate, ...lowAmount].map((w) => w.text),
+        flaggedBoxes: [...lowDate, ...lowAmount, ...lowMarker].map((w) => w.bbox),
+        secondRead: checked.filter((w) => w.confidence < LOW_CONFIDENCE && corroborated(w)).map((w) => w.text),
       },
     };
   });
@@ -205,8 +272,8 @@ export function flagRepeatedRows(rows: CaptureRow[]): CaptureRow[] {
     const opposite = twins.some((t) => t.direction != null && row.direction != null && t.direction !== row.direction);
     const issue: CaptureIssue = {
       code: "possible_repeat",
-      blocking: false,
-      message: `Same date, merchant and amount as row ${twins.map((t) => t.id.replace(/^r/, "")).join(", ")}${opposite ? " but with the opposite Charge/Credit" : ""}. Both are kept — check the image that each is a separate transaction.`,
+      blocking: true,
+      message: `Same date, merchant and amount as row ${twins.map((t) => t.id.replace(/^r/, "")).join(", ")}${opposite ? " but with the opposite Charge/Credit" : ""}. Both are kept — check that each is a separate transaction.`,
     };
     return { ...row, issues: [...row.issues, issue] };
   });

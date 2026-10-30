@@ -92,27 +92,27 @@ const states = () => Object.fromEntries(screen.getAllByTestId("recon-row").map((
 const openDetails = () => fireEvent.click(screen.getByTestId("dock-details"));
 
 describe("Smart Capture → Reconciliation handoff", () => {
-  it("takes the verified rows with their own ids, keeps the excluded row excluded, and shows the existing SMS transaction as a candidate", () => {
+  it("takes the rows with their own ids, keeps the excluded row excluded (re-includable here), and shows the existing SMS transaction as a candidate", () => {
     const cap = handOff();
     render(<ReconciliationWorkspace uid="u1" data={DATA} sync={LOADED} />);
     pickAccount();
     expect(getHandoffState().pending).toBeNull(); // consumed
-    expect(screen.getByTestId("handoff-notice").textContent).toMatch(/2 verified rows arrived/);
+    expect(screen.getByTestId("handoff-notice").textContent).toMatch(/2 rows arrived from Smart Capture/);
     expect(screen.getAllByTestId("recon-row").map((r) => r.dataset.rowId)).toEqual(cap.rows.map((r) => r.id));
     const uber = cap.rows.find((r) => r.description === "UBER")!.id;
     const swiggy = cap.rows.find((r) => r.description === "SWIGGY")!.id;
     expect(states()[uber]).toBe("excluded");
     expect(states()[swiggy]).toBe("exact_candidate");
     // Rows verified in Smart Capture are not re-flagged here (confirmed issues are resolved, as there).
-    expect(document.body.textContent).not.toMatch(/Check flagged values/);
+    expect(screen.queryAllByTestId("row-check-label")).toEqual([]);
     openDetails();
     const panel = screen.getByTestId("match-panel");
     expect(within(panel).getByTestId("match-candidate").textContent).toMatch(/From SMS/);
     fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
-    // Excluded in Smart Capture stays excluded — no Include switch here.
+    // Arrives excluded, but OCR checks now live here, so it can be included here (two-step flow).
     fireEvent.click(screen.getByRole("button", { name: "Expand row 3" }));
-    expect(screen.getByTestId("capture-excluded")).toBeTruthy();
-    expect(screen.queryByRole("switch", { name: "Include this row" })).toBeNull();
+    expect(screen.queryByTestId("capture-excluded")).toBeNull();
+    expect(screen.getByRole("switch", { name: "Include this row" })).toBeTruthy();
   });
 
   it("shows the row's strip of the handed-over screenshot, from the handoff's own URL", () => {

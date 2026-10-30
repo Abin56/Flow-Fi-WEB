@@ -12,6 +12,9 @@ import type { LimitCorrectionTarget } from "@/lib/repositories/credit-limit-corr
 import { cardFundedLoanCardId } from "@/lib/engines/credit-utilization";
 import { outstandingPrincipalFor } from "@/lib/engines/loan-outstanding";
 import type { ReconInstallment } from "@/lib/engines/loan-reconciliation";
+import { cardEmiCase, type CardEmiCase } from "@/features/emi/lib/emi-card-funding";
+import { unpaidAmount } from "@/lib/engines/lender-charges";
+import type { LenderCharge } from "@/lib/models/lender-charge";
 import type { Account } from "@/lib/models/account";
 import type { Transaction } from "@/lib/models/transaction";
 import type { CreditCardStandingView } from "@/features/credit-cards/hooks/use-credit-cards-data";
@@ -47,10 +50,14 @@ export interface LoanReconciliationContext {
   agreementId: string;
   source: { kind: "loan"; row: LoanRow } | { kind: "emi"; row: EmiRow };
   principalAmount: number;
+  /** FlowFi's outstanding principal for this agreement today (principal only — never includes lender charges). */
+  outstandingPrincipal: number;
   ratePercent: number | null;
   installments: ReconInstallment[];
   principalPrepaid: number;
   cardLinkedName: string | null;
+  /** Card-linked EMI only: who owns the principal (`planCardEmiLegs` rule) — read from the EMI's purchase record, never guessed. */
+  cardEmiCase: CardEmiCase | null;
   supportsPrepaymentAndDisbursement: boolean;
 }
 
@@ -120,23 +127,27 @@ export function cardProducts(
   });
 }
 
-export function loanProducts(rows: readonly LoanRow[], cardNameById: ReadonlyMap<string, string>): VarianceProduct[] {
+/** Unpaid, billed lender charges by agreement id — added to the lender-payoff row only (never to principal). */
+export type UnpaidChargesByAgreement = ReadonlyMap<string, number>;
+
+export function loanProducts(rows: readonly LoanRow[], cardNameById: ReadonlyMap<string, string>, unpaidCharges: UnpaidChargesByAgreement = new Map()): VarianceProduct[] {
   // A lent loan is a receivable, not a lender figure the user would read off a bank statement.
   return rows
     .filter((r) => r.direction === "taken" && r.loan.deletedAt == null)
     .map((r) => {
       const cardId = cardFundedLoanCardId(r.loan);
       const cardName = cardId != null ? cardNameById.get(cardId) : undefined;
+      const charges = unpaidCharges.get(r.loan.id) ?? 0;
       return {
         id: `loan:${r.loan.id}`,
         kind: "loan" as const,
         name: r.loan.name ?? r.lenderName,
         subtitle: r.loan.isClosed ? "Loan · closed" : "Loan",
         metrics: ["loanPrincipal", "lenderPayoff"] as VarianceMetric[],
-        flowfi: { loanPrincipal: round2(r.outstandingPrincipal), lenderPayoff: round2(r.outstandingPrincipal) },
+        flowfi: { loanPrincipal: round2(r.outstandingPrincipal), lenderPayoff: round2(r.outstandingPrincipal + charges) },
         notes: {
           loanPrincipal: r.principalPrepaid > 0 ? "After extra principal paid" : "Principal only",
-          lenderPayoff: "FlowFi knows the principal floor only",
+          lenderPayoff: charges > 0 ? `Principal + ${round2(charges)} unpaid lender charges` : "FlowFi knows the principal floor only",
         },
         context: {},
         crossEffect: cardName ? `Card-funded: would also move ${cardName} available credit & utilization` : null,
@@ -146,29 +157,37 @@ export function loanProducts(rows: readonly LoanRow[], cardNameById: ReadonlyMap
           agreementId: r.loan.id,
           source: { kind: "loan", row: r },
           principalAmount: r.loan.loanAmount,
+          outstandingPrincipal: round2(r.outstandingPrincipal),
           ratePercent: r.loan.interest?.ratePercent ?? null,
           installments: r.installments,
           principalPrepaid: r.principalPrepaid,
           cardLinkedName: cardId != null ? (cardName ?? "linked card") : null,
+          cardEmiCase: null,
           supportsPrepaymentAndDisbursement: true,
         },
       };
     });
 }
 
-export function emiProducts(rows: readonly EmiRow[], cardNameById: ReadonlyMap<string, string> = new Map()): VarianceProduct[] {
+export function emiProducts(
+  rows: readonly EmiRow[],
+  cardNameById: ReadonlyMap<string, string> = new Map(),
+  transactionById: ReadonlyMap<string, Transaction> = new Map(),
+  unpaidCharges: UnpaidChargesByAgreement = new Map(),
+): VarianceProduct[] {
   return rows
     .filter((r) => r.emi.deletedAt == null)
     .map((r) => {
       const principal = round2(outstandingPrincipalFor(r.emi.principalAmount, r.installments));
+      const charges = unpaidCharges.get(r.emi.id) ?? 0;
       return {
         id: `emi:${r.emi.id}`,
         kind: "emi" as const,
         name: r.emi.name,
         subtitle: r.emi.isClosed ? "EMI · closed" : "EMI",
         metrics: ["emiPrincipal", "lenderPayoff"] as VarianceMetric[],
-        flowfi: { emiPrincipal: principal, lenderPayoff: principal },
-        notes: { emiPrincipal: "Principal only", lenderPayoff: "FlowFi knows the principal floor only" },
+        flowfi: { emiPrincipal: principal, lenderPayoff: round2(principal + charges) },
+        notes: { emiPrincipal: "Principal only", lenderPayoff: charges > 0 ? `Principal + ${round2(charges)} unpaid lender charges` : "FlowFi knows the principal floor only" },
         context: {},
         crossEffect: r.linkedCard ? "Card-linked: would also move that card's available credit & utilization" : null,
         limitCorrectionTarget: null,
@@ -177,10 +196,14 @@ export function emiProducts(rows: readonly EmiRow[], cardNameById: ReadonlyMap<s
           agreementId: r.emi.id,
           source: { kind: "emi", row: r },
           principalAmount: r.emi.principalAmount,
+          outstandingPrincipal: principal,
           ratePercent: r.emi.interest?.ratePercent ?? null,
           installments: r.installments,
           principalPrepaid: 0,
           cardLinkedName: r.linkedCard ? (cardNameById.get(r.linkedCard.id) ?? "linked card") : null,
+          cardEmiCase: r.linkedCard
+            ? cardEmiCase(r.emi, r.linkedCard.accountId, r.emi.purchaseTransactionId ? (transactionById.get(r.emi.purchaseTransactionId) ?? null) : null)
+            : null,
           supportsPrepaymentAndDisbursement: false,
         },
       };
@@ -192,13 +215,19 @@ export interface ProductSources {
   accounts: readonly Account[];
   loanRows: readonly LoanRow[];
   emiRows: readonly EmiRow[];
+  /** Only used to tell a card EMI's Case A (purchase already on the card) from Case B. */
+  transactions?: readonly Transaction[];
+  /** Live lender charges — only used to add unpaid charges to the lender-payoff row. */
+  lenderCharges?: readonly LenderCharge[];
   now?: Date;
 }
 
 export function buildVarianceProducts(src: ProductSources): VarianceProduct[] {
   const accountById = new Map(src.accounts.map((a) => [a.id, a]));
   const cardNameById = new Map(src.standings.map((s) => [s.card.id, cardLabel(s, accountById)]));
-  return [...cardProducts(src.standings, accountById, src.now), ...loanProducts(src.loanRows, cardNameById), ...emiProducts(src.emiRows, cardNameById)];
+  const unpaid = new Map<string, number>();
+  for (const c of src.lenderCharges ?? []) unpaid.set(c.agreementId, (unpaid.get(c.agreementId) ?? 0) + unpaidAmount(c));
+  return [...cardProducts(src.standings, accountById, src.now), ...loanProducts(src.loanRows, cardNameById, unpaid), ...emiProducts(src.emiRows, cardNameById, new Map((src.transactions ?? []).map((t) => [t.id, t])), unpaid)];
 }
 
 // --- Check input ---

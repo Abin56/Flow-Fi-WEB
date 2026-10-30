@@ -147,11 +147,11 @@ scenario(
     chk("deterministic import keys + provenance note", written.every((t) => t.id.startsWith("txn_imp_") && /Imported via Reconciliation/.test(t.notes)), written.map((t) => t.id).join(","));
 
     // Repeated approval after success: nothing left to import.
-    await dlg.getByRole("button", { name: "Back to reconciliation" }).click();
+    await dlg.getByRole("button", { name: "Back to review" }).click();
     await page.waitForTimeout(800);
     const again = await openApproval(page);
     chk("re-opening the approval finds everything already imported — nothing to write", (await again.getByTestId("approval-nothing").count()) === 1);
-    await again.getByRole("button", { name: "Back to reconciliation" }).click();
+    await again.getByRole("button", { name: "Back to review" }).click();
 
     // Refresh: draft restored, rows now detected as already imported through their deterministic keys.
     await page.reload({ waitUntil: "domcontentloaded" });
@@ -162,7 +162,7 @@ scenario(
     chk("after refresh the imported rows show 'already imported'", (await stateOf(page, "recon-row", "r2")) === "already_imported" && (await stateOf(page, "recon-row", "r3")) === "already_imported");
     const third = await openApproval(page);
     chk("after refresh there is still nothing to import", (await third.getByTestId("approval-nothing").count()) === 1);
-    await third.getByRole("button", { name: "Back to reconciliation" }).click();
+    await third.getByRole("button", { name: "Back to review" }).click();
     chk("repeat/refresh never wrote again", (await cardTxns()).length === 2 && Math.abs((await cardBalance()) - (cardBefore - 152)) < 0.01);
     const ov = await overflowX(page);
     chk("no horizontal overflow", ov.doc <= 1 && ov.main <= 1, JSON.stringify(ov));

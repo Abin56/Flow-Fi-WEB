@@ -33,6 +33,7 @@ export const FirestoreCollections = {
   statementPayments: "statementPayments", // subcollection under statements/{statementId}
   limitCorrections: "limitCorrections", // subcollection under creditCards/{cardId} or sharedCreditLimits/{sharedLimitId} — web-only, see lib/models/credit-limit-correction.ts
   paymentBreakdowns: "paymentBreakdowns", // subcollection under emis/{emiId}, doc id == paymentId
+  lenderCharges: "lenderCharges", // subcollection under loans/{loanId} and emis/{emiId} — web-only, see lib/models/lender-charge.ts
 
   // --- Financial Document Intelligence Engine (Architecture v1.0) ---
   // New for both apps — no Dart source exists yet to port these names from.

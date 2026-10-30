@@ -39,6 +39,22 @@ export type CaptureIssueCode =
 export type CaptureField = "date" | "amount" | "direction";
 
 /**
+ * Codes that pin the problem to one of the three money fields — the row needs that field corrected or confirmed,
+ * not a general look. Shared by the review UI (which field gets its own fix control) and the OCR safety layer
+ * (which decides whether a field-specific ask already covers the row, so a separate generic check isn't redundant).
+ */
+export const FIELD_ISSUE_CODES: ReadonlySet<CaptureIssueCode> = new Set([
+  "no_amount",
+  "multiple_amounts",
+  "direction_unclear",
+  "no_date",
+  "low_confidence_date",
+  "low_confidence_amount",
+  "low_confidence_direction",
+  "decimal_missing",
+]);
+
+/**
  * A column of the source table, identified by what its cell *contains* (a date, a money amount, a Cr/Dr marker, other
  * text) or by what its header says — never by where it sits. `debit`/`credit` exist only for headers that split them.
  */
@@ -66,6 +82,10 @@ export interface CaptureOcrInfo {
   minConfidence: number;
   /** Date/amount words read with low confidence, for highlighting. */
   lowConfidenceWords: string[];
+  /** Where the still-unclear value words sit (prepared-canvas px) — outlined on the row's strip of the image. */
+  flaggedBoxes?: { x0: number; y0: number; x1: number; y1: number }[];
+  /** Value words first read unclearly that a second, separate read of the image agreed with. */
+  secondRead?: string[];
 }
 
 export interface CaptureRow {

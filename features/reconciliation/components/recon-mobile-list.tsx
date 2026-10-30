@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import type { ReconRow, RowDecision, RowMatch } from "../lib/types";
 import { DecisionChip, Money, StateBadge, formatRowDate } from "./recon-ui";
 import { evidenceLine } from "./recon-table";
+import { rowCheckLabel } from "../lib/decisions";
 
 export function ReconMobileList({
   rows,
@@ -45,6 +46,7 @@ export function ReconMobileList({
                   {match && <StateBadge state={match.state} compact />}
                 </div>
                 <p className="mt-1 truncate text-sm font-medium text-foreground">{row.description || "No description"}</p>
+                {rowCheckLabel(row) && <p className="truncate text-[11px] font-medium text-warning" data-testid="row-check-label">{rowCheckLabel(row)}</p>}
                 <div className="mt-1 flex min-w-0 items-center gap-2">
                   {match?.state !== "excluded" && <DecisionChip kind={decisions[row.id]?.kind ?? null} />}
                   <span className="min-w-0 truncate text-[11px] text-muted-foreground">{evidenceLine(match, pendingLabel)}</span>

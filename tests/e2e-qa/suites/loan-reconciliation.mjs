@@ -7,6 +7,12 @@
  */
 import { scenario } from "../lib/core.mjs";
 import * as h from "../lib/harness.mjs";
+/** Reconcile guides use the shared top sheet: a first Escape inside a text field only leaves the field, so press again while one is still open. */
+const escapeSheet = async (page) => {
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(120);
+  if (await page.locator('[data-testid="loan-reconciliation-sheet"][data-state="open"], [data-testid="outstanding-reconciliation-sheet"][data-state="open"]').count()) await page.keyboard.press("Escape");
+};
 
 const money = (t) => Number(String(t).replace(/[^0-9.\-−]/g, "").replace("−", "-"));
 const round2 = (v) => Math.round(v * 100) / 100;
@@ -85,7 +91,7 @@ async function openGuide(page, productRe, metric, lender, asOf) {
   return s;
 }
 const reason = (s) => s.locator('[data-testid="loan-reason-select"]').selectOption("statement");
-const closeGuide = async (page) => { await page.keyboard.press("Escape"); await sheet(page).waitFor({ state: "hidden" }); };
+const closeGuide = async (page) => { await escapeSheet(page); await sheet(page).waitFor({ state: "hidden" }); };
 
 scenario("lrec-loan-journey", "Loan guide: compare, ranked causes + evidence, before/after, history, every hand-off lands on the right installment — nothing written", async ({ page }, chk) => {
   await h.openPortalSignedIn(page).catch(() => {});
@@ -147,7 +153,7 @@ scenario("lrec-loan-journey", "Loan guide: compare, ranked causes + evidence, be
   chk("Loans opens Record Payment for the right agreement", /QA Loan 12|QA Finance Co/.test(await page.locator("body").innerText()) && page.url().includes(`agreement=${agreement.id}`) === false || true);
   chk("the dialog says it pays every unpaid installment up to the chosen one (through #3)", new RegExp(`${i2.sequenceNumber}.{0,4}${i3.sequenceNumber}|through|up to`, "i").test(dlgText), dlgText.slice(0, 220));
   await h.shot(page, "lrec-loan-handoff-pay");
-  await page.keyboard.press("Escape");
+  await escapeSheet(page);
 
   // Past-payments hand-off
   await goTo(page, "/balance-control");
@@ -162,7 +168,7 @@ scenario("lrec-loan-journey", "Loan guide: compare, ranked causes + evidence, be
   await page.getByText(/Record past payments|paid before|already paid/i).first().waitFor({ timeout: 30000 });
   chk("the past-payments hand-off opens Record past payments", true);
   await h.shot(page, "lrec-loan-handoff-past");
-  await page.keyboard.press("Escape");
+  await escapeSheet(page);
   await page.waitForTimeout(800);
 
   const after = await snapshot();
@@ -211,7 +217,7 @@ scenario("lrec-loan-boundaries", "Loan guide: as-of date boundaries (day before 
   await page.getByRole("dialog").filter({ hasText: /Borrow More|Additional|additional/i }).first().waitFor({ timeout: 30000 });
   chk("top-up hand-off opens the existing Additional disbursement dialog for this loan", true);
   await h.shot(page, "lrec-loan-handoff-disbursement");
-  await page.keyboard.press("Escape");
+  await escapeSheet(page);
   await page.waitForTimeout(600);
 
   // Extra principal (lender lower by an amount no installment explains)
@@ -225,7 +231,7 @@ scenario("lrec-loan-boundaries", "Loan guide: as-of date boundaries (day before 
   const dlg = page.getByRole("dialog", { name: /Pay installment|Pay EMI/ });
   await dlg.waitFor({ timeout: 30000 });
   chk("Record Payment offers 'Installment + extra towards principal'", (await dlg.getByText(/extra towards principal/i).count()) > 0);
-  await page.keyboard.press("Escape");
+  await escapeSheet(page);
   await page.waitForTimeout(600);
 
   const after = await snapshot();
@@ -256,7 +262,7 @@ scenario("lrec-emi-standalone", "Standalone EMI guide: principal/terms compared,
   await dlg.waitFor({ timeout: 30000 });
   chk("the EMI Record Payment dialog opens on that EMI", /QA Phone EMI|Pay EMI/.test((await dlg.innerText()) + (await dlg.getAttribute("aria-label") ?? "")));
   await h.shot(page, "lrec-emi-handoff");
-  await page.keyboard.press("Escape");
+  await escapeSheet(page);
   await page.waitForTimeout(600);
   const after = await snapshot();
   chk("nothing was written", diff(before, after).length === 0 && writes.length === 0, `${diff(before, after).join(",")} writes=${writes.length}`);
@@ -274,8 +280,13 @@ scenario("lrec-emi-card-linked", "Card-linked EMI guide: shows the linked-card a
   const s = await openGuide(page, /QA Card EMI/, "emiPrincipal", lender, ymd(new Date(new Date(e1.dueDate).getTime() + DAY)));
   await reason(s);
   await s.locator('[data-testid="loan-cause-missingPayment"]').click();
-  const cardLine = await s.locator('[data-testid="loan-impact-card"]').innerText();
-  chk("the preview shows the linked card's available credit rising by the installment's principal", new RegExp(`available credit \\+.*${Math.round(remainingPrincipal(e1)).toLocaleString("en-IN")}`).test(cardLine), cardLine);
+  const modeCard = s.locator('[data-testid="loan-impact-card-mode-card"]');
+  const modeBank = s.locator('[data-testid="loan-impact-card-mode-bank"]');
+  const previewCard = Number(await modeCard.getAttribute("data-available-delta"));
+  const previewBank = Number(await modeBank.getAttribute("data-available-delta"));
+  const principal = remainingPrincipal(e1);
+  chk("D1: the preview lists BOTH funding modes, labelled", /Charged to the card/.test(await modeCard.innerText()) && /Paid from a bank account/.test(await modeBank.innerText()), await s.locator('[data-testid="loan-impact-card"]').innerText());
+  chk("D1: bank mode releases exactly the installment's principal; card mode nets principal minus the whole installment billed", Math.abs(previewBank - principal) < 0.01 && Math.abs(previewCard - (principal - e1.amountDue)) < 0.01, `bank ${previewBank}, card ${previewCard}, principal ${principal}, due ${e1.amountDue}`);
   await h.shot(page, "lrec-emi-card-guide");
   await closeGuide(page);
 
@@ -294,7 +305,7 @@ scenario("lrec-emi-card-linked", "Card-linked EMI guide: shows the linked-card a
   await sheet(page).locator('[data-testid="loan-handoff-link"]').click();
   const dlg = page.getByRole("dialog", { name: /Pay installment|Pay EMI/ });
   await dlg.waitFor({ timeout: 30000 });
-  const payText = (await dlg.innerText()).replace(/s+/g, " ");
+  const payText = (await dlg.innerText()).replace(/\s+/g, " ");
   notes0.push(`dialog: ${payText.slice(0, 900)}`);
   const bankBefore = (await h.accountBalance("QA Bank")).currentBalance;
   await h.shot(page, "lrec-emi-card-pay-dialog");
@@ -315,8 +326,8 @@ scenario("lrec-emi-card-linked", "Card-linked EMI guide: shows the linked-card a
   const outAfter = await flowfi(page, "totalOutstanding");
   const bankAfter = (await h.accountBalance("QA Bank")).currentBalance;
   notes0.push(`bank ${bankBefore}→${bankAfter}; card avail ${availBefore}→${availAfter}; card outstanding ${outBefore}→${outAfter}`);
-  const guideSaid = remainingPrincipal(e1);
-  chk.finding("lrec-F1", "linked-card available credit moves by the previewed +principal after the hand-off payment (default funding)", Math.abs(availAfter - availBefore - guideSaid) < 1, `avail ${availBefore}→${availAfter} (preview +${guideSaid}); outstanding ${outBefore}→${outAfter}; bank ${bankBefore}→${bankAfter}`);
+  chk("D1: after the default (card-funded) payment the card's available credit moved by exactly the previewed card-mode figure", Math.abs(availAfter - availBefore - previewCard) < 0.02, `preview ${previewCard}; actual ${availAfter - availBefore}`);
+  chk("D1: and its outstanding moved by the opposite amount; the bank was untouched", Math.abs(outAfter - outBefore + previewCard) < 0.02 && Math.abs(bankAfter - bankBefore) < 0.005, `outstanding ${outBefore}→${outAfter}; bank ${bankBefore}→${bankAfter}`);
   await h.shot(page, "lrec-emi-card-after");
 });
 
@@ -362,7 +373,7 @@ scenario("lrec-credit-regression", "Credit Limit Correction and card reconciliat
   await row(page, "creditLimit").locator('[data-testid="correct-limit-button"]').click();
   await page.locator('[data-testid="limit-correction-sheet"]').first().waitFor({ timeout: 15000 }).catch(() => {});
   chk("credit-limit Correct button still opens the correction sheet", (await page.getByRole("dialog").count()) > 0);
-  await page.keyboard.press("Escape");
+  await escapeSheet(page);
   await page.waitForTimeout(500);
   const out = await flowfi(page, "totalOutstanding");
   await type(page, "totalOutstanding", out + 700);
@@ -388,6 +399,9 @@ scenario("lrec-emi-card-bank-mode", "Card-linked EMI paid from the bank via the 
   await row(page, "emiPrincipal").locator('[data-testid="reconcile-button"]').click();
   await sheet(page).locator('[data-testid="loan-asof-input"]').fill(ymd(new Date(new Date(e1.dueDate).getTime() + DAY)));
   await reason(sheet(page));
+  const previewBank = Number(await sheet(page).locator('[data-testid="loan-impact-card-mode-bank"]').getAttribute("data-available-delta"));
+  const bankText = await sheet(page).locator('[data-testid="loan-impact-card-mode-bank"]').innerText();
+  chk("D1: bank-mode preview names the bank debit of the installment", /bank is debited ₹3,000\.00/.test(bankText), bankText);
   await sheet(page).locator('[data-testid="loan-handoff-link"]').click();
   const dlg = page.getByRole("dialog", { name: /Pay installment|Pay EMI/ });
   await dlg.getByText("TO PAY LENDER").waitFor({ timeout: 30000 }).catch(() => {});
@@ -406,5 +420,5 @@ scenario("lrec-emi-card-bank-mode", "Card-linked EMI paid from the bank via the 
   chk("EMI principal now equals the lender figure the guide promised", Math.abs((await flowfi(page, "emiPrincipal")) - lender) < 0.02);
   await select(page, /9090|QA EMI Card/);
   const avail1 = await flowfi(page, "availableCredit");
-  chk("in bank mode the linked card's available credit rises by exactly the previewed principal", Math.abs(avail1 - avail0 - 3000) < 0.02, `${avail0} → ${avail1}`);
+  chk("D1: in bank mode the card's available credit moved by exactly the previewed bank-mode figure (+₹3,000)", Math.abs(avail1 - avail0 - previewBank) < 0.02 && Math.abs(previewBank - 3000) < 0.02, `${avail0} → ${avail1}`);
 });

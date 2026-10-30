@@ -171,19 +171,18 @@ export function ApprovalDialog({
               </span>
             </p>
 
-            <section aria-label="Review totals" className="grid grid-cols-2 gap-2 sm:grid-cols-3" data-testid="approval-counts">
+            <section aria-label="Review totals" className="grid grid-cols-2 gap-2 sm:grid-cols-4" data-testid="approval-counts">
               <Tile label="Captured rows" value={plan.counts.captured} testId="count-captured" />
               <Tile label="New to import" value={plan.counts.newImports} testId="count-new" />
               <Tile label="Kept existing" value={plan.counts.linked} testId="count-linked" />
               <Tile label="Skipped" value={plan.counts.ignored} testId="count-ignored" />
               <Tile label="Left in Inbox" value={plan.counts.inbox} testId="count-inbox" />
+              <Tile label="Excluded" value={plan.counts.excluded} testId="count-excluded" />
               <Tile label="Unresolved / review later" value={plan.counts.unresolved} testId="count-unresolved" tone="warning" />
             </section>
-            {(plan.counts.alreadyImported > 0 || plan.counts.excluded > 0) && (
+            {plan.counts.alreadyImported > 0 && (
               <p className="-mt-2 text-[11px] text-muted-foreground" data-testid="approval-extra-counts">
-                {plan.counts.alreadyImported > 0 && `${plan.counts.alreadyImported} already imported (nothing more to write)`}
-                {plan.counts.alreadyImported > 0 && plan.counts.excluded > 0 && " · "}
-                {plan.counts.excluded > 0 && `${plan.counts.excluded} left out of this review earlier`}
+                {`${plan.counts.alreadyImported} already imported (nothing more to write)`}
               </p>
             )}
 
@@ -240,12 +239,12 @@ export function ApprovalDialog({
                 </p>
               )}
               <ClayButton variant="secondary" onClick={approval.close} disabled={working}>
-                <ArrowLeft className="size-4" /> Back to reconciliation
+                <ArrowLeft className="size-4" /> Back to review
               </ClayButton>
               {plan.counts.newImports > 0 && (
                 <ClayButton onClick={() => void approval.approve()} disabled={!approval.canApprove || working} data-testid="approval-submit">
                   {working && <Loader2 className="size-4 animate-spin" />}
-                  {working ? "Working…" : `Approve & import ${plan.counts.newImports}`}
+                  {working ? "Working…" : `Import ${plan.counts.newImports} transaction${plan.counts.newImports === 1 ? "" : "s"}`}
                 </ClayButton>
               )}
             </div>
@@ -260,7 +259,7 @@ export function ApprovalDialog({
             </DialogHeader>
             <div className="flex justify-end">
               <ClayButton variant="secondary" onClick={approval.close}>
-                <ArrowLeft className="size-4" /> Back to reconciliation
+                <ArrowLeft className="size-4" /> Back to review
               </ClayButton>
             </div>
           </>
@@ -284,7 +283,7 @@ export function ApprovalDialog({
             </ul>
             <div className="flex justify-end">
               <ClayButton onClick={approval.close} data-testid="approval-stale-back">
-                <ArrowLeft className="size-4" /> Back to reconciliation
+                <ArrowLeft className="size-4" /> Back to review
               </ClayButton>
             </div>
           </>

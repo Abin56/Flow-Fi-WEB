@@ -94,8 +94,16 @@ export interface LoanReconImpact {
   installmentsPaidAfter: number;
   remainingInstallmentsBefore: number;
   remainingInstallmentsAfter: number;
-  /** Change to the linked card's available credit (principal restored on a payment, locked on a disbursement). */
+  /**
+   * Change to the linked card's available credit for an ACCOUNT-funded Loan (principal restored on a payment,
+   * locked on a disbursement). Always null for an EMI: its effect depends on the funding mode chosen when paying
+   * (card vs bank) and is derived by the UI from `payment` with the existing `planCardEmiLegs` rule.
+   */
   cardAvailableDelta: number | null;
+  /** The agreement is tied to a card (card-funded Loan / card-linked EMI). */
+  cardLinked: boolean;
+  /** Set when this correction is a payment: the money applied to the installments and the principal it releases. */
+  payment: { applied: number; principal: number } | null;
 }
 
 export interface LoanReconCause {
@@ -191,7 +199,15 @@ function paymentPrincipal(p: ReconPayment, byId: ReadonlyMap<string, ReconInstal
   return p.amount * (i.principalPortion / i.amountDue);
 }
 
-function impactFor(input: LoanReconInput, before: number, delta: number, installmentsNowPaid: ReconInstallment[], cardSign: 1 | -1): LoanReconImpact {
+function impactFor(
+  input: LoanReconInput,
+  before: number,
+  delta: number,
+  installmentsNowPaid: ReconInstallment[],
+  cardSign: 1 | -1,
+  /** Money actually applied when this correction is a payment (omit for reversals / top-ups). */
+  applied: number | null = null,
+): LoanReconImpact {
   const after = round2(clampPositive(before + delta));
   const paidBefore = input.installments.filter(isSettled).length;
   const settledNow = installmentsNowPaid.length;
@@ -203,7 +219,9 @@ function impactFor(input: LoanReconInput, before: number, delta: number, install
     installmentsPaidAfter: paidBefore + settledNow,
     remainingInstallmentsBefore: remainingInstallmentCount(input.installments),
     remainingInstallmentsAfter: remainingInstallmentCount(input.installments) - settledNow,
-    cardAvailableDelta: input.cardLinkedName ? cardSign * Math.abs(delta) : null,
+    cardAvailableDelta: input.cardLinkedName && input.kind === "loan" ? cardSign * Math.abs(delta) : null,
+    cardLinked: input.cardLinkedName != null,
+    payment: applied != null ? { applied: round2(applied), principal: round2(Math.abs(delta)) } : null,
   };
 }
 
@@ -243,7 +261,7 @@ export function reconcileLoan(input: LoanReconInput): LoanReconResult {
         confidence: "strong",
         evidence: [`Installment ${partial.sequenceNumber} shows ${money(partial.amountPaid)} of ${money(partial.amountDue)} paid; the unpaid principal on it is ${money(principalRemainingOn(partial))} — the same as the gap.`],
         resolution: { kind: "recordPayment", installmentId: partial.id, view: "pay", description: `Record the remaining ${money(partial.amountDue - partial.amountPaid)} on installment ${partial.sequenceNumber}.` },
-        impact: impactFor(input, flowfi, -principalRemainingOn(partial), [partial], 1),
+        impact: impactFor(input, flowfi, -principalRemainingOn(partial), [partial], 1, partial.amountDue - partial.amountPaid),
       });
     } else if (matched) {
       const first = matched[0]!;
@@ -268,7 +286,7 @@ export function reconcileLoan(input: LoanReconInput): LoanReconResult {
               ? `Record the payment for ${range}. If it was paid before you tracked it (or is already in an account as another transaction), use Record past payments instead so no money is moved twice.`
               : `Record each of ${range}, one at a time (EMI payments are per installment), or use Record past payments if they were paid before tracking.`,
         },
-        impact: impactFor(input, flowfi, -cumulative, matched, 1),
+        impact: impactFor(input, flowfi, -cumulative, matched, 1, matched.reduce((a, i) => a + (i.amountDue - i.amountPaid), 0)),
       });
     }
 

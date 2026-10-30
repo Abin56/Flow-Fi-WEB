@@ -8,8 +8,9 @@
  *
  * Returns positioned lines with per-word confidence so review can
  * highlight a row's source region and block low-confidence dates/amounts.
- * Confidence is a hint, never proof: every OCR row still needs the user's
- * explicit confirmation (see ocr-review.ts).
+ * Unclear value words get a second, separate read (`recheck`). Confidence
+ * and agreement are evidence, never proof on their own — ocr-review.ts
+ * decides which rows still need the user.
  */
 
 export const OCR_ASSET_BASE = "/ocr";
@@ -38,6 +39,25 @@ export interface OcrWord {
   /** 0–100, as reported by Tesseract. */
   confidence: number;
   bbox: OcrBox;
+  /**
+   * A second, separate read of just this word (re-cropped, enlarged, read as a single line) — only for value-looking
+   * words the first pass read below `RECHECK_BELOW`. Evidence for ocr-review.ts, never a replacement value.
+   */
+  recheck?: { text: string; confidence: number };
+}
+
+/** Value-looking words (date, amount, C/D marker) read below this get a second, separate read. */
+export const RECHECK_BELOW = 90;
+/** Upper bound on second reads per screenshot, so a very noisy capture can't stall the review. */
+export const MAX_RECHECKS = 160;
+const RECHECKABLE = /\d|^(cr|dr|c|d)\.?$|^(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)/i;
+
+/** The words a second read is worth spending time on: value-looking, and not already read clearly. */
+export function recheckTargets(lines: OcrLine[]): OcrWord[] {
+  return lines
+    .flatMap((l) => l.words)
+    .filter((w) => w.confidence < RECHECK_BELOW && RECHECKABLE.test(w.text))
+    .slice(0, MAX_RECHECKS);
 }
 
 export interface OcrLine {
@@ -126,6 +146,29 @@ export function pageToResult(page: RawPage, durationMs: number): OcrResult {
   return { text: lines.map((l) => l.text).join("\n"), lines, confidence, durationMs };
 }
 
+/** One word of the prepared canvas, padded, enlarged 2× on a white margin (Tesseract reads isolated text best with a border). Browser-only. */
+function cropWord(source: HTMLCanvasElement, box: OcrBox): HTMLCanvasElement | null {
+  const h = box.y1 - box.y0;
+  const pad = Math.max(4, Math.round(h * 0.4));
+  const x0 = Math.max(0, box.x0 - pad);
+  const y0 = Math.max(0, box.y0 - pad);
+  const w = Math.min(source.width, box.x1 + pad) - x0;
+  const hh = Math.min(source.height, box.y1 + pad) - y0;
+  if (w <= 0 || hh <= 0) return null;
+  const scale = 2;
+  const margin = 16;
+  const canvas = document.createElement("canvas");
+  canvas.width = w * scale + margin * 2;
+  canvas.height = hh * scale + margin * 2;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(source, x0, y0, w, hh, margin, margin, w * scale, hh * scale);
+  return canvas;
+}
+
 export async function recognizeScreenshot(
   image: Blob | HTMLCanvasElement,
   { onProgress, signal }: { onProgress?: (p: OcrProgress) => void; signal?: AbortSignal } = {},
@@ -136,10 +179,11 @@ export async function recognizeScreenshot(
   if (signal?.aborted) throw new OcrCancelledError();
 
   let cancelled = false;
+  let rechecking = false;
   const worker = await createWorker("eng", OEM_LSTM_ONLY, {
     ...OCR_WORKER_OPTIONS,
     logger: (m: TesseractLoggerMessage) => {
-      if (!cancelled) onProgress?.(toOcrProgress(m));
+      if (!cancelled && !rechecking) onProgress?.(toOcrProgress(m));
     },
   });
 
@@ -155,7 +199,25 @@ export async function recognizeScreenshot(
     await worker.setParameters({ tessedit_pageseg_mode: "6" as never, preserve_interword_spaces: "1" });
     const { data } = await worker.recognize(image, {}, { blocks: true, text: true });
     if (cancelled) throw new OcrCancelledError();
-    return pageToResult(data as unknown as RawPage, performance.now() - started);
+    const result = pageToResult(data as unknown as RawPage, 0);
+
+    // Second, separate read of each unclear value word: the word alone, enlarged, as one line of text. Agreement is
+    // evidence the first read was right; disagreement is shown to the user. Never changes a value by itself.
+    const targets = typeof HTMLCanvasElement !== "undefined" && image instanceof HTMLCanvasElement ? recheckTargets(result.lines) : [];
+    if (targets.length > 0) {
+      rechecking = true;
+      await worker.setParameters({ tessedit_pageseg_mode: "7" as never });
+      for (let i = 0; i < targets.length; i++) {
+        if (cancelled) throw new OcrCancelledError();
+        onProgress?.({ stage: "recognizing", progress: 0.9 + (i / targets.length) * 0.1, label: `Double-checking unclear values (${i + 1}/${targets.length})` });
+        const crop = cropWord(image as HTMLCanvasElement, targets[i].bbox);
+        if (!crop) continue;
+        const { data: word } = await worker.recognize(crop);
+        targets[i].recheck = { text: word.text.trim(), confidence: word.confidence };
+      }
+      if (cancelled) throw new OcrCancelledError();
+    }
+    return { ...result, durationMs: performance.now() - started };
   } catch (error) {
     if (cancelled) throw new OcrCancelledError();
     // tesseract.js rejects with a bare string/undefined when the worker script itself fails to load.

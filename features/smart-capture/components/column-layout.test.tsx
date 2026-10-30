@@ -1,6 +1,11 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, beforeAll, beforeEach, describe as vitestDescribe, expect, it, vi } from "vitest";
+
+// 2026-10-29: Smart Capture now hands rows straight to Review & Import (/reconciliation); the standalone review step
+// these tests drive is no longer routed. The components are kept untouched until the two-step flow is verified in the
+// browser (user decision), so this suite is skipped rather than deleted. The new flow: two-step-flow.test.tsx.
+const describe = vitestDescribe.skip;
 import { ocrLine } from "../lib/ocr-test-helpers";
 import type { OcrResult } from "../lib/tesseract-ocr";
 import { SmartCaptureStudio } from "./smart-capture-studio";
@@ -430,19 +435,17 @@ describe("screenshot capture, Amount | Merchant | Date", () => {
     await screen.findByTestId("progress-ready");
   }
 
-  it("follows the screenshot's column order; low-confidence amount AND date (last column) still block bulk confirmation", async () => {
+  it("follows the screenshot's column order; the clean row is Ready immediately, the low-confidence amount/date rows need one check", async () => {
     await readOcr();
     for (const r of rowsEls()) expect(cols(r)).toEqual(["amount", "merchant", "date"]);
     expect(headerLabels()).toEqual(["Amount", "Merchant", "Date"]);
-    fireEvent.click(screen.getByRole("button", { name: "Confirm all reviewed rows (1)" }));
-    const dialog = screen.getByRole("dialog");
-    expect(within(dialog).getByTestId("bulk-list").textContent).toContain("SWIGGY");
-    expect(within(dialog).getByTestId("bulk-list").textContent).not.toMatch(/ZOMATO|CAFE/);
-    fireEvent.click(within(dialog).getByRole("button", { name: "Confirm 1 row" }));
-    expect(row("ZOMATO").dataset.status).toBe("fix");
-    expect(row("CAFE").dataset.status).toBe("fix");
-    fireEvent.click(screen.getByRole("button", { name: /Undo bulk confirmation \(1\)/ }));
-    await waitFor(() => expect(row("SWIGGY").dataset.status).toBe("check"));
+    // SWIGGY has strong, unambiguous evidence on every field — no row-level click needed.
+    expect(row("SWIGGY").dataset.status).toBe("ready");
+    // Values present but read unclearly: a check (one action), not a correction.
+    expect(row("ZOMATO").dataset.status).toBe("check");
+    expect(row("CAFE").dataset.status).toBe("check");
+    // Nothing is left for a bulk confirm — unclear reads are never bulk-confirmed, so the action isn't offered.
+    expect(screen.queryByRole("button", { name: /Confirm all reviewed rows/ })).toBeNull();
   });
 
   it("the source-screenshot comparison still opens from an expanded row", async () => {
@@ -452,18 +455,18 @@ describe("screenshot capture, Amount | Merchant | Date", () => {
     expect(screen.getByTestId("ocr-source")).toBeTruthy();
   });
 
-  it("rearranging columns keeps the row-by-row 'matches the image' verification", async () => {
+  it("rearranging columns keeps a field-level verification", async () => {
     await readOcr();
-    expand("SWIGGY");
-    fireEvent.click(within(row("SWIGGY")).getByRole("button", { name: "Row matches the image" }));
-    expect(row("SWIGGY").dataset.status).toBe("ready");
+    expand("ZOMATO");
+    fireEvent.click(within(row("ZOMATO")).getByRole("button", { name: "Confirm ₹810.00" }));
+    expect(row("ZOMATO").dataset.status).toBe("ready");
     fireEvent.click(trigger());
     fireEvent.click(screen.getByRole("button", { name: /Customize columns/ }));
     fireEvent.click(screen.getByRole("button", { name: "Move Date left" }));
     fireEvent.click(screen.getByRole("button", { name: "Move Date left" }));
     for (const r of rowsEls()) expect(cols(r)).toEqual(["date", "amount", "merchant"]);
-    expect(row("SWIGGY").dataset.status).toBe("ready");
-    expect(within(row("SWIGGY")).getByText(/Checked against image/)).toBeTruthy();
+    expect(row("ZOMATO").dataset.status).toBe("ready");
+    expect(within(row("ZOMATO")).queryByRole("button", { name: /^Confirm/ })).toBeNull();
   });
 });
 
@@ -521,6 +524,14 @@ describe("financial invariants — layout operations change no transaction data"
     render(<SmartCaptureStudio />);
     extract(TEXT);
     fireEvent.click(within(row("AMAZON")).getAllByRole("checkbox")[0]); // the user excludes one row
+    // Look-alike repeats each need their one look ("separate transaction") before continuing.
+    for (const el of rowsEls().filter((r) => r.dataset.status === "check")) {
+      const id = el.dataset.rowId!;
+      fireEvent.click(within(el).getByRole("button", { name: /^Expand/ }));
+      const now = rowsEls().find((r) => r.dataset.rowId === id)!;
+      fireEvent.click(within(now).getByTestId("confirm-row"));
+      fireEvent.click(within(rowsEls().find((r) => r.dataset.rowId === id)!).getByRole("button", { name: /^Collapse/ }));
+    }
     const before = reviewState();
     if (withOperations) layoutOperations();
     const after = reviewState();
@@ -551,7 +562,13 @@ describe("financial invariants — layout operations change no transaction data"
   });
 
   it("verification state: bulk-confirmed screenshot rows stay confirmed through every layout operation, and so does the undo", async () => {
-    const lines = [ocrLine(0, ["452.00 Dr", "SWIGGY", "05/09/2026"]), ocrLine(40, ["810.00 Dr", "ZOMATO", "06/09/2026"]), ocrLine(80, ["99.00 Cr", "REFUND CAFE", "07/09/2026"])];
+    // Confidence held just below READY (but at/above LOW) on purpose: good enough to need only the generic image
+    // check, not good enough to skip it — exactly the band "Confirm all reviewed rows" exists for.
+    const lines = [
+      ocrLine(0, ["452.00 Dr", "SWIGGY", "05/09/2026"], { "452.00": 88 }),
+      ocrLine(40, ["810.00 Dr", "ZOMATO", "06/09/2026"], { "810.00": 88 }),
+      ocrLine(80, ["99.00 Cr", "REFUND CAFE", "07/09/2026"], { "99.00": 88 }),
+    ];
     recognize.mockResolvedValue({ text: lines.map((l) => l.text).join("\n"), lines, confidence: 95, durationMs: 1 });
     render(<SmartCaptureStudio />);
     fireEvent.click(screen.getByRole("tab", { name: /Screenshot/ }));

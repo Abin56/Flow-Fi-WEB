@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "next/navigation";
 import { EmiScheduleDialog } from "@/features/emi/components/emi-schedule-dialog";
+import { EmiEditTermsDialog } from "@/features/emi/components/emi-edit-terms-dialog";
+import { emiCardLabel } from "@/features/emi/components/emi-card";
 import { useEmiActions, useEmiRows, type EmiRow } from "@/features/emi/hooks/use-emi-data";
 import { AgreementDeleteDialog } from "@/features/loans/components/agreement-delete-dialog";
 import { runPermanentDeletion } from "@/features/loans/lib/permanent-deletion";
@@ -39,6 +41,7 @@ export function EmiWorkspace({ openRequest = null }: EmiWorkspaceProps = {}) {
   // "past": the dialog opens on "Record past payments" instead of paying now.
   const [payView, setPayView] = useState<"pay" | "past">("pay");
   const [statusBusy, setStatusBusy] = useState(false);
+  const [editTermsOpen, setEditTermsOpen] = useState(false);
 
   const activeRowFresh = useMemo(() => {
     const id = activeRow?.emi.id ?? handoffDetailId;
@@ -136,7 +139,7 @@ export function EmiWorkspace({ openRequest = null }: EmiWorkspaceProps = {}) {
   return (
     <>
       <EmiScheduleDialog
-        open={detail != null && !deleteOpen && payTarget == null && viewPayment == null}
+        open={detail != null && !deleteOpen && payTarget == null && viewPayment == null && !editTermsOpen}
         onOpenChange={(open) => {
           if (!open) {
             setActiveRow(null);
@@ -151,11 +154,14 @@ export function EmiWorkspace({ openRequest = null }: EmiWorkspaceProps = {}) {
           if (first) openPay(first, "past");
         }}
         onToggleClose={handleToggleClose}
+        onEditTerms={() => setEditTermsOpen(true)}
         statusBusy={statusBusy}
         paymentActions={paymentActions}
         historyLoading={historyQuery.isLoading}
         onViewPayment={(action) => setViewPayment({ action, all: paymentActions, seq: (viewPayment?.seq ?? 0) + 1 })}
       />
+
+      <EmiEditTermsDialog open={editTermsOpen && detail != null} onOpenChange={setEditTermsOpen} row={detail} cardName={detail ? emiCardLabel(detail) : null} />
 
       <RecordedPaymentDialog
         key={viewPayment ? `emi-payment-${viewPayment.action.id}-${viewPayment.seq}` : "emi-payment-closed"}

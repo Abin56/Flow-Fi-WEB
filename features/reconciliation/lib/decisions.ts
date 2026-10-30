@@ -18,7 +18,7 @@
  *    against records re-read from the server.
  */
 
-import { applyRowPatch, confirmField, isComplete, openIssues, type RowPatch } from "@/features/smart-capture/lib/capture-review";
+import { applyRowPatch, confirmField, confirmRow, isComplete, needsCorrection, openIssues, rowConfirmPlan, type RowPatch } from "@/features/smart-capture/lib/capture-review";
 import type { CaptureField } from "@/features/smart-capture/lib/parse-pasted-statement";
 import type { CaptureAction } from "@/features/smart-capture/lib/capture-review";
 import { internalPaymentVerdict, type OwnedAccountIdentity } from "./internal-payment-guard";
@@ -208,9 +208,21 @@ export function editRow(row: ReconRow, patch: RowPatch): ReconRow {
   return valueEdit ? { ...next, confirmed: false, bulkConfirmed: false, needsReconfirm: true } : next;
 }
 
-/** "Values are correct" — the row-level confirmation (clears ordinary flags, as in Smart Capture) and D6's re-confirm. */
+/**
+ * The row's ONE confirmation — "Values are correct" / "Confirm ₹452.00 · Charge": accepts every unclearly read field
+ * and the row check at once (Smart Capture's `confirmRow`), plus D6's re-confirm after an edit. It never settles a
+ * problem that needs a value picked or entered (a dropped decimal point, several amounts, a missing value) — the row
+ * is returned unchanged until that's done.
+ */
+export function canConfirmRowValues(row: ReconRow): boolean {
+  if (!isComplete(row)) return false;
+  return rowConfirmPlan(row) != null || (row.needsReconfirm && openIssues(row).length === 0);
+}
+
 export function confirmRowValues(row: ReconRow): ReconRow {
-  return { ...row, confirmed: true, needsReconfirm: false };
+  if (!canConfirmRowValues(row)) return row;
+  const next = confirmRow(row) as ReconRow;
+  return { ...next, confirmed: true, needsReconfirm: false };
 }
 
 export function confirmRowField(row: ReconRow, field: CaptureField): ReconRow {
@@ -222,4 +234,25 @@ export function invalidateAfterEdit(decisions: Record<string, RowDecision>, rowI
   const current = decisions[rowId];
   if (!current) return decisions;
   return { ...decisions, [rowId]: { ...current, kind: current.kind === "link" || current.kind === "import_new" ? null : current.kind, linkedRecordId: null, notSameAck: false, creditAs: null, notOwnTransferAck: false, rejectedRecordIds: [], bulkId: null } };
+}
+
+/**
+ * What a captured row still needs, in two or three words for the statement table — null when nothing. "Fix …" = a
+ * value has to be corrected or picked; "Check …" = values are present and one look settles it.
+ */
+export function rowCheckLabel(row: ReconRow): string | null {
+  if (!row.include) return null;
+  if (row.needsReconfirm) return "Edited — confirm values";
+  const open = openIssues(row);
+  if (needsCorrection(row)) {
+    if (row.amount == null || open.some((i) => i.code === "decimal_missing" || i.code === "multiple_amounts" || i.code === "no_amount")) return "Fix amount";
+    if (row.date == null || open.some((i) => i.code === "no_date")) return "Fix date";
+    return "Fix Charge/Credit";
+  }
+  if (open.length === 0) return null;
+  const fields = rowConfirmPlan(row)?.fields ?? [];
+  if (fields.length === 1) return `Check ${fields[0] === "direction" ? "Charge/Credit" : fields[0]}`;
+  if (fields.length > 1) return "Check unclear values";
+  if (open.some((i) => i.code === "possible_repeat")) return "Possible repeat — check";
+  return row.source === "ocr" ? "Check against the image" : "Check values";
 }

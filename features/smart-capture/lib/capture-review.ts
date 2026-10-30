@@ -15,7 +15,7 @@
 
 import { DEFAULT_RECORD_MODIFIERS, type RecordAction, type StagedRecord } from "@/lib/models/document-import";
 import { actionToAxesPatch } from "@/features/transaction-studio/lib/action-metadata";
-import type { CaptureDirection, CaptureField, CaptureIssue, CaptureRow } from "./parse-pasted-statement";
+import type { CaptureDirection, CaptureField, CaptureIssue, CaptureIssueCode, CaptureRow } from "./parse-pasted-statement";
 
 export type CaptureAction = Extract<RecordAction, "normal_expense" | "income" | "refund" | "ignore">;
 
@@ -110,9 +110,9 @@ export interface ReviewProgress {
   verified: number;
   /** Included rows with nothing left to do. */
   ready: number;
-  /** Included rows still waiting for the row-level check ("matches the image" / "values are correct"). */
+  /** Included rows whose values are all there and need one look (unclear read, possible repeat, image check). */
   toCheck: number;
-  /** Included rows with an unresolved date/amount/direction problem (missing, unclear, decimal point…). */
+  /** Included rows that need a value corrected or chosen (missing, several amounts, dropped decimal point…). */
   fieldIssues: number;
   /** Included rows not ready — the number that has to reach 0. */
   pending: number;
@@ -148,6 +148,15 @@ export function undoBulkConfirm(rows: ReviewRow[]): ReviewRow[] {
   return rows.map((row) => (row.bulkConfirmed ? { ...row, confirmed: false, bulkConfirmed: false } : row));
 }
 
+/**
+ * "Fix" vs "Check": a row needs a CORRECTION when a value is missing or has to be chosen (a dropped decimal point,
+ * several amounts, an unknown Charge/Credit); it needs a CHECK when every value is there and one look settles it
+ * (an unclear read, a possible repeat, the image comparison). One rule for the badges, the counts and the summary.
+ */
+export function needsCorrection(row: ReviewRow): boolean {
+  return !isComplete(row) || openIssues(row).some((i) => NEEDS_A_VALUE.has(i.code));
+}
+
 export function reviewProgress(rows: ReviewRow[]): ReviewProgress {
   const included = rows.filter((r) => r.include);
   let ready = 0;
@@ -156,12 +165,10 @@ export function reviewProgress(rows: ReviewRow[]): ReviewProgress {
   let verified = 0;
   for (const row of included) {
     const open = openIssues(row);
-    const fieldOpen = !isComplete(row) || open.some((i) => i.strict || i.field != null || ["no_amount", "no_date", "direction_unclear", "multiple_amounts"].includes(i.code));
-    const rowOpen = open.some((i) => !i.strict && i.field == null && !["no_amount", "no_date", "direction_unclear", "multiple_amounts"].includes(i.code));
-    if (fieldOpen) fieldIssues++;
-    if (rowOpen) toCheck++;
-    else verified++;
-    if (!fieldOpen && !rowOpen) ready++;
+    if (needsCorrection(row)) fieldIssues++;
+    else if (open.length > 0) toCheck++;
+    else ready++;
+    if (!open.some((i) => !i.strict && !NEEDS_A_VALUE.has(i.code))) verified++;
   }
   return { included: included.length, verified, ready, toCheck, fieldIssues, pending: included.length - ready };
 }
@@ -194,6 +201,110 @@ export function confirmField(row: ReviewRow, field: CaptureField): ReviewRow {
   const hasValue = field === "amount" ? row.amount != null && row.amount > 0 : field === "date" ? row.date != null : row.direction != null;
   if (!hasValue || row.confirmedFields.includes(field)) return row;
   return { ...row, confirmedFields: [...row.confirmedFields, field] };
+}
+
+/** Open problems one confirmation can't settle: a value has to be chosen or entered first. */
+const NEEDS_A_VALUE: ReadonlySet<CaptureIssueCode> = new Set(["no_amount", "no_date", "direction_unclear", "multiple_amounts", "decimal_missing"]);
+
+export interface RowConfirmPlan {
+  /** Unclearly read fields whose current values the confirmation accepts. */
+  fields: CaptureField[];
+  /** Whether it also settles the row-level check (compared with the image, a possible repeat, a joined line…). */
+  rowCheck: boolean;
+}
+
+/**
+ * What the row's ONE confirmation covers — every unclearly read field that has a value, plus the row-level check — so
+ * a row never asks for the same look twice. null when there's nothing to confirm, or something open needs a value
+ * chosen or entered first (a dropped decimal point, several amounts, a missing value): confirming can't settle those.
+ */
+export function rowConfirmPlan(row: ReviewRow): RowConfirmPlan | null {
+  if (!isComplete(row)) return null;
+  const open = openIssues(row);
+  if (open.length === 0 || open.some((i) => NEEDS_A_VALUE.has(i.code))) return null;
+  return { fields: [...new Set(open.filter((i) => i.strict && i.field).map((i) => i.field!))], rowCheck: open.some((i) => !i.strict) };
+}
+
+export function confirmRow(row: ReviewRow): ReviewRow {
+  const plan = rowConfirmPlan(row);
+  if (!plan) return row;
+  const next = plan.fields.reduce(confirmField, row);
+  return plan.rowCheck ? { ...next, confirmed: true, bulkConfirmed: false } : next;
+}
+
+/** Withdraws every confirmation on the row (row-level and per field) — the undo of `confirmRow`. */
+export function unconfirmRow(row: ReviewRow): ReviewRow {
+  return { ...row, confirmed: false, bulkConfirmed: false, confirmedFields: [] };
+}
+
+export interface ReviewTotals {
+  /** Included rows counted (complete amount + direction). */
+  counted: number;
+  /** Included rows left out of the sums because their amount or Charge/Credit isn't known yet. */
+  uncounted: number;
+  /** Statement direction — what left / came into the account, whatever it will be imported as. */
+  debits: number;
+  credits: number;
+  debitCount: number;
+  creditCount: number;
+  /** credits − debits: negative = net outflow. */
+  net: number;
+  /** By what the row will be imported as. */
+  expenses: number;
+  refunds: number;
+  income: number;
+  /** Card bill payments / EMIs — money movements, never called an expense or income here. */
+  payments: number;
+  /** Included but set to "Skip" at import. */
+  skipped: number;
+}
+
+const PAYMENT_KINDS: ReadonlySet<CaptureRow["kind"]> = new Set(["payment", "emi"]);
+
+/**
+ * Totals of the included rows' CURRENT (edited) values — excluded rows never count. Summed in paise so 0.1 + 0.2
+ * style float drift can't show up in a financial total.
+ */
+export function reviewTotals(rows: ReviewRow[]): ReviewTotals {
+  const p = { debits: 0, credits: 0, expenses: 0, refunds: 0, income: 0, payments: 0, skipped: 0 };
+  let debitCount = 0;
+  let creditCount = 0;
+  let uncounted = 0;
+  for (const r of rows) {
+    if (!r.include) continue;
+    if (r.amount == null || !(r.amount > 0) || r.direction == null) {
+      uncounted++;
+      continue;
+    }
+    const paise = Math.round(r.amount * 100);
+    if (r.direction === "debit") {
+      p.debits += paise;
+      debitCount++;
+    } else {
+      p.credits += paise;
+      creditCount++;
+    }
+    if (r.action === "ignore") p.skipped += paise;
+    else if (PAYMENT_KINDS.has(r.kind)) p.payments += paise;
+    else if (r.direction === "debit") p.expenses += paise;
+    else if (r.action === "refund") p.refunds += paise;
+    else p.income += paise;
+  }
+  const rupees = (n: number) => n / 100;
+  return {
+    counted: debitCount + creditCount,
+    uncounted,
+    debits: rupees(p.debits),
+    credits: rupees(p.credits),
+    debitCount,
+    creditCount,
+    net: rupees(p.credits - p.debits),
+    expenses: rupees(p.expenses),
+    refunds: rupees(p.refunds),
+    income: rupees(p.income),
+    payments: rupees(p.payments),
+    skipped: rupees(p.skipped),
+  };
 }
 
 export function applyRowPatch(row: ReviewRow, patch: RowPatch): ReviewRow {

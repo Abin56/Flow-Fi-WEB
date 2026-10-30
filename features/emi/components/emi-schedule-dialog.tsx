@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowUpRight, Building2, CreditCard, History, Lock, LockOpen, Trash2, UserRound, Wallet, X } from "lucide-react";
+import { ArrowUpRight, Building2, CreditCard, History, Lock, LockOpen, Pencil, Trash2, UserRound, Wallet, X } from "lucide-react";
 import Link from "next/link";
 import { ClayButton } from "@/components/clay/clay-button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -14,6 +14,8 @@ import { EMI_TYPE_LABEL, emiBadges, emiCardLabel } from "@/features/emi/componen
 import { hasPastDue } from "@/features/loans/lib/record-payment";
 import { useInstallmentPeopleStatus } from "@/features/loans/hooks/use-installment-people-status";
 import { DetailHero, DetailSectionTitle, FactGrid, LinkedList, LinkedRow, daysUntil, dueLabel } from "@/features/loans/components/loan-emi-ui";
+import { LenderPayoffBreakdown } from "@/features/loans/components/lender-payoff-breakdown";
+import { outstandingPrincipalFor } from "@/lib/engines/loan-outstanding";
 
 interface EmiScheduleDialogProps {
   open: boolean;
@@ -24,6 +26,8 @@ interface EmiScheduleDialogProps {
   /** Opens "Record past payments" — EMIs paid before FlowFi, recorded without moving any account or card. */
   onRecordPastPayments?: (row: EmiRow) => void;
   onToggleClose: (row: EmiRow) => void;
+  /** Opens "Edit terms" (rate, tenure, frequency, due day of the unpaid installments). */
+  onEditTerms?: (row: EmiRow) => void;
   /** True while a Close/Reopen write is in flight — blocks a double click. */
   statusBusy?: boolean;
   /** Recorded payments, grouped per payment action. */
@@ -48,7 +52,7 @@ function GoTo({ href, label }: { href: string; label: string }) {
 /** EMI details, laid out exactly like `LoanScheduleDialog` — outstanding balance first, key facts,
  *  what it's linked to, then the installment schedule. `row` is resolved live by the parent from
  *  Firestore-backed rows, so every persisted change re-renders it in place. */
-export function EmiScheduleDialog({ open, onOpenChange, row, onDelete, onRecordPayment, onRecordPastPayments, onToggleClose, statusBusy = false, paymentActions, historyLoading, onViewPayment }: EmiScheduleDialogProps) {
+export function EmiScheduleDialog({ open, onOpenChange, row, onDelete, onRecordPayment, onRecordPastPayments, onToggleClose, onEditTerms, statusBusy = false, paymentActions, historyLoading, onViewPayment }: EmiScheduleDialogProps) {
   // Shared EMI: each installment's People side on its row, next to (never merged with) the lender status.
   const peopleStatus = useInstallmentPeopleStatus(row ? { sourceKind: "emi", source: row.emi, installments: row.installments } : null);
   if (!row) return null;
@@ -136,6 +140,8 @@ export function EmiScheduleDialog({ open, onOpenChange, row, onDelete, onRecordP
               ]}
             />
 
+            <LenderPayoffBreakdown kind="emi" agreementId={row.emi.id} principal={outstandingPrincipalFor(row.emi.principalAmount, row.installments)} />
+
             {linked.length > 0 && (
               <section>
                 <DetailSectionTitle>Linked</DetailSectionTitle>
@@ -173,6 +179,12 @@ export function EmiScheduleDialog({ open, onOpenChange, row, onDelete, onRecordP
           {isClosed && <p className="text-xs text-muted-foreground">This EMI is closed. Reopen it to record payments.</p>}
           <div className="flex w-full flex-wrap items-center gap-2 sm:justify-between">
             <div className="flex flex-wrap items-center gap-1">
+              {onEditTerms && (
+                <ClayButton variant="ghost" size="sm" className="gap-1.5 rounded-[6px] font-medium text-foreground" onClick={() => onEditTerms(row)} disabled={statusBusy} title="Change the rate, tenure, frequency or due day of the unpaid installments">
+                  <Pencil className="size-3.5" />
+                  Edit terms
+                </ClayButton>
+              )}
               <ClayButton variant="ghost" size="sm" className="gap-1.5 rounded-[6px] font-medium text-foreground" onClick={() => onToggleClose(row)} disabled={statusBusy}>
                 {isClosed ? <LockOpen className="size-3.5" /> : <Lock className="size-3.5" />}
                 {statusBusy ? (isClosed ? "Reopening…" : "Closing…") : isClosed ? "Reopen" : "Close EMI"}

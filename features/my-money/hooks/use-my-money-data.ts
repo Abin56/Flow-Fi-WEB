@@ -24,6 +24,7 @@ import { useAllCreditCardStatements, useCreditCards } from "@/hooks/use-credit-c
 import { useEmiInstallmentPayments } from "@/hooks/use-emi-installment-payments";
 import { useLoanScheduledPayments } from "@/hooks/use-loan-scheduled-payments";
 import { useMySpendContext } from "@/hooks/use-my-spend-context";
+import { useSpendTransactions, withBuiltInChargeCategory } from "@/hooks/use-lender-charge-spend";
 import { useTransactions } from "@/hooks/use-transactions";
 import { useAllBillOccurrences } from "@/features/bills/hooks/use-bill-occurrence-history";
 import { useBillRows } from "@/features/bills/hooks/use-bills-data";
@@ -159,6 +160,9 @@ export function useMyMoneyData() {
     mySpendLoading;
 
   const txns = transactions as Transaction[];
+  // Spend only: billed lender charges count once as an expense on their billed date (balances / payments use `txns`).
+  const spendTxns = useSpendTransactions(txns);
+  const spendCategories = useMemo(() => withBuiltInChargeCategory(categories as Category[], spendTxns), [categories, spendTxns]);
   const accountList = accounts as Account[];
   const cardList = useMemo(() => (cards as CreditCardProfile[]).filter((c) => c.deletedAt == null), [cards]);
 
@@ -373,10 +377,10 @@ export function useMyMoneyData() {
   // ── My spending: My Spend engine, Month Cycle bucketing ──
   const spending = useMemo(() => {
     const bucketDate = (t: Transaction) => mySpendBucketDate(t, isCustomCycle);
-    const rows = mySpendRows({ transactions: txns, ctx: mySpendCtx, bucketDate, range: cycleRange });
+    const rows = mySpendRows({ transactions: spendTxns, ctx: mySpendCtx, bucketDate, range: cycleRange });
     const summary = summarizeMySpend(rows);
-    const previous = summarizeMySpend(mySpendRows({ transactions: txns, ctx: mySpendCtx, bucketDate, range: previousRange })).mySpend;
-    const categoryById = new Map((categories as Category[]).map((c) => [c.id, c]));
+    const previous = summarizeMySpend(mySpendRows({ transactions: spendTxns, ctx: mySpendCtx, bucketDate, range: previousRange })).mySpend;
+    const categoryById = new Map(spendCategories.map((c) => [c.id, c]));
     const sharedMine = round2(rows.filter((r) => r.othersAmount > 0).reduce((s, r) => s + r.myAmount, 0));
     const topCategories: SpendCategory[] = [...summary.byCategoryId.entries()]
       .filter(([, amount]) => amount > 0)
@@ -396,7 +400,7 @@ export function useMyMoneyData() {
       topCategories,
       comparison: spendComparison(summary.mySpend, previous, isPast),
     };
-  }, [txns, mySpendCtx, isCustomCycle, cycleRange, previousRange, categories, isPast]);
+  }, [spendTxns, mySpendCtx, isCustomCycle, cycleRange, previousRange, spendCategories, isPast]);
 
   // ── Completed: payments made in the period ──
   const completed = useMemo(() => {

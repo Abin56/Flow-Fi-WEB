@@ -3,7 +3,7 @@ import { OCR_WORKER_OPTIONS, OcrCancelledError, pageToResult, recognizeScreensho
 import { displayToNatural, imageWarnings, isUsableCrop, ocrScaleFor, rectFromPoints } from "./image-crop";
 import { annotateOcrRows, LOW_CONFIDENCE } from "./ocr-review";
 import { parsePastedStatement } from "./parse-pasted-statement";
-import { applyRowPatch, canContinue, confirmField, openIssues, toReviewRows } from "./capture-review";
+import { applyRowPatch, canContinue, confirmField, confirmRow, openIssues, rowConfirmPlan, toReviewRows, unconfirmRow } from "./capture-review";
 import { ocrLine, ocrText } from "./ocr-test-helpers";
 
 // ---- tesseract.js mock: a controllable fake worker ----
@@ -152,14 +152,81 @@ describe("OCR review safety", () => {
     expect(rows[1].kind).toBe("refund");
   });
 
-  it("requires explicit confirmation of every OCR row, even at high confidence", () => {
-    const rows = ocrRows(clean);
-    expect(rows.every((r) => r.source === "ocr" && openIssues(r).some((i) => i.code === "ocr_unverified"))).toBe(true);
-    expect(canContinue(rows)).toBe(false);
+  it("marks a clean, high-confidence OCR row with a C/D marker read ready with no confirm needed", () => {
+    const rows = ocrRows([ocrLine(0, ["05/09/2026", "AMAZON PAY", "1,299.00 Dr"]), ocrLine(40, ["07/09/2026", "REFUND MYNTRA", "999.00 Cr"])]);
+    expect(rows.every((r) => r.source === "ocr" && openIssues(r).length === 0)).toBe(true);
+    expect(canContinue(rows)).toBe(true);
+  });
+
+  it("never auto-accepts a guessed direction: a clean row with no C/D read still needs one look", () => {
+    const [amazon] = ocrRows(clean);
+    expect(openIssues(amazon).map((i) => i.code)).toEqual(["ocr_unverified"]);
+  });
+
+  it("an unmarked charge on a statement that marks its credits is Ready by the statement's own convention", () => {
+    const lines = [ocrLine(0, ["05/09/2026", "AMAZON PAY", "1,299.00"]), ocrLine(40, ["07/09/2026", "REFUND MYNTRA", "999.00 Cr"])];
+    const parsed = parsePastedStatement(ocrText(lines), { today: new Date(2026, 9, 26) });
+    const rows = toReviewRows(annotateOcrRows(parsed.rows, lines, { hasCreditMarkers: parsed.hasCreditMarkers }), "ocr");
+    expect(openIssues(rows[0])).toEqual([]);
+    expect(rows[0].notes.join(" ")).toMatch(/convention/);
+  });
+
+  it("…but not when something unread sits after the amount (where a misread Cr would be)", () => {
+    const lines = [ocrLine(0, ["05/09/2026", "AMAZON PAY", "1,299.00", "~"]), ocrLine(40, ["07/09/2026", "REFUND MYNTRA", "999.00 Cr"])];
+    const parsed = parsePastedStatement(ocrText(lines), { today: new Date(2026, 9, 26) });
+    const [row] = toReviewRows(annotateOcrRows(parsed.rows, lines, { hasCreditMarkers: true }), "ocr");
+    expect(openIssues(row).length).toBeGreaterThan(0);
+  });
+
+  describe("second read of unclear values", () => {
+    const withRecheck = (text: string, recheck: { text: string; confidence: number }) => {
+      const line = ocrLine(0, ["05/09/2026", "SWIGGY", "452.00", "D"], { "452.00": 60, D: 55 });
+      for (const w of line.words) if (w.text === text) w.recheck = recheck;
+      return line;
+    };
+
+    it("an agreeing second read at good confidence is evidence: no confirmation needed", () => {
+      const line = withRecheck("452.00", { text: "452.00", confidence: 96 });
+      line.words.find((w) => w.text === "D")!.recheck = { text: "D", confidence: 93 };
+      const [row] = ocrRows([line]);
+      expect(openIssues(row)).toEqual([]);
+      expect(row.ocr?.secondRead).toEqual(["452.00", "D"]);
+    });
+
+    it("a disagreeing second read keeps the field flagged and shows both readings", () => {
+      const [row] = ocrRows([withRecheck("452.00", { text: "462.00", confidence: 95 })]);
+      const issue = openIssues(row).find((i) => i.code === "low_confidence_amount")!;
+      expect(issue.message).toMatch(/second read of the image saw "462.00"/);
+      expect(row.amount).toBe(452); // evidence never changes a value
+    });
+
+    it("an agreeing but still-unclear second read is not enough", () => {
+      const [row] = ocrRows([withRecheck("452.00", { text: "452.00", confidence: 70 })]);
+      expect(openIssues(row).some((i) => i.code === "low_confidence_amount")).toBe(true);
+    });
+  });
+
+  it("one confirmation settles every unclear field at once — never one button per field", () => {
+    const [row] = ocrRows([ocrLine(0, ["05/09/2026", "SWIGGY", "452.00", "D"], { "452.00": 60, D: 55 })]);
+    expect(rowConfirmPlan(row)).toEqual({ fields: ["amount", "direction"], rowCheck: false });
+    const done = confirmRow(row);
+    expect(openIssues(done)).toEqual([]);
+    expect(openIssues(unconfirmRow(done)).length).toBe(2);
+  });
+
+  it("a dropped decimal point is never settled by the one confirmation — a value must be picked", () => {
+    const [row] = ocrRows([ocrLine(0, ["06/10/2026", "TELECOM", "43461", "D"])]);
+    expect(rowConfirmPlan(row)).toBeNull();
+    expect(confirmRow(row)).toBe(row);
+  });
+
+  it("still requires a row-level check when evidence is OCR-read but only middling (below READY, at/above LOW)", () => {
+    const [row] = ocrRows([ocrLine(0, ["05/09/2026", "AMAZON PAY", "1,299.00"], { "1,299.00": LOW_CONFIDENCE + 2 })]);
+    expect(openIssues(row).map((i) => i.code)).toEqual(["ocr_unverified"]);
+    expect(canContinue([row])).toBe(false);
     // Editing a value is not the same as confirming the row against the image.
-    const edited = rows.map((r) => applyRowPatch(r, { description: r.description + " " }));
-    expect(canContinue(edited)).toBe(false);
-    expect(canContinue(rows.map((r) => applyRowPatch(r, { confirmed: true })))).toBe(true);
+    expect(canContinue([applyRowPatch(row, { description: row.description + " " })])).toBe(false);
+    expect(canContinue([applyRowPatch(row, { confirmed: true })])).toBe(true);
   });
 
   it("says when direction was inferred (no Cr/Dr read) instead of hiding it", () => {
@@ -178,7 +245,8 @@ describe("OCR review safety", () => {
     // Typing the correct amount resolves a low-confidence read; a valid value can also be confirmed as read.
     const typed = applyRowPatch(rowConfirmed, { amount: 452 });
     expect(openIssues(typed)).toEqual([]);
-    expect(openIssues(confirmField(applyRowPatch(row, { amount: 452 }), "amount")).map((i) => i.code)).toEqual(["ocr_unverified", "direction_unclear"]); // no amount was read, so no C/D either
+    // no amount was read, so no C/D either — direction is the only thing left to fix, so that's the row's one ask.
+    expect(openIssues(confirmField(applyRowPatch(row, { amount: 452 }), "amount")).map((i) => i.code)).toEqual(["direction_unclear"]);
   });
 
   it("blocks low-confidence dates and Cr/Dr markers separately", () => {

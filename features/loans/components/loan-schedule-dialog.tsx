@@ -16,6 +16,7 @@ import type { RecordedPaymentAction } from "@/features/loans/lib/recorded-paymen
 import { additionalAmountCopy } from "@/features/loans/lib/loan-labels";
 import { hasPastDue } from "@/features/loans/lib/record-payment";
 import { useInstallmentPeopleStatus } from "@/features/loans/hooks/use-installment-people-status";
+import { LenderPayoffBreakdown } from "@/features/loans/components/lender-payoff-breakdown";
 
 /** Port of `LoanDetailScreen._remainingInterest`. "Loan Amount Left" (the principal counterpart)
  *  now reads `row.outstandingPrincipal` directly instead of a second, locally-recomputed formula —
@@ -188,6 +189,8 @@ export function LoanScheduleDialog({ open, onOpenChange, row, onEdit, onDelete, 
                 },
               ]}
             />
+
+            <LenderPayoffBreakdown kind="loan" agreementId={row.loan.id} principal={row.outstandingPrincipal} />
 
             {linked.length > 0 && (
               <section>

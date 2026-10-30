@@ -4,7 +4,7 @@
  * it (the reconciliation draft survives a refresh on its own, without the screenshot — see reconciliation-draft.ts).
  *
  * Three slots, each with one owner:
- *  - `pending`: a verified capture Smart Capture handed over, waiting for Reconciliation to take it. Reconciliation
+ *  - `pending`: a capture Smart Capture handed over, waiting for Reconciliation to take it. Reconciliation
  *    consumes it (or, when another review is already in progress, the user explicitly keeps or replaces).
  *  - `screenshot`: the screenshot Reconciliation is showing beside its rows. Its object URL is created HERE from the
  *    image Blob, so it is independent of Smart Capture's own URL (which Smart Capture revokes when it unmounts).
@@ -16,7 +16,7 @@
  * directions, descriptions, include state and every confirmation/issue flag exactly as reviewed.
  */
 
-import { canContinue, isComplete, type ReviewRow } from "@/features/smart-capture/lib/capture-review";
+import type { ReviewRow } from "@/features/smart-capture/lib/capture-review";
 import { sourceFingerprint } from "@/features/smart-capture/lib/capture-draft";
 import type { CaptureParseResult } from "@/features/smart-capture/lib/parse-pasted-statement";
 import type { Rect } from "@/features/smart-capture/lib/image-crop";
@@ -101,14 +101,14 @@ export type HandoffInput = {
 };
 
 /**
- * Smart Capture's Continue. Refuses (returns an error, changes nothing) unless the review gates pass — the same
- * `canContinue` Smart Capture's own Continue button uses: at least one included row, and every included row
- * complete with no unresolved (incl. strict OCR) issue. Excluded rows travel along, still excluded.
+ * Smart Capture → Review & Import, straight after extraction. Rows arrive exactly as read — including the ones
+ * that still need an OCR check or a correction: Review & Import settles those (Smart Capture's own gates —
+ * `openIssues`, `isComplete` — are what its import gate `valueIssues` reads), so nothing unresolved can be imported.
+ * Rows the parser suggested leaving out (a cut-off sliver, an EMI or card-payment line) arrive excluded, and can be
+ * included there. Refuses only an empty capture.
  */
 export function handOffCapture(input: HandoffInput): { ok: true; id: string } | { ok: false; error: string } {
-  if (!canContinue(input.rows) || input.rows.some((r) => r.include && !isComplete(r))) {
-    return { ok: false, error: "Some included rows still need attention in Smart Capture." };
-  }
+  if (input.rows.length === 0) return { ok: false, error: "No rows were extracted." };
   const fingerprint = sourceFingerprint(input.sourceText);
   const id = `handoff_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 
@@ -119,7 +119,7 @@ export function handOffCapture(input: HandoffInput): { ok: true; id: string } | 
   // A newer Continue supersedes an earlier one Reconciliation hasn't taken yet.
   revoke(state.pending?.screenshot ?? null, state.screenshot);
 
-  const rows: ReconRow[] = input.rows.map((r) => ({ ...r, needsReconfirm: false, captureExcluded: !r.include }));
+  const rows: ReconRow[] = input.rows.map((r) => ({ ...r, needsReconfirm: false, captureExcluded: false }));
   emit({
     ...state,
     pending: {

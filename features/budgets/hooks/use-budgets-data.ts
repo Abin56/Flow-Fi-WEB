@@ -22,6 +22,7 @@ import type { Budget } from "@/lib/models/budget";
 import type { Category } from "@/lib/models/category";
 import { effectiveMonth, type Transaction } from "@/lib/models/transaction";
 import { useMySpendContext } from "@/hooks/use-my-spend-context";
+import { useSpendTransactions } from "@/hooks/use-lender-charge-spend";
 import { myConsumptionAmount } from "@/lib/engines/my-spend";
 
 import { createBudgetRepository } from "@/lib/repositories/repository-factory";
@@ -61,11 +62,12 @@ export function useBudgetRows(): { rows: BudgetRow[]; isLoading: boolean } {
   const { data: categories = [], isLoading: categoriesLoading } = useCategories();
   const { data: transactions = [], isLoading: transactionsLoading } = useTransactions();
   const { ctx: mySpendCtx, isLoading: mySpendLoading } = useMySpendContext();
+  const spendTransactions = useSpendTransactions(transactions as Transaction[]);
 
   const rows = useMemo(() => {
     const categoryById = new Map((categories as Category[]).map((c) => [c.id, c]));
     // Budgets track MY spend (shared classifier) — my share of split/assigned expenses only.
-    const expenses = (transactions as Transaction[]).filter((t) => myConsumptionAmount(t, mySpendCtx) > 0);
+    const expenses = spendTransactions.filter((t) => myConsumptionAmount(t, mySpendCtx) > 0);
 
     return (budgets as Budget[]).map((budget) => {
       const period = resolveBudgetPeriod(budget);
@@ -87,7 +89,7 @@ export function useBudgetRows(): { rows: BudgetRow[]; isLoading: boolean } {
         insight,
       };
     });
-  }, [budgets, categories, transactions, mySpendCtx]);
+  }, [budgets, categories, spendTransactions, mySpendCtx]);
 
   return { rows, isLoading: budgetsLoading || categoriesLoading || transactionsLoading || mySpendLoading };
 }
@@ -96,12 +98,13 @@ export function useBudgetRows(): { rows: BudgetRow[]; isLoading: boolean } {
 export function useDailySpend(): { days: number[]; average: number } {
   const { data: transactions = [] } = useTransactions();
   const { ctx: mySpendCtx } = useMySpendContext();
+  const spendTransactions = useSpendTransactions(transactions as Transaction[]);
 
   return useMemo(() => {
     const now = new Date();
     const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
     const days = new Array(daysInMonth).fill(0);
-    for (const t of transactions as Transaction[]) {
+    for (const t of spendTransactions) {
       const mine = myConsumptionAmount(t, mySpendCtx);
       if (mine === 0) continue;
       const effective = effectiveMonth(t);
@@ -113,7 +116,7 @@ export function useDailySpend(): { days: number[]; average: number } {
     }
     const average = days.reduce((s, v) => s + v, 0) / daysInMonth;
     return { days, average };
-  }, [transactions, mySpendCtx]);
+  }, [spendTransactions, mySpendCtx]);
 }
 
 /** Create/edit/delete actions wired to the real repository, scoped to the signed-in user. */

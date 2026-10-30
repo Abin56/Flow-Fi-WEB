@@ -10,6 +10,7 @@
 import type { DocumentData, QueryDocumentSnapshot, SnapshotOptions } from "firebase/firestore";
 import { Timestamp } from "firebase/firestore";
 import type { AuditEntry, SoftDeletableEntity } from "@/lib/firestore/soft-deletable";
+import { isLenderChargeSettlement, type LenderChargeSettlementMarker } from "@/lib/models/lender-charge";
 import { paymentAllocationTypeFromName, type PaymentAllocationType } from "@/lib/models/payment-schedule";
 
 export type TransactionType = "income" | "expense";
@@ -158,6 +159,15 @@ export interface Transaction extends SoftDeletableEntity {
    * bill `PaymentRecord` that owns this money. Additive, web-only, optional — absent on every other document.
    */
   billPaymentId?: string | null;
+  /**
+   * Set only on the account debit that SETTLES a billed lender charge (the id of the `LenderCharge`). The expense
+   * was recognised when the charge was billed, so this transaction is a liability settlement: it really moves the
+   * account but no income/expense or spend total counts it (see `isNonIncomeExpenseMovement`,
+   * `classifyForMySpend`). Additive, web-only, optional — absent/null on every other document, which keeps its
+   * exact shape. NOTE: the Flutter client ignores it and would count such a row as an expense, which is why no
+   * code path may write it until that cross-client risk is resolved.
+   */
+  lenderChargeId?: string | null;
 }
 
 /** The document id of the fee expense belonging to the transfer `transferId` (see `Transaction.transferFeeForId`). */
@@ -206,9 +216,10 @@ export function isLoanPrincipalDisbursement(
  * exclude, since the Flutter app never posted one for these entries.
  */
 export function isNonIncomeExpenseMovement(
-  transaction: Pick<Transaction, "transferId" | "loanId" | "paymentAllocationType" | "isPersonLedgerMovement">,
+  transaction: Pick<Transaction, "transferId" | "loanId" | "paymentAllocationType" | "isPersonLedgerMovement"> & LenderChargeSettlementMarker,
 ): boolean {
-  return transaction.transferId != null || isLoanPrincipalDisbursement(transaction) || transaction.isPersonLedgerMovement;
+  // A lender-charge payment really moves the account, but the expense was recognised when the charge was billed.
+  return transaction.transferId != null || isLoanPrincipalDisbursement(transaction) || transaction.isPersonLedgerMovement || isLenderChargeSettlement(transaction);
 }
 
 /** The signed delta this transaction applies to its account's balance. */
@@ -300,6 +311,7 @@ export function transactionFromFirestore(
     fundedByPersonId: (data.fundedByPersonId as string | undefined) ?? null,
     transferFeeForId: (data.transferFeeForId as string | undefined) ?? null,
     billPaymentId: (data.billPaymentId as string | undefined) ?? null,
+    lenderChargeId: (data.lenderChargeId as string | undefined) ?? null,
     deletedAt: (data.deletedAt as Timestamp | undefined)?.toDate() ?? null,
     lastEditedAt: (data.lastEditedAt as Timestamp | undefined)?.toDate() ?? null,
     editHistory: ((data.editHistory as Record<string, unknown>[] | undefined) ?? []).map(auditEntryFromMap),
@@ -336,6 +348,7 @@ export function transactionToFirestore(transaction: Transaction): DocumentData {
     ...(transaction.fundedByPersonId != null ? { fundedByPersonId: transaction.fundedByPersonId } : {}),
     ...(transaction.transferFeeForId != null ? { transferFeeForId: transaction.transferFeeForId } : {}),
     ...(transaction.billPaymentId != null ? { billPaymentId: transaction.billPaymentId } : {}),
+    ...(transaction.lenderChargeId != null && transaction.lenderChargeId !== "" ? { lenderChargeId: transaction.lenderChargeId } : {}),
     deletedAt: transaction.deletedAt == null ? null : Timestamp.fromDate(transaction.deletedAt),
     lastEditedAt: transaction.lastEditedAt == null ? null : Timestamp.fromDate(transaction.lastEditedAt),
     editHistory: transaction.editHistory.map(auditEntryToMap),

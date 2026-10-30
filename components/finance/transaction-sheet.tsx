@@ -66,9 +66,16 @@ const AVATAR_TONE = {
 } as const;
 
 /** The monogram tile on the hero header, tinted by direction: coral for money out, lime for money in. */
-export function SheetAvatar({ children, tone = "neutral" }: { children: ReactNode; tone?: keyof typeof AVATAR_TONE }) {
+export function SheetAvatar({ children, tone = "neutral", compact = false }: { children: ReactNode; tone?: keyof typeof AVATAR_TONE; compact?: boolean }) {
   return (
-    <span aria-hidden className={cn("grid size-12 shrink-0 place-items-center rounded-[15px] text-[15px] font-bold tracking-tight tabular-nums shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] ring-1", AVATAR_TONE[tone])}>
+    <span
+      aria-hidden
+      className={cn(
+        "grid shrink-0 place-items-center font-bold tracking-tight tabular-nums shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] ring-1",
+        compact ? "size-9 rounded-[11px] text-[13px]" : "size-12 rounded-[15px] text-[15px]",
+        AVATAR_TONE[tone],
+      )}
+    >
       {children}
     </span>
   );
@@ -84,7 +91,10 @@ export function SheetNav({
   nextLabel,
   disabled = false,
   positionTestId,
+  compact = false,
+  title,
 }: {
+  title?: string;
   label: string;
   position: string;
   onPrev?: () => void;
@@ -93,14 +103,18 @@ export function SheetNav({
   nextLabel: string;
   disabled?: boolean;
   positionTestId?: string;
+  compact?: boolean;
 }) {
-  const arrow = "grid size-8 place-items-center rounded-[8px] text-hero-foreground/80 transition-colors hover:bg-white/12 hover:text-hero-foreground disabled:opacity-30 focus-visible:ring-2 focus-visible:ring-primary/70 focus-visible:outline-none";
+  const arrow = cn(
+    "grid place-items-center rounded-[8px] text-hero-foreground/80 transition-colors hover:bg-white/12 hover:text-hero-foreground disabled:opacity-30 focus-visible:ring-2 focus-visible:ring-primary/70 focus-visible:outline-none",
+    compact ? "size-7" : "size-8",
+  );
   return (
-    <div className="flex items-center rounded-[12px] bg-white/[0.07] p-0.5 ring-1 ring-white/10" role="group" aria-label={label}>
+    <div className="flex items-center rounded-[12px] bg-white/[0.07] p-0.5 ring-1 ring-white/10" role="group" aria-label={label} title={title}>
       <button type="button" className={arrow} aria-label={prevLabel} disabled={disabled || !onPrev} onClick={onPrev}>
         <ChevronLeft className="size-4" aria-hidden />
       </button>
-      <span data-testid={positionTestId} aria-live="polite" className="min-w-[4rem] text-center text-xs font-semibold text-hero-foreground tabular-nums">
+      <span data-testid={positionTestId} aria-live="polite" className={cn("text-center text-xs font-semibold text-hero-foreground tabular-nums", compact ? "min-w-[3.25rem]" : "min-w-[4rem]")}>
         {position}
       </span>
       <button type="button" className={arrow} aria-label={nextLabel} disabled={disabled || !onNext} onClick={onNext}>
@@ -152,7 +166,9 @@ export function SheetPicker({
   invalid = false,
   ariaLabel,
   extraItems,
+  compact = false,
 }: {
+  compact?: boolean;
   value: string | null;
   onValueChange: (value: string) => void;
   options: SheetPickerOption[];
@@ -173,16 +189,23 @@ export function SheetPicker({
         aria-label={ariaLabel}
         aria-invalid={invalid || undefined}
         className={cn(
-          "h-auto min-h-14 w-full gap-3 rounded-xl border-border-strong bg-card px-3 py-2 text-left shadow-e1 transition-[border-color,box-shadow,background-color] hover:border-muted-foreground hover:bg-secondary/30 focus-visible:border-primary-accent-text focus-visible:ring-0 focus-visible:shadow-[0_0_0_3px_oklch(0.912_0.185_126/0.4)] data-[state=open]:border-primary-accent-text data-[state=open]:ring-0 data-[state=open]:shadow-[0_0_0_3px_oklch(0.912_0.185_126/0.4)] aria-invalid:border-expense aria-invalid:ring-expense/20 dark:bg-card dark:hover:bg-secondary/40",
+          compact ? "h-10 min-h-10 gap-2.5 py-0" : "h-auto min-h-14 gap-3 py-2",
+          "w-full rounded-xl border-border-strong bg-card px-3 text-left shadow-e1 transition-[border-color,box-shadow,background-color] hover:border-muted-foreground hover:bg-secondary/30 focus-visible:border-primary-accent-text focus-visible:ring-0 focus-visible:shadow-[0_0_0_3px_oklch(0.912_0.185_126/0.4)] data-[state=open]:border-primary-accent-text data-[state=open]:ring-0 data-[state=open]:shadow-[0_0_0_3px_oklch(0.912_0.185_126/0.4)] aria-invalid:border-expense aria-invalid:ring-expense/20 dark:bg-card dark:hover:bg-secondary/40",
           "[&>svg:last-child]:size-4 [&>svg:last-child]:opacity-60",
         )}
       >
-        <span className={cn("grid size-9 shrink-0 place-items-center overflow-hidden rounded-[10px] [&>[role=img]]:size-full! [&>span]:size-full!", selected ? "bg-secondary text-foreground/80" : "border border-dashed border-border bg-card text-foreground/72")}>
+        <span
+          className={cn(
+            "grid shrink-0 place-items-center overflow-hidden [&>[role=img]]:size-full! [&>span]:size-full!",
+            compact ? "size-7 rounded-[8px]" : "size-9 rounded-[10px]",
+            selected ? "bg-secondary text-foreground/80" : "border border-dashed border-border bg-card text-foreground/72",
+          )}
+        >
           {selected?.icon ?? emptyIcon}
         </span>
         <span className="flex min-w-0 flex-1 flex-col">
           <span className={cn("truncate text-sm leading-snug", selected ? "font-semibold text-foreground" : "font-medium text-foreground/72")}>{selected?.label ?? placeholder}</span>
-          {caption && <span className={cn("truncate text-[11.5px] leading-snug font-medium", CAPTION_TONE[captionTone])}>{caption}</span>}
+          {caption && !compact && <span className={cn("truncate text-[11.5px] leading-snug font-medium", CAPTION_TONE[captionTone])}>{caption}</span>}
         </span>
       </SelectTrigger>
       <SelectContent className="max-h-80">
@@ -213,15 +236,17 @@ export function SheetChoice<T extends string>({
   value,
   options,
   onChange,
+  compact = false,
 }: {
   label: string;
   value: T;
   options: { value: T; label: string; aria: string; hint: string; icon: LucideIcon; disabled?: boolean }[];
   onChange: (value: T) => void;
+  compact?: boolean;
 }) {
   return (
     <div className="@container">
-    <div role="radiogroup" aria-label={label} className="grid min-h-14 grid-cols-[1fr_1.4fr_1fr] gap-1 rounded-xl border border-border-strong bg-secondary/70 p-1">
+    <div role="radiogroup" aria-label={label} className={cn("grid grid-cols-[1fr_1.4fr_1fr] gap-1 rounded-xl border border-border-strong bg-secondary/70 p-1", compact ? "h-10" : "min-h-14")}>
       {options.map((o) => {
         const active = value === o.value;
         return (
@@ -288,9 +313,27 @@ export function SheetRailBlock({ icon: Icon, title, tone = "neutral", children, 
  * takes `basis-full` (see `SHEET_CHIPS`).
  */
 export const SHEET_CHIPS = "flex flex-wrap gap-1.5 [&>*:has([aria-expanded=true])]:order-last [&>*:has([aria-expanded=true])]:basis-full";
-export function SheetDisclosure({ id, icon: Icon, title, hint, open, onToggle, children }: { id: string; icon: LucideIcon; title: string; hint?: string; open: boolean; onToggle: () => void; children: ReactNode }) {
+export function SheetDisclosure({
+  id,
+  icon: Icon,
+  title,
+  hint,
+  open,
+  onToggle,
+  children,
+  compact = false,
+}: {
+  id: string;
+  icon: LucideIcon;
+  title: string;
+  hint?: string;
+  open: boolean;
+  onToggle: () => void;
+  children: ReactNode;
+  compact?: boolean;
+}) {
   return (
-    <div className={cn(open && "overflow-hidden rounded-2xl border border-border bg-card shadow-e1")}>
+    <div className={cn(open && (compact ? "overflow-hidden rounded-xl border border-border bg-secondary/40" : "overflow-hidden rounded-2xl border border-border bg-card shadow-e1"))}>
       <button
         type="button"
         aria-expanded={open}
@@ -299,7 +342,9 @@ export function SheetDisclosure({ id, icon: Icon, title, hint, open, onToggle, c
         onClick={onToggle}
         className={cn(
           "flex items-center gap-2 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
-          open ? "min-h-10 w-full px-3 hover:bg-secondary/40" : "h-9 rounded-full border border-border-strong bg-card px-3 shadow-e1 hover:border-muted-foreground hover:bg-secondary/40",
+          // Inside an overflow-hidden open card an outer ring is clipped into a stray line — draw it inside.
+          open && "focus-visible:ring-inset",
+          open ? (compact ? "min-h-8 w-full px-3 hover:bg-secondary/60" : "min-h-10 w-full px-3 hover:bg-secondary/40") : cn("rounded-full border border-border-strong bg-card px-3 shadow-e1 hover:border-muted-foreground hover:bg-secondary/40", compact ? "h-8" : "h-9"),
         )}
       >
         <Icon className="size-3.5 shrink-0 text-foreground/72" strokeWidth={2} aria-hidden />
@@ -308,7 +353,7 @@ export function SheetDisclosure({ id, icon: Icon, title, hint, open, onToggle, c
         <ChevronDown className={cn("size-3.5 shrink-0 text-foreground/72 transition-transform duration-200", open && !hint && "ml-auto", open && "rotate-180")} aria-hidden />
       </button>
       {open && (
-        <div id={id} className="px-3 pt-0.5 pb-3">
+        <div id={id} className={cn("px-3", compact ? "border-t border-border-subtle pt-2.5 pb-3" : "pt-0.5 pb-3")}>
           {children}
         </div>
       )}
@@ -330,7 +375,10 @@ export function TransactionSheet({
   onKeyDown,
   testId,
   className,
+  compact = false,
 }: {
+  /** A narrower, centred sheet with a slimmer header, body padding and no grab handle (the header's collapse button stays). */
+  compact?: boolean;
   open: boolean;
   /** Close was asked for (X, Escape, a click outside the sheet). The caller decides — it may ask about unsaved edits first. */
   onRequestClose: () => void;
@@ -380,13 +428,14 @@ export function TransactionSheet({
           "transform-gpu will-change-[transform,opacity] ease-[cubic-bezier(0.22,1,0.36,1)]",
           "data-open:zoom-in-100 data-open:fade-in-0 data-open:slide-in-from-top-5 data-closed:zoom-out-100 data-closed:fade-out-0 data-closed:slide-out-to-top-5 data-open:duration-200 data-closed:duration-150 motion-reduce:data-open:slide-in-from-top-0 motion-reduce:data-closed:slide-out-to-top-0",
           "max-h-[90dvh] max-sm:max-h-[88dvh]",
+          compact && "right-0 mx-auto w-[calc(100%-1rem)] max-w-[1040px] rounded-b-2xl sm:w-[calc(100%-2rem)] sm:max-w-[1040px] max-h-[94dvh]",
           className,
         )}
       >
         <header className="relative shrink-0 bg-surface-hero pt-[env(safe-area-inset-top)] text-hero-foreground" data-testid="sheet-header">
           {/* A soft lime glow from the top-left corner gives the near-black surface some depth. */}
           <div aria-hidden className="pointer-events-none absolute inset-0 bg-[radial-gradient(70%_180%_at_0%_0%,oklch(0.34_0.07_126/0.5),transparent_62%)]" />
-          <div className={cn(CONTENT, "relative flex items-start gap-4 px-4 py-4 sm:px-6 lg:px-8")}>
+          <div className={cn(CONTENT, "relative flex items-start gap-3", compact ? "px-4 py-2.5 sm:px-5" : "gap-4 px-4 py-4 sm:px-6 lg:px-8")}>
             <div className="min-w-0 flex-1">{header}</div>
             {/* Window controls, styled as one family with the queue arrows. */}
             <div className="flex shrink-0 items-center rounded-[12px] bg-white/[0.07] p-0.5 ring-1 ring-white/10">
@@ -417,7 +466,7 @@ export function TransactionSheet({
           </div>
         )}
 
-        <div className="flex shrink-0 justify-center bg-card pb-2 pt-0.5">
+        <div className={cn("flex shrink-0 justify-center bg-card pb-2 pt-0.5", compact && "hidden")}>
           <button
             type="button"
             aria-label={peek ? "Show details" : "Collapse sheet"}

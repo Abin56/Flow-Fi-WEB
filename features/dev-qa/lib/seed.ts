@@ -7,6 +7,7 @@
  * point first re-runs the static environment guard.
  */
 
+import { historyEmiStartDate } from "@/features/dev-qa/lib/history-anchor";
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword, updateProfile, type User } from "firebase/auth";
 import { auth, db } from "@/lib/firebase/client";
 import { LoanAdvancePaymentRepository } from "@/lib/repositories/loan-advance-payment-repository";
@@ -296,9 +297,10 @@ export async function seedSharedHistoryEmi(user: User): Promise<SeedResult> {
   try {
     const priya = (await createPersonRepository(uid).getAll()).find((p) => p.name === "QA Priya");
     if (!priya) throw new Error("Run the base fixtures first");
-    const start = new Date();
-    start.setMonth(start.getMonth() - 24);
-    start.setDate(start.getDate() + 3); // #24 falls due a few days ago, #25 in a few days
+    // Date-independent: anchor on a day-of-month ≤ 28 so monthly due dates are never clamped by short months, with
+    // #24 falling due 3 days ago (or a few more when that day is 29–31) and #25 about a month ahead — never today,
+    // so exactly 24 installments are due on any run date.
+    const start = historyEmiStartDate();
     const emi = await createEmiRepository(uid).createEmi({
       name: "QA 24-Month EMI",
       principalAmount: 72000,

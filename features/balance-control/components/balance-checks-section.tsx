@@ -7,32 +7,39 @@
  */
 
 import { useMemo, useState } from "react";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { BookCheck, CircleCheck, CircleHelp, TriangleAlert } from "lucide-react";
 import { CHECK_AREA_LABEL, type CheckArea, type CheckFinding, type CheckStatus } from "@/lib/engines/balance-control-checks";
 import { formatCurrencyPrecise } from "@/lib/format";
+import { AuditPanel, Fact, FilterChip, Pill, RailItem, type Tone } from "@/features/financial-audit/components/audit-ui";
 import { useBalanceControlData } from "../hooks/use-balance-control-data";
 
 const STATUS_LABEL: Record<CheckStatus, string> = { confirmed: "Confirmed", suspected: "Suspected", legitimate: "Explained" };
+const STATUS_TONE: Record<CheckStatus, Tone> = { confirmed: "danger", suspected: "warning", legitimate: "success" };
+const STATUS_ICON = { confirmed: TriangleAlert, suspected: CircleHelp, legitimate: CircleCheck } as const;
 const AREAS = Object.keys(CHECK_AREA_LABEL) as CheckArea[];
 
 function Row({ f }: { f: CheckFinding }) {
+  const Icon = STATUS_ICON[f.status];
   return (
-    <li className="rounded-xl border border-border p-3 text-sm" data-testid="balance-check-finding">
+    <RailItem tone={STATUS_TONE[f.status]} testId="balance-check-finding">
       <div className="flex flex-wrap items-center gap-2">
-        <Badge variant={f.status === "confirmed" ? "destructive" : f.status === "suspected" ? "secondary" : "outline"}>{STATUS_LABEL[f.status]}</Badge>
+        <Pill tone={STATUS_TONE[f.status]}>
+          <Icon className="size-3" aria-hidden /> {STATUS_LABEL[f.status]}
+        </Pill>
         <span className="font-medium text-foreground">{f.title}</span>
-        <span className="text-xs text-muted-foreground">{f.subject}</span>
+        <span className="rounded-full bg-secondary px-2 py-0.5 text-xs text-secondary-foreground">{f.subject}</span>
       </div>
-      <p className="mt-1 text-muted-foreground">{f.detail}</p>
+      <p className="mt-2 leading-relaxed text-muted-foreground">{f.detail}</p>
       {f.figures && (
-        <dl className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+        <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 rounded-lg bg-muted/50 p-3 sm:grid-cols-3 lg:grid-cols-5">
           {f.figures.map((x) => (
-            <div key={x.label}><dt className="inline">{x.label}: </dt><dd className="inline tabular-nums text-foreground">{formatCurrencyPrecise(x.value)}</dd></div>
+            <Fact key={x.label} label={x.label} tone={f.status === "confirmed" && /unexplained/i.test(x.label) ? "danger" : undefined}>
+              {formatCurrencyPrecise(x.value)}
+            </Fact>
           ))}
         </dl>
       )}
-    </li>
+    </RailItem>
   );
 }
 
@@ -42,31 +49,34 @@ export function BalanceChecksSection() {
   const shown = useMemo(() => report.findings.filter((f) => area === "all" || f.area === area), [report, area]);
 
   return (
-    <Card data-testid="balance-checks">
-      <CardHeader>
-        <CardTitle>Card, limit and debt definitions</CardTitle>
-        <CardDescription>
-          Read-only. Explained = a difference that comes from how a figure is defined (overpayment, net credit, a shared limit), not a mistake.
-          {" "}{report.summary.confirmed} confirmed · {report.summary.suspected} suspected · {report.summary.legitimate} explained.
-        </CardDescription>
-        <div className="flex flex-wrap gap-2 pt-2">
-          <button type="button" onClick={() => setArea("all")} className={`h-8 rounded-md border px-2.5 text-sm ${area === "all" ? "border-primary bg-primary text-primary-foreground" : "border-border"}`}>All</button>
-          {AREAS.map((a) => (
-            <button key={a} type="button" onClick={() => setArea(a)} className={`h-8 rounded-md border px-2.5 text-sm ${area === a ? "border-primary bg-primary text-primary-foreground" : "border-border"}`}>
-              {CHECK_AREA_LABEL[a]} <span className="text-xs opacity-70">({report.checked[a]})</span>
-            </button>
-          ))}
+    <AuditPanel
+      testId="balance-checks"
+      icon={BookCheck}
+      title="Card, limit and debt definitions"
+      description="Read-only. Explained = a difference that comes from how a figure is defined (overpayment, net credit, a shared limit), not a mistake."
+      headerExtra={
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-wrap gap-1.5">
+            <Pill tone={report.summary.confirmed > 0 ? "danger" : "neutral"}>{report.summary.confirmed} confirmed</Pill>
+            <Pill tone={report.summary.suspected > 0 ? "warning" : "neutral"}>{report.summary.suspected} suspected</Pill>
+            <Pill tone={report.summary.legitimate > 0 ? "success" : "neutral"}>{report.summary.legitimate} explained</Pill>
+          </div>
+          <div className="flex flex-wrap gap-2" role="group" aria-label="Filter by area">
+            <FilterChip active={area === "all"} onClick={() => setArea("all")}>All</FilterChip>
+            {AREAS.map((a) => (
+              <FilterChip key={a} active={area === a} onClick={() => setArea(a)} count={report.checked[a]}>{CHECK_AREA_LABEL[a]}</FilterChip>
+            ))}
+          </div>
         </div>
-      </CardHeader>
-      <CardContent>
-        {isLoading && report.findings.length === 0 ? (
-          <p className="text-sm text-muted-foreground">Reading your cards, loans and EMIs…</p>
-        ) : shown.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No findings for this selection.</p>
-        ) : (
-          <ul className="flex flex-col gap-2">{shown.map((f) => <Row key={f.id} f={f} />)}</ul>
-        )}
-      </CardContent>
-    </Card>
+      }
+    >
+      {isLoading && report.findings.length === 0 ? (
+        <p className="text-sm text-muted-foreground">Reading your cards, loans and EMIs…</p>
+      ) : shown.length === 0 ? (
+        <p className="flex items-center gap-2 text-sm text-muted-foreground"><CircleCheck className="size-4 text-success" aria-hidden /> No findings for this selection.</p>
+      ) : (
+        <ul className="flex flex-col gap-3">{shown.map((f) => <Row key={f.id} f={f} />)}</ul>
+      )}
+    </AuditPanel>
   );
 }

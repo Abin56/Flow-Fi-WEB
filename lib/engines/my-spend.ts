@@ -22,6 +22,7 @@
  */
 
 import { myShare, type Expense } from "@/lib/models/expense";
+import { isLenderChargeSettlement } from "@/lib/models/lender-charge";
 import type { PaymentAllocationType } from "@/lib/models/payment-schedule";
 
 export interface MySpendTransaction {
@@ -37,6 +38,8 @@ export interface MySpendTransaction {
   isPersonLedgerMovement: boolean;
   excludeFromCalculations: boolean;
   deletedAt: Date | null;
+  /** Set only on the payment that settles a lender charge (additive; absent on every existing transaction). */
+  lenderChargeId?: string | null;
 }
 
 /** The `Expense` fields the share join needs (see `lib/models/expense.ts`). */
@@ -102,6 +105,8 @@ export function classifyForMySpend(t: MySpendTransaction, ctx: MySpendContext): 
   if (t.transferId != null) return none("transfer", t.amount);
   if (t.loanId != null && t.paymentAllocationType === "additionalDisbursement") return none("loanPrincipalDisbursement", t.amount);
   if (t.isPersonLedgerMovement) return none("personLedgerMovement", t.amount);
+  // Paying a billed lender charge settles a liability whose expense was recognised at billing — never a second expense.
+  if (isLenderChargeSettlement(t)) return none("liabilityRepayment", t.amount);
 
   const agreementId = t.loanId ?? t.emiId;
   if (agreementId != null && t.paymentAllocationType != null && REPAYMENT_ALLOCATIONS.has(t.paymentAllocationType)) {

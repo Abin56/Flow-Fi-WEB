@@ -247,7 +247,7 @@ export function TransactionStudio({ initialDocumentId }: { initialDocumentId: st
   const pendingCount = rows.filter((r) => r.include && !r.committedTransactionId).length;
 
   return (
-    <div className={cn("flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-hidden", fullscreen && "fixed inset-0 z-50 !flex-none bg-background p-4")}>
+    <div className={cn("flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-hidden", fullscreen && "fixed inset-0 z-hero !flex-none bg-background p-4")}>
       {process.env.NODE_ENV === "development" && (
         <div className="fixed bottom-3 left-3 z-[60] flex items-center gap-1 rounded-full border bg-background/95 px-2 py-1 text-[11px] shadow-lg backdrop-blur">
           <span className="pl-1 text-muted-foreground">Dev data:</span>

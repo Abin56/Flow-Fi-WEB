@@ -59,6 +59,9 @@ import type { Category } from "@/lib/models/category";
 import { useExpenses } from "@/hooks/use-expenses";
 import type { CreditCardProfile, Statement } from "@/lib/models/credit-card";
 import { useMySpendContext } from "@/hooks/use-my-spend-context";
+import { useLenderCharges } from "@/hooks/use-lender-charges";
+import { useSpendTransactions, withBuiltInChargeCategory } from "@/hooks/use-lender-charge-spend";
+import { lenderChargeNetWorthChangeFrom, lenderChargeNetWorthEvents } from "@/lib/engines/lender-charge-accounting";
 import { myConsumptionAmount } from "@/lib/engines/my-spend";
 
 import { compareTransactionsNewestFirst, effectiveMonth, isLoanPrincipalDisbursement, isNonIncomeExpenseMovement, signedAmount, type Transaction } from "@/lib/models/transaction";
@@ -128,7 +131,12 @@ export function useDashboardData() {
   const { standings: cardStandings, isLoading: cardStandingsLoading } = useCreditCardStandings();
 
   // Net Worth adds loan principal to account balances (Decision 6 — see `netWorthWithLoans`).
-  const { netWorth: netWorthAmount, sheet: balanceSheet, peoplePayable, peopleAdvanceHeld, isLoading: balanceSheetLoading } = useLoanBalanceSheet();
+  const { netWorth: netWorthAmount, sheet: balanceSheet, peoplePayable, peopleAdvanceHeld, unpaidLenderCharges, isLoading: balanceSheetLoading } = useLoanBalanceSheet();
+  // Billed lender charges: dated Net Worth events for the trend, and one-time expenses on their billed date for spend.
+  const { charges: lenderCharges } = useLenderCharges();
+  const lenderChargeEvents = useMemo(() => lenderChargeNetWorthEvents(lenderCharges), [lenderCharges]);
+  const spendTransactions = useSpendTransactions(transactions as Transaction[]);
+  const spendCategories = useMemo(() => withBuiltInChargeCategory(categories as Category[], spendTransactions), [categories, spendTransactions]);
   const cashFlowSummary = useCashFlowThisMonth();
 
   const isLoading =
@@ -177,7 +185,8 @@ export function useDashboardData() {
     for (let i = 6; i >= 0; i--) {
       const endOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate() - i + 1);
       const after = nwChanging.filter((t) => t.dateTime.getTime() >= endOfDay.getTime()).reduce((sum, t) => sum + signedAmount(t), 0);
-      trend.push(Math.round((netWorthAmount - after) * 100) / 100);
+      // Walk back every Net Worth movement after that day: transactions, and lender charges billed / reversed after it.
+      trend.push(Math.round((netWorthAmount - after - lenderChargeNetWorthChangeFrom(lenderChargeEvents, endOfDay)) * 100) / 100);
     }
     // Assets / Debt so borrowing is visible even when Net Worth doesn't move (borrowed money in the bank
     // raises assets and debt together). Debt is the shared `liabilityTotals` (remaining principal, card
@@ -191,7 +200,8 @@ export function useDashboardData() {
     // showing the borrowed cash as an asset and the obligation as debt.
     // Money a person paid me ahead (unapplied advance) is cash I hold — neither debt nor wealth — so it is its
     // own line: Assets − Debt − Held for people = Net Worth (`netWorthComposition`).
-    const composition = netWorthComposition(netWorthAmount, debt, { payable: peoplePayable, advanceHeld: peopleAdvanceHeld });
+    // Unpaid lender charges are already inside `netWorthAmount`, so they are inside Debt too (Assets − Debt − Held = Net Worth).
+    const composition = netWorthComposition(netWorthAmount, { total: debt.total + unpaidLenderCharges }, { payable: peoplePayable, advanceHeld: peopleAdvanceHeld });
     return {
       amount: netWorthAmount,
       changeAmount: 0,
@@ -202,8 +212,9 @@ export function useDashboardData() {
       heldForPeople: composition.heldForPeople,
       peopleDebt: peoplePayable,
       loanDebt: debt.loanDebt,
+      lenderChargeDebt: unpaidLenderCharges,
     };
-  }, [netWorthAmount, balanceSheet, peoplePayable, peopleAdvanceHeld, accounts, creditCards, transactions, now]);
+  }, [netWorthAmount, balanceSheet, peoplePayable, peopleAdvanceHeld, unpaidLenderCharges, lenderChargeEvents, accounts, creditCards, transactions, now]);
 
   // --- Cash Flow (lib/engines/cash-flow.ts:cashFlowThisMonth via useCashFlowThisMonth) ---
   const cashFlow = useMemo(() => {
@@ -262,12 +273,12 @@ export function useDashboardData() {
   // --- Expenses by Category (direct Transaction/Category field reads + grouping) ---
   const expensesByCategory = useMemo(() => {
     const totals = new Map<string, number>();
-    for (const t of transactions as Transaction[]) {
+    for (const t of spendTransactions) {
       const effective = effectiveMonth(t);
       if (!isThisMonth(effective, now)) continue;
       const amount = personalAmount(t);
       if (amount === 0) continue; // fully someone else's — not my spending
-      const name = categoryNameFor(t.categoryId, categories as Category[]);
+      const name = categoryNameFor(t.categoryId, spendCategories);
       totals.set(name, (totals.get(name) ?? 0) + amount);
     }
     const sorted = Array.from(totals.entries())
@@ -294,7 +305,7 @@ export function useDashboardData() {
     }
 
     return { total, items };
-  }, [transactions, categories, now, personalAmount]);
+  }, [spendTransactions, spendCategories, now, personalAmount]);
 
   // --- Recent Transactions (direct Transaction field reads; signedAmount matches mock's +income/-expense convention) ---
   const recentRaw = useMemo(

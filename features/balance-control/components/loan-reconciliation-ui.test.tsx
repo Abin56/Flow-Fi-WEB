@@ -18,6 +18,9 @@ vi.mock("@/store/toast-store", () => ({ toast: { success: vi.fn(), error: vi.fn(
 vi.mock("@/components/layout/scroll-nav", () => ({ ScrollNav: () => null }));
 vi.mock("next/link", () => ({ default: ({ children, ...rest }: { children: React.ReactNode } & Record<string, unknown>) => <a {...rest}>{children}</a> }));
 vi.mock("../hooks/use-limit-correction", () => ({ useLimitCorrection: () => ({ recordCorrection: vi.fn(), reverseCorrection: vi.fn(), historyFor: vi.fn().mockResolvedValue([]) }) }));
+vi.mock("@/hooks/use-lender-charges", () => ({ useLenderCharges: () => ({ charges: [], isLoading: false }) }));
+vi.mock("@/hooks/use-credit-cards", () => ({ useCreditCards: () => ({ data: [] }), useEmis: () => ({ data: [] }) }));
+vi.mock("@/hooks/use-transactions", () => ({ useTransactions: () => ({ data: [] }) }));
 vi.mock("@/features/loans/hooks/use-payment-history", () => ({
   useLoanPaymentHistory: (row: unknown) => (row ? loanHistory() : { data: undefined, isLoading: false }),
   useEmiPaymentHistory: (row: unknown) => (row ? emiHistory() : { data: undefined, isLoading: false }),
@@ -37,7 +40,7 @@ const installments: ReconInstallment[] = Array.from({ length: 10 }, (_, k) => ({
   isSkipped: false, principalPortion: 1000, interestPortion: 100,
 }));
 
-function product(kind: "loan" | "emi" = "loan", cardLinkedName: string | null = null): VarianceProduct {
+function product(kind: "loan" | "emi" = "loan", cardLinkedName: string | null = null, emiCase: "A" | "B" = "B"): VarianceProduct {
   const metric = kind === "loan" ? "loanPrincipal" : "emiPrincipal";
   return {
     id: `${kind}:a1`, kind, name: "QA Loan", subtitle: kind === "loan" ? "Loan" : "EMI",
@@ -46,7 +49,8 @@ function product(kind: "loan" | "emi" = "loan", cardLinkedName: string | null = 
     loanReconciliation: {
       agreementId: "a1",
       source: kind === "loan" ? { kind: "loan", row: {} as LoanRow } : { kind: "emi", row: {} as EmiRow },
-      principalAmount: 10000, ratePercent: 12, installments, principalPrepaid: 0, cardLinkedName,
+      principalAmount: 10000, outstandingPrincipal: 4000, ratePercent: 12, installments, principalPrepaid: 0, cardLinkedName,
+      cardEmiCase: kind === "emi" && cardLinkedName ? emiCase : null,
       supportsPrepaymentAndDisbursement: kind === "loan",
     },
   };
@@ -112,11 +116,39 @@ describe("Loan reconciliation sheet", () => {
     expect(rows[0]!.textContent).toMatch(/Installment 6/);
   });
 
-  it("an EMI hands off to the first installment, and a card-linked agreement shows the card effect", () => {
+  it("an EMI hands off to the first installment", () => {
     open(product("emi", "HDFC Regalia"), "2000");
     chooseReason();
     expect(g("loan-handoff-link").getAttribute("href")).toContain("installment=i7");
-    expect(g("loan-impact-card").textContent).toMatch(/HDFC Regalia.*available credit \+.*2,000/);
+  });
+
+  it("card-linked EMI (Case B): shows BOTH funding modes — card-funded nets to zero, bank-funded releases the principal", () => {
+    open(product("emi", "HDFC Regalia"), "2000");
+    // Two installments of ₹1,100 (₹1,000 principal each) → ₹2,200 applied, ₹2,000 principal released.
+    expect(g("loan-impact-card-mode-card").textContent).toMatch(/Charged to the card.*₹2,200\.00 is billed.*₹2,000\.00 of locked EMI principal is released/);
+    expect(g("loan-impact-card-mode-card").getAttribute("data-available-delta")).toBe("-200");
+    expect(g("loan-impact-card-mode-bank").textContent).toMatch(/bank is debited ₹2,200\.00.*available credit \+₹2,000\.00/);
+    expect(g("loan-impact-card-mode-bank").getAttribute("data-available-delta")).toBe("2000");
+  });
+
+  it("card-linked EMI (Case A): the principal is already on the card, so only interest is billed and bank mode pays the card", () => {
+    open(product("emi", "HDFC Regalia", "A"), "2000");
+    expect(g("loan-impact-card-mode-card").getAttribute("data-available-delta")).toBe("-200");
+    expect(g("loan-impact-card-mode-bank").textContent).toMatch(/₹2,000\.00 of it pays down HDFC Regalia/);
+    // The principal transfer pays down the purchase balance already on the card, so credit is freed.
+    expect(g("loan-impact-card-mode-bank").getAttribute("data-available-delta")).toBe("2000");
+  });
+
+  it("a card-linked EMI with no payment correction makes no funding-mode claim", () => {
+    open(product("emi", "HDFC Regalia"), "4213.5");
+    fireEvent.click(g("loan-cause-accruedInterestOrCharges"));
+    expect(q("loan-impact-card-mode-card")).toBeNull();
+  });
+
+  it("a card-funded Loan is paid from an account, so its card credit rises by the principal", () => {
+    open(product("loan", "HDFC Regalia"), "2000");
+    expect(g("loan-impact-card").textContent).toMatch(/available credit \+₹2,000\.00/);
+    expect(q("loan-impact-card-mode-card")).toBeNull();
   });
 
   it("a standalone agreement shows no card effect", () => {

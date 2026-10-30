@@ -12,8 +12,9 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { AlertTriangle, ArrowRight, Check, CreditCard, ShieldCheck } from "lucide-react";
-import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { AlertTriangle, ArrowRight, Check, CreditCard, Landmark, ShieldCheck } from "lucide-react";
+import { DialogDescription, DialogTitle } from "@/components/ui/dialog";
+import { SheetAvatar, TransactionSheet } from "@/components/finance/transaction-sheet";
 import { Badge } from "@/components/ui/badge";
 import { formatCurrencyPrecise } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -24,7 +25,9 @@ import {
   type LoanReconResolution,
   type ReconPayment,
 } from "@/lib/engines/loan-reconciliation";
+import { planCardEmiLegs, type CardEmiCase, type CardEmiLegPlan } from "@/features/emi/lib/emi-card-funding";
 import { useEmiPaymentHistory, useLoanPaymentHistory } from "@/features/loans/hooks/use-payment-history";
+import { LenderChargeSection } from "./lender-charge-section";
 import type { LoanReconciliationContext } from "../lib/build-balance-control";
 
 export const RECON_REASONS = [
@@ -91,7 +94,57 @@ function Field({ id, label, children, hint }: { id: string; label: string; child
 
 const INPUT = "mt-1 h-9 w-full rounded-[6px] border border-border-strong bg-card px-2.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
-function CauseDetail({ cause, agreementId, ready, cardLinkedName }: { cause: LoanReconCause; agreementId: string; ready: boolean; cardLinkedName: string | null }) {
+const signedMoney = (n: number) => (n === 0 ? "unchanged" : `${n > 0 ? "+" : "−"}${formatCurrencyPrecise(Math.abs(n))}`);
+
+/**
+ * Card-linked EMI: what recording this payment does to the card, per funding mode — straight from the same
+ * `planCardEmiLegs` rule the payment itself applies (so the preview can never disagree with the posted legs).
+ */
+function emiCardModeLines(plan: CardEmiLegPlan, card: string): string {
+  if (plan.mode === "card") {
+    const billed = plan.cardCharge > 0 ? `${formatCurrencyPrecise(plan.cardCharge)} is billed to ${card}` : `nothing new is billed to ${card}`;
+    return `Charged to the card (the default): ${billed}${plan.lockReleased > 0 ? ` and ${formatCurrencyPrecise(plan.lockReleased)} of locked EMI principal is released` : ""} — available credit ${signedMoney(plan.availableDelta)}.`;
+  }
+  const transfer = plan.principalTransfer > 0 ? ` (${formatCurrencyPrecise(plan.principalTransfer)} of it pays down ${card})` : "";
+  return `Paid from a bank account: the bank is debited ${formatCurrencyPrecise(plan.bankDebit)}${transfer}; ${card} available credit ${signedMoney(plan.availableDelta)}.`;
+}
+
+function CardImpact({ impact, cardLinkedName, emiCase }: { impact: NonNullable<LoanReconCause["impact"]>; cardLinkedName: string | null; emiCase: CardEmiCase | null }) {
+  const card = cardLinkedName ?? "The linked card";
+  if (impact.cardAvailableDelta != null) {
+    return (
+      <p className="mt-1 flex items-start gap-1.5 text-xs text-muted-foreground" data-testid="loan-impact-card">
+        <CreditCard className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+        <span>{card}: available credit {signedMoney(impact.cardAvailableDelta)} and utilization follow automatically.</span>
+      </p>
+    );
+  }
+  if (!impact.cardLinked) return null;
+  if (impact.payment == null || emiCase == null) {
+    return (
+      <p className="mt-1 flex items-start gap-1.5 text-xs text-muted-foreground" data-testid="loan-impact-card">
+        <CreditCard className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+        <span>{card}: the effect depends on how the original payment was funded — see that payment&rsquo;s details before changing it.</span>
+      </p>
+    );
+  }
+  const plans = (["card", "bank"] as const).map((mode) => planCardEmiLegs({ emiCase, mode, applied: impact.payment!.applied, principal: impact.payment!.principal }));
+  return (
+    <div className="mt-1 flex items-start gap-1.5 text-xs text-muted-foreground" data-testid="loan-impact-card">
+      <CreditCard className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+      <div className="space-y-1">
+        <p>{card} depends on how you fund the payment:</p>
+        {plans.map((plan) => (
+          <p key={plan.mode} data-testid={`loan-impact-card-mode-${plan.mode}`} data-available-delta={plan.availableDelta}>
+            {emiCardModeLines(plan, card)}
+          </p>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function CauseDetail({ cause, agreementId, ready, cardLinkedName, emiCase }: { cause: LoanReconCause; agreementId: string; ready: boolean; cardLinkedName: string | null; emiCase: CardEmiCase | null }) {
   const { resolution, impact } = cause;
   const href = handoffHref(agreementId, resolution);
   const pastHref = resolution.kind === "recordPayment" && resolution.view === "pay" ? handoffHref(agreementId, { ...resolution, view: "past" }) : null;
@@ -144,12 +197,7 @@ function CauseDetail({ cause, agreementId, ready, cardLinkedName }: { cause: Loa
           <p className="mt-1.5 text-xs text-foreground" data-testid="loan-impact-gap">
             {Math.abs(impact.gapAfter) <= 1 ? "Matches the lender's figure afterwards." : `Still ${formatCurrencyPrecise(Math.abs(impact.gapAfter))} away from the lender's figure afterwards.`}
           </p>
-          {impact.cardAvailableDelta != null && (
-            <p className="mt-1 flex items-start gap-1.5 text-xs text-muted-foreground" data-testid="loan-impact-card">
-              <CreditCard className="mt-0.5 size-3.5 shrink-0" aria-hidden />
-              {cardLinkedName ?? "The linked card"}: available credit {impact.cardAvailableDelta >= 0 ? "+" : "−"}{formatCurrencyPrecise(Math.abs(impact.cardAvailableDelta))} and utilization follow automatically.
-            </p>
-          )}
+          <CardImpact impact={impact} cardLinkedName={cardLinkedName} emiCase={emiCase} />
         </div>
       )}
     </section>
@@ -216,17 +264,30 @@ function LoanReconciliationBody({ onOpenChange, productName, context, initialLen
   const seqById = useMemo(() => new Map(context.installments.map((i) => [i.id, i.sequenceNumber])), [context.installments]);
 
   return (
-    <Sheet open onOpenChange={onOpenChange}>
-      <SheetContent side="bottom" className="mx-auto w-full sm:max-w-2xl" data-testid="loan-reconciliation-sheet">
-        <SheetHeader>
-          <SheetTitle>Reconcile remaining principal — {productName}</SheetTitle>
-          <SheetDescription>
-            {context.source.kind === "emi" ? (context.cardLinkedName ? "Card-linked EMI" : "Standalone EMI") : context.cardLinkedName ? "Card-funded loan" : "Standalone loan"}. Nothing changes unless you follow a step below.
-          </SheetDescription>
-        </SheetHeader>
-
-        <div className="flex flex-col gap-4 overflow-y-auto px-4 pb-4">
-          <section className="grid grid-cols-1 gap-3 rounded-lg border border-border bg-secondary/20 p-3 sm:grid-cols-2" aria-label="What the lender reports">
+    <TransactionSheet
+      open
+      onRequestClose={() => onOpenChange(false)}
+      closeLabel="Close reconciliation"
+      testId="loan-reconciliation-sheet"
+      header={
+        <div className="flex min-w-0 items-center gap-3.5">
+          <SheetAvatar tone="neutral">
+            <Landmark className="size-5" aria-hidden />
+          </SheetAvatar>
+          <div className="min-w-0">
+            <p className="text-[11px] font-semibold tracking-[0.09em] text-hero-foreground/68 uppercase">Reconcile remaining principal</p>
+            <DialogTitle className="truncate font-heading text-[21px] leading-tight font-bold tracking-tight text-hero-foreground" title={productName}>
+              {productName}
+            </DialogTitle>
+            <DialogDescription className="text-xs text-hero-foreground/68">
+              {context.source.kind === "emi" ? (context.cardLinkedName ? "Card-linked EMI" : "Standalone EMI") : context.cardLinkedName ? "Card-funded loan" : "Standalone loan"}. Nothing changes unless you follow a step below.
+            </DialogDescription>
+          </div>
+        </div>
+      }
+    >
+        <div className="flex flex-col gap-4 px-4 py-4 sm:px-6 lg:px-8 lg:py-5">
+          <section className="grid grid-cols-1 gap-3 rounded-2xl border border-border bg-card p-4 shadow-e1 sm:grid-cols-2 lg:grid-cols-4" aria-label="What the lender reports">
             <Field id="lr-lender" label="Lender's remaining principal (₹)">
               <input id="lr-lender" inputMode="decimal" autoComplete="off" value={lender} onChange={(e) => setLender(e.target.value)} className={INPUT} data-testid="loan-lender-input" aria-invalid={lender.trim() !== "" && lenderPrincipal == null} />
             </Field>
@@ -266,13 +327,13 @@ function LoanReconciliationBody({ onOpenChange, productName, context, initialLen
 
               <section aria-label="Terms comparison">
                 <h3 className="text-sm font-semibold text-foreground">Terms</h3>
-                <div className="mt-1.5 flex flex-col gap-1" data-testid="loan-terms">
+                <div className="mt-1.5 divide-y divide-border rounded-xl border border-border text-xs" data-testid="loan-terms">
                   {result.terms.map((t) => (
-                    <div key={t.key} className="flex items-center justify-between gap-2 rounded-md border border-border px-2.5 py-1.5 text-xs" data-testid={`loan-term-${t.key}`} data-status={t.status}>
-                      <span className="text-foreground">{t.label}</span>
-                      <span className="tabular-nums text-muted-foreground">FlowFi {t.flowfi ?? "—"}</span>
-                      <span className="tabular-nums text-muted-foreground">Lender {t.lender ?? "—"}</span>
-                      <Badge variant={t.status === "differs" ? "destructive" : "secondary"}>{t.status === "match" ? "Match" : t.status === "differs" ? "Differs" : "Not entered"}</Badge>
+                    <div key={t.key} className="grid grid-cols-[minmax(0,1fr)_auto_auto_5.5rem] items-center gap-3 px-3 py-2" data-testid={`loan-term-${t.key}`} data-status={t.status}>
+                      <span className="min-w-0 truncate text-sm text-foreground">{t.label}</span>
+                      <span className="text-right tabular-nums text-muted-foreground">FlowFi <span className="font-medium text-foreground">{t.flowfi ?? "—"}</span></span>
+                      <span className="text-right tabular-nums text-muted-foreground">Lender <span className="font-medium text-foreground">{t.lender ?? "—"}</span></span>
+                      <Badge className="justify-self-end" variant={t.status === "differs" ? "destructive" : "secondary"}>{t.status === "match" ? "Match" : t.status === "differs" ? "Differs" : "Not entered"}</Badge>
                     </div>
                   ))}
                 </div>
@@ -281,14 +342,14 @@ function LoanReconciliationBody({ onOpenChange, productName, context, initialLen
               <section aria-label="Payment history">
                 <h3 className="text-sm font-semibold text-foreground">Recorded payments</h3>
                 <p className="text-xs text-muted-foreground">Check here first — the difference may already be recorded, so nothing is duplicated.</p>
-                <div className="mt-1.5 flex flex-col gap-1" data-testid="loan-history">
-                  {historyLoading && <p className="text-xs text-muted-foreground">Loading payment history…</p>}
-                  {!historyLoading && result.history.length === 0 && <p className="text-xs text-muted-foreground">No payments recorded yet.</p>}
+                <div className="mt-1.5 divide-y divide-border rounded-xl border border-border" data-testid="loan-history">
+                  {historyLoading && <p className="px-3 py-3 text-xs text-muted-foreground">Loading payment history…</p>}
+                  {!historyLoading && result.history.length === 0 && <p className="px-3 py-3 text-xs text-muted-foreground">No payments recorded yet.</p>}
                   {result.history.map((p) => (
-                    <div key={p.id} className="flex items-center justify-between gap-2 rounded-md border border-border px-2.5 py-1.5 text-xs" data-testid="loan-history-row">
-                      <span className="text-foreground">{p.allocationType === "principalPrepayment" ? "Extra principal" : `Installment ${seqById.get(p.installmentId) ?? "—"}`}</span>
-                      <span className="text-muted-foreground">{shortDate(p.date)}</span>
-                      <span className="font-medium tabular-nums">{formatCurrencyPrecise(p.amount)}</span>
+                    <div key={p.id} className="grid grid-cols-[minmax(4.5rem,auto)_minmax(0,1fr)_auto] items-center gap-3 px-3 py-2" data-testid="loan-history-row">
+                      <span className="text-xs text-muted-foreground tabular-nums">{shortDate(p.date)}</span>
+                      <span className="min-w-0 truncate text-sm text-foreground">{p.allocationType === "principalPrepayment" ? "Extra principal" : `Installment ${seqById.get(p.installmentId) ?? "—"}`}</span>
+                      <span className="text-right text-sm font-medium tabular-nums">{formatCurrencyPrecise(p.amount)}</span>
                     </div>
                   ))}
                 </div>
@@ -321,18 +382,19 @@ function LoanReconciliationBody({ onOpenChange, productName, context, initialLen
                       ))}
                     </div>
                   </section>
-                  {selected && <CauseDetail cause={selected} agreementId={context.agreementId} ready={ready} cardLinkedName={context.cardLinkedName} />}
+                  {selected && <CauseDetail cause={selected} agreementId={context.agreementId} ready={ready} cardLinkedName={context.cardLinkedName} emiCase={context.cardEmiCase} />}
                 </>
               )}
             </>
           )}
+
+          <LenderChargeSection context={context} />
 
           <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
             <ShieldCheck className="mt-0.5 size-3.5 shrink-0" aria-hidden />
             This guide never writes a payment, adjusts principal, or edits a schedule. Remaining principal is always recalculated from installments and payments.
           </p>
         </div>
-      </SheetContent>
-    </Sheet>
+    </TransactionSheet>
   );
 }

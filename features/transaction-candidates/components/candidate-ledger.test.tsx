@@ -213,3 +213,18 @@ describe("CandidateLedger", () => {
     expect(screen.getByTestId("candidates-shown").textContent).toMatch(/Showing\s*3\s*of\s*7/);
   });
 });
+
+describe("CandidateLedger account suggestion", () => {
+  it("shows a live last-4 suggestion on an unmatched row without changing its status", () => {
+    const r = row(candidate({ id: "u1", merchant: "Uber", accountId: null, rawLastFour: "9585" }), { accountSuggestion: "Bank of India •••• 9585" }, "unmatched");
+    renderLedger([{ key: "k", label: "Today", dateText: null, flat: false, rows: [r] }]);
+    expect(screen.getByTestId("account-suggestion").textContent).toBe("Suggested: Bank of India •••• 9585");
+    expect(r.status.lane).toBe("needsAccount");
+    expect(screen.getAllByText(/Needs account/).length).toBeGreaterThan(0);
+  });
+  it("shows nothing extra when there is no suggestion", () => {
+    const r = row(candidate({ id: "u2", merchant: "Uber", accountId: null }), {}, "unmatched");
+    renderLedger([{ key: "k", label: "Today", dateText: null, flat: false, rows: [r] }]);
+    expect(screen.queryByTestId("account-suggestion")).toBeNull();
+  });
+});

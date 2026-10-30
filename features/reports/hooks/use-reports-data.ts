@@ -68,6 +68,7 @@ import type { Budget } from "@/lib/models/budget";
 import type { Category } from "@/lib/models/category";
 import { effectiveMonth, isNonIncomeExpenseMovement, type Transaction } from "@/lib/models/transaction";
 import { useMySpendContext } from "@/hooks/use-my-spend-context";
+import { useSpendTransactions, withBuiltInChargeCategory } from "@/hooks/use-lender-charge-spend";
 import { myConsumptionAmount } from "@/lib/engines/my-spend";
 
 
@@ -119,7 +120,10 @@ export function useReportsData() {
   const { data: categories = [], isLoading: categoriesLoading } = useCategories();
 
   // Net Worth includes loan principal (Decision 6) — see `netWorthWithLoans`.
-  const { sheet: balanceSheet, accountBalances, netWorth: netWorthAmount, isLoading: balanceSheetLoading } = useLoanBalanceSheet();
+  const { sheet: balanceSheet, accountBalances, netWorth: netWorthAmount, unpaidLenderCharges, isLoading: balanceSheetLoading } = useLoanBalanceSheet();
+  // Spend sees billed lender charges as one-time expenses on their billed date; balances and cash flow use real rows.
+  const spendTransactions = useSpendTransactions(transactions as Transaction[]);
+  const spendCategories = useMemo(() => withBuiltInChargeCategory(categories as Category[], spendTransactions), [categories, spendTransactions]);
   const cashFlowSummary = useCashFlowThisMonth();
   const { totals: creditCardTotals, isLoading: creditCardsLoading } = useCreditCardTotals();
 
@@ -141,7 +145,7 @@ export function useReportsData() {
   // --- Cash Flow (this month only, real; weekly buckets mirror the dashboard's exactly) ---
   const cashFlow = useMemo(() => {
     const weekTotals = new Map<string, number>();
-    for (const t of transactions as Transaction[]) {
+    for (const t of spendTransactions) {
       if (t.type !== "expense" || isNonIncomeExpenseMovement(t) || t.deletedAt != null) continue;
       const effective = effectiveMonth(t);
       if (!isThisMonth(effective, now)) continue;
@@ -156,7 +160,7 @@ export function useReportsData() {
       savingsRate: cashFlowSummary.moneyIn > 0 ? (cashFlowSummary.net / cashFlowSummary.moneyIn) * 100 : 0,
       weeks,
     };
-  }, [transactions, now, cashFlowSummary]);
+  }, [spendTransactions, now, cashFlowSummary]);
 
   // --- Assets by real Account.type (replaces the mock's fabricated asset categories) ---
   // Card accounts are left out: their (negative) balance is card debt, already on the liabilities'
@@ -187,20 +191,22 @@ export function useReportsData() {
       { name: "Credit Cards", value: liabilities.creditCards },
       { name: "Loans I Owe", value: liabilities.loans },
       { name: "EMIs", value: liabilities.emis },
+      // Billed, unpaid lender charges: their own line, never merged into the principal-only lines above.
+      { name: "Unpaid lender charges", value: unpaidLenderCharges },
     ].filter((row) => row.value > 0);
-  }, [liabilities]);
+  }, [liabilities, unpaidLenderCharges]);
 
   // --- Receivables (principal owed TO me on money I lent) — an asset. ---
   const totalReceivables = balanceSheet.lentPrincipal;
 
-  const totalLiabilities = liabilities.total;
+  const totalLiabilities = liabilities.total + unpaidLenderCharges;
 
   // --- Category spending: this month's real expense Transactions, grouped by real Category,
   //     joined with a matching Budget when one exists (mirrors use-dashboard-data.ts's expensesByCategory
   //     grouping, extended with a real budget/txn-count join) ---
   const categorySpending = useMemo<ReportsCategorySpending[]>(() => {
     const totals = new Map<string, { amount: number; txns: number }>();
-    for (const t of transactions as Transaction[]) {
+    for (const t of spendTransactions) {
       const mine = myConsumptionAmount(t, mySpendCtx);
       if (mine === 0) continue;
       const effective = effectiveMonth(t);
@@ -221,10 +227,10 @@ export function useReportsData() {
         // Budget.amount is the limit itself — no period resolution needed to read it;
         // `amount` above is already this calendar month's real category spend.
         const budget = budgetByCategoryId.get(categoryId)?.amount ?? null;
-        return { categoryId, category: categoryNameFor(categoryId, categories as Category[]), amount, budget, txns };
+        return { categoryId, category: categoryNameFor(categoryId, spendCategories), amount, budget, txns };
       })
       .sort((a, b) => b.amount - a.amount);
-  }, [transactions, budgets, categories, now, mySpendCtx]);
+  }, [spendTransactions, budgets, spendCategories, now, mySpendCtx]);
 
   // --- Spending heatmap: category x day-of-month week-bucket, real this-month expense Transactions ---
   const spendingHeatmap = useMemo(() => {
@@ -232,7 +238,7 @@ export function useReportsData() {
     const grid = new Map<string, number[]>();
     for (const row of topCategories) grid.set(row.categoryId, [0, 0, 0, 0]);
 
-    for (const t of transactions as Transaction[]) {
+    for (const t of spendTransactions) {
       const mine = myConsumptionAmount(t, mySpendCtx);
       if (mine === 0) continue;
       const effective = effectiveMonth(t);
@@ -248,7 +254,7 @@ export function useReportsData() {
       weeks: [...WEEK_BUCKETS],
       values: topCategories.map((c) => grid.get(c.categoryId) ?? [0, 0, 0, 0]),
     };
-  }, [categorySpending, transactions, now, mySpendCtx]);
+  }, [categorySpending, spendTransactions, now, mySpendCtx]);
 
   return {
     isLoading,

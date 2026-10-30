@@ -28,6 +28,11 @@ export interface CandidateRowModel {
   identity: MatchedIdentity | null;
   /** Shown instead of a label when nothing resolves ("Not matched • •••• 7743"). */
   accountHint: string;
+  /**
+   * Saved accounts/cards whose last-4 equals the SMS's, for a row that is still unmatched — a SUGGESTION only (nothing is selected
+   * or linked; Android matches on the phone only when it first builds the candidate and never re-matches). Null when there is none.
+   */
+  accountSuggestion?: string | null;
   selected: boolean;
   /** Why this row can't join a bulk selection (never silently — it is shown beside the row), or null when it can. */
   selectBlockedReason: string | null;

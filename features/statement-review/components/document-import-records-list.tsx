@@ -212,7 +212,7 @@ export function DocumentImportRecordsList({ documentId }: { documentId: string }
   );
 
   return (
-    <div className={cn("flex flex-col gap-2", fullscreen && "fixed inset-0 z-50 overflow-y-auto bg-background p-6")}>
+    <div className={cn("flex flex-col gap-2", fullscreen && "fixed inset-0 z-hero overflow-y-auto bg-background p-6")}>
       {records.length > 0 && (
         <div className="flex items-center justify-end">
           <ClayButton

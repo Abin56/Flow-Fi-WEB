@@ -5,7 +5,12 @@
  * screenshot URLs; include/exclude is its own idea with live counts, preserved across Back.
  */
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe as vitestDescribe, expect, it, vi } from "vitest";
+
+// 2026-10-29: Smart Capture now hands rows straight to Review & Import (/reconciliation); the standalone review step
+// these tests drive is no longer routed. The components are kept untouched until the two-step flow is verified in the
+// browser (user decision), so this suite is skipped rather than deleted. The new flow: two-step-flow.test.tsx.
+const describe = vitestDescribe.skip;
 import { ocrLine } from "../lib/ocr-test-helpers";
 import type { OcrResult } from "../lib/tesseract-ocr";
 import { SmartCaptureStudio } from "./smart-capture-studio";

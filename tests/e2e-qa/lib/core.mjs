@@ -14,6 +14,9 @@ export function scenario(id, name, body, opts) {
   queue.push({ id, name, body, opts });
 }
 
+/** Retired scenario: it drives UI that is no longer routed. Kept (not run) so its history stays readable; see the note at the call site. */
+export function retiredScenario() {}
+
 async function runOne({ id, name, body, opts = {} }) {
   const checks = [];
   const notes = [];

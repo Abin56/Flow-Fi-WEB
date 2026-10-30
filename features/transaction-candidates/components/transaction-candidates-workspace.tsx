@@ -52,6 +52,8 @@ import type { DuplicateDetectionResult, ExistingTransactionForDuplicateCheck } f
 import {
   candidateDestinationGroupKey,
   candidateDestinationState,
+  candidateLastFourSuggestions,
+  effectiveDestinationRefs,
   formatMatchedAccountLabel,
   resolveMatchedIdentity,
   formatUnresolvedAccountHint,
@@ -165,6 +167,19 @@ export function TransactionCandidatesWorkspace() {
   const [importedIds, setImportedIds] = useState<Set<string>>(new Set());
   // Imports that created the transaction but not everything after it — shown until the reviewer closes them.
   const [partialNotices, setPartialNotices] = useState<PartialImportNotice[]>([]);
+  // The account/card the reviewer picked in the popup for a candidate, kept for this session so the list shows it at once. The
+  // candidate document itself is Android-owned and never written, so this lives only here; it is display state — an import still
+  // validates the popup's own draft, and bulk eligibility still needs Android's own match.
+  const [chosenDestinations, setChosenDestinations] = useState<Record<string, string>>({});
+  const chooseDestination = useCallback((candidateId: string, key: string | null) => {
+    setChosenDestinations((prev) => {
+      if ((prev[candidateId] ?? null) === key) return prev;
+      const next = { ...prev };
+      if (key) next[candidateId] = key;
+      else delete next[candidateId];
+      return next;
+    });
+  }, []);
 
   // Same fullscreen pattern as Transaction Studio's own toggle — `fixed inset-0` overlay, Escape to exit.
   const [fullscreen, setFullscreen] = useState(false);
@@ -215,10 +230,14 @@ export function TransactionCandidatesWorkspace() {
   // yet". Until real accounts (and, for card candidates, cards) are present, don't judge whether Android's ids still resolve.
   // While not ready NOTHING is bulk-eligible, so a not-yet-verified match can never slip into a batch.
   const destinationsReady = accounts.length > 0 && (creditCards.length > 0 || !candidates.some((c) => c.cardId));
+  // What a row shows: the reviewer's own choice while it still resolves, otherwise Android's match.
+  const displayRefsOf = useCallback((c: SmsTransactionCandidate) => effectiveDestinationRefs(c, chosenDestinations[c.id], accounts, creditCards), [chosenDestinations, accounts, creditCards]);
   const destinationStateOf = useCallback(
-    (c: SmsTransactionCandidate) =>
-      destinationsReady ? candidateDestinationState(c, accounts, creditCards) : c.accountId != null || c.cardId != null ? ("matched" as const) : ("unmatched" as const),
-    [destinationsReady, accounts, creditCards],
+    (c: SmsTransactionCandidate) => {
+      const refs = displayRefsOf(c);
+      return destinationsReady ? candidateDestinationState(refs, accounts, creditCards) : refs.accountId != null || refs.cardId != null ? ("matched" as const) : ("unmatched" as const);
+    },
+    [destinationsReady, accounts, creditCards, displayRefsOf],
   );
   /** Reliable account/card identity: Android resolved it AND it still points at a real account/card. */
   const bulkEligible = useCallback((c: SmsTransactionCandidate) => destinationsReady && candidateDestinationState(c, accounts, creditCards) === "matched", [destinationsReady, accounts, creditCards]);
@@ -294,7 +313,7 @@ export function TransactionCandidatesWorkspace() {
     setSelectedIds(new Set());
   }
 
-  const accountLabelOf = useCallback((c: SmsTransactionCandidate) => formatMatchedAccountLabel(c, accounts, creditCards), [accounts, creditCards]);
+  const accountLabelOf = useCallback((c: SmsTransactionCandidate) => formatMatchedAccountLabel(displayRefsOf(c), accounts, creditCards), [accounts, creditCards, displayRefsOf]);
   const accountHintOf = useCallback((c: SmsTransactionCandidate) => formatUnresolvedAccountHint(c, destinationStateOf(c)), [destinationStateOf]);
   const groupKeyOf = useCallback((c: SmsTransactionCandidate) => candidateDestinationGroupKey(c, accounts, creditCards), [accounts, creditCards]);
   const groupLabelOf = (c: SmsTransactionCandidate) => accountLabelOf(c) ?? accountHintOf(c);
@@ -346,6 +365,7 @@ export function TransactionCandidatesWorkspace() {
 
   function ineligibleReason(c: SmsTransactionCandidate): string {
     if (!destinationsReady) return "accounts are still loading";
+    if (chosenDestinations[c.id]) return "its account was chosen in the review popup — import it from there";
     const state = candidateDestinationState(c, accounts, creditCards);
     return state === "missing" ? "the account Android matched no longer exists" : "Android couldn't match an account or card";
   }
@@ -548,15 +568,17 @@ export function TransactionCandidatesWorkspace() {
           duplicate: duplicates.get(candidate.id) ?? null,
           destinationState: destinationStateOf(candidate),
           accountLabel: accountLabelOf(candidate),
-          identity: resolveMatchedIdentity(candidate, accounts, creditCards),
+          identity: resolveMatchedIdentity(displayRefsOf(candidate), accounts, creditCards),
           accountHint: accountHintOf(candidate),
+          // Read from the live accounts/cards, so correcting a saved account's last-4 shows up here at once. Suggestion only.
+          accountSuggestion: destinationStateOf(candidate) === "matched" ? null : (candidateLastFourSuggestions(candidate, accounts, creditCards).map((s) => s.label).join(" · ") || null),
           selected,
           selectBlockedReason: selected ? null : selectionBlockedReason(candidate),
         };
       }),
     // `selectionBlockedReason` closes over the anchor + eligibility inputs listed here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [visibleCandidates, statusById, duplicates, selectedIds, destinationStateOf, accountLabelOf, accountHintOf, selectionAnchor, anchorCandidate, destinationsReady, accounts, creditCards],
+    [visibleCandidates, statusById, duplicates, selectedIds, destinationStateOf, displayRefsOf, accountLabelOf, accountHintOf, selectionAnchor, anchorCandidate, destinationsReady, accounts, creditCards],
   );
 
   const ledgerGroups: LedgerGroup[] = useMemo(() => {
@@ -632,7 +654,9 @@ export function TransactionCandidatesWorkspace() {
         // The inbox is an ordinary page that scrolls with the app shell's <main> (the month headers stick to it). Full screen
         // is the exception: a fixed overlay that scrolls itself.
         "flex min-w-0 flex-col gap-3 p-4 sm:gap-4 sm:p-6",
-        fullscreen && "fixed inset-0 z-50 overflow-y-auto bg-background p-4",
+        // z-hero, not z-50: it must stay below the dialog/sheet z-index tokens (app/globals.css) so the review
+        // drawer still renders on top while full screen is on — z-50 sat above --z-dialog and hid it silently.
+        fullscreen && "fixed inset-0 z-hero overflow-y-auto bg-background p-4",
       )}
     >
       <div className="flex items-start justify-between gap-3">
@@ -792,6 +816,8 @@ export function TransactionCandidatesWorkspace() {
               : undefined
           }
           categorySuggestions={detailCategorySuggestions}
+          chosenDestinationKey={detailCandidate ? (chosenDestinations[detailCandidate.id] ?? null) : null}
+          onDestinationChosen={chooseDestination}
           onImported={(id) => setImportedIds((prev) => new Set(prev).add(id))}
           onPartialImport={(notice) => setPartialNotices((prev) => (prev.some((n) => n.id === notice.id) ? prev : [...prev, notice]))}
           duplicate={detailDuplicate}

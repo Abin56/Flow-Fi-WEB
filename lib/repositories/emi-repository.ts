@@ -26,18 +26,23 @@ import {
   collection,
   doc,
   getDocs,
+  runTransaction,
   writeBatch,
 } from "firebase/firestore";
+
+/** Firestore's cap on writes in one transaction. */
+const MAX_TRANSACTION_WRITES = 500;
 import { FirestoreCollections } from "@/lib/firestore/collections";
 import { FirestoreCrudRepository } from "@/lib/firestore/firestore-crud-repository";
 import { recordEdit, updateField } from "@/lib/firestore/soft-deletable";
-import { calculate, type InterestPeriodBreakdown } from "@/lib/engines/interest-calculator";
+import { calculate } from "@/lib/engines/interest-calculator";
+import { installmentsPerYearFor, precomputedFromPeriods, termsTailFirstDueDate, termsTailProblems } from "@/lib/engines/emi-terms-math";
 import type { Emi, EmiInterest, EmiLoanType, EmiPaymentBreakdown } from "@/lib/models/emi";
-import { nextDueDate, type Installment, type PaymentSchedule, type ScheduleType } from "@/lib/models/payment-schedule";
-import type {
+import { type Installment, type PaymentSchedule, type ScheduleType } from "@/lib/models/payment-schedule";
+import {
   InstallmentRepository,
-  PaymentScheduleRepository,
-  PrecomputedInstallmentAmount,
+  type PaymentScheduleRepository,
+  type PrecomputedInstallmentAmount,
 } from "@/lib/repositories/payment-schedule-repository";
 import { generateId } from "@/lib/utils/id-generator";
 import { checkedOwnership, type OwnershipShare } from "@/lib/engines/debt-ownership";
@@ -46,33 +51,6 @@ import { writeKeepingStoredConfirmation } from "@/lib/repositories/ownership-con
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
-}
-
-function precomputedFromPeriods(periods: InterestPeriodBreakdown[]): PrecomputedInstallmentAmount[] {
-  return periods.map((p) => ({
-    amountDue: p.paymentAmount,
-    principalPortion: p.principalPortion,
-    interestPortion: p.interestPortion,
-  }));
-}
-
-/**
- * True per-installment count for `calculate`'s `installmentsPerYear` rate
- * normalization — weekly gets its own exact value (52) instead of being
- * forced through the monthly bucket, which previously overstated weekly
- * interest by ~4.3x. "custom" isn't offered by the EMI form, so 12
- * (monthly) is a safe placeholder if that ever changes; "oneTime" isn't a
- * valid EMI installment frequency but is included for exhaustiveness.
- */
-function installmentsPerYearFor(scheduleType: ScheduleType): number {
-  switch (scheduleType) {
-    case "weekly":
-      return 52;
-    case "monthly":
-    case "oneTime":
-    case "custom":
-      return 12;
-  }
 }
 
 export interface CreateEmiParams {
@@ -523,7 +501,7 @@ export class EmiRepository extends FirestoreCrudRepository<Emi> {
       throw new Error("Monthly due date must be between 1 and 31");
     }
 
-    const sorted = [...currentInstallments].sort((a, b) => a.sequenceNumber - b.sequenceNumber);
+    const sorted = currentInstallments.filter((i) => i.deletedAt == null).sort((a, b) => a.sequenceNumber - b.sequenceNumber);
     const settled = sorted.filter((i) => i.amountPaid > 0 || i.isSkipped);
     const untouched = sorted.filter((i) => i.amountPaid === 0 && !i.isSkipped);
 
@@ -550,6 +528,27 @@ export class EmiRepository extends FirestoreCrudRepository<Emi> {
 
     const effectiveFrequency = installmentFrequency ?? emi.installmentFrequency;
 
+    // Never leave principal unscheduled: with money still owed, at least one unpaid installment must remain.
+    if (remainingCount < 1 && outstandingPrincipal > 0.005) {
+      throw new Error(
+        `Number of payments must be more than the ${settled.length} already made: ₹${outstandingPrincipal.toFixed(2)} of principal is still outstanding and needs an unpaid installment.`,
+      );
+    }
+
+    // The caller's list decides which installments are retired, so it must still be the stored schedule: a payment
+    // or edit that landed after the caller read it would otherwise be retired or re-planned over.
+    const installmentRepository = this.installmentRepositoryFor(emi.scheduleId);
+    const stored = (await installmentRepository.getAll()).filter((i) => i.deletedAt == null);
+    const fingerprint = (xs: readonly Installment[]) =>
+      xs
+        .filter((i) => i.deletedAt == null)
+        .map((i) => `${i.id}:${i.amountPaid}:${i.isSkipped}`)
+        .sort()
+        .join("|");
+    if (fingerprint(stored) !== fingerprint(sorted)) {
+      throw new Error("The installment schedule changed since it was read. Reload the EMI and try again.");
+    }
+
     let newTail: Installment[] = [];
     if (remainingCount > 0 && outstandingPrincipal > 0) {
       let precomputed: PrecomputedInstallmentAmount[] | undefined;
@@ -566,27 +565,16 @@ export class EmiRepository extends FirestoreCrudRepository<Emi> {
         precomputed = precomputedFromPeriods(breakdown.periods);
       }
 
-      const installmentRepository = this.installmentRepositoryFor(emi.scheduleId);
-      await installmentRepository.replaceUnpaid(untouched);
-
       const effectiveDueDayOfMonth = dueDayOfMonth ?? emi.dueDayOfMonth;
       const lastSettled = settled.length === 0 ? null : settled[settled.length - 1];
-      let nextDue =
-        lastSettled == null
-          ? nextDueDate(effectiveFrequency, emi.startDate)
-          : nextDueDate(effectiveFrequency, lastSettled.dueDate);
-      // Unlike `createEmi`'s installment #1 (always the real First EMI
-      // Date), the tail's first installment here is a *continuation* of an
-      // existing EMI, not a fresh "first payment" — so when a due day is
-      // set, it snaps too, same as every installment after it. Only
-      // installment #1 of the EMI as a whole (still intact among `settled`
-      // or, if nothing's settled yet, `emi.startDate` itself) is ever
-      // exempt from this snapping.
-      if (effectiveDueDayOfMonth != null && effectiveFrequency === "monthly" && lastSettled != null) {
-        const lastDayOfMonth = new Date(nextDue.getFullYear(), nextDue.getMonth() + 1, 0).getDate();
-        const snappedDay = effectiveDueDayOfMonth > lastDayOfMonth ? lastDayOfMonth : effectiveDueDayOfMonth;
-        nextDue = new Date(nextDue.getFullYear(), nextDue.getMonth(), snappedDay);
-      }
+      // With nothing settled the tail is the whole schedule, so it keeps the EMI's own first date (installment #1 is
+      // never moved); otherwise it continues one period after the last settled installment, snapped to the due day.
+      const nextDue = termsTailFirstDueDate({
+        frequency: effectiveFrequency,
+        startDate: emi.startDate,
+        lastSettledDueDate: lastSettled?.dueDate ?? null,
+        dueDayOfMonth: effectiveDueDayOfMonth ?? null,
+      });
       const tailTotal =
         precomputed == null ? outstandingPrincipal : precomputed.reduce((s, p) => s + p.amountDue, 0);
 
@@ -608,43 +596,85 @@ export class EmiRepository extends FirestoreCrudRepository<Emi> {
         lastEditedAt: null,
         editHistory: [],
       };
-      newTail = await installmentRepository.generateInstallments(tailScheduleShape, {
+      newTail = InstallmentRepository.buildInstallments(tailScheduleShape, {
         precomputedAmounts: precomputed,
         startingSequenceNumber: settled.length,
         dueDayOfMonth: effectiveDueDayOfMonth ?? undefined,
       });
+      const problems = termsTailProblems({ tail: newTail, outstandingPrincipal, firstDueDate: nextDue, lastSettledDueDate: lastSettled?.dueDate ?? null });
+      if (problems.length > 0) throw new Error(`Terms not saved: ${problems.join(" ")}`);
+    }
+    // The unpaid installments are only retired when a replacement tail is written (unchanged behaviour).
+    const retired = newTail.length > 0 ? untouched : [];
+
+    const settledTotal = settled.reduce((sum, i) => sum + i.amountDue, 0);
+    const newTailTotal = newTail.reduce((sum, i) => sum + i.amountDue, 0);
+    const endDate =
+      newTail.length > 0 ? newTail[newTail.length - 1].dueDate : settled.length === 0 ? emi.startDate : settled[settled.length - 1].dueDate;
+
+    // One Firestore transaction writes the EMI document, the schedule document, every retired installment and every
+    // new installment: they all commit together or none does. The writes are capped by Firestore at 500 per
+    // transaction, so a re-plan that is larger than that is refused up front rather than split into a partial commit.
+    const writeCount = retired.length + newTail.length + 2;
+    if (writeCount > MAX_TRANSACTION_WRITES) {
+      throw new Error(
+        `This change touches ${writeCount} records, more than the ${MAX_TRANSACTION_WRITES} one atomic save can hold. Nothing was saved; use fewer installments.`,
+      );
     }
 
-    let updated = recordEdit(
-      emi,
-      "loanTerms",
-      `${emi.interest?.ratePercent}/${emi.installmentFrequency}/${emi.installmentCount}`,
-      `${interest?.ratePercent}/${effectiveFrequency}/${newInstallmentCount}`,
-    );
-    updated = {
-      ...updated,
-      interest,
-      installmentFrequency: effectiveFrequency,
-      installmentCount: newInstallmentCount,
-      dueDayOfMonth: dueDayOfMonth ?? updated.dueDayOfMonth,
-      endDate:
-        newTail.length > 0
-          ? newTail[newTail.length - 1].dueDate
-          : settled.length === 0
-            ? emi.startDate
-            : settled[settled.length - 1].dueDate,
-    };
-    await this.update(updated);
+    const emiRef = this.docRef(emi.id);
+    const scheduleRef = this.paymentScheduleRepository.docRef(emi.scheduleId);
+    const installmentRefs = new Map(sorted.map((i) => [i.id, installmentRepository.docRef(i.id)] as const));
 
-    const schedule = await this.paymentScheduleRepository.getByKey(emi.scheduleId);
-    if (schedule != null) {
-      const settledTotal = settled.reduce((sum, i) => sum + i.amountDue, 0);
-      const newTailTotal = newTail.reduce((sum, i) => sum + i.amountDue, 0);
-      await this.paymentScheduleRepository.editSchedule(schedule, {
-        installmentCount: newInstallmentCount,
-        totalAmount: settledTotal + newTailTotal,
+    await runTransaction(this.collection.firestore, async (tx) => {
+      // All reads first (Firestore requires it), each by document reference so they are part of the transaction's
+      // read set: if any of them is written by someone else before commit, Firestore retries this callback against
+      // the new data, and the checks below then refuse the edit.
+      const [emiSnap, scheduleSnap, ...installmentSnaps] = await Promise.all([tx.get(emiRef), tx.get(scheduleRef), ...sorted.map((i) => tx.get(installmentRefs.get(i.id)!))]);
+      if (!emiSnap.exists()) throw new Error("This EMI no longer exists — refresh and try again");
+      const freshEmi = emiSnap.data();
+      const sameTerms =
+        freshEmi.deletedAt == null &&
+        freshEmi.scheduleId === emi.scheduleId &&
+        freshEmi.principalAmount === emi.principalAmount &&
+        freshEmi.startDate.getTime() === emi.startDate.getTime() &&
+        freshEmi.installmentFrequency === emi.installmentFrequency &&
+        freshEmi.installmentCount === emi.installmentCount &&
+        (freshEmi.dueDayOfMonth ?? null) === (emi.dueDayOfMonth ?? null) &&
+        freshEmi.isClosed === emi.isClosed &&
+        JSON.stringify(freshEmi.interest ?? null) === JSON.stringify(emi.interest ?? null);
+      if (!sameTerms) throw new Error("This EMI's terms changed since it was read. Reload the EMI and try again.");
+      const freshById = new Map<string, Installment>();
+      installmentSnaps.forEach((s, k) => {
+        const inst = s.exists() ? s.data() : null;
+        const expected = sorted[k]!;
+        if (inst == null || inst.deletedAt != null || inst.amountPaid !== expected.amountPaid || inst.isSkipped !== expected.isSkipped) {
+          throw new Error("The installment schedule changed since it was read. Reload the EMI and try again.");
+        }
+        freshById.set(inst.id, inst);
       });
-    }
+
+      // Writes — built on the fresh documents so no unrelated field is overwritten with a stale copy.
+      const now = new Date();
+      for (const i of retired) tx.set(installmentRefs.get(i.id)!, { ...freshById.get(i.id)!, deletedAt: now });
+      for (const i of newTail) tx.set(installmentRepository.docRef(i.id), i);
+
+      let updated = recordEdit(
+        freshEmi,
+        "loanTerms",
+        `${freshEmi.interest?.ratePercent}/${freshEmi.installmentFrequency}/${freshEmi.installmentCount}`,
+        `${interest?.ratePercent}/${effectiveFrequency}/${newInstallmentCount}`,
+      );
+      updated = { ...updated, interest, installmentFrequency: effectiveFrequency, installmentCount: newInstallmentCount, dueDayOfMonth: dueDayOfMonth ?? updated.dueDayOfMonth, endDate };
+      tx.set(emiRef, updated);
+
+      if (scheduleSnap.exists()) {
+        let schedule = scheduleSnap.data();
+        schedule = updateField(schedule, "totalAmount", schedule.totalAmount, settledTotal + newTailTotal, (e, v) => ({ ...e, totalAmount: v }));
+        schedule = updateField(schedule, "installmentCount", schedule.installmentCount, newInstallmentCount, (e, v) => ({ ...e, installmentCount: v }));
+        tx.set(scheduleRef, schedule);
+      }
+    });
   }
 
   /**

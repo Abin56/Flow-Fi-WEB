@@ -4,7 +4,7 @@
  * only the grid scrolls (no footer overlap, no horizontal overflow), and that on mobile there is one page scroll with
  * a reachable sticky action bar. Reconciliation also proves nothing was written.
  */
-import { scenario } from "../lib/core.mjs";
+import { retiredScenario, scenario } from "../lib/core.mjs";
 import * as h from "../lib/harness.mjs";
 
 const DESKTOP = [
@@ -38,7 +38,7 @@ const metrics = (page, listTestId) =>
 
 const box = async (page, testId) => page.getByTestId(testId).first().boundingBox();
 
-scenario("scap-layout-viewports", "Smart Capture review fits the viewport on desktop and scrolls naturally on mobile", async ({ page }, chk) => {
+retiredScenario("scap-layout-viewports", "Smart Capture review fits the viewport on desktop and scrolls naturally on mobile", async ({ page }, chk) => {
   await page.evaluate(() => window.next.router.push("/smart-capture"));
   await page.getByRole("heading", { name: "Smart Capture" }).waitFor({ timeout: 240000 });
   await page.getByLabel("Pasted statement text").fill(rowsText(30));

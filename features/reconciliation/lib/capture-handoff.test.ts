@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sourceFingerprint } from "@/features/smart-capture/lib/capture-draft";
-import { captureSessionId, confirmField, toReviewRows, type ReviewRow } from "@/features/smart-capture/lib/capture-review";
+import { captureSessionId, confirmField, openIssues, toReviewRows, type ReviewRow } from "@/features/smart-capture/lib/capture-review";
 import { annotateOcrRows } from "@/features/smart-capture/lib/ocr-review";
 import { ocrLine, ocrText } from "@/features/smart-capture/lib/ocr-test-helpers";
 import { parsePastedStatement } from "@/features/smart-capture/lib/parse-pasted-statement";
@@ -18,7 +18,7 @@ import {
 } from "./capture-handoff";
 import { captureSignature, mergeHandoff, sessionFromHandoff } from "./handoff-merge";
 import { buildReconciliationDraft, loadReconciliationDraft, saveReconciliationDraft } from "./reconciliation-draft";
-import { EMPTY_DECISION } from "./decisions";
+import { EMPTY_DECISION, valueIssues } from "./decisions";
 
 let urlSeq = 0;
 const created: string[] = [];
@@ -65,17 +65,20 @@ function handOff(rows: ReviewRow[], cap = ocrCapture()) {
 }
 
 describe("handoff gates", () => {
-  it("refuses unverified OCR rows — nothing is handed over", () => {
+  it("hands over rows that still need an OCR check — flags intact, so Review & Import settles them (and blocks their import until then)", () => {
     const cap = ocrCapture();
     const result = handOff(cap.rows, cap);
-    expect(result.ok).toBe(false);
-    expect(getHandoffState().pending).toBeNull();
-    expect(created).toEqual([]);
+    expect(result.ok).toBe(true);
+    const zomato = getHandoffState().pending!.rows.find((r) => r.description === "ZOMATO")!;
+    expect(openIssues(zomato).map((i) => i.code)).toContain("low_confidence_amount");
+    expect(valueIssues(zomato).length).toBeGreaterThan(0);
   });
 
-  it("refuses when every row is excluded", () => {
+  it("refuses only an empty capture", () => {
     const cap = ocrCapture();
-    expect(handOff(cap.rows.map((r) => ({ ...r, include: false })), cap).ok).toBe(false);
+    expect(handOff([], cap).ok).toBe(false);
+    expect(getHandoffState().pending).toBeNull();
+    expect(handOff(cap.rows.map((r) => ({ ...r, include: false })), cap).ok).toBe(true);
   });
 });
 
@@ -101,7 +104,7 @@ describe("verified handoff", () => {
       expect(r.ocr).toEqual(src.ocr);
       expect(r.needsReconfirm).toBe(false);
     });
-    expect(pending.rows.find((r) => r.description === "UBER")).toMatchObject({ include: false, captureExcluded: true });
+    expect(pending.rows.find((r) => r.description === "UBER")).toMatchObject({ include: false, captureExcluded: false });
     expect(pending.source).toBe("ocr");
   });
 
@@ -208,7 +211,7 @@ describe("handoff → session, merge and draft", () => {
     const loaded = loadReconciliationDraft("u1");
     if (loaded.status !== "restored") throw new Error("expected restore");
     const uber = loaded.state.rows.find((r) => r.description === "UBER")!;
-    expect(uber).toMatchObject({ include: false, captureExcluded: true });
+    expect(uber).toMatchObject({ include: false, captureExcluded: false });
     expect(loaded.state.rows.every((r) => r.captureBaseline === captureSignature(r))).toBe(true);
     expect(loaded.state.rows.every((r) => r.ocr === undefined)).toBe(true);
   });

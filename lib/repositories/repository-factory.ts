@@ -7,9 +7,12 @@
  * pair from the matching model file.
  */
 
-import { collection, collectionGroup, getDocs, query, where, type FirestoreDataConverter, type Query } from "firebase/firestore";
+import { collection, collectionGroup, getDocs, onSnapshot, query, where, type FirestoreDataConverter, type Query } from "firebase/firestore";
 import { db } from "@/lib/firebase/client";
 import { FirestoreCollections } from "@/lib/firestore/collections";
+import { safeDocs } from "@/lib/firestore/safe-docs";
+import type { LenderCharge, LenderChargeAgreementKind } from "@/lib/models/lender-charge";
+import { lenderChargeFromFirestore, lenderChargeToFirestore } from "@/lib/models/lender-charge-firestore";
 import { accountFromFirestore, accountToFirestore, type Account } from "@/lib/models/account";
 import { billFromFirestore, billToFirestore, type Bill } from "@/lib/models/bill";
 import { budgetFromFirestore, budgetToFirestore, type Budget } from "@/lib/models/budget";
@@ -677,4 +680,30 @@ export function createPersonPaymentRepository(uid: string, personId: string, cas
       createInstallmentPaymentRepositoryFor(uid, scheduleId, installmentId, createInstallmentRepositoryFor(uid, scheduleId)).docRef(paymentId),
     cashLegCategoryId,
   });
+}
+
+/**
+ * READ-ONLY access to an agreement's  subcollection. It deliberately exposes no add / update /
+ * delete: until the whole financial write path (billing, settlement, reversal, cross-client safety) is enabled,
+ * nothing in the app can persist a charge.
+ */
+export interface LenderChargeReader {
+  getAll(): Promise<LenderCharge[]>;
+  watchAll(onData: (items: LenderCharge[]) => void, onError?: (error: Error) => void): () => void;
+}
+
+export function createLenderChargeReader(uid: string, agreementKind: LenderChargeAgreementKind, agreementId: string): LenderChargeReader {
+  const ref = collection(
+    db,
+    FirestoreCollections.users,
+    uid,
+    agreementKind === "loan" ? FirestoreCollections.loans : FirestoreCollections.emis,
+    agreementId,
+    FirestoreCollections.lenderCharges,
+  ).withConverter<LenderCharge>({ toFirestore: lenderChargeToFirestore, fromFirestore: lenderChargeFromFirestore });
+  const live = query(ref, where("deletedAt", "==", null));
+  return {
+    getAll: async () => safeDocs((await getDocs(live)).docs),
+    watchAll: (onData, onError) => onSnapshot(live, (snapshot) => onData(safeDocs(snapshot.docs)), onError),
+  };
 }

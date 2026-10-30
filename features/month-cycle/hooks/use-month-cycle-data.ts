@@ -66,6 +66,8 @@ import type { CreditCardProfile, Statement } from "@/lib/models/credit-card";
 import { cardBillsDueInCycle, cardBillsForCard } from "@/lib/engines/card-cycle-bills";
 import { isSplit, myShare, type Expense } from "@/lib/models/expense";
 import { useMySpendContext } from "@/hooks/use-my-spend-context";
+import { useSpendTransactions, withBuiltInChargeCategory } from "@/hooks/use-lender-charge-spend";
+import { isLenderChargeBillingRow } from "@/lib/engines/lender-charge-accounting";
 import { mySpendRows, summarizeMySpend } from "@/lib/engines/my-spend";
 import { caseAEmis, monthCycleDashboardTransactions, monthCycleEmiPaymentRows } from "@/lib/engines/cycle-transaction-mapping";
 import { compareTransactionsNewestFirst, isNonIncomeExpenseMovement, isPersonFunded, type Transaction } from "@/lib/models/transaction";
@@ -199,6 +201,9 @@ export function useMonthCycleData() {
   const { stats: accountsStats, isLoading: accountsStatsLoading } = useAccountsStats();
 
   const { ctx: mySpendCtx, isLoading: mySpendLoading } = useMySpendContext();
+  // Spend sees billed lender charges as one expense on their billed date; balances, counts and statements use `transactions`.
+  const spendTransactions = useSpendTransactions(transactions as Transaction[]);
+  const spendCategories = useMemo(() => withBuiltInChargeCategory(categories as Category[], spendTransactions), [categories, spendTransactions]);
   const isLoading =
     transactionsLoading ||
     mySpendLoading ||
@@ -249,6 +254,8 @@ export function useMonthCycleData() {
 
     // Case A EMIs (purchase already recorded on the card): their principal was spent at the purchase — see `caseAEmis`.
     const caseA = caseAEmis(emis as Emi[], creditCards as CreditCardProfile[], transactions as Transaction[]);
+    // Total OUTFLOW is cash: REAL transactions only. A billed lender charge moves no cash, so it is not in here —
+    // it reaches "My spend" (accrual) below; its settlement payment, a real transaction, is counted here once.
     const dashboardTransactions: DashboardTransaction[] = monthCycleDashboardTransactions(
       transactions as Transaction[],
       new Set((creditCards as CreditCardProfile[]).map((c) => c.accountId)),
@@ -293,10 +300,10 @@ export function useMonthCycleData() {
     // "Total outflow" drill-down shows these so its lines always add back to the headline.
     const spentBreakdown = breakdownFor("combinedExpenses", strategy, range, inputs);
 
-    // "My spend" — MY consumption only, from the shared `lib/engines/my-spend.ts` classifier (my share of
+    // "My spend" — accrual: MY consumption only (billed lender charges are recognised here, once, on their billed date), from the shared `lib/engines/my-spend.ts` classifier (my share of
     // split/assigned expenses; no transfers, card-bill payments, person/loan principal movements, or
     // repayments of a liability whose consumption is already recorded). Same bucketing as `spent`.
-    const txns = transactions as Transaction[];
+    const txns = spendTransactions;
     const bucketDate = (t: Transaction) => heroBucketDate(t, isCustomCycle);
     const mySpent = summarizeMySpend(mySpendRows({ transactions: txns, ctx: mySpendCtx, bucketDate, range })).mySpend;
     const myPreviousSpent = summarizeMySpend(mySpendRows({ transactions: txns, ctx: mySpendCtx, bucketDate, range: previousRange })).mySpend;
@@ -304,7 +311,7 @@ export function useMonthCycleData() {
     const mySpentChangePercent = percentChange(mySpent, myPreviousSpent);
 
     return { spent, spentBreakdown, previousSpent, income, net, spentChangePercent, mySpent, myPreviousSpent, myNet, mySpentChangePercent };
-  }, [isCustomCycle, cycleRange, monthCycleStartDay, transactions, creditCards, emis, expenses, emiPayments, loanScheduledPayments, mySpendCtx]);
+  }, [isCustomCycle, cycleRange, monthCycleStartDay, transactions, spendTransactions, creditCards, emis, expenses, emiPayments, loanScheduledPayments, mySpendCtx]);
 
   const savingsRatePercent = financialView.income > 0 ? Math.round((financialView.net / financialView.income) * 100) : 0;
 
@@ -313,11 +320,11 @@ export function useMonthCycleData() {
   //     so the hero's "Total Spent"/"My Expenses" figure can be drilled into. ---
   const expenseRows = useMemo(() => {
     const accountById = new Map((accounts as Account[]).map((a) => [a.id, a]));
-    const categoryById = new Map((categories as Category[]).map((c) => [c.id, c]));
+    const categoryById = new Map(spendCategories.map((c) => [c.id, c]));
     const expenseByTransactionId = new Map((expenses as Expense[]).filter((e) => e.deletedAt == null).map((e) => [e.transactionId, e]));
 
     // Exactly the rows the hero's "My spend" sums (shared classifier + the hero's own bucketing).
-    const rows = mySpendRows({ transactions: transactions as Transaction[], ctx: mySpendCtx, bucketDate: (t) => heroBucketDate(t, isCustomCycle), range: cycleRange })
+    const rows = mySpendRows({ transactions: spendTransactions, ctx: mySpendCtx, bucketDate: (t) => heroBucketDate(t, isCustomCycle), range: cycleRange })
       .sort((a, b) => compareTransactionsNewestFirst(a.transaction, b.transaction));
 
     return rows.map(({ transaction: t, grossAmount, myAmount }): MonthCycleExpenseRow => {
@@ -330,7 +337,7 @@ export function useMonthCycleData() {
         description: t.description || category?.name || "Uncategorized",
         category: category?.name ?? "Uncategorized",
         categoryIconKey: category?.iconKey ?? "other",
-        account: account?.name ?? (isPersonFunded(t) ? "Paid by a person" : "Unknown Account"),
+        account: account?.name ?? (isLenderChargeBillingRow(t) ? "Billed by lender (no cash yet)" : isPersonFunded(t) ? "Paid by a person" : "Unknown Account"),
         accountType: account?.type ?? null,
         date: t.dateTime,
         fullAmount: grossAmount,
@@ -338,7 +345,7 @@ export function useMonthCycleData() {
         isSplit: split,
       };
     });
-  }, [transactions, expenses, accounts, categories, cycleRange, isCustomCycle, mySpendCtx]);
+  }, [spendTransactions, expenses, accounts, spendCategories, cycleRange, isCustomCycle, mySpendCtx]);
 
   // --- Overall monthly budget (categoryId == null, type == "monthly") ---
   const budgetOverview = useMemo(() => {
@@ -531,9 +538,9 @@ export function useMonthCycleData() {
       txnCountByAccount.set(t.accountId, (txnCountByAccount.get(t.accountId) ?? 0) + 1);
     }
     // Top category ranks MY spend (shared classifier), so category figures add back to "My spend".
-    const myRows = mySpendRows({ transactions: transactions as Transaction[], ctx: mySpendCtx, bucketDate: (t) => heroBucketDate(t, isCustomCycle), range: cycleRange });
+    const myRows = mySpendRows({ transactions: spendTransactions, ctx: mySpendCtx, bucketDate: (t) => heroBucketDate(t, isCustomCycle), range: cycleRange });
     for (const [categoryId, amount] of summarizeMySpend(myRows).byCategoryId) {
-      const name = categoryNameFor(categoryId, categories as Category[]);
+      const name = categoryNameFor(categoryId, spendCategories);
       categoryTotals.set(name, (categoryTotals.get(name) ?? 0) + amount);
     }
 
@@ -559,7 +566,8 @@ export function useMonthCycleData() {
     };
   }, [
     transactions,
-    categories,
+    spendTransactions,
+    spendCategories,
     accounts,
     accountSpends,
     now,

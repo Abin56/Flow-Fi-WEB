@@ -6,6 +6,7 @@
  */
 
 import { useMemo } from "react";
+import { useLenderCharges } from "@/hooks/use-lender-charges";
 import { useAccounts } from "@/hooks/use-accounts";
 import { useCardUtilizationEmis } from "@/hooks/use-card-utilization-emis";
 import { useCreditCards } from "@/hooks/use-credit-cards";
@@ -36,14 +37,15 @@ export function useBalanceControlData(): {
   const { rows: loanRows, isLoading: loansLoading } = useLoanRows();
   const { rows: emiRows, isLoading: emisLoading } = useEmiRows();
   const { sheet, isLoading: sheetLoading } = useLoanBalanceSheet();
+  const { charges: lenderCharges } = useLenderCharges();
   const { utilizationEmis, isLoading: utilizationLoading } = useCardUtilizationEmis();
 
   const isLoading =
     accountsLoading || transactionsLoading || cardsLoading || standingsLoading || loansLoading || emisLoading || sheetLoading || utilizationLoading;
 
   const products = useMemo(
-    () => buildVarianceProducts({ standings, accounts: accounts as Account[], loanRows, emiRows }),
-    [standings, accounts, loanRows, emiRows],
+    () => buildVarianceProducts({ standings, accounts: accounts as Account[], loanRows, emiRows, transactions: transactions as Transaction[], lenderCharges }),
+    [standings, accounts, loanRows, emiRows, transactions, lenderCharges],
   );
 
   const report = useMemo(() => {

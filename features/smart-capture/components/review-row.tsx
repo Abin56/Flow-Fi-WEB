@@ -4,9 +4,10 @@
  * One reviewed transaction — a compact, expandable row.
  *
  * Collapsed: merchant · date · signed amount · Charge/Credit · one status.
- * Expanded:  editable values, the row's strip of the original screenshot,
- *            field-level corrections (each with its own confirm), and the
- *            row's own verification control.
+ * Expanded:  editable values; what still needs a look, said once, with ONE
+ *            primary action (`rowConfirmPlan` — it covers every unclear field
+ *            and the row check together); the row's strip of the original
+ *            image beside the text the computer read from it.
  *
  * Every unresolved item is reachable from the collapsed status ("Fix amount",
  * "Check", …); choosing it expands the row. Gates live in capture-review.ts —
@@ -14,23 +15,21 @@
  */
 
 import { useId, useState } from "react";
-import { AlertTriangle, ArrowDownLeft, ArrowUpRight, Check, ChevronDown, Circle, CircleCheck, Info, ScanText, Undo2 } from "lucide-react";
+import { AlertTriangle, ArrowDownLeft, ArrowUpRight, Check, ChevronDown, Circle, CircleCheck, ImageIcon, Info, ScanText, Undo2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ACTION_META } from "@/features/transaction-studio/lib/action-metadata";
-import { KIND_LABEL, type CaptureField, type CaptureIssue, type CaptureIssueCode } from "../lib/parse-pasted-statement";
-import { CAPTURE_ACTIONS_BY_DIRECTION, currentIssues, isComplete, openIssues, type CaptureAction, type ReviewRow, type RowPatch } from "../lib/capture-review";
+import { KIND_LABEL, type CaptureField, type CaptureIssue } from "../lib/parse-pasted-statement";
+import { CAPTURE_ACTIONS_BY_DIRECTION, currentIssues, isComplete, needsCorrection, openIssues, rowConfirmPlan, type CaptureAction, type ReviewRow, type RowConfirmPlan, type RowPatch } from "../lib/capture-review";
 import { COLUMN_LABEL, type DisplayColumn } from "../lib/source-layout";
 import type { OcrCapture } from "./capture-input";
 import { RowZoom } from "./ocr-source-view";
 
 const FIELD_LABEL: Record<CaptureField, string> = { date: "date", amount: "amount", direction: "Charge/Credit" };
 
-/** Codes that are about one of the money fields (need individual correction/confirmation). */
-const FIELD_CODES: ReadonlySet<CaptureIssueCode> = new Set(["no_amount", "multiple_amounts", "direction_unclear", "no_date", "low_confidence_date", "low_confidence_amount", "low_confidence_direction", "decimal_missing"]);
-
-const inputClass = "h-9 w-full rounded-xl border border-input bg-background px-3 text-sm outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-ring/50";
-const flaggedClass = "border-warning ring-2 ring-warning/25";
+const inputClass = "h-9 w-full min-w-0 rounded-lg border border-input bg-background px-2.5 text-sm text-foreground outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-ring/50";
+const flaggedClass = "border-warning ring-2 ring-warning/20";
+const labelClass = "flex min-w-0 flex-col gap-1 text-[11px] font-medium text-muted-foreground";
 
 function toDateInput(date: Date | null): string {
   if (!date) return "";
@@ -201,25 +200,33 @@ export type RowStatus = "ready" | "fix" | "check" | "excluded" | "imported";
 export function rowStatus(row: ReviewRow): RowStatus {
   if (row.committedTransactionId) return "imported";
   if (!row.include) return "excluded";
-  const open = openIssues(row);
-  if (!isComplete(row) || open.some((i) => FIELD_CODES.has(i.code))) return "fix";
-  if (open.length > 0) return "check";
+  if (needsCorrection(row)) return "fix";
+  if (openIssues(row).length > 0) return "check";
   return "ready";
 }
 
 /** What the collapsed "fix" status says — the most important unresolved field. */
 function fixLabel(row: ReviewRow): string {
   const open = openIssues(row);
-  if (row.amount == null || open.some((i) => i.field === "amount" || i.code === "no_amount" || i.code === "multiple_amounts")) return "Fix amount";
-  if (row.date == null || open.some((i) => i.field === "date" || i.code === "no_date")) return "Fix date";
+  if (row.amount == null || open.some((i) => i.code === "decimal_missing" || i.code === "no_amount" || i.code === "multiple_amounts")) return "Fix amount";
+  if (row.date == null || open.some((i) => i.code === "no_date")) return "Fix date";
   return "Fix Charge/Credit";
+}
+
+/** What the collapsed "check" status says: the unclear field(s) when that's what's open, else what kind of look. */
+function checkLabel(row: ReviewRow): string {
+  const fields = rowConfirmPlan(row)?.fields ?? [];
+  if (fields.length === 1) return `Check ${fields[0] === "direction" ? "C/D" : fields[0]}`;
+  if (fields.length > 1) return "Check values";
+  if (openIssues(row).some((i) => i.code === "possible_repeat")) return "Check repeat";
+  return "Check";
 }
 
 /** ₹ amount with two decimals while idle; free typing while focused. */
 function AmountField({ id, value, onChange, flagged }: { id: string; value: number | null; onChange: (v: number | null) => void; flagged: boolean }) {
   const [draft, setDraft] = useState<string | null>(null);
   return (
-    <div className={cn("flex h-9 items-center rounded-xl border border-input bg-background pl-3 focus-within:ring-2 focus-within:ring-ring/50", flagged && flaggedClass)}>
+    <div className={cn("flex h-9 min-w-0 items-center rounded-lg border border-input bg-background pl-2.5 focus-within:ring-2 focus-within:ring-ring/50", flagged && flaggedClass)}>
       <span className="text-sm text-muted-foreground">₹</span>
       <input
         id={id}
@@ -243,7 +250,7 @@ function AmountField({ id, value, onChange, flagged }: { id: string; value: numb
 
 function DirectionToggle({ value, onChange, flagged }: { value: ReviewRow["direction"]; onChange: (d: "debit" | "credit") => void; flagged: boolean }) {
   return (
-    <div className={cn("inline-flex h-9 w-full rounded-xl border border-input p-0.5", flagged && flaggedClass)} role="group" aria-label="Direction">
+    <div className={cn("inline-flex h-9 w-full rounded-lg border border-input bg-muted/40 p-0.5", flagged && flaggedClass)} role="group" aria-label="Direction">
       {(["debit", "credit"] as const).map((dir) => {
         const active = value === dir;
         const Icon = dir === "debit" ? ArrowUpRight : ArrowDownLeft;
@@ -254,11 +261,11 @@ function DirectionToggle({ value, onChange, flagged }: { value: ReviewRow["direc
             aria-pressed={active}
             onClick={() => onChange(dir)}
             className={cn(
-              "inline-flex flex-1 items-center justify-center gap-1 rounded-lg px-2.5 text-xs font-semibold transition-colors",
-              active ? (dir === "debit" ? "bg-expense text-expense-foreground" : "bg-success text-success-foreground") : "text-muted-foreground hover:bg-muted hover:text-foreground",
+              "inline-flex flex-1 items-center justify-center gap-1 rounded-md px-2 text-xs font-semibold transition-colors",
+              active ? (dir === "debit" ? "bg-expense text-expense-foreground shadow-e1" : "bg-success text-success-foreground shadow-e1") : "text-muted-foreground hover:bg-background hover:text-foreground",
             )}
           >
-            <Icon className="size-3.5" aria-hidden />
+            {active ? <Check className="size-3.5" aria-hidden /> : <Icon className="size-3.5" aria-hidden />}
             {dir === "debit" ? "Charge" : "Credit"}
           </button>
         );
@@ -286,7 +293,7 @@ function StatusBadge({ status, row, onResolve }: { status: RowStatus; row: Revie
     <button
       type="button"
       data-testid="row-status"
-      aria-label={fix ? fixLabel(row) : "Check this row"}
+      aria-label={fix ? fixLabel(row) : checkLabel(row)}
       onClick={(e) => {
         e.stopPropagation();
         onResolve();
@@ -297,22 +304,25 @@ function StatusBadge({ status, row, onResolve }: { status: RowStatus; row: Revie
       )}
     >
       {fix ? <AlertTriangle className="size-3.5" /> : <Circle className="size-3.5" />}
-      <span className="hidden sm:inline">{fix ? fixLabel(row) : "Check"}</span>
+      <span className="hidden truncate sm:inline">{fix ? fixLabel(row) : checkLabel(row)}</span>
     </button>
   );
 }
 
-/** A field-level correction, with its own explicit confirm. */
+/**
+ * A correction that needs a value chosen first (a dropped decimal point, several amounts on one line): the
+ * candidates, and — for a dropped decimal — its own explicit confirm, since picking alone never accepts an amount.
+ */
 function FieldCorrection({ issue, row, onConfirmField, onPatch }: { issue: CaptureIssue; row: ReviewRow; onConfirmField: (f: CaptureField) => void; onPatch: (p: RowPatch) => void }) {
   const field = issue.field;
   const canConfirm = field != null && (field === "amount" ? row.amount != null && row.amount > 0 : field === "date" ? row.date != null : row.direction != null);
   return (
-    <li className="flex flex-col gap-2 rounded-xl border border-warning/30 bg-warning/5 px-3 py-2.5 sm:flex-row sm:items-center">
+    <li className="flex flex-col gap-2 py-2 @lg:flex-row @lg:items-center">
       <p className="flex min-w-0 flex-1 items-start gap-1.5 text-xs text-foreground">
         <AlertTriangle className="mt-px size-3.5 shrink-0 text-warning" />
         <span>{issue.message}</span>
       </p>
-      {issue.code === "decimal_missing" && (
+      {(issue.code === "decimal_missing" || (issue.code === "multiple_amounts" && row.amountCandidates.length > 1)) && (
         <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Amount candidates">
           {row.amountCandidates.map((value) => (
             <button
@@ -330,7 +340,7 @@ function FieldCorrection({ issue, row, onConfirmField, onPatch }: { issue: Captu
           ))}
         </div>
       )}
-      {field && (
+      {field && issue.confirmOnly && (
         <button
           type="button"
           disabled={!canConfirm}
@@ -358,6 +368,8 @@ export function ReviewRowItem({
   onFocus,
   onPatch,
   onConfirmField,
+  onConfirmRow,
+  onUnconfirm,
 }: {
   row: ReviewRow;
   index: number;
@@ -373,6 +385,10 @@ export function ReviewRowItem({
   onFocus: () => void;
   onPatch: (p: RowPatch) => void;
   onConfirmField: (field: CaptureField) => void;
+  /** The row's one confirmation (`confirmRow`). */
+  onConfirmRow: () => void;
+  /** Withdraws every confirmation on the row (`unconfirmRow`). */
+  onUnconfirm: () => void;
 }) {
   const panelId = useId();
   const status = rowStatus(row);
@@ -380,10 +396,7 @@ export function ReviewRowItem({
   const issues = currentIssues(row);
   const fieldOpen = uniqueByCode(open.filter((i) => i.field != null));
   const flagged = (f: CaptureField) => fieldOpen.some((i) => i.field === f) || (f === "amount" && row.amount == null) || (f === "date" && row.date == null) || (f === "direction" && row.direction == null);
-  const rowCheckOpen = open.some((i) => !FIELD_CODES.has(i.code));
-  const otherOpen = uniqueByCode(open.filter((i) => i.field == null && FIELD_CODES.has(i.code)));
-  const advisories = uniqueByCode(issues.filter((i) => !open.some((o) => o.code === i.code) && i.code !== "ocr_unverified"));
-  const rowNotes = uniqueByCode(open.filter((i) => !FIELD_CODES.has(i.code) && i.code !== "ocr_unverified"));
+  const plan = rowConfirmPlan(row);
   const credit = row.direction === "credit";
 
   return (
@@ -475,133 +488,217 @@ export function ReviewRowItem({
       <div id={panelId} className={cn("grid transition-[grid-template-rows] duration-200 ease-out motion-reduce:transition-none", expanded ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
         <div className="overflow-hidden">
           {expanded && (
-            <div className="flex flex-col gap-3 px-3 pb-4 sm:px-4 sm:pl-12">
-              <div className="grid grid-cols-2 gap-2 md:grid-cols-[9.5rem_minmax(0,1fr)_11rem_9.5rem]">
-                <label className="flex flex-col gap-1 text-[11px] font-medium text-muted-foreground">
-                  Date
-                  <input type="date" aria-label="Date" value={toDateInput(row.date)} onChange={(e) => onPatch({ date: fromDateInput(e.target.value) })} className={cn(inputClass, flagged("date") && flaggedClass)} />
-                </label>
-                <label className="col-span-2 flex flex-col gap-1 text-[11px] font-medium text-muted-foreground md:col-span-1 md:row-start-1 md:col-start-2">
+            <div className="@container flex flex-col gap-2.5 px-3 pb-4 sm:pr-4 sm:pl-12" data-testid="row-details">
+              {/* Values — description on its own line until there's room for all four side by side; the amount always
+                  gets a full-width (or ≥ 10.5rem) cell, so a long figure is never clipped inside its input. */}
+              <div className="grid grid-cols-2 gap-2 rounded-xl border border-border bg-background/60 p-2.5 @md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(10.5rem,1.1fr)] @3xl:grid-cols-[9.5rem_minmax(0,1fr)_10.5rem_11rem]">
+                <label className={cn(labelClass, "col-span-2 @md:col-span-3 @3xl:col-span-1 @3xl:col-start-2 @3xl:row-start-1")}>
                   Description
                   <input aria-label="Description" value={row.description} onChange={(e) => onPatch({ description: e.target.value })} className={cn(inputClass, "font-medium")} />
                 </label>
-                <div className="flex flex-col gap-1 text-[11px] font-medium text-muted-foreground">
+                <label className={cn(labelClass, "@3xl:col-start-1 @3xl:row-start-1")}>
+                  Date
+                  <input type="date" aria-label="Date" value={toDateInput(row.date)} onChange={(e) => onPatch({ date: fromDateInput(e.target.value) })} className={cn(inputClass, "tabular-nums", flagged("date") && flaggedClass)} />
+                </label>
+                <div className={labelClass}>
                   Charge / Credit
                   <DirectionToggle value={row.direction} onChange={(direction) => onPatch({ direction })} flagged={flagged("direction")} />
                 </div>
-                <label className="flex flex-col gap-1 text-[11px] font-medium text-muted-foreground" htmlFor={`${panelId}-amount`}>
+                <label className={cn(labelClass, "col-span-2 @md:col-span-1")} htmlFor={`${panelId}-amount`}>
                   Amount
                   <AmountField id={`${panelId}-amount`} value={row.amount} onChange={(amount) => onPatch({ amount })} flagged={flagged("amount")} />
                 </label>
+                {row.direction && (
+                  <div className="col-span-full flex flex-wrap items-center gap-1.5 pt-1 text-[11px] text-muted-foreground" role="group" aria-label="Action">
+                    Import as
+                    {CAPTURE_ACTIONS_BY_DIRECTION[row.direction].map((action: CaptureAction) => (
+                      <button
+                        key={action}
+                        type="button"
+                        aria-pressed={row.action === action}
+                        onClick={() => onPatch({ action })}
+                        className={cn("h-6 rounded-full border px-2.5 font-medium transition-colors", row.action === action ? "border-foreground/40 bg-foreground/5 text-foreground" : "border-border hover:text-foreground")}
+                      >
+                        {ACTION_META[action].label}
+                      </button>
+                    ))}
+                    <span className="text-muted-foreground/70">· category is chosen at approval</span>
+                  </div>
+                )}
               </div>
 
-              {row.direction && (
-                <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground" role="group" aria-label="Action">
-                  Import as
-                  {CAPTURE_ACTIONS_BY_DIRECTION[row.direction].map((action: CaptureAction) => (
-                    <button
-                      key={action}
-                      type="button"
-                      aria-pressed={row.action === action}
-                      onClick={() => onPatch({ action })}
-                      className={cn("h-6 rounded-full border px-2.5 font-medium transition-colors", row.action === action ? "border-foreground/40 bg-foreground/5 text-foreground" : "border-border hover:text-foreground")}
-                    >
-                      {ACTION_META[action].label}
-                    </button>
-                  ))}
-                  <span className="text-muted-foreground/70">· category is chosen at approval</span>
-                </div>
-              )}
+              <RowCheck row={row} status={status} open={open} issues={issues} plan={plan} onConfirmField={onConfirmField} onPatch={onPatch} onConfirmRow={onConfirmRow} onUnconfirm={onUnconfirm} />
 
-              {ocr && row.ocr && (
-                <figure className="flex flex-col gap-1">
-                  <figcaption className="text-[11px] font-medium text-muted-foreground">On the statement</figcaption>
-                  <RowZoom capture={ocr} box={row.ocr.box} />
-                </figure>
-              )}
+              {ocr && row.ocr && <RowEvidence ocr={ocr} row={row} />}
 
-              {(fieldOpen.length > 0 || otherOpen.length > 0) && (
-                <ul className="flex flex-col gap-1.5" aria-label="Corrections needed">
-                  {[...fieldOpen, ...otherOpen].map((issue) => (
-                    <FieldCorrection key={issue.code} issue={issue} row={row} onConfirmField={onConfirmField} onPatch={onPatch} />
-                  ))}
-                </ul>
-              )}
-
-              {(rowNotes.length > 0 || advisories.length > 0 || row.notes.length > 0) && (
-                <ul className="flex flex-col gap-1 text-xs">
-                  {rowNotes.map((issue) => (
-                    <li key={issue.code} className="flex items-start gap-1.5 text-foreground/80">
-                      <AlertTriangle className="mt-px size-3.5 shrink-0 text-warning" />
-                      {issue.message}
-                    </li>
-                  ))}
-                  {advisories.map((issue) => (
-                    <li key={issue.code} className="flex items-start gap-1.5 text-muted-foreground">
-                      <Info className="mt-px size-3.5 shrink-0" />
-                      {issue.message}
-                    </li>
-                  ))}
-                  {row.notes.map((note) => (
-                    <li key={note} className="flex items-start gap-1.5 text-muted-foreground">
-                      <Info className="mt-px size-3.5 shrink-0" />
-                      {note}
-                    </li>
-                  ))}
-                </ul>
-              )}
-
-              <div className="flex flex-wrap items-center gap-2 border-t border-border/70 pt-3">
-                {row.confirmed ? (
-                  <span className="inline-flex items-center gap-1.5 text-xs font-medium text-success">
-                    <CircleCheck className="size-4" />
-                    {row.source === "ocr" ? "Checked against image" : "Values confirmed"}
-                    {row.bulkConfirmed && <span className="font-normal text-muted-foreground">(bulk)</span>}
-                    <button type="button" aria-label="Undo verification" onClick={() => onPatch({ confirmed: false })} className="ml-1 inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-muted-foreground hover:bg-muted hover:text-foreground">
-                      <Undo2 className="size-3" /> Undo
-                    </button>
-                  </span>
-                ) : rowCheckOpen ? (
-                  <button
-                    type="button"
-                    disabled={!isComplete(row)}
-                    onClick={() => onPatch({ confirmed: true })}
-                    className="inline-flex h-8 items-center gap-1.5 rounded-full border border-primary/60 bg-primary/10 px-3.5 text-xs font-semibold text-foreground transition-colors hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    <Check className="size-3.5" />
-                    {row.source === "ocr" ? "Row matches the image" : "Values are correct"}
-                  </button>
-                ) : null}
-                {!isComplete(row) && <span className="text-[11px] text-muted-foreground">Fill in the missing value{row.amount == null && row.date == null ? "s" : ""} first.</span>}
-                <details className="ml-auto text-[11px] text-muted-foreground">
-                  <summary className="cursor-pointer select-none hover:text-foreground">Technical details</summary>
-                  <dl className="mt-1.5 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5">
-                    <dt>Source</dt>
-                    <dd className="font-mono whitespace-pre-wrap text-foreground/80">{row.sourceText}</dd>
-                    <dt>Lines</dt>
-                    <dd>
-                      {row.lineStart + 1}
-                      {row.lineEnd > row.lineStart ? `–${row.lineEnd + 1}` : ""}
-                    </dd>
-                    {row.extraColumns.length > 0 && (
-                      <>
-                        <dt>Other columns</dt>
-                        <dd>{row.extraColumns.join(" · ")}</dd>
-                      </>
-                    )}
-                    {row.ocr && (
-                      <>
-                        <dt>OCR</dt>
-                        <dd>lowest date/amount/C-D confidence {Math.round(row.ocr.minConfidence)}%</dd>
-                      </>
-                    )}
-                  </dl>
-                </details>
-              </div>
+              <details className="text-[11px] text-muted-foreground">
+                <summary className="w-fit cursor-pointer select-none hover:text-foreground">Technical details</summary>
+                <dl className="mt-1.5 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5">
+                  <dt>Source</dt>
+                  <dd className="font-mono break-words whitespace-pre-wrap text-foreground/80">{row.sourceText}</dd>
+                  <dt>Lines</dt>
+                  <dd>
+                    {row.lineStart + 1}
+                    {row.lineEnd > row.lineStart ? `–${row.lineEnd + 1}` : ""}
+                  </dd>
+                  {row.extraColumns.length > 0 && (
+                    <>
+                      <dt>Other columns</dt>
+                      <dd>{row.extraColumns.join(" · ")}</dd>
+                    </>
+                  )}
+                  {row.ocr && (
+                    <>
+                      <dt>OCR</dt>
+                      <dd>lowest date/amount/C-D confidence {Math.round(row.ocr.minConfidence)}%</dd>
+                    </>
+                  )}
+                </dl>
+              </details>
             </div>
           )}
         </div>
       </div>
     </li>
+  );
+}
+
+const CONFIRM_ORDER: CaptureField[] = ["date", "amount", "direction"];
+
+/** The one action's label names exactly what it accepts: "Confirm ₹452.00 · Charge", or the plain row check. */
+export function confirmLabel(row: ReviewRow, plan: RowConfirmPlan): string {
+  if (plan.fields.length === 0) return row.source === "ocr" ? "Row matches the image" : "Values are correct";
+  const parts = CONFIRM_ORDER.filter((f) => plan.fields.includes(f)).map((f) =>
+    f === "amount" ? `₹${formatAmount(row.amount!)}` : f === "date" ? formatDate(row.date) : row.direction === "credit" ? "Credit" : "Charge",
+  );
+  return `Confirm ${parts.join(" · ")}`;
+}
+
+/**
+ * What's left to do on the row, said once: one line per distinct problem (the generic "compare with the image" only
+ * when nothing more specific is open), value pickers where a value must be chosen, and ONE primary action.
+ */
+function RowCheck({
+  row,
+  status,
+  open,
+  issues,
+  plan,
+  onConfirmField,
+  onPatch,
+  onConfirmRow,
+  onUnconfirm,
+}: {
+  row: ReviewRow;
+  status: RowStatus;
+  open: CaptureIssue[];
+  issues: CaptureIssue[];
+  plan: RowConfirmPlan | null;
+  onConfirmField: (f: CaptureField) => void;
+  onPatch: (p: RowPatch) => void;
+  onConfirmRow: () => void;
+  onUnconfirm: () => void;
+}) {
+  const pickers = uniqueByCode(open.filter((i) => i.code === "decimal_missing" || i.code === "multiple_amounts"));
+  const specific = uniqueByCode(open.filter((i) => i.code !== "ocr_unverified" && !pickers.includes(i)));
+  const lines = specific.length > 0 || pickers.length > 0 ? specific : uniqueByCode(open.filter((i) => i.code === "ocr_unverified"));
+  const advisories = uniqueByCode(issues.filter((i) => !i.blocking && i.code !== "ocr_unverified"));
+  const confirmedByUser = row.confirmed || row.confirmedFields.length > 0;
+  const ready = status === "ready";
+
+  if (status === "excluded" || status === "imported") {
+    return row.notes.length > 0 ? <Notes items={row.notes} /> : null;
+  }
+
+  return (
+    <div
+      data-testid="row-check"
+      data-state={status}
+      className={cn("rounded-xl border px-3 py-2.5", ready ? "border-success/30 bg-success/[0.04]" : status === "fix" ? "border-warning/40 bg-warning/[0.05]" : "border-border bg-muted/30")}
+    >
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <p className={cn("flex min-w-0 flex-1 items-center gap-1.5 text-xs font-semibold", ready ? "text-success" : status === "fix" ? "text-warning" : "text-foreground")}>
+          {ready ? <CircleCheck className="size-4 shrink-0" /> : status === "fix" ? <AlertTriangle className="size-4 shrink-0" /> : <Circle className="size-4 shrink-0" />}
+          <span className="min-w-0">
+            {ready
+              ? confirmedByUser
+                ? `Ready — ${row.source === "ocr" ? "checked against the image" : "values confirmed"} by you${row.bulkConfirmed ? " (bulk)" : ""}`
+                : row.source === "ocr"
+                  ? `Ready — date, amount and Charge/Credit read clearly${row.ocr?.secondRead?.length ? ", unclear values double-checked by a second read" : ""}`
+                  : "Ready — nothing to check"
+              : status === "fix"
+                ? plan
+                  ? "Check the highlighted values"
+                  : "Needs a correction"
+                : "Needs a quick check"}
+          </span>
+        </p>
+        {!ready && plan && (
+          <button
+            type="button"
+            data-testid="confirm-row"
+            onClick={onConfirmRow}
+            className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-primary px-3.5 text-xs font-semibold text-primary-foreground shadow-e1 transition-colors hover:bg-[var(--primary-hover)] focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+          >
+            <Check className="size-3.5" />
+            {confirmLabel(row, plan)}
+          </button>
+        )}
+        {confirmedByUser && (
+          <button type="button" aria-label="Undo verification" onClick={onUnconfirm} className="inline-flex h-7 shrink-0 items-center gap-1 rounded-full px-2 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground">
+            <Undo2 className="size-3" /> Undo
+          </button>
+        )}
+      </div>
+
+      {!ready && (lines.length > 0 || pickers.length > 0) && (
+        <ul className="mt-1.5 flex flex-col divide-y divide-border/60" aria-label="Corrections needed">
+          {lines.map((issue) => (
+            <li key={issue.code} className="flex items-start gap-1.5 py-1.5 text-xs text-foreground/85">
+              <span className={cn("mt-1.5 size-1.5 shrink-0 rounded-full", status === "fix" ? "bg-warning" : "bg-muted-foreground/60")} aria-hidden />
+              {issue.message}
+            </li>
+          ))}
+          {pickers.map((issue) => (
+            <FieldCorrection key={issue.code} issue={issue} row={row} onConfirmField={onConfirmField} onPatch={onPatch} />
+          ))}
+        </ul>
+      )}
+      {!ready && !isComplete(row) && <p className="mt-1 text-[11px] text-muted-foreground">Fill in the missing value{row.amount == null && row.date == null ? "s" : ""} above.</p>}
+      {(advisories.length > 0 || row.notes.length > 0) && <Notes items={[...advisories.map((i) => i.message), ...row.notes]} />}
+    </div>
+  );
+}
+
+function Notes({ items }: { items: string[] }) {
+  return (
+    <ul className="mt-1.5 flex flex-col gap-1 text-[11px] text-muted-foreground">
+      {[...new Set(items)].map((note) => (
+        <li key={note} className="flex items-start gap-1.5">
+          <Info className="mt-px size-3 shrink-0" />
+          {note}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** The row's own strip of the original image, kept visibly apart from the text the computer read from it. */
+function RowEvidence({ ocr, row }: { ocr: OcrCapture; row: ReviewRow }) {
+  return (
+    <figure className="flex flex-col gap-1.5" data-testid="row-evidence">
+      <figcaption className="flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
+        <ImageIcon className="size-3.5" aria-hidden /> Original image
+        {row.ocr!.flaggedBoxes?.length ? <span className="font-normal">· unclear values outlined</span> : null}
+      </figcaption>
+      <RowZoom capture={ocr} box={row.ocr!.box} flagged={row.ocr!.flaggedBoxes ?? []} />
+      <p className="flex min-w-0 items-start gap-1.5 text-[11px] text-muted-foreground">
+        <ScanText className="mt-px size-3.5 shrink-0" aria-hidden />
+        <span className="shrink-0">Text as read:</span>
+        <span className="min-w-0 font-mono break-all text-foreground/80" data-testid="row-ocr-text">
+          {row.sourceText.replace(/\t/g, "  ")}
+        </span>
+      </p>
+    </figure>
   );
 }

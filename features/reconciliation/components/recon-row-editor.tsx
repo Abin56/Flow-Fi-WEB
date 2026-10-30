@@ -6,7 +6,9 @@
  * fields fold from one dense band into two columns without the page knowing.
  *
  * Captured values — date, description, amount, Charge/Credit — are editable (D6) through Smart Capture's own patch
- * rules, and any change must be re-confirmed. Category and notes are draft fields used only by the final approval;
+ * rules, and any change must be re-confirmed. OCR checks are settled here too: what's unclear is said once, beside
+ * the row's strip of the original screenshot, with ONE confirmation (`confirmRowValues`) — a value that has to be
+ * picked (dropped decimal point, several amounts) gets its candidates instead. Category and notes are draft fields used only by the final approval;
  * the account is the review's statement account (read-only). Person and Split stay disabled until their write paths
  * are proven safe. Nothing here writes to FlowFi or touches an existing transaction.
  */
@@ -21,8 +23,11 @@ import { ClayButton } from "@/components/clay/clay-button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import { currentIssues, openIssues, type RowPatch } from "@/features/smart-capture/lib/capture-review";
-import type { CaptureField } from "@/features/smart-capture/lib/parse-pasted-statement";
+import { currentIssues, openIssues, rowConfirmPlan, type RowPatch } from "@/features/smart-capture/lib/capture-review";
+import type { CaptureField, CaptureIssue } from "@/features/smart-capture/lib/parse-pasted-statement";
+import { RowZoom } from "@/features/smart-capture/components/ocr-source-view";
+import type { OcrCapture } from "@/features/smart-capture/components/capture-input";
+import { canConfirmRowValues } from "../lib/decisions";
 import type { Category } from "@/lib/models/category";
 import type { ReconRow, RowDecision } from "../lib/types";
 import { formatRowDate } from "./recon-ui";
@@ -99,6 +104,19 @@ function CommitInput({ value, onCommit, label, className, inputMode, type = "tex
   );
 }
 
+/** The one confirmation names what it accepts: "Confirm ₹452.00 · Charge", or the plain row check. */
+export function confirmActionLabel(row: ReconRow): string {
+  const fields = rowConfirmPlan(row)?.fields ?? [];
+  if (fields.length === 0) return row.source === "ocr" && !row.needsReconfirm ? "Row matches the image" : "Values are correct";
+  const order: CaptureField[] = ["date", "amount", "direction"];
+  const parts = order
+    .filter((f) => fields.includes(f))
+    .map((f) =>
+      f === "amount" ? `₹${row.amount!.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : f === "date" ? formatRowDate(row.date) : row.direction === "credit" ? "Credit" : "Charge",
+    );
+  return `Confirm ${parts.join(" · ")}`;
+}
+
 export function categoriesForDirection(categories: Category[], direction: ReconRow["direction"]): Category[] {
   const wanted = direction === "credit" ? "income" : "expense";
   return categories.filter((c) => c.isActive !== false && c.deletedAt == null && (c.type === wanted || c.type === "both"));
@@ -113,10 +131,13 @@ export function ReconRowEditor({
   onConfirmField,
   onDecide,
   accountLabel = null,
+  screenshot = null,
 }: {
   row: ReconRow;
   decision: RowDecision;
   categories: Category[];
+  /** The capture's screenshot (this tab only) — the row's strip is shown beside its checks. */
+  screenshot?: OcrCapture | null;
   /** The statement account ("HDFC Millennia •••• 4821") — read-only here; it's chosen once for the whole review. */
   accountLabel?: string | null;
   onPatch: (patch: RowPatch) => void;
@@ -126,9 +147,13 @@ export function ReconRowEditor({
 }) {
   const open = openIssues(row);
   const informational = currentIssues(row).filter((i) => !i.blocking);
-  const needsRowConfirm = row.needsReconfirm || open.some((i) => !i.strict);
   const options = categoriesForDirection(categories, row.direction);
   const flagged = open.length > 0 || row.needsReconfirm;
+  const pickers = open.filter((i, n) => (i.code === "decimal_missing" || i.code === "multiple_amounts") && open.findIndex((o) => o.code === i.code) === n);
+  const specific = open.filter((i, n) => i.code !== "ocr_unverified" && !pickers.includes(i) && open.findIndex((o) => o.code === i.code) === n);
+  // The generic "compare with the image" only when nothing more specific is open — one problem, said once.
+  const lines: CaptureIssue[] = specific.length > 0 || pickers.length > 0 ? specific : open.filter((i) => i.code === "ocr_unverified").slice(0, 1);
+  const canConfirm = canConfirmRowValues(row);
   const categoryOptions: SheetPickerOption[] = options.map((c) => {
     const CategoryIcon = categoryIconFor(c.iconKey);
     return { value: c.name, label: c.name, icon: <CategoryIcon className="size-4" strokeWidth={2} /> };
@@ -249,15 +274,36 @@ export function ReconRowEditor({
                     <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-warning" /> You changed this row — check the values against the statement and confirm.
                   </li>
                 )}
-                {open.map((issue, i) => (
-                  <li key={`${issue.code}-${i}`} className="flex flex-wrap items-center gap-x-2 gap-y-1.5 text-foreground">
-                    <AlertTriangle className="size-3.5 shrink-0 text-warning" />
+                {lines.map((issue, i) => (
+                  <li key={`${issue.code}-${i}`} className="flex items-start gap-1.5 text-foreground">
+                    <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-warning" />
                     <span className="min-w-0 flex-1">{issue.message}</span>
-                    {issue.strict && issue.field && (
-                      <ClayButton size="sm" variant="secondary" onClick={() => onConfirmField(issue.field!)}>
-                        Confirm {issue.field === "direction" ? "Charge/Credit" : issue.field}
-                      </ClayButton>
-                    )}
+                  </li>
+                ))}
+                {pickers.map((issue) => (
+                  <li key={issue.code} className="flex flex-col gap-1.5 text-foreground" data-testid="amount-picker">
+                    <span className="flex items-start gap-1.5">
+                      <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-warning" />
+                      <span className="min-w-0 flex-1">{issue.message}</span>
+                    </span>
+                    <span className="flex flex-wrap items-center gap-1.5 pl-5" role="group" aria-label="Amount candidates">
+                      {row.amountCandidates.map((value) => (
+                        <button
+                          key={value}
+                          type="button"
+                          aria-pressed={row.amount === value}
+                          onClick={() => onPatch({ amount: value })}
+                          className={cn("h-7 rounded-full border px-2.5 text-xs font-semibold tabular-nums transition-colors", row.amount === value ? "border-primary bg-primary/15" : "border-border bg-card hover:border-primary")}
+                        >
+                          ₹{value.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </button>
+                      ))}
+                      {issue.confirmOnly && issue.field && (
+                        <ClayButton size="sm" variant="secondary" disabled={row.amount == null} onClick={() => onConfirmField(issue.field!)}>
+                          {row.amount != null ? `Confirm ₹${row.amount.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "Confirm amount"}
+                        </ClayButton>
+                      )}
+                    </span>
                   </li>
                 ))}
                 {informational.map((issue, i) => (
@@ -269,14 +315,23 @@ export function ReconRowEditor({
             ) : (
               <p>Nothing flagged on this row.</p>
             )}
-            {needsRowConfirm ? (
-              <button type="button" className={cn(SHEET_BUTTON.secondary, "mt-2.5 h-9 w-full")} onClick={onConfirmRow}>
-                <CheckCircle2 className="size-4 text-[oklch(0.44_0.13_149)] dark:text-success" /> Values are correct
+            {screenshot && row.ocr && (
+              <div className="mt-2.5 flex flex-col gap-1" data-testid="editor-evidence">
+                <p className="text-[11px] font-medium text-foreground/72">Original image{row.ocr.flaggedBoxes?.length ? " · unclear values outlined" : ""}</p>
+                <RowZoom capture={screenshot} box={row.ocr.box} flagged={row.ocr.flaggedBoxes ?? []} />
+                <p className="text-[11px] text-foreground/60">
+                  Text as read: <span className="font-mono break-all text-foreground/80">{row.sourceText.replace(/\t/g, "  ")}</span>
+                </p>
+              </div>
+            )}
+            {flagged && canConfirm ? (
+              <button type="button" data-testid="confirm-row" className={cn(SHEET_BUTTON.secondary, "mt-2.5 h-9 w-full")} onClick={onConfirmRow}>
+                <CheckCircle2 className="size-4 text-[oklch(0.44_0.13_149)] dark:text-success" /> {confirmActionLabel(row)}
               </button>
             ) : (
-              open.length === 0 && (
+              !flagged && (
                 <p className="mt-1.5 flex items-center gap-1.5 font-semibold text-[oklch(0.44_0.13_149)] dark:text-success">
-                  <CheckCircle2 className="size-3.5" /> Values checked
+                  <CheckCircle2 className="size-3.5" /> {row.confirmed || row.confirmedFields.length > 0 ? "Values checked" : row.source === "ocr" ? "Read clearly — nothing to check" : "Values checked"}
                 </p>
               )
             )}

@@ -31,6 +31,9 @@ const eslintConfig = defineConfig([
     // functions/tests are still linted here; only the generated output is
     // excluded.
     "functions/lib/**",
+    // Vendored, minified tesseract.js worker/core assets copied into public/ocr;
+    // third-party build output, not hand-written source.
+    "public/ocr/**",
   ]),
 ]);
 

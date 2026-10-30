@@ -29,13 +29,15 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TransactionSheet } from "@/components/finance/transaction-sheet";
 import { DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { useMediaQuery } from "@/hooks/use-media-query";
+import { isComplete, openIssues, reviewTotals } from "@/features/smart-capture/lib/capture-review";
 import { FOCUS_TOGGLE_TESTID, useFocusMode } from "../hooks/use-focus-mode";
 import { useReconciliationApproval } from "../hooks/use-reconciliation-approval";
 import { useReconciliationSession } from "../hooks/use-reconciliation-session";
 import { sourceLabel, type RecordsSync } from "../hooks/use-reconciliation-data";
 import { consumePendingHandoff, declinePendingHandoff, getHandoffState, releaseReconciliationScreenshot, screenshotFor, subscribeHandoff } from "../lib/capture-handoff";
 import { buildCycleResolver } from "../lib/card-cycle-status";
-import { applyBulkLink, bulkLinkEligible, decisionErrors, decisionFor, importBlockReasons, ownTransferConfirmFor, rejectCandidate, reviewSummary, setDecision, type RowGateContext } from "../lib/decisions";
+import { applyBulkLink, bulkLinkEligible, decisionErrors, decisionFor, importBlockReasons, ownTransferConfirmFor, rejectCandidate, reviewSummary, rowCheckLabel, setDecision, type RowGateContext } from "../lib/decisions";
+import { bulkImportPlan, merchantCategoryIndex } from "../lib/bulk-import";
 import { diffDecisions, pushHistory, undoLast, type HistoryEntry } from "../lib/decision-history";
 import { calendarDayIndex } from "../lib/amounts-and-days";
 import {
@@ -68,7 +70,8 @@ import type { QuickAction } from "./recon-decision-menu";
 import { ReconAccountBar, type AccountOption } from "./recon-header";
 import { ReconIntake } from "./recon-intake";
 import { ReconMobileList } from "./recon-mobile-list";
-import { ReconRowEditor, ReconRowSheet } from "./recon-row-editor";
+import { categoriesForDirection, ReconRowEditor, ReconRowSheet } from "./recon-row-editor";
+import { BulkImportDialog, ReviewImportSummary } from "./review-import-summary";
 import { ReconTable } from "./recon-table";
 import { ReconToolbar, type ReconFilter, type ReconSort } from "./recon-toolbar";
 import { DECISION_META, KEEP_BOTH_LABEL, SHEET_TITLE_BAR, accountIdentity, accountLabel, decisionShort } from "./recon-ui";
@@ -119,6 +122,7 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [compareOpen, setCompareOpen] = useState(false);
   const [bulkConfirmOpen, setBulkConfirmOpen] = useState(false);
+  const [bulkImportOpen, setBulkImportOpen] = useState(false);
   const [lastBulk, setLastBulk] = useState<{ id: string; count: number } | null>(null);
   const [pendingAccount, setPendingAccount] = useState<string | null>(null);
   const [discardOpen, setDiscardOpen] = useState(false);
@@ -185,7 +189,7 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
       if (taken) {
         s.startFromHandoff(taken);
         /* eslint-disable-next-line react-hooks/set-state-in-effect -- reports the handoff that was just applied */
-        setHandoffNotice(`${taken.rows.filter((r) => r.include).length} verified rows arrived from Smart Capture.`);
+        setHandoffNotice(handoffNoticeText(taken.rows));
       }
       return;
     }
@@ -245,6 +249,24 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
     },
     [matches, decisions, gate],
   );
+
+  // ---- Review & Import summary + bulk "Import new rows" (draft only) ----
+  const moneyTotals = useMemo(() => reviewTotals(rows.filter((r) => !r.captureExcluded)), [rows]);
+  const summaryCounts = useMemo(() => {
+    const included = rows.filter((r) => r.include && !r.captureExcluded && matches.get(r.id)?.state !== "excluded");
+    const possibleDuplicates = included.filter((r) => {
+      const m = matches.get(r.id);
+      return !!m && m.state !== "already_imported" && (m.candidates.length > 0 || m.pendingSms.length > 0 || m.notes.some((n) => n.kind === "possible_repeat") || openIssues(r).some((i) => i.code === "possible_repeat"));
+    }).length;
+    return { included: included.length, possibleDuplicates, toCheck: included.filter((r) => rowCheckLabel(r) != null).length, willImport: readiness?.proposedNew ?? 0 };
+  }, [rows, matches, readiness]);
+  const categoryIndex = useMemo(() => merchantCategoryIndex(data.transactions, data.categories), [data.transactions, data.categories]);
+  const bulkPlan = useMemo(
+    () => (session && accountId && matchStatus === "ready" ? bulkImportPlan(rows, matches, decisions, gate, categoryIndex) : { rows: [], creditsLeft: 0 }),
+    [session, accountId, matchStatus, rows, matches, decisions, gate, categoryIndex],
+  );
+  const rowsById = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
+  const expenseCategoryNames = useMemo(() => categoriesForDirection(data.categories, "debit").map((c) => c.name), [data.categories]);
 
   const counts = useMemo(() => {
     const c = { all: 0, open: 0, exact: 0, near: 0, multiple: 0, no_match: 0, in_inbox: 0, conflict: 0, imported: 0, decided: 0, excluded: 0 } satisfies Record<ReconFilter, number>;
@@ -468,6 +490,27 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
     return out;
   };
 
+  /** Records the bulk "Import new" as ordinary draft decisions — one Undo step. */
+  function applyBulkImport(choices: { rowId: string; category: string }[]) {
+    let next = decisions;
+    for (const c of choices) next = setDecision(next, c.rowId, { kind: "import_new", category: c.category, notSameAck: false });
+    remember(`Import new · ${choices.length} row${choices.length === 1 ? "" : "s"}`, next, choices.map((c) => c.rowId));
+    s.replaceDecisions(next);
+    setBulkImportOpen(false);
+  }
+
+  /** The next row whose captured values still need a check or a correction — opened in its editor. */
+  function goToNextCheck() {
+    const pool = rows.filter((r) => rowCheckLabel(r) != null);
+    if (pool.length === 0) return;
+    if (!visible.some((r) => r.id === pool[0].id)) setFilter("all");
+    const at = rows.findIndex((r) => r.id === activeId);
+    const next = pool.find((r) => rows.indexOf(r) > at) ?? pool[0];
+    setSelectedId(next.id);
+    if (isDesktop) setInspectorOpen(true);
+    else setCompareOpen(true);
+  }
+
   // The next row that still needs a decision, after the one in focus (wrapping round), within the rows now showing.
   function goToNextOpen() {
     const isOpen = (r: ReconRow) => filterOf(r).includes("open");
@@ -652,6 +695,7 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
       onConfirmField={(field) => s.confirmField(row.id, field)}
       onDecide={(patch) => decide(row.id, patch, `Details · row ${numberOf(row.id)}`)}
       accountLabel={accountId ? accountName(accountId) : null}
+      screenshot={screenshot}
     />
   );
   /** The desktop editor sheet for the selected row. Its arrows move the selection, like J/K — they never decide or save. */
@@ -743,7 +787,7 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
       data-testid="recon-workspace"
       data-focus={focusMode.focus ? "true" : "false"}
     >
-      <WorkspaceHeader icon={GitCompareArrows} title="Reconciliation" current="reconcile" steps={{ capture: { href: "/smart-capture" }, review: { href: "/smart-capture" } }}>
+      <WorkspaceHeader icon={GitCompareArrows} title="Review & Import" current="reconcile" steps={{ capture: { href: "/smart-capture" } }}>
         <Link
           href="/smart-capture"
           data-testid="back-to-capture"
@@ -864,6 +908,10 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
                 setLastBulk(null);
               }}
             />
+          )}
+
+          {accountId && matchStatus === "ready" && (
+            <ReviewImportSummary totals={moneyTotals} counts={summaryCounts} bulkCount={bulkPlan.rows.length} onBulk={() => setBulkImportOpen(true)} onNextCheck={goToNextCheck} />
           )}
 
           {undoNotice && (
@@ -1044,6 +1092,15 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
           resetView();
         }}
       />
+      <BulkImportDialog
+        open={bulkImportOpen}
+        onOpenChange={setBulkImportOpen}
+        plan={bulkPlan}
+        rowsById={rowsById}
+        numberOf={numberOf}
+        categoryNames={expenseCategoryNames}
+        onApply={applyBulkImport}
+      />
       <ConfirmDialog
         open={bulkConfirmOpen}
         onOpenChange={setBulkConfirmOpen}
@@ -1096,7 +1153,7 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
           const taken = consumePendingHandoff();
           if (taken) {
             s.startFromHandoff(taken);
-            setHandoffNotice(`${taken.rows.filter((r) => r.include).length} verified rows arrived from Smart Capture.`);
+            setHandoffNotice(handoffNoticeText(taken.rows));
           }
           setReplaceOpen(false);
           resetView();
@@ -1215,7 +1272,7 @@ function ReadinessBar({
               </ClayButton>
             )}
             <ClayButton size="sm" variant={canApprove ? "primary" : "secondary"} onClick={onApprove} disabled={!canApprove} data-testid="open-approval">
-              Review &amp; approve
+              {readiness && readiness.proposedNew > 0 ? `Import ${readiness.proposedNew} transaction${readiness.proposedNew === 1 ? "" : "s"}…` : "Finish review…"}
             </ClayButton>
           </div>
         )}
@@ -1253,4 +1310,11 @@ function Notice({ children, onDismiss, testId, icon: Icon = History }: { childre
       </button>
     </div>
   );
+}
+
+/** "20 rows arrived from Smart Capture — 3 need a check before import." */
+function handoffNoticeText(rows: ReconRow[]): string {
+  const included = rows.filter((r) => r.include);
+  const toCheck = included.filter((r) => !isComplete(r) || openIssues(r).length > 0).length;
+  return `${included.length} row${included.length === 1 ? "" : "s"} arrived from Smart Capture${toCheck > 0 ? ` — ${toCheck} need${toCheck === 1 ? "s" : ""} a check before import` : ", all read clearly"}.`;
 }

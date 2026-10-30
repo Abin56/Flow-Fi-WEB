@@ -10,6 +10,8 @@ import { useNetWorth } from "@/hooks/use-accounts";
 import { useCreditCards } from "@/hooks/use-credit-cards";
 import { cardFundedLoanCardId } from "@/lib/engines/credit-utilization";
 import { loanBalanceSheet, netWorthWithLoans, type LoanBalanceSheet } from "@/lib/engines/loan-balance-sheet";
+import { netWorthWithLenderCharges, unpaidLenderChargeTotal } from "@/lib/engines/lender-charge-accounting";
+import { useLenderCharges } from "@/hooks/use-lender-charges";
 import { outstandingPrincipalFor } from "@/lib/engines/loan-outstanding";
 import { useLoanRows } from "@/features/loans/hooks/use-loans-data";
 import { useEmiRows } from "@/features/emi/hooks/use-emi-data";
@@ -20,7 +22,10 @@ import { breakdownEntryOf, peopleNetWorthPosition } from "@/lib/engines/person-p
 export function useLoanBalanceSheet(): {
   sheet: LoanBalanceSheet;
   accountBalances: number;
+  /** Net Worth after unpaid lender charges (`unpaidLenderCharges`); equals the principal-only figure while none exist. */
   netWorth: number;
+  /** Billed, still-unpaid lender charges across all loans and EMIs — its own liability, never part of `sheet` (principal only). */
+  unpaidLenderCharges: number;
   /**
    * What I owe people directly (borrowed, unpaid shares), GROSS per person — never reduced by what the same
    * person owes me. Already inside `netWorth` via the People direct balance (receivable − payable).
@@ -33,6 +38,8 @@ export function useLoanBalanceSheet(): {
   isLoading: boolean;
 } {
   const accountBalances = useNetWorth();
+  const { charges: lenderCharges } = useLenderCharges();
+  const unpaidLenderCharges = useMemo(() => unpaidLenderChargeTotal(lenderCharges), [lenderCharges]);
   const { rows: loanRows, isLoading: loansLoading } = useLoanRows();
   const { rows: emiRows, isLoading: emisLoading } = useEmiRows();
   const { data: cards = [], isLoading: cardListLoading } = useCreditCards();
@@ -84,7 +91,8 @@ export function useLoanBalanceSheet(): {
   return {
     sheet,
     accountBalances,
-    netWorth: netWorthWithLoans(accountBalances, sheet, people.balance),
+    netWorth: netWorthWithLenderCharges(netWorthWithLoans(accountBalances, sheet, people.balance), unpaidLenderCharges),
+    unpaidLenderCharges,
     peoplePayable: people.payable,
     peopleReceivable: people.receivable,
     peopleAdvanceHeld: people.advanceHeld,

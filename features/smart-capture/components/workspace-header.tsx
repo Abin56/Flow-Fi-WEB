@@ -2,7 +2,7 @@
 
 /**
  * The compact workspace header shared by Smart Capture and Reconciliation: icon, title, the three-step indicator
- * (Capture → Review → Check duplicates) and a slot for the screen's own controls. One line on desktop — the
+ * (Capture → Review & Import) and a slot for the screen's own controls. One line on desktop — the
  * explanation lives next to the controls that need it, not in a banner.
  */
 
@@ -13,10 +13,13 @@ import { cn } from "@/lib/utils";
 
 export type WorkflowStepId = "capture" | "review" | "reconcile";
 
+/**
+ * Two steps: Capture, then Review & Import (OCR checks, duplicates and the final import on one screen). "review" stays
+ * a valid id — Smart Capture's old standalone review is no longer part of the flow, so it isn't shown as a step.
+ */
 export const WORKFLOW_STEPS: { id: WorkflowStepId; label: string }[] = [
   { id: "capture", label: "Capture" },
-  { id: "review", label: "Review" },
-  { id: "reconcile", label: "Check duplicates" },
+  { id: "reconcile", label: "Review & Import" },
 ];
 
 export interface StepLink {

@@ -272,6 +272,16 @@ const LedgerRow = memo(function LedgerRow({ row, actions, showDate }: { row: Can
                 {row.accountHint}
               </span>
             )}
+            {row.accountSuggestion && (
+              <span aria-hidden className="hidden @4xl:inline">
+                <Dot />
+              </span>
+            )}
+            {row.accountSuggestion && (
+              <span className="min-w-0 basis-full truncate font-medium text-foreground/80 @4xl:basis-auto" title="A saved account ends in the same last-4 — open Review to confirm it. Nothing is linked automatically." data-testid="account-suggestion">
+                Suggested: {row.accountSuggestion}
+              </span>
+            )}
             {previewFacts.length > 0 && <QuickPreviewToggle open={previewOpen} onToggle={() => setPreviewOpen((o) => !o)} />}
           </span>
           {(confidenceNote || looksLikeRawReference(candidate.merchant) || (row.selectBlockedReason && !row.selected)) && (

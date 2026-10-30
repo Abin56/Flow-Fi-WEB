@@ -47,7 +47,7 @@ describe("reconcileLoan", () => {
     expect(c.id).toBe("missingPayment");
     expect(c.confidence).toBe("strong");
     expect(c.resolution).toMatchObject({ kind: "recordPayment", installmentId: "i8", view: "pay" });
-    expect(c.impact).toMatchObject({ outstandingBefore: 4000, outstandingAfter: 2000, gapAfter: 0, installmentsPaidAfter: 8, remainingInstallmentsAfter: 2, cardAvailableDelta: null });
+    expect(c.impact).toMatchObject({ outstandingBefore: 4000, outstandingAfter: 2000, gapAfter: 0, installmentsPaidAfter: 8, remainingInstallmentsAfter: 2, cardAvailableDelta: null, cardLinked: false });
     expect(r.scheduledPrincipal).toBe(1000);
   });
 
@@ -69,6 +69,21 @@ describe("reconcileLoan", () => {
   it("card-linked agreements show the available-credit effect of a payment", () => {
     const r = reconcileLoan(input({ lenderPrincipal: 3000, cardLinkedName: "HDFC Regalia" }));
     expect(r.causes[0]!.impact?.cardAvailableDelta).toBe(1000);
+  });
+
+  it("a card-linked EMI leaves the card effect to the funding mode: no fixed delta, but the money applied and principal released", () => {
+    const r = reconcileLoan(input({ kind: "emi", lenderPrincipal: 2000, cardLinkedName: "HDFC Regalia", supportsPrepaymentAndDisbursement: false }));
+    expect(r.causes[0]!.impact).toMatchObject({ cardAvailableDelta: null, cardLinked: true, payment: { applied: 2200, principal: 2000 } });
+  });
+
+  it("a part-payment's applied money is only the unpaid remainder of the installment", () => {
+    const r = reconcileLoan(input({ kind: "emi", installments: schedule(6, { seq: 7, paid: 550 }), lenderPrincipal: 3000, cardLinkedName: "C", supportsPrepaymentAndDisbursement: false }));
+    expect(r.causes[0]!.impact?.payment).toEqual({ applied: 550, principal: 500 });
+  });
+
+  it("a non-payment correction (reversing a recorded payment) carries no payment figures", () => {
+    const r = reconcileLoan(input({ installments: schedule(7), payments: [payment(7, new Date(2026, 8, 3))], lenderPrincipal: 4000 }));
+    expect(r.causes.find((c) => c.id === "paymentNotAppliedByLender")!.impact?.payment).toBeNull();
   });
 
   it("lender higher: a payment recorded after the as-of date is a timing difference, no action", () => {

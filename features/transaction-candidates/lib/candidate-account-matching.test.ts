@@ -5,6 +5,7 @@ import {
   resolveMatchedIdentity,
   candidateDestinationGroupKey,
   candidateDestinationState,
+  effectiveDestinationRefs,
   formatMatchedAccountLabel,
   formatUnresolvedAccountHint,
   resolveCandidateDestinationKey,
@@ -185,5 +186,36 @@ describe("resolveMatchedIdentity", () => {
     expect(resolveMatchedIdentity({ accountId: null, cardId: null }, accounts, cards)).toBeNull();
     expect(resolveMatchedIdentity({ accountId: "gone", cardId: null }, accounts, cards)).toBeNull();
     expect(resolveMatchedIdentity({ accountId: "a1", cardId: "c1" }, [], cards)).toBeNull();
+  });
+});
+
+describe("effectiveDestinationRefs (the reviewer's own choice, display only)", () => {
+  const accounts = [{ id: "a2", name: "SBI Savings", bankId: "sbi", type: "bank", accountNumberLast4: "9981" }] as unknown as Account[];
+  const cards = [{ id: "c1", accountId: "a2", lastFourDigits: "4821" }] as unknown as CreditCardProfile[];
+  const unmatched = { accountId: null, cardId: null };
+
+  it("an unmatched candidate stops being unmatched once the reviewer picked a real account", () => {
+    expect(candidateDestinationState(unmatched, accounts, cards)).toBe("unmatched");
+    const refs = effectiveDestinationRefs(unmatched, "account:a2", accounts, cards);
+    expect(candidateDestinationState(refs, accounts, cards)).toBe("matched");
+    expect(formatMatchedAccountLabel(refs, accounts, cards)).toBe("SBI Savings •••• 9981");
+  });
+  it("a picked card reads as that card", () => {
+    const refs = effectiveDestinationRefs(unmatched, "card:c1", accounts, cards);
+    expect(refs).toEqual({ accountId: null, cardId: "c1" });
+    expect(formatMatchedAccountLabel(refs, accounts, cards)).toBe("SBI Savings •••• 4821");
+  });
+  it("a choice overrides Android's match (a correction)", () => {
+    const refs = effectiveDestinationRefs({ accountId: "other", cardId: null }, "account:a2", accounts, cards);
+    expect(refs).toEqual({ accountId: "a2", cardId: null });
+  });
+  it("never shows a stale choice: a deleted account falls back to Android's own state", () => {
+    expect(effectiveDestinationRefs(unmatched, "account:gone", accounts, cards)).toBe(unmatched);
+    expect(candidateDestinationState(effectiveDestinationRefs(unmatched, "account:a2", [], cards), [], cards)).toBe("unmatched");
+  });
+  it("no choice means Android's match, untouched", () => {
+    const android = { accountId: "a2", cardId: null };
+    expect(effectiveDestinationRefs(android, null, accounts, cards)).toBe(android);
+    expect(effectiveDestinationRefs(android, undefined, accounts, cards)).toBe(android);
   });
 });

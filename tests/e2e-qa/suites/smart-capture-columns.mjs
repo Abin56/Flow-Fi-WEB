@@ -8,7 +8,7 @@
  * transaction value (compared before/after every layout operation and across viewport changes). Nothing is imported;
  * the emulator is checked for zero writes.
  */
-import { scenario } from "../lib/core.mjs";
+import { retiredScenario, scenario } from "../lib/core.mjs";
 import * as h from "../lib/harness.mjs";
 
 const PREF_KEY = "flowfi.smartCapture.columns.v1";
@@ -159,7 +159,7 @@ async function runDatasets(page, chk, notes, tag, { gridFor }) {
   }
 }
 
-scenario("scapcol-desktop", "Smart Capture columns: desktop 1280 + 1600 — every source order, sticky header, expand/collapse, Customize/Reset", async ({ page }, chk, notes) => {
+retiredScenario("scapcol-desktop", "Smart Capture columns: desktop 1280 + 1600 — every source order, sticky header, expand/collapse, Customize/Reset", async ({ page }, chk, notes) => {
   await openCapture(page);
   for (const [w, hgt] of [[1280, 800], [1600, 900]]) {
     await page.setViewportSize({ width: w, height: hgt });
@@ -225,7 +225,7 @@ scenario("scapcol-desktop", "Smart Capture columns: desktop 1280 + 1600 — ever
   }
 });
 
-scenario("scapcol-mobile", "Smart Capture columns: phones 360 + 390 — flow/wrap, no overflow, truncation, panel fit, expand", async ({ page }, chk, notes) => {
+retiredScenario("scapcol-mobile", "Smart Capture columns: phones 360 + 390 — flow/wrap, no overflow, truncation, panel fit, expand", async ({ page }, chk, notes) => {
   await openCapture(page);
   for (const [w, hgt] of [[360, 740], [390, 844]]) {
     await page.setViewportSize({ width: w, height: hgt });
@@ -269,7 +269,7 @@ scenario("scapcol-mobile", "Smart Capture columns: phones 360 + 390 — flow/wra
   }
 });
 
-scenario("scapcol-invariants", "Smart Capture columns: no value, id, include or status changes through any layout operation or viewport; Continue hands the same rows over; zero writes", async ({ page }, chk) => {
+retiredScenario("scapcol-invariants", "Smart Capture columns: no value, id, include or status changes through any layout operation or viewport; Continue hands the same rows over; zero writes", async ({ page }, chk) => {
   const snapshotWrites = async () => {
     const [txns, accounts, imports] = await Promise.all([h.list("transactions"), h.list("accounts"), h.list("documentImports")]);
     return JSON.stringify({ txns: txns.length, balances: accounts.map((a) => `${a.name}:${a.currentBalance}`).sort(), imports: imports.length });

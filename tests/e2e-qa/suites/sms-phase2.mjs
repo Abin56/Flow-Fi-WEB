@@ -208,7 +208,8 @@ scenario("sms-11-account-evidence-suggestions-duplicate", "Account evidence and 
   // 4. A matched candidate.
   d = await openDrawerFor(page, "Swiggy");
   chk("a matched candidate states Android's match", /Android matched this to QA Bank/.test(await d.getByTestId("account-match-evidence").innerText()));
-  chk("the status explanation is shown", (await d.getByTestId("status-explanation").count()) === 1);
+  await d.getByRole("button", { name: /^More details/ }).click();
+  chk("the status explanation is shown (under More details)", (await d.getByTestId("status-explanation").count()) === 1);
   await closeDrawer(page, d);
 
   // 5. Duplicate comparison.

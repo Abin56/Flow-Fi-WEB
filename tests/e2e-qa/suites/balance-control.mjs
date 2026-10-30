@@ -7,6 +7,12 @@
 import { scenario } from "../lib/core.mjs";
 import { BASE_URL, FIRESTORE_DOCS, HOST, PORTS, PROJECT_ID } from "../lib/env.mjs";
 import * as h from "../lib/harness.mjs";
+/** Reconcile guides use the shared top sheet: a first Escape inside a text field only leaves the field, so press again while one is still open. */
+const escapeSheet = async (page) => {
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(120);
+  if (await page.locator('[data-testid="loan-reconciliation-sheet"][data-state="open"], [data-testid="outstanding-reconciliation-sheet"][data-state="open"]').count()) await page.keyboard.press("Escape");
+};
 
 const VPS = {
   desktop1920: { width: 1920, height: 1080 },
@@ -620,34 +626,42 @@ scenario("bc-reconcile", "Outstanding reconciliation: cause list, existing-trans
   const sheet = page.locator('[data-testid="outstanding-reconciliation-sheet"]');
   await sheet.waitFor();
   chk("shows FlowFi, bank and the difference", /700/.test(await sheet.locator('[data-testid="reconcile-difference"]').innerText()));
-  const causes = await sheet.locator('[data-testid="cause-list"] button').allInnerTexts();
-  chk("bank-higher gap offers charge-side causes (missing purchase, interest, GST, late fee)", causes.some((c) => /Missing purchase/.test(c)) && causes.some((c) => /Interest charge/.test(c)) && causes.some((c) => /GST/.test(c)) && causes.some((c) => /Late fee/.test(c)));
-  chk("bank-higher gap does NOT offer missing-payment or refund causes", !causes.some((c) => /Missing payment/.test(c)) && !causes.some((c) => /Refund or credit/.test(c)));
+  // Reasons carry plain-language labels; the engine's cause code is the testid.
+  const causeIds = async () => sheet.locator('[data-testid="cause-list"] button').evaluateAll((els) => els.map((e) => e.dataset.testid.replace("cause-", "")));
+  const causes = await causeIds();
+  chk("bank-higher gap offers charge-side causes (missing purchase, interest, GST, late fee)", ["missingPurchase", "interestCharge", "gst", "lateFee"].every((c) => causes.includes(c)), causes.join(","));
+  chk("bank-higher gap does NOT offer missing-payment or refund causes", !causes.includes("missingPayment") && !causes.includes("refundOrCredit"));
+  chk("the summary says the bank shows more outstanding", /Your bank shows ₹700(\.00)? more outstanding than FlowFi/.test(await sheet.locator('[data-testid="reconcile-summary"]').innerText()));
 
   await sheet.locator('[data-testid="cause-missingPurchase"]').click();
   const addExpenseLink = sheet.locator('[data-testid="resolution-link-add-expense"]');
   await addExpenseLink.waitFor();
   const href = await addExpenseLink.getAttribute("href");
   chk("missing-purchase links to Transactions filtered to this card's account", href != null && /^\/transactions\/?\?account=/.test(href), href);
+  await sheet.locator('[data-testid="recon-more-impact"] summary').click();
   chk("impact preview lists the modules a recorded charge would move", /Total outstanding/.test(await sheet.locator('[data-testid="reconcile-impact-preview"]').innerText()));
+  const box = await sheet.boundingBox();
+  chk("desktop dialog is compact (≤ 720px wide)", box != null && box.width <= 720, JSON.stringify(box));
   await h.shot(page, "bc-reconcile-missing-purchase");
 
   // Missing payment direction — bank reports LESS outstanding.
   await sheet.locator('[data-testid="cause-unknown"]').click(); // deselect-ish: switch cause before closing
-  await page.keyboard.press("Escape");
+  await escapeSheet(page);
   await sheet.waitFor({ state: "hidden" });
   await type(page, "totalOutstanding", Math.max(0, out - 500));
   await row(page, "totalOutstanding").locator('[data-testid="reconcile-button"]').click();
   await sheet.waitFor();
-  const causes2 = await sheet.locator('[data-testid="cause-list"] button').allInnerTexts();
-  chk("bank-lower gap offers missing-payment and refund causes, not charge causes", causes2.some((c) => /Missing payment/.test(c)) && causes2.some((c) => /Refund or credit/.test(c)) && !causes2.some((c) => /Missing purchase/.test(c)));
+  const causes2 = await causeIds();
+  chk("bank-lower gap offers missing-payment and refund causes, not charge causes", causes2.includes("missingPayment") && causes2.includes("refundOrCredit") && !causes2.includes("missingPurchase"), causes2.join(","));
+  chk("reopening starts with no reason chosen", (await sheet.locator('[data-testid="resolution-panel"]').count()) === 0);
+  chk("the summary says the bank shows less outstanding", /Your bank shows ₹500(\.00)? less outstanding than FlowFi/.test(await sheet.locator('[data-testid="reconcile-summary"]').innerText()));
   await sheet.locator('[data-testid="cause-missingPayment"]').click();
   const payBillLink = sheet.locator('[data-testid="resolution-link-pay-bill"]');
   await payBillLink.waitFor();
   const payHref = await payBillLink.getAttribute("href");
   chk("missing-payment links to Pay bill (?card=&pay=1), never the expense flow", payHref != null && /^\/credit-cards\/?\?card=.+&pay=1/.test(payHref), payHref);
   chk("missing-payment resolution never shows an Add Expense link", (await sheet.locator('[data-testid="resolution-link-add-expense"]').count()) === 0);
-  await page.keyboard.press("Escape");
+  await escapeSheet(page);
   await sheet.waitFor({ state: "hidden" });
 
   // Card-linked EMI card: the card-EMI cause is explained with no action implied. A gap of EXACTLY the locked
@@ -669,7 +683,7 @@ scenario("bc-reconcile", "Outstanding reconciliation: cause list, existing-trans
   // Unknown/unexplained cause: review notice, nothing implied.
   await sheet.locator('[data-testid="cause-unknown"]').click();
   chk("unknown cause shows the manual-review notice", await sheet.locator('[data-testid="reconcile-review-notice"]').isVisible());
-  await page.keyboard.press("Escape");
+  await escapeSheet(page);
   await sheet.waitFor({ state: "hidden" });
 
   // No Reconcile button once the bank figure matches FlowFi's (nothing to reconcile).
@@ -744,3 +758,135 @@ scenario("bc-deep-link", "Balance Control deep-link: ?product=card:<id> pre-sele
   await waitTable(page);
   chk("an unmatched product id falls back to the first product instead of breaking the page", (await page.locator('[data-testid="product-select"]').inputValue()).length > 0);
 });
+
+/* ───────────────────────────── 8. polished product picker + comparison table, per width ───────────────────────────── */
+const PICKER_VPS = {
+  w1280: { width: 1280, height: 800 },
+  w1920: { width: 1920, height: 1080 },
+  tablet: { width: 820, height: 1180 },
+  w390: { width: 390, height: 844 },
+  w360: { width: 360, height: 740 },
+};
+for (const [name, vp] of Object.entries(PICKER_VPS)) {
+  scenario(`bc-picker-${name}`, `Product picker + comparison table at ${vp.width}x${vp.height}: placement, search, keyboard, labels, no overflow, no writes`, async ({ page }, chk) => {
+    await h.addFixture(page, "card-emi").catch(() => {});
+    if (name === "w1280") await makeSharedFacility(200000);
+    await page.setViewportSize(vp);
+    const writes = watchWrites(page);
+    const before = await snapshot();
+    await goTo(page, "/balance-control");
+    await waitTable(page);
+    const names = await productNames(page);
+
+    // Open: the popup sits inside the viewport, never clipped, and is at least as wide as the trigger.
+    await page.locator('[data-testid="product-picker"]').click();
+    const pop = page.locator('[data-testid="product-picker-popover"]');
+    await pop.waitFor();
+    await page.waitForTimeout(300);
+    const geo = await page.evaluate(() => {
+      const p = document.querySelector('[data-testid="product-picker-popover"]').getBoundingClientRect();
+      const t = document.querySelector('[data-testid="product-picker"]').getBoundingClientRect();
+      const list = document.querySelector('[data-testid="product-picker-popover"] [cmdk-list]');
+      return { left: p.left, right: p.right, top: p.top, bottom: p.bottom, width: p.width, trigger: t.width, vw: window.innerWidth, vh: window.innerHeight, listOverflowY: getComputedStyle(list).overflowY, listScrollX: list.scrollWidth - list.clientWidth };
+    });
+    chk("popup is fully inside the viewport", geo.left >= 0 && geo.right <= geo.vw + 0.5 && geo.top >= 0 && geo.bottom <= geo.vh + 0.5, JSON.stringify(geo));
+    chk("popup is at least as wide as its trigger", geo.width + 0.5 >= geo.trigger, JSON.stringify(geo));
+    chk("popup uses extra width where the viewport allows (≥ 320px or full width minus gutters)", geo.width >= Math.min(320, geo.vw - 32) - 0.5, String(geo.width));
+    chk("product list scrolls vertically, never horizontally", geo.listOverflowY === "auto" && geo.listScrollX <= 1, JSON.stringify(geo));
+    chk("focus starts in the search field", await page.evaluate(() => document.activeElement?.getAttribute("placeholder") === "Search cards, loans, EMIs…"));
+    const options = await pop.locator("[cmdk-item]").count();
+    chk("every product is listed in the popup", options === names.length, `${options} vs ${names.length}`);
+    const groupText = await pop.innerText();
+    chk("popup groups products under Credit cards / Loans / EMIs", /credit cards/i.test(groupText) && /loans/i.test(groupText) && /emis/i.test(groupText), groupText.slice(0, 160).replace(/\n/g, " "));
+    chk("the current product is marked", (await pop.locator('[cmdk-item][data-checked="true"]').count()) === 1);
+    if (name === "w1280") {
+      const tags = await pop.locator('[data-testid="picker-shared-limit"]').allInnerTexts();
+      chk("shared-limit cards carry a 'Shared limit · <facility>' tag", tags.length >= 2 && tags.every((t) => /Shared limit · QA Facility/.test(t)), tags.join(" | "));
+    }
+
+    // Search narrows the list; a no-match search says so; clearing restores it.
+    await page.keyboard.type("loan");
+    await page.waitForTimeout(250);
+    const loanHits = await pop.locator("[cmdk-item]").allInnerTexts();
+    chk("search narrows to matching products", loanHits.length >= 1 && loanHits.length < names.length && loanHits.every((t) => /loan/i.test(t)), loanHits.join(" | ").replace(/\n/g, " "));
+    await page.keyboard.type("zzzz");
+    await page.waitForTimeout(200);
+    chk("no-results search shows 'No match found.'", /No match found/.test(await pop.innerText()));
+    await pop.locator("[cmdk-input]").fill("");
+    await page.waitForTimeout(200);
+
+    // Keyboard: arrow to another product, Enter selects it and closes the popup; the hidden select stays in sync.
+    const startId = await page.locator('[data-testid="product-select"]').inputValue();
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("Enter");
+    await page.waitForTimeout(400);
+    const afterId = await page.locator('[data-testid="product-select"]').inputValue();
+    chk("ArrowDown + Enter selects the next product and closes the popup", afterId !== startId && (await pop.count()) === 0, `${startId} → ${afterId}`);
+    await page.locator('[data-testid="product-picker"]').click();
+    await pop.waitFor();
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(250);
+    chk("Escape closes the popup and keeps the selection", (await pop.count()) === 0 && (await page.locator('[data-testid="product-select"]').inputValue()) === afterId);
+
+    // Mouse selection of a loan, then the comparison table for it.
+    await page.locator('[data-testid="product-picker"]').click();
+    await pop.waitFor();
+    await pop.locator("[cmdk-item]", { hasText: "QA Loan 12" }).first().click();
+    await page.waitForTimeout(400);
+    chk("clicking a product selects it", /QA Loan 12/.test(await page.locator('[data-testid="product-picker"]').innerText()));
+    chk("loan row asks for the lender's remaining principal", (await row(page, "loanPrincipal").locator('[data-testid="bank-input"]').getAttribute("placeholder")) === "Lender remaining principal");
+    chk("empty row: neutral 'Not compared', no difference", (await row(page, "loanPrincipal").locator('[data-testid="variance-class"]').innerText()) === "Not compared" && (await row(page, "loanPrincipal").locator('[data-testid="difference"]').innerText()) === "—");
+    const lp = await flowfi(page, "loanPrincipal");
+    await type(page, "loanPrincipal", (lp + 1234.5).toFixed(2));
+    await page.waitForTimeout(200);
+    const dText = await row(page, "loanPrincipal").locator('[data-testid="difference"]').innerText();
+    chk("typed figure shows the exact signed difference", close(money(dText), 1234.5) && dText.startsWith("+"), dText);
+    chk("mismatch offers the existing Reconcile action", (await row(page, "loanPrincipal").locator('[data-testid="reconcile-button"]').count()) === 1);
+
+    // Card: contextual labels on all four rows, and the existing Correct action on a limit gap.
+    await select(page, names.find((n) => /4242|QA Credit Card/.test(n)));
+    const ph = (m) => row(page, m).locator('[data-testid="bank-input"]').getAttribute("placeholder");
+    chk("card rows name what the bank shows", (await ph("creditLimit")) === "Bank-approved credit limit" && (await ph("totalOutstanding")) === "Bank outstanding" && (await ph("statementBalance")) === "Latest statement balance" && (await ph("availableCredit")) === "Bank available credit");
+    chk("helper explains the bank / lender column", /calculated figure/.test(await page.locator('[data-testid="bank-figure-help"]').innerText()));
+    const limit = await flowfi(page, "creditLimit");
+    await type(page, "creditLimit", limit + 5000);
+    await type(page, "totalOutstanding", ((await flowfi(page, "totalOutstanding")) + 99.99).toFixed(2));
+    await page.waitForTimeout(250);
+    chk("limit gap offers Correct (nothing applied yet)", (await row(page, "creditLimit").locator('[data-testid="correct-limit-button"]').count()) === 1);
+    const clipped = await page.evaluate(() => [...document.querySelectorAll('[data-testid="variance-table"] [role="cell"]')].filter((td) => td.scrollWidth > td.clientWidth + 1).length);
+    chk("no clipped table cells", clipped === 0, clipped);
+    const o = await overflow(page);
+    chk("no page-level horizontal overflow", o.doc <= 1 && (o.main ?? 0) <= 1, JSON.stringify(o));
+    const sizes = await page.locator('[data-testid="bank-input"]').evaluateAll((els) => els.map((e) => { const r = e.getBoundingClientRect(); return [Math.round(r.width), Math.round(r.height)]; }));
+    chk("bank inputs are a usable size (≥140×36)", sizes.every(([w, hh]) => w >= 140 && hh >= 36), JSON.stringify(sizes));
+
+    // Reconcile dialog: compact on desktop, a bottom sheet on phones, inside the viewport, keyboard-driven.
+    await row(page, "totalOutstanding").locator('[data-testid="reconcile-button"]').click();
+    const dlg = page.locator('[data-testid="outstanding-reconciliation-sheet"]');
+    await dlg.waitFor();
+    await page.waitForTimeout(250);
+    const dg = await dlg.evaluate((el) => { const r = el.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width, vw: window.innerWidth, vh: window.innerHeight, scrollX: el.scrollWidth - el.clientWidth }; });
+    chk("reconcile dialog is fully inside the viewport, no sideways scroll", dg.left >= -0.5 && dg.right <= dg.vw + 0.5 && dg.top >= -0.5 && dg.bottom <= dg.vh + 0.5 && dg.scrollX <= 1, JSON.stringify(dg));
+    if (vp.width >= 640) chk("desktop/tablet: a compact dialog (≤ 720px)", dg.width <= 720, String(dg.width));
+    else chk("phone: a full-width bottom sheet", Math.abs(dg.width - dg.vw) <= 1 && Math.abs(dg.bottom - dg.vh) <= 1, JSON.stringify(dg));
+    chk("summary sentence states the direction", /Your bank shows ₹99\.99 more outstanding than FlowFi/.test(await dlg.locator('[data-testid="reconcile-summary"]').innerText()));
+    await dlg.locator('[data-testid="cause-list"] [role="radio"]').first().focus();
+    await page.keyboard.press("ArrowDown");
+    chk("arrow keys choose a reason and show one next step", (await dlg.locator('[role="radio"][aria-checked="true"]').count()) === 1 && (await dlg.locator('[data-testid="resolution-panel"]').count()) === 1);
+    await h.shot(page, `bc-picker-${name}-reconcile`);
+    await page.keyboard.press("Escape");
+    await dlg.waitFor({ state: "hidden" });
+    await page.evaluate(() => { document.querySelector("main").scrollTop = 0; window.scrollTo(0, 0); });
+    await h.shot(page, `bc-picker-${name}-table`);
+    await page.locator('[data-testid="product-picker"]').click();
+    await pop.waitFor();
+    await page.waitForTimeout(300);
+    await h.shot(page, `bc-picker-${name}-open`);
+    await page.keyboard.press("Escape");
+
+    await page.waitForTimeout(1500);
+    chk("viewing, searching, selecting and typing sent no Firestore write", writes.length === 0, writes.slice(0, 2).join(" ; "));
+    const changed = diff(before, await snapshot());
+    chk("financial collections identical before/after", changed.length === 0, changed.join(","));
+  });
+}

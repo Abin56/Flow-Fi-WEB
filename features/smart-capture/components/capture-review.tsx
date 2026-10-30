@@ -7,11 +7,14 @@
  * against the source (one by one, or in bulk for rows with nothing else
  * open). Nothing here writes anywhere.
  *
- * Three separate ideas, shown separately:
+ * Separate ideas, shown separately:
  *  - Included for review — the row's checkbox; excluded rows stay visible (dimmed) and travel along, never imported.
- *  - Verified against source — the row-level check ("matches the image" / "values are correct").
- *  - Ready for the next step — included, complete and verified. Whether a row is imported at all is decided later,
- *    in Check duplicates, and only through its final approval.
+ *  - Ready / Needs review / Needs correction — one rule (`needsCorrection`, `openIssues`). Rows read with clear
+ *    evidence are Ready with no click; "Review issues" walks only the rest, one row at a time, and moves on by itself
+ *    once a row is confirmed or excluded. Whether a row is imported at all is decided later, in Check duplicates, and
+ *    only through its final approval.
+ *  - The money summary — the included rows' current values (`reviewTotals`), by statement direction and by what each
+ *    row will be imported as.
  *
  * Layout: on desktop the workspace fits the viewport — the summary, toolbar and action bar stay put and only the
  * grid (and, separately, the source panel beside it) scrolls. On phones there is one page scroll, the screenshot
@@ -19,14 +22,29 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDownUp, CheckCheck, ChevronRight, ChevronsDownUp, ChevronsUpDown, Eye, EyeOff, FileText, ImageIcon, Undo2 } from "lucide-react";
+import { ArrowDownUp, CheckCheck, ChevronLeft, ChevronRight, ChevronsDownUp, ChevronsUpDown, CircleCheck, Eye, EyeOff, FileText, ImageIcon, ListChecks, Undo2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ClayButton } from "@/components/clay/clay-button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { formatCurrencyPrecise } from "@/lib/format";
 import type { CaptureParseResult } from "../lib/parse-pasted-statement";
-import { applyRowPatch, bulkConfirm, bulkConfirmEligible, canContinue, confirmField, reviewProgress, selectionCounts, undoBulkConfirm, type ReviewRow, type RowPatch } from "../lib/capture-review";
+import {
+  applyRowPatch,
+  bulkConfirm,
+  bulkConfirmEligible,
+  canContinue,
+  confirmField,
+  confirmRow,
+  reviewProgress,
+  reviewTotals,
+  selectionCounts,
+  undoBulkConfirm,
+  unconfirmRow,
+  type ReviewRow,
+  type ReviewTotals,
+  type RowPatch,
+} from "../lib/capture-review";
 import type { OcrCapture } from "./capture-input";
 import { OcrSourceView, ScreenshotDialog } from "./ocr-source-view";
 import { ColumnLayoutControl, useColumnLayout } from "./column-layout-control";
@@ -76,24 +94,68 @@ export function CaptureReview({
   const [showIgnored, setShowIgnored] = useState(false);
   const [bulkOpen, setBulkOpen] = useState(false);
   const [viewerOpen, setViewerOpen] = useState(false);
+  /** The row "Review issues" is on (null = not walking the issues). */
+  const [issueId, setIssueId] = useState<string | null>(null);
+  const [issuesDone, setIssuesDone] = useState(false);
   const listRef = useRef<HTMLUListElement>(null);
   const columnLayout = useColumnLayout(parse);
 
-  const patch = (id: string, p: RowPatch) => onRowsChange(rows.map((r) => (r.id === id ? applyRowPatch(r, p) : r)));
+  /**
+   * Applies one row change. `settles`: an explicit confirm/exclude — when that leaves the current issue row Ready or
+   * excluded, "Review issues" moves straight on to the next one. (Typing never moves on: an edit can clear a flag
+   * mid-word.)
+   */
+  function update(id: string, change: (r: ReviewRow) => ReviewRow, settles = false) {
+    const next = rows.map((r) => (r.id === id ? change(r) : r));
+    onRowsChange(next);
+    if (settles && issueId === id) {
+      const status = rowStatus(next.find((r) => r.id === id)!);
+      if (status === "ready" || status === "excluded") goToIssue(nextIssueAfter(id, next), next);
+    }
+  }
+  const patch = (id: string, p: RowPatch) => update(id, (r) => applyRowPatch(r, p), p.include === false || p.confirmed === true);
   const setAll = (include: boolean) => onRowsChange(rows.map((r) => (r.committedTransactionId ? r : { ...r, include })));
 
   const progress = useMemo(() => reviewProgress(rows), [rows]);
+  const totals = useMemo(() => reviewTotals(rows), [rows]);
   const selection = useMemo(() => selectionCounts(rows), [rows]);
   const statusById = useMemo(() => new Map(rows.map((r) => [r.id, rowStatus(r)])), [rows]);
   const eligible = useMemo(() => bulkConfirmEligible(rows), [rows]);
   const bulkCount = rows.filter((r) => r.bulkConfirmed && r.confirmed).length;
 
-  const visible = useMemo(() => {
-    const filtered = rows.filter((r) => matchesFilter(statusById.get(r.id)!, filter) && (showExcluded || filter === "excluded" || r.include));
-    if (sort === "date") return [...filtered].sort((a, b) => (a.date?.getTime() ?? 0) - (b.date?.getTime() ?? 0));
-    if (sort === "amount") return [...filtered].sort((a, b) => (b.amount ?? 0) - (a.amount ?? 0));
-    return filtered;
-  }, [rows, statusById, filter, sort, showExcluded]);
+  const ordered = useMemo(() => sortRows(rows, sort), [rows, sort]);
+  const visible = useMemo(
+    () => ordered.filter((r) => matchesFilter(statusById.get(r.id)!, filter) && (showExcluded || filter === "excluded" || r.include)),
+    [ordered, statusById, filter, showExcluded],
+  );
+  /** Rows "Review issues" walks, in the order they're listed. */
+  const issueIds = useMemo(() => ordered.filter((r) => isIssue(statusById.get(r.id)!)).map((r) => r.id), [ordered, statusById]);
+
+  function nextIssueAfter(id: string | null, list: ReviewRow[], step: 1 | -1 = 1): string | null {
+    const all = sortRows(list, sort);
+    const issues = all.filter((r) => isIssue(rowStatus(r)));
+    if (issues.length === 0) return null;
+    const at = id == null ? -1 : all.findIndex((r) => r.id === id);
+    if (step === 1) return (issues.find((r) => all.indexOf(r) > at) ?? issues[0]).id;
+    return ([...issues].reverse().find((r) => all.indexOf(r) < at) ?? issues[issues.length - 1]).id;
+  }
+
+  /** Opens just this issue row (others collapse), brings it into view and puts focus on its one action. */
+  function goToIssue(id: string | null, list: ReviewRow[] = rows) {
+    setIssueId(id);
+    setIssuesDone(id == null && list.some((r) => r.include));
+    if (id == null) return;
+    if (!matchesFilter(rowStatus(list.find((r) => r.id === id)!), filter)) setFilter("all");
+    setFocusedId(id);
+    setExpanded(new Set([id]));
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        const li = listRef.current?.querySelector<HTMLElement>(`[data-row-id="${id}"]`);
+        li?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+        (li?.querySelector<HTMLElement>('[data-testid="confirm-row"]') ?? li?.querySelector<HTMLElement>("button[aria-expanded]"))?.focus({ preventScroll: true });
+      }),
+    );
+  }
 
   // Grid only where the columns fit with a readable merchant (the list shares the row with the screenshot panel, so
   // that depends on the list's own width, not the window's). Unknown width (first paint, no layout engine) = grid.
@@ -112,17 +174,6 @@ export function CaptureReview({
 
   const filterCount = (f: Filter) => rows.filter((r) => matchesFilter(statusById.get(r.id)!, f)).length;
 
-  const totals = useMemo(() => {
-    let debit = 0;
-    let credit = 0;
-    for (const r of rows) {
-      if (!r.include || r.amount == null) continue;
-      if (r.direction === "debit") debit += r.amount;
-      if (r.direction === "credit") credit += r.amount;
-    }
-    return { debit, credit };
-  }, [rows]);
-
   const focused = rows.find((r) => r.id === focusedId) ?? null;
   const ready = canContinue(rows);
   const allIncluded = selection.total > 0 && selection.included === selection.total;
@@ -139,6 +190,7 @@ export function CaptureReview({
 
   /** "Fix …" / "Check" on a collapsed row: open it and bring it into view. */
   function expandAndReveal(id: string) {
+    if (issueId != null) setIssueId(id);
     setFocusedId(id);
     setExpanded((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
     requestAnimationFrame(() => listRef.current?.querySelector(`[data-row-id="${id}"]`)?.scrollIntoView?.({ block: "nearest", behavior: "smooth" }));
@@ -163,42 +215,57 @@ export function CaptureReview({
   }, [rows, focusedId]);
 
   const pct = (n: number) => (progress.included === 0 ? 0 : Math.round((n / progress.included) * 100));
+  const issuePosition = issueId ? issueIds.indexOf(issueId) : -1;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
-      {/* Summary — one compact strip: what's included, verified and ready, kept as separate ideas. */}
-      <section aria-label="Review progress" className="flex flex-col gap-2 rounded-2xl border border-border bg-card px-3 py-2.5 sm:px-4">
-        <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
-          <ProgressFigure label="Included for review" value={`${selection.included}`} of={selection.total} testId="progress-included" />
-          <ProgressFigure label="Verified against source" value={`${progress.verified}`} of={progress.included} testId="progress-verified" />
-          <ProgressFigure label="Ready for next step" value={`${progress.ready}`} of={progress.included} tone={progress.ready === progress.included && progress.included > 0 ? "success" : "default"} testId="progress-ready" />
-          <ProgressFigure label="Need correction" value={`${progress.fieldIssues}`} tone={progress.fieldIssues > 0 ? "warning" : "default"} testId="progress-fix" />
-          <p className="text-xs text-muted-foreground tabular-nums sm:ml-auto sm:text-right" data-testid="selection-totals">
-            {formatCurrencyPrecise(totals.debit)} charges · {formatCurrencyPrecise(totals.credit)} credits
-            <span className="block text-[11px]">included rows only</span>
-          </p>
+      {/* Summary — the included rows' money first, then where the review stands, then the one next step. */}
+      <section aria-label="Review summary" data-testid="review-summary" className="@container flex flex-col gap-2.5 rounded-2xl border border-border bg-card px-3 py-3 sm:px-4">
+        <div className="grid grid-cols-2 gap-x-4 gap-y-3 @3xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto] @3xl:items-end">
+          <MoneyFigure label="Debits" detail={`${totals.debitCount} charge${totals.debitCount === 1 ? "" : "s"}`} value={totals.debits} sign="−" testId="total-debits" />
+          <MoneyFigure label="Credits" detail={`${totals.creditCount} credit${totals.creditCount === 1 ? "" : "s"}`} value={totals.credits} sign="+" tone="success" testId="total-credits" />
+          <MoneyFigure
+            label={totals.net < 0 ? "Net outflow" : totals.net > 0 ? "Net inflow" : "Net"}
+            detail="credits − debits"
+            value={Math.abs(totals.net)}
+            sign={totals.net < 0 ? "−" : totals.net > 0 ? "+" : ""}
+            testId="total-net"
+          />
+          <div className="col-span-2 flex flex-wrap items-baseline gap-x-4 gap-y-1 @3xl:col-span-1 @3xl:justify-end" aria-label="Review status">
+            <ProgressFigure label="included" value={`${selection.included}`} of={selection.total} testId="progress-included" />
+            <ProgressFigure label="ready" value={`${progress.ready}`} of={progress.included} tone={progress.ready === progress.included && progress.included > 0 ? "success" : "default"} testId="progress-ready" />
+            <ProgressFigure label="to review" value={`${progress.toCheck}`} tone={progress.toCheck > 0 ? "attention" : "default"} testId="progress-check" />
+            <ProgressFigure label="to correct" value={`${progress.fieldIssues}`} tone={progress.fieldIssues > 0 ? "warning" : "default"} testId="progress-fix" />
+          </div>
         </div>
+        <TotalsBreakdown totals={totals} />
         <div className="h-1 overflow-hidden rounded-full bg-muted" role="progressbar" aria-label="Rows ready" aria-valuemin={0} aria-valuemax={progress.included} aria-valuenow={progress.ready}>
           <div className="h-full rounded-full bg-success transition-[width] duration-300" style={{ width: `${pct(progress.ready)}%` }} />
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <ClayButton size="sm" disabled={eligible.length === 0} onClick={() => setBulkOpen(true)}>
-            <CheckCheck className="size-4" />
-            Confirm all reviewed rows{eligible.length > 0 ? ` (${eligible.length})` : ""}
-          </ClayButton>
+          {issueIds.length > 0 && (
+            <ClayButton size="sm" data-testid="review-issues" onClick={() => goToIssue(issueId && issueIds.includes(issueId) ? issueId : nextIssueAfter(null, rows))}>
+              <ListChecks className="size-4" />
+              Review issues ({issueIds.length})
+            </ClayButton>
+          )}
+          {eligible.length > 0 && (
+            <ClayButton size="sm" variant="secondary" onClick={() => setBulkOpen(true)}>
+              <CheckCheck className="size-4" />
+              Confirm all reviewed rows ({eligible.length})
+            </ClayButton>
+          )}
           {bulkCount > 0 && (
             <button type="button" onClick={() => onRowsChange(undoBulkConfirm(rows))} className={toolButton}>
               <Undo2 className="size-3.5" /> Undo bulk confirmation ({bulkCount})
             </button>
           )}
-          <p className="min-w-0 flex-1 text-xs text-muted-foreground">
-            {progress.fieldIssues > 0
-              ? `${progress.fieldIssues} row${progress.fieldIssues === 1 ? "" : "s"} with an amount, date or Charge/Credit to fix — never bulk-confirmed.`
-              : progress.toCheck > 0
-                ? "Compare the rows with the source, then confirm them."
-                : progress.included > 0
-                  ? "Every included row is verified."
-                  : "Include at least one row."}
+          <p className="min-w-0 flex-1 text-xs text-muted-foreground" data-testid="review-hint">
+            {progress.included === 0
+              ? "Include at least one row."
+              : issueIds.length === 0
+                ? <span className="inline-flex items-center gap-1 font-medium text-success"><CircleCheck className="size-3.5" /> Every included row is ready — nothing to confirm.</span>
+                : `${progress.ready} of ${progress.included} ready with no click needed. Only the ${issueIds.length} row${issueIds.length === 1 ? "" : "s"} below need${issueIds.length === 1 ? "s" : ""} you${progress.fieldIssues > 0 ? ` (${progress.fieldIssues} to correct — never bulk-confirmed)` : ""}.`}
           </p>
         </div>
       </section>
@@ -263,6 +330,38 @@ export function CaptureReview({
             </div>
           </div>
 
+          {(issueId != null || issuesDone) && (
+            <div data-testid="issue-navigator" className="flex flex-wrap items-center gap-2 border-b border-border bg-primary/[0.06] px-2.5 py-1.5 text-xs sm:px-3" aria-live="polite">
+              {issueId != null ? (
+                <>
+                  <span className="font-medium text-foreground tabular-nums">{issuePosition >= 0 ? `Issue ${issuePosition + 1} of ${issueIds.length}` : `Resolved · ${issueIds.length} left`}</span>
+                  <span className="hidden text-muted-foreground sm:inline">— confirm or correct it, and the next one opens.</span>
+                  <span className="ml-auto flex items-center gap-0.5">
+                    <button type="button" className={toolButton} onClick={() => goToIssue(nextIssueAfter(issueId, rows, -1))} disabled={issueIds.length === 0} aria-label="Previous issue">
+                      <ChevronLeft className="size-3.5" /> <span className="hidden sm:inline">Previous</span>
+                    </button>
+                    <button type="button" className={toolButton} onClick={() => goToIssue(nextIssueAfter(issueId, rows))} disabled={issueIds.length === 0} aria-label="Next issue">
+                      <span className="hidden sm:inline">Next</span> <ChevronRight className="size-3.5" />
+                    </button>
+                    <button type="button" className={toolButton} onClick={() => setIssueId(null)} aria-label="Stop reviewing issues">
+                      <X className="size-3.5" />
+                    </button>
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span className="inline-flex items-center gap-1 font-medium text-success">
+                    <CircleCheck className="size-3.5" /> All issues reviewed.
+                  </span>
+                  <span className="text-muted-foreground">Next: check for duplicates.</span>
+                  <button type="button" className={cn(toolButton, "ml-auto")} onClick={() => setIssuesDone(false)} aria-label="Dismiss">
+                    <X className="size-3.5" />
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+
           {visible.length === 0 ? (
             <p className="flex-1 px-4 py-12 text-center text-sm text-muted-foreground">
               {filter === "fix" ? "Nothing left to fix." : filter === "check" ? "Nothing left to check." : !showExcluded && selection.included === 0 ? "Every row is excluded — show excluded rows to include some." : "No rows match this filter."}
@@ -284,7 +383,9 @@ export function CaptureReview({
                   onExpand={() => expandAndReveal(row.id)}
                   onFocus={() => setFocusedId(row.id)}
                   onPatch={(p) => patch(row.id, p)}
-                  onConfirmField={(field) => onRowsChange(rows.map((r) => (r.id === row.id ? confirmField(r, field) : r)))}
+                  onConfirmField={(field) => update(row.id, (r) => confirmField(r, field), true)}
+                  onConfirmRow={() => update(row.id, confirmRow, true)}
+                  onUnconfirm={() => update(row.id, unconfirmRow)}
                 />
               ))}
             </ul>
@@ -406,17 +507,68 @@ export function CaptureReview({
   );
 }
 
-function ProgressFigure({ label, value, of, tone = "default", testId }: { label: string; value: string; of?: number; tone?: "default" | "success" | "warning"; testId: string }) {
+function ProgressFigure({ label, value, of, tone = "default", testId }: { label: string; value: string; of?: number; tone?: "default" | "success" | "warning" | "attention"; testId: string }) {
   return (
-    <div data-testid={testId} className="flex items-baseline gap-2">
+    <div data-testid={testId} className="flex items-baseline gap-1">
       <p className="order-2 text-xs text-muted-foreground">{label}</p>
-      <p className={cn("order-1 font-heading text-lg font-semibold tabular-nums", tone === "success" ? "text-success" : tone === "warning" ? "text-warning" : "text-foreground")}>
+      <p className={cn("order-1 text-base font-semibold tabular-nums", tone === "success" ? "text-success" : tone === "warning" ? "text-warning" : tone === "attention" ? "text-primary" : "text-foreground")}>
         {value}
-        {of != null && <span className="text-sm font-medium text-muted-foreground"> / {of}</span>}
+        {of != null && <span className="text-xs font-medium text-muted-foreground"> / {of}</span>}
       </p>
     </div>
   );
 }
+
+/** A money total — never truncated: the figure steps down a size in a narrow summary instead of clipping digits. */
+function MoneyFigure({ label, detail, value, sign, tone = "default", testId }: { label: string; detail: string; value: number; sign: string; tone?: "default" | "success"; testId: string }) {
+  return (
+    <div data-testid={testId} data-value={value.toFixed(2)} className="flex min-w-0 flex-col">
+      <p className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">{label}</p>
+      <p className={cn("text-sm font-semibold whitespace-nowrap tabular-nums @md:text-base @3xl:text-lg", tone === "success" && value > 0 ? "text-success" : "text-foreground")}>
+        {value > 0 ? sign : ""}
+        {formatCurrencyPrecise(value)}
+      </p>
+      <p className="text-[11px] text-muted-foreground">{detail}</p>
+    </div>
+  );
+}
+
+/** What the debits/credits will be imported as — so a payment or a skipped row is never presented as an expense. */
+function TotalsBreakdown({ totals }: { totals: ReviewTotals }) {
+  const parts: [string, number][] = [
+    ["Expenses", totals.expenses],
+    ["Refunds", totals.refunds],
+    ["Income", totals.income],
+    ["Payments / EMI (not expenses)", totals.payments],
+    ["Skipped at import", totals.skipped],
+  ];
+  const shown = parts.filter(([, v]) => v > 0);
+  return (
+    <p className="text-[11px] text-muted-foreground" data-testid="totals-breakdown">
+      {shown.length > 0 && (
+        <>
+          As imported:{" "}
+          {shown.map(([label, v], i) => (
+            <span key={label} className="whitespace-nowrap">
+              {i > 0 && " · "}
+              {label} <span className="font-medium text-foreground tabular-nums">{formatCurrencyPrecise(v)}</span>
+            </span>
+          ))}
+          {" · "}
+        </>
+      )}
+      Included rows only, current values{totals.uncounted > 0 ? ` · ${totals.uncounted} row${totals.uncounted === 1 ? "" : "s"} without an amount or Charge/Credit not counted yet` : ""}.
+    </p>
+  );
+}
+
+function sortRows(rows: ReviewRow[], sort: Sort): ReviewRow[] {
+  if (sort === "date") return [...rows].sort((a, b) => (a.date?.getTime() ?? 0) - (b.date?.getTime() ?? 0));
+  if (sort === "amount") return [...rows].sort((a, b) => (b.amount ?? 0) - (a.amount ?? 0));
+  return rows;
+}
+
+const isIssue = (status: RowStatus) => status === "fix" || status === "check";
 
 function SourcePreview({ parse, focused, rows, title }: { parse: CaptureParseResult; focused: ReviewRow | null; rows: ReviewRow[]; title: string }) {
   const lineOwner = useMemo(() => {

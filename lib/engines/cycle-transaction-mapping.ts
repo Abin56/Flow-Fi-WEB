@@ -8,6 +8,7 @@ import type { CashFlowTransaction } from "./cash-flow";
 import type { DashboardTransaction } from "./dashboard-aggregation";
 import { emiPurchaseRepresentedOnCard } from "@/lib/engines/credit-utilization";
 import type { Emi } from "@/lib/models/emi";
+import { isLenderChargeSettlement } from "@/lib/models/lender-charge";
 import { effectiveMonth, isLoanPrincipalDisbursement, isNonIncomeExpenseMovement, isTransfer, type Transaction } from "@/lib/models/transaction";
 
 /** Live and counted: not trashed, not "Don't count this in my totals" (WFI-P1-05). */
@@ -105,7 +106,9 @@ export function cashFlowTransactions(
       amount: t.amount,
       effectiveMonth: effectiveMonth(t),
       isDeleted: false,
-      isTransfer: isNonIncomeExpenseMovement(t),
+      // A lender-charge settlement is excluded from income/expense TOTALS (its expense was recognised at billing) but it
+      // is real cash leaving the account, so this cash-basis feed counts it once as money out.
+      isTransfer: isNonIncomeExpenseMovement(t) && !isLenderChargeSettlement(t),
       isCreditCardAccount,
       isCreditCardPayment: t.transferId != null && !isCreditCardAccount && cardPaymentTransferIds.has(t.transferId),
     };

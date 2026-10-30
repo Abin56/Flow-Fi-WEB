@@ -89,7 +89,7 @@ describe("real-screenshot regression (redacted)", () => {
 });
 
 describe("same merchant/date/amount with different directions (legitimate)", () => {
-  it("keeps both rows included; only a non-blocking note is added", () => {
+  it("keeps both rows included; each needs one look before continuing (never merged, never silently passed)", () => {
     const text = `03/10/2026\tSTORE A\t101.00\tD\n03/10/2026\tSTORE A\t101.00\tC\n04/10/2026\tSTORE B\t50.00\tD`;
     const parsed = parsePastedStatement(text, { today: TODAY });
     const rows = toReviewRows(flagRepeatedRows(parsed.rows));
@@ -99,8 +99,9 @@ describe("same merchant/date/amount with different directions (legitimate)", () 
       ["debit", true],
     ]);
     const repeat = rows[0].issues.find((i) => i.code === "possible_repeat")!;
-    expect(repeat.blocking).toBe(false);
-    expect(canContinue(rows)).toBe(true);
+    expect(repeat.blocking).toBe(true);
+    expect(canContinue(rows)).toBe(false);
+    expect(canContinue(rows.map((r) => applyRowPatch(r, { confirmed: true })))).toBe(true);
   });
 });
 

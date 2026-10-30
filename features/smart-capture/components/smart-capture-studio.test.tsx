@@ -1,6 +1,11 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe as vitestDescribe, expect, it, vi } from "vitest";
+
+// 2026-10-29: Smart Capture now hands rows straight to Review & Import (/reconciliation); the standalone review step
+// these tests drive is no longer routed. The components are kept untouched until the two-step flow is verified in the
+// browser (user decision), so this suite is skipped rather than deleted. The new flow: two-step-flow.test.tsx.
+const describe = vitestDescribe.skip;
 import { ocrLine } from "../lib/ocr-test-helpers";
 import { OcrCancelledError, type OcrResult } from "../lib/tesseract-ocr";
 import { SmartCaptureStudio } from "./smart-capture-studio";
@@ -136,37 +141,58 @@ describe("dropped decimal point — candidates, never auto-selected", () => {
 describe("screenshot OCR + progress + bulk confirmation", () => {
   it("separates checked, needs-correction and ready counts", async () => {
     await readOcr();
-    expect(figure("progress-ready")).toBe("0 / 2");
-    expect(figure("progress-verified")).toBe("0 / 2");
-    expect(figure("progress-fix")).toBe("1");
+    // SWIGGY has strong, unambiguous evidence on every field — Ready immediately, no click needed.
+    expect(figure("progress-ready")).toBe("1 / 2");
+    expect(figure("progress-check")).toBe("1"); // ZOMATO: amount read unclearly — one look, not a correction
+    expect(figure("progress-fix")).toBe("0");
     expect(screen.getByTestId("ocr-source")).toBeTruthy();
   });
 
-  it("bulk confirm asks once, lists the eligible rows only, and can be undone", async () => {
-    await readOcr();
+  it("bulk confirm asks once, lists only rows whose evidence is good but not strong enough to skip the check, and can be undone", async () => {
+    // A third row with confidence just under READY (but at/above LOW): nothing field-specific is wrong, so the one
+    // thing it's missing is the generic "checked against the image" — exactly what the bulk action is for.
+    const lines = [...OCR_LINES, ocrLine(80, ["07/09/2026", "CAFE", "99.00 Dr"], { "99.00": 88 })];
+    recognize.mockResolvedValue({ ...OCR_RESULT, text: lines.map((l) => l.text).join("\n"), lines });
+    render(<SmartCaptureStudio />);
+    loadScreenshot();
+    fireEvent.click(screen.getByRole("button", { name: /Read text/ }));
+    await screen.findByTestId("progress-ready");
+
     fireEvent.click(screen.getByRole("button", { name: "Confirm all reviewed rows (1)" }));
     const dialog = screen.getByRole("dialog");
-    expect(within(dialog).getByTestId("bulk-list").textContent).toContain("SWIGGY");
-    expect(within(dialog).getByTestId("bulk-list").textContent).not.toContain("ZOMATO"); // low-confidence amount
+    expect(within(dialog).getByTestId("bulk-list").textContent).toContain("CAFE");
+    expect(within(dialog).getByTestId("bulk-list").textContent).not.toMatch(/SWIGGY|ZOMATO/); // SWIGGY already Ready, ZOMATO has a field issue
     fireEvent.click(within(dialog).getByRole("button", { name: "Confirm 1 row" }));
-    expect(figure("progress-ready")).toBe("1 / 2");
-    expect(row("ZOMATO").dataset.status).toBe("fix");
+    expect(figure("progress-ready")).toBe("2 / 3");
+    expect(row("ZOMATO").dataset.status).toBe("check"); // read unclearly: values present, one look settles it
     fireEvent.click(screen.getByRole("button", { name: /Undo bulk confirmation \(1\)/ }));
-    expect(figure("progress-ready")).toBe("0 / 2");
+    expect(figure("progress-ready")).toBe("1 / 3");
   });
 
-  it("the low-confidence row needs its own row check AND field confirmation", async () => {
+  it("the low-confidence row needs only its one field confirmed — no separate row-level check on top", async () => {
     await readOcr();
     expand("ZOMATO");
-    fireEvent.click(within(row("ZOMATO")).getByRole("button", { name: "Row matches the image" }));
-    expect(row("ZOMATO").dataset.status).toBe("fix");
+    expect(within(row("ZOMATO")).queryByRole("button", { name: "Row matches the image" })).toBeNull();
+    expect(row("ZOMATO").dataset.status).toBe("check"); // read unclearly: values present, one look settles it
     fireEvent.click(within(row("ZOMATO")).getByRole("button", { name: "Confirm ₹810.00" }));
-    expand("SWIGGY");
-    fireEvent.click(within(row("SWIGGY")).getByRole("button", { name: "Row matches the image" }));
+    expect(row("ZOMATO").dataset.status).toBe("ready");
+    // SWIGGY was already Ready — nothing left to unblock Continue.
     expect(cont().disabled).toBe(false);
-    // Undoing a row's verification re-blocks approval.
-    fireEvent.click(within(row("SWIGGY")).getByRole("button", { name: "Undo verification" }));
-    expect(cont().disabled).toBe(true);
+  });
+
+  it("a row that only needs the generic image check can be confirmed and un-confirmed individually", async () => {
+    const lines = [...OCR_LINES, ocrLine(80, ["07/09/2026", "CAFE", "99.00 Dr"], { "99.00": 88 })];
+    recognize.mockResolvedValue({ ...OCR_RESULT, text: lines.map((l) => l.text).join("\n"), lines });
+    render(<SmartCaptureStudio />);
+    loadScreenshot();
+    fireEvent.click(screen.getByRole("button", { name: /Read text/ }));
+    await screen.findByTestId("progress-ready");
+
+    expand("CAFE");
+    fireEvent.click(within(row("CAFE")).getByRole("button", { name: "Row matches the image" }));
+    expect(row("CAFE").dataset.status).toBe("ready");
+    fireEvent.click(within(row("CAFE")).getByRole("button", { name: "Undo verification" }));
+    expect(row("CAFE").dataset.status).toBe("check");
   });
 
   it("moves the source-image highlight to the focused row (1200×600 image read at 2× → 2400×1200 canvas)", async () => {
@@ -316,12 +342,10 @@ describe("Continue → Reconciliation (Phase 3 handoff)", () => {
     expect(pending.priorSessionIds["acc-card"]).toMatch(/^smartcapture_/);
   });
 
-  it("an OCR capture hands over the verified rows with their positions and its own copy of the screenshot", async () => {
+  it("an OCR capture hands over the ready and confirmed rows with their positions and its own copy of the screenshot", async () => {
     await readOcr();
-    fireEvent.click(screen.getByRole("button", { name: "Confirm all reviewed rows (1)" }));
-    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Confirm 1 row" }));
+    // SWIGGY is Ready immediately (strong, unambiguous evidence) — only ZOMATO's low-confidence amount needs confirming.
     expand("ZOMATO");
-    fireEvent.click(within(row("ZOMATO")).getByRole("button", { name: "Row matches the image" }));
     fireEvent.click(within(row("ZOMATO")).getByRole("button", { name: "Confirm ₹810.00" }));
     const createdBefore = vi.mocked(URL.createObjectURL).mock.calls.length;
     fireEvent.click(cont());

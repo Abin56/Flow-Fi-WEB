@@ -86,6 +86,31 @@ export function resolveCandidateDestinationKey(
   return null;
 }
 
+/**
+ * A reviewer-chosen `"card:<id>"` / `"account:<id>"` key as the same `accountId`/`cardId` pair Android's own match uses, so
+ * every display helper above (label, identity, state) reads the reviewer's choice exactly like a resolved match.
+ */
+export function destinationKeyRefs(key: string): Pick<SmsTransactionCandidate, "accountId" | "cardId"> {
+  const [kind, id] = key.split(":");
+  return kind === "card" ? { accountId: null, cardId: id ?? null } : { accountId: id ?? null, cardId: null };
+}
+
+/**
+ * The refs to display a candidate by: the reviewer's own choice while it still points at a real account/card (it may be
+ * "correcting" Android's match or filling in a missing one), otherwise Android's. A choice whose account was deleted since
+ * is ignored — it never shows a stale destination. Display only: the candidate document is never written.
+ */
+export function effectiveDestinationRefs<C extends Pick<SmsTransactionCandidate, "accountId" | "cardId">>(
+  candidate: C,
+  chosenKey: string | null | undefined,
+  accounts: Account[],
+  creditCards: CreditCardProfile[],
+): Pick<SmsTransactionCandidate, "accountId" | "cardId"> {
+  if (!chosenKey) return candidate;
+  const refs = destinationKeyRefs(chosenKey);
+  return resolveCandidateDestinationKey(refs, accounts, creditCards) === chosenKey ? refs : candidate;
+}
+
 export function candidateDestinationState(
   candidate: Pick<SmsTransactionCandidate, "accountId" | "cardId">,
   accounts: Account[],

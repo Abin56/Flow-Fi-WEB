@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import type { Account } from "@/lib/models/account";
 import type { Person } from "@/lib/models/person";
 import type { SmsTransactionCandidate } from "@/lib/models/sms-transaction-candidate";
 import type { ExpenseRepository } from "@/lib/repositories/expense-repository";
@@ -115,9 +116,12 @@ describe("compact transaction inspector", () => {
     expect(screen.getByRole("textbox", { name: "Notes" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /^Original SMS/ }));
     expect(screen.getByTestId("original-message-unavailable")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: /^Parsing evidence/ }));
+    // Parsing evidence and technical details sit together under one "More details" toggle.
+    expect(screen.queryByTestId("status-explanation")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /^More details/ }));
     expect(screen.getByTestId("confidence-explanation")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: /^Technical details/ }));
+    expect(screen.getByTestId("status-explanation")).toBeTruthy();
+    expect(screen.getByText("Technical details")).toBeTruthy();
     expect(screen.getAllByText("UPI1234").length).toBeGreaterThan(0);
     expect(calls).toEqual([]);
   });
@@ -191,5 +195,57 @@ describe("describeSplitAllocation (display only)", () => {
     expect(describeSplitAllocation({ splitType: "equal", participants: [p("Asha", "", "p1"), p("Asha", "", "p1")] }, 500, PEOPLE).duplicate).toBe("Asha");
     expect(describeSplitAllocation({ splitType: "equal", participants: [p("kiran"), p("Kiran ")] }, 500, []).duplicate).toBe("Kiran");
     expect(describeSplitAllocation({ splitType: "equal", participants: [p("Asha", "", "p1"), p("Ravi", "", "p2")] }, 500, PEOPLE).duplicate).toBeNull();
+  });
+});
+
+describe("a chosen account follows the reviewer, not only Android's match", () => {
+  const account = { id: "acc-1", name: "Bank of India", bankId: "boi", type: "bank", accountNumberLast4: "4821" } as unknown as Account;
+
+  function open(extra: { chosenDestinationKey?: string | null; onDestinationChosen?: (id: string, key: string | null) => void } = {}) {
+    render(
+      <CandidateDetailsModal
+        candidate={candidate()}
+        onOpenChange={vi.fn()}
+        duplicate={null}
+        matchedTransaction={null}
+        existingTransactions={[]}
+        accounts={[account]}
+        creditCards={[]}
+        categories={[]}
+        people={PEOPLE}
+        transactionRepository={trap<TransactionRepository>([], "transactions")}
+        candidateRepository={trap<SmsTransactionCandidateRepository>([], "candidates")}
+        expenseRepository={trap<ExpenseRepository>([], "expenses")}
+        onCreatePerson={vi.fn()}
+        onHide={vi.fn()}
+        onUnhide={vi.fn()}
+        {...extra}
+      />,
+    );
+  }
+
+  it("shows 'Account not matched' while nothing is chosen", () => {
+    open();
+    expect(within(screen.getByTestId("sheet-header")).getByText("Account not matched")).toBeTruthy();
+  });
+
+  it("a choice made earlier this session seeds the account and clears the 'not matched' status", () => {
+    open({ chosenDestinationKey: "account:acc-1" });
+    const header = screen.getByTestId("sheet-header");
+    expect(within(header).queryByText("Account not matched")).toBeNull();
+    expect(screen.getAllByText(/Bank of India/).length).toBeGreaterThan(0);
+  });
+
+  it("ignores a chosen account that no longer exists", () => {
+    open({ chosenDestinationKey: "account:gone" });
+    expect(within(screen.getByTestId("sheet-header")).getByText("Account not matched")).toBeTruthy();
+  });
+
+  it("offering the last-4 suggestion and clicking it reports the choice and updates the status at once", () => {
+    const onDestinationChosen = vi.fn();
+    open({ onDestinationChosen });
+    fireEvent.click(screen.getByRole("button", { name: /^Use Bank of India/ }));
+    expect(onDestinationChosen).toHaveBeenCalledWith("sms-1", "account:acc-1");
+    expect(within(screen.getByTestId("sheet-header")).queryByText("Account not matched")).toBeNull();
   });
 });

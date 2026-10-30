@@ -232,3 +232,25 @@ export async function shot(page, name) {
   await page.screenshot({ path: path.join(SHOTS_DIR, `${name}.png`) });
   return `shots/${name}.png`;
 }
+
+/** JS value → Firestore REST typed value (Date → timestamp, integer/float → number, null, array, object). */
+function toFsValue(v) {
+  if (v === null || v === undefined) return { nullValue: null };
+  if (v instanceof Date) return { timestampValue: v.toISOString() };
+  if (typeof v === "string") return { stringValue: v };
+  if (typeof v === "boolean") return { booleanValue: v };
+  if (typeof v === "number") return Number.isInteger(v) ? { integerValue: String(v) } : { doubleValue: v };
+  if (Array.isArray(v)) return { arrayValue: { values: v.map(toFsValue) } };
+  return { mapValue: { fields: Object.fromEntries(Object.entries(v).map(([k, x]) => [k, toFsValue(x)])) } };
+}
+
+/** Creates a fully typed document at `users/{uid}/{docPath}` (emulator only) — synthetic fixtures for read-side QA. */
+export async function createDocUnderUser(docPath, value) {
+  const uid = await authUid();
+  const res = await fetch(`${FIRESTORE_DOCS}/users/${uid}/${docPath}`, {
+    method: "PATCH",
+    headers: { ...OWNER, "Content-Type": "application/json" },
+    body: JSON.stringify({ fields: Object.fromEntries(Object.entries(value).map(([k, x]) => [k, toFsValue(x)])) }),
+  });
+  if (!res.ok) throw new Error(`createDocUnderUser ${docPath} failed: ${res.status} ${await res.text()}`);
+}

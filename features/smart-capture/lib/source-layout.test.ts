@@ -210,8 +210,13 @@ describe("screenshot (OCR) rows — confidence checks follow the field, not the 
     expect(rows[1].issues.some((i) => i.code === "low_confidence_direction")).toBe(false);
   });
 
-  it("every OCR row still needs its own 'checked against the image' confirmation, whatever the order", () => {
+  it("a clean, high-confidence row needs no 'checked against the image' confirmation, whatever the column order", () => {
     const { rows } = issuesOf([ocrLine(0, ["1,299.00 Dr", "AMAZON PAY", "05/09/2026"])]);
+    expect(rows[0].issues.some((i) => i.code === "ocr_unverified" && i.blocking)).toBe(false);
+  });
+
+  it("but a low-confidence read in any column still blocks on a single generic check", () => {
+    const { rows } = issuesOf([ocrLine(0, ["1,299.00 Dr", "AMAZON PAY", "05/09/2026"], { "05/09/2026": LOW_CONFIDENCE + 2 })]);
     expect(rows[0].issues.some((i) => i.code === "ocr_unverified" && i.blocking)).toBe(true);
   });
 
