@@ -181,6 +181,8 @@ export interface ResolutionDockProps {
   history: ExistingRecord[];
   notes: string[];
   importBlocked: string | null;
+  /** Opens the row's editor when the block is about its captured values (confirmable there). Absent for rule blocks. */
+  onFixValues?: () => void;
   /** P0: the own-account confirmation an Import on this row needs (null = none). */
   ownTransferConfirm?: string | null;
   confirmFor: "keep_both" | "import_new" | null;
@@ -384,8 +386,15 @@ export function ResolutionDock(props: ResolutionDockProps) {
               </button>
             )}
             {props.importBlocked && (
-              <span className="min-w-0 flex-1 truncate text-warning" title={props.importBlocked} data-testid="dock-import-blocked">
-                Import blocked: {props.importBlocked}
+              <span className="flex min-w-0 flex-1 items-center gap-2">
+                <span className="min-w-0 truncate text-warning" title={props.importBlocked} data-testid="dock-import-blocked">
+                  Import blocked: {props.importBlocked}
+                </span>
+                {props.onFixValues && (
+                  <button type="button" onClick={props.onFixValues} className="shrink-0 rounded-md bg-warning/12 px-2 py-0.5 font-semibold text-warning outline-none hover:bg-warning/20 focus-visible:ring-2 focus-visible:ring-ring" data-testid="dock-fix-values">
+                    Check values →
+                  </button>
+                )}
               </span>
             )}
             <ClayButton size="sm" variant="ghost" className="ml-auto h-6 shrink-0 px-2" onClick={props.onUndo} disabled={!props.undoLabel} title={props.undoLabel ? `Undo: ${props.undoLabel}` : "Nothing to undo"} data-testid="undo-decision" aria-label={props.undoLabel ? `Undo ${props.undoLabel}` : "Undo"}>

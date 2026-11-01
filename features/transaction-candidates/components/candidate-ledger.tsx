@@ -172,6 +172,15 @@ export function IdentityChip({ identity, className }: { identity: MatchedIdentit
 function quickPreviewFacts(row: CandidateRowModel): string[] {
   const { candidate, status } = row;
   const facts: string[] = [];
+  if (row.rematch) {
+    const why =
+      row.rematch.reason === "stale"
+        ? "its previous account no longer ends in these digits"
+        : row.rematch.reason === "missing"
+          ? "its previous account was removed"
+          : "an account now ends in these digits";
+    facts.push(`Matched to ${row.rematch.label} by last-4${row.rematch.bankConfirmed ? " and bank" : ""} — ${why}.`);
+  }
   if (status.lane !== "noIssues") {
     const detail = status.explanation || status.reasons.join(" ");
     if (detail) facts.push(detail);
@@ -236,20 +245,24 @@ const LedgerRow = memo(function LedgerRow({ row, actions, showDate }: { row: Can
       onClick={onRowClick}
       className={cn(
         "group/row relative cursor-pointer transition-colors duration-150 motion-reduce:transition-none",
+        // Rows past the first screenful skip layout + paint until they near the viewport (the browser remembers each row's real height
+        // once seen), which keeps scrolling smooth through a long inbox. The first rows are never skipped, so they are always fully
+        // rendered, readable (innerText) and focusable the moment the list appears; `auto` keeps find-in-page and scrollIntoView working.
+        row.number > 20 && "[contain-intrinsic-size:auto_4.5rem] [content-visibility:auto]",
         row.selected ? "bg-primary/12 hover:bg-primary/16" : isDuplicate ? "bg-danger/[0.05] hover:bg-danger/[0.09]" : "hover:bg-muted/60",
         "focus-within:bg-muted/60",
       )}
     >
       {/* State rail: lime = selected, red = duplicate. Colour-independent cues (the notice text, the checked box) always accompany it. */}
       <span aria-hidden className={cn("absolute inset-y-0 left-0 w-[3px]", row.selected ? "bg-primary" : isDuplicate ? "bg-danger" : "bg-transparent")} />
-      <div className="grid grid-cols-[2.75rem_2.5rem_minmax(0,1fr)_auto] items-center gap-x-2.5 gap-y-1.5 py-2 pr-2.5 pl-1 @4xl:grid-cols-[2.75rem_2.5rem_minmax(0,1fr)_10rem_9rem_11rem] @4xl:gap-y-0 @4xl:py-1.5 @4xl:pr-3">
+      <div className="grid grid-cols-[2.75rem_2.5rem_minmax(0,1fr)_auto] items-center gap-x-2.5 gap-y-1.5 py-2 pr-2.5 pl-1 @4xl:grid-cols-[2.75rem_2.5rem_minmax(0,1fr)_10rem_9rem_11rem] @4xl:gap-y-0 @4xl:py-2.5 @4xl:pr-3">
         <RowCheckbox row={row} onToggle={actions.onToggle} className="col-start-1 row-start-1" />
         <div className="col-start-2 row-start-1">
           <MerchantAvatar candidate={candidate} />
         </div>
 
         <div className="col-start-3 row-start-1 flex min-w-0 flex-col gap-0.5">
-          <span className={cn("truncate text-[15px] leading-snug font-semibold", unnamed ? "text-muted-foreground italic" : "text-foreground")} title={candidate.merchant ?? undefined}>
+          <span className={cn("truncate text-[15px] leading-snug font-semibold @4xl:text-base", unnamed ? "text-muted-foreground italic" : "text-foreground")} title={candidate.merchant ?? undefined}>
             {unnamed ? "Unknown merchant" : candidateTitle(candidate)}
           </span>
           <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 text-[13px] leading-snug text-muted-foreground @4xl:flex-nowrap">
@@ -335,12 +348,12 @@ const LedgerRow = memo(function LedgerRow({ row, actions, showDate }: { row: Can
 
 // ── groups ───────────────────────────────────────────────────────────────────────────────────────────────────────
 
-const LedgerGroupSection = memo(function LedgerGroupSection({ group, actions }: { group: LedgerGroup; actions: RowActions }) {
+const LedgerGroupSection = memo(function LedgerGroupSection({ group, actions, stickyTop }: { group: LedgerGroup; actions: RowActions; stickyTop: number }) {
   const headingId = useId();
   const count = group.rows.length;
   return (
     <section aria-labelledby={headingId} data-testid="candidate-group" data-group-key={group.key}>
-      <div className="sticky -top-4 z-[1] flex items-baseline sm:-top-6 justify-between gap-3 bg-background px-1 pt-1.5 pb-1.5 sm:pt-2.5">
+      <div style={{ top: stickyTop }} className="sticky z-[1] flex items-baseline justify-between gap-3 bg-background px-1 py-1.5">
         <h2 id={headingId} className="flex items-baseline gap-2 font-heading text-[15px] font-semibold tracking-tight text-foreground">
           {group.label}
           {group.dateText && <span className="text-xs font-medium tracking-normal text-muted-foreground">{group.dateText}</span>}
@@ -366,9 +379,12 @@ export function CandidateLedger({
   someSelected,
   selectAllDisabled,
   onToggleAll,
+  stickyTop = 0,
   ...liveActions
 }: {
   groups: LedgerGroup[];
+  /** Where a month heading sticks (px, sticky-offset space): right under the page's own pinned bars. */
+  stickyTop?: number;
   /** Rows currently shown / total in the queue — "Showing 12 of 126". */
   shownCount: number;
   queueCount: number;
@@ -396,7 +412,7 @@ export function CandidateLedger({
   );
   return (
     <div className="@container flex flex-col" data-testid="candidates-ledger">
-      <div className="flex min-h-10 items-center justify-between gap-3 px-1 sm:min-h-11">
+      <div className="flex min-h-9 items-center justify-between gap-3 px-1">
         <p className="text-sm text-muted-foreground" aria-live="polite" data-testid="candidates-shown">
           {shownCount === queueCount ? (
             <>
@@ -408,7 +424,7 @@ export function CandidateLedger({
             </>
           )}
         </p>
-        <label className={cn("flex min-h-10 cursor-pointer items-center gap-2.5 text-sm font-medium text-foreground sm:min-h-11", selectAllDisabled && "cursor-not-allowed opacity-60")}>
+        <label className={cn("flex min-h-10 cursor-pointer items-center gap-2.5 text-sm font-medium text-foreground", selectAllDisabled && "cursor-not-allowed opacity-60")}>
           <Checkbox
             className={CHECKBOX_CLASS}
             checked={allSelected ? true : someSelected ? "indeterminate" : false}
@@ -421,7 +437,7 @@ export function CandidateLedger({
       </div>
       <div className="flex flex-col gap-1">
         {groups.map((group) => (
-          <LedgerGroupSection key={group.key} group={group} actions={actions} />
+          <LedgerGroupSection key={group.key} group={group} actions={actions} stickyTop={stickyTop} />
         ))}
       </div>
     </div>

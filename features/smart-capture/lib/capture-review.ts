@@ -122,7 +122,7 @@ export interface ReviewProgress {
 /** Row-level checks a bulk confirmation may clear: only "I compared this row with the image". */
 const BULK_CLEARABLE: ReadonlySet<string> = new Set(["ocr_unverified"]);
 /** Signals that something about the row's money is uncertain — such a row always needs its own look. */
-const NEEDS_INDIVIDUAL_LOOK: ReadonlySet<string> = new Set(["direction_inferred", "possible_repeat", "partial_line", "merged_lines", "year_assumed"]);
+const NEEDS_INDIVIDUAL_LOOK: ReadonlySet<string> = new Set(["direction_inferred", "possible_repeat", "partial_line", "merged_lines", "year_assumed", "balance_mismatch"]);
 
 /**
  * Rows "Confirm all reviewed rows" may confirm: included, not yet confirmed, every value present, and the ONLY thing

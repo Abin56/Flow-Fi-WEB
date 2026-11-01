@@ -19,7 +19,7 @@ export function Sidebar() {
     >
       <div className="flex h-full flex-col border-r border-border bg-sidebar">
         <div className="min-h-0 flex-1 overflow-hidden">
-          <SidebarNavContent collapsed={collapsed} />
+          <SidebarNavContent collapsed={collapsed} scrollMotion />
         </div>
 
         <button

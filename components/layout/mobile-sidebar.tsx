@@ -20,7 +20,7 @@ export function MobileSidebar({
         className="h-dvh w-[19rem] gap-0 overflow-hidden rounded-r-[22px] border-r border-border/70 bg-sidebar p-0 pb-[env(safe-area-inset-bottom)] shadow-[18px_0_48px_-16px_rgba(0,0,0,0.35)] sm:max-w-[19rem]"
       >
         <SheetTitle className="sr-only">Navigation</SheetTitle>
-        <SidebarNavContent onNavigate={() => onOpenChange(false)} />
+        <SidebarNavContent scrollMotion onNavigate={() => onOpenChange(false)} />
       </SheetContent>
     </Sheet>
   );

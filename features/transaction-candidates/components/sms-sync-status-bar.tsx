@@ -30,8 +30,8 @@ export function SmsSyncStatusBar() {
 
   return (
     <div className="flex flex-col gap-3" data-testid="sms-sync-status-bar" data-paired={paired}>
-      <div className="relative flex flex-wrap items-center gap-x-3 gap-y-2 overflow-hidden rounded-2xl border border-border/70 bg-card px-3.5 py-2.5 shadow-e1">
-        <span className={cn("relative flex size-8 shrink-0 items-center justify-center rounded-xl", paired ? "bg-primary/20 text-primary-accent-text" : "bg-secondary text-muted-foreground")}>
+      <div className="relative flex flex-wrap items-center gap-x-3 gap-y-2 overflow-hidden rounded-xl border border-border/70 bg-card px-3 py-1.5 shadow-e1">
+        <span className={cn("relative flex size-7 shrink-0 items-center justify-center rounded-lg", paired ? "bg-primary/20 text-primary-accent-text" : "bg-secondary text-muted-foreground")}>
           <Smartphone className="size-4" aria-hidden />
           {s && <StatusDot reachability={s.reachability} reduceMotion={reduceMotion} />}
         </span>
@@ -49,7 +49,7 @@ export function SmsSyncStatusBar() {
           aria-expanded={open}
           onClick={() => setOpen((v) => !v)}
           className={cn(
-            "inline-flex h-9 items-center gap-1.5 rounded-xl px-3 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            "inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
             paired || open ? "border border-border bg-background text-foreground hover:bg-secondary" : "bg-primary text-primary-foreground hover:brightness-95",
           )}
         >

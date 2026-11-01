@@ -33,6 +33,11 @@ export interface CandidateRowModel {
    * or linked; Android matches on the phone only when it first builds the candidate and never re-matches). Null when there is none.
    */
   accountSuggestion?: string | null;
+  /**
+   * Set when this row's account/card was re-matched on the web against the user's CURRENT saved accounts (Android only matches
+   * once, when it builds the candidate) — e.g. "after you corrected an account's last-4". Display + audit only.
+   */
+  rematch?: { reason: "unmatched" | "missing" | "stale"; label: string; bankConfirmed: boolean } | null;
   selected: boolean;
   /** Why this row can't join a bulk selection (never silently — it is shown beside the row), or null when it can. */
   selectBlockedReason: string | null;

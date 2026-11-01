@@ -84,7 +84,7 @@ function matchesQuery(record: ExistingRecord, q: string): boolean {
 function viewOnlyFor(row: ReconRow | null, record: ExistingRecord): { code: ViewOnlyCode; message: string } | null {
   if (!row) return { code: "no_row", message: "Select a statement row first." };
   if (record.kind === "sms_pending") return { code: "sms", message: "Still an SMS in the Transaction Inbox — handle it there." };
-  if (!isComplete(row)) return { code: "incomplete", message: "The statement row needs a date, amount and Charge/Credit first." };
+  if (!isComplete(row)) return { code: "incomplete", message: "The statement row needs a date, amount and Debit/Credit first." };
   if (record.direction !== row.direction) return { code: "direction", message: row.direction === "credit" ? "This is a charge; the statement row is a credit." : "This is a credit; the statement row is a charge." };
   if (Math.abs(record.amountPaise - toPaise(row.amount!)) > 100) return { code: "amount", message: "Amounts differ by more than ₹1.00." };
   if (Math.abs(record.day - calendarDayIndex(row.date!)) > MANUAL_LINK_WINDOW_DAYS) return { code: "window", message: `More than ${MANUAL_LINK_WINDOW_DAYS} days apart.` };
@@ -238,8 +238,8 @@ export function fieldDiffs(params: { row: ReconRow; record: ExistingRecord; cand
     {
       key: "type",
       label: "Type",
-      statement: row.direction === "credit" ? "Credit" : row.direction === "debit" ? "Charge" : "Unknown",
-      existing: record.direction === "credit" ? "Credit" : "Charge",
+      statement: row.direction === "credit" ? "Credit" : row.direction === "debit" ? "Debit" : "Unknown",
+      existing: record.direction === "credit" ? "Credit" : "Debit",
       verdict: sameType ? "same" : "diff",
       detail: sameType ? "Same direction" : "Opposite direction",
     },

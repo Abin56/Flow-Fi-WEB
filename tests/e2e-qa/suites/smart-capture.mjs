@@ -104,8 +104,16 @@ const reconRows = (page) =>
     })),
   );
 
+/** A table stops at "Match your columns" first: confirm the detected columns (a no-op if it never appears). */
+async function confirmColumns(page) {
+  const confirm = page.getByTestId("mapping-confirm");
+  await Promise.race([confirm.waitFor({ timeout: 240000 }).catch(() => null), atRecon(page, 240000).catch(() => null)]);
+  if (await confirm.count()) await confirm.click();
+}
+
 /** Extract (paste) or Read (screenshot) lands straight on Review & Import; waits for it and returns the elapsed ms. */
 async function landOnReview(page, t0 = Date.now()) {
+  await confirmColumns(page);
   await atRecon(page);
   await page.getByRole("heading", { name: "Review & Import" }).waitFor({ timeout: 240000 });
   await page.getByTestId("handoff-notice").waitFor({ timeout: 240000 });

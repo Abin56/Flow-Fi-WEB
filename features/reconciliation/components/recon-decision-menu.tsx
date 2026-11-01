@@ -44,7 +44,7 @@ export function QuickDecideMenu({ rowNumber, kind, keepBoth = false, actions, on
           className="group flex h-8 w-full min-w-0 items-center justify-between gap-1 rounded-lg px-1.5 text-left outline-none transition-colors hover:bg-foreground/5 focus-visible:ring-2 focus-visible:ring-ring"
         >
           <DecisionChip kind={kind} keepBoth={keepBoth} />
-          <ChevronDown className="size-3.5 shrink-0 text-muted-foreground opacity-60 transition-opacity group-hover:opacity-100" aria-hidden />
+          <ChevronDown className={cn("size-3.5 shrink-0 text-muted-foreground transition-opacity group-hover:opacity-100", kind ? "opacity-60" : "opacity-90")} aria-hidden />
         </button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-72 p-1.5" onClick={(e) => e.stopPropagation()}>

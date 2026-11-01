@@ -190,14 +190,14 @@ describe("readiness summary", () => {
 });
 
 describe("draft-only editor and zero writes", () => {
-  it("shows the statement account read-only, keeps Person and Split disabled, and edits stay in the tab draft — nothing is read from the server or written", () => {
+  it("shows the statement account read-only, offers Person and Split as draft choices, and edits stay in the tab draft — nothing is read from the server or written", () => {
     seed("acc-card");
     const { deps, creates, readData } = tripwire();
     render(<ReconciliationWorkspace uid="u1" data={DATA} sync={LOADED} approvalDeps={deps} />);
     fireEvent.click(screen.getByRole("button", { name: "Expand row 3" }));
     expect(screen.getByTestId("editor-account").textContent).toMatch(/HDFC Millennia •••• 4821/);
-    expect(screen.getByTestId("editor-person").getAttribute("aria-disabled")).toBe("true");
-    expect((screen.getByRole("switch", { name: /Split expense/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("radio", { name: "Split expense" }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole("radio", { name: "Someone else's expense" }) as HTMLButtonElement).disabled).toBe(false);
     fireEvent.change(screen.getByLabelText("Notes"), { target: { value: "checked with receipt" } });
     expect(sessionStorage.getItem(`${DRAFT_KEY_PREFIX}u1`)).toContain("checked with receipt");
     // The row sheet is modal: close it before going back to the dock.

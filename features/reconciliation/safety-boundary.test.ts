@@ -2,7 +2,8 @@
  * Reconciliation's write boundary. Reviewing is read-only; the ONLY write is the Phase 4 final approval, and it is
  * confined to three small files:
  *   - lib/approval-commit.ts       — the one place `commitReviewImport` (the existing engine) is called
- *   - lib/approval-app-deps.ts     — builds the app's account + transaction repositories for it
+ *   - lib/approval-app-deps.ts     — builds the app's account + transaction repositories for it, plus the expense
+ *                                    repository that person / split rows are written through (nothing else)
  *   - lib/authoritative-reader.ts  — the pre-commit SERVER re-read (Firestore read functions only)
  * Everything else must stay free of repositories, Firestore and the commit engine. These checks fail if a later change
  * adds a second write path, a direct repository write, an unsupported-action repository, or a Firestore write function.
@@ -34,7 +35,8 @@ const NEVER = [
   /\b(addDoc|setDoc|updateDoc|deleteDoc|writeBatch|runTransaction)\s*\(/,
   /\.(createTransaction|createTransferPair|createTransferPairAtomic|createExpense|assignToPerson|editTransaction|softDeleteTransaction|markHandled|createEmi|createLoan)\s*\(/,
   /\bimportCandidate\s*\(/,
-  /\bcreate(Expense|Emi|Loan|InstallmentRepositoryFor|Person|CreditCard|Statement)[A-Za-z]*\s*\(/,
+  // `createExpenseRepository(` is the one allowed factory call (approval-app-deps.ts only — see the repository test below).
+  /\bcreate(Expense(?!Repository\s*\()|Emi|Loan|InstallmentRepositoryFor|Person|CreditCard|Statement)[A-Za-z]*\s*\(/,
 ];
 
 describe("reconciliation safety boundary", () => {
@@ -56,14 +58,14 @@ describe("reconciliation safety boundary", () => {
     expect(text).toMatch(/from\s+["']@\/features\/transaction-studio\/lib\/commit-review-import["']/);
   });
 
-  it("only approval-app-deps.ts builds repositories, and only the account and transaction ones", () => {
+  it("only approval-app-deps.ts builds repositories, and only the account, transaction and expense ones", () => {
     const offenders: string[] = [];
     for (const file of ALL) {
       const text = readFileSync(file, "utf8");
       const calls = [...text.matchAll(/\bcreate([A-Za-z]*)Repository\s*\(/g)].map((m) => m[1]);
       if (calls.length === 0) continue;
       if (rel(file) !== DEPS) offenders.push(`${rel(file)} builds a repository`);
-      else if (calls.some((c) => c !== "Account" && c !== "Transaction")) offenders.push(`${rel(file)} builds ${calls.join(",")}`);
+      else if (calls.some((c) => c !== "Account" && c !== "Transaction" && c !== "Expense")) offenders.push(`${rel(file)} builds ${calls.join(",")}`);
     }
     expect(offenders).toEqual([]);
   });

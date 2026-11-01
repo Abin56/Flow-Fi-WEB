@@ -136,7 +136,7 @@ export function decisionShort(kind: DecisionKind, keepBoth = false): string {
 export function DecisionChip({ kind, keepBoth = false }: { kind: DecisionKind | null; keepBoth?: boolean }) {
   if (!kind) {
     return (
-      <span className="inline-flex items-center gap-1.5 text-xs font-medium text-warning">
+      <span className="inline-flex items-center gap-1.5 rounded-full border border-warning/35 bg-warning/10 px-2 py-0.5 text-xs font-medium text-warning">
         <span aria-hidden className="size-1.5 rounded-full bg-warning" />
         Undecided
       </span>

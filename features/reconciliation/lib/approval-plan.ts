@@ -6,20 +6,22 @@
  * Gates (Stage 6 + Phase 4):
  *  - Every included row needs an explicit decision; Investigate (or no decision, or an invalid one) BLOCKS approval.
  *  - Link, Ignore and Handle-in-Inbox are never writes.
- *  - Only a valid "Import as new" — a normal expense, income or refund — is ever written. Card payments, EMI lines,
- *    transfers, loans, person assignments and splits cannot reach this far (decisions.ts blocks them), and nothing
- *    here converts one of them into an expense.
+ *  - Only a valid "Import as new" — a normal expense, income or refund, or an expense assigned to a person / split
+ *    between people with a fully validated allocation — is ever written. Card payments, EMI lines, transfers and loans
+ *    cannot reach this far (decisions.ts blocks them), and nothing here converts one of them into an expense.
  *  - A row whose own deterministic import key is already a live transaction is "already imported" — resolved, never
  *    written again.
  */
 
 import type { StagedRecord } from "@/lib/models/document-import";
-import { toStagedRecords, type CaptureAction } from "@/features/smart-capture/lib/capture-review";
+import { toStagedRecords } from "@/features/smart-capture/lib/capture-review";
+import { actionToAxesPatch } from "@/features/transaction-studio/lib/action-metadata";
 import { toPaise } from "./amounts-and-days";
-import { decisionErrors, decisionFor, importActionFor, type RowGateContext } from "./decisions";
+import { decisionErrors, decisionFor, importActionFor, type ImportAction, type RowGateContext } from "./decisions";
+import { describeOwnership, ownershipDetail } from "./row-ownership";
 import type { ReconRow, RowDecision, RowMatch } from "./types";
 
-export type ImportAction = Extract<CaptureAction, "normal_expense" | "refund" | "income">;
+export type { ImportAction };
 
 export type PlanStatus = "import" | "already_imported" | "link" | "ignore" | "inbox" | "excluded" | "blocked";
 
@@ -35,6 +37,8 @@ export interface PlanRow {
   /** The commit action for a row that will be imported. */
   action: ImportAction | null;
   category: string | null;
+  /** One line saying who an imported expense is for, when it is not simply the user's own (person / split). */
+  ownership: string | null;
   /** The existing transaction a Link points at, or the transaction an already-imported row became. */
   recordId: string | null;
   /** Why a blocked row can't be approved (Investigate included). */
@@ -108,7 +112,7 @@ export function buildApprovalPlan(params: {
   const out: PlanRow[] = [];
 
   rows.forEach((row, index) => {
-    const base = { rowId: row.id, number: index + 1, description: row.description, date: row.date, amount: row.amount, direction: row.direction, action: null, category: null, recordId: null, reasons: [] as string[], investigate: false };
+    const base = { rowId: row.id, number: index + 1, description: row.description, date: row.date, amount: row.amount, direction: row.direction, action: null, category: null, ownership: null, recordId: null, reasons: [] as string[], investigate: false };
     const match = matches.get(row.id);
     if (!row.include || match?.state === "excluded") {
       counts.excluded++;
@@ -168,7 +172,7 @@ export function buildApprovalPlan(params: {
         else if (action === "refund") refundsPaise += paise;
         else incomePaise += paise;
         counts.newImports++;
-        out.push({ ...base, status: "import", action, category: decision.category });
+        out.push({ ...base, status: "import", action, category: decision.category, ownership: describeOwnership(row, decision.ownership) });
         return;
       }
       default:
@@ -203,18 +207,26 @@ export const RECONCILIATION_IMPORT_NOTE = "Imported via Reconciliation (Smart Ca
 
 /**
  * The exact `StagedRecord`s the existing commit engine takes, for the rows that will be imported — built with Smart
- * Capture's own `toStagedRecords`, so there is no second row→transaction mapping. Only expense/income/refund actions
- * are ever set, so the engine's single-write path is the only one these can reach.
+ * Capture's own `toStagedRecords`, so there is no second row→transaction mapping. Only expense / income / refund and the
+ * person / split expense actions are ever set; the last two carry the drafted allocation (already validated by the
+ * decision gate) and reach the engine's keyed, all-or-nothing `createExpenseAtomic` — never anything else.
  */
 export function stagedRecordsForImport(rows: ReconRow[], decisions: Record<string, RowDecision>, importRowIds: ReadonlySet<string>): StagedRecord[] {
   const reviewRows = rows
     .filter((r) => importRowIds.has(r.id))
     .map((r) => {
       const d = decisionFor(decisions, r.id);
-      return { ...r, include: true, action: importActionFor(r, d), category: d.category, committedTransactionId: null };
+      const action = importActionFor(r, d);
+      // Smart Capture's own mapping covers expense / income / refund; a person / split expense starts as a plain expense and
+      // takes its ownership axes and detail below.
+      return { ...r, include: true, action: action === "shared_expense" || action === "someone_elses_expense" ? ("normal_expense" as const) : action, category: d.category, committedTransactionId: null };
     });
   return toStagedRecords(reviewRows).map((record) => {
-    const userNote = decisionFor(decisions, record.id).notes.trim();
-    return { ...record, notes: userNote ? `${userNote} · ${RECONCILIATION_IMPORT_NOTE}` : RECONCILIATION_IMPORT_NOTE };
+    const decision = decisionFor(decisions, record.id);
+    const userNote = decision.notes.trim();
+    const notes = userNote ? `${userNote} · ${RECONCILIATION_IMPORT_NOTE}` : RECONCILIATION_IMPORT_NOTE;
+    const row = rows.find((r) => r.id === record.id);
+    const assigned = row && decision.ownership && row.direction === "debit" ? ownershipDetail(row, decision.ownership) : null;
+    return assigned ? { ...record, notes, ...actionToAxesPatch(assigned.action, assigned.detail) } : { ...record, notes };
   });
 }

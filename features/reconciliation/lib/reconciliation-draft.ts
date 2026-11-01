@@ -86,12 +86,13 @@ const ISSUE_LABEL: Record<CaptureIssueCode, string> = {
   ocr_unverified: "Check this row against the statement.",
   low_confidence_date: "Date read with low confidence — correct or confirm it.",
   low_confidence_amount: "Amount read with low confidence — correct or confirm it.",
-  low_confidence_direction: "Charge/Credit read with low confidence — check it.",
-  direction_inferred: "Charge/Credit was inferred — check it.",
+  low_confidence_direction: "Debit/Credit read with low confidence — check it.",
+  direction_inferred: "Debit/Credit was inferred — check it.",
   partial_line: "This row may be cut off — check it.",
   merged_lines: "Built from more than one line — check it isn't two transactions.",
   decimal_missing: "The decimal point may be missing — pick the right amount.",
   possible_repeat: "Same date, merchant and amount as another row — check each is a separate transaction.",
+  balance_mismatch: "The running balance doesn't follow this row — check the amount and the Debit / Credit / Balance columns.",
 };
 
 function storage(): Storage | null {

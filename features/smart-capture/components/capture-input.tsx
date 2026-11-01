@@ -226,7 +226,7 @@ export function CaptureInput({
       {mode === "text" ? (
         <div className="flex flex-col gap-3">
           <ol className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-3">
-            {["Open your card statement (PDF or net-banking).", "Select just the transaction rows and copy.", "Paste below and extract — you review everything next."].map((step, i) => (
+            {["Open your card statement (PDF or net-banking).", "Select just the transaction rows and copy.", "Paste below and extract — you confirm the columns, then review everything."].map((step, i) => (
               <li key={step} className="flex items-start gap-2 rounded-2xl bg-muted/40 px-3 py-2">
                 <span className="grid size-5 shrink-0 place-items-center rounded-full bg-primary/10 text-[11px] font-semibold text-primary-accent-text">{i + 1}</span>
                 {step}

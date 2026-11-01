@@ -9,12 +9,12 @@
  * rules, and any change must be re-confirmed. OCR checks are settled here too: what's unclear is said once, beside
  * the row's strip of the original screenshot, with ONE confirmation (`confirmRowValues`) — a value that has to be
  * picked (dropped decimal point, several amounts) gets its candidates instead. Category and notes are draft fields used only by the final approval;
- * the account is the review's statement account (read-only). Person and Split stay disabled until their write paths
- * are proven safe. Nothing here writes to FlowFi or touches an existing transaction.
+ * the account is the review's statement account (read-only). Person and Split assign the expense (draft intent; the final approval writes it through the
+ * statement-import engine's keyed, all-or-nothing split write). Nothing here writes to FlowFi or touches an existing transaction.
  */
 
 import { useEffect, useRef, useState } from "react";
-import { AlertTriangle, ArrowDownLeft, ArrowUpRight, CheckCircle2, GitCompareArrows, Landmark, Lock, Shapes, ShieldCheck, UserRound, Users } from "lucide-react";
+import { AlertTriangle, ArrowDownLeft, ArrowUpRight, CheckCircle2, GitCompareArrows, Landmark, Lock, ScanLine, Shapes, ShieldCheck, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SHEET_AMOUNT_TONE, SHEET_BUTTON, SHEET_FIELD, SheetAvatar, SheetNav, SheetPicker, SheetRail, SheetRailBlock, SheetSection, TransactionSheet, type SheetPickerOption } from "@/components/finance/transaction-sheet";
 import { categoryIconFor } from "@/features/transactions/hooks/use-transactions-data";
@@ -29,6 +29,8 @@ import { RowZoom } from "@/features/smart-capture/components/ocr-source-view";
 import type { OcrCapture } from "@/features/smart-capture/components/capture-input";
 import { canConfirmRowValues } from "../lib/decisions";
 import type { Category } from "@/lib/models/category";
+import type { Person } from "@/lib/models/person";
+import { ReconOwnershipEditor } from "./recon-ownership-editor";
 import type { ReconRow, RowDecision } from "../lib/types";
 import { formatRowDate } from "./recon-ui";
 
@@ -44,7 +46,7 @@ function fromDateInput(value: string): Date | null {
 }
 
 const FIELD = SHEET_FIELD;
-const LABEL = "flex min-w-0 flex-col gap-1.5 text-[12px] font-medium text-foreground/70";
+const LABEL = "flex min-w-0 flex-col gap-1 text-[12px] font-semibold text-foreground/80";
 
 /**
  * A text field that commits on blur / Enter — each commit is one edit (and one re-match), not one per keystroke. It also
@@ -112,7 +114,7 @@ export function confirmActionLabel(row: ReconRow): string {
   const parts = order
     .filter((f) => fields.includes(f))
     .map((f) =>
-      f === "amount" ? `₹${row.amount!.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : f === "date" ? formatRowDate(row.date) : row.direction === "credit" ? "Credit" : "Charge",
+      f === "amount" ? `₹${row.amount!.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : f === "date" ? formatRowDate(row.date) : row.direction === "credit" ? "Credit" : "Debit",
     );
   return `Confirm ${parts.join(" · ")}`;
 }
@@ -121,6 +123,43 @@ export function categoriesForDirection(categories: Category[], direction: ReconR
   const wanted = direction === "credit" ? "income" : "expense";
   return categories.filter((c) => c.isActive !== false && c.deletedAt == null && (c.type === wanted || c.type === "both"));
 }
+
+type NoteTarget = "date" | "amount" | "type" | "row";
+
+/** Which field an issue belongs beside — so a date problem is said under the date, an amount problem under the amount. */
+const NOTE_TARGET: Partial<Record<CaptureIssue["code"], NoteTarget>> = {
+  no_date: "date",
+  low_confidence_date: "date",
+  year_assumed: "date",
+  no_amount: "amount",
+  multiple_amounts: "amount",
+  decimal_missing: "amount",
+  amount_without_decimals: "amount",
+  low_confidence_amount: "amount",
+  balance_mismatch: "amount",
+  direction_unclear: "type",
+  low_confidence_direction: "type",
+  direction_inferred: "type",
+};
+
+type Note = { tone: "warning" | "info"; text: string };
+
+/** A short note under its own field: a warning while the value needs action, a quiet line otherwise. */
+function FieldNotes({ notes, testId }: { notes: Note[]; testId?: string }) {
+  if (notes.length === 0) return null;
+  return (
+    <ul className="flex flex-col gap-0.5" data-testid={testId}>
+      {notes.map((n) => (
+        <li key={n.text} className={cn("flex items-start gap-1.5 text-[11.5px] leading-snug font-medium", n.tone === "warning" ? "text-[oklch(0.5_0.12_70)] dark:text-warning" : "text-foreground/72")}>
+          {n.tone === "warning" ? <AlertTriangle className="mt-px size-3.5 shrink-0" aria-hidden /> : <ShieldCheck className="mt-px size-3.5 shrink-0" aria-hidden />}
+          <span className="min-w-0">{n.text}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+const money = (n: number) => `₹${n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 export function ReconRowEditor({
   row,
@@ -132,14 +171,17 @@ export function ReconRowEditor({
   onDecide,
   accountLabel = null,
   screenshot = null,
+  people = [],
 }: {
   row: ReconRow;
   decision: RowDecision;
   categories: Category[];
-  /** The capture's screenshot (this tab only) — the row's strip is shown beside its checks. */
+  /** The capture's screenshot (this tab only) — the row's strip is shown beside the details. */
   screenshot?: OcrCapture | null;
   /** The statement account ("HDFC Millennia •••• 4821") — read-only here; it's chosen once for the whole review. */
   accountLabel?: string | null;
+  /** The user's People — who a person / split expense can be assigned to. */
+  people?: Pick<Person, "id" | "name">[];
   onPatch: (patch: RowPatch) => void;
   onConfirmRow: () => void;
   onConfirmField: (field: CaptureField) => void;
@@ -149,46 +191,100 @@ export function ReconRowEditor({
   const informational = currentIssues(row).filter((i) => !i.blocking);
   const options = categoriesForDirection(categories, row.direction);
   const flagged = open.length > 0 || row.needsReconfirm;
-  const pickers = open.filter((i, n) => (i.code === "decimal_missing" || i.code === "multiple_amounts") && open.findIndex((o) => o.code === i.code) === n);
-  const specific = open.filter((i, n) => i.code !== "ocr_unverified" && !pickers.includes(i) && open.findIndex((o) => o.code === i.code) === n);
+  const unique = (list: CaptureIssue[]) => list.filter((i, n) => list.findIndex((o) => o.code === i.code) === n);
+  const pickers = unique(open.filter((i) => i.code === "decimal_missing" || i.code === "multiple_amounts"));
+  const specific = unique(open.filter((i) => i.code !== "ocr_unverified" && !pickers.includes(i)));
   // The generic "compare with the image" only when nothing more specific is open — one problem, said once.
-  const lines: CaptureIssue[] = specific.length > 0 || pickers.length > 0 ? specific : open.filter((i) => i.code === "ocr_unverified").slice(0, 1);
+  const generic = specific.length === 0 && pickers.length === 0 ? unique(open.filter((i) => i.code === "ocr_unverified")).slice(0, 1) : [];
+
+  const notesFor = (target: NoteTarget): Note[] => {
+    const at = (i: CaptureIssue) => (NOTE_TARGET[i.code] ?? "row") === target;
+    const warnings = [...specific, ...generic].filter(at).map((i): Note => ({ tone: "warning", text: i.message }));
+    const infos = unique(informational.filter((i) => !open.includes(i) && at(i))).map((i): Note => ({ tone: "info", text: i.message }));
+    return [...warnings, ...infos];
+  };
+  const today = new Date();
+  const future = row.date != null && row.date.getTime() > new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1).getTime();
+  const dateNotes = notesFor("date");
+  if (future) dateNotes.push({ tone: "warning", text: "This date is in the future — check it against the statement." });
+  const amountNotes = notesFor("amount");
+  const typeNotes = notesFor("type");
+  const rowNotes = notesFor("row");
+  const dateBlocked = open.some((i) => NOTE_TARGET[i.code] === "date");
+  const amountBlocked = open.some((i) => NOTE_TARGET[i.code] === "amount");
+  const typeBlocked = open.some((i) => NOTE_TARGET[i.code] === "type");
   const canConfirm = canConfirmRowValues(row);
   const categoryOptions: SheetPickerOption[] = options.map((c) => {
     const CategoryIcon = categoryIconFor(c.iconKey);
     return { value: c.name, label: c.name, icon: <CategoryIcon className="size-4" strokeWidth={2} /> };
   });
+  const showEvidence = screenshot != null && row.ocr != null;
+  const checkedLabel = row.confirmed || row.confirmedFields.length > 0 ? "Values checked" : row.source === "ocr" ? "Read clearly" : "Values checked";
 
   return (
     <div className="@container" data-testid="row-editor">
-      {/* One card in two rows (values · import details) beside the checks — as short as it can be, so the statement stays in view. */}
-      <div className="grid items-start gap-x-5 gap-y-4 @min-[60rem]:grid-cols-[minmax(0,1fr)_minmax(260px,330px)]">
-        <SheetSection title="Row details" hint="Statement values are editable — re-confirm after a change" role="group">
+      <div className={cn("grid items-start gap-x-3 gap-y-3", showEvidence && "@min-[56rem]:grid-cols-[minmax(0,1fr)_minmax(240px,300px)]")}>
+        <SheetSection
+          compact
+          title="Row details"
+          hint="Editable — re-confirm after a change"
+          role="group"
+          aside={
+            !flagged ? (
+              <span className="inline-flex shrink-0 items-center gap-1 text-[11.5px] font-semibold text-[oklch(0.44_0.13_149)] dark:text-success">
+                <CheckCircle2 className="size-3.5" aria-hidden /> {checkedLabel}
+              </span>
+            ) : undefined
+          }
+        >
           <div className="grid grid-cols-2 gap-x-3 gap-y-3 @min-[44rem]:grid-cols-12">
-            <label className={cn(LABEL, "@min-[44rem]:col-span-3")}>
+            <label className={cn(LABEL, "@min-[44rem]:col-span-4")}>
               Date
-              <CommitInput type="date" label="Date" value={toDateInput(row.date)} onCommit={(v) => onPatch({ date: fromDateInput(v) })} />
+              <CommitInput type="date" label="Date" value={toDateInput(row.date)} onCommit={(v) => onPatch({ date: fromDateInput(v) })} className={cn(dateBlocked && "border-warning")} />
+              <FieldNotes notes={dateNotes} testId="date-notes" />
             </label>
-            <label className={cn(LABEL, "@min-[44rem]:col-span-2")}>
-              Amount (₹)
-              <CommitInput
-                label="Amount"
-                inputMode="decimal"
-                value={row.amount == null ? "" : row.amount.toFixed(2)}
-                className="text-right font-semibold tabular-nums"
-                onCommit={(v) => {
-                  const n = Number(v.replace(/[,\s₹]/g, ""));
-                  onPatch({ amount: v.trim() === "" || !Number.isFinite(n) ? null : n });
-                }}
-              />
-            </label>
-            <label className={cn(LABEL, "col-span-2 @min-[44rem]:col-span-4")}>
-              Merchant / description
-              <CommitInput label="Description" value={row.description} onCommit={(v) => onPatch({ description: v })} />
-            </label>
-            <div className={cn(LABEL, "col-span-2 @min-[44rem]:col-span-3")}>
+            <div className={cn(LABEL, "@min-[44rem]:col-span-4")}>
+              <label className="flex flex-col gap-1">
+                Amount (₹)
+                <CommitInput
+                  label="Amount"
+                  inputMode="decimal"
+                  value={row.amount == null ? "" : row.amount.toFixed(2)}
+                  className={cn("text-right font-semibold tabular-nums", amountBlocked && "border-warning")}
+                  onCommit={(v) => {
+                    const n = Number(v.replace(/[,\s₹]/g, ""));
+                    onPatch({ amount: v.trim() === "" || !Number.isFinite(n) ? null : n });
+                  }}
+                />
+              </label>
+              <FieldNotes notes={amountNotes} testId="amount-notes" />
+              {pickers.map((issue) => (
+                <div key={issue.code} className="flex flex-col gap-1.5" data-testid="amount-picker">
+                  <FieldNotes notes={[{ tone: "warning", text: issue.message }]} />
+                  <span className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Amount candidates">
+                    {row.amountCandidates.map((value) => (
+                      <button
+                        key={value}
+                        type="button"
+                        aria-pressed={row.amount === value}
+                        onClick={() => onPatch({ amount: value })}
+                        className={cn("h-7 rounded-full border px-2.5 text-xs font-semibold tabular-nums transition-colors", row.amount === value ? "border-primary bg-primary/15" : "border-border bg-card hover:border-primary")}
+                      >
+                        {money(value)}
+                      </button>
+                    ))}
+                    {issue.confirmOnly && issue.field && (
+                      <ClayButton size="sm" variant="secondary" disabled={row.amount == null} onClick={() => onConfirmField(issue.field!)}>
+                        {row.amount != null ? `Confirm ${money(row.amount)}` : "Confirm amount"}
+                      </ClayButton>
+                    )}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <div className={cn(LABEL, "col-span-2 @min-[44rem]:col-span-4")}>
               Type
-              <div role="radiogroup" aria-label="Charge or credit" className="grid h-10 grid-cols-2 rounded-[10px] bg-secondary p-1 ring-1 ring-border-strong/60 ring-inset">
+              <div role="radiogroup" aria-label="Debit or credit" className={cn("grid h-10 grid-cols-2 rounded-[10px] bg-secondary p-1 ring-1 ring-inset", typeBlocked ? "ring-warning" : "ring-border-strong/60")}>
                 {(["debit", "credit"] as const).map((d) => (
                   <button
                     key={d}
@@ -202,38 +298,43 @@ export function ReconRowEditor({
                     )}
                   >
                     {d === "debit" ? <ArrowUpRight className="size-3.5" aria-hidden /> : <ArrowDownLeft className="size-3.5" aria-hidden />}
-                    {d === "debit" ? "Charge" : "Credit"}
+                    {d === "debit" ? "Debit" : "Credit"}
                   </button>
                 ))}
               </div>
+              <FieldNotes notes={typeNotes} testId="type-notes" />
             </div>
 
-            <div className={cn(LABEL, "col-span-2 @min-[44rem]:col-span-4")}>
+            <label className={cn(LABEL, "col-span-2 @min-[44rem]:col-span-6")}>
+              Merchant / description
+              <CommitInput label="Description" value={row.description} onCommit={(v) => onPatch({ description: v })} />
+              <FieldNotes notes={rowNotes} testId="row-notes" />
+            </label>
+            <div className={cn(LABEL, "col-span-2 @min-[44rem]:col-span-6")}>
               Category
               <SheetPicker
+                compact
                 value={decision.category}
                 onValueChange={(v) => onDecide({ category: v })}
                 options={categoryOptions}
                 placeholder={options.length ? "Choose a category" : "No categories for this type"}
                 emptyIcon={<Shapes className="size-4" />}
-                caption={decision.category ? (row.direction === "credit" ? "Income category" : "Expense category") : "Needed to import as new"}
                 ariaLabel="Category"
               />
+              {!decision.category && <span className="text-[11.5px] font-medium text-foreground/72">Needed to import as new</span>}
             </div>
-            <div className={cn(LABEL, "col-span-2 @min-[44rem]:col-span-3")}>
+
+            <div className={cn(LABEL, "col-span-2 @min-[44rem]:col-span-4")}>
               Account
-              <div className="flex min-h-14 items-center gap-2.5 rounded-xl border border-border bg-secondary/60 px-3 py-2" data-testid="editor-account" title="From the statement — chosen once for the whole review">
-                <span className="grid size-9 shrink-0 place-items-center rounded-[10px] bg-card text-foreground/72 shadow-e1">
-                  <Landmark className="size-4" aria-hidden />
+              <div className="flex h-10 items-center gap-2.5 rounded-[10px] border border-border bg-secondary/60 px-3" data-testid="editor-account" title="From the statement — chosen once for the whole review">
+                <span className="grid size-7 shrink-0 place-items-center rounded-[8px] bg-card text-foreground/72 shadow-e1">
+                  <Landmark className="size-3.5" aria-hidden />
                 </span>
-                <span className="flex min-w-0 flex-1 flex-col">
-                  <span className="truncate text-sm font-semibold text-foreground">{accountLabel ?? "Choose the statement account first"}</span>
-                  <span className="truncate text-[11.5px] font-medium text-foreground/72">Statement account</span>
-                </span>
+                <span className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">{accountLabel ?? "Choose the statement account first"}</span>
                 <Lock className="size-3.5 shrink-0 text-foreground/55" aria-hidden />
               </div>
             </div>
-            <label className={cn(LABEL, "col-span-2 @min-[44rem]:col-span-3")}>
+            <label className={cn(LABEL, "col-span-2 @min-[44rem]:col-span-5")}>
               Notes
               <Textarea
                 aria-label="Notes"
@@ -241,11 +342,11 @@ export function ReconRowEditor({
                 onChange={(e) => onDecide({ notes: e.target.value })}
                 onKeyDown={(e) => e.stopPropagation()}
                 rows={1}
-                className={cn(SHEET_FIELD, "h-10 min-h-10 resize-y py-2")}
+                className={cn(SHEET_FIELD, "h-10 min-h-10 resize-none py-2")}
                 placeholder="Optional"
               />
             </label>
-            <div className={cn(LABEL, "col-span-2 @min-[44rem]:col-span-2")}>
+            <div className={cn(LABEL, "col-span-2 @min-[44rem]:col-span-3")}>
               In this import
               <div className="flex h-10 items-center justify-between gap-2 rounded-[10px] border border-border-strong bg-card px-3 shadow-e1">
                 <span className="truncate text-[13px] font-semibold text-foreground" title={row.captureExcluded ? "Excluded in Smart Capture — change it there" : undefined}>
@@ -262,97 +363,41 @@ export function ReconRowEditor({
               </div>
             </div>
           </div>
+
+          {/* Who the expense is for — mine, a person's, or split between people. Draft intent only; the final approval writes it. */}
+          <div className="flex flex-col gap-2 border-t border-border-subtle pt-2.5" data-testid="editor-ownership">
+            {row.direction === "debit" && !row.captureExcluded ? (
+              <ReconOwnershipEditor row={row} ownership={decision.ownership} people={people} onChange={(ownership) => onDecide({ ownership })} />
+            ) : (
+              <p className="flex items-center gap-1.5 text-[12px] text-foreground/72">
+                <Users className="size-3.5 text-foreground/65" aria-hidden />
+                <span className="inline-flex items-center rounded-full bg-primary/15 px-2.5 py-0.5 font-semibold text-primary-accent-text">My own {row.direction === "credit" ? "credit" : "expense"}</span>
+              </p>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            {row.needsReconfirm && <p className="min-w-0 flex-1 basis-52 text-[11.5px] font-medium text-[oklch(0.5_0.12_70)] dark:text-warning">You changed this row — confirm the values are correct.</p>}
+            {flagged && canConfirm && (
+              <button type="button" data-testid="confirm-row" className={cn(SHEET_BUTTON.secondary, "ml-auto h-9")} onClick={onConfirmRow}>
+                <CheckCircle2 className="size-4 text-[oklch(0.44_0.13_149)] dark:text-success" /> {confirmActionLabel(row)}
+              </button>
+            )}
+          </div>
         </SheetSection>
 
-        <SheetRail label="Checks">
-          {/* Flags and the row's confirmation are never folded away. */}
-          <SheetRailBlock icon={flagged ? AlertTriangle : CheckCircle2} tone={flagged ? "warning" : "success"} title="Checks">
-            {flagged || informational.length > 0 ? (
-              <ul className="space-y-1.5" aria-label="Flags">
-                {row.needsReconfirm && (
-                  <li className="flex items-start gap-1.5 text-foreground">
-                    <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-warning" /> You changed this row — check the values against the statement and confirm.
-                  </li>
-                )}
-                {lines.map((issue, i) => (
-                  <li key={`${issue.code}-${i}`} className="flex items-start gap-1.5 text-foreground">
-                    <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-warning" />
-                    <span className="min-w-0 flex-1">{issue.message}</span>
-                  </li>
-                ))}
-                {pickers.map((issue) => (
-                  <li key={issue.code} className="flex flex-col gap-1.5 text-foreground" data-testid="amount-picker">
-                    <span className="flex items-start gap-1.5">
-                      <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-warning" />
-                      <span className="min-w-0 flex-1">{issue.message}</span>
-                    </span>
-                    <span className="flex flex-wrap items-center gap-1.5 pl-5" role="group" aria-label="Amount candidates">
-                      {row.amountCandidates.map((value) => (
-                        <button
-                          key={value}
-                          type="button"
-                          aria-pressed={row.amount === value}
-                          onClick={() => onPatch({ amount: value })}
-                          className={cn("h-7 rounded-full border px-2.5 text-xs font-semibold tabular-nums transition-colors", row.amount === value ? "border-primary bg-primary/15" : "border-border bg-card hover:border-primary")}
-                        >
-                          ₹{value.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </button>
-                      ))}
-                      {issue.confirmOnly && issue.field && (
-                        <ClayButton size="sm" variant="secondary" disabled={row.amount == null} onClick={() => onConfirmField(issue.field!)}>
-                          {row.amount != null ? `Confirm ₹${row.amount.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "Confirm amount"}
-                        </ClayButton>
-                      )}
-                    </span>
-                  </li>
-                ))}
-                {informational.map((issue, i) => (
-                  <li key={`info-${issue.code}-${i}`} className="flex items-start gap-1.5 text-foreground/72">
-                    <ShieldCheck className="mt-0.5 size-3.5 shrink-0" /> {issue.message}
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p>Nothing flagged on this row.</p>
-            )}
-            {screenshot && row.ocr && (
-              <div className="mt-2.5 flex flex-col gap-1" data-testid="editor-evidence">
-                <p className="text-[11px] font-medium text-foreground/72">Original image{row.ocr.flaggedBoxes?.length ? " · unclear values outlined" : ""}</p>
-                <RowZoom capture={screenshot} box={row.ocr.box} flagged={row.ocr.flaggedBoxes ?? []} />
+        {showEvidence && row.ocr && (
+          <SheetRail label="Original image" className="gap-2.5">
+            <SheetRailBlock compact icon={ScanLine} title="Original image">
+              <div className="flex flex-col gap-1" data-testid="editor-evidence">
+                <p className="text-[11px] font-medium text-foreground/72">{row.ocr.flaggedBoxes?.length ? "Unclear values outlined" : "As read from your screenshot"}</p>
+                <RowZoom capture={screenshot!} box={row.ocr.box} flagged={row.ocr.flaggedBoxes ?? []} />
                 <p className="text-[11px] text-foreground/60">
                   Text as read: <span className="font-mono break-all text-foreground/80">{row.sourceText.replace(/\t/g, "  ")}</span>
                 </p>
               </div>
-            )}
-            {flagged && canConfirm ? (
-              <button type="button" data-testid="confirm-row" className={cn(SHEET_BUTTON.secondary, "mt-2.5 h-9 w-full")} onClick={onConfirmRow}>
-                <CheckCircle2 className="size-4 text-[oklch(0.44_0.13_149)] dark:text-success" /> {confirmActionLabel(row)}
-              </button>
-            ) : (
-              !flagged && (
-                <p className="mt-1.5 flex items-center gap-1.5 font-semibold text-[oklch(0.44_0.13_149)] dark:text-success">
-                  <CheckCircle2 className="size-3.5" /> {row.confirmed || row.confirmedFields.length > 0 ? "Values checked" : row.source === "ocr" ? "Read clearly — nothing to check" : "Values checked"}
-                </p>
-              )
-            )}
-          </SheetRailBlock>
-
-          {/* Person and Split are shown so the shape is clear, but stay off — their existing write workflows haven't been
-              verified as safe for an import, and this editor never writes anything itself. */}
-          <SheetRailBlock icon={Users} title="Ownership" data-testid="editor-ownership">
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className="inline-flex items-center rounded-full bg-primary/15 px-2.5 py-0.5 text-[12px] font-semibold text-primary-accent-text">My own {row.direction === "credit" ? "credit" : "expense"}</span>
-              <span className="inline-flex cursor-not-allowed items-center gap-1 rounded-full border border-dashed border-border px-2.5 py-0.5 text-[12px] text-foreground/72" aria-disabled="true" data-testid="editor-person">
-                <UserRound className="size-3" /> Person: off
-              </span>
-              <span className="inline-flex items-center gap-1.5 rounded-full border border-dashed border-border py-0.5 pr-2.5 pl-1 text-[12px] text-foreground/72">
-                <Switch checked={false} disabled aria-label="Split expense (not available yet)" className="scale-75" />
-                Split: off
-              </span>
-            </div>
-            <p className="mt-1.5 text-[11.5px] text-foreground/72" title="Their existing write paths haven't been verified as safe for an import.">Person and split can&apos;t be part of an import yet.</p>
-          </SheetRailBlock>
-        </SheetRail>
+            </SheetRailBlock>
+          </SheetRail>
+        )}
       </div>
     </div>
   );
@@ -403,54 +448,55 @@ export function ReconRowSheet({
       onRequestClose={onClose}
       closeLabel="Close row details"
       testId="row-editor-panel"
+      compact
       progress={nav ? { current: nav.position, total: nav.total } : undefined}
       onKeyDown={onKeyDown}
       header={
-        <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
-          <div className="flex min-w-0 flex-1 basis-72 items-center gap-3.5">
-            <SheetAvatar tone={row.direction === "credit" ? "credit" : row.direction === "debit" ? "debit" : "neutral"}>#{rowNumber}</SheetAvatar>
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+          <div className="flex min-w-0 flex-1 basis-64 items-center gap-3">
+            <SheetAvatar compact tone={row.direction === "credit" ? "credit" : row.direction === "debit" ? "debit" : "neutral"}>#{rowNumber}</SheetAvatar>
             <div className="min-w-0">
-              <p className="text-[11px] font-semibold tracking-[0.09em] text-hero-foreground/68 uppercase">Statement row {rowNumber} · draft</p>
-              <div className="flex min-w-0 items-center gap-2.5">
-                <DialogTitle className="truncate font-heading text-[21px] leading-tight font-bold tracking-tight text-hero-foreground" title={row.description}>
+              <p className="text-[10.5px] font-semibold tracking-[0.1em] whitespace-nowrap text-hero-foreground/68 uppercase">Statement row {rowNumber} · draft</p>
+              <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1">
+                <DialogTitle className="max-w-full truncate font-heading text-[17px] leading-tight font-bold tracking-tight text-hero-foreground" title={row.description}>
                   {row.description || "No description"}
                 </DialogTitle>
-                {stateLabel && <span className="shrink-0 rounded-full bg-white/10 px-2.5 py-0.5 text-[11.5px] font-semibold text-hero-foreground ring-1 ring-white/12">{stateLabel}</span>}
+                {stateLabel && <span className="shrink-0 rounded-full bg-white/10 px-2 py-px text-[11px] font-semibold text-hero-foreground ring-1 ring-white/12">{stateLabel}</span>}
               </div>
-              <DialogDescription className="mt-0.5 text-[12.5px] text-hero-foreground/65 tabular-nums">{formatRowDate(row.date, true)}</DialogDescription>
+              <DialogDescription className="mt-0.5 text-[12px] text-hero-foreground/70 tabular-nums">{formatRowDate(row.date, true)}</DialogDescription>
             </div>
           </div>
-          <div className="flex shrink-0 items-center gap-5">
-            <div className="text-right">
-              <p className="text-[11px] font-semibold tracking-[0.09em] text-hero-foreground/68 uppercase">{row.direction === "credit" ? "Credit" : row.direction === "debit" ? "Charge" : "Charge / Credit?"}</p>
-              <p className={cn("mt-1 font-heading text-[32px] leading-none font-bold tracking-tight whitespace-nowrap tabular-nums", tone)}>
-                {row.amount == null ? "₹ —" : `${sign}₹${row.amount.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-              </p>
-            </div>
+          <div className="flex shrink-0 items-center gap-3">
+            <p
+              aria-label={`${row.direction === "credit" ? "Credit" : row.direction === "debit" ? "Debit" : "Debit or credit unknown"} ${row.amount == null ? "no amount" : `${sign}₹${row.amount.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}`}
+              className={cn("font-heading text-[24px] leading-none font-bold tracking-tight whitespace-nowrap tabular-nums", tone)}
+            >
+              {row.amount == null ? "₹ —" : `${sign}₹${row.amount.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+            </p>
             {nav && (
-              <SheetNav label="Move between rows" position={`${nav.position} / ${nav.total}`} prevLabel="Previous row" nextLabel="Next row" onPrev={nav.onPrev} onNext={nav.onNext} />
+              <SheetNav compact label="Move between rows" position={`${nav.position} / ${nav.total}`} prevLabel="Previous row" nextLabel="Next row" onPrev={nav.onPrev} onNext={nav.onNext} />
             )}
           </div>
         </div>
       }
       footer={
-        <div className="flex flex-wrap items-center justify-end gap-x-4 gap-y-2.5 px-4 py-3 sm:px-6 lg:px-8">
-          <p className="mr-auto flex min-w-0 items-center gap-2 text-[12.5px] text-foreground/72">
+        <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-2 px-3 py-2 sm:px-5">
+          <p className="mr-auto flex min-w-0 basis-64 items-center gap-2 text-[12px] text-foreground/72">
             <ShieldCheck className="size-4 shrink-0 text-[oklch(0.44_0.13_149)] dark:text-success" aria-hidden />
-            Draft only — edits stay in this review; nothing is saved to FlowFi until final approval.
+            Draft only — nothing is saved to FlowFi until final approval.
           </p>
           {onCompare && (
-            <button type="button" onClick={() => onCompare(row.id)} className={SHEET_BUTTON.secondary}>
+            <button type="button" onClick={() => onCompare(row.id)} className={cn(SHEET_BUTTON.secondary, "h-9")}>
               <GitCompareArrows className="size-4" /> Compare with FlowFi
             </button>
           )}
-          <button type="button" onClick={onClose} className={cn(SHEET_BUTTON.primary, "px-6")}>
+          <button type="button" onClick={onClose} className={cn(SHEET_BUTTON.primary, "h-9 px-6")}>
             Done
           </button>
         </div>
       }
     >
-      <div key={row.id} className="px-4 py-4 sm:px-6 lg:px-8 sm:py-5">
+      <div key={row.id} className="px-3 py-3 sm:px-5">
         {children}
       </div>
     </TransactionSheet>

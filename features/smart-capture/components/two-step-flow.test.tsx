@@ -33,14 +33,85 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
-function extract(text: string) {
+/** Pastes and presses Extract — a statement that reads as a table stops at the column-mapping step. */
+function startExtract(text: string) {
   fireEvent.change(screen.getByLabelText("Pasted statement text"), { target: { value: text } });
   fireEvent.click(screen.getByRole("button", { name: /Extract transactions/ }));
+}
+/** …and confirms the detected columns. */
+function extract(text: string) {
+  startExtract(text);
+  fireEvent.click(screen.getByTestId("mapping-confirm"));
+}
+async function confirmMapping() {
+  fireEvent.click(await screen.findByTestId("mapping-confirm"));
 }
 function loadScreenshot() {
   fireEvent.click(screen.getByRole("tab", { name: /Screenshot/ }));
   fireEvent.change(screen.getByLabelText("Choose screenshot"), { target: { files: [new File(["x"], "stmt.png", { type: "image/png" })] } });
 }
+
+describe("column mapping step", () => {
+  const BANK = [
+    "Date\tNarration\tWithdrawal\tDeposit\tBalance",
+    "01/10/2026\tUPI SWIGGY\t450.00\t\t49,550.00",
+    "02/10/2026\tSALARY ACME\t\t1,00,000.00\t1,49,550.00",
+    "03/10/2026\tATM WITHDRAWAL\t10,000.00\t\t1,39,550.00",
+  ].join("\n");
+
+  it("a table stops at Match your columns first — nothing is handed over until the user confirms", () => {
+    render(<SmartCaptureStudio />);
+    startExtract(BANK);
+    expect(screen.getByTestId("column-mapping")).toBeTruthy();
+    expect(push).not.toHaveBeenCalled();
+    expect(getHandoffState().pending).toBeNull();
+    // Detected from the headers: nothing for the user to do but confirm.
+    expect((screen.getByTestId("column-role-4") as HTMLSelectElement).value).toBe("balance");
+    expect((screen.getByTestId("column-role-2") as HTMLSelectElement).value).toBe("debit");
+    expect(screen.getByTestId("mapping-summary").textContent).toMatch(/Debit.*Withdrawal/);
+    expect(screen.getAllByTestId("mapping-preview-row")).toHaveLength(3);
+    fireEvent.click(screen.getByTestId("mapping-confirm"));
+    expect(push).toHaveBeenCalledWith("/reconciliation");
+    const rows = getHandoffState().pending!.rows;
+    expect(rows.map((r) => [r.amount, r.direction])).toEqual([[450, "debit"], [100000, "credit"], [10000, "debit"]]);
+  });
+
+  it("the user can correct a column, the preview follows, and a mapping with no Date can't be confirmed", () => {
+    render(<SmartCaptureStudio />);
+    startExtract(BANK);
+    fireEvent.change(screen.getByTestId("column-role-2"), { target: { value: "credit" } });
+    fireEvent.change(screen.getByTestId("column-role-3"), { target: { value: "debit" } });
+    // The balance now moves the opposite way — the preview says so and offers the swap back.
+    expect(screen.getByTestId("mapping-swap")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("mapping-swap"));
+    expect((screen.getByTestId("column-role-2") as HTMLSelectElement).value).toBe("debit");
+
+    fireEvent.change(screen.getByTestId("column-role-0"), { target: { value: "ignore" } });
+    expect((screen.getByTestId("mapping-confirm") as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByTestId("mapping-error").textContent).toMatch(/Date/);
+    expect(screen.queryByTestId("mapping-result")).toBeNull();
+    fireEvent.click(screen.getByTestId("mapping-confirm"));
+    expect(push).not.toHaveBeenCalled();
+  });
+
+  it("optional columns can all be ignored", () => {
+    render(<SmartCaptureStudio />);
+    startExtract(BANK);
+    fireEvent.change(screen.getByTestId("column-role-4"), { target: { value: "ignore" } });
+    expect((screen.getByTestId("mapping-confirm") as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(screen.getByTestId("mapping-confirm"));
+    expect(getHandoffState().pending!.rows).toHaveLength(3);
+  });
+
+  it("'Edit source' goes back to the pasted text, untouched", () => {
+    render(<SmartCaptureStudio />);
+    startExtract(BANK);
+    fireEvent.click(screen.getByTestId("mapping-back"));
+    expect(screen.queryByTestId("column-mapping")).toBeNull();
+    expect((screen.getByLabelText("Pasted statement text") as HTMLTextAreaElement).value).toBe(BANK);
+    expect(push).not.toHaveBeenCalled();
+  });
+});
 
 describe("Capture → Review & Import", () => {
   it("shows two steps, and extracting goes straight to Review & Import with every row — no review step in between", () => {
@@ -64,7 +135,7 @@ describe("Capture → Review & Import", () => {
 
   it("explains when nothing looks like a transaction, and hands nothing over", () => {
     render(<SmartCaptureStudio />);
-    extract("hello world");
+    startExtract("hello world"); // no table in it → no mapping step, read as before
     expect(screen.getByRole("alert").textContent).toMatch(/No transaction rows found/);
     expect(push).not.toHaveBeenCalled();
     expect(getHandoffState().pending).toBeNull();
@@ -76,6 +147,7 @@ describe("Capture → Review & Import", () => {
     render(<SmartCaptureStudio />);
     loadScreenshot();
     fireEvent.click(screen.getByRole("button", { name: /Read text/ }));
+    await confirmMapping();
     await vi.waitFor(() => expect(push).toHaveBeenCalledWith("/reconciliation"));
     const pending = getHandoffState().pending!;
     expect(pending.source).toBe("ocr");
@@ -95,6 +167,7 @@ describe("Capture → Review & Import", () => {
     const lines = [ocrLine(0, ["05/09/2026", "SWIGGY", "452.00 Dr"])];
     recognize.mockResolvedValueOnce({ text: lines[0].text, lines, confidence: 95, durationMs: 500 });
     fireEvent.click(screen.getByRole("button", { name: /Try again/ }));
+    await confirmMapping();
     await vi.waitFor(() => expect(push).toHaveBeenCalledWith("/reconciliation"));
   });
 

@@ -15,6 +15,7 @@ import { safeDocs } from "@/lib/firestore/safe-docs";
 import { accountFromFirestore, accountToFirestore, type Account } from "@/lib/models/account";
 import { categoryFromFirestore, categoryToFirestore, type Category } from "@/lib/models/category";
 import { creditCardProfileFromFirestore, creditCardProfileToFirestore, statementFromFirestore, statementToFirestore, type CreditCardProfile, type Statement } from "@/lib/models/credit-card";
+import { personFromFirestore, personToFirestore, type Person } from "@/lib/models/person";
 import { smsTransactionCandidateFromFirestore, type SmsTransactionCandidate } from "@/lib/models/sms-transaction-candidate";
 import { transactionFromFirestore, transactionToFirestore, type Transaction } from "@/lib/models/transaction";
 import type { ReconciliationData } from "./analyze";
@@ -23,6 +24,7 @@ const accountConverter: FirestoreDataConverter<Account> = { toFirestore: account
 const categoryConverter: FirestoreDataConverter<Category> = { toFirestore: categoryToFirestore, fromFirestore: categoryFromFirestore };
 const cardConverter: FirestoreDataConverter<CreditCardProfile> = { toFirestore: creditCardProfileToFirestore, fromFirestore: creditCardProfileFromFirestore };
 const statementConverter: FirestoreDataConverter<Statement> = { toFirestore: statementToFirestore, fromFirestore: statementFromFirestore };
+const personConverter: FirestoreDataConverter<Person> = { toFirestore: personToFirestore, fromFirestore: personFromFirestore };
 const transactionConverter: FirestoreDataConverter<Transaction> = { toFirestore: transactionToFirestore, fromFirestore: transactionFromFirestore };
 
 /** A read that returned cached data, or didn't complete, is not authoritative. */
@@ -36,18 +38,20 @@ export class AuthoritativeReadError extends Error {
 /**
  * The records Reconciliation compares against, read live from the server. `expenses` is not read: they only label
  * who owns an existing transaction (informational) and take no part in matching, duplicates or the card-bill gate.
+ * `people` IS read: a person / split assignment is checked against the People that exist right now.
  */
 export async function readAuthoritativeData(db: Firestore, uid: string): Promise<ReconciliationData> {
   try {
     const user = [FirestoreCollections.users, uid] as const;
     const active = <T>(name: string, converter: FirestoreDataConverter<T>) => getDocsFromServer(query(collection(db, ...user, name).withConverter(converter), where("deletedAt", "==", null)));
-    const [accountsSnap, cardsSnap, categoriesSnap, transactionsSnap, trashSnap, smsSnap] = await Promise.all([
+    const [accountsSnap, cardsSnap, categoriesSnap, transactionsSnap, trashSnap, smsSnap, peopleSnap] = await Promise.all([
       active(FirestoreCollections.accounts, accountConverter),
       active(FirestoreCollections.creditCards, cardConverter),
       active(FirestoreCollections.categories, categoryConverter),
       active(FirestoreCollections.transactions, transactionConverter),
       getDocsFromServer(query(collection(db, ...user, FirestoreCollections.transactions).withConverter(transactionConverter), where("deletedAt", "!=", null))),
       getDocsFromServer(collection(db, ...user, FirestoreCollections.smsTransactionCandidates)),
+      active(FirestoreCollections.people, personConverter),
     ]);
     const cards = safeDocs(cardsSnap.docs);
     // Card bills live in one subcollection per card; every card must report, so a card's bills are never silently missing.
@@ -71,6 +75,7 @@ export async function readAuthoritativeData(db: Firestore, uid: string): Promise
       trashedTransactions: safeDocs(trashSnap.docs),
       smsCandidates,
       expenses: [],
+      people: safeDocs(peopleSnap.docs),
     };
   } catch (error) {
     throw new AuthoritativeReadError(error instanceof Error ? error.message : "FlowFi's records couldn't be re-read from the server.");

@@ -25,6 +25,7 @@ import { Maximize2, Minimize2, Search } from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ConfirmDialog, EmptyState } from "@/components/finance";
+import { useCompactHeader } from "@/components/layout/compact-header";
 import { ScrollNav } from "@/components/layout/scroll-nav";
 import { SmsInboxEmptyState } from "@/features/transaction-candidates/components/sms-inbox-empty-state";
 import { SmsSyncStatusBar } from "@/features/transaction-candidates/components/sms-sync-status-bar";
@@ -62,6 +63,7 @@ import {
 import { buildDestinationOptions, categoryOptionsForDirection } from "../lib/candidate-details-view";
 import { evaluateCandidateDuplicate, type CandidateDuplicateResult } from "../lib/candidate-duplicate";
 import { candidateNeighbors } from "../lib/candidate-navigation";
+import { applyAccountRematch } from "../lib/candidate-rematch";
 import { deriveCandidateStatus, type CandidateStatus } from "../lib/candidate-status";
 import { deriveCandidatesViewState } from "../lib/candidates-load-state";
 import { suggestCategories } from "../lib/category-suggestions";
@@ -90,6 +92,7 @@ import { bulkImportCandidates, ignoreCandidate } from "../lib/import-candidate";
 import { bulkImportSummaryText, summarizeBulkImport, type PartialImportNotice } from "../lib/import-messages";
 import { BulkImportDialog, type BulkImportSelection } from "./bulk-import-dialog";
 import { CandidateBulkBar } from "./candidate-bulk-bar";
+import { CandidateCompactBar } from "./candidate-compact-bar";
 import { CandidateDetailsModal } from "./candidate-details-modal";
 import { CandidateLedger, CandidateLedgerSkeleton, type LedgerGroup } from "./candidate-ledger";
 import { CandidateFilterSheet } from "./candidate-filter-sheet";
@@ -145,6 +148,24 @@ export function TransactionCandidatesWorkspace() {
   }, []);
   // Below this the month / direction / sort quick filters fold into the Filters sheet, leaving search + one button.
   const compactToolbar = width < 900;
+  // Wide enough for the view tabs AND the whole filter bar on one line (they stack below this).
+  const singleRowBar = width >= 1380;
+
+  // Compact bar: the overview band scrolls away naturally; once it is gone, a slim bar with the same counts slides in and the
+  // views + filter bar stay pinned under it. `stackTop` is where that pinned block sticks (it cancels the shell's padding).
+  const { watch: watchOverview, progress: barProgress, reduceMotion: barReduceMotion, barTop, stackTop } = useCompactHeader();
+  // Pinned block's own height, so each month heading can stick right beneath it instead of under it.
+  const [stackHeight, setStackHeight] = useState(0);
+  const stackObserverRef = useRef<ResizeObserver | null>(null);
+  const stackRef = useCallback((node: HTMLDivElement | null) => {
+    stackObserverRef.current?.disconnect();
+    stackObserverRef.current = null;
+    if (!node || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => setStackHeight(Math.round(node.offsetHeight)));
+    ro.observe(node);
+    setStackHeight(Math.round(node.offsetHeight));
+    stackObserverRef.current = ro;
+  }, []);
 
   // The open candidate is tracked by id and read live from the list, so the drawer never shows (or imports from) a stale
   // copy; if the candidate disappears (imported or removed elsewhere) the drawer simply closes.
@@ -207,7 +228,13 @@ export function TransactionCandidatesWorkspace() {
       return next;
     });
 
-  const candidates = useMemo(() => liveCandidates.filter((c) => !pendingDismissIds.has(c.id)), [liveCandidates, pendingDismissIds]);
+  const pendingCandidates = useMemo(() => liveCandidates.filter((c) => !pendingDismissIds.has(c.id)), [liveCandidates, pendingDismissIds]);
+
+  // Android matches a candidate to an account only once, when it builds it — so a later correction to a saved account's last-4
+  // (or a newly added account) never reaches rows that are already synced. Re-run the same last-4 rule against the CURRENT
+  // accounts/cards here, in memory (the candidate document is Android-owned and is never written), so every status, lane, count,
+  // filter, bulk group, duplicate check and the review drawer below read one corrected answer, and it tracks later edits live.
+  const { candidates, rematched: rematchById } = useMemo(() => applyAccountRematch(pendingCandidates, accounts, creditCards), [pendingCandidates, accounts, creditCards]);
 
   const duplicates: DuplicatesByCandidateId = useMemo(() => {
     const map = new Map<string, CandidateDuplicateResult>();
@@ -571,6 +598,7 @@ export function TransactionCandidatesWorkspace() {
           identity: resolveMatchedIdentity(displayRefsOf(candidate), accounts, creditCards),
           accountHint: accountHintOf(candidate),
           // Read from the live accounts/cards, so correcting a saved account's last-4 shows up here at once. Suggestion only.
+          rematch: rematchById.get(candidate.id) ?? null,
           accountSuggestion: destinationStateOf(candidate) === "matched" ? null : (candidateLastFourSuggestions(candidate, accounts, creditCards).map((s) => s.label).join(" · ") || null),
           selected,
           selectBlockedReason: selected ? null : selectionBlockedReason(candidate),
@@ -578,7 +606,7 @@ export function TransactionCandidatesWorkspace() {
       }),
     // `selectionBlockedReason` closes over the anchor + eligibility inputs listed here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [visibleCandidates, statusById, duplicates, selectedIds, destinationStateOf, displayRefsOf, accountLabelOf, accountHintOf, selectionAnchor, anchorCandidate, destinationsReady, accounts, creditCards],
+    [visibleCandidates, statusById, duplicates, rematchById, selectedIds, destinationStateOf, displayRefsOf, accountLabelOf, accountHintOf, selectionAnchor, anchorCandidate, destinationsReady, accounts, creditCards],
   );
 
   const ledgerGroups: LedgerGroup[] = useMemo(() => {
@@ -647,18 +675,35 @@ export function TransactionCandidatesWorkspace() {
     );
   }
 
+  // Where the pinned views + filter bar sticks. In full screen the scroller is this root itself (padding p-4), not the shell's
+  // <main>, so it cancels that 16px instead and the shared compact bar (which watches <main>) is not used.
+  const pinTop = fullscreen ? -16 : stackTop;
+  const showCompactBar = !fullscreen && !(viewState.phase === "ready" && candidates.length === 0);
+
   return (
     <div
       ref={rootRef}
       className={cn(
-        // The inbox is an ordinary page that scrolls with the app shell's <main> (the month headers stick to it). Full screen
-        // is the exception: a fixed overlay that scrolls itself.
-        "flex min-w-0 flex-col gap-3 p-4 sm:gap-4 sm:p-6",
+        // The inbox is an ordinary page that scrolls with the app shell's <main> (the month headers stick to it) — that shell
+        // already pads it, so no extra padding here. Full screen is the exception: a fixed overlay that scrolls itself.
+        "flex min-w-0 flex-col gap-2.5 px-1 sm:gap-3",
         // z-hero, not z-50: it must stay below the dialog/sheet z-index tokens (app/globals.css) so the review
         // drawer still renders on top while full screen is on — z-50 sat above --z-dialog and hid it silently.
         fullscreen && "fixed inset-0 z-hero overflow-y-auto bg-background p-4",
       )}
     >
+      {showCompactBar && (
+        <CandidateCompactBar
+          progress={barProgress}
+          reduceMotion={barReduceMotion}
+          top={barTop}
+          loading={viewState.phase !== "ready"}
+          waiting={candidates.length}
+          counts={queueCounts}
+          active={filters.lane}
+          onSelect={(lane) => updateFilters((f) => ({ ...f, lane }))}
+        />
+      )}
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <h1 className="font-heading text-2xl font-semibold tracking-tight text-foreground">Transaction Inbox</h1>
@@ -680,35 +725,47 @@ export function TransactionCandidatesWorkspace() {
       {!(viewState.phase === "ready" && candidates.length === 0) && (
         <>
           {viewState.phase === "ready" && visibleCandidates.length > 0 && <SmsSyncStatusBar />}
-          <CandidateOverview
-            loading={viewState.phase !== "ready"}
-            waiting={candidates.length}
-            handled={handled}
-            counts={queueCounts}
-            active={filters.lane}
-            onSelect={(lane) => updateFilters((f) => ({ ...f, lane }))}
-          />
-
-          <div className="flex flex-col gap-3">
-            <CandidateViews active={filters.lane} counts={viewCounts} onSelect={(lane) => updateFilters((f) => ({ ...f, lane }))} />
-            <CandidateToolbar
-              searchText={searchText}
-              onSearchChange={updateSearch}
-              compact={compactToolbar}
-              months={monthOptions}
-              month={filters.month}
-              onMonth={(month) => updateFilters((f) => ({ ...f, month }))}
-              direction={filters.direction}
-              onDirection={(direction) => updateFilters((f) => ({ ...f, direction }))}
-              sortKey={sortKey}
-              onSort={updateSort}
-              activeFilterCount={activeFilterCount}
-              onOpenFilters={() => setFiltersOpen(true)}
-              chips={filterChips}
-              onRemoveChip={(chip) => updateFilters((f) => chip.clear(f))}
-              canClearAll={filtersActive}
-              onClearAll={clearFilters}
+          <div ref={watchOverview}>
+            <CandidateOverview
+              loading={viewState.phase !== "ready"}
+              waiting={candidates.length}
+              handled={handled}
+              counts={queueCounts}
+              active={filters.lane}
+              onSelect={(lane) => updateFilters((f) => ({ ...f, lane }))}
             />
+          </div>
+
+          {/* Pinned under the compact bar while the list scrolls, so search and the views are always one tap away. The opaque
+              background keeps rows passing underneath from showing through; `pt-4` in full screen cancels the root's padding. */}
+          <div
+            ref={stackRef}
+            style={{ top: pinTop }}
+            className={cn("sticky z-[2] flex flex-col gap-2 bg-background pb-2", singleRowBar && "lg:flex-row lg:items-start", fullscreen && "pt-4")}
+          >
+            <div className="min-w-0 shrink-0 lg:max-w-full">
+              <CandidateViews active={filters.lane} counts={viewCounts} onSelect={(lane) => updateFilters((f) => ({ ...f, lane }))} />
+            </div>
+            <div className="min-w-0 flex-1">
+              <CandidateToolbar
+                searchText={searchText}
+                onSearchChange={updateSearch}
+                compact={compactToolbar}
+                months={monthOptions}
+                month={filters.month}
+                onMonth={(month) => updateFilters((f) => ({ ...f, month }))}
+                direction={filters.direction}
+                onDirection={(direction) => updateFilters((f) => ({ ...f, direction }))}
+                sortKey={sortKey}
+                onSort={updateSort}
+                activeFilterCount={activeFilterCount}
+                onOpenFilters={() => setFiltersOpen(true)}
+                chips={filterChips}
+                onRemoveChip={(chip) => updateFilters((f) => chip.clear(f))}
+                canClearAll={filtersActive}
+                onClearAll={clearFilters}
+              />
+            </div>
           </div>
         </>
       )}
@@ -750,6 +807,7 @@ export function TransactionCandidatesWorkspace() {
           <CandidateLedger
             groups={ledgerGroups}
             shownCount={visibleCandidates.length}
+            stickyTop={pinTop + stackHeight}
             queueCount={candidates.length}
             allSelected={allVisibleSelected}
             someSelected={someVisibleSelected}
@@ -818,6 +876,7 @@ export function TransactionCandidatesWorkspace() {
           categorySuggestions={detailCategorySuggestions}
           chosenDestinationKey={detailCandidate ? (chosenDestinations[detailCandidate.id] ?? null) : null}
           onDestinationChosen={chooseDestination}
+          rematch={detailCandidate ? (rematchById.get(detailCandidate.id) ?? null) : null}
           onImported={(id) => setImportedIds((prev) => new Set(prev).add(id))}
           onPartialImport={(notice) => setPartialNotices((prev) => (prev.some((n) => n.id === notice.id) ? prev : [...prev, notice]))}
           duplicate={detailDuplicate}

@@ -144,6 +144,26 @@ export type DecisionKind = "link" | "import_new" | "ignore" | "investigate" | "i
 /** What an imported CREDIT is. Never inferred: a credit on a card isn't automatically a refund (it may be cashback, a reversal, income…). */
 export type CreditKind = "refund" | "income";
 
+/** One participant row of a drafted split. `amount` is what the user typed (custom splits); "Me" is always one row. */
+export interface SplitShareDraft {
+  /** Stable id for the editor's list keys only — never written anywhere. */
+  id: string;
+  personId: string | null;
+  /** A picked person's name, or the typed name of someone not in People yet (created at final approval, reused by name). */
+  name: string;
+  isMe: boolean;
+  amount: string;
+}
+
+/**
+ * Who an imported expense is for, when it isn't simply the user's own (absent = "mine"). Draft intent only — nothing is
+ * written until the final approval, which sends it through the same keyed, all-or-nothing write Transaction Studio's
+ * statement import uses (`createExpenseAtomic` / `assignToPersonAtomic`).
+ */
+export type RowOwnership =
+  | { kind: "person"; personId: string | null; name: string }
+  | { kind: "split"; splitType: "equal" | "custom"; shares: SplitShareDraft[] };
+
 export interface RowDecision {
   kind: DecisionKind | null;
   linkedRecordId: string | null;
@@ -162,6 +182,8 @@ export interface RowDecision {
    * my own account or card". Absent in older drafts = not given.
    */
   notOwnTransferAck?: boolean;
+  /** Import as new on a Charge: assigned to a person or split between people. Absent = the user's own expense. */
+  ownership?: RowOwnership | null;
 }
 
 /** Card-bill status of a row's date on the statement card (D10). */

@@ -22,7 +22,7 @@ import { Chip, formatRowDate } from "./recon-ui";
 
 const rupees = (paise: number) => formatCurrencyPrecise(paise / 100);
 
-const ACTION_LABEL: Record<ImportAction, string> = { normal_expense: "Expense", refund: "Refund", income: "Income" };
+const ACTION_LABEL: Record<ImportAction, string> = { normal_expense: "Expense", refund: "Refund", income: "Income", someone_elses_expense: "Expense for a person", shared_expense: "Split expense" };
 
 const OUTCOME_META: Record<RowOutcomeKind, { label: string; tone: "success" | "primary" | "muted" | "purple" | "danger" }> = {
   imported: { label: "Imported", tone: "success" },
@@ -51,6 +51,11 @@ function ImportRow({ row }: { row: PlanRow }) {
         <p className="truncate text-[11px] text-muted-foreground">
           {formatRowDate(row.date, true)} · {row.action ? ACTION_LABEL[row.action] : "?"} · {row.category ?? "No category"}
         </p>
+        {row.ownership && (
+          <p className="truncate text-[11px] font-medium text-foreground/80" data-testid="approval-row-ownership">
+            {row.ownership}
+          </p>
+        )}
       </div>
       <span className={cn("shrink-0 font-mono text-sm font-semibold tabular-nums", row.direction === "credit" ? "text-success" : "text-foreground")}>
         {row.direction === "credit" ? "+" : "−"}

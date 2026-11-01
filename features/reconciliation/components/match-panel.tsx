@@ -147,7 +147,7 @@ function CandidateCard({
           tone={candidate ? (candidate.dayGap === 0 ? "same" : "diff") : "unknown"}
         />
         <CompareRow label="Account" statement={statementAccount} existing={record.accountId ? accountName(record.accountId) : "Not matched to an account"} verdict={record.accountId ? "Same account" : undefined} tone="same" />
-        <CompareRow label="Type" statement={row.direction === "credit" ? "Credit" : "Charge"} existing={record.direction === "credit" ? "Income / credit" : "Expense / charge"} />
+        <CompareRow label="Type" statement={row.direction === "credit" ? "Credit" : "Debit"} existing={record.direction === "credit" ? "Income / credit" : "Expense / debit"} />
         <CompareRow label="Flags" statement={<span className="text-muted-foreground">—</span>} existing={flags.length > 0 ? <span className="flex flex-wrap gap-1">{flags}</span> : <span className="text-muted-foreground">None — own expense, no split/EMI</span>} />
         <CompareRow label="Context" statement={row.referenceNumber ? `Ref ${row.referenceNumber}` : <span className="text-muted-foreground">—</span>} existing={notes ? <span className="line-clamp-2" title={notes}>{notes}</span> : <span className="text-muted-foreground">No notes</span>} />
       </div>

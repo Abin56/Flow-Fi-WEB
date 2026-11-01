@@ -49,6 +49,8 @@ async function captureScreenshot(page, buffer) {
   await page.waitForFunction(() => document.querySelector('[data-testid="crop-area"] img')?.complete);
   const t0 = Date.now();
   await page.getByRole("button", { name: /Read text/ }).click();
+  // A table stops at "Match your columns" first — confirm the detected columns.
+  await page.getByTestId("mapping-confirm").click({ timeout: 300000 });
   await page.waitForFunction(() => location.pathname.replace(/[/]$/, "") === "/reconciliation", null, { timeout: 300000 });
   await page.getByRole("heading", { name: "Review & Import" }).waitFor({ timeout: 240000 });
   return Date.now() - t0;
@@ -106,7 +108,7 @@ async function settleChecks(page, truth, notes) {
         const amount = editor.getByLabel("Amount", { exact: true });
         await amount.fill(String(t.amount));
         await amount.press("Enter");
-        if (pending.dir !== (t.dir === "Cr" ? "credit" : "debit")) await editor.getByRole("radio", { name: t.dir === "Cr" ? "Credit" : "Charge" }).click();
+        if (pending.dir !== (t.dir === "Cr" ? "credit" : "debit")) await editor.getByRole("radio", { name: t.dir === "Cr" ? "Credit" : "Debit" }).click();
       }
       counts.corrected++;
     }

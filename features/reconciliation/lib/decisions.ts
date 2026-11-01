@@ -22,6 +22,7 @@ import { applyRowPatch, confirmField, confirmRow, isComplete, needsCorrection, o
 import type { CaptureField } from "@/features/smart-capture/lib/parse-pasted-statement";
 import type { CaptureAction } from "@/features/smart-capture/lib/capture-review";
 import { internalPaymentVerdict, type OwnedAccountIdentity } from "./internal-payment-guard";
+import { ownershipErrors, type PersonRef } from "./row-ownership";
 import type { CycleInfo, DecisionKind, ReconRow, RowDecision, RowMatch } from "./types";
 
 export const EMPTY_DECISION: RowDecision = { kind: null, linkedRecordId: null, notSameAck: false, rejectedRecordIds: [], category: null, notes: "", bulkId: null, creditAs: null, notOwnTransferAck: false };
@@ -38,12 +39,14 @@ export interface RowGateContext {
   ownedAccounts?: OwnedAccountIdentity[];
   /** Whether an existing record is one leg of a transfer / card payment between own accounts. */
   isTransferLeg?: (recordId: string) => boolean;
+  /** The user's People (fresh at approval) — a picked person is checked against it. Undefined = not loaded yet. */
+  people?: readonly PersonRef[];
 }
 
 /** Rows whose captured values still need attention before they may be imported (D6 + Smart Capture's gates). */
 export function valueIssues(row: ReconRow): string[] {
   const out: string[] = [];
-  if (!isComplete(row)) out.push("Date, amount and Charge/Credit are all needed.");
+  if (!isComplete(row)) out.push("Date, amount and Debit/Credit are all needed.");
   else if (openIssues(row).length > 0) out.push("Resolve the flagged values first.");
   if (row.needsReconfirm) out.push("You changed this row — confirm the values are correct.");
   return out;
@@ -78,12 +81,20 @@ export function ownTransferConfirmFor(row: ReconRow, ctx: RowGateContext): strin
   return internalPaymentVerdict(row, ctx).confirm;
 }
 
+/** Everything an import can write: a plain expense / income / refund, or an expense for a person / split between people. */
+export type ImportAction = Extract<CaptureAction, "normal_expense" | "refund" | "income"> | "shared_expense" | "someone_elses_expense";
+
 /**
- * The commit action an Import-as-new row maps to — never guessed. A Charge is a normal expense; a Credit is a refund
- * or income only when the user said which (null until they do).
+ * The commit action an Import-as-new row maps to — never guessed. A Charge is a normal expense (or, when the user
+ * assigned it, an expense for a person / split between people); a Credit is a refund or income only when the user said
+ * which (null until they do).
  */
-export function importActionFor(row: ReconRow, decision: RowDecision): Extract<CaptureAction, "normal_expense" | "refund" | "income"> | null {
-  if (row.direction === "debit") return "normal_expense";
+export function importActionFor(row: ReconRow, decision: RowDecision): ImportAction | null {
+  if (row.direction === "debit") {
+    if (decision.ownership?.kind === "person") return "someone_elses_expense";
+    if (decision.ownership?.kind === "split") return "shared_expense";
+    return "normal_expense";
+  }
   if (row.direction === "credit") return decision.creditAs ?? null;
   return null;
 }
@@ -110,6 +121,7 @@ export function decisionErrors(row: ReconRow, match: RowMatch, decision: RowDeci
       if ((match.candidates.length > 0 || match.pendingSms.length > 0) && !decision.notSameAck) errors.push("Confirm this is a different transaction from the possible matches.");
       if (ownTransferConfirmFor(row, ctx) && !decision.notOwnTransferAck) errors.push("Confirm this payment wasn't to or from your own account or card.");
       if (!decision.category) errors.push("Choose a category.");
+      errors.push(...ownershipErrors(row, decision.ownership, ctx.people));
       return errors;
     }
     case "inbox":
@@ -184,6 +196,7 @@ export function setDecision(decisions: Record<string, RowDecision>, rowId: strin
     next.notSameAck = false;
     next.creditAs = null;
     next.notOwnTransferAck = false;
+    next.ownership = null;
   }
   return { ...decisions, [rowId]: next };
 }
@@ -247,12 +260,13 @@ export function rowCheckLabel(row: ReconRow): string | null {
   if (needsCorrection(row)) {
     if (row.amount == null || open.some((i) => i.code === "decimal_missing" || i.code === "multiple_amounts" || i.code === "no_amount")) return "Fix amount";
     if (row.date == null || open.some((i) => i.code === "no_date")) return "Fix date";
-    return "Fix Charge/Credit";
+    return "Fix Debit/Credit";
   }
   if (open.length === 0) return null;
   const fields = rowConfirmPlan(row)?.fields ?? [];
-  if (fields.length === 1) return `Check ${fields[0] === "direction" ? "Charge/Credit" : fields[0]}`;
+  if (fields.length === 1) return `Check ${fields[0] === "direction" ? "Debit/Credit" : fields[0]}`;
   if (fields.length > 1) return "Check unclear values";
   if (open.some((i) => i.code === "possible_repeat")) return "Possible repeat — check";
+  if (open.some((i) => i.code === "balance_mismatch")) return "Balance mismatch — check";
   return row.source === "ocr" ? "Check against the image" : "Check values";
 }

@@ -59,6 +59,7 @@ scenario("sms-9-split-fails-after-import", "Person/Split fails after the transac
   const uid = await h.authUid();
   const bank = await h.accountBalance("QA Bank");
   await putCandidate(uid, { id: "sms-spl-fail-001", amount: 640, merchant: "Dominos", accountId: bank.id, daysAgo: 1 });
+  await h.seedSmsPaired();
   await page.goto(`${BASE_URL}/transaction-candidates`, { waitUntil: "domcontentloaded" });
   await page.getByText("Dominos").first().waitFor({ timeout: 60000 });
   const txnsBefore = (await h.list("transactions")).length;
@@ -142,6 +143,7 @@ scenario("sms-13-bulk-split-fails-after-import", "Bulk import where the People/S
   const bank = await h.accountBalance("QA Bank");
   await putCandidate(uid, { id: "sms-blk-spl-0001", amount: 211, merchant: "Chaayos", accountId: bank.id, daysAgo: 1 });
   await putCandidate(uid, { id: "sms-blk-spl-0002", amount: 212, merchant: "Dunzo", accountId: bank.id, daysAgo: 2 });
+  await h.seedSmsPaired();
   await page.goto(`${BASE_URL}/transaction-candidates`, { waitUntil: "domcontentloaded" });
   await page.getByText("Chaayos").first().waitFor({ timeout: 60000 });
   const txnsBefore = (await h.list("transactions")).length;

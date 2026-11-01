@@ -79,6 +79,14 @@ const WATCH_STATES = () => {
 };
 
 async function openCandidates(page) {
+  // The Inbox lists candidates only while a phone is paired (the operator-written Auto Sync switch) — seed it, emulator only.
+  const uid = await h.authUid();
+  const sw = await fetch(`${FIRESTORE_DOCS}/users/${uid}/smsSyncConfig/backgroundUpload`, {
+    method: "PATCH",
+    headers: OWNER,
+    body: JSON.stringify({ fields: { enabled: { booleanValue: true }, deviceId: { stringValue: "qa-sms-device" }, source: { stringValue: "pairing" } } }),
+  });
+  if (!sw.ok) throw new Error(`seed Auto Sync switch: ${sw.status}`);
   await page.goto(`${BASE_URL}/transaction-candidates`, { waitUntil: "domcontentloaded" });
   await page.getByRole("heading", { name: "Transaction Inbox" }).waitFor({ timeout: 60000 });
 }
@@ -631,11 +639,25 @@ scenario("sms-14-advanced-filters-url-scroll", "Advanced filters AND together, s
     });
     return vis?.getAttribute("data-review-id") ?? null;
   });
+  // The views + filter bar are pinned under the compact bar; the month heading sticks directly beneath that block.
   const stuck = await page.evaluate(() => {
-    const top = document.querySelector("main").getBoundingClientRect().top;
-    return [...document.querySelectorAll('[data-testid="candidate-group"] h2')].some((h) => Math.abs(h.parentElement.getBoundingClientRect().top - top) <= 2);
+    const pinned = document.querySelector('[role="group"][aria-label="Inbox views"]')?.closest(".sticky");
+    if (!pinned) return false;
+    const bottom = pinned.getBoundingClientRect().bottom;
+    return [...document.querySelectorAll('[data-testid="candidate-group"] h2')].some((h) => Math.abs(h.parentElement.getBoundingClientRect().top - bottom) <= 2);
   });
-  check("the current month heading sticks to the top while scrolling", stuck);
+  check("the current month heading sticks under the pinned views + filter bar while scrolling", stuck);
+  const pinnedBar = await page.evaluate(() => {
+    const pinned = document.querySelector('[role="group"][aria-label="Inbox views"]')?.closest(".sticky");
+    const bar = document.querySelector('[data-compact-bar]');
+    if (!pinned || !bar) return null;
+    const p = pinned.getBoundingClientRect();
+    const b = bar.getBoundingClientRect();
+    return { barShown: bar.getAttribute("data-state") === "shown", barBottom: b.bottom, pinnedTop: p.top, pinnedBottom: p.bottom, vh: window.innerHeight };
+  });
+  check("scrolled: the compact summary bar is shown and the filter bar is pinned right below it, not over it", !!pinnedBar && pinnedBar.barShown && pinnedBar.pinnedTop >= pinnedBar.barBottom - 1 && pinnedBar.pinnedTop - pinnedBar.barBottom <= 16, JSON.stringify(pinnedBar));
+  check("scrolled: the pinned header leaves most of the viewport to the list", !!pinnedBar && pinnedBar.pinnedBottom < pinnedBar.vh * 0.3, JSON.stringify(pinnedBar));
+  await h.shot(page, "sms-14-scrolled-compact");
   check("a row was in view after scrolling", before > 100 && !!reviewId, `scrollTop ${before}, row ${reviewId}`);
   await page.locator(`[data-review-id="${reviewId}"]`).click();
   const drawer = page.getByRole("dialog").first();
@@ -657,4 +679,57 @@ scenario("sms-14-advanced-filters-url-scroll", "Advanced filters AND together, s
   await h.shot(page, "sms-14-no-results");
   await page.getByRole("button", { name: "Clear filters" }).first().click();
   check("Clear filters in the empty state restores the inbox", await waitRowCount(page, 36));
+});
+
+/** PATCHes one saved account's last-4 in the emulator — what "correct the account number" does, while the Inbox stays open. */
+async function setAccountLast4(uid, accountId, last4) {
+  const r = await fetch(`${FIRESTORE_DOCS}/users/${uid}/accounts/${accountId}?updateMask.fieldPaths=accountNumberLast4`, {
+    method: "PATCH",
+    headers: OWNER,
+    body: JSON.stringify({ fields: { accountNumberLast4: last4 == null ? nul : s(last4) } }),
+  });
+  if (!r.ok) throw new Error(`set account last-4: ${r.status} ${await r.text()}`);
+}
+
+scenario("sms-15-rematch-after-account-correction", "Correcting a saved account's last-4 re-matches already-synced rows live; unmatchable rows stay 'Needs account'", async ({ page }, check) => {
+  const uid = await h.authUid();
+  const bank = await qaBank();
+  const original = (await (await fetch(`${FIRESTORE_DOCS}/users/${uid}/accounts/${bank.id}`, { headers: OWNER })).json()).fields?.accountNumberLast4?.stringValue ?? null;
+  try {
+    await setAccountLast4(uid, bank.id, "1111");
+    await putCandidate(uid, { id: "sms-rm-0001", amount: 411, merchant: "Rematchco", accountId: null, rawLastFour: "9585", daysAgo: 1, eventType: "bankDebit" });
+    await putCandidate(uid, { id: "sms-rm-0002", amount: 412, merchant: "Wrongdigitsco", accountId: null, rawLastFour: "4040", daysAgo: 1, eventType: "bankDebit" });
+    await openCandidates(page);
+    await rowOf(page, "Rematchco").waitFor({ timeout: 40000 });
+    const needs = (name) => rowOf(page, name).getByRole("button", { name: /Needs account/ }).first();
+    check("before the correction, a row whose last-4 matches no saved account is 'Needs account'", await needs("Rematchco").isVisible());
+    const before = await laneCount(page, "needsAccount");
+
+    // The user corrects the saved account's last-4 (live listener — no reload).
+    await setAccountLast4(uid, bank.id, "9585");
+    await needs("Rematchco").waitFor({ state: "hidden", timeout: 20000 });
+    check("after the correction the row leaves 'Needs account' without a reload", !(await needs("Rematchco").isVisible()));
+    check("the row now shows the matched account and its last-4", /QA Bank/.test(await rowOf(page, "Rematchco").innerText()) && /9585/.test(await rowOf(page, "Rematchco").innerText()));
+    check("a row whose last-4 still matches nothing is untouched (no guessed match)", await needs("Wrongdigitsco").isVisible());
+    check("the 'Needs account' count dropped by exactly the one re-matched row", (await laneCount(page, "needsAccount")) === before - 1, `${before} -> ${await laneCount(page, "needsAccount")}`);
+    check("the lanes still add up to All", (await laneCount(page, "duplicate")) + (await laneCount(page, "needsAccount")) + (await laneCount(page, "needsReview")) + (await laneCount(page, "noIssues")) === (await laneCount(page, "all")));
+    await h.shot(page, "sms-15-rematched");
+
+    // The drawer opens with the corrected account pre-selected and says why it was matched.
+    await openRow(page, "Rematchco");
+    const drawer = page.getByRole("dialog").first();
+    await drawer.getByText("Transaction Details").first().waitFor({ timeout: 20000 });
+    check("the drawer explains the match by last-4 (not 'Android matched')", (await drawer.getByText(/Matched to .* by last-4/).count()) > 0 && (await drawer.getByText(/Android matched this to/).count()) === 0);
+    await page.keyboard.press("Escape");
+    await drawer.waitFor({ state: "hidden", timeout: 10000 });
+
+    // Correcting it away again is just as immediate — the match always follows the latest saved details.
+    await setAccountLast4(uid, bank.id, "1111");
+    await needs("Rematchco").waitFor({ timeout: 20000 });
+    check("changing the last-4 away again puts the row back to 'Needs account'", await needs("Rematchco").isVisible());
+  } finally {
+    await setAccountLast4(uid, bank.id, original).catch(() => {});
+    await deleteCandidate(uid, "sms-rm-0001");
+    await deleteCandidate(uid, "sms-rm-0002");
+  }
 });

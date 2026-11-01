@@ -125,9 +125,9 @@ export function SheetNav({
 }
 
 /** A titled group of fields in the form column. */
-export function SheetSection({ title, hint, aside, children, className, ...rest }: { title: string; hint?: string; aside?: ReactNode; children: ReactNode; className?: string } & React.HTMLAttributes<HTMLElement>) {
+export function SheetSection({ title, hint, aside, children, className, compact = false, ...rest }: { title: string; hint?: string; aside?: ReactNode; children: ReactNode; className?: string; compact?: boolean } & React.HTMLAttributes<HTMLElement>) {
   return (
-    <section aria-label={title} className={cn("flex flex-col gap-3.5 rounded-2xl border border-border bg-card p-4 shadow-e1 sm:p-5", className)} {...rest}>
+    <section aria-label={title} className={cn("flex flex-col shadow-e1 border border-border bg-card", compact ? "gap-2.5 rounded-xl p-3 sm:p-3.5" : "gap-3.5 rounded-2xl p-4 sm:p-5", className)} {...rest}>
       <div className="flex min-h-6 items-center gap-3">
         <span aria-hidden className="h-4 w-1 shrink-0 rounded-full bg-primary" />
         <h3 className="-ml-1 text-[12px] font-bold tracking-[0.08em] whitespace-nowrap text-foreground uppercase">{title}</h3>
@@ -293,11 +293,11 @@ const BLOCK_TONE = {
 } as const;
 
 /** One block of the context rail: an icon tile, a small heading and its content. */
-export function SheetRailBlock({ icon: Icon, title, tone = "neutral", children, className, ...rest }: { icon: LucideIcon; title: string; tone?: keyof typeof BLOCK_TONE; children: ReactNode; className?: string } & React.HTMLAttributes<HTMLDivElement>) {
+export function SheetRailBlock({ icon: Icon, title, tone = "neutral", children, className, compact = false, ...rest }: { icon: LucideIcon; title: string; tone?: keyof typeof BLOCK_TONE; children: ReactNode; className?: string; compact?: boolean } & React.HTMLAttributes<HTMLDivElement>) {
   return (
-    <div className={cn("flex gap-3 rounded-2xl border border-border bg-card px-4 py-3 shadow-e1", className)} {...rest}>
-      <span className={cn("grid size-9 shrink-0 place-items-center rounded-[11px]", BLOCK_TONE[tone])}>
-        <Icon className="size-4" strokeWidth={2.25} aria-hidden />
+    <div className={cn("flex border border-border bg-card shadow-e1", compact ? "gap-2.5 rounded-xl px-3 py-2.5" : "gap-3 rounded-2xl px-4 py-3", className)} {...rest}>
+      <span className={cn("grid shrink-0 place-items-center", compact ? "size-7 rounded-[8px]" : "size-9 rounded-[11px]", BLOCK_TONE[tone])}>
+        <Icon className={compact ? "size-3.5" : "size-4"} strokeWidth={2.25} aria-hidden />
       </span>
       <div className="min-w-0 flex-1 text-[12.5px] leading-relaxed text-foreground/85">
         <p className="text-[11px] font-bold tracking-[0.08em] text-foreground/72 uppercase">{title}</p>
@@ -424,8 +424,9 @@ export function TransactionSheet({
           // Full width at every breakpoint: override the dialog's own centring and `sm:max-w-md` cap.
           "top-0 bottom-auto left-0 flex w-full max-w-none translate-x-0 translate-y-0 flex-col gap-0 overflow-hidden rounded-t-none rounded-b-[22px] border-0 bg-card p-0 text-foreground ring-1 ring-black/5 sm:max-w-none dark:ring-white/10",
           "shadow-[0_24px_60px_-30px_rgba(10,12,8,0.5)]",
-          // Opening moves only transform and opacity (compositor work, no layout), on its own layer.
-          "transform-gpu will-change-[transform,opacity] ease-[cubic-bezier(0.22,1,0.36,1)]",
+          // Opening moves only transform and opacity. No `transform-gpu` / `will-change`: a permanently promoted layer is
+          // rasterised once and then bitmap-scaled on browser zoom, which blurs every piece of text inside the sheet.
+          "ease-[cubic-bezier(0.22,1,0.36,1)]",
           "data-open:zoom-in-100 data-open:fade-in-0 data-open:slide-in-from-top-5 data-closed:zoom-out-100 data-closed:fade-out-0 data-closed:slide-out-to-top-5 data-open:duration-200 data-closed:duration-150 motion-reduce:data-open:slide-in-from-top-0 motion-reduce:data-closed:slide-out-to-top-0",
           "max-h-[90dvh] max-sm:max-h-[88dvh]",
           compact && "right-0 mx-auto w-[calc(100%-1rem)] max-w-[1040px] rounded-b-2xl sm:w-[calc(100%-2rem)] sm:max-w-[1040px] max-h-[94dvh]",

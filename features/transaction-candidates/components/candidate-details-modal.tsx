@@ -261,6 +261,7 @@ export function CandidateDetailsModal({
   onPartialImport,
   chosenDestinationKey = null,
   onDestinationChosen,
+  rematch,
 }: {
   candidate: SmsTransactionCandidate | null;
   onOpenChange: (open: boolean) => void;
@@ -307,6 +308,11 @@ export function CandidateDetailsModal({
   chosenDestinationKey?: string | null;
   /** Called the moment the reviewer picks an account/card (`null` = back to Android's own match), so the list reflects it at once. */
   onDestinationChosen?: (candidateId: string, key: string | null) => void;
+  /**
+   * Set when the workspace re-matched this candidate's account against the user's current saved accounts (Android matches only when it
+   * first builds the candidate). The candidate passed in already carries the corrected ids; this only changes how the match is worded.
+   */
+  rematch?: { reason: "unmatched" | "missing" | "stale"; label: string; bankConfirmed: boolean } | null;
 }) {
   // Never `null` — unlike `TransactionManageModal`'s own `draft`, this one is read unconditionally
   // in the very first render pass below (see the reset block right after `open`), and a `null`
@@ -711,9 +717,21 @@ export function CandidateDetailsModal({
     : matchEvidence.lastFourCheck === "different"
       ? { tone: "warning", text: `The SMS last-4 •••• ${matchEvidence.smsLastFour} is not this account's last-4 (•••• ${matchEvidence.destinationLastFour}) — check you picked the right one.` }
       : matchedUnchanged
-        ? { tone: "success", text: [`Android matched this to ${matchEvidence.androidLabel ?? matchedAccountLabel}.`, lastFourEquals].filter(Boolean).join(" ") }
+        ? {
+            tone: "success",
+            text: [
+              rematch
+                ? `Matched to ${matchEvidence.androidLabel ?? matchedAccountLabel} by last-4${rematch.bankConfirmed ? " and bank" : ""} — ${
+                    rematch.reason === "stale" ? "its previous account no longer ends in these digits" : rematch.reason === "missing" ? "its previous account was removed" : "your saved account now ends in these digits"
+                  }.`
+                : `Android matched this to ${matchEvidence.androidLabel ?? matchedAccountLabel}.`,
+              lastFourEquals,
+            ]
+              .filter(Boolean)
+              .join(" "),
+          }
         : matchEvidence.androidLabel && !matchEvidence.matchesAndroid
-          ? { tone: "warning", text: [`You changed the account — Android had matched ${matchEvidence.androidLabel}.`, lastFourEquals].filter(Boolean).join(" ") }
+          ? { tone: "warning", text: [`You changed the account — ${rematch ? "it had been matched to" : "Android had matched"} ${matchEvidence.androidLabel}.`, lastFourEquals].filter(Boolean).join(" ") }
           : lastFourEquals
             ? { tone: "success", text: lastFourEquals }
             : matchEvidence.lastFourCheck === "destination-has-none"

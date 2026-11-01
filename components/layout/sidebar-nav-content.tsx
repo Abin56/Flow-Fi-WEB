@@ -4,7 +4,7 @@ import { motion, useReducedMotion } from "framer-motion";
 import { ChevronDown, ChevronRight, Search, Sparkles, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { ClayAvatar } from "@/components/clay/clay-avatar";
 import {
   NAV_ITEMS,
@@ -42,13 +42,27 @@ function groupBySection(
 }
 
 
+/** Open-time cascade wrapper for the drawer (see .drawer-stagger in globals.css). Renders its child untouched
+ *  when motion is off, so the desktop rail's DOM is unchanged. */
+function Staggered({ index, enabled, children }: { index: number; enabled: boolean; children: ReactNode }) {
+  if (!enabled) return <>{children}</>;
+  return (
+    <div className="drawer-stagger" style={{ "--i": index } as CSSProperties}>
+      {children}
+    </div>
+  );
+}
+
 /** The sidebar's nav/profile content, shared between the desktop collapsible rail (Sidebar) and
- *  the mobile Sheet drawer (MobileSidebar) — so the two never drift out of sync. */
+ *  the mobile Sheet drawer (MobileSidebar) — so the two never drift out of sync.
+ *  `scrollMotion` (drawer only) adds the staggered open + scroll-linked settle animation; presentation only. */
 export function SidebarNavContent({
   collapsed = false,
+  scrollMotion = false,
   onNavigate,
 }: {
   collapsed?: boolean;
+  scrollMotion?: boolean;
   onNavigate?: () => void;
 }) {
   const pathname = usePathname();
@@ -87,6 +101,16 @@ export function SidebarNavContent({
       else next.add(section);
       return next;
     });
+
+  const groups = groupBySection(NAV_ITEMS.filter(matches));
+  // Visual order (section headers + rows) → cascade step for the drawer's open animation.
+  const motionStep = new Map<string, number>();
+  groups.forEach((group) => {
+    motionStep.set(`section:${group.section}`, motionStep.size);
+    group.items.forEach((item) => motionStep.set(item.href, motionStep.size));
+  });
+  const motionOn = scrollMotion && !collapsed;
+  const scrollItem = motionOn ? "drawer-item" : undefined;
 
   return (
     <div className="flex h-full min-h-0 flex-col py-3.5">
@@ -159,30 +183,33 @@ export function SidebarNavContent({
 
       <div className={cn("min-h-0 flex-1 overflow-y-auto overscroll-contain pb-4 [scrollbar-width:thin]", collapsed ? "mt-6" : "mt-3")}>
         <nav className="flex flex-col gap-3 px-3">
-          {groupBySection(NAV_ITEMS.filter(matches)).map((group) => {
+          {groups.map((group) => {
             const holdsActive = group.items.some((item) => isNavItemActive(item, pathname));
             // While searching every matching group shows; otherwise folding applies.
             const open = collapsed || q !== "" || holdsActive || !folded.has(group.section);
             return (
               <div key={group.section} className="flex flex-col gap-0.5">
                 {!collapsed ? (
-                  <button
-                    type="button"
-                    onClick={() => !holdsActive && toggleSection(group.section)}
-                    aria-expanded={open}
-                    className={cn(
-                      "group/section flex items-center justify-between rounded-lg px-3 pt-1 pb-1.5 text-[11px] font-semibold tracking-[0.08em] text-foreground/55 uppercase outline-none transition-colors hover:text-foreground/80 focus-visible:ring-2 focus-visible:ring-ring",
-                      holdsActive && "cursor-default text-foreground/75",
-                    )}
-                  >
-                    {group.section}
-                    {!holdsActive && (
-                      <ChevronDown
-                        className={cn("size-3.5 opacity-0 transition-[transform,opacity] group-hover/section:opacity-100", !open && "-rotate-90 opacity-100")}
-                        strokeWidth={2}
-                      />
-                    )}
-                  </button>
+                  <Staggered index={motionStep.get(`section:${group.section}`) ?? 0} enabled={motionOn}>
+                    <button
+                      type="button"
+                      onClick={() => !holdsActive && toggleSection(group.section)}
+                      aria-expanded={open}
+                      className={cn(
+                        "group/section flex w-full items-center justify-between rounded-lg px-3 pt-1 pb-1.5 text-[11px] font-semibold tracking-[0.08em] text-foreground/55 uppercase outline-none transition-colors hover:text-foreground/80 focus-visible:ring-2 focus-visible:ring-ring",
+                        holdsActive && "cursor-default text-foreground/75",
+                        scrollItem,
+                      )}
+                    >
+                      {group.section}
+                      {!holdsActive && (
+                        <ChevronDown
+                          className={cn("size-3.5 opacity-0 transition-[transform,opacity] group-hover/section:opacity-100", !open && "-rotate-90 opacity-100")}
+                          strokeWidth={2}
+                        />
+                      )}
+                    </button>
+                  </Staggered>
                 ) : (
                   <span aria-hidden className="mx-auto mb-1 h-px w-6 bg-border" />
                 )}
@@ -207,6 +234,7 @@ export function SidebarNavContent({
                           "group/item relative flex items-center gap-3 rounded-xl px-2 py-1.5 text-sm font-medium text-foreground/75 outline-none transition-colors duration-150 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
                           active && "font-semibold text-foreground",
                           collapsed && "justify-center px-0",
+                          scrollItem,
                         )}
                       >
                         {/* Active pill — slides between items as the page changes. */}
@@ -249,7 +277,13 @@ export function SidebarNavContent({
                       </Link>
                     );
 
-                    if (!collapsed) return link;
+                    if (!collapsed) {
+                      return (
+                        <Staggered key={item.href} index={motionStep.get(item.href) ?? 0} enabled={motionOn}>
+                          {link}
+                        </Staggered>
+                      );
+                    }
 
                     return (
                       <Tooltip key={item.href}>

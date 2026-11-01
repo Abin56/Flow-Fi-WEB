@@ -746,6 +746,46 @@
   100% { transform: translateX(450%) skewX(-12deg); opacity: 0; }
 }
 
+/* Mobile drawer menu motion (opt-in via SidebarNavContent `scrollMotion`; the desktop rail doesn't use it).
+   Two layers, transform/opacity only:
+   1. .drawer-stagger — a short cascade (capped at 10 steps) when the drawer opens or a section unfolds.
+   2. .drawer-item — scroll-linked: rows rise into place as they enter the scroll area from the bottom and
+      ease away as they leave the top, so every row at rest sits in a clean, evenly spaced stack. Uses CSS scroll-driven
+      animations (compositor-driven, no scroll handlers); browsers without them just skip layer 2.
+   Separate elements (wrapper vs. row) so the two animations never fight over `transform`/`opacity`. */
+@keyframes drawer-stagger-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes drawer-item-enter {
+  from { opacity: 0.3; transform: translateY(14px) scale(0.97); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes drawer-item-exit {
+  from { opacity: 1; transform: none; }
+  to { opacity: 0.35; transform: translateY(-8px) scale(0.98); }
+}
+.drawer-stagger {
+  animation: drawer-stagger-in 340ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation-delay: calc(70ms + min(var(--i, 0), 10) * 28ms);
+}
+@supports (animation-timeline: view()) {
+  .drawer-item {
+    transform-origin: left center;
+    animation:
+      drawer-item-enter linear backwards,
+      drawer-item-exit linear forwards;
+    animation-timeline: view(), view();
+    animation-range: entry 0% entry 100%, exit 0% exit 80%;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .drawer-stagger,
+  .drawer-item {
+    animation: none;
+  }
+}
+
 /* /pair landing (FlowFi Connect): staggered entrance, and the web → phone hand-off illustration — a dot travels the
    track while the phone's halo answers on arrival. Purely decorative (aria-hidden); it never stands for a real
    connection. Transform/opacity only. The reduced-motion override above settles each on its final frame. */

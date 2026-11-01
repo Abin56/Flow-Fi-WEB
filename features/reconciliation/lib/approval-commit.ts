@@ -3,7 +3,9 @@
  * Reconciliation that writes, and it writes through exactly one call: `commitReviewImport` (Transaction Studio's
  * engine, also used by Smart Capture's old direct import), after `getPreflightBlockers` and
  * `detectFreshDuplicatesForCommit`. There is no second transaction-writing path, and no financial repository is
- * touched here or changed.
+ * changed. A row assigned to a person or split between people is written by that same engine through the app's own
+ * `ExpenseRepository.createExpenseAtomic` (transaction, balance, schedule, installments, People ledger + balances and
+ * the Expense in ONE Firestore transaction under key-derived ids) — validated against People re-read from the server.
  *
  * Order, and why:
  *  1. Re-read FlowFi's records from the SERVER (`readData`) — never the live hooks, never the cache. A failed read
@@ -53,6 +55,7 @@ export type StaleCode =
   | "preflight"
   | "new_duplicate"
   | "repeat_unacknowledged"
+  | "people_unavailable"
   | "nothing_to_review";
 
 export interface StaleReason {
@@ -186,14 +189,17 @@ function unsupported<T extends object>(name: string): T {
 }
 
 /**
- * The repositories the commit engine is given. Only the transaction repository is real: expense, EMI, loan and
- * installment repositories belong to split / person / EMI / loan actions, which Reconciliation cannot import — so they
- * are tripwires that throw if anything ever reaches for them.
+ * The repositories the commit engine is given. The transaction repository is real, and the expense repository is real
+ * only when the app supplies one (person / split rows). EMI, loan and installment repositories belong to EMI / loan
+ * actions, which Reconciliation cannot import — they are tripwires that throw if anything ever reaches for them, and so
+ * is the expense repository when none is supplied (the approval then refuses person / split rows before writing).
  */
-export function commitRepositoriesFor(transactionRepository: CommitRepositories["transactionRepository"]): CommitRepositories {
+const NO_EXPENSE_REPOSITORY = unsupported<CommitRepositories["expenseRepository"]>("expense repository");
+
+export function commitRepositoriesFor(transactionRepository: CommitRepositories["transactionRepository"], expenseRepository?: CommitRepositories["expenseRepository"]): CommitRepositories {
   return {
     transactionRepository,
-    expenseRepository: unsupported("expense repository"),
+    expenseRepository: expenseRepository ?? NO_EXPENSE_REPOSITORY,
     emiRepository: unsupported("EMI repository"),
     loanRepository: unsupported("loan repository"),
     installmentRepositoryFor: () => {
@@ -221,6 +227,10 @@ export async function runApproval(input: { session: DraftState; reviewed: Approv
     const check = revalidateApproval({ session, fresh, reviewed, repeatsAcknowledged: input.repeatsAcknowledged, now: deps.now?.() });
     if (!check.ok) return { status: "stale", reasons: check.reasons };
     const { plan, staged } = check;
+    const assignedRow = plan.rows.find((r) => r.status === "import" && (r.action === "shared_expense" || r.action === "someone_elses_expense"));
+    if (assignedRow && deps.repositories.expenseRepository === NO_EXPENSE_REPOSITORY) {
+      return { status: "stale", reasons: [{ code: "people_unavailable", rowId: assignedRow.rowId, rowNumber: assignedRow.number, message: "People and split expenses can't be saved from here right now. Nothing was imported." }] };
+    }
 
     const committed = new Map<string, string>();
     const failed = new Map<string, string>();
@@ -232,8 +242,9 @@ export async function runApproval(input: { session: DraftState; reviewed: Approv
           rows: staged,
           accountId: reviewed.accountId,
           categories: fresh.categories,
-          // Only single-write actions (expense / income / refund) can be staged, so none of these are ever consulted.
-          people: [],
+          // The engine's own `people` input is only consulted by flows Reconciliation can't stage; the person / split write
+          // resolves People itself, inside the repository's Firestore transaction.
+          people: fresh.people ?? [],
           accounts: fresh.accounts,
           emis: [],
           loans: [],

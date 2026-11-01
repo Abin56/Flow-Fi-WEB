@@ -36,7 +36,7 @@ import { useReconciliationSession } from "../hooks/use-reconciliation-session";
 import { sourceLabel, type RecordsSync } from "../hooks/use-reconciliation-data";
 import { consumePendingHandoff, declinePendingHandoff, getHandoffState, releaseReconciliationScreenshot, screenshotFor, subscribeHandoff } from "../lib/capture-handoff";
 import { buildCycleResolver } from "../lib/card-cycle-status";
-import { applyBulkLink, bulkLinkEligible, decisionErrors, decisionFor, importBlockReasons, ownTransferConfirmFor, rejectCandidate, reviewSummary, rowCheckLabel, setDecision, type RowGateContext } from "../lib/decisions";
+import { applyBulkLink, bulkLinkEligible, decisionErrors, decisionFor, importBlockReasons, ownTransferConfirmFor, rejectCandidate, reviewSummary, rowCheckLabel, setDecision, valueIssues, type RowGateContext } from "../lib/decisions";
 import { bulkImportPlan, merchantCategoryIndex } from "../lib/bulk-import";
 import { diffDecisions, pushHistory, undoLast, type HistoryEntry } from "../lib/decision-history";
 import { calendarDayIndex } from "../lib/amounts-and-days";
@@ -696,6 +696,7 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
       onDecide={(patch) => decide(row.id, patch, `Details · row ${numberOf(row.id)}`)}
       accountLabel={accountId ? accountName(accountId) : null}
       screenshot={screenshot}
+      people={data.people}
     />
   );
   /** The desktop editor sheet for the selected row. Its arrows move the selection, like J/K — they never decide or save. */
@@ -762,6 +763,7 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
         history={record ? merchantHistory(record, records) : []}
         notes={notes}
         importBlocked={match.state === "excluded" ? null : (importBlockReasons(row, match, gate(row))[0] ?? null)}
+        onFixValues={match.state !== "excluded" && valueIssues(row).length > 0 ? () => setInspectorOpen(true) : undefined}
         ownTransferConfirm={ownTransferConfirmFor(row, gate(row))}
         confirmFor={confirmFor}
         onConfirmFor={setConfirmFor}
@@ -1245,8 +1247,16 @@ function ReadinessBar({
             )}
           </p>
           {summary && summary.included > 0 && (
-            <div role="progressbar" aria-label="Review progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent} className="hidden h-1.5 w-28 overflow-hidden rounded-full bg-muted sm:block">
-              <div className={cn("h-full rounded-full transition-[width] duration-300", percent === 100 ? "bg-success" : "bg-primary")} style={{ width: `${percent}%` }} />
+            // Segments show WHAT was decided (kept / new / skipped), not just how much — same counts as the stats beside it.
+            <div role="progressbar" aria-label="Review progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent} className="hidden h-2 w-32 overflow-hidden rounded-full bg-muted sm:flex">
+              {readiness &&
+                (
+                  [
+                    ["bg-success", readiness.alreadyRecorded + readiness.alreadyImported],
+                    ["bg-primary", readiness.proposedNew],
+                    ["bg-muted-foreground/50", readiness.skipped + readiness.inbox],
+                  ] as const
+                ).map(([color, n]) => (n > 0 ? <div key={color} className={cn("h-full transition-[width] duration-300", color)} style={{ width: `${(n / summary.included) * 100}%` }} /> : null))}
             </div>
           )}
         </div>

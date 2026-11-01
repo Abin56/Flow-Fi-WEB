@@ -13,7 +13,7 @@
  */
 
 import { useState } from "react";
-import { ArrowDownToLine, ListPlus } from "lucide-react";
+import { ArrowDownToLine, CheckCircle2, ListPlus, ScanSearch, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ClayButton } from "@/components/clay/clay-button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -44,6 +44,14 @@ export function ReviewImportSummary({
   onNextCheck: () => void;
 }) {
   const net = totals.net;
+  // One plain sentence on what to do next — the counts below it say how much; this says what.
+  const plural = counts.toCheck === 1 ? "" : "s";
+  const guidance: { text: string; tone: "warning" | "success"; icon: LucideIcon } | null =
+    counts.toCheck > 0
+      ? { text: `${counts.toCheck} row${plural} need${counts.toCheck === 1 ? "s" : ""} a quick look before ${counts.toCheck === 1 ? "it" : "they"} can be imported — open a row (✎) and confirm its date and amount. Rows are never confirmed for you.`, tone: "warning", icon: ScanSearch }
+      : counts.included > 0
+        ? { text: "All values are confirmed. Choose what to do with each row, then finish the review.", tone: "success", icon: CheckCircle2 }
+        : null;
   return (
     <section aria-label="Import summary" data-testid="import-summary" className="@container flex flex-wrap items-center gap-x-5 gap-y-2 rounded-xl border border-border bg-card px-3 py-2 sm:px-4">
       <dl className="flex min-w-0 flex-wrap items-start gap-x-5 gap-y-1.5 @2xl:items-baseline">
@@ -70,9 +78,15 @@ export function ReviewImportSummary({
           </ClayButton>
         )}
       </div>
+      {guidance && (
+        <p className={cn("flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs", guidance.tone === "warning" ? "bg-warning/10 text-foreground" : "bg-success/10 text-foreground")} data-testid="summary-guidance">
+          <guidance.icon className={cn("size-3.5 shrink-0", guidance.tone === "warning" ? "text-warning" : "text-success")} aria-hidden />
+          <span>{guidance.text}</span>
+        </p>
+      )}
       {totals.uncounted > 0 && (
         <p className="w-full text-[11px] text-muted-foreground">
-          {totals.uncounted} included row{totals.uncounted === 1 ? "" : "s"} without an amount or Charge/Credit not counted yet. Totals use included rows&apos; current values.
+          {totals.uncounted} included row{totals.uncounted === 1 ? "" : "s"} without an amount or Debit/Credit not counted yet. Totals use included rows&apos; current values.
         </p>
       )}
     </section>
@@ -169,7 +183,7 @@ export function BulkImportDialog({
         <DialogHeader>
           <DialogTitle>Import {plan.rows.length} new row{plan.rows.length === 1 ? "" : "s"}?</DialogTitle>
           <DialogDescription>
-            Charges with no possible match in FlowFi, values read clearly, and no rule against importing them. Each one becomes a draft “Import new” — nothing is saved until the final Import.
+            Debits with no possible match in FlowFi, values read clearly, and no rule against importing them. Each one becomes a draft “Import new” — nothing is saved until the final Import.
           </DialogDescription>
         </DialogHeader>
 

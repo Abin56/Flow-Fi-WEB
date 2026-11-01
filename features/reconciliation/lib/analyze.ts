@@ -8,6 +8,7 @@ import type { Account } from "@/lib/models/account";
 import type { Category } from "@/lib/models/category";
 import type { CreditCardProfile, Statement } from "@/lib/models/credit-card";
 import type { Expense } from "@/lib/models/expense";
+import type { Person } from "@/lib/models/person";
 import type { SmsTransactionCandidate } from "@/lib/models/sms-transaction-candidate";
 import type { Transaction } from "@/lib/models/transaction";
 import { buildCycleResolver } from "./card-cycle-status";
@@ -28,6 +29,8 @@ export interface ReconciliationData {
   trashedTransactions: Transaction[];
   smsCandidates: SmsTransactionCandidate[];
   expenses: Expense[];
+  /** The user's People — only needed to check a person / split assignment (absent = not loaded; a picked person is then not checked here). */
+  people?: Person[];
 }
 
 /** Cards that share this card's credit limit (D9) — informational only. */
@@ -81,6 +84,6 @@ export function analyzeSession(session: DraftState, data: ReconciliationData, op
   const ownedAccounts = ownedAccountIdentities(data.accounts, data.creditCards, accountId);
   const transferLegIds = new Set(records.filter((r) => r.isTransferLeg && !r.deleted).map((r) => r.id));
   const isTransferLeg = (recordId: string) => transferLegIds.has(recordId);
-  const gate = (row: ReconRow): RowGateContext => ({ isCardAccount, cycle: row.date ? cycleOf(row.date) : null, ownedAccounts, isTransferLeg });
+  const gate = (row: ReconRow): RowGateContext => ({ isCardAccount, cycle: row.date ? cycleOf(row.date) : null, ownedAccounts, isTransferLeg, people: data.people });
   return { account, card, records, matches, gate, cycleOf };
 }

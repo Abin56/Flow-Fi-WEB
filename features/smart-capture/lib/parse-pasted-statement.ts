@@ -34,7 +34,9 @@ export type CaptureIssueCode =
   | "merged_lines"
   | "decimal_missing"
   // Any source: same date + merchant + amount appears more than once (never auto-merged)
-  | "possible_repeat";
+  | "possible_repeat"
+  // Column mapping with a Balance column: the running balance doesn't follow from this row's amount
+  | "balance_mismatch";
 
 export type CaptureField = "date" | "amount" | "direction";
 
@@ -118,6 +120,11 @@ export interface CaptureRow {
    * ever derived from it.
    */
   sourceOrder?: SourceField[];
+  /**
+   * Where the row's Charge/Credit came from when the user mapped the columns: "column" = the amount sat in a mapped
+   * Debit / Credit (or Cr/Dr) column — evidence of its own; "balance" = worked out from the running balance.
+   */
+  directionBasis?: "column" | "balance";
 }
 
 export type IgnoredReason = "summary" | "header" | "no_transaction";

@@ -370,11 +370,15 @@ describe("Reconciliation workspace — row bottom sheet", () => {
     expect(rowEl("r1").textContent).toContain("SWIGGY BLR");
   });
 
-  it("keeps Person and Split disabled", () => {
+  it("offers Mine / Someone else's / Split on a charge — Mine by default, nothing written by choosing", () => {
     seedDraft();
     render(<ReconciliationWorkspace uid="u1" data={DATA} />);
     fireEvent.click(screen.getByRole("button", { name: "Expand row 1" }));
-    expect(screen.getByTestId("editor-person").getAttribute("aria-disabled")).toBe("true");
-    expect((screen.getByRole("switch", { name: "Split expense (not available yet)" }) as HTMLButtonElement).disabled).toBe(true);
+    const own = within(screen.getByTestId("editor-ownership"));
+    expect(own.getByRole("radio", { name: "My own expense" }).getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(own.getByRole("radio", { name: "Split expense" }));
+    expect(own.getByRole("radio", { name: "Split expense" }).getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByTestId("ownership-split")).toBeTruthy();
+    expect(screen.getAllByTestId("split-share")).toHaveLength(2);
   });
 });

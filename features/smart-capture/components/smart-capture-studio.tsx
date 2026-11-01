@@ -6,6 +6,12 @@
  * (/reconciliation), where OCR checks, duplicates and the final import are
  * all settled on one screen. Nothing is written from here.
  *
+ * A statement that reads as a table first stops at "Match your columns"
+ * (column-mapping-step.tsx): columns are detected, the user fixes any role,
+ * and the transactions are read from the *confirmed* mapping
+ * (lib/mapped-extract.ts) — still within step 1, still nothing imported. Text
+ * with no table in it is read by the plain parser, as before.
+ *
  * The rows go over in memory (features/reconciliation/lib/capture-handoff.ts)
  * exactly as read, flags and all — Review & Import's own gates keep anything
  * unresolved from being imported. The old standalone review step
@@ -36,13 +42,25 @@ import { clearCaptureSnapshot, declinePendingHandoff, getHandoffState, handOffCa
 import { parsePastedStatement, type CaptureParseResult } from "../lib/parse-pasted-statement";
 import { hasReviewWork, toReviewRows, type ReviewRow } from "../lib/capture-review";
 import { annotateOcrRows, flagRepeatedRows } from "../lib/ocr-review";
+import { buildGrid, detectColumnRoles, type AutoMapping, type CaptureGrid, type ColumnRole } from "../lib/column-mapping";
+import { extractMapped, linesForMapping } from "../lib/mapped-extract";
 import { clearDraft, loadDraft, type CaptureDraft } from "../lib/capture-draft";
 import type { Rect } from "../lib/image-crop";
 import { CaptureInput, type CaptureImage, type CaptureMode, type OcrCapture } from "./capture-input";
+import { ColumnMappingStep } from "./column-mapping-step";
 import { HeaderAction, WorkspaceHeader } from "./workspace-header";
 
 
 const NO_ROWS_MESSAGE = "No transaction rows found. Each row should start with a date (e.g. 05/09/2026 or 05 Sep) and include an amount like 1,299.00.";
+
+/** A statement cut into columns, waiting for the user to confirm which column is which (see column-mapping.ts). */
+interface PendingMapping {
+  grid: CaptureGrid;
+  auto: AutoMapping;
+  /** Exactly one of these is set: the pasted text, or the screenshot read. */
+  text: string | null;
+  ocr: OcrCapture | null;
+}
 
 /** A pending "this drops your review" confirmation. `cancel` releases anything prepared for the action (e.g. a new image's URL). */
 interface PendingConfirm {
@@ -66,6 +84,7 @@ export function SmartCaptureStudio() {
   const [notice, setNotice] = useState<string | null>(null);
   const [handoffError, setHandoffError] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<PendingConfirm | null>(null);
+  const [mapping, setMapping] = useState<PendingMapping | null>(null);
   const imageUrlRef = useRef<string | null>(null);
   const router = useRouter();
   const { data: accounts = [] } = useAccounts();
@@ -138,6 +157,7 @@ export function SmartCaptureStudio() {
 
   /** Forgets the current rows (and their decisions-only draft and restore point). Keeps the source inputs unless told. */
   function clearReview() {
+    setMapping(null);
     clearDraft();
     setPendingDraft(null);
     setNotice(null);
@@ -156,7 +176,7 @@ export function SmartCaptureStudio() {
    * there, explicitly, so none is carried over. A capture already open there is never replaced from here — Review &
    * Import asks (keep the current review or take this one).
    */
-  function handOver(sourceText: string, result: CaptureParseResult, reviewRows: ReviewRow[], ocrCapture: OcrCapture | null) {
+  function handOver(sourceText: string, result: CaptureParseResult, reviewRows: ReviewRow[], ocrCapture: OcrCapture | null): boolean {
     setNotice(null);
     setHandoffError(null);
     setError(null);
@@ -178,12 +198,27 @@ export function SmartCaptureStudio() {
     });
     if (!outcome.ok) {
       setHandoffError(outcome.error);
-      return;
+      return false;
     }
     router.push("/reconciliation");
+    return true;
   }
 
+  /**
+   * Extract pressed: a statement that reads as a table first goes to the column-mapping step (the user confirms which
+   * column is which); anything with no table in it is read exactly as before.
+   */
   function extract(sourceText: string) {
+    const grid = buildGrid({ text: sourceText });
+    if (grid) {
+      setError(null);
+      setMapping({ grid, auto: detectColumnRoles(grid), text: sourceText, ocr: null });
+      return;
+    }
+    extractUnmapped(sourceText);
+  }
+
+  function extractUnmapped(sourceText: string) {
     const result = parsePastedStatement(sourceText);
     if (result.rows.length === 0) {
       setError(sourceText.trim().length === 0 ? "Paste some statement text first." : NO_ROWS_MESSAGE);
@@ -194,6 +229,16 @@ export function SmartCaptureStudio() {
   }
 
   function extractOcr(capture: OcrCapture) {
+    const grid = buildGrid({ text: capture.text, ocrLines: capture.lines });
+    if (grid) {
+      setError(null);
+      setMapping({ grid, auto: detectColumnRoles(grid), text: null, ocr: capture });
+      return;
+    }
+    extractOcrUnmapped(capture);
+  }
+
+  function extractOcrUnmapped(capture: OcrCapture) {
     const result = parsePastedStatement(capture.text);
     if (result.rows.length === 0) {
       setError(`The screenshot was read, but ${NO_ROWS_MESSAGE.charAt(0).toLowerCase()}${NO_ROWS_MESSAGE.slice(1)} Try selecting just the transaction rows.`);
@@ -201,6 +246,25 @@ export function SmartCaptureStudio() {
     }
     const annotated = annotateOcrRows(result.rows, capture.lines, { hasCreditMarkers: result.hasCreditMarkers });
     handOver(capture.text, { ...result, rows: annotated }, toReviewRows(annotated, "ocr"), capture);
+  }
+
+  /** The user confirmed the columns: read the transactions with them and continue straight into Review & Import. */
+  function confirmMapping(roles: ColumnRole[]) {
+    if (!mapping) return;
+    const { grid, text, ocr: capture } = mapping;
+    const { result } = extractMapped(grid, roles);
+    if (result.rows.length === 0) {
+      setMapping(null);
+      setError(NO_ROWS_MESSAGE);
+      return;
+    }
+    if (capture) {
+      const annotated = annotateOcrRows(result.rows, linesForMapping(grid, roles, capture.lines), { hasCreditMarkers: result.hasCreditMarkers });
+      handOver(capture.text, { ...result, rows: annotated }, toReviewRows(annotated, "ocr"), capture);
+      return;
+    }
+    const rows = flagRepeatedRows(result.rows);
+    handOver(text ?? "", { ...result, rows }, toReviewRows(rows, "text"), null);
   }
 
   /**
@@ -350,7 +414,9 @@ export function SmartCaptureStudio() {
         </div>
       )}
 
-      {(
+      {mapping ? (
+        <ColumnMappingStep key={mapping.grid.lines.length + mapping.grid.method} grid={mapping.grid} auto={mapping.auto} sourceName={mapping.ocr ? "screenshot" : "pasted text"} onConfirm={confirmMapping} onBack={() => setMapping(null)} />
+      ) : (
         <CaptureInput
           mode={mode}
           onModeChange={setMode}

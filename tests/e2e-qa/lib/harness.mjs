@@ -175,6 +175,20 @@ function flat(f) {
   return o;
 }
 
+/**
+ * The Transaction Inbox lists SMS candidates only while a phone is paired (the Auto Sync switch the server writes). Seeds that switch
+ * in the emulator so a scenario that opens the Inbox sees its rows instead of the pairing panel. Emulator only; safe to repeat.
+ */
+export async function seedSmsPaired() {
+  const uid = await authUid();
+  const r = await fetch(`${FIRESTORE_DOCS}/users/${uid}/smsSyncConfig/backgroundUpload`, {
+    method: "PATCH",
+    headers: { ...OWNER, "Content-Type": "application/json" },
+    body: JSON.stringify({ fields: { enabled: { booleanValue: true }, deviceId: { stringValue: "qa-sms-device" }, source: { stringValue: "pairing" } } }),
+  });
+  if (!r.ok) throw new Error(`seed Auto Sync switch: ${r.status}`);
+}
+
 export async function authUid() {
   const j = await (await fetch(`${FIRESTORE_DOCS}/users?pageSize=5&showMissing=true`, { headers: OWNER })).json();
   return j.documents[0].name.split("/").pop();

@@ -910,7 +910,9 @@ export class ExpenseRepository extends FirestoreCrudRepository<Expense> {
       categoryId: params.categoryId,
       accountId: params.accountId,
       splitType: "custom",
-      participantInputs: [{ personId: params.personId, name: params.personName, value: params.totalAmount }],
+      // An empty id means "a name, not a picked person" (the import engine passes `detail.personId ?? ""`): it is promoted
+      // to a People contact by name like any typed split participant, instead of being looked up as a person with id "".
+      participantInputs: [{ personId: params.personId === "" ? null : params.personId, name: params.personName, value: params.totalAmount }],
       notes: params.notes,
       dueDate: params.dueDate,
       sourceKind: "assignedExpense",

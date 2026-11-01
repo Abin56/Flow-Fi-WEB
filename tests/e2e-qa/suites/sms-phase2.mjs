@@ -48,6 +48,7 @@ async function pickFirstOption(page, trigger) {
   await page.getByRole("option").first().click();
 }
 async function openList(page) {
+  await h.seedSmsPaired();
   await page.goto(`${BASE_URL}/transaction-candidates`, { waitUntil: "domcontentloaded" });
   await page.getByRole("heading", { name: "Transaction Inbox" }).waitFor({ timeout: 60000 });
 }
@@ -166,7 +167,7 @@ scenario("sms-10-drawer-keyboard-navigation", "Keyboard-only drawer: focus trap,
   await h.shot(page, "sms-10-import-and-next");
 });
 
-scenario("sms-11-account-evidence-suggestions-duplicate", "Account evidence and last-4 suggestions (never auto-selected), category suggestions (never auto-applied), duplicate comparison without ids", async ({ page }, chk) => {
+scenario("sms-11-account-evidence-suggestions-duplicate", "Account evidence: a unique last-4 re-matches live, anything ambiguous or bank-only stays manual; category suggestions (never auto-applied), duplicate comparison without ids", async ({ page }, chk) => {
   const uid = await h.authUid();
   const bank = (await h.accountBalance("QA Bank")).id;
   await putCandidate(uid, { id: "sms-ev-last4-01", amount: 233, merchant: "Uber", accountId: null, rawLastFour: "4242", daysAgo: 1, confidenceLevel: "low", needsReview: true, reasons: ["No matching account or card found for this message."] });
@@ -178,18 +179,17 @@ scenario("sms-11-account-evidence-suggestions-duplicate", "Account evidence and 
   await page.getByText("Uber").first().waitFor({ timeout: 40000 });
   const txnsBefore = (await h.list("transactions")).length;
 
-  // 1. A last-4 that matches a saved card: suggested, not selected.
+  // 1. A last-4 that matches exactly ONE saved card: the web re-matches it against the CURRENT accounts (Android only matches
+  //    once, when it builds the row), pre-selects it and says why. Import still needs a category — nothing is imported for them.
   let d = await openDrawerFor(page, "Uber");
   const ev = d.getByTestId("account-match-evidence");
-  chk("nothing is selected for the reviewer: the account field shows its placeholder", /Select an account or card/.test(await d.getByRole("combobox").nth(1).innerText()));
-  const sug = d.getByTestId("last-four-suggestions");
-  chk("the card ending 4242 is offered as a suggestion", (await sug.count()) === 1 && /QA Credit Card/.test(await sug.innerText()) && /4242/.test(await sug.innerText()), await sug.innerText().catch(() => "none"));
-  chk("the suggestion is labelled 'suggestions only; nothing is selected for you'", /nothing is selected for you/.test(await sug.innerText()));
-  chk("Import stays blocked until the reviewer picks (category + account missing)", (await d.getByRole("button", { name: /Import as Transaction/ }).getAttribute("aria-disabled")) === "true");
-  await h.shot(page, "sms-11-last4-suggestion");
-  await d.getByRole("button", { name: /^Use QA Credit Card/ }).click();
-  chk("only a click applies it", /QA Credit Card/.test(await d.getByRole("combobox").nth(1).innerText()));
-  chk("the evidence now says the SMS last-4 equals the account's", /equals this account/.test(await ev.innerText()), await ev.innerText());
+  chk("the card ending 4242 is pre-selected as the account", /QA Credit Card/.test(await d.getByRole("combobox").nth(1).innerText()), await d.getByRole("combobox").nth(1).innerText());
+  const evText1 = await ev.innerText();
+  chk("the evidence says it was matched by last-4 (not 'Android matched')", /Matched to QA Credit Card.* by last-4/.test(evText1) && !/Android matched this to/.test(evText1), evText1);
+  chk("…and that the SMS last-4 equals the account's", /equals this account/.test(evText1), evText1);
+  chk("the matched card is not repeated as a suggestion", (await d.getByTestId("last-four-suggestions").count()) === 0);
+  chk("Import stays blocked until a category is chosen", (await d.getByRole("button", { name: /Import as Transaction/ }).getAttribute("aria-disabled")) === "true");
+  await h.shot(page, "sms-11-last4-rematch");
   await closeDrawer(page, d);
 
   // 2. A last-4 nothing matches.

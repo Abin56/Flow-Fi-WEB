@@ -264,7 +264,7 @@ export function matchRows(rows: ReconRow[], ctx: MatchContext): RowMatch[] {
 
     if (!row.include) return result("excluded");
     if (base.alreadyImportedId) return result("already_imported");
-    if (!isComplete(row)) return result("conflict", ["Date, amount or Charge/Credit is missing — fill it in to compare."]);
+    if (!isComplete(row)) return result("conflict", ["Date, amount or Debit/Credit is missing — fill it in to compare."]);
     if (linkedId && claimedBy[linkedId] !== row.id) return result("conflict", ["The linked transaction is already linked to another row."]);
     if (conflicts.length > 0) return result("conflict");
 

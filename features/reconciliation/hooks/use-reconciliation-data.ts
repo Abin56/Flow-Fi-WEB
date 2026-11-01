@@ -20,6 +20,7 @@ import { accountsQueryKey, useAccounts } from "@/hooks/use-accounts";
 import { useCategories } from "@/hooks/use-categories";
 import { creditCardStatementsQueryKey, creditCardsQueryKey, useAllCreditCardStatements, useCreditCards } from "@/hooks/use-credit-cards";
 import { useExpenses } from "@/hooks/use-expenses";
+import { usePeople } from "@/hooks/use-people";
 import { useSmsTransactionCandidates } from "@/hooks/use-sms-transaction-candidates";
 import { transactionsQueryKey, transactionsTrashQueryKey, useTransactions, useTrashedTransactions } from "@/hooks/use-transactions";
 import { retryFirestoreWatch } from "@/lib/services/firestore-watch-registry";
@@ -101,6 +102,7 @@ export function useReconciliationData(): ReconciliationData & { sync: RecordsSyn
   const trashed = useTrashedTransactions();
   const sms = useSmsTransactionCandidates();
   const expenses = useExpenses();
+  const people = usePeople();
 
   const cardList = creditCards.data ?? [];
   const loading: SourceName[] = [];
@@ -128,6 +130,8 @@ export function useReconciliationData(): ReconciliationData & { sync: RecordsSyn
     trashedTransactions: trashed.data ?? [],
     smsCandidates: sms.data ?? [],
     expenses: expenses.data ?? [],
+    // Undefined until People has loaded, so a picked person is never reported missing just because the list has not loaded (the final approval re-checks against the server).
+    people: people.data && people.data.length > 0 ? people.data : undefined,
     sync: {
       loading,
       failed,

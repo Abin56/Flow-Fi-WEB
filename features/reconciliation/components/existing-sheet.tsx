@@ -12,7 +12,7 @@
  */
 
 import { forwardRef } from "react";
-import { ArrowLeftRight, Inbox, Search } from "lucide-react";
+import { ArrowLeftRight, Inbox, Search, SearchCheck } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { describeAmountDelta, describeDayGap } from "../lib/amounts-and-days";
@@ -160,10 +160,18 @@ export const ExistingSheet = forwardRef<HTMLDivElement, ExistingSheetProps>(func
         </div>
         <div data-testid="existing-grid-body" className="min-h-0 flex-1 overflow-y-auto overscroll-contain [scrollbar-gutter:stable]">
           {(pendingLabel || entries.length === 0) && (
-            <div className="flex flex-col items-center gap-2 px-4 py-10 text-center">
-              <p className="text-sm text-muted-foreground" data-testid="existing-empty">
+            <div className="flex flex-col items-center gap-2 px-6 py-10 text-center">
+              <span aria-hidden className="grid size-11 place-items-center rounded-2xl bg-muted text-muted-foreground">
+                {pendingLabel ? <Search className="size-5" /> : <SearchCheck className="size-5" />}
+              </span>
+              <p className="text-sm font-medium text-foreground" data-testid="existing-empty">
                 {empty}
               </p>
+              {!pendingLabel && row && mode === "matches" && !query.trim() && (
+                <p className="max-w-xs text-xs text-muted-foreground" data-testid="existing-empty-hint">
+                  Nothing already in FlowFi looks like this row, so it isn&apos;t a duplicate. Choose <strong className="font-semibold text-foreground">Import new</strong> below once its values are confirmed.
+                </p>
+              )}
               {!pendingLabel && row && mode === "matches" && !query.trim() && (
                 <button type="button" onClick={() => onMode("ledger")} className="text-xs font-medium text-primary-accent-text underline-offset-4 hover:underline">
                   Browse the account ledger

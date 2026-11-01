@@ -213,7 +213,12 @@ export function annotateOcrRows(rows: CaptureRow[], lines: OcrLine[], { hasCredi
     const nothingAfterAmount =
       lastAmount != null && !words.some((w) => w !== lastAmount && w.bbox.x0 > lastAmount.bbox.x1 && Math.abs(w.bbox.y0 - lastAmount.bbox.y0) < lastAmount.bbox.y1 - lastAmount.bbox.y0);
     const byConvention = markers.length === 0 && hasCreditMarkers && row.direction === "debit" && nothingAfterAmount && !issues.some((i) => i.code === "direction_unclear");
-    if (byConvention) {
+    // The user mapped Debit / Credit (or Cr/Dr) columns and this amount was read from one of them: the column is the
+    // statement's own statement of direction, so no marker word is expected on the line.
+    const byColumn = row.directionBasis === "column" && row.direction != null && !issues.some((i) => i.code === "direction_unclear");
+    if (byColumn) {
+      notes.push(`Read as a ${row.direction === "credit" ? "Credit" : "Charge"} from the column you mapped.`);
+    } else if (byConvention) {
       notes.push("No C/D marker — a Charge by this statement's own convention (only credits are marked).");
     } else if (markers.length === 0 && row.direction != null && !issues.some((i) => i.code === "direction_unclear")) {
       issues.push({
@@ -231,7 +236,7 @@ export function annotateOcrRows(rows: CaptureRow[], lines: OcrLine[], { hasCredi
     const onlyFieldSpecific = blockingSoFar.length > 0 && blockingSoFar.every((i) => FIELD_ISSUE_CODES.has(i.code));
     const hasTwin = rows.some((o) => o.id !== row.id && sameDay(o.date, row.date) && o.amount != null && o.amount === row.amount && merchantKey(o.description) === merchantKey(row.description));
     // Direction needs its own evidence — a marker actually read on the line, or the statement's convention above.
-    const directionEvidence = markers.length > 0 || byConvention;
+    const directionEvidence = markers.length > 0 || byConvention || byColumn;
     const reliable = blockingSoFar.length === 0 && !hasTwin && date.length > 0 && amounts.length > 0 && directionEvidence && minConfidence >= READY_CONFIDENCE;
 
     issues.push({
