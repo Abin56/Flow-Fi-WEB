@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PayableObligation } from "@/features/people/lib/person-payment-obligations";
@@ -84,6 +84,9 @@ function setup(props: Partial<React.ComponentProps<typeof RecordPaymentPanel>> =
       {...props}
     />,
   );
+  // Item-by-item allocation is the explicit "Choose specific items" path (a general payment is the default).
+  const items = screen.queryByTestId("rp-mode-items");
+  if (items) fireEvent.click(items);
   return { user, onSubmit, onCancel };
 }
 

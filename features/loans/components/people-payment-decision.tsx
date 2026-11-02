@@ -9,8 +9,10 @@ import { cn } from "@/lib/utils";
  * acknowledgement the write gate requires; it never marks anyone as paid, never postpones, and creates no
  * receivable, expense or transfer — their shares simply stay owed in People. "Collect money from others
  * first" leads to People Record payment (where Postpone also lives) for the person picked in the list.
+ * "Not received yet — postpone" moves when their share is expected, right here (`postponeSlot`); it records no
+ * payment and leaves the lender installment due as it is.
  */
-export type LenderPaymentDecision = "collect" | "ownMoney";
+export type LenderPaymentDecision = "collect" | "ownMoney" | "postpone";
 
 export const OWN_MONEY_REASONS = [
   { value: "couldNotPay", label: "Person could not pay" },
@@ -80,7 +82,10 @@ export function PeoplePaymentDecision({
   lapsedNames = [],
   amountLabel = null,
   advanceNote = null,
+  postponeSlot = null,
 }: {
+  /** The postpone form, shown under "Not received yet" — null: the choice isn't offered. */
+  postponeSlot?: React.ReactNode;
   /** Collect first, when the picked person already gave money held as advance — applying it is offered first. */
   advanceNote?: string | null;
   decision: LenderPaymentDecision | null;
@@ -173,6 +178,15 @@ export function PeoplePaymentDecision({
             {advanceNote}
           </p>
         )}
+        {!allPostponed && postponeSlot != null && (
+          <ChoiceRow
+            active={decision === "postpone"}
+            title={`Not received yet — postpone ${unresolvedNames.length > 0 ? `${peopleNames(unresolvedNames)}'s share` : "their share"}`}
+            hint="Expect their money next month or later. Nothing is paid and the EMI stays due."
+            onSelect={() => onDecision("postpone")}
+          />
+        )}
+        {decision === "postpone" && postponeSlot != null && <Reveal className="pb-1 pl-[26px]">{postponeSlot}</Reveal>}
       </div>
     </section>
   );

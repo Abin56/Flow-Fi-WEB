@@ -24,12 +24,21 @@ export async function openPerson(page, name) {
   await page.waitForTimeout(2000);
 }
 
-/** From a person's page: open Record payment on the "money received" side. */
-export async function openRecord(page, { paid = false } = {}) {
+/**
+ * From a person's page: open Record payment on the "money received" side. The panel opens on a general payment
+ * ("Reduce the overall balance"); scenarios written for item-by-item allocation pick "Choose specific items" —
+ * pass `general: true` to stay on the general payment.
+ */
+export async function openRecord(page, { paid = false, general = false } = {}) {
   await page.getByRole("button", { name: "Record payment" }).first().click();
   await page.getByText(/Amount received|Amount paid/).first().waitFor();
   if (paid) await page.getByText(/^Paid to /).first().click();
   await page.waitForTimeout(500);
+  const items = page.getByTestId("rp-mode-items");
+  if (!general && (await items.count()) > 0) {
+    await items.first().click();
+    await page.waitForTimeout(300);
+  }
 }
 
 export const amountField = (page) => page.locator("input[inputmode='decimal'], input[inputmode='numeric']").first();

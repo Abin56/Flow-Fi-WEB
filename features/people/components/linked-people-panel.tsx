@@ -37,6 +37,8 @@ export interface PeopleSettlementCardProps {
   payeeName: string;
   /** In-app path People returns to after the settlement is recorded. */
   returnTo?: string;
+  /** The payment may go ahead without collecting first (card bills: an explicit "pay anyway" sits below the card). */
+  canPayAnyway?: boolean;
   className?: string;
 }
 
@@ -47,7 +49,7 @@ export interface PeopleSettlementCardProps {
  * (what Enter focuses while the payment is blocked).
  */
 export const PeopleSettlementCard = forwardRef<HTMLAnchorElement, PeopleSettlementCardProps>(function PeopleSettlementCard(
-  { readiness, gate, loading = false, dueLabel, subject, payeeName, returnTo, className },
+  { readiness, gate, loading = false, dueLabel, subject, payeeName, returnTo, canPayAnyway = false, className },
   firstSettleRef,
 ) {
   const [breakdownOpen, setBreakdownOpen] = useState(false);
@@ -122,7 +124,12 @@ export const PeopleSettlementCard = forwardRef<HTMLAnchorElement, PeopleSettleme
 
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-3 py-2">
         <p className="min-w-0 text-xs font-medium text-foreground">
-          {blocked ? (
+          {blocked && canPayAnyway ? (
+            <>
+              <span className="font-bold tabular-nums">{formatCurrency(gate.outstanding)}</span> still to come from {namesOf(gate.attention)}. Collect it first, or pay
+              the bill anyway — their shares stay owed in People.
+            </>
+          ) : blocked ? (
             <>
               <span className="font-bold tabular-nums">{formatCurrency(gate.outstanding)}</span> must be recorded from {namesOf(gate.attention)} before {subject} can be paid.
             </>

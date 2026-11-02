@@ -79,6 +79,46 @@ export function paymentLines(obligations: readonly PayableObligation[], lines: r
   });
 }
 
+/** The key of a general payment line — it pays no obligation (`PaymentRoute` "general"). */
+export const GENERAL_PAYMENT_KEY = "general";
+
+const round2 = (v: number) => Math.round(v * 100) / 100;
+
+/**
+ * What is owed on each side through `cycle`, summed the way the statement engine does (`grossPosition`): every
+ * open obligation dated by the cycle end, then everything not tied to one item — general and legacy unlinked
+ * payments, adjustments — which pays down its own side first, only its excess crossing over. A general payment
+ * reads this, so a second general payment never counts the first one's money again. Read-only.
+ */
+export function overallDue(rows: readonly LedgerRow[], cycle: { end: Date }): { theyOwe: number; iOwe: number } {
+  const end = dayStart(cycle.end);
+  let receive = 0;
+  let give = 0;
+  let unlinked = 0;
+  for (const row of rows) {
+    const s = row.statementRow;
+    if (!s || dayStart(row.date) > end) continue;
+    if (s.kind === "obligation" && row.category !== "loan" && row.remaining != null) {
+      if (row.direction === "theyOwe") receive += row.remaining;
+      else if (row.direction === "iOwe") give += row.remaining;
+    } else if ((s.kind === "settlement" && s.settlesKey == null && (s.category === "received" || s.category === "repaid")) || s.category === "adjustment") {
+      unlinked += s.signedAmount;
+    }
+  }
+  unlinked = round2(unlinked);
+  if (unlinked > 0) {
+    const used = Math.min(unlinked, give);
+    give -= used;
+    receive += unlinked - used;
+  } else if (unlinked < 0) {
+    const used = Math.min(-unlinked, receive);
+    receive -= used;
+    give += -unlinked - used;
+  }
+  const clean = (v: number) => (round2(v) <= PAYMENT_EPSILON ? 0 : round2(v));
+  return { theyOwe: clean(receive), iOwe: clean(give) };
+}
+
 /** The person's advance entries, as `AdvanceSource`s (their advance settles what they owe me). */
 export function advanceSources(entries: readonly LedgerEntry[]): AdvanceSource[] {
   return entries

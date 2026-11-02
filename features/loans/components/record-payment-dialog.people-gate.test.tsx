@@ -67,7 +67,9 @@ vi.mock("@/features/loans/hooks/use-payment-history", () => ({
 }));
 vi.mock("@/features/people/components/linked-funds", () => ({ LinkedFundsPayNotice: () => null }));
 let deferralsMock: unknown[] = [];
+const deferralApply = vi.fn(async (..._args: unknown[]) => ({ outcome: "written" }));
 vi.mock("@/features/people/hooks/use-payment-deferrals", () => ({
+  usePaymentDeferralActions: () => ({ apply: deferralApply }),
   usePersonPaymentDeferrals: () => ({ deferrals: deferralsMock, isLoading: false }),
   usePeoplePaymentDeferrals: (ids: string[]) => ({ deferralsByPerson: Object.fromEntries(ids.map((id) => [id, deferralsMock])), isLoading: false }),
 }));
@@ -113,6 +115,7 @@ beforeEach(() => {
   peopleState = { readiness: null, isLoading: false };
   breakdownState = { breakdown: null, isLoading: false };
   deferralsMock = [];
+  deferralApply.mockClear();
   reimbLines = [];
   reimbRecord.mockClear();
   mockSbiBalance = 10000;
@@ -243,13 +246,73 @@ describe("B — AMMA and JOHN haven't paid", () => {
     breakdownState = { breakdown: BOTH_PENDING_BREAKDOWN(), isLoading: false };
     renderDialog(emiTarget());
     const decision = screen.getByRole("region", { name: "Payment decision" });
-    expect(within(decision).getAllByRole("radio").map((r) => r.getAttribute("aria-checked"))).toEqual(["false", "false"]);
+    expect(within(decision).getAllByRole("radio").map((r) => r.getAttribute("aria-checked"))).toEqual(["false", "false", "false"]);
     expect(footer("Choose how to pay").disabled).toBe(true);
     expect(screen.queryByRole("region", { name: "Payment details" })).toBeNull();
     // Each person row offers the existing People actions — recording money and postponing are separate links.
     expect(screen.getByRole("link", { name: "Record money received from JOHN in People" }).getAttribute("href")).toBe(`/people?person=john&obligation=emi-inst%3Ai1&settle=1&return=%2Femi%3Fagreement%3Dsrc%26pay%3D1`);
     expect(screen.getByRole("link", { name: "Postpone collecting JOHN's share in People" }).getAttribute("href")).toBe(`/people?person=john&obligation=emi-inst%3Ai1&settle=1&intent=postpone&return=%2Femi%3Fagreement%3Dsrc%26pay%3D1`);
     expect(screen.getByTestId("share-john").textContent).toBe("Not received");
+  });
+
+  it("'Not received yet — postpone': next month by default; one deferral per open share; NO lender payment, no money", async () => {
+    const user = userEvent.setup();
+    peopleState = { readiness: BOTH_PENDING(), isLoading: false };
+    breakdownState = { breakdown: BOTH_PENDING_BREAKDOWN(), isLoading: false };
+    const target = emiTarget();
+    renderDialog(target);
+    await user.click(screen.getByRole("radio", { name: /not received yet — postpone amma and john's share/i }));
+    const form = screen.getByTestId("share-postpone");
+    // Next month is the default; the EMI's own due date is stated, never changed.
+    const cycles = within(form).getByRole("radiogroup", { name: "Expected cycle" });
+    expect(within(cycles).getAllByRole("radio")[0].getAttribute("aria-checked")).toBe("true");
+    expect(within(cycles).getAllByRole("radio")[0].textContent).toMatch(/^Next month · /);
+    expect(screen.getByTestId("share-postpone-preview").textContent).toMatch(/Not a payment: nothing is recorded, no account changes, and the EMI stays due on /);
+    expect(footer("Postpone above — or pay now").disabled).toBe(true);
+    expect(screen.queryByRole("region", { name: "Payment details" })).toBeNull();
+
+    await user.click(within(form).getByRole("button", { name: /^Postpone to \w+ cycle$/ }));
+    await waitFor(() => expect(deferralApply).toHaveBeenCalledTimes(2));
+    const requests = deferralApply.mock.calls.map((c) => c[0] as Record<string, unknown>);
+    expect(requests.map((r) => [r.personId, r.obligationKey, r.action, r.remaining, r.expectedRevision])).toEqual([
+      ["amma", "emi-inst:i1", "postpone", 1000, 0],
+      ["john", "emi-inst:i1", "postpone", 1000, 0],
+    ]);
+    // The share's own date (the installment due date) and the SAME target cycle for both.
+    expect((requests[0].obligationDate as Date).getTime()).toBe(dueOf(target).getTime());
+    expect((requests[0].target as { start: Date }).start.getTime()).toBe((requests[1].target as { start: Date }).start.getTime());
+    expect((requests[0].target as { start: Date }).start.getTime()).toBeGreaterThan(Date.now());
+    // Postponing is never a payment.
+    expect(emiRecordPayment).not.toHaveBeenCalled();
+    expect(loanRecordPayment).not.toHaveBeenCalled();
+    expect(reimbRecord).not.toHaveBeenCalled();
+    // Done: the choice resets (the live deferrals then show "will pay you in the … cycle").
+    await waitFor(() => expect(screen.queryByTestId("share-postpone")).toBeNull());
+  });
+
+  it("postpone to a later month with a reminder date; a failed share is retried alone, with the same request id", async () => {
+    const user = userEvent.setup();
+    peopleState = { readiness: BOTH_PENDING(), isLoading: false };
+    breakdownState = { breakdown: BOTH_PENDING_BREAKDOWN(), isLoading: false };
+    renderDialog(emiTarget());
+    await user.click(screen.getByRole("radio", { name: /not received yet — postpone/i }));
+    const form = screen.getByTestId("share-postpone");
+    await user.selectOptions(within(form).getByLabelText("Another cycle"), within(form).getAllByRole("option")[2]);
+    await user.click(within(form).getByRole("radio", { name: "Pick a date" }));
+    deferralApply.mockImplementationOnce(async () => ({ outcome: "written" })).mockImplementationOnce(async () => {
+      throw new Error("Conflict");
+    });
+    await user.click(within(form).getByRole("button", { name: /^Postpone to/ }));
+    await waitFor(() => expect(within(form).getByRole("alert").textContent).toMatch(/JOHN: Conflict/));
+    const [first, second] = deferralApply.mock.calls.map((c) => c[0] as { obligationKey: string; personId: string; requestId: string; reminder: { kind: string } | null; target: { start: Date } });
+    expect(first.reminder?.kind).toBe("date");
+    // Retry: only JOHN's share again, same request id (idempotent), same target.
+    const retryBtn = within(form).getByRole("button", { name: "Retry postponing" }) as HTMLButtonElement;
+    await user.click(retryBtn);
+    await waitFor(() => expect(deferralApply).toHaveBeenCalledTimes(3));
+    const retry = deferralApply.mock.calls[2][0] as typeof second;
+    expect([retry.personId, retry.requestId, retry.target.start.getTime()]).toEqual([second.personId, second.requestId, second.target.start.getTime()]);
+    expect(emiRecordPayment).not.toHaveBeenCalled();
   });
 
   it("'Pay now from SBI' pays the lender once with the acknowledgement; their shares stay owed", async () => {
@@ -446,7 +509,7 @@ describe("H — many people (small screens)", () => {
     expect(within(panel()!).getAllByRole("listitem")).toHaveLength(4);
     expect(screen.getAllByRole("link", { name: /record money received from/i })).toHaveLength(4);
     expect(screen.getAllByRole("link", { name: /postpone collecting/i })).toHaveLength(4);
-    expect(within(screen.getByRole("region", { name: "Payment decision" })).getAllByRole("radio")).toHaveLength(2);
+    expect(within(screen.getByRole("region", { name: "Payment decision" })).getAllByRole("radio")).toHaveLength(3);
     expect(footer("Choose how to pay").disabled).toBe(true);
   });
 });

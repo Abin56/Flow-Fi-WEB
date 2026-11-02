@@ -4,7 +4,16 @@ import { Bell, CalendarClock, CalendarDays, Check, ChevronDown, CircleAlert, Loa
 import { useContext, useEffect, useMemo, useRef, useState } from "react";
 import { EmiBadge } from "@/features/people/components/cycle-statement/statement-parts";
 import type { LedgerRow } from "@/features/people/lib/person-ledger-rows";
-import { obligationSourceLabel, paymentLines, routeFor, settlementProjection, timingOf, type PayableObligation } from "@/features/people/lib/person-payment-obligations";
+import {
+  GENERAL_PAYMENT_KEY,
+  obligationSourceLabel,
+  overallDue,
+  paymentLines,
+  routeFor,
+  settlementProjection,
+  timingOf,
+  type PayableObligation,
+} from "@/features/people/lib/person-payment-obligations";
 import { useCategories } from "@/hooks/use-categories";
 import { formatStatementDate } from "@/lib/engines/person-cycle-statement";
 import { money } from "@/lib/engines/person-cycle-statement-share";
@@ -40,6 +49,7 @@ export interface RecordPaymentInitial {
   amount: number;
   accountId: string | null;
   date: Date;
+  /** Per obligation key; a general payment (tied to no item) is the `GENERAL_PAYMENT_KEY` line. */
   lines: Record<string, number>;
   advance: number;
   /** The extra recorded as separate income, if any — editable to advance (and back) like any extra. */
@@ -54,6 +64,12 @@ const fromInputDate = (s: string) => {
 
 type PayChoice = "full" | "part" | "skip";
 
+/**
+ * How the money is applied. "general" (the default): it lowers the overall balance and is tied to no item — no
+ * transaction is marked paid or part paid. "items": the user says which items it pays (Full / Part / Skip).
+ */
+type ApplyMode = "general" | "items";
+
 /** The one top-level choice: money received, money paid, or "not paid yet" (an action that records no money). */
 type IntentChoice = PaymentDirection | "postpone";
 
@@ -65,7 +81,9 @@ type IntentChoice = PaymentDirection | "postpone";
  *
  * Presentation: one screen, top to bottom.
  *  A. Money received — amount, account, date, and the total outstanding.
- *  B. Choose what to pay now — every due item as a row with Full / Part / Skip and its own amount. Amounts fill
+ *  B. How to apply it. By default the money lowers the overall balance and is tied to no item (a general payment:
+ *     no transaction is marked paid or part paid). "Choose specific items" instead shows
+ *     every due item as a row with Full / Part / Skip and its own amount. Amounts fill
  *     oldest first until the user takes over a row; skipped items stay unpaid, and (only on request) the rest of
  *     an item can be postponed through the existing Postpone payment write after the receipt is saved.
  *  C. What to do with the money left — a short list of destinations.
@@ -184,9 +202,18 @@ export function RecordPaymentPanel({
   );
   const side = sideForDirection(direction);
   const options = obligations.filter((o) => o.side === side);
+  // A row's own "Record payment" (or a lender gate's link to one share) is an explicit choice of item; otherwise
+  // the money lowers the overall balance. An edit keeps the payment's own kind.
+  const [mode, setMode] = useState<ApplyMode>(() =>
+    initial ? (GENERAL_PAYMENT_KEY in initial.lines ? "general" : "items") : preselected ? "items" : "general",
+  );
+  const general = mode === "general";
+  // The overall balance on this side, earlier general payments included — an edit counts its own general part as open again.
+  const overall = useMemo(() => overallDue(rows, cycle), [rows, cycle]);
+  const generalDue = round2((side === "theyOwe" ? overall.theyOwe : overall.iOwe) + (initial?.lines[GENERAL_PAYMENT_KEY] ?? 0));
   const [selected, setSelected] = useState<Set<string>>(() =>
     initial
-      ? new Set(Object.keys(initial.lines))
+      ? new Set(Object.keys(initial.lines).filter((k) => k !== GENERAL_PAYMENT_KEY))
       : preselected
         ? new Set([preselected.key])
         : new Set(options.filter((o) => o.timing !== "later").map((o) => o.key)),
@@ -225,15 +252,23 @@ export function RecordPaymentPanel({
   // "Pay ₹X in total, oldest first" — typed into the list's total. null = the default (as much as the payment covers).
   const [settleText, setSettleText] = useState<string | null>(null);
   const capped =
-    settleText == null
+    settleText == null || general
       ? null
       : settleCapLines({ obligations: options, selectedKeys: [...selected], amount, settle: settleText.trim() === "" ? NaN : Number(settleText) });
-  const allocation = allocatePayment({
-    obligations: options,
-    selectedKeys: [...selected],
-    amount,
-    manual: capped ? capped.manual : manual ? Object.fromEntries(Object.entries(manual).map(([k, v]) => [k, Number(v) || 0])) : null,
-  });
+  // General: the same allocation rule against ONE line — the overall balance — so the money beyond it is the
+  // payment's extra (advance / income / purpose), decided explicitly like any extra. No item is touched.
+  const allocation = general
+    ? allocatePayment({
+        obligations: [{ key: GENERAL_PAYMENT_KEY, title: "Overall balance", date: cycle.start, createdAt: cycle.start, amount: generalDue, outstanding: generalDue, side }],
+        selectedKeys: [GENERAL_PAYMENT_KEY],
+        amount,
+      })
+    : allocatePayment({
+        obligations: options,
+        selectedKeys: [...selected],
+        amount,
+        manual: capped ? capped.manual : manual ? Object.fromEntries(Object.entries(manual).filter(([k]) => k !== GENERAL_PAYMENT_KEY).map(([k, v]) => [k, Number(v) || 0])) : null,
+      });
   const hasExtra = allocation.extra > PAYMENT_EPSILON;
   const effectiveDrafts = extraDrafts ?? [{ ...newAllocationDraft("advance", allocation.extra), key: "auto-advance" }];
   const extraPlan = planExtraAllocation({ extra: allocation.extra, direction, allocations: draftsToAllocations(effectiveDrafts, linkOptions), money });
@@ -258,13 +293,16 @@ export function RecordPaymentPanel({
   };
   // What this person still owes after the payment: everything due now, plus any later item chosen to pay early.
   const owedRows = options.filter((o) => o.timing !== "later" || selected.has(o.key));
-  const stillOwed = round2(owedRows.reduce((t, o) => t + afterOf(o), 0));
+  // General: the overall balance less this payment — no item's own remaining changes.
+  const stillOwed = general ? round2(Math.max(0, generalDue - allocation.allocated)) : round2(owedRows.reduce((t, o) => t + afterOf(o), 0));
   // A selected item that vanished or changed while this was open (paid elsewhere, deleted) — never silently dropped.
-  const vanished = [...selected].filter((k) => !options.some((o) => o.key === k && o.outstanding > PAYMENT_EPSILON));
+  const vanished = general ? [] : [...selected].filter((k) => !options.some((o) => o.key === k && o.outstanding > PAYMENT_EPSILON));
 
   // ── Postpone what stays unpaid (optional) — the existing deferral write, after the receipt is saved ──
+  // Item by item only: a general payment leaves every item's remaining as it was, so postponing items after it
+  // would read as postponing the whole of each one.
   const deferrals = useContext(DeferralContext);
-  const canPostponeAfter = !!deferrals && !initial && theyPaid;
+  const canPostponeAfter = !!deferrals && !initial && theyPaid && !general;
   const postponeRowOf = (o: PayableObligation) => {
     if (!canPostponeAfter || o.timing === "later") return null;
     const row = rowByKey.get(o.key);
@@ -290,7 +328,7 @@ export function RecordPaymentPanel({
   // An unknown receipt date is stored on the oldest item it settles (never later than today), flagged "date not known".
   const earlierPlaceholderDate = (() => {
     const today = fromInputDate(todayInput);
-    const oldest = options.filter((o) => selected.has(o.key)).map((o) => o.date).sort((a, b) => a.getTime() - b.getTime())[0];
+    const oldest = options.filter((o) => (general ? o.timing !== "later" : selected.has(o.key))).map((o) => o.date).sort((a, b) => a.getTime() - b.getTime())[0];
     return oldest && oldest.getTime() <= today.getTime() ? new Date(oldest.getFullYear(), oldest.getMonth(), oldest.getDate()) : today;
   })();
   const earlierBlocker = !earlier
@@ -314,7 +352,7 @@ export function RecordPaymentPanel({
     (liveAfterItems.length > 0 && !afterDraft.ready ? "Choose a reminder date for the postponement." : null);
   // The items this payment leaves open — where a "remind me" goes (each keeps its own remaining). A postponed
   // item carries its own reminder choice instead.
-  const reminderTargets = owedRows.filter((o) => afterOf(o) > PAYMENT_EPSILON && !liveAfterItems.some((i) => i.row.key === o.key)).map((o) => ({ key: o.key, title: o.title }));
+  const reminderTargets = general ? [] : owedRows.filter((o) => afterOf(o) > PAYMENT_EPSILON && !liveAfterItems.some((i) => i.row.key === o.key)).map((o) => ({ key: o.key, title: o.title }));
   const [reminder, setReminder] = useState<ReminderWhen | null>(null);
 
   // "Hasn't paid yet": no money changes hands, so nothing is recorded — the open receivables are postponed
@@ -449,7 +487,9 @@ export function RecordPaymentPanel({
         amount,
         date: earlier && dateUnknown ? earlierPlaceholderDate : fromInputDate(date),
         accountId: accountId!,
-        lines: paymentLines(options, allocation.lines),
+        lines: general
+          ? allocation.lines.map((l) => ({ key: GENERAL_PAYMENT_KEY, amount: l.amount, route: { kind: "general" as const } }))
+          : paymentLines(options, allocation.lines),
         ...(earlier ? { recordedEarlier: true, ...(dateUnknown ? { dateKnown: false } : {}) } : {}),
         ...(() => {
           if (!hasExtra) return { extra: null };
@@ -495,6 +535,9 @@ export function RecordPaymentPanel({
   });
   const accountName = account.accounts.find((a) => a.id === accountId)?.name ?? "The chosen account";
   const dueTotal = theyPaid ? theyOweTotal : iOweTotal;
+  // What "Total outstanding" shows: the overall balance for a general payment, the due items' sum otherwise.
+  const shownDue = general ? generalDue : dueTotal;
+  const owesSomething = options.length > 0 || generalDue > PAYMENT_EPSILON;
   // The same Due, split by the timing it already has — brought forward vs added this cycle. Presentation only.
   const dueByTiming = (t: "carried" | "cycle") => round2(options.filter((o) => o.timing === t).reduce((sum, o) => sum + o.outstanding, 0));
   const duePrevious = dueByTiming("carried");
@@ -513,13 +556,13 @@ export function RecordPaymentPanel({
   }
   const waiting = amount <= 0;
   const automatic = manual == null && settleText == null;
-  const allSkipped = options.length > 0 && selected.size === 0;
+  const allSkipped = !general && options.length > 0 && selected.size === 0;
   const dueKeys = options.filter((o) => o.timing !== "later").map((o) => o.key);
   const allDueAuto = automatic && dueKeys.length > 0 && dueKeys.every((k) => selected.has(k));
   const ready = amount > 0 && !blocker && recon.balanced;
 
   // Step 2's live summary: how much of what is owed (due now + any later item chosen early) this payment covers.
-  const owedBefore = round2(owedRows.reduce((t, o) => t + o.outstanding, 0));
+  const owedBefore = general ? generalDue : round2(owedRows.reduce((t, o) => t + o.outstanding, 0));
   // Step 4 (optional): items whose unpaid rest can be postponed, and whether a reminder can be set.
   const postponeRows = owedRows.filter((o) => postponeRowOf(o) && afterOf(o) > PAYMENT_EPSILON);
   const reminderOffered = !!onSetReminder && reminderTargets.length > 0 && amount > PAYMENT_EPSILON;
@@ -527,7 +570,14 @@ export function RecordPaymentPanel({
   const followUpOpen = afterOpen || liveAfterItems.length > 0;
   // Presentation-only sanity hints (never block saving): a likely typo in the amount, and money left over while a
   // bill stays unpaid — the one-tap fix reuses the existing "Pay all due" action.
-  const amountLooksHigh = dueTotal > PAYMENT_EPSILON && amount > dueTotal * 10 && amount - dueTotal >= 10_000;
+  const amountLooksHigh = shownDue > PAYMENT_EPSILON && amount > shownDue * 10 && amount - shownDue >= 10_000;
+  function switchMode(next: ApplyMode) {
+    if (initial || next === mode) return;
+    setMode(next);
+    setManual(null);
+    setSettleText(null);
+    setPostponeAfter(new Set());
+  }
   const leftoverWhileOwed = hasExtra && !earlier && stillOwed > PAYMENT_EPSILON && !(theyPaid && allSkipped && !initial);
 
   if (recorded) {
@@ -681,18 +731,18 @@ export function RecordPaymentPanel({
                   <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-foreground/75">
                     <span>
                       Total outstanding{" "}
-                      <span className={cn("font-semibold tabular-nums", dueTotal > PAYMENT_EPSILON ? (theyPaid ? "text-settle-receivable-text" : "text-settle-payable-text") : "text-foreground")} data-testid="rp-due-total">
-                        {money(dueTotal)}
+                      <span className={cn("font-semibold tabular-nums", shownDue > PAYMENT_EPSILON ? (theyPaid ? "text-settle-receivable-text" : "text-settle-payable-text") : "text-foreground")} data-testid="rp-due-total">
+                        {money(shownDue)}
                       </span>
                     </span>
                     {/* Convenience only: types the outstanding figure into the amount — the same as typing it. */}
-                    {dueTotal > PAYMENT_EPSILON && amount !== dueTotal && (
+                    {shownDue > PAYMENT_EPSILON && amount !== shownDue && (
                       <button
                         type="button"
-                        onClick={() => setAmountText(String(dueTotal))}
+                        onClick={() => setAmountText(String(shownDue))}
                         className="h-6 rounded-full px-2 font-semibold text-foreground ring-1 ring-border-strong outline-none transition-[box-shadow] duration-150 hover:ring-settle-split-edge focus-visible:ring-2 focus-visible:ring-ring"
                       >
-                        Use {money(dueTotal)}
+                        Use {money(shownDue)}
                       </button>
                     )}
                     {/* The typed number, grouped the Indian way — so ₹5,75,47,654 can't be mistaken for ₹57,547. */}
@@ -708,11 +758,12 @@ export function RecordPaymentPanel({
                       <p role="status" className="flex basis-full items-start gap-1.5 rounded-[8px] bg-warning/10 px-2.5 py-1.5 font-medium text-foreground" data-testid="rp-amount-high">
                         <CircleAlert className="mt-px size-3.5 shrink-0 text-warning" aria-hidden />
                         <span>
-                          That&apos;s much more than the {money(dueTotal)} {theyPaid ? `${first} owes` : `you owe ${first}`} — check the amount. Anything not applied to bills goes to Remaining money.
+                          That&apos;s much more than the {money(shownDue)} {theyPaid ? `${first} owes` : `you owe ${first}`} — check the amount. Anything not applied to bills goes to Remaining money.
                         </span>
                       </p>
                     )}
-                    {duePrevious > PAYMENT_EPSILON && (
+                    {/* The items' breakdown — only while it adds up to the figure shown (a general payment earlier lowers the balance, not an item). */}
+                    {duePrevious > PAYMENT_EPSILON && Math.abs(shownDue - dueTotal) <= PAYMENT_EPSILON && (
                       <details className="group basis-full">
                         <summary className="flex w-fit cursor-pointer list-none items-center gap-1 rounded-[4px] font-semibold text-foreground/75 outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
                           <ChevronDown className="size-3.5 transition-transform group-open:rotate-180" aria-hidden />
@@ -785,9 +836,11 @@ export function RecordPaymentPanel({
               <StepHeading
                 id="rp-settle-heading"
                 n={2}
-                title="Apply to bills"
+                title={general && owesSomething ? "Apply to balance" : "Apply to bills"}
                 hint={
-                  options.length === 0
+                  general && owesSomething
+                    ? "Lowers what is owed overall — not tied to any item."
+                    : options.length === 0
                     ? theyPaid
                       ? `Nothing to receive from ${first} right now`
                       : `Nothing to give to ${first} right now`
@@ -796,7 +849,7 @@ export function RecordPaymentPanel({
                       : "Choose what to pay now — your amounts; the received amount no longer re-fills them."
                 }
                 right={
-                  options.length > 0 && (
+                  !general && options.length > 0 && (
                     <div className="flex flex-wrap items-center gap-1">
                       <span
                         aria-live="polite"
@@ -825,7 +878,21 @@ export function RecordPaymentPanel({
                 }
               />
 
-              {options.length === 0 ? (
+              {owesSomething && <ApplyModeSwitch mode={mode} onChange={switchMode} locked={!!initial} itemCount={options.length} />}
+              {general && owesSomething ? (
+                <div className={cn("overflow-hidden rounded-[10px] border border-border-strong transition-opacity duration-200", waiting && "opacity-70")} data-testid="rp-general">
+                  <dl className="grid grid-cols-3 divide-x divide-border">
+                    <GeneralFigure label="Total outstanding" value={money(generalDue)} testId="rp-general-due" />
+                    <GeneralFigure label={theyPaid ? "Receiving now" : "Paying now"} value={money(allocation.allocated)} testId="rp-general-paying" />
+                    <GeneralFigure label="Remaining after" value={money(stillOwed)} testId="rp-general-left" tone={stillOwed > PAYMENT_EPSILON ? "text-warning" : "text-success"} />
+                  </dl>
+                  <p className="border-t border-border bg-secondary/40 px-3 py-2 text-[11.5px] leading-snug text-foreground/80" data-testid="rp-general-note">
+                    Not tied to any item — no transaction is marked paid or part paid. Items keep their original amounts, and the statement shows this
+                    payment against the overall balance.
+                    {theyPaid && options.some((o) => o.isEmi) && " To record money for one EMI share, choose specific items."}
+                  </p>
+                </div>
+              ) : options.length === 0 ? (
                 <p className="rounded-[10px] bg-secondary/50 px-3 py-2 text-xs text-foreground/75">The whole amount is money left to use — choose what it is for below.</p>
               ) : (
                 <div className={cn("overflow-hidden rounded-[10px] border border-border-strong transition-opacity duration-200", waiting && "opacity-70")}>
@@ -955,7 +1022,13 @@ export function RecordPaymentPanel({
                 </p>
               )}
 
-              {elsewhere.length > 0 && (
+              {!general && allocation.allocated > generalDue + PAYMENT_EPSILON && generalDue < dueTotal - PAYMENT_EPSILON && (
+                <Notice tone="warning" role="status">
+                  {money(allocation.allocated)} is more than the {money(generalDue)} still owed overall — earlier payments not tied to an item already lowered the balance.
+                  The rest would count as {theyPaid ? `money you owe ${first}` : `money ${first} owes you`}.
+                </Notice>
+              )}
+              {!general && elsewhere.length > 0 && (
                 <details className="group mt-2 text-xs">
                   <summary className="flex w-fit cursor-pointer list-none items-center gap-1 rounded-[4px] font-semibold text-foreground/70 outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
                     <ChevronDown className="size-3.5 transition-transform group-open:rotate-180" aria-hidden />
@@ -1027,7 +1100,7 @@ export function RecordPaymentPanel({
                   <Check className="size-3.5 shrink-0 text-success" strokeWidth={3} aria-hidden />
                   <span>
                     <span className="font-semibold text-foreground">Nothing left to assign.</span>{" "}
-                    {amount > PAYMENT_EPSILON ? `All ${money(amount)} goes to bills.` : "Enter an amount to see what is left."}
+                    {amount > PAYMENT_EPSILON ? `All ${money(amount)} goes to ${general ? "the balance" : "bills"}.` : "Enter an amount to see what is left."}
                   </span>
                 </p>
               )}
@@ -1194,7 +1267,7 @@ export function RecordPaymentPanel({
             <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
               <dl className="flex flex-wrap items-baseline gap-x-3.5 gap-y-1 text-xs" aria-label="Where the money goes">
                 <Figure label={theyPaid ? "Received" : "Paid"} value={money(recon.received)} testId="rp-hero-amount" strong />
-                <Figure label="Applied to bills" value={money(recon.allocated)} testId="rp-applied" dot="bg-settle-split-edge" />
+                <Figure label={general ? "Lowers balance" : "Applied to bills"} value={money(recon.allocated)} testId="rp-applied" dot="bg-settle-split-edge" />
                 {recon.income > PAYMENT_EPSILON && <Figure label="Income" value={money(recon.income)} testId="rp-income" dot="bg-success" />}
                 {recon.purpose > PAYMENT_EPSILON && <Figure label="Set aside" value={money(recon.purpose)} testId="rp-set-aside" dot="bg-settle-emi-edge" />}
                 {recon.advance > PAYMENT_EPSILON && <Figure label="Advance" value={money(recon.advance)} testId="rp-advance" dot="bg-settle-advance-edge" />}
@@ -1208,7 +1281,7 @@ export function RecordPaymentPanel({
                 />
               </dl>
               {/* A different balance — what the person owes after this payment. Never added to the receipt beside it. */}
-              {options.length > 0 && (
+              {(general ? generalDue > PAYMENT_EPSILON : options.length > 0) && (
                 <p className="flex flex-wrap items-baseline gap-x-2 text-xs text-foreground/75" title="Not part of this payment — what is still owed after it.">
                   <span className="font-semibold text-foreground">{theyPaid ? `Still owed by ${first}` : `Still owed to ${first}`}</span>
                   <span className={cn("font-heading text-[14px] font-bold tabular-nums", stillOwed > PAYMENT_EPSILON ? "text-warning" : "text-success")} data-testid="rp-still-owed">
@@ -1404,7 +1477,53 @@ function StepHeading({ id, n, title, hint, right }: { id: string; n: number; tit
   );
 }
 
-function Notice({ tone, role, children }: { tone: "warning"; role?: "alert"; children: React.ReactNode }) {
+/** General payment (the default) vs. naming the items it pays — two plain radio options. */
+function ApplyModeSwitch({ mode, onChange, locked, itemCount }: { mode: ApplyMode; onChange: (m: ApplyMode) => void; locked: boolean; itemCount: number }) {
+  const option = (value: ApplyMode, title: string, sub: string) => {
+    const active = mode === value;
+    return (
+      <button
+        type="button"
+        role="radio"
+        aria-checked={active}
+        disabled={locked && !active}
+        onClick={() => onChange(value)}
+        data-testid={`rp-mode-${value}`}
+        className={cn(
+          "flex min-w-0 flex-1 items-start gap-2 rounded-[8px] border px-3 py-2 text-left transition-[border-color,background-color] duration-150 outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50",
+          active ? "border-foreground bg-secondary" : "border-border-strong hover:bg-secondary/60",
+        )}
+      >
+        <span aria-hidden className={cn("mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full border-[1.5px]", active ? "border-foreground" : "border-border-strong")}>
+          {active && <span className="size-2 rounded-full bg-foreground" />}
+        </span>
+        <span className="min-w-0">
+          <span className="block text-[13px] font-semibold text-foreground">{title}</span>
+          <span className="block text-[11.5px] text-foreground/70">{sub}</span>
+        </span>
+      </button>
+    );
+  };
+  return (
+    <div role="radiogroup" aria-label="How to apply this payment" className="mb-2.5 flex flex-col gap-1.5 sm:flex-row">
+      {option("general", "Reduce the overall balance", "Not tied to any item")}
+      {itemCount > 0 && option("items", "Choose specific items", "Say which items this pays")}
+    </div>
+  );
+}
+
+function GeneralFigure({ label, value, testId, tone }: { label: string; value: string; testId: string; tone?: string }) {
+  return (
+    <div className="min-w-0 px-3 py-2">
+      <dt className="truncate text-[11px] font-semibold text-foreground/70">{label}</dt>
+      <dd className={cn("font-heading text-[15px] font-bold tabular-nums", tone ?? "text-foreground")} data-testid={testId}>
+        {value}
+      </dd>
+    </div>
+  );
+}
+
+function Notice({ tone, role, children }: { tone: "warning"; role?: "alert" | "status"; children: React.ReactNode }) {
   return (
     <p className={cn("mt-2 flex items-start gap-1.5 text-xs font-semibold duration-200 animate-in fade-in", tone === "warning" && "text-warning")} role={role}>
       <CircleAlert className="mt-px size-3.5 shrink-0" aria-hidden />
@@ -1549,6 +1668,8 @@ export function paymentInitialFor(
   let advance = 0;
   for (const e of group) {
     if (e.sourceKind === "advance") advance = round2(advance + e.amount);
+    // Tied to no obligation: a general payment's line.
+    else if (e.obligationRef == null && e.parentEntryId == null) lines[GENERAL_PAYMENT_KEY] = round2((lines[GENERAL_PAYMENT_KEY] ?? 0) + e.amount);
     else lines[e.obligationRef ?? `ledger:${e.parentEntryId}`] = e.amount;
   }
   return {

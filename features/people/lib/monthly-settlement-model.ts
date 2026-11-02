@@ -99,6 +99,12 @@ export interface MonthlySettlementView {
   /** Present only when something is postponed: the collectible amount and the postponed amount, kept apart. */
   split: { dueNow: string; postponed: string; postponedTo: string } | null;
   items: MonthlyItem[];
+  /**
+   * What the items' Remaining column doesn't carry, so the table still adds up to the outstanding: payments (and
+   * adjustments) tied to no one item — e.g. ₹20,000 received toward a ₹29,000 balance with no item chosen. Every
+   * item keeps its own amount; this one line says the rest. Null when the items already add up, or rows run both ways.
+   */
+  unallocated: { label: string; amount: string; op: "−" | "+"; total: string } | null;
   /** Earlier items fully settled this cycle — stated in the reconciliation, not listed. */
   clearedCount: number;
   cleared: { count: number; amount: string; range: string } | null;
@@ -123,6 +129,9 @@ function shortStatus(label: string): string {
   if (label === "Payment due" || label === "You need to pay") return "Due";
   if (label === "Upcoming EMI" || label === "Upcoming installment") return "Upcoming";
   if (label === "Covered by advance") return "Advance used";
+  // Paid toward the overall balance, not item by item (a general payment).
+  if (label === "Part of balance") return "In balance";
+  if (label === "Balance cleared") return "Bal. cleared";
   const moved = label.match(/^(Moved to|Rest in) (\w+) cycle$/);
   return moved ? `${moved[1]} ${moved[2]}` : label;
 }
@@ -261,6 +270,17 @@ export function monthlySettlementView(statement: PersonCycleStatement, options: 
   });
 
   const itemsAddUp = items.reduce((s, i) => s + i.remainingPaise, 0);
+  const isMixed = statement.toReceive >= 0.005 && statement.toGive >= 0.005;
+  const gap = outstandingPaise - itemsAddUp;
+  const unallocated =
+    !isMixed && items.length > 0 && Math.abs(gap) >= SAME
+      ? {
+          label: gap < 0 ? "Paid toward the balance · not tied to one item" : "Adjustments · not tied to one item",
+          amount: money(fromPaise(Math.abs(gap))),
+          op: gap < 0 ? ("−" as const) : ("+" as const),
+          total: money(fromPaise(outstandingPaise)),
+        }
+      : null;
   return {
     personName: view.personName,
     ownerName: view.ownerName,
@@ -273,12 +293,13 @@ export function monthlySettlementView(statement: PersonCycleStatement, options: 
     lines,
     split,
     items,
+    unallocated,
     clearedCount: cleared.length,
     cleared: clearedInfo,
     payments,
     totalPaid: view.totalReceived ?? view.totalPaid,
     advance: view.advance,
-    mixed: statement.toReceive >= 0.005 && statement.toGive >= 0.005 ? { theyOwe: money(statement.toReceive), ownerOwes: money(statement.toGive) } : null,
+    mixed: isMixed ? { theyOwe: money(statement.toReceive), ownerOwes: money(statement.toGive) } : null,
     checks: {
       reconciles: previous + added - totalApplied === outstandingPaise || statement.direction === "settled" || mixedSides(statement),
       itemsAddUp: itemsAddUp === outstandingPaise,

@@ -227,6 +227,31 @@ describe("Card Pay bill — People gate enforced at the write layer (OCTANE)", (
     expect(err.message).toMatch(/^Some people-linked amounts in this bill still need to be settled \(.*\)\. Review them before paying\.$/);
   });
 
+  it("“Pay the bill now anyway” (Pay bill's explicit acknowledgement): one pair for the statement; People shares stay exactly as owed; a retry writes nothing more", async () => {
+    // A general People payment from AMMA (tied to no charge) — it lowers her balance but settles no card share.
+    putEntry(entry("g-amma", "amma", "receivedBack", 5000, { paymentId: "pay-g" }));
+    expect(await rejected(22152.02)).toEqual(["AMMA 8000", "SHAMBU 1000"]);
+    const before = snapshot();
+    const anyway = {
+      amount: 22152.02,
+      dateTime: NOW,
+      sourceAccountId: "sbi",
+      destinationAccountId: OCTANE.accountId,
+      categoryId: "cat-transfer",
+      description: "Card bill",
+      idempotencyKey: "paybill-anyway-1",
+      cardStatementIntent: { statementId: currentStatementId() },
+      peopleGateAcknowledgement: { acknowledgedUnsettledPeople: true as const, reason: "Card bill paid before collecting ₹9,000.00 from AMMA, SHAMBU" },
+    };
+    await txRepo.createTransferPairAtomic(anyway);
+    await txRepo.createTransferPairAtomic(anyway); // double submit / lost-response retry
+    const after = snapshot();
+    expect(after).toMatchObject({ statementA: 0, statementB: 27170, outstanding: 27170, transferCount: 2 });
+    expect([after.sbi, after.card]).toEqual([r2(before.sbi - 22152.02), r2(before.card + 22152.02)]);
+    // Paying the issuer never settles a person, never allocates AMMA's general payment to a charge.
+    expect(after.people).toBe(before.people);
+  });
+
   it("B + C. A's shares settled in People → payment succeeds although B's TRIPTHEE / AMMA shares are still open", async () => {
     putEntry(settle("r-amma", "amma", "e-amma-a", 8000));
     putEntry(settle("r-shambu", "shambu", "e-shambu", 1000));

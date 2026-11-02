@@ -11,6 +11,7 @@ import {
   cyclePosition,
   isInboundPayment,
   linkedExpense,
+  generalCreditFrom,
   kindLabel,
   NO_LOOKUPS,
   paidSoFar,
@@ -23,6 +24,7 @@ import {
   settlementTone,
   splitContext,
   splitContextLine,
+  type GeneralCredit,
   type SettlementKind,
   type SettlementLookups,
   type SettlementStatusTone,
@@ -336,12 +338,14 @@ function viewRow(
   deferral: StatementDeferral | null,
   /** The page's "as of" day — what an item's age is counted to. */
   ageIdx: number = asOfIdx,
+  /** Payments toward the overall balance no item carries, at the same cut-off. */
+  credit: GeneralCredit | null = null,
 ): StatementViewRow {
   const { row, later } = rowAt(source, asOfIdx);
   const kind = settlementKind(row, lookups);
   const ctx = kind === "split" || kind === "assigned" ? splitContext(row, lookups, personId) : null;
   const ownerShort = ownerShortName(ownerName);
-  const status = settlementStatus(row, kind, personName, money, now, ownerShort);
+  const status = settlementStatus(row, kind, personName, money, now, ownerShort, credit);
   const paid = isPayment(kind) ? row.amount : paidSoFar(row);
   // Read straight from the Expense (not gated on `splitContext`), so a legacy Expense without participants still gives its proven total.
   const allocation = kind === "split" || kind === "assigned" ? splitAllocation(linkedExpense(row, lookups), personId, ownerName) : null;
@@ -524,13 +528,22 @@ export function statementView(statement: PersonCycleStatement, options: Statemen
         .reverse()
     : [];
   const total = carriedRows.length + ledgerRows.length;
-  const carriedView = carriedRows.map((r, i) => ({
-    ...viewRow(r, i + 1, name, lookups, now, total, statement.personId, owner, asOfIdx, deferralFor(r.key, r.date), dayOf(asOfDate)),
-    carried: true,
-    openAtStart: openAtStart(r, start),
-    fromCycle: `${formatCycleLabel(cycleContaining(r.date, options.cycleStartDay), false)} cycle`,
-  }));
-  const listed = ledgerRows.map((r, i) => viewRow(r, carriedRows.length + i + 1, name, lookups, now, total, statement.personId, owner, asOfIdx, deferralFor(r.key, r.date), dayOf(asOfDate)));
+  const build = (credit: GeneralCredit | null) => ({
+    carriedView: carriedRows.map((r, i) => ({
+      ...viewRow(r, i + 1, name, lookups, now, total, statement.personId, owner, asOfIdx, deferralFor(r.key, r.date), dayOf(asOfDate), credit),
+      carried: true,
+      openAtStart: openAtStart(r, start),
+      fromCycle: `${formatCycleLabel(cycleContaining(r.date, options.cycleStartDay), false)} cycle`,
+    })),
+    listed: ledgerRows.map((r, i) => viewRow(r, carriedRows.length + i + 1, name, lookups, now, total, statement.personId, owner, asOfIdx, deferralFor(r.key, r.date), dayOf(asOfDate), credit)),
+  });
+  // Payments toward the overall balance that no item carries (a general payment): read at the statement's own
+  // cut-off — the listed items' remaining vs. the engine's gross position — and, if any, the open items say they
+  // are part of that balance instead of each reading as fully due. Only possible with the brought-forward items.
+  const plainBuild = build(null);
+  const openSide = (side: "them" | "owner") => [...plainBuild.carriedView, ...plainBuild.listed].reduce((s, r) => s + (r.owedBy === side ? (r.remainingValue ?? 0) : 0), 0);
+  const credit = options.history ? generalCreditFrom({ theyOwe: openSide("them"), iOwe: openSide("owner") }, { theyOwe: statement.toReceive, iOwe: statement.toGive }) : null;
+  const { carriedView, listed } = credit ? build(credit) : plainBuild;
   // When every amount listed is the person's own share, the column header says so once ("Shambu's share") and the
   // per-row caption goes; any other kind of amount keeps the plain "Amount" header and its captions.
   const amounts = [...carriedView, ...listed].filter((r) => r.original);

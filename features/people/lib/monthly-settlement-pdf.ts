@@ -370,6 +370,18 @@ export async function renderMonthlySettlementPdf(
     band = g;
     drawItem(it);
   }
+  // Money paid toward the balance with no item chosen: one line under the items (each keeps its own amount), then
+  // the balance it leaves — so the Remaining column adds up to what is owed.
+  if (v.unallocated) {
+    ensure(52, tableHeader);
+    text(fit(v.unallocated.label, regular, S.meta + 0.6, colRight(3) - colX(1) - PAD - 8), colX(1) + PAD, y - 16, S.meta + 0.6, regular, BODY);
+    amount(`${v.unallocated.op}${v.unallocated.amount}`, colRight(4), y - 16, S.money, monoRegular, v.unallocated.op === "−" ? PAID : INK, COL_W[4] - 2 * PAD);
+    y -= 24;
+    hline(M, M + W, y, RULE_STRONG, 0.7);
+    textRight(settled ? "Settled" : "Remaining balance", colRight(3) - 6, y - 16, S.meta + 0.6, semi, INK);
+    amount(v.unallocated.total, colRight(4), y - 16, S.money + 0.4, monoBold, INK, COL_W[4] - 2 * PAD);
+    y -= 24;
+  }
   y -= 4;
 
   if (v.payments.length > 0) {

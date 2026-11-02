@@ -1481,7 +1481,14 @@ export function CreditCardsWorkspace() {
                             </td>
                             <td className={cn(CC_TD, "text-right")}>
                               {bill ? (
-                                <span className={cn("text-[17px] font-bold tabular-nums", scope.currentOverdue ? "text-expense" : "text-foreground")}>{formatCurrency(scope.statementDue)}</span>
+                                <>
+                                  <span className={cn("text-[17px] font-bold tabular-nums", scope.currentOverdue ? "text-expense" : "text-foreground")}>{formatCurrency(scope.statementDue)}</span>
+                                  {bill.amountPaid > 0.005 && (
+                                    <p className="text-[11px] font-medium text-foreground/70 tabular-nums">
+                                      left of {formatCurrency(bill.totalAmount)} · {formatCurrency(bill.amountPaid)} paid
+                                    </p>
+                                  )}
+                                </>
                               ) : (
                                 <span className="text-sm font-semibold text-foreground/70 tabular-nums">{formatCurrency(0)}</span>
                               )}
@@ -2248,12 +2255,20 @@ function SelectedCardBill({
       <div className="flex flex-wrap items-end justify-between gap-4 rounded-[16px] border border-border-strong/60 bg-gradient-to-br from-primary/[0.08] via-card to-card p-5 shadow-e1 sm:p-6">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <span className={CC_LABEL}>Bill amount</span>
+            {/* Once part of the bill is paid, the big figure is what is LEFT — the label says so. */}
+            <span className={CC_LABEL}>{bill.amountPaid > 0.005 ? "Remaining bill" : "Bill amount"}</span>
             <span className={cn("rounded-full px-2 py-0.5 text-[11px] font-semibold", status.tone)}>{status.label}</span>
           </div>
           <p className={cn("mt-2 text-[34px] leading-none font-bold tracking-tight tabular-nums", scope.currentOverdue ? "text-expense" : "text-foreground")}>
             {formatCurrency(scope.statementDue)}
           </p>
+          {/* The bill as a whole: its total, what was paid toward it, what is left — never per transaction. */}
+          {bill.amountPaid > 0.005 && (
+            <p className="mt-1.5 text-xs font-medium text-foreground/80 tabular-nums" data-testid="card-bill-paid-summary">
+              Bill {formatCurrency(bill.totalAmount)} · Paid <span className="font-semibold text-success">{formatCurrency(bill.amountPaid)}</span> · Remaining{" "}
+              <span className="font-semibold text-foreground">{formatCurrency(bill.remaining)}</span>
+            </p>
+          )}
           {scope.cardOutstanding > scope.statementDue + 0.005 && (
             <p className="mt-1 text-xs font-medium text-foreground/70 tabular-nums">of {formatCurrency(scope.cardOutstanding)} outstanding on this card</p>
           )}

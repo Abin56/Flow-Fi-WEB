@@ -44,6 +44,7 @@ import {
   type LenderPaymentDecision,
   type OwnMoneyReason,
 } from "@/features/loans/components/people-payment-decision";
+import { SharePostponePanel, type PostponeShare } from "@/features/loans/components/share-postpone";
 import { useLinkedPeopleReadiness } from "@/features/people/hooks/use-linked-people-readiness";
 import { peopleApplyAdvanceHref, peopleGateInstallmentIds, peopleSettleHref, peopleSettlementGate, settleActionFor } from "@/lib/engines/linked-people-readiness";
 import { PAYMENT_EPSILON } from "@/lib/engines/person-payment";
@@ -410,6 +411,12 @@ export function RecordPaymentDialog({
   const collectCandidates = settlement.attention.filter((p) => unresolvedIds.has(p.personId));
   const collectPerson = collectCandidates.find((p) => p.personId === pickedCollectId) ?? collectCandidates[0] ?? null;
   const collectAction = collectPerson ? settleActionFor(collectPerson) : null;
+  // "Not received yet — postpone": the undecided people's open shares, each moved through People's own deferral
+  // write. Never a payment — the lender installment stays due on its date.
+  const postponeShares: PostponeShare[] = collectCandidates
+    .map((p) => ({ personId: p.personId, personName: p.personName, obligations: p.obligations.filter((o) => o.remaining > PAYMENT_EPSILON) }))
+    .filter((p) => p.obligations.length > 0);
+  const shareDateOf = (key: string) => liveInstallments?.find((i) => i.id === key.slice(key.indexOf(":") + 1))?.dueDate ?? next?.dueDate ?? new Date();
   // People sends the user back to exactly this payment (same agreement, Record Payment reopened, same installment).
   const agreementId = loanRow?.loan.id ?? emiRow?.emi.id ?? null;
   const returnPath = agreementId ? paymentReturnPath(pathname, agreementId, target?.installment?.id ?? null) : pathname;
@@ -690,7 +697,9 @@ export function RecordPaymentDialog({
         : needsDecision && !ownMoney && !collectFirst
           ? allPostponed
             ? "Confirm paying from your account"
-            : "Choose how to pay"
+            : decision === "postpone"
+              ? "Postpone above — or pay now"
+              : "Choose how to pay"
           : collectFirst
             ? collectPerson
               ? applyAdvanceHref
@@ -830,6 +839,18 @@ export function RecordPaymentDialog({
               unresolvedNames={shareStatus.unresolved.map((p) => p.personName)}
               lapsedNames={shareStatus.people.filter((p) => p.lapsed).map((p) => p.personName)}
               amountLabel={amountLabel}
+              postponeSlot={
+                postponeShares.length > 0 ? (
+                  <SharePostponePanel
+                    people={postponeShares}
+                    dateOf={shareDateOf}
+                    deferralsByPerson={deferralsByPerson}
+                    startDay={startDay}
+                    lenderDueDate={next.dueDate}
+                    onDone={() => setDecision(null)}
+                  />
+                ) : null
+              }
               advanceNote={
                 collectFirst && collectPerson && collectAdvance > PAYMENT_EPSILON
                   ? `${collectPerson.personName} already gave you ${formatCurrencyExact(collectAdvance)} as an advance — apply it first. No money moves and no account is credited again.`

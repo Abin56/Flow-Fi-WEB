@@ -794,7 +794,13 @@ export function TransactionDetailsModal({
   const gateReadiness = gateActive ? (peopleGate.readinessFor ? peopleGate.readinessFor(Number(amount) || 0) : peopleGate.readiness) : null;
   const settlement = peopleSettlementGate(gateReadiness);
   const gateLoading = gateActive && peopleGate.loading;
-  const gateBlocked = gateActive && (settlement.blocked || gateLoading);
+  // "Pay the bill anyway": the user's explicit choice to pay the issuer while people's shares of this bill are still
+  // owed. Sent as the write gate's existing acknowledgement — it marks no share as received, allocates nothing, and
+  // the shares stay owed in People exactly as they are. Card bills only; never preselected.
+  const [payBillAnyway, setPayBillAnyway] = useState(false);
+  const canPayBillAnyway = gateActive && paysCardBill && settlement.blocked && !gateLoading;
+  const gatePeopleAck = canPayBillAnyway && payBillAnyway;
+  const gateBlocked = gateActive && (gateLoading || (settlement.blocked && !gatePeopleAck));
   /** The footer's Settle action — where Enter / Ctrl+Enter / Save land while the payment is blocked. */
   const settleCtaRef = useRef<HTMLAnchorElement>(null);
 
@@ -1142,6 +1148,13 @@ export function TransactionDetailsModal({
             enforceFunds: true,
             cardStatementIntent,
             fee: ownTransfer ? transferFeeParams({ feeText: transferFee, chargedTo: feeChargedTo, feeCategoryId, viaApp }) : null,
+            // Only when the user chose "Pay the bill anyway" while shares are still owed — the shares stay owed in People.
+            peopleGateAcknowledgement: gatePeopleAck
+              ? {
+                  acknowledgedUnsettledPeople: true,
+                  reason: `Card bill paid before collecting ${formatCurrencyPrecise(settlement.outstanding)} from ${settlement.attention.map((p) => p.personName).join(", ")}`,
+                }
+              : null,
           });
         } else {
           const newTransaction = await actions.createTransaction({
@@ -2026,7 +2039,26 @@ export function TransactionDetailsModal({
                   subject="this card bill"
                   payeeName={peopleGate.payeeName}
                   returnTo={peopleGate.returnTo}
+                  canPayAnyway={canPayBillAnyway}
                 />
+                {canPayBillAnyway && (
+                  <label
+                    className={cn(
+                      "mt-2 flex cursor-pointer items-start gap-2.5 rounded-[8px] border px-3 py-2 transition-colors duration-150 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring",
+                      payBillAnyway ? "border-foreground bg-secondary" : "border-border-strong hover:bg-secondary/60",
+                    )}
+                    data-testid="gate-pay-anyway"
+                  >
+                    <input type="checkbox" className="mt-0.5 size-4 shrink-0 accent-[var(--color-primary)]" checked={payBillAnyway} onChange={(e) => setPayBillAnyway(e.target.checked)} />
+                    <span className="min-w-0 text-xs text-foreground">
+                      <span className="block text-[13px] font-semibold">Pay the bill now anyway</span>
+                      <span className="block text-[11.5px] text-foreground/75">
+                        {formatCurrencyPrecise(settlement.outstanding)} from {settlement.attention.map((p) => p.personName).join(", ")} stays owed to you in People — nothing is
+                        marked received.
+                      </span>
+                    </span>
+                  </label>
+                )}
               </div>
             )}
 
