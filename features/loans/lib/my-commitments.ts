@@ -19,6 +19,7 @@ import { installmentWeights, splitPaise, toPaise, type OwnershipShare, type Owne
 import { installmentBreakdown } from "@/lib/engines/installment-participants";
 import { ownershipConfirmationBlocker, type ConfirmableRecord, type OwnershipConfirmation } from "@/lib/models/ownership-confirmation";
 import type { Installment } from "@/lib/models/payment-schedule";
+import { adjacentCycleRange, cycleRangeFor, normalizeCycleStartDay } from "@/lib/engines/month-cycle-range";
 
 /** Ownership data plus the user's optional explicit "this EMI is mine" confirmation. */
 export type ClassifiableOwnership = OwnershipSource & { ownershipConfirmedMine?: OwnershipConfirmation | null };
@@ -95,12 +96,27 @@ export interface MonthWindow {
   /** Last calendar day (inclusive). */
   end: Date;
   label: string;
+  /** True for a configured mid-month Month Cycle (labels say “cycle”, not “month”). */
+  custom: boolean;
 }
 
-export function monthWindow(now: Date, offset: 0 | 1): MonthWindow {
-  const start = new Date(now.getFullYear(), now.getMonth() + offset, 1);
-  const end = new Date(start.getFullYear(), start.getMonth() + 1, 0);
-  return { offset, start, end, label: start.toLocaleDateString("en-IN", { month: "short", year: "numeric" }) };
+/**
+ * The commitment window: the calendar month when `startDay` is 1 (the default), otherwise the user's configured
+ * Month Cycle (`cycleRangeFor`, e.g. start day 17 → 17 Oct – 16 Nov) — `offset` 1 is the very next cycle.
+ * Only the window moves; installment schedules and payments are never rewritten.
+ */
+export function monthWindow(now: Date, offset: 0 | 1, startDay = 1): MonthWindow {
+  const day = normalizeCycleStartDay(startDay);
+  if (day <= 1) {
+    const start = new Date(now.getFullYear(), now.getMonth() + offset, 1);
+    const end = new Date(start.getFullYear(), start.getMonth() + 1, 0);
+    return { offset, start, end, label: start.toLocaleDateString("en-IN", { month: "short", year: "numeric" }), custom: false };
+  }
+  const current = cycleRangeFor(day, now);
+  const range = offset === 1 ? adjacentCycleRange(day, current, 1) : current;
+  const fmt = (d: Date, year: boolean) => d.toLocaleDateString("en-IN", { day: "numeric", month: "short", ...(year ? { year: "numeric" } : {}) });
+  const end = new Date(range.end.getFullYear(), range.end.getMonth(), range.end.getDate());
+  return { offset, start: range.start, end, label: `${fmt(range.start, false)} – ${fmt(end, true)}`, custom: true };
 }
 
 const dayIndex = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();

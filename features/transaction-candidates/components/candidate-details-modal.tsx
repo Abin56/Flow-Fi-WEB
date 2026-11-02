@@ -767,7 +767,10 @@ export function CandidateDetailsModal({
   const accountNote: { tone: "success" | "warning" | "muted"; text: string } | null = !accountChosen
     ? {
         tone: "warning",
-        text: matchEvidence.androidLabel
+        text:
+          destinationState === "missing"
+            ? "Account no longer exists — the account Android matched was removed. Pick where this was paid before importing."
+            : matchEvidence.androidLabel
           ? "Pick where this was paid before importing."
           : currentCandidate.rawLastFour == null
             ? "No last-4 in the SMS — a bank name alone isn't enough; pick the right one before importing."

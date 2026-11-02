@@ -205,7 +205,7 @@ scenario("sms-3-already-imported", "Import once, candidate resurrects, 'Import a
   const txns = (await h.list("transactions")).filter((t) => t.source === "sms");
   check("still exactly one SMS transaction", txns.length === 1, txns.length);
   check("balance unchanged by the second attempt", Math.abs((await qaBank()).currentBalance - balAfterFirst) < 0.01);
-  check("resurrected candidate removed from the queue", await page.getByText("No SMS candidates").isVisible().catch(() => false));
+  check("resurrected candidate removed from the queue", await page.getByText("No SMS candidates").waitFor({ timeout: 20000 }).then(() => true, () => false));
   check("no unrelated new transactions", (await h.list("transactions")).length === before + 1);
 });
 
@@ -361,6 +361,9 @@ scenario("sms-6-popup-destination-categories-keyboard", "Review popup: deleted a
   // With focus on a picker, Enter belongs to the picker (it opens its list) — close it before using the popup's buttons.
   if (await page.getByRole("listbox").isVisible().catch(() => false)) await page.keyboard.press("Escape");
   await dialog.getByRole("button", { name: "Cancel" }).click();
+  // A category was picked, so closing asks about the unsaved edit first — discard it (closing never imports anything).
+  const discardAfterCancel = page.getByRole("dialog").filter({ hasText: "Discard your changes?" });
+  if (await discardAfterCancel.isVisible().catch(() => false)) await discardAfterCancel.getByRole("button", { name: "Discard and close" }).click();
   await page.getByRole("dialog").first().waitFor({ state: "detached", timeout: 10000 });
   await sleep(500);
 
@@ -400,8 +403,8 @@ scenario("sms-6-popup-destination-categories-keyboard", "Review popup: deleted a
   await page.keyboard.press("Enter"); // a bare Enter on Close just closes — it must never import
   await sleep(600);
   // The category was changed, so closing asks first — discard (still nothing imported).
-  const discard = page.getByRole("dialog").filter({ hasText: "Discard your changes?" });
-  if (await discard.isVisible().catch(() => false)) await discard.getByRole("button", { name: "Discard and close" }).click();
+  const discardPrompt = page.getByRole("dialog").filter({ hasText: "Discard your changes?" });
+  if (await discardPrompt.isVisible().catch(() => false)) await discardPrompt.getByRole("button", { name: "Discard and close" }).click();
   check("a bare Enter never imports", (await h.list("transactions")).filter((t) => t.source === "sms").length === 0);
   await openRow(page, "Swiggy");
   dialog = page.getByRole("dialog").first();
@@ -609,7 +612,7 @@ scenario("sms-14-advanced-filters-url-scroll", "Advanced filters AND together, s
   const wantUnmatched = seeded.filter((c) => c.accountId == null).length;
   await page.getByTestId("open-filters").click();
   await sheet.waitFor({ timeout: 5000 });
-  await sheet.getByRole("checkbox", { name: /Unmatched/ }).click();
+  await sheet.getByRole("button", { name: /Unmatched/ }).click();
   await sheet.getByTestId("apply-filters").click();
   check("the Unmatched account option lists only candidates with no account", await waitRowCount(page, wantUnmatched), `${await rowCount(page)} vs ${wantUnmatched}`);
   await page.getByRole("button", { name: "Clear filters" }).first().click();
@@ -665,7 +668,7 @@ scenario("sms-14-advanced-filters-url-scroll", "Advanced filters AND together, s
   await h.shot(page, "sms-14-drawer");
   const dw = await drawer.boundingBox();
   const vh = page.viewportSize().height;
-  check("the editor is a full-width top sheet that leaves the list visible below it", !!dw && Math.round(dw.x) === 0 && Math.round(dw.width) === 1920 && Math.round(dw.y) === 0 && dw.height < vh * 0.7, dw ? `${Math.round(dw.width)}x${Math.round(dw.height)} at y=${Math.round(dw.y)}` : "none");
+  check("the editor is a top-anchored, centred compact sheet (max 1040px) that leaves the list visible below it", !!dw && Math.round(dw.y) === 0 && dw.width <= 1041 && dw.width >= 1000 && Math.abs(dw.x * 2 + dw.width - 1920) <= 2 && dw.height < vh * 0.7, dw ? `${Math.round(dw.width)}x${Math.round(dw.height)} at y=${Math.round(dw.y)}` : "none");
   await page.keyboard.press("Escape");
   await drawer.waitFor({ state: "hidden", timeout: 10000 });
   await sleep(300);

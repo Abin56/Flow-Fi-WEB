@@ -48,6 +48,8 @@ export function useFocusMode() {
   const [notice, setNotice] = useState<string | null>(null);
   /** Focus Mode that fullscreen turned on — leaving fullscreen leaves it too. */
   const fromFullscreen = useRef(false);
+  /** Fullscreen this workspace entered itself — the app-wide fullscreen prompt's fullscreen is left alone on unmount. */
+  const ownsFullscreen = useRef(false);
 
   const exitFocus = useCallback(() => {
     fromFullscreen.current = false;
@@ -77,6 +79,7 @@ export function useFocusMode() {
     }
     try {
       await document.documentElement.requestFullscreen({ navigationUI: "hide" });
+      ownsFullscreen.current = true;
       fromFullscreen.current = !wasFocused;
       setNotice(null);
     } catch {
@@ -120,7 +123,7 @@ export function useFocusMode() {
   useEffect(
     () => () => {
       setActive(false);
-      if (document.fullscreenElement) void document.exitFullscreen?.().catch(() => undefined);
+      if (ownsFullscreen.current && document.fullscreenElement) void document.exitFullscreen?.().catch(() => undefined);
     },
     [setActive],
   );

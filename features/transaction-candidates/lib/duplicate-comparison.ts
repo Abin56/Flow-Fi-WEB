@@ -42,6 +42,11 @@ function sameLocalDay(a: Date, b: Date): boolean {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 }
 
+/** "amount", "amount and date", "amount, date and merchant". */
+function joinWords(parts: string[]): string {
+  return parts.length <= 1 ? (parts[0] ?? "") : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+}
+
 function norm(text: string): string {
   return text.trim().toLowerCase().replace(/\s+/g, " ");
 }
@@ -124,7 +129,7 @@ export function buildDuplicateComparison(params: {
   if (accountMatch === "same") sameParts.push("account");
   const differs = rows.filter((r) => r.match === "different").map((r) => r.label.toLowerCase());
   const summary =
-    (sameParts.length > 0 ? `Same ${sameParts.join(", ")} as a transaction you already have.` : "Looks like a transaction you already have.") +
+    (sameParts.length > 0 ? `Same ${joinWords(sameParts)} as a transaction you already have.` : "Looks like a transaction you already have.") +
     (closeParts.length > 0 ? ` Its ${closeParts.join(" and ")} ${closeParts.length > 1 ? "are" : "is"} close but not identical.` : "") +
     (differs.length > 0 ? ` It differs in ${differs.join(", ")}.` : "") +
     " Nothing has been imported, merged or dismissed.";

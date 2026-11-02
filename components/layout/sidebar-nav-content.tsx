@@ -20,6 +20,7 @@ import {
 import { PeopleNavBadge } from "@/features/people/components/people-attention";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/store/auth-store";
+import { useProfilePhoto } from "@/features/settings/hooks/use-user-preferences";
 
 /** Presentational grouping order only — see NavSection in nav-items.ts for the routes each bucket holds. */
 const SECTION_ORDER: NavSection[] = [
@@ -67,6 +68,8 @@ export function SidebarNavContent({
 }) {
   const pathname = usePathname();
   const user = useAuthStore((state) => state.user);
+  useAuthStore((state) => state.profileVersion); // re-render after a saved name/photo change
+  const profilePhoto = useProfilePhoto();
   const reduceMotion = useReducedMotion();
   // Sections the user folded away (presentation only). The section holding the current page always shows.
   const [folded, setFolded] = useState<Set<NavSection>>(() => new Set());
@@ -312,13 +315,13 @@ export function SidebarNavContent({
           )}
         >
           <span className="rounded-full ring-2 ring-primary/60 ring-offset-2 ring-offset-sidebar">
-            <ClayAvatar src={user?.photoURL} name={user?.displayName} />
+            <ClayAvatar src={profilePhoto} name={user?.displayName} />
           </span>
           {!collapsed && (
             <>
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-semibold text-foreground">
-                  {user?.displayName ?? "Abin John"}
+                  {user?.displayName ?? "Your profile"}
                 </p>
                 <p className="truncate text-xs text-foreground/60">
                   Profile & settings

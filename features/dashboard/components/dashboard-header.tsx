@@ -13,6 +13,7 @@ function greeting() {
 
 export function DashboardHeader() {
   const user = useAuthStore((state) => state.user);
+  useAuthStore((state) => state.profileVersion); // re-render after a saved name change
   const firstName = user?.displayName?.split(" ")[0] ?? "there";
   const today = new Date().toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long" });
 

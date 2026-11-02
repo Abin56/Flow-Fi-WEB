@@ -413,3 +413,43 @@ describe("commitmentRows — the breakdown the summary is folded from", () => {
     }
   });
 });
+
+describe("monthWindow with a configured Month Cycle start day", () => {
+  const d = (y: number, m: number, day: number) => new Date(y, m - 1, day);
+  const ymd = (x: Date) => [x.getFullYear(), x.getMonth() + 1, x.getDate()];
+
+  it("start day 1 stays the calendar month", () => {
+    const w = monthWindow(d(2026, 11, 2), 0, 1);
+    expect([ymd(w.start), ymd(w.end), w.custom]).toEqual([[2026, 11, 1], [2026, 11, 30], false]);
+  });
+  it("start day 17 on 2 Nov shows 17 Oct – 16 Nov (not 1 Nov)", () => {
+    const w = monthWindow(d(2026, 11, 2), 0, 17);
+    expect([ymd(w.start), ymd(w.end), w.custom]).toEqual([[2026, 10, 17], [2026, 11, 16], true]);
+  });
+  it("on the start day itself the new cycle begins; the day before still belongs to the old one", () => {
+    expect(ymd(monthWindow(d(2026, 11, 17), 0, 17).start)).toEqual([2026, 11, 17]);
+    expect(ymd(monthWindow(d(2026, 11, 16), 0, 17).start)).toEqual([2026, 10, 17]);
+  });
+  it("next cycle is contiguous, including across the year end", () => {
+    const next = monthWindow(d(2026, 12, 20), 1, 17);
+    expect([ymd(next.start), ymd(next.end)]).toEqual([[2027, 1, 17], [2027, 2, 16]]);
+  });
+  it("installments land in exactly one cycle; unpaid past-due ones before it are carried overdue", () => {
+    const NOW2 = d(2026, 11, 2);
+    const r = rec({
+      ownership: MINE,
+      installments: [
+        inst("a", 1, d(2026, 10, 16), 1000), // previous cycle, unpaid → overdue carried
+        inst("b", 2, d(2026, 10, 17), 2000), // first day of the cycle
+        inst("c", 3, d(2026, 11, 1), 3000), // 1 Nov — inside the 17 Oct cycle
+        inst("d", 4, d(2026, 11, 16), 4000), // last day
+        inst("e", 5, d(2026, 11, 17), 5000), // next cycle
+      ],
+    });
+    const cur = summarizeCommitments([r], monthWindow(NOW2, 0, 17), NOW2);
+    expect(cur.mine.scheduledPaise).toBe((2000 + 3000 + 4000) * 100);
+    expect(cur.overdue).toMatchObject({ minePaise: 1000 * 100, mineInstallments: 1 });
+    const nxt = summarizeCommitments([r], monthWindow(NOW2, 1, 17), NOW2);
+    expect(nxt.mine.scheduledPaise).toBe(5000 * 100);
+  });
+});

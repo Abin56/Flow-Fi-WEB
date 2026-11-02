@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { signOut } from "@/services/auth/auth-service";
 import { useAuthStore } from "@/store/auth-store";
+import { useProfilePhoto } from "@/features/settings/hooks/use-user-preferences";
 import { cn } from "@/lib/utils";
 
 function IconButton({
@@ -45,6 +46,8 @@ export function Topbar({
   const { theme, setTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
   const user = useAuthStore((state) => state.user);
+  useAuthStore((state) => state.profileVersion); // re-render after a saved name/photo change
+  const profilePhoto = useProfilePhoto();
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- standard next-themes hydration-safe mount flag
@@ -81,7 +84,7 @@ export function Topbar({
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button type="button" className="ml-0.5 rounded-full focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none">
-              <ClayAvatar src={user?.photoURL} name={user?.displayName} size={30} />
+              <ClayAvatar src={profilePhoto} name={user?.displayName} size={30} />
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-56">

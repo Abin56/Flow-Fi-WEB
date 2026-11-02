@@ -11,7 +11,7 @@ import {
   initializeTestEnvironment,
   type RulesTestEnvironment,
 } from "@firebase/rules-unit-testing";
-import { ref, uploadBytes, getBytes } from "firebase/storage";
+import { ref, uploadBytes, getBytes, deleteObject } from "firebase/storage";
 import { afterAll, afterEach, beforeAll, describe, it } from "vitest";
 
 const PROJECT_ID = "flowfi-rules-test";
@@ -85,6 +85,34 @@ describe("Storage: users/{uid}/documents/{documentType}/*", () => {
   it("a different signed-in user cannot write to another user's path", async () => {
     const otherStorage = testEnv.authenticatedContext(OTHER_UID).storage(BUCKET);
     await assertFails(uploadBytes(ref(otherStorage, filePath(OWNER_UID)), new Uint8Array([9])));
+  });
+
+  it("owner can delete their own file (Storage Management)", async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await uploadBytes(ref(ctx.storage(BUCKET), filePath(OWNER_UID)), new Uint8Array([1, 2, 3]));
+    });
+    const ownerStorage = testEnv.authenticatedContext(OWNER_UID).storage(BUCKET);
+    await assertSucceeds(deleteObject(ref(ownerStorage, filePath(OWNER_UID))));
+  });
+
+  it("a different signed-in user cannot delete another user's file", async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await uploadBytes(ref(ctx.storage(BUCKET), filePath(OWNER_UID)), new Uint8Array([1, 2, 3]));
+    });
+    const otherStorage = testEnv.authenticatedContext(OTHER_UID).storage(BUCKET);
+    await assertFails(deleteObject(ref(otherStorage, filePath(OWNER_UID))));
+  });
+
+  it("an unauthenticated request cannot delete", async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await uploadBytes(ref(ctx.storage(BUCKET), filePath(OWNER_UID)), new Uint8Array([1, 2, 3]));
+    });
+    await assertFails(deleteObject(ref(testEnv.unauthenticatedContext().storage(BUCKET), filePath(OWNER_UID))));
+  });
+
+  it("the delete rule does not loosen upload checks (still PDF-only)", async () => {
+    const ownerStorage = testEnv.authenticatedContext(OWNER_UID).storage(BUCKET);
+    await assertFails(uploadBytes(ref(ownerStorage, filePath(OWNER_UID)), new Uint8Array([1]), { contentType: "text/plain" }));
   });
 
   it("an unauthenticated request is denied entirely", async () => {

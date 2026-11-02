@@ -10,6 +10,7 @@ import {
   Camera,
   ChevronRight,
   CloudUpload,
+  HardDrive,
   CreditCard,
   Database,
   Download,
@@ -40,7 +41,9 @@ import {
   Wallet,
   type LucideIcon,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
+import { useTheme } from "next-themes";
 import { motion } from "framer-motion";
 import { ClayBadge } from "@/components/clay/clay-badge";
 import { ClayAvatar } from "@/components/clay/clay-avatar";
@@ -76,14 +79,28 @@ import { cn } from "@/lib/utils";
 import { toast } from "@/store/toast-store";
 import { adjacentCycleRange, cycleRangeFor, normalizeCycleStartDay, ordinalDay } from "@/lib/engines/month-cycle-range";
 import { formatStatementDate } from "@/lib/engines/person-cycle-statement";
-import { useUserPreferences } from "@/features/settings/hooks/use-user-preferences";
+import { useProfilePhoto, useUserPreferences } from "@/features/settings/hooks/use-user-preferences";
+import { resizeAvatarToDataUrl, validateAvatarFile, validateDisplayName, validatePhone } from "@/features/settings/lib/profile-validation";
 import { PdfAnalyzerSetupCard } from "@/features/settings/components/pdf-analyzer-setup-card";
+import { StorageManagement } from "@/features/storage/components/storage-management";
 
-type SettingsTab = "profile" | "preferences" | "accounts" | "security" | "notifications" | "backup" | "others";
+type SettingsTab = "profile" | "preferences" | "accounts" | "security" | "notifications" | "backup" | "storage" | "others";
 
 /** One settings card — rounded, with a gentle hover lift. */
 const SETTINGS_CARD =
   "rounded-[20px] border border-border/60 bg-card p-5 shadow-e1 transition-[box-shadow,border-color] duration-200 hover:border-border hover:shadow-[0_14px_34px_-18px_rgba(0,0,0,0.3)]";
+
+/** Wraps a control that is stored but not yet read by any FlowFi screen: visibly inert, so it never implies an effect. */
+function NotApplied({ children, label = "Not applied yet" }: { children: React.ReactNode; label?: string }) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className="rounded-full bg-secondary px-2 py-0.5 text-[10.5px] font-medium whitespace-nowrap text-muted-foreground">{label}</span>
+      <div inert aria-disabled className="opacity-50">
+        {children}
+      </div>
+    </div>
+  );
+}
 
 const TABS: { id: SettingsTab; label: string; icon: LucideIcon }[] = [
   { id: "profile", label: "Profile", icon: User },
@@ -92,6 +109,7 @@ const TABS: { id: SettingsTab; label: string; icon: LucideIcon }[] = [
   { id: "security", label: "Security", icon: Shield },
   { id: "notifications", label: "Notifications", icon: Bell },
   { id: "backup", label: "Backup & Restore", icon: CloudUpload },
+  { id: "storage", label: "Storage", icon: HardDrive },
   { id: "others", label: "Others", icon: SlidersHorizontal },
 ];
 
@@ -165,7 +183,7 @@ function MonthCycleSetting({ value, onSave }: { value: number; onSave: (day: num
         <div className="min-w-0 flex-1">
           <p className="text-sm font-medium text-foreground">Month cycle</p>
           <p className="text-xs text-muted-foreground">
-            FlowFi uses this cycle across Month Cycle, People Ledger, Dashboard and other cycle-based summaries.
+            Used by Month Cycle, People Ledger &amp; statements, Debt Planner and the Loans &amp; EMI “My EMI — Confirmed” summary. The Dashboard, Budgets and Reports stay on the calendar month; loan and EMI due dates and payments never change.
           </p>
         </div>
       </div>
@@ -205,9 +223,9 @@ function MonthCycleSetting({ value, onSave }: { value: number; onSave: (day: num
   );
 }
 
-function SummaryRow({ icon: Icon, iconClass, label, value, sublabel }: { icon: LucideIcon; iconClass: string; label: string; value: string; sublabel: string }) {
+function SummaryRow({ icon: Icon, iconClass, label, value, sublabel, href }: { icon: LucideIcon; iconClass: string; label: string; value: string; sublabel: string; href: string }) {
   return (
-    <button type="button" className="flex w-full items-center gap-3 rounded-xl px-1 py-2.5 text-left transition-colors hover:bg-muted/50">
+    <Link href={href} className="flex w-full items-center gap-3 rounded-xl px-1 py-2.5 text-left transition-colors hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none">
       <span className={cn("flex size-10 shrink-0 items-center justify-center rounded-full", iconClass)}>
         <Icon className="size-4" />
       </span>
@@ -217,7 +235,7 @@ function SummaryRow({ icon: Icon, iconClass, label, value, sublabel }: { icon: L
       </div>
       <span className="shrink-0 rounded-full bg-secondary px-2.5 py-0.5 text-sm font-semibold tabular-nums text-foreground">{value}</span>
       <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
-    </button>
+    </Link>
   );
 }
 
@@ -259,7 +277,15 @@ export function SettingsWorkspace() {
   const { data: creditCards = [] } = useCreditCards();
   const { data: loans = [] } = useLoans();
   const { data: people = [] } = usePeople();
-  const { preferences, update } = useUserPreferences();
+  const { preferences, update, reset } = useUserPreferences();
+  const bumpProfile = useAuthStore((s) => s.bumpProfile);
+  const profilePhoto = useProfilePhoto();
+  const { theme: activeTheme, setTheme: setActiveTheme } = useTheme();
+  const [themeMounted, setThemeMounted] = useState(false);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- standard next-themes hydration-safe mount flag
+    setThemeMounted(true);
+  }, []);
 
   // Profile — seeded from the real signed-in Google account (this app is
   // Google Sign-In only, see `services/auth/auth-service.ts`; there is no
@@ -268,8 +294,16 @@ export function SettingsWorkspace() {
   // local edit-buffer state until "Save Changes" persists it via `updateProfile`.
   const [fullName, setFullName] = useState(authUser?.displayName ?? "");
   const [email] = useState(authUser?.email ?? "");
-  const phone = preferences.phone;
-  const setPhone = (v: string) => update("phone", v);
+  // Name and phone are drafts saved together by "Save Changes" (validated); the phone follows the stored value when it loads.
+  const [phone, setPhone] = useState(preferences.phone);
+  const [syncedPhone, setSyncedPhone] = useState(preferences.phone);
+  if (syncedPhone !== preferences.phone) {
+    setSyncedPhone(preferences.phone);
+    setPhone(preferences.phone);
+  }
+  const [profileErrors, setProfileErrors] = useState<{ name?: string; phone?: string }>({});
+  const [savingProfile, setSavingProfile] = useState(false);
+  const photoInputRef = useRef<HTMLInputElement>(null);
   const timezone = preferences.timezone;
   const setTimezone = (v: string) => update("timezone", v);
   const currency = preferences.currency;
@@ -292,7 +326,6 @@ export function SettingsWorkspace() {
   const setMonthCycleStartDay = (day: number) => update("monthCycleStartDay", normalizeCycleStartDay(day));
 
   // Security (Profile tab quick card)
-  const biometricLock = preferences.biometricLock;
   const setBiometricLock = (v: boolean) => update("biometricLock", v);
   const autoLockMinutes = preferences.autoLockMinutes;
   const setAutoLockMinutes = (v: string) => update("autoLockMinutes", v);
@@ -316,20 +349,22 @@ export function SettingsWorkspace() {
   const setMonthlyBudget = (v: number) => update("monthlyBudget", v);
   const betaFeatures = preferences.betaFeatures;
   const setBetaFeatures = (v: boolean) => update("betaFeatures", v);
-  const theme = preferences.theme;
-  const setTheme = (v: string) => update("theme", v);
+  // Theme is the live next-themes value (the same one the top bar toggles), not a stored-but-unused preference.
+  const theme = themeMounted ? (activeTheme ?? "system") : "system";
+  const setTheme = (v: string) => setActiveTheme(v);
   const accentColor = preferences.accentColor;
   const setAccentColor = (v: string) => update("accentColor", v);
   const density = preferences.density;
   const setDensity = (v: number) => update("density", v);
 
   // Security tab (deeper)
-  const twoFactor = preferences.twoFactor;
-  const setTwoFactor = (v: boolean) => update("twoFactor", v);
-  const [deleteAccountOpen, setDeleteAccountOpen] = useState(false);
 
   // Notifications tab (deeper)
-  const [pushGranted, setPushGranted] = useState(false);
+  const [pushPermission, setPushPermission] = useState<NotificationPermission | "unsupported">("default");
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reads the browser's real permission after mount
+    setPushPermission(typeof window !== "undefined" && "Notification" in window ? Notification.permission : "unsupported");
+  }, []);
   const digestCategories = preferences.digestCategories;
   const setDigestCategories = (v: string[]) => update("digestCategories", v);
   const channels = preferences.channels;
@@ -338,7 +373,6 @@ export function SettingsWorkspace() {
 
   // Danger zone
   const [resetOpen, setResetOpen] = useState(false);
-  const [deleteAllOpen, setDeleteAllOpen] = useState(false);
 
   function setChannel(row: string, key: string, value: boolean) {
     update("channels", { ...channels, [row]: { ...channels[row], [key]: value } });
@@ -348,12 +382,58 @@ export function SettingsWorkspace() {
 
   async function handleSaveProfile() {
     if (!authUser) return;
+    const name = validateDisplayName(fullName);
+    const phoneCheck = validatePhone(phone);
+    const errors = { name: name.error ?? undefined, phone: phoneCheck.error ?? undefined };
+    setProfileErrors(errors);
+    if (errors.name || errors.phone) return;
+    setSavingProfile(true);
     try {
-      await updateProfile(authUser, { displayName: fullName });
-      toast.success("Settings saved", "Your changes have been applied.");
+      if (name.value !== (authUser.displayName ?? "")) {
+        await updateProfile(authUser, { displayName: name.value });
+        bumpProfile();
+      }
+      update("phone", phoneCheck.value);
+      setFullName(name.value);
+      setPhone(phoneCheck.value);
+      toast.success("Profile saved", "Your name and phone number were updated.");
     } catch {
-      toast.error("Couldn't save profile", "Please try again.");
+      toast.error("Couldn't save profile", "Please check your connection and try again.");
+    } finally {
+      setSavingProfile(false);
     }
+  }
+
+  async function handlePhotoPicked(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    const problem = validateAvatarFile(file);
+    if (problem) {
+      toast.error("Can't use that photo", problem);
+      return;
+    }
+    try {
+      update("avatarDataUrl", await resizeAvatarToDataUrl(file));
+      toast.success("Photo updated", "Saved on this device.");
+    } catch {
+      toast.error("Couldn't read that image", "Try a JPG or PNG.");
+    }
+  }
+
+  function showUnavailable(what: string) {
+    toast.info(`${what} isn't available in the app yet`, "Email abinjohn.dev@gmail.com and we'll handle it manually.");
+  }
+
+  async function enablePush() {
+    if (pushPermission === "unsupported") {
+      toast.error("Notifications aren't supported in this browser");
+      return;
+    }
+    const result = await Notification.requestPermission();
+    setPushPermission(result);
+    if (result === "granted") toast.success("Browser notifications allowed");
+    else toast.error("Notifications are blocked", "Allow them for this site in your browser settings.");
   }
 
   return (
@@ -370,10 +450,10 @@ export function SettingsWorkspace() {
           <span aria-hidden className="pointer-events-none absolute -bottom-24 -left-16 size-52 rounded-full border border-white/10" />
           <div className="relative flex flex-wrap items-center gap-4">
             <span className="rounded-full ring-2 ring-primary/70 ring-offset-2 ring-offset-[#262e3d]">
-              <ClayAvatar name={fullName} size={60} />
+              <ClayAvatar src={profilePhoto} name={authUser?.displayName ?? fullName} size={60} />
             </span>
             <div className="min-w-0 flex-1">
-              <p className="truncate font-heading text-xl leading-tight font-semibold">{fullName || "Your profile"}</p>
+              <p className="truncate font-heading text-xl leading-tight font-semibold">{authUser?.displayName || "Your profile"}</p>
               <p className="truncate text-sm text-white/70">{email || "Signed in"}</p>
             </div>
           </div>
@@ -430,15 +510,24 @@ export function SettingsWorkspace() {
 
                 <div className="mt-4 flex items-center gap-4">
                   <div className="relative">
-                    <ClayAvatar name={fullName} size={72} />
+                    <ClayAvatar src={profilePhoto} name={authUser?.displayName ?? fullName} size={72} />
                     <button
                       type="button"
                       aria-label="Change photo"
-                      onClick={() => toast.info("Avatar picker", "Mock only — no upload wired up.")}
-                      className="absolute -right-1 -bottom-1 flex size-6 items-center justify-center rounded-full border-2 border-card bg-primary text-primary-foreground"
+                      onClick={() => photoInputRef.current?.click()}
+                      className="absolute -right-1 -bottom-1 flex size-6 items-center justify-center rounded-full border-2 border-card bg-primary text-primary-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     >
                       <Camera className="size-3" />
                     </button>
+                    <input ref={photoInputRef} type="file" accept="image/*" hidden aria-label="Profile photo file" onChange={(e) => void handlePhotoPicked(e)} />
+                  </div>
+                  <div className="flex flex-col items-start gap-1 text-xs text-muted-foreground">
+                    <span>JPG, PNG or WebP up to 5 MB. Saved on this device.</span>
+                    {preferences.avatarDataUrl && (
+                      <button type="button" onClick={() => update("avatarDataUrl", "")} className="font-medium text-foreground underline-offset-2 hover:underline">
+                        Remove photo (use Google photo)
+                      </button>
+                    )}
                   </div>
                 </div>
 
@@ -452,12 +541,12 @@ export function SettingsWorkspace() {
                   }}
                 >
                 <div className="mt-4 flex flex-col gap-3">
-                  <TextField label="Full Name" value={fullName} onChange={(e) => setFullName(e.target.value)} />
+                  <TextField label="Full Name" value={fullName} maxLength={80} error={profileErrors.name} onChange={(e) => { setFullName(e.target.value); setProfileErrors((p) => ({ ...p, name: undefined })); }} />
                   <TextField label="Email Address" type="email" value={email} disabled onChange={() => {}} />
-                  <TextField label="Phone Number" value={phone} onChange={(e) => setPhone(e.target.value)} />
+                  <TextField label="Phone Number" type="tel" inputMode="tel" optional value={phone} error={profileErrors.phone} onChange={(e) => { setPhone(e.target.value); setProfileErrors((p) => ({ ...p, phone: undefined })); }} />
                   <div className="flex flex-col gap-1.5">
-                    <span className="text-sm font-medium text-foreground">Timezone</span>
-                    <RowSelect
+                    <span className="flex items-center gap-2 text-sm font-medium text-foreground">Timezone <span className="rounded-full bg-secondary px-2 py-0.5 text-[10.5px] font-medium text-muted-foreground">Not applied yet</span></span>
+                    <div inert aria-disabled className="opacity-50"><RowSelect
                       value={timezone}
                       onChange={setTimezone}
                       className="w-full"
@@ -466,11 +555,11 @@ export function SettingsWorkspace() {
                         { value: "utc", label: "(GMT+00:00) UTC" },
                         { value: "pst", label: "(GMT-08:00) Pacific Time" },
                       ]}
-                    />
+                    /></div>
                   </div>
                   <div className="flex flex-col gap-1.5">
-                    <span className="text-sm font-medium text-foreground">Currency</span>
-                    <RowSelect
+                    <span className="flex items-center gap-2 text-sm font-medium text-foreground">Currency <span className="rounded-full bg-secondary px-2 py-0.5 text-[10.5px] font-medium text-muted-foreground">Fixed to INR (₹)</span></span>
+                    <div inert aria-disabled className="opacity-50"><RowSelect
                       value={currency}
                       onChange={setCurrency}
                       className="w-full"
@@ -479,12 +568,12 @@ export function SettingsWorkspace() {
                         { value: "usd", label: "USD - US Dollar ($)" },
                         { value: "eur", label: "EUR - Euro (€)" },
                       ]}
-                    />
+                    /></div>
                   </div>
                 </div>
 
                 <div className="mt-4 flex justify-end">
-                  <ClayButton type="submit">Save Changes</ClayButton>
+                  <ClayButton type="submit" disabled={savingProfile}>{savingProfile ? "Saving…" : "Save Changes"}</ClayButton>
                 </div>
                 </form>
               </div>
@@ -497,8 +586,7 @@ export function SettingsWorkspace() {
                     icon={<Home className="size-4.5" />}
                     label="Default Home View"
                     description="Choose your default landing page"
-                    control={
-                      <RowSelect
+                    control={<NotApplied><RowSelect
                         value={defaultHomeView}
                         onChange={setDefaultHomeView}
                         options={[
@@ -506,27 +594,23 @@ export function SettingsWorkspace() {
                           { value: "transactions", label: "Transactions" },
                           { value: "budgets", label: "Budgets" },
                         ]}
-                      />
-                    }
+                      /></NotApplied>}
                   />
                   <SettingsRow
                     icon={<Wallet className="size-4.5" />}
                     label="Default Account"
-                    description="Select account for new transactions"
-                    control={
-                      <RowSelect
+                    description="FlowFi never pre-selects an account — you choose the payment source each time"
+                    control={<NotApplied><RowSelect
                         value={defaultAccount}
                         onChange={setDefaultAccount}
                         options={[{ value: "select", label: "Select Account" }, ...(accounts as Account[]).map((a) => ({ value: a.id, label: a.name }))]}
-                      />
-                    }
+                      /></NotApplied>}
                   />
                   <SettingsRow
                     icon={<Calendar className="size-4.5" />}
                     label="Date Format"
                     description="Choose your preferred date format"
-                    control={
-                      <RowSelect
+                    control={<NotApplied><RowSelect
                         value={dateFormat}
                         onChange={setDateFormat}
                         options={[
@@ -534,53 +618,46 @@ export function SettingsWorkspace() {
                           { value: "mm-dd-yyyy", label: "MM/DD/YYYY" },
                           { value: "yyyy-mm-dd", label: "YYYY-MM-DD" },
                         ]}
-                      />
-                    }
+                      /></NotApplied>}
                   />
                   <SettingsRow
                     icon={<Hash className="size-4.5" />}
                     label="Number Format"
                     description="Choose number and currency format"
-                    control={
-                      <RowSelect
+                    control={<NotApplied><RowSelect
                         value={numberFormat}
                         onChange={setNumberFormat}
                         options={[
                           { value: "indian", label: "1,23,456.78" },
                           { value: "international", label: "123,456.78" },
                         ]}
-                      />
-                    }
+                      /></NotApplied>}
                   />
                   <SettingsRow
                     icon={<Globe className="size-4.5" />}
                     label="Language"
                     description="Select your preferred language"
-                    control={
-                      <RowSelect
+                    control={<NotApplied><RowSelect
                         value={language}
                         onChange={setLanguage}
                         options={[
                           { value: "en", label: "English" },
                           { value: "hi", label: "Hindi" },
                         ]}
-                      />
-                    }
+                      /></NotApplied>}
                   />
                   <SettingsRow
                     icon={<CalendarRange className="size-4.5" />}
                     label="Start Week On"
                     description="Choose the first day of the week"
-                    control={
-                      <RowSelect
+                    control={<NotApplied><RowSelect
                         value={startWeekOn}
                         onChange={setStartWeekOn}
                         options={[
                           { value: "monday", label: "Monday" },
                           { value: "sunday", label: "Sunday" },
                         ]}
-                      />
-                    }
+                      /></NotApplied>}
                   />
                   <MonthCycleSetting value={monthCycleStartDay} onSave={setMonthCycleStartDay} />
                 </div>
@@ -596,7 +673,7 @@ export function SettingsWorkspace() {
                     label="Change Password"
                     description="Update your account password"
                     control={
-                      <button type="button" onClick={() => setTab("security")} className="text-muted-foreground">
+                      <button type="button" aria-label="Open security settings" onClick={() => setTab("security")} className="text-muted-foreground">
                         <ChevronRight className="size-4" />
                       </button>
                     }
@@ -605,14 +682,13 @@ export function SettingsWorkspace() {
                     icon={<Fingerprint className="size-4.5" />}
                     label="Biometric Lock"
                     description="Use fingerprint/face to unlock app"
-                    control={<Switch checked={biometricLock} onCheckedChange={setBiometricLock} />}
+                    control={<NotApplied label="Not available on web"><Switch checked={false} onCheckedChange={setBiometricLock} /></NotApplied>}
                   />
                   <SettingsRow
                     icon={<Timer className="size-4.5" />}
                     label="Auto Lock"
                     description="Automatically lock the app"
-                    control={
-                      <RowSelect
+                    control={<NotApplied><RowSelect
                         value={autoLockMinutes}
                         onChange={setAutoLockMinutes}
                         options={[
@@ -620,20 +696,19 @@ export function SettingsWorkspace() {
                           { value: "5", label: "5 minutes" },
                           { value: "15", label: "15 minutes" },
                         ]}
-                      />
-                    }
+                      /></NotApplied>}
                   />
                   <SettingsRow
                     icon={<EyeOff className="size-4.5" />}
                     label="Privacy Mode"
                     description="Hide sensitive data in previews"
-                    control={<Switch checked={privacyMode} onCheckedChange={setPrivacyMode} />}
+                    control={<NotApplied><Switch checked={privacyMode} onCheckedChange={setPrivacyMode} /></NotApplied>}
                   />
                 </div>
               </div>
 
               <div className={SETTINGS_CARD}>
-                <CardHeading icon={Bell} iconClass="bg-success/15 text-success" title="Notifications" description="Choose what notifications you want to receive." />
+                <CardHeading icon={Bell} iconClass="bg-success/15 text-success" title="Notifications" description="Choose what you want to hear about. Saved on this device — delivery isn't live yet." />
                 <div className="mt-2 flex flex-col divide-y divide-border/60">
                   <SettingsRow icon={<Bell className="size-4.5" />} label="Transaction Alerts" description="Get notified for new transactions" control={<Switch checked={transactionAlerts} onCheckedChange={setTransactionAlerts} />} />
                   <SettingsRow icon={<Receipt className="size-4.5" />} label="Bill Reminders" description="Reminders for upcoming bills" control={<Switch checked={billReminders} onCheckedChange={setBillReminders} />} />
@@ -664,15 +739,6 @@ export function SettingsWorkspace() {
                   <p className="text-xs text-muted-foreground">We use bank-level security to protect your financial data and keep it private.</p>
                 </div>
               </div>
-              <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                <span className="flex size-8 items-center justify-center rounded-full bg-success/15 text-success">
-                  <ShieldCheck className="size-4" />
-                </span>
-                <div>
-                  <p className="font-medium text-foreground">All systems secure</p>
-                  <p>Last checked: Today, 10:30 AM</p>
-                </div>
-              </div>
             </div>
           </div>
         )}
@@ -682,7 +748,7 @@ export function SettingsWorkspace() {
             <SettingsCard>
               <CardHeading icon={Wallet} iconClass="bg-primary/12 text-primary-accent-text" title="Budgeting" />
               <div className="mt-3">
-                <CurrencyField label="Default monthly budget" value={monthlyBudget} onChange={setMonthlyBudget} description="Used as the starting point for new budget cycles." />
+                <NotApplied><CurrencyField label="Default monthly budget" value={monthlyBudget} onChange={setMonthlyBudget} description="Used as the starting point for new budget cycles." /></NotApplied>
               </div>
             </SettingsCard>
 
@@ -691,7 +757,7 @@ export function SettingsWorkspace() {
                 icon={<SlidersHorizontal className="size-4.5" />}
                 label="Early access features"
                 description="Try new FlowFi features before general release"
-                control={<Switch checked={betaFeatures} onCheckedChange={setBetaFeatures} />}
+                control={<NotApplied label="No early features yet"><Switch checked={betaFeatures} onCheckedChange={setBetaFeatures} /></NotApplied>}
               />
             </SettingsCard>
 
@@ -713,14 +779,14 @@ export function SettingsWorkspace() {
             <SettingsCard>
               <CardHeading icon={Palette} iconClass="bg-purple/15 text-purple" title="Accent color" />
               <div className="mt-3">
-                <ColorPicker value={accentColor} onChange={setAccentColor} />
+                <NotApplied><ColorPicker value={accentColor} onChange={setAccentColor} /></NotApplied>
               </div>
             </SettingsCard>
 
             <SettingsCard>
               <CardHeading icon={SlidersHorizontal} iconClass="bg-success/15 text-success" title="Density" />
               <div className="mt-3">
-                <SliderField label="Interface density" value={density} onChange={setDensity} formatValue={(v) => (v < 33 ? "Compact" : v < 66 ? "Comfortable" : "Spacious")} />
+                <NotApplied><SliderField label="Interface density" value={density} onChange={setDensity} formatValue={(v) => (v < 33 ? "Compact" : v < 66 ? "Comfortable" : "Spacious")} /></NotApplied>
               </div>
             </SettingsCard>
           </div>
@@ -785,8 +851,14 @@ export function SettingsWorkspace() {
               <SettingsRow
                 icon={<Lock className="size-4.5" />}
                 label="Two-factor authentication"
-                description="Require a code from your authenticator app at sign-in"
-                control={<Switch checked={twoFactor} onCheckedChange={setTwoFactor} />}
+                description="FlowFi signs in through Google, so 2-step verification is set up and enforced in your Google account, not here."
+                control={
+                  <Button asChild variant="outline" size="sm">
+                    <a href="https://myaccount.google.com/signinoptions/two-step-verification" target="_blank" rel="noopener noreferrer">
+                      Manage in Google
+                    </a>
+                  </Button>
+                }
               />
             </SettingsCard>
 
@@ -794,9 +866,9 @@ export function SettingsWorkspace() {
               <SettingsRow
                 icon={<Trash2 className="size-4.5 text-destructive" />}
                 label="Delete account"
-                description="Permanently remove your account and all associated data."
+                description="Not self-service yet — email us and we will delete your account and data."
                 control={
-                  <Button variant="destructive" size="sm" onClick={() => setDeleteAccountOpen(true)}>
+                  <Button variant="destructive" size="sm" onClick={() => showUnavailable("Account deletion")}>
                     Delete account
                   </Button>
                 }
@@ -807,14 +879,8 @@ export function SettingsWorkspace() {
 
         {tab === "notifications" && (
           <div className="flex flex-col gap-4">
-            {!pushGranted && (
-              <PermissionBanner
-                onEnable={() => {
-                  setPushGranted(true);
-                  toast.success("Push notifications enabled");
-                }}
-              />
-            )}
+            {pushPermission !== "granted" && <PermissionBanner onEnable={() => void enablePush()} />}
+            <p className="text-xs text-muted-foreground">Your choices are saved on this device. Email, push and SMS delivery isn&apos;t live yet, so nothing is sent until it is.</p>
 
             <SettingsCard noPadding>
               <NotificationSettingsRow icon={Bell} label="Bill reminders" description="3 days before a bill is due" enabled={channels.bills} onChange={(k, v) => setChannel("bills", k, v)} />
@@ -870,6 +936,8 @@ export function SettingsWorkspace() {
           </div>
         )}
 
+        {tab === "storage" && <StorageManagement />}
+
         {tab === "others" && (
           <div className="flex flex-col gap-4">
             <SettingsCard noPadding>
@@ -883,14 +951,14 @@ export function SettingsWorkspace() {
             </SettingsCard>
 
             <SettingsCard noPadding>
-              <SettingsRow icon={<BookOpen className="size-4.5" />} label="About FlowFi" description="Version 1.0.0" />
+              <SettingsRow icon={<BookOpen className="size-4.5" />} label="About FlowFi" description="FlowFi Web" />
               <SettingsDivider />
               <SettingsRow
                 label="Terms & Privacy Policy"
                 control={
-                  <button type="button" className="text-muted-foreground">
+                  <Link href="/privacy" aria-label="Open Terms & Privacy Policy" className="text-muted-foreground">
                     <ChevronRight className="size-4" />
-                  </button>
+                  </Link>
                 }
               />
             </SettingsCard>
@@ -902,11 +970,11 @@ export function SettingsWorkspace() {
         <div className={SETTINGS_CARD}>
           <CardHeading icon={Landmark} iconClass="bg-primary/12 text-primary-accent-text" title="Account Summary" />
           <div className="mt-2 flex flex-col">
-            <SummaryRow icon={Landmark} iconClass="bg-primary/12 text-primary-accent-text" label="Total Accounts" sublabel="Active" value={String(accounts.length)} />
-            <SummaryRow icon={Wallet} iconClass="bg-success/15 text-success" label="Total Balance" sublabel="Across all accounts" value={formatCurrency(totalBalance)} />
-            <SummaryRow icon={CreditCard} iconClass="bg-expense/12 text-expense" label="Credit Cards" sublabel="Active cards" value={String(creditCards.length)} />
-            <SummaryRow icon={HandCoins} iconClass="bg-warning/20 text-warning-foreground" label="Loans" sublabel="Active loans" value={String(loans.length)} />
-            <SummaryRow icon={Users} iconClass="bg-purple/15 text-purple" label="People Ledger" sublabel="People added" value={String(people.length)} />
+            <SummaryRow icon={Landmark} iconClass="bg-primary/12 text-primary-accent-text" label="Total Accounts" sublabel="Active" value={String(accounts.length)} href="/accounts" />
+            <SummaryRow icon={Wallet} iconClass="bg-success/15 text-success" label="Total Balance" sublabel="Across all accounts" value={formatCurrency(totalBalance)} href="/accounts" />
+            <SummaryRow icon={CreditCard} iconClass="bg-expense/12 text-expense" label="Credit Cards" sublabel="Active cards" value={String(creditCards.length)} href="/credit-cards" />
+            <SummaryRow icon={HandCoins} iconClass="bg-warning/20 text-warning-foreground" label="Loans" sublabel="Active loans" value={String(loans.length)} href="/loans" />
+            <SummaryRow icon={Users} iconClass="bg-purple/15 text-purple" label="People Ledger" sublabel="People added" value={String(people.length)} href="/people" />
           </div>
         </div>
 
@@ -923,44 +991,23 @@ export function SettingsWorkspace() {
           <CardHeading icon={AlertTriangle} iconClass="bg-expense/15 text-expense" title="Danger Zone" />
           <div className="mt-2 flex flex-col">
             <ActionRow icon={RotateCcw} iconClass="bg-expense/12 text-expense" label="Reset App" description="Reset app to default settings" destructive onClick={() => setResetOpen(true)} />
-            <ActionRow icon={Database} iconClass="bg-expense/12 text-expense" label="Delete All Data" description="Permanently delete all your data" destructive onClick={() => setDeleteAllOpen(true)} />
-            <ActionRow icon={AlertTriangle} iconClass="bg-expense/12 text-expense" label="Delete Account" description="Permanently delete your account" destructive onClick={() => setDeleteAccountOpen(true)} />
+            <ActionRow icon={Database} iconClass="bg-expense/12 text-expense" label="Delete All Data" description="Not self-service yet — email us" destructive onClick={() => showUnavailable("Deleting all data")} />
+            <ActionRow icon={AlertTriangle} iconClass="bg-expense/12 text-expense" label="Delete Account" description="Not self-service yet — email us" destructive onClick={() => showUnavailable("Account deletion")} />
           </div>
         </div>
       </div>
 
       <DeleteDialog
-        open={deleteAccountOpen}
-        onOpenChange={setDeleteAccountOpen}
-        title="Delete your account"
-        description="This will permanently delete your FlowFi account, including all transactions, budgets, and connected accounts. This cannot be undone."
-        itemName={fullName}
-        onConfirm={() => {
-          setDeleteAccountOpen(false);
-          toast.error("Account deletion is disabled in this preview.");
-        }}
-      />
-
-      <DeleteDialog
         open={resetOpen}
         onOpenChange={setResetOpen}
         title="Reset app to default settings?"
-        description="Every preference on this page will be reset. Your financial data will not be affected."
+        description="Every preference on this page — including your Month cycle start day and profile photo — goes back to its default. Your accounts, transactions, loans and other financial data are not touched."
         onConfirm={() => {
           setResetOpen(false);
-          toast.error("Reset is disabled in this preview.");
-        }}
-      />
-
-      <DeleteDialog
-        open={deleteAllOpen}
-        onOpenChange={setDeleteAllOpen}
-        title="Delete all data?"
-        description="This permanently deletes every transaction, account, budget, and loan in your FlowFi workspace."
-        itemName="DELETE"
-        onConfirm={() => {
-          setDeleteAllOpen(false);
-          toast.error("Data deletion is disabled in this preview.");
+          reset();
+          setPhone("");
+          setActiveTheme("system");
+          toast.success("Preferences reset", "Settings are back to their defaults.");
         }}
       />
       <ScrollNav />

@@ -83,7 +83,7 @@ describe("Settings → Month cycle UI", () => {
   it("1–2. the setting is visible and defaults to the 1st (calendar month) when nothing is stored", () => {
     openSettings();
     expect(screen.getByText("Month cycle", { selector: "p" })).toBeTruthy();
-    expect(screen.getByText(/FlowFi uses this cycle across Month Cycle, People Ledger, Dashboard/)).toBeTruthy();
+    expect(screen.getByText(/Used by Month Cycle, People Ledger & statements, Debt Planner and the Loans & EMI/)).toBeTruthy();
     expect(trigger().textContent).toBe("1st (calendar month)");
     expect(preview("Current cycle")).toBe(expectedPreview(1).current);
     expect(preview("Current cycle")).toBe("01 Oct 2026 → 31 Oct 2026");

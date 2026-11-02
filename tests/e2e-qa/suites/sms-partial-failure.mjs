@@ -1,7 +1,7 @@
 /**
  * SMS candidates — a People/Split step that fails AFTER the transaction was created.
  * Local emulator only (see tests/e2e-qa/README.md). The failure is injected by swapping the EMULATOR's security rules so
- * writes to everything except transactions / accounts / smsTransactionCandidates are refused: the import's transaction
+ * writes to everything except transactions / accounts / smsTransactionCandidates / smsCandidateTombstones (the atomic import commits the tombstone with the money write) are refused: the import's transaction
  * write succeeds, the person assignment (People ledger / schedule writes) is denied. Nothing here can reach live Firebase.
  */
 import { scenario } from "../lib/core.mjs";
@@ -49,7 +49,7 @@ const ONLY_TRANSACTION_WRITES = `rules_version = '2';
 service cloud.firestore { match /databases/{database}/documents {
   match /users/{uid}/{col}/{d=**} {
     allow read: if request.auth != null;
-    allow write: if request.auth != null && (col == 'transactions' || col == 'accounts' || col == 'smsTransactionCandidates');
+    allow write: if request.auth != null && (col == 'transactions' || col == 'accounts' || col == 'smsTransactionCandidates' || col == 'smsCandidateTombstones');
   }
 } }`;
 const ALLOW_ALL = `rules_version = '2';

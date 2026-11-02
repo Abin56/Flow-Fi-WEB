@@ -21,14 +21,15 @@ import {
   type MonthWindow,
 } from "@/features/loans/lib/my-commitments";
 import { usePeopleCycleStatements } from "@/features/people/hooks/use-person-cycle-statement";
+import { useMonthCycleStartDay } from "@/features/settings/hooks/use-user-preferences";
 import { cn } from "@/lib/utils";
 
 const ALL_TIME = { start: new Date(1970, 0, 1), end: new Date(2200, 0, 1) };
 const rupees = (paise: number) => paise / 100;
 
-const MONTH_OPTIONS: { value: "0" | "1"; label: string }[] = [
-  { value: "0", label: "This month" },
-  { value: "1", label: "Next month" },
+const monthOptions = (custom: boolean): { value: "0" | "1"; label: string }[] => [
+  { value: "0", label: custom ? "This cycle" : "This month" },
+  { value: "1", label: custom ? "Next cycle" : "Next month" },
 ];
 
 const TONES = {
@@ -158,7 +159,9 @@ export function MyCommitmentsSummary({ loanRows, emiRows, defaultExpanded = true
     () => [...loanRows.map(recordFromLoanRow), ...emiRows.map(recordFromEmiRow)].filter((r): r is CommitmentRecord => r != null),
     [loanRows, emiRows],
   );
-  const window = useMemo(() => monthWindow(new Date(), offset === "1" ? 1 : 0), [offset]);
+  // The configured Month Cycle (Settings) drives the window; start day 1 stays the plain calendar month.
+  const cycleStartDay = useMonthCycleStartDay();
+  const window = useMemo(() => monthWindow(new Date(), offset === "1" ? 1 : 0, cycleStartDay), [offset, cycleStartDay]);
   // One evaluation: the summary is folded from the very rows the breakdown lists, so the two cannot disagree.
   const rows = useMemo(() => commitmentRows(records, window, new Date()), [records, window]);
   const s = useMemo(() => foldCommitmentRows(rows), [rows]);
@@ -177,7 +180,7 @@ export function MyCommitmentsSummary({ loanRows, emiRows, defaultExpanded = true
           <span className="ml-1 rounded-full bg-secondary px-2.5 py-0.5 align-middle text-xs font-medium text-muted-foreground">{window.label}</span>
         </h2>
         <div className="flex items-center gap-2">
-          <ChoiceChips ariaLabel="Month" options={MONTH_OPTIONS} value={offset} onChange={setOffset} />
+          <ChoiceChips ariaLabel={window.custom ? "Cycle" : "Month"} options={monthOptions(window.custom)} value={offset} onChange={setOffset} />
           <button
             type="button"
             aria-expanded={expanded}

@@ -14,6 +14,9 @@ import { useAuthStore } from "@/store/auth-store";
 
 export interface UserPreferences {
   phone: string;
+  /** Profile photo chosen in Settings (a small resized JPEG data URL). Device-local like every preference here;
+   *  empty falls back to the Google account photo. */
+  avatarDataUrl: string;
   timezone: string;
   currency: string;
   defaultHomeView: string;
@@ -31,7 +34,8 @@ export interface UserPreferences {
    *
    *  Scope — which views use what:
    *  - GLOBAL ACCOUNTING CYCLE (this setting): Month Cycle; People Ledger / People statements;
-   *    Debt Planner cycle calculations.
+   *    Debt Planner cycle calculations; the Loans & EMI "My EMI — Confirmed" commitments window
+   *    (`monthWindow`). Installment due dates and payments are never rewritten by a cycle change.
    *  - CALENDAR MONTH (intentionally not this setting): Dashboard "This month"; Bills page "This month";
    *    Budgets; Analytics; Reports; Credit Cards "Spent this month"; Transactions "This month".
    *  - OWN INDEPENDENT SCHEDULE (never this setting): credit-card statement cycle (card `statementDay`);
@@ -60,6 +64,7 @@ export interface UserPreferences {
 
 export const DEFAULT_PREFERENCES: UserPreferences = {
   phone: "",
+  avatarDataUrl: "",
   timezone: "ist",
   currency: "inr",
   defaultHomeView: "dashboard",
@@ -158,7 +163,13 @@ export function useUserPreferences() {
     setPreferences((prev) => ({ ...prev, [key]: value }));
   }
 
-  return { preferences, update };
+  /** Back to defaults — preferences only; no financial record is touched. */
+  function reset() {
+    broadcastRef.current = true;
+    setPreferences(DEFAULT_PREFERENCES);
+  }
+
+  return { preferences, update, reset };
 }
 
 /**
@@ -167,4 +178,11 @@ export function useUserPreferences() {
  */
 export function useMonthCycleStartDay(): number {
   return normalizeCycleStartDay(useUserPreferences().preferences.monthCycleStartDay);
+}
+
+/** The profile photo to show: the one picked in Settings, else the Google account's. */
+export function useProfilePhoto(): string | null {
+  const photoURL = useAuthStore((s) => s.user?.photoURL ?? null);
+  const { preferences } = useUserPreferences();
+  return preferences.avatarDataUrl || photoURL;
 }
