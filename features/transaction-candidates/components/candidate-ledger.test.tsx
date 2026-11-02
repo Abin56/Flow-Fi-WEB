@@ -228,3 +228,60 @@ describe("CandidateLedger account suggestion", () => {
     expect(screen.queryByTestId("account-suggestion")).toBeNull();
   });
 });
+
+describe("inline possible-match panel", () => {
+  const match = (over: Record<string, unknown> = {}) =>
+    ({
+      transactionId: "t1",
+      kind: "possible",
+      score: 0.8,
+      amountDiff: 0.08,
+      dayGap: 0,
+      descriptionSimilarity: 1,
+      sameAccount: true,
+      referenceConfirmed: false,
+      reasons: ["Same merchant", "Same day", "Amount differs by ₹0.08"],
+      existing: { description: "SWIGGY BANGALORE", dateText: "21 Oct 2026", amountText: "₹321.08", directionText: "Expense", accountLabel: "HDFC Freedom •••• 4821", categoryLabel: "Food", sourceLabel: "Statement import" },
+      ...over,
+    }) as never;
+  const group = (rows: CandidateRowModel[]): LedgerGroup => ({ key: "g", label: "October 2026", dateText: null, flat: false, rows }) as never;
+
+  it("shows the previously imported transaction inside the row, labelled possible, with why it matched", () => {
+    const c = candidate({ id: "c1" });
+    renderLedger([group([row(c, { matches: [match()] })])]);
+    const panel = screen.getByTestId("candidate-match-panel");
+    expect(panel.getAttribute("data-match-kind")).toBe("possible");
+    expect(within(panel).getByText(/Possible match — similar transaction already imported/)).toBeTruthy();
+    expect(within(panel).getByText("SWIGGY BANGALORE")).toBeTruthy();
+    expect(within(panel).getByText("₹321.08")).toBeTruthy();
+    expect(within(panel).getByText("Amount differs by ₹0.08")).toBeTruthy();
+    expect(within(panel).getByText("Food")).toBeTruthy();
+    expect(within(panel).getByText(/Nothing is skipped or merged for you/)).toBeTruthy();
+  });
+
+  it("labels an exact match differently, in words", () => {
+    renderLedger([group([row(candidate({ id: "c2" }), { matches: [match({ kind: "exact", reasons: ["Same merchant", "Same day", "Same amount"] })] })])]);
+    expect(within(screen.getByTestId("candidate-match-panel")).getByText(/Exact match — already imported/)).toBeTruthy();
+  });
+
+  it("shows the best match first and reveals the others on request; Compare opens the review", () => {
+    const onReview = vi.fn();
+    const second = match({ transactionId: "t2", existing: { description: "SWIGGY INSTAMART", dateText: "22 Oct 2026", amountText: "₹321.00", directionText: "Expense", accountLabel: null, categoryLabel: null, sourceLabel: null } });
+    renderLedger([group([row(candidate({ id: "c3" }), { matches: [match(), second] })])], { onReview });
+    expect(screen.getAllByTestId("candidate-match")).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: /Show 1 more similar/ }));
+    expect(screen.getAllByTestId("candidate-match")).toHaveLength(2);
+    fireEvent.click(screen.getByRole("button", { name: /Compare in review/ }));
+    expect(onReview).toHaveBeenCalledWith("c3");
+  });
+
+  it("a row with no matches renders no panel, and the panel changes neither the lane nor the action buttons", () => {
+    renderLedger([group([row(candidate({ id: "c4" }))])]);
+    expect(screen.queryByTestId("candidate-match-panel")).toBeNull();
+    const withMatch = group([row(candidate({ id: "c5" }), { matches: [match()] })]);
+    cleanup();
+    renderLedger([withMatch]);
+    expect(screen.getByTestId("candidate-row").getAttribute("data-lane")).toBe("noIssues");
+    expect(screen.getByRole("button", { name: /^Review/ })).toBeTruthy();
+  });
+});

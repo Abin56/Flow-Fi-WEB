@@ -4,8 +4,10 @@
  * The "Transaction Details" editor for a single SMS candidate, in a compact sheet that drops down from the top of
  * the viewport (`TransactionSheet`, `compact`) so the inbox stays visible below it. A slim top row states the
  * merchant, signed amount, status, source and queue position once; Category · Account · Whose expense share one row on
- * desktop; the person and split editors open inside the card only when chosen; Notes, the original SMS and "More
- * details" (status explanation, parsing evidence, technical details) are small toggles; the sticky footer carries
+ * desktop. Under Whose expense, "Someone else's" adds one person-picker row and "Split" adds one summary row whose editor
+ * floats in a popover (it never pushes the form down). The "Original SMS" strip keeps what the phone parsed from the
+ * message — bank, type, last-4, reference — on one line, expanding to every parsed field; Notes and "More details"
+ * (status explanation, parsing evidence, technical details) are small toggles; the sticky footer carries
  * "Still needed" and the actions. Needed-action warnings are never folded away: the account-match warning is one
  * inline line under "Paid from". SMS-derived fields (merchant, date, bank, reference, ...) are shown read-only.
  *
@@ -23,6 +25,7 @@ import {
   CalendarDays,
   Check,
   CreditCard,
+  ChevronDown,
   ChevronRight,
   Landmark,
   Loader2,
@@ -59,6 +62,7 @@ import {
   type SheetPickerOption,
 } from "@/components/finance/transaction-sheet";
 import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
@@ -131,7 +135,7 @@ const OWNERSHIP_OPTIONS: { value: Ownership; label: string; aria: string; hint: 
   { value: "split", label: "Split", aria: "Split expense", hint: "Share with people", icon: SplitSquareHorizontal },
 ];
 
-type PanelId = "notes" | "sms" | "more";
+type PanelId = "notes" | "more";
 
 const NOTE_TONE = {
   warning: "text-[oklch(0.5_0.12_70)] dark:text-warning",
@@ -220,6 +224,31 @@ const SPLIT_TYPE_OPTIONS: { value: SplitType; label: string }[] = [
   { value: "percentage", label: "By percentage" },
 ];
 
+export interface SmsParsedFact {
+  label: string;
+  value: string;
+  /** Part of the one-line summary on the closed "Original SMS" strip. */
+  inSummary?: boolean;
+  mono?: boolean;
+}
+
+/**
+ * The fields Android parsed out of the SMS, in reading order — display only. Fields the SMS didn't carry are left out
+ * rather than shown as blanks (the bank, the last-4 and the reference are the ones that commonly go missing).
+ */
+export function smsParsedFacts(candidate: SmsTransactionCandidate, signedAmount: string): SmsParsedFact[] {
+  const facts: (SmsParsedFact | null)[] = [
+    candidate.bankName ? { label: "Bank", value: candidate.bankName, inSummary: true } : null,
+    { label: "Type", value: smsCandidateEventTypeLabel(candidate.eventType), inSummary: true },
+    candidate.rawLastFour ? { label: "Card / account ending", value: `•••• ${candidate.rawLastFour}`, inSummary: true } : null,
+    candidate.referenceNumber ? { label: "Reference", value: candidate.referenceNumber, inSummary: true, mono: true } : null,
+    { label: "Amount", value: signedAmount },
+    { label: "Date & time", value: dateAndTime(candidate.transactionDate) },
+    candidate.merchant ? { label: "Merchant", value: candidate.merchant } : null,
+  ];
+  return facts.filter((f): f is SmsParsedFact => f != null);
+}
+
 /** Same draft -> `ImportCandidateParams.personAssignment` mapping `TransactionDetailsModal`'s own
  *  save branch does for a brand-new expense — `null` when nothing was actually configured, so a
  *  plain import (no one assigned) never triggers a wasted `ExpenseRepository` round trip. */
@@ -244,6 +273,7 @@ export function CandidateDetailsModal({
   onOpenChange,
   duplicate,
   matchedTransaction,
+  similarMatch = null,
   existingTransactions,
   accounts,
   creditCards,
@@ -269,6 +299,8 @@ export function CandidateDetailsModal({
   duplicate: CandidateDuplicateResult | null;
   /** The live `transactions/{duplicate.duplicateOfTransactionId}` doc, when resolved — `null` if there's no duplicate or it hasn't loaded yet. */
   matchedTransaction: Transaction | null;
+  /** The closest saved transaction the strict duplicate check did NOT flag (fuzzy: nearby date, rounding-level amount, similar name) — information only, never blocks an import. */
+  similarMatch?: { transaction: Transaction; kind: "exact" | "possible" } | null;
   /** Every already-loaded existing transaction (manual entry, PDF import, and prior SMS imports alike — source-agnostic) — passed straight through to `importCandidate`'s own duplicate gate. */
   existingTransactions: ExistingTransactionForDuplicateCheck[];
   accounts: Account[];
@@ -342,6 +374,9 @@ export function CandidateDetailsModal({
   // View-only: which folded panels are open, and whether "Someone else's" was picked before a person was chosen.
   const [openPanel, setOpenPanel] = useState<PanelId | null>(null);
   const [personMode, setPersonMode] = useState(false);
+  // View-only: the "Original SMS" strip, and the floating split editor.
+  const [smsOpen, setSmsOpen] = useState(false);
+  const [splitEditorOpen, setSplitEditorOpen] = useState(false);
   // Inline validation only appears once the reviewer actually tries to import (never as a wall of red on open).
   const [showErrors, setShowErrors] = useState(false);
   // The draft as it was seeded for this candidate — what "unsaved edits" is measured against.
@@ -386,6 +421,8 @@ export function CandidateDetailsModal({
     setConfirmDismissOpen(false);
     setDismissing(false);
     setOpenPanel(null);
+    setSmsOpen(false);
+    setSplitEditorOpen(false);
     setPendingClose(false);
     setPersonMode(false);
     setAddingPerson(false);
@@ -427,7 +464,17 @@ export function CandidateDetailsModal({
           accounts,
           creditCards,
         })
-      : null;
+      : !isDuplicate && similarMatch
+        ? buildDuplicateComparison({
+            candidate: currentCandidate,
+            candidateAccountKey: currentDraft.destinationKey ?? matchedDestinationKey,
+            existing: similarMatch.transaction,
+            duplicate: { confidence: similarMatch.kind === "exact" ? 0.9 : 0.6 },
+            kind: similarMatch.kind,
+            accounts,
+            creditCards,
+          })
+        : null;
 
   /**
    * `force` is only ever `true` when re-invoked from the `DuplicateWarningDialog`'s "Import anyway"
@@ -604,7 +651,8 @@ export function CandidateDetailsModal({
       setShowErrors(true);
       const fieldErrors = importFieldErrors(currentDraft, destinationState);
       const first = (["category", "account", "split"] as const).find((f) => fieldErrors[f]);
-      if (first) focusInvalidField(bodyRef.current, first);
+      if (first === "split") setSplitEditorOpen(true);
+      else if (first) focusInvalidField(bodyRef.current, first);
       return;
     }
     void handleImport(false, advance);
@@ -660,15 +708,28 @@ export function CandidateDetailsModal({
     if (next === ownership) return;
     if (next === "mine") {
       setPersonMode(false);
+      setSplitEditorOpen(false);
       setDraft({ ...currentDraft, personId: null, owesPersonToggle: false, splitOpen: false });
     } else if (next === "person") {
       setPersonMode(true);
+      setSplitEditorOpen(false);
       setDraft({ ...currentDraft, splitOpen: false });
     } else {
+      // Choosing Split opens its editor right away, so it is still one click to start naming people.
+      setSplitEditorOpen(true);
       setDraft({ ...currentDraft, splitOpen: true });
     }
   }
   const allocation = currentDraft.splitOpen ? describeSplitAllocation(currentDraft, currentCandidate.amount, people) : null;
+  const splitNeedsAttention = allocation != null && (allocation.balanced === false || allocation.duplicate != null);
+  const splitTypeLabel = SPLIT_TYPE_OPTIONS.find((o) => o.value === currentDraft.splitType)?.label ?? "Split";
+
+  // What the phone parsed from the SMS — the message text itself never reaches FlowFi (see the model's privacy note).
+  const smsFacts = smsParsedFacts(currentCandidate, `${sign}${formatCurrencyPrecise(currentCandidate.amount)}`);
+  const smsSummary = smsFacts
+    .filter((f) => f.inSummary)
+    .map((f) => f.value)
+    .join(" · ");
 
   /** Close (X, Escape, a click outside the sheet, Cancel). Unsaved edits are never discarded silently. Closing never writes. */
   function requestClose() {
@@ -753,7 +814,7 @@ export function CandidateDetailsModal({
             </span>
           </p>
           <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1">
-            <DialogTitle className="max-w-full truncate font-heading text-[17px] leading-tight font-bold tracking-tight text-hero-foreground" title={currentCandidate.merchant ?? undefined}>
+            <DialogTitle className="max-w-full truncate font-heading text-[15px] leading-tight font-bold tracking-tight text-hero-foreground" title={currentCandidate.merchant ?? undefined}>
               {merchantName}
             </DialogTitle>
             <span className="shrink-0 rounded-full bg-card">
@@ -766,12 +827,6 @@ export function CandidateDetailsModal({
               {dateAndTime(currentCandidate.transactionDate)}
             </span>
             <span>{smsCandidateEventTypeLabel(currentCandidate.eventType)}</span>
-            {currentCandidate.bankName && (
-              <span className="inline-flex min-w-0 items-center gap-1.5">
-                <Landmark className="size-3.5 shrink-0 text-hero-foreground/68" aria-hidden />
-                <span className="truncate">{currentCandidate.bankName}</span>
-              </span>
-            )}
           </DialogDescription>
         </div>
       </div>
@@ -780,7 +835,7 @@ export function CandidateDetailsModal({
         <p
           aria-label={`${isExpense ? "Debit" : "Credit"} ${sign}${formatCurrencyPrecise(currentCandidate.amount)}`}
           title="Read-only — taken from the SMS"
-          className={cn("flex items-center gap-1.5 font-heading text-[24px] leading-none font-bold tracking-tight whitespace-nowrap tabular-nums", isExpense ? SHEET_AMOUNT_TONE.debit : SHEET_AMOUNT_TONE.credit)}
+          className={cn("flex items-center gap-1.5 font-heading text-[26px] leading-none font-bold tracking-tight whitespace-nowrap tabular-nums sm:text-[30px]", isExpense ? SHEET_AMOUNT_TONE.debit : SHEET_AMOUNT_TONE.credit)}
         >
           <span>
             {sign}
@@ -826,7 +881,7 @@ export function CandidateDetailsModal({
                   key={c.field}
                   type="button"
                   tabIndex={-1}
-                  onClick={() => focusInvalidField(bodyRef.current, c.field)}
+                  onClick={() => (c.field === "split" ? setSplitEditorOpen(true) : focusInvalidField(bodyRef.current, c.field))}
                   className="inline-flex h-6 shrink-0 items-center rounded-full border border-dashed border-border-strong bg-card px-2 text-[11.5px] font-semibold text-foreground/80 transition-colors hover:border-solid hover:bg-secondary"
                 >
                   {c.label}
@@ -917,10 +972,10 @@ export function CandidateDetailsModal({
           )}
 
           {/* A possible duplicate is the first thing to see — never folded away. */}
-          {isDuplicate &&
+          {(isDuplicate || similarMatch != null) &&
             !committed &&
             (comparison ? (
-              <DuplicateComparisonCard comparison={comparison} />
+              <DuplicateComparisonCard comparison={comparison} rechecked={isDuplicate} />
             ) : (
               <div className="rounded-2xl border border-warning/60 bg-warning/8 p-4 text-xs text-foreground/90" data-testid="duplicate-comparison">
                 <p className="font-bold uppercase">Possible duplicate</p>
@@ -931,6 +986,45 @@ export function CandidateDetailsModal({
 
           {/* One compact card: Category · Paid from · Whose expense in a row, the person/split editor only when chosen, then small toggles. */}
           <section aria-label="Details" className="flex flex-col gap-2.5 rounded-xl border border-border bg-card p-3 shadow-e1 sm:p-3.5">
+            {/* What the phone read from the message, on one line — open it for every parsed field. */}
+            <div className="overflow-hidden rounded-lg border border-border-subtle bg-secondary/50" data-testid="sms-strip">
+              <button
+                type="button"
+                aria-expanded={smsOpen}
+                aria-controls="candidate-panel-sms"
+                aria-label={`Original SMS, ${smsSummary}`}
+                onClick={() => setSmsOpen((v) => !v)}
+                className="flex min-h-9 w-full items-center gap-2 px-2.5 text-left outline-none transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+              >
+                <MessageSquareText className="size-3.5 shrink-0 text-foreground/72" strokeWidth={2} aria-hidden />
+                <span className="shrink-0 text-[12.5px] font-semibold whitespace-nowrap text-foreground">Original SMS</span>
+                <span className="min-w-0 flex-1 truncate text-[12px] text-foreground/75 tabular-nums" data-testid="sms-summary">
+                  {smsSummary}
+                </span>
+                <ChevronDown className={cn("size-3.5 shrink-0 text-foreground/72 transition-transform duration-200", smsOpen && "rotate-180")} aria-hidden />
+              </button>
+              {smsOpen && (
+                <div id="candidate-panel-sms" className="flex flex-col gap-2.5 border-t border-border-subtle px-3 pt-2.5 pb-3">
+                  <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 text-[12px] sm:grid-cols-[auto_minmax(0,1fr)_auto_minmax(0,1fr)]" data-testid="sms-parsed-facts">
+                    {smsFacts.map((f) => (
+                      <div key={f.label} className="contents">
+                        <dt className="text-foreground/72">{f.label}</dt>
+                        <dd className={cn("min-w-0 truncate font-medium text-foreground tabular-nums", f.mono && "font-mono")} title={f.value}>
+                          {f.value}
+                        </dd>
+                      </div>
+                    ))}
+                  </dl>
+                  <div className="flex flex-col gap-0.5 rounded-lg border border-dashed border-border-strong bg-card px-3 py-2" data-testid="original-message-unavailable">
+                    <p className="text-[11px] font-bold tracking-wide text-foreground uppercase">Original message unavailable</p>
+                    <p className="text-[12px] text-foreground/80">
+                      FlowFi never receives the SMS text — it stays on your phone (open the Android app&apos;s SMS Inbox to read it). What you see here is what the phone parsed from it.
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+
             <div className={cn("grid items-start gap-x-3 gap-y-2.5", isExpense ? "md:grid-cols-2 lg:grid-cols-3" : "md:grid-cols-2")}>
               <div className="flex min-w-0 flex-col gap-1.5">
                 <TxnFieldRow label="Category" field="category" error={errors.category}>
@@ -1006,166 +1100,209 @@ export function CandidateDetailsModal({
                 )}
               </div>
               {isExpense && (
-                <div className="flex min-w-0 flex-col gap-1 md:col-span-2 lg:col-span-1">
+                <div className="flex min-w-0 flex-col gap-1.5 md:col-span-2 lg:col-span-1">
                   <span className="text-xs font-semibold text-foreground/80">
                     Whose expense? <span className="font-normal text-foreground/65">(optional)</span>
                   </span>
                   <SheetChoice compact label="Whose expense" value={ownership} onChange={chooseOwnership} options={OWNERSHIP_OPTIONS} />
+
+                  {/* Someone else's: one row — the person, and whether it counts as owed. Nothing opens beneath it. */}
+                  {ownership === "person" && (
+                    <div className="flex flex-col gap-1.5">
+                      {!addingPerson ? (
+                        <SheetPicker
+                          compact
+                          value={currentDraft.personId}
+                          onValueChange={(v) => {
+                            if (v === "add-new") {
+                              setAddingPerson(true);
+                              return;
+                            }
+                            setDraft({ ...currentDraft, personId: v });
+                          }}
+                          options={personPickerOptions}
+                          placeholder="Choose a person"
+                          emptyIcon={<UserPlus className="size-4" />}
+                          ariaLabel="Assign to a person"
+                          extraItems={
+                            <SelectItem value="add-new">
+                              <span className="flex items-center gap-1.5">
+                                <UserPlus className="size-3.5" /> Add new person
+                              </span>
+                            </SelectItem>
+                          }
+                        />
+                      ) : (
+                        <AddPersonInline name={newPersonName} busy={addingPersonBusy} onName={setNewPersonName} onSave={() => void handleAddPerson()} onCancel={() => setAddingPerson(false)} />
+                      )}
+                      {currentDraft.personId && (
+                        <label className="flex cursor-pointer items-center gap-2.5 px-0.5">
+                          <Switch checked={currentDraft.owesPersonToggle} onCheckedChange={(checked) => setDraft({ ...currentDraft, owesPersonToggle: checked })} />
+                          <span className="min-w-0 text-[12.5px] leading-tight">
+                            <span className="font-semibold text-foreground">This person owes me this expense</span>
+                            <span className="block text-[11.5px] text-foreground/72">
+                              {currentDraft.owesPersonToggle ? `Adds ${formatCurrencyPrecise(currentCandidate.amount)} to what they owe you.` : "Off: linked only — nothing is added to what they owe you."}
+                            </span>
+                          </span>
+                        </label>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Split: one summary row; the editor floats over the form so the page never grows. */}
+                  {ownership === "split" && allocation && (
+                    <div className="flex flex-col gap-1">
+                      <Popover open={splitEditorOpen} onOpenChange={setSplitEditorOpen}>
+                        <PopoverTrigger asChild>
+                          <button
+                            type="button"
+                            data-field="split"
+                            aria-label={`Edit split, ${splitTypeLabel}, ${allocation.summary}`}
+                            className={cn(
+                              "flex h-10 w-full items-center gap-2.5 rounded-xl border bg-card px-3 text-left shadow-e1 transition-[border-color,box-shadow] outline-none hover:border-muted-foreground focus-visible:border-primary-accent-text focus-visible:shadow-[0_0_0_3px_oklch(0.912_0.185_126/0.4)] data-[state=open]:border-primary-accent-text",
+                              errors.split ? "border-expense" : "border-border-strong",
+                            )}
+                          >
+                            <span className="grid size-7 shrink-0 place-items-center rounded-[8px] bg-secondary text-foreground/80">
+                              <SplitSquareHorizontal className="size-4" aria-hidden />
+                            </span>
+                            <span className="flex min-w-0 flex-1 flex-col leading-tight">
+                              <span className="truncate text-[13px] font-semibold text-foreground">{splitTypeLabel}</span>
+                              <span data-testid="split-summary" className={cn("truncate text-[11.5px] font-medium tabular-nums", splitNeedsAttention ? NOTE_TONE.warning : NOTE_TONE.muted)}>
+                                {allocation.summary}
+                              </span>
+                            </span>
+                            <span className="shrink-0 text-[12px] font-semibold text-foreground/80">Edit</span>
+                            <ChevronDown className={cn("size-4 shrink-0 text-foreground/60 transition-transform duration-200", splitEditorOpen && "rotate-180")} aria-hidden />
+                          </button>
+                        </PopoverTrigger>
+                        <PopoverContent
+                          align="end"
+                          collisionPadding={12}
+                          aria-label="Split details"
+                          className="max-h-[min(var(--radix-popover-content-available-height),30rem)] w-[min(30rem,calc(100vw-1.5rem))] overflow-y-auto rounded-xl border border-border p-3"
+                        >
+                          <div className="flex flex-col gap-2.5">
+                            <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5">
+                              <Select value={currentDraft.splitType} onValueChange={(v) => setDraft({ ...currentDraft, splitType: v as SplitType })}>
+                                <SelectTrigger className={cn(SHEET_TRIGGER, "h-9 w-auto min-w-36 text-[13px]")} aria-label="Split type">
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {SPLIT_TYPE_OPTIONS.map((o) => (
+                                    <SelectItem key={o.value} value={o.value}>
+                                      {o.label}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                              <span className="text-[12px] font-medium text-foreground/72 tabular-nums">Total {formatCurrencyPrecise(currentCandidate.amount)}</span>
+                              <p
+                                data-testid="split-allocation"
+                                aria-live="polite"
+                                className={cn(
+                                  "rounded-full px-2 py-0.5 text-[11.5px] font-semibold tabular-nums",
+                                  allocation.balanced === true ? "bg-success/12 text-[oklch(0.44_0.13_149)] dark:text-success" : allocation.balanced === false ? "bg-warning/20 text-[oklch(0.45_0.11_70)] dark:text-warning" : "bg-secondary text-foreground/72",
+                                )}
+                              >
+                                {allocation.summary}
+                              </p>
+                            </div>
+
+                            <ul className="flex flex-col gap-1.5" aria-label="Split participants">
+                              {currentDraft.participants.map((p, i) => (
+                                <li key={i} className="grid grid-cols-[1.5rem_minmax(0,1fr)_2rem] items-start gap-x-1.5 rounded-lg bg-secondary/60 p-1.5">
+                                  <span aria-hidden className="mt-1.5 grid size-6 place-items-center rounded-full bg-card text-[11px] font-bold text-foreground/70">
+                                    {i + 1}
+                                  </span>
+                                  {/* Person · name (custom only) · amount share the row and wrap together under the same left edge on a phone. */}
+                                  <div className="flex min-w-0 flex-wrap gap-1.5">
+                                    <Select
+                                      value={p.personId ?? "custom"}
+                                      onValueChange={(v) => {
+                                        if (v === "custom") {
+                                          updateParticipant(i, { personId: null });
+                                          return;
+                                        }
+                                        const person = people.find((person) => person.id === v);
+                                        updateParticipant(i, { personId: v, name: person?.name ?? p.name });
+                                      }}
+                                    >
+                                      <SelectTrigger className={cn(SHEET_TRIGGER, "h-9 w-auto min-w-0 flex-[1_1_8rem] text-[13px] shadow-none")} aria-label={`Participant ${i + 1}`}>
+                                        <SelectValue placeholder="Person" />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        <SelectItem value="custom">Custom name</SelectItem>
+                                        {people.map((person) => (
+                                          <SelectItem key={person.id} value={person.id}>
+                                            {person.name}
+                                          </SelectItem>
+                                        ))}
+                                      </SelectContent>
+                                    </Select>
+                                    {p.personId == null && (
+                                      <Input
+                                        placeholder="Name"
+                                        aria-label={`Participant ${i + 1} name`}
+                                        value={p.name}
+                                        className={cn(SHEET_FIELD, "h-9 w-auto min-w-0 flex-[1_1_7rem] text-[13px] shadow-none")}
+                                        onChange={(e) => updateParticipant(i, { name: e.target.value })}
+                                      />
+                                    )}
+                                    {currentDraft.splitType !== "equal" && (
+                                      <Input
+                                        type="number"
+                                        inputMode="decimal"
+                                        placeholder={currentDraft.splitType === "percentage" ? "%" : "Amount"}
+                                        aria-label={`Participant ${i + 1} ${currentDraft.splitType === "percentage" ? "percentage" : "amount"}`}
+                                        value={p.value}
+                                        className={cn(SHEET_FIELD, "h-9 w-auto min-w-0 flex-[1_0_6rem] text-right text-[13px] tabular-nums shadow-none min-[520px]:flex-[0_0_6rem]")}
+                                        onChange={(e) => updateParticipant(i, { value: e.target.value })}
+                                      />
+                                    )}
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => removeParticipantRow(i)}
+                                    className="grid size-8 place-items-center rounded-lg text-foreground/72 transition-colors hover:bg-danger/10 hover:text-danger"
+                                    aria-label="Remove participant"
+                                  >
+                                    <Trash2 className="size-3.5" />
+                                  </button>
+                                </li>
+                              ))}
+                            </ul>
+
+                            {allocation.hint && <p className="text-[11.5px] text-foreground/72">{allocation.hint}</p>}
+                            {allocation.duplicate && (
+                              <p className="flex items-start gap-1.5 text-[11.5px] text-foreground">
+                                <AlertTriangle className="mt-px size-3.5 shrink-0 text-warning" aria-hidden />
+                                {allocation.duplicate} is in this split twice — the import will refuse a split that lists someone twice.
+                              </p>
+                            )}
+
+                            <div className="flex items-center justify-between gap-2">
+                              <button type="button" onClick={addParticipantRow} className={cn(SHEET_BUTTON.ghost, "h-9 px-2.5 text-[12.5px]")}>
+                                <Plus className="size-3.5" />
+                                Add person
+                              </button>
+                              <button type="button" onClick={() => setSplitEditorOpen(false)} className={cn(SHEET_BUTTON.secondary, "h-9 px-4 text-[13px]")}>
+                                Done
+                              </button>
+                            </div>
+                          </div>
+                        </PopoverContent>
+                      </Popover>
+                      {errors.split && (
+                        <p role="alert" className="text-[11.5px] font-medium text-[oklch(0.5_0.19_25)] dark:text-danger">
+                          {errors.split}
+                        </p>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
-
-            {isExpense && ownership === "person" && (
-              <div className="grid gap-2.5 rounded-lg border border-border bg-secondary/50 p-2.5 md:grid-cols-2 md:items-end">
-                <TxnFieldRow label="Person">
-                  {!addingPerson ? (
-                    <SheetPicker
-                      compact
-                      value={currentDraft.personId}
-                      onValueChange={(v) => {
-                        if (v === "add-new") {
-                          setAddingPerson(true);
-                          return;
-                        }
-                        setDraft({ ...currentDraft, personId: v });
-                      }}
-                      options={personPickerOptions}
-                      placeholder="Choose a person"
-                      emptyIcon={<UserPlus className="size-4" />}
-                      ariaLabel="Assign to a person"
-                      extraItems={
-                        <SelectItem value="add-new">
-                          <span className="flex items-center gap-1.5">
-                            <UserPlus className="size-3.5" /> Add new person
-                          </span>
-                        </SelectItem>
-                      }
-                    />
-                  ) : (
-                    <AddPersonInline name={newPersonName} busy={addingPersonBusy} onName={setNewPersonName} onSave={() => void handleAddPerson()} onCancel={() => setAddingPerson(false)} />
-                  )}
-                </TxnFieldRow>
-                {currentDraft.personId && (
-                  <label className="flex cursor-pointer items-start gap-2.5 rounded-lg bg-card px-2.5 py-2 shadow-e1">
-                    <Switch checked={currentDraft.owesPersonToggle} onCheckedChange={(checked) => setDraft({ ...currentDraft, owesPersonToggle: checked })} className="mt-0.5" />
-                    <span className="min-w-0">
-                      <span className="block text-[12.5px] font-semibold text-foreground">This person owes me this expense</span>
-                      <span className="block text-[11.5px] text-foreground/72">
-                        {currentDraft.owesPersonToggle
-                          ? `Adds ${formatCurrencyPrecise(currentCandidate.amount)} to what they owe you.`
-                          : "Off: linked to them, but nothing is added to what they owe you."}
-                      </span>
-                    </span>
-                  </label>
-                )}
-              </div>
-            )}
-
-            {isExpense && ownership === "split" && (
-              <div data-field="split" className="flex flex-col gap-2 rounded-lg border border-border bg-secondary/50 p-2.5" aria-label="Split" role="group">
-                <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5">
-                  <Select value={currentDraft.splitType} onValueChange={(v) => setDraft({ ...currentDraft, splitType: v as SplitType })}>
-                    <SelectTrigger className={cn(SHEET_TRIGGER, "h-8 w-auto min-w-36 text-[13px]")} aria-label="Split type">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {SPLIT_TYPE_OPTIONS.map((o) => (
-                        <SelectItem key={o.value} value={o.value}>
-                          {o.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <span className="text-[12px] font-medium text-foreground/72 tabular-nums">Total {formatCurrencyPrecise(currentCandidate.amount)}</span>
-                  {allocation && (
-                    <p
-                      data-testid="split-allocation"
-                      aria-live="polite"
-                      className={cn(
-                        "rounded-full px-2 py-0.5 text-[11.5px] font-semibold tabular-nums",
-                        allocation.balanced === true ? "bg-success/12 text-[oklch(0.44_0.13_149)] dark:text-success" : allocation.balanced === false ? "bg-warning/20 text-[oklch(0.45_0.11_70)] dark:text-warning" : "bg-card text-foreground/72",
-                      )}
-                    >
-                      {allocation.summary}
-                    </p>
-                  )}
-                  <button type="button" onClick={addParticipantRow} className={cn(SHEET_BUTTON.ghost, "ml-auto h-8 px-2.5 text-[12.5px]")}>
-                    <Plus className="size-3.5" />
-                    Add person
-                  </button>
-                </div>
-
-                <ul className="grid gap-1.5 lg:grid-cols-2" aria-label="Split participants">
-                  {currentDraft.participants.map((p, i) => (
-                    <li key={i} className="flex items-center gap-1.5 rounded-lg bg-card p-1 shadow-e1">
-                      <span aria-hidden className="grid size-6 shrink-0 place-items-center rounded-full bg-secondary text-[11px] font-bold text-foreground/70">
-                        {i + 1}
-                      </span>
-                      <Select
-                        value={p.personId ?? "custom"}
-                        onValueChange={(v) => {
-                          if (v === "custom") {
-                            updateParticipant(i, { personId: null });
-                            return;
-                          }
-                          const person = people.find((person) => person.id === v);
-                          updateParticipant(i, { personId: v, name: person?.name ?? p.name });
-                        }}
-                      >
-                        <SelectTrigger className={cn(SHEET_TRIGGER, "h-8 w-32 shrink-0 text-[13px] shadow-none")} aria-label={`Participant ${i + 1}`}>
-                          <SelectValue placeholder="Person" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="custom">Custom name</SelectItem>
-                          {people.map((person) => (
-                            <SelectItem key={person.id} value={person.id}>
-                              {person.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      {p.personId == null ? (
-                        <Input placeholder="Name" aria-label={`Participant ${i + 1} name`} value={p.name} className={cn(SHEET_FIELD, "h-8 min-w-0 flex-1 text-[13px] shadow-none")} onChange={(e) => updateParticipant(i, { name: e.target.value })} />
-                      ) : (
-                        <span className="min-w-0 flex-1" />
-                      )}
-                      {currentDraft.splitType !== "equal" && (
-                        <Input
-                          type="number"
-                          inputMode="decimal"
-                          placeholder={currentDraft.splitType === "percentage" ? "%" : "Amount"}
-                          aria-label={`Participant ${i + 1} ${currentDraft.splitType === "percentage" ? "percentage" : "amount"}`}
-                          value={p.value}
-                          className={cn(SHEET_FIELD, "h-8 w-20 shrink-0 text-right text-[13px] tabular-nums shadow-none")}
-                          onChange={(e) => updateParticipant(i, { value: e.target.value })}
-                        />
-                      )}
-                      <button
-                        type="button"
-                        onClick={() => removeParticipantRow(i)}
-                        className="grid size-7 shrink-0 place-items-center rounded-lg text-foreground/72 transition-colors hover:bg-danger/10 hover:text-danger"
-                        aria-label="Remove participant"
-                      >
-                        <Trash2 className="size-3.5" />
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-
-                {allocation?.hint && <p className="text-[11.5px] text-foreground/72">{allocation.hint}</p>}
-                {allocation?.duplicate && (
-                  <p className="flex items-start gap-1.5 text-[11.5px] text-foreground">
-                    <AlertTriangle className="mt-px size-3.5 shrink-0 text-warning" aria-hidden />
-                    {allocation.duplicate} is in this split twice — the import will refuse a split that lists someone twice.
-                  </p>
-                )}
-                {errors.split && (
-                  <p role="alert" className="text-[11.5px] font-medium text-[oklch(0.5_0.19_25)] dark:text-danger">
-                    {errors.split}
-                  </p>
-                )}
-              </div>
-            )}
 
             {/* Small toggles, closed by default. Parsing evidence and technical details live under "More details". */}
             <div className={cn(SHEET_CHIPS, "border-t border-border-subtle pt-2.5")} role="group" aria-label="More about this SMS">
@@ -1178,14 +1315,6 @@ export function CandidateDetailsModal({
                   className={cn(SHEET_FIELD, "h-auto min-h-14 resize-y py-2")}
                   onChange={(e) => setDraft({ ...currentDraft, notes: e.target.value })}
                 />
-              </SheetDisclosure>
-              <SheetDisclosure compact id="candidate-panel-sms" icon={MessageSquareText} title="Original SMS" hint="Stays on your phone" open={openPanel === "sms"} onToggle={() => setOpenPanel(openPanel === "sms" ? null : "sms")}>
-                <div className="flex flex-col gap-0.5 rounded-lg border border-dashed border-border-strong bg-card px-3 py-2" data-testid="original-message-unavailable">
-                  <p className="text-[11px] font-bold tracking-wide text-foreground uppercase">Original message unavailable</p>
-                  <p className="text-[12px] text-foreground/80">
-                    FlowFi never receives the SMS text — it stays on your phone (open the Android app&apos;s SMS Inbox to read it). What you see here is what the phone parsed from it.
-                  </p>
-                </div>
               </SheetDisclosure>
               <SheetDisclosure
                 compact
@@ -1294,17 +1423,24 @@ export function CandidateDetailsModal({
           setPendingClose(false);
         }}
       >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Discard your changes?</DialogTitle>
-            <DialogDescription>
-              You&apos;ve changed this candidate&apos;s category, notes or people. {pendingClose ? "Closing" : "Moving to another candidate"} discards those edits. Nothing has been imported.
+        {/* No corner X: "Keep editing" is the safe answer and Esc / outside-click already mean the same thing, so a third way out only blurs the choice. */}
+        <DialogContent showCloseButton={false} className="gap-5 p-6 sm:max-w-[26rem]">
+          <DialogHeader className="items-center gap-3 text-center">
+            <span className="flex size-12 items-center justify-center rounded-full bg-warning/15 text-warning-foreground ring-8 ring-warning/8" aria-hidden>
+              <NotebookPen className="size-5" />
+            </span>
+            <DialogTitle className="font-heading text-lg leading-snug font-semibold tracking-tight">Discard your changes?</DialogTitle>
+            <DialogDescription className="text-balance text-sm leading-relaxed">
+              You&apos;ve edited this candidate&apos;s category, notes or people. {pendingClose ? "Closing" : "Moving to another candidate"} will throw those edits away.
+              <span className="mt-1.5 block text-xs text-muted-foreground">Nothing has been imported yet.</span>
             </DialogDescription>
           </DialogHeader>
-          <DialogFooter>
+          <DialogFooter className="grid grid-cols-1 gap-2 sm:grid-cols-2">
             <Button
               autoFocus
-              variant="outline"
+              variant="default"
+              size="lg"
+              className="font-semibold sm:order-2"
               onClick={() => {
                 setPendingGoTo(null);
                 setPendingClose(false);
@@ -1314,6 +1450,8 @@ export function CandidateDetailsModal({
             </Button>
             <Button
               variant="destructive"
+              size="lg"
+              className="font-semibold sm:order-1"
               onClick={() => {
                 const target = pendingGoTo;
                 const closing = pendingClose;

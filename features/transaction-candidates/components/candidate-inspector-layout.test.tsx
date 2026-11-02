@@ -7,7 +7,7 @@ import type { SmsTransactionCandidate } from "@/lib/models/sms-transaction-candi
 import type { ExpenseRepository } from "@/lib/repositories/expense-repository";
 import type { SmsTransactionCandidateRepository } from "@/lib/repositories/sms-transaction-candidate-repository";
 import type { TransactionRepository } from "@/lib/repositories/transaction-repository";
-import { CandidateDetailsModal, describeSplitAllocation } from "./candidate-details-modal";
+import { CandidateDetailsModal, describeSplitAllocation, smsParsedFacts } from "./candidate-details-modal";
 
 /**
  * The compact inspector layout: secondary information folded, ownership editors opened only on request, the split
@@ -166,8 +166,56 @@ describe("compact transaction inspector", () => {
     expect(screen.getByText("Discard your changes?")).toBeTruthy();
     expect(onGoTo).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
+    // The floating editor may have closed behind the question, but the split itself is still there and reopens as it was.
+    fireEvent.click(screen.getByRole("button", { name: /^Edit split/ }));
     expect(screen.getByRole("list", { name: "Split participants" })).toBeTruthy();
     expect(calls).toEqual([]);
+  });
+
+  it("shows what the phone parsed from the SMS on one line, and every parsed field on demand", () => {
+    const calls = renderDrawer();
+    expect(screen.getByTestId("sms-summary").textContent).toBe("HDFC · Card purchase · •••• 4821 · UPI1234");
+    expect(screen.queryByTestId("sms-parsed-facts")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /^Original SMS/ }));
+    const facts = within(screen.getByTestId("sms-parsed-facts"));
+    for (const label of ["Bank", "Type", "Card / account ending", "Reference", "Amount", "Date & time", "Merchant"]) expect(facts.getByText(label)).toBeTruthy();
+    expect(facts.getByText("−₹500.00")).toBeTruthy();
+    // The raw text is never available — say so rather than imply it is.
+    expect(screen.getByTestId("original-message-unavailable")).toBeTruthy();
+    expect(calls).toEqual([]);
+  });
+
+  it("leaves fields the SMS didn't carry out of the strip instead of showing blanks", () => {
+    const facts = smsParsedFacts(candidate({ bankName: null, rawLastFour: null, referenceNumber: null, merchant: null }), "−₹500.00");
+    expect(facts.map((f) => f.label)).toEqual(["Type", "Amount", "Date & time"]);
+  });
+
+  it("picking Split opens the floating editor at once, and the form underneath gains only one row", () => {
+    const calls = renderDrawer();
+    expect(screen.queryByRole("button", { name: /^Edit split/ })).toBeNull();
+    fireEvent.click(screen.getByRole("radio", { name: "Split expense" }));
+    // One summary row in the form; the editor itself floats (it is not inside the sheet body).
+    const summaryRow = screen.getByRole("button", { name: /^Edit split/ });
+    expect(screen.getByTestId("split-summary").textContent).toBe("No one added yet");
+    const editor = screen.getByRole("list", { name: "Split participants" });
+    expect(screen.getByTestId("sheet-body").contains(editor)).toBe(false);
+    expect(screen.getByTestId("sheet-body").contains(summaryRow)).toBe(true);
+    // Done folds it away; the summary row keeps the state and reopens it.
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    expect(screen.queryByRole("list", { name: "Split participants" })).toBeNull();
+    fireEvent.click(summaryRow);
+    expect(screen.getByRole("list", { name: "Split participants" })).toBeTruthy();
+    expect(calls).toEqual([]);
+  });
+
+  it("a split row has a person, a name only for a custom person, and an amount only for custom/percentage splits", () => {
+    renderDrawer();
+    fireEvent.click(screen.getByRole("radio", { name: "Split expense" }));
+    const list = within(screen.getByRole("list", { name: "Split participants" }));
+    expect(list.getByRole("textbox", { name: "Participant 1 name" })).toBeTruthy();
+    expect(list.queryByRole("spinbutton", { name: /Participant 1 amount/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Add person" }));
+    expect(list.getAllByRole("textbox", { name: /Participant \d name/ })).toHaveLength(2);
   });
 
   it("closing writes nothing", () => {

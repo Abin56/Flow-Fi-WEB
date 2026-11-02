@@ -22,15 +22,18 @@ export function CandidateViews({
   active,
   counts,
   onSelect,
+  dense = false,
 }: {
   active: CandidateViewFilter;
   counts: Record<"all" | "attention" | "noIssues" | "duplicate", number>;
   onSelect: (view: CandidateViewFilter) => void;
+  /** The slimmer, shorter variant used while the page is scrolled and these controls are pinned under the compact bar. */
+  dense?: boolean;
 }) {
   const visible = VIEWS.filter((v) => v.view !== "duplicate" || counts.duplicate > 0 || active === "duplicate");
   return (
     <div className="-mx-4 overflow-x-auto px-4 [scrollbar-width:none] sm:mx-0 sm:px-0">
-      <div role="group" aria-label="Inbox views" className="inline-flex w-max gap-1 rounded-xl border border-border bg-card p-1">
+      <div role="group" aria-label="Inbox views" className={cn("inline-flex w-max gap-1 border border-border bg-card", dense ? "rounded-[10px] p-0.5" : "rounded-xl p-1")}>
         {visible.map(({ view, label, hint }) => {
           const on = active === view;
           return (
@@ -41,7 +44,8 @@ export function CandidateViews({
               title={hint}
               onClick={() => onSelect(view)}
               className={cn(
-                "inline-flex min-h-11 items-center gap-2 rounded-lg px-3.5 text-sm font-semibold whitespace-nowrap transition-colors motion-reduce:transition-none lg:min-h-10",
+                "inline-flex items-center rounded-lg font-semibold whitespace-nowrap transition-colors motion-reduce:transition-none",
+                dense ? "min-h-9 gap-1.5 px-3 text-[13px] lg:min-h-8" : "min-h-11 gap-2 px-3.5 text-sm lg:min-h-10",
                 FOCUS_RING,
                 on ? "bg-foreground text-background" : "text-foreground hover:bg-secondary",
               )}

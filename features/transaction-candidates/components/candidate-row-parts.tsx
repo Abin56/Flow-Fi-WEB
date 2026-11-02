@@ -13,6 +13,7 @@ import type { SmsTransactionCandidate } from "@/lib/models/sms-transaction-candi
 import type { CandidateDestinationState, MatchedIdentity } from "../lib/candidate-account-matching";
 import type { CandidateDuplicateResult } from "../lib/candidate-duplicate";
 import type { CandidateStatus } from "../lib/candidate-status";
+import type { RowMatch } from "../lib/match-display";
 
 /** Everything one row needs, computed once by the workspace so the list can't disagree with the counts. */
 export interface CandidateRowModel {
@@ -21,6 +22,8 @@ export interface CandidateRowModel {
   number: number;
   status: CandidateStatus;
   duplicate: CandidateDuplicateResult | null;
+  /** Already-saved transactions that look like this one (exact first, at most three) — shown inside the row for comparison. */
+  matches?: RowMatch[];
   destinationState: CandidateDestinationState;
   /** The matched account/card label, or null when Android's match doesn't resolve. */
   accountLabel: string | null;

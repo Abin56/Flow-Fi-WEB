@@ -25,7 +25,7 @@ import { Maximize2, Minimize2, Search } from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ConfirmDialog, EmptyState } from "@/components/finance";
-import { useCompactHeader } from "@/components/layout/compact-header";
+import { SHOW_AT as COMPACT_BAR_SHOW_AT, useCompactHeader } from "@/components/layout/compact-header";
 import { ScrollNav } from "@/components/layout/scroll-nav";
 import { SmsInboxEmptyState } from "@/features/transaction-candidates/components/sms-inbox-empty-state";
 import { SmsSyncStatusBar } from "@/features/transaction-candidates/components/sms-sync-status-bar";
@@ -62,6 +62,8 @@ import {
 } from "../lib/candidate-account-matching";
 import { buildDestinationOptions, categoryOptionsForDirection } from "../lib/candidate-details-view";
 import { evaluateCandidateDuplicate, type CandidateDuplicateResult } from "../lib/candidate-duplicate";
+import { buildRowMatches, type RowMatch } from "../lib/match-display";
+import { findPossibleMatches, mergeGateMatch } from "../lib/possible-matches";
 import { candidateNeighbors } from "../lib/candidate-navigation";
 import { applyAccountRematch } from "../lib/candidate-rematch";
 import { deriveCandidateStatus, type CandidateStatus } from "../lib/candidate-status";
@@ -268,6 +270,20 @@ export function TransactionCandidatesWorkspace() {
   );
   /** Reliable account/card identity: Android resolved it AND it still points at a real account/card. */
   const bulkEligible = useCallback((c: SmsTransactionCandidate) => destinationsReady && candidateDestinationState(c, accounts, creditCards) === "matched", [destinationsReady, accounts, creditCards]);
+
+  // Everything already saved that looks like each candidate — the strict write-gate's hit plus fuzzy matches (±3 days, rounding-level
+  // amount differences, similar merchant names). Display only: it never changes a lane, blocks a selection or an import, or writes.
+  // The destination it compares against is the one the row currently shows (the reviewer's pick, else Android's match).
+  const matchesById = useMemo(() => {
+    const map = new Map<string, RowMatch[]>();
+    for (const c of candidates) {
+      const refs = displayRefsOf(c);
+      const accountId = refs.cardId ? (creditCards.find((card) => card.id === refs.cardId)?.accountId ?? null) : refs.accountId;
+      const found = mergeGateMatch(findPossibleMatches(c, accountId, transactions), duplicates.get(c.id) ?? null, c, accountId, transactionById);
+      if (found.length > 0) map.set(c.id, buildRowMatches(found, transactionById, accounts, categories));
+    }
+    return map;
+  }, [candidates, transactions, transactionById, duplicates, displayRefsOf, creditCards, accounts, categories]);
 
   const statusById = useMemo(() => {
     const map = new Map<string, CandidateStatus>();
@@ -593,6 +609,7 @@ export function TransactionCandidatesWorkspace() {
           number: index + 1,
           status,
           duplicate: duplicates.get(candidate.id) ?? null,
+          matches: matchesById.get(candidate.id) ?? [],
           destinationState: destinationStateOf(candidate),
           accountLabel: accountLabelOf(candidate),
           identity: resolveMatchedIdentity(displayRefsOf(candidate), accounts, creditCards),
@@ -606,7 +623,7 @@ export function TransactionCandidatesWorkspace() {
       }),
     // `selectionBlockedReason` closes over the anchor + eligibility inputs listed here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [visibleCandidates, statusById, duplicates, rematchById, selectedIds, destinationStateOf, displayRefsOf, accountLabelOf, accountHintOf, selectionAnchor, anchorCandidate, destinationsReady, accounts, creditCards],
+    [visibleCandidates, statusById, duplicates, matchesById, rematchById, selectedIds, destinationStateOf, displayRefsOf, accountLabelOf, accountHintOf, selectionAnchor, anchorCandidate, destinationsReady, accounts, creditCards],
   );
 
   const ledgerGroups: LedgerGroup[] = useMemo(() => {
@@ -624,6 +641,8 @@ export function TransactionCandidatesWorkspace() {
   const neighbors = candidateNeighbors(visibleIds, detailCandidateId);
   const detailDuplicate = detailCandidate ? (duplicates.get(detailCandidate.id) ?? null) : null;
   const detailMatchedTransaction = detailDuplicate?.duplicateOfTransactionId ? (transactionById.get(detailDuplicate.duplicateOfTransactionId) ?? null) : null;
+  const detailBestMatch = detailCandidate && !detailDuplicate ? (matchesById.get(detailCandidate.id)?.[0] ?? null) : null;
+  const detailSimilarTransaction = detailBestMatch ? (transactionById.get(detailBestMatch.transactionId) ?? null) : null;
   const detailCategorySuggestions = useMemo(
     () => (detailCandidate ? suggestCategories(detailCandidate, transactions, categoryOptionsForDirection(categories, detailCandidate.direction)) : []),
     [detailCandidate, transactions, categories],
@@ -679,6 +698,10 @@ export function TransactionCandidatesWorkspace() {
   // <main>, so it cancels that 16px instead and the shared compact bar (which watches <main>) is not used.
   const pinTop = fullscreen ? -16 : stackTop;
   const showCompactBar = !fullscreen && !(viewState.phase === "ready" && candidates.length === 0);
+  // Once the overview has scrolled away (the compact bar is in), the pinned views + filters shrink to ONE slim row beside the bar
+  // instead of two tall stacked blocks, so the list keeps the screen. Full screen has no compact bar and keeps the full controls.
+  const condensed = showCompactBar && barProgress >= COMPACT_BAR_SHOW_AT;
+  const rowLayout = singleRowBar || (condensed && width >= 820);
 
   return (
     <div
@@ -741,16 +764,26 @@ export function TransactionCandidatesWorkspace() {
           <div
             ref={stackRef}
             style={{ top: pinTop }}
-            className={cn("sticky z-[2] flex flex-col gap-2 bg-background pb-2", singleRowBar && "lg:flex-row lg:items-start", fullscreen && "pt-4")}
+            data-condensed={condensed || undefined}
+            className={cn(
+              "sticky z-[2] flex flex-col bg-background",
+              condensed ? "gap-1.5 pb-1.5" : "gap-2 pb-2",
+              // A soft fade under the pinned block, so rows slide out beneath it instead of being clipped mid-row.
+              "after:pointer-events-none after:absolute after:inset-x-0 after:top-full after:h-3 after:bg-gradient-to-b after:from-background after:to-transparent after:opacity-0 after:transition-opacity after:content-[''] motion-reduce:after:transition-none",
+              condensed && "after:opacity-100",
+              rowLayout && (condensed ? "lg:flex-row lg:items-center" : "lg:flex-row lg:items-start"),
+              fullscreen && "pt-4",
+            )}
           >
             <div className="min-w-0 shrink-0 lg:max-w-full">
-              <CandidateViews active={filters.lane} counts={viewCounts} onSelect={(lane) => updateFilters((f) => ({ ...f, lane }))} />
+              <CandidateViews dense={condensed} active={filters.lane} counts={viewCounts} onSelect={(lane) => updateFilters((f) => ({ ...f, lane }))} />
             </div>
             <div className="min-w-0 flex-1">
               <CandidateToolbar
                 searchText={searchText}
                 onSearchChange={updateSearch}
                 compact={compactToolbar}
+                dense={condensed}
                 months={monthOptions}
                 month={filters.month}
                 onMonth={(month) => updateFilters((f) => ({ ...f, month }))}
@@ -881,6 +914,7 @@ export function TransactionCandidatesWorkspace() {
           onPartialImport={(notice) => setPartialNotices((prev) => (prev.some((n) => n.id === notice.id) ? prev : [...prev, notice]))}
           duplicate={detailDuplicate}
           matchedTransaction={detailMatchedTransaction}
+          similarMatch={detailBestMatch && detailSimilarTransaction ? { transaction: detailSimilarTransaction, kind: detailBestMatch.kind } : null}
           existingTransactions={existingTransactionsForDuplicateCheck}
           accounts={accounts}
           creditCards={creditCards}

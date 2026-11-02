@@ -31,15 +31,15 @@ const STRENGTH_TEXT = { strong: "Strong match", likely: "Likely match", weak: "W
  * account/card and direction — each marked Same / Similar / Different in TEXT (colour is only a hint). It describes only;
  * it never dismisses, merges or imports, and never shows an internal transaction id.
  */
-export function DuplicateComparisonCard({ comparison }: { comparison: DuplicateComparison }) {
+export function DuplicateComparisonCard({ comparison, rechecked = true }: { comparison: DuplicateComparison; /** `true` when the strict check also re-runs (and asks) at import; `false` for a similar-but-not-flagged match, which is information only. */ rechecked?: boolean }) {
   return (
     <section aria-labelledby="dup-compare-title" className="flex flex-col gap-2.5 rounded-[12px] border border-warning/60 bg-warning/8 p-3" data-testid="duplicate-comparison">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h4 id="dup-compare-title" className="flex items-center gap-1.5 text-xs font-bold tracking-wide text-foreground uppercase">
           <Landmark className="size-3.5 text-warning" aria-hidden />
-          Possible duplicate
+          {rechecked ? "Possible duplicate" : "Similar transaction already imported"}
         </h4>
-        <span className="rounded-full border border-border-strong bg-card px-2 py-0.5 text-[11px] font-semibold text-foreground">{STRENGTH_TEXT[comparison.strength]}</span>
+        <span className="rounded-full border border-border-strong bg-card px-2 py-0.5 text-[11px] font-semibold text-foreground">{comparison.kind === "exact" ? "Exact match" : STRENGTH_TEXT[comparison.strength]}</span>
       </div>
       <p className="text-xs text-foreground/90">{comparison.summary}</p>
       <div className="overflow-x-auto rounded-[10px] border border-border bg-card">
@@ -77,7 +77,9 @@ export function DuplicateComparisonCard({ comparison }: { comparison: DuplicateC
           </tbody>
         </table>
       </div>
-      <p className="text-[11px] text-muted-foreground">Importing will re-check this and ask for your confirmation before anything is created.</p>
+      <p className="text-[11px] text-muted-foreground">
+        {rechecked ? "Importing will re-check this and ask for your confirmation before anything is created." : "This is only a hint — importing will not stop you. If it is a different purchase, import it as usual."}
+      </p>
     </section>
   );
 }

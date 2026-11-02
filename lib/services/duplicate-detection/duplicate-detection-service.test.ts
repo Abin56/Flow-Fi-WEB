@@ -329,3 +329,19 @@ describe("checkForDuplicates — ignoreAccountIds (card bill payment vs the purc
     expect(checkForDuplicates({ ...payment, ignoreAccountIds: ["card"] }, [purchase, priorPayment]).bestMatch?.transactionId).toBe("prior");
   });
 });
+
+describe("checkForDuplicates — calendar-day gap (local time)", () => {
+  const smsAfternoon = candidate({ source: "sms", description: "", requireDescriptionMatch: false, date: new Date(2026, 9, 12, 14, 30) });
+
+  it("treats a same-day afternoon SMS and a midnight statement row as the same day (the amount+date fallback catches it)", () => {
+    const row = existing({ id: "stmt", description: "NO TEXT MATCH", amount: 499, dateTime: new Date(2026, 9, 12, 0, 0) });
+    const result = checkForDuplicates(smsAfternoon, [row]);
+    expect(result.bestMatch).toMatchObject({ transactionId: "stmt", dayGap: 0 });
+  });
+
+  it("does not call 11 PM and 1 AM the next day the same day", () => {
+    const row = existing({ id: "next", description: "NO TEXT MATCH", amount: 499, dateTime: new Date(2026, 9, 13, 1, 0) });
+    const late = { ...smsAfternoon, date: new Date(2026, 9, 12, 23, 0) };
+    expect(checkForDuplicates(late, [row]).status).toBe("unique");
+  });
+});

@@ -174,6 +174,35 @@ describe("importCandidate", () => {
     expect(convertToSplit).toHaveBeenCalledTimes(1);
     expect(markHandled).not.toHaveBeenCalled(); // candidate stays until the user resolves it
   });
+
+  describe("an invalid split is refused BEFORE any money moves", () => {
+    const cases: [string, ImportCandidateParams["personAssignment"]][] = [
+      ["percentages that don't add up to 100", { kind: "split", splitType: "percentage", participantInputs: [{ personId: "p1", name: "Asha", value: 40 }, { personId: "p2", name: "Ben", value: 40 }] }],
+      ["custom amounts that don't add up to the total", { kind: "split", splitType: "custom", participantInputs: [{ personId: "p1", name: "Asha", value: 10 }] }],
+      ["the same person listed twice", { kind: "split", splitType: "equal", participantInputs: [{ personId: "p1", name: "Asha", value: null }, { personId: "p1", name: "Asha", value: null }] }],
+    ];
+    it.each(cases)("%s", async (_label, personAssignment) => {
+      const { transactionRepository, candidateRepository, expenseRepository, createTransaction, markHandled, convertToSplit } = mockRepos(async () => ({ id: "never" }) as Transaction);
+      const result = await importCandidate(baseParams({ personAssignment }), transactionRepository, candidateRepository, expenseRepository);
+      expect(result.status).toBe("validation_failed");
+      expect(createTransaction).not.toHaveBeenCalled();
+      expect(convertToSplit).not.toHaveBeenCalled();
+      expect(markHandled).not.toHaveBeenCalled();
+    });
+
+    it("a valid split still imports normally", async () => {
+      const { transactionRepository, candidateRepository, expenseRepository, createTransaction, convertToSplit } = mockRepos(async () => ({ id: "txn-ok", createdAt: new Date(Date.now() + 60_000) }) as Transaction);
+      const result = await importCandidate(
+        baseParams({ personAssignment: { kind: "split", splitType: "equal", participantInputs: [{ personId: "p1", name: "Asha", value: null }] } }),
+        transactionRepository,
+        candidateRepository,
+        expenseRepository,
+      );
+      expect(result.status).toBe("success");
+      expect(createTransaction).toHaveBeenCalledTimes(1);
+      expect(convertToSplit).toHaveBeenCalledTimes(1);
+    });
+  });
 });
 
 /**
@@ -704,7 +733,7 @@ describe("importCandidate — atomic path (candidate repository with a tombstone
     const result = await importCandidate(
       baseParams({
         candidate: candidate({ id: "atomic-3" }),
-        personAssignment: { kind: "split", splitType: "equal", participantInputs: [] } as never,
+        personAssignment: { kind: "split", splitType: "equal", participantInputs: [{ personId: null, name: "Asha", value: null }] },
       }),
       r.transactionRepository,
       r.candidateRepository,
@@ -721,7 +750,7 @@ describe("importCandidate — atomic path (candidate repository with a tombstone
     (r.expenseRepository as unknown as { convertToSplit: ReturnType<typeof vi.fn> }).convertToSplit.mockRejectedValueOnce(new Error("split failed"));
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     const result = await importCandidate(
-      baseParams({ candidate: candidate({ id: "atomic-4" }), personAssignment: { kind: "split", splitType: "equal", participantInputs: [] } as never }),
+      baseParams({ candidate: candidate({ id: "atomic-4" }), personAssignment: { kind: "split", splitType: "equal", participantInputs: [{ personId: null, name: "Asha", value: null }] } }),
       r.transactionRepository,
       r.candidateRepository,
       r.expenseRepository,
@@ -738,7 +767,7 @@ describe("importCandidate — atomic path (candidate repository with a tombstone
     r.createTransactionInTransaction.mockResolvedValueOnce({ id: "txn_atomic", createdAt: new Date(Date.now() - 60_000) } as unknown as Transaction);
     const convertToSplit = (r.expenseRepository as unknown as { convertToSplit: ReturnType<typeof vi.fn> }).convertToSplit;
     const result = await importCandidate(
-      baseParams({ candidate: candidate({ id: "atomic-5" }), personAssignment: { kind: "split", splitType: "equal", participantInputs: [] } as never }),
+      baseParams({ candidate: candidate({ id: "atomic-5" }), personAssignment: { kind: "split", splitType: "equal", participantInputs: [{ personId: null, name: "Asha", value: null }] } }),
       r.transactionRepository,
       r.candidateRepository,
       r.expenseRepository,

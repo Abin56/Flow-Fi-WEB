@@ -151,12 +151,22 @@ function amountsMatch(a: number, b: number): boolean {
   return Math.abs(a - b) <= AMOUNT_EPSILON;
 }
 
+/** Local calendar day (`YYYY-MM-DD`) — the day a person sees, not the UTC day. */
 function dayKey(date: Date): string {
-  return date.toISOString().slice(0, 10);
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const dd = String(date.getDate()).padStart(2, "0");
+  return `${date.getFullYear()}-${mm}-${dd}`;
 }
 
+/**
+ * Whole CALENDAR days between two moments (local time), not elapsed hours rounded: a 2:30 PM SMS and a midnight
+ * statement row for the same day are 0 days apart, and 11 PM vs 1 AM the next day are 1 day apart. Rounding the
+ * millisecond difference got both wrong, which made the "exact same day" fallback miss same-day pairs whose
+ * timestamps differ by 12+ hours.
+ */
 function daysBetween(a: Date, b: Date): number {
-  return Math.abs(Math.round((a.getTime() - b.getTime()) / (24 * 60 * 60 * 1000)));
+  const dayNumber = (d: Date) => Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / (24 * 60 * 60 * 1000);
+  return Math.abs(dayNumber(a) - dayNumber(b));
 }
 
 function directionMatchesType(direction: DuplicateCandidateInput["direction"], type: "income" | "expense"): boolean {

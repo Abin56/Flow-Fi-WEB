@@ -51,7 +51,7 @@
  * future, gets this protection for free.
  */
 
-import type { ExpenseParticipantInput, ExpenseRepository } from "@/lib/repositories/expense-repository";
+import { ExpenseRepository, type ExpenseParticipantInput } from "@/lib/repositories/expense-repository";
 import type { SmsTransactionCandidateRepository } from "@/lib/repositories/sms-transaction-candidate-repository";
 import type { TransactionRepository } from "@/lib/repositories/transaction-repository";
 import type { SplitType } from "@/lib/models/expense";
@@ -305,6 +305,17 @@ async function runImport(
   if (params.categoryId == null) return { status: "validation_failed", reason: "Select a category before importing." };
 
   const { candidate } = params;
+
+  // The split is checked BEFORE any money moves. `ExpenseRepository.convertToSplit` runs the same `resolveShares` rules, but only after
+  // the Transaction exists — so an unbalanced or duplicate-person split used to leave a real plain expense behind and a "partly
+  // imported" notice. Refusing here keeps the candidate untouched and importable once the split is fixed.
+  if (params.personAssignment?.kind === "split") {
+    try {
+      ExpenseRepository.resolveShares({ type: params.personAssignment.splitType, total: candidate.amount, inputs: params.personAssignment.participantInputs });
+    } catch (error) {
+      return { status: "validation_failed", reason: error instanceof Error ? error.message : "The split isn't valid." };
+    }
+  }
 
   if (!params.skipDuplicateCheck) {
     const duplicateResult = checkCandidateForDuplicates(candidate, accountId, params.existingTransactions ?? []);

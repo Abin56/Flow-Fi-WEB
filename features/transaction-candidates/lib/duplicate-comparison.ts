@@ -3,6 +3,7 @@ import type { CreditCardProfile } from "@/lib/models/credit-card";
 import type { SmsTransactionCandidate } from "@/lib/models/sms-transaction-candidate";
 import type { Transaction } from "@/lib/models/transaction";
 import type { CandidateDuplicateResult } from "./candidate-duplicate";
+import { calendarDayGap, MAX_DAY_GAP, type PossibleMatchKind } from "./possible-matches";
 
 export type ComparisonMatch = "same" | "similar" | "different" | "unknown";
 
@@ -19,11 +20,20 @@ export type DuplicateStrength = "strong" | "likely" | "weak";
 export interface DuplicateComparison {
   rows: ComparisonRow[];
   strength: DuplicateStrength;
+  /**
+   * `exact` = same amount, day and merchant; `possible` = close but not identical. Only `exact`/strict-gate matches are re-checked
+   * (and asked about) at import time — a `possible` one is information for the reviewer, nothing more.
+   */
+  kind: PossibleMatchKind;
   /** One plain-language sentence — never contains an internal transaction id. */
   summary: string;
 }
 
 const AMOUNT_EPSILON = 0.005;
+/** Same rounding-level tolerance the fuzzy finder uses: under ₹1, or within max(₹1, 1%), reads as "similar". */
+function amountsSimilar(a: number, b: number): boolean {
+  return Math.abs(a - b) <= Math.max(1, Math.max(a, b) * 0.01) + 1e-9;
+}
 
 const moneyFormat = new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const dateFormat = new Intl.DateTimeFormat("en-IN", { day: "2-digit", month: "short", year: "numeric" });
@@ -36,7 +46,7 @@ function norm(text: string): string {
   return text.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
-function accountLabelFor(accountId: string | null, accounts: Account[]): string | null {
+export function accountLabelFor(accountId: string | null, accounts: Account[]): string | null {
   if (!accountId) return null;
   const account = accounts.find((a) => a.id === accountId);
   if (!account) return null;
@@ -62,14 +72,20 @@ export function buildDuplicateComparison(params: {
   candidateAccountKey: string | null;
   existing: Pick<Transaction, "amount" | "dateTime" | "description" | "accountId" | "type">;
   duplicate: Pick<CandidateDuplicateResult, "confidence">;
+  /** Defaults to `exact` when the strict check flagged it (confidence ≥ 0.85), else `possible`. */
+  kind?: PossibleMatchKind;
   accounts: Account[];
   creditCards: CreditCardProfile[];
 }): DuplicateComparison {
   const { candidate, existing, accounts, creditCards } = params;
   const candidateAccountId = destinationAccountId(params.candidateAccountKey, creditCards);
 
-  const amountMatch: ComparisonMatch = Math.abs(candidate.amount - existing.amount) <= AMOUNT_EPSILON ? "same" : "different";
-  const dateMatch: ComparisonMatch = sameLocalDay(candidate.transactionDate, existing.dateTime) ? "same" : "different";
+  const amountMatch: ComparisonMatch = Math.abs(candidate.amount - existing.amount) <= AMOUNT_EPSILON ? "same" : amountsSimilar(candidate.amount, existing.amount) ? "similar" : "different";
+  const dateMatch: ComparisonMatch = sameLocalDay(candidate.transactionDate, existing.dateTime)
+    ? "same"
+    : calendarDayGap(candidate.transactionDate, existing.dateTime) <= MAX_DAY_GAP
+      ? "similar"
+      : "different";
 
   const candidateName = candidate.merchant ?? candidate.bankName ?? "";
   const existingName = existing.description ?? "";
@@ -101,13 +117,17 @@ export function buildDuplicateComparison(params: {
   const sameParts: string[] = [];
   if (amountMatch === "same") sameParts.push("amount");
   if (dateMatch === "same") sameParts.push("date");
+  const closeParts: string[] = [];
+  if (amountMatch === "similar") closeParts.push("amount");
+  if (dateMatch === "similar") closeParts.push("date");
   if (merchantMatch === "same" || merchantMatch === "similar") sameParts.push("merchant");
   if (accountMatch === "same") sameParts.push("account");
   const differs = rows.filter((r) => r.match === "different").map((r) => r.label.toLowerCase());
   const summary =
     (sameParts.length > 0 ? `Same ${sameParts.join(", ")} as a transaction you already have.` : "Looks like a transaction you already have.") +
+    (closeParts.length > 0 ? ` Its ${closeParts.join(" and ")} ${closeParts.length > 1 ? "are" : "is"} close but not identical.` : "") +
     (differs.length > 0 ? ` It differs in ${differs.join(", ")}.` : "") +
     " Nothing has been imported, merged or dismissed.";
 
-  return { rows, strength, summary };
+  return { rows, strength, kind: params.kind ?? (params.duplicate.confidence >= 0.85 ? "exact" : "possible"), summary };
 }

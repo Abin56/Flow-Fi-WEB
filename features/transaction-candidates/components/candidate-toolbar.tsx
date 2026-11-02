@@ -32,6 +32,7 @@ export function CandidateToolbar({
   onRemoveChip,
   canClearAll,
   onClearAll,
+  dense = false,
 }: {
   searchText: string;
   onSearchChange: (text: string) => void;
@@ -49,12 +50,15 @@ export function CandidateToolbar({
   onRemoveChip: (chip: FilterChip) => void;
   canClearAll: boolean;
   onClearAll: () => void;
+  /** Scrolled + pinned: one slim row (search + Filters; month/direction/sort live in the Filters sheet) and a one-line chip strip. */
+  dense?: boolean;
 }) {
-  const field = "h-11 lg:h-10";
+  const field = dense ? "h-9 lg:h-9" : "h-11 lg:h-10";
+  const quickFilters = !compact && !dense;
   return (
-    <div className="flex flex-col gap-2">
+    <div className={cn("flex flex-col", dense ? "gap-1.5" : "gap-2")}>
       <div className="flex items-center gap-2">
-        <div className="relative min-w-0 flex-1 sm:max-w-md">
+        <div className={cn("relative min-w-0 flex-1", !dense && "sm:max-w-md")}>
           <Search className="absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
           <Input
             type="search"
@@ -66,7 +70,7 @@ export function CandidateToolbar({
           />
         </div>
 
-        {!compact && (
+        {quickFilters && (
           <>
             <Select value={month ?? "all"} onValueChange={(v) => onMonth(v === "all" ? null : v)}>
               <SelectTrigger className={cn(field, "w-40")} aria-label="Filter by month">
@@ -136,7 +140,11 @@ export function CandidateToolbar({
       </div>
 
       {(chips.length > 0 || canClearAll) && (
-        <ul aria-label="Active filters" className="flex flex-wrap items-center gap-2" data-testid="filter-chips">
+        <ul
+          aria-label="Active filters"
+          className={cn("flex items-center gap-2", dense ? "overflow-x-auto pb-0.5 [scrollbar-width:none] [&>li]:shrink-0" : "flex-wrap")}
+          data-testid="filter-chips"
+        >
           {chips.map((chip) => (
             <li key={chip.id} className="inline-flex items-center rounded-full border border-border-strong bg-card py-0.5 pr-0.5 pl-3 text-xs font-semibold text-foreground">
               <span className="max-w-[16rem] truncate">{chip.label}</span>

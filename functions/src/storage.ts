@@ -45,3 +45,9 @@ export function assertOwnedStoragePath(storagePath: string, uid: string): void {
     throw new StoragePathOwnershipError("storagePath does not belong to the authenticated user.");
   }
 }
+
+/** Deletes an uploaded object from the default bucket. A missing object is not an error (already gone). Same Admin-SDK caveat as `readStorageObjectBytes`: validate the path first. */
+export async function deleteStorageObject(storagePath: string): Promise<void> {
+  const app = getApps().length ? getApps()[0]! : initializeApp();
+  await getStorage(app).bucket().file(storagePath).delete({ ignoreNotFound: true });
+}

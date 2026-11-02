@@ -25,7 +25,7 @@ const THRESHOLDS = Array.from({ length: 21 }, (_, i) => i / 20);
  * The bar snaps: hidden below this progress, fully in at or above it. Tracking `progress` continuously left it parked
  * half-in (clipped at the top edge, over a half-hidden title) whenever scrolling stopped mid-band.
  */
-const SHOW_AT = 0.5;
+export const SHOW_AT = 0.5;
 
 const useIsomorphicLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
 

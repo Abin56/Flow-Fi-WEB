@@ -36,6 +36,7 @@ import {
   signedAmountText,
   type CandidateRowModel,
 } from "./candidate-row-parts";
+import { CandidateMatchPanel } from "./candidate-match-panel";
 import { IgnoreCandidateButton } from "./ignore-candidate-button";
 
 const INTERACTIVE = "button, a, input, label, [role='checkbox'], [role='combobox']";
@@ -223,6 +224,9 @@ function Dot() {
 const LedgerRow = memo(function LedgerRow({ row, actions, showDate }: { row: CandidateRowModel; actions: RowActions; showDate: boolean }) {
   const { candidate, status } = row;
   const isDuplicate = status.lane === "duplicate";
+  const matches = row.matches ?? [];
+  // A similar saved transaction the strict check didn't flag: a softer, warning-toned rail (the lane and every count are unchanged).
+  const hasSoftMatch = !isDuplicate && matches.length > 0;
   const unnamed = candidate.merchant == null;
   // Under a day heading the date is already known — show the time instead (only when the candidate carries one).
   const d = candidate.transactionDate;
@@ -254,7 +258,7 @@ const LedgerRow = memo(function LedgerRow({ row, actions, showDate }: { row: Can
       )}
     >
       {/* State rail: lime = selected, red = duplicate. Colour-independent cues (the notice text, the checked box) always accompany it. */}
-      <span aria-hidden className={cn("absolute inset-y-0 left-0 w-[3px]", row.selected ? "bg-primary" : isDuplicate ? "bg-danger" : "bg-transparent")} />
+      <span aria-hidden className={cn("absolute inset-y-0 left-0 w-[3px]", row.selected ? "bg-primary" : isDuplicate ? "bg-danger" : hasSoftMatch ? "bg-warning" : "bg-transparent")} />
       <div className="grid grid-cols-[2.75rem_2.5rem_minmax(0,1fr)_auto] items-center gap-x-2.5 gap-y-1.5 py-2 pr-2.5 pl-1 @4xl:grid-cols-[2.75rem_2.5rem_minmax(0,1fr)_10rem_9rem_11rem] @4xl:gap-y-0 @4xl:py-2.5 @4xl:pr-3">
         <RowCheckbox row={row} onToggle={actions.onToggle} className="col-start-1 row-start-1" />
         <div className="col-start-2 row-start-1">
@@ -331,6 +335,11 @@ const LedgerRow = memo(function LedgerRow({ row, actions, showDate }: { row: Can
           </div>
         </div>
       </div>
+      {matches.length > 0 && (
+        <div className="pr-3 pb-2.5 pl-3 @4xl:pb-3 @4xl:pl-16" data-testid="candidate-row-matches">
+          <CandidateMatchPanel matches={matches} onCompare={() => actions.onReview(candidate.id)} />
+        </div>
+      )}
       {previewOpen && previewFacts.length > 0 && (
         <div className="pb-2.5 pl-16 pr-3 @4xl:pb-2" data-testid="candidate-quick-preview">
           <ul className="flex flex-col gap-1 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs leading-snug text-muted-foreground">

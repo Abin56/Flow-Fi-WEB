@@ -22,6 +22,7 @@ import { checkAndRecordAttempt, resetRateLimit } from "./ingestion/rate-limit";
 import { attemptUnlock } from "./ingestion/decrypt-document";
 import { checkDocumentExists } from "./ingestion/check-document-exists";
 import { ingestDocument } from "./ingestion/ingest-document";
+import { deleteStatementDocument } from "./ingestion/delete-statement-document";
 import { retryDocumentParsing, type RetryCredential } from "./ingestion/retry-document-parsing";
 import { saveCardPassword, SaveCardPasswordStepError } from "./ingestion/save-card-password";
 import { PdfDocumentError } from "./pdf/pdf-document-provider";
@@ -192,6 +193,28 @@ export const ingestDocumentCallable = onCall(async (request) => {
   }
 
   return result;
+});
+
+/**
+ * Permanently deletes an uploaded statement (PDF in Storage + staged rows +
+ * the document record). See ingestion/delete-statement-document.ts for the
+ * refusal rules (imported transactions, still-processing).
+ */
+export const deleteStatementDocumentCallable = onCall(async (request) => {
+  if (!request.auth) {
+    throw new HttpsError("unauthenticated", "Sign in required.");
+  }
+
+  const { documentId } = request.data as { documentId?: unknown };
+  if (typeof documentId !== "string" || !documentId) {
+    throw new HttpsError("invalid-argument", "documentId is required.");
+  }
+
+  try {
+    return await deleteStatementDocument(getDb(), { uid: request.auth.uid, documentId });
+  } catch (e) {
+    throw toClientError("deleteStatementDocumentCallable", e);
+  }
 });
 
 function parseCredential(raw: unknown): RetryCredential | null {
