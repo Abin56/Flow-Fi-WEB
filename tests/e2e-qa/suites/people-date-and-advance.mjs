@@ -169,10 +169,9 @@ scenario("padv-held-advance-shown-and-applied", "Shared EMI: Priya's held advanc
   // Ravi still owes his share, so the lender payment asks once; paying from my account debits the bank exactly once
   // and neither creates a receipt nor touches the advance application or Priya's settled share.
   const bankBeforeLender = await f.bal("QA Bank");
-  await dlg.getByText(/Pay now from my account/i).first().click();
+  await dlg.getByText(/Pay the lender from my own money/i).first().click();
   await page.waitForTimeout(600);
-  const reason = dlg.getByRole("radio").first();
-  if (await reason.count()) await reason.click().catch(() => {});
+  // The optional reason is a chip (button), not a radio — the dialog's first radio is now the "Received" decision, so no reason is set here.
   await dlg.getByText("Choose paying account").click();
   await page.getByRole("option", { name: /QA Bank/ }).click();
   await dlg.getByRole("button", { name: /^Pay ₹3,000/ }).click();

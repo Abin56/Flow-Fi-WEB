@@ -191,8 +191,9 @@ export function HeroAmount({
 }
 
 /**
- * The top of a People drawer panel: the person's initial (with a ↙/↗ badge when a direction is known), a title,
- * the person's name with one quiet context pill, and a round close button. Sticky; solid (no blur).
+ * The top of a People drawer panel, in the Transaction Details style: a near-black hero strip with the person's
+ * monogram tile (tinted by direction), the title with an optional status pill, the person and one context pill, an
+ * optional live amount, and a round close button. Sticky; solid (no blur).
  */
 export function PanelHeader({
   title,
@@ -200,64 +201,68 @@ export function PanelHeader({
   context,
   tone,
   onClose,
+  amount,
+  status,
 }: {
   title: string;
   personName: string;
   context?: React.ReactNode;
   tone: FlowTone | null;
   onClose: () => void;
+  /** A live figure on the right — e.g. the amount being received (already formatted). */
+  amount?: string;
+  /** A short pill beside the title — e.g. "Received". */
+  status?: string;
 }) {
   const t = tone ? TONE[tone] : null;
   const Badge = t?.icon;
+  const avatar = tone === "in" ? "bg-primary/16 text-primary ring-primary/35" : tone === "out" ? "bg-[oklch(0.8_0.13_28)]/14 text-[oklch(0.88_0.09_28)] ring-[oklch(0.8_0.13_28)]/30" : "bg-white/[0.08] text-hero-foreground ring-white/12";
+  const amountTone = tone === "in" ? "text-primary" : tone === "out" ? "text-[oklch(0.8_0.13_28)]" : "text-hero-foreground";
   return (
-    <div className="sticky top-0 z-30 flex items-center justify-between gap-3 rounded-t-[12px] border-b border-border bg-card px-4 py-3.5 shadow-[0_6px_12px_-10px_rgb(0_0_0/0.25)] sm:px-6">
-      <div className="flex min-w-0 items-center gap-3">
-        <span aria-hidden className="relative shrink-0">
-          <span
-            className={cn(
-              "flex size-10 items-center justify-center rounded-full font-heading text-[15px] font-bold transition-colors duration-300",
-              tone === "in"
-                ? "bg-settle-receivable-text/12 text-settle-receivable-text"
-                : tone === "out"
-                  ? "bg-settle-payable-text/12 text-settle-payable-text"
-                  : "bg-secondary text-foreground/70",
+    <div className="sticky top-0 z-30 overflow-hidden bg-surface-hero text-hero-foreground">
+      <div aria-hidden className="pointer-events-none absolute inset-0 bg-[radial-gradient(70%_180%_at_0%_0%,oklch(0.34_0.07_126/0.5),transparent_62%)]" />
+      <div className="relative flex items-center justify-between gap-3 px-4 py-2.5 sm:px-5">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <span aria-hidden className="relative shrink-0">
+            <span className={cn("grid size-9 place-items-center rounded-[11px] text-[13px] font-bold shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] ring-1 transition-colors duration-300", avatar)}>
+              {personName.slice(0, 1).toUpperCase()}
+            </span>
+            {t && Badge && (
+              <span key={tone} className={cn("absolute -right-0.5 -bottom-0.5 flex size-4 items-center justify-center rounded-full ring-2 ring-surface-hero duration-200 animate-in zoom-in-50", t.solid)}>
+                <Badge className="size-2.5" strokeWidth={3} />
+              </span>
             )}
-          >
-            {personName.slice(0, 1).toUpperCase()}
           </span>
-          {t && Badge && (
-            <span
-              key={tone}
-              className={cn("absolute -right-0.5 -bottom-0.5 flex size-[18px] items-center justify-center rounded-full ring-2 ring-card duration-200 animate-in zoom-in-50", t.solid)}
-            >
-              <Badge className="size-3" strokeWidth={3} />
-            </span>
-          )}
-        </span>
-        <div className="min-w-0">
-          <h3 className="truncate font-heading text-[17px] leading-tight font-semibold tracking-tight text-foreground">
-            {title}
-            <span className="sr-only"> · {personName}</span>
-          </h3>
-          <p className="mt-1 flex min-w-0 items-center gap-2 text-xs">
-            <span aria-hidden className="truncate font-semibold text-foreground/85">
-              {personName}
-            </span>
-            {context && (
-              <span className="inline-flex min-w-0 items-center gap-1 truncate rounded-full bg-secondary px-2 py-0.5 text-[11px] font-medium text-foreground/75">{context}</span>
-            )}
-          </p>
+          <div className="min-w-0">
+            <p className="text-[10.5px] font-bold tracking-[0.08em] text-hero-foreground/65 uppercase">People</p>
+            <h3 className="flex min-w-0 items-center gap-2 text-[15px] leading-tight font-semibold tracking-tight">
+              <span className="truncate">
+                {title}
+                <span className="sr-only"> · {personName}</span>
+              </span>
+              {status && <span className="shrink-0 rounded-full bg-white/10 px-2 py-0.5 text-[11px] font-semibold text-hero-foreground ring-1 ring-white/12">{status}</span>}
+            </h3>
+            <p className="mt-0.5 flex min-w-0 items-center gap-2 text-xs">
+              <span aria-hidden className="truncate font-semibold text-hero-foreground/90">
+                {personName}
+              </span>
+              {context && <span className="inline-flex min-w-0 items-center gap-1 truncate text-[11px] font-medium text-hero-foreground/70">{context}</span>}
+            </p>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          {amount && <span className={cn("font-heading text-[22px] leading-none font-bold tracking-tight tabular-nums sm:text-[26px]", amountTone)}>{amount}</span>}
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            title="Close (Esc)"
+            className="grid size-8 shrink-0 place-items-center rounded-[10px] bg-white/[0.07] text-hero-foreground/80 ring-1 ring-white/10 outline-none transition-colors hover:bg-[oklch(0.6_0.2_25)]/25 hover:text-hero-foreground focus-visible:ring-2 focus-visible:ring-primary/70"
+          >
+            <X className="size-4" strokeWidth={2} aria-hidden />
+          </button>
         </div>
       </div>
-      <button
-        type="button"
-        onClick={onClose}
-        aria-label="Close"
-        title="Close (Esc)"
-        className="flex size-9 shrink-0 items-center justify-center rounded-full text-foreground/70 outline-none transition-[background-color,color,transform] duration-150 hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring active:scale-90"
-      >
-        <X className="size-[18px]" strokeWidth={2} aria-hidden />
-      </button>
     </div>
   );
 }

@@ -99,16 +99,17 @@ scenario("uxp-hist-24-mixed-people", "24 months of history: lender paid earlier 
   );
 });
 
-scenario("uxp-pay-choices-extra-mobile-dark", "Pay drawer at 390×844 dark: every amount named and visible; 'Installment + extra towards principal' debits once, exactly the total", async ({ page }, chk) => {
+scenario("uxp-pay-choices-extra-mobile-dark", "Pay drawer at 390×844 dark: every amount named and visible; 'Installment + extra payment' debits once, exactly the total", async ({ page }, chk) => {
   await openDetails(page, "QA Loan 12");
   await page.getByRole("button", { name: "Record Payment" }).click();
   const dlg = page.getByRole("dialog", { name: /Pay installment/ });
   await dlg.getByText("TO PAY LENDER").waitFor();
-  const group = await f.flat(dlg.getByRole("radiogroup", { name: "What are you paying?" }));
+  await dlg.getByTestId("other-ways-toggle").click();
+  const group = await f.flat(dlg.getByRole("radiogroup", { name: "How much are you paying?" }));
   await h.shot(page, "uxp-pay-choices-mobile-dark");
-  chk("amount choices are visible and named — no 'Other amount' gate", /Pay this installment/.test(group) && /Part payment or another amount/.test(group) && /Installment \+ extra towards principal/.test(group) && /All remaining installments/.test(group) && (await dlg.getByRole("button", { name: "Other amount" }).count()) === 0, group);
+  chk("amount choices are visible and named — no 'Other amount' gate", /Pay this installment/.test(group) && /Part payment/.test(group) && /Installment \+ extra payment/.test(group) && /All remaining installments/.test(group) && (await dlg.getByRole("button", { name: "Other amount" }).count()) === 0, group);
   chk("the scheduled total is not called a payoff", /not a bank closure amount/.test(group) && !/Pay off remaining/.test(group));
-  await dlg.getByRole("radio", { name: /Installment \+ extra towards principal/ }).click();
+  await dlg.getByRole("radio", { name: /Installment \+ extra payment/ }).click();
   await dlg.getByRole("spinbutton").fill("1000");
   await chooseBank(page, dlg);
   const impact = await f.flat(dlg.getByTestId("payment-impact"));
@@ -203,7 +204,7 @@ scenario("uxp-people-in-balance-and-advance", "People: a held advance is offered
   chk("the lender schedule is untouched by People receipts (persisted)", f.paidTotal(await f.scheduleState("emi", "QA Shared EMI")) === 0);
 });
 
-scenario("uxp-collect-return-to-payment", "Collect first → record Priya in People → back on the SAME agreement's payment (dialog reopened)", async ({ page }, chk) => {
+scenario("uxp-collect-return-to-payment", "Received → record Priya right in the payment dialog (no navigation) → the dialog stays on the SAME payment", async ({ page }, chk) => {
   await h.addFixture(page, "shared-emi");
   await openDetails(page, "QA Shared EMI");
   await page.getByRole("button", { name: "Record Payment" }).click();
@@ -211,25 +212,18 @@ scenario("uxp-collect-return-to-payment", "Collect first → record Priya in Peo
   await dlg.getByText("TO PAY LENDER").waitFor();
   const shareActions = await f.flat(dlg.getByRole("region", { name: "Who pays this installment" }));
   chk("each person offers 'Record received' and 'Postpone' separately", /Record received/.test(shareActions) && /Postpone/.test(shareActions) && !/Record \/ postpone/.test(shareActions), shareActions);
-  await dlg.getByRole("radio", { name: /Collect from others first/ }).click();
-  await dlg.getByRole("radio", { name: "Collect from QA Priya" }).click();
-  await h.shot(page, "uxp-collect-first");
   const fromPath = await page.evaluate(() => location.pathname);
-  await dlg.getByRole("button", { name: "Record QA Priya's payment in People" }).click();
-  // Client-side navigation: wait on the URL itself (no page "load" event fires).
-  await waitForPath(page, "/people");
-  await page.getByText(/Amount received/).first().waitFor({ timeout: 30000 });
-  await f.amountField(page).fill("1000");
+  await dlg.getByRole("radio", { name: /^Received/ }).click();
+  const form = dlg.getByTestId("share-received");
+  await form.waitFor();
+  await form.getByLabel("Amount received from QA Ravi").fill("0");
   await f.pickAccountIn(page, "QA Bank");
-  await page.getByRole("button", { name: /^Record ₹1,000 received/ }).first().click();
-  await waitForPath(page, fromPath);
-  const back = page.getByRole("dialog", { name: /Pay EMI/ });
-  await back.getByText("TO PAY LENDER").waitFor({ timeout: 30000 });
-  const url = page.url();
-  const backText = await f.flat(back);
-  await h.shot(page, "uxp-collect-returned");
-  // The page consumes ?agreement= / pay=1 once it has opened them — what matters is WHICH payment is open again.
-  chk("returned to the SAME agreement's payment, reopened", /QA Shared EMI · Installment #1/.test(backText) && !/pay=1/.test(url), `${url} | ${backText.slice(0, 120)}`);
-  chk("…and Priya now reads Received there", /QA PRIYA \| ₹1,000 \| Received/.test(backText), backText.slice(0, 300));
+  await h.shot(page, "uxp-collect-first");
+  const bank0 = await f.bal("QA Bank");
+  await form.getByRole("button", { name: /^Record ₹[\d,.]+ received$/ }).click();
+  await dlg.getByTestId("share-received-done").waitFor({ timeout: 30000 });
+  chk("no navigation — still on the same page with the payment open", (await page.evaluate(() => location.pathname)) === fromPath && (await dlg.isVisible()));
+  await page.waitForTimeout(1500);
+  chk("Priya's money was added to the account once (persisted)", (await f.bal("QA Bank")) > bank0, `${bank0} -> ${await f.bal("QA Bank")}`);
   chk("the lender is still unpaid — recording Priya's money paid nobody else (persisted)", f.paidTotal(await f.scheduleState("emi", "QA Shared EMI")) === 0);
 });

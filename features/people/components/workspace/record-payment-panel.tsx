@@ -1,7 +1,7 @@
 "use client";
 
-import { Bell, CalendarClock, CalendarDays, Check, ChevronDown, CircleAlert, Loader2, RotateCcw } from "lucide-react";
-import { useContext, useEffect, useMemo, useRef, useState } from "react";
+import { Bell, CalendarClock, CalendarDays, Check, ChevronDown, CircleAlert, Info, Loader2, RotateCcw } from "lucide-react";
+import { useContext, useEffect, useId, useMemo, useRef, useState } from "react";
 import { EmiBadge } from "@/features/people/components/cycle-statement/statement-parts";
 import type { LedgerRow } from "@/features/people/lib/person-ledger-rows";
 import {
@@ -32,6 +32,8 @@ import {
 import type { PaymentExtraInput, RecordPaymentInput } from "@/lib/repositories/person-payment-repository";
 import { cn } from "@/lib/utils";
 import { isUnderfunded } from "@/components/finance/payment-source-summary";
+import { SHEET_AMOUNT_TONE, SHEET_BUTTON, SheetAvatar, TransactionSheet } from "@/components/finance/transaction-sheet";
+import { DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { AccountField, useAccountChoice, withRefund } from "./ledger-ui";
 import { WS_FIELD, WS_GHOST, WS_PRIMARY, WsField } from "./person-workspace-ui";
 import { usePurposeLinkOptions } from "./purpose-money";
@@ -104,7 +106,10 @@ export function RecordPaymentPanel({
   initialIntent,
   advanceHeld = 0,
   onApplyAdvance,
+  sheet = false,
 }: {
+  /** Open as the Transaction Details top sheet (dark header, body, "Still needed" footer) instead of filling a drawer. */
+  sheet?: boolean;
   /** Open straight into "Postpone collection" (a lender payment's Postpone link). */
   initialIntent?: "received" | "postpone";
   /** Money this person gave earlier that is still held as advance (not applied) — offered before new money. */
@@ -207,6 +212,7 @@ export function RecordPaymentPanel({
   const [mode, setMode] = useState<ApplyMode>(() =>
     initial ? (GENERAL_PAYMENT_KEY in initial.lines ? "general" : "items") : preselected ? "items" : "general",
   );
+  const formId = useId();
   const general = mode === "general";
   // The overall balance on this side, earlier general payments included — an edit counts its own general part as open again.
   const overall = useMemo(() => overallDue(rows, cycle), [rows, cycle]);
@@ -583,6 +589,8 @@ export function RecordPaymentPanel({
   if (recorded) {
     return (
       <PostponeResult
+        sheet={sheet}
+        formId={formId}
         personName={personName}
         first={first}
         amount={amount}
@@ -612,36 +620,32 @@ export function RecordPaymentPanel({
       : []),
   ];
 
-  return (
-    // A real <form>: Enter in a single-line field records through the same submit() as the primary button,
-    // with the same gates (blocker / saving / unbalanced allocation) the button's disabled state applies.
-    <form
-      noValidate
-      onSubmit={(e) => {
-        e.preventDefault();
-        if (e.target !== e.currentTarget) return;
-        if (postponing) return void submitPostpone();
-        if (!recon.balanced) return;
-        void submit();
-      }}
-      aria-label={initial ? `Edit payment — ${personName}` : postponing ? `Postpone payment — ${personName}` : `Record payment — ${personName}`}
-      // A column that fills its host (the drawer gives it full height): header pinned on top, footer on the bottom.
-      className="mt-4 flex min-h-full flex-col rounded-[12px] border border-border-strong bg-card"
-    >
-      <PanelHeader
-        title={initial ? "Edit payment" : postponing ? "Postpone collection" : "Record payment"}
-        personName={personName}
-        tone={postponing ? "wait" : theyPaid ? "in" : "out"}
-        onClose={onCancel}
-        context={
-          <>
-            <CalendarDays className="size-3 shrink-0" aria-hidden />
-            <span className="truncate">{initial ? `Recorded ${formatStatementDate(initial.date, true)}` : cycleLabel}</span>
-          </>
-        }
-      />
+  // A real <form>: Enter in a single-line field records through the same submit() as the primary button,
+  // with the same gates (blocker / saving / unbalanced allocation) the button's disabled state applies.
+  const formProps = {
+    noValidate: true,
+    onSubmit: (e: React.FormEvent<HTMLFormElement>) => {
+      e.preventDefault();
+      if (e.target !== e.currentTarget) return;
+      if (postponing) return void submitPostpone();
+      if (!recon.balanced) return;
+      void submit();
+    },
+    "aria-label": initial ? `Edit payment — ${personName}` : postponing ? `Postpone payment — ${personName}` : `Record payment — ${personName}`,
+  };
+  const heroTitle = initial ? "Edit payment" : postponing ? "Postpone collection" : "Record payment";
+  const heroTone = postponing ? "wait" : theyPaid ? "in" : "out";
+  const heroAmount = !postponing && amount > PAYMENT_EPSILON ? money(amount) : undefined;
+  const heroStatus = initial ? undefined : postponing ? "Not paid yet" : theyPaid ? "Receiving" : "Paying";
+  const heroContext = (
+    <>
+      <CalendarDays className="size-3 shrink-0" aria-hidden />
+      <span className="truncate">{initial ? `Recorded ${formatStatementDate(initial.date, true)}` : cycleLabel}</span>
+    </>
+  );
 
-      <div className="flex-1 space-y-7 px-4 pt-4 pb-6 sm:px-6">
+  const body = (
+      <div className="flex-1 space-y-5 px-4 pt-4 pb-5 sm:px-5">
         {/* ── What happened: one top-level choice — money received, money paid, or "not paid yet" (postpone) ── */}
         <section aria-label="What happened" className="space-y-3">
           <FlowSwitch
@@ -722,19 +726,35 @@ export function RecordPaymentPanel({
 
         {!postponing && (
           <>
+            {/* ── Money summary: total · receiving/paying now · remaining — the same figures, shown once, up top ── */}
+            {(general && owesSomething) || (!general && options.length > 0) ? (
+              <dl
+                aria-label="Money summary"
+                className={cn("-mt-3 grid grid-cols-3 divide-x divide-border overflow-hidden rounded-[12px] border border-border-strong bg-secondary/30 transition-opacity duration-200", waiting && "opacity-70")}
+                data-testid={general ? "rp-general" : "rp-summary"}
+              >
+                <GeneralFigure label="Total" value={money(general ? generalDue : shownDue)} testId={general ? "rp-general-due" : "rp-due-total"} />
+                <GeneralFigure label={theyPaid ? "Receiving now" : "Paying now"} value={money(general ? allocation.allocated : amount)} testId={general ? "rp-general-paying" : "rp-sum-now"} />
+                <GeneralFigure label="Remaining" value={money(stillOwed)} testId={general ? "rp-general-left" : "rp-sum-left"} tone={stillOwed > PAYMENT_EPSILON ? "text-warning" : "text-success"} />
+              </dl>
+            ) : null}
+
             {/* ── Step 1. Money details: amount, account, funding mode, date, what's outstanding ── */}
-            <section aria-labelledby="rp-money-heading">
-              <StepHeading id="rp-money-heading" n={1} title="Money details" hint={theyPaid ? "How much came in, where it went, and when." : "How much went out, from which account, and when."} />
+            <section aria-labelledby="rp-money-heading" className={RP_CARD}>
+              <StepHeading id="rp-money-heading" n={1} title="Money details" />
               <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,12rem)]">
                 <div className="min-w-0">
                   <HeroAmount label={theyPaid ? "Amount received" : "Amount paid"} value={amountText} onChange={setAmountText} />
                   <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-foreground/75">
-                    <span>
-                      Total outstanding{" "}
-                      <span className={cn("font-semibold tabular-nums", shownDue > PAYMENT_EPSILON ? (theyPaid ? "text-settle-receivable-text" : "text-settle-payable-text") : "text-foreground")} data-testid="rp-due-total">
-                        {money(shownDue)}
+                    {/* With the summary strip above, the total is shown there once; otherwise (nothing itemised) it stays here. */}
+                    {(general || options.length === 0) && (
+                      <span className={general && owesSomething ? "sr-only" : undefined}>
+                        Total outstanding{" "}
+                        <span className={cn("font-semibold tabular-nums", shownDue > PAYMENT_EPSILON ? (theyPaid ? "text-settle-receivable-text" : "text-settle-payable-text") : "text-foreground")} data-testid="rp-due-total">
+                          {money(shownDue)}
+                        </span>
                       </span>
-                    </span>
+                    )}
                     {/* Convenience only: types the outstanding figure into the amount — the same as typing it. */}
                     {shownDue > PAYMENT_EPSILON && amount !== shownDue && (
                       <button
@@ -832,21 +852,21 @@ export function RecordPaymentPanel({
             </section>
 
             {/* ── Step 2. Apply to bills — every due item, decided on its own row ── */}
-            <section aria-labelledby="rp-settle-heading">
+            <section aria-labelledby="rp-settle-heading" className={RP_CARD}>
               <StepHeading
                 id="rp-settle-heading"
                 n={2}
                 title={general && owesSomething ? "Apply to balance" : "Apply to bills"}
                 hint={
                   general && owesSomething
-                    ? "Lowers what is owed overall — not tied to any item."
+                    ? undefined
                     : options.length === 0
                     ? theyPaid
                       ? `Nothing to receive from ${first} right now`
                       : `Nothing to give to ${first} right now`
                     : automatic
-                      ? "Choose what to pay now — filled oldest first. Skip anything not being paid now."
-                      : "Choose what to pay now — your amounts; the received amount no longer re-fills them."
+                      ? "Filled oldest first — skip what isn't paid now."
+                      : "Your amounts — the received amount no longer re-fills them."
                 }
                 right={
                   !general && options.length > 0 && (
@@ -880,18 +900,13 @@ export function RecordPaymentPanel({
 
               {owesSomething && <ApplyModeSwitch mode={mode} onChange={switchMode} locked={!!initial} itemCount={options.length} />}
               {general && owesSomething ? (
-                <div className={cn("overflow-hidden rounded-[10px] border border-border-strong transition-opacity duration-200", waiting && "opacity-70")} data-testid="rp-general">
-                  <dl className="grid grid-cols-3 divide-x divide-border">
-                    <GeneralFigure label="Total outstanding" value={money(generalDue)} testId="rp-general-due" />
-                    <GeneralFigure label={theyPaid ? "Receiving now" : "Paying now"} value={money(allocation.allocated)} testId="rp-general-paying" />
-                    <GeneralFigure label="Remaining after" value={money(stillOwed)} testId="rp-general-left" tone={stillOwed > PAYMENT_EPSILON ? "text-warning" : "text-success"} />
-                  </dl>
-                  <p className="border-t border-border bg-secondary/40 px-3 py-2 text-[11.5px] leading-snug text-foreground/80" data-testid="rp-general-note">
-                    Not tied to any item — no transaction is marked paid or part paid. Items keep their original amounts, and the statement shows this
-                    payment against the overall balance.
-                    {theyPaid && options.some((o) => o.isEmi) && " To record money for one EMI share, choose specific items."}
-                  </p>
-                </div>
+                <p className="flex items-start gap-1.5 rounded-[8px] bg-secondary/40 px-3 py-2 text-[11.5px] leading-snug text-foreground/80" data-testid="rp-general-note">
+                  <Info className="mt-px size-3.5 shrink-0 text-foreground/55" aria-hidden />
+                  <span>
+                    Not tied to any item — no transaction is marked paid or part paid.
+                    {theyPaid && options.some((o) => o.isEmi) && " For one EMI share, choose specific items."}
+                  </span>
+                </p>
               ) : options.length === 0 ? (
                 <p className="rounded-[10px] bg-secondary/50 px-3 py-2 text-xs text-foreground/75">The whole amount is money left to use — choose what it is for below.</p>
               ) : (
@@ -1059,12 +1074,12 @@ export function RecordPaymentPanel({
             </section>
 
             {/* ── Step 3. Remaining money — always here: the editor when some is left, a calm state when not ── */}
-            <section aria-labelledby="rp-remaining-heading">
+            <section aria-labelledby="rp-remaining-heading" className={RP_CARD}>
               <StepHeading
                 id="rp-remaining-heading"
                 n={3}
                 title="Remaining money"
-                hint={hasExtra && !earlier ? "Not applied to bills — choose what it is for." : undefined}
+                hint={hasExtra && !earlier ? "Choose what it is for." : undefined}
                 right={
                   hasExtra && !earlier ? (
                     <p className="text-xs text-foreground/70">
@@ -1108,7 +1123,7 @@ export function RecordPaymentPanel({
 
             {/* ── After recording (optional): postpone what stays unpaid, set a reminder. One collapsed section. ── */}
             {followUpOffered && (
-              <section aria-label="After recording (optional)" className="rounded-[10px] border border-border-strong">
+              <section aria-label="After recording (optional)" className="rounded-xl border border-border bg-card shadow-e1">
                 <button
                   type="button"
                   aria-expanded={followUpOpen}
@@ -1116,12 +1131,12 @@ export function RecordPaymentPanel({
                   onClick={() => {
                     if (liveAfterItems.length === 0) setAfterOpen((v) => !v);
                   }}
-                  className="flex w-full items-center gap-2 rounded-[10px] px-3 py-2.5 text-left outline-none hover:bg-secondary/40 focus-visible:ring-2 focus-visible:ring-ring"
+                  className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left outline-none hover:bg-secondary/40 focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <CalendarClock className="size-4 shrink-0 text-foreground/70" aria-hidden />
                   <span className="min-w-0 flex-1">
                     <span className="block text-[13px] font-bold text-foreground">After recording (optional)</span>
-                    <span className="block text-xs text-foreground/70">Postpone what stays unpaid, or set a reminder — moves no money.</span>
+                    <span className="block text-xs text-foreground/70">Postpone the rest or set a reminder</span>
                   </span>
                   {reminder && reminderOffered && <span className="shrink-0 rounded-full bg-secondary px-2 py-0.5 text-[11px] font-bold text-foreground/80">Reminder set</span>}
                   {liveAfterItems.length > 0 && (
@@ -1205,11 +1220,13 @@ export function RecordPaymentPanel({
           </>
         )}
       </div>
+  );
 
-      {/* ── Always-visible footer: where the money goes, what is still owed (separately), and the action ── */}
+  // ── Always-visible footer: where the money goes, what is still owed (separately), and the action ──
+  const footer = (
       <aside
         aria-label="Payment summary"
-        className="sticky bottom-0 z-10 mt-auto border-t border-border-strong bg-card px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-[0_-8px_24px_-12px_rgb(0_0_0/0.18)] sm:px-6"
+        className={cn("bg-card px-4 py-3 sm:px-5", sheet ? "pb-3" : "sticky bottom-0 z-10 mt-auto border-t border-border-strong pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-[0_-8px_24px_-12px_rgb(0_0_0/0.18)]")}
       >
         {postponing ? (
           <>
@@ -1245,7 +1262,7 @@ export function RecordPaymentPanel({
                 Cancel
               </button>
               <button
-                type="submit"
+                type="submit" form={formId}
                 disabled={!postponeDraft.ready}
                 aria-busy={postponeDraft.busy}
                 className={cn(WS_PRIMARY, "h-10 min-w-0 flex-1 truncate whitespace-nowrap transition-[opacity,transform] duration-150 active:scale-[0.985]")}
@@ -1303,7 +1320,7 @@ export function RecordPaymentPanel({
             )}
             {(error || (blocker && amount > 0)) && (
               <p
-                className={cn("mt-2 flex items-center gap-1.5 text-xs font-semibold duration-200 animate-in fade-in slide-in-from-bottom-1", error ? "text-expense" : "text-warning")}
+                className={cn("mt-2 flex items-center gap-1.5 text-xs font-semibold duration-200 animate-in fade-in slide-in-from-bottom-1", error ? "text-expense" : "text-warning", !error && !earlier && !account.selected && "sr-only")}
                 role={error ? "alert" : undefined}
                 data-testid="rp-blocker"
               >
@@ -1311,14 +1328,36 @@ export function RecordPaymentPanel({
                 {error ?? blocker}
               </p>
             )}
+            {/* Still needed — the Transaction Details pattern: what is missing, or "Ready". */}
+            <div className="mt-2 flex min-w-0 items-center gap-1.5 overflow-x-auto text-[12.5px] [scrollbar-width:none]" aria-live="polite" data-testid="rp-still-needed">
+              {ready ? (
+                <p className="flex min-w-0 items-center gap-2 font-semibold text-[oklch(0.44_0.13_149)] dark:text-success">
+                  <span className="grid size-5 shrink-0 place-items-center rounded-full bg-success text-success-foreground">
+                    <Check className="size-3" strokeWidth={3} aria-hidden />
+                  </span>
+                  <span className="truncate">Ready to record</span>
+                </p>
+              ) : (
+                <>
+                  <span className="shrink-0 font-medium text-foreground/72">Still needed:</span>
+                  {[amount <= PAYMENT_EPSILON ? "Amount" : null, !earlier && !account.selected ? "Account" : null, amount > PAYMENT_EPSILON && blocker && account.selected ? "Fix the note below" : null]
+                    .filter((c): c is string => c != null)
+                    .map((c) => (
+                      <span key={c} className="inline-flex h-6 shrink-0 items-center rounded-full border border-dashed border-border-strong bg-card px-2 text-[11.5px] font-semibold text-foreground/80">
+                        {c}
+                      </span>
+                    ))}
+                </>
+              )}
+            </div>
             <div className="mt-2.5 flex items-center gap-2">
-              <button type="button" onClick={onCancel} disabled={saving} className={cn(WS_GHOST, "shrink-0")}>
+              <button type="button" onClick={onCancel} disabled={saving} className={cn(SHEET_BUTTON.ghost, "shrink-0")}>
                 Cancel
               </button>
               <button
-                type="submit"
+                type="submit" form={formId}
                 disabled={!ready || saving}
-                className={cn(WS_PRIMARY, "h-10 min-w-0 flex-1 truncate whitespace-nowrap transition-[opacity,transform,box-shadow] duration-150 active:scale-[0.985] enabled:hover:shadow-[0_6px_18px_-8px_var(--color-primary)]")}
+                className={cn(SHEET_BUTTON.primary, "min-w-0 flex-1 truncate whitespace-nowrap active:scale-[0.985]")}
               >
                 {saving && <Loader2 className="size-4 shrink-0 animate-spin" aria-hidden />}
                 <span className="truncate">
@@ -1333,9 +1372,64 @@ export function RecordPaymentPanel({
           </>
         )}
       </aside>
+  );
+
+  if (sheet) {
+    return (
+      <TransactionSheet
+        open
+        compact
+        onRequestClose={onCancel}
+        closeDisabled={saving}
+        testId="payment-sheet"
+        header={<SheetHero title={heroTitle} personName={personName} tone={heroTone} status={heroStatus} amount={heroAmount} context={heroContext} />}
+        footer={footer}
+      >
+        <form id={formId} {...formProps} className="flex flex-col">
+          {body}
+        </form>
+      </TransactionSheet>
+    );
+  }
+  return (
+    <form {...formProps} className="mt-4 flex min-h-full flex-col bg-secondary/55">
+      <PanelHeader title={heroTitle} personName={personName} tone={heroTone} onClose={onCancel} amount={heroAmount} status={heroStatus} context={heroContext} />
+      {body}
+      {footer}
     </form>
   );
 }
+
+/** The Transaction Details hero row: tinted monogram, label + title + status pill, person · context, and the live amount. */
+function SheetHero({ title, personName, tone, status, amount, context }: { title: string; personName: string; tone: "in" | "out" | "wait"; status?: string; amount?: string; context?: React.ReactNode }) {
+  return (
+    <div className="flex min-w-0 items-center gap-3">
+      <SheetAvatar compact tone={tone === "in" ? "credit" : tone === "out" ? "debit" : "neutral"}>
+        {personName.slice(0, 1).toUpperCase()}
+      </SheetAvatar>
+      <div className="min-w-0 flex-1">
+        <p className="text-[10.5px] font-bold tracking-[0.08em] text-hero-foreground/65 uppercase">People · {personName}</p>
+        <DialogTitle className="flex min-w-0 items-center gap-2 text-[15px] leading-tight font-semibold tracking-tight text-hero-foreground">
+          <span className="truncate">
+            {title}
+            <span className="sr-only"> · {personName}</span>
+          </span>
+          {status && <span className="shrink-0 rounded-full bg-white/10 px-2 py-0.5 text-[11px] font-semibold text-hero-foreground ring-1 ring-white/12">{status}</span>}
+        </DialogTitle>
+        <DialogDescription className="sr-only">{title}</DialogDescription>
+        {context && <p className="mt-0.5 flex min-w-0 items-center gap-1 truncate text-[11px] font-medium text-hero-foreground/70">{context}</p>}
+      </div>
+      {amount && (
+        <span className={cn("font-heading text-[22px] leading-none font-bold tracking-tight tabular-nums sm:text-[28px]", tone === "in" ? SHEET_AMOUNT_TONE.credit : tone === "out" ? SHEET_AMOUNT_TONE.debit : SHEET_AMOUNT_TONE.unknown)}>
+          {amount}
+        </span>
+      )}
+    </div>
+  );
+}
+
+/** A step's card — the same surface as the Transaction Details sections. */
+const RP_CARD = "rounded-xl border border-border bg-card p-3 shadow-e1 sm:p-3.5";
 
 const LIST_ACTION =
   "inline-flex h-7 items-center gap-1 rounded-full border border-border-strong px-2.5 text-xs font-semibold text-foreground/85 outline-none transition-colors duration-150 hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring aria-pressed:border-settle-split-edge aria-pressed:bg-settle-split-tint/60 aria-pressed:text-settle-split-text";
@@ -1379,7 +1473,7 @@ function ObligationRow({
     <li
       data-choice={choice ?? "none"}
       className={cn(
-        "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2.5 px-3 py-3 transition-colors sm:grid-cols-[minmax(0,1fr)_auto_7.5rem_8.5rem]",
+        "grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-2 px-3 py-2.5 transition-colors sm:grid-cols-[minmax(0,1fr)_auto_7.5rem_8.5rem]",
         active ? "bg-settle-split-tint/20 shadow-[inset_3px_0_0_var(--color-settle-split-edge)]" : "",
       )}
     >
@@ -1443,7 +1537,7 @@ function ObligationRow({
         />
       </div>
 
-      <div className="min-w-0 text-right">
+      <div className="col-span-2 min-w-0 text-right sm:col-span-1">
         {choice === "full" ? (
           <span className="inline-flex items-center gap-1 text-xs font-bold text-success">
             <Check className="size-3.5" strokeWidth={3} aria-hidden />
@@ -1462,9 +1556,10 @@ function ObligationRow({
 /** A step's heading: a "Step n" chip (decorative — the heading's name is just the title), the title, and a quiet hint. */
 function StepHeading({ id, n, title, hint, right }: { id: string; n: number; title: string; hint?: string; right?: React.ReactNode }) {
   return (
-    <div className="mb-2.5 flex flex-wrap items-start justify-between gap-x-3 gap-y-1.5">
+    <div className="mb-2 flex flex-wrap items-start justify-between gap-x-3 gap-y-1">
       <div className="min-w-0">
-        <h4 id={id} className="flex items-center gap-2 text-[14px] font-bold text-foreground">
+        <h4 id={id} className="flex items-center gap-2 text-[13px] font-bold text-foreground">
+          <span aria-hidden className="h-4 w-1 shrink-0 rounded-full bg-primary" />
           <span aria-hidden className="inline-flex h-5 shrink-0 items-center rounded-full bg-secondary px-2 text-[10.5px] font-bold tracking-wide text-foreground/75 uppercase ring-1 ring-border-strong ring-inset">
             Step {n}
           </span>
@@ -1490,7 +1585,7 @@ function ApplyModeSwitch({ mode, onChange, locked, itemCount }: { mode: ApplyMod
         onClick={() => onChange(value)}
         data-testid={`rp-mode-${value}`}
         className={cn(
-          "flex min-w-0 flex-1 items-start gap-2 rounded-[8px] border px-3 py-2 text-left transition-[border-color,background-color] duration-150 outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50",
+          "flex min-w-0 flex-1 items-start gap-2 rounded-[8px] border px-3 py-1.5 text-left transition-[border-color,background-color] duration-150 outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50",
           active ? "border-foreground bg-secondary" : "border-border-strong hover:bg-secondary/60",
         )}
       >
@@ -1499,7 +1594,7 @@ function ApplyModeSwitch({ mode, onChange, locked, itemCount }: { mode: ApplyMod
         </span>
         <span className="min-w-0">
           <span className="block text-[13px] font-semibold text-foreground">{title}</span>
-          <span className="block text-[11.5px] text-foreground/70">{sub}</span>
+          <span className="sr-only sm:not-sr-only sm:block sm:text-[11px] sm:text-foreground/65">{sub}</span>
         </span>
       </button>
     );
@@ -1561,7 +1656,11 @@ function PostponeResult({
   saving,
   onRetry,
   onDone,
+  sheet = false,
+  formId,
 }: {
+  sheet?: boolean;
+  formId?: string;
   personName: string;
   first: string;
   amount: number;
@@ -1573,18 +1672,16 @@ function PostponeResult({
   onDone: () => void;
 }) {
   const busy = saving || draft.busy;
-  return (
-    <form
-      noValidate
-      onSubmit={(e) => {
-        e.preventDefault();
-        if (!busy && draft.ready) onRetry();
-      }}
-      aria-label={`Payment recorded — ${personName}`}
-      className="mt-4 flex min-h-full flex-col rounded-[12px] border border-border-strong bg-card"
-    >
-      <PanelHeader title="Payment recorded" personName={personName} tone={theyPaid ? "in" : "out"} onClose={onDone} />
-      <div className="flex-1 space-y-4 px-4 pt-4 pb-6 sm:px-6">
+  const formProps = {
+    noValidate: true,
+    onSubmit: (e: React.FormEvent<HTMLFormElement>) => {
+      e.preventDefault();
+      if (!busy && draft.ready) onRetry();
+    },
+    "aria-label": `Payment recorded — ${personName}`,
+  };
+  const body = (
+      <div className="flex-1 space-y-4 px-4 pt-4 pb-6 sm:px-5">
         <p role="status" className="flex items-center gap-2 rounded-[10px] bg-success/10 px-3 py-2 text-sm font-semibold text-foreground">
           <Check className="size-4 shrink-0 text-success" strokeWidth={3} aria-hidden />
           {money(amount)} {theyPaid ? `received from ${first}` : `paid to ${first}`} is recorded.
@@ -1621,15 +1718,32 @@ function PostponeResult({
           )}
         </section>
       </div>
-      <div className="sticky bottom-0 z-10 mt-auto flex items-center gap-2 border-t border-border-strong bg-card px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-6">
-        <button type="button" onClick={onDone} disabled={busy} className={cn(WS_GHOST, "shrink-0")}>
+  );
+  const footer = (
+      <div className={cn("flex items-center gap-2 bg-card px-4 py-3 sm:px-5", !sheet && "sticky bottom-0 z-10 mt-auto border-t border-border-strong pb-[max(0.75rem,env(safe-area-inset-bottom))]")}>
+        <button type="button" onClick={onDone} disabled={busy} className={cn(SHEET_BUTTON.ghost, "shrink-0")}>
           Close
         </button>
-        <button type="submit" disabled={busy || !draft.ready} aria-busy={busy} className={cn(WS_PRIMARY, "h-10 min-w-0 flex-1 truncate whitespace-nowrap")}>
+        <button type="submit" form={formId} disabled={busy || !draft.ready} aria-busy={busy} className={cn(SHEET_BUTTON.primary, "min-w-0 flex-1 truncate whitespace-nowrap")}>
           {busy && <Loader2 className="size-4 shrink-0 animate-spin" aria-hidden />}
           <span className="truncate">{busy ? "Postponing…" : `Retry postponing ${money(draft.pendingRemaining)}`}</span>
         </button>
       </div>
+  );
+  if (sheet) {
+    return (
+      <TransactionSheet open compact onRequestClose={onDone} closeDisabled={busy} testId="payment-sheet" header={<SheetHero title="Payment recorded" personName={personName} tone={theyPaid ? "in" : "out"} />} footer={footer}>
+        <form id={formId} {...formProps} className="flex flex-col">
+          {body}
+        </form>
+      </TransactionSheet>
+    );
+  }
+  return (
+    <form {...formProps} className="mt-4 flex min-h-full flex-col bg-secondary/55">
+      <PanelHeader title="Payment recorded" personName={personName} tone={theyPaid ? "in" : "out"} onClose={onDone} />
+      {body}
+      {footer}
     </form>
   );
 }

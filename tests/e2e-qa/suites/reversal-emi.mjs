@@ -231,7 +231,8 @@ scenario("rev-emi-two-tabs-partial", "EMI: A pays ₹1,000 of #1; B's stale dial
   await page.bringToFront();
   const dlgA = await openPay(page);
   await chooseBank(page, dlgA);
-  await dlgA.getByRole("radio", { name: /Part payment or another amount/ }).click();
+  await dlgA.getByTestId("other-ways-toggle").click();
+  await dlgA.getByRole("radio", { name: /Part payment/ }).click();
   await dlgA.locator('input:visible:not([aria-label="Payment date"]):not([type=date])').first().fill("1000");
   await page.waitForTimeout(400);
   await dlgA.getByRole("button", { name: /^Pay ₹1,000/ }).click();
@@ -332,7 +333,7 @@ scenario("rev-emi-shared-people-independent", "Shared EMI: paying the lender (ow
   await h.shot(page, "rev-emi-shared-gate");
   chk("the lender payment asks how to treat the people's open shares (gate shown)", /own money|collect|Priya|Ravi/i.test(text), text.slice(text.indexOf("TO PAY"), text.indexOf("TO PAY") + 420));
   // Explicit choice: pay from my own money (the gate's acknowledgement), then choose the account.
-  await dlg.getByText(/Pay now from my account/i).first().click();
+  await dlg.getByText(/Pay the lender from my own money/i).first().click();
   await page.waitForTimeout(600);
   const reason = dlg.getByRole("radio").first();
   if (await reason.count()) await reason.click().catch(() => {});
