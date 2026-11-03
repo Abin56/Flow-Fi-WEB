@@ -236,7 +236,10 @@ export function RecordPaymentDialog({
   open,
   onOpenChange,
   initialView = "pay",
+  preselectInstallment = false,
 }: {
+  /** With `initialView="past"`: start with the target's installment already ticked (the People row's "Bank already paid"). */
+  preselectInstallment?: boolean;
   target: PaymentTarget | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -641,11 +644,11 @@ export function RecordPaymentDialog({
             lenderSaved.current = true;
             setLenderDone(true);
           }
-          if (peopleItems.length > 0) {
+          if (peopleItems.length > 0 || (earlier && !lent && reconcile.reminderWanted)) {
             const r = await reconcile.run(peopleItems);
             peopleFailed = peopleItems.filter((i) => r[i.key]?.status === "failed").length;
             const added = peopleItems.filter((i) => !i.recordedEarlier).reduce((t, i) => t + i.amount, 0);
-            description = added > 0 ? `People's payments recorded — ${formatCurrencyExact(added)} added to your account.` : "People's payments recorded. No account balance changed.";
+            description = peopleItems.length === 0 ? "Nothing marked received — the pending amount stays owed in People." : added > 0 ? `People's payments recorded — ${formatCurrencyExact(added)} added to your account.` : "People's payments recorded. No account balance changed.";
           }
         },
         refresh: () => Promise.all(DERIVED_QUERY_PREFIXES.map((key) => queryClient.invalidateQueries({ queryKey: [key], exact: false }))),
@@ -766,7 +769,7 @@ export function RecordPaymentDialog({
         // From the details screen's own "Record past payments" there is no payment to go back to.
         onBack={view === "past" && initialView === "past" && !pinnedPast ? undefined : () => setView("pay")}
         onRecordOne={view === "past" ? recordOnePast : undefined}
-        preselectId={view === "past" && initialView !== "past" ? (anchor?.id ?? null) : null}
+        preselectId={view === "past" && (initialView !== "past" || preselectInstallment) ? (preselectInstallment ? (target.installment?.id ?? anchor?.id ?? null) : (anchor?.id ?? null)) : null}
       />
     );
   }
@@ -809,7 +812,7 @@ export function RecordPaymentDialog({
       refreshing={refreshing}
       operation={operation.snapshot}
     >
-      <div className={cn("grid gap-3", showRail ? "lg:grid-cols-[minmax(0,1fr)_minmax(0,380px)] lg:items-start" : "mx-auto max-w-[760px]")}>
+      <div className={cn("grid gap-3", showRail ? "@4xl:grid-cols-[minmax(0,1fr)_minmax(0,380px)] @4xl:items-start" : "mx-auto max-w-[760px]")}>
         <div className="flex min-w-0 flex-col gap-3">
           {!next && <p className="rounded-xl border border-border bg-card p-3.5 text-sm font-semibold text-success shadow-e1">Fully paid — nothing is due.</p>}
           {through && (
@@ -817,6 +820,23 @@ export function RecordPaymentDialog({
               You picked installment #{through.last}. Loan installments are paid in order, so{" "}
               {through.count === 2 ? `#${through.first} (still unpaid) is` : `#${through.first}–#${through.last - 1} (still unpaid) are`} paid first. Choose below what to pay.
             </p>
+          )}
+          {/* The lender's installment and a person's share are separate states: this one is the lender's. */}
+          {next && !lent && !earlier && !modeLocked && (loanRow == null || firstUnpaidInstallment(target)?.id === next.id) && (
+            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-xl border border-border bg-card px-3 py-2 text-xs shadow-e1" data-testid="lender-status-strip">
+              <span className="min-w-0 text-foreground">
+                <span className="font-semibold">Lender:</span> {formatCurrencyExact(remainingAmount(next))} {overdue ? "overdue" : "due"} {formatDueDate(next.dueDate)}
+                <span className="text-muted-foreground"> · what people owe you is separate</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => recordOnePast(next)}
+                className="font-semibold text-foreground underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                data-testid="lender-already-paid"
+              >
+                Already paid the lender? Mark as paid
+              </button>
+            </div>
           )}
           {/* 2 — Who shares it, and (when someone hasn't paid) how to go on. */}
           {next && (showPeople || needsDecision) && (
@@ -867,6 +887,7 @@ export function RecordPaymentDialog({
                   unresolvedNames={shareStatus.unresolved.map((p) => p.personName)}
                   lapsedNames={shareStatus.people.filter((p) => p.lapsed).map((p) => p.personName)}
                   amountLabel={amountLabel}
+                  pendingPeople={postponeShares.length > 0 || collectCandidates.length > 0 ? collectCandidates.map((p) => ({ name: p.personName, amount: p.obligations.reduce((t, o) => t + Math.max(0, o.remaining), 0) })).filter((p) => p.amount > PAYMENT_EPSILON) : []}
                   postponeSlot={
                     postponeShares.length > 0 ? (
                       <SharePostponePanel
@@ -1081,7 +1102,7 @@ export function RecordPaymentDialog({
                 </FieldGroup>
               )}
 
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div className="grid grid-cols-1 gap-3 @xl:grid-cols-2">
                 {needsAccount && (
                   <Field label={earlier ? `${lent ? "Received into" : "Paid from"} · for your records` : lent ? "Received into" : "Paid from"}>
                     {accounts.length === 0 ? (
@@ -1230,7 +1251,7 @@ export function RecordPaymentDialog({
             <SheetSection title="Other options" compact className="gap-2">
               {showPaymentDetails && (
                 <MoreOptions summary={emiRow ? "Note, GST, fees" : "Note"} title="More options">
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div className="grid grid-cols-1 gap-3 @xl:grid-cols-2">
                     <Field label="Note">
                       <input className={LOAN_EMI_INPUT} placeholder="Optional" value={note} onChange={(e) => setNote(e.target.value)} />
                     </Field>

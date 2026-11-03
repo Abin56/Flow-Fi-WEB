@@ -53,6 +53,10 @@ import { money } from "@/lib/engines/person-cycle-statement-share";
 import { splitAllocation } from "@/lib/split/split-allocation";
 import { cn } from "@/lib/utils";
 import { useAllEmiInstallments } from "@/hooks/use-emis";
+import { useEmiRows } from "@/features/emi/hooks/use-emi-data";
+import { useLoanRows } from "@/features/loans/hooks/use-loans-data";
+import type { Installment } from "@/lib/models/payment-schedule";
+import { RecordPaymentDialog, type PaymentTarget } from "@/features/loans/components/record-payment-dialog";
 import { useAllLoanInstallments } from "@/hooks/use-loans";
 import { FollowUpControl, FollowUpNote } from "./follow-up";
 import { DeferralControl, DeferralNote, useRowDeferral } from "./payment-deferral";
@@ -379,6 +383,50 @@ function BankPaidChip({ rowKey }: { rowKey: string }) {
       {chip.label}
     </span>
   );
+}
+
+/**
+ * "Bank already paid" on a Loan / EMI share row whose installment isn't fully paid to the lender: opens the existing
+ * Record past payments flow for exactly that installment (the lender's own `recordedEarlier` write — no account
+ * change, no new transaction, People shares untouched unless answered there). Never offered once the bank is paid.
+ */
+function LenderPaidAction({ rowKey, compact }: { rowKey: string; compact: boolean }) {
+  // Only Loan / EMI share rows need the schedule — no other row reads it.
+  const m = /^(emi|loan)-inst:(.+)$/.exec(rowKey);
+  return m ? <LenderPaidButton kind={m[1] as "emi" | "loan"} installmentId={m[2]} compact={compact} /> : null;
+}
+
+function LenderPaidButton({ kind, installmentId, compact }: { kind: "emi" | "loan"; installmentId: string; compact: boolean }) {
+  const { data: emiInstallments = [] } = useAllEmiInstallments();
+  const { data: loanInstallments = [] } = useAllLoanInstallments();
+  const [seq, setSeq] = useState(0);
+  const inst = (kind === "emi" ? emiInstallments : loanInstallments).find((i) => i.id === installmentId && i.deletedAt == null);
+  if (!inst || inst.amountDue - inst.amountPaid <= 0.005 || inst.isSkipped) return null;
+  return (
+    <>
+      <button
+        type="button"
+        title="You already paid this installment to the bank outside FlowFi — record it as paid (no account change)"
+        onClick={() => setSeq((n) => n + 1)}
+        className={cn(ACTION_BTN, "border-border-strong bg-card text-foreground hover:bg-secondary")}
+        data-testid="row-bank-already-paid"
+      >
+        <Landmark className="size-3.5" strokeWidth={2} />
+        {compact ? "Bank paid?" : "Bank already paid"}
+      </button>
+      {seq > 0 && <LenderPaidDialog key={seq} kind={kind} installment={inst} onClose={() => setSeq(0)} />}
+    </>
+  );
+}
+
+/** Mounted only once asked for: finds the agreement's row and opens Record past payments on that installment. */
+function LenderPaidDialog({ kind, installment, onClose }: { kind: "emi" | "loan"; installment: Installment; onClose: () => void }) {
+  const { rows: emiRows } = useEmiRows();
+  const { rows: loanRows } = useLoanRows();
+  const emiRow = kind === "emi" ? emiRows.find((r) => r.installments.some((i) => i.id === installment.id)) : null;
+  const loanRow = kind === "loan" ? loanRows.find((r) => r.installments.some((i) => i.id === installment.id)) : null;
+  const target: PaymentTarget | null = emiRow ? { kind: "emi", row: emiRow, installment } : loanRow ? { kind: "loan", row: loanRow, installment } : null;
+  return <RecordPaymentDialog target={target} initialView="past" preselectInstallment open={target != null} onOpenChange={(o) => !o && onClose()} />;
 }
 
 /**
@@ -852,6 +900,19 @@ function RowActionButtons({ v, handlers, lookups, compact = false }: { v: Settle
           {compact ? "Record" : row.state === "partial" ? "Record rest" : "Record payment"}
         </button>
       ) : null}
+      {row.settle && !loanPay && row.direction !== "iOwe" && !sourceUnavailable(row, lookups) && row.state !== "settled" && (
+        <button
+          type="button"
+          title="They already paid you outside FlowFi and it is already in your balance — lowers what they owe, no account change"
+          onClick={() => handlers.onSettleStart(row, { alreadyReceived: true })}
+          className={cn(ACTION_BTN, "border-border-strong bg-card text-foreground hover:bg-secondary")}
+          data-testid="row-already-received"
+        >
+          <Check className="size-3.5" strokeWidth={2} />
+          {compact ? "Received" : "Already received"}
+        </button>
+      )}
+      <LenderPaidAction rowKey={row.key} compact={compact} />
       {isEditable(row) && handlers.onEditStart && (
         <button
           type="button"

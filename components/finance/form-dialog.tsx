@@ -1,8 +1,10 @@
+import { useId } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { ClayButton } from "@/components/clay/clay-button";
 import { cn } from "@/lib/utils";
 import { useGuardedSubmit } from "./use-guarded-submit";
 import { handleEnterAdvance } from "./enter-advance";
+import { StackLayer, useInStack } from "./stack-layer";
 
 interface FormDialogProps {
   open: boolean;
@@ -41,6 +43,42 @@ export function FormDialog({
   contentClassName,
 }: FormDialogProps) {
   const handleSubmit = useGuardedSubmit(onConfirm, loading);
+  const formId = useId();
+  const inStack = useInStack();
+  const cancel = () => {
+    onCancel?.();
+    onOpenChange(false);
+  };
+  // Opened from a Loan/EMI popup: a compact layer beside it. Same form, same Cancel / primary action.
+  if (inStack) {
+    return (
+      <StackLayer
+        open={open}
+        onRequestClose={() => onOpenChange(false)}
+        closeDisabled={loading}
+        header={
+          <div className="flex min-w-0 flex-col gap-0.5">
+            <DialogTitle className="truncate text-base leading-tight font-semibold tracking-tight">{title}</DialogTitle>
+            <DialogDescription className={description ? "truncate text-xs" : "sr-only"}>{description ?? title}</DialogDescription>
+          </div>
+        }
+        footer={
+          <div className="flex items-center justify-end gap-2 px-4 py-3">
+            <ClayButton variant="ghost" onClick={cancel} disabled={loading}>
+              {cancelLabel}
+            </ClayButton>
+            <ClayButton type="submit" form={formId} variant="primary" disabled={loading || confirmDisabled}>
+              {loading ? loadingLabel : confirmLabel}
+            </ClayButton>
+          </div>
+        }
+      >
+        <form id={formId} className="px-4 py-4" onSubmit={handleSubmit} onKeyDown={handleEnterAdvance} noValidate>
+          {children}
+        </form>
+      </StackLayer>
+    );
+  }
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className={cn("flex max-h-[calc(100vh-2rem)] flex-col gap-4 overflow-hidden", contentClassName)}>
@@ -53,14 +91,7 @@ export function FormDialog({
         <form className="contents" onSubmit={handleSubmit} onKeyDown={handleEnterAdvance} noValidate>
           <div className="-mx-1 min-h-0 flex-1 overflow-y-auto px-1">{children}</div>
           <DialogFooter className="shrink-0">
-            <ClayButton
-              variant="ghost"
-              onClick={() => {
-                onCancel?.();
-                onOpenChange(false);
-              }}
-              disabled={loading}
-            >
+            <ClayButton variant="ghost" onClick={cancel} disabled={loading}>
               {cancelLabel}
             </ClayButton>
             <ClayButton type="submit" variant="primary" disabled={loading || confirmDisabled}>

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "next/navigation";
+import { StackProvider } from "@/components/finance/stack-layer";
 import { EmiScheduleDialog } from "@/features/emi/components/emi-schedule-dialog";
 import { EmiEditTermsDialog } from "@/features/emi/components/emi-edit-terms-dialog";
 import { emiCardLabel } from "@/features/emi/components/emi-card";
@@ -137,9 +138,10 @@ export function EmiWorkspace({ openRequest = null }: EmiWorkspaceProps = {}) {
   const [viewPayment, setViewPayment] = useState<{ action: RecordedPaymentAction; all: RecordedPaymentAction[]; seq: number } | null>(null);
 
   return (
-    <>
+    // The details stay open underneath; Record Payment, Past payments, Edit terms and a payment's details open as layers beside them.
+    <StackProvider>
       <EmiScheduleDialog
-        open={detail != null && !deleteOpen && payTarget == null && viewPayment == null && !editTermsOpen}
+        open={detail != null}
         onOpenChange={(open) => {
           if (!open) {
             setActiveRow(null);
@@ -191,6 +193,6 @@ export function EmiWorkspace({ openRequest = null }: EmiWorkspaceProps = {}) {
         onConfirm={handleDelete}
         busy={deleting}
       />
-    </>
+    </StackProvider>
   );
 }

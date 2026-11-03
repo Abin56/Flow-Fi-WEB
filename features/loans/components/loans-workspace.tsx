@@ -27,6 +27,7 @@ import {
   RevealToggle,
   SegmentedControl,
 } from "@/features/loans/components/loan-emi-ui";
+import { StackProvider } from "@/components/finance/stack-layer";
 import { LoanScheduleDialog } from "@/features/loans/components/loan-schedule-dialog";
 import { LoansTrashDialog } from "@/features/loans/components/loans-trash-dialog";
 import { RecordPaymentDialog } from "@/features/loans/components/record-payment-dialog";
@@ -386,6 +387,7 @@ export function LoansWorkspace({ openRequest = null, trashRequest = 0 }: LoansWo
     try {
       op.stage("submit", "Moving to trash");
       await actions.deleteLoan(row.loan);
+      setScheduleOpen(false);
       setActiveRowId(null);
       op.succeed({
         toast: {
@@ -467,7 +469,7 @@ export function LoansWorkspace({ openRequest = null, trashRequest = 0 }: LoansWo
   }
 
   return (
-    <>
+    <StackProvider>
       <LoanScheduleDialog
         open={scheduleOpen}
         onOpenChange={(open) => {
@@ -475,14 +477,9 @@ export function LoansWorkspace({ openRequest = null, trashRequest = 0 }: LoansWo
           if (!open) setActiveRowId(null);
         }}
         row={activeRow}
-        onEdit={(row) => {
-          setScheduleOpen(false);
-          openEdit(row);
-        }}
-        onDelete={(row) => {
-          setScheduleOpen(false);
-          handleDelete(row);
-        }}
+        // Edit and the payment flows open as layers beside the details; the details stay put underneath.
+        onEdit={openEdit}
+        onDelete={handleDelete}
         deleteLabel={activeRow != null && originationUiFor(activeRow.loan.id).moneyActive ? "Reverse & Delete" : undefined}
         linkedAccountName={activeRow ? originationAccountName(activeRow.loan.id) : null}
         onRecordPayment={(row, installment) => {
@@ -582,7 +579,7 @@ export function LoansWorkspace({ openRequest = null, trashRequest = 0 }: LoansWo
           minLoanAmount={activeRow ? activeRow.loan.loanAmount - activeRow.outstandingPrincipal : 0}
         />
       </LoanEmiFormDialog>
-    </>
+    </StackProvider>
   );
 }
 

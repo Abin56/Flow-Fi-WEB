@@ -115,7 +115,8 @@ export function ScopeSwitch({
 
 export interface LedgerRowHandlers {
   settlingKey: string | null;
-  onSettleStart: (row: LedgerRow) => void;
+  /** `alreadyReceived`: Record payment opens on "Already in my account balance" (received outside FlowFi — no account change). */
+  onSettleStart: (row: LedgerRow, opts?: { alreadyReceived?: boolean }) => void;
   onSettleCancel: () => void;
   onSettleSubmit: (row: LedgerRow, values: EntrySettleValues) => Promise<void>;
   editingKey?: string | null;

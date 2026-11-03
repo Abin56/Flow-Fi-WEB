@@ -249,7 +249,7 @@ export function BulkHistoricalDialog({
       });
       const lenderDone = plan.items.every((i) => isBulkDone(final[i.installment.id]));
       let peopleOk = true;
-      if (lenderDone && people.length > 0) {
+      if (lenderDone && (people.length > 0 || reconcile.reminderWanted)) {
         // First run: every answered item; a retry: only those not yet recorded.
         const todo = reconcile.failed.length > 0 ? reconcile.failed : people.filter((i) => reconcile.results[i.key]?.status !== "recorded");
         const r = await reconcile.run(todo);

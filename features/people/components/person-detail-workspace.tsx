@@ -202,7 +202,7 @@ export function PersonDetailWorkspace({
   const [undoing, setUndoing] = useState<{ row: LedgerRow; payment: PaymentRecord } | null>(null);
   const [undoOpen, setUndoOpen] = useState(false);
   /** The Record payment workspace: which obligation it opened for, or the payment being edited. */
-  const [paying, setPaying] = useState<{ preselectKey?: string | null; initial?: RecordPaymentInitial | null; intent?: "received" | "postpone" } | null>(null);
+  const [paying, setPaying] = useState<{ preselectKey?: string | null; initial?: RecordPaymentInitial | null; intent?: "received" | "postpone"; alreadyReceived?: boolean } | null>(null);
   const [advanceOpen, setAdvanceOpen] = useState<"theyOwe" | "iOwe" | null>(null);
   // The obligation the Apply advance panel opens on (a lender payment's deep link, or Record payment's
   // "Apply advance instead"), and where to go once it is applied — the lender payment that sent the user here.
@@ -308,7 +308,7 @@ export function PersonDetailWorkspace({
   const undoImpact = undoImpactId ? impactOf(undoImpactId) : null;
 
   /** Record payment opens in place: inline on the page, or as the expanded ledger's own view. */
-  function openPayment(next: { preselectKey?: string | null; initial?: RecordPaymentInitial | null; intent?: "received" | "postpone" }) {
+  function openPayment(next: { preselectKey?: string | null; initial?: RecordPaymentInitial | null; intent?: "received" | "postpone"; alreadyReceived?: boolean }) {
     setPaying(next);
     setSettlingKey(null);
     setEditingKey(null);
@@ -395,7 +395,7 @@ export function PersonDetailWorkspace({
   const paymentPanel =
     onRecordPayment != null ? (
       <RecordPaymentPanel
-        key={`${paying?.preselectKey ?? ""}|${paying?.initial?.paymentId ?? ""}|${paying?.intent ?? ""}|${cycle.start.getTime()}`}
+        key={`${paying?.preselectKey ?? ""}|${paying?.initial?.paymentId ?? ""}|${paying?.intent ?? ""}|${paying?.alreadyReceived ? "earlier" : ""}|${cycle.start.getTime()}`}
         cycle={cycle}
         cycleLabel={formatCycleLabel(cycle)}
         personName={person.name}
@@ -403,6 +403,7 @@ export function PersonDetailWorkspace({
         preselectKey={paying?.preselectKey}
         initial={paying?.initial}
         initialIntent={paying?.intent}
+        initialInBalance={paying?.alreadyReceived === true}
         advanceHeld={onApplyAdvance ? advanceHeldFromThem : 0}
         onApplyAdvance={() => {
           // Applying moves no money (the advance already did). The lender payment this came from stays the way back.
@@ -612,9 +613,9 @@ export function PersonDetailWorkspace({
 
   const rowHandlers: LedgerRowHandlers = {
     settlingKey,
-    onSettleStart: (row) => {
+    onSettleStart: (row, opts) => {
       // One Record payment flow for every obligation — with this row preselected.
-      if (onRecordPayment) openPayment({ preselectKey: row.key });
+      if (onRecordPayment) openPayment({ preselectKey: row.key, alreadyReceived: opts?.alreadyReceived });
       else {
         setInline(null);
         setEditingKey(null);

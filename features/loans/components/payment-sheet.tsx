@@ -2,6 +2,7 @@
 
 import { Check, Loader2, type LucideIcon } from "lucide-react";
 import { OperationProgressView } from "@/components/feedback/operation-progress";
+import { StackLayer, useInStack } from "@/components/finance/stack-layer";
 import { SHEET_BUTTON, SheetAvatar, TransactionSheet } from "@/components/finance/transaction-sheet";
 import { DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { handleEnterKey } from "@/components/ui/enter-key";
@@ -69,6 +70,8 @@ export function PaymentSheet({
   cancelLabel?: string;
 }) {
   const busy = loading || success;
+  // Opened from a Loan/EMI popup: a compact layer beside it instead of the full-width top sheet. Same header, body and footer.
+  const inStack = useInStack();
   const header = (
     <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
       <div className="flex min-w-0 flex-1 basis-64 items-center gap-3">
@@ -159,30 +162,36 @@ export function PaymentSheet({
     </div>
   );
 
+  const footerWithOperation = (
+    <>
+      {operation && (
+        <div className="border-b border-border px-3 py-2 animate-in fade-in-0 duration-150 sm:px-5">
+          {/* A failure's retry is the sheet's current action, so it runs with whatever is entered now. */}
+          <OperationProgressView snapshot={operation.retry ? { ...operation, retry: onConfirm } : operation} />
+        </div>
+      )}
+      {footer}
+    </>
+  );
+  // Enter in any single-line field runs the same primary action as the button (not while busy / invalid).
+  const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => handleEnterKey(e, onEnter ?? onConfirm, { enabled: !busy && !confirmDisabled });
+  const body = (
+    <div inert={busy} aria-busy={busy} className={cn("@container px-3 py-3 text-sm transition-opacity duration-150 sm:px-5", inStack && "sm:px-4", busy && "opacity-70")}>
+      {children}
+    </div>
+  );
+
+  if (inStack) {
+    return (
+      <StackLayer tone="hero" open={open} onRequestClose={() => onOpenChange(false)} closeDisabled={busy} header={header} footer={footerWithOperation} onKeyDown={onKeyDown}>
+        {body}
+      </StackLayer>
+    );
+  }
+
   return (
-    <TransactionSheet
-      compact
-      open={open}
-      onRequestClose={() => onOpenChange(false)}
-      closeDisabled={busy}
-      header={header}
-      footer={
-        <>
-          {operation && (
-            <div className="border-b border-border px-3 py-2 animate-in fade-in-0 duration-150 sm:px-5">
-              {/* A failure's retry is the sheet's current action, so it runs with whatever is entered now. */}
-              <OperationProgressView snapshot={operation.retry ? { ...operation, retry: onConfirm } : operation} />
-            </div>
-          )}
-          {footer}
-        </>
-      }
-      // Enter in any single-line field runs the same primary action as the button (not while busy / invalid).
-      onKeyDown={(e) => handleEnterKey(e, onEnter ?? onConfirm, { enabled: !busy && !confirmDisabled })}
-    >
-      <div inert={busy} aria-busy={busy} className={cn("px-3 py-3 text-sm transition-opacity duration-150 sm:px-5", busy && "opacity-70")}>
-        {children}
-      </div>
+    <TransactionSheet compact open={open} onRequestClose={() => onOpenChange(false)} closeDisabled={busy} header={header} footer={footerWithOperation} onKeyDown={onKeyDown}>
+      {body}
     </TransactionSheet>
   );
 }

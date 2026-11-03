@@ -1,9 +1,10 @@
 "use client";
 
-import { ArrowUpRight, Building2, CreditCard, History, Lock, LockOpen, Pencil, Trash2, UserRound, Wallet, X } from "lucide-react";
+import { ArrowUpRight, Building2, CreditCard, History, Lock, LockOpen, Pencil, Trash2, UserRound, Wallet } from "lucide-react";
 import Link from "next/link";
 import { ClayButton } from "@/components/clay/clay-button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { cn } from "@/lib/utils";
+import { AgreementFooter, AgreementPopup, NextStrip } from "@/features/loans/components/agreement-popup";
 import { formatCurrency } from "@/lib/format";
 import { remainingAmount, type Installment } from "@/lib/models/payment-schedule";
 import { installmentProgress } from "@/lib/engines/installment-progress";
@@ -13,7 +14,7 @@ import type { EmiRow } from "@/features/emi/hooks/use-emi-data";
 import { EMI_TYPE_LABEL, emiBadges, emiCardLabel } from "@/features/emi/components/emi-card";
 import { hasPastDue } from "@/features/loans/lib/record-payment";
 import { useInstallmentPeopleStatus } from "@/features/loans/hooks/use-installment-people-status";
-import { DetailHero, DetailSectionTitle, FactGrid, LinkedList, LinkedRow, daysUntil, dueLabel } from "@/features/loans/components/loan-emi-ui";
+import { DetailSectionTitle, FactGrid, LinkedList, LinkedRow, daysUntil } from "@/features/loans/components/loan-emi-ui";
 import { LenderPayoffBreakdown } from "@/features/loans/components/lender-payoff-breakdown";
 import { outstandingPrincipalFor } from "@/lib/engines/loan-outstanding";
 
@@ -75,131 +76,80 @@ export function EmiScheduleDialog({ open, onOpenChange, row, onDelete, onRecordP
     ) : null,
   ].filter(Boolean);
 
+  const manageBtn = "h-8 gap-1.5 rounded-[6px] px-2 text-xs font-medium text-foreground hover:bg-card";
+  const moneyBtn = "h-9 gap-1.5 rounded-[6px] px-3 text-[13px]";
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        showCloseButton={false}
-        className="flex max-h-[88vh] flex-col gap-0 overflow-hidden rounded-[10px] border border-border p-0 shadow-lg ring-0 sm:max-w-3xl"
-      >
-        <button
-          type="button"
-          onClick={() => onOpenChange(false)}
-          aria-label="Close"
-          className="absolute top-4 right-4 flex size-8 items-center justify-center border border-transparent text-muted-foreground transition-colors hover:border-border hover:text-foreground"
-        >
-          <X className="size-4" />
-        </button>
-
-        <DialogHeader className="shrink-0 gap-0.5 border-b border-border px-6 pt-5 pb-4 pr-14 text-left">
-          <span className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">EMI</span>
-          <DialogTitle className="font-heading text-lg font-semibold">{row.emi.name}</DialogTitle>
-          <DialogDescription className="text-muted-foreground">
-            {row.emi.lenderName ?? EMI_TYPE_LABEL[row.emi.loanType]}
-            {interest ? ` · ${+interest.ratePercent.toFixed(2)}% ${interest.period === "monthly" ? "p.m." : "p.a."} ${interest.type === "flat" ? "flat" : "reducing"}` : " · No interest"}
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          <div className="flex flex-col gap-5 px-6 py-5">
-            <DetailHero
-              label="Outstanding"
-              amount={row.remainingBalance}
-              paid={row.installmentsPaid}
-              total={row.emi.installmentCount}
-              partial={installmentProgress(row.installments).partial}
-              badges={emiBadges(row)}
-            />
-
-            {!isClosed && nextPayable && (
-              <div className="flex flex-wrap items-center justify-between gap-3 rounded-[8px] border border-border bg-secondary px-4 py-3">
-                <div className="flex flex-col">
-                  <span className={nextOverdue ? "text-xs font-semibold text-expense" : "text-xs font-medium text-muted-foreground"}>
-                    Next installment · {dueLabel(nextPayable.dueDate)}
-                  </span>
-                  <span className="font-heading text-lg font-semibold text-foreground tabular-nums">
-                    {formatCurrency(remainingAmount(nextPayable))}
-                  </span>
-                </div>
-                <span className="text-xs text-muted-foreground">
-                  Installment #{nextPayable.sequenceNumber} of {row.emi.installmentCount}
-                </span>
-              </div>
-            )}
-
-            <FactGrid
-              facts={[
-                { label: "Original amount", value: formatCurrency(row.emi.principalAmount) },
-                { label: "Installment", value: formatCurrency(installmentAmount), strong: true },
-                { label: "Paid so far", value: formatCurrency(totalPaid) },
-                { label: "Left incl. interest", value: formatCurrency(row.remainingBalance) },
-                {
-                  label: "Next due",
-                  value: nextPayable ? formatDateLong(nextPayable.dueDate) : "—",
-                  tone: nextOverdue ? "expense" : undefined,
-                },
-              ]}
-            />
-
-            <LenderPayoffBreakdown kind="emi" agreementId={row.emi.id} principal={outstandingPrincipalFor(row.emi.principalAmount, row.installments)} />
-
-            {linked.length > 0 && (
-              <section>
-                <DetailSectionTitle>Linked</DetailSectionTitle>
-                <LinkedList>{linked}</LinkedList>
-              </section>
-            )}
-          </div>
-
-          <div className="border-t border-border px-6 py-5">
-            <DetailSectionTitle aside={<span className="text-xs text-muted-foreground">Select an installment to pay or view it</span>}>
-              Installments
-            </DetailSectionTitle>
-            <InstallmentList
-              installments={row.installments}
-              total={row.emi.installmentCount}
-              closed={isClosed}
-              actions={paymentActions}
-              onPay={(i) => onRecordPayment(row, i)}
-              onViewPayment={onViewPayment}
-              fallbackSourceLabel={emiCardLabel(row)}
-              peopleStatus={peopleStatus}
-            />
-          </div>
-          <div className="border-t border-border px-6 py-5">
-            <DetailSectionTitle>Payment history</DetailSectionTitle>
-            {historyLoading && paymentActions.length === 0 ? (
-              <p className="text-xs text-muted-foreground">Loading history…</p>
-            ) : (
-              <PaymentHistoryList actions={paymentActions} onOpen={onViewPayment} />
-            )}
-          </div>
-        </div>
-
-        <DialogFooter className="shrink-0 flex-col gap-3 border-t border-border bg-muted/30 px-6 py-3.5 sm:flex-col">
-          {isClosed && <p className="text-xs text-muted-foreground">This EMI is closed. Reopen it to record payments.</p>}
-          <div className="flex w-full flex-wrap items-center gap-2 sm:justify-between">
-            <div className="flex flex-wrap items-center gap-1">
-              {onEditTerms && (
-                <ClayButton variant="ghost" size="sm" className="gap-1.5 rounded-[6px] font-medium text-foreground" onClick={() => onEditTerms(row)} disabled={statusBusy} title="Change the rate, tenure, frequency or due day of the unpaid installments">
-                  <Pencil className="size-3.5" />
-                  Edit terms
-                </ClayButton>
-              )}
-              <ClayButton variant="ghost" size="sm" className="gap-1.5 rounded-[6px] font-medium text-foreground" onClick={() => onToggleClose(row)} disabled={statusBusy}>
-                {isClosed ? <LockOpen className="size-3.5" /> : <Lock className="size-3.5" />}
-                {statusBusy ? (isClosed ? "Reopening…" : "Closing…") : isClosed ? "Reopen" : "Close EMI"}
-              </ClayButton>
-              <ClayButton variant="ghost" size="sm" className="gap-1.5 rounded-[6px] font-medium text-expense hover:text-expense" onClick={() => onDelete(row)} disabled={statusBusy}>
-                <Trash2 className="size-3.5" />
-                Delete
-              </ClayButton>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
+    <AgreementPopup
+      open={open}
+      onOpenChange={onOpenChange}
+      testId="emi-popup"
+      eyebrow="EMI"
+      title={row.emi.name}
+      subtitle={`${row.emi.lenderName ?? EMI_TYPE_LABEL[row.emi.loanType]}${interest ? ` · ${+interest.ratePercent.toFixed(2)}% ${interest.period === "monthly" ? "p.m." : "p.a."} ${interest.type === "flat" ? "flat" : "reducing"}` : " · No interest"}`}
+      badges={emiBadges(row)}
+      outstandingLabel="Outstanding"
+      outstanding={row.remainingBalance}
+      paid={row.installmentsPaid}
+      total={row.emi.installmentCount}
+      partial={installmentProgress(row.installments).partial}
+      strip={
+        isClosed ? undefined : (
+          <NextStrip
+            next={nextPayable ? { dueDate: nextPayable.dueDate, amount: remainingAmount(nextPayable), sequenceNumber: nextPayable.sequenceNumber } : null}
+            total={row.emi.installmentCount}
+            overdue={nextOverdue}
+          />
+        )
+      }
+      scheduleCount={row.installments.length}
+      historyCount={paymentActions.length}
+      schedule={
+        <InstallmentList
+          installments={row.installments}
+          total={row.emi.installmentCount}
+          closed={isClosed}
+          actions={paymentActions}
+          onPay={(i) => onRecordPayment(row, i)}
+          onViewPayment={onViewPayment}
+          fallbackSourceLabel={emiCardLabel(row)}
+          peopleStatus={peopleStatus}
+        />
+      }
+      details={
+        <>
+          <FactGrid
+            facts={[
+              { label: "Original amount", value: formatCurrency(row.emi.principalAmount) },
+              { label: "Installment", value: formatCurrency(installmentAmount), strong: true },
+              { label: "Paid so far", value: formatCurrency(totalPaid) },
+              { label: "Left incl. interest", value: formatCurrency(row.remainingBalance) },
+              {
+                label: "Next due",
+                value: nextPayable ? formatDateLong(nextPayable.dueDate) : "—",
+                tone: nextOverdue ? "expense" : undefined,
+              },
+            ]}
+          />
+          <LenderPayoffBreakdown kind="emi" agreementId={row.emi.id} principal={outstandingPrincipalFor(row.emi.principalAmount, row.installments)} />
+          {linked.length > 0 && (
+            <section>
+              <DetailSectionTitle>Linked</DetailSectionTitle>
+              <LinkedList>{linked}</LinkedList>
+            </section>
+          )}
+        </>
+      }
+      history={historyLoading && paymentActions.length === 0 ? <p className="text-xs text-muted-foreground">Loading history…</p> : <PaymentHistoryList actions={paymentActions} onOpen={onViewPayment} />}
+      footer={
+        <AgreementFooter
+          note={isClosed ? "This EMI is closed. Reopen it to record payments." : undefined}
+          money={
+            <>
               {onRecordPastPayments && !isClosed && hasPastDue(row.installments) && (
                 <ClayButton
                   variant="secondary"
-                  className="gap-1.5 rounded-[6px] border-border-strong font-medium text-foreground hover:bg-card"
+                  className={cn(moneyBtn, "border-border-strong font-medium text-foreground hover:bg-card")}
                   onClick={() => onRecordPastPayments(row)}
                   title="EMIs paid before you used FlowFi — recorded without changing any account or card balance"
                 >
@@ -209,18 +159,36 @@ export function EmiScheduleDialog({ open, onOpenChange, row, onDelete, onRecordP
               )}
               <ClayButton
                 variant="primary"
-                className="gap-1.5 rounded-[6px] border-primary-accent-text font-semibold"
+                className={cn(moneyBtn, "min-w-[9.5rem] flex-1 border-primary-accent-text font-semibold sm:flex-none")}
                 disabled={isClosed || nextPayable == null}
                 onClick={() => nextPayable && onRecordPayment(row, nextPayable)}
               >
                 <Wallet className="size-3.5" />
                 Record Payment
               </ClayButton>
-            </div>
-          </div>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+            </>
+          }
+          manage={
+            <>
+              {onEditTerms && (
+                <ClayButton variant="ghost" size="sm" className={manageBtn} onClick={() => onEditTerms(row)} disabled={statusBusy} title="Change the rate, tenure, frequency or due day of the unpaid installments">
+                  <Pencil className="size-3.5" />
+                  Edit terms
+                </ClayButton>
+              )}
+              <ClayButton variant="ghost" size="sm" className={manageBtn} onClick={() => onToggleClose(row)} disabled={statusBusy}>
+                {isClosed ? <LockOpen className="size-3.5" /> : <Lock className="size-3.5" />}
+                {statusBusy ? (isClosed ? "Reopening…" : "Closing…") : isClosed ? "Reopen" : "Close EMI"}
+              </ClayButton>
+              <ClayButton variant="ghost" size="sm" className={cn(manageBtn, "text-expense hover:text-expense")} onClick={() => onDelete(row)} disabled={statusBusy}>
+                <Trash2 className="size-3.5" />
+                Delete
+              </ClayButton>
+            </>
+          }
+        />
+      }
+    />
   );
 }
 

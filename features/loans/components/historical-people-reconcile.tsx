@@ -1,10 +1,14 @@
 "use client";
 
 import { Check, Loader2 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { AccountSelect } from "@/components/finance/account-label";
 import { DateInput } from "@/components/forms/date-input";
 import { useHistoricalReimbursement, type ReimbursementTarget } from "@/features/loans/hooks/use-historical-reimbursement";
+import { planSharePostpone } from "@/features/loans/lib/share-postpone-plan";
+import { usePaymentDeferralActions, usePeoplePaymentDeferrals } from "@/features/people/hooks/use-payment-deferrals";
+import { useMonthCycleStartDay } from "@/features/settings/hooks/use-user-preferences";
+import { defaultTargetCycle } from "@/lib/engines/person-payment-deferral";
 import {
   planReimbursements,
   reimbursementLineKey,
@@ -47,6 +51,13 @@ export interface HistoricalReconcileState {
   blocker: string | null;
   results: Record<string, ReimbursementResult>;
   failed: ReimbursementItem[];
+  /** Optional reminder date ("YYYY-MM-DD", "" = none) for what people still owe after this save. */
+  remindOn: string;
+  setRemindOn: (d: string) => void;
+  /** True when a reminder is set and someone will still owe — the save has People work to do even with no receipts. */
+  reminderWanted: boolean;
+  /** The reminder was written / could not be written (null = not tried). */
+  reminderStatus: "saved" | "failed" | null;
   /** Records the given items (a first run, or a retry of the failed ones). */
   run: (items: readonly ReimbursementItem[]) => Promise<Record<string, ReimbursementResult>>;
 }
@@ -61,6 +72,13 @@ export function useHistoricalReconcile(params: { target: ReimbursementTarget | n
   const [results, setResults] = useState<Record<string, ReimbursementResult>>({});
   const [ranItems, setRanItems] = useState<ReimbursementItem[]>([]);
   const accountId = pickedAccount || params.defaultAccountId;
+  const [remindOn, setRemindOn] = useState("");
+  const [reminderStatus, setReminderStatus] = useState<"saved" | "failed" | null>(null);
+  const deferralActions = usePaymentDeferralActions();
+  const startDay = useMonthCycleStartDay();
+  const { deferralsByPerson } = usePeoplePaymentDeferrals([...new Set(lines.map((l) => l.personId))]);
+  // One request id per share: a retry after a lost response is the same (idempotent) write.
+  const reminderIds = useRef(new Map<string, string>());
 
   const plan = planReimbursements({ lines, draft, batchId });
   const total = plan.ok ? plan.summary.total : 0;
@@ -96,10 +114,62 @@ export function useHistoricalReconcile(params: { target: ReimbursementTarget | n
     blocker,
     results,
     failed,
+    remindOn,
+    setRemindOn,
+    reminderWanted: remindOn !== "" && plan.ok && plan.summary.people.some((p) => p.remainingAfter > PAYMENT_EPSILON),
+    reminderStatus,
     run: async (items) => {
       setRanItems((prev) => [...prev.filter((p) => !items.some((i) => i.key === p.key)), ...items]);
       const r = await record(items, accountId, results);
       setResults(r);
+      // The reminder follows the receipts, and only once all of them are saved — it never touches the payments.
+      if (remindOn !== "" && reminderStatus !== "saved" && items.every((i) => r[i.key]?.status !== "failed")) {
+        const [y, m, d] = remindOn.split("-").map(Number);
+        const remindDate = new Date(y, m - 1, d);
+        const people = [...new Map(lines.map((l) => [l.personId, l.personName])).entries()]
+          .map(([personId, personName]) => ({
+            personId,
+            personName,
+            obligations: lines
+              .filter((l) => l.personId === personId)
+              .map((l) => {
+                const paidNow = items.filter((i) => i.personId === l.personId && i.obligationKey === l.obligationKey).reduce((t, i) => t + i.amount, 0);
+                return { key: l.obligationKey, title: `Installment #${l.sequenceNumber}`, remaining: l.remaining - paidNow };
+              })
+              .filter((o) => o.remaining > PAYMENT_EPSILON),
+          }))
+          .filter((p) => p.obligations.length > 0);
+        if (people.length > 0) {
+          const today = new Date();
+          const dueOf = (key: string) => lines.find((l) => l.obligationKey === key)?.dueDate ?? today;
+          const latest = Math.max(...people.flatMap((p) => p.obligations.map((o) => dueOf(o.key).getTime())));
+          const target = defaultTargetCycle(new Date(latest), today, startDay, null);
+          const requests = planSharePostpone({
+            people,
+            dateOf: dueOf,
+            deferralsByPerson,
+            target,
+            reminder: { kind: "date", remindOn: remindDate },
+            startDay,
+            now: today,
+            requestIdFor: (personId, key) => {
+              const id = `${personId}|${key}`;
+              let rid = reminderIds.current.get(id);
+              if (!rid) reminderIds.current.set(id, (rid = generateId()));
+              return rid;
+            },
+          });
+          let ok = true;
+          for (const req of requests) {
+            try {
+              await deferralActions.apply(req);
+            } catch {
+              ok = false;
+            }
+          }
+          setReminderStatus(ok ? "saved" : "failed");
+        }
+      }
       return r;
     },
   };
@@ -117,6 +187,23 @@ function sharedDate(values: readonly string[]): string {
 function sharedTreatment(values: readonly (BalanceTreatment | null | undefined)[]): BalanceTreatment | null {
   return values.every((v) => v === values[0]) ? (values[0] ?? null) : null;
 }
+
+const pad = (n: number) => String(n).padStart(2, "0");
+const todayText = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+};
+/** A week from today — a starting point the user changes. */
+const defaultRemindOn = () => {
+  const d = new Date();
+  d.setDate(d.getDate() + 7);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+};
+const chipClass = (active: boolean) =>
+  cn(
+    "h-8 rounded-full border px-3 text-xs font-semibold whitespace-nowrap transition-colors duration-150 outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60",
+    active ? "border-foreground bg-foreground text-background" : "border-border-strong bg-card text-foreground hover:bg-secondary",
+  );
 
 const CHOICES: { value: ReceivedChoice; label: string }[] = [
   { value: "full", label: "Received in full" },
@@ -163,11 +250,13 @@ export function HistoricalPeopleReconcile({
   const errors = plan.ok ? {} : plan.errors;
   const summary = plan.ok ? plan.summary : null;
   const receivedCount = lines.filter((l) => l.remaining > PAYMENT_EPSILON && received(draft[reimbursementLineKey(l)])).length;
+  const pendingTotal = summary ? summary.people.reduce((t, p) => t + p.remainingAfter, 0) : 0;
   const anyAdded = lines.some((l) => draft[reimbursementLineKey(l)]?.treatment === "addToAccount" && received(draft[reimbursementLineKey(l)]));
 
   return (
     <section aria-label="People sharing it" className="flex flex-col gap-2.5 rounded-[6px] border border-border p-3">
       <h3 className="text-sm font-semibold text-foreground">Have the people sharing this already paid you?</h3>
+      <p className="-mt-1.5 text-[11.5px] text-muted-foreground">Your payments to the lender are recorded as they are. Say how much each person has given so far — the rest stays pending.</p>
       <ul className="flex flex-col divide-y divide-border">
         {people.map(([personId, personName]) => {
           const own = lines.filter((l) => l.personId === personId);
@@ -273,14 +362,74 @@ export function HistoricalPeopleReconcile({
       )}
 
       {summary && (
-        <p className="text-[11.5px] text-foreground/80" data-testid="reconcile-summary">
-          {summary.people
-            .map((p) => `${p.personName}: ${p.remainingAfter > PAYMENT_EPSILON ? `${formatCurrency(p.remainingAfter)} still to receive` : "fully received"}`)
-            .join(" · ")}
-          {summary.total > PAYMENT_EPSILON && (
-            <> · {summary.balanceChange > PAYMENT_EPSILON ? `Account balance +${formatCurrency(summary.balanceChange)}` : "Account balance won't change"}</>
+        <div className="flex flex-col gap-2 rounded-[6px] bg-secondary/60 p-2.5" data-testid="reconcile-summary">
+          <p className="text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">Their side of it</p>
+          <ul className="flex flex-col gap-1.5">
+            {summary.people.map((p) => {
+              const given = p.alreadyReceived + p.receivedNow;
+              const pending = p.remainingAfter > PAYMENT_EPSILON;
+              return (
+                <li key={p.personId} className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 text-xs">
+                  <span className="min-w-0">
+                    <span className="font-semibold text-foreground">{p.personName}: </span>
+                    <span className={cn("font-semibold", pending ? "text-expense" : "text-success")}>{pending ? `${formatCurrency(p.remainingAfter)} still to receive` : "fully received"}</span>
+                  </span>
+                  <span className="text-muted-foreground tabular-nums">
+                    Gave {formatCurrency(given)} of {formatCurrency(p.share)}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+          {pendingTotal > PAYMENT_EPSILON && (
+            <p className="text-[11.5px] text-foreground/80">
+              The pending {formatCurrency(pendingTotal)} stays owed in the People ledger. Your lender payments above are not changed by it.
+              {summary.total > PAYMENT_EPSILON && (
+                <> {summary.balanceChange > PAYMENT_EPSILON ? `Account balance +${formatCurrency(summary.balanceChange)}.` : "Account balance won't change."}</>
+              )}
+            </p>
           )}
-        </p>
+          {pendingTotal <= PAYMENT_EPSILON && summary.total > PAYMENT_EPSILON && (
+            <p className="text-[11.5px] text-foreground/80">{summary.balanceChange > PAYMENT_EPSILON ? `Account balance +${formatCurrency(summary.balanceChange)}.` : "Account balance won't change."}</p>
+          )}
+          {pendingTotal > PAYMENT_EPSILON && (
+            <div className="flex flex-col gap-1.5 border-t border-border pt-2" data-testid="reconcile-reminder">
+              <p className="text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">
+                Remind me about the rest <span className="font-normal tracking-normal normal-case">(optional)</span>
+              </p>
+              <div role="radiogroup" aria-label="Reminder for the pending amount" className="flex flex-wrap items-center gap-1.5">
+                <button type="button" role="radio" aria-checked={state.remindOn === ""} disabled={locked} onClick={() => state.setRemindOn("")} className={chipClass(state.remindOn === "")}>
+                  No reminder
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={state.remindOn !== ""}
+                  disabled={locked}
+                  onClick={() => state.remindOn === "" && state.setRemindOn(defaultRemindOn())}
+                  className={chipClass(state.remindOn !== "")}
+                >
+                  Remind me on…
+                </button>
+                {state.remindOn !== "" && (
+                  <DateInput
+                    aria-label="Reminder date"
+                    className="h-8 w-36 rounded-[6px] border border-border bg-card px-2 text-xs"
+                    value={state.remindOn}
+                    min={todayText()}
+                    disabled={locked}
+                    onChange={(e) => state.setRemindOn(e.target.value)}
+                  />
+                )}
+              </div>
+              {state.reminderStatus === "failed" && (
+                <p role="alert" className="text-[11px] font-semibold text-expense">
+                  Payments saved, but the reminder wasn&apos;t. Set it from the person&apos;s page in People.
+                </p>
+              )}
+            </div>
+          )}
+        </div>
       )}
     </section>
   );

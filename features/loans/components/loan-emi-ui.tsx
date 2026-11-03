@@ -4,6 +4,7 @@ import { CalendarClock, Check, ChevronDown, ChevronRight, Landmark, Loader2, Sho
 import { useEffect, useRef, useState } from "react";
 import { ClayButton } from "@/components/clay/clay-button";
 import { OperationProgressView } from "@/components/feedback/operation-progress";
+import { StackLayer, useInStack } from "@/components/finance/stack-layer";
 import type { OperationSnapshot } from "@/lib/operation-progress/operation-progress";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { ClayBadge } from "@/components/clay/clay-badge";
@@ -1073,12 +1074,104 @@ export function LoanEmiFormDialog({
   size?: "default" | "compact" | "wide";
 }) {
   const busy = loading || success;
+  // Opened from a Loan/EMI popup: a compact layer beside it instead of the right-hand drawer. Same fields and actions.
+  const inStack = useInStack();
+  const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => handleEnterKey(e, onEnter ?? onConfirm, { enabled: !busy && !confirmDisabled });
+
+  const heading = (
+    <div className={cn("flex min-w-0 flex-1 items-center gap-3", inStack && "gap-2.5")}>
+      {Icon && (
+        <span className={cn(LE_RADIUS.control, "flex shrink-0 items-center justify-center rounded-[10px] bg-primary text-primary-foreground shadow-[0_6px_14px_-6px_rgba(0,0,0,0.35)]", inStack ? "size-9" : "size-10")}>
+          <Icon className="size-[18px]" strokeWidth={2} />
+        </span>
+      )}
+      <div className="flex min-w-0 flex-1 flex-col">
+        <DialogTitle className={cn("font-heading leading-tight font-semibold tracking-tight", inStack ? "truncate text-base" : "text-lg")}>{title}</DialogTitle>
+        <DialogDescription className={description ? "truncate text-xs text-muted-foreground" : "sr-only"}>{description ?? title}</DialogDescription>
+      </div>
+    </div>
+  );
+
+  const body = (
+    <div
+      inert={busy}
+      aria-busy={busy}
+      className={cn(
+        "flex flex-col gap-5 bg-card px-5 py-5 text-sm transition-opacity duration-150 sm:px-6 [&>*+*]:border-t [&>*+*]:border-border [&>*+*]:pt-5",
+        inStack ? "gap-4 px-4 py-4 sm:px-4 [&>*+*]:pt-4" : "min-h-0 flex-1 overflow-y-auto overscroll-contain scroll-smooth scroll-pt-4 scroll-pb-24",
+        busy && "opacity-70",
+      )}
+    >
+      {children}
+    </div>
+  );
+
+  const operationRow = operation && (
+    <div className={cn("shrink-0 border-t border-border bg-card px-5 py-3 animate-in fade-in-0 duration-150 sm:px-6", inStack && "border-t-0 border-b px-4 py-2.5 sm:px-4")}>
+      {/* A failure's retry is the dialog's current action, so it runs with whatever is entered now. */}
+      <OperationProgressView snapshot={operation.retry ? { ...operation, retry: onConfirm } : operation} />
+    </div>
+  );
+
+  const actions = (
+    <>
+      <ClayButton variant="secondary" className="h-10 rounded-[8px] border-border-strong px-4 font-medium" onClick={() => onOpenChange(false)} disabled={busy}>
+        {cancelLabel}
+      </ClayButton>
+      <ClayButton
+        variant="primary"
+        className={cn(
+          "h-10 min-w-36 flex-1 gap-1.5 rounded-[8px] border-primary-accent-text font-semibold transition-[background-color,opacity] duration-200 sm:flex-none",
+          // Success keeps full opacity (it's a confirmation, not a disabled state).
+          success && "disabled:opacity-100",
+        )}
+        onClick={onConfirm}
+        disabled={busy || confirmDisabled}
+        aria-busy={loading}
+      >
+        {success ? (
+          <>
+            <Check className="size-4 animate-in zoom-in-50 fade-in-0 duration-200" strokeWidth={3} />
+            {refreshing ? "Saved · Updating balances…" : "Done"}
+          </>
+        ) : loading ? (
+          <>
+            <Loader2 className="size-4 animate-spin" />
+            {confirmLabel}
+          </>
+        ) : (
+          confirmLabel
+        )}
+      </ClayButton>
+    </>
+  );
+
+  if (inStack) {
+    return (
+      <StackLayer
+        open={open}
+        onRequestClose={() => onOpenChange(false)}
+        closeDisabled={busy}
+        header={heading}
+        footer={
+          <>
+            {operationRow}
+            <div className="flex items-center justify-end gap-2.5 px-4 py-3">{actions}</div>
+          </>
+        }
+        onKeyDown={onKeyDown}
+      >
+        {body}
+      </StackLayer>
+    );
+  }
+
   return (
     <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
       <DialogContent
         showCloseButton={false}
         // Enter in any single-line field runs the same primary action as the button (not while busy / invalid).
-        onKeyDown={(e) => handleEnterKey(e, onEnter ?? onConfirm, { enabled: !busy && !confirmDisabled })}
+        onKeyDown={onKeyDown}
         // Light scrim, no blur: the page behind stays readable.
         overlayClassName="bg-black/20 backdrop-blur-none dark:bg-black/45"
         className={cn(
@@ -1091,15 +1184,7 @@ export function LoanEmiFormDialog({
         )}
       >
         <div className="flex shrink-0 items-center gap-3 border-b border-border bg-gradient-to-b from-primary/25 via-primary/[0.07] to-transparent px-5 pt-5 pb-4 sm:px-6">
-          {Icon && (
-            <span className={cn(LE_RADIUS.control, "flex size-10 shrink-0 items-center justify-center rounded-[10px] bg-primary text-primary-foreground shadow-[0_6px_14px_-6px_rgba(0,0,0,0.35)]")}>
-              <Icon className="size-[18px]" strokeWidth={2} />
-            </span>
-          )}
-          <div className="flex min-w-0 flex-1 flex-col">
-            <DialogTitle className="font-heading text-lg leading-tight font-semibold tracking-tight">{title}</DialogTitle>
-            <DialogDescription className={description ? "truncate text-xs text-muted-foreground" : "sr-only"}>{description ?? title}</DialogDescription>
-          </div>
+          {heading}
           <button
             type="button"
             onClick={() => onOpenChange(false)}
@@ -1114,54 +1199,11 @@ export function LoanEmiFormDialog({
           </button>
         </div>
 
-        <div
-          inert={busy}
-          aria-busy={busy}
-          className={cn(
-            "flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto overscroll-contain scroll-smooth scroll-pt-4 scroll-pb-24 bg-card px-5 py-5 text-sm transition-opacity duration-150 sm:px-6 [&>*+*]:border-t [&>*+*]:border-border [&>*+*]:pt-5",
-            busy && "opacity-70",
-          )}
-        >
-          {children}
-        </div>
+        {body}
 
-        {operation && (
-          <div className="shrink-0 border-t border-border bg-card px-5 py-3 animate-in fade-in-0 duration-150 sm:px-6">
-            {/* A failure's retry is the dialog's current action, so it runs with whatever is entered now. */}
-            <OperationProgressView snapshot={operation.retry ? { ...operation, retry: onConfirm } : operation} />
-          </div>
-        )}
+        {operationRow}
 
-        <div className="flex shrink-0 items-center justify-end gap-2.5 border-t border-border bg-card px-5 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:rounded-bl-[16px] sm:px-6 sm:pb-3">
-          <ClayButton variant="secondary" className="h-10 rounded-[8px] border-border-strong px-4 font-medium" onClick={() => onOpenChange(false)} disabled={busy}>
-            {cancelLabel}
-          </ClayButton>
-          <ClayButton
-            variant="primary"
-            className={cn(
-              "h-10 min-w-36 flex-1 gap-1.5 rounded-[8px] border-primary-accent-text font-semibold transition-[background-color,opacity] duration-200 sm:flex-none",
-              // Success keeps full opacity (it's a confirmation, not a disabled state).
-              success && "disabled:opacity-100",
-            )}
-            onClick={onConfirm}
-            disabled={busy || confirmDisabled}
-            aria-busy={loading}
-          >
-            {success ? (
-              <>
-                <Check className="size-4 animate-in zoom-in-50 fade-in-0 duration-200" strokeWidth={3} />
-                {refreshing ? "Saved · Updating balances…" : "Done"}
-              </>
-            ) : loading ? (
-              <>
-                <Loader2 className="size-4 animate-spin" />
-                {confirmLabel}
-              </>
-            ) : (
-              confirmLabel
-            )}
-          </ClayButton>
-        </div>
+        <div className="flex shrink-0 items-center justify-end gap-2.5 border-t border-border bg-card px-5 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:rounded-bl-[16px] sm:px-6 sm:pb-3">{actions}</div>
       </DialogContent>
     </Dialog>
   );

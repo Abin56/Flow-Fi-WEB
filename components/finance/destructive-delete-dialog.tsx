@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { ClayButton } from "@/components/clay/clay-button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -31,6 +31,17 @@ interface DestructiveDeleteDialogProps {
   warnings?: DestructiveDeleteWarningRow[];
   onConfirm: () => void | Promise<void>;
   confirming: boolean;
+}
+
+/** Splits "99 transactions" into the big number and its caption; falls back to the full label as caption. */
+function splitImpactLabel(row: DestructiveDeleteImpactRow): { value: string; caption: string } {
+  const prefix = String(row.count);
+  const label = row.label.trim();
+  if (label.startsWith(prefix)) {
+    const rest = label.slice(prefix.length).trim();
+    if (rest) return { value: prefix, caption: rest };
+  }
+  return { value: prefix, caption: label };
 }
 
 /**
@@ -69,75 +80,105 @@ export function DestructiveDeleteDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent onKeyDown={(e) => handleEnterKey(e, onConfirm, { enabled: canConfirm, fromButtons: true })}>
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2 text-danger">
+      <DialogContent
+        className="gap-5 sm:max-w-lg"
+        onKeyDown={(e) => handleEnterKey(e, onConfirm, { enabled: canConfirm, fromButtons: true })}
+      >
+        <DialogHeader className="flex-row items-start gap-3 pr-8">
+          <span className="flex size-10 shrink-0 items-center justify-center rounded-none bg-danger/12 text-danger">
             <AlertTriangle className="size-5" />
-            Permanently delete {entityName}?
-          </DialogTitle>
-          <DialogDescription>
-            This cannot be undone. Deleting this {entityLabel} permanently erases its entire history —
-            it is not moved to Trash.
-          </DialogDescription>
+          </span>
+          <div className="flex min-w-0 flex-col gap-1.5">
+            <DialogTitle className="text-base leading-snug text-foreground">
+              Permanently delete <span className="text-danger">{entityName}</span>?
+            </DialogTitle>
+            <DialogDescription className="leading-relaxed">
+              This cannot be undone. Deleting this {entityLabel} erases its entire history — it is not moved to Trash.
+            </DialogDescription>
+          </div>
         </DialogHeader>
 
-        <div className="flex max-h-[60vh] flex-col gap-3 overflow-y-auto">
+        {/* Only the long lists scroll; the acknowledgement + type-to-confirm below stay pinned in view. */}
+        <div className="-mx-1 flex max-h-[max(10rem,calc(100vh-27rem))] min-h-0 flex-col gap-4 overflow-y-auto px-1">
           {hasWarnings && (
-            <div role="alert" className="border-2 border-danger bg-danger/12 px-3 py-3 text-sm">
-              <p className="flex items-center gap-2 font-semibold text-danger">
-                <AlertTriangle className="size-4 shrink-0" />
-                Not settled yet — {warnings.length} open item{warnings.length === 1 ? "" : "s"} will be lost
+            <section role="alert" className="overflow-hidden rounded-none border border-danger/40 bg-danger/8">
+              <p className="flex items-center gap-2 border-b border-danger/25 bg-danger/12 px-3 py-2 text-xs font-semibold tracking-wide text-danger uppercase">
+                <AlertTriangle className="size-3.5 shrink-0" />
+                {warnings.length} unsettled item{warnings.length === 1 ? "" : "s"} will be lost
               </p>
-              <ul className="mt-2 space-y-1.5">
+              <ul className="divide-y divide-danger/15">
                 {warnings.map((row) => (
-                  <li key={`${row.title}|${row.detail}`} className="text-foreground">
-                    <span className="font-medium">{row.title}</span>
-                    <span className="block text-muted-foreground">{row.detail}</span>
+                  <li key={`${row.title}|${row.detail}`} className="flex flex-col gap-0.5 px-3 py-2 text-sm">
+                    <span className="font-medium text-foreground">{row.title}</span>
+                    <span className="text-muted-foreground">{row.detail}</span>
                   </li>
                 ))}
               </ul>
-              <label className="mt-3 flex cursor-pointer items-start gap-2 font-medium text-foreground">
-                <input
-                  type="checkbox"
-                  className="mt-0.5 size-4 shrink-0 accent-[var(--danger)]"
-                  checked={acknowledged}
-                  onChange={(e) => setAcknowledged(e.target.checked)}
-                  disabled={confirming}
-                />
-                <span>I understand these are not settled and will be permanently erased with this {entityLabel}.</span>
-              </label>
-            </div>
+            </section>
           )}
 
-          <div className="border border-danger/30 bg-danger/8 px-3 py-2.5 text-sm">
-            <p className="font-medium text-danger">This will permanently delete:</p>
+          <section className="flex flex-col gap-2">
+            <p className="flex items-center gap-1.5 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+              <Trash2 className="size-3.5" />
+              Will be permanently deleted
+            </p>
             {impact == null ? (
-              <div className="mt-2 flex flex-col gap-1.5">
-                <Skeleton className="h-3.5 w-40" />
-                <Skeleton className="h-3.5 w-32" />
+              <div className="flex flex-col gap-1.5">
+                <Skeleton className="h-6 rounded-none" />
+                <Skeleton className="h-6 rounded-none" />
+                <Skeleton className="h-6 rounded-none" />
               </div>
             ) : visibleImpact.length === 0 ? (
-              <p className="mt-1 text-muted-foreground">Nothing else is linked to this {entityLabel}.</p>
+              <p className="rounded-none border border-border bg-muted/40 px-3 py-2.5 text-sm text-muted-foreground">
+                Nothing else is linked to this {entityLabel}.
+              </p>
             ) : (
-              <ul className="mt-1.5 list-disc space-y-1 pl-4 text-foreground/90">
-                {visibleImpact.map((row) => (
-                  <li key={row.label}>{row.label}</li>
-                ))}
+              <ul className="divide-y divide-danger/15 overflow-hidden rounded-none border border-danger/20 bg-danger/6">
+                {visibleImpact.map((row) => {
+                  const { value, caption } = splitImpactLabel(row);
+                  return (
+                    <li key={row.label} className="flex items-baseline gap-3 px-3 py-1.5 text-sm">
+                      <span className="w-9 shrink-0 text-right font-semibold text-danger tabular-nums">{value}</span>
+                      <span className="min-w-0 text-foreground/85">{caption}</span>
+                    </li>
+                  );
+                })}
               </ul>
             )}
-          </div>
+          </section>
+        </div>
+
+        <div className="flex flex-col gap-3 border-t border-border pt-4">
+          {hasWarnings && (
+            <label
+              className={cn(
+                "flex cursor-pointer items-start gap-2.5 rounded-none border px-3 py-2.5 text-sm font-medium text-foreground transition-colors",
+                acknowledged ? "border-danger/60 bg-danger/10" : "border-border bg-muted/30 hover:border-danger/40",
+              )}
+            >
+              <input
+                type="checkbox"
+                className="mt-0.5 size-4 shrink-0 accent-[var(--danger)]"
+                checked={acknowledged}
+                onChange={(e) => setAcknowledged(e.target.checked)}
+                disabled={confirming}
+              />
+              <span>I understand these are not settled and will be permanently erased with this {entityLabel}.</span>
+            </label>
+          )}
 
           <label className="flex flex-col gap-1.5 text-sm">
             <span className="text-muted-foreground">
               Type <span className="font-semibold text-foreground">{entityName}</span> to confirm
             </span>
             <input
-              autoFocus
-              className="h-10 w-full rounded-none border border-border bg-background px-3 text-sm outline-none transition-colors focus:border-danger"
+              className="h-10 w-full rounded-none border border-border bg-background px-3 text-sm outline-none transition-colors focus:border-danger focus:ring-2 focus:ring-danger/20"
               value={confirmText}
               onChange={(e) => setConfirmText(e.target.value)}
               placeholder={entityName}
               disabled={confirming}
+              autoComplete="off"
+              spellCheck={false}
             />
           </label>
         </div>

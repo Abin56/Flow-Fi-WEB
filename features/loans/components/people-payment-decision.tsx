@@ -2,6 +2,7 @@
 
 import { CalendarClock, Users, Wallet, type LucideIcon } from "lucide-react";
 import { LOAN_EMI_INPUT, Reveal } from "@/features/loans/components/loan-emi-ui";
+import { formatCurrencyExact } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 /**
@@ -111,7 +112,10 @@ export function PeoplePaymentDecision({
   advanceNote = null,
   postponeSlot = null,
   collectSlot = null,
+  pendingPeople = [],
 }: {
+  /** What each undecided person still owes for this payment — shown under "own money" as what goes to People. */
+  pendingPeople?: readonly { name: string; amount: number }[];
   /** The in-dialog "record what they paid" form, shown under "Received". */
   collectSlot?: React.ReactNode;
   /** The postpone form, shown under "Not received yet" — null: the choice isn't offered. */
@@ -162,6 +166,7 @@ export function PeoplePaymentDecision({
         </p>
       )}
       <h3 className="text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">{heading}</h3>
+      <p className="text-xs text-muted-foreground">Paying the lender and collecting from them are separate. The lender is paid in full either way — their share is tracked in People.</p>
       <div role="radiogroup" aria-label="How to pay the lender" className="divide-y divide-border overflow-hidden rounded-[8px] border border-border-strong bg-card">
         {!allPostponed && (
           <ChoiceRow
@@ -199,6 +204,18 @@ export function PeoplePaymentDecision({
           hint={allPostponed ? "Their shares stay owed to you until they pay." : `${accountName ? `From ${accountName} · ` : ""}their share stays owed to you`}
           onSelect={() => onDecision("ownMoney")}
         >
+            {pendingPeople.length > 0 && (
+              <div className="flex flex-col gap-1 rounded-[6px] border border-settle-receivable-text/30 bg-settle-receivable-tint px-2.5 py-2 text-xs" data-testid="own-money-pending">
+                <span className="font-semibold text-settle-receivable-text">Stays pending with them — kept in the People ledger</span>
+                {pendingPeople.map((p) => (
+                  <span key={p.name} className="flex justify-between gap-3 text-foreground">
+                    <span className="uppercase">{p.name}</span>
+                    <span className="font-semibold tabular-nums">{formatCurrencyExact(p.amount)}</span>
+                  </span>
+                ))}
+                <span className="text-muted-foreground">You pay the lender now. They still owe you this until they pay.</span>
+              </div>
+            )}
             {!allPostponed && (
               <div className="flex flex-wrap gap-1.5" aria-label="Reason (optional)">
                 {OWN_MONEY_REASONS.map((r) => {

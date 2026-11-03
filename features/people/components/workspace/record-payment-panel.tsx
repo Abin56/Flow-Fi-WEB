@@ -104,12 +104,15 @@ export function RecordPaymentPanel({
   onSetReminder,
   cycleStartDay = 1,
   initialIntent,
+  initialInBalance = false,
   advanceHeld = 0,
   onApplyAdvance,
   sheet = false,
 }: {
   /** Open as the Transaction Details top sheet (dark header, body, "Still needed" footer) instead of filling a drawer. */
   sheet?: boolean;
+  /** Start with "Already in my account balance" ticked (the row's "Already received" action) — still the user's to untick. */
+  initialInBalance?: boolean;
   /** Open straight into "Postpone collection" (a lender payment's Postpone link). */
   initialIntent?: "received" | "postpone";
   /** Money this person gave earlier that is still held as advance (not applied) — offered before new money. */
@@ -232,7 +235,7 @@ export function RecordPaymentPanel({
   const [date, setDate] = useState(() => toInputDate(initial?.date ?? new Date()));
   // "Already in my account balance": money received before FlowFi tracked it. It settles what they owe and moves
   // no account (the repository's `recordedEarlier`: money received only, settlement lines only, never future-dated).
-  const [inBalance, setInBalance] = useState(false);
+  const [inBalance, setInBalance] = useState(initialInBalance);
   const [dateUnknown, setDateUnknown] = useState(false);
   // Per-item amounts once the user takes over a row (Full / Part / typing). null = automatic, oldest first.
   // Editing shows the payment exactly as it was allocated (not re-allocated oldest first).
