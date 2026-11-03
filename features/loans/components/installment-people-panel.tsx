@@ -6,6 +6,7 @@ import { usePersonPaymentDeferrals } from "@/features/people/hooks/use-payment-d
 import { useMonthCycleStartDay } from "@/features/settings/hooks/use-user-preferences";
 import type { InstallmentBreakdown, InstallmentParticipant, ShareLine } from "@/lib/engines/installment-participants";
 import { peopleApplyAdvanceHref, peoplePostponeHref, peopleSettleHref } from "@/lib/engines/linked-people-readiness";
+import { formatStatementDate } from "@/lib/engines/person-cycle-statement";
 import { cycleName, deferralView, type DeferralView } from "@/lib/engines/person-payment-deferral";
 import { PAYMENT_EPSILON } from "@/lib/engines/person-payment";
 import { formatCurrency } from "@/lib/format";
@@ -28,8 +29,11 @@ export function InstallmentPeoplePanel({
   selectable,
   selectedId,
   onSelect,
+  onPostpone,
   className,
 }: {
+  /** Postpone inside the host dialog (this person only) instead of linking out to People. */
+  onPostpone?: (personId: string) => void;
   breakdown: InstallmentBreakdown | null;
   loading: boolean;
   /** In-app path People returns to after recording. */
@@ -60,6 +64,7 @@ export function InstallmentPeoplePanel({
             selectable={selectable?.has(p.personId) ?? false}
             selected={selectedId === p.personId}
             onSelect={onSelect}
+            onPostpone={onPostpone}
           />
         ))}
       </ul>
@@ -70,7 +75,8 @@ export function InstallmentPeoplePanel({
 /** A postponed date is never shown as received: passed-and-unpaid reads as such, not as a fresh move. */
 function postponedTo(view: DeferralView | null): string | null {
   if (!view) return null;
-  if (view.status === "postponed") return `Moved to ${cycleName(view.cycle)} cycle`;
+  // Their share, not the lender EMI: when it is now expected, by cycle and its first day.
+  if (view.status === "postponed") return `Postponed to ${cycleName(view.cycle)} cycle · from ${formatStatementDate(view.cycle.start)}`;
   if (view.status === "expectedNow") return "Expected this cycle";
   if (view.status === "lapsed") return `Was due in ${cycleName(view.cycle)} cycle — still unpaid`;
   return null;
@@ -82,7 +88,9 @@ function ParticipantRow({
   selectable,
   selected,
   onSelect,
+  onPostpone,
 }: {
+  onPostpone?: (personId: string) => void;
   participant: InstallmentParticipant;
   returnTo?: string;
   selectable: boolean;
@@ -171,9 +179,20 @@ function ParticipantRow({
               <ShareAction href={peopleSettleHref(p.personId, firstOpen.key, returnTo)} label={`Record money received from ${p.personName} in People`}>
                 Record received
               </ShareAction>
-              <ShareAction href={peoplePostponeHref(p.personId, firstOpen.key, returnTo)} label={`Postpone collecting ${p.personName}'s share in People`}>
-                Postpone
-              </ShareAction>
+              {onPostpone ? (
+                <button
+                  type="button"
+                  onClick={() => onPostpone(p.personId)}
+                  aria-label={`Postpone ${p.personName}'s share here`}
+                  className="rounded-[6px] px-1.5 py-0.5 text-xs font-semibold text-settle-receivable-text underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  Postpone
+                </button>
+              ) : (
+                <ShareAction href={peoplePostponeHref(p.personId, firstOpen.key, returnTo)} label={`Postpone collecting ${p.personName}'s share in People`}>
+                  Postpone
+                </ShareAction>
+              )}
             </>
           )}
         </span>

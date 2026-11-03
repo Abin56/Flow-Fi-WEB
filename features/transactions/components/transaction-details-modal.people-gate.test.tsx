@@ -305,7 +305,9 @@ describe("Card bill — People settlement gate", () => {
     expect(card.dataset.state).toBe("blocked");
     expect(within(card).getByText("People payment pending")).toBeTruthy();
     expect(within(card).getByText("Not received yet")).toBeTruthy();
-    expect(within(card).getByText(/must be recorded from AMMA before this card bill can be paid/)).toBeTruthy();
+    expect(within(card).getByText(/still to come from AMMA\. Collect it first, or pay the bill anyway/)).toBeTruthy();
+    // Paying anyway is offered, never preselected.
+    expect((within(screen.getByTestId("gate-pay-anyway")).getByRole("checkbox") as HTMLInputElement).checked).toBe(false);
     // The five accounting rows stay collapsed by default.
     expect(within(card).queryByText("People share")).toBeNull();
 
@@ -331,6 +333,33 @@ describe("Card bill — People settlement gate", () => {
     fireEvent.submit(amountInput().form!);
     await new Promise((r) => setTimeout(r, 30));
     nothingSaved();
+  });
+
+  it("“Pay the bill now anyway” → ONE transfer pair with the write gate's acknowledgement; no People write, nothing marked received", async () => {
+    const user = userEvent.setup();
+    renderCardBill(gateOf(readinessOf(1000, [person("amma", "AMMA", 1000, 400)])));
+    await chooseFrom(user, /SBI/);
+    expect(screen.queryByRole("button", { name: /pay ₹1,000/i })).toBeNull();
+    const choice = screen.getByTestId("gate-pay-anyway");
+    expect(choice.textContent).toMatch(/₹600(\.00)? from AMMA stays owed to you in People — nothing is marked received/);
+    await user.click(within(choice).getByRole("checkbox"));
+    expect(footerSettle()).toBeNull();
+    await user.click(screen.getByRole("button", { name: /pay ₹1,000/i }));
+    await waitFor(() => expect(actions.createTransferPair).toHaveBeenCalledTimes(1));
+    const params = actions.createTransferPair.mock.calls[0][0];
+    expect(params).toMatchObject({ amount: 1000, sourceAccountId: "sbi", destinationAccountId: "octane" });
+    expect(params.peopleGateAcknowledgement).toMatchObject({ acknowledgedUnsettledPeople: true, reason: expect.stringMatching(/AMMA/) });
+    expect(actions.createTransaction).not.toHaveBeenCalled();
+    expect(addLedgerEntryWithTransaction).not.toHaveBeenCalled();
+  });
+
+  it("an ordinary card payment (nothing owed by People) sends no acknowledgement", async () => {
+    const user = userEvent.setup();
+    renderCardBill(gateOf(readinessOf(1000, [])));
+    await chooseFrom(user, /SBI/);
+    await user.click(screen.getByRole("button", { name: /pay ₹1,000/i }));
+    await waitFor(() => expect(actions.createTransferPair).toHaveBeenCalledTimes(1));
+    expect(actions.createTransferPair.mock.calls[0][0].peopleGateAcknowledgement).toBeNull();
   });
 
   it("partial People settlement → still blocked for exactly what remains", () => {

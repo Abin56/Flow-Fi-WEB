@@ -35,7 +35,7 @@ run's environment. No machine-specific paths: everything is derived from the rep
 
 Ports (override with env if needed): app `QA_APP_PORT=3210`, Firestore `QA_FIRESTORE_PORT=8380`, Auth
 `QA_AUTH_PORT=9399`, hub `QA_HUB_PORT=4410`, logging `QA_LOGGING_PORT=4510`, Firestore websocket
-`QA_FIRESTORE_WS_PORT=9350`. Don't use `npm run dev` alongside: its `predev` step kills whatever owns port 3000.
+`QA_FIRESTORE_WS_PORT=9350`, Storage emulator `QA_STORAGE_PORT=9599`. Don't use `npm run dev` alongside: its `predev` step kills whatever owns port 3000.
 
 ## Layout
 

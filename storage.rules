@@ -21,6 +21,13 @@ service firebase.storage {
         && request.auth.uid == uid
         && request.resource.size < 25 * 1024 * 1024
         && request.resource.contentType == 'application/pdf';
+
+      // Storage Management (Settings → Storage): the owner may delete their own
+      // file. `allow write` above can never permit a delete (a delete has no
+      // request.resource), so without this the only way to free space was the
+      // deleteStatementDocument callable, which also erases the statement record
+      // and staged rows. Owner-only, same path; read/create/update are unchanged.
+      allow delete: if request.auth != null && request.auth.uid == uid;
     }
   }
 }

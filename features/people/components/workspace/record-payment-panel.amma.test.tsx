@@ -118,6 +118,8 @@ function setup({ value = ctx(), onSubmit = vi.fn(async (_i: RecordPaymentInput, 
       />
     </DeferralContext.Provider>,
   );
+  // These tests pin item-by-item allocation — the explicit "Choose specific items" path (a general payment is the default).
+  fireEvent.click(screen.getByTestId("rp-mode-items"));
   return { onSubmit, onCancel, onComplete, value };
 }
 

@@ -33,6 +33,7 @@ import { LE_RADIUS } from "@/features/loans/components/loan-emi-ui";
 import { DateInput } from "@/components/forms/date-input";
 import { WS_FIELD, WS_PRIMARY, WS_SECONDARY, WsLabel } from "@/features/people/components/workspace/person-workspace-ui";
 import { paymentInitialFor, RecordPaymentPanel, type RecordPaymentInitial } from "@/features/people/components/workspace/record-payment-panel";
+import { generalCreditOf } from "@/features/people/lib/settlement-presentation";
 import { paymentImpact } from "@/lib/engines/person-payment-impact";
 import { ApplyAdvancePanel, PaymentRevertDetails } from "@/features/people/components/workspace/payment-extras";
 import { MoneyToUseSection } from "@/features/people/components/workspace/purpose-money";
@@ -247,7 +248,12 @@ export function PersonDetailWorkspace({
   const baseLookups = useSettlementLookups(ledgerEntries, pending);
   // "Open expense" carries this exact ledger context (person, selected cycle, expanded ledger) to Transactions.
   const returnHref = peopleLedgerHref({ personId: person.id, cycle, view: mode.kind === "ledger" ? "ledger" : null });
-  const lookups = useMemo(() => ({ ...baseLookups, sourceReturn: { href: returnHref, label: person.name } }), [baseLookups, returnHref, person.name]);
+  // Payments toward the overall balance that no item carries (general payments) — open rows then point at the balance.
+  const generalCredit = useMemo(() => generalCreditOf(allTimeStatement), [allTimeStatement]);
+  const lookups = useMemo(
+    () => ({ ...baseLookups, sourceReturn: { href: returnHref, label: person.name }, generalCredit }),
+    [baseLookups, returnHref, person.name, generalCredit],
+  );
   // Obligations dated before the selected cycle that are still open today — listed as "Brought forward"
   // with their source, so carried money never reads as a new expense. Engine rows, nothing recomputed.
   const carriedRows = useMemo(() => {

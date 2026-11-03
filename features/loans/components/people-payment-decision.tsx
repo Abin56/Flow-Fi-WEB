@@ -1,5 +1,6 @@
 "use client";
 
+import { CalendarClock, Users, Wallet, type LucideIcon } from "lucide-react";
 import { LOAN_EMI_INPUT, Reveal } from "@/features/loans/components/loan-emi-ui";
 import { cn } from "@/lib/utils";
 
@@ -9,8 +10,10 @@ import { cn } from "@/lib/utils";
  * acknowledgement the write gate requires; it never marks anyone as paid, never postpones, and creates no
  * receivable, expense or transfer — their shares simply stay owed in People. "Collect money from others
  * first" leads to People Record payment (where Postpone also lives) for the person picked in the list.
+ * "Not received yet — postpone" moves when their share is expected, right here (`postponeSlot`); it records no
+ * payment and leaves the lender installment due as it is.
  */
-export type LenderPaymentDecision = "collect" | "ownMoney";
+export type LenderPaymentDecision = "collect" | "ownMoney" | "postpone";
 
 export const OWN_MONEY_REASONS = [
   { value: "couldNotPay", label: "Person could not pay" },
@@ -42,27 +45,53 @@ export function peopleNames(names: readonly string[]): string {
   return `${names[0]} and ${names.length - 1} others`;
 }
 
-/** A neutral radio row: selected = strong edge + filled dot (no full-colour fill), readable in both themes. */
-export function ChoiceRow({ active, title, hint, onSelect }: { active: boolean; title: string; hint?: string; onSelect: () => void }) {
+/**
+ * One choice of the grouped control: radio dot, a small icon tile that tells the three choices apart at a glance,
+ * the title and ONE short hint. Selected = strong edge + tinted row (neutral, never a full-colour fill); the chosen
+ * option's details open inside the same row, so nothing jumps elsewhere.
+ */
+export function ChoiceRow({
+  active,
+  title,
+  hint,
+  onSelect,
+  icon: Icon,
+  tone = "neutral",
+  children,
+}: {
+  active: boolean;
+  title: string;
+  hint?: string;
+  onSelect: () => void;
+  icon?: LucideIcon;
+  tone?: "neutral" | "collect" | "postpone";
+  children?: React.ReactNode;
+}) {
+  const tile = tone === "collect" ? "bg-settle-receivable-tint text-settle-receivable-text" : tone === "postpone" ? "bg-settle-split-tint text-settle-split-text" : "bg-secondary text-foreground";
   return (
-    <button
-      type="button"
-      role="radio"
-      aria-checked={active}
-      onClick={onSelect}
-      className={cn(
-        "flex w-full items-start gap-2.5 rounded-[6px] border px-3 py-2 text-left transition-[border-color,background-color] duration-150 outline-none focus-visible:ring-2 focus-visible:ring-ring",
-        active ? "border-foreground bg-secondary" : "border-border hover:border-border-strong hover:bg-secondary/60",
-      )}
-    >
-      <span aria-hidden className={cn("mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full border-[1.5px]", active ? "border-foreground" : "border-border-strong")}>
-        {active && <span className="size-2 rounded-full bg-foreground" />}
-      </span>
-      <span className="flex min-w-0 flex-1 flex-col">
-        <span className="text-sm font-semibold text-foreground">{title}</span>
-        {hint && <span className="text-xs text-muted-foreground">{hint}</span>}
-      </span>
-    </button>
+    <div className={cn("transition-colors duration-150", active ? "bg-secondary/70" : "hover:bg-secondary/40")}>
+      <button
+        type="button"
+        role="radio"
+        aria-checked={active}
+        onClick={onSelect}
+        className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+      >
+        <span aria-hidden className={cn("flex size-4 shrink-0 items-center justify-center rounded-full border-[1.5px]", active ? "border-foreground" : "border-border-strong")}>
+          {active && <span className="size-2 rounded-full bg-foreground" />}
+        </span>
+        {Icon && (
+          <span aria-hidden className={cn("flex size-7 shrink-0 items-center justify-center rounded-[6px]", tile)}>
+            <Icon className="size-3.5" strokeWidth={2} />
+          </span>
+        )}
+        <span className="flex min-w-0 flex-1 flex-col">
+          <span className="text-sm font-semibold text-foreground">{title}</span>
+          {hint && <span className="truncate text-xs text-muted-foreground">{hint}</span>}
+        </span>
+      </button>
+      {active && children && <Reveal className="flex flex-col gap-1.5 px-3 pb-3 pl-[62px]">{children}</Reveal>}
+    </div>
   );
 }
 
@@ -80,7 +109,10 @@ export function PeoplePaymentDecision({
   lapsedNames = [],
   amountLabel = null,
   advanceNote = null,
+  postponeSlot = null,
 }: {
+  /** The postpone form, shown under "Not received yet" — null: the choice isn't offered. */
+  postponeSlot?: React.ReactNode;
   /** Collect first, when the picked person already gave money held as advance — applying it is offered first. */
   advanceNote?: string | null;
   decision: LenderPaymentDecision | null;
@@ -102,6 +134,7 @@ export function PeoplePaymentDecision({
   amountLabel?: string | null;
 }) {
   const from = accountName ? `from ${accountName}` : "from my account";
+  const waiting = unresolvedNames.length > 0 ? peopleNames(unresolvedNames) : "Their";
   const heading = allPostponed
     ? "Payment to lender"
     : postponedNote && unresolvedNames.length > 0
@@ -110,9 +143,12 @@ export function PeoplePaymentDecision({
   return (
     <section aria-label="Payment decision" className="flex flex-col gap-1.5">
       {postponedNote && (
-        <p role="note" className="text-sm text-foreground" data-testid="postponed-note">
-          <span className="text-settle-receivable-text">{postponedNote}</span>
-          {allPostponed && " You can pay the lender now from your account."}
+        <p role="note" className="flex items-start gap-1.5 text-sm text-foreground" data-testid="postponed-note">
+          <CalendarClock className="mt-0.5 size-3.5 shrink-0 text-settle-split-text" aria-hidden />
+          <span>
+            <span className="text-settle-receivable-text">{postponedNote}</span>
+            {allPostponed && " You can pay the lender now from your account."}
+          </span>
         </p>
       )}
       {lapsedNames.length > 0 && (
@@ -121,15 +157,14 @@ export function PeoplePaymentDecision({
         </p>
       )}
       <h3 className="text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">{heading}</h3>
-      <div role="radiogroup" aria-label="How to pay the lender" className="flex flex-col gap-1.5">
+      <div role="radiogroup" aria-label="How to pay the lender" className="divide-y divide-border overflow-hidden rounded-[8px] border border-border-strong bg-card">
         <ChoiceRow
           active={decision === "ownMoney"}
-          title={allPostponed ? `Pay ${amountLabel ? `${amountLabel} ` : ""}to lender ${from}` : `Pay now ${from}`}
-          hint={allPostponed ? "Their shares stay owed to you until they pay." : "Unpaid shares stay owed to you."}
+          icon={Wallet}
+          title={allPostponed ? `Pay ${amountLabel ? `${amountLabel} ` : ""}to lender ${from}` : "Pay now from my account"}
+          hint={allPostponed ? "Their shares stay owed to you until they pay." : `${accountName ? `From ${accountName} · ` : ""}unpaid shares stay owed to you`}
           onSelect={() => onDecision("ownMoney")}
-        />
-        {decision === "ownMoney" && (
-          <Reveal className="flex flex-col gap-1.5 pb-1 pl-[26px]">
+        >
             {!allPostponed && (
               <div className="flex flex-wrap gap-1.5" aria-label="Reason (optional)">
                 {OWN_MONEY_REASONS.map((r) => {
@@ -158,20 +193,36 @@ export function PeoplePaymentDecision({
               value={note}
               onChange={(e) => onNote(e.target.value)}
             />
-          </Reveal>
-        )}
+        </ChoiceRow>
         {!allPostponed && (
           <ChoiceRow
             active={decision === "collect"}
-            title="Collect money from others first"
-            hint="Apply an advance, record what they paid, or postpone their share in People — then come back here."
+            icon={Users}
+            tone="collect"
+            title="Collect from others first"
+            hint="Record what they paid in People, then pay the lender"
             onSelect={() => onDecision("collect")}
-          />
+          >
+            {advanceNote ? (
+              <p className="text-xs font-medium text-settle-advance-text" data-testid="collect-advance-note">
+                {advanceNote}
+              </p>
+            ) : (
+              <p className="text-xs text-muted-foreground">Pick who paid in the list above — you&apos;ll come straight back here.</p>
+            )}
+          </ChoiceRow>
         )}
-        {decision === "collect" && advanceNote && (
-          <p className="pl-[26px] text-xs font-medium text-settle-advance-text" data-testid="collect-advance-note">
-            {advanceNote}
-          </p>
+        {!allPostponed && postponeSlot != null && (
+          <ChoiceRow
+            active={decision === "postpone"}
+            icon={CalendarClock}
+            tone="postpone"
+            title="Not received yet — postpone their share"
+            hint={`${waiting} ${unresolvedNames.length === 1 ? "hasn't" : "haven't"} paid · the EMI itself stays due`}
+            onSelect={() => onDecision("postpone")}
+          >
+            {postponeSlot}
+          </ChoiceRow>
         )}
       </div>
     </section>

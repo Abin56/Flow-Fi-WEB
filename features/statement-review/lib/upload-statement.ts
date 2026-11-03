@@ -30,7 +30,8 @@
 import { FirebaseError } from "firebase/app";
 import { httpsCallable } from "firebase/functions";
 import { ref, uploadBytes } from "firebase/storage";
-import { functions, storage } from "@/lib/firebase/client";
+import { db, functions, storage } from "@/lib/firebase/client";
+import { checkUploadAllowed } from "@/features/storage/lib/storage-service";
 import { describeIngestionCapViolation, validateIngestionCaps } from "@/lib/statement-intelligence/ingestion-caps";
 import { sha256HexOfFile } from "@/lib/statement-intelligence/document-hash";
 
@@ -116,6 +117,11 @@ export async function uploadStatement({ uid, accountId, file }: UploadStatementI
   }
 
   const storagePath = storagePathFor(uid, fileHash);
+
+  // Storage Management: refuse before any bytes are written if the personal storage limit would be exceeded.
+  const gate = await checkUploadAllowed({ db, storage }, uid, { path: storagePath, sizeBytes: bytes.byteLength });
+  if (!gate.allowed) return { outcome: "rejected", message: gate.message };
+
   await uploadBytes(ref(storage, storagePath), bytes, { contentType: "application/pdf" });
 
   const ingestDocument = httpsCallable<{ documentId: string; storagePath: string }, IngestDocumentResponse>(

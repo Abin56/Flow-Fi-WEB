@@ -6,6 +6,9 @@
  *  - one settlement ledger entry per obligation it pays (`parentEntryId` for a ledger obligation,
  *    `obligationRef` for an EMI/Loan installment), all sharing `paymentId` and the cash leg as
  *    `transactionRef` — so the payment is one event, never "money in" + "settlement" twice;
+ *  - or, for a general payment ("reduce the overall balance"), ONE settlement entry tied to no obligation
+ *    (no `parentEntryId`, no `obligationRef`) — the shape of a legacy unlinked payment, which the statement
+ *    engine already reads as lowering the balance without marking any item paid;
  *  - for a split/assigned-expense share, also the tracking `InstallmentPayment` (+ the installment's
  *    `amountPaid`, + the participant's received status when fully paid) the expense itself reads;
  *  - an advance entry (`sourceKind: "advance"`) for extra money held against future obligations, and/or a
@@ -72,6 +75,11 @@ export class PersonPaymentChangedError extends Error {
 
 /** Where one allocation line goes — the path that owns that obligation. */
 export type PaymentRoute =
+  /**
+   * Not tied to any obligation — lowers the overall balance on the payment's side only. No item is marked
+   * paid or part paid, and nothing is allocated on the user's behalf.
+   */
+  | { kind: "general" }
   /** A manual "gave"/"borrowed" entry. */
   | { kind: "entry"; parentEntryId: string }
   /** An explicitly person-repayable EMI / taken-Loan installment (`emi-inst:` / `loan-inst:` key). */
@@ -461,6 +469,7 @@ export class PersonPaymentRepository {
       if (purposes.some((p) => !p.title || !(p.amount > 0))) throw new Error("Every purpose needs a description and an amount.");
     }
     if (!accountId) throw new Error(direction === "theyPaid" ? "Choose the account it was received into." : "Choose the account it was paid from.");
+    if (lines.filter((l) => l.route.kind === "general").length > 1) throw new Error("A payment can have one general part.");
     const earlier = input.recordedEarlier === true;
     if (earlier) {
       if (direction !== "theyPaid") throw new Error("Only money received can be recorded as already in your account.");
@@ -557,9 +566,9 @@ export class PersonPaymentRepository {
         id: entryId(),
         type,
         amount: line.amount,
-        parentEntryId: route.kind === "derived" || route.kind === "opening" ? null : route.parentEntryId,
+        parentEntryId: route.kind === "entry" || route.kind === "split" ? route.parentEntryId : null,
         obligationRef: route.kind === "derived" || route.kind === "opening" ? route.obligationRef : null,
-        sourceKind: (route.kind === "entry" || route.kind === "opening" ? "manual" : route.sourceKind) as LedgerSourceKind,
+        sourceKind: (route.kind === "entry" || route.kind === "opening" || route.kind === "general" ? "manual" : route.sourceKind) as LedgerSourceKind,
         installmentPaymentRef,
       });
     }

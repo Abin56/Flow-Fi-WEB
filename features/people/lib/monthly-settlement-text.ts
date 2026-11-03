@@ -125,7 +125,10 @@ export function smartSettlementText(v: MonthlySettlementView): string {
   if (nowItems.length > 0) {
     section(v.split ? "PAY THIS CYCLE" : "OPEN ITEMS");
     nowItems.forEach((it, k) => out.push(...(k ? [""] : []), ...itemBlock(it, v, person, owner, !v.split)));
+    // Paid toward the balance with no item chosen — the items keep their amounts; this line makes them add up.
+    if (v.unallocated) out.push("", `_${waSafe(v.unallocated.label)}_`, `${v.unallocated.op}${money2(v.unallocated.amount)}`);
     if (v.split) out.push("", `*TOTAL DUE  →  ${money2(v.split.dueNow)}*`);
+    else if (v.unallocated) out.push("", `*REMAINING  →  ${money2(v.unallocated.total)}*`);
   }
   if (v.split && moved.length > 0) {
     section(upper(v.split.postponedTo));
@@ -215,6 +218,9 @@ export function monthlySettlementDetailedText(v: MonthlySettlementView): string 
   if (v.advance) out.push("", `${v.advance.label}: ${money2(v.advance.value)} (held apart, not in the total)`);
   const open = v.items.filter((i) => i.remainingPaise > 0);
   if (open.length > 0) out.push("", `*Open items*`, ...open.map((i) => money2(detailedItem(i, v))));
+  if (open.length > 0 && v.unallocated) {
+    out.push(`• ${waSafe(v.unallocated.label)} — ${v.unallocated.op}${money2(v.unallocated.amount)}`, `= Remaining: ${money2(v.unallocated.total)}`);
+  }
   if (v.payments.length > 0) {
     out.push("", `*Payments*`);
     v.payments.forEach((p, i) => out.push(...detailedPayment(p).map(money2), ...(i < v.payments.length - 1 ? [""] : [])));

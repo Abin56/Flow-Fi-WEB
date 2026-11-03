@@ -3,6 +3,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ThemeProvider } from "next-themes";
 import { useState } from "react";
+import { FullscreenPrompt } from "@/components/fullscreen/fullscreen-prompt";
 import { OperationProgressHost } from "@/components/feedback/operation-progress";
 import { Toaster } from "@/components/feedback/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -23,6 +24,7 @@ export function AppProviders({ children }: { children: React.ReactNode }) {
           <AuthBootstrap>{children}</AuthBootstrap>
           <OperationProgressHost />
           <Toaster />
+          <FullscreenPrompt />
         </TooltipProvider>
       </QueryClientProvider>
     </ThemeProvider>

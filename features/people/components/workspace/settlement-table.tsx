@@ -42,6 +42,7 @@ import {
   settlementTone,
   splitContext,
   splitContextLine,
+  type GeneralCredit,
   type SettlementKind,
   type SettlementLookups,
   type SettlementStatusTone,
@@ -138,9 +139,11 @@ const STATUS_ICON: Partial<Record<StatusStyle, LucideIcon>> = {
  * The table's short status, with the money in it ("₹375 to receive", "Got ₹200 · ₹175 left"). Built on
  * `settlementStatus` (whose wording the statement / PDF keep); its sentence is kept as the hover `detail`.
  */
-export function tableStatus(row: LedgerRow, kind: SettlementKind, personName: string): SettlementRowView["status"] {
-  const base = settlementStatus(row, kind, personName, money);
+export function tableStatus(row: LedgerRow, kind: SettlementKind, personName: string, credit?: GeneralCredit | null): SettlementRowView["status"] {
+  const base = settlementStatus(row, kind, personName, money, new Date(), null, credit);
   if (row.state == null || base.tone === "upcoming") return base;
+  // Paid toward the overall balance, not this item: its own "₹X to receive" would overstate what is owed.
+  if (row.state === "open" && (base.label === "Part of balance" || base.label === "Balance cleared")) return base;
   const mine = row.direction === "iOwe";
   const left = money(row.remaining ?? 0);
   if (row.state === "settled") return { ...base, label: `${mine ? "Paid" : "Received"} ${money(row.amount)}` };
@@ -293,7 +296,7 @@ export function viewOf(row: LedgerRow, personName: string, lookups: SettlementLo
     title: settlementTitle(row, kind, personName),
     typeLabel: tableTypeLabel(kind, row, lookups),
     relation: relationLine(row, kind, personName, money),
-    status: receivedEarlierStatus(row, kind, lookups) ?? tableStatus(row, kind, personName),
+    status: receivedEarlierStatus(row, kind, lookups) ?? tableStatus(row, kind, personName, lookups.generalCredit),
     paid: isPaymentKind(kind) ? row.amount : paidSoFar(row),
     carried,
     // The row amount is one share of a bigger bill — say whose, next to the original total.

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { MyCommitmentsSummary } from "@/features/loans/components/my-commitments-summary";
 
 vi.mock("@/features/people/hooks/use-person-cycle-statement", () => ({
@@ -12,6 +12,12 @@ vi.mock("@/features/people/hooks/use-person-cycle-statement", () => ({
 vi.mock("@/hooks/use-loans", () => ({ useLoanPersons: () => ({ data: [{ id: "sanju", name: "Sanju" }] }) }));
 
 afterEach(cleanup);
+
+// The fixtures put installments on days 5–9 of "this month". Whether those are overdue (and so whether the breakdown has an
+// "Overdue" group instead of the empty state) depends on today's day-of-month, so the clock is pinned to mid-month: the suite
+// then behaves the same on every date instead of failing during the first nine days of each month.
+vi.useFakeTimers({ toFake: ["Date"], now: new Date(2026, 9, 15, 12, 0, 0) });
+afterAll(() => vi.useRealTimers());
 
 const now = new Date();
 const inst = (id: string, day: number, amountDue: number, amountPaid = 0) =>

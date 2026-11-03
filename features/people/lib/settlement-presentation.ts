@@ -106,6 +106,40 @@ export interface SettlementLookups {
   transactionStatus?: (transactionRef: string, entry: Pick<LedgerEntry, "sourceKind">) => "live" | "deleted" | "unknown";
   /** Where "Open expense" comes back to (this person's ledger + selected cycle). Omitted = no return link. */
   sourceReturn?: { href: string; label: string } | null;
+  /** Payments toward the overall balance that no item carries (`generalCreditOf`) — open items then say so. */
+  generalCredit?: GeneralCredit | null;
+}
+
+/**
+ * Per side: money paid toward the overall balance with no item chosen (a general payment, a legacy unlinked one, an
+ * adjustment) — what the open items' own remaining exceeds the balance by — and what is still owed overall. While
+ * it exists, an open item's own "due" isn't the whole story, so its status points at the balance instead.
+ */
+export interface GeneralCredit {
+  theyOwe: { credit: number; owed: number };
+  iOwe: { credit: number; owed: number };
+}
+
+const CREDIT_EPS = 0.005;
+
+/** From the open items' remaining (per side) and the engine's gross position at the same cut-off. Null when none. */
+export function generalCreditFrom(open: { theyOwe: number; iOwe: number }, owed: { theyOwe: number; iOwe: number }): GeneralCredit | null {
+  const side = (o: number, w: number) => ({ credit: Math.max(0, Math.round((o - w) * 100) / 100), owed: Math.max(0, w) });
+  const credit = { theyOwe: side(open.theyOwe, owed.theyOwe), iOwe: side(open.iOwe, owed.iOwe) };
+  return credit.theyOwe.credit >= CREDIT_EPS || credit.iOwe.credit >= CREDIT_EPS ? credit : null;
+}
+
+/** `generalCreditFrom` over one statement (whole history for "today"): its obligations' remaining vs. its `toReceive` / `toGive`. */
+export function generalCreditOf(statement: Pick<PersonCycleStatement, "rows" | "toReceive" | "toGive"> | null | undefined): GeneralCredit | null {
+  if (!statement) return null;
+  let theyOwe = 0;
+  let iOwe = 0;
+  for (const r of statement.rows) {
+    if (r.kind !== "obligation" || r.remainingNow == null) continue;
+    if (r.signedAmount > 0) theyOwe += r.remainingNow;
+    else if (r.signedAmount < 0) iOwe += r.remainingNow;
+  }
+  return generalCreditFrom({ theyOwe, iOwe }, { theyOwe: statement.toReceive, iOwe: statement.toGive });
 }
 
 export const NO_LOOKUPS: SettlementLookups = { entriesById: new Map(), expenseByTransactionId: new Map() };
@@ -348,6 +382,8 @@ export function settlementStatus(
   money: (n: number) => string,
   now: Date = new Date(),
   owner?: string | null,
+  /** Payments toward the overall balance no item carries — an open item then reads as part of that balance. */
+  credit?: GeneralCredit | null,
 ): SettlementStatus {
   const name = firstNameOf(personName);
   const v = ownerVoice(owner);
@@ -381,6 +417,18 @@ export function settlementStatus(
   const isInstallment = kind === "emi" || kind === "loanEmi" || kind === "loanInstallment";
   if (isInstallment && dayIndex(row.date) > dayIndex(now)) {
     return { label: kind === "loanInstallment" ? "Upcoming installment" : "Upcoming EMI", detail: `Due ${formatStatementDate(row.date)}`, tone: "upcoming" };
+  }
+  // Payments were made toward the overall balance without choosing items: this item isn't paid (none was chosen),
+  // but its own amount is no longer what is owed — say it's part of the balance, never "paid".
+  const side = kind === "loanInstallment" ? null : row.direction === "theyOwe" ? credit?.theyOwe : row.direction === "iOwe" ? credit?.iOwe : null;
+  if (side && side.credit >= CREDIT_EPS) {
+    return side.owed < CREDIT_EPS
+      ? { label: "Balance cleared", detail: "The overall balance is paid — not item by item", tone: "neutral" }
+      : {
+          label: "Part of balance",
+          detail: `${money(side.owed)} still owed overall — payments so far weren't tied to items`,
+          tone: row.direction === "iOwe" ? "payable" : "due",
+        };
   }
   return row.direction === "iOwe"
     ? { label: owner ? "Payment due" : "You need to pay", detail: `${v.You} owe${v.s} ${name} ${left}`, tone: "payable" }
@@ -536,7 +584,7 @@ export function allocationLine(r: StatementRow, money: (n: number) => string): s
   if (r.category === "advance") return "Held as advance — for the next obligations";
   if (r.category === "advanceApplied") return r.settles ? `Advance used for ${r.settles.title}` : "Advance used";
   if (r.settles) return `Applied to ${r.settles.title}${r.settles.remainingAfter > 0 ? ` · ${money(r.settles.remainingAfter)} left on it` : " · cleared it"}`;
-  return "Not applied to one item · reduces the overall balance";
+  return "Toward the overall balance · not tied to one item";
 }
 
 /** "Received from Amma" / "Amma paid" / "Paid to Amma" / "Advance applied" for a payment group's head row. */

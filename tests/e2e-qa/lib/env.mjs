@@ -24,6 +24,7 @@ export const PORTS = {
   hub: num("QA_HUB_PORT", 4410),
   logging: num("QA_LOGGING_PORT", 4510),
   firestoreWs: num("QA_FIRESTORE_WS_PORT", 9350),
+  storage: num("QA_STORAGE_PORT", 9599),
 };
 
 export const PROJECT_ID = process.env.QA_PROJECT_ID ?? "demo-flowfi-qa";

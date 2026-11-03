@@ -372,7 +372,7 @@ describe("concurrency: import vs. dismiss racing for the same candidate (two tab
 
     // `expenseRepository` is `{}` in this harness, so the split step throws — the same observable as a real split failure.
     const result = await tabA.importOne(c, {
-      personAssignment: { kind: "split", splitType: "equal", participantInputs: [] } as never,
+      personAssignment: { kind: "split", splitType: "equal", participantInputs: [{ personId: null, name: "Asha", value: null }] },
     });
     expect(result).toMatchObject({ status: "imported_not_deleted", failedStep: "person_split" });
     expect(await tabA.candidateExists(c.id)).toBe(true);
@@ -387,6 +387,36 @@ describe("concurrency: import vs. dismiss racing for the same candidate (two tab
     expect(await tabA.tombstone(c.id)).toMatchObject({ outcome: "imported" });
     expect(await tabA.transactions()).toHaveLength(1);
     expect(await tabA.candidateExists(c.id)).toBe(false);
+  });
+
+  it("an INVALID split is refused before any write: no transaction, no balance change, no tombstone, candidate stays and a corrected retry imports exactly once", async () => {
+    const tab = setup();
+    await tab.seedAccount();
+    const c = smsCandidate();
+    await tab.seedCandidate(c);
+    const balanceBefore = await tab.balance();
+
+    for (const personAssignment of [
+      { kind: "split", splitType: "percentage", participantInputs: [{ personId: "p1", name: "Asha", value: 40 }, { personId: "p2", name: "Ben", value: 40 }] },
+      { kind: "split", splitType: "custom", participantInputs: [{ personId: "p1", name: "Asha", value: 1 }] },
+      { kind: "split", splitType: "equal", participantInputs: [{ personId: "p1", name: "Asha", value: null }, { personId: "p1", name: "Asha", value: null }] },
+    ] as const) {
+      const result = await tab.importOne(c, { personAssignment: personAssignment as never });
+      expect(result.status).toBe("validation_failed");
+    }
+    expect(await tab.transactions()).toHaveLength(0);
+    expect(await tab.balance()).toBe(balanceBefore);
+    expect(await tab.tombstone(c.id)).toBeUndefined();
+    expect(await tab.candidateExists(c.id)).toBe(true);
+
+    // The reviewer fixes the split; the same candidate then imports once, and a repeat creates nothing new.
+    const ok = { kind: "split", splitType: "equal", participantInputs: [{ personId: null, name: "Asha", value: null }] } as never;
+    const first = await tab.importOne(c, { personAssignment: ok });
+    expect(first.status).toBe("imported_not_deleted"); // harness has no ExpenseRepository, so only the split step fails — after exactly one transaction
+    const retry = await tab.importOne(c, {});
+    expect(retry.status === "already_imported" || retry.status === "success").toBe(true);
+    expect(await tab.transactions()).toHaveLength(1);
+    expect(await tab.balance()).toBe(balanceBefore - c.amount); // debited exactly once
   });
 
   it("if dismiss wins the race, the transaction import had already created (if any) is never silently lost — it's reported, not hidden", async () => {

@@ -126,6 +126,7 @@ async function main() {
     NEXT_PUBLIC_QA_USER_PASSWORD: password,
     NEXT_PUBLIC_QA_AUTH_PORT: String(PORTS.auth),
     NEXT_PUBLIC_QA_FIRESTORE_PORT: String(PORTS.firestore),
+    NEXT_PUBLIC_QA_STORAGE_PORT: String(PORTS.storage),
     NEXT_PUBLIC_FIREBASE_PROJECT_ID: PROJECT_ID,
     NEXT_PUBLIC_FIREBASE_API_KEY: "fake-qa-key",
     NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: "localhost",
@@ -138,7 +139,7 @@ async function main() {
   const unoverridden = (copyMode ? [] : [...firebaseEnvKeysInRepo()]).filter((k) => !(k in appEnv));
   if (unoverridden.length > 0) return fail(`repo env files define ${unoverridden.join(", ")} which this launcher does not override — refusing to start.`);
 
-  for (const [name, port] of Object.entries({ app: PORTS.app, firestore: PORTS.firestore, auth: PORTS.auth, hub: PORTS.hub, logging: PORTS.logging, firestoreWs: PORTS.firestoreWs })) {
+  for (const [name, port] of Object.entries({ app: PORTS.app, firestore: PORTS.firestore, auth: PORTS.auth, hub: PORTS.hub, logging: PORTS.logging, firestoreWs: PORTS.firestoreWs, storage: PORTS.storage })) {
     if (!(await portFree(port))) return fail(`port ${port} (${name}) is already in use — the suite never shares ports with running services. Free it or set QA_*_PORT (see README).`);
   }
 
@@ -147,23 +148,26 @@ async function main() {
   tmpDir = tmp;
   const config = {
     firestore: { rules: path.join(repoRoot, "firestore.rules") },
+    storage: { rules: path.join(repoRoot, "storage.rules") },
     emulators: {
       singleProjectMode: true,
       hub: { port: PORTS.hub, host: HOST },
       logging: { port: PORTS.logging, host: HOST },
       auth: { port: PORTS.auth, host: HOST },
       firestore: { port: PORTS.firestore, host: HOST, websocket_port: PORTS.firestoreWs },
+      storage: { port: PORTS.storage, host: HOST },
       ui: { enabled: false },
     },
   };
   const configPath = path.join(tmp, "firebase.qa.json");
   writeFileSync(configPath, JSON.stringify(config));
   console.log(`Starting Auth + Firestore emulators (${PROJECT_ID}) on ${HOST}:${PORTS.auth} / ${HOST}:${PORTS.firestore} …`);
-  const emu = start("emulators", "npx", ["firebase", "emulators:start", "--only", "auth,firestore", "--project", PROJECT_ID, "--config", `"${configPath}"`], { cwd: tmp, env: process.env });
+  const emu = start("emulators", "npx", ["firebase", "emulators:start", "--only", "auth,firestore,storage", "--project", PROJECT_ID, "--config", `"${configPath}"`], { cwd: tmp, env: process.env });
   const probe = (port) => () => fetch(`http://${HOST}:${port}/`).then((r) => r.ok);
   try {
     await waitFor("the Firestore emulator", probe(PORTS.firestore), 120_000);
-    await waitFor("the Auth emulator", probe(PORTS.auth), 60_000);
+    await waitFor("the Auth emulator", probe(PORTS.auth), 120_000);
+    await waitFor("the Storage emulator", () => fetch(`http://${HOST}:${PORTS.storage}/`).then(() => true), 60_000);
   } catch (e) {
     return fail(`${e.message}\n${emu.output().slice(-1200)}\n(Java is required for the Firestore emulator.)`);
   }
@@ -181,7 +185,8 @@ async function main() {
     return fail(`${e.message}${/already running/i.test(out) ? "\nAnother `next dev` is running in this directory. Stop it, or re-run with `npm run test:e2e-qa -- --copy` to use a temporary copy." : ""}\n${out.slice(-800)}`);
   }
   console.log("Warming routes (first compile is slow) …");
-  for (const route of ["/transactions", "/loans-installments", "/accounts", "/credit-cards", "/bills", "/people", "/dashboard", "/month-cycle"]) {
+  // /dev/qa first: every scenario signs in there, and a cold compile of it can exceed the 60s sign-in wait.
+  for (const route of ["/dev/qa", "/transactions", "/loans-installments", "/accounts", "/credit-cards", "/bills", "/people", "/dashboard", "/month-cycle"]) {
     await fetch(`${BASE_URL}${route}`, { signal: AbortSignal.timeout(240_000) }).catch(() => {});
   }
 
