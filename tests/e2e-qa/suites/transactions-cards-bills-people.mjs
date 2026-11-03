@@ -3,6 +3,7 @@
  * Each scenario drives the real UI and asserts on state read back from the emulator.
  */
 import { scenario } from "../lib/core.mjs";
+import { openPayWholeCard } from "../lib/flows.mjs";
 import * as h from "../lib/harness.mjs";
 
 const bal = async (n) => (await h.accountBalance(n)).currentBalance;
@@ -133,8 +134,7 @@ scenario("card-pay", "Credit Card: pay full outstanding ₹12,000 from QA Bank",
   const cardBefore = await bal("QA Credit Card");
   await h.go(page, "/credit-cards");
   await page.waitForTimeout(2500);
-  await page.getByRole("button", { name: /Pay full outstanding/ }).first().click();
-  await page.getByText("PAYING FULL CARD OUTSTANDING").waitFor();
+  await openPayWholeCard(page);
   await page.getByText("Select account").click();
   await page.getByRole("option", { name: /QA Bank/ }).click();
   await h.shot(page, "card-pay-form");
@@ -159,12 +159,11 @@ scenario("card-cancel", "Credit Card: open payment then Cancel", async ({ page }
   const before = await bal("QA Bank");
   await h.go(page, "/credit-cards");
   await page.waitForTimeout(2500);
-  await page.getByRole("button", { name: /Pay full outstanding/ }).first().click();
-  await page.getByText("PAYING FULL CARD OUTSTANDING").waitFor();
+  const heading = await openPayWholeCard(page);
   await page.evaluate(() => window.__reset());
   await page.getByRole("button", { name: "Cancel" }).click();
   await page.waitForTimeout(1200);
-  chk("panel closed", (await page.getByText("PAYING FULL CARD OUTSTANDING").count()) === 0);
+  chk("panel closed", (await page.getByRole("dialog").getByText(heading, { exact: true }).count()) === 0);
   chk("no write attempted; bank unchanged", (await commits(page)) === 0 && (await bal("QA Bank")) === before);
 });
 

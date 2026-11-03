@@ -3,6 +3,7 @@
  * Each scenario drives the real UI and asserts on state read back from the emulator.
  */
 import { scenario } from "../lib/core.mjs";
+import { openPayWholeCard } from "../lib/flows.mjs";
 import * as h from "../lib/harness.mjs";
 const bal = async (n) => (await h.accountBalance(n)).currentBalance;
 const commits = (page) => page.evaluate(() => window.__ev.filter((e) => e.n === "commitStart").length);
@@ -12,8 +13,7 @@ scenario("card-cancel-recorded", "Credit Card: pay ₹12,000 then 'Cancel record
   const card0 = await bal("QA Credit Card");
   await h.go(page, "/credit-cards");
   await page.waitForTimeout(2500);
-  await page.getByRole("button", { name: /Pay full outstanding/ }).first().click();
-  await page.getByText("PAYING FULL CARD OUTSTANDING").waitFor();
+  await openPayWholeCard(page);
   await page.getByText("Select account").click();
   await page.getByRole("option", { name: /QA Bank/ }).click();
   await page.getByRole("button", { name: /^Pay ₹12,000/ }).click();
@@ -21,7 +21,8 @@ scenario("card-cancel-recorded", "Credit Card: pay ₹12,000 then 'Cancel record
   await page.getByRole("button", { name: "Cancel" }).last().click().catch(() => {});
   await page.waitForTimeout(800);
   chk("precondition: payment recorded (bank −₹12,000, card ₹0)", Math.abs(bank0 - (await bal("QA Bank")) - 12000) < 0.01 && (await bal("QA Credit Card")) === 0, `${bank0} -> ${await bal("QA Bank")}; card ${card0} -> ${await bal("QA Credit Card")}`);
-  await page.getByRole("button", { name: "Transactions", exact: true }).first().click().catch(() => {});
+  // List view: a "Transactions" tab; Cards view (the default): the activity tile's "Transactions · Charges and payments".
+  await page.getByRole("button", { name: /^Transactions(\s|$)/ }).first().click().catch(() => {});
   await page.waitForTimeout(1500);
   const menu = page.getByRole("button", { name: "Payment actions" }).first();
   await h.shot(page, "card-cancel-recorded-list");

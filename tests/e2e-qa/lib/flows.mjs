@@ -18,7 +18,8 @@ export async function secondTab(ctx, path) {
 /* ───────────── People Ledger ───────────── */
 
 export async function openPerson(page, name) {
-  if (!/\/people(\?|$)/.test(page.url())) await h.go(page, "/people");
+  // `trailingSlash: true` (next.config, since 2026-10-26): the People page is served at "/people/".
+  if (!/\/people\/?(\?|$)/.test(page.url())) await h.go(page, "/people");
   await page.waitForTimeout(2500);
   await page.getByRole("button", { name: new RegExp(`Open ${name}`) }).click();
   await page.waitForTimeout(2000);
@@ -212,4 +213,24 @@ export function diffStatement(displayed, expected) {
     }
   }
   return out;
+}
+
+/**
+ * Opens Pay for the card's WHOLE seeded outstanding (₹12,000). The seed's purchase is dated relative to today, so
+ * depending on the date it sits in the still-open cycle ("Pay full outstanding") or in a closed statement that is
+ * the whole outstanding ("Pay bill ₹12,000"). Both pay the same ₹12,000; returns the dialog's heading text.
+ */
+export async function openPayWholeCard(page) {
+  const full = page.getByRole("button", { name: /Pay full outstanding/ }).first();
+  const bill = page.getByRole("button", { name: /^Pay bill ₹12,000/ }).first();
+  await full.or(bill).first().waitFor({ timeout: 30000 });
+  if ((await full.count()) > 0 && (await full.isVisible())) {
+    await full.click();
+    await page.getByText("PAYING FULL CARD OUTSTANDING").waitFor();
+    return "PAYING FULL CARD OUTSTANDING";
+  }
+  await bill.click();
+  // The Pay bill dialog names the bill it pays: "Current bill" (shown uppercase), its period and due date.
+  await page.getByRole("dialog").last().getByText("Current bill", { exact: true }).first().waitFor();
+  return "Current bill";
 }

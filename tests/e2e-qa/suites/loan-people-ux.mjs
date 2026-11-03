@@ -23,7 +23,9 @@ async function waitForPath(page, path, ms = 30000) {
   let href = "";
   while (Date.now() < end) {
     href = await page.evaluate(() => location.href).catch(() => href);
-    if (new URL(href).pathname === path) return;
+    // next.config has `trailingSlash: true` (since 2026-10-26): "/people/" is the same page as "/people".
+    const norm = (p) => (p.length > 1 ? p.replace(/\/+$/, "") : p);
+    if (norm(new URL(href).pathname) === norm(path)) return;
     await page.waitForTimeout(250);
   }
   throw new Error(`expected path ${path}, still on ${href}`);
@@ -209,7 +211,7 @@ scenario("uxp-collect-return-to-payment", "Collect first → record Priya in Peo
   await dlg.getByText("TO PAY LENDER").waitFor();
   const shareActions = await f.flat(dlg.getByRole("region", { name: "Who pays this installment" }));
   chk("each person offers 'Record received' and 'Postpone' separately", /Record received/.test(shareActions) && /Postpone/.test(shareActions) && !/Record \/ postpone/.test(shareActions), shareActions);
-  await dlg.getByRole("radio", { name: /Collect money from others first/ }).click();
+  await dlg.getByRole("radio", { name: /Collect from others first/ }).click();
   await dlg.getByRole("radio", { name: "Collect from QA Priya" }).click();
   await h.shot(page, "uxp-collect-first");
   const fromPath = await page.evaluate(() => location.pathname);

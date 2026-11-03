@@ -185,7 +185,8 @@ async function main() {
     return fail(`${e.message}${/already running/i.test(out) ? "\nAnother `next dev` is running in this directory. Stop it, or re-run with `npm run test:e2e-qa -- --copy` to use a temporary copy." : ""}\n${out.slice(-800)}`);
   }
   console.log("Warming routes (first compile is slow) …");
-  for (const route of ["/transactions", "/loans-installments", "/accounts", "/credit-cards", "/bills", "/people", "/dashboard", "/month-cycle"]) {
+  // /dev/qa first: every scenario signs in there, and a cold compile of it can exceed the 60s sign-in wait.
+  for (const route of ["/dev/qa", "/transactions", "/loans-installments", "/accounts", "/credit-cards", "/bills", "/people", "/dashboard", "/month-cycle"]) {
     await fetch(`${BASE_URL}${route}`, { signal: AbortSignal.timeout(240_000) }).catch(() => {});
   }
 

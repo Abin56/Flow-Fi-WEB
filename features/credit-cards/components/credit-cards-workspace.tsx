@@ -2651,13 +2651,25 @@ function PayScope({
       <dl className="min-w-0 space-y-0.5">
         {bill ? (
           <div className="flex flex-wrap items-baseline gap-x-1.5">
-            <dt className="text-foreground/75">{scope.currentOverdue ? "Overdue bill" : "Current bill"}</dt>
+            {/* Once part of the bill is paid, the figure is what is LEFT — the label says so. */}
+            <dt className="text-foreground/75">{bill.amountPaid > 0.005 ? (scope.currentOverdue ? "Overdue · remaining" : "Remaining bill") : scope.currentOverdue ? "Overdue bill" : "Current bill"}</dt>
             <dd className="font-semibold text-foreground tabular-nums">{formatCurrency(scope.statementDue)}</dd>
             <dd className={cn("text-foreground/75", scope.currentOverdue && "font-semibold text-expense")}>
               · {billPeriodLabel(bill)} · {scope.currentOverdue ? "was due" : "due"} {formatShortDate(bill.dueDate)}
             </dd>
           </div>
-        ) : (
+        ) : null}
+        {/* The bill as a whole — its total, what was paid toward it, what is left (never per transaction). */}
+        {bill && bill.amountPaid > 0.005 && (
+          <div className="flex flex-wrap items-baseline gap-x-1.5 tabular-nums" data-testid="card-bill-paid-summary">
+            <dt className="text-foreground/75">Bill {formatCurrency(bill.totalAmount)}</dt>
+            <dd className="text-foreground/75">
+              · Paid <span className="font-semibold text-success">{formatCurrency(bill.amountPaid)}</span> · Remaining{" "}
+              <span className="font-semibold text-foreground">{formatCurrency(bill.remaining)}</span>
+            </dd>
+          </div>
+        )}
+        {!bill && (
           <div className="flex flex-wrap items-baseline gap-x-1.5">
             <dt className="text-foreground/75">Current outstanding</dt>
             <dd className="font-semibold text-foreground tabular-nums">{formatCurrency(ownOutstanding)}</dd>
