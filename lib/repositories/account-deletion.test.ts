@@ -2,11 +2,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Account } from "@/lib/models/account";
 import type { Bill } from "@/lib/models/bill";
 import type { Expense } from "@/lib/models/expense";
+import type { Emi } from "@/lib/models/emi";
+import type { Loan } from "@/lib/models/loan";
+import type { Installment } from "@/lib/models/payment-schedule";
 import type { LedgerEntry, Person } from "@/lib/models/person";
 import type { Transaction } from "@/lib/models/transaction";
 import type { AccountRepository } from "./account-repository";
 import type { BillRepository } from "./bill-repository";
+import type { EmiRepository } from "./emi-repository";
 import type { ExpenseRepository } from "./expense-repository";
+import type { LoanRepository } from "./loan-repository";
 import type { InstallmentRepository, PaymentScheduleRepository } from "./payment-schedule-repository";
 import type { LedgerRepository, PersonRepository } from "./person-repository";
 import type { TransactionRepository } from "./transaction-repository";
@@ -187,37 +192,90 @@ function bill(overrides: Partial<Bill> = {}): Bill {
   };
 }
 
+function loan(overrides: Partial<Loan> = {}): Loan {
+  return {
+    id: "loan-1",
+    name: "Bike loan",
+    direction: "taken",
+    scheduleId: "schedule-loan-1",
+    isClosed: false,
+    deletedAt: null,
+    ...overrides,
+  } as Loan;
+}
+
+function emi(overrides: Partial<Emi> = {}): Emi {
+  return {
+    id: "emi-1",
+    name: "Phone EMI",
+    scheduleId: "schedule-emi-1",
+    isClosed: false,
+    deletedAt: null,
+    ...overrides,
+  } as Emi;
+}
+
+function installment(overrides: Partial<Installment> = {}): Installment {
+  return {
+    id: "inst-1",
+    scheduleId: "schedule-loan-1",
+    sequenceNumber: 1,
+    dueDate: new Date("2026-12-01T00:00:00Z"),
+    amountDue: 1000,
+    amountPaid: 0,
+    isSkipped: false,
+    deletedAt: null,
+    ...overrides,
+  } as Installment;
+}
+
 interface Fixture {
   repos: AccountDeletionRepos;
   billRepo: { getAll: ReturnType<typeof vi.fn>; getTrash: ReturnType<typeof vi.fn>; docRef: ReturnType<typeof vi.fn> };
   accountRepo: { getByKey: ReturnType<typeof vi.fn>; applyBalanceDelta: ReturnType<typeof vi.fn>; docRef: ReturnType<typeof vi.fn> };
   personRepo: { getByKey: ReturnType<typeof vi.fn>; applyBalanceDelta: ReturnType<typeof vi.fn>; docRef: ReturnType<typeof vi.fn> };
-  ledgerRepo: {
-    getByTransactionRef: ReturnType<typeof vi.fn>;
-    getTrashByTransactionRef: ReturnType<typeof vi.fn>;
-    docRef: ReturnType<typeof vi.fn>;
-  };
 }
 
 function makeFixture(params: {
   transactions: Transaction[];
+  /** Transactions on OTHER accounts (what `getAll` returns besides this account's own). */
+  otherTransactions?: Transaction[];
   sibling?: Transaction | null;
   siblingAccount?: Account;
   expenses?: Expense[];
   bills?: Bill[];
   people?: Record<string, Person>;
-  ledgerEntriesByPersonAndTx?: Record<string, LedgerEntry[]>;
+  ledgerEntries?: LedgerEntry[];
+  loans?: Loan[];
+  emis?: Emi[];
+  installmentsBySchedule?: Record<string, Installment[]>;
+  accounts?: Record<string, Account>;
 }): Fixture {
-  const { transactions, sibling = null, siblingAccount, expenses = [], bills = [], people = {}, ledgerEntriesByPersonAndTx = {} } = params;
+  const {
+    transactions,
+    otherTransactions = [],
+    sibling = null,
+    siblingAccount,
+    expenses = [],
+    bills = [],
+    people = {},
+    ledgerEntries = [],
+    loans = [],
+    emis = [],
+    installmentsBySchedule = {},
+    accounts = {},
+  } = params;
 
   const transactionRepo = {
     getAllForAccountIncludingTrash: vi.fn(async () => transactions),
     findTransferSibling: vi.fn(async () => sibling),
+    getAll: vi.fn(async () => [...transactions, ...otherTransactions].filter((t) => t.deletedAt == null)),
+    getTrash: vi.fn(async () => [...transactions, ...otherTransactions].filter((t) => t.deletedAt != null)),
     docRef: vi.fn((id: string) => fakeDocRef(`tx:${id}`)),
   } as unknown as TransactionRepository;
 
   const accountRepo = {
-    getByKey: vi.fn(async (id: string) => (siblingAccount && siblingAccount.id === id ? siblingAccount : null)),
+    getByKey: vi.fn(async (id: string) => accounts[id] ?? (siblingAccount && siblingAccount.id === id ? siblingAccount : null)),
     applyBalanceDelta: vi.fn((acc: Account, delta: number) => ({ ...acc, currentBalance: acc.currentBalance + delta })),
     docRef: vi.fn((id: string) => fakeDocRef(`acc:${id}`)),
   };
@@ -236,18 +294,27 @@ function makeFixture(params: {
 
   const personRepo = {
     getByKey: vi.fn(async (id: string) => people[id] ?? null),
+    getAll: vi.fn(async () => Object.values(people).filter((p) => p.deletedAt == null)),
+    getTrash: vi.fn(async () => Object.values(people).filter((p) => p.deletedAt != null)),
     applyBalanceDelta: vi.fn((p: Person, delta: number) => ({ ...p, currentBalance: p.currentBalance + delta })),
     docRef: vi.fn((id: string) => fakeDocRef(`person:${id}`)),
   };
 
-  const ledgerRepo = {
-    getByTransactionRef: vi.fn(async (txId: string) =>
-      (ledgerEntriesByPersonAndTx[txId] ?? []).filter((e) => e.deletedAt == null),
-    ),
-    getTrashByTransactionRef: vi.fn(async (txId: string) =>
-      (ledgerEntriesByPersonAndTx[txId] ?? []).filter((e) => e.deletedAt != null),
-    ),
+  const ledgerRepoFor = (personId: string) => ({
+    getAll: vi.fn(async () => ledgerEntries.filter((e) => e.personId === personId && e.deletedAt == null)),
+    getTrash: vi.fn(async () => ledgerEntries.filter((e) => e.personId === personId && e.deletedAt != null)),
     docRef: vi.fn((id: string) => fakeDocRef(`ledger:${id}`)),
+  });
+
+  const loanRepo = {
+    getAll: vi.fn(async () => loans),
+    getTrash: vi.fn(async () => []),
+    docRef: vi.fn((id: string) => fakeDocRef(`loan:${id}`)),
+  };
+  const emiRepo = {
+    getAll: vi.fn(async () => emis),
+    getTrash: vi.fn(async () => []),
+    docRef: vi.fn((id: string) => fakeDocRef(`emi:${id}`)),
   };
 
   const repos: AccountDeletionRepos = {
@@ -257,19 +324,21 @@ function makeFixture(params: {
     billRepository: billRepo as unknown as BillRepository,
     expenseRepository: expenseRepo,
     personRepository: personRepo as unknown as PersonRepository,
-    ledgerRepositoryFor: vi.fn(() => ledgerRepo as unknown as LedgerRepository),
+    ledgerRepositoryFor: vi.fn((personId: string) => ledgerRepoFor(personId) as unknown as LedgerRepository),
     paymentScheduleRepository: { docRef: vi.fn((id: string) => fakeDocRef(`schedule:${id}`)) } as unknown as PaymentScheduleRepository,
     installmentRepositoryFor: vi.fn(
-      () =>
+      (scheduleId: string) =>
         ({
-          getAll: vi.fn(async () => []),
+          getAll: vi.fn(async () => installmentsBySchedule[scheduleId] ?? []),
           getTrash: vi.fn(async () => []),
           docRef: vi.fn((id: string) => fakeDocRef(`installment:${id}`)),
         }) as unknown as InstallmentRepository,
     ),
+    loanRepository: loanRepo as unknown as LoanRepository,
+    emiRepository: emiRepo as unknown as EmiRepository,
   };
 
-  return { repos, billRepo, accountRepo, personRepo, ledgerRepo };
+  return { repos, billRepo, accountRepo, personRepo };
 }
 
 describe("previewAccountDeletionImpact", () => {
@@ -296,7 +365,65 @@ describe("previewAccountDeletionImpact", () => {
       expenseCount: 1,
       affectedPersonCount: 1,
       billCount: 1,
+      agreementLoanCount: 0,
+      agreementEmiCount: 0,
+      agreementLegCount: 0,
+      ledgerEntryCount: 0,
+      unsettled: [],
     });
+  });
+
+  it("warns about an unpaid loan, an unpaid EMI and an unsettled person — and not about closed or fully paid ones", async () => {
+    const loanTx = transaction({ id: "tx-loan", loanId: "loan-1" });
+    const emiTx = transaction({ id: "tx-emi", emiId: "emi-1" });
+    const settledTx = transaction({ id: "tx-settled", loanId: "loan-2" });
+    const personTx = transaction({ id: "tx-person", linkedPersonId: "person-bob", isPersonLedgerMovement: true });
+    const bob = person({ id: "person-bob", name: "Bob", currentBalance: 750 });
+    const { repos } = makeFixture({
+      transactions: [loanTx, emiTx, settledTx, personTx],
+      loans: [loan({ id: "loan-1", scheduleId: "schedule-loan-1" }), loan({ id: "loan-2", scheduleId: "schedule-loan-2" })],
+      emis: [emi({ id: "emi-1", scheduleId: "schedule-emi-1" })],
+      installmentsBySchedule: {
+        "schedule-loan-1": [installment({ id: "a", amountDue: 1000, amountPaid: 400 }), installment({ id: "b", sequenceNumber: 2 })],
+        "schedule-emi-1": [installment({ id: "c", scheduleId: "schedule-emi-1", amountDue: 500 })],
+        "schedule-loan-2": [installment({ id: "d", scheduleId: "schedule-loan-2", amountDue: 300, amountPaid: 300 })],
+      },
+      people: { "person-bob": bob },
+      ledgerEntries: [ledgerEntry({ id: "entry-bob", personId: "person-bob", transactionRef: "tx-person" })],
+    });
+
+    const impact = await previewAccountDeletionImpact("acc-del", repos);
+
+    expect(impact.agreementLoanCount).toBe(2);
+    expect(impact.agreementEmiCount).toBe(1);
+    expect(impact.ledgerEntryCount).toBe(1);
+    expect(impact.unsettled).toEqual([
+      { kind: "loan", name: "Bike loan", amount: 1600, direction: "owedByMe", pendingInstallments: 2 },
+      { kind: "emi", name: "Phone EMI", amount: 500, direction: "owedByMe", pendingInstallments: 1 },
+      { kind: "person", name: "Bob", amount: 750, direction: "owedToMe" },
+    ]);
+  });
+
+  it("reports a loan I lent as still owed to me, and nothing for a closed loan", async () => {
+    const lentTx = transaction({ id: "tx-lent", loanId: "loan-1" });
+    const closedTx = transaction({ id: "tx-closed", loanId: "loan-2" });
+    const { repos } = makeFixture({
+      transactions: [lentTx, closedTx],
+      loans: [
+        loan({ id: "loan-1", direction: "given", name: "To Asha" }),
+        loan({ id: "loan-2", scheduleId: "schedule-loan-2", isClosed: true }),
+      ],
+      installmentsBySchedule: {
+        "schedule-loan-1": [installment({ amountDue: 900 })],
+        "schedule-loan-2": [installment({ id: "x", scheduleId: "schedule-loan-2" })],
+      },
+    });
+
+    const impact = await previewAccountDeletionImpact("acc-del", repos);
+
+    expect(impact.unsettled).toEqual([
+      { kind: "loan", name: "To Asha", amount: 900, direction: "owedToMe", pendingInstallments: 1 },
+    ]);
   });
 });
 
@@ -342,7 +469,7 @@ describe("permanentlyDeleteAccountHistory", () => {
       transactions: [tx1],
       expenses: [linkedExpense],
       people: { "person-bob": bob },
-      ledgerEntriesByPersonAndTx: { "tx-1": [gaveEntry] },
+      ledgerEntries: [gaveEntry],
     });
 
     await permanentlyDeleteAccountHistory("acc-del", repos);
@@ -365,6 +492,82 @@ describe("permanentlyDeleteAccountHistory", () => {
 
     const deletedRefs = committedOps.filter((op) => op.type === "delete").map((op) => op.ref);
     expect(deletedRefs).toContainEqual(fakeDocRef("bill:bill-1"));
+  });
+
+  it("sweeps a person's ledger entry from a plain person payment (no expense), reversing the balance once", async () => {
+    const tx = transaction({ id: "tx-pay", linkedPersonId: "person-bob", isPersonLedgerMovement: true });
+    const bob = person({ id: "person-bob", currentBalance: 300 });
+    const borrowed = ledgerEntry({ id: "entry-b", type: "borrowed", amount: 300, transactionRef: "tx-pay" });
+    const unrelated = ledgerEntry({ id: "entry-keep", type: "gave", amount: 50, transactionRef: "tx-other" });
+    const { repos, personRepo } = makeFixture({
+      transactions: [tx],
+      people: { "person-bob": bob },
+      ledgerEntries: [borrowed, unrelated],
+    });
+
+    await permanentlyDeleteAccountHistory("acc-del", repos);
+
+    // "borrowed" moved the balance by -300, so removing it applies +300.
+    expect(personRepo.applyBalanceDelta).toHaveBeenCalledTimes(1);
+    expect(personRepo.applyBalanceDelta).toHaveBeenCalledWith(bob, 300);
+    const deletedRefs = committedOps.filter((op) => op.type === "delete").map((op) => op.ref);
+    expect(deletedRefs).toContainEqual(fakeDocRef("ledger:entry-b"));
+    expect(deletedRefs).not.toContainEqual(fakeDocRef("ledger:entry-keep"));
+  });
+
+  it("deletes a loan and an EMI with their installments and schedules, and sweeps ledger entries settling them", async () => {
+    const loanTx = transaction({ id: "tx-loan", loanId: "loan-1" });
+    const emiTx = transaction({ id: "tx-emi", emiId: "emi-1" });
+    const bob = person({ id: "person-bob", currentBalance: 0 });
+    const share = ledgerEntry({
+      id: "entry-share",
+      personId: "person-bob",
+      type: "repaid",
+      amount: 200,
+      transactionRef: null,
+      obligationRef: "emi-inst:inst-emi",
+    });
+    const { repos } = makeFixture({
+      transactions: [loanTx, emiTx],
+      loans: [loan({ id: "loan-1", scheduleId: "schedule-loan-1" })],
+      emis: [emi({ id: "emi-1", scheduleId: "schedule-emi-1" })],
+      installmentsBySchedule: {
+        "schedule-loan-1": [installment({ id: "inst-loan" })],
+        "schedule-emi-1": [installment({ id: "inst-emi", scheduleId: "schedule-emi-1" })],
+      },
+      people: { "person-bob": bob },
+      ledgerEntries: [share],
+    });
+
+    await permanentlyDeleteAccountHistory("acc-del", repos);
+
+    const deletedRefs = committedOps.filter((op) => op.type === "delete").map((op) => op.ref);
+    for (const id of ["loan:loan-1", "schedule:schedule-loan-1", "installment:inst-loan", "emi:emi-1", "schedule:schedule-emi-1", "installment:inst-emi", "ledger:entry-share"]) {
+      expect(deletedRefs).toContainEqual(fakeDocRef(id));
+    }
+  });
+
+  it("removes a loan's payment leg posted on another account and corrects that account's balance", async () => {
+    const ownLeg = transaction({ id: "tx-own", loanId: "loan-1" });
+    const otherLeg = transaction({ id: "tx-other-leg", accountId: "acc-survivor", loanId: "loan-1", type: "expense", amount: 400 });
+    const survivor = account({ id: "acc-survivor", currentBalance: 600 });
+    const { repos, accountRepo } = makeFixture({
+      transactions: [ownLeg],
+      otherTransactions: [otherLeg],
+      loans: [loan({ id: "loan-1" })],
+      installmentsBySchedule: { "schedule-loan-1": [installment()] },
+      accounts: { "acc-survivor": survivor },
+    });
+
+    const impact = await previewAccountDeletionImpact("acc-del", repos);
+    expect(impact.agreementLegCount).toBe(1);
+
+    await permanentlyDeleteAccountHistory("acc-del", repos);
+
+    // The expense leg took 400 out of the survivor; removing it gives 400 back.
+    expect(accountRepo.applyBalanceDelta).toHaveBeenCalledWith(survivor, 400);
+    const deletedRefs = committedOps.filter((op) => op.type === "delete").map((op) => op.ref);
+    expect(deletedRefs).toContainEqual(fakeDocRef("tx:tx-other-leg"));
   });
 
   it("leaves an unrelated person's balance and a bill on a different account untouched", async () => {

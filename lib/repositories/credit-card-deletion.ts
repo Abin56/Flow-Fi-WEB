@@ -2,8 +2,9 @@
  * Cascading PERMANENT deletion for a Credit Card — everything
  * `account-deletion.ts` does for the card's underlying Account
  * (`CreditCardProfile.accountId`), plus the card-specific links that module
- * knows nothing about: `Emi`s linked via `linkedCreditCardId` (cascaded
- * through the existing `EmiRepository.permanentlyDeleteEmi`), every
+ * knows nothing about: `Emi`s and `Loan`s linked via `linkedCreditCardId`
+ * (handed to the account cascade as `extras`, so their schedules, payments and
+ * people-ledger entries go with everything else), every
  * `Statement`/`StatementPayment` under the card, and — when this was the
  * last card on a `SharedCreditLimit` — that now-orphaned shared limit too.
  *
@@ -16,10 +17,10 @@ import { db } from "@/lib/firebase/client";
 import { FirestoreCollections } from "@/lib/firestore/collections";
 import type { CreditCardProfile } from "@/lib/models/credit-card";
 import type { CreditCardRepository, SharedCreditLimitRepository } from "./credit-card-repository";
-import type { EmiRepository } from "./emi-repository";
 import {
   permanentlyDeleteAccountHistory,
   previewAccountDeletionImpact,
+  type AccountDeletionExtras,
   type AccountDeletionImpact,
   type AccountDeletionRepos,
 } from "./account-deletion";
@@ -27,18 +28,26 @@ import {
 export interface CreditCardDeletionRepos extends AccountDeletionRepos {
   creditCardRepository: CreditCardRepository;
   sharedCreditLimitRepository: SharedCreditLimitRepository;
-  emiRepository: EmiRepository;
 }
 
 export interface CreditCardDeletionImpact extends AccountDeletionImpact {
+  /** Every EMI that will be deleted (linked to the card, or paid through its account). */
   emiCount: number;
   statementCount: number;
   sharedLimitWillBeRemoved: boolean;
 }
 
 async function gatherCardExtras(card: CreditCardProfile, repos: CreditCardDeletionRepos) {
-  const [activeEmis, trashedEmis] = await Promise.all([repos.emiRepository.getAll(), repos.emiRepository.getTrash()]);
-  const emis = [...activeEmis, ...trashedEmis].filter((e) => e.linkedCreditCardId === card.id);
+  const [activeEmis, trashedEmis, activeLoans, trashedLoans] = await Promise.all([
+    repos.emiRepository.getAll(),
+    repos.emiRepository.getTrash(),
+    repos.loanRepository.getAll(),
+    repos.loanRepository.getTrash(),
+  ]);
+  const extras: AccountDeletionExtras = {
+    emis: [...activeEmis, ...trashedEmis].filter((e) => e.linkedCreditCardId === card.id),
+    loans: [...activeLoans, ...trashedLoans].filter((l) => l.linkedCreditCardId === card.id),
+  };
 
   const statementsRef = collection(repos.creditCardRepository.docRef(card.id), FirestoreCollections.statements);
   const statementDocs = await getDocs(statementsRef);
@@ -49,7 +58,7 @@ async function gatherCardExtras(card: CreditCardProfile, repos: CreditCardDeleti
     sharedLimitWillBeRemoved = !allCards.some((c) => c.id !== card.id && c.sharedLimitId === card.sharedLimitId);
   }
 
-  return { emis, statementDocs, sharedLimitWillBeRemoved };
+  return { extras, statementDocs, sharedLimitWillBeRemoved };
 }
 
 /** Read-only preview for the type-to-confirm delete dialog — mirrors `previewAccountDeletionImpact`
@@ -58,30 +67,24 @@ export async function previewCreditCardDeletionImpact(
   card: CreditCardProfile,
   repos: CreditCardDeletionRepos,
 ): Promise<CreditCardDeletionImpact> {
-  const [accountImpact, extras] = await Promise.all([
-    previewAccountDeletionImpact(card.accountId, repos),
-    gatherCardExtras(card, repos),
-  ]);
+  const cardExtras = await gatherCardExtras(card, repos);
+  const accountImpact = await previewAccountDeletionImpact(card.accountId, repos, cardExtras.extras);
   return {
     ...accountImpact,
-    emiCount: extras.emis.length,
-    statementCount: extras.statementDocs.size,
-    sharedLimitWillBeRemoved: extras.sharedLimitWillBeRemoved,
+    emiCount: accountImpact.agreementEmiCount,
+    statementCount: cardExtras.statementDocs.size,
+    sharedLimitWillBeRemoved: cardExtras.sharedLimitWillBeRemoved,
   };
 }
 
-/** Full cascade: linked EMIs, statements + their payments, an orphaned shared-limit cleanup,
- *  then the shared account-history cascade for `card.accountId`, then the `CreditCardProfile`
- *  doc and its `Account` doc themselves. */
+/** Full cascade: statements + their payments, an orphaned shared-limit cleanup, then the shared
+ *  account-history cascade for `card.accountId` (which also removes the card's linked EMIs/loans),
+ *  then the `CreditCardProfile` doc and its `Account` doc themselves. */
 export async function permanentlyDeleteCreditCardAndHistory(
   card: CreditCardProfile,
   repos: CreditCardDeletionRepos,
 ): Promise<void> {
-  const { emis, statementDocs, sharedLimitWillBeRemoved } = await gatherCardExtras(card, repos);
-
-  for (const emi of emis) {
-    await repos.emiRepository.permanentlyDeleteEmi(emi);
-  }
+  const { extras, statementDocs, sharedLimitWillBeRemoved } = await gatherCardExtras(card, repos);
 
   for (const statementDoc of statementDocs.docs) {
     const paymentsRef = collection(statementDoc.ref, FirestoreCollections.statementPayments);
@@ -99,7 +102,7 @@ export async function permanentlyDeleteCreditCardAndHistory(
     }
   }
 
-  await permanentlyDeleteAccountHistory(card.accountId, repos);
+  await permanentlyDeleteAccountHistory(card.accountId, repos, extras);
 
   await repos.creditCardRepository.permanentlyDelete(card);
   const account = await repos.accountRepository.getByKey(card.accountId);

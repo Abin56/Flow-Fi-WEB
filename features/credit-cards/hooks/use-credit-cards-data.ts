@@ -82,6 +82,7 @@ import {
   createBillRepository,
   createCreditCardRepository,
   createEmiRepository,
+  createLoanRepository,
   createExpenseRepository,
   createInstallmentRepositoryFor,
   createLedgerRepositoryFor,
@@ -714,6 +715,7 @@ export function useCreditCardActions() {
       creditCardRepository: cardRepository,
       sharedCreditLimitRepository,
       emiRepository,
+      loanRepository: createLoanRepository(uid),
     };
 
     return {

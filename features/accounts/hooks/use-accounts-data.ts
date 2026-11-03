@@ -46,8 +46,10 @@ import {
   createAccountRepository,
   createBillRepository,
   createExpenseRepository,
+  createEmiRepository,
   createInstallmentRepositoryFor,
   createLedgerRepositoryFor,
+  createLoanRepository,
   createPaymentScheduleRepository,
   createPersonRepository,
   createTransactionRepository,
@@ -305,6 +307,8 @@ export function useAccountActions() {
       ledgerRepositoryFor: (personId) => createLedgerRepositoryFor(uid, personId, personRepository),
       paymentScheduleRepository,
       installmentRepositoryFor: (scheduleId) => createInstallmentRepositoryFor(uid, scheduleId),
+      loanRepository: createLoanRepository(uid),
+      emiRepository: createEmiRepository(uid),
     };
 
     return {

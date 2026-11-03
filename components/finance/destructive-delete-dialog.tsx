@@ -13,6 +13,12 @@ export interface DestructiveDeleteImpactRow {
   count: number;
 }
 
+/** Something still open (an unpaid loan, an unsettled person balance…) that the delete would erase. */
+export interface DestructiveDeleteWarningRow {
+  title: string;
+  detail: string;
+}
+
 interface DestructiveDeleteDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -21,6 +27,8 @@ interface DestructiveDeleteDialogProps {
   entityName: string;
   /** null while the impact preview is still loading. */
   impact: DestructiveDeleteImpactRow[] | null;
+  /** Unsettled items shown in a prominent warning; when any exist the user must acknowledge them before deleting. */
+  warnings?: DestructiveDeleteWarningRow[];
   onConfirm: () => void | Promise<void>;
   confirming: boolean;
 }
@@ -39,18 +47,24 @@ export function DestructiveDeleteDialog({
   entityLabel,
   entityName,
   impact,
+  warnings = [],
   onConfirm,
   confirming,
 }: DestructiveDeleteDialogProps) {
   const [confirmText, setConfirmText] = useState("");
+  const [acknowledged, setAcknowledged] = useState(false);
 
   const visibleImpact = impact?.filter((row) => row.count > 0) ?? [];
-  const canConfirm = !confirming && impact != null && confirmText.trim() === entityName;
+  const hasWarnings = warnings.length > 0;
+  const canConfirm = !confirming && impact != null && confirmText.trim() === entityName && (!hasWarnings || acknowledged);
 
   function handleOpenChange(next: boolean) {
     if (confirming) return;
     onOpenChange(next);
-    if (!next) setConfirmText("");
+    if (!next) {
+      setConfirmText("");
+      setAcknowledged(false);
+    }
   }
 
   return (
@@ -67,7 +81,34 @@ export function DestructiveDeleteDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex flex-col gap-3">
+        <div className="flex max-h-[60vh] flex-col gap-3 overflow-y-auto">
+          {hasWarnings && (
+            <div role="alert" className="border-2 border-danger bg-danger/12 px-3 py-3 text-sm">
+              <p className="flex items-center gap-2 font-semibold text-danger">
+                <AlertTriangle className="size-4 shrink-0" />
+                Not settled yet — {warnings.length} open item{warnings.length === 1 ? "" : "s"} will be lost
+              </p>
+              <ul className="mt-2 space-y-1.5">
+                {warnings.map((row) => (
+                  <li key={`${row.title}|${row.detail}`} className="text-foreground">
+                    <span className="font-medium">{row.title}</span>
+                    <span className="block text-muted-foreground">{row.detail}</span>
+                  </li>
+                ))}
+              </ul>
+              <label className="mt-3 flex cursor-pointer items-start gap-2 font-medium text-foreground">
+                <input
+                  type="checkbox"
+                  className="mt-0.5 size-4 shrink-0 accent-[var(--danger)]"
+                  checked={acknowledged}
+                  onChange={(e) => setAcknowledged(e.target.checked)}
+                  disabled={confirming}
+                />
+                <span>I understand these are not settled and will be permanently erased with this {entityLabel}.</span>
+              </label>
+            </div>
+          )}
+
           <div className="border border-danger/30 bg-danger/8 px-3 py-2.5 text-sm">
             <p className="font-medium text-danger">This will permanently delete:</p>
             {impact == null ? (

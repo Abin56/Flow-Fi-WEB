@@ -46,8 +46,8 @@ import {
   BankCombobox,
   BankLogo,
   DestructiveDeleteDialog,
-  type DestructiveDeleteImpactRow,
 } from "@/components/finance";
+import { deletionImpactRows, deletionWarningRows } from "@/features/accounts/lib/deletion-presentation";
 import { useGuardedSubmit } from "@/components/finance/use-guarded-submit";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -603,16 +603,7 @@ export function CreditCardsWorkspace() {
     };
   }, [actions, deletingCard]);
 
-  const cardDeletionImpactRows: DestructiveDeleteImpactRow[] | null = cardDeletionImpact && [
-    { label: `${cardDeletionImpact.transactionCount} transaction${cardDeletionImpact.transactionCount === 1 ? "" : "s"}`, count: cardDeletionImpact.transactionCount },
-    { label: `${cardDeletionImpact.emiCount} linked EMI${cardDeletionImpact.emiCount === 1 ? "" : "s"}`, count: cardDeletionImpact.emiCount },
-    { label: `${cardDeletionImpact.statementCount} statement${cardDeletionImpact.statementCount === 1 ? "" : "s"}`, count: cardDeletionImpact.statementCount },
-    { label: "Shared credit limit will also be removed (no other card uses it)", count: cardDeletionImpact.sharedLimitWillBeRemoved ? 1 : 0 },
-    { label: `${cardDeletionImpact.transferSiblingCount} linked transfer${cardDeletionImpact.transferSiblingCount === 1 ? "" : "s"} on other accounts`, count: cardDeletionImpact.transferSiblingCount },
-    { label: `${cardDeletionImpact.expenseCount} shared/assigned expense${cardDeletionImpact.expenseCount === 1 ? "" : "s"}`, count: cardDeletionImpact.expenseCount },
-    { label: `${cardDeletionImpact.affectedPersonCount} person${cardDeletionImpact.affectedPersonCount === 1 ? "'s" : "s'"} balance will be recalculated`, count: cardDeletionImpact.affectedPersonCount },
-    { label: `${cardDeletionImpact.billCount} bill${cardDeletionImpact.billCount === 1 ? "" : "s"} paying from this card`, count: cardDeletionImpact.billCount },
-  ];
+  const cardDeletionImpactRows = cardDeletionImpact && deletionImpactRows(cardDeletionImpact, "card");
 
   async function handleDeleteCard() {
     if (!actions || !deletingCard) return;
@@ -1772,6 +1763,7 @@ export function CreditCardsWorkspace() {
         entityLabel="credit card"
         entityName={deletingCard?.name ?? "this card"}
         impact={cardDeletionImpactRows}
+        warnings={cardDeletionImpact ? deletionWarningRows(cardDeletionImpact) : []}
         onConfirm={handleDeleteCard}
         confirming={deletingCardBusy}
       />

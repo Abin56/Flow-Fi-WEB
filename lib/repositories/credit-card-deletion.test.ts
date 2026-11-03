@@ -14,12 +14,17 @@ import type { AccountDeletionRepos } from "./account-deletion";
  */
 const accountHistoryMock = vi.hoisted(() => ({
   permanentlyDeleteAccountHistory: vi.fn(async () => {}),
-  previewAccountDeletionImpact: vi.fn(async () => ({
+  previewAccountDeletionImpact: vi.fn(async (_accountId: string, _repos: unknown, extras?: { emis?: unknown[] }) => ({
     transactionCount: 0,
     transferSiblingCount: 0,
     expenseCount: 0,
     affectedPersonCount: 0,
     billCount: 0,
+    agreementLoanCount: 0,
+    agreementEmiCount: extras?.emis?.length ?? 0,
+    agreementLegCount: 0,
+    ledgerEntryCount: 0,
+    unsettled: [],
   })),
 }));
 vi.mock("./account-deletion", () => accountHistoryMock);
@@ -150,8 +155,11 @@ function makeFixture(params: {
   const emiRepository = {
     getAll: vi.fn(async () => emis),
     getTrash: vi.fn(async () => []),
-    permanentlyDeleteEmi: vi.fn(async () => {}),
   } as unknown as EmiRepository;
+  const loanRepository = {
+    getAll: vi.fn(async () => []),
+    getTrash: vi.fn(async () => []),
+  } as unknown as AccountDeletionRepos["loanRepository"];
 
   // Every test in this file exercises a single card whose statements live under the fixed
   // "acc-card-1" key `statementDocsByCard`/`paymentDocsByStatement` are seeded with above, so
@@ -185,6 +193,7 @@ function makeFixture(params: {
     creditCardRepository,
     sharedCreditLimitRepository,
     emiRepository,
+    loanRepository,
   };
 
   return { repos, emiRepository, creditCardRepository, sharedCreditLimitRepository, accountRepository };
@@ -239,13 +248,13 @@ describe("permanentlyDeleteCreditCardAndHistory", () => {
     accountHistoryMock.permanentlyDeleteAccountHistory.mockClear();
   });
 
-  it("cascades linked EMIs, statement payments/statements, an orphaned shared limit, then the account history and the card/account docs", async () => {
+  it("hands linked EMIs to the account cascade, then removes statement payments/statements, an orphaned shared limit, and the card/account docs", async () => {
     const theCard = card({ id: "card-1", sharedLimitId: "limit-1", accountId: "acc-card-1" });
     const linkedEmi = emi({ id: "emi-1", linkedCreditCardId: "card-1" });
     const statements: FakeDocSnapshot[] = [{ ref: { id: "stmt-1" } }];
     const payments: FakeDocSnapshot[] = [{ ref: { id: "pay-1" } }];
 
-    const { repos, emiRepository, sharedCreditLimitRepository, creditCardRepository, accountRepository } = makeFixture({
+    const { repos, sharedCreditLimitRepository, creditCardRepository, accountRepository } = makeFixture({
       cards: [theCard],
       emis: [linkedEmi],
       statements,
@@ -255,11 +264,10 @@ describe("permanentlyDeleteCreditCardAndHistory", () => {
 
     await permanentlyDeleteCreditCardAndHistory(theCard, repos);
 
-    expect(emiRepository.permanentlyDeleteEmi).toHaveBeenCalledWith(linkedEmi);
     expect(committedDeletes).toContainEqual({ id: "pay-1" });
     expect(committedDeletes).toContainEqual({ id: "stmt-1" });
     expect(sharedCreditLimitRepository.permanentlyDelete).toHaveBeenCalledWith({ id: "limit-1", deletedAt: null });
-    expect(accountHistoryMock.permanentlyDeleteAccountHistory).toHaveBeenCalledWith("acc-card-1", repos);
+    expect(accountHistoryMock.permanentlyDeleteAccountHistory).toHaveBeenCalledWith("acc-card-1", repos, { emis: [linkedEmi], loans: [] });
     expect(creditCardRepository.permanentlyDelete).toHaveBeenCalledWith(theCard);
     expect(accountRepository.permanentlyDelete).toHaveBeenCalled();
   });

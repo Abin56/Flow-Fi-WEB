@@ -27,7 +27,8 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ClayButton } from "@/components/clay/clay-button";
 import { transactionsHrefForAccount } from "@/features/transactions/lib/account-filter-param";
-import { BankCombobox, DestructiveDeleteDialog, type DestructiveDeleteImpactRow } from "@/components/finance";
+import { BankCombobox, DestructiveDeleteDialog } from "@/components/finance";
+import { deletionImpactRows, deletionWarningRows } from "@/features/accounts/lib/deletion-presentation";
 import { useGuardedSubmit } from "@/components/finance/use-guarded-submit";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AccountOverviewPanel } from "@/features/accounts/components/account-overview-panel";
@@ -336,20 +337,7 @@ export function AccountsWorkspace() {
     };
   }, [actions, cardActions, deletingAccount, deletingCreditCard]);
 
-  const deletionImpactRows: DestructiveDeleteImpactRow[] | null = deletionImpact && [
-    { label: `${deletionImpact.transactionCount} transaction${deletionImpact.transactionCount === 1 ? "" : "s"}`, count: deletionImpact.transactionCount },
-    { label: `${deletionImpact.transferSiblingCount} linked transfer${deletionImpact.transferSiblingCount === 1 ? "" : "s"} on other accounts`, count: deletionImpact.transferSiblingCount },
-    { label: `${deletionImpact.expenseCount} shared/assigned expense${deletionImpact.expenseCount === 1 ? "" : "s"}`, count: deletionImpact.expenseCount },
-    { label: `${deletionImpact.affectedPersonCount} person${deletionImpact.affectedPersonCount === 1 ? "'s" : "s'"} balance will be recalculated`, count: deletionImpact.affectedPersonCount },
-    { label: `${deletionImpact.billCount} bill${deletionImpact.billCount === 1 ? "" : "s"} paying from this account`, count: deletionImpact.billCount },
-    ...("emiCount" in deletionImpact
-      ? [
-          { label: `${deletionImpact.emiCount} linked EMI${deletionImpact.emiCount === 1 ? "" : "s"}`, count: deletionImpact.emiCount },
-          { label: `${deletionImpact.statementCount} statement${deletionImpact.statementCount === 1 ? "" : "s"}`, count: deletionImpact.statementCount },
-          { label: "Shared credit limit will also be removed (no other card uses it)", count: deletionImpact.sharedLimitWillBeRemoved ? 1 : 0 },
-        ]
-      : []),
-  ];
+  const deletionImpactRowsForDialog = deletionImpact && deletionImpactRows(deletionImpact, "account");
 
   async function handleDelete() {
     if (!deletingAccount) return;
@@ -1165,11 +1153,13 @@ export function AccountsWorkspace() {
       <BalanceBreakdownSheet scope={breakdownScope} onClose={closeBreakdown} />
 
       <DestructiveDeleteDialog
+        key={deletingAccount?.id ?? "none"}
         open={deletingAccount != null}
         onOpenChange={(open) => !open && setDeletingAccount(null)}
         entityLabel="account"
         entityName={deletingAccount?.name ?? "this account"}
-        impact={deletionImpactRows}
+        impact={deletionImpactRowsForDialog}
+        warnings={deletionImpact ? deletionWarningRows(deletionImpact) : []}
         onConfirm={handleDelete}
         confirming={deleting}
       />
