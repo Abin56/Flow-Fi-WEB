@@ -1,10 +1,10 @@
 "use client";
 
-import { CheckCircle2, History, Maximize2, Plus, Search } from "lucide-react";
+import { CheckCircle2, ChevronDown, History, ListFilter, Maximize2, Plus, Search } from "lucide-react";
 import { useState } from "react";
 import type { EntryEditValues, EntrySettleValues } from "@/features/people/components/workspace/ledger-ui";
 import { WS_SECONDARY } from "@/features/people/components/workspace/person-workspace-ui";
-import { applySettlementFilters, CyclePaymentHistory, SettledCycleNote, SettlementFilters } from "@/features/people/components/workspace/settlement-summary";
+import { applySettlementFilters, CyclePaymentHistory, SettlementFilters } from "@/features/people/components/workspace/settlement-summary";
 import { SettlementTable } from "@/features/people/components/workspace/settlement-table";
 import { linkedTrailFor } from "@/features/people/components/linked-funds";
 import type { SettlementLookupsWithAccounts } from "@/features/people/hooks/use-settlement-lookups";
@@ -178,6 +178,9 @@ export function PersonActivityFeed({
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState<SettlementStatusFilter>("all");
   const [type, setType] = useState<SettlementTypeFilter>("all");
+  // The per-item Pending / Partial / Paid filters are secondary: the totals above are the settlement view. They stay one tap away.
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const filtering = status !== "all" || type !== "all";
   const firstName = personName.split(" ")[0];
 
   const searched = filterLedgerRows(rows, "all", search);
@@ -218,7 +221,21 @@ export function PersonActivityFeed({
           <span className="text-sm font-medium text-foreground/65 tabular-nums">· {counts[scope]}</span>
         </h2>
         <ScopeSwitch scope={scope} onScopeChange={changeScope} counts={counts} cycleLabel={cycleLabel} />
-        <SettlementFilters rows={[...carriedRows, ...rows]} lookups={lookups} status={status} onStatusChange={setStatus} type={type} onTypeChange={setType} />
+        <button
+          type="button"
+          aria-expanded={filtersOpen}
+          onClick={() => setFiltersOpen((o) => !o)}
+          className={cn(
+            "inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-[12.5px] font-semibold outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+            filtering ? "border-primary-accent-text bg-primary/10 text-foreground" : "border-border-strong bg-card text-foreground/80 hover:border-muted-foreground",
+          )}
+        >
+          <ListFilter className="size-3.5" strokeWidth={2} aria-hidden />
+          Filter{filtering && <span className="size-1.5 rounded-full bg-primary-accent-text" aria-label="active" />}
+        </button>
+        {(filtersOpen || filtering) && (
+          <SettlementFilters rows={[...carriedRows, ...rows]} lookups={lookups} status={status} onStatusChange={setStatus} type={type} onTypeChange={setType} />
+        )}
         <div className="flex w-full items-center gap-2 sm:ml-auto sm:w-auto">
           {rows.length > 5 && (
             <div className="relative min-w-0 flex-1 sm:w-44 sm:flex-none">
@@ -239,7 +256,7 @@ export function PersonActivityFeed({
         </div>
       </div>
 
-      {showCarried && statement && <SettledCycleNote statement={statement} personName={personName} />}
+      {/* The "Settled cycle" banner is retired from the main view — the totals strip above already reads Remaining ₹0. */}
       {showCarried && carriedRows.length === 0 && <CarriedForwardNote carried={carriedForward} personName={personName} className="mb-2 shrink-0" />}
 
       {/* Only the table scrolls on larger screens; its header row sticks */}
@@ -247,7 +264,6 @@ export function PersonActivityFeed({
         key={scope}
         className={cn(
           "animate-in overflow-x-hidden rounded-[6px] border border-border-strong/80 duration-200 fade-in-0 sm:max-h-[min(66vh,48rem)] sm:overflow-y-auto sm:overscroll-contain",
-          showCarried && statement?.direction === "settled" && "mt-2",
         )}
       >
         <SettlementTable
@@ -266,7 +282,13 @@ export function PersonActivityFeed({
       </div>
 
       {scope === "cycle" && statement && !isLoading && (
-        <CyclePaymentHistory statement={statement} personName={personName} accountForEntry={lookups.accountForEntry} incomeForEntry={lookups.incomeForEntry} className="mt-3 max-w-3xl" />
+        <details className="group mt-2 max-w-3xl" data-testid="payment-history-details">
+          <summary className="flex w-fit cursor-pointer list-none items-center gap-1 rounded-[6px] px-1 py-1 text-xs font-semibold text-foreground/75 outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+            <ChevronDown className="size-3.5 transition-transform group-open:rotate-180" strokeWidth={1.75} aria-hidden />
+            Payment history · this cycle
+          </summary>
+          <CyclePaymentHistory statement={statement} personName={personName} accountForEntry={lookups.accountForEntry} incomeForEntry={lookups.incomeForEntry} className="mt-1.5" />
+        </details>
       )}
     </section>
   );

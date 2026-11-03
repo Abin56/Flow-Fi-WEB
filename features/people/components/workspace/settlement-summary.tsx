@@ -128,6 +128,43 @@ function Row({ label, value, side, strong, tone: t }: { label: React.ReactNode; 
   );
 }
 
+/**
+ * The compact headline for a cycle: Total · Received (or Paid) · Remaining — three figures from the same engine
+ * values the full reconciliation uses (previous + added, the payment lines, current pending). No per-transaction
+ * status here; the transaction list below keeps those. When both directions are open each side is its own
+ * obligation, so the strip steps aside and the hero's two gross figures carry the story.
+ */
+export function SettlementTotals({ statement, personName, children, className }: { statement: PersonCycleStatement; personName: string; children?: React.ReactNode; className?: string }) {
+  const pos = cyclePosition(statement, personName);
+  if (statement.toReceive > 0 && statement.toGive > 0) return null;
+  const total = Math.abs(statement.previousPending + statement.cycleActivity);
+  const inbound = statement.direction !== "iOwe";
+  const settledAmount = round2(pos.lines.filter((l) => l.key === "received" || l.key === "paid" || l.key === "advanceApplied").reduce((s, l) => s + l.value, 0));
+  const remaining = statement.amount;
+  if (total < 0.005 && settledAmount < 0.005 && remaining < 0.005) return null;
+  const tone = statement.direction === "theyOwe" ? "text-settle-receivable-text" : statement.direction === "iOwe" ? "text-settle-payable-text" : "text-success";
+  const figures: { label: string; value: number; testId: string; tone?: string }[] = [
+    { label: "Total", value: total, testId: "settlement-total" },
+    { label: inbound ? "Received" : "Paid", value: settledAmount, testId: "settlement-received", tone: settledAmount > 0 ? "text-success" : undefined },
+    { label: "Remaining", value: remaining, testId: "settlement-remaining", tone: remaining > 0 ? tone : "text-success" },
+  ];
+  return (
+    <div aria-label="Settlement totals" className={className}>
+      <dl className="grid grid-cols-3 divide-x divide-border-strong/60 overflow-hidden rounded-[10px] border border-border-strong/70 bg-secondary/30">
+        {figures.map((f) => (
+          <div key={f.label} className="min-w-0 px-2.5 py-2">
+            <dt className="truncate text-[10px] font-bold tracking-[0.05em] text-foreground/65 uppercase">{f.label}</dt>
+            <dd className={cn("font-heading text-[17px] leading-tight font-bold tabular-nums", f.tone ?? "text-foreground")} data-testid={f.testId}>
+              {money(f.value)}
+            </dd>
+          </div>
+        ))}
+      </dl>
+      {children}
+    </div>
+  );
+}
+
 export function CycleReconciliation({ statement, personName, className }: { statement: PersonCycleStatement; personName: string; className?: string }) {
   const pos = cyclePosition(statement, personName);
   const first = personName.split(" ")[0];

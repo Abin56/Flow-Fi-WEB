@@ -1,7 +1,7 @@
 "use client";
 
 import { ArrowLeft, Bell, Calendar, ChevronDown, HandCoins, ListX, Mail, MoreHorizontal, Paperclip, Pencil, Phone, Plus, Share2, Split, StickyNote, Trash2, Users } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, cloneElement } from "react";
 import { useRouter } from "next/navigation";
 import { ClayAvatar } from "@/components/clay/clay-avatar";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
@@ -771,7 +771,7 @@ export function PersonDetailWorkspace({
   const balanceSummary = (b.toGive > 0 || b.toReceive > 0 || hasAdvance) && (
     <div aria-label="Balance summary" className="text-[13px] tabular-nums">
       <p className="text-[11px] font-bold tracking-[0.08em] text-foreground/75 uppercase">Overall with {person.name.split(" ")[0]}</p>
-      <dl className="mt-1.5 grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+      <dl className="mt-1.5 grid grid-cols-1 gap-1.5">
         {summaryLines.map((l) => (
           <div
             key={l.label}
@@ -832,10 +832,23 @@ export function PersonDetailWorkspace({
             onCycleChange={setCycle}
             linkedEmis={linkedEmis}
             setRepays={setRepays}
+            highlights={
+              <>
+                <DeferralCycleSummary cycle={cycle} />
+                {upcomingEmi.length > 0 && (
+                  <span
+                    title={upcomingEmi.slice(0, 5).map((e) => `${e.label} · ${formatCurrency(e.amount)}`).join("\n")}
+                    className="inline-flex items-center gap-1 rounded-full bg-primary/20 px-2 py-0.5 text-[11.5px] font-medium text-foreground tabular-nums ring-1 ring-primary-accent-text/30"
+                  >
+                    <span className="text-[10px] font-bold tracking-wide text-primary-accent-text">EMI</span>
+                    {upcomingEmi.length} upcoming <span className="font-bold">{formatCurrency(upcomingEmi.reduce((t, e) => t + e.amount, 0))}</span>
+                  </span>
+                )}
+              </>
+            }
             footnote={
               <>
                 {balanceSummary}
-                <DeferralCycleSummary cycle={cycle} />
                 {loansNote}
               </>
             }
@@ -878,9 +891,8 @@ export function PersonDetailWorkspace({
               }}
             />
           ))}
-        <PeopleDrawer id="person-inline-settle" width="lg" open={inline === "settle" && rawPerson != null && paymentPanel != null} onOpenChange={(o) => !o && closePayment()} title={`${paying?.intent === "postpone" ? "Postpone collection" : "Record payment"} — ${person.name}`}>
-          {rawPerson && inline === "settle" && paymentPanel}
-        </PeopleDrawer>
+        {/* Record payment opens as the Transaction Details top sheet (the panel portals itself) — the person page stays underneath */}
+        <div id="person-inline-settle">{rawPerson && inline === "settle" && paymentPanel != null && cloneElement(paymentPanel, { sheet: true })}</div>
         {/* Split is the one focused popup — the person page stays underneath, unchanged */}
         <PeopleDrawer id="person-inline-split" width="xl" open={inline === "split" && rawPerson != null} onOpenChange={(o) => !o && setInline(null)} title={`Split expense with ${person.name}`}>
           {rawPerson && (

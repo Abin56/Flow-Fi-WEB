@@ -2,7 +2,7 @@
 
 import { AccountSelect } from "@/components/finance/account-label";
 import { PaymentSourceSummary, isUnderfunded } from "@/components/finance/payment-source-summary";
-import { ArrowRight, CalendarClock, History, Wallet } from "lucide-react";
+import { ArrowRight, CalendarClock, ChevronDown, History, Wallet } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useMemo, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
@@ -16,7 +16,6 @@ import {
   FieldGroup,
   LE_RADIUS,
   LOAN_EMI_INPUT,
-  LoanEmiFormDialog,
   Money,
   MoreOptions,
   Reveal,
@@ -44,9 +43,10 @@ import {
   type LenderPaymentDecision,
   type OwnMoneyReason,
 } from "@/features/loans/components/people-payment-decision";
+import { ShareReceivedPanel, type ReceivedSummary } from "@/features/loans/components/share-received";
 import { PostponedBanner, SharePostponePanel, type PostponeShare, type SharePostponeResult } from "@/features/loans/components/share-postpone";
 import { useLinkedPeopleReadiness } from "@/features/people/hooks/use-linked-people-readiness";
-import { peopleApplyAdvanceHref, peopleGateInstallmentIds, peoplePostponeHref, peopleSettleHref, peopleSettlementGate, settleActionFor } from "@/lib/engines/linked-people-readiness";
+import { peopleApplyAdvanceHref, peopleGateInstallmentIds, peoplePostponeHref, peopleSettlementGate, settleActionFor } from "@/lib/engines/linked-people-readiness";
 import { PAYMENT_EPSILON } from "@/lib/engines/person-payment";
 import { RECORDED_EARLIER_PEOPLE_ACK } from "@/lib/engines/recorded-earlier";
 import { planLoanPaymentCore, type LoanPaymentCore } from "@/lib/engines/loan-payment-core";
@@ -86,6 +86,8 @@ import { formatCurrencyExact } from "@/lib/format";
 import { generateId } from "@/lib/utils/id-generator";
 import { cn } from "@/lib/utils";
 import { DateInput } from "@/components/forms/date-input";
+import { PaymentSheet } from "@/features/loans/components/payment-sheet";
+import { SheetRail, SheetSection } from "@/components/finance/transaction-sheet";
 import { BulkHistoricalDialog } from "@/features/loans/components/bulk-historical-dialog";
 import { HistoricalPeopleReconcile, useHistoricalReconcile } from "@/features/loans/components/historical-people-reconcile";
 
@@ -271,6 +273,10 @@ export function RecordPaymentDialog({
   const [refreshing, setRefreshing] = useState(false);
   const operation = useOperation();
   const [customTouched, setCustomTouched] = useState(false);
+  // "Other ways to pay" (part payment, extra, all remaining) folds away until opened or one of them is chosen.
+  const [otherWaysOpen, setOtherWaysOpen] = useState(false);
+  // "All remaining installments" pays the whole schedule in one go — it needs an explicit confirmation.
+  const [remainingAck, setRemainingAck] = useState(false);
   // One per mount — its synchronous guard blocks a double click/double submit (state updates are async).
   const [submission] = useState(createPaymentSubmission);
   const [mode, setMode] = useState<PayMode>("now");
@@ -284,9 +290,10 @@ export function RecordPaymentDialog({
   const [pinnedPast, setPinnedPast] = useState<Installment | null>(null);
   // Nothing is preselected while shares are open: paying from my own money is always a deliberate choice.
   const [decision, setDecision] = useState<LenderPaymentDecision | null>(null);
-  const [pickedCollectId, setPickedCollectId] = useState<string | null>(null);
   // The last postponement made here — kept on screen as the success state (the live deferrals update the rest).
   const [postponed, setPostponed] = useState<SharePostponeResult | null>(null);
+  // The last receipt recorded here ("Received") — also kept on screen as a success state.
+  const [received, setReceived] = useState<ReceivedSummary | null>(null);
   // A person row's "Postpone": the in-dialog postpone, with only that person selected.
   const [postponeOnly, setPostponeOnly] = useState<string | null>(null);
   const [ownReason, setOwnReason] = useState<OwnMoneyReason | null>(null);
@@ -400,7 +407,6 @@ export function RecordPaymentDialog({
   const needsDecision = !earlier && peopleGated && !gateLoading && settlement.blocked;
   const allPostponed = needsDecision && shareStatus.allPostponed;
   const postponedNote = needsDecision ? postponedMessage(shareStatus.postponed) : "";
-  const collectFirst = needsDecision && !allPostponed && decision === "collect";
   const ownMoney = needsDecision && decision === "ownMoney";
   const ownReasonLabel = ownMoneyReasonLabel(ownReason);
   const peopleAck = earlier
@@ -410,11 +416,9 @@ export function RecordPaymentDialog({
       : null;
   const router = useRouter();
   const pathname = usePathname();
-  // Collect first: the person picked in the list (default: whoever owes the most) → their People Record payment.
+  // "Received": the undecided people's open shares are recorded right here as People receipts (`ShareReceivedPanel`).
   const unresolvedIds = new Set(shareStatus.unresolved.map((p) => p.personId));
   const collectCandidates = settlement.attention.filter((p) => unresolvedIds.has(p.personId));
-  const collectPerson = collectCandidates.find((p) => p.personId === pickedCollectId) ?? collectCandidates[0] ?? null;
-  const collectAction = collectPerson ? settleActionFor(collectPerson) : null;
   // "Not received yet — postpone": the undecided people's open shares, each moved through People's own deferral
   // write. Never a payment — the lender installment stays due on its date.
   const postponeShares: PostponeShare[] = collectCandidates
@@ -431,12 +435,11 @@ export function RecordPaymentDialog({
       ? { sourceKind: isLoan ? ("loan" as const) : ("emi" as const), source: breakdownSource, installments: breakdownInstallments, installmentId: next.id }
       : null;
   const { breakdown, isLoading: breakdownLoading } = useInstallmentBreakdown(breakdownTarget);
-  // Collect first, when that person already gave money held as an advance: applying it comes first — it settles
-  // their share without recording new money (no account is credited again). Recording a new receipt is the fallback.
-  const collectAdvance = collectPerson ? (breakdown?.participants.find((p) => p.personId === collectPerson.personId)?.advanceHeld ?? 0) : 0;
-  const applyAdvanceHref =
-    collectAction && collectAdvance > PAYMENT_EPSILON ? peopleApplyAdvanceHref(collectAction.personId, collectAction.obligationKey, returnPath) : null;
-  const settleHref = collectAction ? (applyAdvanceHref ?? peopleSettleHref(collectAction.personId, collectAction.obligationKey, returnPath)) : null;
+  // Received, when someone already gave money held as an advance: applying it comes first — it settles their
+  // share without recording new money (no account is credited again). Recording a new receipt is the fallback.
+  const advancePeople = collectCandidates
+    .map((p) => ({ person: p, advance: breakdown?.participants.find((x) => x.personId === p.personId)?.advanceHeld ?? 0 }))
+    .filter((x) => x.advance > PAYMENT_EPSILON);
   // Past payment: whether the people sharing it had already paid me back — answered per person, written as
   // People settlements AFTER the lender record. The installments are fixed at the first save (afterwards
   // the dialog's "next" installment moves on), and a saved lender record is never written again.
@@ -506,8 +509,9 @@ export function RecordPaymentDialog({
   const payingAccount = needsAccount ? (accounts.find((a) => a.id === accountId) ?? null) : null;
   const underfunded = fundsApply && isUnderfunded(payingAccount, planAmount);
   const showError = error != null && ((effectiveChoice !== "custom" && effectiveChoice !== "extra") || customTouched || error === earlierExtraError);
+  const remainingUnconfirmed = effectiveChoice === "remaining" && !earlier && !remainingAck;
   const blocked =
-    next == null || error != null || earlierDateError != null || (needsAccount && accountId === "") || underfunded || (earlier && !lent && reconcile.blocker != null);
+    remainingUnconfirmed || next == null || error != null || earlierDateError != null || (needsAccount && accountId === "") || underfunded || (earlier && !lent && reconcile.blocker != null);
   const accountName = needsAccount ? (accounts.find((a) => a.id === accountId)?.name ?? null) : (cardLabel ?? null);
   // The same Case A / B rule the write applies (`emi-card-funding.ts`), read from the EMI's linked purchase record.
   const linkedCardAccountId = emiRow?.linkedCard?.accountId ?? null;
@@ -559,11 +563,6 @@ export function RecordPaymentDialog({
 
   async function submit() {
     if (lenderDone && reconcile.failed.length > 0) return retryReconcile();
-    // Collect first: the primary action is the People settlement, never the lender payment.
-    if (collectFirst) {
-      if (settleHref) router.push(settleHref);
-      return;
-    }
     // Unknown People state: wait — the acknowledgement must name exactly what stays open.
     if (gateLoading) return;
     if (submission.inFlight || blocked || planAmount == null) return;
@@ -698,22 +697,18 @@ export function RecordPaymentDialog({
         ? "Retry people's payments"
       : earlier
         ? `Save past payment${amountLabel ? ` of ${amountLabel}` : ""}${reconcileTotal > 0.005 ? ` · ${formatCurrencyExact(reconcileTotal)} from people` : ""}`
-        : needsDecision && !ownMoney && !collectFirst
+        : needsDecision && !ownMoney
           ? allPostponed
             ? "Confirm paying from your account"
-            : decision === "postpone"
-              ? "Postpone above — or pay now"
-              : "Choose how to pay"
-          : collectFirst
-            ? collectPerson
-              ? applyAdvanceHref
-                ? `Apply ${collectPerson.personName}'s ${formatCurrencyExact(collectAdvance)} advance in People`
-                : `Record ${collectPerson.personName}'s payment in People`
-              : "Choose who paid"
+            : decision === "collect"
+              ? "Record what they paid above — then pay"
+              : decision === "postpone"
+                ? "Postpone above — or pay now"
+                : "Choose how to pay"
             : lent
               ? `Record ${amountLabel ?? "repayment"} received`
               : `Pay ${amountLabel ?? "installment"} to lender`;
-  const confirmDisabled = lenderDone ? reconcile.failed.length === 0 || saving : earlier ? blocked : gateLoading || (needsDecision && !ownMoney && !collectFirst) || (collectFirst ? settleHref == null : blocked);
+  const confirmDisabled = lenderDone ? reconcile.failed.length === 0 || saving : earlier ? blocked : gateLoading || (needsDecision && !ownMoney) || blocked;
 
   // Where the money goes — the account (or card) only. What people owe is its own line (`peopleImpact`).
   const moneyMove = (() => {
@@ -744,6 +739,22 @@ export function RecordPaymentDialog({
   const lentAccount = lent && needsAccount ? (accounts.find((a) => a.id === accountId) ?? null) : null;
   const remainingOption = options.find((o) => o.choice === "remaining") ?? null;
   const leadingOptions = options.filter((o) => o.choice !== "remaining");
+  const showRail = next != null && !earlier;
+  // What still blocks the primary action, in plain words (the footer's "Still needed").
+  const pending: string[] = [];
+  if (!lenderDone && !gateLoading && !saving) {
+    if (!earlier && needsDecision && !ownMoney) pending.push(allPostponed ? "Confirm paying" : "Received or not");
+    if (showPaymentDetails) {
+      if (needsAccount && accountId === "") pending.push(lent ? "Account" : "Paying account");
+      if (error != null) pending.push("Amount");
+      if (remainingUnconfirmed) pending.push("Confirm all remaining");
+      if (underfunded) pending.push("Enough balance");
+      if (earlierDateError != null) pending.push("Date");
+      if (earlier && !lent && reconcile.blocker != null) pending.push("People answers");
+    }
+  }
+  // The pay-this-installment choices come first; part / extra / all-remaining open on request (or when chosen).
+  const otherWaysShown = otherWaysOpen || effectiveChoice === "custom" || effectiveChoice === "extra" || effectiveChoice === "remaining";
 
   if ((view === "past" || view === "payMany") && target) {
     return (
@@ -761,351 +772,403 @@ export function RecordPaymentDialog({
   }
 
   return (
-    <LoanEmiFormDialog
+    <PaymentSheet
       open={open}
       onOpenChange={onOpenChange}
-      size="compact"
+      eyebrow={earlier ? "Past payment" : lent ? "Repayment" : isLoan ? "Loan payment" : "EMI payment"}
       icon={earlier ? History : Wallet}
       title={earlier ? (lent ? "Record past repayment" : "Record past payment") : lent ? "Record repayment" : isLoan ? "Pay installment" : "Pay EMI"}
       description={next ? `${name} · Installment #${next.sequenceNumber} of ${totalCount}` : name}
+      chip={next ? { label: overdue ? `Overdue · ${formatDueDate(next.dueDate)}` : `Due ${formatDueDate(next.dueDate)}`, tone: overdue ? "danger" : "neutral" } : null}
+      heroLabel={next ? (lent ? "To receive" : "To pay lender") : undefined}
+      hero={
+        next ? (
+          <span className="font-heading text-[26px] leading-none font-bold tracking-tight whitespace-nowrap text-hero-foreground tabular-nums sm:text-[30px]">
+            {formatCurrencyExact(remainingAmount(next))}
+          </span>
+        ) : undefined
+      }
+      facts={
+        next ? (
+          <dl className="flex flex-wrap gap-x-4 gap-y-0.5 text-[11.5px] sm:justify-end">
+            {next.amountPaid > 0 && <SummaryFact hero label="Already paid" value={formatCurrencyExact(Math.min(next.amountPaid, next.amountDue))} />}
+            {breakdown && participants.length > 0 && <SummaryFact hero label="Your share" value={formatCurrencyExact(breakdown.yourShare)} />}
+            {breakdown && participants.length > 0 && (
+              <SummaryFact hero label="Owed to you by others" value={formatCurrencyExact(othersUnpaidNow)} tone={othersUnpaidNow > 0.005 ? "owed" : "done"} />
+            )}
+            <SummaryFact hero label={lent ? "Total still to receive" : isLoan ? "Loan outstanding" : "EMI outstanding"} value={formatCurrencyExact(outstanding)} muted />
+          </dl>
+        ) : undefined
+      }
       onConfirm={submit}
-      // Collect first: Enter in a field must not navigate away — only the button opens People.
-      onEnter={collectFirst ? () => undefined : undefined}
       confirmLabel={confirmLabel}
       confirmDisabled={confirmDisabled}
+      pending={pending}
       loading={saving}
       success={success}
       refreshing={refreshing}
       operation={operation.snapshot}
     >
-      {/* 1 — What is owed to the lender right now. */}
-      <section className="flex flex-col gap-2.5" aria-label="Payment summary">
-        {next ? (
-          <>
-            <div className="flex items-end justify-between gap-3">
-              <div className="flex min-w-0 flex-col gap-1">
-                <span className="text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">{lent ? "To receive" : "To pay lender"}</span>
-                <Money exact amount={remainingAmount(next)} className="text-[28px] leading-none text-foreground" />
-              </div>
-              <span
-                className={cn(
-                  "shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-semibold",
-                  overdue ? "border-expense/40 text-expense" : "border-border-strong text-muted-foreground",
-                )}
-              >
-                {overdue ? `Overdue · ${formatDueDate(next.dueDate)}` : `Due ${formatDueDate(next.dueDate)}`}
-              </span>
-            </div>
-            <dl className="flex flex-wrap gap-x-5 gap-y-1 text-xs">
-              {next.amountPaid > 0 && <SummaryFact label="Already paid" value={formatCurrencyExact(Math.min(next.amountPaid, next.amountDue))} />}
-              {breakdown && participants.length > 0 && <SummaryFact label="Your share" value={formatCurrencyExact(breakdown.yourShare)} />}
-              {breakdown && participants.length > 0 && (
-                <SummaryFact label="Owed to you by others" value={formatCurrencyExact(othersUnpaidNow)} tone={othersUnpaidNow > 0.005 ? "owed" : "done"} />
-              )}
-              <SummaryFact label={lent ? "Total still to receive" : isLoan ? "Loan outstanding" : "EMI outstanding"} value={formatCurrencyExact(outstanding)} muted />
-            </dl>
-            {through && (
-              <p role="note" className="rounded-[6px] border border-border bg-secondary px-3 py-2 text-xs text-foreground" data-testid="through-note">
-                You picked installment #{through.last}. Loan installments are paid in order, so{" "}
-                {through.count === 2 ? `#${through.first} (still unpaid) is` : `#${through.first}–#${through.last - 1} (still unpaid) are`} paid first. Choose below what to pay.
-              </p>
-            )}
-          </>
-        ) : (
-          <p className="text-sm font-semibold text-success">Fully paid — nothing is due.</p>
-        )}
-      </section>
-
-      {/* 2 — Who shares it, and (when someone hasn't paid) how to go on. */}
-      {next && (showPeople || needsDecision) && (
-        <section className="flex flex-col gap-3">
-          {postponed && !earlier && <PostponedBanner result={postponed} lenderDueDate={next.dueDate} onDismiss={() => setPostponed(null)} />}
-          {showPeople && (
-            <InstallmentPeoplePanel
-              breakdown={breakdown}
-              loading={breakdownLoading}
-              returnTo={returnPath}
-              selectable={collectFirst ? unresolvedIds : null}
-              selectedId={collectFirst ? (collectPerson?.personId ?? null) : null}
-              onSelect={setPickedCollectId}
-              onPostpone={
-                needsDecision && postponeShares.length > 0
-                  ? (personId) => {
-                      // Someone already postponed (or nothing open) keeps the People route for changing it.
-                      if (!postponeShares.some((p) => p.personId === personId)) {
-                        const key = settlement.attention.find((p) => p.personId === personId)?.obligations[0]?.key;
-                        if (key) router.push(peoplePostponeHref(personId, key, returnPath));
-                        return;
-                      }
-                      setPostponed(null);
-                      setPostponeOnly(personId);
-                      setDecision("postpone");
-                    }
-                  : undefined
-              }
-            />
-          )}
-          {needsDecision && (
-            <PeoplePaymentDecision
-              decision={decision}
-              onDecision={(d) => {
-                // The main choice postpones everyone who hasn't paid; a row's "Postpone" picks one person.
-                if (d === "postpone") setPostponeOnly(null);
-                setDecision(d);
-              }}
-              reason={ownReason}
-              onReason={setOwnReason}
-              note={ownNote}
-              onNote={setOwnNote}
-              accountName={accountName}
-              allPostponed={allPostponed}
-              postponedNote={postponedNote}
-              unresolvedNames={shareStatus.unresolved.map((p) => p.personName)}
-              lapsedNames={shareStatus.people.filter((p) => p.lapsed).map((p) => p.personName)}
-              amountLabel={amountLabel}
-              postponeSlot={
-                postponeShares.length > 0 ? (
-                  <SharePostponePanel
-                    key={postponeOnly ?? "all"}
-                    only={postponeOnly}
-                    people={postponeShares}
-                    dateOf={shareDateOf}
-                    deferralsByPerson={deferralsByPerson}
-                    startDay={startDay}
-                    lenderDueDate={next.dueDate}
-                    onDone={(result) => {
-                      setPostponed(result);
-                      setDecision(null);
-                    }}
-                  />
-                ) : null
-              }
-              advanceNote={
-                collectFirst && collectPerson && collectAdvance > PAYMENT_EPSILON
-                  ? `${collectPerson.personName} already gave you ${formatCurrencyExact(collectAdvance)} as an advance — apply it first. No money moves and no account is credited again.`
-                  : null
-              }
-            />
-          )}
-        </section>
-      )}
-
-      {/* 3 — The payment itself: what is being paid, from where, when — then exactly what will happen. */}
-      {showPaymentDetails && next && (
-        <section className="flex flex-col gap-3" aria-label="Payment details">
-          {earlier && (
-            <div className="flex flex-col gap-1 rounded-[6px] border border-border bg-secondary px-3 py-2" data-testid="past-payment-header">
-              <span className="text-sm font-semibold text-foreground">
-                Past payment <span className="font-normal text-muted-foreground">· {lent ? "received" : "paid"} before FlowFi — no account balance changes</span>
-              </span>
-              {!modeLocked && (
-                <span className="flex flex-wrap gap-x-3 text-xs">
-                  <button type="button" onClick={() => setView("past")} className="font-semibold text-foreground underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                    Choose other installments
-                  </button>
-                  <button type="button" onClick={() => setMode("now")} className="font-semibold text-foreground underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                    {lent ? "Receive it now instead" : "Pay it now instead"}
-                  </button>
-                </span>
-              )}
-            </div>
-          )}
-
-          <div role="radiogroup" aria-label={earlier ? "How much was paid" : "What are you paying?"} className="flex flex-col gap-1.5">
-            <span className="text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">{earlier ? "How much was paid" : lent ? "What are you receiving?" : "What are you paying?"}</span>
-            {leadingOptions.map((o) => (
-              <AmountChoice key={o.choice} active={effectiveChoice === o.choice} label={o.label} hint={o.hint} amount={o.amount} onSelect={() => setChoice(o.choice)} />
-            ))}
-            <AmountChoice
-              active={effectiveChoice === "custom"}
-              label={earlier ? "A different amount" : "Part payment or another amount"}
-              hint={
-                earlier
-                  ? "Part of an installment, or several in order"
-                  : isLoan
-                    ? loanRow?.loan.repaymentType === "oneTime"
-                      ? "Part payment"
-                      : "Less than due stays owed · more than due: you choose where it goes"
-                    : "Part of an installment, or several in order"
-              }
-              onSelect={() => setChoice("custom")}
-            />
-            {effectiveChoice === "custom" && (
-              <Reveal className="flex flex-col gap-2 pb-1 pl-7">
-                <Field label="Amount">
-                  <AmountInput
-                    value={customAmount}
-                    autoFocus
-                    onChange={(v) => {
-                      setCustomAmount(v);
-                      setCustomTouched(true);
-                    }}
-                  />
-                </Field>
-                {!earlier && extra > 0 && loanRow?.loan.repaymentType !== "oneTime" && (
-                  <div className="flex flex-col gap-2">
-                    <span className="text-xs font-semibold text-foreground">
-                      <Money exact amount={extra} className="text-xs" /> is more than what&apos;s due now. Apply it to:
-                    </span>
-                    <SegmentedControl<ExtraTreatment>
-                      ariaLabel="Apply the extra amount to"
-                      size="sm"
-                      className="sm:w-full"
-                      options={[
-                        { value: "reducePrincipal", label: "Reduce principal" },
-                        { value: "payUpcoming", label: "Upcoming installments" },
-                      ]}
-                      value={treatment}
-                      onChange={setTreatment}
-                    />
-                    {treatment === "payUpcoming" && (
-                      <p className="text-[11px] text-muted-foreground">Fills your next installments in order (an advance payment). Anything beyond them reduces principal.</p>
-                    )}
-                  </div>
-                )}
-              </Reveal>
-            )}
-            {extraAvailable && loanFigures && (
-              <AmountChoice
-                active={effectiveChoice === "extra"}
-                label={lent ? "Repayment + extra towards principal" : "Installment + extra towards principal"}
-                hint={`${formatCurrencyExact(loanFigures.dueAmount)} due now is paid first · the extra lowers the principal`}
-                onSelect={() => setChoice("extra")}
-              />
-            )}
-            {effectiveChoice === "extra" && loanFigures && (
-              <Reveal className="flex flex-col gap-1.5 pb-1 pl-7">
-                <Field label="Extra towards principal">
-                  <AmountInput
-                    value={extraAmount}
-                    autoFocus
-                    onChange={(v) => {
-                      setExtraAmount(v);
-                      setCustomTouched(true);
-                    }}
-                  />
-                </Field>
-                {extraValid && (
-                  <p className="text-xs text-muted-foreground" data-testid="extra-total">
-                    {formatCurrencyExact(loanFigures.dueAmount)} due now + {formatCurrencyExact(extraValue)} extra ={" "}
-                    <span className="font-semibold text-foreground">{formatCurrencyExact(loanFigures.dueAmount + extraValue)}</span> in total
-                  </p>
-                )}
-              </Reveal>
-            )}
-            {remainingOption && (
-              <AmountChoice
-                active={effectiveChoice === "remaining"}
-                label={remainingOption.label}
-                hint={remainingOption.hint}
-                amount={remainingOption.amount}
-                onSelect={() => setChoice("remaining")}
-              />
-            )}
-          </div>
-          {showError && (
-            <p role="alert" className="text-xs font-semibold text-expense">
-              {error}
+      <div className={cn("grid gap-3", showRail ? "lg:grid-cols-[minmax(0,1fr)_minmax(0,380px)] lg:items-start" : "mx-auto max-w-[760px]")}>
+        <div className="flex min-w-0 flex-col gap-3">
+          {!next && <p className="rounded-xl border border-border bg-card p-3.5 text-sm font-semibold text-success shadow-e1">Fully paid — nothing is due.</p>}
+          {through && (
+            <p role="note" className="rounded-xl border border-border bg-card px-3 py-2.5 text-xs text-foreground shadow-e1" data-testid="through-note">
+              You picked installment #{through.last}. Loan installments are paid in order, so{" "}
+              {through.count === 2 ? `#${through.first} (still unpaid) is` : `#${through.first}–#${through.last - 1} (still unpaid) are`} paid first. Choose below what to pay.
             </p>
           )}
-
-          {cardLinked && !earlier && !modeLocked && cardLabel && (
-            <FieldGroup label="How will you pay this EMI?">
-              <ChoiceChips
-                ariaLabel="EMI funding"
-                options={[
-                  { value: "card", label: `Charge to ${cardLabel}` },
-                  { value: "bank", label: "Pay from a bank account" },
-                ]}
-                value={fundingMode}
-                onChange={setFundingMode}
-              />
-            </FieldGroup>
-          )}
-
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            {needsAccount && (
-              <Field label={earlier ? `${lent ? "Received into" : "Paid from"} · for your records` : lent ? "Received into" : "Paid from"}>
-                {accounts.length === 0 ? (
-                  <span className="flex h-10 items-center justify-between gap-2 rounded-[6px] border border-dashed border-border bg-secondary px-3 text-xs text-muted-foreground">
-                    Add an account first
-                    <AddElsewhereLink href="/accounts" label="Go to Accounts" />
-                  </span>
-                ) : (
-                  <AccountSelect
-                    className={LOAN_EMI_INPUT}
-                    accounts={selectableAccounts}
-                    value={accountId}
-                    onChange={setAccountId}
-                    placeholder={lent ? "Choose account" : "Choose paying account"}
-                    showBalance={fundsApply}
-                    ariaLabel={lent ? "Received into account" : "Paid from account"}
-                  />
-                )}
-              </Field>
-            )}
-            <Field label={earlier ? (lent ? "Date received" : "Date paid") : "Payment date"}>
-              <span className="relative">
-                <CalendarClock className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
-                {earlier ? (
-                  <DateInput
-                    className={cn(LOAN_EMI_INPUT, "pl-9")}
-                    aria-label={lent ? "Date received" : "Date paid"}
-                    value={dateUnknown ? "" : earlierDate}
-                    max={today}
-                    disabled={dateUnknown}
-                    onChange={(e) => setEarlierDate(e.target.value)}
-                  />
-                ) : (
-                  <DateInput className={cn(LOAN_EMI_INPUT, "pl-9")} aria-label="Payment date" value={date} onChange={(e) => setDate(e.target.value)} />
-                )}
-              </span>
-            </Field>
-          </div>
-
-          {backdated && (
-            <div role="note" className="flex flex-col gap-1.5 rounded-[6px] border border-warning/50 bg-warning/10 px-3 py-2.5 text-xs leading-snug text-foreground" data-testid="backdate-hint">
-              <p className="text-[11px] font-semibold tracking-[0.06em] text-warning-foreground uppercase dark:text-warning">Back-dated payment</p>
-              <p className="[overflow-wrap:anywhere]">
-                This records a real {lent ? "credit to" : needsAccount ? "payment from" : "charge on"} <span className="font-semibold">{backdatedSource}</span> dated{" "}
-                <span className="font-semibold whitespace-nowrap">{paymentDate.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}</span>; its balance changes from that date.
-              </p>
-              {!modeLocked && (
-                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-warning/30 pt-1.5">
-                  <span className="text-muted-foreground">{lent ? "Received" : "Paid"} before FlowFi, already in your balance?</span>
-                  <button type="button" onClick={() => setView("past")} className="font-semibold underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                    {lent ? "Record past repayments instead" : "Record past payments instead"}
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
-
-          {earlier && (
-            <>
-              <label className="flex items-center gap-2 text-xs font-medium text-foreground">
-                <input type="checkbox" className="size-4 accent-foreground" checked={dateUnknown} onChange={(e) => setDateUnknown(e.target.checked)} />
-                I don&apos;t know the exact date
-                {dateUnknown && anchor && <span className="font-normal text-muted-foreground">· saved as “date not known”</span>}
-              </label>
-              {earlierDateError && (
-                <p role="alert" className="text-xs font-semibold text-expense">
-                  {earlierDateError}
+          {/* 2 — Who shares it, and (when someone hasn't paid) how to go on. */}
+          {next && (showPeople || needsDecision) && (
+            <section className="flex flex-col gap-3 rounded-xl border border-border bg-card p-3 shadow-e1 sm:p-3.5">
+              {postponed && !earlier && <PostponedBanner result={postponed} lenderDueDate={next.dueDate} onDismiss={() => setPostponed(null)} />}
+              {received && !earlier && (
+                <p role="status" className="rounded-[8px] border border-success/40 bg-success/10 px-3 py-2.5 text-[13px] font-semibold text-foreground" data-testid="share-received-done">
+                  Received — {peopleNames(received.names)} gave you {formatCurrencyExact(received.total)}. Now pay the lender below.
                 </p>
               )}
-              <input className={LOAN_EMI_INPUT} aria-label="Note" placeholder="Note or reference (optional)" value={note} onChange={(e) => setNote(e.target.value)} />
-              {!lent && <HistoricalPeopleReconcile state={reconcile} accounts={accounts} showInstallment={(reconcileIds ?? touched).length > 1} locked={lenderDone && reconcile.failed.length === 0} />}
-              <p className="text-xs font-medium text-foreground/80" data-testid="past-payment-effect">
-                No account balance changes for the {lent ? "repayment" : "lender payment"}.
-                {!lent && " People shares are only marked received where you say so above."}
-              </p>
-            </>
+              {showPeople && (
+                <InstallmentPeoplePanel
+                  breakdown={breakdown}
+                  loading={breakdownLoading}
+                  returnTo={returnPath}
+                  onPostpone={
+                    needsDecision && postponeShares.length > 0
+                      ? (personId) => {
+                          // Someone already postponed (or nothing open) keeps the People route for changing it.
+                          if (!postponeShares.some((p) => p.personId === personId)) {
+                            const key = settlement.attention.find((p) => p.personId === personId)?.obligations[0]?.key;
+                            if (key) router.push(peoplePostponeHref(personId, key, returnPath));
+                            return;
+                          }
+                          setPostponed(null);
+                          setPostponeOnly(personId);
+                          setDecision("postpone");
+                        }
+                      : undefined
+                  }
+                />
+              )}
+              {needsDecision && (
+                <PeoplePaymentDecision
+                  decision={decision}
+                  onDecision={(d) => {
+                    // The main choice postpones everyone who hasn't paid; a row's "Postpone" picks one person.
+                    if (d === "postpone") setPostponeOnly(null);
+                    setDecision(d);
+                  }}
+                  reason={ownReason}
+                  onReason={setOwnReason}
+                  note={ownNote}
+                  onNote={setOwnNote}
+                  accountName={accountName}
+                  allPostponed={allPostponed}
+                  postponedNote={postponedNote}
+                  unresolvedNames={shareStatus.unresolved.map((p) => p.personName)}
+                  lapsedNames={shareStatus.people.filter((p) => p.lapsed).map((p) => p.personName)}
+                  amountLabel={amountLabel}
+                  postponeSlot={
+                    postponeShares.length > 0 ? (
+                      <SharePostponePanel
+                        key={postponeOnly ?? "all"}
+                        only={postponeOnly}
+                        people={postponeShares}
+                        dateOf={shareDateOf}
+                        deferralsByPerson={deferralsByPerson}
+                        startDay={startDay}
+                        lenderDueDate={next.dueDate}
+                        onDone={(result) => {
+                          setPostponed(result);
+                          setDecision(null);
+                        }}
+                      />
+                    ) : null
+                  }
+                  collectSlot={
+                    <ShareReceivedPanel
+                      target={
+                        breakdownSource && breakdownInstallments && !lent
+                          ? { sourceKind: isLoan ? "loan" : "emi", source: breakdownSource, installments: breakdownInstallments, installmentIds: [...new Set(gatedIds)] }
+                          : null
+                      }
+                      personIds={collectCandidates.map((p) => p.personId)}
+                      accounts={accounts}
+                      defaultAccountId={accountId}
+                      onDone={(result) => {
+                        setReceived(result);
+                        setDecision(null);
+                      }}
+                      advanceSlot={advancePeople.map(({ person, advance }) => {
+                        const action = settleActionFor(person);
+                        return (
+                          <p key={person.personId} className="text-xs font-medium text-settle-advance-text" data-testid="collect-advance-note">
+                            {person.personName} already gave you {formatCurrencyExact(advance)} as an advance — apply it first. No money moves and no account is credited again.{" "}
+                            <a className="font-semibold underline underline-offset-2" href={peopleApplyAdvanceHref(action.personId, action.obligationKey, returnPath)}>
+                              Apply advance in People
+                            </a>
+                          </p>
+                        );
+                      })}
+                    />
+                  }
+                />
+              )}
+            </section>
           )}
 
+          {/* 3 — The payment itself: what is being paid, from where, when — then exactly what will happen. */}
+          {showPaymentDetails && next && (
+            <SheetSection title="Payment details" compact>
+              {earlier && (
+                <div className="flex flex-col gap-1 rounded-[6px] border border-border bg-secondary px-3 py-2" data-testid="past-payment-header">
+                  <span className="text-sm font-semibold text-foreground">
+                    Past payment <span className="font-normal text-muted-foreground">· {lent ? "received" : "paid"} before FlowFi — no account balance changes</span>
+                  </span>
+                  {!modeLocked && (
+                    <span className="flex flex-wrap gap-x-3 text-xs">
+                      <button type="button" onClick={() => setView("past")} className="font-semibold text-foreground underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                        Choose other installments
+                      </button>
+                      <button type="button" onClick={() => setMode("now")} className="font-semibold text-foreground underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                        {lent ? "Receive it now instead" : "Pay it now instead"}
+                      </button>
+                    </span>
+                  )}
+                </div>
+              )}
+
+              <div role="radiogroup" aria-label={earlier ? "How much was paid" : lent ? "How much are you receiving?" : "How much are you paying?"} className="flex flex-col gap-1.5">
+                <span className="text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">{earlier ? "How much was paid" : lent ? "How much are you receiving?" : "How much are you paying?"}</span>
+                {leadingOptions.map((o) => (
+                  <AmountChoice key={o.choice} active={effectiveChoice === o.choice} label={o.label} hint={o.hint} amount={o.amount} onSelect={() => setChoice(o.choice)} />
+                ))}
+                {!otherWaysShown && (
+                  <button
+                    type="button"
+                    aria-expanded={false}
+                    onClick={() => setOtherWaysOpen(true)}
+                    className="flex items-center gap-1.5 self-start rounded-[6px] px-1 py-1 text-xs font-semibold text-foreground underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    data-testid="other-ways-toggle"
+                  >
+                    <ChevronDown className="size-3.5" aria-hidden />
+                    {earlier ? "A different amount" : "Part payment, extra payment or pay everything"}
+                  </button>
+                )}
+                {otherWaysShown && (
+                  <>
+                    <AmountChoice
+                      active={effectiveChoice === "custom"}
+                      label={earlier ? "A different amount" : "Part payment"}
+                      hint={
+                        earlier
+                          ? "Part of an installment, or several in order"
+                          : isLoan && loanRow?.loan.repaymentType !== "oneTime"
+                            ? "Pay only some of it, or a different amount. What's left stays due"
+                            : "Pay only some of the amount. What's left stays due"
+                      }
+                      onSelect={() => setChoice("custom")}
+                    />
+                    {effectiveChoice === "custom" && (
+                      <Reveal className="flex flex-col gap-2 pb-1 pl-7">
+                        <Field label="Amount">
+                          <AmountInput
+                            value={customAmount}
+                            autoFocus
+                            onChange={(v) => {
+                              setCustomAmount(v);
+                              setCustomTouched(true);
+                            }}
+                          />
+                        </Field>
+                        {!earlier && extra > 0 && loanRow?.loan.repaymentType !== "oneTime" && (
+                          <div className="flex flex-col gap-2">
+                            <span className="text-xs font-semibold text-foreground">
+                              <Money exact amount={extra} className="text-xs" /> is more than what&apos;s due now. Where should the extra go?
+                            </span>
+                            <SegmentedControl<ExtraTreatment>
+                              ariaLabel="Apply the extra amount to"
+                              size="sm"
+                              className="sm:w-full"
+                              options={[
+                                { value: "reducePrincipal", label: "Lower the loan balance" },
+                                { value: "payUpcoming", label: "Pay upcoming installments" },
+                              ]}
+                              value={treatment}
+                              onChange={setTreatment}
+                            />
+                            <p className="text-[11px] text-muted-foreground">
+                              {treatment === "payUpcoming"
+                                ? "Fills your next installments in order (an advance payment). Anything beyond them lowers the loan balance."
+                                : "The extra reduces the amount you still owe (the principal), so future interest is lower."}
+                            </p>
+                          </div>
+                        )}
+                      </Reveal>
+                    )}
+                    {extraAvailable && loanFigures && (
+                      <AmountChoice
+                        active={effectiveChoice === "extra"}
+                        label={lent ? "Repayment + extra payment" : "Installment + extra payment"}
+                        hint={`${formatCurrencyExact(loanFigures.dueAmount)} due now is paid first · your extra lowers the loan balance (principal)`}
+                        onSelect={() => setChoice("extra")}
+                      />
+                    )}
+                    {effectiveChoice === "extra" && loanFigures && (
+                      <Reveal className="flex flex-col gap-1.5 pb-1 pl-7">
+                        <Field label="Extra amount" hint="Goes straight to reducing what you owe, on top of this installment.">
+                          <AmountInput
+                            value={extraAmount}
+                            autoFocus
+                            onChange={(v) => {
+                              setExtraAmount(v);
+                              setCustomTouched(true);
+                            }}
+                          />
+                        </Field>
+                        {extraValid && (
+                          <p className="text-xs text-muted-foreground" data-testid="extra-total">
+                            {formatCurrencyExact(loanFigures.dueAmount)} due now + {formatCurrencyExact(extraValue)} extra ={" "}
+                            <span className="font-semibold text-foreground">{formatCurrencyExact(loanFigures.dueAmount + extraValue)}</span> in total
+                          </p>
+                        )}
+                      </Reveal>
+                    )}
+                    {remainingOption && (
+                      <AmountChoice
+                        active={effectiveChoice === "remaining"}
+                        label={`${remainingOption.label} · advanced`}
+                        hint={remainingOption.hint}
+                        amount={remainingOption.amount}
+                        onSelect={() => {
+                          setRemainingAck(false);
+                          setChoice("remaining");
+                        }}
+                      />
+                    )}
+                    {effectiveChoice === "remaining" && remainingOption && !earlier && (
+                      <Reveal className="pb-1 pl-7">
+                        <label className="flex items-start gap-2 rounded-[6px] border border-warning/50 bg-warning/10 px-3 py-2 text-xs leading-snug text-foreground" data-testid="remaining-warning">
+                          <input type="checkbox" className="mt-0.5 size-4 shrink-0 accent-foreground" checked={remainingAck} onChange={(e) => setRemainingAck(e.target.checked)} />
+                          <span>
+                            <span className="block font-semibold">This pays every remaining installment in one go.</span>
+                            <span className="block text-muted-foreground">
+                              It takes {formatCurrencyExact(remainingOption.amount)} out of your account at once. I understand and want to continue.
+                            </span>
+                          </span>
+                        </label>
+                      </Reveal>
+                    )}
+                  </>
+                )}
+              </div>
+              {showError && (
+                <p role="alert" className="text-xs font-semibold text-expense">
+                  {error}
+                </p>
+              )}
+
+              {cardLinked && !earlier && !modeLocked && cardLabel && (
+                <FieldGroup label="How will you pay this EMI?">
+                  <ChoiceChips
+                    ariaLabel="EMI funding"
+                    options={[
+                      { value: "card", label: `Charge to ${cardLabel}` },
+                      { value: "bank", label: "Pay from a bank account" },
+                    ]}
+                    value={fundingMode}
+                    onChange={setFundingMode}
+                  />
+                </FieldGroup>
+              )}
+
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                {needsAccount && (
+                  <Field label={earlier ? `${lent ? "Received into" : "Paid from"} · for your records` : lent ? "Received into" : "Paid from"}>
+                    {accounts.length === 0 ? (
+                      <span className="flex h-10 items-center justify-between gap-2 rounded-[6px] border border-dashed border-border bg-secondary px-3 text-xs text-muted-foreground">
+                        Add an account first
+                        <AddElsewhereLink href="/accounts" label="Go to Accounts" />
+                      </span>
+                    ) : (
+                      <AccountSelect
+                        className={LOAN_EMI_INPUT}
+                        accounts={selectableAccounts}
+                        value={accountId}
+                        onChange={setAccountId}
+                        placeholder={lent ? "Choose account" : "Choose paying account"}
+                        showBalance={fundsApply}
+                        ariaLabel={lent ? "Received into account" : "Paid from account"}
+                      />
+                    )}
+                  </Field>
+                )}
+                <Field label={earlier ? (lent ? "Date received" : "Date paid") : "Payment date"}>
+                  <span className="relative">
+                    <CalendarClock className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+                    {earlier ? (
+                      <DateInput
+                        className={cn(LOAN_EMI_INPUT, "pl-9")}
+                        aria-label={lent ? "Date received" : "Date paid"}
+                        value={dateUnknown ? "" : earlierDate}
+                        max={today}
+                        disabled={dateUnknown}
+                        onChange={(e) => setEarlierDate(e.target.value)}
+                      />
+                    ) : (
+                      <DateInput className={cn(LOAN_EMI_INPUT, "pl-9")} aria-label="Payment date" value={date} onChange={(e) => setDate(e.target.value)} />
+                    )}
+                  </span>
+                </Field>
+              </div>
+
+              {backdated && (
+                <div role="note" className="flex flex-col gap-1.5 rounded-[6px] border border-warning/50 bg-warning/10 px-3 py-2.5 text-xs leading-snug text-foreground" data-testid="backdate-hint">
+                  <p className="text-[11px] font-semibold tracking-[0.06em] text-warning-foreground uppercase dark:text-warning">Back-dated payment</p>
+                  <p className="[overflow-wrap:anywhere]">
+                    This records a real {lent ? "credit to" : needsAccount ? "payment from" : "charge on"} <span className="font-semibold">{backdatedSource}</span> dated{" "}
+                    <span className="font-semibold whitespace-nowrap">{paymentDate.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}</span>; its balance changes from that date.
+                  </p>
+                  {!modeLocked && (
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-warning/30 pt-1.5">
+                      <span className="text-muted-foreground">{lent ? "Received" : "Paid"} before FlowFi, already in your balance?</span>
+                      <button type="button" onClick={() => setView("past")} className="font-semibold underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                        {lent ? "Record past repayments instead" : "Record past payments instead"}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {earlier && (
+                <>
+                  <label className="flex items-center gap-2 text-xs font-medium text-foreground">
+                    <input type="checkbox" className="size-4 accent-foreground" checked={dateUnknown} onChange={(e) => setDateUnknown(e.target.checked)} />
+                    I don&apos;t know the exact date
+                    {dateUnknown && anchor && <span className="font-normal text-muted-foreground">· saved as “date not known”</span>}
+                  </label>
+                  {earlierDateError && (
+                    <p role="alert" className="text-xs font-semibold text-expense">
+                      {earlierDateError}
+                    </p>
+                  )}
+                  <input className={LOAN_EMI_INPUT} aria-label="Note" placeholder="Note or reference (optional)" value={note} onChange={(e) => setNote(e.target.value)} />
+                  {!lent && <HistoricalPeopleReconcile state={reconcile} accounts={accounts} showInstallment={(reconcileIds ?? touched).length > 1} locked={lenderDone && reconcile.failed.length === 0} />}
+                  <p className="text-xs font-medium text-foreground/80" data-testid="past-payment-effect">
+                    No account balance changes for the {lent ? "repayment" : "lender payment"}.
+                    {!lent && " People shares are only marked received where you say so above."}
+                  </p>
+                </>
+              )}
+
+            </SheetSection>
+          )}
+        </div>
+        {showRail && (
+          <SheetRail label="Payment context">
           {/* What will happen — read off the same allocation the write performs. */}
-          {!earlier && planAmount != null && (
-            <section aria-label="Payment preview" className={cn(LE_RADIUS.control, "flex flex-col gap-2.5 border border-border-strong/60 bg-card px-3 py-3")} data-testid="payment-impact">
-              <h3 className="text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">Payment preview</h3>
+          {showPaymentDetails && !earlier && planAmount != null && (
+            <section aria-label="Payment preview" className="flex flex-col gap-2.5 rounded-xl border border-border bg-card px-3 py-3 shadow-e1 sm:px-3.5" data-testid="payment-impact">
+              <h3 className="text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">What will happen</h3>
               {reamortizes && prepaymentPreview && loanFigures ? (
                 <div className="flex flex-col gap-1.5">
                   <ImpactRow label="Due now · paid first" amount={Math.max(0, planAmount - extra)} />
@@ -1160,51 +1223,50 @@ export function RecordPaymentDialog({
               {postponedImpact && <p className="text-xs text-foreground/80">{postponedImpact}</p>}
             </section>
           )}
-          {!earlier && !lent && (
+          {showPaymentDetails && !earlier && !lent && (
             <LinkedFundsPayNotice funds={linkedFundsForInstallment(linkedFunds, next.id)} accountName={(id) => accounts.find((a) => a.id === id)?.name} onUseAccount={needsAccount ? setAccountId : undefined} />
           )}
-        </section>
-      )}
-
-      {/* 4 — Less common: extra details, past payments, several installments at once. */}
-      {next && !earlier && (
-        <section className="flex flex-col gap-2">
-          {showPaymentDetails && (
-            <MoreOptions summary={emiRow ? "Note, GST, fees" : "Note"} title="More options">
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <Field label="Note">
-                  <input className={LOAN_EMI_INPUT} placeholder="Optional" value={note} onChange={(e) => setNote(e.target.value)} />
-                </Field>
-                {emiRow && (
-                  <>
-                    <Field label="GST" hint="For your records only.">
-                      <input type="number" inputMode="decimal" className={LOAN_EMI_INPUT} value={gst} onChange={(e) => setGst(e.target.value)} />
+          {next && !earlier && (
+            <SheetSection title="Other options" compact className="gap-2">
+              {showPaymentDetails && (
+                <MoreOptions summary={emiRow ? "Note, GST, fees" : "Note"} title="More options">
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <Field label="Note">
+                      <input className={LOAN_EMI_INPUT} placeholder="Optional" value={note} onChange={(e) => setNote(e.target.value)} />
                     </Field>
-                    <Field label="Processing fee" hint="For your records only.">
-                      <input type="number" inputMode="decimal" className={LOAN_EMI_INPUT} value={processingFee} onChange={(e) => setProcessingFee(e.target.value)} />
-                    </Field>
-                  </>
-                )}
-              </div>
-            </MoreOptions>
+                    {emiRow && (
+                      <>
+                        <Field label="GST" hint="For your records only.">
+                          <input type="number" inputMode="decimal" className={LOAN_EMI_INPUT} value={gst} onChange={(e) => setGst(e.target.value)} />
+                        </Field>
+                        <Field label="Processing fee" hint="For your records only.">
+                          <input type="number" inputMode="decimal" className={LOAN_EMI_INPUT} value={processingFee} onChange={(e) => setProcessingFee(e.target.value)} />
+                        </Field>
+                      </>
+                    )}
+                  </div>
+                </MoreOptions>
+              )}
+              {!modeLocked && (
+                <FlowLink
+                  title={lent ? "Record past repayments" : "Record past payments"}
+                  hint={`Already ${lent ? "received" : "paid"} before you used FlowFi? Add them here — no account balance changes.`}
+                  onClick={() => setView("past")}
+                />
+              )}
+              {!modeLocked && (
+                <FlowLink
+                  title={lent ? "Receive several repayments now" : `Pay several ${isLoan ? "installments" : "EMIs"} now`}
+                  hint="Pay more than one installment today — pick them from a list"
+                  onClick={() => setView("payMany")}
+                />
+              )}
+            </SheetSection>
           )}
-          {!modeLocked && (
-            <FlowLink
-              title={lent ? "Record past repayments" : "Record past payments"}
-              hint={`${lent ? "Received" : "Paid"} before FlowFi — one or many installments, no account balance changes`}
-              onClick={() => setView("past")}
-            />
-          )}
-          {!modeLocked && (
-            <FlowLink
-              title={lent ? "Receive several repayments now" : `Pay several ${isLoan ? "installments" : "EMIs"} now`}
-              hint="Pick them from a list — one payment per installment from your account"
-              onClick={() => setView("payMany")}
-            />
-          )}
-        </section>
-      )}
-    </LoanEmiFormDialog>
+          </SheetRail>
+        )}
+      </div>
+    </PaymentSheet>
   );
 }
 
@@ -1235,14 +1297,26 @@ function ImpactRow({ label, amount }: { label: string; amount: number }) {
 }
 
 /** One small figure in the summary line. `owed` = still to come in (not green); `done` = nothing left. */
-function SummaryFact({ label, value, muted, tone }: { label: string; value: string; muted?: boolean; tone?: "owed" | "done" }) {
+function SummaryFact({ label, value, muted, tone, hero }: { label: string; value: string; muted?: boolean; tone?: "owed" | "done"; hero?: boolean }) {
   return (
     <div className="flex items-baseline gap-1.5">
-      <dt className="text-muted-foreground">{label}</dt>
+      <dt className={hero ? "text-hero-foreground/68" : "text-muted-foreground"}>{label}</dt>
       <dd
         className={cn(
           "font-semibold tabular-nums",
-          muted ? "text-muted-foreground" : tone === "owed" ? "text-settle-receivable-text" : tone === "done" ? "text-success" : "text-foreground",
+          hero
+            ? muted
+              ? "text-hero-foreground/68"
+              : tone === "owed" || tone === "done"
+                ? "text-primary"
+                : "text-hero-foreground"
+            : muted
+              ? "text-muted-foreground"
+              : tone === "owed"
+                ? "text-settle-receivable-text"
+                : tone === "done"
+                  ? "text-success"
+                  : "text-foreground",
         )}
       >
         {value}

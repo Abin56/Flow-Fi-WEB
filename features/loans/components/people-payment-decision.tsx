@@ -6,12 +6,12 @@ import { cn } from "@/lib/utils";
 
 /**
  * Shared Loan / EMI Record payment, when people's shares of what this payment settles are still open: the
- * user picks how to go on — nothing is preselected. "Pay now from my account" is the explicit
- * acknowledgement the write gate requires; it never marks anyone as paid, never postpones, and creates no
- * receivable, expense or transfer — their shares simply stay owed in People. "Collect money from others
- * first" leads to People Record payment (where Postpone also lives) for the person picked in the list.
- * "Not received yet — postpone" moves when their share is expected, right here (`postponeSlot`); it records no
- * payment and leaves the lender installment due as it is.
+ * user picks how to go on — nothing is preselected. The question is "Did they give you their share?":
+ * "Received" records what they paid right here (`collectSlot`, the People receipt), "Not received yet" moves when
+ * their share is expected, right here (`postponeSlot`; it records no payment and leaves the lender installment due
+ * as it is). "Pay the lender from my own money" is the explicit acknowledgement the write gate requires; it never
+ * marks anyone as paid, never postpones, and creates no receivable, expense or transfer — their shares simply stay
+ * owed in People.
  */
 export type LenderPaymentDecision = "collect" | "ownMoney" | "postpone";
 
@@ -110,7 +110,10 @@ export function PeoplePaymentDecision({
   amountLabel = null,
   advanceNote = null,
   postponeSlot = null,
+  collectSlot = null,
 }: {
+  /** The in-dialog "record what they paid" form, shown under "Received". */
+  collectSlot?: React.ReactNode;
   /** The postpone form, shown under "Not received yet" — null: the choice isn't offered. */
   postponeSlot?: React.ReactNode;
   /** Collect first, when the picked person already gave money held as advance — applying it is offered first. */
@@ -139,7 +142,9 @@ export function PeoplePaymentDecision({
     ? "Payment to lender"
     : postponedNote && unresolvedNames.length > 0
       ? `What about ${peopleNames(unresolvedNames)}'s share?`
-      : "How do you want to pay?";
+      : unresolvedNames.length > 0
+        ? `Did ${peopleNames(unresolvedNames)} give you their share?`
+        : "How do you want to pay?";
   return (
     <section aria-label="Payment decision" className="flex flex-col gap-1.5">
       {postponedNote && (
@@ -158,11 +163,40 @@ export function PeoplePaymentDecision({
       )}
       <h3 className="text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">{heading}</h3>
       <div role="radiogroup" aria-label="How to pay the lender" className="divide-y divide-border overflow-hidden rounded-[8px] border border-border-strong bg-card">
+        {!allPostponed && (
+          <ChoiceRow
+            active={decision === "collect"}
+            icon={Users}
+            tone="collect"
+            title="Received"
+            hint={`${waiting} ${unresolvedNames.length === 1 ? "has" : "have"} given you their share`}
+            onSelect={() => onDecision("collect")}
+          >
+            {collectSlot ??
+              (advanceNote ? (
+                <p className="text-xs font-medium text-settle-advance-text" data-testid="collect-advance-note">
+                  {advanceNote}
+                </p>
+              ) : null)}
+          </ChoiceRow>
+        )}
+        {!allPostponed && postponeSlot != null && (
+          <ChoiceRow
+            active={decision === "postpone"}
+            icon={CalendarClock}
+            tone="postpone"
+            title="Not received yet"
+            hint="Move their share to a later month · the EMI stays due"
+            onSelect={() => onDecision("postpone")}
+          >
+            {postponeSlot}
+          </ChoiceRow>
+        )}
         <ChoiceRow
           active={decision === "ownMoney"}
           icon={Wallet}
-          title={allPostponed ? `Pay ${amountLabel ? `${amountLabel} ` : ""}to lender ${from}` : "Pay now from my account"}
-          hint={allPostponed ? "Their shares stay owed to you until they pay." : `${accountName ? `From ${accountName} · ` : ""}unpaid shares stay owed to you`}
+          title={allPostponed ? `Pay ${amountLabel ? `${amountLabel} ` : ""}to lender ${from}` : "Pay the lender from my own money"}
+          hint={allPostponed ? "Their shares stay owed to you until they pay." : `${accountName ? `From ${accountName} · ` : ""}their share stays owed to you`}
           onSelect={() => onDecision("ownMoney")}
         >
             {!allPostponed && (
@@ -194,36 +228,6 @@ export function PeoplePaymentDecision({
               onChange={(e) => onNote(e.target.value)}
             />
         </ChoiceRow>
-        {!allPostponed && (
-          <ChoiceRow
-            active={decision === "collect"}
-            icon={Users}
-            tone="collect"
-            title="Collect from others first"
-            hint="Record what they paid in People, then pay the lender"
-            onSelect={() => onDecision("collect")}
-          >
-            {advanceNote ? (
-              <p className="text-xs font-medium text-settle-advance-text" data-testid="collect-advance-note">
-                {advanceNote}
-              </p>
-            ) : (
-              <p className="text-xs text-muted-foreground">Pick who paid in the list above — you&apos;ll come straight back here.</p>
-            )}
-          </ChoiceRow>
-        )}
-        {!allPostponed && postponeSlot != null && (
-          <ChoiceRow
-            active={decision === "postpone"}
-            icon={CalendarClock}
-            tone="postpone"
-            title="Not received yet — postpone their share"
-            hint={`${waiting} ${unresolvedNames.length === 1 ? "hasn't" : "haven't"} paid · the EMI itself stays due`}
-            onSelect={() => onDecision("postpone")}
-          >
-            {postponeSlot}
-          </ChoiceRow>
-        )}
       </div>
     </section>
   );

@@ -230,7 +230,8 @@ scenario("lrec-loan-boundaries", "Loan guide: as-of date boundaries (day before 
   await s.locator('[data-testid="loan-handoff-link"]').click();
   const dlg = page.getByRole("dialog", { name: /Pay installment|Pay EMI/ });
   await dlg.waitFor({ timeout: 30000 });
-  chk("Record Payment offers 'Installment + extra towards principal'", (await dlg.getByText(/extra towards principal/i).count()) > 0);
+  await dlg.getByTestId("other-ways-toggle").click();
+  chk("Record Payment offers 'Installment + extra payment'", (await dlg.getByText(/Installment \+ extra payment/i).count()) > 0);
   await escapeSheet(page);
   await page.waitForTimeout(600);
 
@@ -341,7 +342,8 @@ scenario("lrec-execute-loan-partial", "Partial payment executed via the dialog, 
   await dlg.getByText("TO PAY LENDER").waitFor();
   await dlg.getByText("Choose paying account").click();
   await page.getByRole("option", { name: /QA Bank/ }).click();
-  await dlg.getByRole("radio", { name: /Part payment or another amount/ }).click();
+  await dlg.getByTestId("other-ways-toggle").click();
+  await dlg.getByRole("radio", { name: /Part payment/ }).click();
   await dlg.locator("input[inputmode='decimal']").first().fill("2000");
   await dlg.getByRole("button", { name: /^Pay ₹2,000/ }).last().click();
   await dlg.waitFor({ state: "hidden", timeout: 30000 });

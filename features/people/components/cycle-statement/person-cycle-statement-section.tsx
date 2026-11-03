@@ -9,7 +9,7 @@ import { formatCycleLabel, type PersonCycleStatement, type StatementCycle } from
 import { money } from "@/lib/engines/person-cycle-statement-share";
 import { cn } from "@/lib/utils";
 import { toast } from "@/store/toast-store";
-import { CycleReconciliation } from "@/features/people/components/workspace/settlement-summary";
+import { CycleReconciliation, SettlementTotals } from "@/features/people/components/workspace/settlement-summary";
 import { cyclePosition } from "@/features/people/lib/settlement-presentation";
 import { EmiBadge, StatementBreakdown, StatementCalculation } from "./statement-parts";
 
@@ -28,6 +28,7 @@ export function PersonCycleStatementSection({
   actions,
   footnote,
   aside,
+  highlights,
 }: {
   statement: PersonCycleStatement | null;
   isLoading: boolean;
@@ -41,6 +42,8 @@ export function PersonCycleStatementSection({
   footnote?: React.ReactNode;
   /** Overall-relationship context — its own column on wide screens, above the linked EMIs. */
   aside?: React.ReactNode;
+  /** Small badges under the totals (postponed amounts, upcoming EMI). */
+  highlights?: React.ReactNode;
 }) {
   const [howOpen, setHowOpen] = useState(false);
   const [savingLink, setSavingLink] = useState<string | null>(null);
@@ -62,7 +65,13 @@ export function PersonCycleStatementSection({
   const DirectionIcon = statement?.direction === "theyOwe" ? ArrowDownLeft : statement?.direction === "iOwe" ? ArrowUpRight : Check;
 
   return (
-    <section className="grid gap-x-8 gap-y-5 md:grid-cols-[minmax(0,1fr)_minmax(15rem,1fr)] xl:grid-cols-[minmax(13rem,0.85fr)_minmax(16rem,1fr)_minmax(16rem,1fr)]">
+    <section
+      className={cn(
+        "grid gap-x-8 gap-y-5 md:grid-cols-[minmax(0,1fr)_minmax(16rem,1.1fr)]",
+        // The third (context) column only exists when there is context — otherwise the totals get its room.
+        !loading && (aside || linkedEmis.length > 0) && "xl:grid-cols-[minmax(13rem,0.85fr)_minmax(16rem,1fr)_minmax(16rem,1fr)]",
+      )}
+    >
       {/* Balance hero — the strongest element on the page */}
       <div className="min-w-0">
         {loading ? (
@@ -126,7 +135,8 @@ export function PersonCycleStatementSection({
         ) : (
           <>
             <p className="text-[11px] font-bold tracking-[0.08em] text-foreground/75 uppercase">This cycle</p>
-            <CycleReconciliation statement={statement} personName={statement.personName} className="mt-1" />
+            <SettlementTotals statement={statement} personName={statement.personName} className="mt-1.5" />
+            {highlights && <div className="mt-2 flex flex-wrap items-center gap-1.5 empty:hidden">{highlights}</div>}
 
             <div className="mt-2">
               <button
@@ -135,13 +145,22 @@ export function PersonCycleStatementSection({
                 onClick={() => setHowOpen((o) => !o)}
                 className="-mx-1 flex w-[calc(100%+0.5rem)] items-center justify-between rounded-[6px] px-1 py-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
               >
-                How is this calculated?
+                Cycle breakdown
                 <ChevronDown className={cn("size-3.5 transition-transform", howOpen && "rotate-180")} strokeWidth={1.75} />
               </button>
               {howOpen && (
                 <div className="mt-1.5 space-y-3 rounded-[6px] bg-secondary/60 p-3">
-                  <StatementBreakdown statement={statement} />
-                  <StatementCalculation statement={statement} />
+                  <CycleReconciliation statement={statement} personName={statement.personName} />
+                  <details className="group">
+                    <summary className="flex w-fit cursor-pointer list-none items-center gap-1 text-xs font-medium text-foreground/70 hover:text-foreground [&::-webkit-details-marker]:hidden">
+                      How is this calculated?
+                      <ChevronDown className="size-3.5 transition-transform group-open:rotate-180" strokeWidth={1.75} />
+                    </summary>
+                    <div className="mt-1.5 space-y-3">
+                      <StatementBreakdown statement={statement} />
+                      <StatementCalculation statement={statement} />
+                    </div>
+                  </details>
                 </div>
               )}
             </div>

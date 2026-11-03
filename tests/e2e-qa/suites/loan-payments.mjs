@@ -43,11 +43,12 @@ scenario("loan-record", "Loan: record full installment from bank", async ({ page
   return tl;
 });
 
-scenario("loan-partial", "Loan: partial payment of ₹2,000 via 'Part payment or another amount'", async ({ page }, chk) => {
+scenario("loan-partial", "Loan: partial payment of ₹2,000 via 'Part payment'", async ({ page }, chk) => {
   const before = await bal("QA Bank");
   const dlg = await openPay(page);
   await pickAccount(page, dlg, "QA Bank");
-  await dlg.getByRole("radio", { name: /Part payment or another amount/ }).click();
+  await dlg.getByTestId("other-ways-toggle").click();
+  await dlg.getByRole("radio", { name: /Part payment/ }).click();
   await dlg.locator("input:visible:not([aria-label=\"Payment date\"]):not([type=date])").first().fill("2000");
   await page.waitForTimeout(400);
   await h.shot(page, "loan-partial-dialog");

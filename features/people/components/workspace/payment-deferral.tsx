@@ -468,6 +468,7 @@ export function PostponeFields({ draft, noMoneyNote = false }: { draft: Postpone
           {noMoneyNote ? "No money will be recorded and your balances will not change." : "The original transaction and your financial totals will not change."}
         </span>
       </p>
+    <span className="sr-only">already included in pending, not added again</span>
     </>
   );
 }
@@ -481,19 +482,28 @@ export function DeferralCycleSummary({ cycle, className }: { cycle: StatementCyc
   const summary = useMemo(() => (ctx ? deferralCycleSummary(ctx.byKey.values(), cycle) : null), [ctx, cycle]);
   if (!summary || (summary.postponedLaterCount === 0 && summary.expectedHereCount === 0)) return null;
   return (
-    <p aria-label="Postponed payments" className={cn("mt-3 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[12px] text-foreground/75 tabular-nums", className)}>
-      <CalendarClock className="size-3.5 text-foreground/60" aria-hidden />
+    <>
       {summary.expectedHereCount > 0 && (
-        <span>
-          Expected this cycle after postponement <span className="font-semibold text-foreground">{money(summary.expectedHere)}</span>
+        <span
+          aria-label="Postponed payments"
+          title="Expected this cycle after postponement — already included in pending, not added again"
+          className={cn("inline-flex items-center gap-1 rounded-full bg-warning/12 px-2 py-0.5 text-[11.5px] font-medium text-foreground tabular-nums ring-1 ring-warning/30", className)}
+        >
+          <CalendarClock className="size-3 text-warning" aria-hidden />
+          Expected this cycle after postponement <span className="font-bold">{money(summary.expectedHere)}</span>
         </span>
       )}
       {summary.postponedLaterCount > 0 && (
-        <span>
-          Postponed to later cycles <span className="font-semibold text-foreground">{money(summary.postponedLater)}</span>
+        <span
+          aria-label={summary.expectedHereCount > 0 ? undefined : "Postponed payments"}
+          title="Postponed to later cycles — already included in pending, not added again"
+          className={cn("inline-flex items-center gap-1 rounded-full bg-warning/12 px-2 py-0.5 text-[11.5px] font-medium text-foreground tabular-nums ring-1 ring-warning/30", className)}
+        >
+          <CalendarClock className="size-3 text-warning" aria-hidden />
+          Postponed to later cycles <span className="font-bold">{money(summary.postponedLater)}</span>
         </span>
       )}
-      <span className="text-foreground/55">· already included in pending, not added again</span>
-    </p>
+    <span className="sr-only">already included in pending, not added again</span>
+    </>
   );
 }

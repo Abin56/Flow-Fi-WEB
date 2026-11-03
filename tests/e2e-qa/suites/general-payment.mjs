@@ -4,7 +4,7 @@
  *    no row reads paid / part paid, and the account moves once.
  *  - Credit card: a person's share of a bill charge is still owed → the bill can still be paid, explicitly; the share
  *    stays owed in People; the bill shows its total, what was paid and what is left.
- *  - Loan / EMI: "Not received yet — postpone their share" moves people's shares to a later cycle — no payment, no
+ *  - Loan / EMI: "Not received yet" moves people's shares to a later cycle — no payment, no
  *    transaction, the lender schedule (amounts and due dates) untouched; a double click writes once.
  * Every action is asserted on both the browser and the persisted emulator data. Local emulator only.
  */
@@ -137,8 +137,8 @@ const postponeAllBody = async ({ page }, chk) => {
   const tx0 = (await f.txns(() => true)).length;
   const sched0 = JSON.stringify(await schedule());
   const choices = await dlg.getByRole("radiogroup", { name: "How to pay the lender" }).getByRole("radio").allInnerTexts();
-  chk("three choices, in order", /^Pay now from my account/.test(choices[0]) && /^Collect from others first/.test(choices[1]) && /^Not received yet — postpone their share/.test(choices[2]), JSON.stringify(choices));
-  await dlg.getByRole("radio", { name: /Not received yet — postpone their share/ }).click();
+  chk("three choices, in order", /^Received/.test(choices[0]) && /^Not received yet/.test(choices[1]) && /^Pay the lender from my own money/.test(choices[2]), JSON.stringify(choices));
+  await dlg.getByRole("radio", { name: /^Not received yet/ }).click();
   const form = dlg.getByTestId("share-postpone");
   await form.waitFor();
   const who = await form.getByRole("list", { name: "Shares not received" }).innerText();
@@ -163,7 +163,7 @@ const postponeAllBody = async ({ page }, chk) => {
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   chk("no horizontal page overflow", overflow <= 1, `${overflow}px`);
 };
-scenario("gpay-emi-postpone", "Pay EMI: 'Not received yet — postpone their share' (double-click) → both shares to next month once; no payment, schedule untouched", postponeAllBody);
+scenario("gpay-emi-postpone", "Pay EMI: 'Not received yet' (double-click) → both shares to next month once; no payment, schedule untouched", postponeAllBody);
 scenario("gpay-emi-postpone-mobile-dark", "Pay EMI: the same postponement on mobile 390×844, dark", postponeAllBody, { viewport: { width: 390, height: 844 }, scheme: "dark" });
 
 scenario("gpay-emi-postpone-one-later", "Pay EMI: Ravi's row 'Postpone' → only Ravi, a later cycle and a reminder date; Priya untouched", async ({ page }, chk) => {
@@ -198,5 +198,5 @@ scenario("gpay-emi-postpone-one-later", "Pay EMI: Ravi's row 'Postpone' → only
   chk("the reminder is saved on that date (persisted)", followUps.some((r) => new Date(ms(r.remindOn)).toDateString() === remindOn.toDateString()), JSON.stringify(followUps.map((r) => r.remindOn)));
   chk("lender schedule untouched (persisted)", JSON.stringify(await schedule()) === sched0);
   // Priya is still undecided: the choice stays available for her.
-  chk("Priya can still be postponed or collected", (await dlg.getByRole("radio", { name: /Not received yet — postpone their share/ }).count()) === 1);
+  chk("Priya can still be postponed or collected", (await dlg.getByRole("radio", { name: /^Not received yet/ }).count()) === 1);
 });
