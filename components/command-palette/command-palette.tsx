@@ -1,18 +1,7 @@
 "use client";
 
-import {
-  Calendar,
-  CreditCard,
-  FileBarChart,
-  Landmark,
-  LayoutDashboard,
-  Receipt,
-  Repeat,
-  Settings,
-  Target,
-  Users,
-  Wallet,
-} from "lucide-react";
+import { CreditCard, Landmark, Receipt, Repeat, Users, Wallet } from "lucide-react";
+
 import { useRouter } from "next/navigation";
 import { useMemo } from "react";
 import {
@@ -23,7 +12,9 @@ import {
   CommandItem,
   CommandList,
   CommandSeparator,
+  CommandShortcut,
 } from "@/components/ui/command";
+import { NAV_ITEMS } from "@/components/layout/nav-items";
 import { useAccounts } from "@/hooks/use-accounts";
 import { useBills } from "@/hooks/use-bills";
 import { useCreditCards } from "@/hooks/use-credit-cards";
@@ -42,20 +33,6 @@ interface CommandPaletteProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
-
-const PAGES = [
-  { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-  { label: "Transactions", href: "/transactions", icon: Receipt },
-  { label: "Accounts", href: "/accounts", icon: Wallet },
-  { label: "Credit Cards", href: "/credit-cards", icon: CreditCard },
-  { label: "Bills", href: "/bills", icon: Repeat },
-  { label: "Savings", href: "/savings", icon: Target },
-  { label: "Loan & EMI", href: "/loans", icon: Landmark },
-  { label: "People Ledger", href: "/people", icon: Users },
-  { label: "Calendar", href: "/calendar", icon: Calendar },
-  { label: "Reports", href: "/reports", icon: FileBarChart },
-  { label: "Settings", href: "/settings", icon: Settings },
-];
 
 const MAX_RESULTS_PER_GROUP = 5;
 
@@ -90,9 +67,10 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
         <CommandEmpty>No results found.</CommandEmpty>
 
         <CommandGroup heading="Pages">
-          {PAGES.map((page) => (
-            <CommandItem key={page.href} value={page.label} onSelect={() => go(page.href)}>
+          {NAV_ITEMS.map((page) => (
+            <CommandItem key={page.href} value={page.label} keywords={[page.section]} onSelect={() => go(page.href)}>
               <page.icon /> {page.label}
+              <CommandShortcut>G {page.chord.toUpperCase()}</CommandShortcut>
             </CommandItem>
           ))}
         </CommandGroup>

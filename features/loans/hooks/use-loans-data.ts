@@ -254,6 +254,8 @@ export interface EditLoanFormParams {
   payerPersonId?: string | null;
   /** `null` switches back to "For me" — see `Loan.beneficiaryPersonId`. */
   beneficiaryPersonId?: string | null;
+  /** "They repay me each installment" — `undefined` leaves it. See `Loan.beneficiaryRepaysInstallments`. */
+  beneficiaryRepaysInstallments?: boolean;
 }
 
 /** Create/edit/delete/payment actions wired to the real repositories, scoped to the signed-in user. */
@@ -355,6 +357,7 @@ export function useLoanActions() {
                 branch: params.branch,
                 payerPersonId: params.payerPersonId,
                 beneficiaryPersonId: params.beneficiaryPersonId,
+                beneficiaryRepaysInstallments: params.beneficiaryRepaysInstallments,
               }
             : {
                 hasPayments,
@@ -362,6 +365,7 @@ export function useLoanActions() {
                 notes: params.notes,
                 payerPersonId: params.payerPersonId,
                 beneficiaryPersonId: params.beneficiaryPersonId,
+                beneficiaryRepaysInstallments: params.beneficiaryRepaysInstallments,
               };
         return loanRepository.editLoan(loan, editParams);
       },

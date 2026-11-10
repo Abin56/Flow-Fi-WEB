@@ -17,7 +17,7 @@
  * Add Loan / Add EMI forms sent.
  */
 
-import type { CreateLoanFormParams } from "@/features/loans/hooks/use-loans-data";
+import type { CreateLoanFormParams, EditLoanFormParams, LoanRow } from "@/features/loans/hooks/use-loans-data";
 import type { InterestPeriod, InterestType } from "@/lib/engines/interest-calculator";
 import { allocateOwnership, fromPaise, installmentWeights, splitByOwnership, splitPaise, toPaise, type AllocationMode, type AllocationResult } from "@/lib/engines/debt-ownership";
 import type { Emi, EmiLoanType } from "@/lib/models/emi";
@@ -439,6 +439,141 @@ export function previewInstallment(
   const r = annual / periodsPerYear;
   const per = (principal * r) / (1 - Math.pow(1 + r, -count));
   return { perInstallment: per, interest: per * count - principal };
+}
+
+/* ───────────── Edit — the SAME form, pre-filled from a saved Loan ───────────── */
+
+/**
+ * The Add form, pre-filled from a saved Loan, so Edit reads exactly like Add. Money-movement fields
+ * (`useAccount`, `accountId`) stay off — an account link is made at creation and never edited here.
+ * A shared loan's split can't be edited (`ownership` stays "me" and the dialog shows it read-only).
+ */
+export function loanEditForm(row: LoanRow): LoanEmiAddForm {
+  const { loan } = row;
+  const interest = loan.interest;
+  const hasInterest = interest != null && interest.ratePercent > 0;
+  const beneficiaryPersonId = row.beneficiaryPersonId ?? "";
+  return {
+    ...emptyLoanEmiAddForm(recordKindForLoan(loan).kind, ""),
+    borrowedFrom: row.category,
+    lenderName: row.category === "institutional" ? row.lenderName : "",
+    provider: row.category === "institutional" ? row.lenderName : "",
+    personId: loan.personId ?? "",
+    name: loan.name ?? "",
+    amount: String(loan.loanAmount),
+    // The calendar day as the user sees it (local) — the Add flow stores local midnight, so the UTC day reads a day early in India.
+    date: toDateInput(loan.loanDate),
+    firstEmiDate: toDateInput(row.installments[0]?.dueDate ?? loan.loanDate),
+    frequency: loan.installmentFrequency ?? "monthly",
+    count: String(loan.installmentCount ?? row.totalInstallments),
+    hasInterest,
+    ratePercent: hasInterest ? String(interest.ratePercent) : "",
+    ratePeriod: interest?.period ?? "yearly",
+    interestType: interest?.type ?? "reducingBalance",
+    cardId: loan.linkedCreditCardId ?? "",
+    ownership: beneficiaryPersonId !== "" ? "someoneElse" : "me",
+    beneficiaryPersonId,
+    beneficiaryRepays: loan.beneficiaryRepaysInstallments === true,
+    payerPersonId: row.payerPersonId ?? "",
+    loanType: loan.loanType ?? "",
+    loanNumber: loan.loanNumber ?? "",
+    accountNumber: loan.accountNumber ?? "",
+    branch: loan.branch ?? "",
+    notes: loan.notes,
+  };
+}
+
+/** What the saved Loan's payments already pin down — each is a floor/lock the edit form must respect. */
+export interface LoanEditLimits {
+  /** Any installment already carries a payment — the Loan Date and First EMI Date lock. */
+  hasPayments: boolean;
+  /** Installments already settled (paid or skipped) can't be removed. */
+  minInstallmentCount: number;
+  /** Principal already paid off — the loan can't be lowered beneath it. */
+  minLoanAmount: number;
+}
+
+export function loanEditLimits(row: LoanRow): LoanEditLimits {
+  return {
+    hasPayments: row.installments.some((i) => i.amountPaid > 0),
+    minInstallmentCount: row.installments.filter((i) => i.amountPaid > 0 || i.isSkipped).length,
+    minLoanAmount: row.loan.loanAmount - row.outstandingPrincipal,
+  };
+}
+
+/** Why the edit can't be saved yet, or null when it can — the Add rules plus the floors the payments set. */
+export function loanEditError(form: LoanEmiAddForm, row: LoanRow): string | null {
+  const error = loanEmiAddError(form);
+  if (error != null) return error;
+  const limits = loanEditLimits(row);
+  const count = Number(form.count);
+  if (limits.minInstallmentCount > 0 && count < limits.minInstallmentCount) {
+    return `Installments can't go below ${limits.minInstallmentCount} — already settled`;
+  }
+  if (limits.minLoanAmount > 0 && Number(form.amount) < limits.minLoanAmount) {
+    return `Amount can't go below ₹${limits.minLoanAmount.toLocaleString("en-IN")} — already paid off`;
+  }
+  return null;
+}
+
+/** Whether the saved Loan splits its principal between people — that split isn't editable from this form. */
+export function isSharedLoan(loan: Pick<Loan, "ownershipShares">): boolean {
+  return (loan.ownershipShares?.length ?? 0) > 0;
+}
+
+/** The writes one Save performs, in order: details, then schedule re-plan, then date moves. */
+export interface LoanEditPlan {
+  details: Omit<EditLoanFormParams, "currentInstallments">;
+  /** Null when no term changed — the schedule is left alone. */
+  terms: { loanAmount: number | undefined; interest: { type: InterestType; ratePercent: number; period: InterestPeriod } | null; installmentFrequency: ScheduleType; newInstallmentCount: number } | null;
+  /** Null when the Loan Date is unchanged (or locked by a payment). */
+  newLoanDate: Date | null;
+  /** Null when the First EMI Date is unchanged (or locked by a payment). */
+  newFirstDueDate: Date | null;
+}
+
+/** Maps the edited form onto the existing edit operations; only what actually changed becomes a write. */
+export function buildLoanEditPlan(row: LoanRow, form: LoanEmiAddForm): LoanEditPlan {
+  const { loan } = row;
+  const s = addSections(form);
+  const limits = loanEditLimits(row);
+  const shared = isSharedLoan(loan);
+  // "Who is this for?" only applies to money borrowed; a shared loan's split is left exactly as it is.
+  const ownershipEditable = loan.direction === "taken" && !shared;
+  const beneficiaryPersonId = ownershipEditable ? beneficiaryOf(form) : undefined;
+
+  const rate = effectiveRate(form);
+  const newInterest = rate && Number.isFinite(rate.ratePercent) && rate.ratePercent > 0 ? { type: form.interestType, ...rate } : null;
+  const original = loan.interest != null && loan.interest.ratePercent > 0 ? loan.interest : null;
+  const newAmount = Number(form.amount);
+  const newCount = Math.floor(Number(form.count));
+  const termsChanged =
+    (Number.isFinite(newAmount) && newAmount !== loan.loanAmount) ||
+    (newInterest?.ratePercent ?? null) !== (original?.ratePercent ?? null) ||
+    (newInterest?.type ?? null) !== (original?.type ?? null) ||
+    (newInterest?.period ?? null) !== (original?.period ?? null) ||
+    form.frequency !== (loan.installmentFrequency ?? "monthly") ||
+    newCount !== row.totalInstallments;
+
+  return {
+    details: {
+      name: form.name.trim(),
+      lenderName: s.purchase ? form.provider : form.lenderName,
+      notes: form.notes,
+      loanType: form.loanType.trim() || null,
+      loanNumber: form.loanNumber.trim() || null,
+      accountNumber: form.accountNumber.trim() || null,
+      branch: form.branch.trim() || null,
+      payerPersonId: s.payer ? form.payerPersonId || null : undefined,
+      beneficiaryPersonId,
+      beneficiaryRepaysInstallments: ownershipEditable ? beneficiaryPersonId != null && form.beneficiaryRepays : undefined,
+    },
+    terms: termsChanged
+      ? { loanAmount: Number.isFinite(newAmount) && newAmount > 0 ? newAmount : undefined, interest: newInterest, installmentFrequency: form.frequency, newInstallmentCount: newCount }
+      : null,
+    newLoanDate: !limits.hasPayments && form.date !== toDateInput(loan.loanDate) ? parseDateInput(form.date) : null,
+    newFirstDueDate: !limits.hasPayments && form.firstEmiDate !== toDateInput(row.installments[0]?.dueDate ?? loan.loanDate) ? parseDateInput(form.firstEmiDate) : null,
+  };
 }
 
 /* ───────────── Existing records → unified classification (display only, nothing persisted) ───────────── */

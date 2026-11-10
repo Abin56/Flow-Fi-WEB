@@ -618,7 +618,7 @@ scenario("le-sweep-edit", "Loan & EMI sweep: editing an unpaid loan — a lender
   const shownFirst = await dates.nth(1).inputValue();
   const ddmmyyyy = (iso) => { const d = new Date(iso); return `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}/${d.getFullYear()}`; };
   chk(`Edit form shows the stored loan date (${ddmmyyyy(loanDate0)}) and first EMI date (${ddmmyyyy(due0[0])})`, shownLoan === ddmmyyyy(loanDate0) && shownFirst === ddmmyyyy(due0[0]), `${shownLoan} / ${shownFirst}`);
-  await ed.getByText("Lender", { exact: true }).first().locator("xpath=following::input[1]").fill("QA Housing Bank 2");
+  await ed.getByText("Bank / lender", { exact: true }).first().locator("xpath=following::input[1]").fill("QA Housing Bank 2");
   await page.evaluate(() => window.__reset());
   await ed.getByRole("button", { name: "Save Changes" }).click();
   await page.waitForTimeout(4000);

@@ -65,7 +65,7 @@ export function InlineReveal({ open, children, className }: { open: boolean; chi
   );
 }
 
-const PEOPLE_DRAWER_WIDTH = { md: "sm:max-w-[640px]", lg: "sm:max-w-[920px]", xl: "sm:max-w-[1040px]" } as const;
+const PEOPLE_DRAWER_WIDTH = { sm: "sm:max-w-[480px]", md: "sm:max-w-[640px]", wide: "sm:max-w-[780px]", lg: "sm:max-w-[920px]", xl: "sm:max-w-[1040px]" } as const;
 
 /**
  * Right-side drawer for a person's actions (Record payment, Add, Split, Share) — the same slide-in experience as

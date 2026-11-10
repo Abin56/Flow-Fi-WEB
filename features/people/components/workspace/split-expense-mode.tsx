@@ -334,12 +334,12 @@ export function SplitExpenseMode({
         <ModeHeader backLabel={backLabel ?? person.name} onBack={onBack} onClose={undefined} title="Split expense" subtitle="Record an expense and track what each person owes." />
       )}
 
-      <div className={cn(WS_PAD, "mt-4 grid flex-1 items-start gap-x-5 gap-y-3 @3xl:grid-cols-[minmax(0,1fr)_14rem]")}>
+      <div className={cn(WS_PAD, "mt-4 grid flex-1 items-start gap-x-5 gap-y-3 @3xl:grid-cols-[minmax(0,1fr)_15rem]")}>
         <div className="@container flex min-w-0 flex-col gap-3">
           {/* The expense */}
           <Group title="Expense" icon={Receipt}>
             <div className="grid gap-3">
-              <div className="grid min-w-0 gap-3 rounded-xl bg-secondary/60 p-3 @md:grid-cols-2 @md:items-start">
+              <div className="grid min-w-0 gap-3 rounded-xl bg-secondary/60 p-3 @md:grid-cols-[minmax(0,11rem)_minmax(0,1fr)] @md:items-start">
                 <div className="min-w-0">
                 <HeroAmount
                   label="Total amount"
@@ -370,7 +370,7 @@ export function SplitExpenseMode({
                   />
                 </WsField>
               </div>
-              <div className="grid min-w-0 content-start gap-3 @sm:grid-cols-3">
+              <div className="grid min-w-0 content-start gap-3 @sm:grid-cols-2 @xl:grid-cols-3">
               <WsField label="Date" error={errors.date}>
                 <DateInput className={WS_FIELD} value={date} onChange={(e) => setDate(e.target.value)} />
               </WsField>
@@ -394,7 +394,7 @@ export function SplitExpenseMode({
                   </SelectContent>
                 </Select>
               </WsField>
-              <WsField label="Account" error={errors.account}>
+              <WsField label="Account" error={errors.account} className="@sm:col-span-2 @xl:col-span-1">
                 <Select
                   value={accountId}
                   onValueChange={(v) => {

@@ -472,6 +472,23 @@ function StatusLegend({ hasLenderRows }: { hasLenderRows: boolean }) {
   );
 }
 
+/** Kinds that come from an EMI / loan installment schedule. */
+const isEmiKind = (k: SettlementKind) => k === "emi" || k === "loanEmi" || k === "loanInstallment";
+
+/** A solid "EMI" mark at the start of the row's title — so an installment is told apart from a one-off expense at a glance. */
+function EmiChip({ className }: { className?: string }) {
+  return (
+    <span
+      data-testid="emi-chip"
+      title="This row is an EMI installment"
+      className={cn("inline-flex h-[18px] shrink-0 items-center gap-1 rounded-[4px] bg-primary px-1.5 text-[10.5px] leading-none font-extrabold tracking-wide whitespace-nowrap text-primary-foreground", className)}
+    >
+      <CalendarClock className="size-3" strokeWidth={2.5} aria-hidden />
+      EMI
+    </span>
+  );
+}
+
 /** An earlier cycle's obligation that is still open. */
 function CarriedChip() {
   return <span className="shrink-0 rounded-[4px] bg-settle-carried-badge px-1.5 text-[10.5px] leading-4 font-bold whitespace-nowrap text-settle-carried-text">Previous unpaid</span>;
@@ -512,9 +529,13 @@ export function TypeBadge({ kind, family, label, className }: { kind: Settlement
   return (
     <span
       data-family={family}
-      className={cn("inline-flex h-5 shrink-0 items-center gap-1 rounded-[4px] border border-border-strong/70 px-1.5 text-[10.5px] leading-none font-semibold whitespace-nowrap text-foreground/80", className)}
+      className={cn(
+        "inline-flex h-5 shrink-0 items-center gap-1 rounded-[4px] border px-1.5 text-[10.5px] leading-none font-semibold whitespace-nowrap",
+        isEmiKind(kind) ? "border-settle-emi-edge bg-settle-emi-badge text-settle-emi-text" : "border-border-strong/70 text-foreground/80",
+        className,
+      )}
     >
-      <Icon className="size-3 text-foreground/55" strokeWidth={2.25} aria-hidden />
+      <Icon className={cn("size-3", isEmiKind(kind) ? "text-settle-emi-text" : "text-foreground/55")} strokeWidth={2.25} aria-hidden />
       {label ?? TABLE_KIND_LABEL[kind]}
     </span>
   );
@@ -1119,6 +1140,8 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
   const isOpen = (row: LedgerRow) => openKey === row.key || handlers.settlingKey === row.key || handlers.editingKey === row.key;
 
   const carriedViews = carriedRows.map((r) => viewOf(r, personName, lookups, true, personId));
+  // Brought-forward rows are grouped by month too, with the same heading the current months get.
+  const carriedGroups = groupByMonth(carriedViews, (v) => v.row.date);
   const groups = groupByMonth(rows, (r) => r.date);
   const total = rows.length + carriedRows.length;
   const expansionProps = { personId, personName, lookups, accountForEntry, handlers, cycleLabelOf };
@@ -1164,6 +1187,7 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
           <td className={cn(TD, "w-full max-w-0")}>
             <div className="flex min-w-0 items-center gap-1.5">
               <ChevronDown className={cn("size-3.5 shrink-0 text-foreground/50 transition-transform", open && "rotate-180")} strokeWidth={2} aria-hidden />
+              {isEmiKind(v.kind) && <EmiChip />}
               <span className={cn("truncate text-[13.5px] leading-tight font-semibold", muted ? "text-foreground/80" : "text-foreground")}>{v.title}</span>
               <TypeBadge kind={v.kind} family={v.typeFamily} label={v.typeLabel} className="h-[18px] xl:hidden" />
               {v.carried && <CarriedChip />}
@@ -1215,7 +1239,10 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
         <button type="button" onClick={() => toggle(row)} aria-expanded={open} className="block w-full px-3 py-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset">
           {/* Line 1: what it is · the figure that matters (what is left, or the amount once paid). */}
           <div className="flex items-baseline justify-between gap-3">
-            <p className={cn("min-w-0 truncate text-[13.5px] leading-snug font-semibold", row.state === "settled" ? "text-foreground/80" : "text-foreground")}>{v.title}</p>
+            <p className={cn("flex min-w-0 items-center gap-1.5 text-[13.5px] leading-snug font-semibold", row.state === "settled" ? "text-foreground/80" : "text-foreground")}>
+              {isEmiKind(v.kind) && <EmiChip />}
+              <span className="truncate">{v.title}</span>
+            </p>
             <MobileFigure v={v} />
           </div>
           {/* Line 2: type · date · status. Paid / left / moved are in the status, so no separate grid. A completed
@@ -1244,6 +1271,23 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
     );
   };
 
+  type MonthGroup = { key: string; label: string | null; rows: unknown[] };
+  const countLabel = (g: MonthGroup) => `${g.rows.length} ${g.rows.length === 1 ? "transaction" : "transactions"}`;
+  const monthHeadingRow = (g: MonthGroup) => (
+    <tr>
+      <td colSpan={7} className="border-t-2 border-b border-t-border-strong border-b-border-strong/70 bg-secondary px-3 py-0.5">
+        <span className="text-[11.5px] font-bold tracking-[0.08em] whitespace-nowrap text-foreground uppercase">{g.label}</span>
+        <span className="ml-2 text-[11.5px] font-medium whitespace-nowrap text-foreground/70">{countLabel(g)}</span>
+      </td>
+    </tr>
+  );
+  const monthHeadingItem = (g: MonthGroup) => (
+    <li className="sticky top-0 z-[1] flex items-baseline justify-between border-t-2 border-b border-t-border-strong border-b-border-strong/70 bg-secondary px-3 py-1">
+      <span className="text-[12px] font-bold tracking-[0.08em] whitespace-nowrap text-foreground uppercase">{g.label}</span>
+      <span className="text-[11px] font-medium whitespace-nowrap text-foreground/70">{countLabel(g)}</span>
+    </li>
+  );
+
   let n = 0;
   return (
     <div className={className}>
@@ -1268,19 +1312,17 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
                   <span className="inline-flex items-center gap-1.5"><History className="size-3.5" />Previous unpaid amount · not paid in previous months</span>
                 </td>
               </tr>
-              {carriedViews.map((v) => desktopRow(v, ++n))}
+              {carriedGroups.map((g) => (
+                <Fragment key={`carried-${g.key}`}>
+                  {monthHeadingRow(g)}
+                  {g.rows.map((x) => desktopRow(x.row, ++n))}
+                </Fragment>
+              ))}
             </>
           )}
           {groups.map((g) => (
             <Fragment key={g.key}>
-              <tr>
-                <td colSpan={7} className="border-t-2 border-b border-t-border-strong border-b-border-strong/70 bg-secondary px-3 py-0.5">
-                  <span className="text-[11.5px] font-bold tracking-[0.08em] whitespace-nowrap text-foreground uppercase">{g.label}</span>
-                  <span className="ml-2 text-[11.5px] font-medium whitespace-nowrap text-foreground/70">
-                    {g.rows.length} {g.rows.length === 1 ? "transaction" : "transactions"}
-                  </span>
-                </td>
-              </tr>
+              {monthHeadingRow(g)}
               {foldPaymentRows(g.rows.map((x) => x.row)).map((item) => {
                 if (item.kind === "row") return desktopRow(viewOf(item.row, personName, lookups, false, personId), ++n);
                 const open = foldIsOpen(item);
@@ -1309,13 +1351,15 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
         {carriedViews.length > 0 && (
           <li className="border-b border-border-strong/60 bg-settle-carried-badge px-3 py-1 text-[10.5px] font-bold tracking-[0.08em] text-settle-carried-text uppercase">Previous unpaid amount</li>
         )}
-        {carriedViews.map(mobileRow)}
+        {carriedGroups.map((g) => (
+          <Fragment key={`carried-${g.key}`}>
+            {monthHeadingItem(g)}
+            {g.rows.map((x) => mobileRow(x.row))}
+          </Fragment>
+        ))}
         {groups.map((g) => (
           <Fragment key={g.key}>
-            <li className="sticky top-0 z-[1] flex items-baseline justify-between border-t-2 border-b border-t-border-strong border-b-border-strong/70 bg-secondary px-3 py-1">
-              <span className="text-[12px] font-bold tracking-[0.08em] whitespace-nowrap text-foreground uppercase">{g.label}</span>
-              <span className="text-[11px] font-medium whitespace-nowrap text-foreground/70">{g.rows.length} {g.rows.length === 1 ? "transaction" : "transactions"}</span>
-            </li>
+            {monthHeadingItem(g)}
             {foldPaymentRows(g.rows.map((x) => x.row)).map((item) => {
               if (item.kind === "row") return mobileRow(viewOf(item.row, personName, lookups, false, personId));
               const open = foldIsOpen(item);

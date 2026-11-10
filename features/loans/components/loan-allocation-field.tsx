@@ -37,12 +37,23 @@ const EMI_SPLITS: { value: EmiSplit; label: string }[] = [
 
 type Patch = Partial<Pick<LoanEmiAddForm, "ownership" | "beneficiaryPersonId" | "beneficiaryRepays" | "allocationMode" | "allocationRows">>;
 
-export function LoanAllocationField({ form, people, onChange }: { form: LoanEmiAddForm; people: Person[]; onChange: (patch: Patch) => void }) {
+export function LoanAllocationField({
+  form,
+  people,
+  onChange,
+  allowShared = true,
+}: {
+  form: LoanEmiAddForm;
+  people: Person[];
+  onChange: (patch: Patch) => void;
+  /** Off when editing a saved loan — a shared split is set at creation and isn't edited afterwards. */
+  allowShared?: boolean;
+}) {
   return (
     <div className="flex flex-col gap-3">
       <SegmentedControl
         ariaLabel="Who is this for?"
-        options={CHOICES}
+        options={allowShared ? CHOICES : CHOICES.filter((c) => c.value !== "shared")}
         value={form.ownership}
         onChange={(v) => onChange({ ownership: v, ...(v !== "someoneElse" ? { beneficiaryPersonId: "", beneficiaryRepays: false } : {}) })}
       />

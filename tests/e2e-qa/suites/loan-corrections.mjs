@@ -49,7 +49,7 @@ scenario("lcor-edit-terms", "Loan Edit: interest-rate and tenure change re-plan 
   await openLoan(page);
   await page.getByRole("button", { name: "Edit", exact: true }).click();
   const dlg = page.getByRole("dialog").last();
-  await dlg.getByLabel(/Number of installments/).fill("10");
+  await dlg.getByLabel("Custom number of installments").fill("10");
   await dlg.getByLabel(/Interest rate/).fill("9");
   await h.shot(page, "lcor-edit-form");
   await dlg.getByRole("button", { name: /Save Changes/ }).click();

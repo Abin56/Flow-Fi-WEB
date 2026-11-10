@@ -121,7 +121,7 @@ export function AddEntryPanel({
       onKeyDown={handleEnterAdvance}
       aria-label={`Add transaction — ${personName}`}
       // A column that fills its host (the drawer flattens and stretches it): header on top, footer on the bottom.
-      className="mt-4 flex min-h-full flex-col rounded-[12px] border border-border-strong bg-card"
+      className="@container mt-4 flex min-h-full flex-col rounded-[12px] border border-border-strong bg-card"
     >
       <PanelHeader
         title="Add transaction"
@@ -136,7 +136,7 @@ export function AddEntryPanel({
         }
       />
 
-      <div className="flex-1 space-y-4 px-4 pt-4 pb-6 sm:px-6">
+      <div className="flex-1 space-y-3 px-4 pt-3.5 pb-4 sm:px-5">
         <TypeCards
           value={type}
           invalid={missingType}
@@ -158,10 +158,10 @@ export function AddEntryPanel({
           inert={!type}
         >
           <div className="-mx-1 min-h-0 overflow-hidden px-1">
-            <div className="space-y-4 pb-1">
-            {/* Amount tile on the left; date and account beside it on wide screens, below on phones. */}
-            <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,17rem)]">
-              <div className="rounded-[14px] bg-secondary/60 p-3.5">
+            <div className="space-y-3 pb-1">
+            {/* Amount tile on the left; date and account beside it when the panel is wide, below in the compact drawer. */}
+            <div className="grid gap-3 @2xl:grid-cols-[minmax(0,1fr)_minmax(0,17rem)]">
+              <div className="rounded-[14px] bg-secondary/60 p-3">
                 <HeroAmount
                   inputRef={amountRef}
                   label="Amount"
@@ -173,12 +173,13 @@ export function AddEntryPanel({
                     if (error) setError(null);
                   }}
                 />
-                <WsField label="Description" className="mt-3">
+                <WsField label="Description" className="mt-2.5">
                   <input className={WS_FIELD} placeholder="e.g. Dinner, cab" value={note} onChange={(e) => setNote(e.target.value)} />
                 </WsField>
               </div>
-              <div className="grid content-start gap-3 sm:grid-cols-2 md:grid-cols-1">
+              <div className="grid grid-cols-2 content-start gap-3 @2xl:grid-cols-1">
                 <AccountField
+                  className="col-span-2 @2xl:col-span-1"
                   choice={account}
                   label={type === "borrowed" ? "Receive into account" : type === "gave" ? "Pay from account" : "Account"}
                   outflow={type === "gave" ? (Number(amount) > 0 ? Number(amount) : null) : undefined}
