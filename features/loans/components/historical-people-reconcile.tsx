@@ -64,7 +64,16 @@ export interface HistoricalReconcileState {
 
 const received = (d: ReimbursementDraft | undefined) => d != null && d.choice !== "none";
 
-export function useHistoricalReconcile(params: { target: ReimbursementTarget | null; defaultAccountId: string }): HistoricalReconcileState {
+export function useHistoricalReconcile(params: {
+  target: ReimbursementTarget | null;
+  defaultAccountId: string;
+  /**
+   * The date a "received" row starts on until the user changes it: the date they already gave for the lender payment,
+   * or `null`/"" when that date isn't known (the row then starts blank = "Date not known"). Omitted: the installment's
+   * due date. Never later than today — money already received can't be dated in the future.
+   */
+  defaultDateOf?: (line: ReimbursementLine) => string | null;
+}): HistoricalReconcileState {
   const { lines, isLoading, record } = useHistoricalReimbursement(params.target);
   const [batchId] = useState(generateId);
   const [draft, setDraft] = useState<Record<string, ReimbursementDraft>>({});
@@ -80,7 +89,21 @@ export function useHistoricalReconcile(params: { target: ReimbursementTarget | n
   // One request id per share: a retry after a lost response is the same (idempotent) write.
   const reminderIds = useRef(new Map<string, string>());
 
-  const plan = planReimbursements({ lines, draft, batchId });
+  // A received row whose date the user hasn't touched starts on its default date (see `defaultDateOf`), so the field
+  // and its calendar open on the installment's own month instead of today. Typing or clearing the date makes it theirs
+  // (`date` is then a string — "" = not known), and from then on the default never overrides it.
+  const defaultDateFor = (l: ReimbursementLine): string => {
+    const d = params.defaultDateOf ? params.defaultDateOf(l) : dateText(l.dueDate);
+    return d != null && d !== "" && d <= todayText() ? d : "";
+  };
+  const lineByKey = new Map(lines.map((l) => [reimbursementLineKey(l), l]));
+  const shown: Record<string, ReimbursementDraft> = Object.fromEntries(
+    Object.entries(draft).map(([k, d]) => {
+      const l = lineByKey.get(k);
+      return [k, l != null && received(d) && d.date === undefined ? { ...d, date: defaultDateFor(l) } : d];
+    }),
+  );
+  const plan = planReimbursements({ lines, draft: shown, batchId });
   const total = plan.ok ? plan.summary.total : 0;
   const blocker = !plan.ok ? "Check the people's rows." : total > PAYMENT_EPSILON && accountId === "" ? "Choose the account it was received into." : null;
   const failed = useMemo(() => ranItems.filter((i) => results[i.key]?.status === "failed"), [ranItems, results]);
@@ -89,7 +112,7 @@ export function useHistoricalReconcile(params: { target: ReimbursementTarget | n
   return {
     lines,
     loading: isLoading,
-    draft,
+    draft: shown,
     setLine: (key, patch) => setDraft((prev) => ({ ...prev, [key]: { ...blank, ...prev[key], ...patch } })),
     setPerson: (personId, choice) =>
       setDraft((prev) => {
@@ -189,10 +212,8 @@ function sharedTreatment(values: readonly (BalanceTreatment | null | undefined)[
 }
 
 const pad = (n: number) => String(n).padStart(2, "0");
-const todayText = () => {
-  const d = new Date();
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-};
+const dateText = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const todayText = () => dateText(new Date());
 /** A week from today — a starting point the user changes. */
 const defaultRemindOn = () => {
   const d = new Date();
@@ -247,6 +268,8 @@ export function HistoricalPeopleReconcile({
     );
   }
   const people = [...new Map(lines.map((l) => [l.personId, l.personName])).entries()];
+  // One person → name them ("Has ABIN already paid you their share?"); several → "these people".
+  const solo = people.length === 1 ? people[0][1] : null;
   const errors = plan.ok ? {} : plan.errors;
   const summary = plan.ok ? plan.summary : null;
   const receivedCount = lines.filter((l) => l.remaining > PAYMENT_EPSILON && received(draft[reimbursementLineKey(l)])).length;
@@ -255,8 +278,10 @@ export function HistoricalPeopleReconcile({
 
   return (
     <section aria-label="People sharing it" className="flex flex-col gap-2.5 rounded-[6px] border border-border p-3">
-      <h3 className="text-sm font-semibold text-foreground">Have the people sharing this already paid you?</h3>
-      <p className="-mt-1.5 text-[11.5px] text-muted-foreground">Your payments to the lender are recorded as they are. Say how much each person has given so far — the rest stays pending.</p>
+      <h3 className="text-sm font-semibold text-foreground">{solo ? `Has ${solo} already paid you their share?` : "Have these people already paid you their share?"}</h3>
+      <p className="-mt-1.5 text-[11.5px] text-muted-foreground">
+        You paid the lender. {solo ?? "Each person below"} owes you a share of each installment. Say how much {solo ?? "each person"} has already paid you back — anything you leave as “Not received yet” stays pending in People.
+      </p>
       <ul className="flex flex-col divide-y divide-border">
         {people.map(([personId, personName]) => {
           const own = lines.filter((l) => l.personId === personId);
@@ -292,7 +317,7 @@ export function HistoricalPeopleReconcile({
               {/* One answer for all of this person's received rows — each row can still be changed below. */}
               {ownReceived.length > 1 && !locked && (
                 <div className="flex flex-wrap items-center gap-1.5 rounded-[6px] bg-secondary/60 px-2 py-1.5 text-[11px]" aria-label={`All of ${personName}'s received shares`}>
-                  <span className="font-medium text-foreground">For all {ownReceived.length} received:</span>
+                  <span className="font-medium text-foreground">Same for all {ownReceived.length} received:</span>
                   <DateInput
                     aria-label={`Date ${personName} paid you, for all received`}
                     title="Leave blank if you don't know the date"
@@ -346,7 +371,7 @@ export function HistoricalPeopleReconcile({
         <div className="flex flex-col gap-1.5 border-t border-border pt-2.5">
           {receivedCount > 1 && !locked && (
             <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
-              Set all received:
+              Set every row marked received to:
               {TREATMENTS.map((t) => (
                 <button key={t.value} type="button" className="font-semibold text-foreground underline-offset-2 hover:underline" onClick={() => state.setAllTreatments(t.value)}>
                   {t.short}
@@ -358,12 +383,17 @@ export function HistoricalPeopleReconcile({
             <span className="text-[11px] font-medium text-muted-foreground">{anyAdded ? "Received into" : "Received into · for your records"}</span>
             <AccountSelect className="h-9 rounded-[6px] border border-border bg-card px-2 text-sm" accounts={accounts as Account[]} value={state.accountId} onChange={state.setAccountId} ariaLabel="Received into account" />
           </label>
+          {/* What the two per-row choices mean — the buttons alone don't say it. */}
+          <p className="text-[11px] leading-snug text-muted-foreground">
+            <span className="font-semibold text-foreground/80">Already in my account</span> — you got that money earlier, so it&apos;s already in your balance and nothing changes.{" "}
+            <span className="font-semibold text-foreground/80">Add to my account</span> — FlowFi adds it to the account above now.
+          </p>
         </div>
       )}
 
       {summary && (
         <div className="flex flex-col gap-2 rounded-[6px] bg-secondary/60 p-2.5" data-testid="reconcile-summary">
-          <p className="text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">Their side of it</p>
+          <p className="text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">{solo ? `What ${solo} has paid you` : "What each person has paid you"}</p>
           <ul className="flex flex-col gap-1.5">
             {summary.people.map((p) => {
               const given = p.alreadyReceived + p.receivedNow;
@@ -375,7 +405,7 @@ export function HistoricalPeopleReconcile({
                     <span className={cn("font-semibold", pending ? "text-expense" : "text-success")}>{pending ? `${formatCurrency(p.remainingAfter)} still to receive` : "fully received"}</span>
                   </span>
                   <span className="text-muted-foreground tabular-nums">
-                    Gave {formatCurrency(given)} of {formatCurrency(p.share)}
+                    Paid you {formatCurrency(given)} of {formatCurrency(p.share)}
                   </span>
                 </li>
               );
@@ -452,7 +482,7 @@ function ShareLineRow({
   locked?: boolean;
   onChange: (patch: Partial<ReimbursementDraft>) => void;
 }) {
-  const label = `${showInstallment ? `#${line.sequenceNumber} · ` : ""}Share ${formatCurrency(line.share)}`;
+  const label = `${showInstallment ? `Installment #${line.sequenceNumber} · ` : ""}${line.personName}'s share ${formatCurrency(line.share)}`;
   const name = `${line.personName}${showInstallment ? ` #${line.sequenceNumber}` : ""}`;
   if (line.remaining <= PAYMENT_EPSILON) {
     return (
@@ -511,7 +541,7 @@ function ShareLineRow({
           />
         </div>
       )}
-      {choice !== "none" && !(draft?.date ?? "") && <p className="text-right text-[11px] text-muted-foreground">Date not known — saved as such</p>}
+      {choice !== "none" && !(draft?.date ?? "") && <p className="text-right text-[11px] text-muted-foreground">No date entered — it will be saved as “Date not known”.</p>}
       {error && (
         <p role="alert" className="text-right text-[11px] font-semibold text-expense">
           {error}

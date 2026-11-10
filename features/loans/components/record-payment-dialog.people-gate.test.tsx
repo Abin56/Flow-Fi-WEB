@@ -897,7 +897,9 @@ describe("J — Mark an old EMI as paid: had the people sharing it already paid 
     await choose(user, "SANJU", "Received in full");
     const save = footer("Save past payment of ₹3,000");
     expect(save.disabled).toBe(true); // where is the money? must be answered
-    expect(screen.getByText("Date not known — saved as such")).toBeTruthy();
+    // The date already given for the lender payment is the starting point — not asked again from today's calendar.
+    expect(screen.queryByText("No date entered — it will be saved as “Date not known”.")).toBeNull();
+    expect((screen.getByLabelText("Date received from SANJU") as HTMLInputElement).value).not.toBe("");
     await choose(user, "Where is SANJU's money", "Already in my account");
     expect(screen.getByTestId("reconcile-summary").textContent).toContain("AMMA: ₹1,000 still to receive");
     expect(screen.getByTestId("reconcile-summary").textContent).toContain("SANJU: fully received");
@@ -911,10 +913,26 @@ describe("J — Mark an old EMI as paid: had the people sharing it already paid 
     const [items, accountId] = reimbRecord.mock.calls[0];
     expect(accountId).toBe("sbi");
     expect(items).toHaveLength(1);
-    expect(items[0]).toMatchObject({ personId: "sanju", obligationKey: "emi-inst:i1", amount: 1000, recordedEarlier: true, dateKnown: false });
-    // Never the lender payment's date: the unknown date is only the share's placeholder.
-    expect(items[0].date.toDateString()).toBe(day(-40).toDateString());
-    expect((emiRecordPayment.mock.calls[0][2] as { date: Date }).date.toDateString()).not.toBe(items[0].date.toDateString());
+    // Untouched, the person's date starts on the lender payment's date and is saved as a known date.
+    expect(items[0]).toMatchObject({ personId: "sanju", obligationKey: "emi-inst:i1", amount: 1000, recordedEarlier: true, dateKnown: true });
+    expect(items[0].date.toDateString()).toBe((emiRecordPayment.mock.calls[0][2] as { date: Date }).date.toDateString());
+  });
+
+  it("clearing the starting date makes it 'Date not known' — the due date is then only a placeholder", async () => {
+    const user = userEvent.setup();
+    reimbLines = [share("sanju", "SANJU")];
+    renderDialog(emiTarget());
+    await openPastSingle(user);
+    await choose(user, "SANJU", "Received in full");
+    await user.clear(screen.getByLabelText("Date received from SANJU"));
+    expect(screen.getByText("No date entered — it will be saved as “Date not known”.")).toBeTruthy();
+    await choose(user, "Where is SANJU's money", "Already in my account");
+    await pickAccount(user, "Received into account");
+    await user.click(footer("Save past payment of ₹3,000 · ₹1,000 from people"));
+    await waitFor(() => expect(reimbRecord).toHaveBeenCalledTimes(1));
+    const item = reimbRecord.mock.calls[0][0][0];
+    expect(item).toMatchObject({ dateKnown: false });
+    expect(item.date.toDateString()).toBe(day(-40).toDateString());
   });
 
   it("received some + 'Add money to my account': an ordinary receipt for exactly that amount", async () => {
@@ -924,6 +942,7 @@ describe("J — Mark an old EMI as paid: had the people sharing it already paid 
     await openPastSingle(user);
     await choose(user, "AMMA", "Received some");
     await user.type(screen.getByRole("spinbutton", { name: /amount received from amma/i }), "400");
+    await user.clear(screen.getByLabelText("Date received from AMMA"));
     await user.type(screen.getByLabelText("Date received from AMMA"), "05/09/2026");
     await choose(user, "Where is AMMA's money", "Add to my account");
     expect(screen.getByTestId("reconcile-summary").textContent).toContain("AMMA: ₹600 still to receive");

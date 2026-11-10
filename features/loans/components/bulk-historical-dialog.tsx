@@ -143,6 +143,8 @@ export function BulkHistoricalDialog({
   const reconcile = useHistoricalReconcile({
     target: reconcileTarget,
     defaultAccountId: accountId,
+    // Each person's row starts on the date chosen for that installment above ("blank / unknown" stays blank).
+    defaultDateOf: (l) => (fromAccount ? null : bulkDraftDate(dateMode ?? "unknown", l.dueDate, sameDate, draft[l.installmentId]?.date ?? "")),
   });
   const [peopleItems, setPeopleItems] = useState<ReimbursementItem[] | null>(null);
   const reconcileTotal = reconcile.plan.ok ? reconcile.plan.summary.total : 0;
@@ -462,7 +464,7 @@ export function BulkHistoricalDialog({
       {step === "people" && !fromAccount && (
         <section aria-label="People's shares" className="flex flex-col gap-2">
           <p className="text-xs text-muted-foreground">
-            Recording the lender payments never marks anyone as paid. Mark only what each person really paid you — everything else stays owed in People.
+            These are your past payments to the lender. They don&apos;t mark anyone as having paid you — tick only what a person really paid you back; the rest stays pending in People.
           </p>
           <HistoricalPeopleReconcile state={reconcile} accounts={accounts} showInstallment locked={false} />
         </section>

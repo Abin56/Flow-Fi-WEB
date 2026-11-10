@@ -40,7 +40,7 @@ async function toPeopleStep(page) {
   await dlg.getByRole("button", { name: "Continue with 3 EMIs" }).click();
   await dlg.getByRole("radio", { name: /Each on its due date/ }).click();
   await dlg.getByRole("button", { name: "Continue to people's shares" }).click({ timeout: 30000 });
-  await dlg.getByText("Have the people sharing this already paid you?").waitFor();
+  await dlg.getByText(/already paid you their share\?/).waitFor();
   return dlg;
 }
 
@@ -79,7 +79,7 @@ const partBody = (withReminder) => async ({ page }, chk) => {
   await receivedSome(page, dlg, 400);
   const summary = (await dlg.getByTestId("reconcile-summary").innerText()).replace(/\n/g, " ");
   await h.shot(page, `${label}-people${sfx(page)}`);
-  chk("shows what she gave and what is left (₹400 of ₹3,000 · ₹2,600 still to receive)", /QA Priya: ₹2,600 still to receive/.test(summary) && /Gave ₹400 of ₹3,000/.test(summary), summary);
+  chk("shows what she gave and what is left (₹400 of ₹3,000 · ₹2,600 still to receive)", /QA Priya: ₹2,600 still to receive/.test(summary) && /Paid you ₹400 of ₹3,000/.test(summary), summary);
   chk("says the pending amount stays in People and lender payments are not changed", /stays owed in the People ledger/.test(summary) && /lender payments above are not changed/.test(summary));
   chk("reminder control is offered, 'No reminder' selected by default", (await dlg.getByRole("radio", { name: "No reminder" }).getAttribute("aria-checked")) === "true");
   const remindOn = new Date(Date.now() + 10 * 86400000);
@@ -127,7 +127,7 @@ const onlyBody = async ({ page }, chk) => {
   const led0 = (await activeEntries(priya)).length;
   const dlg = await toPeopleStep(page);
   const summary = (await dlg.getByTestId("reconcile-summary").innerText()).replace(/\n/g, " ");
-  chk("nothing marked received: ₹3,000 pending, ₹0 given", /QA Priya: ₹3,000 still to receive/.test(summary) && /Gave ₹0 of ₹3,000/.test(summary), summary);
+  chk("nothing marked received: ₹3,000 pending, ₹0 given", /QA Priya: ₹3,000 still to receive/.test(summary) && /Paid you ₹0 of ₹3,000/.test(summary), summary);
   const remindOn = new Date(Date.now() + 5 * 86400000);
   await dlg.getByRole("radio", { name: "Remind me on…" }).click();
   await dlg.getByLabel("Reminder date").fill(ddmmyyyy(remindOn));

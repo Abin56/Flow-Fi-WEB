@@ -473,6 +473,8 @@ export function RecordPaymentDialog({
           }
         : null,
     defaultAccountId: accountId,
+    // The people's rows start on the date already given for the lender payment — not asked again from today's calendar.
+    defaultDateOf: () => (dateUnknown ? null : earlierDate),
   });
   const reconcileItems = reconcile.plan.ok ? reconcile.plan.items : [];
   const reconcileTotal = reconcile.plan.ok ? reconcile.plan.summary.total : 0;

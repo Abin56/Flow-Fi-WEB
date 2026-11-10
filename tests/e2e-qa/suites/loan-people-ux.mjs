@@ -61,7 +61,7 @@ scenario("uxp-hist-24-mixed-people", "24 months of history: lender paid earlier 
   chk("dates are never assumed: the next step waits for an answer", await dlg.getByRole("button", { name: "Choose when they were paid" }).isDisabled());
   await dlg.getByRole("radio", { name: /Each on its due date/ }).click();
   await dlg.getByRole("button", { name: "Continue to people's shares" }).click({ timeout: 30000 });
-  await dlg.getByText("Have the people sharing this already paid you?").waitFor();
+  await dlg.getByText(/already paid you their share\?/).waitFor();
   // Priya paid #1–#22 (already in my balance); #23 and #24 are still owed.
   const person = dlg.getByTestId(/reconcile-person-/).first();
   await person.getByRole("button", { name: "All received" }).click();
