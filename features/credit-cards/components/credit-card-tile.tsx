@@ -171,7 +171,14 @@ export function CreditCardTile({ card, bankId, active, partnerHighlighted, onHov
                     <MoreVertical className="size-4" />
                   </button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="rounded-[8px]">
+                {/* The menu is portalled, but React still bubbles its events to this tile's onClick / onKeyDown —
+                    without this, choosing Edit or Delete would also select the card and open its activity sheet. */}
+                <DropdownMenuContent
+                  align="end"
+                  className="rounded-[8px]"
+                  onClick={(e) => e.stopPropagation()}
+                  onKeyDown={(e) => e.stopPropagation()}
+                >
                   <DropdownMenuItem onSelect={() => onEdit?.()}>Edit</DropdownMenuItem>
                   <DropdownMenuItem className="text-expense" onSelect={() => onDelete?.()}>
                     Delete

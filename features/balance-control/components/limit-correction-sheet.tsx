@@ -13,6 +13,7 @@
 
 import { useId, useState } from "react";
 import { AlertTriangle, ShieldCheck } from "lucide-react";
+import { DateInput } from "@/components/forms/date-input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -172,9 +173,8 @@ function LimitCorrectionForm({
 
         <div>
           <Label htmlFor={`${formId}-date`} className="text-xs text-muted-foreground">Effective date</Label>
-          <input
+          <DateInput
             id={`${formId}-date`}
-            type="date"
             value={effectiveDate}
             onChange={(e) => setEffectiveDate(e.target.value)}
             data-testid="correction-effective-date"

@@ -6,7 +6,7 @@ import type { LedgerEntryType } from "@/lib/models/person";
 import { money } from "@/lib/engines/person-cycle-statement-share";
 import { cn } from "@/lib/utils";
 import { isUnderfunded } from "@/components/finance/payment-source-summary";
-import { AccountField, useAccountChoice } from "./ledger-ui";
+import { AccountField, toDateInput, useAccountChoice } from "./ledger-ui";
 import { WS_FIELD, WS_GHOST, WS_PRIMARY, WS_SELECT_TRIGGER, WsField } from "./person-workspace-ui";
 import { flowText, HeroAmount, PanelHeader, type FlowTone } from "./flow-switch";
 import { DateInput } from "@/components/forms/date-input";
@@ -53,7 +53,7 @@ export function AddEntryPanel({
 }) {
   const [type, setType] = useState<AddEntryType | null>(null);
   const [amount, setAmount] = useState("");
-  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(() => toDateInput(new Date()));
   const [note, setNote] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -68,9 +68,11 @@ export function AddEntryPanel({
   const amountRef = useRef<HTMLInputElement>(null);
   const firstName = personName.split(" ")[0];
 
+  // A ref, not state: a rapid double click lands before the re-render that disables Save (would post the entry twice).
+  const inFlight = useRef(false);
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (saving) return;
+    if (saving || inFlight.current) return;
     if (!type) {
       setError("Choose “Money I Gave” or “Money I Borrowed”.");
       return;
@@ -88,6 +90,7 @@ export function AddEntryPanel({
       setError("The chosen account doesn't have enough balance — choose another account or lower the amount.");
       return;
     }
+    inFlight.current = true;
     setSaving(true);
     setError(null);
     try {
@@ -96,6 +99,7 @@ export function AddEntryPanel({
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong. Please try again.");
+      inFlight.current = false;
       setSaving(false);
     }
   }
@@ -202,9 +206,9 @@ export function AddEntryPanel({
 
             {/* What this will record — updates as the form is filled. */}
             <section aria-label="Summary" className="overflow-hidden rounded-2xl border border-border-strong bg-card shadow-e1">
-              <div className={cn("px-4 py-3", type === "gave" ? "bg-settle-receivable-tint" : type === "borrowed" ? "bg-settle-payable-tint" : "bg-secondary/60")}>
-                <p className="text-[11px] font-bold tracking-[0.1em] text-foreground/65 uppercase">{outcome ? outcome.lead : "This will record"}</p>
-                <p className={cn("mt-1 font-heading text-[30px] leading-none font-bold tracking-tight tabular-nums", typed > 0 ? "text-foreground" : "text-foreground/35")}>{money(typed)}</p>
+              <div className={cn("flex items-baseline justify-between gap-3 px-4 py-2.5", type === "gave" ? "bg-settle-receivable-tint" : type === "borrowed" ? "bg-settle-payable-tint" : "bg-secondary/60")}>
+                <p className="min-w-0 truncate text-[11px] font-bold tracking-[0.1em] text-foreground/65 uppercase">{outcome ? outcome.lead : "This will record"}</p>
+                <p className={cn("shrink-0 font-heading text-[24px] leading-none font-bold tracking-tight tabular-nums", typed > 0 ? "text-foreground" : "text-foreground/35")}>{money(typed)}</p>
               </div>
               <dl className="divide-y divide-dashed divide-border-strong px-4 text-[13px]">
                 <SummaryRow label={type === "borrowed" ? "Into account" : "From account"}>{account.selected?.name ?? <span className="font-semibold text-warning">Choose an account</span>}</SummaryRow>
@@ -219,7 +223,7 @@ export function AddEntryPanel({
       </div>
 
       {/* Pinned footer: the consequence in words, any error, and the action */}
-      <div className="sticky bottom-0 z-10 mt-auto border-t border-border-strong bg-card px-4 py-3.5 pb-[max(0.875rem,env(safe-area-inset-bottom))] shadow-[0_-8px_24px_-12px_rgb(0_0_0/0.18)] sm:px-6">
+      <div className="sticky bottom-0 z-10 mt-auto border-t border-border-strong bg-card px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-[0_-8px_24px_-12px_rgb(0_0_0/0.18)] sm:px-5">
         <p className="min-h-5 truncate text-xs text-foreground/70" aria-live="polite">
           {outcome ? (
             <span key={outcome.lead} className="inline-block duration-200 animate-in fade-in slide-in-from-bottom-0.5">
@@ -236,7 +240,7 @@ export function AddEntryPanel({
             {error}
           </p>
         )}
-        <div className="mt-3 flex items-center gap-2">
+        <div className="mt-2.5 flex items-center gap-2">
           <button type="button" onClick={onCancel} disabled={saving} className={cn(WS_GHOST, "shrink-0")}>
             Cancel
           </button>
@@ -256,7 +260,7 @@ export function AddEntryPanel({
 
 function SummaryRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="grid grid-cols-[6rem_minmax(0,1fr)] items-baseline gap-x-3 py-2.5">
+    <div className="grid grid-cols-[6rem_minmax(0,1fr)] items-baseline gap-x-3 py-1.5">
       <dt className="text-xs font-medium text-foreground/70">{label}</dt>
       <dd className="min-w-0 text-right font-medium text-foreground [overflow-wrap:anywhere]">{children}</dd>
     </div>
@@ -276,7 +280,7 @@ function TypeCards({
   invalid: boolean;
 }) {
   return (
-    <div role="radiogroup" aria-label="Transaction type" aria-invalid={invalid || undefined} className={cn("grid grid-cols-2 gap-2.5 rounded-2xl", invalid && "ring-2 ring-warning/60 ring-offset-2 ring-offset-card")}>
+    <div role="radiogroup" aria-label="Transaction type" aria-invalid={invalid || undefined} className={cn("grid grid-cols-2 gap-2 rounded-2xl", invalid && "ring-2 ring-warning/60 ring-offset-2 ring-offset-card")}>
       {options.map(({ value: v, title, sub, label, meta, Icon, tint, text }) => {
         const on = v === value;
         return (
@@ -288,15 +292,15 @@ function TypeCards({
             aria-label={label}
             onClick={() => onChange(v)}
             className={cn(
-              "flex min-w-0 items-center gap-3 rounded-2xl border px-3.5 py-3 text-left outline-none transition-[background-color,border-color,box-shadow] duration-200 focus-visible:ring-2 focus-visible:ring-ring",
+              "flex min-w-0 items-center gap-2.5 rounded-2xl border px-3 py-2.5 text-left outline-none transition-[background-color,border-color,box-shadow] duration-200 focus-visible:ring-2 focus-visible:ring-ring",
               on ? cn("border-transparent shadow-e1 ring-2", tint) : "border-border-strong bg-card hover:bg-secondary/60",
             )}
           >
-            <span aria-hidden className={cn("grid size-10 shrink-0 place-items-center rounded-full", on ? "bg-card shadow-e1" : "bg-secondary", text)}>
-              <Icon className="size-5" strokeWidth={2.25} />
+            <span aria-hidden className={cn("grid size-8 shrink-0 place-items-center rounded-full", on ? "bg-card shadow-e1" : "bg-secondary", text)}>
+              <Icon className="size-4" strokeWidth={2.25} />
             </span>
             <span className="min-w-0">
-              <span className="block truncate text-[15px] font-bold text-foreground">
+              <span className="block truncate text-sm font-bold text-foreground">
                 {title} <span className="font-medium text-foreground/70">{sub}</span>
               </span>
               <span className={cn("block truncate text-xs", on ? cn("font-semibold", text) : "text-foreground/65")}>{meta}</span>

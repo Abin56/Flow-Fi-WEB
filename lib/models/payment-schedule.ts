@@ -167,6 +167,20 @@ export function remainingAmount(installment: Installment): number {
   return Math.min(Math.max(remaining, 0), installment.amountDue);
 }
 
+/** Installments still unpaid (count + total remaining), or null when there are none. */
+export function outstandingOf(installments: Installment[] | undefined): { count: number; amount: number } | null {
+  let count = 0;
+  let amount = 0;
+  for (const i of installments ?? []) {
+    const left = remainingAmount(i);
+    if (left > 0) {
+      count += 1;
+      amount += left;
+    }
+  }
+  return count > 0 ? { count, amount } : null;
+}
+
 /** Mirrors `Installment.status`. */
 export function installmentStatus(installment: Installment, now: Date = new Date()): InstallmentStatus {
   if (installment.amountPaid >= installment.amountDue) return "paid";

@@ -14,7 +14,7 @@ import { RecordPaymentDialog } from "@/features/loans/components/record-payment-
 import { RecordedPaymentDialog } from "@/features/loans/components/recorded-payment-dialog";
 import { EMI_PAYMENT_HISTORY_KEY, useEmiPaymentHistory } from "@/features/loans/hooks/use-payment-history";
 import { groupRecordedPayments, type RecordedPaymentAction } from "@/features/loans/lib/recorded-payments";
-import { remainingAmount, type Installment } from "@/lib/models/payment-schedule";
+import { outstandingOf, remainingAmount, type Installment } from "@/lib/models/payment-schedule";
 import { errorDetail } from "@/lib/operation-progress/operation-progress";
 import { startOperation } from "@/store/operation-progress-store";
 
@@ -192,6 +192,7 @@ export function EmiWorkspace({ openRequest = null }: EmiWorkspaceProps = {}) {
         loadImpact={loadDeleteImpact}
         onConfirm={handleDelete}
         busy={deleting}
+        outstanding={outstandingOf(activeRowFresh?.installments)}
       />
     </StackProvider>
   );

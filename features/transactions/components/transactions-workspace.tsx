@@ -134,13 +134,26 @@ interface SplitFormState {
   participants: SplitParticipantForm[];
 }
 
+/** `yyyy-mm-dd` of the calendar day as the user sees it (local). `toISOString()` is the UTC day, which is a day behind
+ *  for anything before 5:30 am in India — and for a local-midnight date like "the 1st of the month". */
+function localDateInput(date: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+/** `yyyy-mm-dd` → midnight at the start of that LOCAL day (`new Date("yyyy-mm-dd")` would be midnight UTC). */
+function localDayStart(value: string): Date {
+  const [y, m, d] = value.split("-").map(Number);
+  return new Date(y, m - 1, d);
+}
+
 function emptySplitForm(defaultAccountId: string, defaultCategoryId: string): SplitFormState {
   return {
     description: "",
     amount: "",
     accountId: defaultAccountId,
     categoryId: defaultCategoryId,
-    date: new Date().toISOString().slice(0, 10),
+    date: localDateInput(new Date()),
     notes: "",
     splitType: "equal",
     includeMe: true,
@@ -340,11 +353,11 @@ export function TransactionsWorkspace() {
       list = list.filter((r) => paymentMethodFor(r.transaction, r.account) === paymentMethodFilter);
     }
     if (dateFrom) {
-      const from = new Date(dateFrom);
+      const from = localDayStart(dateFrom);
       list = list.filter((r) => r.transaction.dateTime >= from);
     }
     if (dateTo) {
-      const to = new Date(dateTo);
+      const to = localDayStart(dateTo);
       to.setHours(23, 59, 59, 999);
       list = list.filter((r) => r.transaction.dateTime <= to);
     }
@@ -422,8 +435,8 @@ export function TransactionsWorkspace() {
   const setThisMonth = () => {
     const now = new Date();
     const start = new Date(now.getFullYear(), now.getMonth(), 1);
-    setDateFrom(start.toISOString().slice(0, 10));
-    setDateTo(now.toISOString().slice(0, 10));
+    setDateFrom(localDateInput(start));
+    setDateTo(localDateInput(now));
     setPage(1);
   };
 
@@ -1341,7 +1354,7 @@ function shortDate(d: Date): string {
 }
 
 function dateRangeLabel(from: string, to: string): string {
-  const fmt = (v: string) => new Date(v).toLocaleDateString("en-IN", { day: "numeric", month: "short" });
+  const fmt = (v: string) => localDayStart(v).toLocaleDateString("en-IN", { day: "numeric", month: "short" });
   if (from && to) return `${fmt(from)} – ${fmt(to)}`;
   return from ? `From ${fmt(from)}` : `Until ${fmt(to)}`;
 }

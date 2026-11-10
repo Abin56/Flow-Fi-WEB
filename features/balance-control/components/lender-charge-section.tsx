@@ -14,6 +14,7 @@
 
 import { useMemo, useState } from "react";
 import { Ban, CreditCard, Landmark } from "lucide-react";
+import { DateInput } from "@/components/forms/date-input";
 import { Badge } from "@/components/ui/badge";
 import { formatCurrencyPrecise } from "@/lib/format";
 import { useCreditCards } from "@/hooks/use-credit-cards";
@@ -166,7 +167,7 @@ export function LenderChargeSection({ context, now }: { context: LoanReconciliat
           <input id="lc-amount" inputMode="decimal" autoComplete="off" value={amount} onChange={(e) => setAmount(e.target.value)} className={INPUT} data-testid="lender-charge-amount" />
         </Field>
         <Field id="lc-date" label="Billed / effective date" hint="The date the lender billed it — the expense is recognised in this month.">
-          <input id="lc-date" type="date" value={billed} onChange={(e) => setBilled(e.target.value)} className={INPUT} data-testid="lender-charge-date" />
+          <DateInput id="lc-date"value={billed} onChange={(e) => setBilled(e.target.value)} className={INPUT} data-testid="lender-charge-date" />
         </Field>
         <Field id="lc-ref" label="Lender reference" hint="Statement, invoice or charge id. Helps stop the same charge being recorded twice.">
           <input id="lc-ref" value={reference} onChange={(e) => setReference(e.target.value)} className={INPUT} data-testid="lender-charge-reference" />

@@ -13,7 +13,7 @@ import { SUCCESS_HOLD_MS, type OperationHandle } from "@/lib/operation-progress/
 import { startOperation } from "@/store/operation-progress-store";
 import type { InterestType } from "@/lib/engines/interest-calculator";
 import type { Loan, LoanCategory, LoanDirection } from "@/lib/models/loan";
-import type { ScheduleType } from "@/lib/models/payment-schedule";
+import { outstandingOf, type ScheduleType } from "@/lib/models/payment-schedule";
 import { loanDisplayName } from "@/features/loans/components/loan-card";
 import {
   AmountInput,
@@ -44,7 +44,7 @@ import {
   type OwnershipChoice,
 } from "@/features/loans/components/who-is-this-for-field";
 import { loanOriginationUi } from "@/features/loans/lib/loan-origination-ui";
-import { recordKindForLoan } from "@/features/loans/lib/loan-emi-add";
+import { parseDateInput, recordKindForLoan, toDateInput } from "@/features/loans/lib/loan-emi-add";
 import { originationIdsFor, originationKeyFromLoanId } from "@/lib/engines/loan-origination";
 import { useTransactions } from "@/hooks/use-transactions";
 import { useLoanActions, useLoanRows, useTrashedLoanRows, type LoanRow } from "@/features/loans/hooks/use-loans-data";
@@ -102,8 +102,8 @@ function emptyForm(): LoanFormState {
     interestType: "reducingBalance",
     installmentFrequency: "monthly",
     installmentCount: "12",
-    loanDate: new Date().toISOString().slice(0, 10),
-    firstEmiDate: new Date().toISOString().slice(0, 10),
+    loanDate: toDateInput(new Date()),
+    firstEmiDate: toDateInput(new Date()),
     notes: "",
     loanType: "",
     loanNumber: "",
@@ -131,8 +131,9 @@ function formFromRow(row: LoanRow): LoanFormState {
     interestType: row.loan.interest?.type ?? "reducingBalance",
     installmentFrequency: row.loan.installmentFrequency ?? "monthly",
     installmentCount: String(row.loan.installmentCount ?? row.totalInstallments),
-    loanDate: row.loan.loanDate.toISOString().slice(0, 10),
-    firstEmiDate: (row.installments[0]?.dueDate ?? row.loan.loanDate).toISOString().slice(0, 10),
+    // The calendar day as the user sees it (local) — the Add flow stores local midnight, so the UTC day reads a day early in India.
+    loanDate: toDateInput(row.loan.loanDate),
+    firstEmiDate: toDateInput(row.installments[0]?.dueDate ?? row.loan.loanDate),
     notes: row.loan.notes,
     loanType: row.loan.loanType ?? "",
     loanNumber: row.loan.loanNumber ?? "",
@@ -257,6 +258,8 @@ export function LoansWorkspace({ openRequest = null, trashRequest = 0 }: LoansWo
   function openEdit(row: LoanRow) {
     setActiveRowId(row.loan.id);
     setForm(formFromRow(row));
+    // Each Edit starts clean — the previous save's "Loan updated ✓ Done" (or a failure) must not greet the next one.
+    editOperation.clear();
     setEditOpen(true);
   }
 
@@ -296,9 +299,9 @@ export function LoansWorkspace({ openRequest = null, trashRequest = 0 }: LoansWo
         // Loan Date only moves before any payment exists — mirrors `LoanRepository.editLoanDate`'s own
         // guard. Runs against `current` so it re-amortizes with whatever terms were just saved above.
         const hasPayments = activeRow.installments.some((i) => i.amountPaid > 0);
-        const originalLoanDate = activeRow.loan.loanDate.toISOString().slice(0, 10);
+        const originalLoanDate = toDateInput(activeRow.loan.loanDate);
         const dateChanged = !hasPayments && form.loanDate !== originalLoanDate;
-        const originalFirstEmiDate = (activeRow.installments[0]?.dueDate ?? activeRow.loan.loanDate).toISOString().slice(0, 10);
+        const originalFirstEmiDate = toDateInput(activeRow.installments[0]?.dueDate ?? activeRow.loan.loanDate);
         const firstEmiDateChanged = !hasPayments && form.firstEmiDate !== originalFirstEmiDate;
         // The real, sequential writes this save performs: details first, then any schedule re-plan / date move.
         op = editOperation.start({ label: "Updating loan", successLabel: "Loan updated", errorLabel: "Couldn't save changes", detail: "Checking changes" });
@@ -335,7 +338,7 @@ export function LoansWorkspace({ openRequest = null, trashRequest = 0 }: LoansWo
         if (dateChanged) {
           op.stage("related", "Updating dates");
           current = await actions.editLoanDate(current, {
-            newLoanDate: new Date(form.loanDate),
+            newLoanDate: parseDateInput(form.loanDate) ?? new Date(form.loanDate),
             hasPayments: false,
             currentInstallments: activeRow.installments,
           });
@@ -344,7 +347,7 @@ export function LoansWorkspace({ openRequest = null, trashRequest = 0 }: LoansWo
         if (firstEmiDateChanged) {
           op.stage("related", "Updating repayment schedule");
           await actions.editFirstDueDate(current, {
-            newFirstDueDate: new Date(form.firstEmiDate),
+            newFirstDueDate: parseDateInput(form.firstEmiDate) ?? new Date(form.firstEmiDate),
             hasPayments: false,
             currentInstallments: activeRow.installments,
           });
@@ -543,6 +546,7 @@ export function LoansWorkspace({ openRequest = null, trashRequest = 0 }: LoansWo
         loadImpact={loadDeleteImpact}
         onConfirm={confirmPermanentDelete}
         busy={purging}
+        outstanding={outstandingOf(rows.find((r) => r.loan.id === deleteTarget?.id)?.installments)}
       />
 
       <LoansTrashDialog

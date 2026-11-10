@@ -151,7 +151,7 @@ export function annotateOcrRows(rows: CaptureRow[], lines: OcrLine[], { hasCredi
     let suggestedInclude = row.suggestedInclude;
 
     const dateFirst = row.sourceOrder == null || row.sourceOrder[0] === "date";
-    const date = dateFirst ? dateWords(rowLines[0].words) : findDateWords(rowLines[0].words);
+    const date = dateFirst ? dateWords(rowLines[0].words) : findDateWords((row.sourceOrder?.at(-1) === "date" ? rowLines[rowLines.length - 1] : rowLines[0]).words);
     const amounts = words.filter((w) => AMOUNT_WORD.test(w.text));
     const markerColumn = row.sourceOrder?.includes("direction") ?? false;
     const markers = rowLines.flatMap((l) => markerWords(l, markerColumn));

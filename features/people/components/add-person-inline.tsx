@@ -75,15 +75,18 @@ function AddPersonForm({
     if (open) nameRef.current?.focus({ preventScroll: true });
   }, [open]);
 
+  // A ref, not state: a rapid double click lands before the re-render that disables the button (would add the person twice).
+  const inFlight = useRef(false);
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (saving) return;
+    if (saving || inFlight.current) return;
     const trimmed = name.trim();
     if (!trimmed) return setError("Enter a name.");
     const amount = opening.trim() ? Number(opening) : 0;
     if (!Number.isFinite(amount) || amount < 0)
       return setError("Opening balance must be a positive amount.");
     setError(null);
+    inFlight.current = true;
     setSaving(true);
     try {
       await onSubmit({
@@ -98,6 +101,7 @@ function AddPersonForm({
           ? err.message
           : "Couldn't add this person. Please try again.",
       );
+      inFlight.current = false;
       setSaving(false);
     }
   }

@@ -206,6 +206,15 @@ export function BillsWorkspace() {
 
   async function handleSave(isEdit: boolean) {
     if (!actions) return;
+    // The date field reports "" while its text is empty / incomplete / not a real date — never turn that into a stored date.
+    if (!form.name.trim()) {
+      toast.error(isEdit ? "Couldn't save changes" : "Couldn't add bill", "Enter a bill name.");
+      return;
+    }
+    if (!form.dueDate) {
+      toast.error(isEdit ? "Couldn't save changes" : "Couldn't add bill", "Enter a valid due date (dd/mm/yyyy).");
+      return;
+    }
     setSaving(true);
     try {
       const amount = Number(form.amount);

@@ -16,6 +16,7 @@
 import { useMemo, useState } from "react";
 import { AlertTriangle, ArrowDownLeft, ArrowLeft, ArrowLeftRight, ArrowUpRight, CheckCircle2, ChevronDown, Columns3, RotateCcw, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { formatDisplayDate } from "@/components/forms/date-input";
 import { ClayButton } from "@/components/clay/clay-button";
 import { assignRole, columnName, detectColumnRoles, ROLE_LABEL, ROLE_ORDER, validateMapping, type AutoMapping, type CaptureGrid, type ColumnRole, type MappingProblem } from "../lib/column-mapping";
 import { extractMapped, summarizeExtraction, swapDebitCredit } from "../lib/mapped-extract";
@@ -49,7 +50,7 @@ const SLIM_ROLES: ReadonlySet<ColumnRole> = new Set<ColumnRole>(["ignore", "type
 const INVERTED_MESSAGE = "Balance moves opposite to Debit / Credit — they may be swapped.";
 
 const inr = (paise: number) => (paise / 100).toLocaleString("en-IN", { style: "currency", currency: "INR", minimumFractionDigits: 2 });
-const day = (d: Date | null) => (d ? d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "—");
+const day = (d: Date | null) => (d ? formatDisplayDate(d) : "—");
 
 export function ColumnMappingStep({
   grid,

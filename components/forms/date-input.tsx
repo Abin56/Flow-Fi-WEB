@@ -10,6 +10,12 @@ export function isoToDisplayDate(iso: string): string {
   return m ? `${m[3]}/${m[2]}/${m[1]}` : "";
 }
 
+/** A Date -> `dd/mm/yyyy` (local calendar day), the one display format used app-wide. */
+export function formatDisplayDate(date: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(date.getDate())}/${pad(date.getMonth() + 1)}/${date.getFullYear()}`;
+}
+
 /** `dd/mm/yyyy` -> `yyyy-mm-dd`; "" when incomplete or not a real calendar date. */
 export function displayToIsoDate(text: string): string {
   const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(text);

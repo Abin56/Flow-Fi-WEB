@@ -228,8 +228,95 @@ const SUMMARY_PATTERNS = [
 const HEADER_HINTS = /\b(date|transaction details|description|narration|particulars|merchant)\b/i;
 const HEADER_AMOUNT_HINTS = /\b(amount|debit|credit|withdrawal|deposit|dr|cr)\b/i;
 
+/**
+ * A month heading with that month's total beside it — Google Pay's history prints "2026" / "November  ₹3,949.90" above
+ * each month's days. The amount is a monthly total, not a transaction, and the year line above it is just a label.
+ * Only a line made of nothing but [year] month [year] and an amount counts, so a dated transaction never matches.
+ */
+const YEAR_LABEL_RE = /^(19|20)\d{2}$/;
+const MONTH_TOTAL_RE = new RegExp(`^(?:(?:19|20)\\d{2}\\s+)?${MONTH_NAME}(?:\\s+(?:19|20)\\d{2})?\\s*[:|-]?\\s*((?:[^\\w\\s]|rs\\.?|inr)*)\\s*([\\d,]*\\d(?:\\.\\d+)?)\\s*(?:cr|dr)?$`, "i");
+
+function isMonthTotalLine(text: string): boolean {
+  if (YEAR_LABEL_RE.test(text)) return true;
+  const m = MONTH_TOTAL_RE.exec(text);
+  // Bare "Nov 05" is not a total — need a currency mark or a figure that looks like money.
+  return m != null && (m[2].length > 0 || /[,.]|\d{3}/.test(m[3]));
+}
+
 function isSummaryLine(text: string): boolean {
-  return SUMMARY_PATTERNS.some((re) => re.test(text));
+  return SUMMARY_PATTERNS.some((re) => re.test(text)) || isMonthTotalLine(text);
+}
+
+/**
+ * "Merchant … amount" with the date on the line BELOW (Google Pay's history: the merchant and amount share a line and
+ * "2 November" sits under them). The amount is the last cell of the line, and may be a bare integer.
+ */
+const TRAILING_AMOUNT_RE = /^(.*[a-z].*?)(?:\t+|\s{2,})([+\-−–]?\s*(?:₹|rs\.?|inr)?\s*\d[\d,.]*)$/i;
+
+function dateOnlyLine(text: string): DateMatch | null {
+  const m = matchLeadingDate(text);
+  return m != null && text.slice(m.length).trim() === "" ? m : null;
+}
+
+function trailingAmountLine(text: string): { description: string; amountText: string } | null {
+  if (matchLeadingDate(text) || isSummaryLine(text) || isHeaderLine(text)) return null;
+  const m = TRAILING_AMOUNT_RE.exec(text);
+  return m ? { description: stripAvatarGlyph(m[1]), amountText: m[2].replace(/\s+/g, "") } : null;
+}
+
+const SMALL_WORDS = new Set(["a", "an", "of", "to", "in", "on", "at", "by", "or", "as", "is", "my", "mr", "dr"]);
+
+/**
+ * The round avatar at the left of a row is read as stray characters ("G Google Pay rewards", "il Indian Railways",
+ * "aq Indian Railways", "Jio) Jio Prepaid", "( Channel Online"). Dropped only when it has no letters/digits, is a lone
+ * letter matching the name's first letter, repeats the name's first word, or is a 1–2 letter lowercase scrap before a
+ * capitalised word.
+ */
+function stripAvatarGlyph(text: string): string {
+  const parts = text.trim().split(/\s+/);
+  if (parts.length < 2) return text.trim();
+  const core = parts[0].replace(/[^a-z0-9]/gi, "");
+  const next = parts[1].replace(/[^a-z0-9]/gi, "");
+  const strip =
+    core === "" ||
+    (next !== "" && core.toLowerCase() === next.toLowerCase()) ||
+    (core.length === 1 && /[a-z]/i.test(core) && core.toLowerCase() === next[0]?.toLowerCase()) ||
+    (/^[a-z]{1,2}$/.test(core) && !SMALL_WORDS.has(core) && /^[A-Z]/.test(next));
+  return strip ? parts.slice(1).join(" ") : text.trim();
+}
+
+/** Valid money text -> number; "7.735" (a comma read as a full stop) is read as 7,735. Null when it isn't money-shaped. */
+function moneyValue(text: string): number | null {
+  const s = /^\d{1,3}\.\d{3}$/.test(text) ? text.replace(".", ",") : text;
+  if (!/^(?:\d{1,3}(?:,\d{2})*,\d{3}|\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?$/.test(s)) return null;
+  const value = Number(s.replace(/,/g, ""));
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+const CURRENCY_MARK_RE = /₹|rs\.?|inr/i;
+
+/** Whether an amount's text starts with a digit a ₹ could have been read as (no ₹ itself left in it). */
+export function startsWithMisreadCurrency(raw: string): boolean {
+  return !CURRENCY_MARK_RE.test(raw) && /^[23]/.test(raw.replace(/[^\d.,]/g, ""));
+}
+
+/**
+ * Readings of a right-aligned amount. OCR turns the ₹ into a digit glued to the front ("₹350" -> "3350",
+ * "₹1,521.80" -> "31,521.80", "₹3,600.90" -> "323,600.90"). `values[0]` is the reading used; `guessed` is true when
+ * it is the amount with that leading digit(s) removed — only done when `glued` (most amounts in the same capture start
+ * that way, so the ₹ is evidently being read as a digit) and always reported on the row so it is checked.
+ */
+export function trailingAmountReadings(raw: string, glued: boolean): { values: number[]; guessed: boolean; credit: boolean } {
+  const credit = raw.startsWith("+");
+  const digits = raw.replace(/[^\d.,]/g, "");
+  const guessed = glued && startsWithMisreadCurrency(raw);
+  const cuts = guessed ? (/^(32|23)/.test(digits) ? [2, 1, 0] : [1, 0]) : [0];
+  const values: number[] = [];
+  for (const cut of cuts) {
+    const v = moneyValue(digits.slice(cut));
+    if (v != null && !values.includes(v)) values.push(v);
+  }
+  return { values, guessed: guessed && values[0] !== moneyValue(digits), credit };
 }
 
 function isHeaderLine(text: string): boolean {
@@ -477,6 +564,8 @@ interface DraftRow {
   order?: SourceField[];
   /** The date was not the first cell of the line — it was read by its contents and is flagged for a look. */
   dateMoved?: boolean;
+  /** Merchant + amount on this line, the date on the next (see `trailingAmountLine`); the amount text as read. */
+  trailingAmount?: string;
 }
 
 export function parsePastedStatement(input: string, options: ParseOptions = {}): CaptureParseResult {
@@ -488,7 +577,14 @@ export function parsePastedStatement(input: string, options: ParseOptions = {}):
   let headerOrder: SourceField[] | undefined;
   let current: DraftRow | null = null;
 
+  // The date sits UNDER its merchant + amount when the first date-only line follows such a line (a date-above layout
+  // has its first date line before any transaction), so one reading holds for the whole paste.
+  const firstDateOnly = lines.findIndex((l) => dateOnlyLine(l.trim()) != null);
+  const dateBelow = firstDateOnly > 0 && trailingAmountLine(lines[firstDateOnly - 1].trim()) != null;
+  let consumedLine = -1;
+
   lines.forEach((rawLine, lineIndex) => {
+    if (lineIndex === consumedLine) return;
     const line = rawLine.replace(/\s+$/, "");
     const trimmed = line.trim();
     if (trimmed === "") {
@@ -502,6 +598,29 @@ export function parsePastedStatement(input: string, options: ParseOptions = {}):
       ignored.push({ lineIndex, text: trimmed, reason: "header" });
       current = null;
       return;
+    }
+
+    if (dateBelow) {
+      const below = trailingAmountLine(trimmed);
+      const dateLine = below ? dateOnlyLine((lines[lineIndex + 1] ?? "").trim()) : null;
+      if (below && dateLine) {
+        drafts.push({
+          lineStart: lineIndex,
+          lineEnd: lineIndex + 1,
+          sourceLines: [trimmed, lines[lineIndex + 1].trim()],
+          dateMatch: dateLine,
+          description: below.description,
+          amountTokens: [],
+          cells: null,
+          mergedLines: false,
+          rest: below.description,
+          order: ["merchant", "amount", "date"],
+          trailingAmount: below.amountText,
+        });
+        consumedLine = lineIndex + 1;
+        current = null;
+        return;
+      }
     }
 
     // Name the cells by their contents. A line that isn't already date → merchant → amount (a date in a later
@@ -585,7 +704,11 @@ export function parsePastedStatement(input: string, options: ParseOptions = {}):
   const knownYears = drafts.map((d) => d.dateMatch?.y).filter((y): y is number => y != null);
   const fallbackYear = knownYears.length > 0 ? mostCommon(knownYears) : today.getFullYear();
 
-  const rows = alignCodeColumns(drafts.map((draft, i) => finalizeRow(draft, i, { layout, hasCreditMarkers, markerColumn, fallbackYear, today })));
+  // Whether the ₹ is evidently being read as a leading digit in this capture (most amounts begin with a 2 or 3).
+  const belowAmounts = drafts.filter((d) => d.trailingAmount != null);
+  const currencyGlued = belowAmounts.length > 0 && belowAmounts.filter((d) => startsWithMisreadCurrency(d.trailingAmount!)).length / belowAmounts.length >= 0.5;
+
+  const rows = alignCodeColumns(drafts.map((draft, i) => finalizeRow(draft, i, { layout, hasCreditMarkers, markerColumn, fallbackYear, today, currencyGlued })));
   return { rows, ignored, lines, hasCreditMarkers, ...(headerOrder ? { headerOrder } : {}) };
 }
 
@@ -614,7 +737,7 @@ function mostCommon(values: number[]): number {
 function finalizeRow(
   draft: DraftRow,
   index: number,
-  ctx: { layout: ColumnLayout | null; hasCreditMarkers: boolean; markerColumn: boolean; fallbackYear: number; today: Date },
+  ctx: { layout: ColumnLayout | null; hasCreditMarkers: boolean; markerColumn: boolean; fallbackYear: number; today: Date; currencyGlued?: boolean },
 ): CaptureRow {
   const issues: CaptureIssue[] = [];
   const notes: string[] = [];
@@ -664,7 +787,25 @@ function finalizeRow(
   const amountCandidates = tokens.map((t) => t.value);
 
   const columnPick = ctx.layout && draft.cells ? pickFromColumns(draft.cells, ctx.layout) : null;
-  if (columnPick) {
+  if (draft.trailingAmount != null) {
+    // Money out is unsigned and money in carries a "+" (Google Pay). The ₹ is usually read as a digit stuck to the amount.
+    const read = trailingAmountReadings(draft.trailingAmount, ctx.currencyGlued ?? false);
+    direction = read.credit ? "credit" : "debit";
+    amountCandidates.splice(0, amountCandidates.length, ...read.values);
+    if (read.values.length === 0) {
+      issues.push({ code: "no_amount", message: `Couldn't read an amount from "${draft.trailingAmount}" — enter it.`, blocking: true });
+    } else {
+      amount = read.values[0];
+      if (read.guessed) {
+        issues.push({
+          code: "amount_without_decimals",
+          field: "amount",
+          blocking: false,
+          message: `Read "${draft.trailingAmount}" — the ₹ sign is read as a digit in this screenshot, so it is taken as ₹${amount.toLocaleString("en-IN")}. Check it against the image.`,
+        });
+      }
+    }
+  } else if (columnPick) {
     amount = columnPick.amount;
     direction = columnPick.direction;
   } else if (tokens.length === 0) {

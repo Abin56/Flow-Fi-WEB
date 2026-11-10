@@ -2,7 +2,7 @@
 
 import { AccountLabel } from "@/components/finance/account-label";
 import { Check, Divide, Percent, Plus, Receipt, SlidersHorizontal, Split, Trash2, UserRound, Users } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { ClayAvatar } from "@/components/clay/clay-avatar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { formatCurrency } from "@/lib/format";
@@ -15,6 +15,7 @@ import { useTransactionActions } from "@/features/transactions/hooks/use-transac
 import { initialAddAccountId } from "@/features/transactions/lib/initial-account";
 import { cn } from "@/lib/utils";
 import { HeroAmount, PanelHeader } from "./flow-switch";
+import { toDateInput } from "./ledger-ui";
 import {
   ModeFooter,
   ModeHeader,
@@ -160,7 +161,7 @@ export function SplitExpenseMode({
   const [amount, setAmount] = useState("");
   const [accountIdState, setAccountId] = useState("");
   const [categoryIdState, setCategoryId] = useState("");
-  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(() => toDateInput(new Date()));
   const [splitType, setSplitType] = useState<SplitType>("equal");
   const [includeMe, setIncludeMe] = useState(true);
   const [assignFully, setAssignFully] = useState(false);
@@ -271,11 +272,14 @@ export function SplitExpenseMode({
   const shares = preview && "shares" in preview ? preview.shares : null;
   const shareFor = (match: (p: ExpenseParticipant) => boolean) => shares?.find(match)?.share;
 
+  // A ref, not state: a rapid double click lands before the re-render that disables Save Split (would create it twice).
+  const inFlight = useRef(false);
   async function handleSave() {
-    if (!actions || saving) return;
+    if (!actions || saving || inFlight.current) return;
     const fieldErrors = validate();
     setErrors(fieldErrors);
     if (Object.keys(fieldErrors).length > 0) return;
+    inFlight.current = true;
     setSaving(true);
     setSaveError(null);
     try {
@@ -293,6 +297,7 @@ export function SplitExpenseMode({
       onDone();
     } catch (e) {
       setSaveError(e instanceof Error ? e.message : "Could not save this expense");
+      inFlight.current = false;
       setSaving(false);
     }
   }
@@ -309,7 +314,7 @@ export function SplitExpenseMode({
         e.preventDefault();
         if (e.target === e.currentTarget) void handleSave();
       }}
-      className="flex min-h-full flex-col bg-secondary/40"
+      className="@container flex min-h-full flex-col bg-secondary/40"
     >
       {closeable ? (
         <PanelHeader
@@ -329,12 +334,13 @@ export function SplitExpenseMode({
         <ModeHeader backLabel={backLabel ?? person.name} onBack={onBack} onClose={undefined} title="Split expense" subtitle="Record an expense and track what each person owes." />
       )}
 
-      <div className={cn(WS_PAD, "mt-5 grid flex-1 items-start gap-x-6 gap-y-4 lg:grid-cols-[minmax(0,1fr)_17rem]")}>
-        <div className="flex min-w-0 flex-col gap-4">
+      <div className={cn(WS_PAD, "mt-4 grid flex-1 items-start gap-x-5 gap-y-3 @3xl:grid-cols-[minmax(0,1fr)_14rem]")}>
+        <div className="@container flex min-w-0 flex-col gap-3">
           {/* The expense */}
           <Group title="Expense" icon={Receipt}>
-            <div className="grid gap-x-4 gap-y-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,15rem)]">
-              <div className="min-w-0 rounded-xl bg-secondary/60 p-3">
+            <div className="grid gap-3">
+              <div className="grid min-w-0 gap-3 rounded-xl bg-secondary/60 p-3 @md:grid-cols-2 @md:items-start">
+                <div className="min-w-0">
                 <HeroAmount
                   label="Total amount"
                   autoFocus={false}
@@ -350,23 +356,21 @@ export function SplitExpenseMode({
                     {errors.amount}
                   </p>
                 )}
-                <div className="mt-3">
-              <WsField label="Description" error={errors.description}>
-                <input
-                  aria-invalid={!!errors.description || undefined}
-                  className={cn(WS_FIELD, "font-medium")}
-                  placeholder="What was it for? e.g. Dinner at Cafe"
-                  value={description}
-                  onChange={(e) => {
-                    setDescription(e.target.value);
-                    clear("description");
-                  }}
-                />
-              </WsField>
-
                 </div>
+                <WsField label="Description" error={errors.description}>
+                  <input
+                    aria-invalid={!!errors.description || undefined}
+                    className={cn(WS_FIELD, "font-medium")}
+                    placeholder="What was it for? e.g. Dinner at Cafe"
+                    value={description}
+                    onChange={(e) => {
+                      setDescription(e.target.value);
+                      clear("description");
+                    }}
+                  />
+                </WsField>
               </div>
-              <div className="grid min-w-0 content-start gap-3">
+              <div className="grid min-w-0 content-start gap-3 @sm:grid-cols-3">
               <WsField label="Date" error={errors.date}>
                 <DateInput className={WS_FIELD} value={date} onChange={(e) => setDate(e.target.value)} />
               </WsField>
@@ -418,7 +422,7 @@ export function SplitExpenseMode({
           {/* The split — opens once there is a total to split */}
           <Expand open={totalAmount > 0}>
           <Group title="Split between" icon={Users}>
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <div className="flex flex-col gap-2 @xl:flex-row @xl:items-center">
               <WsSegmented
                 label="Who pays"
                 value={assignFully ? "assign" : "split"}
@@ -427,10 +431,10 @@ export function SplitExpenseMode({
                   { value: "split", label: "Split it", icon: Split },
                   { value: "assign", label: `${firstName} pays all`, icon: UserRound },
                 ]}
-                className="sm:w-72"
+                className="@xl:w-72"
               />
               {!assignFully && (
-                <WsSegmented label="Split type" value={splitType} onChange={setSplitType} options={SPLIT_TYPE_OPTIONS} className="sm:flex-1" />
+                <WsSegmented label="Split type" value={splitType} onChange={setSplitType} options={SPLIT_TYPE_OPTIONS} className="@xl:flex-1" />
               )}
             </div>
 
@@ -604,7 +608,7 @@ export function SplitExpenseMode({
         </div>
 
         {/* Live summary — the engine's resolution of exactly what Save will send; beside the form on desktop */}
-        <aside aria-label="Summary" className="overflow-hidden rounded-2xl border border-border-strong bg-card shadow-e1 lg:sticky lg:top-0">
+        <aside aria-label="Summary" className="overflow-hidden rounded-2xl border border-border-strong bg-card shadow-e1 @3xl:sticky @3xl:top-0">
           <div className="flex items-start justify-between gap-2 bg-primary/20 px-4 py-3">
             <div className="min-w-0">
               <p className="text-[11px] font-bold tracking-[0.1em] text-foreground/65 uppercase">Total expense</p>

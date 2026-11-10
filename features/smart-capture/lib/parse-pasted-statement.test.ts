@@ -222,3 +222,111 @@ describe("capture review → Transaction Studio staged records", () => {
     expect(captureSessionId("a b", "x")).toMatch(/^smartcapture_[0-9a-f]+$/);
   });
 });
+
+describe("parsePastedStatement — month totals (Google Pay history)", () => {
+  const GPAY = `2026
+November  ₹3,949.90
+Jio Prepaid  ₹3,600.90
+2 November
+ABIN JOHN  ₹350
+1 November
+2026
+October  ₹7,735
+Indian Railways  ₹1,521.80
+31 October`;
+
+  it("never reads a month heading's total (or its year line) as a transaction", () => {
+    const result = parsePastedStatement(GPAY, { today: TODAY });
+    expect(result.rows.map((r) => r.amount)).not.toContain(3949.9);
+    expect(result.rows.map((r) => r.amount)).not.toContain(7735);
+    expect(result.rows.every((r) => !/^(november|october)$/i.test(r.description.trim()))).toBe(true);
+    expect(result.ignored.filter((i) => i.reason === "summary").map((i) => i.text)).toEqual(
+      expect.arrayContaining(["2026", "November  ₹3,949.90", "October  ₹7,735"]),
+    );
+  });
+
+  it("still reads a dated row that starts with a month name", () => {
+    const result = parsePastedStatement("Oct 5 2026 SWIGGY 450.00", { today: TODAY });
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0].amount).toBe(450);
+  });
+});
+
+describe("parsePastedStatement — merchant and amount on one line, date below (Google Pay screenshot)", () => {
+  // What OCR read from the screenshot: ₹ comes out as a digit glued to the amount, avatars as stray characters.
+  const OCR = [
+    "2026",
+    "November                     3394990",
+    "Jio)  Jio Prepaid                  323,600.90",
+    "2 November",
+    "G    Google Pay rewards                       +31",
+    "1 November",
+    "A  ABIN JOHN                      3350",
+    "1 November",
+    "2026",
+    "October                           7.735",
+    "il  Indian Railways            31,521.80",
+    "31 October",
+    "(  Channel Online                   3500",
+    "29 October",
+    "B     BAAD AKASH APPA                      +3300",
+    "24 October",
+  ].join("\n");
+
+  const result = parsePastedStatement(OCR, { today: TODAY });
+
+  it("makes one row per transaction, each with the date from the line below", () => {
+    expect(result.rows.map((r) => [r.description, r.date?.getDate(), r.date?.getMonth()])).toEqual([
+      ["Jio Prepaid", 2, 10],
+      ["Google Pay rewards", 1, 10],
+      ["ABIN JOHN", 1, 10],
+      ["Indian Railways", 31, 9],
+      ["Channel Online", 29, 9],
+      ["BAAD AKASH APPA", 24, 9],
+    ]);
+  });
+
+  it("leaves the month totals out", () => {
+    expect(result.rows.flatMap((r) => r.amountCandidates)).not.toContain(7735);
+    expect(result.rows.flatMap((r) => r.amountCandidates)).not.toContain(3949.9);
+  });
+
+  it("reads the ₹ that OCR turned into a leading digit, and says so on the row", () => {
+    expect(result.rows.map((r) => [r.description, r.amount])).toEqual([
+      ["Jio Prepaid", 3600.9],
+      ["Google Pay rewards", 1],
+      ["ABIN JOHN", 350],
+      ["Indian Railways", 1521.8],
+      ["Channel Online", 500],
+      ["BAAD AKASH APPA", 300],
+    ]);
+    expect(result.rows.every((r) => r.issues.some((i) => i.code === "amount_without_decimals" && !i.blocking))).toBe(true);
+  });
+
+  it("strips a lowercase avatar scrap but keeps a real first word", () => {
+    const r = parsePastedStatement("aq  Indian Railways      1,521.80\n22 October\nMr  Mohan Lal      200.00\n21 October", { today: TODAY });
+    expect(r.rows.map((x) => x.description)).toEqual(["Indian Railways", "Mr Mohan Lal"]);
+  });
+
+  it("leaves amounts alone when the ₹ was read correctly", () => {
+    const r = parsePastedStatement("Jio Prepaid      ₹3,600.90\n2 November\nABIN JOHN      ₹350\n1 November", { today: TODAY });
+    expect(r.rows.map((x) => x.amount)).toEqual([3600.9, 350]);
+  });
+
+  it("reads a leading + as money in, and no sign as money out", () => {
+    const byName = (n: string) => result.rows.find((r) => r.description === n)!;
+    expect(byName("Google Pay rewards").direction).toBe("credit");
+    expect(byName("BAAD AKASH APPA").direction).toBe("credit");
+    expect(byName("ABIN JOHN").direction).toBe("debit");
+  });
+
+  it("takes a clean amount as read", () => {
+    const clean = parsePastedStatement("Indian Railways      1,521.80\n31 October\nZomato      450.00\n30 October", { today: TODAY });
+    expect(clean.rows.map((r) => r.amount)).toEqual([1521.8, 450]);
+  });
+
+  it("does not turn a date-above layout into a date-below one", () => {
+    const above = parsePastedStatement("2 Nov\nSWIGGY      450.00\n3 Nov\nZOMATO      120.00", { today: TODAY });
+    expect(above.rows.map((r) => [r.description, r.date?.getDate()])).toEqual([["SWIGGY", 2], ["ZOMATO", 3]]);
+  });
+});

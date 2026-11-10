@@ -4,7 +4,7 @@ import { AccountLabel } from "@/components/finance/account-label";
 import { PaymentSourceSummary, isUnderfunded } from "@/components/finance/payment-source-summary";
 import { Landmark, Trash2, Undo2 } from "lucide-react";
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useAccounts } from "@/hooks/use-accounts";
@@ -296,7 +296,8 @@ export function EntryEditForm({
   );
 }
 
-function toDateInput(d: Date): string {
+/** `yyyy-mm-dd` of the LOCAL calendar day (`toISOString()` is the UTC day — a day behind before 5:30 am in India). */
+export function toDateInput(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
@@ -388,7 +389,7 @@ export function EntrySettleForm({
 }) {
   const max = row.settle?.max ?? 0;
   const [amount, setAmount] = useState(() => max.toFixed(2));
-  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(() => toDateInput(new Date()));
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   // Every settlement is real money — ledger entries, installment shares, split shares and an opening balance all
@@ -402,9 +403,11 @@ export function EntrySettleForm({
   const enteredAmount = Number(amount);
   const outflow = Number.isFinite(enteredAmount) && enteredAmount > 0 ? enteredAmount : null;
 
+  // A ref, not state: a rapid double click lands before the re-render that disables Record (would settle twice).
+  const inFlight = useRef(false);
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (saving) return;
+    if (saving || inFlight.current) return;
     const value = Number(amount);
     if (!Number.isFinite(value) || value <= 0) {
       setError("Enter an amount greater than 0.");
@@ -423,11 +426,13 @@ export function EntrySettleForm({
       return;
     }
     setError(null);
+    inFlight.current = true;
     setSaving(true);
     try {
       await onSubmit({ amount: value, date: new Date(date), accountId: needsAccount ? account.accountId : undefined });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Couldn't record the settlement. Please try again.");
+      inFlight.current = false;
       setSaving(false);
     }
   }

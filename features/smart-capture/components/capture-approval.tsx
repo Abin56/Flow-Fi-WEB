@@ -14,6 +14,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, CheckCircle2, ChevronLeft, CreditCard, Loader2, ShieldCheck } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { formatDisplayDate } from "@/components/forms/date-input";
 import { ClayButton } from "@/components/clay/clay-button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { formatCurrencyPrecise } from "@/lib/format";
@@ -180,7 +181,7 @@ export function CaptureApproval({
                 <div className="min-w-0">
                   <p className="truncate text-sm font-medium text-foreground">{row.description}</p>
                   <p className="text-xs text-muted-foreground">
-                    {row.date?.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
+                    {(row.date ? formatDisplayDate(row.date) : undefined)}
                     {duplicateIds.has(row.id) && <span className="ml-2 text-warning">· Possible duplicate</span>}
                     {blockedIds.has(row.id) && !done && <span className="ml-2 text-warning">· {blockers.find((b) => b.recordId === row.id)?.blockingReasons[0]?.message}</span>}
                   </p>

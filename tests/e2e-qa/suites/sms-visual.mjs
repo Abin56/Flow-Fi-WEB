@@ -38,6 +38,16 @@ async function putCandidate(uid, { id, amount, merchant, accountId, daysAgo, dir
   if (!r.ok) throw new Error(`seed ${id}: ${r.status} ${await r.text()}`);
 }
 
+// The Inbox lists candidates only while a phone is paired (the operator-written Auto Sync switch) — seed it, emulator only.
+async function seedPairedSwitch(uid) {
+  const sw = await fetch(`${FIRESTORE_DOCS}/users/${uid}/smsSyncConfig/backgroundUpload`, {
+    method: "PATCH",
+    headers: OWNER,
+    body: JSON.stringify({ fields: { enabled: { booleanValue: true }, deviceId: { stringValue: "qa-sms-device" }, source: { stringValue: "pairing" } } }),
+  });
+  if (!sw.ok) throw new Error(`seed Auto Sync switch: ${sw.status}`);
+}
+
 const lum = (c) => {
   const [r, g, b] = c.map((v) => {
     v /= 255;
@@ -86,6 +96,7 @@ for (const [vpName, vp] of Object.entries(VPS)) {
       `SMS candidates visual sweep: ${vp.width}x${vp.height}, ${scheme}`,
       async ({ page }, chk, notes) => {
         const uid = await h.authUid();
+        await seedPairedSwitch(uid);
         const bank = (await h.accountBalance("QA Bank")).id;
         await putCandidate(uid, { id: "smsv-clean-0001", amount: 321, merchant: "Swiggy", accountId: bank, daysAgo: 1 });
         await putCandidate(uid, { id: "smsv-medium-001", amount: 1904, merchant: "BigBasket", accountId: bank, daysAgo: 1, confidenceLevel: "medium", needsReview: true });
@@ -282,6 +293,7 @@ for (const scheme of ["light", "dark"]) {
     `SMS candidates contrast audit (${scheme}) — real badges, captions, checkboxes, drawer panels`,
     async ({ page }, chk, notes) => {
       const uid = await h.authUid();
+      await seedPairedSwitch(uid);
       const bank = (await h.accountBalance("QA Bank")).id;
       await putCandidate(uid, { id: "smsc-medium-001", amount: 1904, merchant: "BigBasket", accountId: bank, daysAgo: 1, confidenceLevel: "medium", needsReview: true });
       await putCandidate(uid, { id: "smsc-clean-0001", amount: 321, merchant: "Swiggy", accountId: bank, daysAgo: 1 });

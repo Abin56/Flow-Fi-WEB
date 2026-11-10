@@ -1380,6 +1380,14 @@ export function TransactionDetailsModal({
             e.preventDefault();
             (isTransferLeg ? descriptionRef.current : amountRef.current)?.focus();
           }}
+          onEscapeKeyDown={(e) => {
+            // The "More options" card is a layer inside this drawer: Esc dismisses just that card, never the whole
+            // drawer (and the entry in progress). Radix handles Esc in the capture phase, before the card's own onKeyDown.
+            if (moreOpen) {
+              e.preventDefault();
+              setMoreOpen(false);
+            }
+          }}
           onKeyDown={(e) => {
             // Speed keys: Alt+1 / Alt+2 / Alt+3 switch Expense / Income / Transfer while adding (e.code survives macOS Option).
             if (e.altKey && !e.ctrlKey && !e.metaKey && !transaction && view === "form" && /^Digit[1-3]$/.test(e.code)) {
