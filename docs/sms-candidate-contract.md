@@ -92,6 +92,48 @@ the cloud (it's on-device-only on `SmsInboxItem`), and no
 `suggestedCategoryId` (Android's Phase 1 deliberately never resolves a
 FlowFi category at candidate-build time — see the Dart model's module doc).
 
+## Integrity fields (classification v1, added 2026-11)
+
+Computed on Android by `SmsCandidateVerifier`
+(`lib/features/sms_inbox/domain/sms_candidate_verification.dart`) from the
+stored raw SMS at every sync, so they are current even for candidates built
+before they existed. **All optional**: a document written before them has
+none, and the web keeps its earlier behaviour for it. Android refreshes such a
+document once (guarded transaction: never recreates a dismissed/imported
+candidate, never drops an existing `accountId`/`cardId`) when its
+`classificationVersion` is older or missing. No security-rule change was
+needed (the rules don't restrict candidate fields).
+
+| Field | Values | Meaning |
+|---|---|---|
+| `eventClass` | `actualCredit` `actualDebit` `scheduledCredit` `scheduledDebit` `creditCardPurchase` `creditCardRefund` `cardBillPayment` `emiReminder` `emiDebited` `failedTransaction` `pendingTransaction` `reversal` `balanceAlert` `thirdPartyEvent` `informational` `unknown` | What the message describes. An unrecognised value reads as `unknown`. |
+| `moneyMovement` | bool | Money actually moved. True only for `actualCredit/actualDebit/creditCardPurchase/creditCardRefund/cardBillPayment/emiDebited/reversal`. |
+| `transactionStatus` | `success` `pending` `failed` `reversed` `refunded` `unknown` | Read from the message. |
+| `directionEvidence` | `contextual` `keyword` | `contextual`: the message says whose account moved. `keyword`: bare verbs only. |
+| `ownership` | `verified` `unverified` | `verified` only when the SMS's last-4 resolved to exactly one of the user's own accounts/cards. Being signed in when the SMS arrived is **not** ownership evidence. |
+| `messageReceivedAt` | Timestamp | When the SMS arrived. |
+| `dateSource` | `messageBody` `messageReceived` | Whether `transactionDate` came from a reliable date in the message body (within 45 days before / 1 day after receipt) or is the received time. |
+| `classificationVersion` | int | `1` today. |
+
+Web rules (single home: `features/transaction-candidates/lib/candidate-event-class.ts`):
+
+- **Never importable** (single or bulk — enforced inside `importCandidate`
+  itself, before any write): every class with `moneyMovement == false`
+  (scheduled, reminders, failed, pending, balance alerts, third-party,
+  informational, unknown). Shown in the Needs Review lane as
+  "… — nothing to import"; Dismiss only.
+- **Importable after individual review, never bulk / "No issues flagged"**:
+  `creditCardRefund`, `cardBillPayment`, `reversal`, and any candidate whose
+  `directionEvidence` is `keyword`.
+- **Routine**: `actualCredit`, `actualDebit`, `creditCardPurchase`,
+  `emiDebited` with contextual direction — still subject to the existing
+  account-match, duplicate and Android `needsReview` checks.
+
+Android additionally **never uploads** a candidate whose debit/credit it
+cannot verify from the message (the web cannot change a candidate's
+direction); it stays on the phone for manual review. The class lists are
+pinned on both sides by "Android ↔ Web contract" tests.
+
 ## PRIVACY — hard requirement, not a suggestion
 
 Verified directly against `sms_transaction_candidate_cloud_test.dart`'s own

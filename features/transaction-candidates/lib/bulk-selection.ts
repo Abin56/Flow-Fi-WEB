@@ -1,4 +1,5 @@
 import type { SmsCandidateDirection, SmsTransactionCandidate } from "@/lib/models/sms-transaction-candidate";
+import { candidatePassesIntegrity } from "./candidate-event-class";
 
 /**
  * Bulk selection rules for the SMS candidates list — pure, so they can be unit tested without the workspace.
@@ -53,7 +54,7 @@ export function selectableRows(
   return effective ? visible.filter((c) => matchesAnchor(c, effective, groupKeyOf)) : [];
 }
 
-export type BulkIneligibleReason = "no-reliable-account";
+export type BulkIneligibleReason = "no-reliable-account" | "needs-individual-review";
 
 /**
  * A candidate may join a bulk import only when Android's own account/card match for it is reliable: resolved AND still
@@ -62,8 +63,12 @@ export type BulkIneligibleReason = "no-reliable-account";
  * guesses an account from a bank name or a partial hint. `destinationMatched` is that resolved-and-still-real check, passed in
  * (and `false` while accounts haven't loaded yet) so this module stays free of repositories.
  */
-export function bulkIneligibleReason(destinationMatched: boolean): BulkIneligibleReason | null {
-  return destinationMatched ? null : "no-reliable-account";
+export function bulkIneligibleReason(destinationMatched: boolean, candidate?: SmsTransactionCandidate): BulkIneligibleReason | null {
+  if (!destinationMatched) return "no-reliable-account";
+  // Android's integrity verdict (classification v1): no money moved, or a refund/reversal/card bill payment, or a
+  // debit/credit read from bare keywords — never part of a batch. Legacy candidates pass, as before.
+  if (candidate && !candidatePassesIntegrity(candidate)) return "needs-individual-review";
+  return null;
 }
 
 /** The confirmation-stage gate: splits a batch into the rows that may be bulk-imported and the rows that must be reviewed one by one. */
@@ -73,6 +78,6 @@ export function partitionBulkEligible(
 ): { eligible: SmsTransactionCandidate[]; blocked: SmsTransactionCandidate[] } {
   const eligible: SmsTransactionCandidate[] = [];
   const blocked: SmsTransactionCandidate[] = [];
-  for (const c of candidates) (bulkIneligibleReason(destinationMatchedOf(c)) == null ? eligible : blocked).push(c);
+  for (const c of candidates) (bulkIneligibleReason(destinationMatchedOf(c), c) == null ? eligible : blocked).push(c);
   return { eligible, blocked };
 }

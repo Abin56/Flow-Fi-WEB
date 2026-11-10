@@ -470,7 +470,7 @@ export function TransactionCandidatesWorkspace() {
     if (!repositories || candidatesToImport.length === 0) return;
     const { blocked } = partitionBulkEligible(candidatesToImport, bulkEligible);
     if (blocked.length > 0) {
-      toast.error("Nothing was imported", `${blocked.length} selected row${blocked.length === 1 ? "" : "s"} can't be bulk-imported (no reliable account or card). Review ${blocked.length === 1 ? "it" : "them"} individually.`);
+      toast.error("Nothing was imported", `${blocked.length} selected row${blocked.length === 1 ? "" : "s"} can't be bulk-imported (no reliable account or card, or not a confirmed routine transaction). Review ${blocked.length === 1 ? "it" : "them"} individually.`);
       return;
     }
     setBulkRunning(true);
