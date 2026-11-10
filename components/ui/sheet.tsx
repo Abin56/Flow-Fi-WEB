@@ -37,7 +37,10 @@ function SheetOverlay({
   return (
     <SheetPrimitive.Overlay
       data-slot="sheet-overlay"
-      style={{ zIndex: "var(--z-dialog)" }}
+      // One layer BELOW the content (which sits at --z-dialog). Radix portals the two separately, so at equal z-index the DOM
+      // order decides: a drawer closed and reopened within its exit animation (e.g. Cancel on a confirmation opened from it)
+      // remounted its overlay after the content and left a dimmed, unclickable drawer. Still above all page content.
+      style={{ zIndex: "calc(var(--z-dialog) - 1)" }}
       className={cn(
         "fixed inset-0 bg-black/50 duration-100 supports-backdrop-filter:backdrop-blur-sm data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0 dark:bg-black/65",
         className

@@ -13,6 +13,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { AlertTriangle, ArrowRight, Check, CreditCard, Landmark, ShieldCheck } from "lucide-react";
+import { DateInput } from "@/components/forms/date-input";
 import { DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { SheetAvatar, TransactionSheet } from "@/components/finance/transaction-sheet";
 import { Badge } from "@/components/ui/badge";
@@ -292,7 +293,7 @@ function LoanReconciliationBody({ onOpenChange, productName, context, initialLen
               <input id="lr-lender" inputMode="decimal" autoComplete="off" value={lender} onChange={(e) => setLender(e.target.value)} className={INPUT} data-testid="loan-lender-input" aria-invalid={lender.trim() !== "" && lenderPrincipal == null} />
             </Field>
             <Field id="lr-asof" label="As-of date">
-              <input id="lr-asof" type="date" value={asOf} onChange={(e) => setAsOf(e.target.value)} className={INPUT} data-testid="loan-asof-input" />
+              <DateInput id="lr-asof"value={asOf} onChange={(e) => setAsOf(e.target.value)} className={INPUT} data-testid="loan-asof-input" />
             </Field>
             <Field id="lr-reason" label="Reason for checking">
               <select id="lr-reason" value={reason} onChange={(e) => setReason(e.target.value)} className={INPUT} data-testid="loan-reason-select">

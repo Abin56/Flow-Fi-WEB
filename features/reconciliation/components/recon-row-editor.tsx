@@ -21,6 +21,7 @@ import { categoryIconFor } from "@/features/transactions/hooks/use-transactions-
 import { DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { ClayButton } from "@/components/clay/clay-button";
 import { Input } from "@/components/ui/input";
+import { DateInput } from "@/components/forms/date-input";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { currentIssues, openIssues, rowConfirmPlan, type RowPatch } from "@/features/smart-capture/lib/capture-review";
@@ -77,8 +78,34 @@ function CommitInput({ value, onCommit, label, className, inputMode, type = "tex
       reverting.current = false;
       return;
     }
-    if (draft !== value) onCommit(draft);
+    // A date that is half-typed reads as "" — keep the saved date rather than clearing it.
+    if (draft !== value && !(type === "date" && draft === "")) onCommit(draft);
   };
+  if (type === "date") {
+    return (
+      <DateInput
+        aria-label={label}
+        value={draft}
+        onChange={(e) => {
+          reverting.current = false;
+          setDraft(e.target.value);
+        }}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            commit();
+          }
+          if (e.key === "Escape") {
+            reverting.current = true;
+            setDraft(value);
+          }
+          e.stopPropagation();
+        }}
+        className={cn(FIELD, className)}
+      />
+    );
+  }
   return (
     <Input
       aria-label={label}

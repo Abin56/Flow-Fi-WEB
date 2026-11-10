@@ -1,7 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { AlertTriangle } from "lucide-react";
+import { ClayButton } from "@/components/clay/clay-button";
 import { ConfirmDialog, DestructiveDeleteDialog, type DestructiveDeleteImpactRow } from "@/components/finance";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { formatCurrency } from "@/lib/format";
 import type { AgreementDeletionImpact } from "@/lib/repositories/agreement-deletion";
 
@@ -21,6 +24,7 @@ export function AgreementDeleteDialog({
   loadImpact,
   onConfirm,
   busy,
+  outstanding = null,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -29,7 +33,10 @@ export function AgreementDeleteDialog({
   loadImpact: () => Promise<AgreementDeletionImpact | null>;
   onConfirm: () => void | Promise<void>;
   busy: boolean;
+  /** Installments still unpaid. When present, confirming a delete first asks whether to settle and close instead. */
+  outstanding?: { count: number; amount: number } | null;
 }) {
+  const [askSettle, setAskSettle] = useState(false);
   const [impact, setImpact] = useState<AgreementDeletionImpact | null | undefined>(undefined);
   const [loadedFor, setLoadedFor] = useState<string | null>(null);
   const label = kind === "loan" ? "loan" : "EMI";
@@ -51,17 +58,58 @@ export function AgreementDeleteDialog({
     };
   }, [open, loadImpact]);
 
+  const hasOutstanding = outstanding != null && outstanding.count > 0;
+  // Last confirmation before erasing: with unpaid installments left, offer "settle and close" first.
+  function guardedConfirm() {
+    if (hasOutstanding) setAskSettle(true);
+    else void onConfirm();
+  }
+  function handleOpenChange(next: boolean) {
+    if (!next) setAskSettle(false);
+    onOpenChange(next);
+  }
+
+  if (open && askSettle && outstanding) {
+    const installments = `${outstanding.count} installment${outstanding.count === 1 ? "" : "s"}`;
+    return (
+      <Dialog open onOpenChange={(next) => { if (!busy) handleOpenChange(next); }}>
+        <DialogContent className="gap-5 sm:max-w-md">
+          <DialogHeader className="flex-row items-start gap-3 pr-8">
+            <span className="flex size-10 shrink-0 items-center justify-center rounded-none bg-danger/12 text-danger">
+              <AlertTriangle className="size-5" />
+            </span>
+            <div className="flex min-w-0 flex-col gap-1.5">
+              <DialogTitle className="text-base leading-snug text-foreground">This {label} isn&apos;t settled yet</DialogTitle>
+              <DialogDescription className="leading-relaxed">
+                You still have {installments} to clear, {formatCurrency(outstanding.amount)} in total. Settle the {label} and close it to keep it in your
+                history, or delete it anyway and lose it permanently.
+              </DialogDescription>
+            </div>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:flex-col sm:space-x-0">
+            <ClayButton variant="primary" onClick={() => handleOpenChange(false)} disabled={busy}>
+              Settle {label} &amp; close
+            </ClayButton>
+            <ClayButton variant="ghost" onClick={() => void onConfirm()} disabled={busy} className="text-danger">
+              {busy ? "Deleting…" : "Delete anyway"}
+            </ClayButton>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    );
+  }
+
   if (open && impact && !impact.hasFinancialActivity) {
     return (
       <ConfirmDialog
         open
-        onOpenChange={onOpenChange}
+        onOpenChange={handleOpenChange}
         title={`Delete ${name} permanently?`}
         description={`Nothing has been recorded against this ${label}. It and its ${impact.installmentCount} scheduled installment${impact.installmentCount === 1 ? "" : "s"} will be removed. This can't be undone.`}
         variant="destructive"
         confirmLabel={busy ? "Deleting…" : "Delete permanently"}
         loading={busy}
-        onConfirm={onConfirm}
+        onConfirm={guardedConfirm}
       />
     );
   }
@@ -85,11 +133,11 @@ export function AgreementDeleteDialog({
   return (
     <DestructiveDeleteDialog
       open={open}
-      onOpenChange={onOpenChange}
+      onOpenChange={handleOpenChange}
       entityLabel={label}
       entityName={name}
       impact={rows}
-      onConfirm={onConfirm}
+      onConfirm={guardedConfirm}
       confirming={busy}
     />
   );

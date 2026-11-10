@@ -129,6 +129,9 @@ export function StagedRecordManagerSheet({
   }
 
   if (!record) {
+    // Sheet closed: forget the last row so reopening the SAME row re-seeds from its latest data
+    // (otherwise stale inputs / a missed "assign" auto-focus carry over from the previous open).
+    if (seenRecordId !== null) setSeenRecordId(null);
     return (
       <DetailDrawer open={open} onOpenChange={onOpenChange} title="Transaction Details" className="sm:max-w-lg duration-150">
         {null}

@@ -12,6 +12,7 @@
 import { Search, X } from "lucide-react";
 import { useId, useMemo, useState } from "react";
 import { Input } from "@/components/ui/input";
+import { DateInput } from "@/components/forms/date-input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
@@ -231,11 +232,11 @@ function SheetBody({
             <div className="grid grid-cols-2 gap-3">
               <label className="flex flex-col gap-1 text-sm font-medium text-foreground">
                 From
-                <Input type="date" className="h-11" value={draft.dateFrom ?? ""} max={draft.dateTo ?? undefined} onChange={(e) => setDraft((d) => ({ ...d, dateFrom: e.target.value || null }))} />
+                <DateInput className="h-11" value={draft.dateFrom ?? ""} max={draft.dateTo ?? undefined} onChange={(e) => setDraft((d) => ({ ...d, dateFrom: e.target.value || null }))} />
               </label>
               <label className="flex flex-col gap-1 text-sm font-medium text-foreground">
                 To
-                <Input type="date" className="h-11" value={draft.dateTo ?? ""} min={draft.dateFrom ?? undefined} onChange={(e) => setDraft((d) => ({ ...d, dateTo: e.target.value || null }))} />
+                <DateInput className="h-11" value={draft.dateTo ?? ""} min={draft.dateFrom ?? undefined} onChange={(e) => setDraft((d) => ({ ...d, dateTo: e.target.value || null }))} />
               </label>
             </div>
             {dateError && (

@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ClayButton } from "@/components/clay/clay-button";
 import { transactionsHrefForAccount } from "@/features/transactions/lib/account-filter-param";
 import { BankCombobox, DestructiveDeleteDialog } from "@/components/finance";
@@ -236,18 +236,12 @@ export function AccountsWorkspace() {
   const [form, setForm] = useState<AccountFormState>(() => emptyAccountForm("blue"));
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  // Once a bank is picked (new account only), suggest its name as the Account Name so
-  // most people never have to type one — but stop the moment they've typed their own,
-  // so we never clobber a name someone intentionally chose (e.g. "HDFC Salary").
-  const [nameAutoFillable, setNameAutoFillable] = useState(true);
-  const nameInputRef = useRef<HTMLInputElement>(null);
 
   function openAdd() {
     // Defaults to the next unused color in the cycle, same idea as the credit card tiles'
     // accent — just a sensible starting point, not a lock-in; the picker below lets it be changed.
     setForm(emptyAccountForm(ACCOUNT_COLOR_CYCLE[accountsOverviewList.length % ACCOUNT_COLOR_CYCLE.length]!));
     setFormError(null);
-    setNameAutoFillable(true);
     setAddOpen(true);
   }
 
@@ -255,7 +249,6 @@ export function AccountsWorkspace() {
     setEditingAccount(account);
     setForm(accountFormFromAccount(account));
     setFormError(null);
-    setNameAutoFillable(false);
   }
 
   const submitAccount = useGuardedSubmit(handleSave, saving);
@@ -263,13 +256,14 @@ export function AccountsWorkspace() {
   async function handleSave() {
     if (!actions) return;
 
-    const validated = validateAccountForm(form as AccountFormInput, !!editingAccount);
+    const submitted = (editingAccount ? form : { ...form, name: derivedName }) as AccountFormInput;
+    const validated = validateAccountForm(submitted, !!editingAccount);
     if (!validated.ok) {
       setFormError(validated.error);
       return;
     }
 
-    const action = buildSaveAction(form as AccountFormInput, validated, !!editingAccount, {
+    const action = buildSaveAction(submitted, validated, !!editingAccount, {
       colorValue: colorValueForAccountColor(form.color),
     });
 
@@ -380,7 +374,18 @@ export function AccountsWorkspace() {
   const formBankSubtype = form.type === "bank" ? form.bankAccountSubtype : null;
   const formCardSubtype = form.type === "card" ? form.cardSubtype : null;
   const formIsDeposit = isDepositSubtype(formBankSubtype);
+  // There's no name field: a new account is named from its bank / provider and type; edits keep the saved name.
+  const subtypeLabel =
+    form.type === "bank"
+      ? BANK_ACCOUNT_SUBTYPE_OPTIONS.find((o) => o.value === form.bankAccountSubtype)?.label
+      : form.type === "card"
+        ? CARD_SUBTYPE_OPTIONS.find((o) => o.value === form.cardSubtype)?.label
+        : undefined;
+  const issuerName = selectedBank && selectedBank.id !== GENERIC_BANK.id ? selectedBank.name : form.type === "card" ? form.cardProvider.trim() : "";
+  const derivedName = editingAccount ? form.name : [issuerName, subtypeLabel ?? (issuerName ? "" : selectedType.label)].filter(Boolean).join(" ");
   const visibility = fieldVisibilityFor(form.type, formBankSubtype, formCardSubtype, !!editingAccount);
+  // Mirrors validateAccountForm: holder name + last-4 are mandatory for cards and bank accounts (deposits hide the fields); optional otherwise.
+  const holderRequired = form.type === "card" || form.type === "bank";
   const linkableBankAccounts = (rawAccounts as Account[]).filter((a) => a.type === "bank");
 
   // Credit-card accounts are managed in the Credit Cards section (statements, limits, payments).
@@ -601,7 +606,9 @@ export function AccountsWorkspace() {
           // Card accounts hold what you owe, not money — their breakdown lives in Credit Cards.
           onExplainBalance={cardAccountIds.has(selected.id) ? undefined : () => openBreakdown({ kind: "account", accountId: selected.id })}
           onViewTransactions={() => {
-            router.replace(`/accounts?account=${encodeURIComponent(selected.id)}`, { scroll: false });
+            // Stamp the selection onto THIS history entry first, synchronously: a `router.replace` here would be
+            // discarded by the `router.push` below (a new navigation preempts a pending one), so Back wouldn't reopen it.
+            window.history.replaceState(window.history.state, "", `${window.location.pathname}?account=${encodeURIComponent(selected.id)}`);
             router.push(transactionsHrefForAccount(selected.id));
           }}
           onEdit={() => {
@@ -621,13 +628,6 @@ export function AccountsWorkspace() {
       <Dialog open={addOpen || editingAccount != null} onOpenChange={(open) => !open && closeAccountDialog()}>
         <DialogContent
           showCloseButton={false}
-          // Open on the name field (the colour picker sits above it in the DOM).
-          onOpenAutoFocus={(e) => {
-            if (nameInputRef.current) {
-              e.preventDefault();
-              nameInputRef.current.focus();
-            }
-          }}
           overlayClassName="bg-black/20 backdrop-blur-none dark:bg-black/45"
           className={cn(
             "flex flex-col gap-0 overflow-hidden bg-card p-0 ring-0",
@@ -664,7 +664,7 @@ export function AccountsWorkspace() {
                   <SelectedTypeIcon className="size-5" strokeWidth={1.75} />
                 </span>
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-semibold text-foreground">{form.name.trim() || "Account Name"}</p>
+                  <p className="truncate text-sm font-semibold text-foreground">{derivedName.trim() || "Account"}</p>
                   <p className="truncate text-xs text-muted-foreground">
                     {form.type === "bank" && selectedBank ? selectedBank.name : selectedType.label}
                     {form.accountNumberLast4 ? ` • •••• ${form.accountNumberLast4}` : ""}
@@ -699,25 +699,6 @@ export function AccountsWorkspace() {
             </div>
 
             <FormSection title="Account details" icon={Wallet} className="gap-3">
-              <label className={AC_FIELD}>
-                <span className={AC_LABEL}>
-                  Account Name <span className="text-expense">*</span>
-                </span>
-                <div className="relative">
-                  <SelectedTypeIcon className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" strokeWidth={1.75} />
-                  <input
-                    ref={nameInputRef}
-                    className={cn(AC_INPUT, "pl-9")}
-                    placeholder={form.bankId === GENERIC_BANK.id ? "Type your bank's name" : "e.g. HDFC Savings"}
-                    value={form.name}
-                    onChange={(e) => {
-                      setNameAutoFillable(false);
-                      setForm((f) => ({ ...f, name: e.target.value }));
-                    }}
-                  />
-                </div>
-              </label>
-
               <div className={AC_FIELD}>
                 <span className={AC_LABEL}>
                   Account Type <span className="text-expense">*</span>
@@ -731,7 +712,10 @@ export function AccountsWorkspace() {
                         key={o.value}
                         type="button"
                         aria-pressed={selected}
-                        onClick={() => setForm((f) => ({ ...f, type: o.value, bankId: o.value === "bank" ? f.bankId : null }))}
+                        onClick={() => {
+                          setFormError(null); // a validation message about the previous type no longer applies
+                          setForm((f) => ({ ...f, type: o.value, bankId: o.value === "bank" ? f.bankId : null }));
+                        }}
                         className={cn(AC_CHOICE, choiceClass(selected))}
                       >
                         <Icon className="size-3.5" strokeWidth={selected ? 2.25 : 1.75} />
@@ -748,16 +732,7 @@ export function AccountsWorkspace() {
                   <BankCombobox
                     value={form.bankId}
                     onChange={(bankId) => {
-                      const bank = bankById(bankId);
-                      const isGeneric = bankId === GENERIC_BANK.id;
-                      if (!nameAutoFillable) {
-                        setForm((f) => ({ ...f, bankId }));
-                        return;
-                      }
-                      // A real bank's name is a good name suggestion; "Other / Generic Bank" isn't —
-                      // clear the field instead and focus it so the user can type their bank's real name.
-                      setForm((f) => ({ ...f, bankId, name: isGeneric ? "" : (bank?.name ?? f.name) }));
-                      if (isGeneric) requestAnimationFrame(() => nameInputRef.current?.focus());
+                      setForm((f) => ({ ...f, bankId }));
                     }}
                     placeholder="Search for your bank…"
                     className={AC_COMBOBOX}
@@ -776,7 +751,10 @@ export function AccountsWorkspace() {
                           key={o.value}
                           type="button"
                           aria-pressed={selected}
-                          onClick={() => setForm((f) => ({ ...f, bankAccountSubtype: o.value }))}
+                          onClick={() => {
+                            setFormError(null);
+                            setForm((f) => ({ ...f, bankAccountSubtype: o.value }));
+                          }}
                           className={cn(AC_CHOICE, choiceClass(selected))}
                         >
                           {selected && <Check className="size-3.5" strokeWidth={2.5} />}
@@ -801,7 +779,10 @@ export function AccountsWorkspace() {
                           type="button"
                           aria-pressed={selected}
                           disabled={!!editingAccount}
-                          onClick={() => setForm((f) => ({ ...f, cardSubtype: o.value }))}
+                          onClick={() => {
+                            setFormError(null);
+                            setForm((f) => ({ ...f, cardSubtype: o.value }));
+                          }}
                           className={cn(
                             AC_CHOICE,
                             choiceClass(selected),
@@ -868,7 +849,9 @@ export function AccountsWorkspace() {
                 <div className="grid grid-cols-1 gap-x-3 gap-y-2.5 sm:grid-cols-2">
                   <label className={AC_FIELD}>
                     <span className={AC_LABEL}>
-                      {form.type === "card" ? "Card Holder Name" : "Account Holder"} <span className="text-expense">*</span>
+                      {form.type === "card" ? "Card Holder Name" : "Account Holder"}
+                      {/* Required only where validateAccountForm requires it: cards and (non-deposit) bank accounts. */}
+                      {holderRequired && <span className="text-expense"> *</span>}
                     </span>
                     <div className="relative">
                       <User className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" strokeWidth={1.75} />
@@ -881,7 +864,8 @@ export function AccountsWorkspace() {
                   </label>
                   <label className={AC_FIELD}>
                     <span className={AC_LABEL}>
-                      {form.type === "card" ? "Card Number (Last 4 Digits)" : "Last 4 Digits"} <span className="text-expense">*</span>
+                      {form.type === "card" ? "Card Number (Last 4 Digits)" : "Last 4 Digits"}
+                      {holderRequired && <span className="text-expense"> *</span>}
                     </span>
                     <input
                       className={cn(AC_INPUT, "font-mono tracking-widest")}

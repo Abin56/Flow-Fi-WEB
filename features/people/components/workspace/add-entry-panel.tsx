@@ -6,7 +6,7 @@ import type { LedgerEntryType } from "@/lib/models/person";
 import { money } from "@/lib/engines/person-cycle-statement-share";
 import { cn } from "@/lib/utils";
 import { isUnderfunded } from "@/components/finance/payment-source-summary";
-import { AccountField, useAccountChoice } from "./ledger-ui";
+import { AccountField, toDateInput, useAccountChoice } from "./ledger-ui";
 import { WS_FIELD, WS_GHOST, WS_PRIMARY, WS_SELECT_TRIGGER, WsField } from "./person-workspace-ui";
 import { FlowSwitch, flowText, HeroAmount, PanelHeader, type FlowTone } from "./flow-switch";
 import { DateInput } from "@/components/forms/date-input";
@@ -53,7 +53,7 @@ export function AddEntryPanel({
 }) {
   const [type, setType] = useState<AddEntryType | null>(null);
   const [amount, setAmount] = useState("");
-  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(() => toDateInput(new Date()));
   const [note, setNote] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -68,9 +68,11 @@ export function AddEntryPanel({
   const amountRef = useRef<HTMLInputElement>(null);
   const firstName = personName.split(" ")[0];
 
+  // A ref, not state: a rapid double click lands before the re-render that disables Save (would post the entry twice).
+  const inFlight = useRef(false);
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (saving) return;
+    if (saving || inFlight.current) return;
     if (!type) {
       setError("Choose “Money I Gave” or “Money I Borrowed”.");
       return;
@@ -88,6 +90,7 @@ export function AddEntryPanel({
       setError("The chosen account doesn't have enough balance — choose another account or lower the amount.");
       return;
     }
+    inFlight.current = true;
     setSaving(true);
     setError(null);
     try {
@@ -96,6 +99,7 @@ export function AddEntryPanel({
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong. Please try again.");
+      inFlight.current = false;
       setSaving(false);
     }
   }

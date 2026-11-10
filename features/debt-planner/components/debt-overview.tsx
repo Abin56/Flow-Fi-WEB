@@ -206,7 +206,8 @@ export function DebtCommandHeader({
             <PlanAmountInput id="dp-budget" label="Monthly payoff budget" value={budgetInput} onChange={onBudgetInput} size="lg" />
             <div className="flex flex-wrap gap-1.5" aria-label="Suggested budgets">
               {presets.map((v, i) => (
-                <PresetButton key={v} active={Math.abs(v - budgetValue) < 0.5} onClick={() => onBudgetInput(String(Math.ceil(v)))}>
+                // Picking a preset stores the amount rounded up to a whole rupee, so match that too.
+                <PresetButton key={v} active={Math.abs(v - budgetValue) < 0.5 || Math.ceil(v) === budgetValue} onClick={() => onBudgetInput(String(Math.ceil(v)))}>
                   {i === 0 && v === required.total ? `Required ${formatCurrency(v)}` : formatCurrency(v)}
                 </PresetButton>
               ))}

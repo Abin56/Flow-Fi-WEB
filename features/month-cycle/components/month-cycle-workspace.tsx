@@ -845,7 +845,8 @@ export function MonthCycleWorkspace() {
             <RotateCcw className="size-4" strokeWidth={2} />
           </button>
         )}
-        <span className="hidden h-7 shrink-0 items-center rounded-[6px] bg-secondary px-2 text-xs font-semibold text-foreground md:inline-flex">{cycleStatusText}</span>
+        {/* From `lg`, not `md`: at 768–1023px the sidebar is showing and the bar is too narrow for the chip (the "Cycle details" menu carries the status there). */}
+        <span className="hidden h-7 shrink-0 items-center rounded-[6px] bg-secondary px-2 text-xs font-semibold text-foreground lg:inline-flex">{cycleStatusText}</span>
         <div className="ml-auto flex min-w-0 items-center gap-1.5">
           <span className="hidden min-w-0 flex-col items-end px-2 text-right leading-tight lg:flex">
             <span className="text-[10px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">{isMine ? "My spend" : "Total outflow"}</span>
@@ -858,7 +859,7 @@ export function MonthCycleWorkspace() {
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-64">
-              <DropdownMenuLabel className="md:hidden">{cycleStatusText}</DropdownMenuLabel>
+              <DropdownMenuLabel className="lg:hidden">{cycleStatusText}</DropdownMenuLabel>
               <DropdownMenuLabel className="text-xs leading-snug font-normal text-muted-foreground">
                 <span className="mb-0.5 block text-sm font-semibold text-foreground">About this cycle</span>
                 {cycleInfoText}
@@ -871,7 +872,8 @@ export function MonthCycleWorkspace() {
             className="flex h-10 min-w-10 shrink-0 items-center justify-center gap-1.5 rounded-[6px] border border-primary-accent-text bg-primary px-2.5 text-sm font-semibold text-primary-foreground transition-opacity hover:opacity-90 sm:px-3.5"
           >
             <Plus className="size-4" strokeWidth={2.25} />
-            <span className="hidden sm:inline">New transaction</span>
+            {/* Icon-only at 768–1023px (sidebar showing, narrow bar); the link keeps its aria-label. */}
+            <span className="hidden sm:inline md:max-lg:hidden">New transaction</span>
           </Link>
         </div>
       </CompactHeaderBar>

@@ -18,6 +18,7 @@ import { useId, useState } from "react";
 import { AlertTriangle, ArrowDownLeft, ArrowUpRight, Check, ChevronDown, Circle, CircleCheck, ImageIcon, Info, ScanText, Undo2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Checkbox } from "@/components/ui/checkbox";
+import { DateInput, formatDisplayDate } from "@/components/forms/date-input";
 import { ACTION_META } from "@/features/transaction-studio/lib/action-metadata";
 import { KIND_LABEL, type CaptureField, type CaptureIssue } from "../lib/parse-pasted-statement";
 import { CAPTURE_ACTIONS_BY_DIRECTION, currentIssues, isComplete, needsCorrection, openIssues, rowConfirmPlan, type CaptureAction, type ReviewRow, type RowConfirmPlan, type RowPatch } from "../lib/capture-review";
@@ -43,7 +44,7 @@ function fromDateInput(value: string): Date | null {
 }
 
 export const formatAmount = (n: number) => n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const formatDate = (d: Date | null) => (d ? d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "No date");
+const formatDate = (d: Date | null) => (d ? formatDisplayDate(d) : "No date");
 
 function uniqueByCode<T extends { code: string }>(items: T[]): T[] {
   return items.filter((item, i) => items.findIndex((o) => o.code === item.code) === i);
@@ -498,7 +499,7 @@ export function ReviewRowItem({
                 </label>
                 <label className={cn(labelClass, "@3xl:col-start-1 @3xl:row-start-1")}>
                   Date
-                  <input type="date" aria-label="Date" value={toDateInput(row.date)} onChange={(e) => onPatch({ date: fromDateInput(e.target.value) })} className={cn(inputClass, "tabular-nums", flagged("date") && flaggedClass)} />
+                  <DateInput aria-label="Date" value={toDateInput(row.date)} onChange={(e) => onPatch({ date: fromDateInput(e.target.value) })} className={cn(inputClass, "tabular-nums", flagged("date") && flaggedClass)} />
                 </label>
                 <div className={labelClass}>
                   Charge / Credit

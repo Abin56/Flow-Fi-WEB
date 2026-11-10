@@ -194,3 +194,15 @@ describe("Capture → Review & Import", () => {
     expect(screen.queryByTestId("review-row")).toBeNull();
   });
 });
+
+describe("extract error", () => {
+  it("belongs to the source it came from — switching tabs does not carry it over", () => {
+    render(<SmartCaptureStudio />);
+    startExtract("hello world\nthis is not a statement");
+    expect(screen.getByRole("alert").textContent).toMatch(/No transaction rows found/);
+    fireEvent.click(screen.getByRole("tab", { name: /Screenshot/ }));
+    expect(screen.queryByRole("alert")).toBeNull();
+    fireEvent.click(screen.getByRole("tab", { name: /Paste text/ }));
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+});

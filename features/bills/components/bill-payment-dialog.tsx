@@ -101,13 +101,15 @@ function BillPaymentForm({
         ? "Enter an amount."
         : amount > owedNow + 0.005
           ? `Only ${formatCurrency(owedNow)} is still due.`
-          : mode === "account" && !account
-            ? "Choose the account you paid from."
-            : mode === "account" && preview?.status === "insufficient"
-              ? "That account doesn't have enough balance — choose another account or lower the amount."
-              : mode === "earlier" && dayToDate(date).getTime() > endOfDay(openedAt)
-                ? "A payment already made can't be dated in the future."
-                : null;
+          : !date
+            ? "Enter a valid payment date (dd/mm/yyyy)."
+            : mode === "account" && !account
+              ? "Choose the account you paid from."
+              : mode === "account" && preview?.status === "insufficient"
+                ? "That account doesn't have enough balance — choose another account or lower the amount."
+                : mode === "earlier" && dayToDate(date).getTime() > endOfDay(openedAt)
+                  ? "A payment already made can't be dated in the future."
+                  : null;
 
   async function confirm() {
     if (blocker || saving || !actions || mode == null) return;

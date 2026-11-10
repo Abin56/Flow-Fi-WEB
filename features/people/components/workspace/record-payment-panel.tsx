@@ -1395,7 +1395,7 @@ export function RecordPaymentPanel({
     );
   }
   return (
-    <form {...formProps} className="mt-4 flex min-h-full flex-col bg-secondary/55">
+    <form id={formId} {...formProps} className="mt-4 flex min-h-full flex-col bg-secondary/55">
       <PanelHeader title={heroTitle} personName={personName} tone={heroTone} onClose={onCancel} amount={heroAmount} status={heroStatus} context={heroContext} />
       {body}
       {footer}
@@ -1743,7 +1743,7 @@ function PostponeResult({
     );
   }
   return (
-    <form {...formProps} className="mt-4 flex min-h-full flex-col bg-secondary/55">
+    <form id={formId} {...formProps} className="mt-4 flex min-h-full flex-col bg-secondary/55">
       <PanelHeader title="Payment recorded" personName={personName} tone={theyPaid ? "in" : "out"} onClose={onDone} />
       {body}
       {footer}

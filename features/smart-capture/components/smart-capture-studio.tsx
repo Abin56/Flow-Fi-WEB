@@ -419,7 +419,11 @@ export function SmartCaptureStudio() {
       ) : (
         <CaptureInput
           mode={mode}
-          onModeChange={setMode}
+          onModeChange={(next) => {
+            // An extract error belongs to the source it came from — don't carry it onto the other tab.
+            setMode(next);
+            setError(null);
+          }}
           text={text}
           onTextChange={setText}
           image={image}

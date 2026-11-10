@@ -2,7 +2,7 @@
 
 import { AccountLabel } from "@/components/finance/account-label";
 import { Check, Divide, Percent, Plus, SlidersHorizontal, Split, Trash2, UserRound } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { ClayAvatar } from "@/components/clay/clay-avatar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { formatCurrency } from "@/lib/format";
@@ -14,7 +14,7 @@ import { ExpenseRepository, type ExpenseParticipantInput } from "@/lib/repositor
 import { useTransactionActions } from "@/features/transactions/hooks/use-transactions-data";
 import { initialAddAccountId } from "@/features/transactions/lib/initial-account";
 import { cn } from "@/lib/utils";
-import { CompactAmountInput } from "./ledger-ui";
+import { CompactAmountInput, toDateInput } from "./ledger-ui";
 import {
   ModeFooter,
   ModeHeader,
@@ -153,7 +153,7 @@ export function SplitExpenseMode({
   const [amount, setAmount] = useState("");
   const [accountIdState, setAccountId] = useState("");
   const [categoryIdState, setCategoryId] = useState("");
-  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(() => toDateInput(new Date()));
   const [splitType, setSplitType] = useState<SplitType>("equal");
   const [includeMe, setIncludeMe] = useState(true);
   const [assignFully, setAssignFully] = useState(false);
@@ -264,11 +264,14 @@ export function SplitExpenseMode({
   const shares = preview && "shares" in preview ? preview.shares : null;
   const shareFor = (match: (p: ExpenseParticipant) => boolean) => shares?.find(match)?.share;
 
+  // A ref, not state: a rapid double click lands before the re-render that disables Save Split (would create it twice).
+  const inFlight = useRef(false);
   async function handleSave() {
-    if (!actions || saving) return;
+    if (!actions || saving || inFlight.current) return;
     const fieldErrors = validate();
     setErrors(fieldErrors);
     if (Object.keys(fieldErrors).length > 0) return;
+    inFlight.current = true;
     setSaving(true);
     setSaveError(null);
     try {
@@ -286,6 +289,7 @@ export function SplitExpenseMode({
       onDone();
     } catch (e) {
       setSaveError(e instanceof Error ? e.message : "Could not save this expense");
+      inFlight.current = false;
       setSaving(false);
     }
   }
