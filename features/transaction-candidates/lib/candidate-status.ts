@@ -1,6 +1,7 @@
 import type { RowStatusTone } from "@/features/transaction-studio/lib/row-status";
 import type { SmsTransactionCandidate } from "@/lib/models/sms-transaction-candidate";
 import type { CandidateDestinationState } from "./candidate-account-matching";
+import { candidateImportBlockReason, candidateIntegrityReviewReason, eventClassLabel } from "./candidate-event-class";
 import type { CandidateDuplicateResult } from "./candidate-duplicate";
 
 /**
@@ -38,7 +39,10 @@ export function stripInternalIds(text: string): string {
   return text.replace(/\s*\((?=[^)]*[A-Za-z])[A-Za-z0-9_-]{8,}\)/g, "").replace(/\s{2,}/g, " ").trim();
 }
 
-type StatusInput = Pick<SmsTransactionCandidate, "needsReview" | "needsReviewReasons" | "confidenceLevel" | "accountId" | "cardId">;
+type StatusInput = Pick<
+  SmsTransactionCandidate,
+  "needsReview" | "needsReviewReasons" | "confidenceLevel" | "accountId" | "cardId" | "eventClass" | "moneyMovement" | "directionEvidence"
+>;
 
 /** Falls back to the ids alone when the caller can't check them against the user's accounts (tests, badge-only callers). */
 function defaultDestinationState(candidate: Pick<SmsTransactionCandidate, "accountId" | "cardId">): CandidateDestinationState {
@@ -53,10 +57,14 @@ function defaultDestinationState(candidate: Pick<SmsTransactionCandidate, "accou
  * model's module doc), so every candidate this function sees is pending by construction.
  *
  * Priority order (first match wins):
+ *   0. No money moved — Android classified the message as failed, pending, a reminder/scheduled payment, a balance
+ *      alert, someone else's account, informational, or unclear (`candidateImportBlockReason`). It can never be
+ *      imported, only dismissed, so this outranks everything else.
  *   1. Possible duplicate of an existing committed Transaction — importing it would double-count.
  *   2. Account not matched — Android couldn't resolve an account/card, or the one it resolved no longer exists
  *      (`destinationState`). The reviewer must choose a destination.
- *   3. Needs review (Android's own `needsReview` flag) — "Needs Review" for low confidence, "Review Recommended"
+ *   3. Needs review — an integrity reason (a refund/reversal/card bill payment, or a debit/credit read from bare
+ *      keywords only), or Android's own `needsReview` flag: "Needs Review" for low confidence, "Review Recommended"
  *      otherwise.
  *   4. No issues flagged. NOT "ready to import": a category is always still required.
  */
@@ -65,6 +73,17 @@ export function deriveCandidateStatus(
   duplicate: CandidateDuplicateResult | null,
   destinationState: CandidateDestinationState = defaultDestinationState(candidate),
 ): CandidateStatus {
+  const blocked = candidateImportBlockReason(candidate);
+  if (blocked != null) {
+    return {
+      lane: "needsReview",
+      label: `${eventClassLabel(candidate.eventClass ?? "unknown")} — nothing to import`,
+      tone: "muted",
+      reasons: [blocked],
+      explanation: blocked,
+    };
+  }
+
   if (duplicate && duplicate.duplicateOfTransactionId != null) {
     return {
       lane: "duplicate",
@@ -86,6 +105,17 @@ export function deriveCandidateStatus(
         destinationState === "missing"
           ? "Android matched an account or card that no longer exists. Choose the destination yourself."
           : "Android couldn't match this message to one of your accounts or cards. Choose the destination yourself.",
+    };
+  }
+
+  const integrityReason = candidateIntegrityReviewReason(candidate);
+  if (integrityReason != null) {
+    return {
+      lane: "needsReview",
+      label: "Needs Review",
+      tone: "warning",
+      reasons: [integrityReason, ...candidate.needsReviewReasons.filter((r) => r !== integrityReason)],
+      explanation: integrityReason,
     };
   }
 

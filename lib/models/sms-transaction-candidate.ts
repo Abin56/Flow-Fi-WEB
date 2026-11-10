@@ -125,6 +125,78 @@ export interface SmsTransactionCandidate {
   createdAt: Date;
   /** Always null in practice — Android hard-deletes via `SmsCandidateCloudSync`/`deleteById`, it never soft-deletes this collection. Kept only because `toFirestore()` always writes it (see Dart source comment). */
   deletedAt: Date | null;
+
+  // --- Integrity fields (classification v1, 2026-11), computed by Android's `SmsCandidateVerifier`. All optional:
+  // a document uploaded before them has none, and the web keeps its earlier behaviour for it (see
+  // `features/transaction-candidates/lib/candidate-event-class.ts`). Consumed as-given, never recomputed here. ---
+
+  /** What the message describes. Only a money-moving class may ever be imported. */
+  eventClass?: SmsCandidateEventClass | null;
+  /** Whether money actually moved (derived from `eventClass` on Android). */
+  moneyMovement?: boolean | null;
+  transactionStatus?: SmsCandidateTransactionStatus | null;
+  /** `contextual`: the message says whose account moved. `keyword`: bare verbs only — needs a look before import. */
+  directionEvidence?: SmsCandidateDirectionEvidence | null;
+  /** `verified` only when the phone resolved the SMS's last-4 to one of the user's own accounts/cards. */
+  ownership?: SmsCandidateOwnership | null;
+  /** When the SMS arrived. `transactionDate` may instead come from the date written in the message (`dateSource`). */
+  messageReceivedAt?: Date | null;
+  dateSource?: SmsCandidateDateSource | null;
+  classificationVersion?: number | null;
+}
+
+/** Mirrors `SmsEventClass` (`sms_event_class.dart`) value for value. */
+export type SmsCandidateEventClass =
+  | "actualCredit"
+  | "actualDebit"
+  | "scheduledCredit"
+  | "scheduledDebit"
+  | "creditCardPurchase"
+  | "creditCardRefund"
+  | "cardBillPayment"
+  | "emiReminder"
+  | "emiDebited"
+  | "failedTransaction"
+  | "pendingTransaction"
+  | "reversal"
+  | "balanceAlert"
+  | "thirdPartyEvent"
+  | "informational"
+  | "unknown";
+
+export const SMS_CANDIDATE_EVENT_CLASSES: readonly SmsCandidateEventClass[] = [
+  "actualCredit",
+  "actualDebit",
+  "scheduledCredit",
+  "scheduledDebit",
+  "creditCardPurchase",
+  "creditCardRefund",
+  "cardBillPayment",
+  "emiReminder",
+  "emiDebited",
+  "failedTransaction",
+  "pendingTransaction",
+  "reversal",
+  "balanceAlert",
+  "thirdPartyEvent",
+  "informational",
+  "unknown",
+];
+
+/** Mirrors `TransactionStatus` (`transaction_status.dart`). */
+export type SmsCandidateTransactionStatus = "pending" | "success" | "failed" | "reversed" | "refunded" | "unknown";
+export type SmsCandidateDirectionEvidence = "contextual" | "keyword";
+export type SmsCandidateOwnership = "verified" | "unverified";
+export type SmsCandidateDateSource = "messageBody" | "messageReceived";
+
+function oneOf<T extends string>(raw: unknown, values: readonly T[]): T | null {
+  return typeof raw === "string" && (values as readonly string[]).includes(raw) ? (raw as T) : null;
+}
+
+/** Absent → null (a pre-integrity document). An unrecognised value (a newer Android) → "unknown", the conservative reading: never importable. */
+function parseEventClass(raw: unknown): SmsCandidateEventClass | null {
+  if (raw == null) return null;
+  return oneOf(raw, SMS_CANDIDATE_EVENT_CLASSES) ?? "unknown";
 }
 
 const VALID_DIRECTIONS: SmsCandidateDirection[] = ["debit", "credit"];
@@ -166,7 +238,31 @@ export function smsTransactionCandidateFromFirestore(
     source: "sms",
     createdAt: (data.createdAt as Timestamp).toDate(),
     deletedAt: (data.deletedAt as Timestamp | undefined)?.toDate() ?? null,
+    ...integrityFieldsFromFirestore(data),
   };
+}
+
+/**
+ * Only the integrity fields the document actually has — a document uploaded before them reads back exactly as it did
+ * (no extra keys), so nothing that compares or spreads a legacy candidate changes.
+ */
+function integrityFieldsFromFirestore(data: DocumentData): Partial<SmsTransactionCandidate> {
+  const out: Partial<SmsTransactionCandidate> = {};
+  const eventClass = parseEventClass(data.eventClass);
+  if (eventClass != null) out.eventClass = eventClass;
+  if (typeof data.moneyMovement === "boolean") out.moneyMovement = data.moneyMovement;
+  const status = oneOf(data.transactionStatus, ["pending", "success", "failed", "reversed", "refunded", "unknown"] as const);
+  if (status != null) out.transactionStatus = status;
+  const evidence = oneOf(data.directionEvidence, ["contextual", "keyword"] as const);
+  if (evidence != null) out.directionEvidence = evidence;
+  const ownership = oneOf(data.ownership, ["verified", "unverified"] as const);
+  if (ownership != null) out.ownership = ownership;
+  const received = data.messageReceivedAt as Timestamp | null | undefined;
+  if (received != null && typeof received.toDate === "function") out.messageReceivedAt = received.toDate();
+  const dateSource = oneOf(data.dateSource, ["messageBody", "messageReceived"] as const);
+  if (dateSource != null) out.dateSource = dateSource;
+  if (typeof data.classificationVersion === "number") out.classificationVersion = data.classificationVersion;
+  return out;
 }
 
 /**
@@ -195,5 +291,14 @@ export function smsTransactionCandidateToFirestore(candidate: SmsTransactionCand
     source: candidate.source,
     createdAt: Timestamp.fromDate(candidate.createdAt),
     deletedAt: candidate.deletedAt == null ? null : Timestamp.fromDate(candidate.deletedAt),
+    // Integrity fields only when present, exactly like Android's `toFirestore`.
+    ...(candidate.eventClass != null && { eventClass: candidate.eventClass }),
+    ...(candidate.moneyMovement != null && { moneyMovement: candidate.moneyMovement }),
+    ...(candidate.transactionStatus != null && { transactionStatus: candidate.transactionStatus }),
+    ...(candidate.directionEvidence != null && { directionEvidence: candidate.directionEvidence }),
+    ...(candidate.ownership != null && { ownership: candidate.ownership }),
+    ...(candidate.messageReceivedAt != null && { messageReceivedAt: Timestamp.fromDate(candidate.messageReceivedAt) }),
+    ...(candidate.dateSource != null && { dateSource: candidate.dateSource }),
+    ...(candidate.classificationVersion != null && { classificationVersion: candidate.classificationVersion }),
   };
 }

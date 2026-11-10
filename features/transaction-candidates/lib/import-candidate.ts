@@ -63,6 +63,7 @@ import {
   type DuplicateDetectionResult,
   type ExistingTransactionForDuplicateCheck,
 } from "@/lib/services/duplicate-detection/duplicate-detection-service";
+import { candidateImportBlockReason } from "./candidate-event-class";
 import { candidateImportKey, importedTransactionId, isKeyedTransactionChangedError } from "./candidate-import-key";
 
 /**
@@ -300,6 +301,12 @@ async function runImport(
   candidateRepository: SmsTransactionCandidateRepository,
   expenseRepository: ExpenseRepository,
 ): Promise<ImportOutcome> {
+  // Integrity gate, before anything else and with no writes: a message Android classified as not moving money
+  // (failed, pending, a reminder or scheduled payment, a balance alert, someone else's account, informational, or
+  // unclear direction) must never reach a balance — whatever the caller (single review, bulk import) passes in.
+  const blocked = candidateImportBlockReason(params.candidate);
+  if (blocked != null) return { status: "validation_failed", reason: blocked };
+
   const accountId = resolveAccountId(params);
   if (accountId == null) return { status: "validation_failed", reason: "Select an account or card before importing." };
   if (params.categoryId == null) return { status: "validation_failed", reason: "Select a category before importing." };
