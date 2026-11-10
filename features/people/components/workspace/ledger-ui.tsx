@@ -78,6 +78,7 @@ export function PeopleDrawer({
   title,
   width = "md",
   id,
+  compact = false,
   children,
 }: {
   open: boolean;
@@ -86,6 +87,8 @@ export function PeopleDrawer({
   title: string;
   width?: keyof typeof PEOPLE_DRAWER_WIDTH;
   id?: string;
+  /** Sized to its content (a floating card at the top right) instead of the full height — for short forms. */
+  compact?: boolean;
   children: React.ReactNode;
 }) {
   return (
@@ -101,12 +104,13 @@ export function PeopleDrawer({
           "shadow-[-24px_0_60px_-20px_rgba(0,0,0,0.45)] duration-300 ease-out data-open:slide-in-from-right data-closed:slide-out-to-right data-closed:duration-200",
           "sm:rounded-l-[16px]",
           PEOPLE_DRAWER_WIDTH[width],
+          compact && "h-auto sm:top-3 sm:right-3 sm:max-h-[calc(100dvh-1.5rem)] sm:rounded-[16px] sm:shadow-[0_24px_60px_-20px_rgba(0,0,0,0.5)]",
         )}
       >
         <DialogTitle className="sr-only">{title}</DialogTitle>
         <DialogDescription className="sr-only">{title}</DialogDescription>
         {/* No accent strip: each panel's own header is the top edge, so the drawer reads as one calm surface. */}
-        <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain scroll-smooth scroll-pt-4 scroll-pb-24 [&>*]:mt-0! [&>*]:min-h-full [&>*]:overflow-visible! [&>*]:rounded-none! [&>*]:border-0!">
+        <div className={cn("min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain scroll-smooth scroll-pt-4 scroll-pb-24 [&>*]:mt-0! [&>*]:overflow-visible! [&>*]:rounded-none! [&>*]:border-0!", compact ? "[&>*]:min-h-0!" : "[&>*]:min-h-full")}>
           {children}
         </div>
       </DialogContent>

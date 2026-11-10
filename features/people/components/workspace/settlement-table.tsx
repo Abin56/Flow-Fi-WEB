@@ -259,7 +259,7 @@ const BANK_STATUS: Record<EmiRowStatus, string> = {
 
 const TH =
   "sticky top-0 z-[2] border-r border-b border-r-border-strong/50 border-b-border-strong bg-secondary px-2.5 py-1.5 text-left text-[10.5px] font-bold tracking-[0.07em] whitespace-nowrap text-foreground/75 uppercase last:border-r-0";
-const TD = "border-r border-b border-r-border-strong/40 border-b-border-strong/55 px-2.5 py-1 align-middle last:border-r-0";
+const TD = "border-r border-b border-r-border-strong/40 border-b-border-strong/55 px-2.5 py-[3px] align-middle last:border-r-0";
 const NUM = "text-right tabular-nums whitespace-nowrap";
 
 const isPaymentKind = (k: SettlementKind) => k === "paymentReceived" || k === "paymentMade" || k === "advance" || k === "advanceApplied";
@@ -408,11 +408,12 @@ function LenderPaidButton({ kind, installmentId, compact }: { kind: "emi" | "loa
         type="button"
         title="You already paid this installment to the bank outside FlowFi — record it as paid (no account change)"
         onClick={() => setSeq((n) => n + 1)}
-        className={cn(ACTION_BTN, "border-border-strong bg-card text-foreground hover:bg-secondary")}
+        aria-label="Bank already paid"
+        className={cn(ACTION_BTN, compact && "px-1.5", "border-border-strong bg-card text-foreground hover:bg-secondary")}
         data-testid="row-bank-already-paid"
       >
         <Landmark className="size-3.5" strokeWidth={2} />
-        {compact ? "Bank paid?" : "Bank already paid"}
+        {compact ? <span className="sr-only">Bank already paid</span> : "Bank already paid"}
       </button>
       {seq > 0 && <LenderPaidDialog key={seq} kind={kind} installment={inst} onClose={() => setSeq(0)} />}
     </>
@@ -886,7 +887,7 @@ function RowActionButtons({ v, handlers, lookups, compact = false }: { v: Settle
   const editing = handlers.editingKey === row.key;
   const loanPay = row.category === "loan" && row.loanId != null && row.state != null && row.state !== "settled";
   return (
-    <div className="flex flex-wrap items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+    <div className={cn("flex items-center", compact ? "flex-nowrap gap-1" : "flex-wrap gap-1.5")} onClick={(e) => e.stopPropagation()}>
       {loanPay ? (
         <LoanPayLink loanId={row.loanId!} />
       ) : row.settle && !sourceUnavailable(row, lookups) ? (
@@ -905,11 +906,12 @@ function RowActionButtons({ v, handlers, lookups, compact = false }: { v: Settle
           type="button"
           title="They already paid you outside FlowFi and it is already in your balance — lowers what they owe, no account change"
           onClick={() => handlers.onSettleStart(row, { alreadyReceived: true })}
-          className={cn(ACTION_BTN, "border-border-strong bg-card text-foreground hover:bg-secondary")}
+          aria-label="Already received"
+          className={cn(ACTION_BTN, compact && "px-1.5", "border-border-strong bg-card text-foreground hover:bg-secondary")}
           data-testid="row-already-received"
         >
           <Check className="size-3.5" strokeWidth={2} />
-          {compact ? "Received" : "Already received"}
+          {compact ? <span className="sr-only">Already received</span> : "Already received"}
         </button>
       )}
       <LenderPaidAction rowKey={row.key} compact={compact} />
@@ -1188,7 +1190,7 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
             <FollowUpNote rowKey={row.key} className="flex justify-end" />
           </td>
           <td className={cn(TD, "w-[11.5rem] max-w-[11.5rem]")}><RowStatus v={v} /></td>
-          <td className={cn(TD, "w-[10rem] py-0.5")}><RowActionButtons v={v} handlers={handlers} lookups={lookups} compact /></td>
+          <td className={cn(TD, "w-[10.5rem] py-0.5")}><RowActionButtons v={v} handlers={handlers} lookups={lookups} compact /></td>
         </tr>
         <tr aria-hidden={!open}>
           <td colSpan={7} className={cn("p-0", open && "border-b border-border-strong/60 bg-secondary/60")}>
@@ -1255,14 +1257,14 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
             <th className={cn(TH, "hidden w-[9.5rem] xl:table-cell")}>Type</th>
             <th className={cn(TH, "w-[9.5rem] text-right")} title="Still remaining, with this person's original amount (for a split, their share) and what has been paid underneath">Amount</th>
             <th className={cn(TH, "w-[11.5rem]")}>Status</th>
-            <th className={cn(TH, "w-[10rem]")}>Action</th>
+            <th className={cn(TH, "w-[10.5rem]")}>Action</th>
           </tr>
         </thead>
         <tbody>
           {carriedViews.length > 0 && (
             <>
               <tr>
-                <td colSpan={7} className="border-b border-border-strong/60 bg-settle-carried-badge px-3 py-1 text-[10.5px] font-bold tracking-[0.08em] text-settle-carried-text uppercase">
+                <td colSpan={7} className="border-b border-border-strong/60 bg-settle-carried-badge px-3 py-0.5 text-[10.5px] font-bold tracking-[0.08em] text-settle-carried-text uppercase">
                   <span className="inline-flex items-center gap-1.5"><History className="size-3.5" />Previous unpaid amount · not paid in previous months</span>
                 </td>
               </tr>
@@ -1272,8 +1274,8 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
           {groups.map((g) => (
             <Fragment key={g.key}>
               <tr>
-                <td colSpan={7} className="border-t-2 border-b border-t-border-strong border-b-border-strong/70 bg-secondary px-3 pt-2 pb-1">
-                  <span className="text-[12px] font-bold tracking-[0.08em] whitespace-nowrap text-foreground uppercase">{g.label}</span>
+                <td colSpan={7} className="border-t-2 border-b border-t-border-strong border-b-border-strong/70 bg-secondary px-3 py-0.5">
+                  <span className="text-[11.5px] font-bold tracking-[0.08em] whitespace-nowrap text-foreground uppercase">{g.label}</span>
                   <span className="ml-2 text-[11.5px] font-medium whitespace-nowrap text-foreground/70">
                     {g.rows.length} {g.rows.length === 1 ? "transaction" : "transactions"}
                   </span>

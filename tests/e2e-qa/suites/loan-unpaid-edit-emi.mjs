@@ -22,6 +22,9 @@ async function payFromBank(page, dlg, label) {
   await dlg.getByRole("button", { name: label }).click();
   await dlg.waitFor({ state: "hidden", timeout: 25000 });
   await page.waitForTimeout(1500);
+  // The details popup stays open under the payment layer, so the next step comes sooner than it used to: let the
+  // "payment recorded" toast go before the timing probe is reset, or it is read as the next write's success.
+  await page.waitForFunction(() => !/recorded successfully/i.test(document.body.innerText), null, { timeout: 20000 });
 }
 async function openDetails(page, seq) {
   await page.getByRole("button", { name: new RegExp(`Installment ${seq}.*edit or mark unpaid`) }).click();

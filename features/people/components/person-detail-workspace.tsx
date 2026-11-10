@@ -770,7 +770,7 @@ export function PersonDetailWorkspace({
   const hasAdvance = Math.abs(b.advance) >= 0.005;
   const breakdownNote = Math.abs(b.unlinked) >= 0.005 || b.loanPayable > 0 || b.loanReceivable > 0 || b.emiReceivableOpen > 0;
   const balanceSummary = (b.toGive > 0 || b.toReceive > 0 || hasAdvance) && (
-    <div aria-label="Balance summary" className="text-[13px] tabular-nums">
+    <div aria-label="Balance summary" className="mt-4 text-[13px] tabular-nums">
       <p className="text-[11px] font-bold tracking-[0.08em] text-foreground/75 uppercase">Overall with {person.name.split(" ")[0]}</p>
       <dl className="mt-1.5 grid grid-cols-1 gap-1.5">
         {summaryLines.map((l) => (
@@ -857,7 +857,7 @@ export function PersonDetailWorkspace({
           <div className="min-w-0 lg:border-l lg:border-border lg:pl-6">{actionBar}</div>
         </div>
         {/* Inline actions — open as a workspace state right under the position, full width; one at a time */}
-        <PeopleDrawer id="person-inline-add" open={inline === "add" && onAddEntry != null} onOpenChange={(o) => !o && setInline(null)} title={`Add transaction with ${person.name}`}>
+        <PeopleDrawer id="person-inline-add" compact open={inline === "add" && onAddEntry != null} onOpenChange={(o) => !o && setInline(null)} title={`Add transaction with ${person.name}`}>
           {onAddEntry && (
             <AddEntryPanel
               personName={person.name}
@@ -895,7 +895,7 @@ export function PersonDetailWorkspace({
         {/* Record payment opens as the Transaction Details top sheet (the panel portals itself) — the person page stays underneath */}
         <div id="person-inline-settle">{rawPerson && inline === "settle" && paymentPanel != null && cloneElement(paymentPanel, { sheet: true })}</div>
         {/* Split is the one focused popup — the person page stays underneath, unchanged */}
-        <PeopleDrawer id="person-inline-split" width="xl" open={inline === "split" && rawPerson != null} onOpenChange={(o) => !o && setInline(null)} title={`Split expense with ${person.name}`}>
+        <PeopleDrawer id="person-inline-split" compact width="xl" open={inline === "split" && rawPerson != null} onOpenChange={(o) => !o && setInline(null)} title={`Split expense with ${person.name}`}>
           {rawPerson && (
             <SplitExpenseMode
               person={rawPerson}

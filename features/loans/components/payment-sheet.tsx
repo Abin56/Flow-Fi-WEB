@@ -30,6 +30,8 @@ export function PaymentSheet({
   heroLabel,
   hero,
   facts,
+  toolbar,
+  instant = false,
   children,
   onConfirm,
   onEnter,
@@ -56,6 +58,10 @@ export function PaymentSheet({
   hero?: React.ReactNode;
   /** Small figures under the amount (already paid, your share, …) — light text on the dark header. */
   facts?: React.ReactNode;
+  /** Pinned under the header, above the scrolling body — the payment flow's "what are you recording" switch. */
+  toolbar?: React.ReactNode;
+  /** A sibling step of the same flow just closed: skip the enter animation so the swap reads as one sheet. */
+  instant?: boolean;
   children: React.ReactNode;
   onConfirm: () => void;
   onEnter?: () => void;
@@ -176,14 +182,15 @@ export function PaymentSheet({
   // Enter in any single-line field runs the same primary action as the button (not while busy / invalid).
   const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => handleEnterKey(e, onEnter ?? onConfirm, { enabled: !busy && !confirmDisabled });
   const body = (
-    <div inert={busy} aria-busy={busy} className={cn("@container px-3 py-3 text-sm transition-opacity duration-150 sm:px-5", inStack && "sm:px-4", busy && "opacity-70")}>
+    <div inert={busy} aria-busy={busy} className={cn("@container px-3 py-3 text-sm transition-opacity duration-150 sm:px-5", inStack && "sm:py-4", busy && "opacity-70")}>
+      {!inStack && toolbar && <div className="mb-3">{toolbar}</div>}
       {children}
     </div>
   );
 
   if (inStack) {
     return (
-      <StackLayer tone="hero" open={open} onRequestClose={() => onOpenChange(false)} closeDisabled={busy} header={header} footer={footerWithOperation} onKeyDown={onKeyDown}>
+      <StackLayer tone="hero" size="wide" instant={instant} toolbar={toolbar} open={open} onRequestClose={() => onOpenChange(false)} closeDisabled={busy} header={header} footer={footerWithOperation} onKeyDown={onKeyDown}>
         {body}
       </StackLayer>
     );

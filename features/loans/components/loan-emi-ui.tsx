@@ -565,35 +565,37 @@ export interface Fact {
   tone?: "expense";
 }
 
-/** Compact label/value grid used on both detail views. */
+/** Compact label/value grid used on both detail views. One row per fact (label left, value right) in a narrow space such as the rail, two then three columns as it widens. */
 export function FactGrid({ facts, className }: { facts: (Fact | null | false)[]; className?: string }) {
   const visible = facts.filter(Boolean) as Fact[];
   // Pad the last row with blank cells so the grid's divider background never shows through as a grey block.
   const fill2 = (2 - (visible.length % 2)) % 2;
   const fill3 = (3 - (visible.length % 3)) % 3;
   const fillers = Array.from({ length: Math.max(fill2, fill3) }, (_, i) =>
-    cn("bg-card", i < fill2 ? "block" : "hidden", i < fill3 ? "sm:block" : "sm:hidden"),
+    cn("hidden bg-card", i < fill2 && i < fill3 ? "@[22rem]:block" : i < fill2 ? "@[22rem]:block @[34rem]:hidden" : "@[34rem]:block"),
   );
   return (
-    <dl className={cn(LE_RADIUS.card, "grid grid-cols-2 gap-px overflow-hidden border border-border bg-border sm:grid-cols-3", className)}>
-      {visible.map((f) => (
-        <div key={f.label} className="flex min-w-0 flex-col gap-0.5 bg-card px-3.5 py-3">
-          <dt className="truncate text-[11px] font-medium text-muted-foreground">{f.label}</dt>
-          <dd
-            className={cn(
-              "truncate text-sm font-medium text-foreground tabular-nums",
-              f.strong && "font-heading text-base font-semibold",
-              f.tone === "expense" && "text-expense",
-            )}
-          >
-            {f.value}
-          </dd>
-        </div>
-      ))}
-      {fillers.map((cls, i) => (
-        <div key={`filler-${i}`} aria-hidden className={cls} />
-      ))}
-    </dl>
+    <div className="@container">
+      <dl className={cn(LE_RADIUS.card, "grid grid-cols-1 gap-px overflow-hidden border border-border bg-border @[22rem]:grid-cols-2 @[34rem]:grid-cols-3", className)}>
+        {visible.map((f) => (
+          <div key={f.label} className="flex min-w-0 flex-row items-baseline justify-between gap-3 bg-card px-3.5 py-2.5 @[22rem]:flex-col @[22rem]:items-stretch @[22rem]:justify-start @[22rem]:gap-0.5 @[22rem]:py-3">
+            <dt className="truncate text-[11px] font-medium text-muted-foreground">{f.label}</dt>
+            <dd
+              className={cn(
+                "truncate text-sm font-medium text-foreground tabular-nums",
+                f.strong && "font-heading text-base font-semibold",
+                f.tone === "expense" && "text-expense",
+              )}
+            >
+              {f.value}
+            </dd>
+          </div>
+        ))}
+        {fillers.map((cls, i) => (
+          <div key={`filler-${i}`} aria-hidden className={cls} />
+        ))}
+      </dl>
+    </div>
   );
 }
 
@@ -729,15 +731,22 @@ export function FilterTabs<T extends string>({
   onChange,
   ariaLabel,
   className,
+  fill = false,
 }: {
   options: { value: T; label: string; count?: number }[];
   value: T;
   onChange: (v: T) => void;
   ariaLabel: string;
   className?: string;
+  /** Stretch the segments across the full width. */
+  fill?: boolean;
 }) {
   return (
-    <div role="tablist" aria-label={ariaLabel} className={cn("inline-flex max-w-full items-center gap-0.5 self-start overflow-x-auto rounded-[7px] border border-border bg-secondary p-0.5", className)}>
+    <div
+      role="tablist"
+      aria-label={ariaLabel}
+      className={cn("inline-flex max-w-full items-center gap-0.5 self-start overflow-x-auto rounded-[7px] border border-border bg-secondary p-0.5", fill && "flex self-stretch [&>button]:flex-1 [&>button]:justify-center", className)}
+    >
       {options.map(({ value: v, label, count }) => {
         const active = v === value;
         return (
@@ -1087,7 +1096,7 @@ export function LoanEmiFormDialog({
       )}
       <div className="flex min-w-0 flex-1 flex-col">
         <DialogTitle className={cn("font-heading leading-tight font-semibold tracking-tight", inStack ? "truncate text-base" : "text-lg")}>{title}</DialogTitle>
-        <DialogDescription className={description ? "truncate text-xs text-muted-foreground" : "sr-only"}>{description ?? title}</DialogDescription>
+        <DialogDescription className={description ? cn("text-xs text-muted-foreground", inStack ? "line-clamp-2" : "truncate") : "sr-only"}>{description ?? title}</DialogDescription>
       </div>
     </div>
   );

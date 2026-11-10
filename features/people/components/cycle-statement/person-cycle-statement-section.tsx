@@ -60,8 +60,9 @@ export function PersonCycleStatementSection({
   const loading = isLoading || statement == null;
   const tone =
     statement?.direction === "theyOwe" ? "text-settle-receivable-text" : statement?.direction === "iOwe" ? "text-settle-payable-text" : "text-success";
-  const edge =
-    statement?.direction === "theyOwe" ? "border-l-settle-receivable-edge" : statement?.direction === "iOwe" ? "border-l-settle-payable-edge" : "border-l-success";
+  // The balance sits on a soft panel in the direction's colour (receivable blue-grey, payable warm, settled green).
+  const panel =
+    statement?.direction === "theyOwe" ? "bg-settle-receivable-tint" : statement?.direction === "iOwe" ? "bg-settle-payable-tint" : "bg-success/10";
   const DirectionIcon = statement?.direction === "theyOwe" ? ArrowDownLeft : statement?.direction === "iOwe" ? ArrowUpRight : Check;
 
   return (
@@ -98,7 +99,7 @@ export function PersonCycleStatementSection({
                 <p className="mt-1.5 text-[11.5px] font-medium text-foreground/70">Tracked separately — each side is settled on its own.</p>
               </>
             ) : (
-            <div className={cn("mt-1.5 border-l-[4px] pl-3", edge)}>
+            <div className={cn("mt-2 rounded-2xl px-4 py-3.5 ring-1 ring-black/5 ring-inset dark:ring-white/10", panel)}>
               <p className={cn("inline-flex items-center gap-1.5 text-[13px] font-bold tracking-[0.08em] uppercase", tone)}>
                 <DirectionIcon className="size-4" strokeWidth={2.5} aria-hidden />
                 {cyclePosition(statement, statement.personName).headline}
@@ -125,7 +126,7 @@ export function PersonCycleStatementSection({
       </div>
 
       {/* Compact reconciliation */}
-      <div className="min-w-0 border-t border-border-strong/60 pt-4 md:border-t-0 md:border-l md:pt-0 md:pl-7">
+      <div className="min-w-0 rounded-2xl bg-secondary/45 p-4">
         {loading ? (
           <div className="space-y-2 pt-1">
             <Skeleton className="h-4 w-full" />
@@ -169,14 +170,14 @@ export function PersonCycleStatementSection({
       </div>
       {/* Context — overall relationship + linked obligations; only when there is something to show */}
       {!loading && (aside || linkedEmis.length > 0) && (
-        <div className="flex min-w-0 flex-col gap-4 border-t border-border-strong/60 pt-4 md:col-span-2 xl:col-span-1 xl:border-t-0 xl:border-l xl:pt-0 xl:pl-7">
+        <div className="flex min-w-0 flex-col gap-4 rounded-2xl bg-secondary/45 p-4 md:col-span-2 xl:col-span-1">
           {aside}
           {linkedEmis.length > 0 && (
             <div>
               <p className="text-[11px] font-bold tracking-[0.08em] text-foreground/75 uppercase">Linked EMIs</p>
-              <ul className="mt-1.5 divide-y divide-border-strong/50">
+              <ul className="mt-2 space-y-2">
                 {linkedEmis.map((s) => (
-                  <li key={`${s.kind}:${s.id}`} className="flex items-center justify-between gap-3 py-1.5 text-xs">
+                  <li key={`${s.kind}:${s.id}`} className="flex items-center justify-between gap-3 rounded-xl bg-card px-3 py-2 text-xs ring-1 ring-border">
                     <span className="flex min-w-0 flex-col gap-0.5">
                       <span className="flex min-w-0 items-center gap-1.5">
                         <EmiBadge />
@@ -188,7 +189,7 @@ export function PersonCycleStatementSection({
                       type="button"
                       disabled={savingLink === s.id}
                       onClick={() => toggleRepays(s)}
-                      className="shrink-0 rounded-[6px] border border-border-strong px-2 py-0.5 font-semibold text-foreground transition-colors hover:border-primary-accent-text hover:text-primary-accent-text disabled:opacity-50"
+                      className="shrink-0 rounded-full border border-border-strong px-2.5 py-1 font-semibold text-foreground transition-colors hover:border-primary-accent-text hover:bg-primary/15 disabled:opacity-50"
                     >
                       {s.repays ? "Stop counting" : `${statement.personName} repays me`}
                     </button>

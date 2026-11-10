@@ -1,7 +1,7 @@
 "use client";
 
 import { AccountLabel } from "@/components/finance/account-label";
-import { Check, Divide, Percent, Plus, SlidersHorizontal, Split, Trash2, UserRound } from "lucide-react";
+import { Check, Divide, Percent, Plus, Receipt, SlidersHorizontal, Split, Trash2, UserRound, Users } from "lucide-react";
 import { useMemo, useState } from "react";
 import { ClayAvatar } from "@/components/clay/clay-avatar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -14,7 +14,7 @@ import { ExpenseRepository, type ExpenseParticipantInput } from "@/lib/repositor
 import { useTransactionActions } from "@/features/transactions/hooks/use-transactions-data";
 import { initialAddAccountId } from "@/features/transactions/lib/initial-account";
 import { cn } from "@/lib/utils";
-import { CompactAmountInput } from "./ledger-ui";
+import { HeroAmount, PanelHeader } from "./flow-switch";
 import {
   ModeFooter,
   ModeHeader,
@@ -93,14 +93,21 @@ function ShareInput({
 }
 
 /** A framed form group — caption strip + body, the ledger's panel treatment. */
-function Group({ title, aside, children, className }: { title: string; aside?: React.ReactNode; children: React.ReactNode; className?: string }) {
+function Group({ title, aside, children, className, icon: Icon }: { title: string; aside?: React.ReactNode; children: React.ReactNode; className?: string; icon?: React.ComponentType<{ className?: string; strokeWidth?: number }> }) {
   return (
-    <section className={cn("overflow-hidden rounded-[8px] border border-border-strong bg-card", className)}>
-      <div className="flex items-center justify-between gap-3 border-b border-border-strong/75 bg-secondary/80 px-3.5 py-2">
-        <h3 className="text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">{title}</h3>
+    <section className={cn("overflow-hidden rounded-2xl border border-border-strong bg-card shadow-e1", className)}>
+      <div className="flex items-center justify-between gap-3 border-b border-border-strong/75 bg-secondary/60 px-4 py-2.5">
+        <h3 className="flex items-center gap-2 text-[11px] font-semibold tracking-[0.06em] text-foreground/70 uppercase">
+          {Icon && (
+            <span aria-hidden className="grid size-6 place-items-center rounded-lg bg-primary/30 text-foreground">
+              <Icon className="size-3.5" strokeWidth={2.25} />
+            </span>
+          )}
+          {title}
+        </h3>
         {aside}
       </div>
-      <div className="px-3.5 py-3">{children}</div>
+      <div className="px-4 py-3.5">{children}</div>
     </section>
   );
 }
@@ -302,21 +309,48 @@ export function SplitExpenseMode({
         e.preventDefault();
         if (e.target === e.currentTarget) void handleSave();
       }}
-      className="flex min-h-full flex-col"
+      className="flex min-h-full flex-col bg-secondary/40"
     >
-      <ModeHeader
-        backLabel={backLabel ?? person.name}
-        onBack={onBack}
-        onClose={closeable ? onBack : undefined}
-        title={closeable ? `Split expense — ${person.name}` : "Split expense"}
-        subtitle="Record an expense and track what each person owes."
-      />
+      {closeable ? (
+        <PanelHeader
+          title="Split expense"
+          personName={person.name}
+          tone={null}
+          onClose={onBack}
+          amount={totalAmount > 0 ? formatCurrency(totalAmount) : undefined}
+          context={
+            <>
+              <Split className="size-3 shrink-0" aria-hidden />
+              <span className="truncate">Record an expense and track what each person owes</span>
+            </>
+          }
+        />
+      ) : (
+        <ModeHeader backLabel={backLabel ?? person.name} onBack={onBack} onClose={undefined} title="Split expense" subtitle="Record an expense and track what each person owes." />
+      )}
 
       <div className={cn(WS_PAD, "mt-5 grid flex-1 items-start gap-x-6 gap-y-4 lg:grid-cols-[minmax(0,1fr)_17rem]")}>
         <div className="flex min-w-0 flex-col gap-4">
           {/* The expense */}
-          <Group title="Expense">
-            <div className="grid gap-x-3 gap-y-3 sm:grid-cols-[minmax(0,1fr)_10rem]">
+          <Group title="Expense" icon={Receipt}>
+            <div className="grid gap-x-4 gap-y-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,15rem)]">
+              <div className="min-w-0 rounded-xl bg-secondary/60 p-3">
+                <HeroAmount
+                  label="Total amount"
+                  autoFocus={false}
+                  value={amount}
+                  onChange={(v) => {
+                    setAmount(v);
+                    clear("amount");
+                  }}
+                  invalid={!!errors.amount}
+                />
+                {errors.amount && (
+                  <p role="alert" className="mt-1 text-[11.5px] font-medium text-expense">
+                    {errors.amount}
+                  </p>
+                )}
+                <div className="mt-3">
               <WsField label="Description" error={errors.description}>
                 <input
                   aria-invalid={!!errors.description || undefined}
@@ -329,20 +363,10 @@ export function SplitExpenseMode({
                   }}
                 />
               </WsField>
-              <WsField label="Total amount" error={errors.amount}>
-                <CompactAmountInput
-                  label="Total amount"
-                  value={amount}
-                  onChange={(v) => {
-                    setAmount(v);
-                    clear("amount");
-                  }}
-                  invalid={!!errors.amount}
-                />
-              </WsField>
-            </div>
 
-            <div className="mt-3 grid gap-x-3 gap-y-3 sm:grid-cols-3">
+                </div>
+              </div>
+              <div className="grid min-w-0 content-start gap-3">
               <WsField label="Date" error={errors.date}>
                 <DateInput className={WS_FIELD} value={date} onChange={(e) => setDate(e.target.value)} />
               </WsField>
@@ -386,11 +410,14 @@ export function SplitExpenseMode({
                   </SelectContent>
                 </Select>
               </WsField>
+
+              </div>
             </div>
           </Group>
 
-          {/* The split */}
-          <Group title="Split between">
+          {/* The split — opens once there is a total to split */}
+          <Expand open={totalAmount > 0}>
+          <Group title="Split between" icon={Users}>
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
               <WsSegmented
                 label="Who pays"
@@ -573,36 +600,34 @@ export function SplitExpenseMode({
               )}
             </div>
           </Group>
+          </Expand>
         </div>
 
         {/* Live summary — the engine's resolution of exactly what Save will send; beside the form on desktop */}
-        <Group
-          title="Summary"
-          className="lg:sticky lg:top-0"
-          aside={
-            shares && (
-              <span className="flex items-center gap-1 text-[11px] font-medium text-muted-foreground">
-                <Check className="size-3 text-success" strokeWidth={2.5} /> Fully allocated
+        <aside aria-label="Summary" className="overflow-hidden rounded-2xl border border-border-strong bg-card shadow-e1 lg:sticky lg:top-0">
+          <div className="flex items-start justify-between gap-2 bg-primary/20 px-4 py-3">
+            <div className="min-w-0">
+              <p className="text-[11px] font-bold tracking-[0.1em] text-foreground/65 uppercase">Total expense</p>
+              <p className={cn("mt-1 font-heading text-[28px] leading-none font-bold tracking-tight tabular-nums", totalAmount > 0 ? "text-foreground" : "text-foreground/35")}>{formatCurrency(totalAmount > 0 ? totalAmount : 0)}</p>
+            </div>
+            {shares && (
+              <span className="flex shrink-0 items-center gap-1 rounded-full bg-success/15 px-2 py-0.5 text-[11px] font-bold text-[oklch(0.44_0.13_149)] dark:text-success">
+                <Check className="size-3" strokeWidth={2.5} /> Fully allocated
               </span>
-            )
-          }
-        >
-          <div aria-live="polite">
+            )}
+          </div>
+          <div className="px-4 py-3.5" aria-live="polite">
             {preview == null ? (
               <p className="text-sm text-muted-foreground">
                 Enter the total{!assignFully && splitType !== "equal" ? ` and ${firstName}'s ${unitLabel}` : ""} to see who owes what.
               </p>
             ) : "error" in preview ? (
               <>
-                <dl className="text-sm">
-                  <SummaryLine label="Total" value={formatCurrency(totalAmount)} className="font-medium text-foreground" />
-                </dl>
-                <p className="mt-2 rounded-[6px] border border-expense/40 bg-expense/8 px-2.5 py-1.5 text-xs font-medium text-expense">{preview.error}</p>
+                <p className="rounded-[6px] border border-expense/40 bg-expense/8 px-2.5 py-1.5 text-xs font-medium text-expense">{preview.error}</p>
               </>
             ) : (
               <>
                 <dl className="space-y-1 text-sm">
-                  <SummaryLine label="Total" value={formatCurrency(totalAmount)} className="font-medium text-foreground" />
                   {preview.shares.map((s, i) => (
                     <SummaryLine
                       key={`${s.personId ?? s.name}-${i}`}
@@ -613,7 +638,7 @@ export function SplitExpenseMode({
                   ))}
                 </dl>
                 {preview.shares.some((s) => !s.isMe && s.share > 0) && (
-                  <dl className="mt-2.5 space-y-1 border-t border-border-strong/80 pt-2.5">
+                  <dl className="mt-3 space-y-1 rounded-xl bg-settle-receivable-tint px-3 py-2.5 ring-1 ring-settle-receivable-text/15 ring-inset">
                     {preview.shares
                       .filter((s) => !s.isMe && s.share > 0)
                       .map((s, i) => (
@@ -632,7 +657,7 @@ export function SplitExpenseMode({
               </>
             )}
           </div>
-        </Group>
+        </aside>
       </div>
 
       <ModeFooter>
@@ -645,5 +670,17 @@ export function SplitExpenseMode({
         </button>
       </ModeFooter>
     </form>
+  );
+}
+
+/** Starts folded and opens (animated) when `open` — the same fields, just revealed when they matter. */
+function Expand({ open, children }: { open: boolean; children: React.ReactNode }) {
+  return (
+    <div
+      className={cn("grid transition-[grid-template-rows,opacity] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none", open ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0")}
+      inert={!open}
+    >
+      <div className="-mx-1 min-h-0 overflow-hidden px-1">{children}</div>
+    </div>
   );
 }

@@ -1,6 +1,7 @@
 "use client";
 
-import { CalendarClock, Users, Wallet, type LucideIcon } from "lucide-react";
+import { useEffect, useRef } from "react";
+import { CalendarClock, Users, Wallet, X, type LucideIcon } from "lucide-react";
 import { LOAN_EMI_INPUT, Reveal } from "@/features/loans/components/loan-emi-ui";
 import { formatCurrencyExact } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -96,6 +97,33 @@ export function ChoiceRow({
   );
 }
 
+/** The form a person's "Record received" / "Postpone" button opens right under the people list. */
+export function ActionPanel({ title, onClose, children, testId }: { title: string; onClose: () => void; children: React.ReactNode; testId: string }) {
+  // It opens below the person cards, often under the fold: bring it into view.
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    ref.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, []);
+  return (
+    <div ref={ref} className="scroll-mb-4">
+    <Reveal className="flex flex-col gap-3 rounded-xl border border-border-strong bg-card p-3 shadow-e1">
+      <div className="flex items-center justify-between gap-2" data-testid={testId}>
+        <h4 className="text-sm font-semibold text-foreground">{title}</h4>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close this form"
+          className="grid size-7 place-items-center rounded-[8px] text-muted-foreground outline-none hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <X className="size-4" strokeWidth={1.75} />
+        </button>
+      </div>
+      {children}
+    </Reveal>
+    </div>
+  );
+}
+
 export function PeoplePaymentDecision({
   decision,
   onDecision,
@@ -113,7 +141,16 @@ export function PeoplePaymentDecision({
   postponeSlot = null,
   collectSlot = null,
   pendingPeople = [],
+  actionsInRows = false,
+  panelsOutside = false,
 }: {
+  /** The Received / Postpone forms are drawn by the host (beside this list on a wide sheet) — not under the people. */
+  panelsOutside?: boolean;
+  /**
+   * Each undecided person's "Record received" / "Postpone" buttons are on their own card above, so their forms open
+   * below that list when pressed and only "pay from my own money" is a choice here.
+   */
+  actionsInRows?: boolean;
   /** What each undecided person still owes for this payment — shown under "own money" as what goes to People. */
   pendingPeople?: readonly { name: string; amount: number }[];
   /** The in-dialog "record what they paid" form, shown under "Received". */
@@ -123,7 +160,7 @@ export function PeoplePaymentDecision({
   /** Collect first, when the picked person already gave money held as advance — applying it is offered first. */
   advanceNote?: string | null;
   decision: LenderPaymentDecision | null;
-  onDecision: (d: LenderPaymentDecision) => void;
+  onDecision: (d: LenderPaymentDecision | null) => void;
   reason: OwnMoneyReason | null;
   onReason: (r: OwnMoneyReason | null) => void;
   note: string;
@@ -144,6 +181,8 @@ export function PeoplePaymentDecision({
   const waiting = unresolvedNames.length > 0 ? peopleNames(unresolvedNames) : "Their";
   const heading = allPostponed
     ? "Payment to lender"
+    : actionsInRows
+      ? "Or pay the lender now"
     : postponedNote && unresolvedNames.length > 0
       ? `What about ${peopleNames(unresolvedNames)}'s share?`
       : unresolvedNames.length > 0
@@ -165,10 +204,20 @@ export function PeoplePaymentDecision({
           {peopleNames(lapsedNames)}: postponed date has passed — still not received.
         </p>
       )}
-      <h3 className="text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">{heading}</h3>
-      <p className="text-xs text-muted-foreground">Paying the lender and collecting from them are separate. The lender is paid in full either way — their share is tracked in People.</p>
-      <div role="radiogroup" aria-label="How to pay the lender" className="divide-y divide-border overflow-hidden rounded-[8px] border border-border-strong bg-card">
-        {!allPostponed && (
+      {actionsInRows && !panelsOutside && !allPostponed && decision === "collect" && (
+        <ActionPanel title={`Record what ${waiting === "Their" ? "they" : waiting} gave you`} onClose={() => onDecision(null)} testId="decision-collect">
+          {collectSlot}
+        </ActionPanel>
+      )}
+      {actionsInRows && !panelsOutside && !allPostponed && decision === "postpone" && postponeSlot != null && (
+        <ActionPanel title="Move their share to a later month" onClose={() => onDecision(null)} testId="decision-postpone">
+          {postponeSlot}
+        </ActionPanel>
+      )}
+      <h3 className="mt-1 text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">{heading}</h3>
+      {!actionsInRows && <p className="text-xs text-muted-foreground">Paying the lender and collecting from them are separate. The lender is paid in full either way — their share is tracked in People.</p>}
+      <div role="radiogroup" aria-label="How to pay the lender" className="divide-y divide-border overflow-hidden rounded-[10px] border border-border-strong bg-card">
+        {!allPostponed && !actionsInRows && (
           <ChoiceRow
             active={decision === "collect"}
             icon={Users}
@@ -185,7 +234,7 @@ export function PeoplePaymentDecision({
               ) : null)}
           </ChoiceRow>
         )}
-        {!allPostponed && postponeSlot != null && (
+        {!allPostponed && !actionsInRows && postponeSlot != null && (
           <ChoiceRow
             active={decision === "postpone"}
             icon={CalendarClock}
@@ -204,7 +253,7 @@ export function PeoplePaymentDecision({
           hint={allPostponed ? "Their shares stay owed to you until they pay." : `${accountName ? `From ${accountName} · ` : ""}their share stays owed to you`}
           onSelect={() => onDecision("ownMoney")}
         >
-            {pendingPeople.length > 0 && (
+            {pendingPeople.length > 0 && !actionsInRows && (
               <div className="flex flex-col gap-1 rounded-[6px] border border-settle-receivable-text/30 bg-settle-receivable-tint px-2.5 py-2 text-xs" data-testid="own-money-pending">
                 <span className="font-semibold text-settle-receivable-text">Stays pending with them — kept in the People ledger</span>
                 {pendingPeople.map((p) => (

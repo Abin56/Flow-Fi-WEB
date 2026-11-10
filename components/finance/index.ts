@@ -21,3 +21,4 @@ export * from "@/components/finance/bank-combobox";
 export * from "@/components/finance/bank-logo";
 export * from "@/components/finance/account-label";
 export * from "@/components/finance/payment-source-summary";
+export * from "@/components/finance/context-panel";

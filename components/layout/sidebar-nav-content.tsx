@@ -116,7 +116,7 @@ export function SidebarNavContent({
   const scrollItem = motionOn ? "drawer-item" : undefined;
 
   return (
-    <div className="flex h-full min-h-0 flex-col py-3.5">
+    <div className="flex h-full min-h-0 flex-col py-3">
       {/* Slim loading bar along the top of the window while a page from the menu is opening. */}
       {pendingHref != null && (
         <div aria-hidden className="pointer-events-none fixed inset-x-0 top-0 z-command h-0.5 overflow-hidden">
@@ -131,13 +131,12 @@ export function SidebarNavContent({
       {/* Brand */}
       <div
         className={cn(
-          "flex shrink-0 items-center gap-2.5 px-5",
+          "flex shrink-0 items-center gap-2.5 px-4",
           collapsed && "justify-center px-0",
         )}
       >
-        <div className="relative flex size-8.5 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-gradient-to-br from-primary via-primary to-success/70 font-heading text-sm font-bold text-primary-foreground shadow-[0_6px_16px_-6px_rgba(120,160,20,0.6)] ring-1 ring-primary-accent-text/30">
-          <span aria-hidden className="absolute -top-3 -right-3 size-6 rounded-full bg-white/40 blur-md" />
-          <span className="relative">F</span>
+        <div className="relative flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-[10px] bg-primary font-heading text-sm font-bold text-primary-foreground ring-1 ring-primary-accent-text/30">
+                    <span className="relative">F</span>
         </div>
         {!collapsed && (
           <div className="min-w-0">
@@ -152,8 +151,8 @@ export function SidebarNavContent({
 
       {/* Only this middle region scrolls, so the logo and profile stay pinned and every item stays reachable on short screens. */}
       {!collapsed && (
-        <div className="mt-5 shrink-0 px-3">
-          <label className="flex h-9 items-center gap-2 rounded-xl border border-border/80 bg-card/70 px-3 text-sm transition-colors focus-within:border-primary-accent-text/60 focus-within:bg-card focus-within:ring-2 focus-within:ring-ring/40">
+        <div className="mt-4 shrink-0 px-3">
+          <label className="flex h-8 items-center gap-2 rounded-lg border border-border/70 bg-card/60 px-2.5 text-[13px] transition-colors focus-within:border-primary-accent-text/60 focus-within:bg-card focus-within:ring-2 focus-within:ring-ring/40">
             <Search className="size-4 shrink-0 text-foreground/50" strokeWidth={1.9} />
             <input
               ref={searchRef}
@@ -184,8 +183,8 @@ export function SidebarNavContent({
         </div>
       )}
 
-      <div className={cn("min-h-0 flex-1 overflow-y-auto overscroll-contain pb-4 [scrollbar-width:thin]", collapsed ? "mt-6" : "mt-3")}>
-        <nav className="flex flex-col gap-3 px-3">
+      <div className={cn("min-h-0 flex-1 overflow-y-auto overscroll-contain pb-4 [scrollbar-width:thin]", collapsed ? "mt-5" : "mt-2.5")}>
+        <nav className="flex flex-col gap-2 px-3">
           {groups.map((group) => {
             const holdsActive = group.items.some((item) => isNavItemActive(item, pathname));
             // While searching every matching group shows; otherwise folding applies.
@@ -199,7 +198,7 @@ export function SidebarNavContent({
                       onClick={() => !holdsActive && toggleSection(group.section)}
                       aria-expanded={open}
                       className={cn(
-                        "group/section flex w-full items-center justify-between rounded-lg px-3 pt-1 pb-1.5 text-[11px] font-semibold tracking-[0.08em] text-foreground/55 uppercase outline-none transition-colors hover:text-foreground/80 focus-visible:ring-2 focus-visible:ring-ring",
+                        "group/section flex w-full items-center justify-between rounded-lg px-2.5 pt-1 pb-1 text-[10.5px] font-semibold tracking-[0.1em] text-foreground/50 uppercase outline-none transition-colors hover:text-foreground/80 focus-visible:ring-2 focus-visible:ring-ring",
                         holdsActive && "cursor-default text-foreground/75",
                         scrollItem,
                       )}
@@ -234,7 +233,7 @@ export function SidebarNavContent({
                         onFocus={() => router.prefetch(item.href)}
                         aria-current={active ? "page" : undefined}
                         className={cn(
-                          "group/item relative flex items-center gap-3 rounded-xl px-2 py-1.5 text-sm font-medium text-foreground/75 outline-none transition-colors duration-150 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
+                          "group/item relative flex items-center gap-2.5 rounded-lg px-1.5 py-1 text-[13px] font-medium text-foreground/75 outline-none transition-colors duration-150 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
                           active && "font-semibold text-foreground",
                           collapsed && "justify-center px-0",
                           scrollItem,
@@ -245,26 +244,26 @@ export function SidebarNavContent({
                           <motion.span
                             layoutId={collapsed ? "nav-active-rail" : "nav-active"}
                             aria-hidden
-                            className="absolute inset-0 rounded-xl bg-gradient-to-r from-primary/40 via-primary/20 to-primary/5 shadow-[0_6px_18px_-10px_rgba(120,160,20,0.55)] ring-1 ring-primary-accent-text/25 before:absolute before:inset-y-2 before:-left-3 before:w-1 before:rounded-full before:bg-primary-accent-text"
+                            className="absolute inset-0 rounded-lg bg-primary/20 ring-1 ring-primary-accent-text/20 before:absolute before:inset-y-1.5 before:-left-3 before:w-1 before:rounded-full before:bg-primary-accent-text"
                             transition={reduceMotion ? { duration: 0 } : { type: "spring", stiffness: 450, damping: 38 }}
                           />
                         )}
-                        {!active && <span aria-hidden className="absolute inset-0 rounded-xl bg-muted opacity-0 transition-opacity group-hover/item:opacity-100" />}
+                        {!active && <span aria-hidden className="absolute inset-0 rounded-lg bg-muted opacity-0 transition-opacity group-hover/item:opacity-100" />}
                         <span
                           className={cn(
-                            "relative flex size-8 shrink-0 items-center justify-center rounded-[10px] transition-colors",
+                            "relative flex size-7 shrink-0 items-center justify-center rounded-lg transition-colors",
                             active
-                              ? "bg-primary text-primary-foreground shadow-[0_4px_10px_-4px_rgba(120,160,20,0.7)]"
+                              ? "bg-primary text-primary-foreground"
                               : "text-foreground/65 group-hover/item:bg-card group-hover/item:text-foreground group-hover/item:shadow-sm",
                           )}
                         >
-                          <Icon className="size-4.5" />
+                          <Icon className="size-4" />
                         </span>
                         {!collapsed && (
-                          <span className="relative truncate transition-transform duration-150 group-hover/item:translate-x-0.5">{item.label}</span>
+                          <span className="relative truncate transition-transform duration-150 group-hover/item:translate-x-px">{item.label}</span>
                         )}
                         {active && !collapsed && item.href !== "/people" && (
-                          <span aria-hidden className="relative ml-auto mr-1 size-1.5 rounded-full bg-primary-accent-text shadow-[0_0_0_3px_rgba(150,190,40,0.18)]" />
+                          <span aria-hidden className="relative ml-auto mr-1 size-1.5 rounded-full bg-primary-accent-text" />
                         )}
                         {firstMatch?.href === item.href && !active && (
                           <kbd className="relative ml-auto rounded-md border border-border bg-card px-1 text-[10px] font-semibold text-foreground/55">↵</kbd>
@@ -310,7 +309,7 @@ export function SidebarNavContent({
           href="/settings"
           onClick={onNavigate}
           className={cn(
-            "group/profile flex items-center gap-2.5 rounded-2xl border border-border/70 bg-card/60 p-2 outline-none transition-colors hover:border-border hover:bg-card focus-visible:ring-2 focus-visible:ring-ring",
+            "group/profile flex items-center gap-2.5 rounded-xl border border-border/70 bg-card/60 p-1.5 outline-none transition-colors hover:border-border hover:bg-card focus-visible:ring-2 focus-visible:ring-ring",
             collapsed && "justify-center border-transparent bg-transparent p-1",
           )}
         >

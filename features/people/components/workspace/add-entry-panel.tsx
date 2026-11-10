@@ -1,6 +1,6 @@
 "use client";
 
-import { CircleAlert, Loader2, Receipt } from "lucide-react";
+import { ArrowDownLeft, ArrowUpRight, CircleAlert, Loader2, Receipt } from "lucide-react";
 import { useRef, useState } from "react";
 import type { LedgerEntryType } from "@/lib/models/person";
 import { money } from "@/lib/engines/person-cycle-statement-share";
@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 import { isUnderfunded } from "@/components/finance/payment-source-summary";
 import { AccountField, useAccountChoice } from "./ledger-ui";
 import { WS_FIELD, WS_GHOST, WS_PRIMARY, WS_SELECT_TRIGGER, WsField } from "./person-workspace-ui";
-import { FlowSwitch, flowText, HeroAmount, PanelHeader, type FlowTone } from "./flow-switch";
+import { flowText, HeroAmount, PanelHeader, type FlowTone } from "./flow-switch";
 import { DateInput } from "@/components/forms/date-input";
 import { handleEnterAdvance } from "@/components/finance/enter-advance";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -133,8 +133,7 @@ export function AddEntryPanel({
       />
 
       <div className="flex-1 space-y-4 px-4 pt-4 pb-6 sm:px-6">
-        <FlowSwitch
-          label="Transaction type"
+        <TypeCards
           value={type}
           invalid={missingType}
           onChange={(next) => {
@@ -144,53 +143,77 @@ export function AddEntryPanel({
             if (!amount) requestAnimationFrame(() => amountRef.current?.focus());
           }}
           options={[
-            { value: "gave", tone: TONE.gave, title: "I gave", sub: firstName, label: "Money I Gave", meta: `${firstName} will owe you` },
-            { value: "borrowed", tone: TONE.borrowed, title: "I borrowed", sub: `from ${firstName}`, label: "Money I Borrowed", meta: `You will owe ${firstName}` },
+            { value: "gave", title: "I gave", sub: firstName, label: "Money I Gave", meta: `${firstName} will owe you`, Icon: ArrowUpRight, tint: "bg-settle-receivable-tint ring-settle-receivable-text/45", text: "text-settle-receivable-text" },
+            { value: "borrowed", title: "I borrowed", sub: `from ${firstName}`, label: "Money I Borrowed", meta: `You will owe ${firstName}`, Icon: ArrowDownLeft, tint: "bg-settle-payable-tint ring-settle-payable-text/45", text: "text-settle-payable-text" },
           ]}
         />
 
-        {/* Amount tile on the left; date and account beside it on wide screens, below on phones. */}
-        <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,17rem)]">
-          <div className="rounded-[14px] bg-secondary/60 p-3.5">
-            <HeroAmount
-              inputRef={amountRef}
-              label="Amount"
-              autoFocus={false}
-              value={amount}
-              invalid={!!error && !!type && !(typed > 0)}
-              onChange={(v) => {
-                setAmount(v);
-                if (error) setError(null);
-              }}
-            />
-            <WsField label="Description" className="mt-3">
-              <input className={WS_FIELD} placeholder="e.g. Dinner, cab" value={note} onChange={(e) => setNote(e.target.value)} />
-            </WsField>
-          </div>
-          <div className="grid content-start gap-3 sm:grid-cols-2 md:grid-cols-1">
-            <AccountField
-              choice={account}
-              label={type === "borrowed" ? "Receive into account" : type === "gave" ? "Pay from account" : "Account"}
-              outflow={type === "gave" ? (Number(amount) > 0 ? Number(amount) : null) : undefined}
-            />
-            <WsField label="Date">
-              <DateInput className={WS_FIELD} value={date} onChange={(e) => setDate(e.target.value)} />
-            </WsField>
-            <WsField label="Category">
-              <Select value={pickedCategory} onValueChange={setCategoryId}>
-                <SelectTrigger className={WS_SELECT_TRIGGER} aria-label="Category">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent className="max-h-72">
-                  <SelectItem value={DEFAULT_CATEGORY}>{PERSONAL_LOAN_CATEGORY_NAME}</SelectItem>
-                  {categories.map((c) => (
-                    <SelectItem key={c.id} value={c.id}>
-                      {c.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </WsField>
+        {/* Starts as just the two choices; pressing one expands the rest of the form (the same fields, nothing new). */}
+        <div
+          className={cn("grid transition-[grid-template-rows,opacity] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none", type ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0")}
+          inert={!type}
+        >
+          <div className="-mx-1 min-h-0 overflow-hidden px-1">
+            <div className="space-y-4 pb-1">
+            {/* Amount tile on the left; date and account beside it on wide screens, below on phones. */}
+            <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,17rem)]">
+              <div className="rounded-[14px] bg-secondary/60 p-3.5">
+                <HeroAmount
+                  inputRef={amountRef}
+                  label="Amount"
+                  autoFocus={false}
+                  value={amount}
+                  invalid={!!error && !!type && !(typed > 0)}
+                  onChange={(v) => {
+                    setAmount(v);
+                    if (error) setError(null);
+                  }}
+                />
+                <WsField label="Description" className="mt-3">
+                  <input className={WS_FIELD} placeholder="e.g. Dinner, cab" value={note} onChange={(e) => setNote(e.target.value)} />
+                </WsField>
+              </div>
+              <div className="grid content-start gap-3 sm:grid-cols-2 md:grid-cols-1">
+                <AccountField
+                  choice={account}
+                  label={type === "borrowed" ? "Receive into account" : type === "gave" ? "Pay from account" : "Account"}
+                  outflow={type === "gave" ? (Number(amount) > 0 ? Number(amount) : null) : undefined}
+                />
+                <WsField label="Date">
+                  <DateInput className={WS_FIELD} value={date} onChange={(e) => setDate(e.target.value)} />
+                </WsField>
+                <WsField label="Category">
+                  <Select value={pickedCategory} onValueChange={setCategoryId}>
+                    <SelectTrigger className={WS_SELECT_TRIGGER} aria-label="Category">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent className="max-h-72">
+                      <SelectItem value={DEFAULT_CATEGORY}>{PERSONAL_LOAN_CATEGORY_NAME}</SelectItem>
+                      {categories.map((c) => (
+                        <SelectItem key={c.id} value={c.id}>
+                          {c.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </WsField>
+              </div>
+            </div>
+
+            {/* What this will record — updates as the form is filled. */}
+            <section aria-label="Summary" className="overflow-hidden rounded-2xl border border-border-strong bg-card shadow-e1">
+              <div className={cn("px-4 py-3", type === "gave" ? "bg-settle-receivable-tint" : type === "borrowed" ? "bg-settle-payable-tint" : "bg-secondary/60")}>
+                <p className="text-[11px] font-bold tracking-[0.1em] text-foreground/65 uppercase">{outcome ? outcome.lead : "This will record"}</p>
+                <p className={cn("mt-1 font-heading text-[30px] leading-none font-bold tracking-tight tabular-nums", typed > 0 ? "text-foreground" : "text-foreground/35")}>{money(typed)}</p>
+              </div>
+              <dl className="divide-y divide-dashed divide-border-strong px-4 text-[13px]">
+                <SummaryRow label={type === "borrowed" ? "Into account" : "From account"}>{account.selected?.name ?? <span className="font-semibold text-warning">Choose an account</span>}</SummaryRow>
+                <SummaryRow label="Date">{new Date(`${date}T00:00:00`).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}</SummaryRow>
+                <SummaryRow label="Category">{pickedCategory === DEFAULT_CATEGORY ? PERSONAL_LOAN_CATEGORY_NAME : (categories.find((c) => c.id === pickedCategory)?.name ?? PERSONAL_LOAN_CATEGORY_NAME)}</SummaryRow>
+                {note.trim() && <SummaryRow label="Note">{note.trim()}</SummaryRow>}
+              </dl>
+            </section>
+            </div>
           </div>
         </div>
       </div>
@@ -228,5 +251,59 @@ export function AddEntryPanel({
         </div>
       </div>
     </form>
+  );
+}
+
+function SummaryRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="grid grid-cols-[6rem_minmax(0,1fr)] items-baseline gap-x-3 py-2.5">
+      <dt className="text-xs font-medium text-foreground/70">{label}</dt>
+      <dd className="min-w-0 text-right font-medium text-foreground [overflow-wrap:anywhere]">{children}</dd>
+    </div>
+  );
+}
+
+/** The two things that can have happened, as two cards: nothing is preselected; the chosen one takes its colour. */
+function TypeCards({
+  value,
+  onChange,
+  options,
+  invalid,
+}: {
+  value: AddEntryType | null;
+  onChange: (v: AddEntryType) => void;
+  options: { value: AddEntryType; title: string; sub: string; label: string; meta: string; Icon: typeof ArrowUpRight; tint: string; text: string }[];
+  invalid: boolean;
+}) {
+  return (
+    <div role="radiogroup" aria-label="Transaction type" aria-invalid={invalid || undefined} className={cn("grid grid-cols-2 gap-2.5 rounded-2xl", invalid && "ring-2 ring-warning/60 ring-offset-2 ring-offset-card")}>
+      {options.map(({ value: v, title, sub, label, meta, Icon, tint, text }) => {
+        const on = v === value;
+        return (
+          <button
+            key={v}
+            type="button"
+            role="radio"
+            aria-checked={on}
+            aria-label={label}
+            onClick={() => onChange(v)}
+            className={cn(
+              "flex min-w-0 items-center gap-3 rounded-2xl border px-3.5 py-3 text-left outline-none transition-[background-color,border-color,box-shadow] duration-200 focus-visible:ring-2 focus-visible:ring-ring",
+              on ? cn("border-transparent shadow-e1 ring-2", tint) : "border-border-strong bg-card hover:bg-secondary/60",
+            )}
+          >
+            <span aria-hidden className={cn("grid size-10 shrink-0 place-items-center rounded-full", on ? "bg-card shadow-e1" : "bg-secondary", text)}>
+              <Icon className="size-5" strokeWidth={2.25} />
+            </span>
+            <span className="min-w-0">
+              <span className="block truncate text-[15px] font-bold text-foreground">
+                {title} <span className="font-medium text-foreground/70">{sub}</span>
+              </span>
+              <span className={cn("block truncate text-xs", on ? cn("font-semibold", text) : "text-foreground/65")}>{meta}</span>
+            </span>
+          </button>
+        );
+      })}
+    </div>
   );
 }

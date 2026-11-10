@@ -9,8 +9,9 @@
  * the row model and the totals never carry it.
  */
 
-import { CalendarClock, Undo2 } from "lucide-react";
+import { ArrowRight, CalendarClock, CheckCircle2, ChevronDown, Undo2 } from "lucide-react";
 import { createContext, useContext, useMemo, useRef, useState } from "react";
+import { PanelSection } from "@/components/finance/context-panel";
 import { DateInput } from "@/components/forms/date-input";
 import { money } from "@/lib/engines/person-cycle-statement-share";
 import { cycleContaining, formatCycleLabel, formatStatementDate, type StatementCycle } from "@/lib/engines/person-cycle-statement";
@@ -381,7 +382,8 @@ export function usePostponeDraft(items: readonly PostponeItem[]) {
 }
 
 /** The postpone choices — expected cycle, optional reason, optional reminder — and a plain-language preview. */
-export function PostponeFields({ draft, noMoneyNote = false }: { draft: PostponeDraft; noMoneyNote?: boolean }) {
+export function PostponeFields({ draft, noMoneyNote = false, compact = false }: { draft: PostponeDraft; noMoneyNote?: boolean; compact?: boolean }) {
+  if (compact) return <PostponeFieldsCompact draft={draft} noMoneyNote={noMoneyNote} />;
   const { options, targetIdx, setTargetIdx, target, today, single, anyView, remaining, reason, setReason, note, setNote, reminderMode, setReminderMode, dateText, setDateText } = draft;
   const chipCount = 3;
   return (
@@ -470,6 +472,143 @@ export function PostponeFields({ draft, noMoneyNote = false }: { draft: Postpone
       </p>
     <span className="sr-only">already included in pending, not added again</span>
     </>
+  );
+}
+
+/**
+ * The same choices for a small sheet (Record payment → Not paid yet): the cycle as swipeable cards, a from → to
+ * preview, and the optional reason / reminder folded into one section. Same draft, same write — presentation only.
+ */
+function PostponeFieldsCompact({ draft, noMoneyNote }: { draft: PostponeDraft; noMoneyNote: boolean }) {
+  const { options, targetIdx, setTargetIdx, target, today, single, anyView, remaining, reason, setReason, note, setNote, reminderMode, setReminderMode, dateText, setDateText } = draft;
+  const chipCount = 3;
+  const [extrasOpen, setExtrasOpen] = useState(false);
+  // A chosen date that is still empty is what keeps Postpone disabled — never hide it in a closed section.
+  const dateMissing = reminderMode === "date" && fromInputDate(dateText) == null;
+  const extrasSummary =
+    [reason ? DEFERRAL_REASON_LABEL[reason] : null, reminderMode === "cycleStart" ? `Remind ${formatStatementDate(target.start)}` : reminderMode === "date" && !dateMissing ? `Remind ${formatStatementDate(fromInputDate(dateText)!)}` : null]
+      .filter(Boolean)
+      .join(" · ") || "Optional";
+  const card = (on: boolean) =>
+    cn(
+      "flex min-w-[6.75rem] shrink-0 snap-start flex-col items-start rounded-[12px] border px-3 py-2 text-left outline-none transition-[border-color,background-color,box-shadow,transform] duration-200 focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.98] @md:min-w-0",
+      on ? "border-primary-accent-text bg-primary/12 shadow-[0_4px_14px_-8px_rgb(0_0_0/0.3)]" : "border-border-strong bg-card hover:border-muted-foreground hover:bg-secondary/50",
+    );
+  const smallChip = (on: boolean) =>
+    cn(
+      "inline-flex h-8 shrink-0 items-center rounded-full border px-3 text-xs font-semibold outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-ring",
+      on ? "border-primary-accent-text bg-primary/15 text-foreground" : "border-border-strong bg-card text-foreground/80 hover:bg-secondary",
+    );
+  return (
+    <div className="space-y-3">
+      <div>
+        <p className="mb-1.5 text-xs font-bold text-foreground/85">Expect the payment in</p>
+        <div role="radiogroup" aria-label="Expected cycle" className="-mx-1 flex snap-x gap-1.5 overflow-x-auto px-1 pb-1 [scrollbar-width:none] @md:grid @md:grid-cols-4 @md:overflow-visible">
+          {options.slice(0, chipCount).map((c, i) => {
+            const on = targetIdx === i;
+            return (
+              <button key={c.start.getTime()} type="button" role="radio" aria-checked={on} aria-label={`${cycleName(c, today)} cycle`} title={rangeLabel(c)} className={card(on)} onClick={() => setTargetIdx(i)}>
+                <span className="flex w-full items-center justify-between gap-2">
+                  <span className="font-heading text-[15px] leading-tight font-bold text-foreground">{cycleName(c, today)}</span>
+                  {on && <CheckCircle2 className="size-4 shrink-0 text-primary-accent-text duration-200 animate-in zoom-in-50" aria-hidden />}
+                </span>
+                <span className="mt-0.5 text-[11px] font-medium text-foreground/65">{i === 0 && !anyView ? "Next cycle" : `From ${formatStatementDate(c.start)}`}</span>
+              </button>
+            );
+          })}
+          <label className={cn(card(targetIdx >= chipCount), "relative cursor-pointer")}>
+            <span className="font-heading text-[15px] leading-tight font-bold text-foreground">{targetIdx >= chipCount ? cycleName(target, today) : "Later"}</span>
+            <span className="mt-0.5 flex items-center gap-0.5 text-[11px] font-medium text-foreground/65">
+              {targetIdx >= chipCount ? `From ${formatStatementDate(target.start)}` : "Pick a cycle"}
+              <ChevronDown className="size-3" aria-hidden />
+            </span>
+            <select
+              aria-label="Later cycle"
+              className="absolute inset-0 cursor-pointer opacity-0"
+              value={targetIdx >= chipCount ? String(targetIdx) : ""}
+              onChange={(e) => e.target.value !== "" && setTargetIdx(Number(e.target.value))}
+            >
+              <option value="">Later…</option>
+              {options.slice(chipCount).map((c, i) => (
+                <option key={c.start.getTime()} value={String(i + chipCount)}>
+                  {cycleName(c, today)} cycle · {rangeLabel(c)}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      </div>
+
+      {/* From → to, then the plain-language promise. */}
+      <div className="overflow-hidden rounded-[12px] border border-settle-split-edge/50 bg-settle-split-tint/35" data-testid="postpone-preview">
+        <div className="flex items-center gap-2 px-3 pt-2.5 text-xs">
+          <span className="rounded-full bg-card px-2 py-0.5 font-semibold text-foreground/70 ring-1 ring-border">{single ? `${cycleName(single.cycle, today)} cycle` : "Now"}</span>
+          <ArrowRight className="size-3.5 shrink-0 text-settle-split-text" aria-hidden />
+          <span key={target.start.getTime()} className="rounded-full bg-card px-2 py-0.5 font-bold text-foreground ring-1 ring-settle-split-edge duration-200 animate-in fade-in zoom-in-95">
+            {cycleName(target, today)} cycle
+          </span>
+          <span className="ml-auto truncate text-[11px] text-foreground/60 tabular-nums">{rangeLabel(target)}</span>
+        </div>
+        <p className="px-3 pt-1.5 pb-2.5 text-[12px] leading-snug text-foreground/85">
+          <span className="font-semibold tabular-nums">{money(remaining)}</span> will remain unpaid and will be expected in the{" "}
+          <span className="font-semibold">{cycleName(target, today)} cycle</span> ({rangeLabel(target)}).{" "}
+          {noMoneyNote ? "No money will be recorded and your balances will not change." : "The original transaction and your financial totals will not change."}
+        </p>
+      </div>
+
+      <PanelSection title="Reason & reminder" summary={extrasSummary} open={extrasOpen || dateMissing} onOpenChange={setExtrasOpen}>
+        <div className="space-y-3">
+          <div>
+            <p className="mb-1.5 text-xs font-bold text-foreground/85">
+              Reason <span className="font-normal text-foreground/60">(optional)</span>
+            </p>
+            <div role="radiogroup" aria-label="Reason" className="flex flex-wrap gap-1.5">
+              {DEFERRAL_REASONS.map((r) => (
+                <button key={r} type="button" role="radio" aria-checked={reason === r} className={smallChip(reason === r)} onClick={() => setReason(reason === r ? null : r)}>
+                  {DEFERRAL_REASON_LABEL[r]}
+                </button>
+              ))}
+            </div>
+            {reason === "other" && (
+              <input aria-label="Reason note" className={cn(WS_FIELD, "mt-1.5 h-8 duration-200 animate-in fade-in")} maxLength={DEFERRAL_NOTE_MAX} placeholder="Add a short note" value={note} onChange={(e) => setNote(e.target.value)} />
+            )}
+          </div>
+          <div>
+            <p className="mb-1.5 text-xs font-bold text-foreground/85">
+              Reminder <span className="font-normal text-foreground/60">(optional)</span>
+            </p>
+            <div role="radiogroup" aria-label="Reminder" className="flex flex-wrap gap-1.5">
+              <button type="button" role="radio" aria-checked={reminderMode === "none"} className={smallChip(reminderMode === "none")} onClick={() => setReminderMode("none")}>
+                No new reminder
+              </button>
+              <button type="button" role="radio" aria-checked={reminderMode === "cycleStart"} className={smallChip(reminderMode === "cycleStart")} onClick={() => setReminderMode("cycleStart")}>
+                When it starts · {formatStatementDate(target.start)}
+              </button>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={reminderMode === "date"}
+                className={smallChip(reminderMode === "date")}
+                onClick={() => {
+                  setReminderMode("date");
+                  if (!dateText) setDateText(toInputDate(target.start));
+                }}
+              >
+                Choose date
+              </button>
+            </div>
+            {reminderMode === "date" && (
+              <DateInput aria-label="Reminder date" className={cn(WS_FIELD, "h-8")} wrapperClassName="mt-1.5 w-44 duration-200 animate-in fade-in" value={dateText} onChange={(e) => setDateText(e.target.value)} />
+            )}
+            {draft.movingReminder && (
+              <p className="mt-1.5 text-[11.5px] text-foreground/65">
+                Your reminder on {formatStatementDate(draft.movingReminder)} moves to {formatStatementDate(target.start)} so it won&apos;t show as overdue.
+              </p>
+            )}
+          </div>
+        </div>
+      </PanelSection>
+    </div>
   );
 }
 

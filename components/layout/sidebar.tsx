@@ -13,7 +13,7 @@ export function Sidebar() {
 
   return (
     <motion.div
-      animate={{ width: collapsed ? 76 : 260 }}
+      animate={{ width: collapsed ? 68 : 236 }}
       transition={springs.smooth}
       className="hidden shrink-0 md:block"
     >
@@ -26,7 +26,7 @@ export function Sidebar() {
           type="button"
           onClick={() => setCollapsed((v) => !v)}
           aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          className="mx-3 mt-2 mb-3 flex h-9 shrink-0 items-center justify-center gap-2 rounded-xl border border-dashed border-border text-xs font-medium text-foreground/60 transition-colors hover:border-border-strong hover:bg-muted/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+          className="mx-3 mt-1.5 mb-2.5 flex h-8 shrink-0 items-center justify-center gap-2 rounded-xl border border-dashed border-border text-xs font-medium text-foreground/60 transition-colors hover:border-border-strong hover:bg-muted/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
         >
           {collapsed ? (
             <ChevronRight className="size-4" />

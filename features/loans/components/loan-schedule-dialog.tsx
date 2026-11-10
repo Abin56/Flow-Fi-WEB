@@ -119,8 +119,21 @@ export function LoanScheduleDialog({ open, onOpenChange, row, onEdit, onDelete, 
     ) : null,
   ].filter(Boolean);
 
+  // Same rows, handlers and People status in every section — only the scope differs.
+  const listProps = {
+    installments: row.installments,
+    total: row.totalInstallments,
+    closed: isClosed,
+    actions: paymentActions,
+    onPay: (i: Installment) => onRecordPayment(row, i),
+    onViewPayment,
+    lent,
+    peopleStatus,
+  };
+  const upcomingCount = row.installments.filter((i) => !i.isSkipped && remainingAmount(i) > 0).length;
+
   const manageBtn = "h-8 gap-1.5 rounded-[6px] px-2 text-xs font-medium text-foreground hover:bg-card";
-  const moneyBtn = "h-9 gap-1.5 rounded-[6px] px-3 text-[13px]";
+  const moneyBtn = "h-10 gap-1.5 rounded-[8px] px-3 text-[13px] whitespace-nowrap";
 
   return (
     <AgreementPopup
@@ -145,20 +158,14 @@ export function LoanScheduleDialog({ open, onOpenChange, row, onEdit, onDelete, 
           />
         )
       }
-      scheduleCount={row.installments.length}
+      upcomingCount={upcomingCount}
+      allCount={row.installments.length}
       historyCount={paymentActions.length}
-      schedule={
-        <InstallmentList
-          installments={row.installments}
-          total={row.totalInstallments}
-          closed={isClosed}
-          actions={paymentActions}
-          onPay={(i) => onRecordPayment(row, i)}
-          onViewPayment={onViewPayment}
-          lent={row.direction === "given"}
-          peopleStatus={peopleStatus}
-        />
-      }
+      allLabel="Schedule"
+      comingUp={!isClosed && nextPayable ? <InstallmentList {...listProps} scope="upcoming" limit={3} /> : undefined}
+      upcoming={<InstallmentList {...listProps} scope="upcoming" />}
+      all={<InstallmentList {...listProps} />}
+      detailsTitle={lent ? "Loan given" : "Loan details"}
       details={
         <>
           <FactGrid
@@ -211,7 +218,7 @@ export function LoanScheduleDialog({ open, onOpenChange, row, onEdit, onDelete, 
                   Fully paid
                 </span>
               ) : (
-                <ClayButton variant="primary" className={cn(moneyBtn, "min-w-[9.5rem] flex-1 border-primary-accent-text font-semibold sm:flex-none")} disabled={isClosed || nextPayable == null} onClick={() => onRecordPayment(row)}>
+                <ClayButton variant="primary" className={cn(moneyBtn, "border-primary-accent-text font-semibold")} disabled={isClosed || nextPayable == null} onClick={() => onRecordPayment(row)}>
                   <Wallet className="size-4" />
                   {lent ? "Record Repayment" : "Record Payment"}
                 </ClayButton>
