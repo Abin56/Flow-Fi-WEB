@@ -34,9 +34,10 @@ import { ModeFooter, ModeHeader, WS_PAD, WS_PRIMARY, WS_SECONDARY, WsLabel } fro
 
 /**
  * Share mode — a preview of exactly what the PDF contains, drawn as the same landscape statement (header,
- * summary, every item with original / amount / paid / remaining and its status, split shares, payment history,
- * ending balance), plus WhatsApp / Copy / PDF. The preview and the PDF read one `statementView`; the text message is
- * the engine's summary.
+ * summary, every item with its original / amount and a kind tag — never a per-item paid/remaining figure,
+ * since a payment ties to no item anymore — split shares, payment history, ending balance), plus
+ * WhatsApp / Copy / PDF. The preview and the PDF read one `statementView`; the text message is the engine's
+ * summary.
  */
 export function ShareStatementMode({
   statement,
@@ -235,8 +236,8 @@ const C = STATEMENT_INK;
 /** Small-caps signpost labels — tracked, as in the PDF. */
 const LABEL = "text-[9.5px] font-semibold tracking-[0.12em] uppercase";
 /** The transaction columns from the container's "wide" width up — the PDF's columns, in the same order. */
-const TABLE_COLS = "@[46rem]:grid-cols-[1.75rem_5.2rem_minmax(0,1fr)_6rem_6.4rem_5.6rem_6.2rem_9rem]";
-const PAY_COLS = "@[46rem]:grid-cols-[5.2rem_minmax(0,1fr)_minmax(0,1.25fr)_7rem]";
+const TABLE_COLS = "@[46rem]:grid-cols-[1.75rem_5.2rem_minmax(0,1fr)_6rem_6.4rem_9rem]";
+const PAY_COLS = "@[46rem]:grid-cols-[5.2rem_minmax(0,1fr)_7rem]";
 /** Fine concentric rings on midnight — the header band's guilloché, as in the PDF. */
 const RINGS = `repeating-radial-gradient(circle at 100% 70%, transparent 0 21px, ${C.midnightLine} 21px 22px)`;
 
@@ -328,7 +329,6 @@ export function StatementDocument({ view }: { view: StatementView }) {
   const count = view.carried.length + view.rows.length;
   const empty = STATEMENT_COPY.empty;
   const zero = money(0);
-  const totals = view.totals;
 
   return (
     <article
@@ -469,7 +469,6 @@ export function StatementDocument({ view }: { view: StatementView }) {
             caption={
               <>
                 {count} {count === 1 ? "item" : "items"}
-                {count > 0 && ` · ${view.openCount === 0 ? "all paid" : `${view.openCount} still open`}`}
               </>
             }
           />
@@ -485,27 +484,18 @@ export function StatementDocument({ view }: { view: StatementView }) {
             <span className="px-2">Description</span>
             <span className="px-2 text-right">Original</span>
             <span className="px-2 text-right">{view.amountHeader}</span>
-            <span className="px-2 text-right">Paid</span>
-            <span className="px-2 text-right">Remaining</span>
-            <span className="px-2">Status</span>
+            <span className="px-2">Type</span>
           </div>
           {showPrevious && (
             <>
               <CarryForwardRow value={previous?.value ?? null} note={[view.previousNote, previous?.side].filter(Boolean).join(" · ")} />
               <RowGroup rows={view.carried} view={view} groupOf={groupOf} />
-              {totals?.carried && <SumRow label="Still open from earlier cycles" value={totals.carried} />}
               <CycleBand note={view.rows.length ? `${view.cycleLabel} · ${view.rows.length} new ${view.rows.length === 1 ? "item" : "items"}` : `${view.cycleLabel} · ${empty}`} />
             </>
           )}
           {!showPrevious && view.rows.length === 0 && <CycleBand note={`${view.cycleLabel} · ${empty}`} />}
           <RowGroup rows={view.rows} view={view} groupOf={groupOf} />
-          {totals && (
-            <>
-              {totals.current && <SumRow label="Still open from this cycle" value={totals.current} op={totals.carried ? "+" : null} />}
-              {totals.other && <SumRow label={totals.other.label} value={totals.other.value} op={totals.other.op} />}
-              <SumRow label={totals.total.label} value={totals.total.value} op={totals.carried || totals.current || totals.other ? "=" : null} strong settled={settled} />
-            </>
-          )}
+          {count > 0 && <SumRow label={view.closing.label} value={view.closing.value} strong settled={settled} />}
         </div>
 
         {view.payments.length > 0 && <PaymentHistory view={view} />}
@@ -589,7 +579,7 @@ function CarryForwardRow({ value, note }: { value: string | null; note: string }
       className={cn("grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3 border-b border-l-[3px] px-2.5 py-2 @[46rem]:gap-x-0 @[46rem]:px-0", TABLE_COLS)}
       style={{ background: C.surface, borderBottomColor: C.rule, borderLeftColor: C.gold }}
     >
-      <div className="min-w-0 @[46rem]:col-span-5 @[46rem]:col-start-3 @[46rem]:px-2">
+      <div className="min-w-0 @[46rem]:col-span-3 @[46rem]:col-start-3 @[46rem]:px-2">
         <p className="flex flex-wrap items-baseline gap-x-2.5">
           <span className={cn(LABEL, "text-[10px]")} style={{ color: STATEMENT_CHIP.carried.text }}>
             {STATEMENT_COPY.carried.label}
@@ -600,7 +590,7 @@ function CarryForwardRow({ value, note }: { value: string | null; note: string }
           {note}
         </p>
       </div>
-      <div className="@[46rem]:col-start-8 @[46rem]:px-2">
+      <div className="@[46rem]:col-start-6 @[46rem]:px-2">
         <Chip tone="carried">Brought forward</Chip>
       </div>
     </div>
@@ -619,12 +609,12 @@ function SumRow({ label, value, op = null, strong = false, settled = false }: { 
       style={{ background: strong ? C.midnight : C.surface, borderColor: C.rule }}
     >
       <p
-        className={cn("min-w-0 @[46rem]:col-span-4 @[46rem]:col-start-2 @[46rem]:px-2 @[46rem]:text-right", strong ? cn(LABEL, "text-[10.5px] tracking-[0.16em]") : "text-[12px] font-semibold")}
+        className={cn("min-w-0 @[46rem]:col-span-3 @[46rem]:col-start-2 @[46rem]:px-2 @[46rem]:text-right", strong ? cn(LABEL, "text-[10.5px] tracking-[0.16em]") : "text-[12px] font-semibold")}
         style={{ color: strong ? C.goldLight : C.body }}
       >
         {label}
       </p>
-      <p className="flex items-baseline justify-end gap-2 @[46rem]:col-start-7 @[46rem]:px-2">
+      <p className="flex items-baseline justify-end gap-2 @[46rem]:col-start-5 @[46rem]:px-2">
         {op && (
           <span aria-hidden className="text-[12px]" style={{ color: strong ? C.onMidnightMuted : C.muted }}>
             {op}
@@ -659,8 +649,8 @@ function CycleBand({ note }: { note: string }) {
 /**
  * One transaction — the PDF row's architecture: # and date, the title with one quiet meta line, then Original
  * (only for a split, where it differs from the amount) / Amount (captioned with whose share it is beside an
- * Original) / Paid / Remaining, and the status chip. A genuine split (2+ people) adds a connected shares line.
- * Wide: a table row. Narrow: a stacked record with the figures in a labelled line.
+ * Original), and the Type chip — what the row is (or "Moved" / "Overdue"), never a paid/remaining figure. A
+ * genuine split (2+ people) adds a connected shares line. Wide: a table row. Narrow: a stacked record.
  */
 function StatementRow({ row: r, view }: { row: StatementViewRow; view: StatementView }) {
   const a = r.allocation ?? null;
@@ -668,13 +658,11 @@ function StatementRow({ row: r, view }: { row: StatementViewRow; view: Statement
   const mismatch = a && !shares && !a.reconciles && a.participants.length > 0;
   const split = r.purchase != null || shares != null;
   const date = statementDate(view, r.date);
-  const zero = money(0);
-  const remainingTone = !r.remaining || r.remaining === zero ? C.faint : r.chip === "overdue" ? STATEMENT_CHIP.overdue.text : C.ink;
   return (
     <div data-carried={r.carried || undefined} data-split={split || undefined} className="relative isolate border-b" style={{ borderColor: C.rule }}>
-      {/* Wide: the Remaining column's faint band runs the whole item, shares included. */}
+      {/* Wide: the Amount column's faint band runs the whole item, shares included — the figure that matters now. */}
       <span aria-hidden className={cn("pointer-events-none absolute inset-0 -z-10 hidden @[46rem]:grid", TABLE_COLS)}>
-        <span className="col-start-7" style={{ background: C.remainTint }} />
+        <span className="col-start-5" style={{ background: C.remainTint }} />
       </span>
       <div className={cn("grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-1 px-2.5 pt-3 pb-2.5 @[46rem]:gap-x-0 @[46rem]:px-0", TABLE_COLS)}>
         <p className="col-span-2 text-[11px] tabular-nums @[46rem]:contents" style={{ color: C.muted }}>
@@ -705,28 +693,12 @@ function StatementRow({ row: r, view }: { row: StatementViewRow; view: Statement
           )}
         </div>
 
-        <div className="row-start-2 flex min-w-0 flex-col items-end @[46rem]:col-start-8 @[46rem]:row-start-1 @[46rem]:items-start @[46rem]:px-2">
-          <Chip tone={r.chip}>{r.status}</Chip>
-          {r.age && (
-            <span
-              data-age={r.age.tone}
-              title={`Open since ${r.date} — counted to ${view.asOf}`}
-              className={cn("mt-1 inline-flex items-center gap-1.5 text-[10.5px] leading-none", r.age.tone !== "fresh" && "font-medium")}
-              style={{ color: r.age.tone === "old" ? STATEMENT_CHIP.overdue.text : r.age.tone === "aging" ? STATEMENT_CHIP.due.text : C.muted }}
-            >
-              <span aria-hidden className="size-[5px] rounded-full" style={{ background: r.age.tone === "fresh" ? C.faint : "currentColor" }} />
-              {r.age.label}
-            </span>
-          )}
-          {r.statusNote && (
-            <span className="mt-0.5 text-right text-[10.5px] leading-snug @[46rem]:text-left" style={{ color: C.muted }}>
-              {r.statusNote}
-            </span>
-          )}
+        <div className="row-start-2 flex min-w-0 flex-col items-end @[46rem]:col-start-6 @[46rem]:row-start-1 @[46rem]:items-start @[46rem]:px-2">
+          <Chip tone={r.chip}>{r.tag}</Chip>
         </div>
 
         <dl
-          className={cn("col-span-2 row-start-3 mt-1 grid gap-x-3 rounded-[4px] px-2.5 py-1.5 font-mono text-[12.5px] tabular-nums @[46rem]:contents", r.purchase ? "grid-cols-4" : "grid-cols-3")}
+          className={cn("col-span-2 row-start-3 mt-1 grid gap-x-3 rounded-[4px] px-2.5 py-1.5 font-mono text-[12.5px] tabular-nums @[46rem]:contents", r.purchase ? "grid-cols-2" : "grid-cols-1")}
           style={{ background: C.surface }}
         >
           {r.purchase && (
@@ -752,27 +724,6 @@ function StatementRow({ row: r, view }: { row: StatementViewRow; view: Statement
             {r.shareLabel && (
               <dd className="font-sans text-[10.5px] whitespace-nowrap" style={{ color: C.muted }}>
                 {r.shareLabel}
-              </dd>
-            )}
-          </div>
-          <div className="min-w-0 @[46rem]:col-start-6 @[46rem]:row-start-1 @[46rem]:px-2 @[46rem]:text-right">
-            <dt className="font-sans text-[10.5px] @[46rem]:sr-only" style={{ color: C.muted }}>
-              Paid
-            </dt>
-            <dd className="whitespace-nowrap" style={{ color: !r.paid || r.paid === zero ? C.faint : STATEMENT_CHIP.paid.text }}>
-              {r.paid && r.paid !== zero ? r.paid : "—"}
-            </dd>
-          </div>
-          <div className="min-w-0 @[46rem]:col-start-7 @[46rem]:row-start-1 @[46rem]:px-2 @[46rem]:text-right">
-            <dt className="font-sans text-[10.5px] @[46rem]:sr-only" style={{ color: C.muted }}>
-              Remaining
-            </dt>
-            <dd className={cn("whitespace-nowrap", r.remaining && r.remaining !== zero && "font-bold")} style={{ color: remainingTone }}>
-              {r.remaining || "—"}
-            </dd>
-            {r.progress != null && (
-              <dd aria-hidden className="mt-1 ml-auto h-[4px] w-full max-w-[5rem] overflow-hidden rounded-full" style={{ background: C.head }}>
-                <span className="block h-full rounded-full" style={{ width: `${r.progress * 100}%`, background: STATEMENT_CHIP.partial.edge }} />
               </dd>
             )}
           </div>
@@ -862,12 +813,11 @@ function PaymentHistory({ view }: { view: StatementView }) {
   ) as { label: string; value: string }[];
   return (
     <section aria-label="Payment history" className="mt-6">
-      <SectionTitle title="Payment history" caption="Payments this cycle and the items (#) each one paid" />
+      <SectionTitle title="Payment history" caption="Every payment this cycle" />
       <div className="mt-2 overflow-hidden rounded-[8px] border" style={{ borderColor: C.ruleStrong }}>
         <div className={cn("hidden border-b px-2.5 py-2 @[46rem]:grid", PAY_COLS, LABEL, "text-[9px]")} style={{ background: C.head, borderColor: C.ruleStrong, color: C.body }} aria-hidden>
           <span>Date</span>
           <span>Payment</span>
-          <span>Applied to</span>
           <span className="text-right">Amount</span>
         </div>
         <ul>
@@ -885,9 +835,9 @@ function PaymentHistory({ view }: { view: StatementView }) {
                 <DirectionBadge inbound={p.inbound} advance={p.advance} />
                 <p className="min-w-0 pt-0.5 text-[13px] font-medium break-words">
                   {p.label}
-                  {(p.account || p.note) && (
+                  {(p.account || p.toward || p.note) && (
                     <span className="block text-[10.5px] font-normal" style={{ color: C.muted }}>
-                      {[p.account, p.note].filter(Boolean).join(" · ")}
+                      {[p.account, p.toward, p.note].filter(Boolean).join(" · ")}
                     </span>
                   )}
                 </p>
@@ -895,53 +845,6 @@ function PaymentHistory({ view }: { view: StatementView }) {
               <span className="text-right font-mono text-[14px] font-bold whitespace-nowrap tabular-nums @[46rem]:order-last" style={{ color: p.inbound ? STATEMENT_CHIP.paid.text : C.ink }}>
                 {p.amount}
               </span>
-              <div className="col-span-2 min-w-0 text-[11.5px] @[46rem]:col-span-1 @[46rem]:pr-6">
-                {p.single != null ? (
-                  <p className="break-words" style={{ color: C.body }}>
-                    {p.single}
-                  </p>
-                ) : (
-                  <>
-                    {p.applied.map((a, j) => (
-                      <p key={j} className="flex justify-between gap-3 py-[1px] tabular-nums" style={{ color: C.body }}>
-                        <span className="min-w-0 break-words">
-                          {a.ref && (
-                            <span
-                              className="mr-2 inline-flex min-w-[20px] justify-center rounded-[4px] border px-1 text-[9.5px] leading-[14px] font-semibold"
-                              style={{ background: C.surface, borderColor: C.rule, color: C.muted }}
-                            >
-                              {a.ref}
-                            </span>
-                          )}
-                          {a.label}
-                          {(a.date || a.note) && (
-                            <span className="ml-1.5 text-[10.5px]" style={{ color: C.muted }}>
-                              {a.date}
-                              {a.date && a.note && " · "}
-                              {a.note && <span style={{ color: a.note === "cleared" ? STATEMENT_CHIP.paid.text : C.muted }}>{a.note}</span>}
-                            </span>
-                          )}
-                        </span>
-                        <span className="font-mono whitespace-nowrap" style={{ color: C.ink }}>
-                          {a.amount}
-                        </span>
-                      </p>
-                    ))}
-                    {p.applied.length > 1 && (
-                      <p className="mt-0.5 flex justify-between gap-3 border-t pt-0.5 font-semibold tabular-nums" style={{ borderColor: C.rule }}>
-                        <span>Applied to obligations</span>
-                        <span>{p.appliedTotal}</span>
-                      </p>
-                    )}
-                    {p.held && (
-                      <p className="flex justify-between gap-3 font-semibold tabular-nums" style={{ color: C.advance }}>
-                        <span>Held as advance</span>
-                        <span>{p.held}</span>
-                      </p>
-                    )}
-                  </>
-                )}
-              </div>
             </li>
           ))}
         </ul>

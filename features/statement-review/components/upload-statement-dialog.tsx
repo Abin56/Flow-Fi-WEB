@@ -111,7 +111,7 @@ export function UploadStatementDialog({ open, onOpenChange, uid, creditCards, on
                 const name = accountNameById.get(c.accountId) ?? `Card ${c.id.slice(0, 8)}`;
                 return (
                   <SelectItem key={c.id} value={c.id}>
-                    <AccountLabel account={{ name, bankId: accounts.find((a) => a.id === c.accountId)?.bankId ?? null, type: "card" }} suffix={c.lastFourDigits ? `•••• ${c.lastFourDigits}` : undefined} />
+                    <AccountLabel account={{ name, bankId: accounts.find((a) => a.id === c.accountId)?.bankId ?? null, type: "card", cardSubtype: "credit" }} suffix={c.lastFourDigits ? `•••• ${c.lastFourDigits}` : undefined} />
                   </SelectItem>
                 );
               })}

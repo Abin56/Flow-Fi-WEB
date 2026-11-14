@@ -153,7 +153,7 @@ describe("overallDue — the balance the statement engine reads, earlier general
 describe("Record Payment — general payment (the default)", () => {
   it("₹20,000 of ₹29,000: one general line, no item, ₹9,000 remaining — never Full / Part / Skip", () => {
     const { onSubmit } = setup(ITEMS);
-    expect(screen.getByTestId("rp-mode-general").getAttribute("aria-checked")).toBe("true");
+    expect(screen.queryByTestId("rp-mode-items")).toBeNull();
     expect(screen.queryByRole("list", { name: "Items to pay" })).toBeNull();
     amount("20000");
     expect(fig("rp-general-due")).toBe("₹29,000");
@@ -182,19 +182,20 @@ describe("Record Payment — general payment (the default)", () => {
     expect(input.extra).toEqual({ kind: "advance", amount: 1_000 });
   });
 
-  it("choosing specific items still works and records item lines (backward compatible)", () => {
-    const { onSubmit } = setup(ITEMS);
-    fireEvent.click(screen.getByTestId("rp-mode-items"));
-    expect(screen.getByRole("list", { name: "Items to pay" })).toBeTruthy();
-    amount("12000");
-    submit();
-    const input = onSubmit.mock.calls[0][0];
-    expect(input.lines.map((l) => [l.key, l.amount, l.route.kind])).toEqual([["ledger:rent", 12_000, "entry"]]);
+  it("a new payment never offers Choose specific items — that switch is gone", () => {
+    setup(ITEMS);
+    expect(screen.queryByTestId("rp-mode-items")).toBeNull();
+    expect(screen.queryByTestId("rp-mode-general")).toBeNull();
   });
 
-  it("a row's own Record payment (preselected item) opens on that item, not the general payment", () => {
-    setup(ITEMS, { preselectKey: "ledger:fees" });
-    expect(screen.getByTestId("rp-mode-items").getAttribute("aria-checked")).toBe("true");
+  it("a row's own Record payment (preselected item) opens as a general payment, seeded with that row's amount as a hint", () => {
+    const { onSubmit } = setup(ITEMS, { preselectKey: "ledger:fees" });
+    expect(screen.queryByTestId("rp-mode-items")).toBeNull();
+    expect(screen.queryByRole("list", { name: "Items to pay" })).toBeNull();
+    expect((screen.getByLabelText(/^Amount (received|paid)$/) as HTMLInputElement).value).toBe("10000");
+    submit();
+    const input = onSubmit.mock.calls[0][0];
+    expect(input.lines).toEqual([{ key: GENERAL_PAYMENT_KEY, amount: 10_000, route: { kind: "general" } }]);
   });
 
   it("editing a general payment reopens it as one: its own ₹20,000 counts as open again and the kind is locked", () => {
@@ -202,8 +203,8 @@ describe("Record Payment — general payment (the default)", () => {
     const initial = paymentInitialFor("pay-1", entries, () => "sbi");
     expect(initial?.lines).toEqual({ [GENERAL_PAYMENT_KEY]: 20_000 });
     const { onSubmit } = setup(entries, { initial });
-    expect(screen.getByTestId("rp-mode-general").getAttribute("aria-checked")).toBe("true");
-    expect((screen.getByTestId("rp-mode-items") as HTMLButtonElement).disabled).toBe(true);
+    // Editing a general payment behaves exactly like a new one — no mode switch to show or lock.
+    expect(screen.queryByTestId("rp-mode-items")).toBeNull();
     expect(fig("rp-general-due")).toBe("₹29,000");
     amount("25000");
     fireEvent.click(screen.getByRole("button", { name: /^Save changes/ }));

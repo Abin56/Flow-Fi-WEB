@@ -21,9 +21,9 @@
  */
 
 import { useState, type KeyboardEvent, type ReactNode } from "react";
-import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, X, type LucideIcon } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CreditCard, X, type LucideIcon } from "lucide-react";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
-import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 
 /** Content never stretches past this on very wide screens — the sheet is full width, its columns aren't. */
@@ -147,7 +147,13 @@ export interface SheetPickerOption {
   icon?: ReactNode;
   /** A short second line shown in the list. */
   detail?: string;
+  /** Presentation only: the section heading this option is listed under. Options without one stay in a flat list. */
+  section?: string;
+  /** Presentation only: marks a credit card — tinted tile and a "Credit" tag so it never looks like a plain account. */
+  credit?: boolean;
 }
+
+const CREDIT_TILE = "bg-violet-500/12 text-violet-700 dark:bg-violet-400/15 dark:text-violet-300";
 
 const CAPTION_TONE = { muted: "text-foreground/72", success: "text-[oklch(0.44_0.13_149)] dark:text-success", warning: "text-[oklch(0.5_0.12_70)] dark:text-warning", danger: "text-[oklch(0.5_0.19_25)] dark:text-danger" } as const;
 
@@ -183,6 +189,13 @@ export function SheetPicker({
   extraItems?: ReactNode;
 }) {
   const selected = value != null ? options.find((o) => o.value === value) : undefined;
+  // Options that name a section are listed under headings (in the order the sections first appear); the rest stay one flat list.
+  const sections: { title?: string; options: SheetPickerOption[] }[] = [];
+  for (const o of options) {
+    const s = sections.find((x) => x.title === o.section);
+    if (s) s.options.push(o);
+    else sections.push({ title: o.section, options: [o] });
+  }
   return (
     <Select value={value ?? undefined} onValueChange={onValueChange}>
       <SelectTrigger
@@ -198,7 +211,7 @@ export function SheetPicker({
           className={cn(
             "grid shrink-0 place-items-center overflow-hidden [&>[role=img]]:size-full! [&>span]:size-full!",
             compact ? "size-7 rounded-[8px]" : "size-9 rounded-[10px]",
-            selected ? "bg-secondary text-foreground/80" : "border border-dashed border-border bg-card text-foreground/72",
+            selected ? (selected.credit ? CREDIT_TILE : "bg-secondary text-foreground/80") : "border border-dashed border-border bg-card text-foreground/72",
           )}
         >
           {selected?.icon ?? emptyIcon}
@@ -209,17 +222,33 @@ export function SheetPicker({
         </span>
       </SelectTrigger>
       <SelectContent className="max-h-80">
-        {options.map((o) => (
-          <SelectItem key={o.value} value={o.value} className="py-2">
-            <span className="flex items-center gap-2.5">
-              {o.icon && <span className="grid size-7 shrink-0 place-items-center overflow-hidden rounded-[8px] bg-secondary text-foreground/80 [&>[role=img]]:size-full! [&>span]:size-full!">{o.icon}</span>}
-              <span className="flex min-w-0 flex-col">
-                <span className="truncate">{o.label}</span>
-                {o.detail && <span className="truncate text-[11px] text-muted-foreground">{o.detail}</span>}
-              </span>
-            </span>
-          </SelectItem>
-        ))}
+        {sections.map((s, i) => {
+          const credit = s.options.some((o) => o.credit);
+          return (
+            <div key={s.title ?? "all"}>
+              {i > 0 && <SelectSeparator />}
+              <SelectGroup className={cn(credit && s.title && "rounded-md bg-violet-500/[0.06] pb-0.5 dark:bg-violet-400/[0.08]")}>
+                {s.title && (
+                  <SelectLabel className={cn("flex items-center gap-1.5 pt-1.5 pb-1 text-[10px] font-semibold tracking-wide uppercase", credit && "text-violet-700 dark:text-violet-300")}>
+                    {credit && <CreditCard className="size-3" strokeWidth={2.4} />}
+                    {s.title}
+                  </SelectLabel>
+                )}
+                {s.options.map((o) => (
+                  <SelectItem key={o.value} value={o.value} className="py-2">
+                    <span className="flex items-center gap-2.5">
+                      {o.icon && <span className={cn("grid size-7 shrink-0 place-items-center overflow-hidden rounded-[8px] [&>[role=img]]:size-full! [&>span]:size-full!", o.credit ? CREDIT_TILE : "bg-secondary text-foreground/80")}>{o.icon}</span>}
+                      <span className="flex min-w-0 flex-col">
+                        <span className="truncate">{o.label}</span>
+                        {o.detail && <span className="truncate text-[11px] text-muted-foreground">{o.detail}</span>}
+                      </span>
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </div>
+          );
+        })}
         {extraItems}
       </SelectContent>
     </Select>
@@ -375,8 +404,14 @@ export function TransactionSheet({
   onKeyDown,
   testId,
   className,
+  overlayClassName,
   compact = false,
+  layer,
 }: {
+  /** An internal layer (e.g. a right-side drawer) drawn over the whole sheet, inside it. While `open`, Escape closes only the layer. */
+  layer?: { open: boolean; onClose: () => void; content: ReactNode };
+  /** Replaces the default light scrim — a stacked second layer uses a heavier blur so the sheet under it is not readable. */
+  overlayClassName?: string;
   /** A narrower, centred sheet with a slimmer header, body padding and no grab handle (the header's collapse button stays). */
   compact?: boolean;
   open: boolean;
@@ -410,10 +445,15 @@ export function TransactionSheet({
         data-testid={testId}
         data-sheet-size={peek ? "peek" : "open"}
         // A light, barely-blurred scrim: the page below stays readable, only clearly behind the sheet.
-        overlayClassName="bg-black/[0.3] backdrop-blur-none duration-200 dark:bg-black/55"
+        overlayClassName={overlayClassName ?? "bg-black/[0.3] backdrop-blur-none duration-200 dark:bg-black/55"}
         onKeyDown={onKeyDown}
         // Escape while typing leaves the field (each field handles its own Escape first); the next Escape closes.
         onEscapeKeyDown={(e) => {
+          if (layer?.open) {
+            e.preventDefault();
+            layer.onClose();
+            return;
+          }
           const active = document.activeElement;
           if (active instanceof HTMLElement && active.matches('input:not([type="checkbox"]):not([type="radio"]), textarea')) {
             e.preventDefault();
@@ -478,6 +518,7 @@ export function TransactionSheet({
             <span aria-hidden className="h-1 w-10 rounded-full bg-border transition-[width,background-color] group-hover/handle:w-14 group-hover/handle:bg-border-strong" />
           </button>
         </div>
+        {layer?.content}
       </DialogContent>
     </Dialog>
   );

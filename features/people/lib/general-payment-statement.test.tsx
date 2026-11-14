@@ -1,7 +1,7 @@
 import { inflateSync } from "node:zlib";
 import { PDFArray, PDFDocument, type PDFRawStream, PDFRef } from "pdf-lib";
 import { describe, expect, it, vi } from "vitest";
-import { monthlySettlementView, paise } from "@/features/people/lib/monthly-settlement-model";
+import { monthlySettlementView } from "@/features/people/lib/monthly-settlement-model";
 import { renderMonthlySettlementPdf } from "@/features/people/lib/monthly-settlement-pdf";
 import { monthlySettlementDetailedText, smartSettlementText } from "@/features/people/lib/monthly-settlement-text";
 import { pdfSafe, renderPersonStatementPdf } from "@/features/people/lib/person-statement-pdf";
@@ -80,25 +80,22 @@ describe("general payment on the shared statements", () => {
     expect(statement.rows.find((r) => r.kind === "settlement")?.settlesKey).toBeUndefined();
   });
 
-  it("Full statement: items keep original / nothing paid / full remaining, then one line for the ₹20,000, then the ₹9,000", () => {
+  it("Full statement: items keep their original amount and a plain kind tag — never a paid/remaining figure", () => {
     const { statement, options } = setup();
     const v = statementView(statement, options);
-    expect(v.rows.map((r) => [r.title, r.original, r.paid, r.remaining])).toEqual([
-      ["Rent share", "₹12,000", "₹0", "₹12,000"],
-      ["College fees", "₹10,000", "₹0", "₹10,000"],
-      ["Phone", "₹7,000", "₹0", "₹7,000"],
+    expect(v.rows.map((r) => [r.title, r.original])).toEqual([
+      ["Rent share", "₹12,000"],
+      ["College fees", "₹10,000"],
+      ["Phone", "₹7,000"],
     ]);
-    expect(v.rows.some((r) => /Paid in full|Partially paid/.test(r.status))).toBe(false);
-    // Each item says it is part of the balance (₹9,000 owed overall) — not "Payment due ₹12,000", not paid.
-    expect(v.rows.map((r) => [r.status, r.statusDetail])).toEqual(
-      Array(3).fill(["Part of balance", "₹9,000 still owed overall — payments so far weren't tied to items"]),
-    );
-    expect(v.totals?.other).toEqual({ label: "Payments & adjustments not tied to one item", value: "₹20,000", op: "−" });
-    expect(v.totals?.total).toEqual({ label: "Balance due", value: "₹9,000" });
-    expect(v.payments[0].single).toBe("Toward the overall balance · not tied to one item");
+    // Each item reads the same plain "Given" kind tag — nothing says it was paid or part paid, because
+    // nothing is tied to any item anymore.
+    expect(v.rows.map((r) => [r.tag, r.chip])).toEqual(Array(3).fill(["Given", "due"]));
+    expect(v.closing).toEqual({ label: "Balance due", value: "₹9,000", direction: "theyOwe" });
+    expect(v.payments[0].toward).toBeNull();
   });
 
-  it("Monthly settlement: Received ₹20,000, Remaining ₹9,000, and the item column adds up through the general line", () => {
+  it("Monthly settlement: Received ₹20,000, and the one closing line is ₹9,000 — never summed from the items", () => {
     const { statement, options } = setup();
     const m = monthlySettlementView(statement, options);
     expect(m.lines.map((l) => [l.label, l.value])).toEqual([
@@ -106,49 +103,46 @@ describe("general payment on the shared statements", () => {
       ["Received from SANJU", "₹20,000"],
       ["Remaining balance", "₹9,000"],
     ]);
-    expect(m.items.map((i) => [i.title, i.amount, i.paid, i.remaining, i.status])).toEqual([
-      ["Rent share", "₹12,000", "—", "₹12,000", "In balance"],
-      ["College fees", "₹10,000", "—", "₹10,000", "In balance"],
-      ["Phone", "₹7,000", "—", "₹7,000", "In balance"],
+    expect(m.items.map((i) => [i.title, i.amount, i.tag])).toEqual([
+      ["Rent share", "₹12,000", "Given"],
+      ["College fees", "₹10,000", "Given"],
+      ["Phone", "₹7,000", "Given"],
     ]);
-    expect(m.unallocated).toEqual({ label: "Paid toward the balance · not tied to one item", amount: "₹20,000", op: "−", total: "₹9,000" });
-    // Items − the general line = the outstanding, to the paisa.
-    expect(m.items.reduce((s, i) => s + i.remainingPaise, 0) - paise(20_000)).toBe(paise(statement.amount));
+    expect(m.closing).toEqual({ label: "Remaining balance", value: "₹9,000" });
   });
 
-  it("Smart Settlement and Detailed texts state the general line and the remaining", () => {
+  it("Smart Settlement and Detailed texts state the total outstanding, never a per-item paid/remaining figure", () => {
     const { statement, options } = setup();
     const m = monthlySettlementView(statement, options);
     const smart = smartSettlementText(m);
-    expect(smart).toContain("_Paid toward the balance · not tied to one item_\n−₹20,000.00");
-    expect(smart).toContain("*REMAINING  →  ₹9,000.00*");
-    expect(smart).not.toMatch(/Part paid|cleared/);
+    expect(smart).toContain("*TOTAL OUTSTANDING*\n*₹9,000.00*");
+    expect(smart).not.toMatch(/Part paid|cleared|not tied to one item/);
     const detailed = monthlySettlementDetailedText(m);
-    expect(detailed).toContain("• Paid toward the balance · not tied to one item — −₹20,000.00");
-    expect(detailed).toContain("= Remaining: ₹9,000.00");
+    expect(detailed).toContain("*Total outstanding: ₹9,000.00*");
   });
 
-  it("both PDFs draw the general line and the ₹9,000", async () => {
+  it("both PDFs draw the one closing balance, never a per-item breakdown", async () => {
     const { statement, options } = setup();
     const monthly = await pdfText(await renderMonthlySettlementPdf(statement, options));
-    expect(monthly).toContain(pdfSafe("Paid toward the balance · not tied to one item"));
-    expect(monthly).toContain(pdfSafe("−₹20,000.00"));
     expect(monthly).toContain("Remaining balance");
+    expect(monthly.join(" ")).not.toContain(pdfSafe("not tied to one item"));
     const full = await pdfText(await renderPersonStatementPdf(statement, options));
-    expect(full.join(" ")).toContain(pdfSafe("Payments & adjustments not tied to one item"));
+    expect(full).toContain("BALANCE DUE");
+    expect(full.join(" ")).not.toContain(pdfSafe("Payments & adjustments not tied to one item"));
   });
 
-  it("the whole ₹29,000 paid in general payments: balance settled, items read 'Balance cleared' — never 'Paid in full'", () => {
+  it("the whole ₹29,000 paid in general payments: balance settled, items still read the plain kind tag", () => {
     const entries = [...ENTRIES, { ...ENTRIES[3], id: "g2", amount: 9_000, paymentId: "p2", date: d(10, 8), createdAt: d(10, 8) }];
     const input = { person: { id: "S", name: "SANJU", openingBalance: 0, createdAt: d(1, 1) }, ledgerEntries: entries, loanIds: new Set<string>(), emis: [], loans: [], installments: [], now: NOW };
     const statement = buildPersonCycleStatement({ ...input, cycle: CYCLE });
     const history = buildPersonCycleStatement({ ...input, cycle: { start: new Date(1970, 0, 1), end: CYCLE.end } });
     expect(statement.direction).toBe("settled");
     const v = statementView(statement, { history, entries, now: NOW, ownerName: "Abin" });
-    expect(new Set(v.rows.map((r) => r.status))).toEqual(new Set(["Balance cleared"]));
+    expect(new Set(v.rows.map((r) => r.tag))).toEqual(new Set(["Given"]));
+    expect(v.closing).toMatchObject({ label: "Settled", value: "₹0" });
     const m = monthlySettlementView(statement, { history, entries, now: NOW, ownerName: "Abin" });
-    expect(m.items.map((i) => i.status)).toEqual(["Bal. cleared", "Bal. cleared", "Bal. cleared"]);
-    expect(m.unallocated).toMatchObject({ amount: "₹29,000", op: "−", total: "₹0" });
+    expect(m.items.map((i) => i.tag)).toEqual(["Given", "Given", "Given"]);
+    expect(m.closing).toMatchObject({ label: "Settled", value: "₹0" });
   });
 
   it("People Ledger table: open items say 'Part of balance' with the overall figure; without general payments the old wording stays", () => {
@@ -164,13 +158,13 @@ describe("general payment on the shared statements", () => {
     expect(generalCreditOf(noGeneral)).toBeNull();
   });
 
-  it("a payment tied to items (existing behaviour) adds no general line", () => {
-    const linked = ENTRIES.map((e) => (e.id === "g1" ? { ...e, amount: 12_000, parentEntryId: "rent" } : e));
+  it("a payment tied to items (legacy, still editable/displayable) shows the same plain kind tag as any other item", () => {
+    // Part-paid, not fully settled, so the item still appears in this cycle's short summary.
+    const linked = ENTRIES.map((e) => (e.id === "g1" ? { ...e, amount: 5_000, parentEntryId: "rent" } : e));
     const input = { person: { id: "S", name: "SANJU", openingBalance: 0, createdAt: d(1, 1) }, ledgerEntries: linked, loanIds: new Set<string>(), emis: [], loans: [], installments: [], now: NOW };
     const statement = buildPersonCycleStatement({ ...input, cycle: CYCLE });
     const history = buildPersonCycleStatement({ ...input, cycle: { start: new Date(1970, 0, 1), end: CYCLE.end } });
     const m = monthlySettlementView(statement, { history, entries: linked, now: NOW, ownerName: "Abin" });
-    expect(m.unallocated).toBeNull();
-    expect(m.items.find((i) => i.title === "Rent share")?.status).toBe("Paid");
+    expect(m.items.find((i) => i.title === "Rent share")?.tag).toBe("Given");
   });
 });

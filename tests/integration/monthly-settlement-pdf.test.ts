@@ -194,13 +194,15 @@ describe("SANJU — October monthly settlement from real stored data", () => {
       ["cycle", "Groceries"],
     ]);
     expect(monthly.lines.map((l) => [l.key, l.value])).toEqual([["previous", money(6575.52)], ["new", money(19828.88)], ["applied", money(9575.52)], ["outstanding", money(16828.88)]]);
-    expect(monthly.lines.find((l) => l.key === "applied")!.note).toBe(`${money(6575.52)} to earlier balance · ${money(3000)} to this cycle`);
-    expect(monthly.items.find((i) => i.title === "Bajaj Finance - Oct")).toMatchObject({ paid: money(3000), remaining: money(643.88), status: "Part paid" });
-    expect(monthly.split).toEqual({ dueNow: money(13643.88), postponed: money(3185), postponedTo: "Moved to November" });
-    expect(monthly.cleared).toEqual({ count: 4, amount: money(6575.52), range: "Jun–Sep" });
+    // The four cleared Jun–Sep items are excluded from `items` exactly as before (fully settled, so they never
+    // appear as carried rows) — but the per-item note about *how much* this cycle's payment left on Bajaj Finance
+    // - Oct is gone: the row shows its own full face amount and a plain kind tag, never a paid/remaining figure.
+    expect(monthly.items.find((i) => i.title === "Bajaj Finance - Oct")).toMatchObject({ amount: money(3643.88), tag: "Given" });
+    expect(monthly.closing).toEqual({ label: "Remaining balance", value: money(16828.88) });
     expect(monthly.payments).toHaveLength(1);
-    expect(monthly.payments[0].lines.map((l) => [l.label, l.amount, l.tail])).toEqual([["Earlier balance · 4 items", money(6575.52), "cleared"], ["Bajaj Finance - Oct", money(3000), `${money(643.88)} left`]]);
-    expect(monthly.checks).toEqual({ reconciles: true, itemsAddUp: true, unitemisedPaise: 0 });
+    // Five of this one payment's lines were tied to items (the four earlier + October's Bajaj Finance) — named
+    // together, not itemised (that breakdown belonged to the removed Paid/Remaining columns).
+    expect(monthly.payments[0]).toMatchObject({ amount: money(9575.52), note: "Toward 5 items" });
 
     // Agrees with the People Ledger (same statementView, same cycle, same as-of date) and with the stored person balance.
     const ledger = statementView(statement, options);

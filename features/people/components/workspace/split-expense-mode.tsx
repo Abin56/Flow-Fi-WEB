@@ -1,6 +1,6 @@
 "use client";
 
-import { AccountLabel } from "@/components/finance/account-label";
+import { AccountOptions } from "@/components/finance/account-label";
 import { Check, Divide, Percent, Plus, Receipt, SlidersHorizontal, Split, Trash2, UserRound, Users } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import { ClayAvatar } from "@/components/clay/clay-avatar";
@@ -406,11 +406,7 @@ export function SplitExpenseMode({
                     <SelectValue placeholder="Select account" />
                   </SelectTrigger>
                   <SelectContent>
-                    {accounts.map((a) => (
-                      <SelectItem key={a.id} value={a.id}>
-                        <AccountLabel account={a} suffix={a.accountNumberLast4 ? `•••• ${a.accountNumberLast4}` : undefined} />
-                      </SelectItem>
-                    ))}
+                    <AccountOptions accounts={accounts} />
                   </SelectContent>
                 </Select>
               </WsField>

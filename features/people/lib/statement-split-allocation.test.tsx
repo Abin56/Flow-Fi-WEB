@@ -131,8 +131,8 @@ describe("shared statement — split allocation is transparent", () => {
     ]);
     expect(new Set(a.participants.map((p) => p.amount)).size).toBe(3); // not flattened to 2,080 ÷ 4
     expect(a).toMatchObject({ allocated: 2080, reconciles: true, participantCount: 4 });
-    // Settlement columns keep their meaning: Sojan's obligation, not the purchase total.
-    expect(row).toMatchObject({ original: money(490), paid: money(0), remaining: money(490) });
+    // The row's own figure keeps its meaning: Sojan's obligation, not the purchase total.
+    expect(row).toMatchObject({ original: money(490) });
 
     const text = await pdfText(statement, options);
     expect(text).toContain(pdfMoney(2080));

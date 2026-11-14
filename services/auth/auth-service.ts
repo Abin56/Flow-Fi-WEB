@@ -6,6 +6,7 @@ import {
   signOut as firebaseSignOut,
 } from "firebase/auth";
 import { auth } from "@/lib/firebase/client";
+import { closeIdleSharedSubscriptions } from "@/lib/services/firestore-watch-registry";
 import { assertAccessGranted, clearAccess } from "@/services/access/access-gate";
 
 /**
@@ -22,6 +23,7 @@ export function signInWithGoogle() {
 
 export function signOut() {
   clearAccess();
+  closeIdleSharedSubscriptions(); // listeners only kept warm for fast navigation must not outlive the session
   return firebaseSignOut(auth);
 }
 

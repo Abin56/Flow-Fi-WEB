@@ -38,8 +38,9 @@ const PAGE_H = 841.89;
 const M = 36;
 const W = PAGE_W - 2 * M;
 const PAD = 7;
-/** Date · Description (rest) · Amount · Paid · Remaining · Status */
-const FIXED = [46, 0, 72, 64, 72, 90];
+/** Date · Description (rest) · Amount · Type — a payment no longer ties to one item, so there is no Paid /
+ * Remaining breakdown per row; Type is the chip (a kind tag, or "Moved" / "Overdue"). */
+const FIXED = [46, 0, 90, 90];
 const COL_W = FIXED.map((w) => (w === 0 ? W - FIXED.reduce((s, x) => s + x, 0) : w));
 const colX = (i: number) => M + COL_W.slice(0, i).reduce((s, w) => s + w, 0);
 const colRight = (i: number) => colX(i) + COL_W[i] - PAD;
@@ -200,32 +201,18 @@ export async function renderMonthlySettlementPdf(
     const LEFT_W = 206;
     const rowH = (l: (typeof v.lines)[number]) => (l.note ? 36 : 25);
     const bodyH = v.lines.reduce((s, l) => s + rowH(l), 0) + 20;
-    const H = Math.max(v.split ? 176 : 100, bodyH);
+    const H = Math.max(100, bodyH);
     const top = y;
     page.drawRectangle({ x: M, y: top - H, width: W, height: H, color: WHITE, borderColor: RULE_STRONG, borderWidth: 0.7 });
     box(M + 0.35, top - H + 0.35, LEFT_W, H - 0.7, NAVY_TINT);
     box(M + 0.35, top - H + 0.35, 3, H - 0.7, NAVY);
     const ix = M + 18;
-    const ir = M + LEFT_W - 14;
     tracked(settled ? "ALL SETTLED" : "TOTAL OUTSTANDING", ix, top - 21, S.label + 0.4, semi, NAVY, 1.1);
     const total = money2(v.outstanding);
     const size = sizeToFit(total, 25, monoBold, LEFT_W - 32, 14);
     text(total, ix, top - 52, size, monoBold, settled ? PAID : NAVY);
     const hl = cap(wrap(settled ? "Nothing left to settle" : v.headline, LEFT_W - 32, medium, 9.6), 2, medium, 9.6, LEFT_W - 32);
     hl.forEach((t, i) => text(t, ix, top - 69 - i * 12, 9.6, medium, BODY));
-    if (v.split) {
-      // Due now (strong, gold-marked) and the postponed amount (quiet) — never read as one figure.
-      const at = top - 70 - hl.length * 12 - 8;
-      hline(ix, ir, at, hex(STATEMENT_INK.navyRule), 0.6);
-      const row = (label: string, value: string, note: string, base: number, strong: boolean) => {
-        if (strong) box(ix - 8, base - 22, 2, 28, GOLD);
-        tracked(label, ix, base, S.label, semi, strong ? NAVY : MUTED, 0.9);
-        amount(value, ir, base - 1, 11.5, monoBold, strong ? INK : BODY, 110);
-        text(fit(note, regular, S.meta, ir - ix), ix, base - 13, S.meta, regular, MUTED);
-      };
-      row("DUE NOW", v.split.dueNow, "to collect this cycle", at - 17, true);
-      row(v.split.postponedTo.toUpperCase(), v.split.postponed, "postponed · still owed, not cancelled", at - 17 - 38, false);
-    }
     const lx = M + LEFT_W + 20;
     const vr = M + W - 16;
     let ly = top - 14;
@@ -256,13 +243,13 @@ export async function renderMonthlySettlementPdf(
   };
 
   // ---- Items table ----
-  const COLS = ["Date", "Description", "Amount", "Paid", "Remaining", "Status"];
+  const COLS = ["Date", "Description", "Amount", "Type"];
   const tableHeader = () => {
     box(M, y - 20, W, 20, HEAD);
     hline(M, M + W, y - 20, RULE_STRONG, 0.7);
     COLS.forEach((c, i) => {
       const label = c.toUpperCase();
-      if (i >= 2 && i <= 4) trackedRight(label, colRight(i), y - 13, S.label, semi, BODY);
+      if (i === 2) trackedRight(label, colRight(i), y - 13, S.label, semi, BODY);
       else tracked(label, colX(i) + PAD, y - 13, S.label, semi, BODY);
     });
     y -= 20;
@@ -283,7 +270,6 @@ export async function renderMonthlySettlementPdf(
     ensure(l.h + 4, tableHeader);
     const top = y;
     const line1 = top - 19;
-    const zero = it.remaining.replace(/[^\d]/g, "").replace(/0/g, "") === "";
     const dm = it.date.match(/^(\d{1,2}) ([A-Za-z]{3})(?: (\d{4}))?$/);
     if (dm) {
       text(dm[1], colX(0) + PAD, line1 - 0.5, 12.5, semi, INK);
@@ -293,29 +279,27 @@ export async function renderMonthlySettlementPdf(
     l.titleLines.forEach((t, i) => text(t, dx, line1 - i * 12, S.title, semi, INK));
     l.noteLines.forEach((t, i) => text(t, dx, line1 - (l.titleLines.length - 1) * 12 - 11.5 - i * 10.2, S.meta, regular, MUTED));
     amount(it.amount, colRight(2), line1, S.money, monoBold, it.amount === "—" ? FAINT : INK, COL_W[2] - 2 * PAD);
-    amount(it.paid, colRight(3), line1, S.money, monoRegular, it.paid === "—" ? FAINT : PAID, COL_W[3] - 2 * PAD);
-    amount(it.remaining, colRight(4), line1, S.money + 0.4, zero ? monoRegular : monoBold, zero || it.remaining === "—" ? FAINT : it.chip === "overdue" ? CHIP_TEXT.overdue : INK, COL_W[4] - 2 * PAD);
-    // Status: a dot and one short word, in the status colour.
+    // Type: a dot and one short word — the kind, or "Moved" / "Overdue" — in the chip's colour.
     const color = CHIP_TEXT[it.chip];
-    page.drawCircle({ x: colX(5) + PAD + 2.6, y: line1 + 3, size: 2.4, color });
-    text(fit(it.status, semi, 8.8, COL_W[5] - 2 * PAD - 9), colX(5) + PAD + 9, line1, 8.8, semi, color);
+    page.drawCircle({ x: colX(3) + PAD + 2.6, y: line1 + 3, size: 2.4, color });
+    text(fit(it.tag, semi, 8.8, COL_W[3] - 2 * PAD - 9), colX(3) + PAD + 9, line1, 8.8, semi, color);
     y = top - l.h;
     hline(M, M + W, y, RULE, 0.4);
   };
 
-  // ---- Payments: a compact receipt ledger — date · where it arrived · amount, then where it went ----
+  // ---- Payments: a compact receipt ledger — date · where it arrived · amount, then what it was toward ----
   const receipt = (p: MonthlyPayment) => {
     const source = p.source ? tidyAccount(p.source) : "";
     // The statement already says who paid (section caption), so a receipt is titled by where it arrived.
-    if (p.inbound && !p.advance && source.startsWith("Received in")) return { title: source, sub: "" };
-    if (p.inbound && !p.advance) return { title: "Payment received", sub: source };
-    return { title: p.label, sub: source };
+    if (p.inbound && !p.advance && source.startsWith("Received in")) return { title: source, sub: p.note ?? "" };
+    if (p.inbound && !p.advance) return { title: "Payment received", sub: [source, p.note].filter(Boolean).join("  ·  ") };
+    return { title: p.label, sub: [source, p.note].filter(Boolean).join("  ·  ") };
   };
   const payLayout = (p: MonthlyPayment) => {
     const r = receipt(p);
     const titleLines = cap(wrap(r.title, DESC_W + COL_W[0] - 8, semi, S.title), 2, semi, S.title, DESC_W);
     const subLines = r.sub ? cap(wrap(r.sub, DESC_W + COL_W[0] - 8, regular, S.meta), 2, regular, S.meta, DESC_W) : [];
-    const h = 24 + (titleLines.length - 1) * 12 + subLines.length * 10.5 + p.lines.length * 14 + (p.lines.length ? 4 : 0) + 6;
+    const h = 24 + (titleLines.length - 1) * 12 + subLines.length * 10.5 + 6;
     return { titleLines, subLines, h };
   };
   const drawPayment = (p: MonthlyPayment) => {
@@ -325,20 +309,13 @@ export async function renderMonthlySettlementPdf(
     let ly = top - 19;
     text(p.date === "Date not known" ? "Date n/k" : p.date.replace(/ \d{4}$/, ""), colX(0) + PAD, ly, 9.6, semi, INK);
     const dx = colX(0) + PAD + 50;
-    l.titleLines.forEach((t, i) => text(fit(t, semi, S.title, colRight(4) - dx - 90), dx, ly - i * 12, S.title, semi, INK));
-    amount(p.amount, colRight(4), ly, S.money + 0.6, monoBold, p.inbound ? PAID : INK, 100);
+    l.titleLines.forEach((t, i) => text(fit(t, semi, S.title, colRight(2) - dx - 90), dx, ly - i * 12, S.title, semi, INK));
+    amount(p.amount, colRight(2), ly, S.money + 0.6, monoBold, p.inbound ? PAID : INK, 100);
     ly -= (l.titleLines.length - 1) * 12;
     l.subLines.forEach((t) => {
       ly -= 10.5;
       text(t, dx, ly, S.meta, regular, MUTED);
     });
-    ly -= 4;
-    for (const a of p.lines) {
-      ly -= 14;
-      text(fit(a.label, regular, S.meta + 0.6, colRight(3) - dx - 56), dx, ly, S.meta + 0.6, regular, BODY);
-      if (a.amount) amount(a.amount, colRight(4), ly, S.meta + 1, monoRegular, BODY, 80);
-      if (a.tail) text(fit(money2(a.tail), a.cleared ? semi : regular, S.meta, COL_W[5] - 2 * PAD), colX(5) + PAD, ly, S.meta, a.cleared ? semi : regular, a.cleared ? PAID : MUTED);
-    }
     y = top - l.h;
     hline(M, M + W, y, RULE, 0.4);
   };
@@ -349,8 +326,7 @@ export async function renderMonthlySettlementPdf(
 
   const cycleItems = v.items.filter((i) => i.group === "cycle").length;
   const earlier = v.items.filter((i) => i.group !== "cycle").length;
-  const openCount = v.items.filter((i) => i.remainingPaise > 0).length;
-  sectionTitle("This cycle's items", v.items.length === 0 ? "" : `${v.items.length} ${v.items.length === 1 ? "line" : "lines"}  ·  ${openCount === 0 ? "all settled" : `${openCount} still open`}`);
+  sectionTitle("This cycle's items", v.items.length === 0 ? "" : `${v.items.length} ${v.items.length === 1 ? "line" : "lines"}`);
   ensure(18 + (v.items[0] ? itemLayout(v.items[0]).h : 30), undefined);
   tableHeader();
   if (v.items.length === 0) {
@@ -370,16 +346,13 @@ export async function renderMonthlySettlementPdf(
     band = g;
     drawItem(it);
   }
-  // Money paid toward the balance with no item chosen: one line under the items (each keeps its own amount), then
-  // the balance it leaves — so the Remaining column adds up to what is owed.
-  if (v.unallocated) {
-    ensure(52, tableHeader);
-    text(fit(v.unallocated.label, regular, S.meta + 0.6, colRight(3) - colX(1) - PAD - 8), colX(1) + PAD, y - 16, S.meta + 0.6, regular, BODY);
-    amount(`${v.unallocated.op}${v.unallocated.amount}`, colRight(4), y - 16, S.money, monoRegular, v.unallocated.op === "−" ? PAID : INK, COL_W[4] - 2 * PAD);
-    y -= 24;
+  // The one closing line — the engine's own balance, never summed from the items above (nothing is tied to one
+  // item anymore, so there is nothing left for a Remaining column to add up).
+  if (v.items.length > 0) {
+    ensure(28, tableHeader);
     hline(M, M + W, y, RULE_STRONG, 0.7);
-    textRight(settled ? "Settled" : "Remaining balance", colRight(3) - 6, y - 16, S.meta + 0.6, semi, INK);
-    amount(v.unallocated.total, colRight(4), y - 16, S.money + 0.4, monoBold, INK, COL_W[4] - 2 * PAD);
+    textRight(v.closing.label, colRight(1) - 6, y - 16, S.meta + 0.6, semi, INK);
+    amount(v.closing.value, colRight(2), y - 16, S.money + 0.4, monoBold, INK, COL_W[2] - 2 * PAD);
     y -= 24;
   }
   y -= 4;
@@ -392,8 +365,8 @@ export async function renderMonthlySettlementPdf(
     v.payments.forEach(drawPayment);
     if (v.payments.length > 1 && v.totalPaid) {
       ensure(26);
-      textRight("Total received", colRight(3) - 6, y - 17, S.meta + 0.6, semi, BODY);
-      amount(v.totalPaid, colRight(4), y - 17, S.money + 0.4, monoBold, PAID, 100);
+      textRight("Total received", colRight(1) - 6, y - 17, S.meta + 0.6, semi, BODY);
+      amount(v.totalPaid, colRight(2), y - 17, S.money + 0.4, monoBold, PAID, 100);
       y -= 26;
     }
   }

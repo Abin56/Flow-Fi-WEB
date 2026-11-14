@@ -1,4 +1,66 @@
 import type { AccountColor } from "@/lib/mock/accounts-overview-data";
+import {
+  LEGACY_ACCOUNT_HEX,
+  gradientFromArgb,
+  hexToArgb,
+  onColorClass,
+  resolveColorValue,
+  argbToHex,
+} from "@/lib/account-color";
+
+/** Picker order of the named swatches. Their ARGB values (`LEGACY_ACCOUNT_HEX`, same order) are what gets stored
+ *  in `Account.colorValue` — the same int format the mobile app writes — so a pick syncs across platforms. */
+export const ACCOUNT_COLOR_CYCLE: AccountColor[] = [
+  "slate",
+  "orange",
+  "blue",
+  "green",
+  "cyan",
+  "violet",
+  "maroon",
+  "emerald",
+  "bronze",
+  "charcoal",
+  "navy",
+  "plum",
+];
+
+export function colorValueForAccountColor(color: AccountColor): number {
+  return hexToArgb(LEGACY_ACCOUNT_HEX[Math.max(0, ACCOUNT_COLOR_CYCLE.indexOf(color))]!);
+}
+
+export interface AccountPalette {
+  wash: string;
+  icon: string;
+  stroke: string;
+  gradient: string;
+  onGradient: string;
+}
+
+/** Which named swatch (if any) a stored value is exactly — the picker uses it to show the selected dot. */
+export function namedAccountColor(colorValue: number | null | undefined, kind: "account" | "card" = "account"): AccountColor | null {
+  const argb = resolveColorValue(colorValue, kind) ?? resolveColorValue(colorValue, "account");
+  if (argb == null) return null;
+  const i = LEGACY_ACCOUNT_HEX.findIndex((h) => hexToArgb(h) === argb);
+  return i >= 0 ? ACCOUNT_COLOR_CYCLE[i]! : null;
+}
+
+/**
+ * The colour treatment for any stored `colorValue` — including an arbitrary colour picked on mobile. A value that
+ * is exactly one of the web swatches keeps its hand-tuned treatment; any other ARGB colour gets one derived from it.
+ */
+export function accountPaletteFor(colorValue: number | null | undefined, kind: "account" | "card" = "account"): AccountPalette {
+  const argb = resolveColorValue(colorValue, kind) ?? resolveColorValue(colorValue, "account")!;
+  const named = namedAccountColor(colorValue, kind);
+  if (named) return ACCOUNT_COLOR[named];
+  return {
+    wash: "",
+    icon: "",
+    stroke: argbToHex(argb),
+    gradient: gradientFromArgb(argb),
+    onGradient: onColorClass(argb),
+  };
+}
 
 /** Shared per-account color treatment — a light tinted card wash, a solid icon chip, a matching sparkline
  *  stroke, and the text color that stays readable *on top of* `gradient` — reused by both the account tiles

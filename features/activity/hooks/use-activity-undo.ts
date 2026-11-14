@@ -8,7 +8,7 @@
 
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useMemo } from "react";
-import { DERIVED_QUERY_PREFIXES } from "@/features/loans/components/record-payment-dialog";
+import { DERIVED_QUERY_PREFIXES } from "@/features/loans/lib/derived-query-prefixes";
 import { useBillActions } from "@/features/bills/hooks/use-bills-data";
 import { useEmiActions } from "@/features/emi/hooks/use-emi-data";
 import { useLoanActions } from "@/features/loans/hooks/use-loans-data";

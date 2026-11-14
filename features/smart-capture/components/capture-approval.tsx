@@ -16,6 +16,7 @@ import { AlertTriangle, CheckCircle2, ChevronLeft, CreditCard, Loader2, ShieldCh
 import { cn } from "@/lib/utils";
 import { formatDisplayDate } from "@/components/forms/date-input";
 import { ClayButton } from "@/components/clay/clay-button";
+import { AccountMark, AccountOptions } from "@/components/finance/account-label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { formatCurrencyPrecise } from "@/lib/format";
 import { useAccounts } from "@/hooks/use-accounts";
@@ -158,12 +159,18 @@ export function CaptureApproval({
             <SelectValue placeholder="Choose card or account" />
           </SelectTrigger>
           <SelectContent>
-            {accountOptions.map((a) => (
-              <SelectItem key={a.id} value={a.id}>
-                {a.name}
-                {a.type === "card" ? " · Card" : ""}
-              </SelectItem>
-            ))}
+            <AccountOptions
+              accounts={accountOptions}
+              label={(a) => (
+                <span className="inline-flex min-w-0 items-center gap-2">
+                  <AccountMark account={a} size={18} />
+                  <span className="truncate">
+                    {a.name}
+                    {a.type === "card" ? " · Card" : ""}
+                  </span>
+                </span>
+              )}
+            />
           </SelectContent>
         </Select>
       </section>

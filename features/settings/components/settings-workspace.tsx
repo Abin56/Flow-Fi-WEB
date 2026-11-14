@@ -82,9 +82,10 @@ import { formatStatementDate } from "@/lib/engines/person-cycle-statement";
 import { useProfilePhoto, useUserPreferences } from "@/features/settings/hooks/use-user-preferences";
 import { resizeAvatarToDataUrl, validateAvatarFile, validateDisplayName, validatePhone } from "@/features/settings/lib/profile-validation";
 import { PdfAnalyzerSetupCard } from "@/features/settings/components/pdf-analyzer-setup-card";
+import { AppearanceThemes } from "@/features/settings/components/appearance-themes";
 import { StorageManagement } from "@/features/storage/components/storage-management";
 
-type SettingsTab = "profile" | "preferences" | "accounts" | "security" | "notifications" | "backup" | "storage" | "others";
+type SettingsTab = "profile" | "preferences" | "appearance" | "accounts" | "security" | "notifications" | "backup" | "storage" | "others";
 
 /** One settings card — rounded, with a gentle hover lift. */
 const SETTINGS_CARD =
@@ -105,6 +106,7 @@ function NotApplied({ children, label = "Not applied yet" }: { children: React.R
 const TABS: { id: SettingsTab; label: string; icon: LucideIcon }[] = [
   { id: "profile", label: "Profile", icon: User },
   { id: "preferences", label: "Preferences", icon: SlidersHorizontal },
+  { id: "appearance", label: "Appearance", icon: Palette },
   { id: "accounts", label: "Accounts", icon: Wallet },
   { id: "security", label: "Security", icon: Shield },
   { id: "notifications", label: "Notifications", icon: Bell },
@@ -791,6 +793,8 @@ export function SettingsWorkspace() {
             </SettingsCard>
           </div>
         )}
+
+        {tab === "appearance" && <AppearanceThemes />}
 
         {tab === "accounts" && (
           <div className="flex flex-col gap-4">

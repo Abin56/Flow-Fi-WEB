@@ -410,7 +410,7 @@ describe("outputs share the engine total", () => {
     // Read by the person: both sides named, never "you" (no profile name → the neutral fallback).
     expect(view.headline).toBe(`${s.personName} owes Account holder`);
     expect(view.flow).toEqual({ from: s.personName, to: "Account holder" });
-    expect(view.rows.find((r) => r.kind === "emi")).toMatchObject({ typeLabel: "EMI", original: money(2500), remaining: money(2500) });
+    expect(view.rows.find((r) => r.kind === "emi")).toMatchObject({ typeLabel: "EMI", original: money(2500) });
     // The received payment is listed in the cycle's payment history.
     expect(view.payments.some((p) => p.amount === money(1500) && p.inbound)).toBe(true);
     const bytes = await renderPersonStatementPdf(s);

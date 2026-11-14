@@ -6,7 +6,6 @@ import { motion, useReducedMotion } from "framer-motion";
 import { useState } from "react";
 import { Line, LineChart, ResponsiveContainer } from "recharts";
 import { BankLogo } from "@/components/finance/bank-logo";
-import { ACCOUNT_COLOR } from "@/features/accounts/lib/account-colors";
 import type { AccountOverviewItem } from "@/features/accounts/hooks/use-accounts-data";
 import { AccountLinkedFundsSection } from "@/features/people/components/linked-funds";
 import type { LinkedFund } from "@/lib/engines/linked-funds";
@@ -72,7 +71,7 @@ export function AccountOverviewPanel({
   linkedFunds?: { funds: LinkedFund[]; total: number };
 }) {
   const [revealed, setRevealed] = useState(false);
-  const palette = ACCOUNT_COLOR[account.color];
+  const palette = account.palette;
   const Icon = account.mask ? Landmark : Wallet;
   const reduceMotion = useReducedMotion();
 

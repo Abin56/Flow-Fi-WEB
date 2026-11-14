@@ -18,6 +18,12 @@ export interface AndroidRelease {
   /** Absolute HTTPS (or same-origin) URL of the APK. */
   url: string;
   publishedAt: string | null;
+  /** Release notes for the in-app update dialog, if the release was prepared with `--notes`. */
+  releaseNotes: string | null;
+  /** True when this release was prepared with `--mandatory` — every older install must update before continuing. */
+  mandatory: boolean;
+  /** Installs with a lower versionCode than this are treated as mandatory, even if `mandatory` itself is false. */
+  minSupportedVersionCode: number | null;
 }
 
 const SAFE_FILE = /^flowfi-android(?:-[0-9A-Za-z.+_-]{1,40})?\.apk$/;
@@ -40,6 +46,9 @@ export function parseAndroidRelease(raw: unknown, origin: string): AndroidReleas
     sizeBytes: r.sizeBytes,
     url: `${origin.replace(/\/+$/, "")}/downloads/${r.file}`,
     publishedAt: typeof r.publishedAt === "string" ? r.publishedAt : null,
+    releaseNotes: typeof r.releaseNotes === "string" && r.releaseNotes.length > 0 ? r.releaseNotes : null,
+    mandatory: r.mandatory === true,
+    minSupportedVersionCode: typeof r.minSupportedVersionCode === "number" && Number.isInteger(r.minSupportedVersionCode) && r.minSupportedVersionCode >= 1 ? r.minSupportedVersionCode : null,
   };
 }
 

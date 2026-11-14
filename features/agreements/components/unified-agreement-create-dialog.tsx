@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ClayButton } from "@/components/clay/clay-button";
 import { FLAT_INPUT } from "@/components/finance";
+import { groupAccountsByKind } from "@/components/finance/account-label";
 import { PersonPickerField } from "@/features/loans/components/loans-workspace";
 import { useLoanActions } from "@/features/loans/hooks/use-loans-data";
 import { WhoIsThisForField } from "@/features/loans/components/who-is-this-for-field";
@@ -225,7 +226,10 @@ export function UnifiedAgreementCreateDialog({ open, onOpenChange }: { open: boo
                     Account
                     <select className={FLAT_INPUT} value={form.movementAccountId} onChange={(e) => set({ movementAccountId: e.target.value })}>
                       <option value="">Choose account</option>
-                      {movementAccounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}
+                      {groupAccountsByKind(movementAccounts).map((g) => {
+                        const options = g.accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>);
+                        return g.kind === "credit" ? <optgroup key={g.kind} label="Credit cards">{options}</optgroup> : options;
+                      })}
                     </select>
                   </label>
                 ) : (

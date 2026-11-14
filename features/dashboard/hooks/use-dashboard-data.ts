@@ -30,6 +30,7 @@
  *    available now rather than fake the Expense join.
  */
 
+import { accountPaletteFor } from "@/features/accounts/lib/account-colors";
 import { useHistoricalPaymentFlags } from "@/features/loans/hooks/use-historical-payment-flags";
 import { useLoans } from "@/hooks/use-loans";
 import { useMemo } from "react";
@@ -266,6 +267,8 @@ export function useDashboardData() {
         mask: account.accountNumberLast4,
         balance: account.currentBalance,
         accent: ACCOUNT_ACCENTS[index % ACCOUNT_ACCENTS.length] as AccountAccent,
+        // The account's own colour (shared with the mobile app) — the fallback chip uses it instead of list position.
+        palette: accountPaletteFor(account.colorValue, account.type === "card" ? "card" : "account"),
       })),
     };
   }, [accounts, creditCards]);

@@ -3,7 +3,6 @@
 import { ChevronRight, Landmark, Star, Wallet } from "lucide-react";
 import { Line, LineChart, ResponsiveContainer } from "recharts";
 import { BankLogo } from "@/components/finance/bank-logo";
-import { ACCOUNT_COLOR } from "@/features/accounts/lib/account-colors";
 import type { AccountOverviewItem } from "@/features/accounts/hooks/use-accounts-data";
 import { motion, useReducedMotion } from "framer-motion";
 import { StaggerItem } from "@/components/foundation/animated-container";
@@ -11,7 +10,7 @@ import { formatCurrency } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 function AccountMark({ account, size }: { account: AccountOverviewItem; size: number }) {
-  const palette = ACCOUNT_COLOR[account.color];
+  const palette = account.palette;
   const Icon = account.mask ? Landmark : Wallet;
   return account.bankId ? (
     <BankLogo bankId={account.bankId} size={size} className="shrink-0 shadow-sm" />
@@ -69,7 +68,7 @@ export function AccountTile({
   onExplain?: () => void;
   variant?: "grid" | "list";
 }) {
-  const palette = ACCOUNT_COLOR[account.color];
+  const palette = account.palette;
   const subtitle = `${account.typeLabel}${account.mask ? ` •••• ${account.mask}` : ""}`;
   const reduceMotion = useReducedMotion();
   const Icon = account.mask ? Landmark : Wallet;

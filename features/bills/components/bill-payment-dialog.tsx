@@ -3,7 +3,8 @@
 import { useMemo, useState } from "react";
 import { FormDialog } from "@/components/finance";
 import { DateInput } from "@/components/forms/date-input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { AccountLabel, AccountOptions } from "@/components/finance/account-label";
+import { Select, SelectContent, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useAccounts } from "@/hooks/use-accounts";
 import { previewFunds } from "@/lib/engines/payment-funding";
 import { formatCurrency } from "@/lib/format";
@@ -186,11 +187,7 @@ function BillPaymentForm({
                   <SelectValue placeholder="Choose an account" />
                 </SelectTrigger>
                 <SelectContent>
-                  {accounts.map((a) => (
-                    <SelectItem key={a.id} value={a.id}>
-                      {a.name} · {formatCurrency(a.currentBalance)}
-                    </SelectItem>
-                  ))}
+                  <AccountOptions accounts={accounts} label={(a) => <AccountLabel account={a} suffix={formatCurrency(a.currentBalance)} />} />
                 </SelectContent>
               </Select>
             </label>

@@ -1,6 +1,6 @@
 "use client";
 
-import { AccountLabel, AccountMark } from "@/components/finance/account-label";
+import { AccountLabel, AccountMark, AccountOptions } from "@/components/finance/account-label";
 import {
   ArrowDownLeft,
   ArrowLeftRight,
@@ -1182,11 +1182,7 @@ function SplitFormFields({
             <SelectValue placeholder="Select account" />
           </SelectTrigger>
           <SelectContent>
-            {accounts.map((a) => (
-              <SelectItem key={a.id} value={a.id}>
-                <AccountLabel account={a} />
-              </SelectItem>
-            ))}
+            <AccountOptions accounts={accounts} label={(a) => <AccountLabel account={a} />} />
           </SelectContent>
         </Select>
       </label>

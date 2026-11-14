@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { timingOf, type ObligationTiming, type PayableObligation } from "@/features/people/lib/person-payment-obligations";
+import { GENERAL_PAYMENT_KEY, timingOf, type ObligationTiming, type PayableObligation } from "@/features/people/lib/person-payment-obligations";
 import type { RecordPaymentInput } from "@/lib/repositories/person-payment-repository";
 import { RecordPaymentPanel } from "./record-payment-panel";
 
@@ -28,7 +28,17 @@ vi.mock("@/features/people/components/workspace/purpose-money", () => ({ usePurp
 let payable: PayableObligation[] = [];
 vi.mock("@/features/people/lib/person-payment-obligations", async (orig) => {
   const actual = await orig<typeof import("@/features/people/lib/person-payment-obligations")>();
-  return { ...actual, settlementProjection: () => ({ payable, elsewhere: [] }) };
+  return {
+    ...actual,
+    settlementProjection: () => ({ payable, elsewhere: [] }),
+    // `overallDue` reads real `LedgerRow[]`, not `settlementProjection` — these tests pass `rows={[]}` and
+    // drive everything through the mocked `payable` above, so the general-mode due total must mirror it:
+    // same "due now" rule (brought forward + this cycle, future excluded), split by side.
+    overallDue: () => {
+      const sum = (side: "theyOwe" | "iOwe") => payable.filter((o) => o.side === side && o.timing !== "later").reduce((s, o) => s + o.outstanding, 0);
+      return { theyOwe: sum("theyOwe"), iOwe: sum("iOwe") };
+    },
+  };
 });
 
 beforeAll(() => {
@@ -85,13 +95,10 @@ function setup() {
       onSetReminder={onSetReminder}
     />,
   );
-  // Item-by-item allocation is the explicit "Choose specific items" path (a general payment is the default).
-  fireEvent.click(screen.getByTestId("rp-mode-items"));
   return { user, onSubmit, onSetReminder };
 }
 
 const amountInput = () => screen.getByLabelText(/^Amount received$/);
-const applyInput = () => screen.getByLabelText("Total paying now") as HTMLInputElement;
 const cta = () => screen.getByRole("button", { name: /^Record|Saving/ });
 const linesOf =(input: RecordPaymentInput) => Object.fromEntries(input.lines.map((l) => [l.key, l.amount]));
 
@@ -111,48 +118,24 @@ describe("Record Payment from a selected cycle — scope is that cycle's due, ne
     expect(screen.queryByText(/6,000/)).toBeNull();
   });
 
-  it("full cycle payment ₹4,000 settles carried + current; the next-cycle ₹2,000 is untouched", async () => {
+  it("full cycle payment ₹4,000 settles the due total; nothing is tied to any item, so the future ₹2,000 is untouched", async () => {
     const { user, onSubmit } = setup();
     await user.type(amountInput(), "4000");
-    expect(applyInput().value).toBe("4000");
     expect(screen.getByTestId("rp-still-owed").textContent).toContain("0");
     await user.click(cta());
     const input = onSubmit.mock.calls[0][0];
-    expect(linesOf(input)).toEqual({ "ledger:aug-carried": 1000, "ledger:sep-share": 3000 });
+    expect(input.lines).toEqual([{ key: GENERAL_PAYMENT_KEY, amount: 4000, route: { kind: "general" } }]);
     expect(input.extra).toBeNull();
   });
 
-  it("partial ₹2,500: brought-forward settles first, ₹1,500 stays on this cycle's item, future untouched", async () => {
-    const { user, onSubmit } = setup();
-    await user.type(amountInput(), "2500");
-    expect(screen.getByTestId("rp-still-owed").textContent).toContain("1,500");
-    await user.click(cta());
-    const input = onSubmit.mock.calls[0][0];
-    expect(linesOf(input)).toEqual({ "ledger:aug-carried": 1000, "ledger:sep-share": 1500 });
-    expect(input.lines.some((l) => l.key === "ledger:oct-next")).toBe(false);
-    expect(input.extra).toBeNull();
-  });
-
-  it("₹10,000 received: ₹4,000 applied to the cycle, ₹6,000 kept as advance — NOT applied to the future ₹2,000", async () => {
+  it("₹10,000 received: ₹4,000 settles the due total, ₹6,000 kept as advance — never applied to the future ₹2,000", async () => {
     const { user, onSubmit } = setup();
     await user.type(amountInput(), "10000");
-    expect(applyInput().value).toBe("4000");
     expect(screen.getByTestId("rp-left-over").textContent).toContain("6,000");
     await user.click(cta());
     const input = onSubmit.mock.calls[0][0];
-    expect(linesOf(input)).toEqual({ "ledger:aug-carried": 1000, "ledger:sep-share": 3000 });
+    expect(input.lines).toEqual([{ key: GENERAL_PAYMENT_KEY, amount: 4000, route: { kind: "general" } }]);
     expect(input.extra).toEqual({ kind: "advance", amount: 6000 });
-  });
-
-  it("paying the next-cycle item early is an explicit opt-in (Show upcoming → tick)", async () => {
-    const { user, onSubmit } = setup();
-    await user.type(amountInput(), "6000");
-    expect(applyInput().value).toBe("4000");
-    await user.click(screen.getByRole("button", { name: /Show 1 upcoming item/ }));
-    await user.click(screen.getByRole("button", { name: "Pay ledger:oct-next in full" }));
-    expect(applyInput().value).toBe("6000");
-    await user.click(cta());
-    expect(linesOf(onSubmit.mock.calls[0][0])).toEqual({ "ledger:aug-carried": 1000, "ledger:sep-share": 3000, "ledger:oct-next": 2000 });
   });
 
   it("edit: the payment's own lines reopen and stay selected; the future item stays out", async () => {
@@ -200,30 +183,19 @@ describe("Due breakdown — presentation of the same Due, future excluded", () =
   });
 });
 
-describe("Remainders and reminders from the selected cycle — future ₹2,000 always untouched", () => {
-  it("A. reminder: partial ₹2,500 → reminder on the still-open current item only, never the future one", async () => {
-    const { user, onSubmit, onSetReminder } = setup();
-    await user.type(amountInput(), "2500");
-    await user.click(screen.getByRole("button", { name: /After recording/ }));
-    await user.click(within(screen.getByRole("radiogroup", { name: "Reminder" })).getByRole("radio", { name: /Next cycle/ }));
-    await user.click(cta());
-    expect(linesOf(onSubmit.mock.calls[0][0])).toEqual({ "ledger:aug-carried": 1000, "ledger:sep-share": 1500 });
-    const [targets] = onSetReminder.mock.calls[0] as unknown as [{ key: string }[]];
-    expect(targets.map((t) => t.key)).toEqual(["ledger:sep-share"]);
-  });
-
-  it("B. income remainder: ₹10,000 → ₹4,000 settles the cycle, ₹6,000 recorded as income", async () => {
+describe("Remainders from the selected cycle — future ₹2,000 always untouched", () => {
+  it("B. income remainder: ₹10,000 → ₹4,000 settles the due total, ₹6,000 recorded as income", async () => {
     const { user, onSubmit } = setup();
     await user.type(amountInput(), "10000");
     await user.selectOptions(screen.getAllByLabelText(/^Use for —/)[0], "income");
     await user.selectOptions(screen.getByLabelText("Income category"), "gift");
     await user.click(cta());
     const input = onSubmit.mock.calls[0][0];
-    expect(linesOf(input)).toEqual({ "ledger:aug-carried": 1000, "ledger:sep-share": 3000 });
+    expect(input.lines).toEqual([{ key: GENERAL_PAYMENT_KEY, amount: 4000, route: { kind: "general" } }]);
     expect(input.extra).toMatchObject({ kind: "income", amount: 6000, categoryId: "gift" });
   });
 
-  it("C. purpose remainder: ₹10,000 → ₹4,000 settles the cycle, ₹6,000 set aside", async () => {
+  it("C. purpose remainder: ₹10,000 → ₹4,000 settles the due total, ₹6,000 set aside", async () => {
     const { user, onSubmit } = setup();
     await user.type(amountInput(), "10000");
     await user.selectOptions(screen.getAllByLabelText(/^Use for —/)[0], "purpose");
@@ -232,8 +204,7 @@ describe("Remainders and reminders from the selected cycle — future ₹2,000 a
     await user.type(screen.getByLabelText("Purpose amount"), "6000");
     await user.click(cta());
     const input = onSubmit.mock.calls[0][0];
-    expect(linesOf(input)).toEqual({ "ledger:aug-carried": 1000, "ledger:sep-share": 3000 });
+    expect(input.lines).toEqual([{ key: GENERAL_PAYMENT_KEY, amount: 4000, route: { kind: "general" } }]);
     expect(input.purposes?.map((p) => [p.title, p.amount])).toEqual([["Hospital", 6000]]);
-    expect(input.lines.some((l) => l.key === "ledger:oct-next")).toBe(false);
   });
 });

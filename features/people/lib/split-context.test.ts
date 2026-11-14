@@ -181,8 +181,6 @@ describe("Share Statement — split rows", () => {
     const row = view.rows.find((r) => r.kind === "split")!;
     expect(row.splitNote).toBe(`Total price ${money(3000)} · 3-way split · Amma's share ${money(1000)}`);
     expect(row.original).toBe(money(1000));
-    expect(row.paid).toBe(money(400));
-    expect(row.remaining).toBe(money(600));
     const everything = JSON.stringify(view);
     // Shared statements show THIS split's full stored allocation (so Amma can verify her share)…
     expect(row.allocation!.participants.map((p) => [p.label, p.amount])).toEqual([["Account holder", 1000], ["Amma", 1000], ["Tripthee", 1000]]);

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import type { ReimbursementItem, ReimbursementLine, ReimbursementResult } from "@/lib/engines/historical-reimbursement";
 import { forwardRef, type AnchorHTMLAttributes } from "react";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Loan } from "@/lib/models/loan";
@@ -11,14 +11,16 @@ import type { InstallmentBreakdown, ShareLine } from "@/lib/engines/installment-
 import { RecordPaymentDialog, type PaymentTarget } from "./record-payment-dialog";
 
 /**
- * Loan / EMI Record payment (Pay EMI) — the user scenarios A–H. Summary first; one compact row per person;
- * while a person's share of THAT installment is still open the user must choose (nothing preselected):
- * "Pay now from my account" (only then does the payment carry the acknowledgement the write gate requires;
- * People stays untouched) or "Collect money from others first" (pick the person → their People Record
- * payment; the lender is never paid). Fully received → no choice, no acknowledgement. "Mark an old EMI as
- * paid" records a past payment with no account movement. The footer always names what it does. The
- * participant breakdown reads the People statements (mocked here). Layout at phone width is not testable
- * in jsdom — H checks the content stays one row per person with one footer action.
+ * Loan / EMI Record payment (Pay EMI) — the user scenarios A–H. Summary first; one compact row per person
+ * (display only — their status, never an action). While a person's share of THAT installment is still open
+ * the user answers one plain question, "Has their share been paid?" — Yes or No, nothing preselected.
+ * Either answer only marks status (saved in the payment's own note) and unblocks paying the lender; it
+ * never writes a People ledger entry, moves money, or settles anyone — a real reimbursement is recorded
+ * separately, in the person's own People Record Payment screen. Fully received already → no question, no
+ * acknowledgement. "Mark an old EMI as paid" records a past payment with no account movement. The footer
+ * always names what it does. The participant breakdown reads the People statements (mocked here). Layout
+ * at phone width is not testable in jsdom — H checks the content stays one row per person with one footer
+ * action.
  */
 
 const push = vi.fn();
@@ -81,9 +83,6 @@ vi.mock("@/features/loans/hooks/use-installment-breakdown", () => ({
 
 // Historical reimbursement: People lines (as the statement engine would give them) and the People write.
 let reimbLines: ReimbursementLine[] = [];
-const receiptLine = (personId: string, personName: string): ReimbursementLine => ({
-  personId, personName, installmentId: "i1", sequenceNumber: 1, dueDate: new Date(2000, 0, 1), obligationKey: "emi-inst:i1", share: 1000, received: 0, remaining: 1000,
-});
 const reimbRecord = vi.fn(async (items: readonly ReimbursementItem[], _accountId: string, previous: Record<string, ReimbursementResult> = {}) => ({
   ...previous,
   ...Object.fromEntries(items.map((i) => [i.key, { status: "recorded" as const }])),
@@ -183,13 +182,6 @@ const renderDialog = (target: PaymentTarget) => render(<RecordPaymentDialog targ
 const panel = () => screen.queryByRole("region", { name: "Who pays this installment" });
 const footer = (name: string | RegExp) => screen.getByRole("button", { name }) as HTMLButtonElement;
 
-/** Opens the postpone form for everyone who hasn't paid: JOHN's "Postpone" button, then AMMA ticked in (each person's button opens it for that person only). */
-async function openPostponeBoth(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(screen.getByRole("button", { name: "Postpone JOHN's share here" }));
-  const form = screen.getByTestId("share-postpone");
-  await user.click(within(form).getByRole("checkbox", { name: "Postpone AMMA's share" }));
-  return form;
-}
 /** Record past payments → the one installment the dialog was on → the single past-payment form (unchanged write path). */
 async function openPastSingle(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole("radio", { name: /past (payment|repayment)/i }));
@@ -241,7 +233,7 @@ describe("A — everyone has paid their share", () => {
     };
     renderDialog(emiTarget());
     expect(screen.getByTestId("share-amma").textContent).toBe("Received");
-    expect(screen.queryByRole("region", { name: "Payment decision" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Has their share been paid?" })).toBeNull();
     expect(screen.queryByTestId("account-movement")).toBeNull(); // no account is assumed until it is chosen
     await pickAccount(user);
     expect(screen.getByTestId("account-movement").textContent).toBe("₹3,000 will be taken from SBI.");
@@ -252,140 +244,32 @@ describe("A — everyone has paid their share", () => {
 });
 
 describe("B — AMMA and JOHN haven't paid", () => {
-  it("nothing is preselected: the footer waits for a choice and payment fields stay hidden", () => {
+  it("nothing is preselected: the footer waits for an answer and payment fields stay hidden", () => {
     peopleState = { readiness: BOTH_PENDING(), isLoading: false };
     breakdownState = { breakdown: BOTH_PENDING_BREAKDOWN(), isLoading: false };
     renderDialog(emiTarget());
-    const decision = screen.getByRole("region", { name: "Payment decision" });
-    // "Received" and "Not received yet" are each person's own buttons now; only paying from my own money is a choice here.
-    expect(within(decision).getAllByRole("radio").map((r) => r.getAttribute("aria-checked"))).toEqual(["false"]);
-    expect(within(decision).getAllByRole("radio").map((r) => r.textContent)).toEqual([expect.stringMatching(/^Pay the lender from my own money/)]);
-    expect(footer("Choose how to pay").disabled).toBe(true);
+    const confirm = screen.getByRole("region", { name: "Has their share been paid?" });
+    const radios = within(confirm).getAllByRole("radio");
+    expect(radios.map((r) => r.textContent)).toEqual(["Yes, already paid", "No, not yet"]);
+    expect(radios.map((r) => r.getAttribute("aria-checked"))).toEqual(["false", "false"]);
+    expect(footer("Has their share been paid?").disabled).toBe(true);
     expect(screen.queryByRole("region", { name: "Payment details" })).toBeNull();
-    // Each person card: two real buttons — record what they paid, or postpone — both right here (no navigation).
-    expect(screen.getByRole("button", { name: "Record money received from JOHN here" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Postpone JOHN's share here" })).toBeTruthy();
+    // Display only now — no in-dialog action buttons per person.
+    expect(screen.queryByRole("button", { name: /record money received/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /postpone/i })).toBeNull();
     expect(screen.getByTestId("share-john").textContent).toBe("Not received");
   });
 
-  it("'Not received yet — postpone their share': next month by default; one deferral per open share; NO lender payment, no money; success shown", async () => {
-    const user = userEvent.setup();
-    peopleState = { readiness: BOTH_PENDING(), isLoading: false };
-    breakdownState = { breakdown: BOTH_PENDING_BREAKDOWN(), isLoading: false };
-    const target = emiTarget();
-    renderDialog(target);
-    const form = await openPostponeBoth(user);
-    // Whose share, and how much each.
-    expect(within(within(form).getByRole("list", { name: "Shares not received" })).getAllByRole("listitem").map((li) => li.textContent)).toEqual(["AMMA₹1,000", "JOHN₹1,000"]);
-    // Next month is the default.
-    const cycles = within(form).getByRole("radiogroup", { name: "Expected cycle" });
-    expect(within(cycles).getAllByRole("radio")[0].getAttribute("aria-checked")).toBe("true");
-    expect(within(cycles).getAllByRole("radio")[0].textContent).toMatch(/^Next month · /);
-    // What will happen: their share moves; the lender EMI keeps its own due date.
-    const preview = screen.getByTestId("share-postpone-preview").textContent ?? "";
-    expect(preview).toMatch(/AMMA and JOHN's ₹2,000 — expected in \w+ cycle/);
-    expect(preview).toMatch(/Lender EMI unchanged.*Still due .*Not a payment: nothing is recorded and no account changes\./);
-    expect(footer("Postpone above — or pay now").disabled).toBe(true);
-    expect(screen.queryByRole("region", { name: "Payment details" })).toBeNull();
-
-    await user.click(within(form).getByRole("button", { name: /^Postpone 2 shares to \w+$/ }));
-    await waitFor(() => expect(deferralApply).toHaveBeenCalledTimes(2));
-    const requests = deferralApply.mock.calls.map((c) => c[0] as Record<string, unknown>);
-    expect(requests.map((r) => [r.personId, r.obligationKey, r.action, r.remaining, r.expectedRevision])).toEqual([
-      ["amma", "emi-inst:i1", "postpone", 1000, 0],
-      ["john", "emi-inst:i1", "postpone", 1000, 0],
-    ]);
-    // The share's own date (the installment due date) and the SAME target cycle for both.
-    expect((requests[0].obligationDate as Date).getTime()).toBe(dueOf(target).getTime());
-    expect((requests[0].target as { start: Date }).start.getTime()).toBe((requests[1].target as { start: Date }).start.getTime());
-    expect((requests[0].target as { start: Date }).start.getTime()).toBeGreaterThan(Date.now());
-    // Postponing is never a payment.
-    expect(emiRecordPayment).not.toHaveBeenCalled();
-    expect(loanRecordPayment).not.toHaveBeenCalled();
-    expect(reimbRecord).not.toHaveBeenCalled();
-    // Success: the result stays on screen (whose share, until when, the EMI unchanged); the choice resets.
-    const done = await screen.findByTestId("share-postponed");
-    expect(done.textContent).toMatch(/^Postponed — AMMA and JOHN's ₹2,000 now expected in the \w+ cycle/);
-    expect(done.textContent).toMatch(/Nothing was paid; the lender EMI is still due/);
-    expect(screen.queryByTestId("share-postpone")).toBeNull();
-  });
-
-  it("postpone to a later month with a reminder date; a failed share is retried alone, with the same request id", async () => {
+  it("answering 'No' pays the lender once with the new acknowledgement; their shares stay owed, and no People entry is written", async () => {
     const user = userEvent.setup();
     peopleState = { readiness: BOTH_PENDING(), isLoading: false };
     breakdownState = { breakdown: BOTH_PENDING_BREAKDOWN(), isLoading: false };
     renderDialog(emiTarget());
-    const form = await openPostponeBoth(user);
-    await user.selectOptions(within(form).getByLabelText("Another cycle"), within(form).getAllByRole("option")[2]);
-    await user.click(within(form).getByRole("radio", { name: "Pick a date" }));
-    deferralApply.mockImplementationOnce(async () => ({ outcome: "written" })).mockImplementationOnce(async () => {
-      throw new Error("Conflict");
-    });
-    await user.click(within(form).getByRole("button", { name: /^Postpone 2 shares to/ }));
-    await waitFor(() => expect(within(form).getByRole("alert").textContent).toMatch(/JOHN: Conflict/));
-    const [first, second] = deferralApply.mock.calls.map((c) => c[0] as { obligationKey: string; personId: string; requestId: string; reminder: { kind: string } | null; target: { start: Date } });
-    expect(first.reminder?.kind).toBe("date");
-    // Retry: only JOHN's share again, same request id (idempotent), same target.
-    await user.click(within(form).getByRole("button", { name: "Retry postponing" }));
-    await waitFor(() => expect(deferralApply).toHaveBeenCalledTimes(3));
-    const retry = deferralApply.mock.calls[2][0] as typeof second;
-    expect([retry.personId, retry.requestId, retry.target.start.getTime()]).toEqual([second.personId, second.requestId, second.target.start.getTime()]);
-    expect(emiRecordPayment).not.toHaveBeenCalled();
-  });
-
-  it("different shares; a row's 'Postpone' postpones only that person, in the dialog", async () => {
-    const user = userEvent.setup();
-    peopleState = { readiness: readinessOf([person("amma", "AMMA", 1500, 0, "emi-inst:i1"), person("john", "JOHN", 500, 0, "emi-inst:i1")]), isLoading: false };
-    breakdownState = {
-      breakdown: breakdownOf([
-        { id: "amma", name: "AMMA", current: line("emi-inst:i1", 1, 1500, 0) },
-        { id: "john", name: "JOHN", current: line("emi-inst:i1", 1, 500, 0) },
-      ]),
-      isLoading: false,
-    };
-    renderDialog(emiTarget());
-    await user.click(screen.getByRole("button", { name: "Postpone JOHN's share here" }));
-    const form = screen.getByTestId("share-postpone");
-    expect(screen.getByRole("button", { name: "Postpone JOHN's share here" }).getAttribute("aria-pressed")).toBe("true");
-    expect((within(form).getByRole("checkbox", { name: "Postpone JOHN's share" }) as HTMLInputElement).checked).toBe(true);
-    expect((within(form).getByRole("checkbox", { name: "Postpone AMMA's share" }) as HTMLInputElement).checked).toBe(false);
-    expect(screen.getByTestId("share-postpone-preview").textContent).toMatch(/JOHN's ₹500 — expected in/);
-    await user.click(within(form).getByRole("button", { name: /^Postpone JOHN's share to \w+$/ }));
-    await waitFor(() => expect(deferralApply).toHaveBeenCalledTimes(1));
-    expect((deferralApply.mock.calls[0][0] as { personId: string; remaining: number }).personId).toBe("john");
-    expect((deferralApply.mock.calls[0][0] as { remaining: number }).remaining).toBe(500);
-    expect(emiRecordPayment).not.toHaveBeenCalled();
-  });
-
-  it("validation: nobody selected, or a reminder in the past, can't be submitted", async () => {
-    const user = userEvent.setup();
-    peopleState = { readiness: BOTH_PENDING(), isLoading: false };
-    breakdownState = { breakdown: BOTH_PENDING_BREAKDOWN(), isLoading: false };
-    renderDialog(emiTarget());
-    const form = await openPostponeBoth(user);
-    await user.click(within(form).getByRole("checkbox", { name: "Postpone AMMA's share" }));
-    await user.click(within(form).getByRole("checkbox", { name: "Postpone JOHN's share" }));
-    expect((within(form).getByRole("button", { name: "Choose who to postpone" }) as HTMLButtonElement).disabled).toBe(true);
-    await user.click(within(form).getByRole("checkbox", { name: "Postpone JOHN's share" }));
-    await user.click(within(form).getByRole("radio", { name: "Pick a date" }));
-    fireEvent.change(within(form).getByLabelText("Reminder date"), { target: { value: "2020-01-01" } });
-    expect(within(form).getByRole("alert").textContent).toMatch(/can't be in the past|Choose a reminder date/);
-    expect((within(form).getByRole("button", { name: /^Postpone JOHN's share to/ }) as HTMLButtonElement).disabled).toBe(true);
-    expect(deferralApply).not.toHaveBeenCalled();
-  });
-
-  it("'Pay now from SBI' pays the lender once with the acknowledgement; their shares stay owed", async () => {
-    const user = userEvent.setup();
-    peopleState = { readiness: BOTH_PENDING(), isLoading: false };
-    breakdownState = { breakdown: BOTH_PENDING_BREAKDOWN(), isLoading: false };
-    renderDialog(emiTarget());
-    await user.click(screen.getByRole("radio", { name: /pay the lender from my own money/i }));
+    await user.click(screen.getByRole("radio", { name: "No, not yet" }));
+    expect(screen.getByTestId("share-not-paid-warning")).toBeTruthy();
     await pickAccount(user);
     expect(screen.getByTestId("account-movement").textContent).toBe("₹3,000 will be taken from SBI.");
     expect(screen.getByTestId("people-impact").textContent).toBe("People: AMMA and JOHN still owe you ₹2,000 — paying the lender doesn't mark anyone as paid.");
-    await user.click(screen.getByRole("button", { name: "Payment delayed" }));
-    await user.type(screen.getByRole("textbox", { name: /note about paying/i }), "back on 5th");
-    await pickAccount(user);
     const pay = footer("Pay ₹3,000 to lender");
     await user.click(pay);
     await user.click(pay); // double submit
@@ -393,51 +277,45 @@ describe("B — AMMA and JOHN haven't paid", () => {
     expect(emiRecordPayment.mock.calls[0][2]).toMatchObject({
       amount: 3000,
       accountId: "sbi",
-      note: "Paid from my own money — Payment delayed: back on 5th",
+      note: "Marked: AMMA and JOHN hasn't paid their share yet — paying the lender anyway.",
       recordedEarlier: null,
-      peopleGateAcknowledgement: { acknowledgedUnsettledPeople: true, reason: "Paid lender first; still owed: AMMA ₹1,000, JOHN ₹1,000 — Payment delayed" },
+      peopleGateAcknowledgement: { acknowledgedUnsettledPeople: true, reason: "Marked: AMMA and JOHN hasn't paid their share yet — paying the lender anyway." },
     });
     expect(push).not.toHaveBeenCalled();
+    expect(reimbRecord).not.toHaveBeenCalled();
   });
 
-  it("'Received': records a person's share right in the dialog — no navigation, no lender payment", async () => {
+  it("answering 'Yes' also pays the lender, with the 'already paid' acknowledgement — still no People entry", async () => {
     const user = userEvent.setup();
     peopleState = { readiness: BOTH_PENDING(), isLoading: false };
     breakdownState = { breakdown: BOTH_PENDING_BREAKDOWN(), isLoading: false };
-    reimbLines = [receiptLine("amma", "AMMA"), receiptLine("john", "JOHN")];
     renderDialog(emiTarget());
-    await user.click(screen.getByRole("button", { name: "Record money received from JOHN here" }));
-    expect(screen.queryByRole("region", { name: "Payment details" })).toBeNull();
-    // Only JOHN's share is offered (his own button); recorded right here — the footer never opens People, and never pays the lender.
-    expect(screen.queryByLabelText("Amount received from AMMA")).toBeNull();
-    expect(footer("Record what they paid above — then pay").disabled).toBe(true);
-    await user.selectOptions(screen.getByLabelText("Received into account"), "sbi");
-    await user.click(screen.getByRole("button", { name: "Record ₹1,000 received" }));
-    await waitFor(() => expect(reimbRecord).toHaveBeenCalledTimes(1));
-    const [items, accountId] = reimbRecord.mock.calls[0];
-    expect(accountId).toBe("sbi");
-    expect(items).toHaveLength(1);
-    expect(items[0]).toMatchObject({ personId: "john", obligationKey: "emi-inst:i1", amount: 1000, recordedEarlier: false, dateKnown: true });
-    expect(push).not.toHaveBeenCalled();
-    expect(emiRecordPayment).not.toHaveBeenCalled();
-    expect(screen.getByTestId("share-received-done").textContent).toContain("JOHN gave you ₹1,000");
-    // The decision is made: choosing to pay from my own money is still available.
+    await user.click(screen.getByRole("radio", { name: "Yes, already paid" }));
+    expect(screen.queryByTestId("share-not-paid-warning")).toBeNull();
+    await pickAccount(user);
+    await user.click(footer("Pay ₹3,000 to lender"));
+    await waitFor(() => expect(emiRecordPayment).toHaveBeenCalledTimes(1));
+    expect(emiRecordPayment.mock.calls[0][2]).toMatchObject({
+      note: "Marked: AMMA and JOHN already paid their share of this.",
+      peopleGateAcknowledgement: { acknowledgedUnsettledPeople: true, reason: "Marked: AMMA and JOHN already paid their share of this." },
+    });
+    expect(reimbRecord).not.toHaveBeenCalled();
   });
 
-  it("Loan: same choice; own money forwards the acknowledgement", async () => {
+  it("Loan: answering 'No' forwards the acknowledgement", async () => {
     const user = userEvent.setup();
     peopleState = { readiness: readinessOf([person("john", "JOHN", 1000, 0, "loan-inst:l1")]), isLoading: false };
     renderDialog(loanTarget());
     expect(screen.getByText("Pay installment")).toBeTruthy();
-    expect(footer("Choose how to pay").disabled).toBe(true);
-    await user.click(screen.getByRole("radio", { name: /pay the lender from my own money/i }));
+    expect(footer("Has their share been paid?").disabled).toBe(true);
+    await user.click(screen.getByRole("radio", { name: "No, not yet" }));
     await pickAccount(user);
     await user.click(footer("Pay ₹3,000 to lender"));
     await waitFor(() => expect(loanRecordPayment).toHaveBeenCalledTimes(1));
     expect(loanRecordPayment.mock.calls[0][2]).toMatchObject({
       accountId: "sbi",
-      note: "Paid from my own money",
-      peopleGateAcknowledgement: { acknowledgedUnsettledPeople: true, reason: "Paid lender first; still owed: JOHN ₹1,000" },
+      note: "Marked: JOHN hasn't paid their share yet — paying the lender anyway.",
+      peopleGateAcknowledgement: { acknowledgedUnsettledPeople: true, reason: "Marked: JOHN hasn't paid their share yet — paying the lender anyway." },
     });
   });
 });
@@ -477,7 +355,7 @@ describe("E — Mark an old EMI as paid", () => {
     renderDialog(target);
     await openPastSingle(user);
     expect(screen.getByTestId("past-payment-header").textContent).toContain("paid before FlowFi — no account balance changes");
-    expect(screen.queryByRole("region", { name: "Payment decision" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Has their share been paid?" })).toBeNull();
     expect(screen.queryByLabelText(/paid from account/i)).toBeNull();
     expect(screen.queryByTestId("account-movement")).toBeNull();
     const save = footer("Save past payment of ₹3,000");
@@ -576,16 +454,16 @@ describe("F / G — every amount is visible and named", () => {
 });
 
 describe("H — many people (small screens)", () => {
-  it("one compact row per person, one clear footer action", () => {
+  it("one compact row per person (display only), and one Yes/No question regardless of how many people share it", () => {
     const names = ["AMMA", "JOHN", "RAVI", "SANJU"];
     peopleState = { readiness: readinessOf(names.map((n) => person(n.toLowerCase(), n, 500, 0, "emi-inst:i1"))), isLoading: false };
     breakdownState = { breakdown: breakdownOf(names.map((n) => ({ id: n.toLowerCase(), name: n, current: line("emi-inst:i1", 1, 500, 0) }))), isLoading: false };
     renderDialog(emiTarget());
     expect(within(panel()!).getAllByRole("listitem")).toHaveLength(4);
-    expect(screen.getAllByRole("button", { name: /^Record money received from .* here$/ })).toHaveLength(4);
-    expect(screen.getAllByRole("button", { name: /^Postpone .*share here$/ })).toHaveLength(4);
-    expect(within(screen.getByRole("region", { name: "Payment decision" })).getAllByRole("radio")).toHaveLength(1);
-    expect(footer("Choose how to pay").disabled).toBe(true);
+    expect(screen.queryAllByRole("button", { name: /^Record money received from .* here$/ })).toHaveLength(0);
+    expect(screen.queryAllByRole("button", { name: /^Postpone .*share here$/ })).toHaveLength(0);
+    expect(within(screen.getByRole("region", { name: "Has their share been paid?" })).getAllByRole("radio")).toHaveLength(2);
+    expect(footer("Has their share been paid?").disabled).toBe(true);
   });
 });
 
@@ -624,85 +502,11 @@ describe("Edge states", () => {
   });
 });
 
-describe("H — shares already moved to a later cycle in People", () => {
-  const later = { start: new Date(2099, 10, 1), end: new Date(2099, 10, 30) };
-  const past = { start: new Date(2000, 0, 1), end: new Date(2000, 0, 31) };
-  const moved = (key: string, cycle = later) => ({ obligationKey: key, state: "active", expected: { cycle, reason: null, note: null }, frames: [] });
-
-  it("all postponed: a contextual message, no collect-first choice, and an explicit pay-from-account step", async () => {
-    const user = userEvent.setup();
-    deferralsMock = [moved("emi-inst:i1")];
-    peopleState = { readiness: BOTH_PENDING(), isLoading: false };
-    breakdownState = { breakdown: BOTH_PENDING_BREAKDOWN(), isLoading: false };
-    renderDialog(emiTarget());
-    expect(screen.getByTestId("postponed-note").textContent).toBe("AMMA and JOHN will pay you in the Nov 2099 cycle. You can pay the lender now from your account.");
-    expect(screen.queryByRole("radio", { name: /^received/i })).toBeNull();
-    // Still an explicit authorization — nothing is preselected and nothing is paid yet.
-    expect(footer("Confirm paying from your account").disabled).toBe(true);
-    await user.click(screen.getByRole("radio", { name: /pay ₹3,000 to lender from my account/i }));
-    await pickAccount(user);
-    await user.click(footer("Pay ₹3,000 to lender"));
-    await waitFor(() => expect(emiRecordPayment).toHaveBeenCalledTimes(1));
-    expect(emiRecordPayment.mock.calls[0][2]).toMatchObject({
-      amount: 3000,
-      accountId: "sbi",
-      note: "Paid from my own money — I will collect later",
-      peopleGateAcknowledgement: {
-        acknowledgedUnsettledPeople: true,
-        reason: "Paid lender first; still owed: AMMA ₹1,000, JOHN ₹1,000 — AMMA and JOHN will pay you in the Nov 2099 cycle.",
-      },
-    });
-    // The lender's due date is untouched; the People rows still read as not received.
-    expect(screen.queryByText(/^Overdue · /)).toBeTruthy();
-    expect(screen.getByTestId("share-john").textContent).toMatch(/^Not received · Postponed to Nov 2099 cycle · from \d{2} \w{3}$/);
-  });
-
-  it("one postponed, one not: the choice stays, and 'Received' only offers the undecided person", async () => {
-    const user = userEvent.setup();
-    deferralsMock = [moved("emi-inst:i0")];
-    peopleState = { readiness: readinessOf([person("amma", "AMMA", 1000, 0, "emi-inst:i0"), person("john", "JOHN", 1000, 0, "emi-inst:i1")]), isLoading: false };
-    breakdownState = { breakdown: BOTH_PENDING_BREAKDOWN(), isLoading: false };
-    reimbLines = [receiptLine("amma", "AMMA"), receiptLine("john", "JOHN")];
-    renderDialog(emiTarget());
-    expect(screen.getByTestId("postponed-note").textContent).toBe("AMMA will pay you in the Nov 2099 cycle.");
-    expect(screen.getByText("Or pay the lender now")).toBeTruthy();
-    // AMMA's postponement stands: her card offers People; only JOHN, who hasn't decided, records here.
-    expect(screen.queryByRole("button", { name: "Record money received from AMMA here" })).toBeNull();
-    await user.click(screen.getByRole("button", { name: "Record money received from JOHN here" }));
-    // Only the undecided person is offered; AMMA's postponement stands.
-    expect(screen.getByLabelText("Amount received from JOHN")).toBeTruthy();
-    expect(screen.queryByLabelText("Amount received from AMMA")).toBeNull();
-    expect(emiRecordPayment).not.toHaveBeenCalled();
-  });
-
-  it("a passed postponement is neither received nor a fresh postponement: the normal choice comes back", () => {
-    deferralsMock = [moved("emi-inst:i1", past)];
-    peopleState = { readiness: readinessOf([person("john", "JOHN", 1000, 0, "emi-inst:i1")]), isLoading: false };
-    breakdownState = { breakdown: breakdownOf([{ id: "john", name: "JOHN", current: line("emi-inst:i1", 1, 1000, 0) }]), isLoading: false };
-    renderDialog(emiTarget());
-    expect(screen.queryByTestId("postponed-note")).toBeNull();
-    expect(screen.getByTestId("lapsed-note").textContent).toContain("JOHN");
-    expect(screen.getByTestId("share-john").textContent).toBe("Not received · Was due in Jan 2000 cycle — still unpaid");
-    expect(screen.getByRole("button", { name: "Record money received from JOHN here" })).toBeTruthy();
-    expect(footer("Choose how to pay").disabled).toBe(true);
-  });
-
-  it("one received, one postponed: only the postponed one is open, so it is all-postponed", () => {
-    deferralsMock = [moved("emi-inst:i1")];
-    peopleState = { readiness: readinessOf([person("amma", "AMMA", 1000, 1000, "emi-inst:i1"), person("john", "JOHN", 1000, 400, "emi-inst:i1")]), isLoading: false };
-    breakdownState = {
-      breakdown: breakdownOf([
-        { id: "amma", name: "AMMA", current: line("emi-inst:i1", 1, 1000, 1000) },
-        { id: "john", name: "JOHN", current: line("emi-inst:i1", 1, 1000, 400) },
-      ]),
-      isLoading: false,
-    };
-    renderDialog(emiTarget());
-    expect(screen.getByTestId("postponed-note").textContent).toBe("JOHN will pay you in the Nov 2099 cycle. You can pay the lender now from your account.");
-    expect(screen.getByTestId("share-amma").textContent).toBe("Received");
-    expect(screen.getByTestId("share-john").textContent).toMatch(/^₹400 of ₹1,000 received · Postponed to Nov 2099 cycle · from \d{2} \w{3}$/);
-  });
-});
+// The old "H — shares already moved to a later cycle in People" scenario (all-postponed / lapsed-note /
+// per-person collect-only-the-undecided-one) tested the removed 3-way decision UI directly. The underlying
+// informational display it also touched — each person's own postponed/lapsed status text, via
+// `InstallmentPeoplePanel` — is independent of that decision UI and is still covered in "C / D" above
+// (unaffected by this rewrite).
 
 describe("I — mark several old installments as paid", () => {
   function pastEmiTarget(): PaymentTarget {
@@ -1127,19 +931,6 @@ describe("K — clearer payment choices (Phase 2)", () => {
     expect(hint.textContent).toContain("This records a real payment from SBI dated 5 Mar 2024");
     await user.click(within(hint).getByRole("button", { name: /record past payments instead/i }));
     expect(screen.getByTestId("bulk-step").textContent).toContain("Choose EMIs");
-    expect(emiRecordPayment).not.toHaveBeenCalled();
-  });
-
-  it("received, and the person already gave an advance: Apply advance comes first (no new money), with the way back", async () => {
-    const user = userEvent.setup();
-    peopleState = { readiness: readinessOf([person("john", "JOHN", 1000, 0, "emi-inst:i1")]), isLoading: false };
-    const b = breakdownOf([{ id: "john", name: "JOHN", current: line("emi-inst:i1", 1, 1000, 0) }]);
-    b.participants[0].advanceHeld = 1000;
-    breakdownState = { breakdown: b, isLoading: false };
-    renderDialog(emiTarget());
-    await user.click(screen.getByRole("button", { name: "Record money received from JOHN here" }));
-    expect(screen.getByTestId("collect-advance-note").textContent).toContain("JOHN already gave you ₹1,000 as an advance");
-    expect(screen.getByRole("link", { name: "Apply advance in People" }).getAttribute("href")).toBe(`/people?person=john&applyAdvance=1&obligation=emi-inst%3Ai1&return=%2Femi%3Fagreement%3Dsrc%26pay%3D1`);
     expect(emiRecordPayment).not.toHaveBeenCalled();
   });
 

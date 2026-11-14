@@ -2,10 +2,10 @@
 
 import { AccountSelect } from "@/components/finance/account-label";
 import { PaymentSourceSummary, isUnderfunded } from "@/components/finance/payment-source-summary";
-import { ArrowRight, ChevronDown, HandCoins, History, Wallet } from "lucide-react";
+import { ArrowRight, ChevronDown, History, Wallet } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useMemo, useRef, useState } from "react";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { useEmiActions, type EmiRow } from "@/features/emi/hooks/use-emi-data";
 import { emiCardLabel } from "@/features/emi/components/emi-card";
 import { loanDisplayName } from "@/features/loans/components/loan-card";
@@ -31,30 +31,20 @@ import { useLinkedFunds } from "@/features/people/hooks/use-linked-funds";
 import { linkedFundsForInstallment } from "@/lib/engines/linked-funds";
 import { InstallmentPeoplePanel } from "@/features/loans/components/installment-people-panel";
 import { useInstallmentBreakdown } from "@/features/loans/hooks/use-installment-breakdown";
-import { lenderFirstReason, openShareStatuses, postponedMessage } from "@/lib/engines/installment-participants";
+import { openShareStatuses } from "@/lib/engines/installment-participants";
 import { usePeoplePaymentDeferrals } from "@/features/people/hooks/use-payment-deferrals";
 import { useMonthCycleStartDay } from "@/features/settings/hooks/use-user-preferences";
-import {
-  ActionPanel,
-  PeoplePaymentDecision,
-  ownMoneyPaymentNote,
-  ownMoneyReasonLabel,
-  peopleNames,
-  type LenderPaymentDecision,
-  type OwnMoneyReason,
-} from "@/features/loans/components/people-payment-decision";
-import { ShareReceivedPanel, type ReceivedSummary } from "@/features/loans/components/share-received";
-import { PostponedBanner, SharePostponePanel, type PostponeShare, type SharePostponeResult } from "@/features/loans/components/share-postpone";
+import { peopleNames } from "@/features/loans/components/people-payment-decision";
+import { PeopleShareConfirm, peopleShareAcknowledgement, type PeopleShareAnswer } from "@/features/loans/components/people-share-confirm";
 import { useLinkedPeopleReadiness } from "@/features/people/hooks/use-linked-people-readiness";
-import { peopleApplyAdvanceHref, peopleGateInstallmentIds, peoplePostponeHref, peopleSettlementGate, settleActionFor } from "@/lib/engines/linked-people-readiness";
-import { PAYMENT_EPSILON } from "@/lib/engines/person-payment";
+import { peopleGateInstallmentIds, peopleSettlementGate } from "@/lib/engines/linked-people-readiness";
 import { RECORDED_EARLIER_PEOPLE_ACK } from "@/lib/engines/recorded-earlier";
 import { planLoanPaymentCore, type LoanPaymentCore } from "@/lib/engines/loan-payment-core";
 import { installmentProgress } from "@/lib/engines/installment-progress";
 import { outstandingPrincipalAfterPrepaymentsFor } from "@/lib/engines/loan-outstanding";
 import { previewPrincipalPrepayment } from "@/features/loans/lib/loan-adjustment-preview";
 import { friendlyLoanError } from "@/features/loans/lib/loan-live-state";
-import { EMI_PAYMENT_HISTORY_KEY } from "@/features/loans/hooks/use-payment-history";
+import { DERIVED_QUERY_PREFIXES } from "@/features/loans/lib/derived-query-prefixes";
 import {
   emiPaymentOutcome,
   emiQuickOptions,
@@ -121,9 +111,7 @@ function dateToInput(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-/** Queries derived from payment sub-collections — keyed on live installment state already; invalidated
- *  too so history / extra-principal / card-credit figures re-read at once after a write. */
-export const DERIVED_QUERY_PREFIXES = ["loan-financial-history", "loanPrincipalPrepaid", "loanScheduledPayments", "cardLinkedEmiPayments", EMI_PAYMENT_HISTORY_KEY];
+export { DERIVED_QUERY_PREFIXES };
 
 function todayInput(): string {
   const d = new Date();
@@ -295,25 +283,15 @@ export function RecordPaymentDialog({
   const [view, setView] = useState<DialogView>(initialView);
   // Set on the first switch between the flow's pages: every page after it replaces the last in place (no new sheet animating in).
   const [switched, setSwitched] = useState(false);
-  // "Record received" for one person (their button) — the received form then lists only them.
-  const [receiveOnly, setReceiveOnly] = useState<string | null>(null);
-  // On a wide sheet the Received / Postpone forms open in the right-hand work area, beside the people (not under them).
-  const [gridBox, wideGrid] = useWideBox(856);
-  // The people step folds itself once it is decided (paying from my own money); the user's own toggle wins.
+  // On a wide sheet "What will happen" opens in the right-hand work area, beside the people (not under them).
+  const [gridBox] = useWideBox(856);
+  // The people step folds itself once the share question is answered; the user's own toggle wins.
   const [peoplePick, setPeoplePick] = useState<boolean | null>(null);
   // One installment chosen in Record past payments, handed to the single past-payment form below — the existing
   // single write path, unchanged (same allocation, identity, edit and reversal behaviour).
   const [pinnedPast, setPinnedPast] = useState<Installment | null>(null);
-  // Nothing is preselected while shares are open: paying from my own money is always a deliberate choice.
-  const [decision, setDecision] = useState<LenderPaymentDecision | null>(null);
-  // The last postponement made here — kept on screen as the success state (the live deferrals update the rest).
-  const [postponed, setPostponed] = useState<SharePostponeResult | null>(null);
-  // The last receipt recorded here ("Received") — also kept on screen as a success state.
-  const [received, setReceived] = useState<ReceivedSummary | null>(null);
-  // A person row's "Postpone": the in-dialog postpone, with only that person selected.
-  const [postponeOnly, setPostponeOnly] = useState<string | null>(null);
-  const [ownReason, setOwnReason] = useState<OwnMoneyReason | null>(null);
-  const [ownNote, setOwnNote] = useState("");
+  // "Has the person already paid their share?" — nothing until answered; either answer unblocks the lender payment.
+  const [shareAnswer, setShareAnswer] = useState<PeopleShareAnswer | null>(null);
   const [dateUnknown, setDateUnknown] = useState(false);
   // "Already paid earlier" date — starts on the installment's due date when that has passed, else today.
   const [earlierDate, setEarlierDate] = useState(() => {
@@ -416,31 +394,14 @@ export function RecordPaymentDialog({
   // Shares already moved to a later cycle in People (the one postponement system, `paymentDeferrals`) are a
   // decision already made: the user isn't asked to collect or postpone them again. A target cycle that has
   // arrived or passed while still unpaid counts as undecided again. The gate acknowledgement stays explicit.
-  const { deferralsByPerson, isLoading: deferralsLoading } = usePeoplePaymentDeferrals(peopleGated ? settlement.attention.map((p) => p.personId) : []);
+  // Informational only (see `postponedImpact` below) — never gates the Yes/No question itself.
+  const { deferralsByPerson } = usePeoplePaymentDeferrals(peopleGated ? settlement.attention.map((p) => p.personId) : []);
   const startDay = useMonthCycleStartDay();
   const shareStatus = openShareStatuses(settlement.attention, deferralsByPerson, startDay);
-  const gateLoading = !earlier && peopleGated && (linkedPeopleLoading || (settlement.blocked && deferralsLoading));
-  const needsDecision = !earlier && peopleGated && !gateLoading && settlement.blocked;
-  const allPostponed = needsDecision && shareStatus.allPostponed;
-  const postponedNote = needsDecision ? postponedMessage(shareStatus.postponed) : "";
-  const ownMoney = needsDecision && decision === "ownMoney";
-  const ownReasonLabel = ownMoneyReasonLabel(ownReason);
-  const peopleAck = earlier
-    ? RECORDED_EARLIER_PEOPLE_ACK
-    : ownMoney
-      ? { acknowledgedUnsettledPeople: true as const, reason: `${lenderFirstReason(settlement.attention)}${postponedNote ? ` — ${postponedNote}` : ""}${ownReasonLabel ? ` — ${ownReasonLabel}` : ""}` }
-      : null;
-  const router = useRouter();
+  const gateLoading = !earlier && peopleGated && linkedPeopleLoading;
+  const needsConfirm = !earlier && peopleGated && !gateLoading && settlement.blocked;
+  const peopleAck = earlier ? RECORDED_EARLIER_PEOPLE_ACK : peopleShareAcknowledgement(shareAnswer, settlement.attention.map((p) => p.personName));
   const pathname = usePathname();
-  // "Received": the undecided people's open shares are recorded right here as People receipts (`ShareReceivedPanel`).
-  const unresolvedIds = new Set(shareStatus.unresolved.map((p) => p.personId));
-  const collectCandidates = settlement.attention.filter((p) => unresolvedIds.has(p.personId));
-  // "Not received yet — postpone": the undecided people's open shares, each moved through People's own deferral
-  // write. Never a payment — the lender installment stays due on its date.
-  const postponeShares: PostponeShare[] = collectCandidates
-    .map((p) => ({ personId: p.personId, personName: p.personName, obligations: p.obligations.filter((o) => o.remaining > PAYMENT_EPSILON) }))
-    .filter((p) => p.obligations.length > 0);
-  const shareDateOf = (key: string) => liveInstallments?.find((i) => i.id === key.slice(key.indexOf(":") + 1))?.dueDate ?? next?.dueDate ?? new Date();
   // People sends the user back to exactly this payment (same agreement, Record Payment reopened, same installment).
   const agreementId = loanRow?.loan.id ?? emiRow?.emi.id ?? null;
   const returnPath = agreementId ? paymentReturnPath(pathname, agreementId, target?.installment?.id ?? null) : pathname;
@@ -451,11 +412,6 @@ export function RecordPaymentDialog({
       ? { sourceKind: isLoan ? ("loan" as const) : ("emi" as const), source: breakdownSource, installments: breakdownInstallments, installmentId: next.id }
       : null;
   const { breakdown, isLoading: breakdownLoading } = useInstallmentBreakdown(breakdownTarget);
-  // Received, when someone already gave money held as an advance: applying it comes first — it settles their
-  // share without recording new money (no account is credited again). Recording a new receipt is the fallback.
-  const advancePeople = collectCandidates
-    .map((p) => ({ person: p, advance: breakdown?.participants.find((x) => x.personId === p.personId)?.advanceHeld ?? 0 }))
-    .filter((x) => x.advance > PAYMENT_EPSILON);
   // Past payment: whether the people sharing it had already paid me back — answered per person, written as
   // People settlements AFTER the lender record. The installments are fixed at the first save (afterwards
   // the dialog's "next" installment moves on), and a saved lender record is never written again.
@@ -543,7 +499,7 @@ export function RecordPaymentDialog({
         })
       : null;
   // Saved in the payment's own note — the only durable place for it (no separate audit field exists).
-  const paymentNote = [ownMoney ? ownMoneyPaymentNote(ownReason ?? (allPostponed ? "collectLater" : null), ownNote) : null, note.trim() || null].filter(Boolean).join(" · ") || undefined;
+  const paymentNote = [peopleAck && !earlier ? peopleAck.reason : null, note.trim() || null].filter(Boolean).join(" · ") || undefined;
 
   /**
    * Record past payments → exactly one installment picked: it is recorded through the single past-payment form
@@ -703,8 +659,8 @@ export function RecordPaymentDialog({
   const showPeople = next != null && !lent && !earlier && (breakdownLoading || participants.length > 0);
   const othersUnpaidNow = participants.reduce((t, p) => t + (p.current?.remaining ?? 0), 0);
   const stillOwing = participants.filter((p) => p.outstanding > 0.005);
-  // Details of the payment itself appear once there is nothing left to decide (or "pay from my account" was chosen).
-  const showPaymentDetails = next != null && (earlier || !needsDecision || ownMoney);
+  // Details of the payment itself appear once there is nothing left to decide (or the share question is answered).
+  const showPaymentDetails = next != null && (earlier || !needsConfirm || shareAnswer != null);
 
   // The footer always says what pressing it does — a lender payment never reads as settling a person.
   const confirmLabel = saving
@@ -715,18 +671,12 @@ export function RecordPaymentDialog({
         ? "Retry people's payments"
       : earlier
         ? `Save past payment${amountLabel ? ` of ${amountLabel}` : ""}${reconcileTotal > 0.005 ? ` · ${formatCurrencyExact(reconcileTotal)} from people` : ""}`
-        : needsDecision && !ownMoney
-          ? allPostponed
-            ? "Confirm paying from your account"
-            : decision === "collect"
-              ? "Record what they paid above — then pay"
-              : decision === "postpone"
-                ? "Postpone above — or pay now"
-                : "Choose how to pay"
-            : lent
-              ? `Record ${amountLabel ?? "repayment"} received`
-              : `Pay ${amountLabel ?? "installment"} to lender`;
-  const confirmDisabled = lenderDone ? reconcile.failed.length === 0 || saving : earlier ? blocked : gateLoading || (needsDecision && !ownMoney) || blocked;
+        : needsConfirm && shareAnswer == null
+          ? "Has their share been paid?"
+          : lent
+            ? `Record ${amountLabel ?? "repayment"} received`
+            : `Pay ${amountLabel ?? "installment"} to lender`;
+  const confirmDisabled = lenderDone ? reconcile.failed.length === 0 || saving : earlier ? blocked : gateLoading || (needsConfirm && shareAnswer == null) || blocked;
 
   // Where the money goes — the account (or card) only. What people owe is its own line (`peopleImpact`).
   const moneyMove = (() => {
@@ -757,63 +707,15 @@ export function RecordPaymentDialog({
   const lentAccount = lent && needsAccount ? (accounts.find((a) => a.id === accountId) ?? null) : null;
   const remainingOption = options.find((o) => o.choice === "remaining") ?? null;
   const leadingOptions = options.filter((o) => o.choice !== "remaining");
-  // Wide sheet: the people list on the left, and on the right whatever the user is working on — the Received / Postpone
-  // form while one is open, then what will happen. The rail only appears once there is something to put in it.
-  const panelsInRail = wideGrid && showPeople && collectCandidates.length > 0 && next != null;
-  const panelOpen = needsDecision && (decision === "collect" || decision === "postpone");
-  const showRail = next != null && !earlier && (showPaymentDetails || panelsInRail);
+  // Wide sheet: the people list on the left, "what will happen" on the right, once there is something to show.
+  const showRail = next != null && !earlier && showPaymentDetails;
   // A single past payment: how much / when on the left, "have the people sharing it already paid you?" on the right.
   const earlierSplit = earlier && next != null && showPaymentDetails && !lent;
-  const postponeNode =
-    next && postponeShares.length > 0 ? (
-      <SharePostponePanel
-        key={postponeOnly ?? "all"}
-        only={postponeOnly}
-        people={postponeShares}
-        dateOf={shareDateOf}
-        deferralsByPerson={deferralsByPerson}
-        startDay={startDay}
-        lenderDueDate={next.dueDate}
-        onDone={(result) => {
-          setPostponed(result);
-          setDecision(null);
-        }}
-      />
-    ) : null;
-  const collectNode = (
-    <ShareReceivedPanel
-      key={receiveOnly ?? "all"}
-      target={
-        breakdownSource && breakdownInstallments && !lent
-          ? { sourceKind: isLoan ? "loan" : "emi", source: breakdownSource, installments: breakdownInstallments, installmentIds: [...new Set(gatedIds)] }
-          : null
-      }
-      personIds={receiveOnly ? [receiveOnly] : collectCandidates.map((p) => p.personId)}
-      accounts={accounts}
-      defaultAccountId={accountId}
-      onDone={(result) => {
-        setReceived(result);
-        setDecision(null);
-      }}
-      advanceSlot={advancePeople.map(({ person, advance }) => {
-        const action = settleActionFor(person);
-        return (
-          <p key={person.personId} className="text-xs font-medium text-settle-advance-text" data-testid="collect-advance-note">
-            {person.personName} already gave you {formatCurrencyExact(advance)} as an advance — apply it first. No money moves and no account is credited again.{" "}
-            <a className="font-semibold underline underline-offset-2" href={peopleApplyAdvanceHref(action.personId, action.obligationKey, returnPath)}>
-              Apply advance in People
-            </a>
-          </p>
-        );
-      })}
-    />
-  );
-  const receiveNames = receiveOnly ? [collectCandidates.find((p) => p.personId === receiveOnly)?.personName ?? ""] : shareStatus.unresolved.map((p) => p.personName);
-  const peopleOpen = peoplePick ?? !(needsDecision && ownMoney);
+  const peopleOpen = peoplePick ?? !(needsConfirm && shareAnswer != null);
   // What still blocks the primary action, in plain words (the footer's "Still needed").
   const pending: string[] = [];
   if (!lenderDone && !gateLoading && !saving) {
-    if (!earlier && needsDecision && !ownMoney) pending.push(allPostponed ? "Confirm paying" : "Received or not");
+    if (!earlier && needsConfirm && shareAnswer == null) pending.push("Received or not");
     if (showPaymentDetails) {
       if (needsAccount && accountId === "") pending.push(lent ? "Account" : "Paying account");
       if (error != null) pending.push("Amount");
@@ -824,21 +726,15 @@ export function RecordPaymentDialog({
     }
   }
   // Collapsible steps: numbered in the order shown, each with a one-line recap for when it is folded.
-  const peopleStepShown = next != null && (showPeople || needsDecision);
+  const peopleStepShown = next != null && (showPeople || needsConfirm);
   const amountStep = peopleStepShown ? 2 : 1;
-  const peopleSummary = received
-    ? "Received"
-    : postponed
-      ? "Postponed"
-      : needsDecision
-        ? decision === "collect"
-          ? "Received"
-          : decision === "postpone"
-            ? "Not received yet"
-            : decision === "ownMoney"
-              ? "Paying from my own money"
-              : "Received or not?"
-        : `${participants.length} ${participants.length === 1 ? "person" : "people"}`;
+  const peopleSummary = needsConfirm
+    ? shareAnswer === "yes"
+      ? "Already paid"
+      : shareAnswer === "no"
+        ? "Not paid yet"
+        : "Received or not?"
+    : `${participants.length} ${participants.length === 1 ? "person" : "people"}`;
   const dateSummary =
     earlier && dateUnknown ? "Date not known" : earlier && earlierDateError ? "Date needed" : paymentDate.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
   const sourceSummary = needsAccount ? (accountName ?? "Choose account") : earlier ? null : cardLabel;
@@ -937,72 +833,12 @@ export function RecordPaymentDialog({
           )}
           {/* 2 — Who shares it, and (when someone hasn't paid) how to go on. */}
           {peopleStepShown && (
-            <PanelSection className="shadow-e1" open={peopleOpen} onOpenChange={setPeoplePick} title={<StepTitle n={1}>{needsDecision ? "Shared with people · received or not?" : "Shared with people"}</StepTitle>} summary={peopleSummary}>
+            <PanelSection className="shadow-e1" open={peopleOpen} onOpenChange={setPeoplePick} title={<StepTitle n={1}>{needsConfirm ? "Shared with people · received or not?" : "Shared with people"}</StepTitle>} summary={peopleSummary}>
               <div className="flex flex-col gap-3">
-                {postponed && !earlier && <PostponedBanner result={postponed} lenderDueDate={next.dueDate} onDismiss={() => setPostponed(null)} />}
-                {received && !earlier && (
-                  <p role="status" className="rounded-[8px] border border-success/40 bg-success/10 px-3 py-2.5 text-[13px] font-semibold text-foreground" data-testid="share-received-done">
-                    Received — {peopleNames(received.names)} gave you {formatCurrencyExact(received.total)}. Now pay the lender below.
-                  </p>
-                )}
-                {showPeople && (
-                  <InstallmentPeoplePanel
-                    breakdown={breakdown}
-                    loading={breakdownLoading}
-                    returnTo={returnPath}
-                    inline={needsDecision && collectCandidates.length > 0 ? new Set(collectCandidates.map((p) => p.personId)) : undefined}
-                    onReceive={
-                      needsDecision && collectCandidates.length > 0
-                        ? (personId) => {
-                            setPostponed(null);
-                            setReceiveOnly(personId);
-                            setDecision("collect");
-                          }
-                        : undefined
-                    }
-                    pressed={(personId, kind) => (kind === "collect" ? decision === "collect" && (receiveOnly == null || receiveOnly === personId) : decision === "postpone" && (postponeOnly == null || postponeOnly === personId))}
-                    onPostpone={
-                      needsDecision && postponeShares.length > 0
-                        ? (personId) => {
-                            // Someone already postponed (or nothing open) keeps the People route for changing it.
-                            if (!postponeShares.some((p) => p.personId === personId)) {
-                              const key = settlement.attention.find((p) => p.personId === personId)?.obligations[0]?.key;
-                              if (key) router.push(peoplePostponeHref(personId, key, returnPath));
-                              return;
-                            }
-                            setPostponed(null);
-                            setPostponeOnly(personId);
-                            setDecision("postpone");
-                          }
-                        : undefined
-                    }
-                  />
-                )}
-                {needsDecision && (
-                  <PeoplePaymentDecision
-                    decision={decision}
-                    actionsInRows={showPeople && collectCandidates.length > 0}
-                    onDecision={(d) => {
-                      // The main choice postpones everyone who hasn't paid; a row's "Postpone" picks one person.
-                      if (d === "postpone") setPostponeOnly(null);
-                      if (d === "collect") setReceiveOnly(null);
-                      setDecision(d);
-                    }}
-                    reason={ownReason}
-                    onReason={setOwnReason}
-                    note={ownNote}
-                    onNote={setOwnNote}
-                    accountName={accountName}
-                    allPostponed={allPostponed}
-                    postponedNote={postponedNote}
-                    unresolvedNames={shareStatus.unresolved.map((p) => p.personName)}
-                    lapsedNames={shareStatus.people.filter((p) => p.lapsed).map((p) => p.personName)}
-                    amountLabel={amountLabel}
-                    pendingPeople={postponeShares.length > 0 || collectCandidates.length > 0 ? collectCandidates.map((p) => ({ name: p.personName, amount: p.obligations.reduce((t, o) => t + Math.max(0, o.remaining), 0) })).filter((p) => p.amount > PAYMENT_EPSILON) : []}
-                    postponeSlot={postponeNode}
-                    collectSlot={collectNode}
-                    panelsOutside={panelsInRail}
-                  />
+                {/* Display only — each person's own "Record received" / "Postpone" opens their People Ledger directly. */}
+                {showPeople && <InstallmentPeoplePanel breakdown={breakdown} loading={breakdownLoading} returnTo={returnPath} />}
+                {needsConfirm && (
+                  <PeopleShareConfirm names={settlement.attention.map((p) => p.personName)} amount={settlement.outstanding} answer={shareAnswer} onAnswer={setShareAnswer} />
                 )}
               </div>
             </PanelSection>
@@ -1286,24 +1122,6 @@ export function RecordPaymentDialog({
         )}
         {showRail && (
           <SheetRail label="Payment context">
-          {panelsInRail && panelOpen && (
-            <ActionPanel
-              testId={decision === "collect" ? "decision-collect" : "decision-postpone"}
-              title={decision === "collect" ? `Record what ${receiveNames.length > 0 ? peopleNames(receiveNames) : "they"} gave you` : "Move their share to a later month"}
-              onClose={() => setDecision(null)}
-            >
-              {decision === "collect" ? collectNode : postponeNode}
-            </ActionPanel>
-          )}
-          {panelsInRail && !panelOpen && !showPaymentDetails && (
-            <div className="flex items-start gap-3 rounded-xl border border-dashed border-border-strong bg-card/60 p-4 text-sm text-muted-foreground">
-              <HandCoins className="mt-0.5 size-5 shrink-0 text-settle-receivable-text" aria-hidden />
-              <p>
-                <span className="block font-semibold text-foreground">What happened with their share?</span>
-                Press <span className="font-semibold text-foreground">Record received</span> or <span className="font-semibold text-foreground">Postpone</span> on a person — the form opens here. Or pay the lender first and collect later.
-              </p>
-            </div>
-          )}
           {/* What will happen — read off the same allocation the write performs. */}
           {showPaymentDetails && !earlier && planAmount != null && (
             <PanelSection className="shadow-e1" defaultOpen title="What will happen" summary={amountLabel}>

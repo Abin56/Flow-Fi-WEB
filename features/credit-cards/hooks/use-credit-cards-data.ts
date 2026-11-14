@@ -37,6 +37,7 @@
  *    real per-card setting read back from Firestore.
  */
 
+import { LEGACY_CARD_HEX, hexToArgb, resolveColorValue } from "@/lib/account-color";
 import { saveCreditCardAtomically, type AtomicCardSaveInput } from "@/lib/repositories/credit-card-save";
 import { useMemo } from "react";
 import {
@@ -534,6 +535,8 @@ export interface CreditCardViewItem {
   minimumDue: number | null;
   isPrimary: boolean;
   accent: CardAccent;
+  /** ARGB of a colour that is not one of the named swatches (mobile-picked); null when `accent` fully describes it. */
+  customColor: number | null;
   rewardPoints: number;
   cashbackEarned: number;
   loungeVisitsLeft: number;
@@ -554,14 +557,24 @@ export const ACCENT_CYCLE: CardAccent[] = ["primary", "success", "warning", "pur
 /** Every user-pickable card colour, in picker order. */
 export const CARD_ACCENTS: CardAccent[] = ["primary", "purple", "teal", "success", "gold", "orange", "expense", "warning", "rose", "sky", "emerald", "violet", "slate", "bronze", "magenta", "navy"];
 
-/** The card account's `colorValue` stores the picked colour as `CARD_ACCENTS` index + 1; 0 (legacy / never
- *  picked) keeps the old list-position colour so existing cards don't all change look. */
+/** The card account's `colorValue` is the same ARGB int the mobile app stores (see `lib/account-color.ts`). Each
+ *  named web swatch has a fixed ARGB (`LEGACY_CARD_HEX`, same order as `CARD_ACCENTS`); 0 / null = never picked. */
 export function colorValueForCardAccent(accent: CardAccent | null): number {
-  return accent == null ? 0 : CARD_ACCENTS.indexOf(accent) + 1;
+  return accent == null ? 0 : hexToArgb(LEGACY_CARD_HEX[CARD_ACCENTS.indexOf(accent)]!);
 }
 
+/** The named swatch a stored value is exactly (also decodes legacy index values), else null. */
 export function pickedCardAccent(colorValue: number | undefined): CardAccent | null {
-  return colorValue != null && colorValue > 0 ? (CARD_ACCENTS[colorValue - 1] ?? null) : null;
+  const argb = resolveColorValue(colorValue, "card");
+  if (argb == null) return null;
+  const i = LEGACY_CARD_HEX.findIndex((h) => hexToArgb(h) === argb);
+  return i >= 0 ? CARD_ACCENTS[i]! : null;
+}
+
+/** A stored colour that is NOT one of the named swatches (e.g. picked on mobile) — drawn from the colour itself. */
+export function customCardColor(colorValue: number | undefined): number | null {
+  const argb = resolveColorValue(colorValue, "card");
+  return argb != null && pickedCardAccent(colorValue) == null ? argb : null;
 }
 
 function toViewItem(
@@ -613,6 +626,7 @@ function toViewItem(
     minimumDue: standing.statementPayment.current ? standing.statementPayment.current.minimumDue : null,
     isPrimary: index === 0,
     accent: pickedCardAccent(account?.colorValue) ?? ACCENT_CYCLE[index % ACCENT_CYCLE.length],
+    customColor: customCardColor(account?.colorValue),
     // No rewards-ledger feature exists to source these from — see module doc comment.
     rewardPoints: 0,
     cashbackEarned: 0,

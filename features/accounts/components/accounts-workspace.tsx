@@ -39,10 +39,10 @@ import { AccountsToolbar } from "@/features/accounts/components/accounts-toolbar
 import { AccountTile } from "@/features/accounts/components/account-tile";
 import { BalanceBreakdownSheet, type BalanceScope } from "@/features/accounts/components/balance-breakdown-sheet";
 import { RecentAccountTransactions } from "@/features/accounts/components/recent-account-transactions";
-import { ACCOUNT_COLOR } from "@/features/accounts/lib/account-colors";
+import { ACCOUNT_COLOR, accountPaletteFor } from "@/features/accounts/lib/account-colors";
+import { resolveColorValue } from "@/lib/account-color";
 import {
   ACCOUNT_COLOR_CYCLE,
-  accountColorForColorValue,
   colorValueForAccountColor,
   useAccountActions,
   useAccountsOverview,
@@ -56,7 +56,6 @@ import { useLinkedFunds } from "@/features/people/hooks/use-linked-funds";
 import { linkedPendingForAccount } from "@/lib/engines/linked-funds";
 import { bankById, GENERIC_BANK } from "@/lib/data/bank-registry";
 import type { Account, AccountType, BankAccountSubtype, CardSubtype } from "@/lib/models/account";
-import type { AccountColor } from "@/lib/mock/accounts-overview-data";
 import { formatCurrency } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { startOperation } from "@/store/operation-progress-store";
@@ -137,10 +136,11 @@ interface AccountFormState {
   accountHolderName: string;
   accountNumberLast4: string;
   notes: string;
-  color: AccountColor;
+  /** ARGB int — the exact value stored in `Account.colorValue` (same format as the mobile app). */
+  colorValue: number;
 }
 
-function emptyAccountForm(color: AccountColor): AccountFormState {
+function emptyAccountForm(colorValue: number): AccountFormState {
   return {
     name: "",
     type: "bank",
@@ -163,7 +163,7 @@ function emptyAccountForm(color: AccountColor): AccountFormState {
     accountHolderName: "",
     accountNumberLast4: "",
     notes: "",
-    color,
+    colorValue,
   };
 }
 
@@ -190,7 +190,7 @@ function accountFormFromAccount(account: Account): AccountFormState {
     accountHolderName: account.accountHolderName ?? "",
     accountNumberLast4: account.accountNumberLast4 ?? "",
     notes: account.notes ?? "",
-    color: accountColorForColorValue(account.colorValue),
+    colorValue: resolveColorValue(account.colorValue, account.type === "card" ? "card" : "account") ?? colorValueForAccountColor(ACCOUNT_COLOR_CYCLE[0]!),
   };
 }
 
@@ -233,14 +233,14 @@ export function AccountsWorkspace() {
   const [deletingAccount, setDeletingAccount] = useState<Account | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [deletionImpact, setDeletionImpact] = useState<AccountDeletionImpact | CreditCardDeletionImpact | null>(null);
-  const [form, setForm] = useState<AccountFormState>(() => emptyAccountForm("blue"));
+  const [form, setForm] = useState<AccountFormState>(() => emptyAccountForm(colorValueForAccountColor("blue")));
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   function openAdd() {
     // Defaults to the next unused color in the cycle, same idea as the credit card tiles'
     // accent — just a sensible starting point, not a lock-in; the picker below lets it be changed.
-    setForm(emptyAccountForm(ACCOUNT_COLOR_CYCLE[accountsOverviewList.length % ACCOUNT_COLOR_CYCLE.length]!));
+    setForm(emptyAccountForm(colorValueForAccountColor(ACCOUNT_COLOR_CYCLE[accountsOverviewList.length % ACCOUNT_COLOR_CYCLE.length]!)));
     setFormError(null);
     setAddOpen(true);
   }
@@ -264,7 +264,7 @@ export function AccountsWorkspace() {
     }
 
     const action = buildSaveAction(submitted, validated, !!editingAccount, {
-      colorValue: colorValueForAccountColor(form.color),
+      colorValue: form.colorValue,
     });
 
     setSaving(true);
@@ -382,6 +382,7 @@ export function AccountsWorkspace() {
         ? CARD_SUBTYPE_OPTIONS.find((o) => o.value === form.cardSubtype)?.label
         : undefined;
   const issuerName = selectedBank && selectedBank.id !== GENERIC_BANK.id ? selectedBank.name : form.type === "card" ? form.cardProvider.trim() : "";
+  const formPalette = accountPaletteFor(form.colorValue);
   const derivedName = editingAccount ? form.name : [issuerName, subtypeLabel ?? (issuerName ? "" : selectedType.label)].filter(Boolean).join(" ");
   const visibility = fieldVisibilityFor(form.type, formBankSubtype, formCardSubtype, !!editingAccount);
   // Mirrors validateAccountForm: holder name + last-4 are mandatory for cards and bank accounts (deposits hide the fields); optional otherwise.
@@ -573,8 +574,8 @@ export function AccountsWorkspace() {
                     )}
                   >
                     <span
-                      className={cn("flex size-8 shrink-0 items-center justify-center rounded-[8px] border border-black/10", ACCOUNT_COLOR[card.color].onGradient)}
-                      style={{ background: ACCOUNT_COLOR[card.color].gradient }}
+                      className={cn("flex size-8 shrink-0 items-center justify-center rounded-[8px] border border-black/10", card.palette.onGradient)}
+                      style={{ background: card.palette.gradient }}
                     >
                       <CreditCard className="size-4" strokeWidth={1.75} />
                     </span>
@@ -658,8 +659,8 @@ export function AccountsWorkspace() {
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
               <div className={cn(LE_RADIUS.card, "flex min-w-0 items-center gap-3 border border-border bg-secondary px-3 py-2.5 sm:w-60 sm:shrink-0")}>
                 <span
-                  className={cn(LE_RADIUS.card, "flex size-10 shrink-0 items-center justify-center border border-black/10 shadow-e1", ACCOUNT_COLOR[form.color].onGradient)}
-                  style={{ background: ACCOUNT_COLOR[form.color].gradient }}
+                  className={cn(LE_RADIUS.card, "flex size-10 shrink-0 items-center justify-center border border-black/10 shadow-e1", formPalette.onGradient)}
+                  style={{ background: formPalette.gradient }}
                 >
                   <SelectedTypeIcon className="size-5" strokeWidth={1.75} />
                 </span>
@@ -676,14 +677,14 @@ export function AccountsWorkspace() {
                 <span className={AC_LABEL}>Colour</span>
                 <div className="flex flex-wrap gap-1.5">
                   {ACCOUNT_COLOR_CYCLE.map((c) => {
-                    const selected = form.color === c;
+                    const selected = form.colorValue === colorValueForAccountColor(c);
                     return (
                       <button
                         key={c}
                         type="button"
                         aria-label={c}
                         aria-pressed={selected}
-                        onClick={() => setForm((f) => ({ ...f, color: c }))}
+                        onClick={() => setForm((f) => ({ ...f, colorValue: colorValueForAccountColor(c) }))}
                         className={cn(
                           "flex size-6 items-center justify-center rounded-full shadow-e1 outline-none transition-transform hover:scale-110 focus-visible:ring-2 focus-visible:ring-ring",
                           selected && "ring-2 ring-primary-accent-text ring-offset-2 ring-offset-card",

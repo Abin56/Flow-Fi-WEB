@@ -3,6 +3,7 @@ import { ChevronRight, Landmark, Wallet } from "lucide-react";
 import { BankLogo } from "@/components/finance/bank-logo";
 import { Skeleton } from "@/components/ui/skeleton";
 import { DASH_LABEL, DashEmpty, DashFooterLink, DashPanel, DashPanelHeader } from "@/features/dashboard/components/dash-ui";
+import type { AccountPalette } from "@/features/accounts/lib/account-colors";
 import { formatCurrency } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -24,6 +25,7 @@ export interface AccountsOverviewCardProps {
       mask: string | null;
       balance: number;
       accent: keyof typeof ACCENTS;
+      palette?: AccountPalette;
     }[];
   };
   isLoading?: boolean;
@@ -75,7 +77,10 @@ export function AccountsOverviewCard({ accountsOverview, isLoading }: AccountsOv
                     {account.bankId ? (
                       <BankLogo bankId={account.bankId} size={32} shape="square" />
                     ) : (
-                      <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-[8px]", ACCENTS[account.accent])}>
+                      <span
+                        className={cn("flex size-8 shrink-0 items-center justify-center rounded-[8px]", account.palette ? account.palette.onGradient : ACCENTS[account.accent])}
+                        style={account.palette ? { background: account.palette.gradient } : undefined}
+                      >
                         <Icon className="size-4" strokeWidth={1.75} />
                       </span>
                     )}

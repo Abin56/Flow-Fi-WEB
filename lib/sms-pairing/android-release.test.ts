@@ -13,7 +13,20 @@ describe("android release manifest", () => {
       sizeBytes: 90 * 1024 * 1024,
       url: "https://flowfi.web.app/downloads/flowfi-android-1.0.0.apk",
       publishedAt: "2026-10-25T12:00:00Z",
+      releaseNotes: null,
+      mandatory: false,
+      minSupportedVersionCode: null,
     });
+  });
+
+  it("carries release notes, mandatory flag and the minimum supported versionCode", () => {
+    const release = parseAndroidRelease({ ...valid, releaseNotes: "Bug fixes", mandatory: true, minSupportedVersionCode: 3 }, "https://flowfi.web.app");
+    expect(release).toMatchObject({ releaseNotes: "Bug fixes", mandatory: true, minSupportedVersionCode: 3 });
+  });
+
+  it("treats a malformed minSupportedVersionCode as absent rather than failing the whole manifest", () => {
+    const release = parseAndroidRelease({ ...valid, minSupportedVersionCode: 0 }, "https://flowfi.web.app");
+    expect(release?.minSupportedVersionCode).toBeNull();
   });
 
   it("accepts the stable 'latest' file name", () => {

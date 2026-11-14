@@ -328,7 +328,7 @@ describe("Share Statement / PDF — recipient-safe split context", () => {
     const view = statementView(statement, { entries: [share, paid], lookups, now: NOW });
     const row = view.rows.find((r) => r.kind === "split")!;
     expect(row.splitNote).toBe(`Total price ${money(8000)} · 8-way split · AMMA's share ${money(1000)}`);
-    expect(row).toMatchObject({ paid: money(500), remaining: money(500) });
+    expect(row.original).toBe(money(1000)); // the row's own face amount is never reduced by a partial payment
     const all = JSON.stringify(view);
     // Every participant of THIS split is visible with their stored share; nothing else about them is.
     expect(row.allocation!.participants.map((p) => p.label)).toEqual(["Account holder", "AMMA", "Tripthee Ananthakrishnan", "Anu", "Bala", "Chitra", "Deepa", "Esha"]);

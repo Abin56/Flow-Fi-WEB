@@ -753,6 +753,8 @@ export function CandidateDetailsModal({
       value: opt.key,
       label: opt.label,
       detail: destKind === "card" ? "Credit card" : "Account",
+      section: destKind === "card" ? "Credit cards" : "Accounts & debit cards",
+      credit: destKind === "card",
       icon: account?.bankId ? <BankLogo bankId={account.bankId} size={36} shape="square" className="rounded-[inherit]" /> : destKind === "card" ? <CreditCard className="size-4" /> : <Landmark className="size-4" />,
     };
   });

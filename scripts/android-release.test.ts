@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { EXPECTED_PACKAGE, parseBadging, parseSignerOutput, releaseHashMismatches, sha256File } from "./android-release.mjs";
+import { EXPECTED_PACKAGE, parseBadging, parsePrepareFlags, parseSignerOutput, releaseHashMismatches, sha256File } from "./android-release.mjs";
 
 const debugSigner = `Verifies
 Verified using v1 scheme (JAR signing): true
@@ -46,5 +46,17 @@ uses-permission: name='android.permission.INTERNET'`;
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it("parses the in-app-update flags for prepare", () => {
+    expect(parsePrepareFlags([])).toEqual({});
+    expect(parsePrepareFlags(["--mandatory"])).toEqual({ mandatory: true });
+    expect(parsePrepareFlags(["--notes", "Bug fixes"])).toEqual({ notes: "Bug fixes" });
+    expect(parsePrepareFlags(["--min-supported-code", "3"])).toEqual({ minSupportedVersionCode: 3 });
+    expect(parsePrepareFlags(["--mandatory", "--notes", "Bug fixes", "--min-supported-code", "3"])).toEqual({
+      mandatory: true,
+      notes: "Bug fixes",
+      minSupportedVersionCode: 3,
+    });
   });
 });

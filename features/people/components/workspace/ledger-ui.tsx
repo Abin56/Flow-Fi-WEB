@@ -1,12 +1,12 @@
 "use client";
 
-import { AccountLabel } from "@/components/finance/account-label";
+import { AccountLabel, AccountOptions } from "@/components/finance/account-label";
 import { PaymentSourceSummary, isUnderfunded } from "@/components/finance/payment-source-summary";
 import { Landmark, Trash2, Undo2 } from "lucide-react";
 import Link from "next/link";
 import { useMemo, useRef, useState } from "react";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Select, SelectContent, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useAccounts } from "@/hooks/use-accounts";
 import type { DeleteBlock, LedgerRow } from "@/features/people/lib/person-ledger-rows";
 import { formatCurrency } from "@/lib/format";
@@ -343,14 +343,15 @@ export function AccountField({
           <SelectValue placeholder="Select account" />
         </SelectTrigger>
         <SelectContent>
-          {choice.accounts.map((a) => (
-            <SelectItem key={a.id} value={a.id}>
+          <AccountOptions
+            accounts={choice.accounts}
+            label={(a) => (
               <AccountLabel
                 account={a}
                 suffix={[a.accountNumberLast4 ? `•••• ${a.accountNumberLast4}` : null, paying && a.type !== "card" ? formatCurrency(a.currentBalance) : null].filter(Boolean).join(" · ") || undefined}
               />
-            </SelectItem>
-          ))}
+            )}
+          />
         </SelectContent>
       </Select>
       {paying && choice.selected && choice.selected.type !== "card" && (

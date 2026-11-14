@@ -80,7 +80,7 @@ import {
   type CreditCardDeletionImpact,
   type CreditCardViewItem,
 } from "@/features/credit-cards/hooks/use-credit-cards-data";
-import { CARD_GRADIENT, CreditCardTile } from "@/features/credit-cards/components/credit-card-tile";
+import { CARD_GRADIENT, CreditCardTile, cardFaceGradient } from "@/features/credit-cards/components/credit-card-tile";
 import { CardLimitSection } from "@/features/credit-cards/components/card-limit-section";
 import { CardFormPreview, type PreviewCard } from "@/features/credit-cards/components/card-form-preview";
 import { useAuthStore } from "@/store/auth-store";
@@ -93,6 +93,7 @@ import { usePeople } from "@/hooks/use-people";
 import { toast } from "@/store/toast-store";
 import { startOperation } from "@/store/operation-progress-store";
 import { errorDetail } from "@/lib/operation-progress/operation-progress";
+import { gradientFromArgb, resolveColorValue } from "@/lib/account-color";
 import { cn } from "@/lib/utils";
 import { handleEnterAdvance } from "@/components/finance/enter-advance";
 import { Field, FieldGroup, FormSection, LE_RADIUS, LOAN_EMI_INPUT, choiceClass } from "@/features/loans/components/loan-emi-ui";
@@ -530,7 +531,8 @@ export function CreditCardsWorkspace() {
               paymentDueDay,
               // A shared-limit card's own stored limit is left as it is — the shared limit supplies it.
               creditLimit: form.limitSource === "own" ? creditLimit : editingCard.card.creditLimit,
-              colorValue: form.color ? colorValueForCardAccent(form.color) : (baseAccount?.colorValue ?? 0),
+              // Keep a custom (mobile-picked) colour as is; upgrade a legacy/never-picked value to the ARGB of what is shown.
+              colorValue: form.color ? colorValueForCardAccent(form.color) : (resolveColorValue(baseAccount?.colorValue, "card") ?? colorValueForCardAccent(editingCard.accent)),
             },
           }
         : {
@@ -544,7 +546,8 @@ export function CreditCardsWorkspace() {
               statementDay,
               paymentDueDay,
               creditLimit,
-              colorValue: colorValueForCardAccent(form.color),
+              // Persist the colour the preview showed (not 0), so mobile and web agree on a card nobody recoloured.
+              colorValue: colorValueForCardAccent(form.color ?? previewAccent),
             },
           },
       // The second physical card: its own number/network/bill, ₹0 own limit (Flutter's `_createLinkedPairCard`).
@@ -672,6 +675,9 @@ export function CreditCardsWorkspace() {
   // Preview which gradient this card will actually be assigned — accent is "index in list order"
   // (see ACCENT_CYCLE in use-credit-cards-data.ts), so a new card lands at the current list length.
   const previewAccent = form.color ?? (editingCard ? editingCard.accent : ACCENT_CYCLE[creditCards.length % ACCENT_CYCLE.length]);
+  // A card recoloured on mobile may be a colour outside the named swatches — preview it as is, with no swatch selected.
+  const customPreviewColor = !form.color && editingCard ? editingCard.customColor : null;
+  const previewGradient = customPreviewColor != null ? gradientFromArgb(customPreviewColor) : CARD_GRADIENT[previewAccent];
   // The other card on the limit, peeking out behind this one: the card being added, a linked card, or a current member.
   const previewCard: PreviewCard = {
     name: form.name.trim() || autoCardName(bankById(form.bankId), form.cardNetwork || null, form.lastFourDigits || "••••"),
@@ -698,7 +704,7 @@ export function CreditCardsWorkspace() {
       creditCards.find((c) => c.id === form.linkCardId) ??
       creditCards.find((c) => c.id !== editingCard?.id && c.card.sharedLimitId != null && c.card.sharedLimitId === form.selectedSharedLimitId);
     return other
-      ? { name: other.name, holder: other.card.cardHolderName ?? "", last4: other.last4, network: other.card.cardNetwork ?? null, background: CARD_GRADIENT[other.accent], bankId: bankIdOf(other) }
+      ? { name: other.name, holder: other.card.cardHolderName ?? "", last4: other.last4, network: other.card.cardNetwork ?? null, background: cardFaceGradient(other), bankId: bankIdOf(other) }
       : null;
   })();
   const previewAmount = Number(form.limitSource === "own" ? form.creditLimit : form.sharedLimitAmount);
@@ -765,7 +771,7 @@ export function CreditCardsWorkspace() {
               transition={{ duration: reduceMotion ? 0 : 0.25, ease: "easeOut" }}
               className="hidden w-[280px] shrink-0 flex-col gap-3 overflow-y-auto overscroll-contain border-r border-border bg-secondary/50 px-4 py-5 sm:flex"
             >
-              <CardFormPreview variant="pair" card={previewCard} partner={previewPartner} background={CARD_GRADIENT[previewAccent]} bank={form.bankId} limitLine={previewLimitLine} />
+              <CardFormPreview variant="pair" card={previewCard} partner={previewPartner} background={previewGradient} bank={form.bankId} limitLine={previewLimitLine} />
             </motion.aside>
           )}
         <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-5 overflow-y-auto overscroll-contain scroll-smooth scroll-pt-4 scroll-pb-24 bg-card px-5 py-5 text-sm sm:px-6 [&>*+*]:border-t [&>*+*]:border-border [&>*+*]:pt-5">
@@ -776,7 +782,7 @@ export function CreditCardsWorkspace() {
               <CardFormPreview
                 card={previewCard}
                 partner={previewPartner}
-                background={CARD_GRADIENT[previewAccent]}
+                background={previewGradient}
                 bank={form.bankId}
                 limitLine={previewLimitLine}
               />
@@ -786,7 +792,7 @@ export function CreditCardsWorkspace() {
               <FieldGroup label="Card colour" className="gap-1.5">
                 <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="Card colour">
                   {CARD_ACCENTS.map((accent) => {
-                    const selected = previewAccent === accent;
+                    const selected = customPreviewColor == null && previewAccent === accent;
                     return (
                       <button
                         key={accent}
@@ -1644,7 +1650,7 @@ export function CreditCardsWorkspace() {
                                   <span
                                     aria-hidden
                                     className="absolute -right-1 -bottom-1 h-3.5 w-5 rounded-[4px] shadow-sm ring-2 ring-card"
-                                    style={{ background: CARD_GRADIENT[cardView.accent] }}
+                                    style={{ background: cardFaceGradient(cardView) }}
                                   />
                                 )}
                               </span>
@@ -1943,7 +1949,7 @@ function ActivityHeader({
       {/* Hero — the selected card's own colour, its identity and the three figures that matter. Scrolls away. */}
       <div
         className="relative overflow-hidden px-4 pt-9 pb-5 text-white sm:px-6"
-        style={{ background: !showingAll && card ? CARD_GRADIENT[card.accent] : "linear-gradient(135deg, #1f2430 0%, #3a4252 100%)" }}
+        style={{ background: !showingAll && card ? cardFaceGradient(card) : "linear-gradient(135deg, #1f2430 0%, #3a4252 100%)" }}
       >
         <span aria-hidden className="pointer-events-none absolute -top-20 -right-16 size-56 rounded-full bg-white/10 blur-3xl" />
         <span aria-hidden className="pointer-events-none absolute -bottom-24 -left-10 size-48 rounded-full border border-white/10" />
@@ -2103,8 +2109,8 @@ function ActivityLauncher({
     >
       {/* Header — tinted with the selected card's own gradient, so it reads as "this card's activity". */}
       <div className="relative flex min-w-0 items-center gap-3 px-4 pt-3.5 pb-3">
-        {card && <span aria-hidden className="pointer-events-none absolute inset-0 opacity-[0.12] dark:opacity-[0.22]" style={{ background: CARD_GRADIENT[card.accent] }} />}
-        {card && <span aria-hidden className="pointer-events-none absolute inset-x-0 top-0 h-[3px]" style={{ background: CARD_GRADIENT[card.accent] }} />}
+        {card && <span aria-hidden className="pointer-events-none absolute inset-0 opacity-[0.12] dark:opacity-[0.22]" style={{ background: cardFaceGradient(card) }} />}
+        {card && <span aria-hidden className="pointer-events-none absolute inset-x-0 top-0 h-[3px]" style={{ background: cardFaceGradient(card) }} />}
         <span className="relative flex size-9 shrink-0 items-center justify-center rounded-full bg-card shadow-e1 ring-1 ring-border-strong/50">
           {card && bankId ? <BankLogo bankId={bankId} size={24} /> : <Activity className="size-4 text-foreground/70" strokeWidth={2} />}
         </span>
@@ -2355,12 +2361,12 @@ function CardChip({ card, bankId }: { card: CreditCardViewItem; bankId?: string 
       {bankId ? (
         <BankLogo bankId={bankId} size={36} />
       ) : (
-        <span className="flex h-6 w-9 rounded-[5px] shadow-sm" style={{ background: CARD_GRADIENT[card.accent] }} />
+        <span className="flex h-6 w-9 rounded-[5px] shadow-sm" style={{ background: cardFaceGradient(card) }} />
       )}
       <span
         aria-hidden
         className="absolute -right-0.5 -bottom-0.5 size-3.5 rounded-full ring-2 ring-card"
-        style={{ background: CARD_GRADIENT[card.accent] }}
+        style={{ background: cardFaceGradient(card) }}
       />
     </span>
   );
@@ -2447,7 +2453,7 @@ function SelectedCardPanel({
       className="overflow-hidden rounded-[12px] border border-border-strong/60 bg-card shadow-e1"
     >
       {/* Card face */}
-      <div style={{ background: CARD_GRADIENT[card.accent] }} className="relative flex flex-col gap-3 overflow-hidden p-4 text-white">
+      <div style={{ background: cardFaceGradient(card) }} className="relative flex flex-col gap-3 overflow-hidden p-4 text-white">
         <span className="pointer-events-none absolute -top-14 -right-10 size-36 rounded-full bg-white/10 blur-2xl" aria-hidden />
         <div className="relative flex items-start justify-between gap-2">
           <div className="flex min-w-0 items-center gap-2.5">

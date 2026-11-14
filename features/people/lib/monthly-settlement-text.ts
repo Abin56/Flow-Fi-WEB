@@ -66,25 +66,24 @@ function cycleMonth(label: string): string {
   return m ? upper(`${m[1]} ${m[2]}`) : "";
 }
 
-/** One open item: title, then the amount still owed (+ quiet tags); a part-paid line only when something was paid. */
-function itemBlock(it: MonthlyItem, v: MonthlySettlementView, person: string, owner: string, showTarget: boolean): string[] {
-  const partPaid = it.paid !== "—";
-  const amount = `${money2(it.remaining)}${it.postponed || partPaid ? " remaining" : ""}`;
-  const tags = [
-    it.group === "earlier" ? "earlier balance" : "",
-    it.status === "Overdue" || it.status === "Upcoming" ? it.status.toLowerCase() : "",
-    showTarget && it.postponed ? it.status.replace(/^Rest in /, "moved to ").replace(/^Moved to /, "moved to ") : "",
-    v.mixed && it.owedBy ? `${firstName(it.owedBy === "them" ? person : owner)} owes` : "",
-  ].filter(Boolean);
-  const out = [`*${short(waSafe(it.title))}*`, [amount, ...tags].join(SEP)];
-  if (partPaid) out.push(`_Paid ${money2(it.paid)} / ${money2(it.amount)}_`);
-  return out;
+/** Just the "Moved to X cycle" / "Part paid · rest moved to X cycle" clause, wherever it falls inside the
+ * row's full meta line — short enough for a phone line; the full note (with the rest of the meta line and
+ * "first due in Y cycle") is for the PDF and the Detailed text, which have more room. */
+function movedClause(note: string): string {
+  return note.match(/(?:Moved to \S+ cycle|Part paid · rest moved to \S+ cycle)/)?.[0] ?? note;
 }
 
-/** What a receipt went to: "Previous balance cleared", "Bajaj Finance · EMI #13", "B · cleared". */
-function allocationLabel(a: MonthlyPayment["lines"][number]): string {
-  if (a.label.startsWith("Earlier balance")) return a.cleared ? "Previous balance cleared" : `Previous balance${a.tail ? ` · ${money2(a.tail)} left` : ""}`;
-  return `${short(waSafe(a.label))}${a.cleared ? " · cleared" : ""}`;
+/** One open item: title, then its amount (+ quiet tags) — never a per-item paid/remaining figure. A moved
+ * item adds a quiet line naming which cycle it moved to (read from the model, never hardcoded). */
+function itemBlock(it: MonthlyItem, v: MonthlySettlementView, person: string, owner: string): string[] {
+  const tags = [
+    it.group === "earlier" ? "earlier balance" : "",
+    it.tag === "Overdue" || it.tag === "Moved" ? it.tag.toLowerCase() : "",
+    v.mixed && it.owedBy ? `${firstName(it.owedBy === "them" ? person : owner)} owes` : "",
+  ].filter(Boolean);
+  const out = [`*${short(waSafe(it.title))}*`, [money2(it.amount), ...tags].join(SEP)];
+  if (it.tag === "Moved" && it.note) out.push(`_${waSafe(movedClause(it.note))}_`);
+  return out;
 }
 
 export function smartSettlementText(v: MonthlySettlementView): string {
@@ -104,8 +103,6 @@ export function smartSettlementText(v: MonthlySettlementView): string {
   if (settled) out.push("*ALL SETTLED*", `*${money2(v.outstanding)}*`);
   else if (v.mixed) {
     out.push("*NET BALANCE*", `*${money2(v.outstanding)}*`, "", `${firstName(person)} owes${GAP}${money2(v.mixed.theyOwe)}`, `${firstName(owner)} owes${GAP}${money2(v.mixed.ownerOwes)}`);
-  } else if (v.split) {
-    out.push("*PAYMENT DUE NOW*", `*${money2(v.split.dueNow)}*`, "", `Total outstanding${GAP}${money2(v.outstanding)}`, `${v.split.postponedTo}${GAP}${money2(v.split.postponed)}`);
   } else out.push("*TOTAL OUTSTANDING*", `*${money2(v.outstanding)}*`);
   if (v.advance) out.push(`_${v.advance.label}: ${money2(v.advance.value)} — held apart, not in the total._`);
   out.push(DIVIDER);
@@ -117,47 +114,28 @@ export function smartSettlementText(v: MonthlySettlementView): string {
     out.push(`*${String(n).padStart(2, "0")}  /  ${title}*`, "");
   };
 
-  // ---- 4–6. Open items, grouped by the model's own postponed flag (never reclassified here) ----
-  const open = v.items.filter((i) => i.remainingPaise > 0);
-  const nowItems = v.split ? open.filter((i) => !i.postponed) : open;
-  const moved = v.split ? open.filter((i) => i.postponed) : [];
+  // ---- 4. Every transaction this cycle — each with its own amount, never a per-item remaining figure ----
   out.push("");
-  if (nowItems.length > 0) {
-    section(v.split ? "PAY THIS CYCLE" : "OPEN ITEMS");
-    nowItems.forEach((it, k) => out.push(...(k ? [""] : []), ...itemBlock(it, v, person, owner, !v.split)));
-    // Paid toward the balance with no item chosen — the items keep their amounts; this line makes them add up.
-    if (v.unallocated) out.push("", `_${waSafe(v.unallocated.label)}_`, `${v.unallocated.op}${money2(v.unallocated.amount)}`);
-    if (v.split) out.push("", `*TOTAL DUE  →  ${money2(v.split.dueNow)}*`);
-    else if (v.unallocated) out.push("", `*REMAINING  →  ${money2(v.unallocated.total)}*`);
-  }
-  if (v.split && moved.length > 0) {
-    section(upper(v.split.postponedTo));
-    const many = v.split.postponedTo === "Moved to later cycles";
-    moved.forEach((it, k) => out.push(...(k ? [""] : []), ...itemBlock(it, v, person, owner, many)));
-    out.push("", `*TOTAL MOVED  →  ${money2(v.split.postponed)}*`, "_Postponed, not cancelled._");
+  if (v.items.length > 0) {
+    section("OPEN ITEMS");
+    v.items.forEach((it, k) => out.push(...(k ? [""] : []), ...itemBlock(it, v, person, owner)));
   }
 
-  // ---- 7. Payments: one ✓ line per amount applied, where it landed, and what it went to ----
+  // ---- 5. Payments: one ✓ line per payment, where it landed, and what it was toward (if anything) ----
   if (v.payments.length > 0) {
     section(v.payments.every((p) => p.inbound) ? "PAYMENTS RECEIVED" : "PAYMENTS");
-    let rows = 0;
-    for (const p of v.payments) {
+    v.payments.forEach((p, i) => {
       const source = sourceOf(p);
       const where = source.startsWith("Received in ") ? source.slice("Received in ".length) : "";
       // A receipt recorded after the fact with no account is a record, not new money in a bank account.
       const record = source && !where && !source.startsWith("Paid from") ? `   _${source.charAt(0).toUpperCase()}${source.slice(1)}_` : null;
-      const byLine = p.lines.length > 1 && p.lines.every((a) => a.amount);
-      const parts = byLine ? p.lines.map((a) => ({ amount: a.amount as string, lines: [a] })) : [{ amount: p.amount, lines: p.lines }];
-      for (const part of parts) {
-        out.push(...(rows ? [""] : []), `${p.inbound ? "✓" : "↗"} ${money2(part.amount)}${SEP}${dateOf(p)}`);
-        if (!p.inbound) out.push(`   ${waSafe(p.label)}`);
-        if (record) out.push(record);
-        const detail = [where, ...part.lines.map(allocationLabel)].filter(Boolean).join("  /  ");
-        if (detail) out.push(`   ${detail}`);
-        rows += 1;
-      }
-    }
-    if (rows > 1 && v.totalPaid) out.push("", `*TOTAL RECEIVED${GAP}${money2(v.totalPaid)}*`);
+      out.push(...(i ? [""] : []), `${p.inbound ? "✓" : "↗"} ${money2(p.amount)}${SEP}${dateOf(p)}`);
+      if (!p.inbound) out.push(`   ${waSafe(p.label)}`);
+      if (record) out.push(record);
+      const detail = [where, p.note ? waSafe(p.note) : ""].filter(Boolean).join("  /  ");
+      if (detail) out.push(`   ${detail}`);
+    });
+    if (v.payments.length > 1 && v.totalPaid) out.push("", `*TOTAL RECEIVED${GAP}${money2(v.totalPaid)}*`);
   }
 
   // ---- 8. Balance summary (omitted for a both-ways balance, whose sides are named above) ----
@@ -185,16 +163,15 @@ export function smartSettlementText(v: MonthlySettlementView): string {
 // ---------------------------------------------------------------------------------------------------
 
 function detailedItem(it: MonthlyItem, v: MonthlySettlementView): string {
-  const part = it.paid !== "—" ? `${it.remaining} left of ${it.amount}` : it.remaining;
-  const tags = [it.status, it.group === "earlier" ? "earlier balance" : "", v.mixed && it.owedBy ? `${firstName(it.owedBy === "them" ? v.personName : v.ownerName)} owes` : ""].filter(Boolean);
-  return `• ${short(waSafe(it.title), 40)} — ${part} · ${tags.join(" · ")}`;
+  const tags = [it.tag, it.group === "earlier" ? "earlier balance" : "", v.mixed && it.owedBy ? `${firstName(it.owedBy === "them" ? v.personName : v.ownerName)} owes` : ""].filter(Boolean);
+  return `• ${short(waSafe(it.title), 40)} — ${it.amount} · ${tags.join(" · ")}`;
 }
 
 function detailedPayment(p: MonthlyPayment): string[] {
   const source = sourceOf(p);
   const where = source ? (source.startsWith("Received in") ? source.replace(/^Received/, "received") : source.charAt(0).toLowerCase() + source.slice(1)) : "";
   const lines = [[dateOf(p), p.amount, p.inbound || !p.label ? where : waSafe(p.label)].filter(Boolean).join(" · ")];
-  for (const a of p.lines) lines.push(a.amount ? `  → ${a.amount} to ${short(waSafe(a.label), 40)}${a.tail ? ` (${a.tail})` : ""}` : `  → ${a.label}`);
+  if (p.note) lines.push(`  → ${waSafe(p.note)}`);
   return lines;
 }
 
@@ -209,18 +186,12 @@ export function monthlySettlementDetailedText(v: MonthlySettlementView): string 
     for (const l of v.lines) {
       if (l.key === "outstanding") continue;
       out.push(`${l.key === "applied" ? "Received" : l.label}: ${money2(l.value)}`);
-      if (l.key === "previous" && v.cleared) out.push(`  – ${v.cleared.count} earlier ${v.cleared.count === 1 ? "item" : "items"} (${v.cleared.range}) cleared this cycle`);
       if (l.key === "applied" && l.note) out.push(`  – ${money2(l.note)}`);
     }
     out.push(settled ? "*Settled — nothing outstanding*" : `*Total outstanding: ${money2(v.outstanding)}*`);
-    if (v.split) out.push("", `*Due now:* ${money2(v.split.dueNow)}`, `*${v.split.postponedTo}:* ${money2(v.split.postponed)} (postponed — still owed, not cancelled)`);
   }
   if (v.advance) out.push("", `${v.advance.label}: ${money2(v.advance.value)} (held apart, not in the total)`);
-  const open = v.items.filter((i) => i.remainingPaise > 0);
-  if (open.length > 0) out.push("", `*Open items*`, ...open.map((i) => money2(detailedItem(i, v))));
-  if (open.length > 0 && v.unallocated) {
-    out.push(`• ${waSafe(v.unallocated.label)} — ${v.unallocated.op}${money2(v.unallocated.amount)}`, `= Remaining: ${money2(v.unallocated.total)}`);
-  }
+  if (v.items.length > 0) out.push("", `*Open items*`, ...v.items.map((i) => money2(detailedItem(i, v))));
   if (v.payments.length > 0) {
     out.push("", `*Payments*`);
     v.payments.forEach((p, i) => out.push(...detailedPayment(p).map(money2), ...(i < v.payments.length - 1 ? [""] : [])));

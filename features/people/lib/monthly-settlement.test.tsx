@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { PDFDocument } from "pdf-lib";
 import { describe, expect, it, vi } from "vitest";
-import { monthlySettlementView, paise, tidyTitle } from "@/features/people/lib/monthly-settlement-model";
+import { monthlySettlementView, tidyTitle } from "@/features/people/lib/monthly-settlement-model";
 import { monthlySettlementDetailedText, smartSettlementText, waSafe } from "@/features/people/lib/monthly-settlement-text";
 import { statementShareText } from "@/lib/engines/person-cycle-statement-share";
 import { renderMonthlySettlementPdf } from "@/features/people/lib/monthly-settlement-pdf";
@@ -91,8 +91,6 @@ function sanju(extra: Partial<Scenario> & { paid?: boolean; postpone?: boolean }
   });
 }
 
-const sum = (xs: number[]) => xs.reduce((s, x) => s + paise(x), 0);
-
 describe("Monthly Settlement — the SANJU-shaped October (01 Oct – 31 Oct)", () => {
   it("engine figures: previous ₹6,575.52 + new ₹19,828.88 − applied ₹9,575.52 = ₹16,828.88", () => {
     const { statement } = sanju();
@@ -100,22 +98,20 @@ describe("Monthly Settlement — the SANJU-shaped October (01 Oct – 31 Oct)", 
     expect([statement.previousPending, statement.cycleActivity, statement.cycleSettlements, statement.amount]).toEqual([6575.52, 19828.88, -9575.52, 16828.88]);
   });
 
-  it("the four fully cleared Jun–Sep EMIs are not rows at all (the reconciliation states them); October's five obligations stay", () => {
+  it("the four fully cleared Jun–Sep EMIs are left out of this short summary (resolved, exactly as before); October's five obligations stay", () => {
     const { monthly } = sanju();
     const titles = monthly.items.map((i) => i.title);
     expect(monthly.items.filter((i) => i.group === "earlier")).toHaveLength(0);
-    expect(monthly.cleared).toEqual({ count: 4, amount: money(6575.52), range: "Jun–Sep" });
-    expect(monthly.lines[0]).toMatchObject({ key: "previous", value: money(6575.52), note: "Open on 01 Oct · 4 items (Jun–Sep) cleared this cycle" });
+    expect(monthly.lines[0]).toMatchObject({ key: "previous", value: money(6575.52), note: "Open on 01 Oct" });
     expect(titles.filter((t) => /EMI #(9|10|11|12)$/.test(t))).toEqual([]);
     expect(monthly.items.filter((i) => i.group === "cycle").map((i) => i.title)).toEqual(
       expect.arrayContaining(["Bajaj Finance · EMI #13", "Super Money · EMI #1", "Given to Sanju", "Interest for ₹10,000", "Groceries"]),
     );
     expect(monthly.items.filter((i) => i.group === "cycle")).toHaveLength(5);
     expect(monthly.items).toHaveLength(5);
-    expect(monthly.clearedCount).toBe(4);
   });
 
-  it("the summary keeps previous / new / applied / total apart, and says where the payment went", () => {
+  it("the summary keeps previous / new / applied / total apart — aggregate figures, untouched by the redesign", () => {
     const { monthly } = sanju();
     expect(monthly.outstanding).toBe(money(16828.88));
     expect(monthly.headline).toBe("Sanju owes Abin John");
@@ -125,49 +121,38 @@ describe("Monthly Settlement — the SANJU-shaped October (01 Oct – 31 Oct)", 
       ["applied", money(9575.52), "−"],
       ["outstanding", money(16828.88), "="], // labelled "Remaining balance" — the big card says "Total outstanding" once
     ]);
-    expect(monthly.lines.find((l) => l.key === "applied")!.note).toBe(`${money(6575.52)} to earlier balance · ${money(3000)} to this cycle`);
+    // The per-item breakdown note is gone — nothing is tied to one item anymore.
+    expect(monthly.lines.find((l) => l.key === "applied")!.note).toBeNull();
   });
 
-  it("Bajaj EMI #13: ₹3,000 applied, ₹643.88 left, partly paid", () => {
+  it("Bajaj EMI #13 shows its own full face amount and a plain kind tag — never a paid/remaining figure, even though ₹3,000 of it was paid", () => {
     const { monthly } = sanju();
-    expect(monthly.items.find((i) => i.title === "Bajaj Finance · EMI #13")).toMatchObject({ amount: money(3643.88), paid: money(3000), remaining: money(643.88), status: "Part paid", chip: "partial" });
+    expect(monthly.items.find((i) => i.title === "Bajaj Finance · EMI #13")).toMatchObject({ amount: money(3643.88), tag: "EMI", chip: "upcoming" });
   });
 
-  it("postponed obligations stay owed: total unchanged, collectible now ≠ total", () => {
+  it("a postponed obligation carries 'Moved' as its tag; the total is unaffected either way (it never summed postponed items separately)", () => {
     const { monthly } = sanju();
-    expect(monthly.split).toEqual({ dueNow: money(13643.88), postponed: money(3185), postponedTo: "Moved to November" });
     expect(monthly.outstanding).toBe(money(16828.88));
-    expect(monthly.items.find((i) => i.title === "Super Money · EMI #1")).toMatchObject({ status: "Moved to Nov", postponed: true, remaining: money(2185) });
-    expect(sum([13643.88, 3185])).toBe(paise(16828.88));
+    expect(monthly.items.find((i) => i.title === "Super Money · EMI #1")).toMatchObject({ tag: "Moved", chip: "upcoming", amount: money(2185) });
   });
 
-  it("no postponement → no split strip", () => {
-    expect(sanju({ postpone: false }).monthly.split).toBeNull();
-  });
-
-  it("payments: one receipt, earlier balance as one line, October's Bajaj by name", () => {
+  it("payments: one receipt, naming what it was toward — several items named together, never itemised", () => {
     const { monthly } = sanju();
     expect(monthly.payments).toHaveLength(1);
     const [p] = monthly.payments;
-    expect(p).toMatchObject({ amount: money(9575.52), inbound: true });
-    expect(p.lines.map((l) => [l.label, l.amount, l.tail])).toEqual([
-      ["Earlier balance · 4 items", money(6575.52), "cleared"],
-      ["Bajaj Finance · EMI #13", money(3000), `${money(643.88)} left`],
-    ]);
+    expect(p).toMatchObject({ amount: money(9575.52), inbound: true, note: "Toward 5 items" });
   });
 
   it("agrees with the People Ledger for the same cycle and as-of date", () => {
-    const { monthly, ledger, statement } = sanju();
+    const { monthly, ledger } = sanju();
     expect(monthly.outstanding).toBe(ledger.amount);
     expect(monthly.asOf).toBe(ledger.asOf);
-    // Every monthly line's Remaining is the ledger row's Remaining; the column adds up to the balance.
+    // Every monthly item's amount is the ledger row's own Original — the same one figure everywhere now.
     const ledgerRows = [...ledger.carried, ...ledger.rows];
     for (const it of monthly.items) {
       const row = ledgerRows.find((r) => (r.emiLabel ?? r.title) === it.title)!;
-      expect([it.amount, it.paid === "—" ? "" : it.paid, it.remaining]).toEqual([row.original, row.paid === money(0) ? "" : row.paid, row.remaining]);
+      expect([it.amount, it.tag]).toEqual([row.original, row.tag]);
     }
-    expect(monthly.items.reduce((s, i) => s + i.remainingPaise, 0)).toBe(paise(statement.amount));
-    expect(monthly.checks).toEqual({ reconciles: true, itemsAddUp: true, unitemisedPaise: 0 });
   });
 
   it("renders a one-page A4 portrait PDF", async () => {
@@ -209,23 +194,21 @@ describe("cycle boundaries", () => {
 describe("previous balance", () => {
   it("an unpaid earlier obligation stays on the statement as a real row (never silently hidden)", async () => {
     const s = scenario({ entries: [entry("gave", 2500, d(8, 12), { note: "Old loan" }), entry("gave", 300, d(10, 5), { note: "Lunch" })] });
-    expect(s.monthly.items.map((i) => [i.group, i.title, i.remaining, i.status])).toEqual([
-      ["earlier", "Old loan", money(2500), "Due"],
-      ["cycle", "Lunch", money(300), "Due"],
+    expect(s.monthly.items.map((i) => [i.group, i.title, i.amount, i.tag])).toEqual([
+      ["earlier", "Old loan", money(2500), "Given"],
+      ["cycle", "Lunch", money(300), "Given"],
     ]);
-    expect(s.monthly.items[0].note).toContain("From 01 Aug – 31 Aug");
     expect(s.monthly.lines.map((l) => l.key)).toEqual(["previous", "new", "outstanding"]);
     expect(s.monthly.outstanding).toBe(money(2800));
     write("earlier-open", await renderMonthlySettlementPdf(s.statement, { ...s.options, ...fonts() }));
   });
 
-  it("a part-paid earlier item stays at what's left, and the payment is split correctly", () => {
+  it("a part-paid earlier item still shows its own full face amount — never what's left — while the aggregate balance correctly nets the payment", () => {
     const old = entry("gave", 2500, d(8, 12), { note: "Old loan" });
     const s = scenario({ entries: [old, entry("receivedBack", 1000, d(10, 6), { parentEntryId: old.id, note: "Received: part", paymentId: "P2" })] });
-    expect(s.monthly.items.map((i) => [i.title, i.amount, i.paid, i.remaining])).toEqual([["Old loan", money(2500), money(1000), money(1500)]]);
-    expect(s.monthly.lines.find((l) => l.key === "applied")!.note).toBeNull(); // a single destination needs no breakdown
+    expect(s.monthly.items.map((i) => [i.title, i.amount])).toEqual([["Old loan", money(2500)]]);
+    expect(s.monthly.lines.find((l) => l.key === "applied")!.note).toBeNull(); // the breakdown note is gone — nothing is tied to one item
     expect(s.monthly.outstanding).toBe(money(1500));
-    expect(s.monthly.checks.reconciles).toBe(true);
   });
 
   it("an earlier item settled in a PRIOR cycle is not listed at all", () => {
@@ -237,12 +220,12 @@ describe("previous balance", () => {
 });
 
 describe("current cycle states", () => {
-  it("partial payment, full payment, no payment — each with the right status", () => {
+  it("partial payment stays listed with its full face amount; full payment is settled and left out; no payment is plain — all read the same kind tag, never a status", () => {
     const a = entry("gave", 1000, d(10, 3), { note: "A" });
     const b = entry("gave", 2000, d(10, 4), { note: "B" });
     const c = entry("gave", 500, d(10, 5), { note: "C" });
     const s = scenario({ entries: [a, b, c, entry("receivedBack", 400, d(10, 8), { parentEntryId: a.id }), entry("receivedBack", 2000, d(10, 8), { parentEntryId: b.id })] });
-    expect(s.monthly.items.map((i) => [i.title, i.status, i.remaining])).toEqual([["A", "Part paid", money(600)], ["B", "Paid", money(0)], ["C", "Due", money(500)]]);
+    expect(s.monthly.items.map((i) => [i.title, i.tag, i.amount])).toEqual([["A", "Given", money(1000)], ["C", "Given", money(500)]]);
     expect(s.monthly.outstanding).toBe(money(1100));
   });
 
@@ -257,7 +240,7 @@ describe("current cycle states", () => {
     const s = scenario({ entries: [a, entry("receivedBack", 1000, d(10, 9), { parentEntryId: a.id })] });
     expect(s.monthly.direction).toBe("settled");
     expect(s.monthly.lines.at(-1)).toMatchObject({ label: "Settled", value: money(0) });
-    expect(s.monthly.split).toBeNull();
+    expect(s.monthly.closing).toEqual({ label: "Settled", value: money(0) });
     const doc = await PDFDocument.load(await renderMonthlySettlementPdf(s.statement, s.options));
     expect(doc.getPageCount()).toBe(1);
     write("zero-outstanding", await renderMonthlySettlementPdf(s.statement, { ...s.options, ...fonts() }));
@@ -294,7 +277,7 @@ describe("multiple people & split shares", () => {
     const lookups = { entriesById: new Map([[share.id, share]]), expenseByTransactionId: new Map([["T-pz", expense]]) } as unknown as SettlementLookups;
     const s = scenario({ entries: [share], lookups });
     expect(s.monthly.items).toHaveLength(1);
-    expect(s.monthly.items[0]).toMatchObject({ title: "Pizza night", amount: money(200), remaining: money(200) });
+    expect(s.monthly.items[0]).toMatchObject({ title: "Pizza night", amount: money(200) });
     expect(s.monthly.items[0].note).toContain(`Total ${money(600)} · 3-way split`);
     write("split-shares", await renderMonthlySettlementPdf(s.statement, { ...s.options, ...fonts() }));
   });
@@ -330,7 +313,8 @@ describe("the full-history statement is unchanged", () => {
   it("still lists every earlier cleared item (the complete People Ledger statement)", async () => {
     const { ledger, statement, options } = sanju();
     expect(ledger.carried).toHaveLength(4);
-    expect(ledger.carried.every((r) => r.remainingValue === 0)).toBe(true);
+    // Each cleared EMI still shows its own full face amount — never a reduced "remaining" figure.
+    expect(ledger.carried.every((r) => r.amountValue === 1643.88)).toBe(true);
     const full = await renderPersonStatementPdf(statement, { ...options, ...fonts() });
     expect((await PDFDocument.load(full)).getPageCount()).toBeGreaterThanOrEqual(1);
     write("before-full-statement", full);
@@ -375,14 +359,23 @@ describe("copied WhatsApp message (same view model as the PDF)", () => {
         "01–31 Oct  |  Updated 20 Oct",
         "",
         "━━━━━━━━━━━━━━━━━━━━",
-        "*PAYMENT DUE NOW*",
-        "*₹10,380.00*",
-        "",
-        "Total outstanding  ₹16,828.88",
-        "Moved to November  ₹6,448.88",
+        "*TOTAL OUTSTANDING*",
+        "*₹16,828.88*",
         "━━━━━━━━━━━━━━━━━━━━",
         "",
-        "*01  /  PAY THIS CYCLE*",
+        "*01  /  OPEN ITEMS*",
+        "",
+        "*Bajaj Finance · EMI #13*",
+        "₹4,630.00  •  moved",
+        "_Part paid · rest moved to Nov cycle_",
+        "",
+        "*Super Money · EMI #1*",
+        "₹3,175.00  •  moved",
+        "_Moved to Nov cycle_",
+        "",
+        "*For Sanju · EMI #5*",
+        "₹1,643.88  •  moved",
+        "_Moved to Nov cycle_",
         "",
         "*Gived to sanju*",
         "₹10,000.00",
@@ -390,37 +383,14 @@ describe("copied WhatsApp message (same view model as the PDF)", () => {
         "*Interest for 10k*",
         "₹380.00",
         "",
-        "*TOTAL DUE  →  ₹10,380.00*",
+        "━━━━━━━━━━━━━━━━━━━━",
+        "*02  /  PAYMENTS RECEIVED*",
+        "",
+        "✓ ₹9,575.52  •  19 Oct",
+        "   SBI  /  Toward 5 items",
         "",
         "━━━━━━━━━━━━━━━━━━━━",
-        "*02  /  MOVED TO NOVEMBER*",
-        "",
-        "*Bajaj Finance · EMI #13*",
-        "₹1,630.00 remaining",
-        "_Paid ₹3,000.00 / ₹4,630.00_",
-        "",
-        "*Super Money · EMI #1*",
-        "₹3,175.00 remaining",
-        "",
-        "*For Sanju · EMI #5*",
-        "₹1,643.88 remaining",
-        "",
-        "*TOTAL MOVED  →  ₹6,448.88*",
-        "_Postponed, not cancelled._",
-        "",
-        "━━━━━━━━━━━━━━━━━━━━",
-        "*03  /  PAYMENTS RECEIVED*",
-        "",
-        "✓ ₹6,575.52  •  19 Oct",
-        "   SBI  /  Previous balance cleared",
-        "",
-        "✓ ₹3,000.00  •  19 Oct",
-        "   SBI  /  Bajaj Finance · EMI #13",
-        "",
-        "*TOTAL RECEIVED  ₹9,575.52*",
-        "",
-        "━━━━━━━━━━━━━━━━━━━━",
-        "*04  /  BALANCE SUMMARY*",
+        "*03  /  BALANCE SUMMARY*",
         "",
         "Previous balance  ₹6,575.52",
         "New this cycle  ₹19,828.88",
@@ -441,34 +411,31 @@ describe("copied WhatsApp message (same view model as the PDF)", () => {
     expect(t).not.toMatch(/\n\n\n/);
     for (const line of t.split("\n")) expect(visible(line)).toBeLessThanOrEqual(36);
     for (const d of t.match(/^[━─]+$/gm) ?? []) expect([...d].length).toBe(20);
-    expect((t.match(/[✓↗]/g) ?? []).length).toBe(2); // the only symbols: one tick per receipt line
+    expect((t.match(/[✓↗]/g) ?? []).length).toBe(1); // one payment now (it is never split per allocation line)
   });
 
-  it("due now is the headline; due-now and moved items never mix; section totals are the model's split", () => {
+  it("every item lists in one section, moved or not — nothing splits into separate due-now/moved sections anymore", () => {
     const s = referenceOctober();
     const t = text(s);
-    expect(t.indexOf("*PAYMENT DUE NOW*\n*₹10,380.00*")).toBeLessThan(t.indexOf("Total outstanding"));
-    const pay = sectionOf(t, "PAY THIS CYCLE");
-    const moved = sectionOf(t, "MOVED TO NOVEMBER");
-    expect(pay).toContain("Gived to sanju");
-    expect(pay).not.toMatch(/EMI #/);
-    expect(moved).toMatch(/EMI #13[\s\S]*EMI #1\*[\s\S]*EMI #5/);
-    expect(moved).not.toMatch(/Gived|Interest/);
-    // Grouping follows the model's own postponed flag, item for item.
-    for (const it of s.monthly.items.filter((i) => i.remainingPaise > 0)) expect((it.postponed ? moved : pay).includes(it.title)).toBe(true);
-    expect(pay).toContain("*TOTAL DUE  →  ₹10,380.00*");
-    expect(moved).toContain("*TOTAL MOVED  →  ₹6,448.88*");
-    expect(t.match(/₹16,828\.88/g)).toHaveLength(2); // secondary total + the balance summary's result
-    expect(t).not.toMatch(/EMI #(9|10|11|12)\b/); // earlier items cleared this cycle are not listed
+    // One section lists every item — nothing is split into "due now" vs "moved" sections anymore.
+    const open = sectionOf(t, "OPEN ITEMS");
+    expect(open).toContain("Gived to sanju");
+    expect(open).toMatch(/EMI #13[\s\S]*EMI #1\*[\s\S]*EMI #5/);
+    // A postponed item's own quiet line still names which cycle it moved to — dynamic, read from the model
+    // (the phone line keeps only the short "moved to X cycle" clause out of the item's full meta line).
+    for (const it of s.monthly.items.filter((i) => i.tag === "Moved")) {
+      const clause = it.note.match(/(?:Moved to \S+ cycle|Part paid · rest moved to \S+ cycle)/)?.[0] ?? it.note;
+      expect(open).toContain(clause);
+    }
   });
 
   it("the moved-to cycle label is dynamic, never a hardcoded November", () => {
     const b = inst("bx", "SB", d(10, 2), 1000, 14);
     const s = scenario({ entries: [entry("gave", 500, d(10, 3), { note: "Lunch" })], emis: [bajaj], installments: [b], deferralFor: (k) => (k === "emi-inst:bx" ? { status: "postponed", name: "Dec", from: "Oct" } : null) });
     const t = text(s);
-    expect(s.monthly.split!.postponedTo).toBe("Moved to December");
-    expect(t).toContain("Moved to December  ₹1,000.00");
-    expect(t).toContain(`*02  /  ${s.monthly.split!.postponedTo.toUpperCase()}*`);
+    const moved = s.monthly.items.find((i) => i.tag === "Moved")!;
+    expect(moved.note).toContain("Moved to Dec cycle · first due in Oct cycle");
+    expect(t).toContain("_Moved to Dec cycle_");
     expect(t).not.toMatch(/November/i);
   });
 
@@ -491,15 +458,15 @@ describe("copied WhatsApp message (same view model as the PDF)", () => {
     expect(t).toContain("Previous balance  ₹2,500.00");
   });
 
-  it("partial payments only where relevant; fully paid items not listed; several receipts total up", () => {
+  it("every item keeps its own full face amount, never a remaining figure; a fully paid one isn't listed; several receipts total up", () => {
     const a = entry("gave", 1000, d(10, 3), { note: "A" });
     const b = entry("gave", 2000, d(10, 4), { note: "B" });
     const c = entry("gave", 700, d(10, 5), { note: "C" });
     const t = text(scenario({ entries: [a, b, c, entry("receivedBack", 400, d(10, 8), { parentEntryId: a.id }), entry("receivedBack", 2000, d(10, 9), { parentEntryId: b.id })], accountForEntry: () => "HDFC Savings" }));
-    expect(t).toContain("*A*\n₹600.00 remaining\n_Paid ₹400.00 / ₹1,000.00_");
+    expect(t).toContain("*A*\n₹1,000.00\n");
     expect(t).toContain("*C*\n₹700.00\n\n");
-    expect(t).not.toContain("*B*");
-    expect(t).toContain("✓ ₹2,000.00  •  09 Oct\n   HDFC Savings  /  B · cleared");
+    expect(t).not.toContain("*B*"); // fully paid — left out of this short summary, as before
+    expect(t).toContain("✓ ₹2,000.00  •  09 Oct\n   HDFC Savings  /  Applied to B · cleared it");
     expect(t).toContain("*TOTAL RECEIVED  ₹2,400.00*");
   });
 
@@ -507,7 +474,7 @@ describe("copied WhatsApp message (same view model as the PDF)", () => {
     const a = entry("gave", 1000, d(10, 3), { note: "A" });
     const b = entry("gave", 500, d(10, 4), { note: "B" });
     const t = text(scenario({ entries: [a, b, entry("receivedBack", 1000, d(10, 6), { parentEntryId: a.id, recordedEarlier: true, receivedDateKnown: false })] }));
-    expect(t).toContain("✓ ₹1,000.00  •  Date not known\n   _Received earlier · recorded later · no new bank receipt_\n   A · cleared");
+    expect(t).toContain("✓ ₹1,000.00  •  Date not known\n   _Received earlier · recorded later · no new bank receipt_\n   Applied to A · cleared it");
     expect(t).not.toContain("TOTAL RECEIVED");
   });
 
@@ -557,9 +524,10 @@ describe("copied WhatsApp message (same view model as the PDF)", () => {
     const detailed = monthlySettlementDetailedText(s.monthly);
     writeText("copy-detailed-reference-october", detailed);
     expect(detailed).toContain("*FlowFi Monthly Settlement*");
-    expect(detailed).toContain("*Due now:* ₹10,380.00");
-    expect(detailed).toContain("*Moved to November:* ₹6,448.88 (postponed — still owed, not cancelled)");
+    expect(detailed).toContain("*Total outstanding: ₹16,828.88*");
+    expect(detailed).toContain("• Bajaj Finance · EMI #13 — ₹4,630.00 · Moved");
     expect(detailed).toContain("19 Oct · ₹9,575.52 · received in SBI");
+    expect(detailed).toContain("  → Toward 5 items");
     const summary = statementShareText(s.statement);
     writeText("copy-summary-reference-october", summary);
     expect(summary.startsWith("*FlowFi — Cycle Statement*")).toBe(true);

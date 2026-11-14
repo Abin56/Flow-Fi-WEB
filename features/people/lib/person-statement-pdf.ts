@@ -79,7 +79,6 @@ const CHIP = Object.fromEntries(
   Object.entries(STATEMENT_CHIP).map(([k, v]) => [k, { fill: hex(v.fill), text: hex(v.text), edge: hex(v.edge) }]),
 ) as Record<StatementChip, Tone>;
 const PAID_TEXT = CHIP.paid.text;
-const OVERDUE_TEXT = CHIP.overdue.text;
 
 /** Type roles (pt). Hierarchy comes from size, weight and tracking; figures are monospaced so columns align. */
 const T = {
@@ -154,23 +153,22 @@ function pageGeometry(orientation: StatementOrientation) {
   const M = portrait ? 30 : 32;
   const PAD = portrait ? 5.5 : 7;
   const TABLE_W = PAGE_W - 2 * M;
-  // [#, Date, Description (the rest), Original, Amount, Paid, Remaining, Status]
-  const widths = portrait ? [18, 52, 0, 64, 68, 58, 64, 78] : [24, 58, 0, 88, 90, 78, 86, 104];
+  // [#, Date, Description (the rest), Original, Amount, Type] — a payment no longer ties to one item, so there is
+  // no Paid / Remaining breakdown to show per row; Type is the chip (a kind tag, or "Moved" / "Overdue").
+  const widths = portrait ? [18, 52, 0, 64, 68, 70] : [24, 58, 0, 88, 90, 90];
   const COLUMNS = [
     { label: "#", align: "right" },
     { label: "Date", align: "left" },
     { label: "Description", align: "left" },
     { label: "Original", align: "right" },
     { label: "Amount", align: "right" },
-    { label: "Paid", align: "right" },
-    { label: "Remaining", align: "right" },
-    { label: "Status", align: "left" },
+    { label: "Type", align: "left" },
   ] as const;
   /** Description takes whatever the fixed columns leave. */
   const COL_W = widths.map((w) => (w === 0 ? TABLE_W - widths.reduce((s, x) => s + x, 0) : w));
   const colX = (i: number) => M + COL_W.slice(0, i).reduce((s, w) => s + w, 0);
   const colRight = (i: number) => colX(i) + COL_W[i] - PAD;
-  return { portrait, PAGE_W, PAGE_H, M, PAD, TABLE_W, COLUMNS, COL_W, colX, colRight, DESC_W: COL_W[2] - 2 * PAD, STATUS_W: COL_W[7] - 2 * PAD };
+  return { portrait, PAGE_W, PAGE_H, M, PAD, TABLE_W, COLUMNS, COL_W, colX, colRight, DESC_W: COL_W[2] - 2 * PAD, STATUS_W: COL_W[5] - 2 * PAD };
 }
 /** The first page's midnight header band, and the slimmer band that opens every later page. */
 const HERO_H = 84;
@@ -740,7 +738,8 @@ export async function renderPersonStatementPdf(
   // ---------------- Rows ----------------
   // Each transaction is one unit: the title (medium — the figures carry the weight), a quiet meta line (type · what
   // it means), then the money in fixed columns: Original only when it differs from the Amount, the Amount
-  // (captioned with whose share it is only beside an Original), Paid, Remaining, and the status chip.
+  // (captioned with whose share it is only beside an Original), and the Type chip — what the row is, not what
+  // state a payment left it in (nothing is marked paid or part paid per row anymore).
   const layoutRow = (row: StatementViewRow) => {
     const a = row.allocation ?? null;
     const shares = a && a.participants.length >= 2 ? layoutShares(a) : null;
@@ -751,15 +750,11 @@ export async function renderPersonStatementPdf(
     // The cycle a brought-forward row came from is its group heading, so the meta line never repeats it.
     const metaLines = capLines(wrapWords(row.metaLine, DESC_W, regular, T.meta), 3, regular, T.meta, DESC_W);
     const descBottom = LINE1 + (titleLines.length - 1) * TITLE_LH + metaLines.length * META_LH + (mismatch ? NOTE_LH : 0) + 9;
-    const noteLines = row.statusNote ? capLines(wrapWords(row.statusNote, STATUS_W, regular, T.caption), 2, regular, T.caption, STATUS_W) : [];
-    // Under the chip: how long the item has been open, then any note. A caption needs less room below than the chip.
-    const statusLines = noteLines.length + (row.age ? 1 : 0);
-    const statusBottom = LINE1 + 4 + statusLines * NOTE_LH + (statusLines ? 5 : 9);
     const amountBottom = LINE1 + (row.purchase || row.shareLabel ? 9 : 0) + 9;
-    const mainH = Math.max(descBottom, statusBottom, amountBottom, 32);
+    const mainH = Math.max(descBottom, LINE1 + 13, amountBottom, 32);
     // The pills tuck up under the description, so a split reads as one block with its shares.
     const h = mainH + (shares ? sharesH(shares) - SHARE_TUCK : 0);
-    return { shares, titleLines, metaLines, mismatch, noteLines, mainH, h };
+    return { shares, titleLines, metaLines, mismatch, mainH, h };
   };
   const drawRow = (row: StatementViewRow, tail = 0) => {
     const l = layoutRow(row);
@@ -767,8 +762,8 @@ export async function renderPersonStatementPdf(
     const top = y;
     const line1 = top - LINE1;
     const line2 = line1 - 9;
-    // The Remaining column's faint band runs the whole item, so the eye runs straight down what is left.
-    box(colX(6), top - l.h, COL_W[6], l.h - TOP_GAP, REMAIN_TINT);
+    // The Amount column's faint band runs the whole item — the one figure that matters now.
+    box(colX(4), top - l.h, COL_W[4], l.h - TOP_GAP, REMAIN_TINT);
     // # and the date tile.
     textRight(row.no, colRight(0) - 1, line1, T.meta - 0.4, regular, FAINT);
     dateTile(row.date, colX(1) + PAD, line1);
@@ -781,7 +776,7 @@ export async function renderPersonStatementPdf(
       text(m, dx, ly, T.meta, regular, MUTED);
     }
     if (l.mismatch) text(l.mismatch, dx, ly - NOTE_LH, T.caption, regular, MUTED);
-    // Original (split only) → Amount → Paid → Remaining.
+    // Original (split only) → Amount.
     const maxW = (i: number) => COL_W[i] - 2 * PAD;
     if (row.purchase) {
       amountRight(row.purchase, colRight(3), line1, T.money - 0.2, regular, MUTED, maxW(3));
@@ -791,32 +786,8 @@ export async function renderPersonStatementPdf(
       amountRight(row.original, colRight(4), line1, T.money + 0.4, bold, INK, maxW(4));
       if (row.shareLabel) textRight(fit(row.shareLabel, regular, T.caption, maxW(4)), colRight(4), line2, T.caption, regular, MUTED);
     } else textRight("—", colRight(4), line1, T.money, regular, FAINT);
-    // Nothing paid yet reads as a quiet dash, so a column of ₹0 doesn't compete with what's left to pay.
-    if (row.paid && row.paid !== ZERO) amountRight(row.paid, colRight(5), line1, T.money, regular, PAID_TEXT, maxW(5));
-    else textRight("—", colRight(5), line1, T.money, regular, FAINT);
-    if (row.remaining) {
-      const zero = row.remaining === ZERO;
-      const tone = zero ? FAINT : row.chip === "overdue" ? OVERDUE_TEXT : INK;
-      amountRight(row.remaining, colRight(6), line1, T.money + 0.6, zero ? regular : bold, tone, maxW(6));
-    } else textRight("—", colRight(6), line1, T.money, regular, FAINT);
-    // A partly paid row shows how far it is paid down: a thin bar under its Remaining amount.
-    if (row.progress != null) {
-      const bw = COL_W[6] - 2 * PAD - 6;
-      const bx = colRight(6) - bw;
-      roundBox(bx, line1 - 9.5, bw, 3, 1.5, HEAD);
-      roundBox(bx, line1 - 9.5, Math.max(3, bw * row.progress), 3, 1.5, CHIP.partial.edge);
-    }
-    // Status chip + a note only when it says something new.
-    chip(row.status, colX(7) + PAD, line1, row.chip);
-    let sy = line1 - 11.5;
-    if (row.age) {
-      // How long it has been open: a dot and the words, deepening from grey to amber to red as it ages.
-      const tone = row.age.tone === "old" ? OVERDUE_TEXT : row.age.tone === "aging" ? CHIP.due.text : MUTED;
-      page.drawCircle({ x: colX(7) + PAD + 2.2, y: sy + 2.1, size: 1.5, color: row.age.tone === "fresh" ? FAINT : tone });
-      text(fit(row.age.label, medium, T.caption, STATUS_W - 7), colX(7) + PAD + 7, sy, T.caption, row.age.tone === "fresh" ? regular : medium, tone);
-      sy -= NOTE_LH;
-    }
-    l.noteLines.forEach((s, si) => text(s, colX(7) + PAD, sy - si * NOTE_LH, T.caption, regular, MUTED));
+    // The kind tag — what this row is, or "Moved" / "Overdue" when it carries a live postponement.
+    chip(row.tag, colX(5) + PAD, line1, row.chip);
     if (l.shares) drawShares(l.shares, top - l.mainH + SHARE_TUCK);
     y = top - l.h;
     hline(M, M + TABLE_W, y, RULE, LINE_W);
@@ -836,8 +807,8 @@ export async function renderPersonStatementPdf(
     tracked(label, colX(2) + PAD, y - 11.5, T.label + 0.3, semi, CHIP.carried.text);
     if (previous) text(previous.value, colX(2) + PAD + trackedWidth(label, T.label + 0.3) + 9, y - 12, T.money + 0.8, amountBold, INK);
     const note = [view.previousNote, previous?.side].filter(Boolean).join("  ·  ");
-    text(fit(note, regular, T.meta, colX(6) - colX(2) - 2 * PAD), colX(2) + PAD, y - 21, T.meta, regular, MUTED);
-    chip("Brought forward", colX(7) + PAD, y - 11.5, "carried");
+    text(fit(note, regular, T.meta, colX(5) - colX(2) - 2 * PAD), colX(2) + PAD, y - 21, T.meta, regular, MUTED);
+    chip("Brought forward", colX(5) + PAD, y - 11.5, "carried");
     y -= CARRY_H;
     hline(M, M + TABLE_W, y, RULE, LINE_W);
   };
@@ -855,11 +826,11 @@ export async function renderPersonStatementPdf(
     if (strong) roundBox(M + 0.35, y - h + 0.35, TABLE_W - 0.7, h - 0.35 - TOP_GAP, RADIUS - 0.4, MIDNIGHT, undefined, 0, "bottom");
     else box(M + 0.35, y - h, TABLE_W - 0.7, h - TOP_GAP, SURFACE);
     const base = y - (strong ? 16.5 : 12.5);
-    hline(colX(6) + PAD + 4, colRight(6), y - (strong ? 5 : 3), strong ? GOLD : RULE_STRONG, strong ? 0.8 : 0.6);
-    if (strong) trackedRight(label.toUpperCase(), colX(6) - PAD - 6, base + 0.5, T.label + 1, semi, GOLD_LIGHT, 1);
-    else textRight(label, colX(6) - PAD - 6, base, T.meta + 0.3, semi, BODY);
-    if (opts.op) operator(opts.op, colX(6) + PAD - 1, base + 3, strong);
-    amountRight(value, colRight(6), base, strong ? T.money + 2.6 : T.money + 0.5, bold, strong ? (settled ? SETTLED_ON_MID : WHITE) : INK, COL_W[6] - 2 * PAD - 12);
+    hline(colX(4) + PAD + 4, colRight(4), y - (strong ? 5 : 3), strong ? GOLD : RULE_STRONG, strong ? 0.8 : 0.6);
+    if (strong) trackedRight(label.toUpperCase(), colX(4) - PAD - 6, base + 0.5, T.label + 1, semi, GOLD_LIGHT, 1);
+    else textRight(label, colX(4) - PAD - 6, base, T.meta + 0.3, semi, BODY);
+    if (opts.op) operator(opts.op, colX(4) + PAD - 1, base + 3, strong);
+    amountRight(value, colRight(4), base, strong ? T.money + 2.6 : T.money + 0.5, bold, strong ? (settled ? SETTLED_ON_MID : WHITE) : INK, COL_W[4] - 2 * PAD - 12);
     y -= h;
     if (!strong) hline(M, M + TABLE_W, y, RULE, LINE_W);
   };
@@ -900,26 +871,21 @@ export async function renderPersonStatementPdf(
   };
   const firstUnit = (rows: StatementViewRow[], tail = 0) => (rows.length === 0 ? tail : (groupOf(rows[0]) ? MONTH_H : 0) + layoutRow(rows[0]).h + (rows.length === 1 ? tail : 0));
 
-  // ---------------- Payment history (grouped by real payment) ----------------
+  // ---------------- Payment history (one line per real payment — no per-item allocation table) ----------------
   const P_DATE = M + PAD + 2;
   const P_LABEL = colX(2) + PAD;
-  const P_APPLIED = colX(3) + PAD;
-  const P_APPLIED_RIGHT = colRight(6);
   const P_AMOUNT_RIGHT = M + TABLE_W - PAD - 4;
   /** The payment's text starts after its direction badge. */
   const BADGE = 19;
-  const P_LABEL_W = P_APPLIED - P_LABEL - 2 * PAD - BADGE;
-  const P_APPLIED_W = P_APPLIED_RIGHT - P_APPLIED;
-  /** Pitch of the allocation lines. */
-  const APPLIED_LH = 11.5;
+  const P_LABEL_W = P_AMOUNT_RIGHT - P_LABEL - 2 * PAD - BADGE - 100;
   type Payment = (typeof view.payments)[number];
   const paymentLayout = (p: Payment) => {
     const labelLines = capLines(wrapWords(p.label, P_LABEL_W, medium, T.title), 2, medium, T.title, P_LABEL_W);
-    const sub = [p.account, p.note].filter(Boolean).join("  ·  ");
-    const singleLines = p.single != null ? capLines(wrapWords(p.single, P_APPLIED_W, regular, T.meta), 2, regular, T.meta, P_APPLIED_W) : [];
-    const appliedLines = p.single != null ? singleLines.length : p.applied.length + (p.applied.length > 1 ? 1 : 0) + (p.held ? 1 : 0);
-    const h = Math.max(LINE1 + (labelLines.length - 1) * TITLE_LH + (sub ? META_LH : 0) + 2, LINE1 + 10.5, LINE1 + (appliedLines - 1) * APPLIED_LH + (p.applied.length > 1 ? 2.5 : 0)) + 10;
-    return { labelLines, sub, singleLines, h };
+    // What this payment was toward (a legacy, per-item payment only) joins the account / earlier-receipt note.
+    const sub = [p.account, p.toward, p.note].filter(Boolean).join("  ·  ");
+    const subLines = sub ? capLines(wrapWords(sub, P_LABEL_W, regular, T.caption), 2, regular, T.caption, P_LABEL_W) : [];
+    const h = LINE1 + (labelLines.length - 1) * TITLE_LH + subLines.length * META_LH + 10;
+    return { labelLines, subLines, h };
   };
   /**
    * The payment's direction as a small round badge with an arrow drawn as lines (no glyph, so it survives every
@@ -936,32 +902,11 @@ export async function renderPersonStatementPdf(
     seg(tip, { x: tip.x - dir * 3, y: tip.y });
     seg(tip, { x: tip.x, y: tip.y - dir * 3 });
   };
-  /** One allocation: the item's # in a small badge (as in the table), its title, then its date and what it left. */
-  const appliedLine = (a: Payment["applied"][number], yy: number) => {
-    let x = P_APPLIED;
-    if (a.ref) {
-      const bw = Math.max(15, width(a.ref, 6, semi) + 7);
-      roundBox(x, yy - 2.7, bw, 9.6, 2.6, SURFACE, RULE, 0.5);
-      text(a.ref, x + (bw - width(a.ref, 6, semi)) / 2, yy - 0.2, 6, semi, MUTED);
-      x += bw + 6;
-    }
-    const tail = [a.date, a.note].filter(Boolean).join("  ·  ");
-    const tailW = tail ? width(tail, T.caption) + 8 : 0;
-    const label = fit(a.label, regular, T.meta, Math.max(40, P_APPLIED_RIGHT - 64 - x - tailW));
-    text(label, x, yy, T.meta, regular, BODY);
-    if (tail) {
-      const tx = x + width(label, T.meta) + 6;
-      if (a.date) text(a.date, tx, yy, T.caption, regular, MUTED);
-      if (a.note) text(`${a.date ? "  ·  " : ""}${a.note}`, tx + (a.date ? width(a.date, T.caption) : 0), yy, T.caption, a.note === "cleared" ? medium : regular, a.note === "cleared" ? PAID_TEXT : MUTED);
-    }
-    amountRight(a.amount, P_APPLIED_RIGHT, yy, T.meta, regular, INK);
-  };
   const paymentHeader = () => {
     openPanel();
     panelHeader(HEADER_H);
     tracked("DATE", P_DATE, y - 11.5, T.label, semi, BODY);
     tracked("PAYMENT", P_LABEL, y - 11.5, T.label, semi, BODY);
-    tracked("APPLIED TO", P_APPLIED, y - 11.5, T.label, semi, BODY);
     trackedRight("AMOUNT", P_AMOUNT_RIGHT, y - 11.5, T.label, semi, BODY);
     y -= HEADER_H;
   };
@@ -978,29 +923,8 @@ export async function renderPersonStatementPdf(
     dateTile(p.date, P_DATE, line1);
     directionBadge(p, P_LABEL + 6.8, line1 + 2.6);
     l.labelLines.forEach((s, i) => text(s, P_LABEL + BADGE, line1 - i * TITLE_LH, T.title, medium, INK));
-    if (l.sub) text(fit(l.sub, regular, T.caption, P_LABEL_W), P_LABEL + BADGE, line1 - (l.labelLines.length - 1) * TITLE_LH - META_LH, T.caption, regular, MUTED);
+    l.subLines.forEach((s, i) => text(s, P_LABEL + BADGE, line1 - (l.labelLines.length - 1) * TITLE_LH - META_LH - i * META_LH, T.caption, regular, MUTED));
     amountRight(p.amount, P_AMOUNT_RIGHT, line1, T.money + 1.2, bold, p.inbound ? PAID_TEXT : INK);
-    if (p.single != null) {
-      l.singleLines.forEach((s, i) => text(s, P_APPLIED, line1 - i * 10, T.meta, regular, BODY));
-    } else {
-      // Where one payment went: each item it paid (by its # in the table), what was applied, any advance held.
-      let ly = line1;
-      for (const a of p.applied) {
-        appliedLine(a, ly);
-        ly -= APPLIED_LH;
-      }
-      if (p.applied.length > 1) {
-        ly -= 2.5;
-        hline(P_APPLIED, P_APPLIED_RIGHT, ly + 8.5, RULE_STRONG, 0.5);
-        text("Applied to obligations", P_APPLIED, ly, T.meta, semi, INK);
-        amountRight(p.appliedTotal ?? "", P_APPLIED_RIGHT, ly, T.meta, bold, INK);
-        ly -= APPLIED_LH;
-      }
-      if (p.held) {
-        text("Held as advance", P_APPLIED, ly, T.meta, semi, ADVANCE);
-        amountRight(p.held, P_APPLIED_RIGHT, ly, T.meta, bold, ADVANCE);
-      }
-    }
     y = top - l.h;
     hline(M, M + TABLE_W, y, RULE, LINE_W);
   };
@@ -1038,12 +962,11 @@ export async function renderPersonStatementPdf(
   drawSummary();
   y -= 10;
   const count = allRows.length;
-  const sums = view.totals;
-  sectionTitle("Transactions", `${count} ${count === 1 ? "item" : "items"}${count > 0 ? `  ·  ${view.openCount === 0 ? "all paid" : `${view.openCount} still open`}` : ""}`);
+  sectionTitle("Transactions", `${count} ${count === 1 ? "item" : "items"}`);
   const hasPayments = view.payments.length > 0;
   // The table's last unit carries the ending balance with it when no payment history follows.
   const tableTail = hasPayments ? 0 : ENDING;
-  const closingH = sums ? (sums.current ? SUB_H : 0) + (sums.other ? SUB_H : 0) + TOTAL_ROW_H : 0;
+  const closingH = count > 0 ? TOTAL_ROW_H : 0;
   ensure(HEADER_H + firstUnit(showPrevious ? view.carried : view.rows, tableTail) + (showPrevious ? CARRY_H : 0));
   panelKind = "table";
   redrawPanelHeader = drawTableHeader;
@@ -1053,18 +976,13 @@ export async function renderPersonStatementPdf(
   const bandNote = n ? `${view.cycleLabel}  ·  ${n} new ${n === 1 ? "item" : "items"}` : emptyNote;
   if (showPrevious) {
     carryRow(firstUnit(view.carried, view.rows.length ? 0 : tableTail));
-    // With nothing new, the last brought-forward row keeps the closing lines (and the ending) with it — the
+    // With nothing new, the last brought-forward row keeps the closing line (and the ending) with it — the
     // conclusion never stands alone on a page.
-    drawRows(view.carried, (sums?.carried ? SUB_H : 0) + (view.rows.length ? 0 : SECTION_H + closingH + tableTail));
-    if (sums?.carried) sumRow("Still open from earlier cycles", sums.carried, { tail: view.rows.length ? 0 : SECTION_H + closingH + tableTail });
+    drawRows(view.carried, view.rows.length ? 0 : SECTION_H + closingH + tableTail);
     cycleBand(bandNote, firstUnit(view.rows, closingH + tableTail) || closingH + tableTail);
   } else if (view.rows.length === 0) cycleBand(emptyNote, closingH + tableTail);
   if (view.rows.length > 0) drawRows(view.rows, closingH + tableTail);
-  if (sums) {
-    if (sums.current) sumRow("Still open from this cycle", sums.current, { op: sums.carried ? "+" : null, tail: TOTAL_ROW_H + tableTail });
-    if (sums.other) sumRow(sums.other.label, sums.other.value, { op: sums.other.op, tail: TOTAL_ROW_H + tableTail });
-    sumRow(sums.total.label, sums.total.value, { op: sums.carried || sums.current || sums.other ? "=" : null, strong: true, tail: tableTail });
-  }
+  if (count > 0) sumRow(view.closing.label, view.closing.value, { strong: true, tail: tableTail });
   closePanel();
   panelKind = null;
 
@@ -1075,7 +993,7 @@ export async function renderPersonStatementPdf(
     // The heading never sits alone at a page foot: it moves with the first payment.
     ensure(14 + heading + HEADER_H + paymentLayout(view.payments[0]).h + (view.payments.length === 1 ? lastTail : 0));
     y -= 14;
-    sectionTitle("Payment history", "Payments this cycle and the items (#) each one paid");
+    sectionTitle("Payment history", "Every payment this cycle");
     panelKind = "payments";
     redrawPanelHeader = paymentHeader;
     paymentHeader();
@@ -1085,7 +1003,7 @@ export async function renderPersonStatementPdf(
       const last = i === totals.length - 1;
       if (last) roundBox(M + 0.35, y - TOTAL_H + 0.35, TABLE_W - 0.7, TOTAL_H - 0.35 - TOP_GAP, RADIUS - 0.4, SURFACE, undefined, 0, "bottom");
       else box(M + 0.35, y - TOTAL_H, TABLE_W - 0.7, TOTAL_H - TOP_GAP, SURFACE);
-      textRight(t.label, P_APPLIED_RIGHT, y - 12.5, T.meta + 0.4, semi, INK);
+      textRight(t.label, colX(4) - PAD - 6, y - 12.5, T.meta + 0.4, semi, INK);
       amountRight(t.value, P_AMOUNT_RIGHT, y - 12.5, T.money + 0.5, bold, INK);
       y -= TOTAL_H;
     });

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { ArrowRight, Landmark, TrendingDown } from "lucide-react";
 import { FLAT_INPUT, FormDialog, SectionLabel } from "@/components/finance";
+import { groupAccountsByKind } from "@/components/finance/account-label";
 import { isUnderfunded } from "@/components/finance/payment-source-summary";
 import type { Account } from "@/lib/models/account";
 import type { LoanRow } from "@/features/loans/hooks/use-loans-data";
@@ -105,7 +106,7 @@ export function LoanAdjustmentDialog({ open, onOpenChange, kind, row, accounts, 
           <label className="space-y-1"><span className="text-xs font-medium text-muted-foreground">{isPrepayment ? "Extra principal" : row.direction === "given" ? "Additional amount I gave" : "Additional amount I received"}</span><input aria-label={isPrepayment ? "Extra principal" : "Additional amount"} type="number" min="0.01" step="0.01" className={FLAT_INPUT} value={amount} onChange={(event) => setAmount(event.target.value)} autoFocus /></label>
           <label className="space-y-1"><span className="text-xs font-medium text-muted-foreground">Date</span><DateInput aria-label="Operation date" className={FLAT_INPUT} value={date} onChange={(event) => setDate(event.target.value)} /></label>
         </div>
-        <label className="space-y-1"><span className="text-xs font-medium text-muted-foreground">{moneyIn ? "Into account" : "From account"}</span><select aria-label="Payment account" className={FLAT_INPUT} value={accountId} onChange={(event) => setAccountId(event.target.value)}><option value="">Select account</option>{accounts.map((account) => <option key={account.id} value={account.id}>{account.name}{account.accountNumberLast4 ? ` ••${account.accountNumberLast4}` : ""}{!moneyIn && account.type !== "card" ? ` · ${money(account.currentBalance)}` : ""}</option>)}</select></label>
+        <label className="space-y-1"><span className="text-xs font-medium text-muted-foreground">{moneyIn ? "Into account" : "From account"}</span><select aria-label="Payment account" className={FLAT_INPUT} value={accountId} onChange={(event) => setAccountId(event.target.value)}><option value="">Select account</option>{groupAccountsByKind(accounts).map((g) => { const options = g.accounts.map((account) => <option key={account.id} value={account.id}>{account.name}{account.accountNumberLast4 ? ` ••${account.accountNumberLast4}` : ""}{!moneyIn && account.type !== "card" ? ` · ${money(account.currentBalance)}` : ""}</option>); return g.kind === "credit" ? <optgroup key={g.kind} label="Credit cards">{options}</optgroup> : options; })}</select></label>
         <label className="space-y-1"><span className="text-xs font-medium text-muted-foreground">Note (optional)</span><input className={FLAT_INPUT} value={note} onChange={(event) => setNote(event.target.value)} /></label>
         {preview && <div className="rounded-2xl border border-border bg-muted/25 p-4 text-sm">
           <SectionLabel icon={isPrepayment ? TrendingDown : Landmark}>Preview</SectionLabel>

@@ -101,7 +101,7 @@ async function pdfPages(s: ReturnType<typeof amma>): Promise<string[][]> {
 }
 const pm = (n: number) => pdfSafe(money(n));
 /** The transaction table's drawn strings: after its column header, before the ending balance. */
-const tableOf = (page: string[]) => page.slice(page.indexOf("STATUS") + 1, page.indexOf("ENDING BALANCE"));
+const tableOf = (page: string[]) => page.slice(page.indexOf("TYPE") + 1, page.lastIndexOf("BALANCE DUE") + 2); // + the closing row's label and value
 const me = (s: number) => part("Me", s, null, true);
 const ammaPart = (s: number) => part("Amma", s, "A");
 
@@ -124,7 +124,8 @@ describe("original amount vs the person's share", () => {
     expect(row.metaLine).toBe(`Assigned expense · Amma owes Abin for this`);
     const [page] = await pdfPages(s);
     for (const absent of ["SHARES", "Assigned in full", "Amma's share", "ORIGINAL PURCHASE"]) expect(page).not.toContain(absent);
-    // In the table ₹170 appears as the Amount and the Remaining only — never a third time as an "original".
+    // Original == Amount, so the row draws just one figure (never a separate "Original" restating it);
+    // ₹170 appears once in the row and once in the closing BALANCE DUE line — never a third time.
     expect(tableOf(page).filter((l) => l === pm(170))).toHaveLength(2);
   });
 
@@ -147,7 +148,7 @@ describe("original amount vs the person's share", () => {
 });
 
 describe("status vocabulary and colour families", () => {
-  it("due / partly paid / paid / advance each map to one chip family", () => {
+  it("the chip is the row's kind, never its payment status — differently-paid items read identically", () => {
     const xs = [0, 1, 2].map((i) => expense(340, [me(170), ammaPart(170)], `Item ${i}`));
     const s = amma(
       xs.map((x) => ({ x, share: 170 })),
@@ -158,17 +159,16 @@ describe("status vocabulary and colour families", () => {
       ],
     );
     const by = (title: string) => s.view.rows.find((r) => r.title === title)!;
-    expect([by("Item 0"), by("Item 1"), by("Item 2")].map((r) => [r.status, r.chip])).toEqual([
-      ["Payment due", "due"],
-      ["Partially paid", "partial"],
-      ["Paid in full", "paid"],
+    // All three are "split" rows, so all three carry the same kind tag and chip — nothing here says which was
+    // paid, part paid or untouched, because a payment no longer ties to one item.
+    expect([by("Item 0"), by("Item 1"), by("Item 2")].map((r) => [r.tag, r.chip])).toEqual([
+      ["Split", "carried"],
+      ["Split", "carried"],
+      ["Split", "carried"],
     ]);
     // An advance is money paid, not something owed: it is listed once, in Payment history, never as a transaction.
     expect(s.view.rows.some((r) => r.kind === "advance")).toBe(false);
-    expect(s.view.payments.find((p) => p.advance)).toMatchObject({ amount: money(500), single: "Held as advance — for the next obligations" });
-    // A detail that only restates the direction and Paid / Remaining is not repeated under the chip — only when it was paid.
-    expect(by("Item 1").statusNote).toBe("Last paid 25 Sep");
-    expect(by("Item 2").statusNote).toBe("Cleared 25 Sep");
+    expect(s.view.payments.find((p) => p.advance)).toMatchObject({ amount: money(500), toward: null });
   });
 });
 
@@ -221,8 +221,8 @@ describe("preview ↔ PDF", () => {
     expect(assigned.textContent).not.toContain("share");
     const page = (await pdfPages(s)).flat();
     for (const r of s.view.rows) {
-      expect(container.querySelector(`[data-chip="${r.chip}"]`)?.textContent).toBe(r.status);
-      expect(page).toContain(pdfSafe(r.status));
+      expect(container.querySelector(`[data-chip="${r.chip}"]`)?.textContent).toBe(r.tag);
+      expect(page).toContain(pdfSafe(r.tag));
       // A meta line may wrap in the narrower portrait column; joined back it reads the same.
       expect(page.join(" ")).toContain(pdfSafe(r.metaLine));
     }
@@ -263,15 +263,12 @@ describe("progress cues", () => {
   it("summary bar: the share of the total due already cleared, worded with figures the statement shows", () => {
     const s = amma([{ x: expense(400, [me(200), ammaPart(200)], "Groceries"), share: 200 }], (sh) => [entry("receivedBack", 50, d(9, 25), { parentEntryId: sh[0].id })]);
     expect(s.view.settleProgress).toEqual({ ratio: 0.25, label: `${money(150)} of ${money(200)} still to settle` });
-    // The partly paid row carries its own paid-down fraction for the bar under Remaining.
-    expect(s.view.rows.find((r) => r.kind === "split")!.progress).toBe(0.25);
   });
 
-  it("fully settled reads as such; unpaid rows carry no row bar", () => {
+  it("fully settled reads as such", () => {
     const settled = amma([{ x: expense(400, [me(200), ammaPart(200)], "Groceries"), share: 200 }], (sh) => [entry("receivedBack", 200, d(9, 25), { parentEntryId: sh[0].id })]);
     expect(settled.view.settleProgress).toEqual({ ratio: 1, label: "Fully settled" });
     const unpaid = amma([{ x: expense(400, [me(200), ammaPart(200)], "Groceries"), share: 200 }]);
     expect(unpaid.view.settleProgress!.ratio).toBe(0);
-    expect(unpaid.view.rows[0].progress).toBeNull();
   });
 });

@@ -6,6 +6,8 @@ import { useState } from "react";
 import { FullscreenPrompt } from "@/components/fullscreen/fullscreen-prompt";
 import { OperationProgressHost } from "@/components/feedback/operation-progress";
 import { Toaster } from "@/components/feedback/toaster";
+import { ThemeCustomizer } from "@/components/providers/theme-customizer";
+import { THEME_BOOT_SCRIPT } from "@/lib/theme/apply";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAuthListener } from "@/hooks/use-auth-listener";
 
@@ -19,6 +21,9 @@ export function AppProviders({ children }: { children: React.ReactNode }) {
 
   return (
     <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
+      {/* Paints the saved colour theme before hydration (runs after next-themes sets the light/dark class). */}
+      <script dangerouslySetInnerHTML={{ __html: THEME_BOOT_SCRIPT }} />
+      <ThemeCustomizer />
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
           <AuthBootstrap>{children}</AuthBootstrap>

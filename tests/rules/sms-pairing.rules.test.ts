@@ -100,6 +100,15 @@ describe("smsSyncControl", () => {
   });
 });
 
+describe("appConfig/androidUpdate", () => {
+  it("signed-in clients can read the in-app update override; nobody can write it", async () => {
+    await seed((db) => setDoc(doc(db, "appConfig", "androidUpdate"), { mandatory: true, minSupportedVersionCode: 5 }));
+    await assertSucceeds(getDoc(doc(asUser(OWNER), "appConfig", "androidUpdate")));
+    await assertFails(getDoc(doc(testEnv.unauthenticatedContext().firestore() as unknown as Firestore, "appConfig", "androidUpdate")));
+    await assertFails(setDoc(doc(asUser(OWNER), "appConfig", "androidUpdate"), { mandatory: false }));
+  });
+});
+
 describe("smsDeviceStatus", () => {
   it("an active paired phone can report its status with a server timestamp", async () => {
     await activeDevice();

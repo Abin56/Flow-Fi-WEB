@@ -95,59 +95,49 @@ describe("brought-forward items stay on the statement that brought them forward"
     expect(statement.previousPending).toBe(1969.6);
     expect(view.carried).toHaveLength(13);
     expect(view.rows).toHaveLength(0);
-    expect(sum(view.carried.map((r) => r.remainingValue))).toBe(1969.6);
-    expect(view.previousNote).toBe("13 items open on 01 Oct · listed below by cycle");
-    // Ending balance follows the table directly — no closing row restating it.
-    expect(view.totals).toBeNull();
+    expect(sum(view.carried.map((r) => r.amountValue))).toBe(1969.6);
+    expect(view.previousNote).toBe("13 items open on 01 Oct");
+    // The one closing line — the engine's aggregate, never summed from the rows above it.
+    expect(view.closing).toEqual({ label: "Balance due", value: money(1969.6), direction: "theyOwe" });
   });
 
-  it("items paid this cycle are still listed (paid in full, cleared date) and the Remaining column adds up", () => {
+  it("items paid this cycle (even in full, via a legacy linked payment) still show their own full face amount and plain kind tag — never a paid/remaining figure", () => {
     const { view, statement } = shambu({ paid: true, newSplit: true });
     expect(statement.amount).toBe(1569.6);
     expect(view.carried).toHaveLength(13);
     const fish = view.carried[0];
-    expect(fish).toMatchObject({ title: "Shai Ganesh - fish", paid: money(200), remaining: money(0), status: "Paid in full", chip: "paid", statusNote: "Cleared 15 Oct" });
-    expect(view.carried[4]).toMatchObject({ paid: money(152.4), remaining: money(21.82), status: "Partially paid", statusNote: "Last paid 15 Oct" });
-    expect(view.totals).toEqual({ carried: money(1369.6), current: money(200), other: null, total: { label: "Balance due", value: money(1569.6) } });
-    expect(sum([...view.carried, ...view.rows].map((r) => r.remainingValue))).toBe(statement.amount);
-    expect(view.openCount).toBe(10);
+    expect(fish).toMatchObject({ title: "Shai Ganesh - fish", original: money(200), tag: "Split", chip: "carried" });
+    expect(view.carried[4]).toMatchObject({ original: money(174.22), tag: "Split", chip: "carried" }); // Shambu's own share of the ₹348.43 bill
+    expect(view.closing).toEqual({ label: "Balance due", value: money(1569.6), direction: "theyOwe" });
   });
 
-  it("a payment is listed once — in Payment history, never as a transaction row — and points at the items it paid by #", () => {
+  it("a payment is listed once — in Payment history, never as a transaction row — naming what it was toward", () => {
     const { view } = shambu({ paid: true, newSplit: true });
     expect([...view.carried, ...view.rows].some((r) => r.kind === "paymentReceived")).toBe(false);
     expect(view.rows.map((r) => r.title)).toEqual(["Pizza night"]);
     expect(view.payments).toHaveLength(1);
     const [p] = view.payments;
-    expect(p).toMatchObject({ amount: money(600), single: null, appliedTotal: money(600) });
-    expect(p.applied.map((a) => [a.ref, a.date, a.label, a.note])).toEqual([
-      ["01", "25 Jul", "Shai Ganesh - fish", "cleared"],
-      ["02", "09 Aug", "BEVCO", "cleared"],
-      ["03", "09 Aug", "CIG", "cleared"],
-      ["04", "09 Aug", "GUVA -JUICE", "cleared"],
-      ["05", "18 Aug", "KERALA STATE BEVERAGES", `${money(21.82)} left`],
-    ]);
+    // Five items were tied to this one payment — named together, not itemised (that detail belonged to Paid/Remaining).
+    expect(p).toMatchObject({ amount: money(600), toward: "Toward 5 items" });
   });
 
-  it("an item part-paid in an earlier cycle is carried at what was left; a fully paid one is not carried", () => {
+  it("an item part-paid in an earlier cycle is still carried at its full face amount; a fully paid one is not carried", () => {
     const { view, statement } = shambu({
       extra: (sh) => [E("receivedBack", 100, d(9, 20), { parentEntryId: sh[7].id }), E("receivedBack", 28, d(9, 21), { parentEntryId: sh[2].id })],
     });
     expect(statement.previousPending).toBe(1841.6);
     expect(view.carried.map((r) => r.title)).not.toContain("CIG");
-    expect(view.carried.find((r) => r.title === "BEVCO - ONAM - BEER")).toMatchObject({ paid: money(100), remaining: money(285) });
-    expect(sum(view.carried.map((r) => r.remainingValue))).toBe(1841.6);
+    expect(view.carried.find((r) => r.title === "BEVCO - ONAM - BEER")).toMatchObject({ original: money(385) });
   });
 });
 
 describe("one date for every figure", () => {
-  it("a closed cycle is read at its last day: a later payment is a note, never a figure", () => {
+  it("a closed cycle is read at its last day: a later payment never changes the engine's own balance", () => {
     const { view, statement } = shambu({ paid: true, cycleOf: d(9, 10) });
     expect(view.asOf).toBe("30 Sep 2026");
     expect(statement.amount).toBe(1969.6);
     const fish = view.carried.find((r) => r.title === "Shai Ganesh - fish")!;
-    expect(fish).toMatchObject({ paid: money(0), remaining: money(200), status: "Payment due", statusNote: `${money(200)} paid later · 15 Oct` });
-    expect(sum([...view.carried, ...view.rows].map((r) => r.remainingValue))).toBe(1969.6);
+    expect(fish.original).toBe(money(200));
     expect(view.payments).toHaveLength(0);
   });
 
@@ -156,25 +146,8 @@ describe("one date for every figure", () => {
   });
 });
 
-describe("how long each item has been open", () => {
-  it("counts from the item's own date to the statement date, deepening in tone with age; paid items carry none", () => {
-    const { view } = shambu({ paid: true, newSplit: true });
-    const by = (title: string) => [...view.carried, ...view.rows].find((r) => r.title === title)!;
-    expect(by("Shai Ganesh - fish").age).toBeNull(); // cleared 15 Oct
-    expect(view.carried.find((r) => r.title.startsWith("ZOMATO"))!.age).toEqual({ label: "Open 53 days", tone: "aging" });
-    expect(view.carried.find((r) => r.title === "KEala beverage for postoffice apply")!.age).toEqual({ label: "Open 35 days", tone: "aging" });
-    expect(by("Pizza night").age).toEqual({ label: "Open 7 days", tone: "fresh" });
-    expect(view.carried[4].age).toEqual({ label: "Open 62 days", tone: "old" }); // part paid, still open
-  });
-
-  it("a closed cycle counts to its own last day", () => {
-    const { view } = shambu({ cycleOf: d(9, 10) });
-    expect(view.carried[0].age).toEqual({ label: "Open 67 days", tone: "old" });
-  });
-});
-
 describe("what the ledger knows, the statement says", () => {
-  it("a postponed item shows the cycle it moved to", () => {
+  it("a postponed item carries 'Moved' as its tag, and the note folds in which cycle it moved to and from", () => {
     let zomatoKey = "";
     const { view } = shambu({
       extra: (sh) => {
@@ -184,7 +157,8 @@ describe("what the ledger knows, the statement says", () => {
       deferralFor: (key) => (key === zomatoKey ? { status: "postponed", name: "Nov", from: "Aug" } : null),
     });
     const zomato = view.carried.find((r) => r.title.startsWith("ZOMATO"))!;
-    expect(zomato).toMatchObject({ status: "Moved to Nov cycle", chip: "upcoming", statusNote: "First due in Aug cycle", remaining: money(147.16) });
+    expect(zomato).toMatchObject({ tag: "Moved", chip: "upcoming", original: money(147.16) });
+    expect(zomato.metaLine).toContain("Moved to Nov cycle · first due in Aug cycle");
   });
 
   it("a receipt recorded later with no known date says so instead of a placeholder date", () => {
@@ -192,13 +166,12 @@ describe("what the ledger knows, the statement says", () => {
       extra: (sh) => [E("receivedBack", 170, d(10, 2), { parentEntryId: sh[10].id, recordedEarlier: true, receivedDateKnown: false } as Partial<LedgerEntry>)],
     });
     expect(view.payments[0]).toMatchObject({ date: "Date not known", note: "Received earlier · recorded later" });
-    expect(view.carried.find((r) => r.title === "Paliparuvadi - Beer")!.statusNote).toBe("Cleared · date not known");
   });
 
-  it("rows owed both ways: no single column sum is claimed", () => {
+  it("rows owed both ways: the one closing balance still reads correctly — nothing is summed from rows anymore", () => {
     const { view, statement } = shambu({ newSplit: true, extra: () => [E("borrowed", 300, d(10, 5), { note: "Borrowed for petrol" })] });
     expect(statement.amount).toBe(1869.6);
-    expect(view.totals).toBeNull();
+    expect(view.closing.value).toBe(money(1869.6));
   });
 });
 

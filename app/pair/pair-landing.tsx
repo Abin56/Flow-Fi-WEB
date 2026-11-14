@@ -284,6 +284,11 @@ export function PairLanding() {
                       {release.sha256}
                     </p>
                   </Collapsible>
+                  {release.releaseNotes && (
+                    <p className="mt-2 text-center text-[12px] leading-relaxed text-muted-foreground" data-testid="pair-release-notes">
+                      {release.releaseNotes}
+                    </p>
+                  )}
                 </div>
               )}
             </div>

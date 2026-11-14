@@ -289,32 +289,10 @@ describe("Money received — existing allocation preserved (cases 2–6, 10)", (
     expect(input.extra).toEqual({ kind: "advance", amount: 125 });
   });
 
-  it("money entered + Skip all is still a legitimate receipt — but the screen says so and offers Postpone", async () => {
-    const { onSubmit } = setup();
-    fireEvent.change(amountField(), { target: { value: "500" } });
-    fireEvent.click(screen.getByRole("button", { name: "Skip all" }));
-    const note = screen.getByTestId("rp-settle-nothing-note");
-    expect(note.textContent).toContain("₹500 will still be recorded as received from SHAMBU");
-    expect(primary().textContent).toBe("Record ₹500 received");
-    // The follow-up reminder is described as a reminder, not a postponement.
-    fireEvent.click(screen.getByRole("button", { name: /After recording/ }));
-    expect(screen.getByTestId("rp-reminder-note").textContent).toContain("A reminder only — it doesn't postpone what is owed.");
-    fireEvent.click(screen.getByRole("radio", { name: /next cycle/i }));
-    expect(screen.getByTestId("rp-reminder-note").textContent).toMatch(/^You'll be reminded on 18 Oct/);
-    await act(async () => fireEvent.click(primary()));
-    expect(onSubmit.mock.calls[0][0]).toMatchObject({ amount: 500, lines: [], extra: { kind: "advance", amount: 500 } });
-  });
-
-  it("the prefilled ₹375 + Skip all (the reported trap): Postpone instead switches to the no-money path", async () => {
-    const { onSubmit, value } = setup();
-    fireEvent.click(screen.getByRole("button", { name: "Skip all" }));
-    fireEvent.click(within(screen.getByTestId("rp-settle-nothing-note")).getByRole("button", { name: /postpone instead/i }));
-    expect(hasntPaid().getAttribute("aria-checked")).toBe("true");
-    expect(primary().textContent).toBe("Postpone ₹375");
-    await act(async () => fireEvent.click(primary()));
-    expect(onSubmit).not.toHaveBeenCalled();
-    expect(value.onApply).toHaveBeenCalledTimes(1);
-  });
+  // "Skip all" and its "settle nothing now" trap-escape no longer exist for a new (always general-mode)
+  // payment — there is no item list to skip, so a general payment can never be recorded while settling
+  // nothing: the entered amount always applies to the overall balance first, the rest becomes an explicit
+  // extra (advance/income/purpose). That removes the trap this pair of tests guarded against.
 
   it("payment after postpone: recording money is the normal payment (the deferral resolves from the live remaining)", async () => {
     const plan = planDeferralWrite(null, null, {

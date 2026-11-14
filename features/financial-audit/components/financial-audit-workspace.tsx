@@ -8,7 +8,7 @@
  */
 
 import { useCallback, useMemo, useState } from "react";
-import { ArrowLeftRight, CircleAlert, CircleCheck, Download, Inbox, Landmark, ListChecks, Lock, RefreshCw, Repeat2, ScanSearch, ShieldCheck, TriangleAlert, Wallet } from "lucide-react";
+import { ArrowLeftRight, CircleAlert, CircleCheck, Download, Inbox, Landmark, ListChecks, Lock, RefreshCw, Repeat2, ScanSearch, ShieldCheck, Sparkles, TriangleAlert, Wallet } from "lucide-react";
 import { ScrollNav } from "@/components/layout/scroll-nav";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -53,21 +53,29 @@ function FindingRow({ f }: { f: Finding }) {
         <Pill>{f.confidence} confidence</Pill>
         <span className="font-medium text-foreground">{f.title}</span>
       </div>
-      <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-4">
-        <Fact label="Date">{fmt(f.date)}</Fact>
-        <Fact label="Amount">{f.amount == null ? "—" : formatCurrencyPrecise(f.amount)}</Fact>
-        <Fact label="Account">{f.accountName ?? "—"}</Fact>
-        <Fact label="Records">{f.refs.map((r) => `${r.kind}:${r.id.slice(0, 10)}`).join(", ")}</Fact>
-      </dl>
-      <p className="mt-3 leading-relaxed text-muted-foreground">{f.reason}</p>
-      <p className="mt-3 flex items-start gap-2 rounded-lg border border-dashed border-border-strong bg-muted/40 p-3 text-xs leading-relaxed">
-        <Lock className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" aria-hidden />
-        <span>
-          <span className="font-medium text-foreground">Proposed correction (preview only, not applied): </span>
-          {f.proposal.summary}
-          {f.proposal.balanceDelta != null ? ` Balance change if applied: ${f.proposal.balanceDelta > 0 ? "+" : ""}${formatCurrencyPrecise(f.proposal.balanceDelta)}.` : ""}
-        </span>
-      </p>
+      <p className="mt-2 leading-relaxed text-muted-foreground">{f.reason}</p>
+      <details className="group mt-3">
+        <summary className="inline-flex cursor-pointer list-none items-center gap-1 text-xs font-medium text-primary-accent-text select-none hover:underline">
+          Show details
+          <svg aria-hidden className="size-3 transition-transform group-open:rotate-90" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 6l6 6-6 6" /></svg>
+        </summary>
+        <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-4">
+          <Fact label="Date">{fmt(f.date)}</Fact>
+          <Fact label="Amount">{f.amount == null ? "—" : formatCurrencyPrecise(f.amount)}</Fact>
+          <Fact label="Account">{f.accountName ?? "—"}</Fact>
+          <Fact label="Records">{f.refs.map((r) => `${r.kind}:${r.id.slice(0, 10)}`).join(", ")}</Fact>
+        </dl>
+        <p className="mt-3 flex items-start gap-2 rounded-lg border border-border-strong bg-muted/40 p-3 text-xs leading-relaxed">
+          <Lock className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+          <span>
+            <span className="inline-flex items-center gap-1 font-medium text-foreground">
+              <Sparkles className="size-3 text-primary-accent-text" aria-hidden /> Proposed correction (preview only, not applied):
+            </span>{" "}
+            {f.proposal.summary}
+            {f.proposal.balanceDelta != null ? ` Balance change if applied: ${f.proposal.balanceDelta > 0 ? "+" : ""}${formatCurrencyPrecise(f.proposal.balanceDelta)}.` : ""}
+          </span>
+        </p>
+      </details>
     </RailItem>
   );
 }
@@ -228,14 +236,44 @@ export function FinancialAuditWorkspace() {
         </div>
       )}
       {!report && state !== "loading" && (
-        <div className="surface-primary flex flex-col items-center gap-3 rounded-2xl border-dashed px-6 py-10 text-center">
+        <div className="surface-primary flex flex-col items-center gap-4 rounded-2xl border-dashed px-6 py-10 text-center">
           <span className="flex size-12 items-center justify-center rounded-2xl bg-accent text-primary-accent-text"><ListChecks className="size-6" aria-hidden /></span>
-          <p className="max-w-xl text-sm leading-relaxed text-muted-foreground">Press “Run audit” to read your accounts, transactions, People ledger, Loans and EMIs and compare them. It only reads.</p>
+          <div className="max-w-md">
+            <p className="text-sm leading-relaxed text-muted-foreground">Press “Run audit” to read your accounts, transactions, People ledger, Loans and EMIs and compare them. It only reads.</p>
+          </div>
+          <ul className="grid gap-2 text-left text-xs text-muted-foreground sm:grid-cols-3">
+            <li className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2"><Landmark className="size-3.5 shrink-0 text-primary-accent-text" aria-hidden /> Account balances vs calculated</li>
+            <li className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2"><ListChecks className="size-3.5 shrink-0 text-primary-accent-text" aria-hidden /> Contradicting records</li>
+            <li className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2"><Repeat2 className="size-3.5 shrink-0 text-primary-accent-text" aria-hidden /> Card EMI principal billed twice</li>
+          </ul>
         </div>
       )}
 
       {report && (
         <>
+          {(() => {
+            const issues = report.summary.confirmed + report.summary.suspected;
+            const healthy = issues === 0;
+            return (
+              <div
+                role="status"
+                className={cn(
+                  "flex items-center gap-3 rounded-2xl border p-4",
+                  healthy ? "border-success/30 bg-success/[0.06]" : "border-warning/40 bg-warning/[0.07]",
+                )}
+              >
+                <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-xl", healthy ? "bg-success/15 text-success" : "bg-warning/20 text-warning-foreground dark:text-warning")}>
+                  {healthy ? <CircleCheck className="size-4.5" aria-hidden /> : <TriangleAlert className="size-4.5" aria-hidden />}
+                </span>
+                <p className="text-sm font-medium text-foreground">
+                  {healthy
+                    ? "Everything checks out — no contradictions found."
+                    : `${issues} thing${issues === 1 ? "" : "s"} may need your attention — ${report.summary.confirmed} confirmed, ${report.summary.suspected} suspected.`}
+                </p>
+              </div>
+            );
+          })()}
+
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
             <StatTile icon={TriangleAlert} label="Confirmed" value={report.summary.confirmed} tone={report.summary.confirmed > 0 ? "danger" : "success"} hint={report.summary.confirmed > 0 ? "Records contradict each other" : "Nothing contradicts"} />
             <StatTile icon={CircleAlert} label="Suspected (historical)" value={report.summary.suspected} tone={report.summary.suspected > 0 ? "warning" : "success"} />

@@ -2,18 +2,29 @@
 
 import { motion } from "framer-motion";
 import { ChevronRight } from "lucide-react";
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { SidebarNavContent } from "@/components/layout/sidebar-nav-content";
 import { springs } from "@/lib/motion/tokens";
 
 /** Desktop nav rail — hidden below md; see MobileSidebar for the small-screen equivalent (a Sheet drawer
  *  triggered from Topbar's hamburger button), both built on the shared SidebarNavContent. */
+/** Wide screens get the roomier rail; laptops (incl. 125% display scaling) get a slimmer one so the page keeps its space. */
+const WIDE_QUERY = "(min-width: 1600px)";
+function subscribeWide(onChange: () => void) {
+  const mq = window.matchMedia(WIDE_QUERY);
+  mq.addEventListener("change", onChange);
+  return () => mq.removeEventListener("change", onChange);
+}
+const isWide = () => window.matchMedia(WIDE_QUERY).matches;
+
 export function Sidebar() {
   const [collapsed, setCollapsed] = useState(false);
+  const wide = useSyncExternalStore(subscribeWide, isWide, () => false);
 
   return (
     <motion.div
-      animate={{ width: collapsed ? 72 : 264 }}
+      initial={false}
+      animate={{ width: collapsed ? 68 : wide ? 264 : 252 }}
       transition={springs.smooth}
       className="hidden shrink-0 md:block"
     >

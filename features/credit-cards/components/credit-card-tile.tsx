@@ -7,6 +7,7 @@ import { StaggerItem } from "@/components/foundation/animated-container";
 import { BankLogo } from "@/components/finance/bank-logo";
 import { formatCurrency } from "@/lib/format";
 import type { CreditCardViewItem } from "@/features/credit-cards/hooks/use-credit-cards-data";
+import { gradientFromArgb } from "@/lib/account-color";
 import { cn } from "@/lib/utils";
 
 /** Rich dark card-face gradients — deliberately outside the app's pastel token palette, since these stand in
@@ -30,6 +31,11 @@ export const CARD_GRADIENT: Record<CreditCardViewItem["accent"], string> = {
   magenta: "linear-gradient(135deg, #701a75 0%, #c026d3 100%)",
   navy: "linear-gradient(135deg, #0a0f2c 0%, #1e2a78 100%)",
 };
+
+/** The card face gradient: the named swatch's hand-tuned gradient, or one derived from a custom (mobile-picked) colour. */
+export function cardFaceGradient(card: Pick<CreditCardViewItem, "accent" | "customColor">): string {
+  return card.customColor != null ? gradientFromArgb(card.customColor) : CARD_GRADIENT[card.accent];
+}
 
 function daysUntil(date: Date): number {
   const now = new Date();
@@ -105,7 +111,7 @@ export function CreditCardTile({ card, bankId, active, partnerHighlighted, onHov
           whileTap={reduceMotion ? undefined : { scale: 0.985 }}
           transition={{ type: "spring", stiffness: 300, damping: 24 }}
           style={{
-            background: CARD_GRADIENT[card.accent],
+            background: cardFaceGradient(card),
             rotateX: reduceMotion ? 0 : rotateX,
             rotateY: reduceMotion ? 0 : rotateY,
           }}

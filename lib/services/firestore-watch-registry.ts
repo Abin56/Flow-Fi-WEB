@@ -50,33 +50,59 @@ export function _debugRegistrySize(queryKey: readonly unknown[]): number {
 interface SharedSubscription {
   refCount: number;
   unsubscribe: () => void;
+  /** Pending teardown after the last consumer released (cancelled if someone re-acquires within the grace period). */
+  idleTimer: ReturnType<typeof setTimeout> | null;
+  /** The listener reported an error — Firestore ends a listener after an error, so it must be reopened, never reused. */
+  failed: boolean;
 }
 
 const subscriptions = new Map<string, SharedSubscription>();
 
 /**
+ * How long a listener stays open after its last consumer unmounts. Navigating from one page to another unmounts the
+ * old page BEFORE the new one mounts, so without this every listener the two pages share (accounts, transactions, …)
+ * was closed and reopened on each navigation — a full collection re-read plus a fresh array (and re-render of every
+ * consumer) per switch. Within this window the next page simply rides the still-open listener. Data stays live either
+ * way; only the teardown is deferred. Performance only — what the listener reads and writes is unchanged.
+ */
+export const IDLE_RELEASE_MS = 60_000;
+
+function teardown(key: string, entry: SharedSubscription) {
+  if (entry.idleTimer) clearTimeout(entry.idleTimer);
+  entry.idleTimer = null;
+  entry.unsubscribe();
+  if (subscriptions.get(key) === entry) subscriptions.delete(key);
+}
+
+/**
  * Reference-counted ownership of the *actual* Firestore listener behind a `useFirestoreWatch`
  * query key. The first caller for a given key really does open it (`subscribe()` is invoked);
- * every other concurrently-mounted caller for that same key (e.g. a sidebar summary and the page
- * itself both calling `useAccounts()`, or simply navigating back to a page whose data is still
- * referenced elsewhere) just increments the ref count and rides the one listener's writes into
- * the shared React Query cache — every `useQuery({queryKey})` observer already re-renders off
- * that shared cache regardless of which mounted instance owns the underlying subscription. The
- * real listener is only torn down once the last caller releases, so navigating away from and back
- * to a page no longer means a fresh full-collection re-fetch each time as long as *something*
- * elsewhere kept the subscription alive in between — and once nothing does, it tears down exactly
- * like before.
+ * every other concurrently-mounted caller for that same key just increments the ref count and rides
+ * the one listener's writes into the shared React Query cache. Once the last caller releases, the
+ * listener is kept open for `IDLE_RELEASE_MS` (see above) and torn down only if nobody re-acquires it.
  *
- * `subscribe` is only ever invoked for the caller that actually creates the entry — later callers'
- * `subscribe` closures are discarded, which is safe because two callers sharing the same `queryKey`
- * are, by construction, watching the same uid-scoped Firestore query.
+ * A listener marked failed (`markSharedSubscriptionFailed`) is reopened by the next acquire — this is
+ * what the watcher banner's Retry relies on — while keeping the key's consumer count intact.
+ *
+ * `subscribe` is only ever invoked for the caller that actually creates (or reopens) the entry — later
+ * callers' `subscribe` closures are discarded, which is safe because two callers sharing the same
+ * `queryKey` are, by construction, watching the same uid-scoped Firestore query.
  */
 export function acquireSharedSubscription(queryKey: readonly unknown[], subscribe: () => () => void): () => void {
   const key = keyFor(queryKey);
   let entry = subscriptions.get(key);
-  if (!entry) {
-    entry = { refCount: 0, unsubscribe: subscribe() };
+  if (entry && entry.failed) {
+    const refCount = entry.refCount;
+    teardown(key, entry);
+    entry = { refCount, unsubscribe: subscribe(), idleTimer: null, failed: false };
     subscriptions.set(key, entry);
+  } else if (!entry) {
+    entry = { refCount: 0, unsubscribe: subscribe(), idleTimer: null, failed: false };
+    subscriptions.set(key, entry);
+  }
+  if (entry.idleTimer) {
+    clearTimeout(entry.idleTimer);
+    entry.idleTimer = null;
   }
   entry.refCount += 1;
 
@@ -84,12 +110,35 @@ export function acquireSharedSubscription(queryKey: readonly unknown[], subscrib
   return () => {
     if (released) return;
     released = true;
-    entry!.refCount -= 1;
-    if (entry!.refCount <= 0) {
-      entry!.unsubscribe();
-      subscriptions.delete(key);
+    // Always the key's CURRENT entry: a failed listener may have been reopened (replaced) since this caller acquired.
+    const current = subscriptions.get(key);
+    if (!current) return;
+    current.refCount -= 1;
+    if (current.refCount > 0) return;
+    current.refCount = 0;
+    if (current.failed) {
+      teardown(key, current);
+      return;
     }
+    if (current.idleTimer) clearTimeout(current.idleTimer);
+    current.idleTimer = setTimeout(() => {
+      if (current.refCount <= 0) teardown(key, current);
+    }, IDLE_RELEASE_MS);
   };
+}
+
+/** The listener behind this key errored (Firestore has already ended it): the next acquire opens a fresh one. */
+export function markSharedSubscriptionFailed(queryKey: readonly unknown[]): void {
+  const key = keyFor(queryKey);
+  const entry = subscriptions.get(key);
+  if (!entry) return;
+  entry.failed = true;
+  if (entry.refCount <= 0) teardown(key, entry);
+}
+
+/** Closes every listener that is only being kept open for the grace period (no mounted consumer). Called on sign-out. */
+export function closeIdleSharedSubscriptions(): void {
+  for (const [key, entry] of [...subscriptions]) if (entry.refCount <= 0) teardown(key, entry);
 }
 
 /** Test-only escape hatch. */

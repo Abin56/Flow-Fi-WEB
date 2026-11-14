@@ -21,10 +21,11 @@
  */
 
 import { useState } from "react";
-import { Loader2, Users } from "lucide-react";
+import { CreditCard, Loader2, Users } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SectionCard } from "@/components/finance/transaction-details-shell";
 import { formatCurrencyPrecise } from "@/lib/format";
 import { AlertTriangle } from "lucide-react";
@@ -177,11 +178,36 @@ export function BulkImportDialog({
                 <SelectValue placeholder="Select an account or card" />
               </SelectTrigger>
               <SelectContent>
-                {destinationOptions.map((opt) => (
-                  <SelectItem key={opt.key} value={opt.key}>
-                    {opt.label}
-                  </SelectItem>
-                ))}
+                {[
+                  { title: "Accounts & debit cards", credit: false, options: destinationOptions.filter((o) => !o.key.startsWith("card:")) },
+                  { title: "Credit cards", credit: true, options: destinationOptions.filter((o) => o.key.startsWith("card:")) },
+                ]
+                  .filter((g) => g.options.length > 0)
+                  .map((g, i, all) => (
+                    <div key={g.title}>
+                      {i > 0 && <SelectSeparator />}
+                      <SelectGroup className={cn(g.credit && "rounded-md bg-violet-500/[0.06] pb-0.5 dark:bg-violet-400/[0.08]")}>
+                        {(all.length > 1 || g.credit) && (
+                          <SelectLabel className={cn("flex items-center gap-1.5 pt-1.5 pb-1 text-[10px] font-semibold tracking-wide uppercase", g.credit && "text-violet-700 dark:text-violet-300")}>
+                            {g.credit && <CreditCard className="size-3" strokeWidth={2.4} />}
+                            {g.title}
+                          </SelectLabel>
+                        )}
+                        {g.options.map((opt) => (
+                          <SelectItem key={opt.key} value={opt.key}>
+                            {g.credit ? (
+                              <span className="inline-flex min-w-0 items-center gap-2">
+                                <CreditCard className="size-4 shrink-0 text-violet-600 dark:text-violet-300" />
+                                <span className="truncate">{opt.label}</span>
+                              </span>
+                            ) : (
+                              opt.label
+                            )}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </div>
+                  ))}
               </SelectContent>
             </Select>
             {overridesAndroidMatch && (

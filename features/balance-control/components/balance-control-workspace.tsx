@@ -75,6 +75,12 @@ const SEVERITY_ICON: Record<VarianceSeverity, LucideIcon> = { ok: CircleCheck, i
 const SEVERITY_RAIL: Record<VarianceSeverity, string> = { ok: "before:bg-success", info: "before:bg-border-strong", review: "before:bg-warning" };
 
 const KIND_ICON: Record<ProductKind, LucideIcon> = { card: CreditCard, loan: Landmark, emi: CalendarClock };
+/** A soft, kind-specific tint on the product badge — purely a visual cue to tell cards, loans and EMIs apart at a glance. */
+const KIND_ACCENT: Record<ProductKind, string> = {
+  card: "bg-[oklch(0.94_0.03_255)] text-[oklch(0.5_0.14_255)] dark:bg-[oklch(0.3_0.05_255)] dark:text-[oklch(0.78_0.1_255)]",
+  loan: "bg-[oklch(0.95_0.03_300)] text-[oklch(0.52_0.13_300)] dark:bg-[oklch(0.3_0.05_300)] dark:text-[oklch(0.8_0.1_300)]",
+  emi: "bg-[oklch(0.95_0.04_70)] text-[oklch(0.55_0.12_70)] dark:bg-[oklch(0.3_0.05_70)] dark:text-[oklch(0.82_0.1_70)]",
+};
 
 /**
  * What the bank / lender column holds on each row. The same column means different things per figure (an approved
@@ -94,7 +100,7 @@ function ResultChip({ result }: { result: VarianceResult }) {
   // Nothing typed yet: a quiet neutral state, not a second "enter a figure" prompt beside the input.
   if (result.classification === "notEntered") {
     return (
-      <span className="inline-flex h-6 items-center text-xs text-muted-foreground/80" data-testid="variance-class" data-state="pending">
+      <span className="inline-flex h-6 items-center text-xs text-muted-foreground/55 italic" data-testid="variance-class" data-state="pending">
         Not compared
       </span>
     );
@@ -231,25 +237,29 @@ function MetricRow({
         </span>
       </div>
       <div role="cell" className="min-w-0 @2xl:pt-2">
-        <div className="flex flex-wrap items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-2">
           <ResultChip result={result} />
-          {canCorrect && (
-            <Button size="xs" onClick={onCorrect} data-testid="correct-limit-button" className="shadow-e1">
-              Correct
-            </Button>
-          )}
-          {canReconcile && (
-            <Button size="xs" onClick={onReconcile} data-testid="reconcile-button" className="shadow-e1">
-              Reconcile
-            </Button>
-          )}
-          {metric === "creditLimit" && onShowHistory && (
-            <Button size="icon-xs" variant="ghost" onClick={onShowHistory} aria-label="Correction history" data-testid="limit-history-button" className="relative text-muted-foreground hover:text-foreground">
-              <History />
-              {historyCount != null && historyCount > 0 && (
-                <span className="absolute -top-1 -right-1 flex size-3.5 items-center justify-center rounded-full bg-accent text-[9px] font-medium text-accent-foreground">{historyCount}</span>
+          {(canCorrect || canReconcile || (metric === "creditLimit" && onShowHistory)) && (
+            <div className="flex items-center gap-1 rounded-full border border-border bg-card p-0.5 shadow-e1">
+              {canCorrect && (
+                <Button size="xs" variant="ghost" onClick={onCorrect} data-testid="correct-limit-button" className="rounded-full text-primary-accent-text hover:bg-accent hover:text-primary-accent-text">
+                  Correct
+                </Button>
               )}
-            </Button>
+              {canReconcile && (
+                <Button size="xs" variant="ghost" onClick={onReconcile} data-testid="reconcile-button" className="rounded-full text-primary-accent-text hover:bg-accent hover:text-primary-accent-text">
+                  Reconcile
+                </Button>
+              )}
+              {metric === "creditLimit" && onShowHistory && (
+                <Button size="icon-xs" variant="ghost" onClick={onShowHistory} aria-label="Correction history" data-testid="limit-history-button" className="relative rounded-full text-muted-foreground hover:bg-muted hover:text-foreground">
+                  <History />
+                  {historyCount != null && historyCount > 0 && (
+                    <span className="absolute -top-1 -right-1 flex size-3.5 items-center justify-center rounded-full bg-accent text-[9px] font-medium text-accent-foreground">{historyCount}</span>
+                  )}
+                </Button>
+              )}
+            </div>
           )}
         </div>
         {entered && <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">{result.hint}</p>}
@@ -295,9 +305,9 @@ function ImpactPreview({ product, results }: { product: VarianceProduct; results
     .filter((p) => p.preview != null);
   if (previews.length === 0) return null;
   return (
-    <section className="surface-primary overflow-hidden rounded-2xl" data-testid="impact-preview">
-      <header className="flex flex-wrap items-center gap-3 border-b border-border bg-muted/40 px-4 py-3">
-        <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-accent text-primary-accent-text">
+    <section className="surface-primary overflow-hidden rounded-2xl ring-1 ring-primary/15" data-testid="impact-preview">
+      <header className="flex flex-wrap items-center gap-3 border-b border-border bg-gradient-to-r from-primary/[0.06] to-transparent px-4 py-3">
+        <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-e1">
           <Eye className="size-4" aria-hidden />
         </span>
         <div className="min-w-0 flex-1">
@@ -383,7 +393,7 @@ function ProductPicker({ products, product, onSelect }: { products: VarianceProd
             data-testid="product-picker"
             className="group flex h-10 w-full max-w-full min-w-56 cursor-pointer items-center gap-2 rounded-lg border border-border-strong bg-background py-1 pr-2.5 pl-1.5 text-left text-sm font-medium text-foreground shadow-e1 transition-[border-color,box-shadow,background-color] duration-150 outline-none hover:border-foreground/25 hover:bg-muted/40 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30 data-[state=open]:border-ring data-[state=open]:ring-3 data-[state=open]:ring-ring/30"
           >
-            <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-accent text-primary-accent-text">
+            <span className={cn("flex size-7 shrink-0 items-center justify-center rounded-md", KIND_ACCENT[product.kind])}>
               <Icon className="size-4" aria-hidden />
             </span>
             <span className="min-w-0 flex-1 truncate">{productLabel(product)}</span>
@@ -642,7 +652,7 @@ export const BalanceControlView = memo(function BalanceControlView({
           <div className="@container surface-primary rounded-2xl p-3 sm:p-4">
             <div className="flex flex-col gap-3 @3xl:flex-row @3xl:items-center @3xl:justify-between">
               <div className="flex min-w-0 items-center gap-3">
-                <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-accent text-primary-accent-text">
+                <span className={cn("flex size-10 shrink-0 items-center justify-center rounded-xl", product ? KIND_ACCENT[product.kind] : "bg-accent text-primary-accent-text")}>
                   <KindIcon className="size-5" aria-hidden />
                 </span>
                 <div className="flex min-w-0 flex-1 flex-col gap-1">

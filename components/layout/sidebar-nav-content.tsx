@@ -1,6 +1,6 @@
 "use client";
 
-import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import { motion, useReducedMotion } from "framer-motion";
 import {
   CalendarRange,
   ChevronRight,
@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { ClayAvatar } from "@/components/clay/clay-avatar";
 import {
   NAV_ITEMS,
@@ -29,7 +29,9 @@ import {
   type NavSection,
 } from "@/components/layout/nav-items";
 import { MAX_PINS, togglePin, useNavPrefs } from "@/components/layout/nav-prefs";
+import { NavScrollThumb } from "@/components/layout/nav-scroll-thumb";
 import { QuickAccess } from "@/components/layout/quick-access";
+import { useSmoothScroll } from "@/components/layout/use-smooth-scroll";
 import {
   Tooltip,
   TooltipContent,
@@ -65,6 +67,12 @@ const SECTION_ICON: Record<NavSection, LucideIcon> = {
 /** Breathing room (px) kept above/below the active row when the list glides to it. */
 const EDGE = 10;
 
+/** One spring for every sliding highlight in the drawer, so they all move with the same feel. */
+const SLIDE = { type: "spring", stiffness: 900, damping: 52, mass: 0.6 } as const;
+
+/** Set once the whole menu has been prefetched, so later mounts of the nav (every mobile drawer open) skip it. */
+let menuWarmed = false;
+
 function groupBySection(
   items: NavItem[],
 ): Array<{ section: NavSection; items: NavItem[] }> {
@@ -98,7 +106,7 @@ export function SidebarNavContent({
   collapsed?: boolean;
   scrollMotion?: boolean;
   onNavigate?: () => void;
-  /** Desktop rail only: renders a collapse button inside the profile row. */
+  /** Desktop rail only: renders a collapse button beside the logo. */
   onCollapse?: () => void;
 }) {
   const pathname = usePathname();
@@ -106,6 +114,10 @@ export function SidebarNavContent({
   useAuthStore((state) => state.profileVersion); // re-render after a saved name/photo change
   const profilePhoto = useProfilePhoto();
   const reduceMotion = useReducedMotion();
+  // The desktop rail stays mounted (hidden) under the mobile drawer; a per-instance scope keeps their sliding
+  // highlights (shared layoutIds) from ever animating between the two copies.
+  const scope = useId();
+  const slide = reduceMotion ? { duration: 0 } : SLIDE;
   // "Jump to…" — filters the menu; Enter opens the first match. Presentation only (same routes).
   const router = useRouter();
   // The page being opened (set on click, cleared once the URL changes) — drives the instant highlight and the top bar.
@@ -115,6 +127,8 @@ export function SidebarNavContent({
     setLastPathname(pathname);
     setPendingHref(null);
   }
+  // Row under the mouse — one shared hover highlight glides between rows instead of each row blinking on/off.
+  const [hoverHref, setHoverHref] = useState<string | null>(null);
   const prefs = useNavPrefs();
   const currentHref = navItemForPath(pathname)?.href;
   const warm = (href: string) => router.prefetch(href);
@@ -123,9 +137,15 @@ export function SidebarNavContent({
     if (!e.metaKey && !e.ctrlKey && !e.shiftKey && e.button === 0 && !isNavItemActive(item, pathname)) setPendingHref(item.href);
     onNavigate?.();
   };
-  // Warm every menu page once the browser is idle, so the first visit to each opens quickly.
+  // Warm every menu page once per session (when the browser is idle), so the first visit to each opens quickly.
+  // Not per mount: the mobile drawer remounts this component on every open, and re-issuing 20 prefetches while
+  // the drawer is sliding in only competes with its own animation.
   useEffect(() => {
-    const warm = () => NAV_ITEMS.forEach((item) => router.prefetch(item.href));
+    if (menuWarmed) return;
+    const warm = () => {
+      menuWarmed = true;
+      NAV_ITEMS.forEach((item) => router.prefetch(item.href));
+    };
     if (typeof window.requestIdleCallback === "function") {
       const id = window.requestIdleCallback(warm, { timeout: 2500 });
       return () => window.cancelIdleCallback(id);
@@ -139,15 +159,21 @@ export function SidebarNavContent({
   const matches = (item: NavItem) => q === "" || item.label.toLowerCase().includes(q) || item.section.toLowerCase().includes(q);
   const firstMatch = q === "" ? null : NAV_ITEMS.find(matches) ?? null;
   const scrollerRef = useRef<HTMLDivElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  // Wheel glide + one shared easing for every programmatic scroll (tabs, keep-active-in-view, thumb).
+  const { scrollTo: glideTo } = useSmoothScroll(scrollerRef, rootRef, !reduceMotion);
   const groupRefs = useRef(new Map<NavSection, HTMLElement>());
-  // Category the list is currently showing (drives the tab strip highlight + caption) — always what is in view.
+  // Category the list is currently showing (drives the tab strip highlight) — always what is in view.
   const [spySection, setSpySection] = useState<NavSection | null>(null);
   const lockedRef = useRef(false); // while a tab-click glide runs, scroll events must not override the clicked tab
   const lockTimer = useRef(0);
+  // Set while the list is gliding to the current page: the tab strip then names that page's category and ignores the
+  // scroll events of the glide. Any wheel / touch / pointer / key input in the drawer hands control back to the scroll-spy.
+  const holdRef = useRef(false);
 
   // Scroll-spy: the category whose heading was last to reach the top of the list is the "current" one.
   const spyFrame = useRef(0);
-  // Edge fades: a soft shadow only on a side where more rows are hidden, so cut-off rows read as "scroll for more".
+  // Edge fades: the list dissolves only on a side where more rows are hidden, so cut-off rows read as "scroll for more".
   const [edges, setEdges] = useState({ up: false, down: false });
   const updateEdges = () => {
     const sc = scrollerRef.current;
@@ -188,9 +214,12 @@ export function SidebarNavContent({
     return () => window.cancelAnimationFrame(frame);
   }, [pathname, q]);
 
+  const releaseHold = () => {
+    holdRef.current = false;
+  };
   const onListScroll = () => {
     updateEdges();
-    if (lockedRef.current || spyFrame.current) return;
+    if (lockedRef.current || holdRef.current || spyFrame.current) return;
     spyFrame.current = window.requestAnimationFrame(() => {
       spyFrame.current = 0;
       computeSpy();
@@ -210,16 +239,17 @@ export function SidebarNavContent({
     const scroller = scrollerRef.current;
     const el = groupRefs.current.get(section);
     if (!scroller || !el) return;
+    holdRef.current = false;
     lockedRef.current = true;
     window.clearTimeout(lockTimer.current);
-    lockTimer.current = window.setTimeout(() => (lockedRef.current = false), 700);
+    lockTimer.current = window.setTimeout(() => (lockedRef.current = false), 380);
     setSpySection(section);
     // Brief highlight on the heading you jumped to, so the eye lands on it.
     setFlashSection(section);
     window.clearTimeout(flashTimer.current);
-    flashTimer.current = window.setTimeout(() => setFlashSection(null), 650);
+    flashTimer.current = window.setTimeout(() => setFlashSection(null), 450);
     const delta = el.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
-    scroller.scrollTo({ top: Math.max(0, scroller.scrollTop + delta - 2), behavior: reduceMotion ? "auto" : "smooth" });
+    glideTo(scroller.scrollTop + delta - 2);
   };
 
   // Keep the current page in view: when the menu opens or the page changes, glide the list so the active row is
@@ -232,13 +262,20 @@ export function SidebarNavContent({
     const instant = firstScroll.current || !!reduceMotion;
     firstScroll.current = false;
     const frame = window.requestAnimationFrame(() => {
+      // The tab strip names the category of the page you are on, not whichever heading happens to be nearest the top
+      // (at the end of the list those differ). Hold it while the list moves; the next manual scroll takes over again.
+      const activeSection = navItemForPath(pathname)?.section;
+      if (activeSection && groupRefs.current.has(activeSection)) {
+        holdRef.current = true;
+        setSpySection(activeSection);
+      }
       const s = scroller.getBoundingClientRect();
       const r = row.getBoundingClientRect();
       if (r.top >= s.top + EDGE && r.bottom <= s.bottom - EDGE) return; // already comfortably visible
-      scroller.scrollTo({ top: scroller.scrollTop + (r.top - s.top) - s.height / 2 + r.height / 2, behavior: instant ? "auto" : "smooth" });
+      glideTo(scroller.scrollTop + (r.top - s.top) - s.height / 2 + r.height / 2, instant);
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [pathname, reduceMotion]);
+  }, [pathname, reduceMotion, glideTo]);
 
   const groups = groupBySection(NAV_ITEMS.filter(matches));
   // Visual order (section headers + rows) → cascade step for the drawer's open animation.
@@ -249,9 +286,25 @@ export function SidebarNavContent({
   });
   const motionOn = scrollMotion && !collapsed;
   const scrollItem = motionOn ? "drawer-item" : undefined;
+  // Soft dissolve at whichever edge has more rows hidden (mask, so it works on any background/theme).
+  const fadeTop = edges.up ? 22 : 0;
+  const fadeBottom = edges.down ? 32 : 0;
+  const listMask = `linear-gradient(to bottom, transparent 0, #000 ${fadeTop}px, #000 calc(100% - ${fadeBottom}px), transparent 100%)`;
 
   return (
-    <div className="flex h-full min-h-0 flex-col py-3">
+    <div
+      ref={rootRef}
+      onWheel={releaseHold}
+      onTouchStart={releaseHold}
+      onPointerDown={releaseHold}
+      onKeyDown={releaseHold}
+      className="nav-root relative flex h-full min-h-0 flex-col py-3"
+    >
+      {/* Soft brand glow behind the header — decorative. */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-x-0 top-0 h-44 bg-[radial-gradient(110%_70%_at_0%_0%,color-mix(in_oklab,var(--primary)_28%,transparent),transparent_72%)] opacity-80"
+      />
       {/* Slim loading bar along the top of the window while a page from the menu is opening. */}
       {pendingHref != null && (
         <div aria-hidden className="pointer-events-none fixed inset-x-0 top-0 z-command h-0.5 overflow-hidden">
@@ -259,35 +312,51 @@ export function SidebarNavContent({
             className="h-full bg-primary-accent-text shadow-[0_0_8px_rgba(150,190,40,0.8)]"
             initial={{ width: "0%" }}
             animate={{ width: "85%" }}
-            transition={{ duration: reduceMotion ? 0 : 1.6, ease: [0.1, 0.8, 0.2, 1] }}
+            transition={{ duration: reduceMotion ? 0 : 0.7, ease: [0.1, 0.8, 0.2, 1] }}
           />
         </div>
       )}
-      {/* Brand */}
-      <div
-        className={cn(
-          "flex shrink-0 items-center gap-2.5 px-4",
-          collapsed && "justify-center px-0",
-        )}
-      >
-        <div className="relative flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-[10px] bg-primary font-heading text-sm font-bold text-primary-foreground ring-1 ring-primary-accent-text/30">
-                    <span className="relative">F</span>
-        </div>
+
+      {/* Brand + collapse */}
+      <div className={cn("relative flex h-10 shrink-0 items-center gap-2.5 px-4", collapsed && "justify-center px-0")}>
+        <Link
+          href="/dashboard"
+          onClick={onNavigate}
+          aria-label="FlowFi home"
+          className="group/logo relative flex size-[var(--nav-logo)] shrink-0 items-center justify-center rounded-[11px] bg-gradient-to-br from-primary to-[var(--primary-hover)] font-heading text-[15px] font-bold text-primary-foreground shadow-[0_4px_12px_-4px_rgba(150,190,40,0.7),inset_0_1px_0_rgba(255,255,255,0.5)] outline-none transition-transform duration-200 ease-[var(--nav-ease-spring)] hover:-rotate-8 hover:scale-110 active:scale-90 focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          F
+        </Link>
         {!collapsed && (
-          <div className="min-w-0">
-            <span className="flex items-center gap-1 font-heading text-base leading-tight font-semibold tracking-tight">
+          <div className="min-w-0 flex-1">
+            <span className="flex items-center gap-1 font-heading text-[length:var(--nav-title)] leading-tight font-semibold tracking-[-0.02em]">
               FlowFi
-              <Sparkles className="size-3.5 text-primary-accent-text" />
+              <Sparkles className="size-3 text-primary-accent-text" strokeWidth={2.2} />
             </span>
-            <span className="block text-xs leading-tight text-foreground/60">Personal finance</span>
+            <span className="block text-[11px] leading-tight font-medium tracking-[0.01em] text-foreground/50">Personal finance</span>
           </div>
+        )}
+        {!collapsed && onCollapse && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={onCollapse}
+                aria-label="Collapse sidebar"
+                className="flex size-7 shrink-0 items-center justify-center rounded-lg text-foreground/45 outline-none transition-[background-color,color,transform] hover:bg-card hover:text-foreground hover:shadow-sm active:scale-90 focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <ChevronsLeft className="size-4" strokeWidth={1.8} />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right">Collapse sidebar</TooltipContent>
+          </Tooltip>
         )}
       </div>
 
-      {/* Only this middle region scrolls, so the logo and profile stay pinned and every item stays reachable on short screens. */}
+      {/* Mobile only: the desktop top bar already has ⌘K. */}
       {!collapsed && (
-        <div className="mt-4 shrink-0 px-3 md:hidden">
-          <label className="flex h-10 items-center gap-2.5 rounded-xl border border-border/70 bg-card/60 px-3 text-sm transition-colors focus-within:border-primary-accent-text/60 focus-within:bg-card focus-within:ring-2 focus-within:ring-ring/40">
+        <div className="relative mt-4 shrink-0 px-3 md:hidden">
+          <label className="nav-search flex h-10 items-center gap-2.5 rounded-xl bg-card/80 px-3 text-sm ring-1 ring-border/60 transition-[box-shadow,background-color] focus-within:bg-card">
             <Search className="size-4 shrink-0 text-foreground/50" strokeWidth={1.9} />
             <input
               ref={searchRef}
@@ -324,15 +393,19 @@ export function SidebarNavContent({
           recents={prefs.recents}
           currentHref={currentHref}
           pendingHref={pendingHref}
+          layoutScope={scope}
           onGo={handleGo}
           onWarm={warm}
         />
       )}
 
-      {/* Category tabs — always visible, so any earlier category is one tap away while the list scrolls under them. */}
+      {/* Category tabs — always visible, so any category is one tap away while the list scrolls under them. */}
       {!collapsed && q === "" && groups.length > 1 && (
-        <div className="mx-3 mt-2.5 shrink-0">
-        <div role="group" aria-label="Jump to a category" className="flex gap-0.5 rounded-xl border border-border/60 bg-muted/50 p-0.5">
+        <div
+          role="group"
+          aria-label="Jump to a category"
+          className="relative mx-3 mt-3 flex shrink-0 gap-0.5 rounded-xl bg-muted/60 p-[3px] ring-1 ring-border/40 [@media(max-height:820px)]:mt-2.5"
+        >
           {groups.map((group) => {
             const TabIcon = SECTION_ICON[group.section];
             const current = spySection === group.section;
@@ -344,22 +417,22 @@ export function SidebarNavContent({
                     aria-current={current ? "true" : undefined}
                     aria-label={group.section}
                     onClick={() => jumpToSection(group.section)}
-                    className="group/tab relative flex h-10 min-w-0 flex-1 items-center justify-center rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    className="group/tab relative flex h-[var(--nav-tab)] min-w-0 flex-1 items-center justify-center rounded-lg outline-none transition-transform active:scale-90 focus-visible:ring-2 focus-visible:ring-ring"
                   >
                     {current && (
                       <motion.span
-                        layoutId="nav-cat-active"
+                        layoutId={`${scope}nav-cat-active`}
                         aria-hidden
-                        className="absolute inset-0 rounded-lg bg-card shadow-sm ring-1 ring-primary-accent-text/25"
-                        transition={reduceMotion ? { duration: 0 } : { type: "spring", stiffness: 500, damping: 38 }}
+                        className="absolute inset-0 rounded-lg bg-card shadow-[0_1px_3px_rgba(0,0,0,0.1)] ring-1 ring-primary-accent-text/20"
+                        transition={slide}
                       />
                     )}
                     <TabIcon
                       className={cn(
-                        "relative size-5 transition-colors",
-                        current ? "text-primary-accent-text" : "text-foreground/55 group-hover/tab:text-foreground",
+                        "relative size-[var(--nav-tab-icon)] transition-[color,transform] duration-200 ease-[var(--nav-ease-spring)] group-hover/tab:-translate-y-px",
+                        current ? "scale-105 text-primary-accent-text" : "text-foreground/45 group-hover/tab:text-foreground",
                       )}
-                      strokeWidth={2}
+                      strokeWidth={current ? 2.2 : 1.8}
                     />
                   </button>
                 </TooltipTrigger>
@@ -368,37 +441,16 @@ export function SidebarNavContent({
             );
           })}
         </div>
-        {/* Caption: names the category in view (icons alone are ambiguous on touch) and survives scrolling. */}
-        <div className="mt-1.5 flex h-5 items-center justify-between px-2 text-xs [@media(max-height:820px)]:hidden" aria-hidden>
-          <AnimatePresence mode="wait" initial={false}>
-            <motion.span
-              key={spySection ?? "none"}
-              initial={reduceMotion ? false : { opacity: 0, y: 4 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -4 }}
-              transition={{ duration: reduceMotion ? 0 : 0.14 }}
-              className="font-semibold text-foreground/80"
-            >
-              {spySection ?? "Menu"}
-            </motion.span>
-          </AnimatePresence>
-          <span className="text-foreground/45 tabular-nums">
-            {groups.find((g) => g.section === spySection)?.items.length ?? NAV_ITEMS.length} pages
-          </span>
-        </div>
-        </div>
       )}
 
-      <div className={cn("relative min-h-0 flex-1", collapsed ? "mt-5" : "mt-1")}>
-      {/* Edge fades — only where more rows are hidden. */}
-      <div aria-hidden className={cn("pointer-events-none absolute inset-x-0 top-0 z-10 h-6 bg-gradient-to-b from-sidebar to-transparent transition-opacity duration-200", edges.up ? "opacity-100" : "opacity-0")} />
-      <div aria-hidden className={cn("pointer-events-none absolute inset-x-0 bottom-0 z-10 h-8 bg-gradient-to-t from-sidebar to-transparent transition-opacity duration-200", edges.down ? "opacity-100" : "opacity-0")} />
+      <div className={cn("nav-list relative min-h-0 flex-1", collapsed ? "mt-5" : "mt-1.5")}>
       <div
         ref={scrollerRef}
         onScroll={onListScroll}
-        className="h-full overflow-y-auto overscroll-contain pb-6 [scrollbar-width:thin]"
+        style={{ maskImage: listMask, WebkitMaskImage: listMask }}
+        className="nav-scroll relative h-full overflow-y-auto overscroll-contain pb-6"
       >
-        <nav className="flex flex-col gap-2 px-3">
+        <nav className="flex flex-col gap-1 px-3" onMouseLeave={() => setHoverHref(null)}>
           {groups.map((group) => {
             const holdsActive = group.items.some((item) => isNavItemActive(item, pathname));
             const SectionIcon = SECTION_ICON[group.section];
@@ -415,122 +467,151 @@ export function SidebarNavContent({
                   <Staggered index={motionStep.get(`section:${group.section}`) ?? 0} enabled={motionOn}>
                     <div
                       className={cn(
-                        "flex items-center gap-1.5 rounded-lg px-2.5 pt-2 pb-1.5 text-xs font-semibold tracking-[0.08em] text-foreground/50 uppercase transition-colors duration-500",
-                        holdsActive && "text-foreground/75",
+                        "flex items-center gap-2 rounded-lg px-2 pt-3 pb-1 text-[11px] font-semibold tracking-[0.1em] text-foreground/45 uppercase [@media(max-height:820px)]:pt-2 transition-[background-color,color] duration-500",
+                        holdsActive && "text-foreground/70",
                         flashSection === group.section && "bg-primary/25 text-foreground duration-100",
                       )}
                     >
-                      <SectionIcon className={cn("size-4 shrink-0", holdsActive && "text-primary-accent-text")} strokeWidth={2} />
-                      {group.section}
+                      <SectionIcon className={cn("size-3 shrink-0", holdsActive && "text-primary-accent-text")} strokeWidth={2.4} />
+                      <span className="shrink-0">{group.section}</span>
+                      <span aria-hidden className="h-px flex-1 bg-gradient-to-r from-border/80 to-transparent" />
+                      <span className="rounded-full bg-muted/70 px-1.5 text-[10px] leading-4 font-semibold tracking-normal text-foreground/45 tabular-nums">{group.items.length}</span>
                     </div>
                   </Staggered>
                 ) : (
-                  <span aria-hidden className="mx-auto mb-1 h-px w-6 bg-border" />
+                  <span aria-hidden className="mx-auto my-1 h-px w-6 bg-border" />
                 )}
 
-                {
-                  group.items.map((item) => {
-                    // Optimistic: the clicked item lights up at once, before the new page has finished loading.
-                    const active = pendingHref != null ? pendingHref === item.href : isNavItemActive(item, pathname);
-                    const Icon = item.icon;
-                    const link = (
-                      <Link
-                        key={item.href}
-                        href={item.href}
-                        onClick={(e) => handleGo(item, e)}
-                        onMouseEnter={() => warm(item.href)}
-                        onFocus={() => warm(item.href)}
-                        aria-current={active ? "page" : undefined}
+                {group.items.map((item) => {
+                  // Optimistic: the clicked item lights up at once, before the new page has finished loading.
+                  const active = pendingHref != null ? pendingHref === item.href : isNavItemActive(item, pathname);
+                  const hovered = hoverHref === item.href;
+                  const Icon = item.icon;
+                  const link = (
+                    <Link
+                      key={item.href}
+                      href={item.href}
+                      onClick={(e) => handleGo(item, e)}
+                      onPointerDown={(e) => {
+                        if (e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !isNavItemActive(item, pathname)) setPendingHref(item.href);
+                      }}
+                      onPointerLeave={(e) => {
+                        // Pressed then dragged away without releasing: that's not a click, so drop the early highlight.
+                        if (e.buttons === 1 && pendingHref === item.href) setPendingHref(null);
+                      }}
+                      onPointerEnter={(e) => {
+                        if (e.pointerType === "mouse") setHoverHref(item.href);
+                        warm(item.href);
+                      }}
+                      onFocus={() => warm(item.href)}
+                      aria-current={active ? "page" : undefined}
+                      className={cn(
+                        "group/item relative flex h-[var(--nav-row)] items-center gap-2.5 rounded-[11px] px-1 text-[length:var(--nav-font)] font-medium tracking-[-0.006em] text-foreground/70 outline-none transition-[color,transform] duration-150 hover:text-foreground active:scale-[0.98] focus-visible:ring-2 focus-visible:ring-ring",
+                        active && "font-semibold text-foreground",
+                        collapsed ? "justify-center px-0" : "pr-9",
+                        scrollItem,
+                      )}
+                    >
+                      {/* Active pill — slides between items as the page changes. */}
+                      {active && (
+                        <motion.span
+                          layoutId={`${scope}${collapsed ? "nav-active-rail" : "nav-active"}`}
+                          aria-hidden
+                          className="absolute inset-0 rounded-[11px] bg-gradient-to-r from-primary/35 via-primary/15 to-primary/5 ring-1 ring-primary-accent-text/15"
+                          transition={slide}
+                        >
+                          {!collapsed && (
+                            <span className="absolute inset-y-[22%] -left-3 w-[3px] rounded-r-full bg-primary-accent-text shadow-[0_0_10px_rgba(150,190,40,0.8)]" />
+                          )}
+                        </motion.span>
+                      )}
+                      {/* Hover pill — one shared highlight that glides to whichever row the mouse is over. */}
+                      {!active && hovered && (
+                        <motion.span
+                          layoutId={`${scope}${collapsed ? "nav-hover-rail" : "nav-hover"}`}
+                          aria-hidden
+                          className="absolute inset-0 rounded-[11px] bg-muted/80"
+                          initial={{ opacity: 0 }}
+                          animate={{ opacity: 1 }}
+                          transition={reduceMotion ? { duration: 0 } : { ...SLIDE, opacity: { duration: 0.08 } }}
+                        />
+                      )}
+                      <span
                         className={cn(
-                          "group/item relative flex items-center gap-3 rounded-xl px-2 py-1.5 text-[15px] font-medium text-foreground/75 outline-none transition-colors duration-150 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
-                          active && "font-semibold text-foreground",
-                          collapsed ? "justify-center px-0" : "pr-11",
-                          scrollItem,
+                          "relative flex size-[var(--nav-ibox)] shrink-0 items-center justify-center rounded-[9px] transition-[background-color,color,box-shadow,transform] duration-200 ease-[var(--nav-ease-spring)]",
+                          active
+                            ? "bg-primary text-primary-foreground shadow-[0_3px_10px_-3px_rgba(150,190,40,0.75)]"
+                            : "text-foreground/55 group-hover/item:-rotate-6 group-hover/item:scale-110 group-hover/item:bg-card group-hover/item:text-foreground group-hover/item:shadow-[0_1px_3px_rgba(0,0,0,0.08)]",
                         )}
                       >
-                        {/* Active pill — slides between items as the page changes. */}
-                        {active && (
-                          <motion.span
-                            layoutId={collapsed ? "nav-active-rail" : "nav-active"}
-                            aria-hidden
-                            className="absolute inset-0 rounded-xl bg-primary/20 ring-1 ring-primary-accent-text/20 before:absolute before:inset-y-1.5 before:-left-3 before:w-1 before:rounded-full before:bg-primary-accent-text"
-                            transition={reduceMotion ? { duration: 0 } : { type: "spring", stiffness: 450, damping: 38 }}
-                          />
-                        )}
-                        {!active && <span aria-hidden className="absolute inset-0 rounded-xl bg-muted opacity-0 transition-opacity group-hover/item:opacity-100" />}
-                        <span
-                          className={cn(
-                            "relative flex size-9 shrink-0 items-center justify-center rounded-xl transition-colors",
-                            active
-                              ? "bg-primary text-primary-foreground"
-                              : "text-foreground/65 group-hover/item:bg-card group-hover/item:text-foreground group-hover/item:shadow-sm",
-                          )}
-                        >
-                          <Icon className="size-5" />
+                        {/* The newly opened page's icon pops in as its pill arrives. */}
+                        <span className={cn("flex", active && "nav-pop")}>
+                          <Icon className="size-[var(--nav-icon)]" strokeWidth={active ? 2.1 : 1.75} />
                         </span>
-                        {!collapsed && (
-                          <span className="relative truncate transition-transform duration-150 group-hover/item:translate-x-px">{item.label}</span>
-                        )}
-                        {active && !collapsed && item.href !== "/people" && (
-                          <span aria-hidden className="relative ml-auto mr-1 size-1.5 rounded-full bg-primary-accent-text" />
-                        )}
-                        {firstMatch?.href === item.href && !active && (
-                          <kbd className="relative ml-auto rounded-md border border-border bg-card px-1 text-[10px] font-semibold text-foreground/55">↵</kbd>
-                        )}
-                        {item.href === "/people" &&
-                          (collapsed ? (
-                            <PeopleNavBadge collapsed />
-                          ) : (
-                            <span className="relative ml-auto">
-                              <PeopleNavBadge collapsed={false} />
-                            </span>
-                          ))}
-                      </Link>
-                    );
+                      </span>
+                      {!collapsed && (
+                        <span className="relative truncate transition-transform duration-200 ease-[var(--nav-ease-spring)] group-hover/item:translate-x-0.5">{item.label}</span>
+                      )}
+                      {firstMatch?.href === item.href && !active && (
+                        <kbd className="relative ml-auto rounded-md border border-border bg-card px-1 text-[10px] font-semibold text-foreground/55">↵</kbd>
+                      )}
+                      {item.href === "/people" &&
+                        (collapsed ? (
+                          <PeopleNavBadge collapsed />
+                        ) : (
+                          <span className="relative ml-auto">
+                            <PeopleNavBadge collapsed={false} />
+                          </span>
+                        ))}
+                    </Link>
+                  );
 
-                    if (!collapsed) {
-                      const isPinned = prefs.pins.includes(item.href);
-                      const pinFull = !isPinned && prefs.pins.length >= MAX_PINS;
-                      const pinLabel = isPinned
-                        ? `Unpin ${item.label} from Quick access`
-                        : pinFull
-                          ? "Quick access is full — unpin a page first"
-                          : `Pin ${item.label} to Quick access`;
-                      return (
-                        <Staggered key={item.href} index={motionStep.get(item.href) ?? 0} enabled={motionOn}>
-                          <div className="group/row relative">
-                            {link}
-                            <button
-                              type="button"
-                              aria-pressed={isPinned}
-                              aria-label={pinLabel}
-                              aria-disabled={pinFull || undefined}
-                              title={pinLabel}
-                              onClick={() => {
-                                if (!pinFull) togglePin(item.href);
-                              }}
-                              className={cn(
-                                "absolute top-1/2 right-1.5 z-10 flex size-8 -translate-y-1/2 items-center justify-center rounded-lg outline-none transition-[opacity,color,background-color] focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring",
-                                isPinned
-                                  ? "text-primary-accent-text opacity-100 hover:bg-card"
-                                  : "text-foreground/45 opacity-0 group-hover/row:opacity-100 hover:bg-card hover:text-foreground [@media(hover:none)]:opacity-50",
-                                pinFull && "cursor-not-allowed",
-                              )}
-                            >
-                              <Star className={cn("size-4", isPinned && "fill-current")} />
-                            </button>
-                          </div>
-                        </Staggered>
-                      );
-                    }
-
+                  if (!collapsed) {
+                    const isPinned = prefs.pins.includes(item.href);
+                    const pinFull = !isPinned && prefs.pins.length >= MAX_PINS;
+                    const pinLabel = isPinned
+                      ? `Unpin ${item.label} from Quick access`
+                      : pinFull
+                        ? "Quick access is full — unpin a page first"
+                        : `Pin ${item.label} to Quick access`;
                     return (
-                      <Tooltip key={item.href}>
-                        <TooltipTrigger asChild>{link}</TooltipTrigger>
-                        <TooltipContent side="right">{item.label}</TooltipContent>
-                      </Tooltip>
+                      <Staggered key={item.href} index={motionStep.get(item.href) ?? 0} enabled={motionOn}>
+                        <div className="group/row relative">
+                          {link}
+                          <button
+                            type="button"
+                            aria-pressed={isPinned}
+                            aria-label={pinLabel}
+                            aria-disabled={pinFull || undefined}
+                            title={pinLabel}
+                            onClick={() => {
+                              if (!pinFull) togglePin(item.href);
+                            }}
+                            className={cn(
+                              "absolute top-1/2 right-1 z-10 flex size-7 -translate-y-1/2 items-center justify-center rounded-lg outline-none transition-[opacity,color,background-color,transform] duration-150 active:scale-75 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring",
+                              isPinned
+                                ? "text-primary-accent-text opacity-100 hover:bg-card"
+                                : "text-foreground/45 opacity-0 group-hover/row:opacity-100 hover:bg-card hover:text-foreground [@media(hover:none)]:opacity-35",
+                              pinFull && "cursor-not-allowed",
+                            )}
+                          >
+                            {/* key remounts on toggle so the pop replays; CSS only — no per-row animation engine. */}
+                            <span key={isPinned ? "on" : "off"} className={cn("flex", isPinned && "nav-star-pop")}>
+                              <Star className={cn("size-[15px]", isPinned && "fill-current")} strokeWidth={1.9} />
+                            </span>
+                          </button>
+                        </div>
+                      </Staggered>
                     );
-                  })}
+                  }
+
+                  return (
+                    <Tooltip key={item.href}>
+                      <TooltipTrigger asChild>{link}</TooltipTrigger>
+                      <TooltipContent side="right">{item.label}</TooltipContent>
+                    </Tooltip>
+                  );
+                })}
               </div>
             );
           })}
@@ -539,50 +620,38 @@ export function SidebarNavContent({
           <p className="px-6 py-6 text-center text-xs text-foreground/60">No page matches “{query.trim()}”.</p>
         )}
       </div>
+      <NavScrollThumb scrollerRef={scrollerRef} scrollTo={glideTo} />
       </div>
 
       {/* Profile */}
-      <div className="flex shrink-0 items-center gap-1.5 border-t border-border/70 px-3 pt-3">
+      <div className={cn("relative shrink-0 px-3 pt-2", collapsed && "pt-3")}>
         <Link
           href="/settings"
           onClick={onNavigate}
           className={cn(
-            "group/profile flex min-w-0 flex-1 items-center gap-2.5 rounded-xl border border-border/70 bg-card/60 p-1.5 outline-none transition-colors hover:border-border hover:bg-card focus-visible:ring-2 focus-visible:ring-ring",
-            collapsed && "justify-center border-transparent bg-transparent p-1",
+            "group/profile flex min-w-0 items-center gap-2.5 rounded-[14px] bg-card/75 p-1.5 pr-2 shadow-[0_1px_2px_rgba(0,0,0,0.04)] ring-1 ring-border/60 outline-none transition-[background-color,box-shadow,transform] duration-150 hover:bg-card hover:shadow-[0_6px_18px_-10px_rgba(0,0,0,0.3)] active:scale-[0.98] focus-visible:ring-2 focus-visible:ring-ring",
+            collapsed && "justify-center bg-transparent p-1 pr-1 shadow-none ring-0",
           )}
         >
-          <span className="rounded-full ring-2 ring-primary/60 ring-offset-2 ring-offset-sidebar">
+          <span className="relative rounded-full ring-2 ring-primary/70 ring-offset-2 ring-offset-card">
             <ClayAvatar src={profilePhoto} name={user?.displayName} />
           </span>
           {!collapsed && (
             <>
               <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-semibold text-foreground">
+                <p className="truncate text-[13px] leading-tight font-semibold tracking-[-0.01em] text-foreground">
                   {user?.displayName ?? "Your profile"}
                 </p>
-                <p className="truncate text-xs text-foreground/60">
+                <p className="truncate text-[11px] leading-tight text-foreground/50">
                   Profile & settings
                 </p>
               </div>
-              <ChevronRight className="size-4 shrink-0 text-foreground/50 transition-transform group-hover/profile:translate-x-0.5" />
+              <span className="flex size-7 shrink-0 items-center justify-center rounded-lg text-foreground/45 transition-[background-color,color] group-hover/profile:bg-muted group-hover/profile:text-foreground">
+                <ChevronRight className="size-4 transition-transform duration-200 group-hover/profile:translate-x-0.5" />
+              </span>
             </>
           )}
         </Link>
-        {!collapsed && onCollapse && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                onClick={onCollapse}
-                aria-label="Collapse sidebar"
-                className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-dashed border-border text-foreground/55 outline-none transition-colors hover:border-border-strong hover:bg-muted/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <ChevronsLeft className="size-4" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="top">Collapse sidebar</TooltipContent>
-          </Tooltip>
-        )}
       </div>
     </div>
   );

@@ -24,10 +24,8 @@
  *    windowing joined with per-account linkage, which isn't part of this
  *    task's named scope (Account + Transaction only) — reported as 0
  *    reminders rather than faked.
- *  - `colorValue` (an int, ported 1:1 from Flutter) has no defined mapping
- *    to this web UI's six named `AccountColor` swatches, so accounts are
- *    assigned a color by cycling through the palette in list order — purely
- *    a presentation choice, not a business calculation.
+ *  - `colorValue` is the ARGB int Flutter stores (see `lib/account-color.ts`);
+ *    the web reads and writes that same format so colours sync both ways.
  *  - `accountHolderName`/`accountNumberLast4` are real fields; the masked
  *    "5010 12** **** 4567"-style full number and any account "type" label
  *    beyond the raw `AccountType` enum are UI flourishes the model doesn't
@@ -42,6 +40,13 @@ import { useTransactions } from "@/hooks/use-transactions";
 import { compareTransactionsNewestFirst, isPersonFunded, signedAmount, type Transaction } from "@/lib/models/transaction";
 import type { Account, AccountType } from "@/lib/models/account";
 import type { AccountColor } from "@/lib/mock/accounts-overview-data";
+import {
+  ACCOUNT_COLOR_CYCLE,
+  accountPaletteFor,
+  colorValueForAccountColor,
+  namedAccountColor,
+  type AccountPalette,
+} from "@/features/accounts/lib/account-colors";
 import {
   createAccountRepository,
   createBillRepository,
@@ -75,21 +80,6 @@ const ACCOUNT_TYPE_LABEL: Record<AccountType, string> = {
   other: "Other Account",
 };
 
-const ACCOUNT_COLOR_CYCLE: AccountColor[] = [
-  "slate",
-  "orange",
-  "blue",
-  "green",
-  "cyan",
-  "violet",
-  "maroon",
-  "emerald",
-  "bronze",
-  "charcoal",
-  "navy",
-  "plum",
-];
-
 export interface AccountOverviewItem {
   id: string;
   name: string;
@@ -101,6 +91,10 @@ export interface AccountOverviewItem {
   isPrimary?: boolean;
   cardStyle: "featured" | "compact";
   color: AccountColor;
+  /** The account's stored colour (ARGB, shared with the mobile app) resolved to a display treatment. */
+  palette: AccountPalette;
+  /** Raw stored `Account.colorValue` — ARGB from mobile/new web saves, or a legacy web list index. */
+  colorValue: number;
   sparkline?: number[];
   accountHolder: string;
   accountNumberMasked: string | null;
@@ -127,7 +121,9 @@ function toOverviewItem(account: Account, index: number): AccountOverviewItem {
     // actual stored choice again rather than deriving from list position — a picked color has to
     // actually stick, or the picker would be pointless. New accounts default to the next unused
     // color in the cycle (see `useAccountActions`'s create call site) so they still start distinct.
-    color: accountColorForColorValue(account.colorValue),
+    color: namedAccountColor(account.colorValue, account.type === "card" ? "card" : "account") ?? "slate",
+    palette: accountPaletteFor(account.colorValue, account.type === "card" ? "card" : "account"),
+    colorValue: account.colorValue,
     accountHolder: account.accountHolderName ?? "—",
     accountNumberMasked: account.accountNumberLast4 ? `•••• •••• •••• ${account.accountNumberLast4}` : null,
     ifsc: null,
@@ -271,16 +267,8 @@ export function useAccountTransactions(accountId: string | undefined) {
   return { transactions: rows, isLoading };
 }
 
-/** `colorValue` is an opaque int on the ported `Account` model (see `lib/models/account.ts`) — this app's only
- *  use for it is picking one of the twelve `AccountColor` swatches, so the index into `ACCOUNT_COLOR_CYCLE` doubles
- *  as the stored `colorValue`. */
-export function colorValueForAccountColor(color: AccountColor): number {
-  return ACCOUNT_COLOR_CYCLE.indexOf(color);
-}
-
-export function accountColorForColorValue(colorValue: number): AccountColor {
-  return ACCOUNT_COLOR_CYCLE[colorValue % ACCOUNT_COLOR_CYCLE.length] ?? ACCOUNT_COLOR_CYCLE[0];
-}
+/** `colorValue` is the same ARGB int the mobile app stores (see `lib/account-color.ts`). */
+export { colorValueForAccountColor };
 
 export { ACCOUNT_COLOR_CYCLE };
 

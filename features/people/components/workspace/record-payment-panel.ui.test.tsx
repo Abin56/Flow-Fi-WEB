@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PayableObligation } from "@/features/people/lib/person-payment-obligations";
@@ -7,7 +7,9 @@ import type { RecordPaymentInput } from "@/lib/repositories/person-payment-repos
 import { RecordPaymentPanel } from "./record-payment-panel";
 
 /**
- * Record Payment — UI regression for the one-screen workspace (money → what to pay now → the money left).
+ * Record Payment — UI regression for the one-screen workspace (money → how it lowers the balance → the money
+ * left). A new payment is always general (tied to no item) — Full/Part/Skip per-item allocation is reachable
+ * only when editing a payment recorded the old, per-item way (see record-payment-panel.general.test.tsx).
  * The figures are the engine's (`allocatePayment` / `planExtraAllocation` / `reconcilePayment`); these tests
  * only pin that the screen shows them, keeps every option reachable, and saves exactly what it did before.
  */
@@ -33,7 +35,20 @@ vi.mock("@/features/people/components/workspace/purpose-money", () => ({
 let payable: PayableObligation[] = [];
 vi.mock("@/features/people/lib/person-payment-obligations", async (orig) => {
   const actual = await orig<typeof import("@/features/people/lib/person-payment-obligations")>();
-  return { ...actual, settlementProjection: () => ({ payable, elsewhere: [] }) };
+  return {
+    ...actual,
+    settlementProjection: () => ({ payable, elsewhere: [] }),
+    // A general payment reads the overall balance from `overallDue`, not from `settlementProjection` — keep it
+    // in agreement with `payable` or the balance these tests show would silently read ₹0.
+    overallDue: () =>
+      payable.reduce(
+        (acc, o) => {
+          acc[o.side] += o.outstanding;
+          return acc;
+        },
+        { theyOwe: 0, iOwe: 0 },
+      ),
+  };
 });
 
 beforeAll(() => {
@@ -84,9 +99,6 @@ function setup(props: Partial<React.ComponentProps<typeof RecordPaymentPanel>> =
       {...props}
     />,
   );
-  // Item-by-item allocation is the explicit "Choose specific items" path (a general payment is the default).
-  const items = screen.queryByTestId("rp-mode-items");
-  if (items) fireEvent.click(items);
   return { user, onSubmit, onCancel };
 }
 
@@ -118,31 +130,6 @@ describe("Record Payment — one-screen workspace", () => {
     expect(fig("rp-unassigned")).toBe("₹0");
   });
 
-  it("2/3/12. obligations are rows with Full / Part / Skip; oldest first by default; partial settlement", async () => {
-    payable = [obligation("ledger:kseb", "KSEB", 1000, 1500, "theyOwe", 19), obligation("ledger:emi", "EMI · October", 1667, 1667, "theyOwe", 21)];
-    const { user, onSubmit } = setup();
-    await user.type(amountInput(), "1500");
-    expect(screen.getByRole("heading", { name: "Apply to bills" })).toBeTruthy();
-    // No disclosure: every row is on screen.
-    expect(screen.getByLabelText("Paying now for KSEB")).toBeTruthy();
-    expect(fig("rp-applied")).toMatch(/1,500/);
-    expect(fig("rp-still-owed")).toMatch(/1,167/);
-    expect(screen.getByRole("button", { name: "Pay KSEB in full" }).getAttribute("aria-pressed")).toBe("true");
-    expect(screen.getByRole("button", { name: "Pay part of EMI · October" }).getAttribute("aria-pressed")).toBe("true");
-    expect(screen.getByText("Paid in full")).toBeTruthy();
-    expect(screen.getByText("₹1,167 left")).toBeTruthy();
-    // Step 3 keeps its place: a calm state, no editor and no empty rows.
-    expect(screen.getByTestId("rp-remaining-none").textContent).toMatch(/Nothing left to assign/);
-    expect(screen.queryByLabelText(/^Use for —/)).toBeNull();
-    await user.click(cta());
-    const input = onSubmit.mock.calls[0][0];
-    expect(input.lines.map((l) => [l.key, l.amount])).toEqual([
-      ["ledger:kseb", 1000],
-      ["ledger:emi", 500],
-    ]);
-    expect(input.extra).toBeNull();
-  });
-
   it("4. keep as advance saves an advance extra — no extra step", async () => {
     const { user, onSubmit } = setup();
     await user.type(amountInput(), "2000");
@@ -169,7 +156,7 @@ describe("Record Payment — one-screen workspace", () => {
     const category = screen.getByLabelText("Income category");
     expect(document.activeElement).toBe(category);
     expect((cta() as HTMLButtonElement).disabled).toBe(true);
-    await user.selectOptions(category, "gift");
+    await user.selectOptions(screen.getByLabelText("Income category"), "gift");
     expect(fig("rp-income")).toMatch(/2,000/);
     await user.click(cta());
     expect(onSubmit.mock.calls[0][0].extra).toMatchObject({ kind: "income", amount: 2000, categoryId: "gift" });
@@ -266,7 +253,7 @@ describe("Record Payment — one-screen workspace", () => {
     const { user } = setup();
     await user.click(screen.getByRole("radio", { name: /Money paid to AMMA/ }));
     await user.type(amountInput(), "1000");
-    expect(screen.getByRole("heading", { name: "Apply to bills" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Apply to balance" })).toBeTruthy();
     expect(useFor().value).toBe("advance");
     expect(within(useFor()).queryByRole("option", { name: "Income" })).toBeNull();
     expect(screen.queryByRole("button", { name: /Add income|Add purpose/ })).toBeNull();
@@ -274,18 +261,9 @@ describe("Record Payment — one-screen workspace", () => {
     expect(cta().textContent).toMatch(/Record ₹1,000 paid/);
   });
 
-  it("16. keyboard: row choices are buttons with pressed state; a destination's kind is a native select", async () => {
-    payable = [obligation("ledger:kseb", "KSEB", 1000)];
+  it("16. keyboard: a destination's kind is a native select", async () => {
     const { user } = setup();
     await user.type(amountInput(), "500");
-    const part = screen.getByRole("button", { name: "Pay part of KSEB" });
-    part.focus();
-    await user.keyboard("{Enter}");
-    // Part focuses the row's amount, ready to type.
-    expect(document.activeElement).toBe(screen.getByLabelText("Paying now for KSEB"));
-    await user.keyboard("300");
-    expect(fig("rp-applied")).toMatch(/300/);
-    expect(fig("rp-left-over")).toMatch(/200/);
     // Native control: the platform's own keyboard and screen-reader behaviour.
     expect(useFor().tagName).toBe("SELECT");
   });
@@ -307,7 +285,7 @@ describe("Record Payment — one-screen workspace", () => {
     expect(form.lastElementChild).toBe(aside);
     expect(document.querySelector("table")).toBeNull();
     await user.type(amountInput(), "1500");
-    const settle = screen.getByRole("heading", { name: "Apply to bills" });
+    const settle = screen.getByRole("heading", { name: "Apply to balance" });
     const extra = screen.getByRole("heading", { name: "Remaining money" });
     expect(settle.compareDocumentPosition(extra) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.queryByRole("button", { name: /Back/ })).toBeNull();
@@ -319,13 +297,13 @@ describe("Record Payment — one-screen workspace", () => {
     const { user, onSubmit } = setup({
       initial: { paymentId: "p1", direction: "theyPaid", amount: 3000, accountId: "sbi", date: D, lines: {}, advance: 1000, income: { amount: 2000, categoryId: "gift", description: "Gift" } },
     });
-    expect(valueOf("Advance amount")).toBe("1000");
-    expect(valueOf("Income amount")).toBe("2000");
     expect(fig("rp-advance")).toMatch(/1,000/);
     expect(fig("rp-income")).toMatch(/2,000/);
     // Nothing in the money-left section steals focus from the amount on open.
     expect(document.activeElement).toBe(amountInput());
     expect(onSubmit).not.toHaveBeenCalled();
+    expect(valueOf("Advance amount")).toBe("1000");
+    expect(valueOf("Income amount")).toBe("2000");
     await user.click(screen.getByRole("button", { name: "Save changes" }));
     expect(onSubmit.mock.calls[0][1]).toBe("p1");
     expect(onSubmit.mock.calls[0][0]).toMatchObject({ amount: 3000, extra: { kind: "advance", amount: 1000 }, extras: [{ kind: "income", amount: 2000 }] });
@@ -333,35 +311,21 @@ describe("Record Payment — one-screen workspace", () => {
 });
 
 describe("Record Payment — step structure", () => {
-  const stepHeadings = () => screen.getAllByRole("heading", { level: 4 }).map((h) => h.textContent?.replace(/^Step \d+/, "").trim());
+  // The step badge (an aria-hidden digit or checkmark) is its own element inside the heading, so its text leaks
+  // into textContent as a bare leading digit — strip that, not a literal "Step N" that never appears here.
+  const stepHeadings = () => screen.getAllByRole("heading", { level: 4 }).map((h) => h.textContent?.replace(/^\d+/, "").trim());
 
   it("S1. the three steps are labelled in order; Remaining money keeps its place with and without leftover", async () => {
     payable = [obligation("ledger:kseb", "KSEB", 1000)];
     const { user } = setup();
-    expect(stepHeadings()).toEqual(["Money details", "Apply to bills", "Remaining money"]);
+    expect(stepHeadings()).toEqual(["Money details", "Apply to balance", "Remaining money"]);
     expect(screen.getByTestId("rp-remaining-none").textContent).toMatch(/Enter an amount/);
     await user.type(amountInput(), "1000");
-    expect(stepHeadings()).toEqual(["Money details", "Apply to bills", "Remaining money"]);
-    expect(screen.getByTestId("rp-remaining-none").textContent).toMatch(/Nothing left to assign.*All ₹1,000 goes to bills/);
+    expect(stepHeadings()).toEqual(["Money details", "Apply to balance", "Remaining money"]);
+    expect(screen.getByTestId("rp-remaining-none").textContent).toMatch(/Nothing left to assign.*All ₹1,000 goes to the balance/);
     await user.type(amountInput(), "5");
     expect(screen.queryByTestId("rp-remaining-none")).toBeNull();
-    expect(stepHeadings()).toEqual(["Money details", "Apply to bills", "Remaining money"]);
-  });
-
-  it("S2. bills summary is live: applied of owed, still owed; Auto switches to Manual when the user takes over a row", async () => {
-    payable = [obligation("ledger:kseb", "KSEB", 1000), obligation("ledger:emi", "EMI · October", 1667, 1667, "theyOwe", 21)];
-    const { user } = setup();
-    await user.type(amountInput(), "1500");
-    expect(screen.getByTestId("rp-bills-summary").textContent).toBe("₹1,500 of ₹2,667 applied to bills · ₹1,167 still owed");
-    expect(screen.getByTestId("rp-alloc-mode").textContent).toBe("Auto · oldest first");
-    await user.click(screen.getByRole("button", { name: "Skip KSEB" }));
-    await user.click(screen.getByRole("button", { name: "Pay part of EMI · October" }));
-    await user.keyboard("400");
-    expect(screen.getByTestId("rp-alloc-mode").textContent).toBe("Manual amounts");
-    expect(screen.getByTestId("rp-bills-summary").textContent).toBe("₹400 of ₹2,667 applied to bills · ₹2,267 still owed");
-    // Back to the automatic order in one tap.
-    await user.click(screen.getByRole("button", { name: "Oldest first" }));
-    expect(screen.getByTestId("rp-alloc-mode").textContent).toBe("Auto · oldest first");
+    expect(stepHeadings()).toEqual(["Money details", "Apply to balance", "Remaining money"]);
   });
 
   it("S3. no empty rows: with everything assigned there is no Add button, only a hint; freeing money brings the buttons back", async () => {
@@ -376,6 +340,25 @@ describe("Record Payment — step structure", () => {
     await user.click(screen.getByRole("button", { name: "Add income" }));
     expect(valueOf("Income amount")).toBe("2000");
     expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("S3b. all of it on the default Advance row: 'Add as income' / 'Set aside for something' stay one tap away and re-label that row (no empty row)", async () => {
+    payable = [obligation("ledger:kseb", "KSEB", 1000)];
+    const { user, onSubmit } = setup();
+    await user.type(amountInput(), "5000");
+    expect(screen.getByRole("button", { name: "Add as income" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Set aside for something" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Keep as advance" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Add as income" }));
+    expect(useFor().value).toBe("income");
+    expect(valueOf("Income amount")).toBe("4000");
+    expect(screen.getAllByLabelText(/^Use for —/)).toHaveLength(1);
+    // The income category is asked for right away; saving is blocked until it is chosen.
+    expect(screen.getByLabelText("Income category")).toBeTruthy();
+    expect((cta() as HTMLButtonElement).disabled).toBe(true);
+    await user.selectOptions(screen.getByLabelText("Income category"), "gift");
+    await user.click(cta());
+    expect(onSubmit.mock.calls[0][0].extra).toMatchObject({ kind: "income", amount: 4000, categoryId: "gift" });
   });
 
   it("S4. 'Already in my account balance' is a visible funding card next to the account; it is account-neutral and leaves Remaining money with a calm note", async () => {
@@ -403,16 +386,4 @@ describe("Record Payment — step structure", () => {
     expect(screen.queryByTestId("rp-amount-high")).toBeNull();
   });
 
-  it("S6. money left over while a bill stays unpaid: a nudge whose one tap applies it oldest first (existing Pay all due)", async () => {
-    payable = [obligation("ledger:kseb", "KSEB", 1000), obligation("ledger:emi", "EMI · October", 1667, 1667, "theyOwe", 21)];
-    const { user } = setup();
-    await user.type(amountInput(), "5000");
-    expect(screen.queryByTestId("rp-leftover-while-owed")).toBeNull();
-    await user.click(screen.getByRole("button", { name: "Skip EMI · October" }));
-    expect(screen.getByTestId("rp-leftover-while-owed").textContent).toMatch(/₹1,667 stays unpaid while ₹4,000 goes to Remaining money/);
-    await user.click(screen.getByRole("button", { name: "Apply to bills first" }));
-    expect(screen.queryByTestId("rp-leftover-while-owed")).toBeNull();
-    expect(fig("rp-applied")).toMatch(/2,667/);
-    expect(fig("rp-still-owed")).toBe("₹0");
-  });
 });

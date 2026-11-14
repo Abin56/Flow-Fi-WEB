@@ -730,6 +730,18 @@
    don't draw a box around themselves. */
 :root {
   --focus-ring: oklch(0.42 0.13 135);
+  /* Primary as seen on the always-dark hero headers/bars. Stock lime already reads there; the colour-theme
+     engine (lib/theme/derive.ts) overrides these with a lifted twin when a deep primary (black, navy) is chosen. */
+  --primary-on-hero: oklch(0.912 0.185 126);
+  --primary-on-hero-foreground: oklch(0.135 0.004 112);
+}
+/* Hero scope: everything inside a dark hero header/bar resolves `primary` to the hero-safe twin, so credit
+   amounts, progress bars and chips stay legible with any colour theme. */
+.surface-hero,
+.bg-surface-hero,
+[style*="--gradient-hero"] {
+  --primary: var(--primary-on-hero);
+  --primary-foreground: var(--primary-on-hero-foreground);
 }
 .dark {
   --focus-ring: oklch(0.912 0.185 126);
@@ -737,6 +749,14 @@
 :focus-visible:not([tabindex="-1"]) {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
+}
+/* Drawer "Jump to…" field: draw the same ring around the whole rounded field instead of the bare input inside it. */
+.nav-search:has(input:focus-visible) {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.nav-search input:focus-visible {
+  outline: none;
 }
 
 /* Credit card tile: one diagonal shine sweep across the face on hover. */
@@ -758,16 +778,16 @@
   to { opacity: 1; transform: none; }
 }
 @keyframes drawer-item-enter {
-  from { opacity: 0.3; transform: translateY(14px) scale(0.97); }
+  from { opacity: 0.75; transform: translateY(4px); }
   to { opacity: 1; transform: none; }
 }
 @keyframes drawer-item-exit {
   from { opacity: 1; transform: none; }
-  to { opacity: 0.6; transform: translateY(-4px) scale(0.99); }
+  to { opacity: 0.85; transform: none; }
 }
 .drawer-stagger {
-  animation: drawer-stagger-in 180ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
-  animation-delay: calc(min(var(--i, 0), 8) * 12ms);
+  animation: drawer-stagger-in 140ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation-delay: calc(min(var(--i, 0), 8) * 8ms);
 }
 @supports (animation-timeline: view()) {
   .drawer-item {
@@ -779,9 +799,134 @@
     animation-range: entry 0% entry 100%, exit 0% exit 80%;
   }
 }
+/* Navigation drawer density — every size in the drawer reads from these, so it scales as one piece with the screen.
+   Default suits laptops (~800–1000px tall); short screens tighten, tall + wide screens relax. Touch keeps 40px rows. */
+.nav-root {
+  --nav-row: 2.5rem;
+  --nav-font: 0.875rem;
+  --nav-ibox: 1.875rem;
+  --nav-icon: 1.0625rem;
+  --nav-tile: 2.375rem;
+  --nav-tile-font: 0.78125rem;
+  --nav-tab: 1.875rem;
+  --nav-tab-icon: 1.0625rem;
+  --nav-logo: 2.125rem;
+  --nav-title: 1rem;
+}
+@media (max-height: 820px) {
+  .nav-root {
+    --nav-row: 2.25rem;
+    --nav-font: 0.84375rem;
+    --nav-ibox: 1.75rem;
+    --nav-icon: 1rem;
+    --nav-tile: 2.25rem;
+    --nav-tab: 1.75rem;
+    --nav-tab-icon: 1rem;
+    --nav-logo: 2rem;
+    --nav-title: 0.9375rem;
+  }
+}
+@media (min-height: 1000px) and (min-width: 1600px) {
+  .nav-root {
+    --nav-row: 2.75rem;
+    --nav-font: 0.9375rem;
+    --nav-ibox: 2rem;
+    --nav-icon: 1.125rem;
+    --nav-tile: 2.5rem;
+    --nav-tile-font: 0.8125rem;
+    --nav-tab: 2rem;
+    --nav-tab-icon: 1.125rem;
+    --nav-logo: 2.25rem;
+    --nav-title: 1.0625rem;
+  }
+}
+@media (hover: none) {
+  .nav-root {
+    --nav-row: 2.5rem;
+    --nav-tile: 2.5rem;
+  }
+}
+/* Springy ease for small hover nudges (slight overshoot, settles fast). */
+.nav-root {
+  --nav-ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* Drawer list: native scrollbar hidden — NavScrollThumb draws a slim thumb that fades in while scrolling/hovering,
+   widens under the pointer and can be dragged. Wheel glide comes from useSmoothScroll. */
+.nav-scroll {
+  scrollbar-width: none;
+}
+.nav-scroll::-webkit-scrollbar {
+  display: none;
+}
+.nav-thumb-track {
+  position: absolute;
+  top: 6px;
+  right: 1px;
+  bottom: 10px;
+  z-index: 20;
+  width: 10px;
+  cursor: pointer;
+  touch-action: none;
+  opacity: 0;
+  transition: opacity 200ms ease;
+}
+.nav-list:hover .nav-thumb-track {
+  opacity: 0.55;
+}
+.nav-thumb-track[data-active],
+.nav-thumb-track:hover,
+.nav-thumb-track[data-drag] {
+  opacity: 1;
+  transition-duration: 120ms;
+}
+.nav-thumb-track[data-hidden] {
+  display: none;
+}
+.nav-thumb {
+  position: absolute;
+  top: 0;
+  right: 3px;
+  width: 4px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--foreground) 24%, transparent);
+  will-change: transform;
+  transition: width 160ms ease, right 160ms ease, background-color 160ms ease;
+}
+.nav-thumb-track:hover .nav-thumb,
+.nav-thumb-track[data-drag] .nav-thumb {
+  right: 2px;
+  width: 6px;
+  background: color-mix(in oklab, var(--primary-accent-text) 70%, transparent);
+}
+@media (hover: none) {
+  .nav-thumb-track {
+    pointer-events: none;
+  }
+}
+
+/* Small pops in the drawer (active page icon, a freshly starred page) — CSS keyframes instead of one animation
+   engine instance per row, so opening the drawer stays cheap. */
+@keyframes nav-pop {
+  from { transform: scale(0.75) rotate(-12deg); }
+  to { transform: none; }
+}
+@keyframes nav-star-pop {
+  from { transform: scale(0.4) rotate(-40deg); }
+  60% { transform: scale(1.15) rotate(6deg); }
+  to { transform: none; }
+}
+.nav-pop {
+  animation: nav-pop 220ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+.nav-star-pop {
+  animation: nav-star-pop 280ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
 @media (prefers-reduced-motion: reduce) {
   .drawer-stagger,
-  .drawer-item {
+  .drawer-item,
+  .nav-pop,
+  .nav-star-pop {
     animation: none;
   }
 }

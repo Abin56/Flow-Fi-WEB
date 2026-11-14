@@ -8,7 +8,7 @@
  * Numbers and validation come from `planExtraAllocation`.
  */
 
-import { Check, ChevronDown, CircleAlert, Plus, X } from "lucide-react";
+import { Check, ChevronDown, CircleAlert, Hourglass, PiggyBank, Plus, TrendingUp, X, type LucideIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { DateInput } from "@/components/forms/date-input";
 import { money } from "@/lib/engines/person-cycle-statement-share";
@@ -84,11 +84,44 @@ export function draftsToAllocations(drafts: readonly AllocationDraft[], linkOpti
   });
 }
 
-/** Plain names per destination, and its quiet colour (a 3px edge + the dot in the summary). */
-export const KIND_META: Record<ExtraAllocationKind, { label: string; add: string; first: string; edge: string; dot: string }> = {
-  advance: { label: "Advance", add: "Add advance", first: "Keep as advance", edge: "border-l-settle-advance-edge", dot: "bg-settle-advance-edge" },
-  income: { label: "Income", add: "Add income", first: "Add as income", edge: "border-l-success", dot: "bg-success" },
-  purpose: { label: "Set aside", add: "Add purpose", first: "Set aside for something", edge: "border-l-settle-emi-edge", dot: "bg-settle-emi-edge" },
+/** Plain names per destination, its colour (edge, dot/bar, soft tint, ink), icon and a one-line hint for the choice tiles. */
+export const KIND_META: Record<
+  ExtraAllocationKind,
+  { label: string; add: string; first: string; edge: string; dot: string; tint: string; ink: string; icon: LucideIcon; hint: string }
+> = {
+  advance: {
+    label: "Advance",
+    add: "Add advance",
+    first: "Keep as advance",
+    edge: "border-l-settle-advance-edge",
+    dot: "bg-settle-advance-edge",
+    tint: "bg-settle-advance-tint",
+    ink: "text-settle-advance-text",
+    icon: Hourglass,
+    hint: "Hold for future dues",
+  },
+  income: {
+    label: "Income",
+    add: "Add income",
+    first: "Add as income",
+    edge: "border-l-success",
+    dot: "bg-success",
+    tint: "bg-success/10",
+    ink: "text-success",
+    icon: TrendingUp,
+    hint: "Count it as earnings",
+  },
+  purpose: {
+    label: "Set aside",
+    add: "Add purpose",
+    first: "Set aside for something",
+    edge: "border-l-settle-emi-edge",
+    dot: "bg-settle-emi-edge",
+    tint: "bg-settle-emi-tint",
+    ink: "text-settle-emi-text",
+    icon: PiggyBank,
+    hint: "Keep it for a goal",
+  },
 };
 
 const shortDate = (d: Date) => d.toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
@@ -106,6 +139,7 @@ export function ExtraAllocationEditor({
   onChange,
   linkOptions,
   incomeCategories,
+  hideSummary = false,
 }: {
   extra: number;
   direction: PaymentDirection;
@@ -114,6 +148,8 @@ export function ExtraAllocationEditor({
   onChange: (next: AllocationDraft[]) => void;
   linkOptions: readonly PurposeLink[];
   incomeCategories: readonly { id: string; name: string }[];
+  /** Presentation only: the host already shows the status + meter (e.g. the Record Payment drawer's sticky overview). */
+  hideSummary?: boolean;
 }) {
   const allocations = draftsToAllocations(drafts, linkOptions);
   const plan = planExtraAllocation({ extra, direction, allocations, money });
@@ -132,6 +168,11 @@ export function ExtraAllocationEditor({
   const kindDefaults = (kind: ExtraAllocationKind): Partial<AllocationDraft> => (kind === "income" ? { description: `Extra money from ${firstName}` } : {});
 
   function add(kind: ExtraAllocationKind) {
+    // Nothing left and only the default advance row: the choice re-labels that row (its amount stays) — one tap, no empty row.
+    if (convertsDefault) {
+      changeKind(drafts[0].key, kind);
+      return;
+    }
     const d = newAllocationDraft(kind, Math.max(0, plan.left), kindDefaults(kind));
     onChange([...drafts, d]);
     if (kind !== "advance") pendingFocus.current = d.key;
@@ -147,12 +188,28 @@ export function ExtraAllocationEditor({
   // Nothing left to assign → nothing to add (a new row would start empty and invalid). Lower a row's amount first.
   const hasLeft = plan.left > 0.005;
   const canAdd = order.filter((k) => addable.includes(k));
-  const offered = hasLeft ? canAdd : [];
+  // The common case — all of it sits on the default "Advance" row: "Add as income" / "Set aside for something" stay one tap
+  // away, switching that row (its amount stays) instead of adding an empty one. With several rows, lower an amount to split.
+  const convertsDefault = !hasLeft && drafts.length === 1 && drafts[0].kind === "advance";
+  const offered = hasLeft ? canAdd : convertsDefault ? canAdd.filter((k) => k !== "advance") : [];
 
   return (
-    <div className="overflow-hidden rounded-[10px] border border-border bg-card">
+    <div className="flex flex-col gap-3">
+      {/* Live picture of the money left: one coloured segment per use, the unassigned rest striped. */}
+      {!hideSummary && (
+        <div className="flex flex-col gap-1.5 rounded-xl bg-secondary/50 px-3 py-2.5">
+          <div className="flex items-center justify-between gap-2">
+            <AllocationSummary plan={plan} />
+            <span className="shrink-0 text-xs font-semibold whitespace-nowrap text-foreground/60 tabular-nums">
+              {money(Math.max(0, plan.assigned))} / {money(extra)}
+            </span>
+          </div>
+          <AllocationMeter extra={extra} drafts={drafts} allocations={allocations} />
+        </div>
+      )}
+
       {drafts.length > 0 && (
-        <ul ref={listRef} className="divide-y divide-border" aria-label="Uses of the money left">
+        <ul ref={listRef} className="flex flex-col gap-2.5" aria-label="Uses of the money left">
           {drafts.map((d, i) => (
             <DestinationRow
               key={d.key}
@@ -170,24 +227,68 @@ export function ExtraAllocationEditor({
           ))}
         </ul>
       )}
-      <div className={cn("flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 bg-secondary/40 px-3 py-1.5", drafts.length > 0 && "border-t border-border")}>
-        <AllocationSummary plan={plan} />
-        {offered.length > 0 && (
-          <div className="flex flex-wrap gap-1">
-            {offered.map((k) => (
-              <button key={k} type="button" onClick={() => add(k)} className={cn(WS_GHOST, "h-8 px-2 text-xs font-semibold text-foreground/85")}>
-                <Plus className="size-3.5" aria-hidden />
-                {drafts.length === 0 ? KIND_META[k].first : k === "purpose" && drafts.some((x) => x.kind === "purpose") ? "Add another purpose" : KIND_META[k].add}
-              </button>
-            ))}
+      {offered.length > 0 && (
+        <div className="flex flex-col gap-1.5">
+          <span className="text-[11px] font-semibold text-foreground/55">{drafts.length === 0 ? "Use it for" : convertsDefault ? "Or use it as" : "Split the rest"}</span>
+          <div className="flex flex-wrap items-stretch gap-2">
+            {offered.map((k) => {
+              const meta = KIND_META[k];
+              const Icon = meta.icon;
+              const another = k === "purpose" && drafts.some((x) => x.kind === "purpose");
+              const name = drafts.length === 0 || convertsDefault ? meta.first : another ? "Add another purpose" : meta.add;
+              return (
+                <button
+                  key={k}
+                  type="button"
+                  onClick={() => add(k)}
+                  aria-label={name}
+                  title={`${name} — ${meta.hint.toLowerCase()}`}
+                  className="group flex min-w-[9.5rem] flex-1 items-center gap-2.5 rounded-xl border border-dashed border-foreground/25 bg-card px-3 py-2.5 text-left outline-none transition-colors duration-150 hover:border-solid hover:border-foreground/40 hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-full", meta.tint, meta.ink)}>
+                    <Icon className="size-4" aria-hidden />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[13px] font-semibold text-foreground">{another ? "Another purpose" : meta.label}</span>
+                    <span className="block truncate text-[11px] text-foreground/60">{meta.hint}</span>
+                  </span>
+                  <Plus className="size-4 shrink-0 text-foreground/40 group-hover:text-foreground" aria-hidden />
+                </button>
+              );
+            })}
           </div>
-        )}
-        {offered.length === 0 && canAdd.length > 0 && plan.status === "full" && drafts.length > 0 && (
-          <p className="text-[11.5px] text-foreground/70" data-testid="rp-add-hint">
-            To split it, lower an amount first.
-          </p>
-        )}
-      </div>
+        </div>
+      )}
+
+      {!hasLeft && canAdd.length > 0 && plan.status === "full" && drafts.length > 0 && (
+        <p className="text-[11.5px] text-foreground/60" data-testid="rp-add-hint">
+          To split it between several uses, lower an amount first.
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** The money left as one bar: a segment per use (its kind's colour), the unassigned rest striped. Words live in the summary. */
+export function AllocationMeter({ extra, drafts, allocations }: { extra: number; drafts: readonly AllocationDraft[]; allocations: readonly ExtraAllocation[] }) {
+  const amounts = allocations.map((a) => Math.max(0, a.amount));
+  const total = amounts.reduce((s, x) => s + x, 0);
+  const base = Math.max(extra, total, 0.01);
+  const rest = Math.max(0, extra - total);
+  const over = total > extra + 0.005;
+  return (
+    <div aria-hidden className={cn("flex h-2 w-full gap-0.5 overflow-hidden rounded-full bg-secondary", over && "ring-1 ring-expense/60")}>
+      {drafts.map((d, i) =>
+        amounts[i] > 0 ? (
+          <span key={d.key} className={cn("h-full rounded-full transition-[width] duration-300 ease-out", KIND_META[d.kind].dot)} style={{ width: `${(amounts[i] / base) * 100}%` }} />
+        ) : null,
+      )}
+      {rest > 0.005 && (
+        <span
+          className="h-full rounded-full opacity-50 transition-[width] duration-300 ease-out"
+          style={{ width: `${(rest / base) * 100}%`, backgroundImage: "repeating-linear-gradient(135deg, var(--warning) 0 4px, transparent 4px 8px)" }}
+        />
+      )}
     </div>
   );
 }
@@ -219,6 +320,7 @@ function DestinationRow({
   const name = allocationName(a, direction, firstName);
   const [more, setMore] = useState(d.due !== "" || d.note !== "" || d.connectKind !== "");
   const kinds: ExtraAllocationKind[] = direction === "theyPaid" ? ["advance", "income", "purpose"] : ["advance"];
+  const KindIcon = KIND_META[d.kind].icon;
   const linked = d.link ? linkOptions.find((o) => encodeLink(o) === d.link) : null;
   const moreSummary =
     d.kind === "purpose"
@@ -226,14 +328,31 @@ function DestinationRow({
       : "";
 
   return (
-    <li data-draft={d.key} className={cn("border-l-[3px] px-3 py-2 duration-200 ease-out animate-in fade-in slide-in-from-top-1", KIND_META[d.kind].edge)}>
-      <div className="grid grid-cols-[minmax(0,1fr)_7.5rem_auto] items-center gap-x-2 gap-y-1.5 sm:grid-cols-[7.5rem_minmax(0,1fr)_8rem_auto]">
+    // Each destination reads as its own small card — a clear kind badge, a roomy field for the one thing it
+    // needs, its amount, done. No more squeezing a select, a field and an amount onto one line: with the editor
+    // now getting the sheet's full width, there's room to let each piece breathe.
+    <li
+      data-draft={d.key}
+      className={cn(
+        "rounded-xl border border-l-4 border-border bg-card p-3 shadow-e1 duration-200 ease-out animate-in fade-in slide-in-from-top-1 sm:p-3.5",
+        KIND_META[d.kind].edge,
+      )}
+    >
+      <div className="flex items-center gap-2.5">
+        <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-full", KIND_META[d.kind].tint, KIND_META[d.kind].ink)}>
+          <KindIcon className="size-[18px]" aria-hidden />
+        </span>
         <select
           aria-label={`Use for — ${name}`}
           value={d.kind}
           onChange={(e) => onKind(e.target.value as ExtraAllocationKind)}
           disabled={kinds.length === 1}
-          className={cn(WS_FIELD, "h-9 px-2 font-semibold disabled:opacity-100")}
+          className={cn(
+            WS_FIELD,
+            "h-10 w-auto min-w-[8.5rem] shrink-0 border-transparent px-3 text-sm font-bold disabled:opacity-100",
+            KIND_META[d.kind].tint,
+            KIND_META[d.kind].ink,
+          )}
         >
           {kinds.map((k) => (
             <option key={k} value={k} disabled={k !== "purpose" && taken.has(k)}>
@@ -242,84 +361,88 @@ function DestinationRow({
           ))}
         </select>
 
-        {/* The one field the destination needs — under the kind on phones, between kind and amount from sm. */}
-        <div className="order-last col-span-3 min-w-0 sm:order-none sm:col-span-1">
-          {d.kind === "advance" ? (
-            <p className="truncate text-xs text-foreground/75">{direction === "theyPaid" ? `Held for ${firstName}'s future dues` : `Counts toward what you'll owe ${firstName}`}</p>
-          ) : d.kind === "income" ? (
-            <select
-              data-first-field
-              aria-label="Income category"
-              className={WS_FIELD}
-              value={d.categoryId}
-              aria-invalid={!d.categoryId || undefined}
-              onChange={(e) => update({ categoryId: e.target.value })}
-            >
-              <option value="">Choose income category…</option>
-              {incomeCategories.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
-          ) : (
-            <input
-              data-first-field
-              aria-label="What is this money for?"
-              className={WS_FIELD}
-              value={d.title}
-              aria-invalid={!d.title.trim() || undefined}
-              onChange={(e) => update({ title: e.target.value })}
-              placeholder="What is it for? e.g. SBI EMI"
-            />
-          )}
+        <div className="ml-auto w-[7.5rem] shrink-0 sm:w-36">
+          <CompactAmountInput
+            label={d.kind === "purpose" ? "Purpose amount" : d.kind === "income" ? "Income amount" : "Advance amount"}
+            value={d.amount}
+            onChange={(v) => update({ amount: v })}
+            invalid={!(Number(d.amount) > 0) || undefined}
+          />
         </div>
 
-        <CompactAmountInput
-          label={d.kind === "purpose" ? "Purpose amount" : d.kind === "income" ? "Income amount" : "Advance amount"}
-          value={d.amount}
-          onChange={(v) => update({ amount: v })}
-          invalid={!(Number(d.amount) > 0) || undefined}
-        />
+        <button
+          type="button"
+          onClick={onRemove}
+          aria-label={`Remove ${name}`}
+          title="Remove"
+          className="flex size-9 shrink-0 items-center justify-center rounded-[8px] text-foreground/60 outline-none hover:bg-secondary hover:text-expense focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <X className="size-4" aria-hidden />
+        </button>
+      </div>
 
-        <div className="flex items-center">
-          {d.kind !== "advance" && (
-            <button
-              type="button"
-              onClick={() => setMore((v) => !v)}
-              aria-expanded={more}
-              aria-label={`More details — ${name}`}
-              title={d.kind === "purpose" ? "Use-by date, link, note" : "Description"}
-              className="flex size-8 shrink-0 items-center justify-center rounded-[6px] text-foreground/70 outline-none hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              <ChevronDown className={cn("size-4 transition-transform duration-200", more && "rotate-180")} aria-hidden />
-            </button>
-          )}
+      {/* The one field this destination needs. */}
+      <div className="mt-2.5 min-w-0 pl-[2.9rem]">
+        {d.kind === "advance" ? (
+          <p className="text-xs leading-snug text-foreground/70">{direction === "theyPaid" ? `Held for ${firstName}'s future dues` : `Counts toward what you'll owe ${firstName}`}</p>
+        ) : d.kind === "income" ? (
+          <select
+            data-first-field
+            aria-label="Income category"
+            className={WS_FIELD}
+            value={d.categoryId}
+            aria-invalid={!d.categoryId || undefined}
+            onChange={(e) => update({ categoryId: e.target.value })}
+          >
+            <option value="">Choose income category…</option>
+            {incomeCategories.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <input
+            data-first-field
+            aria-label="What is this money for?"
+            className={WS_FIELD}
+            value={d.title}
+            aria-invalid={!d.title.trim() || undefined}
+            onChange={(e) => update({ title: e.target.value })}
+            placeholder="What is it for? e.g. SBI EMI"
+          />
+        )}
+
+        {!more && moreSummary && <p className="mt-1.5 truncate text-[11px] text-foreground/65">{moreSummary}</p>}
+
+        {d.kind !== "advance" && (
           <button
             type="button"
-            onClick={onRemove}
-            aria-label={`Remove ${name}`}
-            className="flex size-8 shrink-0 items-center justify-center rounded-[6px] text-foreground/70 outline-none hover:bg-secondary hover:text-expense focus-visible:ring-2 focus-visible:ring-ring"
+            onClick={() => setMore((v) => !v)}
+            aria-expanded={more}
+            aria-label={`More details — ${name}`}
+            title={d.kind === "purpose" ? "Use-by date, link, note" : "Description"}
+            className="mt-1.5 flex h-7 w-fit items-center gap-1 rounded-[6px] px-1.5 text-[12px] font-semibold text-foreground/65 outline-none hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
           >
-            <X className="size-4" aria-hidden />
+            {d.kind === "purpose" ? "Date, link or note" : "Description"}
+            <ChevronDown className={cn("size-3.5 transition-transform duration-200", more && "rotate-180")} aria-hidden />
           </button>
-        </div>
-      </div>
-      {!more && moreSummary && <p className="mt-1 truncate text-[11px] text-foreground/65">{moreSummary}</p>}
+        )}
 
-      {d.kind !== "advance" && (
-        <InlineReveal open={more}>
-          {d.kind === "income" ? (
-            <div className="pt-2">
-              <WsField label="Description">
-                <input className={WS_FIELD} value={d.description} onChange={(e) => update({ description: e.target.value })} placeholder={`Extra money from ${firstName}`} />
-              </WsField>
-            </div>
-          ) : (
-            <PurposeDetails d={d} update={update} linkOptions={linkOptions} />
-          )}
-        </InlineReveal>
-      )}
+        {d.kind !== "advance" && (
+          <InlineReveal open={more}>
+            {d.kind === "income" ? (
+              <div className="pt-2">
+                <WsField label="Description">
+                  <input className={WS_FIELD} value={d.description} onChange={(e) => update({ description: e.target.value })} placeholder={`Extra money from ${firstName}`} />
+                </WsField>
+              </div>
+            ) : (
+              <PurposeDetails d={d} update={update} linkOptions={linkOptions} />
+            )}
+          </InlineReveal>
+        )}
+      </div>
     </li>
   );
 }
@@ -341,7 +464,7 @@ function PurposeDetails({ d, update, linkOptions }: { d: AllocationDraft; update
   const kinds = (Object.keys(CONNECT_KINDS) as ConnectKind[]).filter((k) => linkOptions.some((o) => CONNECT_KINDS[k].includes(o.kind)));
   const items = d.connectKind ? linkOptions.filter((o) => connectKindOf(o.kind) === d.connectKind) : [];
   return (
-    <div className="grid gap-2.5 pt-2 sm:grid-cols-2">
+    <div className="@container grid gap-2.5 pt-2 @lg:grid-cols-2">
       <WsField label="Use by (optional)">
         <div className="flex items-center gap-1.5">
           <DateInput className={WS_FIELD} value={d.due} onChange={(e) => update({ due: e.target.value })} aria-label="Date to use it by" />
@@ -374,7 +497,7 @@ function PurposeDetails({ d, update, linkOptions }: { d: AllocationDraft; update
           </select>
         )}
       </div>
-      <WsField label="Note (optional)" className="sm:col-span-2">
+      <WsField label="Note (optional)" className="@lg:col-span-2">
         <input className={WS_FIELD} value={d.note} onChange={(e) => update({ note: e.target.value })} placeholder="e.g. Pay before the 15th" />
       </WsField>
     </div>
@@ -382,11 +505,18 @@ function PurposeDetails({ d, update, linkOptions }: { d: AllocationDraft; update
 }
 
 /** Status of the money left — in words and an icon, never colour alone. */
-export function AllocationSummary({ plan }: { plan: ExtraAllocationPlan }) {
+export function AllocationSummary({ plan, testId = "rp-left-status" }: { plan: ExtraAllocationPlan; testId?: string }) {
   const over = plan.status === "over";
   const full = plan.status === "full";
   return (
-    <p className={cn("flex items-center gap-1 text-xs font-bold", over ? "text-expense" : full ? "text-success" : "text-warning")} aria-live="polite" data-testid="rp-left-status">
+    <p
+      className={cn(
+        "flex w-fit items-center gap-1 rounded-full px-2 py-0.5 text-xs font-bold transition-colors duration-200",
+        over ? "bg-expense/10 text-expense" : full ? "bg-success/10 text-success" : "bg-warning/10 text-warning",
+      )}
+      aria-live="polite"
+      data-testid={testId}
+    >
       {full ? <Check className="size-3.5" aria-hidden /> : <CircleAlert className="size-3.5" aria-hidden />}
       {full ? "All assigned" : over ? `${money(-plan.left)} more than the money left` : `${money(plan.left)} not yet assigned`}
     </p>

@@ -31,7 +31,7 @@
 
 import { useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { acquireSharedSubscription, keyFor, registerRetry } from "@/lib/services/firestore-watch-registry";
+import { acquireSharedSubscription, keyFor, markSharedSubscriptionFailed, registerRetry } from "@/lib/services/firestore-watch-registry";
 
 export { retryFirestoreWatch } from "@/lib/services/firestore-watch-registry";
 
@@ -72,6 +72,7 @@ export function useFirestoreWatch<T>(options: UseFirestoreWatchOptions<T>): UseQ
         (data) => queryClient.setQueryData(queryKey, data),
         (error) => {
           console.error(`${hookName} watchAll failed:`, error);
+          markSharedSubscriptionFailed(queryKey); // so Retry (or the next page) reopens it instead of reusing a dead listener
           const err = error instanceof Error ? error : new Error(String(error));
           // Marks the underlying cache entry itself as errored — every useQuery(queryKey)
           // observer (including WatcherErrorBanner/useWatcherErrors, which scan the cache)

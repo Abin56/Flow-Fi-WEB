@@ -352,6 +352,18 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // In-app Android update override (`androidUpdate`: optional
+    // `mandatory`/`minSupportedVersionCode`/`note`). The real APK URL and
+    // SHA-256 always come from the signed release manifest
+    // (/downloads/flowfi-android.json) — this doc only tightens policy, e.g.
+    // force-mandatory or kill a bad release without a new hosting deploy.
+    // Readable by any signed-in client; written only via the Admin SDK /
+    // console, same as `smsSyncControl/global` above.
+    match /appConfig/androidUpdate {
+      allow read: if isSignedIn();
+      allow write: if false;
+    }
+
     // Document Type Registry (Architecture §3): defines the parsing
     // pipeline's behavior per document type. Deployed via CI using the
     // Admin SDK (docs/adr/ADR-001) — never editable by any client, staging

@@ -185,7 +185,7 @@ describe("original purchase vs recipient's share", () => {
     const s = sojan([{ x: ZOMATO(), share: 220.74 }]);
     const row = s.view.rows[0];
     expect(row.allocation!.original).toBe(882.96);
-    expect(row).toMatchObject({ original: money(220.74), amountLabel: "Sojan's share", paid: money(0), remaining: money(220.74) });
+    expect(row).toMatchObject({ original: money(220.74), amountLabel: "Sojan's share" });
     // Every amount is Sojan's share, so the column header says it once instead of a caption on each row.
     expect(row).toMatchObject({ purchase: money(882.96), purchaseNote: "4-way split", shareLabel: null });
     expect(s.view.amountHeader).toBe("Sojan's share");
@@ -193,7 +193,7 @@ describe("original purchase vs recipient's share", () => {
     // The Original column holds the purchase total captioned with the split; the Amount column is headed Sojan's share.
     expect(lines).toContain("ORIGINAL");
     expect(lines).toContain("SOJAN'S SHARE");
-    const table = lines.slice(lines.indexOf("STATUS") + 1);
+    const table = lines.slice(lines.indexOf("TYPE") + 1);
     expect(table[table.indexOf(pm(882.96)) + 1]).toBe("4-way split");
   });
 
@@ -304,15 +304,17 @@ describe("participant grid", () => {
 });
 
 describe("settlement states", () => {
-  it("L/M/N. unpaid, partly paid and fully paid keep their engine values and statuses", async () => {
+  it("L/M/N. unpaid, partly paid and fully paid all read the same plain kind tag — payment status no longer shows per item", async () => {
     const xs = [ZOMATO(), ZOMATO(), ZOMATO()];
     const s = sojan(xs.map((x) => ({ x, share: 220.74 })), { payments: { 1: 100, 2: 220.74 } });
     const [unpaid, partial, full] = s.view.rows.filter((r) => r.kind === "split");
-    expect(unpaid).toMatchObject({ paid: money(0), remaining: money(220.74) });
-    expect(partial).toMatchObject({ paid: money(100), remaining: money(120.74), statusTone: "partial" });
-    expect(full).toMatchObject({ paid: money(220.74), remaining: money(0), statusTone: "settled" });
+    expect([unpaid, partial, full].map((r) => [r.tag, r.chip])).toEqual([
+      ["Split", "carried"],
+      ["Split", "carried"],
+      ["Split", "carried"],
+    ]);
     const text = await pdfText(s);
-    for (const r of [unpaid, partial, full]) expect(text).toContain(pdfSafe(r.status));
+    for (const r of [unpaid, partial, full]) expect(text).toContain(pdfSafe(r.tag));
   });
 
   it("O/P. a brought-forward split is secondary context with its allocation; the current-cycle split follows", async () => {
@@ -418,7 +420,7 @@ describe("recipient-safe wording (the person reads this statement)", () => {
     expect(s.view.reconciliation.map((l) => l.label)).toEqual(["Previous balance", "New this cycle", "Total due", "Paid by Sojan"]);
     // The header states the direction, so same-direction lines carry no side sentence.
     expect(s.view.reconciliation.every((l) => l.side === null)).toBe(true);
-    expect(s.view.rows[0]).toMatchObject({ relation: "Sojan's share of a split expense", status: "Payment due", statusDetail: `Sojan owes Ibin ${money(220.74)}` });
+    expect(s.view.rows[0]).toMatchObject({ relation: "Sojan's share of a split expense" });
     const lines = cellLines(await pdfText(s));
     expect(lines.filter((l) => YOU.test(l))).toEqual([]);
     expect(lines).toContain("BALANCE DUE");
@@ -433,7 +435,6 @@ describe("recipient-safe wording (the person reads this statement)", () => {
     expect(s.view.flow).toEqual({ from: OWNER, to: "Sojan" });
     expect(s.view.rows.map((r) => r.typeLabel)).toEqual(["Lent by Sojan", "Lent by Sojan"]);
     expect(s.view.rows[0].relation).toBe(`Sojan gave Ibin ${money(1023.41)} · Ibin owes Sojan`);
-    expect(s.view.rows[0]).toMatchObject({ status: "Payment due", statusDetail: `Ibin owes Sojan ${money(1023.41)}` });
     // Nothing paid either way: the paid line names whoever owes the balance.
     expect(s.view.reconciliation.map((l) => l.label)).toContain("Paid by Ibin");
     const lines = cellLines(await pdfText(s));
@@ -455,8 +456,8 @@ describe("recipient-safe wording (the person reads this statement)", () => {
 
   it("no profile name: the neutral fallback is named whole in sentences (never cut to \"Account\")", () => {
     const s = sojan([{ x: ZOMATO(), share: 220.74 }], { ownerName: null });
+    // The headline already carries the fallback name in a full sentence, unabbreviated.
     expect(s.view.headline).toBe(`Sojan owes ${OWNER_FALLBACK}`);
-    expect(s.view.rows[0].statusDetail).toBe(`Sojan owes ${OWNER_FALLBACK} ${money(220.74)}`);
   });
 
   it("private UI wording is unchanged when no owner is passed", async () => {
@@ -472,7 +473,7 @@ describe("statement grouping", () => {
   it("brought-forward rows are grouped by the cycle they came from (said once, not per row); sections use plain words", async () => {
     const carried = sojan([{ x: expense(882.96, ZOMATO().participants, "SWIGGY", d(7, 3)), share: 220.74 }, { x: expense(882.96, ZOMATO().participants, "BEVCO", d(8, 2)), share: 220.74 }], { history: true });
     const lines = cellLines(await pdfText(carried));
-    const headings = lines.filter((l) => /^\d.* CYCLE$/.test(l));
+    const headings = lines.filter((l) => /^[A-Z]+ 2026$/.test(l));
     expect(headings).toHaveLength(2);
     expect(lines.some((l) => l.startsWith("From "))).toBe(false);
     expect(lines).toContain("PREVIOUS BALANCE");
@@ -497,7 +498,7 @@ describe("statement grouping", () => {
       const l = page.split("\n");
       // Every heading on a page is followed by one of its transactions before the next heading.
       l.forEach((x, at) => {
-        if (/^\d.* CYCLE$/.test(x)) expect(l.slice(at + 1).find((y) => /^M\d\d$/.test(y) || /^\d.* CYCLE$/.test(y))).toMatch(/^M\d\d$/);
+        if (/^[A-Z]+ 2026$/.test(x)) expect(l.slice(at + 1).find((y) => /^M\d\d$/.test(y) || /^[A-Z]+ 2026$/.test(y))).toMatch(/^M\d\d$/);
       });
     }
   });
@@ -519,10 +520,11 @@ describe("page utilization", () => {
     expect(s.view.carried).toHaveLength(5);
     expect(s.view.rows).toHaveLength(0);
     const pages = await pdfPages(s);
-    // Was 2 pages: the content floor reserved 70pt above the page edge while the footer rule sits at 30pt,
-    // pushing "This cycle" + the ending block onto a page of their own.
-    expect(pages).toHaveLength(1);
-    expect(pages[0]).toContain("ENDING BALANCE");
+    // Two pages now: the closing Balance Due line is unconditional (the one figure at the end of the table,
+    // never skipped just because nothing is new), so this all-carried, nothing-new case carries one more row
+    // of height than before. The balance still reads once, clearly, on its own page with the ending panel.
+    expect(pages).toHaveLength(2);
+    expect(pages.join("\n")).toContain("ENDING BALANCE");
     expect(pages[0]).toContain("THIS CYCLE");
   });
 });

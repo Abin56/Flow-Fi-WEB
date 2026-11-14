@@ -2,7 +2,8 @@
 /**
  * FlowFi Android sideload release tooling (docs/sms-sync-pairing.md → "Android APK distribution").
  *
- *   node scripts/android-release.mjs prepare <path-to-signed-release.apk>   validate + copy into release/android/
+ *   node scripts/android-release.mjs prepare <path-to-signed-release.apk> [--notes "text"] [--mandatory] [--min-supported-code <n>]
+ *                                                                           validate + copy into release/android/
  *   node scripts/android-release.mjs stage                                  copy release/android/* into out/downloads/ (runs after `next build`)
  *   node scripts/android-release.mjs verify-remote [origin]                 download the live APK and compare it with the live manifest
  *
@@ -13,6 +14,12 @@
  * Scheme v2+), package `com.flowfi.app`, built with READ_SMS (the sideload flavor), and — once a first release
  * was recorded — signed by the SAME certificate as before (Android refuses in-place updates across keys). It never reads
  * keystore files or passwords; it only inspects the finished APK.
+ *
+ * In-app update flags (read by the Flutter app's update checker — see Finance_App's RELEASE.md):
+ *   --notes "text"            release notes shown in the update dialog (omit to publish without notes)
+ *   --mandatory               force every installed app below this versionCode to update before continuing
+ *   --min-supported-code <n>  app builds with a lower versionCode are treated as mandatory; omit to carry over the
+ *                             previous release's value unchanged (so a routine release never silently resets the floor)
  */
 
 import { createHash } from "node:crypto";
@@ -81,8 +88,19 @@ export function parseBadging(text) {
   };
 }
 
-function prepare(apkArg) {
-  if (!apkArg) fail("Usage: android-release.mjs prepare <path-to-signed-release.apk>");
+/** Parses the flags after the APK path for `prepare`. Exported for tests. */
+export function parsePrepareFlags(argv) {
+  const flags = {};
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === "--mandatory") flags.mandatory = true;
+    else if (argv[i] === "--notes") flags.notes = argv[++i];
+    else if (argv[i] === "--min-supported-code") flags.minSupportedVersionCode = Number(argv[++i]);
+  }
+  return flags;
+}
+
+function prepare(apkArg, flags = {}) {
+  if (!apkArg) fail("Usage: android-release.mjs prepare <path-to-signed-release.apk> [--notes \"text\"] [--mandatory] [--min-supported-code <n>]");
   const apk = resolve(apkArg);
   if (!existsSync(apk) || !statSync(apk).isFile()) fail(`APK not found: ${apk}`);
 
@@ -109,9 +127,17 @@ function prepare(apkArg) {
     if (recorded !== signer.sha256) fail(`Signing certificate differs from the one recorded for earlier releases (${recorded.slice(0, 16)}… vs ${signer.sha256.slice(0, 16)}…). Android would refuse to update installed apps. Nothing was published.`);
   }
   const manifestFile = join(RELEASE_DIR, MANIFEST);
+  let previous = null;
   if (existsSync(manifestFile)) {
-    const previous = JSON.parse(readFileSync(manifestFile, "utf8"));
+    previous = JSON.parse(readFileSync(manifestFile, "utf8"));
     if (badging.versionCode <= previous.versionCode) fail(`versionCode ${badging.versionCode} is not higher than the published ${previous.versionCode}. Bump the version in pubspec.yaml.`);
+  }
+
+  let minSupportedVersionCode = previous?.minSupportedVersionCode;
+  if (flags.minSupportedVersionCode !== undefined) {
+    if (!Number.isInteger(flags.minSupportedVersionCode) || flags.minSupportedVersionCode < 1) fail("--min-supported-code must be a positive integer.");
+    if (flags.minSupportedVersionCode > badging.versionCode) fail(`--min-supported-code ${flags.minSupportedVersionCode} cannot exceed the versionCode being published (${badging.versionCode}).`);
+    minSupportedVersionCode = flags.minSupportedVersionCode;
   }
 
   const safeVersion = badging.versionName.replace(/[^0-9A-Za-z.+_-]/g, "_");
@@ -129,6 +155,9 @@ function prepare(apkArg) {
     packageName: EXPECTED_PACKAGE,
     signerSha256: signer.sha256,
     publishedAt: new Date().toISOString(),
+    mandatory: flags.mandatory === true,
+    ...(flags.notes ? { releaseNotes: String(flags.notes) } : {}),
+    ...(minSupportedVersionCode !== undefined ? { minSupportedVersionCode } : {}),
   };
   writeFileSync(manifestFile, `${JSON.stringify(manifest, null, 2)}\n`);
 
@@ -138,6 +167,7 @@ function prepare(apkArg) {
   console.log(`  SHA-256     ${digest}`);
   console.log(`  signer      ${signer.dn}`);
   console.log(`  cert SHA-256 ${signer.sha256}`);
+  console.log(`  mandatory   ${manifest.mandatory}${minSupportedVersionCode !== undefined ? `  (min supported versionCode ${minSupportedVersionCode})` : ""}`);
   console.log("Next: npm run build (stages it into out/downloads), then deploy hosting.");
 }
 
@@ -177,9 +207,9 @@ async function verifyRemote(originArg) {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const [command, arg] = process.argv.slice(2);
-  if (command === "prepare") prepare(arg);
+  const [command, arg, ...rest] = process.argv.slice(2);
+  if (command === "prepare") prepare(arg, parsePrepareFlags(rest));
   else if (command === "stage") stage();
   else if (command === "verify-remote") await verifyRemote(arg);
-  else fail("Usage: android-release.mjs <prepare <apk> | stage | verify-remote [origin]>");
+  else fail("Usage: android-release.mjs <prepare <apk> [--notes \"text\"] [--mandatory] [--min-supported-code <n>] | stage | verify-remote [origin]>");
 }

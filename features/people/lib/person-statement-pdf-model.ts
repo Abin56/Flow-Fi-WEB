@@ -11,26 +11,21 @@ import {
   cyclePosition,
   isInboundPayment,
   linkedExpense,
-  generalCreditFrom,
   kindLabel,
   NO_LOOKUPS,
-  paidSoFar,
   paymentGroupLabel,
   paymentGroups,
   relationLine,
   settlementKind,
-  settlementStatus,
   settlementTitle,
   settlementTone,
   splitContext,
   splitContextLine,
-  type GeneralCredit,
   type SettlementKind,
   type SettlementLookups,
-  type SettlementStatusTone,
   type SettlementTone,
 } from "@/features/people/lib/settlement-presentation";
-import { cycleContaining, formatCycleLabel, formatStatementDate, type PersonCycleStatement, type StatementRow } from "@/lib/engines/person-cycle-statement";
+import { formatStatementDate, type PersonCycleStatement, type StatementRow } from "@/lib/engines/person-cycle-statement";
 import { money } from "@/lib/engines/person-cycle-statement-share";
 import type { LedgerEntry } from "@/lib/models/person";
 import { splitAllocation, splitCountLabel, type SplitAllocation } from "@/lib/split/split-allocation";
@@ -53,11 +48,6 @@ export interface StatementViewRow {
   original: string;
   /** What `original` is: "Amount", or for a split/assigned share whose share it is ("Sojan's share" / "Ibin's share"). */
   amountLabel: string;
-  paid: string;
-  remaining: string;
-  status: string;
-  statusDetail: string;
-  statusTone: SettlementStatusTone;
   /** Split/assigned share only: "Total price ₹3,000 · 3-way split · Amma's share ₹1,000" (the one-line summary). */
   splitNote?: string | null;
   /**
@@ -76,63 +66,44 @@ export interface StatementViewRow {
   purchaseNote: string | null;
   /** Caption under the amount ("Amma's share") — only beside a purchase total, where the two must be told apart. */
   shareLabel: string | null;
-  /** The status chip's colour family — one meaning, one colour, everywhere in the statement. */
+  /** The chip's colour family — from what the row IS (its kind), never a payment-status colour. */
   chip: StatementChip;
-  /** The status detail only when it adds something the columns don't already say ("Due 12 Oct"). */
-  statusNote: string;
+  /** The chip's short text: the kind ("EMI" / "Loan" / "Split" / "Given" / "Borrowed" / "Payment" / "Advance" / …),
+   * or "Moved" / "Overdue" when the obligation carries a live postponement — never a paid/remaining figure. */
+  tag: string;
   /**
    * The quiet line under the title: type · context, each said once. A payment's sentence already names who
-   * paid whom, so its type label ("Paid by Amma") is left out.
+   * paid whom, so its type label ("Paid by Amma") is left out. Carries a postponement's note when one applies
+   * ("First due in Sep cycle"), since there is no separate status line anymore.
    */
   metaLine: string;
-  /**
-   * A partly paid obligation's paid-down fraction (0–1), for a bar under its Remaining amount — a drawing width
-   * only, never shown as a figure. Null unless the row is partly paid.
-   */
-  progress: number | null;
   /** An open obligation from an earlier cycle, listed as brought forward. */
   carried?: boolean;
-  /** e.g. "18 Aug – 17 Sep cycle" for a brought-forward row. */
-  fromCycle?: string;
   /** "August 2026" — the month heading the row is grouped under when a statement spans months. */
   month: string;
-  /** Who still owes this row's Remaining — the person ("them"), the owner, or neither (no settlement state). */
+  /** Who still owes this row — the person ("them"), the owner, or neither (a payment / advance row). */
   owedBy: "them" | "owner" | null;
-  /** Remaining as a number (engine value read at the statement date), for the section subtotals; null without a state. */
-  remainingValue: number | null;
   /**
-   * How long a still-open item has been open at the statement date ("Open 86 days") — a fact from its own date, never
-   * a due date (splits have none). The tone deepens with age: fresh < 30 days, aging < 60, old after. Null when the
-   * item is paid, postponed, not yet dated, or carries no settlement state.
+   * Whether the obligation is fully resolved — a flag, never a figure (no remaining amount is exposed). The
+   * full statement lists a row regardless (it is the complete history); the short Monthly Settlement uses
+   * this to leave a resolved item out of its summary, the same way it always has.
    */
-  age: { label: string; tone: "fresh" | "aging" | "old" } | null;
-  /** Engine values behind the strings, for the monthly settlement's sums. */
+  settled: boolean;
+  /** Engine value behind `original` — the row's own tracked amount, never a per-row remaining or paid-down figure. */
   amountValue: number;
-  /** What was paid on it at the statement date; null for a payment / advance row. */
-  paidValue: number | null;
   dateValue: Date;
-  /** The obligation is postponed to a later cycle (`deferredTo`, e.g. "Nov") — still owed, not collectible now. */
-  postponed: boolean;
-  deferredTo: string | null;
   /** "Bajaj Finance · EMI #13" for an EMI / Loan installment; null for everything else. */
   emiLabel: string | null;
-  /** Brought-forward rows only: what was still open on the item when the cycle began. */
-  openAtStart?: number;
 }
 
 /**
- * The table's sum, so its Remaining column adds up to the answer on the page: each section's still-open subtotal,
- * anything not tied to one item (an unlinked payment, an adjustment), and the balance due they make.
+ * The table's one closing line — read straight from the engine's final aggregate position, never summed from
+ * the rows above it (a payment no longer ties to one item, so there is nothing left to add up a column into).
  */
-export interface StatementTotals {
-  /** "Still open from earlier cycles" — under the brought-forward rows; null without any, or when it is the only figure. */
-  carried: string | null;
-  /** "Still open from this cycle" — under this cycle's rows; null without any, or when it is the only figure. */
-  current: string | null;
-  /** Payments / adjustments not tied to one item: reduce ("−") or add to ("+") the items' sum. */
-  other: { label: string; value: string; op: "+" | "−" } | null;
-  /** The closing line — always the engine's balance. */
-  total: { label: string; value: string };
+export interface StatementClosingBalance {
+  label: string;
+  value: string;
+  direction: PersonCycleStatement["direction"];
 }
 
 /** A postponement agreed on one obligation (web-only `paymentDeferrals`) — when payment is now expected, never an amount. */
@@ -164,17 +135,14 @@ export interface StatementViewPayment {
   amount: string;
   inbound: boolean;
   advance: boolean;
-  /** One line for a payment not tied to a listed item (an advance, an unlinked payment); null when `applied` says it. */
-  single: string | null;
-  /**
-   * Where the money went, item by item, in the table's order: `ref` is the item's # in the table, `date` its date,
-   * `note` what that payment left on it ("cleared" / "₹21.82 left").
-   */
-  applied: { ref: string | null; date: string | null; label: string; amount: string; amountValue: number; leftValue: number | null; note: string | null }[];
   /** The cash amount as a number (`amount` is its display). */
   amountValue: number;
-  appliedTotal: string | null;
-  held: string | null;
+  /**
+   * What this payment was toward, one line — null for a general payment tied to no item (the normal, new case).
+   * For a payment recorded the old, per-item way before this was simplified: "Applied to X · ₹400 left on it" /
+   * "Applied to X · cleared it" for one item, or "Toward X and Y" / "Toward N items" for several.
+   */
+  toward: string | null;
   /** A quiet qualifier: "Received earlier · recorded later" for a receipt entered after the fact. */
   note: string | null;
 }
@@ -218,14 +186,8 @@ export interface StatementView {
   settleProgress: { ratio: number; label: string } | null;
   /** The Previous balance band's line: "13 items open on 01 Oct". */
   previousNote: string;
-  /** Items still open at the statement date (carried + this cycle). */
-  openCount: number;
-  /**
-   * The table's closing sum — earlier cycles' open amount + this cycle's + anything not tied to an item = the
-   * balance due — so the Remaining column adds up to the answer on the page. Null when rows run both ways (some
-   * owed by the person, some by the owner): one column can't add those.
-   */
-  totals: StatementTotals | null;
+  /** The table's one closing line — the engine's final aggregate position, never summed from the rows. */
+  closing: StatementClosingBalance;
 }
 
 export interface StatementViewOptions {
@@ -258,26 +220,51 @@ export const STATEMENT_COPY = {
 export const OWNER_FALLBACK = "Account holder";
 const SAME = 0.005;
 
-/** Statement wording for the advance states, in plain financial words (the private workspace keeps its own). */
-const STATUS_WORDS: Record<string, string> = { "Advance available": "Advance held", "Advance used": "Covered by advance" };
-
-/** Status tone → chip family: paid / received are one green, due is amber, overdue red. */
-const CHIP: Record<SettlementStatusTone, StatementChip> = {
-  settled: "paid",
-  received: "paid",
-  paid: "paid",
-  partial: "partial",
-  due: "due",
-  payable: "due",
-  overdue: "overdue",
-  upcoming: "upcoming",
-  neutral: "neutral",
+/** The chip's short text — what the row fundamentally is, never a payment-status word. */
+const KIND_TAG: Record<SettlementKind, string> = {
+  emi: "EMI",
+  loanEmi: "EMI",
+  loanInstallment: "Loan",
+  loan: "Loan",
+  moneyGiven: "Given",
+  moneyReceived: "Borrowed",
+  assigned: "Split",
+  split: "Split",
+  paymentReceived: "Payment",
+  paymentMade: "Payment",
+  opening: "Opening",
+  adjustment: "Adjustment",
+  advance: "Advance",
+  advanceApplied: "Advance",
 };
+
+/**
+ * The chip's colour family, by kind — reusing the palette's existing (status-named) slots for a new, kind-based
+ * meaning, since the palette itself (`statement-palette.ts`) isn't touched: EMI/Loan in the "upcoming" blue-grey,
+ * Split/Assigned in "carried" tan, a plain Given/Borrowed entry in "due" amber, a payment in "paid" green, an
+ * advance in its own teal, Opening/Adjustment neutral grey.
+ */
+const KIND_CHIP: Record<SettlementKind, StatementChip> = {
+  emi: "upcoming",
+  loanEmi: "upcoming",
+  loanInstallment: "upcoming",
+  loan: "upcoming",
+  moneyGiven: "due",
+  moneyReceived: "due",
+  assigned: "carried",
+  split: "carried",
+  paymentReceived: "paid",
+  paymentMade: "paid",
+  opening: "neutral",
+  adjustment: "neutral",
+  advance: "advance",
+  advanceApplied: "advance",
+};
+
+const isPayment = (k: SettlementKind) => k === "paymentReceived" || k === "paymentMade" || k === "advance" || k === "advanceApplied";
 
 /** Bar widths only: a fraction kept within 0–1. */
 const clamp01 = (n: number) => Math.min(1, Math.max(0, n));
-
-const isPayment = (k: SettlementKind) => k === "paymentReceived" || k === "paymentMade" || k === "advance" || k === "advanceApplied";
 
 const MONTH = new Intl.DateTimeFormat("en-IN", { month: "long", year: "numeric" });
 
@@ -313,16 +300,16 @@ function openAtStart(row: LedgerRow, startIdx: number): number {
   return Math.min(row.amount, round2(row.remaining + row.payments.filter((p) => dayOf(p.date) >= startIdx).reduce((s, p) => s + p.amount, 0)));
 }
 
-/** Postponement wording: the status a moved obligation shows, and the note under it. */
-function deferredStatus(row: LedgerRow, d: StatementDeferral): { label: string; note: string; chip: StatementChip } | null {
+/** Postponement wording: the note a moved obligation carries, folded into its `metaLine`, and the chip colour it takes. */
+function deferredStatus(row: LedgerRow, d: StatementDeferral): { note: string; chip: StatementChip } | null {
   if (row.state === "settled") return null;
   if (d.status === "postponed") {
     return row.state === "partial"
-      ? { label: `Rest in ${d.name} cycle`, note: `Part paid · rest moved from ${d.from} cycle`, chip: "upcoming" }
-      : { label: `Moved to ${d.name} cycle`, note: `First due in ${d.from} cycle`, chip: "upcoming" };
+      ? { note: `Part paid · rest moved to ${d.name} cycle`, chip: "upcoming" }
+      : { note: `Moved to ${d.name} cycle · first due in ${d.from} cycle`, chip: "upcoming" };
   }
-  if (d.status === "lapsed") return { label: "Overdue", note: `Was promised for ${d.name} cycle`, chip: "overdue" };
-  return { label: row.state === "partial" ? "Partially paid" : "Payment due", note: `Moved here from ${d.from} cycle`, chip: row.state === "partial" ? "partial" : "due" };
+  if (d.status === "lapsed") return { note: `Was promised for ${d.name} cycle`, chip: "overdue" };
+  return { note: `Moved here from ${d.from} cycle`, chip: row.state === "partial" ? "partial" : "due" };
 }
 
 function viewRow(
@@ -330,40 +317,24 @@ function viewRow(
   n: number,
   personName: string,
   lookups: SettlementLookups,
-  now: Date,
   total: number,
   personId: string,
   ownerName: string,
   asOfIdx: number,
   deferral: StatementDeferral | null,
-  /** The page's "as of" day — what an item's age is counted to. */
-  ageIdx: number = asOfIdx,
-  /** Payments toward the overall balance no item carries, at the same cut-off. */
-  credit: GeneralCredit | null = null,
 ): StatementViewRow {
-  const { row, later } = rowAt(source, asOfIdx);
+  const { row } = rowAt(source, asOfIdx);
   const kind = settlementKind(row, lookups);
   const ctx = kind === "split" || kind === "assigned" ? splitContext(row, lookups, personId) : null;
   const ownerShort = ownerShortName(ownerName);
-  const status = settlementStatus(row, kind, personName, money, now, ownerShort, credit);
-  const paid = isPayment(kind) ? row.amount : paidSoFar(row);
   // Read straight from the Expense (not gated on `splitContext`), so a legacy Expense without participants still gives its proven total.
   const allocation = kind === "split" || kind === "assigned" ? splitAllocation(linkedExpense(row, lookups), personId, ownerName) : null;
   // The original total earns a column only when it says something new — it differs from the amount this row tracks.
   const showPurchase = allocation != null && Math.abs(allocation.original - row.amount) >= SAME;
   const moved = deferral ? deferredStatus(row, deferral) : null;
-  const label = moved?.label ?? STATUS_WORDS[status.label] ?? status.label;
   const amountName = amountLabel(row.amount, allocation, personName, ownerName);
   const relation = relationLine(row, kind, personName, money, ownerShort);
   const typeLabel = kindLabel(kind, personName, ownerShort);
-  // When it was paid — the last payment up to the statement date, unless its date was never known.
-  const dateOf = (p: PaymentRecord) => (p.entryId != null && lookups.entriesById.get(p.entryId)?.receivedDateKnown === false ? null : formatStatementDate(p.date));
-  const last = row.payments.length > 0 ? row.payments[row.payments.length - 1] : null;
-  const paidNote = last == null ? "" : row.state === "settled" ? `Cleared ${dateOf(last) ?? "· date not known"}` : row.state === "partial" ? `Last paid ${dateOf(last) ?? "· date not known"}` : "";
-  const laterNote = later.length ? `${money(round2(later.reduce((s, p) => s + p.amount, 0)))} paid later · ${dateOf(later[later.length - 1]) ?? "date not known"}` : "";
-  // "Amma owes Abin ₹70" / "From Amma" only restate the direction and the Paid / Remaining columns.
-  const baseNote = status.tone === "upcoming" || status.tone === "neutral" || kind === "advanceApplied" ? (status.detail ?? "") : "";
-  const statusNote = [moved?.note ?? baseNote, moved ? "" : paidNote, laterNote].filter(Boolean).join(" · ");
   return {
     key: row.key,
     no: String(n).padStart(Math.max(2, String(total).length), "0"),
@@ -375,40 +346,21 @@ function viewRow(
     typeLabel,
     original: isPayment(kind) ? "" : money(row.amount),
     amountLabel: amountName,
-    paid: paid == null ? "" : money(paid),
-    remaining: row.state == null ? "" : money(row.remaining ?? 0),
-    status: label,
-    statusDetail: status.detail ?? "",
-    statusTone: status.tone,
     purchase: showPurchase ? money(allocation.original) : null,
     purchaseNote: showPurchase ? splitCountLabel(allocation) : null,
     shareLabel: showPurchase ? amountName : null,
-    chip: moved?.chip ?? (kind === "advance" || kind === "advanceApplied" ? "advance" : CHIP[status.tone]),
-    statusNote,
-    metaLine: metaLine(row, kind, typeLabel, relation, personName.split(" ")[0], ownerShort),
-    progress: row.state === "partial" && row.amount > SAME ? clamp01(1 - (row.remaining ?? 0) / row.amount) : null,
+    chip: moved?.chip ?? KIND_CHIP[kind],
+    tag: moved ? (deferral?.status === "lapsed" ? "Overdue" : "Moved") : KIND_TAG[kind],
+    metaLine: [metaLine(row, kind, typeLabel, relation, personName.split(" ")[0], ownerShort), moved?.note].filter(Boolean).join(" · "),
     splitNote: ctx ? `${splitContextLine(ctx, money)} · ${personName.split(" ")[0]}'s share ${money(ctx.personShare ?? row.amount)}` : null,
     allocation,
     month: MONTH.format(row.date),
     owedBy: row.state == null ? null : row.direction === "theyOwe" ? "them" : row.direction === "iOwe" ? "owner" : null,
-    remainingValue: row.state == null ? null : (row.remaining ?? 0),
-    age: openAge(row, kind, ageIdx, moved != null),
+    settled: row.state === "settled",
     amountValue: row.amount,
-    paidValue: paid,
     dateValue: row.date,
-    postponed: moved != null && deferral?.status === "postponed",
-    deferredTo: moved != null && deferral?.status === "postponed" ? deferral.name : null,
     emiLabel: row.statementRow?.emi ? `${row.statementRow.emi.sourceName} · EMI #${row.statementRow.emi.installmentNumber}` : null,
   };
-}
-
-/** "Open 86 days" for a still-open item, counted from its own date to the statement date (see `StatementViewRow.age`). */
-function openAge(row: LedgerRow, kind: SettlementKind, ageIdx: number, moved: boolean): StatementViewRow["age"] {
-  if (moved || isPayment(kind) || (row.state !== "open" && row.state !== "partial")) return null;
-  const days = Math.round((ageIdx - dayOf(row.date)) / 86_400_000);
-  if (days < 0) return null;
-  const label = days === 0 ? "Added today" : `Open ${days} ${days === 1 ? "day" : "days"}`;
-  return { label, tone: days >= 60 ? "old" : days >= 30 ? "aging" : "fresh" };
 }
 
 /**
@@ -482,11 +434,10 @@ export function statementSections(view: StatementView) {
     /** A carry-forward row (and a THIS CYCLE band after it) when anything was brought forward. */
     showPrevious: view.carried.length > 0 || (previous != null && previous.value !== money(0)),
     /**
-     * The heading a row is listed under, or null for none. Brought-forward rows are grouped by the cycle they came
-     * from ("17 Jul – 16 Aug cycle"), so that cycle is said once instead of on every row; this cycle's rows by
-     * month, only when they span more than one.
+     * The heading a row is listed under, or null for none. Brought-forward rows are grouped by month; this
+     * cycle's rows too, but only when they span more than one.
      */
-    groupOf: (r: StatementViewRow): string | null => (r.carried ? (r.fromCycle ?? r.month) : currentByMonth ? r.month : null),
+    groupOf: (r: StatementViewRow): string | null => (r.carried || currentByMonth ? r.month : null),
   };
 }
 
@@ -528,22 +479,11 @@ export function statementView(statement: PersonCycleStatement, options: Statemen
         .reverse()
     : [];
   const total = carriedRows.length + ledgerRows.length;
-  const build = (credit: GeneralCredit | null) => ({
-    carriedView: carriedRows.map((r, i) => ({
-      ...viewRow(r, i + 1, name, lookups, now, total, statement.personId, owner, asOfIdx, deferralFor(r.key, r.date), dayOf(asOfDate), credit),
-      carried: true,
-      openAtStart: openAtStart(r, start),
-      fromCycle: `${formatCycleLabel(cycleContaining(r.date, options.cycleStartDay), false)} cycle`,
-    })),
-    listed: ledgerRows.map((r, i) => viewRow(r, carriedRows.length + i + 1, name, lookups, now, total, statement.personId, owner, asOfIdx, deferralFor(r.key, r.date), dayOf(asOfDate), credit)),
-  });
-  // Payments toward the overall balance that no item carries (a general payment): read at the statement's own
-  // cut-off — the listed items' remaining vs. the engine's gross position — and, if any, the open items say they
-  // are part of that balance instead of each reading as fully due. Only possible with the brought-forward items.
-  const plainBuild = build(null);
-  const openSide = (side: "them" | "owner") => [...plainBuild.carriedView, ...plainBuild.listed].reduce((s, r) => s + (r.owedBy === side ? (r.remainingValue ?? 0) : 0), 0);
-  const credit = options.history ? generalCreditFrom({ theyOwe: openSide("them"), iOwe: openSide("owner") }, { theyOwe: statement.toReceive, iOwe: statement.toGive }) : null;
-  const { carriedView, listed } = credit ? build(credit) : plainBuild;
+  const carriedView = carriedRows.map((r, i) => ({
+    ...viewRow(r, i + 1, name, lookups, total, statement.personId, owner, asOfIdx, deferralFor(r.key, r.date)),
+    carried: true,
+  }));
+  const listed = ledgerRows.map((r, i) => viewRow(r, carriedRows.length + i + 1, name, lookups, total, statement.personId, owner, asOfIdx, deferralFor(r.key, r.date)));
   // When every amount listed is the person's own share, the column header says so once ("Shambu's share") and the
   // per-row caption goes; any other kind of amount keeps the plain "Amount" header and its captions.
   const amounts = [...carriedView, ...listed].filter((r) => r.original);
@@ -582,9 +522,7 @@ export function statementView(statement: PersonCycleStatement, options: Statemen
   } else for (const l of reconciliation) l.op = null;
   const receivedApplied = line("received")?.value ?? 0;
 
-  // Each payment's allocation points at the item it paid — by its # and date in the table, so two items with the
-  // same name ("KERALA STATE BEVERAGES" ×3) are never confused — and is listed in the table's order.
-  const byKey = new Map([...carried, ...rows].map((r) => [r.key, r]));
+  // A payment's `toward` names what it paid — by the settled obligation's own title.
   const entryOf = (r: StatementRow) => (r.key.startsWith("ledger:") ? lookups.entriesById.get(r.key.slice("ledger:".length)) : undefined);
   const payments: StatementViewPayment[] = paymentGroups(statement)
     .reverse()
@@ -593,13 +531,18 @@ export function statementView(statement: PersonCycleStatement, options: Statemen
       const entryId = head.key.startsWith("ledger:") ? head.key.slice("ledger:".length) : null;
       const cash = g.filter((r) => r.category !== "advanceApplied");
       const linked = g.filter((r) => r.category !== "advance" && r.settles != null);
-      const applied = g.filter((r) => r.category !== "advance");
-      const held = g.filter((r) => r.category === "advance").reduce((s, r) => s + r.amount, 0);
-      const item = (r: StatementRow) => (r.settlesKey ? byKey.get(r.settlesKey) : undefined);
-      const order = (r: StatementRow) => Number(item(r)?.no ?? Number.MAX_SAFE_INTEGER);
       const entry = entryOf(head);
-      // A lone payment against one item is said by its allocation line; only an advance / unlinked payment keeps a sentence.
-      const listAll = g.length > 1 || linked.length === 1;
+      // A general payment (the normal, new case) ties to no item — nothing to name. One linked item uses the same
+      // one-line wording the private workspace does; several are named together, or just counted when there are many.
+      const toward =
+        linked.length === 0
+          ? null
+          : linked.length === 1
+            ? allocationLine(linked[0], money)
+            : (() => {
+                const titles = linked.map((r) => r.settles?.title).filter((t): t is string => !!t);
+                return titles.length <= 2 ? `Toward ${titles.join(" and ")}` : `Toward ${linked.length} items`;
+              })();
       return {
         date: entry?.receivedDateKnown === false ? "Date not known" : formatStatementDate(head.date, true),
         label: paymentGroupLabel(g, name, ownerShort),
@@ -608,54 +551,11 @@ export function statementView(statement: PersonCycleStatement, options: Statemen
         amountValue: g.length > 1 ? cash.reduce((s, r) => s + r.amount, 0) : head.amount,
         inbound: isInboundPayment(head),
         advance: head.category === "advance" || head.category === "advanceApplied",
-        single: listAll ? null : allocationLine(head, money),
-        applied: listAll
-          ? [...applied]
-              .sort((a, b) => order(a) - order(b))
-              .map((r) => {
-                const it = item(r);
-                const left = r.settles?.remainingAfter ?? 0;
-                return {
-                  ref: it?.no ?? null,
-                  date: it ? statementDate(statement, it.date).day : null,
-                  label: r.settles?.title ?? "Overall balance",
-                  amount: money(r.amount),
-                  amountValue: r.amount,
-                  leftValue: r.settles ? left : null,
-                  note: r.settles ? (left >= SAME ? `${money(left)} left` : "cleared") : null,
-                };
-              })
-          : [],
-        appliedTotal: applied.length > 1 ? money(applied.reduce((s, r) => s + r.amount, 0)) : null,
-        held: g.length > 1 && held > 0 ? money(held) : null,
+        toward,
         note: entry?.recordedEarlier === true ? "Received earlier · recorded later" : null,
       };
     });
 
-  // The table's closing sum, read in the balance's direction: each section's open items, then anything not tied to
-  // one item (an unlinked payment, an adjustment, an opening balance without items), equal to the balance due.
-  const listedAll = [...carried, ...rows];
-  const sign = statement.direction === "iOwe" ? -1 : 1;
-  const mixed = listedAll.some((r) => (r.remainingValue ?? 0) >= SAME && r.owedBy != null && (r.owedBy === "them" ? 1 : -1) !== sign);
-  const openOf = (list: StatementViewRow[]) => round2(list.reduce((s, r) => s + (r.remainingValue ?? 0), 0));
-  const carriedOpen = openOf(carried);
-  const currentOpen = openOf(rows);
-  const other = round2(statement.amount - carriedOpen - currentOpen);
-  const hasOther = Math.abs(other) >= SAME;
-  // A section's subtotal is drawn only beside another figure — alone, it would just restate the closing line. And
-  // the closing line itself only when it sums something, or Payment history stands between the table and the
-  // Ending balance; otherwise the Ending balance right under the table already says it.
-  const sumsSomething = (carried.length > 0 && rows.length > 0) || hasOther;
-  const totals: StatementTotals | null =
-    mixed || listedAll.length === 0 || (!sumsSomething && payments.length === 0)
-      ? null
-      : {
-          carried: carried.length && (rows.length || hasOther) ? money(carriedOpen) : null,
-          current: rows.length && (carried.length || hasOther) ? money(currentOpen) : null,
-          other: hasOther ? { label: "Payments & adjustments not tied to one item", value: money(Math.abs(other)), op: other < 0 ? "−" : "+" } : null,
-          total: { label: statement.direction === "settled" ? "Settled" : "Balance due", value: money(statement.amount) },
-        };
-  const openCount = listedAll.filter((r) => (r.remainingValue ?? 0) >= SAME).length;
   const carriedOpenAtStart = carriedRows.length;
 
   return {
@@ -694,9 +594,8 @@ export function statementView(statement: PersonCycleStatement, options: Statemen
           : { ratio: clamp01(1 - statement.amount / Math.abs(totalDue)), label: `${money(statement.amount)} of ${money(Math.abs(totalDue))} still to settle` },
     previousNote:
       carriedOpenAtStart > 0
-        ? `${carriedOpenAtStart} ${carriedOpenAtStart === 1 ? "item" : "items"} open on ${formatStatementDate(statement.cycle.start)} · listed below by cycle`
+        ? `${carriedOpenAtStart} ${carriedOpenAtStart === 1 ? "item" : "items"} open on ${formatStatementDate(statement.cycle.start)}`
         : STATEMENT_COPY.carried.note,
-    openCount,
-    totals,
+    closing: { label: statement.direction === "settled" ? "Settled" : "Balance due", value: money(statement.amount), direction: statement.direction },
   };
 }
