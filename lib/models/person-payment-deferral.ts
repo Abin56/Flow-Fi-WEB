@@ -45,6 +45,12 @@ export interface DeferralCycleRef {
 
 export interface DeferralExpectation {
   cycle: DeferralCycleRef;
+  /**
+   * The exact day the person is now expected to pay (local midnight) — "until 25 Nov". Optional and additive:
+   * a deferral written before exact dates existed has none and reads as its cycle. When present, `cycle` is the
+   * cycle containing it, so every cycle-based rule (summaries, statements) keeps working unchanged.
+   */
+  date?: Date | null;
   reason: DeferralReason | null;
   note: string | null;
 }
@@ -76,6 +82,8 @@ export interface DeferralHistoryEntry {
   /** Expected cycle's last day before / after — null: no deferral. */
   fromEnd: Date | null;
   toEnd: Date | null;
+  /** The exact day expected after this move, when one was chosen. */
+  toDate?: Date | null;
   reason: DeferralReason | null;
 }
 
@@ -126,11 +134,11 @@ function expectationFrom(v: unknown): DeferralExpectation | null {
   const m = v as Record<string, unknown> | null | undefined;
   const cycle = cycleFrom(m?.cycle);
   if (!m || !cycle) return null;
-  return { cycle, reason: reasonOf(m.reason), note: typeof m.note === "string" && m.note ? m.note : null };
+  return { cycle, date: toDate(m.date), reason: reasonOf(m.reason), note: typeof m.note === "string" && m.note ? m.note : null };
 }
 
 function expectationTo(e: DeferralExpectation | null): DocumentData | null {
-  return e == null ? null : { cycle: { start: ts(e.cycle.start), end: ts(e.cycle.end) }, reason: e.reason, note: e.note };
+  return e == null ? null : { cycle: { start: ts(e.cycle.start), end: ts(e.cycle.end) }, date: e.date ? ts(e.date) : null, reason: e.reason, note: e.note };
 }
 
 function reminderFrom(v: unknown): ReminderSnapshot | null {
@@ -161,6 +169,7 @@ export function paymentDeferralFromData(id: string, data: DocumentData): PersonP
       action: m.action === "undo" ? ("undo" as const) : ("postpone" as const),
       fromEnd: toDate(m.fromEnd),
       toEnd: toDate(m.toEnd),
+      toDate: toDate(m.toDate),
       reason: reasonOf(m.reason),
     };
   });
@@ -203,7 +212,7 @@ export function paymentDeferralToFirestore(d: PersonPaymentDeferral): DocumentDa
       reminderBefore: reminderTo(f.reminderBefore),
       reminderAfter: reminderTo(f.reminderAfter),
     })),
-    history: d.history.map((h) => ({ at: ts(h.at), action: h.action, fromEnd: h.fromEnd ? ts(h.fromEnd) : null, toEnd: h.toEnd ? ts(h.toEnd) : null, reason: h.reason })),
+    history: d.history.map((h) => ({ at: ts(h.at), action: h.action, fromEnd: h.fromEnd ? ts(h.fromEnd) : null, toEnd: h.toEnd ? ts(h.toEnd) : null, toDate: h.toDate ? ts(h.toDate) : null, reason: h.reason })),
     createdAt: ts(d.createdAt),
     updatedAt: ts(d.updatedAt),
   };

@@ -279,7 +279,45 @@ describe("multiple people & split shares", () => {
     expect(s.monthly.items).toHaveLength(1);
     expect(s.monthly.items[0]).toMatchObject({ title: "Pizza night", amount: money(200) });
     expect(s.monthly.items[0].note).toContain(`Total ${money(600)} · 3-way split`);
+    // Plain words: a genuine split says it is shared, and shows the total only because it differs from the share.
+    expect(s.monthly.items[0]).toMatchObject({ type: "Shared Expense", status: "Pending", detail: `${money(600)} total · Your share ${money(200)}` });
     write("split-shares", await renderMonthlySettlementPdf(s.statement, { ...s.options, ...fonts() }));
+  });
+
+  it("an expense assigned in full is 'Assigned Expense' with no repeated original / share line", async () => {
+    const part = (name: string, share: number, personId: string | null): ExpenseParticipant => ({ personId, name, share, installmentId: null, isMe: personId === null, receivedStatus: personId === null ? "notApplicable" : "yetToReceive" });
+    const expense = { id: "x2", description: "Daba - food", totalAmount: 500, date: d(10, 12), categoryId: "c", accountId: "a", transactionId: "T-daba", splitType: "custom", participants: [part("Sanju", 500, "S")], scheduleId: "s", notes: "", createdAt: d(10, 12), deletedAt: null } as unknown as Expense;
+    const share = entry("gave", 500, d(10, 12), { note: "Assigned: Daba - food", sourceKind: "assignedExpense", transactionRef: "T-daba" });
+    const lookups = { entriesById: new Map([[share.id, share]]), expenseByTransactionId: new Map([["T-daba", expense]]) } as unknown as SettlementLookups;
+    const s = scenario({ entries: [share], lookups });
+    expect(s.monthly.items[0]).toMatchObject({ type: "Assigned Expense", status: "Pending", detail: "", amount: money(500) });
+  });
+});
+
+describe("plain wording, postponed visibility and the due-now / postponed split", () => {
+  it("a postponed EMI says where it is expected, in plain words; it stays in the total", () => {
+    const { monthly } = sanju({ deferralFor: (k) => (k === "emi-inst:sm1" ? { status: "postponed", name: "Nov", from: "Oct", title: "Nov 2026" } : null) });
+    expect(monthly.items.find((i) => i.title === "Super Money · EMI #1")).toMatchObject({ type: "EMI", status: "Postponed", detail: "Postponed to Nov 2026" });
+    expect(monthly.items.find((i) => i.title === "Bajaj Finance · EMI #13")).toMatchObject({ type: "EMI", status: "Pending", detail: "" });
+    expect(monthly.outstanding).toBe(money(16828.88));
+  });
+
+  it("splits the engine total into due this cycle + postponed — the total itself never changes", () => {
+    const { monthly } = sanju({ deferralFor: (k) => (k === "emi-inst:sm1" ? { status: "postponed", name: "Nov", from: "Oct", title: "Nov 2026" } : null) });
+    expect(monthly.split).toEqual({ dueNow: money(14643.88), postponed: money(2185), postponedTo: "Nov 2026" });
+    expect(monthly.outstanding).toBe(money(16828.88));
+  });
+
+  it("no split when nothing is postponed; an exact promised day replaces the cycle name", () => {
+    expect(sanju({ postpone: false }).monthly.split).toBeNull();
+    const { monthly } = sanju({ deferralFor: (k) => (k === "emi-inst:sm1" ? { status: "postponed", name: "Dec", from: "Oct", title: "Dec 2026", date: new Date(2026, 11, 20) } : null) });
+    expect(monthly.items.find((i) => i.title === "Super Money · EMI #1")!.detail).toBe("Postponed to 20 Dec 2026");
+  });
+
+  it("payments say Received / Paid; renders with the new layout", async () => {
+    const { statement, options, monthly } = sanju({ deferralFor: (k) => (k === "emi-inst:sm1" ? { status: "postponed", name: "Nov", from: "Oct", title: "Nov 2026" } : null) });
+    expect(monthly.payments[0].status).toBe("Received");
+    write("sanju-oct-plain", await renderMonthlySettlementPdf(statement, { ...options, ...fonts() }));
   });
 });
 

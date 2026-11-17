@@ -193,9 +193,12 @@ interface Gathered {
   purchaseTransactionId: string | null;
   personId: string | null;
   referencedTransactionIds: string[];
+  /** The user's own expenses this agreement's "already paid earlier" payments were LINKED to (not owned: never deleted). */
+  linkedExpenseTransactionIds: string[];
   transactions: Transaction[];
   ledgerEntries: LedgerEntry[];
   dependentExpenseTransactionIds: string[];
+  livePersonSettlementCount: number;
   installmentCount: number;
   paidInstallmentCount: number;
   paymentCount: number;
@@ -206,6 +209,22 @@ function ledgerPersonId(kind: AgreementKind, agreement: Loan | Emi): string | nu
   if (kind !== "loan") return null;
   const loan = agreement as Loan;
   return loan.category === "personal" ? (loan.personId ?? null) : null;
+}
+
+/** Live People-ledger entries that settle one of this agreement's installments (`emi-inst:` / `loan-inst:` refs). */
+async function countLivePersonSettlements(r: Refs, agreement: Loan | Emi, installmentIds: ReadonlySet<string>): Promise<number> {
+  const a = agreement as { ownershipShares?: { personId: string | null }[] | null; beneficiaryPersonId?: string | null; payerPersonId?: string | null };
+  const personIds = new Set<string>([...(a.ownershipShares ?? []).map((s) => s.personId), a.beneficiaryPersonId, a.payerPersonId].filter((id): id is string => !!id));
+  let count = 0;
+  for (const personId of personIds) {
+    const snap = await getDocs(query(r.ledger(personId), where("sourceKind", "in", ["emiInstallment", "loanInstallment"])));
+    for (const d of snap.docs) {
+      const e = d.data();
+      const ref = e.obligationRef ?? "";
+      if (e.deletedAt == null && installmentIds.has(ref.slice(ref.indexOf(":") + 1))) count++;
+    }
+  }
+  return count;
 }
 
 async function gather(r: Refs, kind: AgreementKind, agreement: Loan | Emi): Promise<Gathered> {
@@ -226,9 +245,11 @@ async function gather(r: Refs, kind: AgreementKind, agreement: Loan | Emi): Prom
     purchaseTransactionId,
     personId,
     referencedTransactionIds,
+    linkedExpenseTransactionIds: Array.from(new Set(paymentDocs.map((p) => p.linkedTransactionId).filter((id): id is string => !!id))),
     transactions,
     ledgerEntries,
     dependentExpenseTransactionIds: await readDependentExpenseTransactionIds(r, ownedIds),
+    livePersonSettlementCount: await countLivePersonSettlements(r, agreement, new Set(leaves.installments.map((i) => i.id))),
     installmentCount: leaves.installments.length,
     paidInstallmentCount: leaves.installments.filter((d) => ((d.data() as { amountPaid?: number }).amountPaid ?? 0) > 0).length,
     paymentCount: paymentDocs.filter((p) => p.deletedAt == null).length,
@@ -325,12 +346,21 @@ export async function permanentlyDeleteAgreement(
       transactions,
       ledgerEntries,
       dependentExpenseTransactionIds: g.dependentExpenseTransactionIds,
+      livePersonSettlementCount: g.livePersonSettlementCount,
     });
     const accounts = new Map<string, Account>();
     for (const id of plan.accountDeltas.keys()) {
       const snap = await tx.get(doc(r.accounts, id));
       // An account the user already deleted took its balance with it — nothing left to correct there.
       if (snap.exists()) accounts.set(id, snap.data());
+    }
+    // Expenses linked to this agreement's payments: they stay (their money was counted once, on their own account) but
+    // must stop pointing at an agreement that is about to stop existing, or they would stay locked to it for good.
+    const linkedToRelease: Transaction[] = [];
+    for (const id of g.linkedExpenseTransactionIds) {
+      if (ownedIds.includes(id)) continue;
+      const snap = await tx.get(doc(r.transactions, id));
+      if (snap.exists() && snap.data().earlierPaymentLink?.ownerId === agreementId) linkedToRelease.push(snap.data());
     }
     const personSnap = g.personId && plan.personDelta !== 0 ? await tx.get(doc(r.people, g.personId)) : null;
     const scheduleSnap = await tx.get(doc(r.schedules, g.scheduleId));
@@ -344,6 +374,7 @@ export async function permanentlyDeleteAgreement(
       tx.set(doc(r.accounts, id), { ...recordEdit(account, "currentBalance", String(account.currentBalance), String(balance)), currentBalance: balance });
     }
     for (const t of plan.ownedTransactions) tx.delete(doc(r.transactions, t.id));
+    for (const t of linkedToRelease) tx.set(doc(r.transactions, t.id), { ...t, earlierPaymentLink: null });
     if (personSnap?.exists()) {
       const person = personSnap.data();
       const balance = Math.round((person.currentBalance + plan.personDelta) * 100) / 100;

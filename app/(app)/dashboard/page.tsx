@@ -1,9 +1,11 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { Stagger, StaggerItem } from "@/components/foundation/animated-container";
 import { AccountsOverviewCard } from "@/features/dashboard/components/accounts-overview-card";
 import { AttentionRow } from "@/features/dashboard/components/attention-row";
 import { MoneyToUseSignal } from "@/features/people/components/purpose-money-signals";
+import { UpcomingCycleAlert } from "@/features/people/components/upcoming-cycle-alert";
 import { CashFlowCard } from "@/features/dashboard/components/cash-flow-card";
 import { CreditUtilizationCard } from "@/features/dashboard/components/credit-utilization-card";
 import { DashboardHeader } from "@/features/dashboard/components/dashboard-header";
@@ -27,6 +29,7 @@ import { useUserPreferences } from "@/features/settings/hooks/use-user-preferenc
 export default function DashboardPage() {
   const data = useDashboardData();
   const { preferences, update } = useUserPreferences();
+  const router = useRouter();
 
   return (
     <Stagger className="flex min-w-0 flex-col gap-5 px-1 pb-8">
@@ -47,6 +50,8 @@ export default function DashboardPage() {
       </StaggerItem>
 
       <StaggerItem>
+        {/* A day before the next cycle: collections postponed into it. Renders nothing otherwise. */}
+        <UpcomingCycleAlert className="mb-3" onOpen={(personId, key) => router.push(`/people?person=${encodeURIComponent(personId)}&obligation=${encodeURIComponent(key)}&settle=1`)} />
         <AttentionRow items={data.needsAttention} isLoading={data.isLoading} />
         {/* Purpose money people gave me — one quiet line, nothing when there is none */}
         <MoneyToUseSignal className="mt-3" />

@@ -27,6 +27,7 @@
  * reuse it verbatim on any retry.
  */
 
+import { assertLinkable, LinkEarlierPaymentError, LinkedPaymentEditError } from "@/lib/engines/link-earlier-payment";
 import {
   type CollectionReference,
   type DocumentReference,
@@ -193,6 +194,13 @@ export interface RecordAdvancePaymentParams {
   expectedAllocation?: { installmentIds: string[]; overflow: number; amounts?: number[] | null } | null;
   /** Bulk "already paid earlier": cover exactly this one installment (see `LoanPaymentCoreInput.onlyInstallmentId`). */
   onlyInstallmentId?: string | null;
+  /**
+   * With `recordedEarlier`: the id of the user's EXISTING expense Transaction this payment IS (see
+   * `lib/engines/link-earlier-payment.ts`). Posts and moves nothing — amount, date and account must be exactly that
+   * transaction's, it must be live and unlinked, and it is marked as linked in the SAME atomic write. A transaction can be
+   * linked once; a retry (same idempotency key) is a no-op.
+   */
+  linkedTransactionId?: string | null;
 }
 
 interface CoreResult {
@@ -531,6 +539,15 @@ export class LoanAdvancePaymentRepository {
       if (!accountSnap.exists()) throw new Error("Account not found");
       const account = accountSnap.data();
 
+      // Linking an existing transaction: read it FRESH here and check every rule against the stored document.
+      let linkedTx: Transaction | null = null;
+      if (params.linkedTransactionId) {
+        if (!params.recordedEarlier) throw new Error("A transaction can only be linked to a payment recorded as already paid earlier.");
+        const linkedSnap = await tx.get(this.transactionRef(params.linkedTransactionId));
+        linkedTx = linkedSnap.exists() ? linkedSnap.data() : null;
+        assertLinkable(linkedTx, { amount, date, accountId });
+      }
+
       const freshById = await this.readInstallmentsInTransaction(
         tx,
         loan.scheduleId,
@@ -583,7 +600,23 @@ export class LoanAdvancePaymentRepository {
 
       // --- Then all writes. ---
       for (const installment of core.installments) tx.set(doc(this.installments(loan.scheduleId), installment.id), installment);
-      for (const payment of core.payments) tx.set(this.paymentRef(loan.scheduleId, payment.installmentId, payment.id), payment);
+      if (linkedTx != null) {
+        // One installment, exactly the transaction's amount: anything else would not be that transaction.
+        if (core.payments.length !== 1 || core.overflow > 0 || Math.abs(core.payments[0].amount - linkedTx.amount) > 0.005) {
+          throw new LinkEarlierPaymentError("The transaction's amount doesn't match what this installment still owes — nothing was recorded.");
+        }
+      }
+      for (const payment of core.payments) {
+        tx.set(this.paymentRef(loan.scheduleId, payment.installmentId, payment.id), linkedTx != null ? { ...payment, linkedTransactionId: linkedTx.id } : payment);
+      }
+      if (linkedTx != null) {
+        // The back-marker: this expense IS that installment's payment — written in the same commit as the payment.
+        const only = core.payments[0];
+        tx.set(this.transactionRef(linkedTx.id), {
+          ...linkedTx,
+          earlierPaymentLink: { ownerType: "loan", ownerId: loan.id, scheduleId: loan.scheduleId, installmentId: only.installmentId, paymentId: only.id },
+        });
+      }
       if (core.overflowPayment) tx.set(this.paymentRef(loan.scheduleId, lastKnownInstallmentId, core.overflowPayment.id), core.overflowPayment);
       tx.set(this.transactionRef(transactionId), core.transaction);
       const paymentEffect = balanceEffect(core.transaction);
@@ -855,6 +888,9 @@ export class LoanAdvancePaymentRepository {
         if (snap.exists()) freshPayments.set(paymentIds[i], snap.data());
       });
       const freshOverflowPayment: InstallmentPayment | null = overflowSnap != null && overflowSnap.exists() ? overflowSnap.data() : null;
+      // A payment linked to the user's own transaction: read that transaction too (before any write) so the link can be cleared.
+      const linkedIds = [...new Set([...freshPayments.values()].map((p) => p.linkedTransactionId).filter((id): id is string => !!id))];
+      const linkedSnaps = new Map((await Promise.all(linkedIds.map(async (id) => [id, await tx.get(this.transactionRef(id))] as const))));
 
       // --- Then all writes. ---
       for (let i = 0; i < paymentIds.length; i++) {
@@ -872,6 +908,11 @@ export class LoanAdvancePaymentRepository {
         }
 
         tx.set(this.paymentRef(loan.scheduleId, installmentId, paymentId), { ...payment, deletedAt: new Date() });
+        // Unlink only: the user's own transaction, its amount and its account are NOT touched — it simply stops explaining a payment.
+        const linkedSnap = payment.linkedTransactionId ? linkedSnaps.get(payment.linkedTransactionId) : undefined;
+        if (linkedSnap?.exists() && linkedSnap.data().earlierPaymentLink?.paymentId === paymentId) {
+          tx.set(linkedSnap.ref, { ...linkedSnap.data(), earlierPaymentLink: null });
+        }
       }
 
       if (freshOverflowPayment != null && freshOverflowPayment.deletedAt == null) {
@@ -1044,6 +1085,13 @@ export class LoanAdvancePaymentRepository {
     const oldSnap = await getDoc(this.transactionRef(original.transactionId));
     if (!oldSnap.exists()) throw new Error("The original payment could not be found");
     const oldTransaction = oldSnap.data();
+    // A payment linked to the user's own transaction takes its amount, date and account from that transaction: not editable here.
+    const firstPaymentId = original.paymentIds[0];
+    const firstInstallmentId = original.installmentIds[0];
+    if (firstPaymentId != null && firstInstallmentId != null) {
+      const linkedCheck = await getDoc(this.paymentRef(loan.scheduleId, firstInstallmentId, firstPaymentId));
+      if (linkedCheck.exists() && linkedCheck.data().deletedAt == null && linkedCheck.data().linkedTransactionId) throw new LinkedPaymentEditError();
+    }
     // The correction keeps the original's treatment, read from the stored payment (never from the caller):
     // a payment recorded as already paid earlier stays one, so its edit moves no account either.
     const recordedEarlier = await this.originalRecordedEarlier(loan, original, params.date);

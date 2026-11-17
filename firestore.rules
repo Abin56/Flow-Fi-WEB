@@ -52,7 +52,39 @@ service cloud.firestore {
     // under paymentSchedules, paymentBreakdowns under emis, statements/
     // statementPayments under creditCards).
     match /users/{uid}/accounts/{document=**} { allow read, write: if isOwner(uid); }
-    match /users/{uid}/transactions/{document=**} { allow read, write: if isOwner(uid); }
+    // transactions: plain owner CRUD, with ONE server-side guard. A Transaction LINKED to an installment the user recorded
+    // as "already paid earlier" (web-only field `earlierPaymentLink`, see lib/models/transaction.ts) is the money behind
+    // that payment: while the link is set its amount, type, account, date, funding flags and deletion state cannot be
+    // changed, and it cannot be deleted. The Loan/EMI reversal path clears the link first (a link-only update, allowed),
+    // after which the transaction is ordinary again. The app already enforces this in its repositories; this closes the
+    // stale-tab / older-bundle / other-client path that bypasses them. Documents without the field are unaffected.
+    function isEarlierLinked(data) { return data.get('earlierPaymentLink', null) != null; }
+    function linkedTransactionMoneyUnchanged() {
+      return request.resource.data.get('amount', null) == resource.data.get('amount', null)
+        && request.resource.data.get('type', null) == resource.data.get('type', null)
+        && request.resource.data.get('accountId', null) == resource.data.get('accountId', null)
+        && request.resource.data.get('dateTime', null) == resource.data.get('dateTime', null)
+        && request.resource.data.get('transferId', null) == resource.data.get('transferId', null)
+        && request.resource.data.get('excludeFromCalculations', null) == resource.data.get('excludeFromCalculations', null)
+        && request.resource.data.get('deletedAt', null) == resource.data.get('deletedAt', null)
+        && request.resource.data.get('fundedByPersonId', null) == resource.data.get('fundedByPersonId', null);
+    }
+    // The link may be cleared only when what it explains is gone IN THE SAME WRITE: the payment is reversed (soft-deleted)
+    // or removed, or the Loan/EMI that owns it no longer exists (permanent deletion). A stale client cannot unlink first
+    // and then change the money.
+    function earlierLinkReleasable(uid, link) {
+      return !existsAfter(/databases/$(database)/documents/users/$(uid)/paymentSchedules/$(link.scheduleId)/installments/$(link.installmentId)/payments/$(link.paymentId))
+        || getAfter(/databases/$(database)/documents/users/$(uid)/paymentSchedules/$(link.scheduleId)/installments/$(link.installmentId)/payments/$(link.paymentId)).data.get('deletedAt', null) != null
+        || (link.ownerType == 'loan' && !existsAfter(/databases/$(database)/documents/users/$(uid)/loans/$(link.ownerId)))
+        || (link.ownerType == 'emi' && !existsAfter(/databases/$(database)/documents/users/$(uid)/emis/$(link.ownerId)));
+    }
+    match /users/{uid}/transactions/{document=**} {
+      allow read, create: if isOwner(uid);
+      allow update: if isOwner(uid) && (!isEarlierLinked(resource.data)
+        || (linkedTransactionMoneyUnchanged()
+            && (isEarlierLinked(request.resource.data) || earlierLinkReleasable(uid, resource.data.earlierPaymentLink))));
+      allow delete: if isOwner(uid) && !isEarlierLinked(resource.data);
+    }
     match /users/{uid}/categories/{document=**} { allow read, write: if isOwner(uid); }
     match /users/{uid}/budgets/{document=**} { allow read, write: if isOwner(uid); }
     match /users/{uid}/savingsGoals/{document=**} { allow read, write: if isOwner(uid); }

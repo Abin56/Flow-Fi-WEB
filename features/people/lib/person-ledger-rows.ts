@@ -122,6 +122,12 @@ export interface LedgerRow {
   loanId: string | null;
   /** Unpaid past its due date (Loan installments only — the other sources carry no due date). */
   overdue: boolean;
+  /**
+   * A STANDALONE payment row (a general payment — "reduces the overall balance", tied to no item): the Record Payment it
+   * is, so the row itself can offer Revert. Kept apart from `payments` (which are payments APPLIED TO an obligation and feed
+   * statements / PDFs), so no total, statement or PDF ever counts it twice. Null for every other row.
+   */
+  ownPayment?: PaymentRecord | null;
 }
 
 const EPSILON = 0.005;
@@ -362,6 +368,20 @@ export function buildLedgerRows({
       payments: row.kind === "obligation" ? (payments.get(row.key) ?? []) : [],
       loanId: row.loan?.loanId ?? null,
       overdue: row.category === "loan" && state !== "settled" && dayIndex(row.date) < dayIndex(now),
+      ownPayment:
+        row.kind === "settlement" && row.settlesKey == null && entry?.paymentId != null
+          ? {
+              key: row.key,
+              entryId,
+              date: row.date,
+              amount: row.amount,
+              direction: row.category === "repaid" ? "youPaid" : "theyPaid",
+              source: "cash",
+              paymentId: entry.paymentId,
+              remainingAfter: 0,
+              ...undoTargetFor(entry, entries, pending, cashLegIds),
+            }
+          : null,
     });
   }
 

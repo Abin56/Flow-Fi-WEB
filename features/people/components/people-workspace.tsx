@@ -1,6 +1,7 @@
 "use client";
 
 import { PeopleAttention } from "@/features/people/components/people-attention";
+import { UpcomingCycleAlert } from "@/features/people/components/upcoming-cycle-alert";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
 import { Plus, UserPlus, Users, X } from "lucide-react";
@@ -102,10 +103,12 @@ export function PeopleWorkspace() {
   const pushedRef = useRef(false);
   const listScrollRef = useRef(0);
 
-  function openPerson(id: string) {
+  function openPerson(id: string, obligationKey?: string) {
     listScrollRef.current = scroller()?.scrollTop ?? 0;
     pushedRef.current = true;
-    window.history.pushState(null, "", `${pathname}?person=${encodeURIComponent(id)}`);
+    // With an obligation: straight into that collection's Record payment sheet (Received / Not paid yet), preselected.
+    const deep = obligationKey ? `&obligation=${encodeURIComponent(obligationKey)}&settle=1` : "";
+    window.history.pushState(null, "", `${pathname}?person=${encodeURIComponent(id)}${deep}`);
   }
 
   function closePerson() {
@@ -451,6 +454,7 @@ export function PeopleWorkspace() {
           className="flex animate-in flex-col gap-5 fade-in duration-200"
         >
           <PeopleCycleSummary rows={ledgerRows} />
+          <UpcomingCycleAlert onOpen={openPerson} />
           <PeopleAttention onOpenPerson={openPerson} />
 
           <section aria-label="People" className="flex flex-col gap-3">

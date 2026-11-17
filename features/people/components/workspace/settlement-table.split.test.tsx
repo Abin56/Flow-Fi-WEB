@@ -97,6 +97,8 @@ function renderTable(rows: LedgerRow[], lookups: SettlementLookups) {
 /** The desktop table row for a title (jsdom renders the md+ table and the mobile list side by side). */
 const tableRow = (title: string) => screen.getAllByText(title).map((el) => el.closest("tr")).find(Boolean) as HTMLTableRowElement;
 const expansionOf = (row: HTMLTableRowElement) => row.nextElementSibling as HTMLTableRowElement;
+/** The split's full allocation sits under "More details" (progressive disclosure); the settlement above it stays visible. */
+const openDetails = (exp: HTMLElement) => fireEvent.click(within(exp).getByRole("button", { name: /more details/i }));
 const cells = (scope: HTMLElement) =>
   [...scope.querySelectorAll("section dl > div")].map((c) => [c.querySelector("dt")!.textContent, c.querySelector("dd")!.firstChild!.textContent]);
 
@@ -142,6 +144,10 @@ describe("People Ledger table — split row, expanded through the row's own togg
     fireEvent.click(tr);
     expect(tr.getAttribute("aria-expanded")).toBe("true");
     const exp = expansionOf(tr);
+    // Default view: the person's settlement only — the whole-bill allocation is one click away.
+    expect(within(exp).getByText("Sojan's settlement")).toBeTruthy();
+    expect(within(exp).queryByText("Split details")).toBeNull();
+    openDetails(exp);
     expect(within(exp).getByText("Split details")).toBeTruthy();
     const section = exp.querySelector("section")!;
     expect(within(section).getByText("Original total")).toBeTruthy();
@@ -174,6 +180,7 @@ describe("People Ledger table — split row, expanded through the row's own togg
     const tr = tableRow("BEVCO - ONAM");
     fireEvent.click(tr);
     const exp = expansionOf(tr);
+    openDetails(exp);
     expect(cells(exp).find(([n]) => n === "Sojan")![1]).toBe(money(490));
     const settlement = within(exp).getByText("Sojan's settlement").parentElement!;
     expect(within(settlement).getByText("Sojan paid").nextElementSibling!.textContent).toBe(money(200));
@@ -186,6 +193,7 @@ describe("People Ledger table — split row, expanded through the row's own togg
     const { rows, lookups } = sojanLedger(x, 2000);
     renderTable(rows, lookups);
     fireEvent.click(tableRow("BEVCO - ONAM"));
+    openDetails(expansionOf(tableRow("BEVCO - ONAM")));
     expect(cells(expansionOf(tableRow("BEVCO - ONAM"))).map(([, a]) => a)).toEqual([money(4000), money(3500), money(2000), money(500)]);
   });
 
@@ -194,6 +202,7 @@ describe("People Ledger table — split row, expanded through the row's own togg
     const { rows, lookups } = sojanLedger(x, 333.34);
     renderTable(rows, lookups);
     fireEvent.click(tableRow("BEVCO - ONAM"));
+    openDetails(expansionOf(tableRow("BEVCO - ONAM")));
     expect(cells(expansionOf(tableRow("BEVCO - ONAM"))).map(([, a]) => a)).toEqual([money(333.34), money(333.34), money(333.33)]);
   });
 
@@ -207,6 +216,7 @@ describe("People Ledger table — split row, expanded through the row's own togg
     renderTable(rows, lookups);
     fireEvent.click(tableRow("BEVCO - ONAM"));
     const exp = expansionOf(tableRow("BEVCO - ONAM"));
+    openDetails(exp);
     expect(within(tableRow("BEVCO - ONAM")).getByText(`Split expense · ${n} people`)).toBeTruthy();
     expect(cells(exp)).toHaveLength(n);
     const grid = exp.querySelector("section dl")!.className;
@@ -219,6 +229,7 @@ describe("People Ledger table — split row, expanded through the row's own togg
     const { rows, lookups } = sojanLedger(BEVCO, 490);
     renderTable(rows, lookups);
     fireEvent.click(tableRow("BEVCO - ONAM"));
+    openDetails(expansionOf(tableRow("BEVCO - ONAM")));
     const section = expansionOf(tableRow("BEVCO - ONAM")).querySelector("section")!;
     expect(section.closest('[class*="md:grid-cols-2"]')).toBeNull();
   });

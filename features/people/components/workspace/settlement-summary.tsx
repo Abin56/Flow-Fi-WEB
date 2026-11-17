@@ -7,7 +7,7 @@ import {
   cyclePosition,
   isInboundPayment,
   matchesStatusFilter,
-  matchesTypeFilter,
+  rowMatchesTypeFilter,
   paymentGroupLabel,
   paymentGroups,
   settlementKind,
@@ -42,7 +42,7 @@ export function applySettlementFilters(
   type: SettlementTypeFilter,
   lookups: SettlementLookups,
 ): LedgerRow[] {
-  return rows.filter((r) => matchesStatusFilter(r, status) && matchesTypeFilter(settlementKind(r, lookups), type));
+  return rows.filter((r) => matchesStatusFilter(r, status) && rowMatchesTypeFilter(r, settlementKind(r, lookups), type));
 }
 
 /** Compact status chips (with counts) + a type selector listing only the types present. */
@@ -63,9 +63,9 @@ export function SettlementFilters({
   onTypeChange: (t: SettlementTypeFilter) => void;
   className?: string;
 }) {
-  const typed = rows.filter((r) => matchesTypeFilter(settlementKind(r, lookups), type));
+  const typed = rows.filter((r) => rowMatchesTypeFilter(r, settlementKind(r, lookups), type));
   const count = (s: SettlementStatusFilter) => typed.filter((r) => matchesStatusFilter(r, s)).length;
-  const present = TYPE_ORDER.filter((t) => t === "all" || t === type || rows.some((r) => matchesTypeFilter(settlementKind(r, lookups), t)));
+  const present = TYPE_ORDER.filter((t) => t === "all" || t === type || rows.some((r) => rowMatchesTypeFilter(r, settlementKind(r, lookups), t)));
   return (
     <div className={cn("flex flex-wrap items-center gap-2", className)}>
       <div role="radiogroup" aria-label="Status" className="flex items-center rounded-[7px] border border-border-strong bg-card p-[2px]">

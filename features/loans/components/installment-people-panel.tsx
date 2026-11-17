@@ -79,6 +79,13 @@ export function InstallmentPeoplePanel({
 function postponedTo(view: DeferralView | null): string | null {
   if (!view) return null;
   // Their share, not the lender EMI: when it is now expected, by cycle and its first day.
+  if (view.date) {
+    const until = formatStatementDate(view.date, true);
+    if (view.status === "postponed") return `Postponed until ${until}`;
+    if (view.status === "expectedNow") return "Expected today";
+    if (view.status === "lapsed") return `Was postponed until ${until} — still unpaid`;
+    return null;
+  }
   if (view.status === "postponed") return `Postponed to ${cycleName(view.cycle)} cycle · from ${formatStatementDate(view.cycle.start)}`;
   if (view.status === "expectedNow") return "Expected this cycle";
   if (view.status === "lapsed") return `Was due in ${cycleName(view.cycle)} cycle — still unpaid`;

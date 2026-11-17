@@ -451,11 +451,14 @@ export function useLoanActions() {
           expectedAllocation?: { installmentIds: string[]; overflow: number } | null;
           /** Bulk "already paid earlier": exactly this one installment. */
           onlyInstallmentId?: string | null;
+          /** With `recordedEarlier`: the user's existing expense this payment IS (see `link-earlier-payment.ts`). */
+          linkedTransactionId?: string | null;
         },
       ) => {
         const paymentRepository = new LoanAdvancePaymentRepository(db, uid);
         const result = await paymentRepository.record({
           recordedEarlier: params.recordedEarlier,
+          linkedTransactionId: params.linkedTransactionId,
           expectedFirstInstallmentId: params.expectedFirstInstallmentId,
           expectedAllocation: params.expectedAllocation,
           onlyInstallmentId: params.onlyInstallmentId,

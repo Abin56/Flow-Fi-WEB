@@ -9,7 +9,7 @@
  * the row model and the totals never carry it.
  */
 
-import { ArrowRight, CalendarClock, CheckCircle2, ChevronDown, Undo2 } from "lucide-react";
+import { CalendarClock, CheckCircle2, ChevronDown, Undo2 } from "lucide-react";
 import { createContext, useContext, useMemo, useRef, useState } from "react";
 import { PanelSection } from "@/components/finance/context-panel";
 import { DateInput } from "@/components/forms/date-input";
@@ -18,6 +18,7 @@ import { cycleContaining, formatCycleLabel, formatStatementDate, type StatementC
 import {
   cycleName,
   cycleStartReminderKind,
+  cycleTitle,
   DEFERRAL_NOTE_MAX,
   defaultTargetCycle,
   deferralCycleSummary,
@@ -32,6 +33,7 @@ import { cn } from "@/lib/utils";
 import { toast } from "@/store/toast-store";
 import type { LedgerRow } from "@/features/people/lib/person-ledger-rows";
 import { FollowUpContext } from "./follow-up";
+import { PostponeEmiPanel } from "./postpone-emi-panel";
 import { WS_FIELD } from "./person-workspace-ui";
 
 /** The request minus what the workspace fills in (person, start day, clock). */
@@ -46,6 +48,11 @@ export interface DeferralContextValue {
   personName: string;
   /** Resolves "written" / "noop"; throws `PaymentDeferralError` on a conflict or invalid request. */
   onApply: (request: DeferralSubmit, options?: { silent?: boolean }) => Promise<"written" | "noop">;
+  /**
+   * Opens the one Record payment sheet on this obligation ("Received", with its Full / Part choice) — so a postponed
+   * collection is settled from its own row, never by hunting through pages. Absent where no payment can be recorded.
+   */
+  onOpenPayment?: (obligationKey: string) => void;
 }
 
 export const DeferralContext = createContext<DeferralContextValue | null>(null);
@@ -63,11 +70,11 @@ export function canPostponeRow(row: Pick<LedgerRow, "statementRow" | "category" 
 }
 
 /** A row's live postponement for display — the cycle it was moved to ("Nov") and the cycle it came from. */
-export function useRowDeferral(rowKey: string, rowDate: Date): { status: Exclude<DeferralView["status"], "resolved">; name: string; from: string; range: string } | null {
+export function useRowDeferral(rowKey: string, rowDate: Date): { status: Exclude<DeferralView["status"], "resolved">; name: string; from: string; range: string; date: Date | null } | null {
   const ctx = useContext(DeferralContext);
   const view = ctx?.byKey.get(rowKey);
   if (!ctx || !view || view.status === "resolved") return null;
-  return { status: view.status, name: cycleName(view.cycle), from: cycleName(cycleContaining(rowDate, ctx.cycleStartDay)), range: rangeLabel(view.cycle) };
+  return { status: view.status, name: cycleName(view.cycle), from: cycleName(cycleContaining(rowDate, ctx.cycleStartDay)), range: rangeLabel(view.cycle), date: view.date };
 }
 
 /**
@@ -78,8 +85,16 @@ export function DeferralNote({ rowKey, rowDate, className, hidePostponed = false
   const view = useRowDeferral(rowKey, rowDate);
   if (!view || (hidePostponed && view.status === "postponed")) return null;
   const { name, from } = view;
-  const text =
-    view.status === "postponed"
+  // An exact day reads as a date ("Postponed until 25 Nov 2026 · was due 15 Nov 2026"); a cycle-only one keeps its cycle wording.
+  const until = view.date ? formatStatementDate(view.date, true) : null;
+  const wasDue = formatStatementDate(rowDate, true);
+  const text = until
+    ? view.status === "postponed"
+      ? `Postponed until ${until} · was due ${wasDue}`
+      : view.status === "expectedNow"
+        ? `Due today · postponed from ${wasDue}`
+        : `Was postponed until ${until} · still not paid`
+    : view.status === "postponed"
       ? `Moved to ${name} cycle`
       : view.status === "expectedNow"
         ? `Due this cycle · moved from ${from} cycle`
@@ -99,16 +114,21 @@ export function DeferralNote({ rowKey, rowDate, className, hidePostponed = false
   );
 }
 
-const CHIP =
-  "h-8 rounded-full border px-2.5 text-xs font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50";
-const chip = (on: boolean) => cn(CHIP, on ? "border-primary-accent-text bg-primary/15 text-foreground" : "border-border-strong bg-card text-foreground/80 hover:bg-secondary");
 const BTN =
   "inline-flex h-7 items-center gap-1 rounded-[6px] border border-border-strong bg-card px-2 text-[12px] font-semibold text-foreground outline-none hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50";
 
+/** The expanded row's quiet variant: text-weight actions in one line, so Postpone never competes with Record payment. */
+const QUIET_BTN =
+  "inline-flex h-6 items-center gap-1 rounded-[5px] px-1.5 text-[12px] font-semibold text-foreground/75 outline-none transition-colors hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50";
+
 type ReminderMode = "none" | "cycleStart" | "date";
 
-/** In a row's expansion: Postpone / Change cycle / Undo. Renders nothing for rows that can't be postponed. */
-export function DeferralControl({ row, title }: { row: LedgerRow; title: string }) {
+/**
+ * In a row's expansion: Postpone / Change cycle / Undo. Renders nothing for rows that can't be postponed.
+ * `compact` (the expanded ledger row) only restyles the same buttons; `hideReceived` drops the "Received" shortcut when the
+ * row's own Record payment button — the very same `openPayment` flow — is already shown right above it.
+ */
+export function DeferralControl({ row, title, compact = false, hideReceived = false }: { row: LedgerRow; title: string; compact?: boolean; hideReceived?: boolean }) {
   const ctx = useContext(DeferralContext);
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -131,6 +151,7 @@ export function DeferralControl({ row, title }: { row: LedgerRow; title: string 
     }
   };
 
+  const btn = compact ? QUIET_BTN : BTN;
   return (
     <div className={cn("min-w-0", editing && eligible && "basis-full")} onClick={(e) => e.stopPropagation()}>
       {editing && eligible ? (
@@ -139,8 +160,8 @@ export function DeferralControl({ row, title }: { row: LedgerRow; title: string 
         <PostponePanel row={row} title={title} onDone={() => setEditing(false)} />
         </>
       ) : (
-        <div className="flex flex-wrap items-center gap-1.5">
-          <span className="mr-0.5 text-[10.5px] font-bold tracking-[0.08em] text-foreground/65 uppercase">Payment timing</span>
+        <div className={cn("flex flex-wrap items-center", compact ? "gap-x-2 gap-y-1" : "gap-1.5")}>
+          <span className="mr-0.5 text-[10.5px] font-bold tracking-[0.08em] text-foreground/65 uppercase">{compact ? "Timing" : "Payment timing"}</span>
           {live ? (
             <>
               <DeferralNote rowKey={row.key} rowDate={row.date} className="mr-1" />
@@ -149,19 +170,32 @@ export function DeferralControl({ row, title }: { row: LedgerRow; title: string 
                   · {live.deferral.expected.reason === "other" && live.deferral.expected.note ? live.deferral.expected.note : DEFERRAL_REASON_LABEL[live.deferral.expected.reason]}
                 </span>
               )}
-              {eligible && (
-                <button type="button" className={BTN} disabled={busy} onClick={() => setEditing(true)}>
-                  Change cycle
+              {ctx.onOpenPayment && eligible && !hideReceived && (
+                <button
+                  type="button"
+                  className={cn(btn, !compact && "border-primary-accent-text/60 bg-primary/10")}
+                  disabled={busy}
+                  onClick={() => ctx.onOpenPayment?.(row.key)}
+                  title="Record the money they paid — all of it, or part (the rest stays owed)."
+                >
+                  <CheckCircle2 className="size-3.5" aria-hidden />
+                  Received
                 </button>
               )}
-              <button type="button" className={BTN} disabled={busy} onClick={undo} title="Restore the previous expected cycle">
+              {eligible && (
+                <button type="button" className={btn} disabled={busy} onClick={() => setEditing(true)} title="Move when it's expected again — nothing new is created.">
+                  {compact && <CalendarClock className="size-3.5" aria-hidden />}
+                  {live.date ? "Postpone again · change date" : "Postpone again"}
+                </button>
+              )}
+              <button type="button" className={btn} disabled={busy} onClick={undo} title={live.undoTo ? "Restore the previous expected cycle" : "Remove the postponement — the payment is expected on its own date again. Nothing else changes."}>
                 <Undo2 className="size-3.5" aria-hidden />
-                {live.undoTo ? `Back to ${cycleName(live.undoTo)} cycle` : "Undo postponement"}
+                {live.undoTo ? `Back to ${cycleName(live.undoTo)} cycle` : "Cancel postponement"}
               </button>
             </>
           ) : (
             <>
-              <button type="button" className={BTN} disabled={busy} onClick={() => setEditing(true)} title="Can't be paid this cycle? Move when it's expected — the amount and totals don't change.">
+              <button type="button" className={btn} disabled={busy} onClick={() => setEditing(true)} title="Can't be paid this cycle? Move when it's expected — the amount and totals don't change.">
 
                 <CalendarClock className="size-3.5" aria-hidden />
                 Postpone payment
@@ -180,6 +214,12 @@ export function DeferralControl({ row, title }: { row: LedgerRow; title: string 
 }
 
 function PostponePanel({ row, title, onDone }: { row: LedgerRow; title: string; onDone: () => void }) {
+  // A person's share of a Loan / EMI installment is two decisions (their date, then the bank EMI) — see postpone-emi-panel.tsx.
+  if (row.category === "emi" && /^(emi|loan)-inst:/.test(row.key)) return <PostponeEmiPanel row={row} title={title} onDone={onDone} />;
+  return <PostponeItemPanel row={row} title={title} onDone={onDone} />;
+}
+
+function PostponeItemPanel({ row, title, onDone }: { row: LedgerRow; title: string; onDone: () => void }) {
   const items = useMemo(() => [{ row, title }], [row, title]);
   const draft = usePostponeDraft(items);
   const submit = async () => {
@@ -187,6 +227,9 @@ function PostponePanel({ row, title, onDone }: { row: LedgerRow; title: string; 
   };
   return (
     <div role="group" aria-label="Postpone payment" className="max-w-2xl rounded-[8px] border border-border-strong bg-card px-3 py-2.5">
+      <p className="mb-2 text-[13px] text-foreground" data-testid="postpone-heading">
+        <span className="font-semibold">{draft.personName}</span> · <span className="font-bold tabular-nums">{money(draft.remaining)}</span> pending
+      </p>
       <PostponeFields draft={draft} />
       {draft.error && (
         <p role="alert" className="mt-1.5 text-[12px] font-medium text-expense">
@@ -204,7 +247,7 @@ function PostponePanel({ row, title, onDone }: { row: LedgerRow; title: string; 
           aria-busy={draft.busy}
           onClick={submit}
         >
-          {draft.busy ? "Moving…" : "Move payment"}
+          {draft.busy ? "Postponing…" : "Confirm postpone"}
         </button>
       </div>
     </div>
@@ -256,6 +299,8 @@ export function usePostponeDraft(items: readonly PostponeItem[]) {
   const [note, setNote] = useState(single?.deferral.expected?.note ?? "");
   const [reminderMode, setReminderMode] = useState<ReminderMode>("none");
   const [dateText, setDateText] = useState("");
+  // The exact day the person is given until. Empty = use the chosen cycle (the original behaviour). A day wins over the chips.
+  const [untilText, setUntilText] = useState(() => (single?.date ? toInputDate(single.date) : ""));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // One id per obligation per intent: a retry after a lost response is recognised as the same request (no double write).
@@ -268,7 +313,22 @@ export function usePostponeDraft(items: readonly PostponeItem[]) {
   // A ref, not state: a double click lands before the re-render that disables the button.
   const inFlight = useRef(false);
 
-  const target = options[Math.min(targetIdx, options.length - 1)];
+  // An exact day must be after today and after every item's own due date — the lender's date is never moved by it.
+  const dayAfter = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1);
+  const minUntil = useMemo(() => {
+    const t = dayAfter(today);
+    const o = latestDay > 0 ? dayAfter(new Date(latestDay)) : t;
+    return o.getTime() > t.getTime() ? o : t;
+  }, [today, latestDay]);
+  const untilDate = fromInputDate(untilText);
+  const untilError =
+    untilText === "" ? null : untilDate == null ? "Enter a valid date." : untilDate.getTime() < minUntil.getTime() ? `Choose a date from ${formatStatementDate(minUntil)} — after today and after the original due date.` : null;
+  const exactDate = untilDate != null && untilError == null ? untilDate : null;
+  const pickCycle = (i: number) => {
+    setTargetIdx(i);
+    setUntilText("");
+  };
+  const target = exactDate ? cycleContaining(exactDate, startDay) : options[Math.min(targetIdx, options.length - 1)];
   const remaining = items.reduce((t, { row }) => t + (row.remaining ?? 0), 0);
   const reminder: { kind: FollowUpKind; remindOn: Date } | null =
     reminderMode === "cycleStart"
@@ -315,6 +375,7 @@ export function usePostponeDraft(items: readonly PostponeItem[]) {
           obligationDate: row.date,
           remaining: row.remaining ?? 0,
           target,
+          targetDate: exactDate,
           reason,
           note: reason === "other" ? note.trim() || null : null,
           reminder,
@@ -348,6 +409,16 @@ export function usePostponeDraft(items: readonly PostponeItem[]) {
     }
   };
   const pendingRemaining = pending.reduce((t, { row }) => t + (row.remaining ?? 0), 0);
+  // The very same expectation as the saved one (same cycle or day, reason and no new reminder): confirming would write nothing.
+  const unchanged =
+    single != null &&
+    items.length === 1 &&
+    reminderMode === "none" &&
+    reason === (single.deferral.expected?.reason ?? null) &&
+    (reason !== "other" || (note.trim() || null) === (single.deferral.expected?.note ?? null)) &&
+    (exactDate
+      ? single.date != null && single.date.getTime() === exactDate.getTime()
+      : single.date == null && single.cycle.start.getTime() === target.start.getTime());
 
   return {
     personName: ctx?.personName ?? "",
@@ -376,111 +447,108 @@ export function usePostponeDraft(items: readonly PostponeItem[]) {
     /** What a retry would still postpone — only the items not yet saved. */
     pendingRemaining,
     retrying: doneKeys.size > 0 && pending.length > 0,
-    ready: !busy && !reminderMissing && pending.length > 0,
+    ready: !busy && !reminderMissing && untilError == null && !(untilText !== "" && untilDate == null) && pending.length > 0 && !unchanged,
+    unchanged,
     submit,
+    /** The exact-date control: text ("yyyy-mm-dd" or empty), its parsed day, its error, and the earliest allowed day. */
+    untilText,
+    setUntilText,
+    exactDate,
+    untilError,
+    minUntil,
+    /** Picks a cycle chip and clears any exact day (the chips and the day are alternatives). */
+    pickCycle,
+    /** The original due date of a single item (null for several) — shown next to the new date. */
+    originalDue: items.length === 1 ? items[0].row.date : null,
   };
 }
 
-/** The postpone choices — expected cycle, optional reason, optional reminder — and a plain-language preview. */
-export function PostponeFields({ draft, noMoneyNote = false, compact = false }: { draft: PostponeDraft; noMoneyNote?: boolean; compact?: boolean }) {
-  if (compact) return <PostponeFieldsCompact draft={draft} noMoneyNote={noMoneyNote} />;
-  const { options, targetIdx, setTargetIdx, target, today, single, anyView, remaining, reason, setReason, note, setNote, reminderMode, setReminderMode, dateText, setDateText } = draft;
-  const chipCount = 3;
+/** "18 Nov" (this year) / "18 Nov 2027" — the year only when it isn't `today`'s, so ordinary dates stay short. */
+const shortDate = (d: Date, today: Date) => formatStatementDate(d, d.getFullYear() !== today.getFullYear());
+
+/**
+ * The one line that says what will happen — "Selected: Dec 2026 · Expected from 18 Nov". The date is read from the
+ * chosen cycle's configured first day (Settings → Month cycle), never typed. An exact custom day replaces it.
+ * Display only: the lender's EMI date and every total are untouched by either.
+ */
+function SelectedLine({ draft }: { draft: PostponeDraft }) {
+  const { exactDate, target, today } = draft;
   return (
-    <>
-      <p className="text-[13px] text-foreground">
-        <span className="font-semibold">{draft.personName}</span> still owes <span className="font-bold tabular-nums">{money(remaining)}</span>
-        {single && <span className="text-foreground/70"> · now expected {cycleName(single.cycle)} cycle</span>}
-      </p>
-
-      <p className="mt-3 mb-1.5 text-xs font-bold text-foreground/85">Move expected payment to</p>
-      <div role="radiogroup" aria-label="Expected cycle" className="flex flex-wrap items-center gap-1.5">
-        {options.slice(0, chipCount).map((c, i) => (
-          <button key={c.start.getTime()} type="button" role="radio" aria-checked={targetIdx === i} title={rangeLabel(c)} className={chip(targetIdx === i)} onClick={() => setTargetIdx(i)}>
-            {i === 0 && !anyView ? `Next cycle · ${cycleName(c, today)}` : `${cycleName(c, today)} cycle`}
-          </button>
-        ))}
-        <select
-          aria-label="Later cycle"
-          className={cn(WS_FIELD, "h-8 w-auto max-w-full truncate rounded-full px-2.5 text-xs font-semibold", targetIdx >= chipCount && "border-primary-accent-text bg-primary/15")}
-          value={targetIdx >= chipCount ? String(targetIdx) : ""}
-          onChange={(e) => e.target.value !== "" && setTargetIdx(Number(e.target.value))}
-        >
-          <option value="">Later…</option>
-          {options.slice(chipCount).map((c, i) => (
-            <option key={c.start.getTime()} value={String(i + chipCount)}>
-              {cycleName(c, today)} cycle · {rangeLabel(c)}
-            </option>
-          ))}
-        </select>
-      </div>
-      <p className="mt-1 text-[11.5px] text-foreground/65 tabular-nums">{rangeLabel(target)}</p>
-
-      <p className="mt-3.5 mb-1.5 text-xs font-bold text-foreground/85">
-        Reason <span className="font-normal text-foreground/60">(optional)</span>
-      </p>
-      <div role="radiogroup" aria-label="Reason" className="flex flex-wrap items-center gap-1.5">
-        {DEFERRAL_REASONS.map((r) => (
-          <button key={r} type="button" role="radio" aria-checked={reason === r} className={chip(reason === r)} onClick={() => setReason(reason === r ? null : r)}>
-            {DEFERRAL_REASON_LABEL[r]}
-          </button>
-        ))}
-        {reason === "other" && (
-          <input aria-label="Reason note" className={cn(WS_FIELD, "h-8 w-56 max-w-full")} maxLength={DEFERRAL_NOTE_MAX} placeholder="Add a short note" value={note} onChange={(e) => setNote(e.target.value)} />
-        )}
-      </div>
-
-      <p className="mt-3.5 mb-1.5 text-xs font-bold text-foreground/85">
-        Reminder <span className="font-normal text-foreground/60">(optional)</span>
-      </p>
-      <div role="radiogroup" aria-label="Reminder" className="flex flex-wrap items-center gap-1.5">
-        <button type="button" role="radio" aria-checked={reminderMode === "none"} className={chip(reminderMode === "none")} onClick={() => setReminderMode("none")}>
-          No new reminder
-        </button>
-        <button type="button" role="radio" aria-checked={reminderMode === "cycleStart"} className={chip(reminderMode === "cycleStart")} onClick={() => setReminderMode("cycleStart")}>
-          When the cycle starts · {formatStatementDate(target.start)}
-        </button>
-        <button
-          type="button"
-          role="radio"
-          aria-checked={reminderMode === "date"}
-          className={chip(reminderMode === "date")}
-          onClick={() => {
-            setReminderMode("date");
-            if (!dateText) setDateText(toInputDate(target.start));
-          }}
-        >
-          Choose date
-        </button>
-        {reminderMode === "date" && (
-          <DateInput aria-label="Reminder date" className={cn(WS_FIELD, "h-8")} wrapperClassName="w-40" value={dateText} onChange={(e) => setDateText(e.target.value)} />
-        )}
-      </div>
-      {draft.movingReminder && (
-        <p className="mt-1 text-[11.5px] text-foreground/65">
-          Your reminder on {formatStatementDate(draft.movingReminder)} moves to {formatStatementDate(target.start)} so it won&apos;t show as overdue.
-        </p>
+    <p className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-[13px] text-foreground" data-testid="postpone-preview" aria-live="polite">
+      {exactDate ? (
+        <>
+          <span>
+            <span className="text-foreground/60">Selected </span>
+            <span className="font-bold">Custom date</span>
+          </span>
+          <span key={exactDate.getTime()} className="duration-200 animate-in fade-in">
+            <span className="text-foreground/60">Expected on </span>
+            <span className="font-bold tabular-nums">{shortDate(exactDate, today)}</span>
+            <span className="text-foreground/60"> · {cycleTitle(target)} cycle</span>
+          </span>
+        </>
+      ) : (
+        <>
+          <span>
+            <span className="text-foreground/60">Selected </span>
+            <span className="font-bold">{cycleTitle(target)}</span>
+          </span>
+          <span key={target.start.getTime()} className="duration-200 animate-in fade-in">
+            <span className="text-foreground/60">Expected from </span>
+            <span className="font-bold tabular-nums" title={rangeLabel(target)}>
+              {shortDate(target.start, today)}
+            </span>
+          </span>
+        </>
       )}
+    </p>
+  );
+}
 
-      <p className="mt-4 flex items-start gap-2 rounded-[8px] border border-settle-split-edge/50 bg-settle-split-tint/40 px-3 py-2 text-[12.5px] leading-snug text-foreground" data-testid="postpone-preview">
-        <CalendarClock className="mt-0.5 size-3.5 shrink-0 text-settle-split-text" aria-hidden />
-        <span>
-          <span className="font-semibold tabular-nums">{money(remaining)}</span> will remain unpaid and will be expected in the{" "}
-          <span className="font-semibold">{cycleName(target, today)} cycle</span> ({rangeLabel(target)}).{" "}
-          {noMoneyNote ? "No money will be recorded and your balances will not change." : "The original transaction and your financial totals will not change."}
-        </span>
-      </p>
-    <span className="sr-only">already included in pending, not added again</span>
-    </>
+/** An exact day — a secondary option. Closed by default; the cycle above is the normal way and needs no date. */
+function CustomDate({ draft }: { draft: PostponeDraft }) {
+  const { untilText, setUntilText, untilError, minUntil, exactDate } = draft;
+  const [open, setOpen] = useState(untilText !== "");
+  const shown = open || untilText !== "";
+  return (
+    <div data-testid="postpone-until">
+      <button
+        type="button"
+        aria-expanded={shown}
+        onClick={() => {
+          if (shown) {
+            setUntilText("");
+            setOpen(false);
+          } else setOpen(true);
+        }}
+        className="inline-flex h-7 items-center gap-1 rounded-[6px] px-1 text-xs font-semibold text-primary-accent-text outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <CalendarClock className="size-3.5" aria-hidden />
+        {shown ? "Use the cycle date instead" : "Custom date"}
+      </button>
+      {shown && (
+        <div className="mt-1 duration-200 animate-in fade-in slide-in-from-top-1">
+          <DateInput aria-label="Postpone until date" min={toInputDate(minUntil)} className={cn(WS_FIELD, "h-8")} wrapperClassName="w-44" value={untilText} onChange={(e) => setUntilText(e.target.value)} />
+          {untilError ? (
+            <p role="alert" className="mt-1 text-[11.5px] font-medium text-expense">
+              {untilError}
+            </p>
+          ) : (
+            !exactDate && <p className="mt-1 text-[11.5px] text-foreground/60">From {formatStatementDate(minUntil, true)}.</p>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
 /**
- * The same choices for a small sheet (Record payment → Not paid yet): the cycle as swipeable cards, a from → to
- * preview, and the optional reason / reminder folded into one section. Same draft, same write — presentation only.
+ * The postpone choices, kept to the minimum: pick a cycle (its start date is shown on the card and derived from the
+ * Month Cycle setting), read one "Selected / Expected from" line, and — only if wanted — a custom date, a reason or a
+ * reminder. Same draft, same write for the Record-payment sheet and a row's own panel.
  */
-function PostponeFieldsCompact({ draft, noMoneyNote }: { draft: PostponeDraft; noMoneyNote: boolean }) {
-  const { options, targetIdx, setTargetIdx, target, today, single, anyView, remaining, reason, setReason, note, setNote, reminderMode, setReminderMode, dateText, setDateText } = draft;
+export function PostponeFields({ draft }: { draft: PostponeDraft; noMoneyNote?: boolean; compact?: boolean }) {
+  const { options, targetIdx, target, today, anyView, reason, setReason, note, setNote, reminderMode, setReminderMode, dateText, setDateText, single } = draft;
   const chipCount = 3;
   const [extrasOpen, setExtrasOpen] = useState(false);
   // A chosen date that is still empty is what keeps Postpone disabled — never hide it in a closed section.
@@ -489,9 +557,10 @@ function PostponeFieldsCompact({ draft, noMoneyNote }: { draft: PostponeDraft; n
     [reason ? DEFERRAL_REASON_LABEL[reason] : null, reminderMode === "cycleStart" ? `Remind ${formatStatementDate(target.start)}` : reminderMode === "date" && !dateMissing ? `Remind ${formatStatementDate(fromInputDate(dateText)!)}` : null]
       .filter(Boolean)
       .join(" · ") || "Optional";
+  const currentStart = single?.date == null ? (single?.cycle.start.getTime() ?? null) : null;
   const card = (on: boolean) =>
     cn(
-      "flex min-w-[6.75rem] shrink-0 snap-start flex-col items-start rounded-[12px] border px-3 py-2 text-left outline-none transition-[border-color,background-color,box-shadow,transform] duration-200 focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.98] @md:min-w-0",
+      "flex min-w-[6.25rem] shrink-0 snap-start flex-col items-start rounded-[12px] border px-3 py-2 text-left outline-none transition-[border-color,background-color,box-shadow,transform] duration-200 focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.98] @md:min-w-0",
       on ? "border-primary-accent-text bg-primary/12 shadow-[0_4px_14px_-8px_rgb(0_0_0/0.3)]" : "border-border-strong bg-card hover:border-muted-foreground hover:bg-secondary/50",
     );
   const smallChip = (on: boolean) =>
@@ -500,33 +569,34 @@ function PostponeFieldsCompact({ draft, noMoneyNote }: { draft: PostponeDraft; n
       on ? "border-primary-accent-text bg-primary/15 text-foreground" : "border-border-strong bg-card text-foreground/80 hover:bg-secondary",
     );
   return (
-    <div className="space-y-3">
+    <div className="@container space-y-2.5" data-testid="postpone-fields">
       <div>
-        <p className="mb-1.5 text-xs font-bold text-foreground/85">Expect the payment in</p>
+        <p className="mb-1.5 text-xs font-bold text-foreground/85">Choose a cycle</p>
         <div role="radiogroup" aria-label="Expected cycle" className="-mx-1 flex snap-x gap-1.5 overflow-x-auto px-1 pb-1 [scrollbar-width:none] @md:grid @md:grid-cols-4 @md:overflow-visible">
           {options.slice(0, chipCount).map((c, i) => {
-            const on = targetIdx === i;
+            const on = targetIdx === i && !draft.exactDate;
+            const isCurrent = currentStart === c.start.getTime();
             return (
-              <button key={c.start.getTime()} type="button" role="radio" aria-checked={on} aria-label={`${cycleName(c, today)} cycle`} title={rangeLabel(c)} className={card(on)} onClick={() => setTargetIdx(i)}>
+              <button key={c.start.getTime()} type="button" role="radio" aria-checked={on} aria-label={`${cycleName(c, today)} cycle`} title={rangeLabel(c)} className={card(on)} onClick={() => draft.pickCycle(i)}>
                 <span className="flex w-full items-center justify-between gap-2">
                   <span className="font-heading text-[15px] leading-tight font-bold text-foreground">{cycleName(c, today)}</span>
                   {on && <CheckCircle2 className="size-4 shrink-0 text-primary-accent-text duration-200 animate-in zoom-in-50" aria-hidden />}
                 </span>
-                <span className="mt-0.5 text-[11px] font-medium text-foreground/65">{i === 0 && !anyView ? "Next cycle" : `From ${formatStatementDate(c.start)}`}</span>
+                <span className="mt-0.5 text-[11px] font-medium text-foreground/65">{isCurrent ? "Current" : `From ${shortDate(c.start, today)}`}</span>
               </button>
             );
           })}
-          <label className={cn(card(targetIdx >= chipCount), "relative cursor-pointer")}>
-            <span className="font-heading text-[15px] leading-tight font-bold text-foreground">{targetIdx >= chipCount ? cycleName(target, today) : "Later"}</span>
+          <label className={cn(card(targetIdx >= chipCount && !draft.exactDate), "relative cursor-pointer")}>
+            <span className="font-heading text-[15px] leading-tight font-bold text-foreground">{targetIdx >= chipCount && !draft.exactDate ? cycleName(target, today) : "Later"}</span>
             <span className="mt-0.5 flex items-center gap-0.5 text-[11px] font-medium text-foreground/65">
-              {targetIdx >= chipCount ? `From ${formatStatementDate(target.start)}` : "Pick a cycle"}
+              {targetIdx >= chipCount && !draft.exactDate ? `From ${shortDate(target.start, today)}` : "Pick a cycle"}
               <ChevronDown className="size-3" aria-hidden />
             </span>
             <select
               aria-label="Later cycle"
               className="absolute inset-0 cursor-pointer opacity-0"
-              value={targetIdx >= chipCount ? String(targetIdx) : ""}
-              onChange={(e) => e.target.value !== "" && setTargetIdx(Number(e.target.value))}
+              value={targetIdx >= chipCount && !draft.exactDate ? String(targetIdx) : ""}
+              onChange={(e) => e.target.value !== "" && draft.pickCycle(Number(e.target.value))}
             >
               <option value="">Later…</option>
               {options.slice(chipCount).map((c, i) => (
@@ -539,22 +609,13 @@ function PostponeFieldsCompact({ draft, noMoneyNote }: { draft: PostponeDraft; n
         </div>
       </div>
 
-      {/* From → to, then the plain-language promise. */}
-      <div className="overflow-hidden rounded-[12px] border border-settle-split-edge/50 bg-settle-split-tint/35" data-testid="postpone-preview">
-        <div className="flex items-center gap-2 px-3 pt-2.5 text-xs">
-          <span className="rounded-full bg-card px-2 py-0.5 font-semibold text-foreground/70 ring-1 ring-border">{single ? `${cycleName(single.cycle, today)} cycle` : "Now"}</span>
-          <ArrowRight className="size-3.5 shrink-0 text-settle-split-text" aria-hidden />
-          <span key={target.start.getTime()} className="rounded-full bg-card px-2 py-0.5 font-bold text-foreground ring-1 ring-settle-split-edge duration-200 animate-in fade-in zoom-in-95">
-            {cycleName(target, today)} cycle
-          </span>
-          <span className="ml-auto truncate text-[11px] text-foreground/60 tabular-nums">{rangeLabel(target)}</span>
-        </div>
-        <p className="px-3 pt-1.5 pb-2.5 text-[12px] leading-snug text-foreground/85">
-          <span className="font-semibold tabular-nums">{money(remaining)}</span> will remain unpaid and will be expected in the{" "}
-          <span className="font-semibold">{cycleName(target, today)} cycle</span> ({rangeLabel(target)}).{" "}
-          {noMoneyNote ? "No money will be recorded and your balances will not change." : "The original transaction and your financial totals will not change."}
+      <SelectedLine draft={draft} />
+      {draft.unchanged && draft.doneKeys.size === 0 && (
+        <p className="text-[11.5px] font-medium text-foreground/65" data-testid="postpone-unchanged">
+          Already set to this — pick another {anyView ? "cycle or date" : "cycle"} to change it.
         </p>
-      </div>
+      )}
+      <CustomDate draft={draft} />
 
       <PanelSection title="Reason & reminder" summary={extrasSummary} open={extrasOpen || dateMissing} onOpenChange={setExtrasOpen}>
         <div className="space-y-3">
@@ -608,6 +669,7 @@ function PostponeFieldsCompact({ draft, noMoneyNote }: { draft: PostponeDraft; n
           </div>
         </div>
       </PanelSection>
+      <span className="sr-only">already included in pending, not added again</span>
     </div>
   );
 }

@@ -54,6 +54,7 @@
  *    text citing specific numbers.
  */
 
+import { weeklyCashFlowTotals } from "@/lib/engines/cycle-transaction-mapping";
 import { useMemo } from "react";
 import { useAccounts } from "@/hooks/use-accounts";
 import { useLoanBalanceSheet } from "@/hooks/use-loan-balance-sheet";
@@ -66,7 +67,7 @@ import { useCreditCardTotals } from "@/features/credit-cards/hooks/use-credit-ca
 import type { Account, AccountType } from "@/lib/models/account";
 import type { Budget } from "@/lib/models/budget";
 import type { Category } from "@/lib/models/category";
-import { effectiveMonth, isNonIncomeExpenseMovement, type Transaction } from "@/lib/models/transaction";
+import { effectiveMonth, type Transaction } from "@/lib/models/transaction";
 import { useMySpendContext } from "@/hooks/use-my-spend-context";
 import { useSpendTransactions, withBuiltInChargeCategory } from "@/hooks/use-lender-charge-spend";
 import { myConsumptionAmount } from "@/lib/engines/my-spend";
@@ -144,14 +145,7 @@ export function useReportsData() {
 
   // --- Cash Flow (this month only, real; weekly buckets mirror the dashboard's exactly) ---
   const cashFlow = useMemo(() => {
-    const weekTotals = new Map<string, number>();
-    for (const t of spendTransactions) {
-      if (t.type !== "expense" || isNonIncomeExpenseMovement(t) || t.deletedAt != null) continue;
-      const effective = effectiveMonth(t);
-      if (!isThisMonth(effective, now)) continue;
-      const label = weekBucketLabel(t.dateTime.getDate());
-      weekTotals.set(label, (weekTotals.get(label) ?? 0) + t.amount);
-    }
+    const weekTotals = weeklyCashFlowTotals(spendTransactions, new Set(), now, "expenses");
     const weeks = WEEK_BUCKETS.map((label) => ({ label, value: weekTotals.get(label) ?? 0 }));
     return {
       income: cashFlowSummary.moneyIn,

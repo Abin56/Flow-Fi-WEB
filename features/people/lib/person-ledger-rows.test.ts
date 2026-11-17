@@ -234,3 +234,40 @@ describe("calendar-month headings (presentation only)", () => {
     expect(groupByMonth([{ d: new Date(2026, 9, 4) }], (r) => r.d)[0].label).toBe("October 2026");
   });
 });
+
+describe("ownPayment — a standalone (general) payment row can be reverted, without being double counted", () => {
+  const rowsOf = (entries: LedgerEntry[]) => {
+    const st = statementOf(entries, true);
+    return buildLedgerRows({ statement: st, history: st, entries, pending: [], now: d(9, 28) });
+  };
+
+  it("a general payment (paymentId, no parent) carries its own payment; an obligation and an applied payment do not", () => {
+    const owed = entry("gave", 1000, d(9, 5), { note: "Dinner" });
+    const general = entry("receivedBack", 400, d(9, 10), { paymentId: "pay-general", receivedStatus: "received" });
+    const applied = entry("receivedBack", 100, d(9, 11), { paymentId: "pay-applied", parentEntryId: owed.id, receivedStatus: "received" });
+    const rows = rowsOf([owed, general, applied]);
+
+    const generalRow = rows.find((r) => r.entryId === general.id)!;
+    expect(generalRow.ownPayment).toMatchObject({ paymentId: "pay-general", amount: 400, direction: "theyPaid", source: "cash", undo: { kind: "payment", paymentId: "pay-general" }, undoBlock: null });
+
+    const owedRow = rows.find((r) => r.entryId === owed.id)!;
+    expect(owedRow.ownPayment ?? null).toBeNull();
+    // The applied payment stays a payment ON the obligation (what statements / PDFs read) — and is not its own row's ownPayment.
+    expect(owedRow.payments.map((p) => p.paymentId)).toEqual(["pay-applied"]);
+    // A general payment is never merged into any obligation's payments: nothing is counted twice.
+    expect(rows.flatMap((r) => r.payments).some((p) => p.paymentId === "pay-general")).toBe(false);
+    expect(rows.filter((r) => r.ownPayment != null)).toHaveLength(1);
+  });
+
+  it("a plain manual receipt with no recorded payment (legacy) has no ownPayment", () => {
+    const owed = entry("gave", 1000, d(9, 5));
+    const legacy = entry("receivedBack", 300, d(9, 10), { receivedStatus: "received" });
+    expect(rowsOf([owed, legacy]).every((r) => (r.ownPayment ?? null) === null)).toBe(true);
+  });
+
+  it("money I paid out as a general payment reads as youPaid", () => {
+    const borrowed = entry("borrowed", 800, d(9, 5));
+    const repaid = entry("repaid", 300, d(9, 12), { paymentId: "pay-out" });
+    expect(rowsOf([borrowed, repaid]).find((r) => r.entryId === repaid.id)!.ownPayment).toMatchObject({ direction: "youPaid", paymentId: "pay-out" });
+  });
+});

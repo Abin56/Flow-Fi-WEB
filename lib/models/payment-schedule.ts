@@ -263,6 +263,12 @@ export interface InstallmentPayment extends SoftDeletableEntity {
    * EMI posts no Transaction at all. Absent/null = an ordinary payment.
    */
   recordedEarlier?: RecordedEarlier | null;
+  /**
+   * Web-only, additive: the id of the user's EXISTING expense Transaction this "already paid earlier" payment was linked to
+   * (see `Transaction.earlierPaymentLink`). Only a reference — the payment still posts no money of its own; the linked
+   * transaction is what moved the account, once. Absent/null = not linked.
+   */
+  linkedTransactionId?: string | null;
 }
 
 /** See `InstallmentPayment.recordedEarlier`. */
@@ -402,6 +408,7 @@ export function installmentPaymentFromFirestore(
     reamortizationEventId: (data.reamortizationEventId as string | undefined) ?? null,
     transactionId: (data.transactionId as string | undefined) ?? null,
     recordedEarlier: recordedEarlierFromMap(data.recordedEarlier),
+    linkedTransactionId: (data.linkedTransactionId as string | undefined) ?? null,
     deletedAt: (data.deletedAt as Timestamp | undefined)?.toDate() ?? null,
     lastEditedAt: (data.lastEditedAt as Timestamp | undefined)?.toDate() ?? null,
     editHistory: ((data.editHistory as Record<string, unknown>[] | undefined) ?? []).map(auditEntryFromMap),
@@ -428,6 +435,7 @@ export function installmentPaymentToFirestore(payment: InstallmentPayment): Docu
     transactionId: payment.transactionId,
     // Written only when present — ordinary payment documents keep their exact shape.
     ...(payment.recordedEarlier ? { recordedEarlier: { dateKnown: payment.recordedEarlier.dateKnown } } : {}),
+    ...(payment.linkedTransactionId ? { linkedTransactionId: payment.linkedTransactionId } : {}),
     deletedAt: payment.deletedAt == null ? null : Timestamp.fromDate(payment.deletedAt),
     lastEditedAt: payment.lastEditedAt == null ? null : Timestamp.fromDate(payment.lastEditedAt),
     editHistory: payment.editHistory.map(auditEntryToMap),

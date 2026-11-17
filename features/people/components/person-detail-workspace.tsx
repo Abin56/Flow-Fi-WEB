@@ -209,7 +209,7 @@ export function PersonDetailWorkspace({
   const [advanceKey, setAdvanceKey] = useState<string | null>(null);
   const advanceReturnRef = useRef<string | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
-  const { statement, allTimeStatement, ledgerEntries, isLoading, linkedEmis, setRepays, advanceApplications } = usePersonCycleStatement(person.id, cycle);
+  const { statement, allTimeStatement, ledgerEntries, isLoading, linkedEmis, linkedEmiSummaries, setRepays, advanceApplications } = usePersonCycleStatement(person.id, cycle);
   const { pending, trackedShareRefs: trackedAll, isLoading: sharesLoading } = usePersonPendingSplitParticipants(person.id);
   // Until expenses have loaded, whether a share is tracked is unknown — keep it conservative (null).
   const trackedShareRefs = sharesLoading ? null : trackedAll;
@@ -318,6 +318,11 @@ export function PersonDetailWorkspace({
       rootRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     }
   }
+  // The deferral context (built below, memoised) opens payments through this ref so it never captures a stale `mode`.
+  const openPaymentRef = useRef(openPayment);
+  useEffect(() => {
+    openPaymentRef.current = openPayment;
+  });
   const closePayment = () => {
     settleReturnRef.current = null;
     setPaying(null);
@@ -488,6 +493,7 @@ export function PersonDetailWorkspace({
       revisionByKey: new Map(deferrals.map((d) => [d.obligationKey, d.revision])),
       cycleStartDay,
       personName: person.name,
+      onOpenPayment: onRecordPayment ? (key) => openPaymentRef.current({ preselectKey: key }) : undefined,
       onApply: async (request, options) => {
         const result = await deferralActions.apply({ ...request, personId: person.id, startDay: cycleStartDay, now: new Date() });
         // A multi-item postpone reports one consolidated result itself.
@@ -498,7 +504,7 @@ export function PersonDetailWorkspace({
         return result.outcome;
       },
     };
-  }, [allRows, deferrals, cycleStartDay, person.id, person.name, deferralActions]);
+  }, [allRows, deferrals, cycleStartDay, person.id, person.name, deferralActions, onRecordPayment]);
   const heldSides = advanceSides(advanceAvailable);
   // Deep link from a lender payment (`?applyAdvance=1&obligation=<key>`): opens the existing Apply advance panel
   // with that obligation preselected, once. Nothing is applied until the user confirms.
@@ -832,6 +838,7 @@ export function PersonDetailWorkspace({
             cycle={cycle}
             onCycleChange={setCycle}
             linkedEmis={linkedEmis}
+            linkedEmiSummaries={linkedEmiSummaries}
             setRepays={setRepays}
             highlights={
               <>

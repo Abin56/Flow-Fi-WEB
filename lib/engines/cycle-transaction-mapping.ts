@@ -9,7 +9,7 @@ import type { DashboardTransaction } from "./dashboard-aggregation";
 import { emiPurchaseRepresentedOnCard } from "@/lib/engines/credit-utilization";
 import type { Emi } from "@/lib/models/emi";
 import { isLenderChargeSettlement } from "@/lib/models/lender-charge";
-import { effectiveMonth, isLoanPrincipalDisbursement, isNonIncomeExpenseMovement, isTransfer, type Transaction } from "@/lib/models/transaction";
+import { effectiveMonth, isLoanPrincipalDisbursement, isNonIncomeExpenseMovement, isTransfer, signedAmount, type Transaction } from "@/lib/models/transaction";
 
 /** Live and counted: not trashed, not "Don't count this in my totals" (WFI-P1-05). */
 const counts = (t: Transaction) => t.deletedAt == null && !t.excludeFromCalculations;
@@ -113,4 +113,52 @@ export function cashFlowTransactions(
       isCreditCardPayment: t.transferId != null && !isCreditCardAccount && cardPaymentTransferIds.has(t.transferId),
     };
   });
+}
+
+/** Day-of-month week buckets of the cash-flow bars. */
+export const CASH_FLOW_WEEK_LABELS = ["1-7", "8-14", "15-21", "22-31"] as const;
+export type CashFlowWeekLabel = (typeof CASH_FLOW_WEEK_LABELS)[number];
+
+export function cashFlowWeekLabel(dayOfMonth: number): CashFlowWeekLabel {
+  if (dayOfMonth <= 7) return "1-7";
+  if (dayOfMonth <= 14) return "8-14";
+  if (dayOfMonth <= 21) return "15-21";
+  return "22-31";
+}
+
+/**
+ * The weekly bars of the Dashboard / Reports cash-flow card, from the same "does this row count" rule as the headline
+ * Money In / Money Out (`counts`): a trashed row, or one flagged "don't count in my totals" (it never moved an
+ * account — `balanceEffect` is 0), is in NEITHER the headline nor a bar. Before this shared rule the bars skipped
+ * the flag, so a "recorded earlier" / don't-count row showed up in a bar but not in the total it is meant to sum to.
+ *
+ *  - `net`: income − expense per week; card-account rows (liability, not cash) excluded; transfers / loan principal /
+ *    People settlement cash excluded, except the cash side of a card bill payment (the Dashboard bars).
+ *  - `expenses`: expense amount per week, no card-account exclusion (the Reports bars, which also show card spend).
+ */
+export function weeklyCashFlowTotals(
+  transactions: readonly Transaction[],
+  cardAccountIds: ReadonlySet<string>,
+  now: Date,
+  mode: "net" | "expenses",
+): Map<CashFlowWeekLabel, number> {
+  const cardPaymentTransferIds = new Set(
+    transactions.filter((t) => t.transferId != null && t.type === "income" && cardAccountIds.has(t.accountId)).map((t) => t.transferId as string),
+  );
+  const totals = new Map<CashFlowWeekLabel, number>();
+  for (const t of transactions) {
+    if (!counts(t)) continue;
+    if (mode === "net") {
+      if (cardAccountIds.has(t.accountId)) continue;
+      const isCardPayment = t.transferId != null && t.type === "expense" && cardPaymentTransferIds.has(t.transferId);
+      if (isNonIncomeExpenseMovement(t) && !isCardPayment) continue;
+    } else if (t.type !== "expense" || isNonIncomeExpenseMovement(t)) {
+      continue;
+    }
+    const month = effectiveMonth(t);
+    if (month.getFullYear() !== now.getFullYear() || month.getMonth() !== now.getMonth()) continue;
+    const label = cashFlowWeekLabel(t.dateTime.getDate());
+    totals.set(label, (totals.get(label) ?? 0) + (mode === "net" ? signedAmount(t) : t.amount));
+  }
+  return totals;
 }

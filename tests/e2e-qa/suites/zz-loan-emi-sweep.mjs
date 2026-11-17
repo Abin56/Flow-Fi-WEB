@@ -341,6 +341,7 @@ scenario("le-sweep-loan-dialog", "Loan & EMI sweep: the loan details dialog — 
   await page.waitForTimeout(600);
   chk("Cancel closes the payment dialog and returns to the loan", (await page.getByRole("dialog").count()) === 1);
 
+  await h.showSchedule(d);
   await d.getByRole("button", { name: /^Installment 1 for .*edit or mark unpaid/ }).click();
   const rec = topDialog(page);
   await rec.waitFor();

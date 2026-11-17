@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { closeIdleSharedSubscriptions } from "@/lib/services/firestore-watch-registry";
 import { CandidatesLoadError } from "@/features/transaction-candidates/components/candidates-load-error";
 import { deriveCandidatesViewState } from "@/features/transaction-candidates/lib/candidates-load-state";
 import { useAuthStore } from "@/store/auth-store";
@@ -56,6 +57,9 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  // Listeners are kept open 60s after the last consumer unmounts (navigation keep-alive); close them so each test
+  // starts with a genuinely fresh subscription.
+  closeIdleSharedSubscriptions();
   vi.restoreAllMocks();
 });
 

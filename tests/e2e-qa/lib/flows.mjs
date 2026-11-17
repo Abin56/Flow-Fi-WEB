@@ -33,7 +33,8 @@ export async function openPerson(page, name) {
 export async function openRecord(page, { paid = false, general = false } = {}) {
   await page.getByRole("button", { name: "Record payment" }).first().click();
   await page.getByText(/Amount received|Amount paid/).first().waitFor();
-  if (paid) await page.getByText(/^Paid to /).first().click();
+  // The direction switch (Received / Paid / Not paid yet): "Paid" is the radio labelled "Money paid to <name>".
+  if (paid) await page.getByRole("radio", { name: /Money paid to/ }).first().click();
   await page.waitForTimeout(500);
   const items = page.getByTestId("rp-mode-items");
   if (!general && (await items.count()) > 0) {

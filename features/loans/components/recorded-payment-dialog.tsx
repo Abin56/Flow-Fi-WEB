@@ -37,6 +37,7 @@ import {
   originalRefs,
   paymentTypeLabel,
   type RecordedPaymentAction,
+  LINKED_EDIT_REASON,
 } from "@/features/loans/lib/recorded-payments";
 import type { ExtraTreatment } from "@/features/loans/lib/record-payment";
 import { paymentDateFrom } from "@/features/loans/lib/record-payment";
@@ -164,6 +165,9 @@ export function RecordedPaymentDialog({
   const lent = loanRow?.direction === "given";
   const closed = loanRow ? loanRow.status === "closed" : emiRow!.emi.isClosed;
   const eligibility = editEligibility(action, target.all, { closed });
+  // Edit only — Mark as unpaid keeps using `eligibility` (it is how a linked payment is unlinked).
+  const linkedLock = action.linkedTransactionId != null;
+  const editAllowed = eligibility.ok && !linkedLock;
   const installments = row.installments;
   const total = loanRow ? loanRow.totalInstallments : emiRow!.emi.installmentCount;
   // The payment's own account unless the user picks another — never a silent default.
@@ -186,8 +190,12 @@ export function RecordedPaymentDialog({
   const purchaseOnCard = emiRow?.linkedCard != null && cardEmiCase(emiRow.emi, emiRow.linkedCard.accountId, (transactions as Transaction[]).find((t) => t.id === emiRow.emi.purchaseTransactionId) ?? null) === "A";
   const fmt = formatCurrencyExact;
   const emiAccountLabel = emiPostedTransaction ? (accounts.find((a) => a.id === emiPostedTransaction.accountId)?.name ?? "Account") : null;
+  // The user's own expense this payment was linked to (null: not linked, or since deleted).
+  const linkedTxn = action.linkedTransactionId ? ((transactions as Transaction[]).find((t) => t.id === action.linkedTransactionId) ?? null) : null;
   const sourceLabel = earlierMark
-    ? loanRow
+    ? action.linkedTransactionId
+      ? `Linked to ${linkedTxn ? `“${linkedTxn.description?.trim() || "your expense"}” · ${accounts.find((a) => a.id === linkedTxn.accountId)?.name ?? "Account"}` : "a transaction that no longer exists"} · no balance change here`
+      : loanRow
       ? `${accounts.find((a) => a.id === originalTransaction?.accountId)?.name ?? "Account"} · no balance change`
       : "Paid before FlowFi · no balance change"
     : loanRow
@@ -272,7 +280,7 @@ export function RecordedPaymentDialog({
     : ["Updating payment & schedule", ...(reamortizes ? ["Re-planning schedule"] : []), "Refreshing balances"];
 
   async function saveEdit() {
-    if (submission.inFlight || error || unchanged || !eligibility.ok || !target || !action) return;
+    if (submission.inFlight || error || unchanged || !editAllowed || !target || !action) return;
     const stageIndex = (label: string) => Math.max(0, stages.indexOf(label));
     const op = operation.start({ label: "Updating payment", successLabel: "Payment updated", errorLabel: "Couldn't update payment", detail: "Checking the correction" });
     await submission.run(
@@ -538,7 +546,9 @@ export function RecordedPaymentDialog({
 
   if (mode === "unpay") {
     const moneyLine = earlierMark
-      ? "Only the schedule changes — this was recorded as already paid earlier, so no account balance moves."
+      ? action.linkedTransactionId
+        ? "Only the schedule changes. Your linked transaction and its account stay exactly as they are — it simply stops being this payment."
+        : "Only the schedule changes — this was recorded as already paid earlier, so no account balance moves."
       : loanRow
         ? lent
           ? `${formatCurrencyExact(action.amount)} comes back out of ${sourceLabel}.`
@@ -627,7 +637,7 @@ export function RecordedPaymentDialog({
         description={loanRow ? loanRow.loan.name || loanRow.lenderName : emiRow!.emi.name}
         onConfirm={() => goTo("edit")}
         confirmLabel="Edit payment"
-        confirmDisabled={!eligibility.ok}
+        confirmDisabled={!editAllowed}
         cancelLabel="Close"
       >
         <section className="flex flex-col gap-2">
@@ -698,10 +708,10 @@ export function RecordedPaymentDialog({
               />
             </div>
           )}
-          {!eligibility.ok && (
-            <p className="flex items-start gap-2 text-xs text-muted-foreground">
+          {(!eligibility.ok || linkedLock) && (
+            <p className="flex items-start gap-2 text-xs text-muted-foreground" data-testid="edit-blocked-note">
               <Info className="mt-px size-3.5 shrink-0" strokeWidth={1.75} />
-              {eligibility.reason}
+              {!eligibility.ok ? eligibility.reason : LINKED_EDIT_REASON}
             </p>
           )}
           {canUnpayChain && (
@@ -765,7 +775,7 @@ export function RecordedPaymentDialog({
       description={`Originally ${formatCurrencyExact(action.amount)} on ${action.date.toLocaleDateString("en-IN", { day: "numeric", month: "short" })}`}
       onConfirm={saveEdit}
       confirmLabel={confirmLabel}
-      confirmDisabled={error != null || unchanged || !eligibility.ok}
+      confirmDisabled={error != null || unchanged || !editAllowed}
       loading={saving}
       success={success}
       refreshing={refreshing}

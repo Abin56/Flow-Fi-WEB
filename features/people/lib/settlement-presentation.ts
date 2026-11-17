@@ -93,6 +93,20 @@ export function matchesTypeFilter(kind: SettlementKind, filter: SettlementTypeFi
 }
 
 /**
+ * A standalone payment row (a payment recorded in this cycle against an earlier installment) that settles
+ * an EMI / Loan installment share — so "EMI" also shows the money received for it, not only the shares.
+ */
+export function isEmiPaymentRow(row: LedgerRow): boolean {
+  const key = row.statementRow?.settlesKey;
+  return key != null && (key.startsWith("emi-inst:") || key.startsWith("loan-inst:"));
+}
+
+/** Row-aware type filter: `matchesTypeFilter` plus EMI-related payment rows under the EMI group. */
+export function rowMatchesTypeFilter(row: LedgerRow, kind: SettlementKind, filter: SettlementTypeFilter): boolean {
+  return matchesTypeFilter(kind, filter) || (filter === "emi" && isEmiPaymentRow(row));
+}
+
+/**
  * Lookups the presentation needs beyond the row itself — all read-only views of stored records:
  * the ledger entry behind a row (its `sourceKind`), and the Expense behind a split/assigned share.
  */

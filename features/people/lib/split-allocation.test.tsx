@@ -294,8 +294,13 @@ describe("People Ledger — compact row and expanded row", () => {
         empty={null}
       />,
     );
-    // Desktop table row + mobile list item both exist in jsdom; expand the first toggle.
-    fireEvent.click(screen.getAllByRole("button", { expanded: false })[0]);
+    // Desktop table row + mobile list item both exist in jsdom; expand the first ROW toggle (not the per-row "More actions" menu,
+    // which is also aria-expanded=false and comes first in the DOM).
+    const rowToggle = screen.getAllByRole("button", { expanded: false }).find((b) => !/^More actions/.test(b.getAttribute("aria-label") ?? "") && !/statuses mean/i.test(b.textContent ?? ""))!;
+    fireEvent.click(rowToggle);
+    // The full allocation sits under the panel's "More details" (progressive disclosure); the settlement stays visible.
+    expect(screen.queryAllByText("Split details")).toHaveLength(0);
+    fireEvent.click(screen.getAllByTestId("row-more-details")[0]);
     const details = screen.getAllByText("Split details")[0].parentElement!;
     expect(within(details).getByText("4-way split")).toBeTruthy();
     expect(within(details).getByText(money(4000))).toBeTruthy();

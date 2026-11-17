@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ACCOUNT_COLOR } from "@/features/accounts/lib/account-colors";
 import { AccountsStats } from "./accounts-stats";
 import { AccountTile } from "./account-tile";
 import type { AccountOverviewItem } from "@/features/accounts/hooks/use-accounts-data";
@@ -14,7 +15,7 @@ vi.mock("@/features/accounts/hooks/use-accounts-data", () => ({
 
 afterEach(cleanup);
 
-const item = { id: "sbi", name: "SBI", typeLabel: "Savings Account", bankId: null, mask: "5568", balance: 42237, balanceLabel: "Current balance", cardStyle: "compact", color: "blue" } as AccountOverviewItem;
+const item = { id: "sbi", name: "SBI", typeLabel: "Savings Account", bankId: null, mask: "5568", balance: 42237, balanceLabel: "Current balance", cardStyle: "compact", color: "blue", palette: ACCOUNT_COLOR.blue, colorValue: 0 } as AccountOverviewItem;
 
 describe("Accounts → breakdown entry points", () => {
   it("Total balance: the 'View breakdown' button and the amount both open the total scope", () => {

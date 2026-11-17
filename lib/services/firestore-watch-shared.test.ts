@@ -106,3 +106,63 @@ describe("acquireSharedSubscription — keep-alive between pages", () => {
     expect(liveUnsub).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("acquireSharedSubscription — a listener built from changing inputs is never reused stale", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  // Regression: `useAllLoanInstallments` opens one listener per loan schedule. On a cold load it first runs with no
+  // schedules (nothing to watch), then again once the Loans list arrives. The shared registry used to hand the second
+  // run the first run's (empty) listener and drop its `subscribe`, so no installment was ever read: every loan showed
+  // "Fully paid · ₹0".
+  it("reopens the listener when the inputs it was built from change (hook re-runs: release, then acquire)", () => {
+    const key = freshKey();
+    const unsubEmpty = vi.fn();
+    const unsubLoaded = vi.fn();
+    const subscribeLoaded = vi.fn(() => unsubLoaded);
+
+    const first = acquireSharedSubscription(key, () => unsubEmpty, "uid|");
+    first(); // effect cleanup (deps changed)…
+    const second = acquireSharedSubscription(key, subscribeLoaded, "uid|schedule-1,schedule-2"); // …then re-run
+
+    expect(subscribeLoaded).toHaveBeenCalledTimes(1);
+    expect(unsubEmpty).toHaveBeenCalledTimes(1);
+    expect(_debugSharedSubscriptionRefCount(key)).toBe(1);
+    second();
+    vi.advanceTimersByTime(IDLE_RELEASE_MS);
+    expect(unsubLoaded).toHaveBeenCalledTimes(1);
+  });
+
+  it("still shares one listener between consumers whose inputs are identical", () => {
+    const key = freshKey();
+    const subscribe = vi.fn(() => vi.fn());
+    const a = acquireSharedSubscription(key, subscribe, "uid|s1");
+    const b = acquireSharedSubscription(key, subscribe, "uid|s1");
+    expect(subscribe).toHaveBeenCalledTimes(1);
+    expect(_debugSharedSubscriptionRefCount(key)).toBe(2);
+    a();
+    b();
+  });
+
+  it("keeps every consumer's count when another consumer's inputs differ", () => {
+    const key = freshKey();
+    const a = acquireSharedSubscription(key, () => vi.fn(), "uid|s1");
+    const b = acquireSharedSubscription(key, () => vi.fn(), "uid|s1,s2");
+    expect(_debugSharedSubscriptionRefCount(key)).toBe(2);
+    a();
+    b();
+    expect(_debugSharedSubscriptionRefCount(key)).toBe(0);
+  });
+
+  it("a keep-alive reuse with unchanged inputs (page navigation) still does not reopen", () => {
+    const key = freshKey();
+    const unsub = vi.fn();
+    const subscribe = vi.fn(() => unsub);
+    acquireSharedSubscription(key, subscribe, "uid|s1")();
+    acquireSharedSubscription(key, subscribe, "uid|s1");
+    vi.advanceTimersByTime(IDLE_RELEASE_MS * 2);
+    expect(subscribe).toHaveBeenCalledTimes(1);
+    expect(unsub).not.toHaveBeenCalled();
+  });
+});
+

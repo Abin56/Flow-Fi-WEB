@@ -6,6 +6,7 @@
  * "not executable yet" notice naming the missing write). Nothing here writes — the sheet has no repository, and
  * the engine is covered in `lib/engines/loan-reconciliation.test.ts`.
  */
+import { isoToDisplayDate } from "@/components/forms/date-input";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -61,7 +62,8 @@ function open(p: VarianceProduct, typed: string, asOf = "2026-09-10") {
   const metric = p.metrics[0]!;
   fireEvent.change(within(g(`variance-row-${metric}`)).getByTestId("bank-input"), { target: { value: typed } });
   fireEvent.click(within(g(`variance-row-${metric}`)).getByTestId("reconcile-button"));
-  fireEvent.change(g("loan-asof-input"), { target: { value: asOf } });
+  // The as-of field is a dd/mm/yyyy text input (DateInput); callers pass ISO for readability.
+  fireEvent.change(g("loan-asof-input"), { target: { value: isoToDisplayDate(asOf) } });
 }
 
 const chooseReason = () => fireEvent.change(g("loan-reason-select"), { target: { value: "statement" } });

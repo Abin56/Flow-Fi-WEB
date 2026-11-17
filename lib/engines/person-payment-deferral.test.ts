@@ -10,6 +10,7 @@ import {
 import {
   cycleName,
   cycleStartReminderKind,
+  cycleTitle,
   defaultTargetCycle,
   deferralCycleSummary,
   deferralView,
@@ -418,5 +419,111 @@ describe("acceptance: SHAMBU owes ₹2,000 in October, postponed to November", (
     const row = statement([share, pay1, pay2], oct, d(10, 26)).rows.find((r) => r.key === "ledger:share-a")!;
     expect(row.remainingNow).toBe(700);
     expect(deferralView(deferral, row.remainingNow, SD, d(10, 26))!.remaining).toBe(700);
+  });
+});
+
+describe("exact postponed date — 'until 25 Nov' (EMI due 15 Nov, lender unchanged)", () => {
+  // Calendar-month cycles so 15 Nov and 25 Nov are in the SAME cycle — the case a cycle-only postpone could not express.
+  const NOV = { startDay: 1, now: d(11, 10), obligationDate: d(11, 15) };
+
+  it("accepts a date inside the obligation's own cycle and stores the exact day with its cycle", () => {
+    const plan = written(planDeferralWrite(null, null, postpone({ ...NOV, targetDate: d(11, 25), reason: "unableNow" })));
+    expect(plan.deferral.expected!.date).toEqual(d(11, 25));
+    expect(plan.deferral.expected!.cycle.start).toEqual(d(11, 1));
+    expect(plan.deferral.history[0].toDate).toEqual(d(11, 25));
+  });
+
+  it("rejects a date that is not after today, or not after the original due date", () => {
+    const bad = (targetDate: Date, patch: Partial<PostponeRequest> = {}) => planDeferralWrite(null, null, postpone({ ...NOV, targetDate, ...patch }));
+    expect(bad(d(11, 10)).kind).toBe("invalid"); // today
+    expect(bad(d(11, 9)).kind).toBe("invalid"); // past
+    expect(bad(d(11, 15))).toMatchObject({ kind: "invalid", message: "Choose a date after the original due date." }); // the due date itself
+    expect(bad(d(11, 14)).kind).toBe("invalid"); // before the due date
+    // An overdue obligation (due 5 Nov, today 10 Nov) can be given time to a future day.
+    expect(bad(d(11, 20), { obligationDate: d(11, 5) }).kind).toBe("write");
+  });
+
+  it("a future EMI can be given time past its own due date without touching it", () => {
+    const plan = written(planDeferralWrite(null, null, postpone({ startDay: 1, now: d(11, 10), obligationDate: d(12, 15), targetDate: d(12, 25) })));
+    expect(plan.deferral.expected!.date).toEqual(d(12, 25));
+    expect(plan.deferral.expected!.cycle.start).toEqual(d(12, 1));
+  });
+
+  it("changing the date writes a new revision; the same date again is a no-op; undo restores the previous date", () => {
+    const s = { deferral: null as PersonPaymentDeferral | null, followUp: null as PersonFollowUp | null };
+    written(run(s, postpone({ ...NOV, targetDate: d(11, 25) })));
+    written(run(s, postpone({ ...NOV, expectedRevision: 1, targetDate: d(11, 28) })));
+    expect(s.deferral!.expected!.date).toEqual(d(11, 28));
+    expect(run(s, postpone({ ...NOV, expectedRevision: 2, targetDate: d(11, 28) })).kind).toBe("noop");
+    written(run(s, undo({ ...NOV, expectedRevision: 2 })));
+    expect(s.deferral!.expected!.date).toEqual(d(11, 25)); // cancel one step = back to 25 Nov
+    written(run(s, undo({ ...NOV, expectedRevision: 3 })));
+    expect(s.deferral!.state).toBe("cleared"); // cancelled: the obligation's own timing again
+    expect(s.deferral!.expected).toBeNull();
+  });
+
+  it("status follows the day: postponed → due today → lapsed; paid → resolved", () => {
+    const dfr = written(planDeferralWrite(null, null, postpone({ ...NOV, targetDate: d(11, 25) }))).deferral;
+    expect(deferralView(dfr, 5000, 1, d(11, 10))!.status).toBe("postponed");
+    expect(deferralView(dfr, 5000, 1, d(11, 25))!.status).toBe("expectedNow");
+    expect(deferralView(dfr, 5000, 1, d(11, 26))!.status).toBe("lapsed");
+    expect(deferralView(dfr, 0, 1, d(11, 12))!.status).toBe("resolved");
+    expect(deferralView(dfr, 5000, 1, d(11, 10))!.date).toEqual(d(11, 25));
+  });
+
+  it("a legacy cycle-only deferral (no date) keeps its cycle behaviour and reads date = null", () => {
+    const legacy = written(planDeferralWrite(null, null, postpone())).deferral;
+    expect(legacy.expected!.date).toBeNull();
+    expect(deferralView(legacy, 2000, SD, NOW)).toMatchObject({ status: "postponed", date: null });
+  });
+
+  it("an active reminder before the new date moves to that exact date; undo restores it", () => {
+    const s = { deferral: null as PersonPaymentDeferral | null, followUp: followUp(d(11, 12)) as PersonFollowUp | null };
+    written(run(s, postpone({ ...NOV, targetDate: d(11, 25) })));
+    expect(s.followUp!.remindOn).toEqual(d(11, 25));
+    written(run(s, undo({ ...NOV, expectedRevision: 1 })));
+    expect(s.followUp!.remindOn).toEqual(d(11, 12));
+  });
+
+  it("the exact date survives the Firestore round trip and stores no amount", () => {
+    const dfr = written(planDeferralWrite(null, null, postpone({ ...NOV, targetDate: d(11, 25) }))).deferral;
+    const stored = paymentDeferralToFirestore(dfr);
+    expect(JSON.stringify(stored)).not.toMatch(/amount|remaining/i);
+    // Timestamps come back as Firestore Timestamps — rebuild them the way the SDK would.
+    const back = paymentDeferralFromData(dfr.id, stored);
+    expect(back.expected!.date).toEqual(d(11, 25));
+    expect(back.history[0].toDate).toEqual(d(11, 25));
+  });
+});
+
+describe("derived start date of the chosen cycle (the 'Expected from' date — never typed)", () => {
+  it("custom 18th start: the Dec cycle is named Dec, spans 18 Nov – 17 Dec and is expected from 18 Nov", () => {
+    const dec = cycleContaining(d(12, 1), 18);
+    expect(cycleName(dec, NOW)).toBe("Dec");
+    expect(dec.start).toEqual(d(11, 18));
+    expect(dec.end).toEqual(d(12, 17));
+  });
+  it("calendar month (start day 1): Dec is expected from 1 Dec", () => {
+    const dec = cycleContaining(d(12, 20), 1);
+    expect(dec.start).toEqual(d(12, 1));
+    expect(dec.end).toEqual(d(12, 31));
+  });
+  it("cycleTitle always carries the year, across a year boundary too", () => {
+    expect(cycleTitle(cycleContaining(d(12, 1), 18))).toBe("Dec 2026");
+    const jan = cycleContaining(d(1, 5, 2027), 18); // 18 Dec 2026 – 17 Jan 2027
+    expect(cycleTitle(jan)).toBe("Jan 2027");
+    expect(jan.start).toEqual(d(12, 18));
+    expect(cycleName(jan, NOW)).toBe("Jan 2027"); // the short name keeps the year once it isn't this year's
+  });
+  it("the selectable cycles start after today's AND after the obligation's own cycle, one contiguous cycle apart", () => {
+    const options = targetCycleOptions(d(10, 5), NOW, 18, 4);
+    expect(options[0].start).toEqual(d(10, 18));
+    options.slice(1).forEach((c, i) => expect(c.start.getTime()).toBe(new Date(options[i].end.getFullYear(), options[i].end.getMonth(), options[i].end.getDate() + 1).getTime()));
+  });
+  it("postponing to the cycle that already holds the expectation changes nothing (same-cycle transition is a no-op)", () => {
+    const first = planDeferralWrite(null, null, postpone({ target: cyc(d(12, 1)) }));
+    if (first.kind !== "write") throw new Error(first.kind);
+    const again = planDeferralWrite(first.deferral, null, postpone({ target: cyc(d(12, 1)), expectedRevision: first.deferral.revision }));
+    expect(again.kind).toBe("noop");
   });
 });

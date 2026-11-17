@@ -44,6 +44,11 @@ export interface AgreementDeletionInput {
   ledgerEntries: LedgerEntry[];
   /** Split/shared expenses built on top of any owned Transaction (`expense.transactionId`). */
   dependentExpenseTransactionIds: string[];
+  /**
+   * Live People-ledger settlement entries (a person's repayment of their share) that point at one of this
+   * agreement's installments. Optional for callers that predate the check; absent = none.
+   */
+  livePersonSettlementCount?: number;
 }
 
 export interface AgreementDeletionPlan {
@@ -79,6 +84,16 @@ export function planAgreementDeletion(input: AgreementDeletionInput): AgreementD
   if (input.dependentExpenseTransactionIds.some((id) => ownedIds.has(id))) {
     throw new AgreementDeletionBlockedError(
       `A shared or split expense was created from one of this ${input.kind === "loan" ? "loan" : "EMI"}'s payments. Delete that expense first, then delete this ${input.kind === "loan" ? "loan" : "EMI"}.`,
+    );
+  }
+
+  // A person's share of an EMI/Loan is DERIVED from its installments, but their repayment is a STORED ledger entry
+  // plus a real cash leg. Deleting the agreement would remove the receivable and keep the repayment, flipping the
+  // person to "I owe them" while the money stays in my account. Never cascade-delete that history: stop and say so.
+  if ((input.livePersonSettlementCount ?? 0) > 0) {
+    const noun = input.kind === "loan" ? "loan" : "EMI";
+    throw new AgreementDeletionBlockedError(
+      `${input.livePersonSettlementCount} repayment${input.livePersonSettlementCount === 1 ? "" : "s"} from a person ${input.livePersonSettlementCount === 1 ? "is" : "are"} recorded against this ${noun}'s installments. Revert ${input.livePersonSettlementCount === 1 ? "it" : "them"} in People first, then delete this ${noun}. Nothing was changed.`,
     );
   }
 

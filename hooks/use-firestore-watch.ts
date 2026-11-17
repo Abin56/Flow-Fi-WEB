@@ -35,6 +35,14 @@ import { acquireSharedSubscription, keyFor, markSharedSubscriptionFailed, regist
 
 export { retryFirestoreWatch } from "@/lib/services/firestore-watch-registry";
 
+/**
+ * What the listener's `subscribe` closure was built from, for the shared registry: the plain-value deps (uid, an id
+ * list key, …). Object deps (the query client) are identity-only and never differ between consumers.
+ */
+function depsSignature(deps: readonly unknown[]): string {
+  return JSON.stringify(deps.filter((d) => d == null || typeof d === "string" || typeof d === "number" || typeof d === "boolean"));
+}
+
 export interface UseFirestoreWatchOptions<T> {
   queryKey: readonly unknown[];
   enabled: boolean;
@@ -80,6 +88,7 @@ export function useFirestoreWatch<T>(options: UseFirestoreWatchOptions<T>): UseQ
           queryClient.getQueryCache().find({ queryKey })?.setState({ status: "error", error: err, fetchStatus: "idle" });
         },
       ),
+      depsSignature(deps),
     );
     // `deps` is intentionally the effect's real dependency list, supplied by the caller —
     // this hook's own body has nothing else that would need to trigger a re-subscribe,

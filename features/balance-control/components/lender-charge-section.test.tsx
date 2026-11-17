@@ -6,6 +6,7 @@
  */
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { isoToDisplayDate } from "@/components/forms/date-input";
 import type { LenderCharge } from "@/lib/models/lender-charge";
 
 const state: { charges: LenderCharge[]; cards: { id: string; accountId: string }[]; transactions: unknown[] } = vi.hoisted(() => ({ charges: [], cards: [], transactions: [] }));
@@ -37,7 +38,8 @@ const fill = (id: string, value: string) => fireEvent.change(g(id), { target: { 
 function enter(over: { type?: string; amount?: string; date?: string; ref?: string; reason?: string } = {}) {
   fill("lender-charge-type", over.type ?? "penalty");
   fill("lender-charge-amount", over.amount ?? "1000");
-  fill("lender-charge-date", over.date ?? "2026-10-20");
+  // The date field is a dd/mm/yyyy text input (DateInput); tests state ISO dates for readability.
+  fill("lender-charge-date", isoToDisplayDate(over.date ?? "2026-10-20"));
   fill("lender-charge-reference", over.ref ?? "NEW-9");
   fill("lender-charge-reason", over.reason ?? "late payment");
 }

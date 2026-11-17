@@ -11,7 +11,9 @@ import { cn } from "@/lib/utils";
 import { toast } from "@/store/toast-store";
 import { CycleReconciliation, SettlementTotals } from "@/features/people/components/workspace/settlement-summary";
 import { cyclePosition } from "@/features/people/lib/settlement-presentation";
-import { EmiBadge, StatementBreakdown, StatementCalculation } from "./statement-parts";
+import { StatementBreakdown, StatementCalculation } from "./statement-parts";
+import { LinkedEmisPanel } from "@/features/people/components/linked-emis-panel";
+import type { PersonLinkedEmi } from "@/lib/engines/person-linked-emis";
 
 /**
  * The People Ledger's per-accounting-cycle (Settings → Month cycle) settlement summary for one person — the balance hero, cycle
@@ -24,6 +26,7 @@ export function PersonCycleStatementSection({
   cycle,
   onCycleChange,
   linkedEmis,
+  linkedEmiSummaries = [],
   setRepays,
   actions,
   footnote,
@@ -35,6 +38,7 @@ export function PersonCycleStatementSection({
   cycle: StatementCycle;
   onCycleChange: (cycle: StatementCycle) => void;
   linkedEmis: LinkedEmiSource[];
+  linkedEmiSummaries?: PersonLinkedEmi[];
   setRepays: (source: LinkedEmiSource, repays: boolean) => Promise<void>;
   /** Rendered directly under the balance (the workspace's action bar). */
   actions?: React.ReactNode;
@@ -58,6 +62,7 @@ export function PersonCycleStatementSection({
     }
   };
   const loading = isLoading || statement == null;
+  const hasLinked = linkedEmis.length > 0 || linkedEmiSummaries.length > 0;
   const tone =
     statement?.direction === "theyOwe" ? "text-settle-receivable-text" : statement?.direction === "iOwe" ? "text-settle-payable-text" : "text-success";
   // The balance sits on a soft panel in the direction's colour (receivable blue-grey, payable warm, settled green).
@@ -70,7 +75,7 @@ export function PersonCycleStatementSection({
       className={cn(
         "grid gap-x-8 gap-y-5 md:grid-cols-[minmax(0,1fr)_minmax(16rem,1.1fr)]",
         // The third (context) column only exists when there is context — otherwise the totals get its room.
-        !loading && (aside || linkedEmis.length > 0) && "xl:grid-cols-[minmax(13rem,0.85fr)_minmax(16rem,1fr)_minmax(16rem,1fr)]",
+        !loading && (aside || hasLinked) && "xl:grid-cols-[minmax(13rem,0.85fr)_minmax(16rem,1fr)_minmax(16rem,1fr)]",
       )}
     >
       {/* Balance hero — the strongest element on the page */}
@@ -169,36 +174,10 @@ export function PersonCycleStatementSection({
         )}
       </div>
       {/* Context — overall relationship + linked obligations; only when there is something to show */}
-      {!loading && (aside || linkedEmis.length > 0) && (
+      {!loading && (aside || hasLinked) && (
         <div className="flex min-w-0 flex-col gap-4 rounded-2xl bg-secondary/45 p-4 md:col-span-2 xl:col-span-1">
           {aside}
-          {linkedEmis.length > 0 && (
-            <div>
-              <p className="text-[11px] font-bold tracking-[0.08em] text-foreground/75 uppercase">Linked EMIs</p>
-              <ul className="mt-2 space-y-2">
-                {linkedEmis.map((s) => (
-                  <li key={`${s.kind}:${s.id}`} className="flex items-center justify-between gap-3 rounded-xl bg-card px-3 py-2 text-xs ring-1 ring-border">
-                    <span className="flex min-w-0 flex-col gap-0.5">
-                      <span className="flex min-w-0 items-center gap-1.5">
-                        <EmiBadge />
-                        <span className="truncate font-semibold text-foreground">{s.name}</span>
-                      </span>
-                      <span className="text-foreground/70">{s.repays ? `${statement.personName} repays you` : "For them, not counted"}</span>
-                    </span>
-                    <button
-                      type="button"
-                      disabled={savingLink === s.id}
-                      onClick={() => toggleRepays(s)}
-                      className="shrink-0 rounded-full border border-border-strong px-2.5 py-1 font-semibold text-foreground transition-colors hover:border-primary-accent-text hover:bg-primary/15 disabled:opacity-50"
-                    >
-                      {s.repays ? "Stop counting" : `${statement.personName} repays me`}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-              <p className="mt-1 text-[11px] text-foreground/65">Paying the bank doesn&apos;t settle this — record what they pay you with Settle Up.</p>
-            </div>
-          )}
+          <LinkedEmisPanel personName={statement.personName} summaries={linkedEmiSummaries} sources={linkedEmis} savingId={savingLink} onToggle={toggleRepays} />
         </div>
       )}
     </section>

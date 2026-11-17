@@ -94,7 +94,7 @@ describe("correction sheet", () => {
 
   it("disables Apply until a reason is chosen", async () => {
     await openSheet();
-    fireEvent.change(screen.getByTestId("correction-effective-date"), { target: { value: "2026-10-01" } });
+    fireEvent.change(screen.getByTestId("correction-effective-date"), { target: { value: "01/10/2026" } });
     expect((screen.getByTestId("correction-apply") as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(screen.getByTestId("correction-reason-bankIncreased"));
     expect((screen.getByTestId("correction-apply") as HTMLButtonElement).disabled).toBe(false);
@@ -103,7 +103,7 @@ describe("correction sheet", () => {
   it("disables Apply for a zero or blank new limit", async () => {
     await openSheet();
     fireEvent.change(screen.getByTestId("correction-new-value"), { target: { value: "0" } });
-    fireEvent.change(screen.getByTestId("correction-effective-date"), { target: { value: "2026-10-01" } });
+    fireEvent.change(screen.getByTestId("correction-effective-date"), { target: { value: "01/10/2026" } });
     fireEvent.click(screen.getByTestId("correction-reason-bankIncreased"));
     expect((screen.getByTestId("correction-apply") as HTMLButtonElement).disabled).toBe(true);
   });
@@ -111,7 +111,7 @@ describe("correction sheet", () => {
   it("applies with exactly the entered target, previous and new limit, reason and date", async () => {
     recordCorrection.mockResolvedValue({ status: "applied", correction: {} });
     await openSheet();
-    fireEvent.change(screen.getByTestId("correction-effective-date"), { target: { value: "2026-10-05" } });
+    fireEvent.change(screen.getByTestId("correction-effective-date"), { target: { value: "05/10/2026" } });
     fireEvent.click(screen.getByTestId("correction-reason-bankIncreased"));
     fireEvent.change(screen.getByTestId("correction-note"), { target: { value: "SMS from bank" } });
     await act(async () => {
@@ -131,7 +131,7 @@ describe("correction sheet", () => {
   it("shows the server's error and keeps the sheet open on failure", async () => {
     recordCorrection.mockRejectedValue(new Error("The limit changed to ₹55,000 elsewhere"));
     await openSheet();
-    fireEvent.change(screen.getByTestId("correction-effective-date"), { target: { value: "2026-10-05" } });
+    fireEvent.change(screen.getByTestId("correction-effective-date"), { target: { value: "05/10/2026" } });
     fireEvent.click(screen.getByTestId("correction-reason-bankIncreased"));
     await act(async () => {
       fireEvent.click(screen.getByTestId("correction-apply"));

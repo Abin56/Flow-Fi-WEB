@@ -135,10 +135,11 @@ describe("No money received — postpone (case 1, 7, 8, 9, 12)", () => {
     expect(screen.queryByText(/what should happen to this money/i)).toBeNull();
     expect(screen.queryByText(/advance/i)).toBeNull();
 
-    expect(screen.getByRole("radio", { name: /next cycle · nov/i }).getAttribute("aria-checked")).toBe("true");
-    expect(screen.getByTestId("postpone-preview").textContent).toBe(
-      "₹375 will remain unpaid and will be expected in the Nov cycle (18 Oct – 17 Nov 2026). No money will be recorded and your balances will not change.",
-    );
+    expect(screen.getByRole("radio", { name: "Nov cycle" }).getAttribute("aria-checked")).toBe("true");
+    // One short line: the cycle and the date derived from the Month Cycle (18th start) — no date picker, no paragraph.
+    expect(screen.getByTestId("postpone-preview").textContent).toBe("Selected Nov 2026Expected from 18 Oct");
+    expect(screen.queryByLabelText("Postpone until date")).toBeNull();
+    expect(screen.queryByText(/will remain unpaid/)).toBeNull();
     expect(screen.getByTestId("rp-hero-amount").textContent).toBe("₹0");
     expect(screen.getByText("No money recorded")).toBeTruthy();
     expect(primary().textContent).toBe("Postpone ₹375");
@@ -162,7 +163,8 @@ describe("No money received — postpone (case 1, 7, 8, 9, 12)", () => {
   it("with a reminder at the cycle start: the reminder travels with the deferral (still no payment)", async () => {
     const { onSubmit, onSetReminder, value } = setup();
     fireEvent.click(hasntPaid());
-    fireEvent.click(screen.getByRole("radio", { name: /when the cycle starts/i }));
+    fireEvent.click(screen.getByRole("button", { name: /reason & reminder/i }));
+    fireEvent.click(screen.getByRole("radio", { name: /when it starts/i }));
     await act(async () => fireEvent.click(primary()));
     expect(value.onApply).toHaveBeenCalledWith(expect.objectContaining({ reminder: { kind: "nextCycle", remindOn: d(10, 18) } }));
     expect(onSubmit).not.toHaveBeenCalled();

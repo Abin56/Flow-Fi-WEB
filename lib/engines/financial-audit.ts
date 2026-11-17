@@ -59,7 +59,8 @@ export type FindingCategory =
   | "people-receipt-link"
   | "transfer-integrity"
   | "duplicate-movement"
-  | "orphan-account-link";
+  | "orphan-account-link"
+  | "earlier-payment-link";
 
 export interface Proposal {
   /** What a correction would look like. Never applied by the audit. */
@@ -665,6 +666,52 @@ export function runFinancialAudit(input: AuditInput, now: Date = new Date()): Au
       refs: group.map((g) => ({ kind: "transaction", id: g.id })),
       proposal: { summary: `If one is a duplicate, removing it would change the balance by ${(-balanceEffect(group[0])).toFixed(2)}. Not applied.`, accountId: group[0].accountId, balanceDelta: null, needsDecision: true },
     });
+  }
+
+  // ---------------------------------------------------------------- earlier-payment links (payment ⇄ the user's own expense)
+  // A payment recorded as "already paid earlier" may be LINKED to an existing expense (`linkedTransactionId` on the payment,
+  // `earlierPaymentLink` on the transaction). The two must agree: same payment, same amount, a live expense on both ends.
+  // Read-only: a mismatch is reported with a no-op proposal (nothing here changes an account — the link never moved money).
+  const paymentById = new Map(input.payments.map((p) => [p.id, p]));
+  const linkProblem = (id: string, title: string, reason: string, t: Transaction | null, p: InstallmentPayment | null) =>
+    add({
+      id: `earlier-payment-link:${id}`,
+      category: "earlier-payment-link",
+      status: "confirmed",
+      confidence: "high",
+      title,
+      reason,
+      date: t?.dateTime ?? p?.date ?? null,
+      amount: t?.amount ?? p?.amount ?? null,
+      accountId: t?.accountId ?? null,
+      refs: [...(t ? [{ kind: "transaction", id: t.id }] : []), ...(p ? [{ kind: "installmentPayment", id: p.id }] : [])],
+      proposal: { summary: "The link never moved money, so no balance changes. Review which record is right, then unlink by marking the payment unpaid. Not applied.", accountId: null, balanceDelta: 0, needsDecision: true },
+    });
+  for (const t of liveTx) {
+    const link = t.earlierPaymentLink;
+    if (link == null) continue;
+    const p = paymentById.get(link.paymentId) ?? null;
+    if (p == null || p.deletedAt != null) {
+      linkProblem(`tx-orphan:${t.id}`, "Expense is linked to a payment that no longer exists", `"${t.description || "Expense"}" still says it is the payment ${link.paymentId}, but that payment ${p == null ? "is gone" : "was reversed"}. The expense is locked as if a Loan/EMI owned it.`, t, p);
+    } else if (p.linkedTransactionId !== t.id) {
+      linkProblem(`tx-mismatch:${t.id}`, "Expense and payment disagree about their link", `"${t.description || "Expense"}" points at a payment that points at ${p.linkedTransactionId ?? "no transaction"}.`, t, p);
+    } else if (Math.abs(p.amount - t.amount) > EPS) {
+      linkProblem(`amount:${t.id}`, "Linked expense amount differs from its payment", `The expense is ${t.amount.toFixed(2)} but the payment it explains is ${p.amount.toFixed(2)} — the expense was changed after it was linked.`, t, p);
+    }
+  }
+  const linkedCount = new Map<string, number>();
+  for (const p of livePayments) {
+    if (!p.linkedTransactionId) continue;
+    linkedCount.set(p.linkedTransactionId, (linkedCount.get(p.linkedTransactionId) ?? 0) + 1);
+    const t = txById.get(p.linkedTransactionId) ?? null;
+    if (t == null || t.deletedAt != null) {
+      linkProblem(`pay-orphan:${p.id}`, "Payment is linked to an expense that is gone", `The payment of ${p.amount.toFixed(2)} was linked to transaction ${p.linkedTransactionId}, which ${t == null ? "no longer exists" : "was deleted"} — nothing now backs it.`, t, p);
+    } else if (t.earlierPaymentLink?.paymentId !== p.id) {
+      linkProblem(`pay-unmarked:${p.id}`, "Payment is linked to an expense that does not point back", `The expense "${t.description || "Expense"}" is no longer marked as this payment's — it can now be edited or deleted on its own.`, t, p);
+    }
+  }
+  for (const [txId, n] of linkedCount) {
+    if (n > 1) linkProblem(`double:${txId}`, "One expense is linked to several payments", `${n} live payments claim the same transaction ${txId} — it can only explain one.`, txById.get(txId) ?? null, null);
   }
 
   // ---------------------------------------------------------------- explanation candidates for drifting accounts

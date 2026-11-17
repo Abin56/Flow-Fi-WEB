@@ -76,6 +76,25 @@ scenario("my-id", "What it checks", async ({ page }, check) => {
 Fixtures are created by `features/dev-qa/lib/seed.ts` through the app's own repositories (accounts, loans, EMI,
 card, bill, people, shared expense, a historical payment). Dates are relative to "today".
 
+## Navigation benchmark (`nav-perf`)
+
+Not a pass/fail test — a measurement. It clicks every real sidebar link and records, per page, the time until real content
+is painted, main-thread blocking (long tasks), the worst frame gap and the emulator requests it caused.
+
+```
+npm run test:e2e-qa -- nav-perf --copy         # via the normal launcher (dev server: first pass includes on-demand compile)
+node tests/e2e-qa/bench.mjs                    # against servers you already started on the QA ports (iterate quickly)
+```
+
+Env: `NAV_PERF_CPU=4` (CPU slowdown, ≈ a mid-range laptop), `NAV_PERF_BULK=4000` (adds synthetic transactions to the
+emulator so it isn't a toy data set), `NAV_PERF_PASSES`, `NAV_PERF_ROUTES=/a,/b` (use `MSYS_NO_PATHCONV=1` in Git Bash),
+`QA_LEAN=1` (skips the harness's text scan — reading `innerText` on every mutation forces layout and distorts timings;
+always use it for benchmarks). Results: `.results/nav-perf-cpu<N>-bulk<N>.json`.
+
+A dev server mostly measures compile time and React's dev build. To measure what users get, build the static export
+(`npm run build`) and serve `out/` — the QA portal only exists in dev builds, so benchmark a scratch copy whose
+`NODE_ENV === "development"` gates are relaxed, never the real tree.
+
 ## Known limits
 
 Chrome only, mouse + keyboard (390×844 is viewport emulation, not a device); emulator latency, not production;

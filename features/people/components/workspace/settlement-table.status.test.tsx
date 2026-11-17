@@ -136,14 +136,16 @@ describe("collapsed row treatments", () => {
 });
 
 describe("received rows are restrained", () => {
-  it("a payment-received row: neutral surface, neutral Type chip, plain amount; only Status shows success", () => {
+  it("a payment-received row: neutral surface, light-tint money-in chip and amount, Status shows success", () => {
     renderTable();
     const rows = document.querySelectorAll<HTMLElement>("tr[data-obligation-key]");
-    const received = [...rows].find((r) => r.textContent!.includes("Payment received"))!;
+    // The general payment row (ledger:general). Its Type chip now reads "Money in · Received" (was "Payment received").
+    const received = [...rows].find((r) => r.getAttribute("data-obligation-key") === "ledger:general")!;
     expect(received.className).toContain("bg-card");
     expect(received.className).not.toMatch(/success/);
-    for (const badge of within(received).getAllByText("Payment received")) expect(badge.className).not.toMatch(/success/);
-    for (const amount of within(received).getAllByText("₹100")) expect(amount.className).not.toMatch(/text-success/);
+    // The flow chip is a light tint (money in), never a solid filled badge.
+    for (const badge of within(received).getAllByText("Money in · Received")) expect(badge.className).not.toMatch(/bg-success(?![/\w-])/);
+    for (const amount of within(received).getAllByText(/^\+?₹100$/)) expect(amount.className).toMatch(/text-success/); // money-in amounts carry the flow tone (colour-coded in/out); the ROW surface stays neutral
     expect(within(received).getByText("Received").className).toContain("[&>svg]:text-success");
     // A payment is money moving, not a completed obligation — no completion stamp.
     expect(within(received).queryByTestId("completion-stamp")).toBeNull();

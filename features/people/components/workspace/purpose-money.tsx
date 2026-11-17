@@ -659,15 +659,33 @@ function RecordUseDialog({ person, view, funds, onClose }: { person: Person; vie
           e.preventDefault();
           void submit();
         }}
-        className="space-y-3 px-4 py-3.5"
+        className="space-y-4 px-5 pt-4 pb-0"
       >
-        <dl className="grid grid-cols-3 gap-2 rounded-[6px] border border-border-strong bg-secondary/50 px-3 py-2 text-xs">
-          <Fig label="Allocated" value={money(view.fund.amount)} />
-          <Fig label="Used" value={money(view.used)} />
-          <Fig label="Remaining" value={money(view.remaining)} tone="text-settle-emi-text" />
-        </dl>
+        <div className="rounded-[8px] border border-border-strong bg-secondary/50 px-3.5 py-3">
+          <dl className="grid grid-cols-3 gap-2 text-xs">
+            <Fig label="Allocated" value={money(view.fund.amount)} />
+            <Fig label="Used" value={money(view.used)} />
+            <Fig label="Remaining" value={money(view.remaining)} tone="text-settle-emi-text" />
+          </dl>
+          <div
+            role="progressbar"
+            aria-label="Used so far"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.round(Math.min(100, Math.max(0, (view.used / (view.fund.amount || 1)) * 100)))}
+            className="mt-2.5 flex h-1.5 overflow-hidden rounded-full bg-border-strong/50"
+          >
+            <span className="bg-primary-accent-text/80" style={{ width: `${Math.min(100, Math.max(0, (view.used / (view.fund.amount || 1)) * 100))}%` }} />
+            {amount > 0 && (
+              <span
+                className="bg-primary-accent-text/35"
+                style={{ width: `${Math.min(100 - Math.min(100, (view.used / (view.fund.amount || 1)) * 100), Math.max(0, (amount / (view.fund.amount || 1)) * 100))}%` }}
+              />
+            )}
+          </div>
+        </div>
         {modes.length > 1 && (
-          <div role="radiogroup" aria-label="How it was paid" className="flex flex-wrap gap-1.5">
+          <div role="radiogroup" aria-label="How it was paid" className="grid auto-cols-fr grid-flow-col gap-1 rounded-[8px] border border-border-strong bg-secondary/50 p-1">
             {modes.map((m) => (
               <button
                 key={m.value}
@@ -676,8 +694,8 @@ function RecordUseDialog({ person, view, funds, onClose }: { person: Person; vie
                 aria-checked={mode === m.value}
                 onClick={() => setMode(m.value)}
                 className={cn(
-                  "h-8 rounded-full border px-3 text-xs font-semibold",
-                  mode === m.value ? "border-primary-accent-text bg-primary/10 text-foreground" : "border-border-strong text-foreground/85 hover:bg-secondary",
+                  "h-8 rounded-[6px] px-3 text-xs font-semibold outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+                  mode === m.value ? "bg-card text-foreground shadow-sm ring-1 ring-border-strong" : "text-foreground/70 hover:text-foreground",
                 )}
               >
                 {m.label}
@@ -718,39 +736,51 @@ function RecordUseDialog({ person, view, funds, onClose }: { person: Person; vie
               ))}
             </div>
           )
-        ) : (
-          <div className="grid gap-2.5 sm:grid-cols-2">
-            <AccountField choice={account} label="Paid from account" outflow={amount > 0 ? amount : null} />
-            <WsField label="Date">
-              <DateInput className={WS_FIELD} value={date} onChange={(e) => setDate(e.target.value)} />
-            </WsField>
-            <WsField label="Description" className="sm:col-span-2">
-              <input className={WS_FIELD} value={description} onChange={(e) => setDescription(e.target.value)} />
-            </WsField>
-          </div>
-        )}
+        ) : null}
 
-        <WsField label={mode === "link" ? "Amount of that payment used for this purpose" : "Amount paid"}>
-          <CompactAmountInput label="Amount used" value={amountText} onChange={setAmountText} />
-        </WsField>
+        {/* Amount first (it drives the balance preview), then when, from where, and what to call it. */}
+        <div className="grid gap-3 sm:grid-cols-2">
+          <WsField label={mode === "link" ? "Amount of that payment used" : "Amount paid"} className={mode === "link" ? "sm:col-span-2" : undefined}>
+            <CompactAmountInput label="Amount used" value={amountText} onChange={setAmountText} />
+          </WsField>
+          {mode !== "link" && (
+            <>
+              <WsField label="Date">
+                <DateInput className={WS_FIELD} value={date} onChange={(e) => setDate(e.target.value)} />
+              </WsField>
+              <AccountField choice={account} label="Paid from account" outflow={amount > 0 ? amount : null} className="sm:col-span-2" />
+              <WsField label="Description" className="sm:col-span-2">
+                <input className={WS_FIELD} value={description} onChange={(e) => setDescription(e.target.value)} />
+              </WsField>
+            </>
+          )}
+        </div>
 
         {mode === "new" && (
-          <fieldset className="space-y-1.5">
-            <legend className="text-[11px] font-medium text-muted-foreground">How should this count?</legend>
-            <label className="flex items-start gap-2 text-sm">
-              <input type="radio" checked={classification === "behalf"} onChange={() => setClassification("behalf")} className="mt-1 size-4" />
-              <span>
-                <span className="font-semibold text-foreground">Paid with {first}&apos;s money</span>
-                <span className="block text-xs text-foreground/80">Moves your account, but isn&apos;t your expense — just as the money wasn&apos;t your income.</span>
-              </span>
-            </label>
-            <label className="flex items-start gap-2 text-sm">
-              <input type="radio" checked={classification === "expense"} onChange={() => setClassification("expense")} className="mt-1 size-4" />
-              <span>
-                <span className="font-semibold text-foreground">My own expense</span>
-                <span className="block text-xs text-foreground/80">Counted in your expense reports.</span>
-              </span>
-            </label>
+          <fieldset className="space-y-2">
+            <legend className="mb-1.5 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">How should this count?</legend>
+            <div role="radiogroup" className="grid gap-2 sm:grid-cols-2">
+              {(
+                [
+                  { value: "behalf", title: `Paid with ${first}'s money`, body: "Moves your account, but isn't your expense — just as the money wasn't your income." },
+                  { value: "expense", title: "My own expense", body: "Counted in your expense reports." },
+                ] as const
+              ).map((o) => (
+                <label
+                  key={o.value}
+                  className={cn(
+                    "flex cursor-pointer items-start gap-2.5 rounded-[8px] border px-3 py-2.5 transition-colors has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring/40",
+                    classification === o.value ? "border-primary-accent-text bg-primary/[0.08]" : "border-border-strong hover:bg-secondary/60",
+                  )}
+                >
+                  <input type="radio" name="purpose-use-classification" checked={classification === o.value} onChange={() => setClassification(o.value)} className="mt-0.5 size-4 shrink-0 accent-[var(--color-primary-accent-text)]" />
+                  <span className="min-w-0">
+                    <span className="block text-sm font-semibold text-foreground">{o.title}</span>
+                    <span className="mt-0.5 block text-xs leading-snug text-foreground/75">{o.body}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
             {classification === "expense" && (
               <select className={WS_FIELD} value={categoryId} onChange={(e) => setCategoryId(e.target.value)} aria-label="Expense category">
                 <option value="">Choose a category…</option>
@@ -770,14 +800,21 @@ function RecordUseDialog({ person, view, funds, onClose }: { person: Person; vie
           </label>
         )}
 
-        {(error || blocker) && <p className={cn("text-xs font-medium", error ? "text-expense" : "text-foreground/85")}>{error ?? blocker}</p>}
-        <div className="flex justify-end gap-2 pt-1">
-          <button type="button" onClick={onClose} className={WS_GHOST}>
-            Cancel
-          </button>
-          <button type="submit" disabled={!!blocker || saving} className={WS_PRIMARY}>
-            {saving ? "Saving…" : `Record ${money(amount)} used`}
-          </button>
+        <div className="sticky bottom-0 -mx-5 mt-1 space-y-2 border-t border-border-strong bg-card px-5 py-3">
+          {(error || blocker) && (
+            <p role={error ? "alert" : undefined} className={cn("flex items-start gap-1.5 text-xs font-medium", error ? "text-expense" : "text-foreground/80")}>
+              <AlertTriangle className="mt-px size-3.5 shrink-0" aria-hidden />
+              <span>{error ?? blocker}</span>
+            </p>
+          )}
+          <div className="flex items-center justify-end gap-2">
+            <button type="button" onClick={onClose} className={WS_GHOST}>
+              Cancel
+            </button>
+            <button type="submit" disabled={!!blocker || saving} className={WS_PRIMARY}>
+              {saving ? "Saving…" : `Record ${money(amount)} used`}
+            </button>
+          </div>
         </div>
       </form>
     </DialogShell>

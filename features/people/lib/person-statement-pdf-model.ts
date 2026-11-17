@@ -94,6 +94,10 @@ export interface StatementViewRow {
   dateValue: Date;
   /** "Bajaj Finance · EMI #13" for an EMI / Loan installment; null for everything else. */
   emiLabel: string | null;
+  /** The live postponement this still-open obligation carries — null when none, or when it is resolved. */
+  deferral: StatementDeferral | null;
+  /** What is still open on this obligation at the statement date (engine `remaining`); null for a payment / advance row. */
+  remainingValue: number | null;
 }
 
 /**
@@ -113,6 +117,10 @@ export interface StatementDeferral {
   name: string;
   /** The cycle the obligation was first due in ("Sep"). */
   from: string;
+  /** The expected cycle with its year always shown ("Dec 2026") — optional, for wording that must not depend on today's year. */
+  title?: string;
+  /** The exact day payment is now expected, when one was chosen (null / absent: only the cycle is known). */
+  date?: Date | null;
 }
 
 export interface StatementViewLine {
@@ -360,6 +368,8 @@ function viewRow(
     amountValue: row.amount,
     dateValue: row.date,
     emiLabel: row.statementRow?.emi ? `${row.statementRow.emi.sourceName} · EMI #${row.statementRow.emi.installmentNumber}` : null,
+    deferral: moved ? deferral : null,
+    remainingValue: row.remaining ?? null,
   };
 }
 

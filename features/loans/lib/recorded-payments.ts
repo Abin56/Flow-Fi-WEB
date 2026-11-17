@@ -33,9 +33,18 @@ export interface RecordedPaymentAction {
   reversed: boolean;
   /** Recorded as "already paid earlier" (before FlowFi) — it never moved an account balance. */
   recordedEarlier: RecordedEarlier | null;
+  /** The user's own expense this payment IS (see `link-earlier-payment.ts`): its amount, date and account come from it. */
+  linkedTransactionId?: string | null;
 }
 
 export type EditEligibility = { ok: true } | { ok: false; reason: string };
+
+/**
+ * A payment linked to one of the user's transactions takes its amount, date and account from it: Edit is not offered (the
+ * write refuses it too). Marking it unpaid stays available — that is how it is unlinked, leaving the transaction untouched.
+ */
+export const LINKED_EDIT_REASON =
+  "Linked to one of your transactions, so its amount and date come from it. Mark it as unpaid (your transaction stays) and link it again to change it.";
 
 const EMI_ACTION_ID = /^emi_(.+)_p\d+$/;
 
@@ -77,6 +86,7 @@ export function groupRecordedPayments(payments: InstallmentPayment[], installmen
       remainingAfter: last?.remainingBalanceAfterPayment ?? null,
       reversed: lead.deletedAt != null,
       recordedEarlier: lead.recordedEarlier ?? null,
+      linkedTransactionId: lead.linkedTransactionId ?? null,
     };
   });
   return actions.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime() || b.date.getTime() - a.date.getTime());

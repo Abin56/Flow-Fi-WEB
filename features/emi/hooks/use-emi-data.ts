@@ -71,6 +71,7 @@ import {
 import type { CreateEmiParams, EditEmiParams, EditEmiTermsParams } from "@/lib/repositories/emi-repository";
 import { assertLinkedPeopleSettled } from "@/lib/repositories/people-settlement-gate";
 import type { UnsettledPeopleAcknowledgement } from "@/lib/engines/linked-people-readiness";
+import { assertLinkable, LinkEarlierPaymentError, LinkedPaymentEditError } from "@/lib/engines/link-earlier-payment";
 import { useAuthStore } from "@/store/auth-store";
 
 export interface EmiRow {
@@ -187,9 +188,15 @@ export interface RecordEmiPaymentParams {
   recordedEarlier?: RecordedEarlier | null;
   /** Bulk "already paid earlier": the amount must stay on `targetInstallmentId` — never spill into the next one. */
   onlyTargetInstallment?: boolean;
+  /**
+   * Links the payment to one of the user's EXISTING expense Transactions (only with `recordedEarlier`): the expense is
+   * what the money really was, so nothing is posted or deducted — see `lib/engines/link-earlier-payment.ts`. Its amount
+   * and date must be exactly this payment's, checked again on the fresh document inside the transaction.
+   */
+  linkedTransactionId?: string | null;
 }
 
-export interface EditEmiPaymentParams extends Omit<RecordEmiPaymentParams, "targetInstallmentId" | "principalPaid" | "interestPaid" | "recordedEarlier"> {
+export interface EditEmiPaymentParams extends Omit<RecordEmiPaymentParams, "targetInstallmentId" | "principalPaid" | "interestPaid" | "recordedEarlier" | "linkedTransactionId"> {
   /** The recorded action being corrected: its payments and the installments they sit under (parallel arrays). */
   original: { paymentIds: string[]; installmentIds: string[] };
 }
@@ -309,6 +316,15 @@ export function useEmiActions() {
             if (snap.exists()) fresh.push(snap.data());
           }
 
+          // Linking an existing expense: read it FRESH here and check every rule against the stored document.
+          let linkedTx: Transaction | null = null;
+          if (params.linkedTransactionId) {
+            if (!recordedEarlier) throw new LinkEarlierPaymentError("A transaction can only be linked to a payment recorded as already paid earlier.");
+            const linkedSnap = await tx.get(transactionRepository.docRef(params.linkedTransactionId));
+            linkedTx = linkedSnap.exists() ? linkedSnap.data() : null;
+            assertLinkable(linkedTx, { amount: params.amount, date: params.date, accountId: linkedTx?.accountId ?? "" });
+          }
+
           // The confirmed installment must still be payable. Past payments keep their own "already paid" refusal.
           if (params.targetInstallmentId != null && !payableEmiInstallments(fresh).some((i) => i.id === params.targetInstallmentId)) {
             if (recordedEarlier) assertRecordedEarlierTarget(undefined, params.targetInstallmentId);
@@ -400,8 +416,24 @@ export function useEmiActions() {
           }
 
           // --- Then all writes. ---
+          if (linkedTx != null) {
+            // One installment, exactly the transaction's amount: anything else would not be that transaction.
+            if (writes.payments.length !== 1 || Math.abs(writes.payments[0].amount - linkedTx.amount) > 0.005) {
+              throw new LinkEarlierPaymentError("The transaction's amount doesn't match what this installment still owes — nothing was recorded.");
+            }
+          }
           for (const installment of writes.installments) tx.set(installmentRepository.docRef(installment.id), installment);
-          for (const payment of writes.payments) tx.set(paymentRepositoryFor(payment.installmentId).docRef(payment.id), payment);
+          for (const payment of writes.payments) {
+            tx.set(paymentRepositoryFor(payment.installmentId).docRef(payment.id), linkedTx != null ? { ...payment, linkedTransactionId: linkedTx.id } : payment);
+          }
+          if (linkedTx != null) {
+            // The back-marker: this expense IS that installment's payment — written in the same commit as the payment.
+            const only = writes.payments[0];
+            tx.set(transactionRepository.docRef(linkedTx.id), {
+              ...linkedTx,
+              earlierPaymentLink: { ownerType: "emi", ownerId: emi.id, scheduleId: emi.scheduleId, installmentId: only.installmentId, paymentId: only.id },
+            });
+          }
           for (const breakdown of writes.breakdowns) tx.set(breakdownRepository.docRef(breakdown.id), breakdown);
           for (const t of linkedLegs) tx.set(transactionRepository.docRef(t.id), t);
           for (const [id, delta] of netBalanceDeltas([], linkedLegs)) {
@@ -455,6 +487,8 @@ export function useEmiActions() {
             const snap = await tx.get(transactionRepository.docRef(id));
             if (snap.exists() && snap.data().deletedAt == null) oldCardTransactions.push(snap.data());
           }
+          // A payment linked to the user's own transaction takes its amount and date from that transaction: not editable here.
+          if (original.some((p) => p.linkedTransactionId)) throw new LinkedPaymentEditError();
           // The correction keeps the original's treatment (read from the stored payment, not the caller): one
           // recorded as already paid earlier stays balance-neutral — no card or bank Transaction is posted.
           const recordedEarlier = carriedRecordedEarlier(original[0], params.date);
@@ -615,11 +649,21 @@ export function useEmiActions() {
             accounts.set(id, snap.data());
           }
 
+          // Expenses linked to these payments: read now (all reads precede writes), released below.
+          const linkedExpenses: Transaction[] = [];
+          for (const payment of original) {
+            if (!payment.linkedTransactionId) continue;
+            const snap = await tx.get(transactionRepository.docRef(payment.linkedTransactionId));
+            if (snap.exists() && snap.data().earlierPaymentLink?.paymentId === payment.id) linkedExpenses.push(snap.data());
+          }
+
           const plan = planEmiPaymentReversal({ installments: fresh, original });
           if (plan == null) return { alreadyReversed: true };
 
           // --- Then all writes. ---
           const now = new Date();
+          // Unlink only: the user's own transaction, its amount and its account are NOT touched — it simply stops explaining a payment.
+          for (const t of linkedExpenses) tx.set(transactionRepository.docRef(t.id), { ...t, earlierPaymentLink: null });
           for (const installment of plan.installments) tx.set(installmentRepository.docRef(installment.id), installment);
           for (const payment of original) tx.set(paymentRepositoryFor(payment.installmentId).docRef(payment.id), { ...payment, deletedAt: now });
           for (const breakdown of breakdowns) tx.set(breakdownRepository.docRef(breakdown.id), { ...breakdown, deletedAt: now });

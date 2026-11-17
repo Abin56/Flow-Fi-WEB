@@ -23,18 +23,37 @@ const snapshot = async () => ({
   inst: await emiInst(),
 });
 
+/**
+ * Row actions live in each row's "⋯" menu. Opens the visible menus one by one until one offers `testid`; returns that
+ * item's locator (menu left open) or null when none does (menus closed again).
+ */
+async function menuItem(page, testid) {
+  const triggers = page.locator('[data-testid="row-more-actions"]:visible');
+  const n = await triggers.count();
+  for (let i = 0; i < n; i++) {
+    await triggers.nth(i).click();
+    const item = page.locator(`[role="menuitem"][data-testid="${testid}"]`);
+    if (await item.first().isVisible().catch(() => false)) return item.first();
+    await page.keyboard.press("Escape");
+  }
+  return null;
+}
+
 async function openPriya(page) {
   await h.addFixture(page, "shared-emi");
   await f.openPerson(page, "QA Priya");
-  const bank = page.locator('[data-testid="row-bank-already-paid"]:visible').first();
-  await bank.waitFor({ state: "attached", timeout: 30000 }).catch(() => {});
-  if (!(await bank.isVisible().catch(() => false))) {
+  const more = page.locator('[data-testid="row-more-actions"]:visible').first();
+  await more.waitFor({ state: "attached", timeout: 30000 }).catch(() => {});
+  if (!(await more.isVisible().catch(() => false))) {
     await h.shot(page, `ps-open-person${sfx(page)}`);
-    await page.locator("text=/QA Shared EMI/ >> visible=true").first().click().catch(() => {});
+    // On a phone the "Linked EMIs" card above the ledger also says "QA Shared EMI" — expand the LEDGER row, not that card.
+    const ledgerRow = page.locator("li[data-obligation-key]").filter({ hasText: /EMI share/ }).first();
+    if (await ledgerRow.count()) await ledgerRow.locator("button").first().click().catch(() => {});
+    else await page.locator("text=/QA Shared EMI/ >> visible=true").first().click().catch(() => {});
     await page.waitForTimeout(800);
     await h.shot(page, `ps-open-person-clicked${sfx(page)}`);
   }
-  await bank.waitFor({ timeout: 30000 });
+  await more.waitFor({ timeout: 30000 });
 }
 
 const noOverflow = async (page, chk) => {
@@ -47,9 +66,10 @@ const receivedBody = async ({ page }, chk) => {
   const s0 = await snapshot();
   const body0 = (await page.locator("body").innerText()).split("\n").join(" ");
   chk("row shows the lender chip 'Bank overdue' beside Priya's share", /Bank overdue/.test(body0));
-  const sibling = page.locator('[data-testid="row-bank-already-paid"]:visible').first().locator("xpath=..");
-  const btn = sibling.getByTestId("row-already-received");
-  chk("the row offers 'Already received' AND 'Bank already paid' as separate actions", (await btn.count()) === 1);
+  const btn = await menuItem(page, "row-already-received");
+  chk("the row's ⋯ menu offers 'Already received'", btn != null);
+  const bankItem = page.locator('[role="menuitem"][data-testid="row-bank-already-paid"]');
+  chk("…AND 'Bank already paid' as a separate action", (await bankItem.count()) === 1);
   await h.shot(page, `ps-row-actions${sfx(page)}`);
   await btn.click();
   const box = page.getByTestId("rp-in-balance").getByRole("checkbox");
@@ -83,7 +103,7 @@ const bankBody = async ({ page }, chk) => {
   await openPriya(page);
   const s0 = await snapshot();
   const ledger0 = JSON.stringify(await activeEntries(s0.priya.id));
-  await page.locator('[data-testid="row-bank-already-paid"]:visible').first().click();
+  await (await menuItem(page, "row-bank-already-paid")).click();
   // The list opens with this installment ticked; one installment then goes straight to the single past-payment form.
   const list = page.getByRole("dialog").last();
   chk("opens Record past payments with this installment already ticked", await list.getByRole("checkbox", { name: "#1", exact: true }).isChecked());
@@ -108,7 +128,7 @@ const bankBody = async ({ page }, chk) => {
   await page.waitForTimeout(3000);
   const body = (await page.locator("body").innerText()).split("\n").join(" ");
   await h.shot(page, `ps-bank-after${sfx(page)}`);
-  chk("UI: the chip now reads 'Bank paid' and no 'Bank already paid' action remains", /Bank paid/.test(body) && !/Bank overdue/.test(body) && (await page.locator('[data-testid="row-bank-already-paid"]:visible').count()) === 0);
+  chk("UI: the chip now reads 'Bank paid' and no 'Bank already paid' action remains", /Bank paid/.test(body) && !/Bank overdue/.test(body) && (await menuItem(page, "row-bank-already-paid")) === null);
   chk("UI: Priya's ₹1,000 share is still 'to receive'", /₹1,000 to receive/.test(body));
   await noOverflow(page, chk);
 };

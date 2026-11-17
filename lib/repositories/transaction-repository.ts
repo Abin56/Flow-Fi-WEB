@@ -226,10 +226,12 @@ export type TransactionOwnerKind = "loan" | "emi" | "people" | "split" | "bill";
 
 /** The owner the Transaction document itself declares (`split` needs the Expense lookup — see `withExpenseOwnerLookup`). */
 export function declaredTransactionOwner(
-  t: Pick<Transaction, "loanId" | "emiId" | "isPersonLedgerMovement" | "fundedByPersonId" | "billPaymentId">,
+  t: Pick<Transaction, "loanId" | "emiId" | "isPersonLedgerMovement" | "fundedByPersonId" | "billPaymentId"> & Partial<Pick<Transaction, "earlierPaymentLink">>,
 ): TransactionOwnerKind | null {
   if (t.loanId != null) return "loan";
   if (t.emiId != null) return "emi";
+  // An ordinary expense LINKED to an "already paid earlier" installment payment: the Loan / EMI owns the link.
+  if (t.earlierPaymentLink != null) return t.earlierPaymentLink.ownerType;
   if (t.billPaymentId != null) return "bill";
   if (t.isPersonLedgerMovement || t.fundedByPersonId != null) return "people";
   return null;

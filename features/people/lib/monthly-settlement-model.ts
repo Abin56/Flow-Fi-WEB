@@ -41,6 +41,12 @@ export interface MonthlyItem {
   tag: string;
   /** Who owes this item — only drawn when the balance runs both ways. */
   owedBy: "them" | "owner" | null;
+  /** The PDF's plain-words kind: "EMI" / "Shared Expense" / "Assigned Expense" / "Given" / … — from what the entry IS. */
+  type: string;
+  /** The PDF's plain-words status. Never "Paid" (a paid item is left out) and never a per-item paid / remaining figure. */
+  status: "Pending" | "Postponed" | "Overdue";
+  /** One short line under the title, in plain words ("Postponed to Dec 2026", "₹1,000 total · Your share ₹500"). Empty when the type says it all. */
+  detail: string;
 }
 
 export interface MonthlyPayment {
@@ -54,6 +60,20 @@ export interface MonthlyPayment {
   source: string | null;
   /** What this payment was toward, one line — null for a general payment tied to no item. */
   note: string | null;
+  /** Plain-words direction for the PDF: money the person paid in, money paid out to them, or paid ahead. */
+  status: "Received" | "Paid" | "Advance";
+}
+
+/**
+ * Where the open balance stands, in three plain figures: all of it, the part expected this cycle, and the part
+ * postponed to a later cycle. `dueNow + postponed = the total` by construction (dueNow is the engine total minus the
+ * postponed amount — a postponement moves when money is expected, never what is owed).
+ */
+export interface MonthlySplit {
+  dueNow: string;
+  postponed: string;
+  /** "Dec 2026", or "later cycles" when the postponed items go to different cycles. */
+  postponedTo: string;
 }
 
 export interface MonthlySummaryLine {
@@ -88,7 +108,27 @@ export interface MonthlySettlementView {
    * "payable" figure would be a guess. Null otherwise.
    */
   mixed: { theyOwe: string; ownerOwes: string } | null;
+  /** Due this cycle vs postponed — only when something is postponed and the balance runs one way. */
+  split: MonthlySplit | null;
 }
+
+/** The PDF's plain-words kind for a row — decided by what the entry IS, never by how it is being collected. */
+const TYPE_WORD: Partial<Record<StatementViewRow["kind"], string>> = {
+  emi: "EMI",
+  loanEmi: "EMI",
+  loanInstallment: "Loan",
+  loan: "Loan",
+  assigned: "Assigned Expense",
+  split: "Shared Expense",
+  moneyGiven: "Given",
+  moneyReceived: "Borrowed",
+  opening: "Opening balance",
+  adjustment: "Adjustment",
+};
+
+const DATE_LONG = new Intl.DateTimeFormat("en-IN", { day: "numeric", month: "short", year: "numeric" });
+/** "20 Dec 2026" when an exact day was chosen, else the expected cycle's name with its year ("Dec 2026"). */
+const expectedWhen = (d: NonNullable<StatementViewRow["deferral"]>) => (d.date ? DATE_LONG.format(d.date) : (d.title ?? d.name));
 
 const isPaymentKind = (r: StatementViewRow) => r.kind === "paymentReceived" || r.kind === "paymentMade" || r.kind === "advance" || r.kind === "advanceApplied";
 
@@ -112,9 +152,17 @@ export const tidyAccount = (s: string) => s.replace(/\b[A-Z](?: [A-Z]){2,}\b/g, 
 export function monthlySettlementView(statement: PersonCycleStatement, options: StatementViewOptions = {}): MonthlySettlementView {
   const view = statementView(statement, options);
   const first = view.personName.split(" ")[0];
+  const isMixed = statement.toReceive >= 0.005 && statement.toGive >= 0.005;
   const itemOf = (r: StatementViewRow, group: MonthlyItem["group"]): MonthlyItem => {
     const d = statementDate(view, r.date);
     const note = r.purchase && r.purchaseNote ? `Total ${r.purchase} · ${r.purchaseNote}` : r.metaLine;
+    const df = r.deferral;
+    const status: MonthlyItem["status"] = df?.status === "postponed" ? "Postponed" : df?.status === "lapsed" ? "Overdue" : "Pending";
+    // Plain words, said once: where it is expected, then (only for a genuine split) the total and this person's share.
+    const when = df ? expectedWhen(df) : "";
+    const where = df?.status === "postponed" ? `Postponed to ${when}` : df?.status === "lapsed" ? `Was expected ${when}` : df?.status === "expectedNow" ? `Postponed from ${df.from} · due now` : "";
+    const share = r.purchase ? `${r.purchase} total · ${r.owedBy === "owner" ? r.amountLabel : "Your share"} ${r.original}` : "";
+    const who = isMixed && r.owedBy ? `${r.owedBy === "them" ? first : view.ownerShort} owes` : "";
     return {
       group,
       date: d.year ? `${d.day} ${d.year}` : d.day,
@@ -124,6 +172,9 @@ export function monthlySettlementView(statement: PersonCycleStatement, options: 
       chip: r.chip,
       tag: r.tag,
       owedBy: r.owedBy,
+      type: TYPE_WORD[r.kind] ?? r.tag,
+      status,
+      detail: [where, share, who].filter(Boolean).join(" · "),
     };
   };
 
@@ -152,9 +203,26 @@ export function monthlySettlementView(statement: PersonCycleStatement, options: 
     // A receipt recorded after the fact and linked to no account is a record, not a new bank receipt.
     source: p.account ? `${p.inbound ? "Received in" : "Paid from"} ${p.account}` : p.note ? `${p.note} · no new bank receipt` : null,
     note: p.toward,
+    status: p.advance ? "Advance" : p.inbound ? "Received" : "Paid",
   }));
 
-  const isMixed = statement.toReceive >= 0.005 && statement.toGive >= 0.005;
+  // Due this cycle vs postponed: the postponed part is the live remaining of the open items on the owed side that are
+  // expected in a LATER cycle; due-now is the engine's own total minus it. Nothing is removed from the total — only
+  // when the money is expected differs. Skipped when the balance runs both ways (no single side to split).
+  const owedSide = statement.direction === "iOwe" ? "owner" : "them";
+  let postponedPaise = 0;
+  const targets = new Set<string>();
+  for (const r of [...view.carried, ...obligations]) {
+    if (r.settled || r.deferral?.status !== "postponed" || r.owedBy !== owedSide || r.remainingValue == null) continue;
+    postponedPaise += paise(r.remainingValue);
+    targets.add(expectedWhen(r.deferral));
+  }
+  postponedPaise = Math.min(postponedPaise, outstandingPaise);
+  const split: MonthlySplit | null =
+    !isMixed && statement.direction !== "settled" && postponedPaise >= SAME
+      ? { dueNow: money(fromPaise(outstandingPaise - postponedPaise)), postponed: money(fromPaise(postponedPaise)), postponedTo: targets.size === 1 ? [...targets][0] : "later cycles" }
+      : null;
+
   return {
     personName: view.personName,
     ownerName: view.ownerName,
@@ -171,6 +239,7 @@ export function monthlySettlementView(statement: PersonCycleStatement, options: 
     totalPaid: view.totalReceived ?? view.totalPaid,
     advance: view.advance,
     mixed: isMixed ? { theyOwe: money(statement.toReceive), ownerOwes: money(statement.toGive) } : null,
+    split,
   };
 }
 

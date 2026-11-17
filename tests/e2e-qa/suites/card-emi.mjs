@@ -46,6 +46,7 @@ scenario("card-emi-pay-and-reverse", "Card EMI: pay ₹3,000 (double-click) → 
   chk("exactly one EMI transaction of ₹3,000, on the card account (persisted)", txs.length === 1 && txs[0].amount === 3000 && txs[0].accountId === card.id, txs.map((t) => `${t.amount}@${t.accountId}`).join(","));
   chk("installment #1 amountPaid = ₹3,000, nothing else (persisted)", JSON.stringify(await paidList()) === JSON.stringify([3000, 0, 0, 0]), JSON.stringify(await paidList()));
 
+  await h.showSchedule(page);
   await page.getByRole("button", { name: /Installment 1.*(edit or mark unpaid|view payment)/ }).click();
   const det = page.getByRole("dialog", { name: /Recorded payment/ });
   await det.waitFor();
@@ -131,6 +132,7 @@ scenario("card-emi-bank-funded", "Card EMI paid from savings: the dialog offers 
   chk("the card is untouched — no statement charge (persisted)", f.close2(await cardBal(), card0), `${card0} -> ${await cardBal()}`);
   chk("exactly one EMI transaction of ₹3,000, on the bank account (persisted)", txs.length === 1 && txs[0].amount === 3000 && txs[0].accountId === bankAcc.id, txs.map((t) => `${t.amount}@${t.accountId}`).join(","));
   chk("installment #1 amountPaid = ₹3,000 (persisted)", JSON.stringify(await paidList()) === JSON.stringify([3000, 0, 0, 0]), JSON.stringify(await paidList()));
+  await h.showSchedule(page);
   await page.getByRole("button", { name: /Installment 1.*(edit or mark unpaid|view payment)/ }).click();
   const det = page.getByRole("dialog", { name: /Recorded payment/ });
   await det.waitFor();
@@ -161,6 +163,7 @@ async function openAPay(page, name) {
   return dlg;
 }
 async function openDetails(page) {
+  await h.showSchedule(page);
   await page.getByRole("button", { name: /Installment 1.*(edit or mark unpaid|view payment)/ }).click();
   const det = page.getByRole("dialog", { name: /Recorded payment/ });
   await det.waitFor();

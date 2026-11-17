@@ -281,7 +281,11 @@ function ledgerTable(v: ReturnType<typeof personView>) {
     <SettlementTable personId="amma" personName="AMMA" rows={v.rows} isLoading={false} lookups={v.lookups} accountForEntry={() => null} handlers={{} as never} empty={null} />
   );
 }
-const splitDetails = () => screen.getAllByText("Split details")[0].parentElement!;
+/** The whole-bill allocation sits under the expanded row's "More details" — opened the first time it is needed (it stays open on re-render). */
+const splitDetails = () => {
+  if (screen.queryAllByText("Split details").length === 0) fireEvent.click(screen.getAllByTestId("row-more-details")[0]);
+  return screen.getAllByText("Split details")[0].parentElement!;
+};
 /** The collapsed split summary (separate figures, not one sentence) — matched with whitespace ignored. */
 const hasSplitSummary = (share: number) =>
   screen.queryAllByText((_, el) => el?.tagName === "P" && el.textContent?.replace(/\s/g, "") === `Split expense · 4 people Original ${money(4000)} AMMA's share ${money(share)}`.replace(/\s/g, "")).length > 0;
@@ -322,7 +326,8 @@ describe("Split edit lifecycle — the real editExpense path the Transaction det
     // People Ledger (AMMA): compact line + expanded breakdown, mounted once and kept mounted.
     const { rerender } = render(ledgerTable(before));
     expect(hasSplitSummary(1000)).toBe(true);
-    fireEvent.click(screen.getAllByRole("button", { expanded: false })[0]);
+    // The ledger gained other collapsed controls (e.g. a status-help trigger), so target the Dinner row itself.
+    fireEvent.click(document.querySelector("tr[aria-expanded=false]")!);
     let details = splitDetails();
     expect(within(details).getByText(money(4000))).toBeTruthy();
     for (const n of ["You", "AMMA", "TRIPTHEE", "ANU"]) expect(cellAmount(details, n)).toContain(money(1000));
@@ -396,7 +401,9 @@ describe("Split edit lifecycle — the real editExpense path the Transaction det
     const view = statementView(after.statement, { entries: after.entries, lookups: after.lookups, now: NOW });
     const row = view.rows.find((r) => r.kind === "split")!;
     expect(row.splitNote).toBe(`Total price ${money(4000)} · 4-way split · AMMA's share ${money(500)}`);
-    expect(row).toMatchObject({ original: money(500), remaining: money(500) });
+    expect(row).toMatchObject({ original: money(500) });
+    // The statement model exposes no per-row remaining/paid figure by design (a resolved flag only).
+    expect(row).not.toHaveProperty("remaining");
     const shared = JSON.stringify(view);
     // The shared statement shows this split's current (edited) allocation in full — and nothing else about the others.
     expect(row.allocation!.participants.map((p) => [p.label, p.amount])).toEqual([["Account holder", 1500], ["AMMA", 500], ["TRIPTHEE", 1250], ["ANU", 750]]);

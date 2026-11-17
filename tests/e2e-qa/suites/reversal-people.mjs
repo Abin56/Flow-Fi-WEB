@@ -10,20 +10,29 @@ import * as h from "../lib/harness.mjs";
 
 const RECORD_400 = /^Record ₹400/;
 
-/** In the Edit-payment panel: set the amount received AND the allocation on the lent row to the same value. */
+/** In the Edit-payment panel of a GENERAL payment: set the amount received (there is no per-item allocation any more). */
 async function setEditAmount(pg, amount) {
   await f.amountField(pg).fill(String(amount));
-  const row = pg.getByRole("dialog").last().getByText("QA lent to Ravi").first().locator("xpath=ancestor::*[count(.//button[normalize-space()='Skip'])=1][1]");
-  await row.locator("input").first().fill(String(amount));
   await pg.waitForTimeout(400);
 }
 
 async function receiptFromPriya(page, amount, label) {
   await f.openPerson(page, "QA Priya");
+  // New People payments are GENERAL by design (they lower the overall balance, tied to no item), so the receipt is its own
+  // "Payment from …" row — that row carries Revert / Edit — and the dinner share reads "Part of balance".
   await f.openRecord(page);
   await f.amountField(page).fill(String(amount));
   await f.pickAccountIn(page, "QA Bank");
-  const btn = page.getByRole("button", { name: label ?? new RegExp(`^Record ₹${Number(amount).toLocaleString("en-IN")}`) }).first();
+  // The submit button: "Record ₹…" inline on a desktop; on a phone the sheet is Money → Apply → Finish and the Apply page's
+  // "Next · Finish" is what commits the payment — so advance only as far as "Next · Apply".
+  const record = label ?? new RegExp(`^Record ₹${Number(amount).toLocaleString("en-IN")}`);
+  const btn = page.getByRole("button", { name: new RegExp(`${record.source}|^Next · Finish`) }).first();
+  await page.waitForTimeout(800); // the sheet has just taken the amount/account — let its footer settle
+  const toApply = page.getByTestId("payment-sheet").getByRole("button", { name: /^Next · Apply/ });
+  if (await toApply.isVisible().catch(() => false)) {
+    await toApply.click();
+    await page.waitForTimeout(700);
+  }
   return btn;
 }
 
@@ -41,18 +50,24 @@ scenario("rev-people-receipt-partial-duplicate", "People: ₹400 partial receipt
   chk("bank credited exactly ₹400 once (persisted)", f.close2(after - before, 400), `${before} -> ${after}`);
   chk("exactly one ₹400 receipt transaction persisted", received.length === 1 && income.length <= 1, received.length);
   chk("UI: ₹600 still pending (partial settlement)", /CURRENT PENDING\s*₹600/.test(body) || /₹600/.test(body), (body.match(/CURRENT PENDING[^A-Z]{0,20}/) ?? ["?"])[0]);
-  chk("UI: row shows 'Got ₹400 · ₹600 left'", /Got ₹400 · ₹600 left/.test(body));
+  chk("UI: the receipt is its own 'Payment from …' row (+₹400) and the dinner share reads 'Part of balance'", /Payment from/.test(body) && /\+₹400/.test(body) && /Part of balance/.test(body), (body.match(/Payment from[^A-Z]{0,40}/) ?? ["?"])[0]);
+  chk("UI: header says ₹600 is still to receive", /YOU NEED TO RECEIVE FROM QA\s*₹600/i.test(body));
   return await h.timeline(page);
 });
 
 const revertBody = async ({ page }, chk) => {
   const base = await f.bal("QA Bank");
   const btn = await receiptFromPriya(page, 400, RECORD_400);
-  await btn.click();
+  // One direct click (the phone sheet re-renders as it closes, so Playwright's own click can retry against a vanished button).
+  await btn.evaluate((b) => b.click());
+  await page.waitForTimeout(2500);
+  // On a phone "Next · Finish" may open the Finish page, whose own "Record ₹400" commits; click it only if it is still there.
+  const finish = page.getByRole("button", { name: RECORD_400 }).first();
+  if (await finish.isVisible().catch(() => false)) await finish.evaluate((b) => b.click()).catch(() => {});
   await page.waitForTimeout(3500);
   const afterReceipt = await f.bal("QA Bank");
   chk("precondition: receipt recorded (+₹400)", f.close2(afterReceipt - base, 400), `${base} -> ${afterReceipt}`);
-  await f.expandRow(page, "QA team dinner");
+  await f.expandRow(page, "Payment from");
   await page.evaluate(() => window.__reset());
   const dialogText = await f.confirmRevert(page, { double: true });
   await page.waitForTimeout(4000);
@@ -62,7 +77,7 @@ const revertBody = async ({ page }, chk) => {
   chk("confirmation states the effect (remove ₹400 from QA Bank)", /remove ₹400 from QA Bank/.test(dialogText), dialogText.slice(0, 200));
   chk("bank back to the pre-receipt balance — refunded exactly once (persisted)", f.close2(afterRevert, base), `${afterReceipt} -> ${afterRevert} (base ${base})`);
   chk("the receipt transaction is no longer active (persisted)", (await f.txns((t) => t.type === "income" && t.amount === 400)).length === 0);
-  chk("UI: the ₹1,000 share is owed in full again", /₹1,000 to receive/.test(body) || /CURRENT PENDING\s*₹1,000/.test(body));
+  chk("UI: the ₹1,000 share is owed in full again", /YOU NEED TO RECEIVE FROM QA\s*₹1,000/i.test(body), (body.match(/YOU NEED TO RECEIVE FROM[^A-Z]{0,30}/i) ?? ["?"])[0]);
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   chk("no horizontal page overflow", overflow <= 1, `${overflow}px`);
   return await h.timeline(page);
@@ -80,7 +95,7 @@ scenario("rev-people-stale-revert-two-tabs", "People: revert in tab A, then the 
   tabB.setDefaultTimeout(30000);
   await tabB.goto(`${BASE_URL}/people`, { waitUntil: "domcontentloaded" });
   await f.openPerson(tabB, "QA Priya");
-  await f.expandRow(tabB, "QA team dinner");
+  await f.expandRow(tabB, "Payment from");
   await tabB.getByTitle("Revert this payment").first().waitFor();
   // Tab B opens the revert confirmation and leaves it open (this is the stale state).
   await tabB.getByTitle("Revert this payment").first().click();
@@ -88,7 +103,7 @@ scenario("rev-people-stale-revert-two-tabs", "People: revert in tab A, then the 
   await dlgB.getByText("Revert payment?").waitFor();
   // Tab A reverts.
   await page.bringToFront();
-  await f.expandRow(page, "QA team dinner");
+  await f.expandRow(page, "Payment from");
   await f.confirmRevert(page);
   await page.waitForTimeout(3500);
   chk("tab A: revert refunded the bank", f.close2(await f.bal("QA Bank"), base), `${await f.bal("QA Bank")} (base ${base})`);
@@ -145,7 +160,7 @@ scenario("rev-people-vs-lender-schedule", "People: a receipt from Priya (incl. h
   await h.shot(page, "rev-people-vs-lender");
   const lenderAfter = await f.scheduleState("emi", "QA Shared EMI");
   chk("bank credited ₹1,500 exactly once (persisted)", f.close2((await f.bal("QA Bank")) - bankBefore, 1500));
-  chk("People side shows her EMI share partly settled (₹500 of ₹1,000)", /paid ₹500/.test(body) || /Got ₹500 · ₹500 left/.test(body), (body.match(/EMI share[^A-Z]{0,40}/) ?? ["?"])[0]);
+  chk("People side: the ₹1,500 lowers her overall balance (₹2,000 → ₹500) as a general payment — it is tied to no EMI installment", /YOU NEED TO RECEIVE FROM QA\s*₹500/i.test(body), (body.match(/YOU NEED TO RECEIVE FROM[^A-Z]{0,30}/i) ?? ["?"])[0]);
   chk("LENDER schedule untouched: every installment amountPaid still 0 (persisted)", f.paidTotal(lenderAfter) === 0, JSON.stringify(lenderAfter.map((i) => i.amountPaid)));
   await h.go(page, "/loans-installments");
   await page.waitForTimeout(3000);
@@ -168,16 +183,9 @@ scenario("rev-people-edit-and-stale-edit", "People: edit a recorded receipt ₹1
   const gave = await f.bal("QA Bank");
   chk("precondition: money given (bank −₹2,000)", f.close2(bank0 - gave, 2000), `${bank0} -> ${gave}`);
 
-  // Receipt of ₹1,000 applied to that entry only (skip the split share).
+  // Receipt of ₹1,000 — a GENERAL payment (lowers the overall balance; no item is chosen any more).
   await f.openRecord(page);
   await f.amountField(page).fill("1000");
-  // Put the ₹1,000 on the "lent to Ravi" row only: skip the (older) split-share row, then set the lent row's own amount.
-  const panel = page.getByRole("dialog").last();
-  const rowWith = (text) => panel.getByText(text).first().locator("xpath=ancestor::*[count(.//button[normalize-space()='Skip'])=1][1]");
-  await rowWith("QA team dinner").getByRole("button", { name: "Skip" }).click();
-  const lent = rowWith("QA lent to Ravi");
-  await lent.getByRole("button", { name: "Part" }).click();
-  await lent.locator("input").first().fill("1000");
   await f.pickAccountIn(page, "QA Bank");
   await page.waitForTimeout(400);
   await h.shot(page, "rev-people-edit-receipt-form");
@@ -186,7 +194,7 @@ scenario("rev-people-edit-and-stale-edit", "People: edit a recorded receipt ₹1
   const afterReceipt = await f.bal("QA Bank");
   chk("receipt recorded (+₹1,000)", f.close2(afterReceipt - gave, 1000), `${gave} -> ${afterReceipt}`);
 
-  await f.expandRow(page, "QA lent to Ravi");
+  await f.expandRow(page, "Payment from");
   const editBtn = page.getByTitle("Edit this payment").first();
   const editable = (await editBtn.count()) > 0;
   await h.shot(page, "rev-people-edit-row");
@@ -198,7 +206,7 @@ scenario("rev-people-edit-and-stale-edit", "People: edit a recorded receipt ₹1
   tabB.setDefaultTimeout(30000);
   await tabB.goto(`${BASE_URL}/people`, { waitUntil: "domcontentloaded" });
   await f.openPerson(tabB, "QA Ravi");
-  await f.expandRow(tabB, "QA lent to Ravi");
+  await f.expandRow(tabB, "Payment from");
   await tabB.getByTitle("Edit this payment").first().click();
   await tabB.waitForTimeout(1200);
   await setEditAmount(tabB, 500);
@@ -218,7 +226,7 @@ scenario("rev-people-edit-and-stale-edit", "People: edit a recorded receipt ₹1
 
   // Tab A cancels (reverts) the payment.
   await page.waitForTimeout(1500);
-  if ((await page.getByTitle("Revert this payment").count()) === 0) await f.expandRow(page, "QA lent to Ravi");
+  if ((await page.getByTitle("Revert this payment").count()) === 0) await f.expandRow(page, "Payment from");
   await f.confirmRevert(page);
   await page.waitForTimeout(3500);
   const afterCancel = await f.bal("QA Bank");

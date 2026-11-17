@@ -89,6 +89,7 @@ scenario("stk-pay-and-history", "EMI popup: pay from the layer (writes once), th
   await page.getByRole("tab", { name: /^History/ }).click();
   await page.waitForTimeout(500);
   await h.shot(page, "stk-pay-2-history");
+  await h.showSchedule(page);
   await page.getByRole("button", { name: /view payment/ }).first().click();
   await layer(page).waitFor({ timeout: 20000 });
   await page.waitForTimeout(700);

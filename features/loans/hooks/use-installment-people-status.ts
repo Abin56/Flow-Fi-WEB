@@ -12,7 +12,7 @@ import { usePeoplePaymentDeferrals } from "@/features/people/hooks/use-payment-d
 import { useMonthCycleStartDay } from "@/features/settings/hooks/use-user-preferences";
 import type { OwnershipSource } from "@/lib/engines/debt-ownership";
 import { installmentBreakdown, type InstallmentParticipant } from "@/lib/engines/installment-participants";
-import type { StatementCycle } from "@/lib/engines/person-cycle-statement";
+import { formatStatementDate, type StatementCycle } from "@/lib/engines/person-cycle-statement";
 import { cycleName, deferralView } from "@/lib/engines/person-payment-deferral";
 import { PAYMENT_EPSILON } from "@/lib/engines/person-payment";
 import type { PersonPaymentDeferral } from "@/lib/models/person-payment-deferral";
@@ -50,7 +50,7 @@ export function peopleStatusOf(
     const view = deferral ? deferralView(deferral, line.remaining, startDay) : null;
     if (view?.status === "postponed") {
       moved += 1;
-      return `${p.personName}: moved to ${cycleName(view.cycle)} cycle`;
+      return view.date ? `${p.personName}: postponed until ${formatStatementDate(view.date, true)}` : `${p.personName}: moved to ${cycleName(view.cycle)} cycle`;
     }
     return line.received > PAYMENT_EPSILON
       ? `${p.personName}: ${formatCurrency(line.received)} of ${formatCurrency(line.share)} received`

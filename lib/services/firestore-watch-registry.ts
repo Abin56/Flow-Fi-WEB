@@ -54,6 +54,11 @@ interface SharedSubscription {
   idleTimer: ReturnType<typeof setTimeout> | null;
   /** The listener reported an error — Firestore ends a listener after an error, so it must be reopened, never reused. */
   failed: boolean;
+  /**
+   * The inputs the listener was built from (`subscribe`'s closure: uid, the loan schedules to watch, …). A caller that
+   * brings different inputs must NOT ride this listener — it would keep watching the old set.
+   */
+  signature: string;
 }
 
 const subscriptions = new Map<string, SharedSubscription>();
@@ -84,20 +89,23 @@ function teardown(key: string, entry: SharedSubscription) {
  * A listener marked failed (`markSharedSubscriptionFailed`) is reopened by the next acquire — this is
  * what the watcher banner's Retry relies on — while keeping the key's consumer count intact.
  *
- * `subscribe` is only ever invoked for the caller that actually creates (or reopens) the entry — later
- * callers' `subscribe` closures are discarded, which is safe because two callers sharing the same
- * `queryKey` are, by construction, watching the same uid-scoped Firestore query.
+ * `subscribe` is only invoked for the caller that actually creates (or reopens) the entry — later callers'
+ * `subscribe` closures are discarded. That is safe only while they are watching the same thing, so each caller passes
+ * a `signature` of the inputs its closure was built from. A caller whose signature differs from the open listener's
+ * (e.g. `useAllLoanInstallments` once the Loans list has arrived and there are schedules to watch, where the first run
+ * had none) REOPENS the listener instead of silently reusing a stale one — keeping the consumer count intact.
+ * Consumers with identical inputs, and keep-alive re-acquires between pages, still share one listener.
  */
-export function acquireSharedSubscription(queryKey: readonly unknown[], subscribe: () => () => void): () => void {
+export function acquireSharedSubscription(queryKey: readonly unknown[], subscribe: () => () => void, signature = ""): () => void {
   const key = keyFor(queryKey);
   let entry = subscriptions.get(key);
-  if (entry && entry.failed) {
+  if (entry && (entry.failed || entry.signature !== signature)) {
     const refCount = entry.refCount;
     teardown(key, entry);
-    entry = { refCount, unsubscribe: subscribe(), idleTimer: null, failed: false };
+    entry = { refCount, unsubscribe: subscribe(), idleTimer: null, failed: false, signature };
     subscriptions.set(key, entry);
   } else if (!entry) {
-    entry = { refCount: 0, unsubscribe: subscribe(), idleTimer: null, failed: false };
+    entry = { refCount: 0, unsubscribe: subscribe(), idleTimer: null, failed: false, signature };
     subscriptions.set(key, entry);
   }
   if (entry.idleTimer) {

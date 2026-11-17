@@ -25,7 +25,8 @@
 
 import { readFileSync } from "node:fs";
 import { initializeTestEnvironment, type RulesTestEnvironment } from "@firebase/rules-unit-testing";
-import { collection, doc, getDocs, query, where, type Firestore } from "firebase/firestore";
+import { collection, deleteDoc, deleteField, doc, getDocs, query, updateDoc, where, type Firestore } from "firebase/firestore";
+import { permanentlyDeleteAgreement } from "@/lib/repositories/agreement-deletion";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { splitByOwnership, resolveOwnership } from "@/lib/engines/debt-ownership";
@@ -33,6 +34,11 @@ import { loanDebtPosition, requiredByOwnership, type LoanDebtInput } from "@/lib
 import { loanBalanceSheet, netWorthWithLoans } from "@/lib/engines/loan-balance-sheet";
 import { outstandingPrincipalAfterPrepaymentsFor, principalPrepaidFor } from "@/lib/engines/loan-outstanding";
 import { emiReceivableThrough, personEmiObligations } from "@/lib/engines/person-emi-obligations";
+import { personLinkedEmis } from "@/lib/engines/person-linked-emis";
+import { deferralView } from "@/lib/engines/person-payment-deferral";
+import { LinkEarlierPaymentError, LinkedPaymentEditError } from "@/lib/engines/link-earlier-payment";
+import { OwnedTransactionDeleteError, OwnedTransactionEditError } from "@/lib/repositories/transaction-repository";
+import { paymentDeferralFromData } from "@/lib/models/person-payment-deferral";
 import { allocatePayment, advanceRemaining, planAdvanceApplication } from "@/lib/engines/person-payment";
 import { buildPersonCycleStatement, type StatementCycle } from "@/lib/engines/person-cycle-statement";
 import { breakdownEntryOf, peopleNetWorthPosition, personDirectGross, personPosition, type PersonPosition } from "@/lib/engines/person-position";
@@ -1455,4 +1461,624 @@ describe("Bulk — several overdue installments paid from my account (shared loa
     await payOne(w, 2, 2_000, "ac-s2-rest")();
     expect([await seqPaid(w, 2), await cash(w)]).toEqual([3_000, startCash - 6_000]);
   }, 60_000);
+});
+
+// ═══════════ 22. Linked EMIs summary (People page) — derived from the same live documents ═══════════
+
+describe("22 — Linked EMIs summary agrees with the ledger, the lender schedule and every payment step", () => {
+  const MAR_15 = new Date(2026, 2, 15);
+
+  /** What `usePersonCycleStatement` feeds the panel: obligations + the all-time statement's `remainingNow`. */
+  async function linked(w: World, personId: string, now: Date) {
+    const loan = await loanNow(w);
+    const obligations = personEmiObligations({ personId, emis: [], loans: [loanSource(loan)], installments: await liveInstallments(w), now });
+    const st = await statement(w, personId, now, { start: new Date(1970, 0, 1), end: cycleOf(now).end });
+    const remainingByKey = new Map(st.rows.filter((r) => r.kind === "obligation" && r.remainingNow != null).map((r) => [r.key, r.remainingNow as number]));
+    return personLinkedEmis({ obligations, remainingByKey, sharedSourceIds: new Set([`loan:${loan.id}`]), now })[0];
+  }
+  /** Record Payment exactly as the People workspace builds it: all-time rows, canonical oldest-first allocation. */
+  async function payAllTime(w: World, personId: string, amount: number, date: Date) {
+    const hist = await statement(w, personId, date, { start: new Date(1970, 0, 1), end: cycleOf(date).end });
+    const ledger = buildLedgerRows({ statement: hist, entries: await ledgerEntries(w, personId), pending: [], now: date, advanceApplications: await applications(w, personId) });
+    const obligations = payableObligations(ledger).filter((o) => o.side === "theyOwe");
+    const alloc = allocatePayment({ obligations, selectedKeys: obligations.map((o) => o.key), amount });
+    return { paymentId: await w.personPayments(personId).recordPayment((await w.people.getByKey(personId)) as Person, { direction: "theyPaid", amount, date, accountId: w.accountId, lines: paymentLines(obligations, alloc.lines), extra: null }) };
+  }
+  const figures = (e: Awaited<ReturnType<typeof linked>>) => e && { share: e.monthlyShare, whole: e.installmentAmount, due: e.dueToDate, paid: e.paid, left: e.remaining, status: e.status };
+
+  it("create → A part-pays → lender pays → revert A → close → delete: every figure ties to People, the lender and the account", async () => {
+    const w = await world();
+
+    // Each of A and B owes ₹1,000 of every ₹3,000 installment; #1 (Feb 10) and #2 (Mar 10) are due by Mar 15.
+    const a0 = await linked(w, w.aId, MAR_15);
+    expect(figures(a0)).toEqual({ share: 1_000, whole: 3_000, due: 2_000, paid: 0, left: 2_000, status: "overdue" });
+    expect(a0.shared).toBe(true);
+    // The summary and the People position can never disagree about what is owed.
+    expect((await position(w, w.aId, MAR_15)).net).toBe(a0.remaining);
+    // Parts of an installment sum to it (A + B + my own third).
+    expect(a0.monthlyShare + (await linked(w, w.bId, MAR_15)).monthlyShare + 1_000).toBe(3_000);
+
+    // A pays ₹1,500 — oldest first: #1 fully, #2 by ₹500. Money in once; lender untouched; B untouched.
+    const cash0 = await cash(w);
+    const aPay = await payAllTime(w, w.aId, 1_500, MAR_15);
+    expect(await cash(w)).toBe(cash0 + 1_500);
+    const a1 = await linked(w, w.aId, MAR_15);
+    expect(figures(a1)).toMatchObject({ paid: 1_500, left: 500 });
+    expect(a1.installments.slice(0, 2).map((i) => [i.paid, i.remaining, i.status])).toEqual([[1_000, 0, "paid"], [500, 500, "partial"]]);
+    expect(figures(await linked(w, w.bId, MAR_15))).toMatchObject({ paid: 0, left: 2_000 });
+    expect((await liveInstallments(w)).map((i) => i.amountPaid).reduce((x, y) => x + y, 0)).toBe(0);
+    expect((await position(w, w.aId, MAR_15)).net).toBe(a1.remaining);
+
+    // Lender payment for #1: bank side only — nobody's People figures move, the summary just shows "bank paid".
+    await payLenderAnyway(w, 3_000, FIRST_DUE, "x22-l1");
+    expect(await cash(w)).toBe(cash0 + 1_500 - 3_000);
+    const a2 = await linked(w, w.aId, MAR_15);
+    expect(figures(a2)).toEqual(figures(a1));
+    expect(a2.installments[0].lenderStatus).toBe("paid");
+    expect(a2.installments[1].lenderStatus).not.toBe("paid");
+    expect(figures(await linked(w, w.bId, MAR_15))).toMatchObject({ paid: 0, left: 2_000 });
+
+    // Revert A's payment: the summary returns exactly to the original obligation and the cash leg is reversed.
+    await w.personPayments(w.aId).revertPayment((await w.people.getByKey(w.aId))!, aPay.paymentId);
+    expect(await cash(w)).toBe(cash0 - 3_000);
+    expect(figures(await linked(w, w.aId, MAR_15))).toEqual(figures(a0));
+
+    // Close: only the lender-paid #1 keeps a share; open future/unpaid ones stop (existing close rule).
+    await w.loans.closeLoan(await loanNow(w));
+    const closed = await linked(w, w.aId, MAR_15);
+    expect(closed.installments.map((i) => i.number)).toEqual([1]);
+    expect((await position(w, w.aId, MAR_15)).net).toBe(closed.remaining);
+  }, 60_000);
+
+  it("a trashed agreement disappears from the person's summary and from People", async () => {
+    const w = await world({ movement: false });
+    expect(await linked(w, w.aId, MAR_15)).toBeDefined();
+    await w.loans.softDelete(await loanNow(w));
+    expect(await linked(w, w.aId, MAR_15)).toBeUndefined();
+    expect((await position(w, w.aId, MAR_15)).net).toBe(0);
+  });
+
+  it("a person with no share in the agreement has no summary", async () => {
+    const w = await world();
+    const stranger = await w.people.createPerson({ name: "Stranger", avatarColorValue: 0, openingBalance: 0 });
+    expect(await linked(w, stranger.id, MAR_15)).toBeUndefined();
+  });
+});
+
+// ═══════════ 23. Postpone THE PERSON to an exact date — the bank EMI is a separate, explicit decision ═══════════
+
+describe("23 — postponing a person's EMI share to an exact date (bank EMI due the 10th, person until the 25th)", () => {
+  const ALL = { start: new Date(1970, 0, 1), end: new Date(2200, 0, 1) };
+  const FEB_25 = new Date(2026, 1, 25);
+  const FEB_26 = new Date(2026, 1, 26);
+  const FEB_28 = new Date(2026, 1, 28);
+
+  const keyOf = async (w: World, seq: number) => `loan-inst:${(await liveInstallments(w)).find((i) => i.sequenceNumber === seq)!.id}`;
+  async function postponeTo(w: World, personId: string, seq: number, targetDate: Date, now: Date, revision = 0, requestId = `pp-${personId}-${seq}-${revision}-${targetDate.getTime()}`) {
+    const inst = (await liveInstallments(w)).find((i) => i.sequenceNumber === seq)!;
+    return new PaymentDeferralRepository(w.db, UID).apply({
+      action: "postpone", requestId, expectedRevision: revision, personId, obligationKey: await keyOf(w, seq), obligationTitle: "Shared loan",
+      now, startDay: 1, obligationDate: inst.dueDate, remaining: 1_000, target: cycleContaining(targetDate, 1), targetDate, reason: "unableNow", note: null, reminder: null,
+    });
+  }
+  async function undoPostpone(w: World, personId: string, seq: number, now: Date, revision: number) {
+    return new PaymentDeferralRepository(w.db, UID).apply({ action: "undo", requestId: `undo-${personId}-${seq}-${revision}`, expectedRevision: revision, personId, obligationKey: await keyOf(w, seq), obligationTitle: "Shared loan", now, startDay: 1 });
+  }
+  /** The stored document, read straight from Firestore — what survives a reload, not what the screen said. */
+  async function storedDeferral(w: World, personId: string, seq: number) {
+    const snap = await getDocs(collection(w.db, "users", UID, "people", personId, "paymentDeferrals"));
+    const key = await keyOf(w, seq);
+    const d = snap.docs.find((x) => x.data().obligationKey === key);
+    return d ? paymentDeferralFromData(d.id, d.data()) : null;
+  }
+  async function viewOf(w: World, personId: string, seq: number, now: Date) {
+    const dfr = await storedDeferral(w, personId, seq);
+    if (!dfr) return null;
+    // Whole schedule (a future installment's share has no row in a statement that ends with the current cycle).
+    const st = await statement(w, personId, now, ALL);
+    const remaining = st.rows.find((r) => r.key === dfr.obligationKey)?.remainingNow ?? 0;
+    return deferralView(dfr, remaining, 1, now);
+  }
+  /** The figures every connected module reads, from live documents. */
+  async function snap(w: World, now: Date) {
+    const nw = await netWorth(w, now);
+    return {
+      cash: await cash(w),
+      outstanding: await outstanding(w),
+      installments: (await liveInstallments(w)).map((i) => [i.sequenceNumber, i.amountPaid, i.dueDate.getTime()]),
+      aNet: (await position(w, w.aId, now)).net,
+      bNet: (await position(w, w.bId, now)).net,
+      toReceive: nw.peopleReceivable,
+      netWorth: nw.netWorth,
+      income: await monthCycleIncome(w),
+      expenses: (await getDocs(w.transactionsRef)).docs.map((d) => d.data() as Transaction).filter((t) => t.deletedAt == null && t.type === "expense").length,
+    };
+  }
+
+  it("1 · postpone without paying the lender: stored with the exact date, nothing else anywhere changes", async () => {
+    const w = await world();
+    const before = await snap(w, FEB_12);
+    const written = await postponeTo(w, w.bId, 1, FEB_25, FEB_12);
+    expect(written.outcome).toBe("written");
+
+    // Persisted — read back from Firestore, not from the call's return value.
+    const stored = (await storedDeferral(w, w.bId, 1))!;
+    expect(stored.state).toBe("active");
+    expect(stored.expected!.date).toEqual(FEB_25);
+    expect(stored.expected!.reason).toBe("unableNow");
+    expect(JSON.stringify(stored)).not.toMatch(/amount/i); // no amount is ever stored
+
+    // The bank's side and every module: identical to before. A postponement is metadata only.
+    expect(await snap(w, FEB_12)).toEqual(before);
+    expect((await liveInstallments(w))[0].dueDate).toEqual(FIRST_DUE); // the lender's date never moves
+    expect((await liveInstallments(w))[0].amountPaid).toBe(0); // and the EMI is NOT marked paid
+
+    // Status follows the exact day: postponed → due on the 25th → lapsed the day after.
+    expect(await viewOf(w, w.bId, 1, FEB_12)).toMatchObject({ status: "postponed", remaining: 1_000 });
+    expect((await viewOf(w, w.bId, 1, FEB_12))!.date).toEqual(FEB_25);
+    expect((await viewOf(w, w.bId, 1, FEB_25))!.status).toBe("expectedNow");
+    expect((await viewOf(w, w.bId, 1, FEB_26))!.status).toBe("lapsed");
+    // A is untouched.
+    expect(await storedDeferral(w, w.aId, 1)).toBeNull();
+  }, 60_000);
+
+  it("rejects a date that is today, in the past, or not after the original due date — nothing written", async () => {
+    const w = await world();
+    const before = await snap(w, FEB_12);
+    for (const d of [FEB_12, new Date(2026, 1, 11), FIRST_DUE, new Date(2026, 1, 9)]) {
+      await expect(postponeTo(w, w.bId, 1, d, FEB_12)).rejects.toThrow(/Choose a date/);
+    }
+    expect(await storedDeferral(w, w.bId, 1)).toBeNull();
+    expect(await snap(w, FEB_12)).toEqual(before);
+  }, 60_000);
+
+  it("2 · postpone, then the lender EMI paid from my account: one Money Out, person still owes, both dates kept", async () => {
+    const w = await world();
+    await postponeTo(w, w.bId, 1, FEB_25, FEB_12);
+    const cash0 = await cash(w);
+    const bNet0 = (await position(w, w.bId, FEB_12)).net;
+
+    // The explicit own-money path the payment dialog offers once the open shares are postponed.
+    const paid = await payLenderAnyway(w, 3_000, FEB_12, "pp-lender-1");
+    await payLenderAnyway(w, 3_000, FEB_12, "pp-lender-1"); // a double submit never deducts twice
+    expect(await cash(w)).toBe(cash0 - 3_000);
+    expect((await liveInstallments(w))[0].amountPaid).toBe(3_000);
+    expect((await liveInstallments(w))[0].dueDate).toEqual(FIRST_DUE);
+    expect((await getDocs(w.transactionsRef)).docs.map((d) => d.data()).filter((t) => t.deletedAt == null && t.type === "expense")).toHaveLength(1);
+
+    // Person's side untouched: still owes ₹1,000, still postponed until the 25th.
+    expect((await position(w, w.bId, FEB_12)).net).toBe(bNet0);
+    expect(await viewOf(w, w.bId, 1, FEB_12)).toMatchObject({ status: "postponed", remaining: 1_000 });
+
+    // Reversing the lender payment restores the account and reopens the bank EMI — the postponement is unaffected.
+    await revertLender(w, paid, "pp-lender-1-rev");
+    expect(await cash(w)).toBe(cash0);
+    expect((await liveInstallments(w))[0].amountPaid).toBe(0);
+    expect(await viewOf(w, w.bId, 1, FEB_12)).toMatchObject({ status: "postponed", remaining: 1_000 });
+  }, 60_000);
+
+  it("3 · the EMI was already paid: recording it deducts nothing and adds no Money Out; the postponement is unaffected", async () => {
+    const w = await world();
+    await postponeTo(w, w.bId, 1, FEB_25, FEB_12);
+    const cash0 = await cash(w);
+    await payEarlier(w, 3_000, new Date(2026, 1, 8), "pp-earlier-1");
+    await payEarlier(w, 3_000, new Date(2026, 1, 8), "pp-earlier-1"); // retry never duplicates
+    expect(await cash(w)).toBe(cash0); // no balance change at all
+    expect(await seqPaid(w, 1)).toBe(3_000);
+    expect(await loanCashOut(w)).toBe(0); // no counted money-out in any module
+    expect(await seqPaid(w, 2)).toBe(0); // and nothing spilled onto #2
+    expect((await position(w, w.bId, FEB_12)).net).toBe(1_000);
+    expect(await viewOf(w, w.bId, 1, FEB_12)).toMatchObject({ status: "postponed" });
+  }, 60_000);
+
+  it("4 · a future EMI: the person can be given time without marking the future bank EMI paid or moving its date", async () => {
+    const w = await world();
+    const before = await snap(w, FEB_12);
+    const apr20 = new Date(2026, 3, 20);
+    await postponeTo(w, w.bId, 3, apr20, FEB_12); // #3 falls due 10 Apr
+    expect((await storedDeferral(w, w.bId, 3))!.expected!.date).toEqual(apr20);
+    expect(await snap(w, FEB_12)).toEqual(before);
+    expect(await seqPaid(w, 3)).toBe(0);
+    expect(await viewOf(w, w.bId, 3, FEB_12)).toMatchObject({ status: "postponed" });
+    // Not due yet, so nothing is owed now — the share only appears once #3 falls due, then is already postponed.
+    expect((await position(w, w.bId, FEB_12)).net).toBe(1_000); // only #1 is due by Feb 12
+  }, 60_000);
+
+  it("5–6 · edit the date, then cancel: each step is one revision; cancelling restores the original timing", async () => {
+    const w = await world();
+    await postponeTo(w, w.bId, 1, FEB_25, FEB_12);
+    const edited = await postponeTo(w, w.bId, 1, FEB_28, FEB_12, 1);
+    expect(edited.outcome).toBe("written");
+    let stored = (await storedDeferral(w, w.bId, 1))!;
+    expect([stored.revision, stored.expected!.date]).toEqual([2, FEB_28]);
+    // A stale second tab (still at revision 1) is refused, never overwrites.
+    await expect(postponeTo(w, w.bId, 1, new Date(2026, 2, 5), FEB_12, 1, "stale-tab")).rejects.toThrow(/just changed elsewhere/);
+    expect((await storedDeferral(w, w.bId, 1))!.expected!.date).toEqual(FEB_28);
+    // The same edit retried (lost response) is a no-op.
+    expect((await postponeTo(w, w.bId, 1, FEB_28, FEB_12, 1)).outcome).toBe("noop");
+
+    await undoPostpone(w, w.bId, 1, FEB_12, 2); // cancel one step → back to the 25th
+    expect((await storedDeferral(w, w.bId, 1))!.expected!.date).toEqual(FEB_25);
+    await undoPostpone(w, w.bId, 1, FEB_12, 3); // cancel again → no postponement
+    stored = (await storedDeferral(w, w.bId, 1))!;
+    expect([stored.state, stored.expected]).toEqual(["cleared", null]);
+    expect(await viewOf(w, w.bId, 1, FEB_12)).toBeNull();
+    // Still owed, in full, on its own date — cancelling never loses or invents money.
+    expect((await position(w, w.bId, FEB_12)).net).toBe(1_000);
+  }, 60_000);
+
+  it("7–8 · partial then full reimbursement after postponing: Money In once each, status resolves only at zero", async () => {
+    const w = await world();
+    await postponeTo(w, w.bId, 1, FEB_25, FEB_12);
+    const cash0 = await cash(w);
+
+    await personPays(w, w.bId, 400, FEB_12);
+    expect(await cash(w)).toBe(cash0 + 400);
+    expect(await viewOf(w, w.bId, 1, FEB_12)).toMatchObject({ status: "postponed", remaining: 600 }); // still postponed, live remaining
+    expect((await position(w, w.bId, FEB_12)).net).toBe(600);
+    expect((await liveInstallments(w))[0].amountPaid).toBe(0); // the bank EMI is not touched by the person paying me
+    expect(await monthCycleIncome(w)).toBe(0); // a reimbursement is not income
+
+    const rest = await personPays(w, w.bId, 600, FEB_12);
+    expect(await cash(w)).toBe(cash0 + 1_000);
+    expect(await viewOf(w, w.bId, 1, FEB_12)).toMatchObject({ status: "resolved", remaining: 0 }); // nothing left to collect
+    expect((await position(w, w.bId, FEB_12)).net).toBe(0);
+    expect((await liveInstallments(w))[0].amountPaid).toBe(0);
+
+    // 9 · deleting (reverting) the linked reimbursement reopens the share AND its postponement, and returns the cash.
+    await w.personPayments(w.bId).revertPayment((await w.people.getByKey(w.bId))!, rest.paymentId);
+    expect(await cash(w)).toBe(cash0 + 400);
+    expect(await viewOf(w, w.bId, 1, FEB_12)).toMatchObject({ status: "postponed", remaining: 600 });
+    expect((await position(w, w.bId, FEB_12)).net).toBe(600);
+  }, 60_000);
+
+  it("10 · across modules: lender paid + person postponed + person part-paid reconcile (Accounts, People, Net Worth, Debt, Month Cycle)", async () => {
+    const w = await world();
+    await postponeTo(w, w.bId, 1, FEB_25, FEB_12);
+    await payLenderAnyway(w, 3_000, FEB_12, "pp-x-1");
+    await personPays(w, w.bId, 400, FEB_12);
+    const s = await snap(w, FEB_12);
+    // cash: 5,000 + 30,000 loan − 3,000 lender + 400 reimbursement
+    expect(s.cash).toBe(32_400);
+    expect(s.outstanding).toBe(27_000); // principal after the lender EMI
+    expect(s.bNet).toBe(600);
+    expect(s.income).toBe(0);
+    // Net worth = cash − outstanding liability + what people owe me (A ₹1,000 + B ₹600).
+    expect(s.netWorth).toBe(32_400 - 27_000 + 1_000 + 600);
+    expect(await viewOf(w, w.bId, 1, FEB_12)).toMatchObject({ status: "postponed", remaining: 600 });
+  }, 60_000);
+});
+
+// ═══════════ 24. Link an "already paid earlier" installment to the user's EXISTING expense ═══════════
+
+describe("24 — linking an already-paid EMI to an existing account transaction", () => {
+  const FEB_8 = new Date(2026, 1, 8);
+
+  /** The user's own expense — it already moved the account once, long before the link. */
+  async function ownExpense(w: World, amount: number, patch: Record<string, unknown> = {}) {
+    return w.transactions.createTransaction({ type: "expense", amount, dateTime: FEB_8, accountId: w.accountId, categoryId: "cat-emi", description: "EMI paid by me", ...patch });
+  }
+  /** What the Loan screen sends for "already paid earlier" + a chosen transaction. */
+  async function linkTo(w: World, t: { id: string; amount: number; dateTime: Date; accountId: string }, key: string, over: Record<string, unknown> = {}) {
+    const insts = await liveInstallments(w);
+    return w.lender.record({
+      loan: await loanNow(w),
+      scheduleInstallments: insts,
+      accountId: t.accountId,
+      amount: t.amount,
+      date: t.dateTime,
+      idempotencyKey: key,
+      includeUpcomingInstallments: true,
+      peopleGateAcknowledgement: RECORDED_EARLIER_PEOPLE_ACK,
+      recordedEarlier: { dateKnown: true },
+      expectedFirstInstallmentId: insts.find((i) => i.amountPaid < i.amountDue)!.id,
+      linkedTransactionId: t.id,
+      ...over,
+    });
+  }
+  const liveTx = async (w: World, id: string) => (await getDocs(w.transactionsRef)).docs.map((d) => d.data() as Transaction).find((t) => t.id === id)!;
+  /** Every counted (non-excluded, live) expense — what Dashboard / Month Cycle / My Money add up. */
+  async function countedExpenses(w: World) {
+    return (await getDocs(w.transactionsRef)).docs.map((d) => d.data() as Transaction).filter((t) => t.deletedAt == null && t.type === "expense" && !t.excludeFromCalculations);
+  }
+  async function figures(w: World, now: Date) {
+    const nw = await netWorth(w, now);
+    return {
+      cash: await cash(w),
+      outstanding: await outstanding(w),
+      paid: (await liveInstallments(w)).map((i) => i.amountPaid),
+      countedExpense: (await countedExpenses(w)).reduce((t, x) => t + x.amount, 0),
+      netWorth: nw.netWorth,
+      income: await monthCycleIncome(w),
+      aNet: (await position(w, w.aId, now)).net,
+    };
+  }
+
+  it("links the user's expense to #1: the installment is paid, the account is NOT touched again, the expense is counted once", async () => {
+    const w = await world();
+    const t = await ownExpense(w, 3_000);
+    const cashAfterExpense = await cash(w); // 5,000 + 30,000 loan − 3,000
+    expect(cashAfterExpense).toBe(32_000);
+    const before = await figures(w, FEB_15);
+
+    const r = await linkTo(w, t, "link-1");
+    expect(r.alreadyRecorded).toBe(false);
+
+    expect(await cash(w)).toBe(cashAfterExpense); // no second deduction
+    const insts = await liveInstallments(w);
+    expect(insts[0].amountPaid).toBe(3_000);
+    expect(insts[0].dueDate).toEqual(FIRST_DUE);
+
+    // The reference and the back-marker, both stored.
+    const payment = (await paymentDocs(w)).find((p) => p.installmentId === insts[0].id)!;
+    expect(payment.linkedTransactionId).toBe(t.id);
+    expect(payment.recordedEarlier).toEqual({ dateKnown: true });
+    const stored = await liveTx(w, t.id);
+    expect(stored.earlierPaymentLink).toMatchObject({ ownerType: "loan", ownerId: w.loanId, installmentId: insts[0].id, paymentId: payment.id });
+    expect([stored.amount, stored.deletedAt, stored.loanId]).toEqual([3_000, null, null]); // still the user's plain expense
+
+    // One counted expense of ₹3,000 across the whole book (the loan payment's own transaction is excluded).
+    expect((await countedExpenses(w)).map((x) => x.amount)).toEqual([3_000]);
+    expect(await loanCashOut(w)).toBe(0);
+
+    // Only the loan's own figures moved: outstanding −3,000, installment paid; cash, expense, income and People unchanged.
+    const after = await figures(w, FEB_15);
+    expect(after).toEqual({ ...before, outstanding: before.outstanding - 3_000, paid: [3_000, 0, 0, 0, 0, 0, 0, 0, 0, 0], netWorth: before.netWorth + 3_000 });
+  }, 60_000);
+
+  it("is idempotent, and one transaction can never be linked twice", async () => {
+    const w = await world();
+    const t = await ownExpense(w, 3_000);
+    await linkTo(w, t, "link-idem");
+    expect((await linkTo(w, t, "link-idem")).alreadyRecorded).toBe(true); // double click / retry
+    expect((await liveInstallments(w))[0].amountPaid).toBe(3_000);
+    // The same transaction used again (a different action) for installment #2 → refused, nothing written.
+    await expect(linkTo(w, await liveTx(w, t.id), "link-twice")).rejects.toThrow(/already linked/);
+    expect((await liveInstallments(w))[1].amountPaid).toBe(0);
+    expect((await countedExpenses(w)).length).toBe(1);
+  }, 60_000);
+
+  it("refuses anything that is not a real, unlinked, matching expense — nothing written", async () => {
+    const w = await world();
+    const good = await ownExpense(w, 3_000);
+    const income = await w.transactions.createTransaction({ type: "income", amount: 3_000, dateTime: FEB_8, accountId: w.accountId, categoryId: "cat-in" });
+    const gone = await ownExpense(w, 3_000);
+    await w.transactions.softDeleteTransaction(gone);
+    const loanPaid = await payLenderAnyway(w, 3_000, FEB_12, "real-lender-pay"); // a normal lender payment: its own txn is loan-owned
+    const other = await w.accounts.createAccount({ name: "Other", type: "bank", openingBalance: 9_000, colorValue: 0 });
+    const future = await ownExpense(w, 3_000, { dateTime: new Date(2099, 0, 1) });
+    const snapshot = JSON.stringify([await cash(w), (await liveInstallments(w)).map((i) => i.amountPaid)]);
+
+    const wrong = async (t: Transaction, over: Record<string, unknown> = {}) => linkTo(w, t, `bad-${Math.random()}`, over);
+    await expect(wrong(income)).rejects.toThrow(/Only an expense/);
+    await expect(wrong(gone)).rejects.toThrow(/deleted/);
+    await expect(wrong((await getDocs(w.transactionsRef)).docs.map((d) => d.data() as Transaction).find((x) => x.id === loanPaid.transactionId)!)).rejects.toThrow(/already belongs to a Loan/);
+    await expect(wrong(future)).rejects.toThrow(/future/);
+    await expect(wrong(good, { amount: 2_500 })).rejects.toThrow(/exactly the transaction's amount/);
+    await expect(wrong(good, { date: new Date(2026, 1, 9) })).rejects.toThrow(/exactly the transaction's date/);
+    await expect(wrong(good, { accountId: other.id })).rejects.toThrow(/transaction's account/);
+    await expect(wrong({ ...good, id: "missing-id" } as Transaction)).rejects.toBeInstanceOf(LinkEarlierPaymentError);
+    // Linking needs the "already paid earlier" mode.
+    await expect(wrong(good, { recordedEarlier: null })).rejects.toThrow(/already paid earlier/);
+
+    expect(JSON.stringify([await cash(w), (await liveInstallments(w)).map((i) => i.amountPaid)])).toBe(snapshot);
+    expect((await liveTx(w, good.id)).earlierPaymentLink ?? null).toBeNull();
+  }, 90_000);
+
+  it("a smaller transaction links as a PARTIAL payment (₹1,000 of ₹3,000); one larger than the installment is refused", async () => {
+    const w = await world();
+    const small = await ownExpense(w, 1_000);
+    await linkTo(w, small, "link-partial");
+    expect((await liveInstallments(w))[0].amountPaid).toBe(1_000);
+    const big = await ownExpense(w, 5_000, { description: "too big" });
+    await expect(linkTo(w, big, "link-big")).rejects.toThrow();
+    expect((await liveInstallments(w))[0].amountPaid).toBe(1_000);
+    expect((await liveTx(w, big.id)).earlierPaymentLink ?? null).toBeNull();
+  }, 60_000);
+
+  it("while linked, the transaction cannot be edited or deleted on its own, and the payment cannot be edited", async () => {
+    const w = await world();
+    const t = await ownExpense(w, 3_000);
+    const r = await linkTo(w, t, "link-guard");
+    const linked = await liveTx(w, t.id);
+    const before = JSON.stringify(await figures(w, FEB_15));
+
+    await expect(w.transactions.editTransaction(linked, { amount: 4_000 })).rejects.toBeInstanceOf(OwnedTransactionEditError);
+    await expect(w.transactions.softDeleteTransaction(linked)).rejects.toBeInstanceOf(OwnedTransactionDeleteError);
+    const insts = await liveInstallments(w);
+    await expect(
+      w.lender.editPayment({
+        loan: await loanNow(w), scheduleInstallments: insts, original: { transactionId: r.transactionId, paymentIds: r.paymentIds, installmentIds: r.installmentIds },
+        accountId: w.accountId, amount: 2_000, date: FEB_8, idempotencyKey: "edit-linked",
+      }),
+    ).rejects.toBeInstanceOf(LinkedPaymentEditError);
+
+    expect(JSON.stringify(await figures(w, FEB_15))).toBe(before);
+    expect((await liveTx(w, t.id)).amount).toBe(3_000);
+  }, 60_000);
+
+  it("marking it unpaid UNLINKS: the installment reopens, your transaction and the account are untouched, and it can be linked again", async () => {
+    const w = await world();
+    const t = await ownExpense(w, 3_000);
+    const cashAfterExpense = await cash(w);
+    const unpaidFigures = JSON.stringify(await figures(w, FEB_15));
+    const r = await linkTo(w, t, "link-undo");
+
+    await revertLender(w, r, "link-undo-rev");
+    expect((await liveInstallments(w))[0].amountPaid).toBe(0);
+    expect(await cash(w)).toBe(cashAfterExpense); // the user's expense is still the only deduction
+    const stored = await liveTx(w, t.id);
+    expect([stored.deletedAt, stored.amount, stored.earlierPaymentLink ?? null]).toEqual([null, 3_000, null]); // intact, unlinked
+    expect(JSON.stringify(await figures(w, FEB_15))).toBe(unpaidFigures); // everything back to "before the link"
+    // A second reversal (retry) is a no-op.
+    await revertLender(w, r, "link-undo-rev-2");
+    expect(await cash(w)).toBe(cashAfterExpense);
+
+    // Now it is free again — and the editing/deleting guards are released.
+    await linkTo(w, stored, "link-again");
+    expect((await liveTx(w, t.id)).earlierPaymentLink).toMatchObject({ ownerType: "loan" });
+    expect((await liveInstallments(w))[0].amountPaid).toBe(3_000);
+  }, 60_000);
+
+  it("a write that BYPASSES the repositories (stale tab / older client) cannot change a linked transaction's money, move it or delete it", async () => {
+    const w = await world();
+    const t = await ownExpense(w, 3_000);
+    await linkTo(w, t, "link-bypass");
+    const before = JSON.stringify(await figures(w, FEB_15));
+    const ref = doc(w.db, "users", UID, "transactions", t.id);
+
+    await expect(updateDoc(ref, { amount: 9_999 })).rejects.toThrow(/PERMISSION_DENIED|permission/i);
+    await expect(updateDoc(ref, { accountId: "some-other-account" })).rejects.toThrow(/PERMISSION_DENIED|permission/i);
+    await expect(updateDoc(ref, { deletedAt: new Date() })).rejects.toThrow(/PERMISSION_DENIED|permission/i);
+    await expect(deleteDoc(ref)).rejects.toThrow(/PERMISSION_DENIED|permission/i);
+    // Unlinking without reversing the payment first is refused too — otherwise the money could be changed afterwards.
+    await expect(updateDoc(ref, { earlierPaymentLink: deleteField() })).rejects.toThrow(/PERMISSION_DENIED|permission/i);
+    // A descriptive edit is fine.
+    await updateDoc(ref, { description: "EMI paid by me (Feb)" });
+
+    expect(JSON.stringify(await figures(w, FEB_15))).toBe(before);
+    expect((await liveTx(w, t.id)).amount).toBe(3_000);
+  }, 60_000);
+
+  it("permanently deleting the Loan RELEASES the linked expense: it stays (counted once, account untouched) and is ordinary again", async () => {
+    const w = await world();
+    const t = await ownExpense(w, 3_000);
+    await linkTo(w, t, "link-then-delete-loan");
+    expect((await liveTx(w, t.id)).earlierPaymentLink).toMatchObject({ ownerType: "loan", ownerId: w.loanId });
+    const cashBefore = await cash(w);
+
+    const result = await permanentlyDeleteAgreement(w.db as never, UID, "loan", w.loanId);
+    expect(result.resumed).toBe(false);
+
+    // The expense is still there, unchanged, no longer pointing at a Loan that no longer exists...
+    const stored = await liveTx(w, t.id);
+    expect([stored.deletedAt, stored.amount, stored.earlierPaymentLink ?? null]).toEqual([null, 3_000, null]);
+    // ...so it is editable/deletable like any ordinary expense (it used to stay locked to the deleted Loan for good).
+    await w.transactions.editTransaction(stored, { amount: 3_500 });
+    expect((await liveTx(w, t.id)).amount).toBe(3_500);
+    // The loan's own money (disbursement) was reversed by the deletion; the user's expense was not touched by it.
+    expect(cashBefore - (await cash(w))).toBe(30_000 /* loan principal reversed */ + 500 /* then the user's own +500 edit */);
+  }, 90_000);
+
+  it("every module reads the same figures as an unlinked 'already paid earlier' of the same expense (no double count anywhere)", async () => {
+    const w1 = await world();
+    const t1 = await ownExpense(w1, 3_000);
+    await linkTo(w1, t1, "cmp-linked");
+    const linked = await figures(w1, FEB_15);
+    await testEnv.clearFirestore();
+
+    const w2 = await world();
+    await ownExpense(w2, 3_000);
+    await payEarlier(w2, 3_000, FEB_8, "cmp-plain");
+    const plain = await figures(w2, FEB_15);
+
+    expect(linked).toEqual(plain);
+    expect(linked.countedExpense).toBe(3_000); // once
+  }, 90_000);
+});
+
+// ═══════════ 25. The whole flow, every module read after every step ═══════════
+
+describe("25 — postpone → lender paid from my account → reimbursements → edit → cancel → reverse: every module, every step", () => {
+  const ALL = { start: new Date(1970, 0, 1), end: new Date(2200, 0, 1) };
+  const FEB_25 = new Date(2026, 1, 25);
+  const FEB_28 = new Date(2026, 1, 28);
+
+  async function postpone(w: World, personId: string, targetDate: Date, revision: number) {
+    const inst = (await liveInstallments(w))[0];
+    return new PaymentDeferralRepository(w.db, UID).apply({
+      action: "postpone", requestId: `flow-${personId}-${revision}-${targetDate.getTime()}`, expectedRevision: revision, personId, obligationKey: `loan-inst:${inst.id}`, obligationTitle: "Shared loan",
+      now: FEB_15, startDay: 1, obligationDate: inst.dueDate, remaining: 1_000, target: cycleContaining(targetDate, 1), targetDate, reason: "unableNow", note: null, reminder: null,
+    });
+  }
+  async function cancelPostponement(w: World, personId: string, revision: number) {
+    const inst = (await liveInstallments(w))[0];
+    return new PaymentDeferralRepository(w.db, UID).apply({ action: "undo", requestId: `flow-undo-${revision}`, expectedRevision: revision, personId, obligationKey: `loan-inst:${inst.id}`, obligationTitle: "Shared loan", now: FEB_15, startDay: 1 });
+  }
+  async function deferral(w: World, personId: string) {
+    const inst = (await liveInstallments(w))[0];
+    const snap = await getDocs(collection(w.db, "users", UID, "people", personId, "paymentDeferrals"));
+    const doc_ = snap.docs.find((x) => x.data().obligationKey === `loan-inst:${inst.id}`);
+    if (!doc_) return null;
+    const d = paymentDeferralFromData(doc_.id, doc_.data());
+    const st = await statement(w, personId, FEB_15, ALL);
+    return deferralView(d, st.rows.find((r) => r.key === d.obligationKey)?.remainingNow ?? 0, 1, FEB_15);
+  }
+  /** Accounts · Loan EMI · People · Net Worth (Dashboard) · Debt Planner · My Spend (My Money) · Month Cycle — from live documents. */
+  async function modules(w: World) {
+    const nw = await netWorth(w, FEB_15);
+    const planner = (await plannerOwnership(w, FEB_15))!;
+    const txs = (await getDocs(w.transactionsRef)).docs.map((d) => d.data() as Transaction);
+    const loan = await loanNow(w);
+    const ctx = mySpendContextFromRecords({ transactions: txs, expenses: [], loans: [loan], emis: [] });
+    return {
+      accountCash: await cash(w),
+      loanOutstanding: await outstanding(w),
+      installment1Paid: (await liveInstallments(w))[0].amountPaid,
+      installment1Due: (await liveInstallments(w))[0].dueDate.getTime(),
+      aOwes: (await position(w, w.aId, FEB_15)).net,
+      bOwes: (await position(w, w.bId, FEB_15)).net,
+      peopleReceivable: nw.peopleReceivable,
+      netWorth: nw.netWorth,
+      plannerOutstanding: planner.outstanding,
+      plannerMine: planner.ownership.mine,
+      mySpend: txs.filter((t) => t.deletedAt == null).reduce((x, t) => x + classifyForMySpend(t, ctx).myAmount, 0),
+      monthCycleIncome: await monthCycleIncome(w),
+    };
+  }
+  const E = (patch: Partial<Awaited<ReturnType<typeof modules>>>) => ({
+    accountCash: 35_000, loanOutstanding: 30_000, installment1Paid: 0, installment1Due: FIRST_DUE.getTime(), aOwes: 1_000, bOwes: 1_000, peopleReceivable: 2_000, netWorth: 7_000,
+    plannerOutstanding: 30_000, plannerMine: 10_000, mySpend: 0, monthCycleIncome: 0, ...patch,
+  });
+
+  it("each step moves exactly the figures it should — and the bank's date and paid state move only with a real lender payment", async () => {
+    const w = await world();
+    expect(await modules(w)).toEqual(E({}));
+
+    // 1 · Postpone B's repayment to the 25th (the bank EMI was due the 10th): metadata only — nothing else moves.
+    await postpone(w, w.bId, FEB_25, 0);
+    expect((await deferral(w, w.bId))!.date).toEqual(FEB_25);
+    expect(await modules(w)).toEqual(E({}));
+
+    // 2 · I pay the bank from my own account: −₹3,000 cash, loan −₹3,000, installment paid; People untouched; net worth unchanged.
+    const lender = await payLenderAnyway(w, 3_000, FEB_12, "flow-lender");
+    expect(await modules(w)).toEqual(E({ accountCash: 32_000, loanOutstanding: 27_000, installment1Paid: 3_000, plannerOutstanding: 27_000, plannerMine: 9_000 }));
+    expect((await deferral(w, w.bId))!.status).toBe("postponed");
+
+    // 3 · A reimburses ₹1,000 (Money In — not income, not spend).
+    const aPay = await personPays(w, w.aId, 1_000, FEB_12);
+    expect(await modules(w)).toEqual(E({ accountCash: 33_000, loanOutstanding: 27_000, installment1Paid: 3_000, plannerOutstanding: 27_000, plannerMine: 9_000, aOwes: 0, peopleReceivable: 1_000 }));
+
+    // 4 · B (postponed) pays ₹400 early: still postponed, ₹600 left.
+    const bPay = await personPays(w, w.bId, 400, FEB_12);
+    expect(await modules(w)).toEqual(E({ accountCash: 33_400, loanOutstanding: 27_000, installment1Paid: 3_000, plannerOutstanding: 27_000, plannerMine: 9_000, aOwes: 0, bOwes: 600, peopleReceivable: 600 }));
+    expect(await deferral(w, w.bId)).toMatchObject({ status: "postponed", remaining: 600 });
+
+    // 5 · Edit the date: timing only.
+    const before5 = await modules(w);
+    await postpone(w, w.bId, FEB_28, 1);
+    expect((await deferral(w, w.bId))!.date).toEqual(FEB_28);
+    expect(await modules(w)).toEqual(before5);
+
+    // 6 · Cancel the postponement (twice: back to the 25th, then none): timing only; B still owes ₹600.
+    await cancelPostponement(w, w.bId, 2);
+    expect((await deferral(w, w.bId))!.date).toEqual(FEB_25);
+    await cancelPostponement(w, w.bId, 3);
+    expect(await deferral(w, w.bId)).toBeNull();
+    expect(await modules(w)).toEqual(before5);
+
+    // 7 · Delete B's linked ₹400 payment: cash back, B owes the full ₹1,000 again, bank side untouched.
+    await w.personPayments(w.bId).revertPayment((await w.people.getByKey(w.bId))!, bPay.paymentId);
+    expect(await modules(w)).toEqual(E({ accountCash: 33_000, loanOutstanding: 27_000, installment1Paid: 3_000, plannerOutstanding: 27_000, plannerMine: 9_000, aOwes: 0, bOwes: 1_000, peopleReceivable: 1_000 }));
+
+    // 8 · Reverse my payment to the bank: the account and the loan come back; People is independent of it.
+    await revertLender(w, lender, "flow-lender-rev");
+    expect(await modules(w)).toEqual(E({ accountCash: 36_000, aOwes: 0, bOwes: 1_000, peopleReceivable: 1_000 }));
+
+    // 9 · A's payment reverted too, then B pays in full: every figure follows.
+    await w.personPayments(w.aId).revertPayment((await w.people.getByKey(w.aId))!, aPay.paymentId);
+    expect(await modules(w)).toEqual(E({ accountCash: 35_000 }));
+    await personPays(w, w.bId, 1_000, FEB_12);
+    expect(await modules(w)).toEqual(E({ accountCash: 36_000, bOwes: 0, peopleReceivable: 1_000 }));
+  }, 120_000);
 });

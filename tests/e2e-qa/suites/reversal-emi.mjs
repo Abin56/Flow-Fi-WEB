@@ -43,6 +43,7 @@ async function payOnce(page, { double = false } = {}) {
   await page.waitForTimeout(1500);
 }
 async function openDetails(page, seq = 1) {
+  await h.showSchedule(page);
   await page.getByRole("button", { name: new RegExp(`Installment ${seq}.*(edit or mark unpaid|view payment)`) }).click();
   const d = page.getByRole("dialog", { name: /Recorded payment/ });
   await d.waitFor();
@@ -268,7 +269,7 @@ scenario("rev-emi-label-funding", "EMI: payment details name the funding — acc
   // Account-neutral historical payment of installment #2.
   const dlg = await openPay(page);
   // Record past payments → the installment the dialog was on (#2, not due yet — paid ahead) → the single past-payment form.
-  await dlg.getByRole("button", { name: /Record past payments/ }).click();
+  await dlg.getByRole("radio", { name: /Past payment/ }).click(); // the sheet's Pay now / Past payment / Pay several switch
   await page.getByRole("button", { name: "Continue with 1 EMI" }).click();
   const past = page.getByRole("dialog", { name: /Record past payment/ });
   await past.getByRole("button", { name: /^Save past payment/ }).waitFor();
@@ -289,15 +290,20 @@ scenario("rev-emi-two-tabs-unpaid", "EMI: two tabs mark the same payment unpaid 
   await payOnce(page);
   const afterPay = await f.bal("QA Bank");
   chk("precondition: paid (−₹4,000)", f.close2(base - afterPay, 4000));
+  // Tab B is loaded FIRST. Loading the app in a second tab remounts the first tab's open popup (see finding EMI-TAB-1 below), so
+  // both confirmations are opened once both pages are up — the case under test is two confirmations racing.
+  const tabB = await ctx.newPage();
+  tabB.setDefaultTimeout(30000);
+  await tabB.goto(`${BASE_URL}/loans-installments`, { waitUntil: "domcontentloaded" });
+  await tabB.waitForTimeout(2500);
+  await page.bringToFront();
   const detA = await openDetails(page);
   await detA.getByRole("button", { name: "Mark as unpaid" }).click();
   const confA = page.getByRole("dialog").last();
   await confA.getByText("This installment goes back to unpaid").waitFor();
 
-  const tabB = await ctx.newPage();
-  tabB.setDefaultTimeout(30000);
-  await tabB.goto(`${BASE_URL}/loans-installments`, { waitUntil: "domcontentloaded" });
   await tabB.getByText(EMI).first().click();
+  await h.showSchedule(tabB);
   await tabB.getByRole("button", { name: /Installment 1.*(edit or mark unpaid|view payment)/ }).click();
   const detB = tabB.getByRole("dialog", { name: /Recorded payment/ });
   await detB.waitFor();
@@ -306,6 +312,10 @@ scenario("rev-emi-two-tabs-unpaid", "EMI: two tabs mark the same payment unpaid 
   await confB.getByText("This installment goes back to unpaid").waitFor();
 
   await page.bringToFront();
+  await page.waitForTimeout(1500);
+  // FINDING EMI-TAB-1: opening the app in ANOTHER tab used to close this tab's open confirmation (the whole details popup
+  // remounted on its first tab). Expected: it stays open. Nothing is written either way, so it fails safe.
+  chk.finding("EMI-TAB-1", "tab A's open 'Mark as unpaid' confirmation is still open after another tab opened the app", (await confA.getByText("This installment goes back to unpaid").count()) > 0, "closed by the second tab's load");
   await confA.getByRole("button", { name: "Mark as unpaid" }).click();
   await page.waitForTimeout(3500);
   const afterA = await f.bal("QA Bank");
@@ -333,11 +343,11 @@ scenario("rev-emi-shared-people-independent", "Shared EMI: paying the lender (ow
   await h.shot(page, "rev-emi-shared-gate");
   chk("the lender payment asks how to treat the people's open shares (gate shown)", /own money|collect|Priya|Ravi/i.test(text), text.slice(text.indexOf("TO PAY"), text.indexOf("TO PAY") + 420));
   // Explicit choice: pay from my own money (the gate's acknowledgement), then choose the account.
-  await dlg.getByText(/Pay the lender from my own money/i).first().click();
+  // Current flow: "Has QA Priya and QA Ravi already paid you their share?" must be answered; "No, not yet" keeps their
+  // shares open in People and lets the lender be paid from my own money (the write layer still gets the acknowledgement).
+  await dlg.getByRole("radio", { name: /No, not yet/ }).click();
   await page.waitForTimeout(600);
-  const reason = dlg.getByRole("radio").first();
-  if (await reason.count()) await reason.click().catch(() => {});
-  await chooseBank(page, dlg).catch(() => {});
+  await chooseBank(page, dlg);
   await h.shot(page, "rev-emi-shared-own-money");
   await page.evaluate(() => window.__reset());
   const payBtn = dlg.getByRole("button", { name: /^Pay ₹3,000/ });
@@ -357,7 +367,7 @@ scenario("rev-emi-shared-people-independent", "Shared EMI: paying the lender (ow
   await page.waitForTimeout(2000);
   const priya = (await page.locator("body").innerText()).split("\n").join(" ");
   await h.shot(page, "rev-emi-shared-priya");
-  chk("People: Priya still owes ₹2,000 (EMI share ₹1,000 + dinner ₹1,000) — unchanged by the lender payment", /CURRENT PENDING\s*₹2,000/.test(priya), (priya.match(/CURRENT PENDING[^A-Z]{0,20}/) ?? ["?"])[0]);
+  chk("People: Priya still owes ₹2,000 (EMI share ₹1,000 + dinner ₹1,000) — unchanged by the lender payment", /YOU NEED TO RECEIVE FROM QA\s*₹2,000/i.test(priya), (priya.match(/YOU NEED TO RECEIVE FROM[^A-Z]{0,30}/i) ?? ["?"])[0]);
 
   // Receiving from Priya does not touch the lender schedule.
   const bankBeforeReceipt = await f.bal("QA Bank");

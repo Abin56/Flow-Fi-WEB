@@ -27,6 +27,7 @@ async function payFromBank(page, dlg, label) {
   await page.waitForFunction(() => !/recorded successfully/i.test(document.body.innerText), null, { timeout: 20000 });
 }
 async function openDetails(page, seq) {
+  await h.showSchedule(page);
   await page.getByRole("button", { name: new RegExp(`Installment ${seq}.*edit or mark unpaid`) }).click();
   await page.getByRole("dialog", { name: /Recorded payment/ }).waitFor();
   return page.getByRole("dialog", { name: /Recorded payment/ });

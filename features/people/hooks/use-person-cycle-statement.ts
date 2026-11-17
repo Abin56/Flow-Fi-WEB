@@ -22,6 +22,9 @@ import {
   type PersonCycleStatement,
   type StatementCycle,
 } from "@/lib/engines/person-cycle-statement";
+import { hasOwnershipShares } from "@/lib/engines/debt-ownership";
+import { personEmiObligations } from "@/lib/engines/person-emi-obligations";
+import { personLinkedEmis, type PersonLinkedEmi } from "@/lib/engines/person-linked-emis";
 import type { Emi } from "@/lib/models/emi";
 import type { Loan } from "@/lib/models/loan";
 import type { Installment } from "@/lib/models/payment-schedule";
@@ -54,6 +57,8 @@ export function usePersonCycleStatement(
   advanceApplications: AdvanceApplication[];
   person: Person | null;
   linkedEmis: LinkedEmiSource[];
+  /** One summary per Loan/EMI this person carries a share of (opted-in beneficiary or a shared split). */
+  linkedEmiSummaries: PersonLinkedEmi[];
   setRepays: (source: LinkedEmiSource, repays: boolean) => Promise<void>;
   isLoading: boolean;
 } {
@@ -112,6 +117,26 @@ export function usePersonCycleStatement(
     [baseInput, cycleStartDay],
   );
 
+  // Per-agreement summary of what this person owes through shared / linked EMIs. Reads the same obligation
+  // primitive and the same statement `remainingNow` as the ledger, so it can never disagree with it.
+  const linkedEmiSummaries = useMemo<PersonLinkedEmi[]>(() => {
+    if (person == null || allTimeStatement == null) return [];
+    const obligations = personEmiObligations({
+      personId: person.id,
+      emis: emis as Emi[],
+      loans: loans as Loan[],
+      installments: [...(emiInstallments as Installment[]), ...(loanInstallments as Installment[])],
+    });
+    const remainingByKey = new Map<string, number>();
+    for (const row of allTimeStatement.rows) {
+      if (row.kind === "obligation" && row.remainingNow != null) remainingByKey.set(row.key, row.remainingNow);
+    }
+    const shared = new Set<string>();
+    for (const e of emis as Emi[]) if (hasOwnershipShares(e) && e.deletedAt == null) shared.add(`emi:${e.id}`);
+    for (const l of loans as Loan[]) if (hasOwnershipShares(l) && l.deletedAt == null) shared.add(`loan:${l.id}`);
+    return personLinkedEmis({ obligations, remainingByKey, sharedSourceIds: shared });
+  }, [person, allTimeStatement, emis, loans, emiInstallments, loanInstallments]);
+
   const setRepays = async (source: LinkedEmiSource, repays: boolean) => {
     if (!uid) return;
     // `hasPayments: true` only locks principal edits, which this call never makes.
@@ -131,6 +156,7 @@ export function usePersonCycleStatement(
     advanceApplications,
     person,
     linkedEmis,
+    linkedEmiSummaries,
     setRepays,
     isLoading: peopleLoading || entriesLoading || applicationsLoading,
   };

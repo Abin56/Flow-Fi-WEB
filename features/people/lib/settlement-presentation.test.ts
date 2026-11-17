@@ -7,6 +7,7 @@ import {
   statementTypeLabel,
   matchesStatusFilter,
   matchesTypeFilter,
+  rowMatchesTypeFilter,
   paidSoFar,
   relationLine,
   settlementKind,
@@ -282,6 +283,15 @@ describe("type filter", () => {
     expect(matchesTypeFilter("moneyGiven", "manual")).toBe(true);
     expect(matchesTypeFilter("split", "assigned")).toBe(false);
     expect(matchesTypeFilter("paymentReceived", "all")).toBe(true);
+  });
+
+  it("puts a payment that settles an EMI / Loan installment share under the EMI filter, and no other payment", () => {
+    const payment = (settlesKey: string | undefined) => ({ statementRow: { settlesKey } }) as unknown as Parameters<typeof rowMatchesTypeFilter>[0];
+    expect(rowMatchesTypeFilter(payment("emi-inst:i1"), "paymentReceived", "emi")).toBe(true);
+    expect(rowMatchesTypeFilter(payment("loan-inst:i1"), "paymentReceived", "emi")).toBe(true);
+    expect(rowMatchesTypeFilter(payment("ledger:x"), "paymentReceived", "emi")).toBe(false);
+    expect(rowMatchesTypeFilter(payment(undefined), "paymentReceived", "emi")).toBe(false);
+    expect(rowMatchesTypeFilter(payment("emi-inst:i1"), "paymentReceived", "payments")).toBe(true);
   });
 });
 

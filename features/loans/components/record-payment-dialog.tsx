@@ -39,6 +39,9 @@ import { PeopleShareConfirm, peopleShareAcknowledgement, type PeopleShareAnswer 
 import { useLinkedPeopleReadiness } from "@/features/people/hooks/use-linked-people-readiness";
 import { peopleGateInstallmentIds, peopleSettlementGate } from "@/lib/engines/linked-people-readiness";
 import { RECORDED_EARLIER_PEOPLE_ACK } from "@/lib/engines/recorded-earlier";
+import { linkableCandidates, splitCandidates } from "@/lib/engines/link-earlier-payment";
+import { agreementMatchContext } from "@/features/loans/lib/link-match-context";
+import { LinkTransactionField } from "@/features/loans/components/link-transaction-field";
 import { planLoanPaymentCore, type LoanPaymentCore } from "@/lib/engines/loan-payment-core";
 import { installmentProgress } from "@/lib/engines/installment-progress";
 import { outstandingPrincipalAfterPrepaymentsFor } from "@/lib/engines/loan-outstanding";
@@ -293,6 +296,8 @@ export function RecordPaymentDialog({
   // "Has the person already paid their share?" — nothing until answered; either answer unblocks the lender payment.
   const [shareAnswer, setShareAnswer] = useState<PeopleShareAnswer | null>(null);
   const [dateUnknown, setDateUnknown] = useState(false);
+  // "Already paid earlier" + a transaction the user already recorded: that transaction IS the payment (see link-earlier-payment.ts).
+  const [linkedTx, setLinkedTx] = useState<Transaction | null>(null);
   // "Already paid earlier" date — starts on the installment's due date when that has passed, else today.
   const [earlierDate, setEarlierDate] = useState(() => {
     const due = firstUnpaidInstallment(target)?.dueDate;
@@ -484,8 +489,35 @@ export function RecordPaymentDialog({
   const underfunded = fundsApply && isUnderfunded(payingAccount, planAmount);
   const showError = error != null && ((effectiveChoice !== "custom" && effectiveChoice !== "extra") || customTouched || error === earlierExtraError);
   const remainingUnconfirmed = effectiveChoice === "remaining" && !earlier && !remainingAck;
+  // Candidates: the user's own live, unlinked expenses no larger than what the installment still owes (best match first).
+  const linkCandidates: Transaction[] =
+    earlier && !lent && anchor != null
+      ? (linkableCandidates(allTransactions as Transaction[], { amountDue: anchor.amountDue, amountPaid: anchor.amountPaid, dueDate: anchor.dueDate }) as Transaction[])
+      : [];
+  // Only expenses that name this agreement (or sit in a loan category) are suggested; amount/date-only matches wait behind a warning.
+  const linkSplit = splitCandidates(linkCandidates, agreementMatchContext(loanRow ? { kind: "loan", loan: loanRow.loan } : { kind: "emi", emi: emiRow!.emi }));
+  // While linked, amount / date / account ARE the transaction's — anything else is refused here (and again by the write).
+  const linkMismatch =
+    !earlier || linkedTx == null
+      ? null
+      : planAmount == null || Math.abs(planAmount - linkedTx.amount) > 0.005
+        ? "The amount must stay exactly the transaction's — unlink it to change the amount."
+        : isLoan && accountId !== linkedTx.accountId // an EMI payment made earlier has no paying account to compare
+          ? "The account must stay the transaction's — unlink it to change it."
+          : dateToInput(paymentDate) !== dateToInput(linkedTx.dateTime)
+            ? "The date must stay the transaction's — unlink it to change it."
+            : null;
   const blocked =
-    remainingUnconfirmed || next == null || error != null || earlierDateError != null || (needsAccount && accountId === "") || underfunded || (earlier && !lent && reconcile.blocker != null);
+    remainingUnconfirmed || next == null || error != null || earlierDateError != null || (needsAccount && accountId === "") || underfunded || (earlier && !lent && reconcile.blocker != null) || linkMismatch != null;
+  function pickLink(t: Transaction) {
+    setLinkedTx(t);
+    setChoice("custom");
+    setCustomAmount(String(t.amount));
+    setCustomTouched(true);
+    setEarlierDate(dateToInput(t.dateTime));
+    setDateUnknown(false);
+    setAccountId(t.accountId);
+  }
   const accountName = needsAccount ? (accounts.find((a) => a.id === accountId)?.name ?? null) : (cardLabel ?? null);
   // The same Case A / B rule the write applies (`emi-card-funding.ts`), read from the EMI's linked purchase record.
   const linkedCardAccountId = emiRow?.linkedCard?.accountId ?? null;
@@ -578,6 +610,7 @@ export function RecordPaymentDialog({
               peopleGateAcknowledgement: peopleAck,
               recordedEarlier,
               // The installment the preview showed first — if another tab paid it meanwhile, nothing is written.
+              linkedTransactionId: earlier ? (linkedTx?.id ?? null) : null,
               expectedFirstInstallmentId: earlier ? (loanCore?.payments[0]?.installmentId ?? null) : null,
               // A normal payment must land on exactly what the preview showed (same installments, same extra principal).
               expectedAllocation: !earlier && reviewedLoanCore ? { installmentIds: reviewedLoanCore.installmentIds, overflow: reviewedLoanCore.overflow } : null,
@@ -605,6 +638,7 @@ export function RecordPaymentDialog({
               processingFee: processingFee && !earlier ? Number(processingFee) : undefined,
               peopleGateAcknowledgement: peopleAck,
               recordedEarlier,
+              linkedTransactionId: earlier ? (linkedTx?.id ?? null) : null,
             });
             if (!earlier) {
               title = result.allocationType === "advanceEmi" ? "Advance payment recorded successfully" : "Payment recorded successfully";
@@ -1097,6 +1131,19 @@ export function RecordPaymentDialog({
                         <p role="alert" className="text-xs font-semibold text-expense">
                           {earlierDateError}
                         </p>
+                      )}
+                      {!lent && (
+                        <LinkTransactionField
+                          related={linkSplit.related}
+                          others={linkSplit.others}
+                          owed={anchor ? Math.max(0, anchor.amountDue - anchor.amountPaid) : 0}
+                          dueDate={anchor?.dueDate ?? new Date()}
+                          linked={linkedTx}
+                          accountName={(id) => accounts.find((a) => a.id === id)?.name ?? "Account"}
+                          mismatch={linkMismatch}
+                          onPick={pickLink}
+                          onClear={() => setLinkedTx(null)}
+                        />
                       )}
                       {!lent && !earlierSplit && <HistoricalPeopleReconcile state={reconcile} accounts={accounts} showInstallment={(reconcileIds ?? touched).length > 1} locked={lenderDone && reconcile.failed.length === 0} />}
                       {!earlierSplit && (

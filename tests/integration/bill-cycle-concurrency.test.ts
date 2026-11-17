@@ -82,6 +82,13 @@ function legacyCycle(id: string, dueDate: Date, over: Partial<BillOccurrence> = 
   return { id, billId: BILL, dueDate, amount: 1_000, amountPaid: 0, isSkipped: false, createdAt: new Date(2026, 0, 1), deletedAt: null, lastEditedAt: null, editHistory: [], ...over };
 }
 
+/** Five deliberately CONTENDED rounds. Measured: setup per round is ~15 ms, a race that does not collide takes ~150 ms, but a
+ * collision makes the losing transaction abort and the Firestore SDK retry with its own exponential backoff (~0.5-1.5 s),
+ * and the first round also pays ~2 s of cold connection setup. 5 rounds therefore legitimately exceed vitest's 5 s default.
+ * This is test amplification, not an app slowdown (one transaction per open), so only these stress tests get a larger budget.
+ */
+const STRESS_TIMEOUT_MS = 30_000;
+
 describe("A1 — one cycle per bill per due day, however many tabs race", () => {
   it("two tabs opening a brand-new bill at once create ONE first cycle (repeated rounds)", async () => {
     for (let round = 0; round < 5; round++) {
@@ -95,7 +102,7 @@ describe("A1 — one cycle per bill per due day, however many tabs race", () => 
       expect(ra.id).toBe(rb.id);
       expect(ra.id).toBe(billCycleId(BILL, monthsAgo(2)));
     }
-  });
+  }, STRESS_TIMEOUT_MS);
 
   it("two tabs rolling a settled cycle forward at once create ONE next cycle and advance the bill ONCE", async () => {
     for (let round = 0; round < 5; round++) {
@@ -118,7 +125,7 @@ describe("A1 — one cycle per bill per due day, however many tabs race", () => 
       expect(dayKey(bill.nextDueDate)).toBe(dayKey(monthsAgo(1)));
       expect(bill.editHistory.filter((e) => e.field === "nextDueDate")).toHaveLength(1);
     }
-  });
+  }, STRESS_TIMEOUT_MS);
 
   it("a long chain of rolls from two tabs never branches: exactly one cycle per month", async () => {
     const a = client();

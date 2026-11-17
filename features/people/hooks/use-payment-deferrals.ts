@@ -9,8 +9,10 @@
 import { onSnapshot } from "firebase/firestore";
 import { useMemo } from "react";
 import { useFirestoreWatch } from "@/hooks/use-firestore-watch";
+import { usePeople } from "@/hooks/use-people";
 import { db } from "@/lib/firebase/client";
 import type { DeferralRequest } from "@/lib/engines/person-payment-deferral";
+import type { Person } from "@/lib/models/person";
 import type { PersonPaymentDeferral } from "@/lib/models/person-payment-deferral";
 import { PaymentDeferralRepository } from "@/lib/repositories/payment-deferral-repository";
 import { createPaymentDeferralsCollection } from "@/lib/repositories/repository-factory";
@@ -74,4 +76,36 @@ export function usePeoplePaymentDeferrals(personIds: readonly string[]) {
     },
   });
   return { deferralsByPerson: query.data ?? {}, isLoading: ids.length > 0 && query.data === undefined };
+}
+
+/** Every person's payment deferrals, LIVE, keyed by person — for the upcoming-cycle alert. Emits once every person has reported. */
+export function useAllPersonDeferrals() {
+  const uid = useAuthStore((s) => s.user?.uid);
+  const { data: people = [], isLoading: peopleLoading } = usePeople();
+  const personIds = useMemo(() => (people as Person[]).map((p) => p.id).sort(), [people]);
+  const query = useFirestoreWatch<Record<string, PersonPaymentDeferral[]>>({
+    queryKey: ["people-payment-deferrals-all", uid, ...personIds] as const,
+    enabled: !!uid && personIds.length > 0,
+    hookName: "useAllPersonDeferrals",
+    emptyValue: {},
+    deps: [uid, personIds.join("|")],
+    subscribe: (onData, onError) => {
+      if (!uid) return () => {};
+      const byPerson: Record<string, PersonPaymentDeferral[]> = {};
+      const pending = new Set(personIds);
+      const unsubs = personIds.map((personId) =>
+        onSnapshot(
+          createPaymentDeferralsCollection(uid, personId),
+          (snapshot) => {
+            byPerson[personId] = snapshot.docs.map((d) => d.data());
+            pending.delete(personId);
+            if (pending.size === 0) onData({ ...byPerson });
+          },
+          onError,
+        ),
+      );
+      return () => unsubs.forEach((u) => u());
+    },
+  });
+  return { deferralsByPerson: query.data ?? {}, isLoading: peopleLoading || (personIds.length > 0 && query.data === undefined) };
 }

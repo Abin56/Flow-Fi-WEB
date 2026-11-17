@@ -30,6 +30,7 @@ import {
   updateDoc,
   deleteDoc,
   where,
+  writeBatch,
 } from "firebase/firestore";
 import { afterAll, afterEach, beforeAll, describe, expect, it, beforeEach } from "vitest";
 
@@ -795,5 +796,88 @@ describe("aiInsights (Architecture §17, backlog M12-T3)", () => {
         message: "Fabricated",
       }),
     );
+  });
+});
+
+/**
+ * A Transaction linked to an "already paid earlier" installment payment (`earlierPaymentLink`) is the money behind that
+ * payment. The server — not just the app's repositories — must refuse to change its money, move it or delete it, so a
+ * stale tab or an older client cannot unbalance the account. A link-only update (what the Loan/EMI reversal does) and
+ * edits of descriptive fields stay allowed, and documents without the field behave exactly as before.
+ */
+describe("earlier-payment-linked transactions are protected server-side", () => {
+  const LINK = { ownerType: "loan", ownerId: "loan-1", scheduleId: "s1", installmentId: "i1", paymentId: "p1" };
+  const base = { type: "expense", amount: 5000, accountId: "acc-1", dateTime: new Date("2026-10-05T10:00:00Z"), description: "Rent", transferId: null, excludeFromCalculations: false, deletedAt: null };
+
+  async function seed(id: string, extra: Record<string, unknown> = {}) {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "users", OWNER_UID, "transactions", id), { ...base, ...extra });
+    });
+  }
+  const owner = () => testEnv.authenticatedContext(OWNER_UID).firestore();
+
+  it("refuses amount, account, date, type, exclusion and deletion changes while linked", async () => {
+    await seed("t1", { earlierPaymentLink: LINK });
+    const ref = doc(owner(), "users", OWNER_UID, "transactions", "t1");
+    await assertFails(updateDoc(ref, { amount: 4000 }));
+    await assertFails(updateDoc(ref, { accountId: "acc-2" }));
+    await assertFails(updateDoc(ref, { dateTime: new Date("2026-10-06T10:00:00Z") }));
+    await assertFails(updateDoc(ref, { type: "income" }));
+    await assertFails(updateDoc(ref, { excludeFromCalculations: true }));
+    await assertFails(updateDoc(ref, { deletedAt: new Date() }));
+    await assertFails(deleteDoc(ref));
+  });
+
+  it("still allows descriptive edits and the link-only clear used by a payment reversal", async () => {
+    await seed("t2", { earlierPaymentLink: LINK });
+    const db = owner();
+    const ref = doc(db, "users", OWNER_UID, "transactions", "t2");
+    await assertSucceeds(updateDoc(ref, { description: "Rent (Oct)" }));
+    // Clearing the link alone is refused while the payment it explains is still live (a stale client cannot unlink first)...
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "users", OWNER_UID, "paymentSchedules", "s1", "installments", "i1", "payments", "p1"), { amount: 5000, deletedAt: null });
+      await setDoc(doc(ctx.firestore(), "users", OWNER_UID, "loans", "loan-1"), { name: "L" });
+    });
+    await assertFails(setDoc(ref, { ...base, description: "Rent (Oct)" }));
+    // ...and allowed in the same write that reverses (soft-deletes) that payment — exactly what the app's reversal does.
+    const batch = writeBatch(db);
+    batch.set(doc(db, "users", OWNER_UID, "paymentSchedules", "s1", "installments", "i1", "payments", "p1"), { amount: 5000, deletedAt: new Date() });
+    batch.set(ref, { ...base, description: "Rent (Oct)" });
+    await assertSucceeds(batch.commit());
+    // ...after which it is an ordinary transaction again.
+    await assertSucceeds(updateDoc(ref, { amount: 4500 }));
+    await assertSucceeds(deleteDoc(ref));
+  });
+
+  it("the link is also released when its Loan is deleted in the same write", async () => {
+    await seed("t6", { earlierPaymentLink: LINK });
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "users", OWNER_UID, "paymentSchedules", "s1", "installments", "i1", "payments", "p1"), { amount: 5000, deletedAt: null });
+      await setDoc(doc(ctx.firestore(), "users", OWNER_UID, "loans", "loan-1"), { name: "L" });
+    });
+    const db = owner();
+    const ref = doc(db, "users", OWNER_UID, "transactions", "t6");
+    await assertFails(setDoc(ref, { ...base }));
+    const batch = writeBatch(db);
+    batch.delete(doc(db, "users", OWNER_UID, "loans", "loan-1"));
+    batch.set(ref, { ...base });
+    await assertSucceeds(batch.commit());
+  });
+
+  it("a full replace that keeps the link but changes money is refused too", async () => {
+    await seed("t3", { earlierPaymentLink: LINK });
+    await assertFails(setDoc(doc(owner(), "users", OWNER_UID, "transactions", "t3"), { ...base, amount: 1, earlierPaymentLink: LINK }));
+  });
+
+  it("a transaction without a link is unaffected (legacy and ordinary documents)", async () => {
+    await seed("t4");
+    const ref = doc(owner(), "users", OWNER_UID, "transactions", "t4");
+    await assertSucceeds(updateDoc(ref, { amount: 6000, accountId: "acc-2" }));
+    await assertSucceeds(deleteDoc(ref));
+  });
+
+  it("another user still cannot touch it", async () => {
+    await seed("t5", { earlierPaymentLink: LINK });
+    await assertFails(updateDoc(doc(testEnv.authenticatedContext(OTHER_UID).firestore(), "users", OWNER_UID, "transactions", "t5"), { description: "x" }));
   });
 });

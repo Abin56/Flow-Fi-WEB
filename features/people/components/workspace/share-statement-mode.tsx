@@ -6,9 +6,10 @@ import { usePersonCycleStatement } from "@/features/people/hooks/use-person-cycl
 import { usePersonPendingSplitParticipants } from "@/features/people/hooks/use-person-pending-split-participants";
 import { useSettlementLookups } from "@/features/people/hooks/use-settlement-lookups";
 import { monthlySettlementView } from "@/features/people/lib/monthly-settlement-model";
-import { renderMonthlySettlementPdf } from "@/features/people/lib/monthly-settlement-pdf";
 import { COPY_FORMATS, monthlySettlementDetailedText, smartSettlementText, type CopyFormat } from "@/features/people/lib/monthly-settlement-text";
-import { loadStatementAmountFonts, loadStatementTextFonts, renderPersonStatementPdf, type StatementOrientation } from "@/features/people/lib/person-statement-pdf";
+// The PDF engine (pdf-lib + fontkit, ~0.5 MB) is loaded only when a PDF is actually made — see `downloadPdf` — so it is not
+// part of the People page's first load. Type-only import here.
+import type { StatementOrientation } from "@/features/people/lib/person-statement-pdf";
 import { useMonthCycleStartDay } from "@/features/settings/hooks/use-user-preferences";
 import {
   STATEMENT_COPY,
@@ -22,7 +23,7 @@ import {
 } from "@/features/people/lib/person-statement-pdf-model";
 import { STATEMENT_CHIP, STATEMENT_INK, type StatementChip } from "@/features/people/lib/statement-palette";
 import { cycleContaining, type PersonCycleStatement } from "@/lib/engines/person-cycle-statement";
-import { cycleName } from "@/lib/engines/person-payment-deferral";
+import { cycleName, cycleTitle } from "@/lib/engines/person-payment-deferral";
 import { money, sharedPositionLine, statementShareText, whatsAppShareUrl } from "@/lib/engines/person-cycle-statement-share";
 import type { SplitAllocation } from "@/lib/split/split-allocation";
 import { cn } from "@/lib/utils";
@@ -71,7 +72,7 @@ export function ShareStatementMode({
       deferralFor: (key, date) => {
         const v = deferrals?.byKey.get(key);
         if (!v || v.status === "resolved") return null;
-        return { status: v.status, name: cycleName(v.cycle), from: cycleName(cycleContaining(date, deferrals?.cycleStartDay ?? cycleStartDay)) };
+        return { status: v.status, name: cycleName(v.cycle), from: cycleName(cycleContaining(date, deferrals?.cycleStartDay ?? cycleStartDay)), title: cycleTitle(v.cycle), date: v.date };
       },
     }),
     [ledgerEntries, allTimeStatement, lookups, cycleStartDay, ownerName, deferrals],
@@ -100,11 +101,15 @@ export function ShareStatementMode({
     try {
       // Words in Plus Jakarta Sans, amounts in Geist Mono with the real ₹; if a font can't load, the PDF still
       // renders (Helvetica, "Rs.").
-      const [amountFonts, textFonts] = await Promise.all([loadStatementAmountFonts(), loadStatementTextFonts()]);
+      const [statementPdf, settlementPdf] = await Promise.all([
+        import("@/features/people/lib/person-statement-pdf"),
+        import("@/features/people/lib/monthly-settlement-pdf"),
+      ]);
+      const [amountFonts, textFonts] = await Promise.all([statementPdf.loadStatementAmountFonts(), statementPdf.loadStatementTextFonts()]);
       const bytes =
         mode === "monthly"
-          ? await renderMonthlySettlementPdf(statement, { ...options, amountFonts, textFonts })
-          : await renderPersonStatementPdf(statement, { ...options, orientation: statementOrientation(), amountFonts, textFonts });
+          ? await settlementPdf.renderMonthlySettlementPdf(statement, { ...options, amountFonts, textFonts })
+          : await statementPdf.renderPersonStatementPdf(statement, { ...options, orientation: statementOrientation(), amountFonts, textFonts });
       const blob = new Blob([bytes as BlobPart], { type: "application/pdf" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");

@@ -38,9 +38,11 @@ const PAGE_H = 841.89;
 const M = 36;
 const W = PAGE_W - 2 * M;
 const PAD = 7;
-/** Date · Description (rest) · Amount · Type — a payment no longer ties to one item, so there is no Paid /
- * Remaining breakdown per row; Type is the chip (a kind tag, or "Moved" / "Overdue"). */
-const FIXED = [46, 0, 90, 90];
+/** Date · Description (rest) · Amount (with its status word beneath) · Type — a payment no longer ties to one item,
+ * so there is no Paid / Remaining breakdown per row; Type is what the entry is ("EMI", "Shared Expense", …). */
+const FIXED = [46, 0, 84, 104];
+const STATUS_COLOR = { Pending: BODY, Postponed: CHIP_TEXT.upcoming, Overdue: CHIP_TEXT.overdue } as const;
+const RED = CHIP_TEXT.overdue;
 const COL_W = FIXED.map((w) => (w === 0 ? W - FIXED.reduce((s, x) => s + x, 0) : w));
 const colX = (i: number) => M + COL_W.slice(0, i).reduce((s, w) => s + w, 0);
 const colRight = (i: number) => colX(i) + COL_W[i] - PAD;
@@ -201,7 +203,10 @@ export async function renderMonthlySettlementPdf(
     const LEFT_W = 206;
     const rowH = (l: (typeof v.lines)[number]) => (l.note ? 36 : 25);
     const bodyH = v.lines.reduce((s, l) => s + rowH(l), 0) + 20;
-    const H = Math.max(100, bodyH);
+    const hl = cap(wrap(settled ? "Nothing left to settle" : v.headline, LEFT_W - 32, medium, 9.6), 2, medium, 9.6, LEFT_W - 32);
+    // Due this cycle / Postponed sit under the total — the total itself never drops by what is postponed.
+    const splitTop = 69 + (hl.length - 1) * 12 + 16;
+    const H = Math.max(100, bodyH, v.split ? splitTop + 2 * 14 + 8 : 0);
     const top = y;
     page.drawRectangle({ x: M, y: top - H, width: W, height: H, color: WHITE, borderColor: RULE_STRONG, borderWidth: 0.7 });
     box(M + 0.35, top - H + 0.35, LEFT_W, H - 0.7, NAVY_TINT);
@@ -211,8 +216,18 @@ export async function renderMonthlySettlementPdf(
     const total = money2(v.outstanding);
     const size = sizeToFit(total, 25, monoBold, LEFT_W - 32, 14);
     text(total, ix, top - 52, size, monoBold, settled ? PAID : NAVY);
-    const hl = cap(wrap(settled ? "Nothing left to settle" : v.headline, LEFT_W - 32, medium, 9.6), 2, medium, 9.6, LEFT_W - 32);
     hl.forEach((t, i) => text(t, ix, top - 69 - i * 12, 9.6, medium, BODY));
+    if (v.split) {
+      const rows: [string, string, RGB][] = [
+        ["Due this cycle", v.split.dueNow, INK],
+        [`Postponed to ${v.split.postponedTo}`, v.split.postponed, CHIP_TEXT.upcoming],
+      ];
+      rows.forEach(([label, value, color], i) => {
+        const by = top - splitTop - i * 14;
+        text(fit(label, semi, 8.6, LEFT_W - 32 - 62), ix, by, 8.6, semi, color);
+        amount(value, M + LEFT_W - 14, by, 9, monoBold, color, 70);
+      });
+    }
     const lx = M + LEFT_W + 20;
     const vr = M + W - 16;
     let ly = top - 14;
@@ -262,7 +277,7 @@ export async function renderMonthlySettlementPdf(
   };
   const itemLayout = (it: MonthlyItem) => {
     const titleLines = cap(wrap(it.title, DESC_W, semi, S.title), 3, semi, S.title, DESC_W);
-    const noteLines = it.note ? cap(wrap(money2(it.note), DESC_W, regular, S.meta), 2, regular, S.meta, DESC_W) : [];
+    const noteLines = it.detail ? cap(wrap(money2(it.detail), DESC_W, regular, S.meta), 2, regular, S.meta, DESC_W) : [];
     return { titleLines, noteLines, h: Math.max(36, 24 + titleLines.length * 12 + noteLines.length * 10.2 - (noteLines.length ? 3 : 0)) };
   };
   const drawItem = (it: MonthlyItem) => {
@@ -279,10 +294,13 @@ export async function renderMonthlySettlementPdf(
     l.titleLines.forEach((t, i) => text(t, dx, line1 - i * 12, S.title, semi, INK));
     l.noteLines.forEach((t, i) => text(t, dx, line1 - (l.titleLines.length - 1) * 12 - 11.5 - i * 10.2, S.meta, regular, MUTED));
     amount(it.amount, colRight(2), line1, S.money, monoBold, it.amount === "—" ? FAINT : INK, COL_W[2] - 2 * PAD);
-    // Type: a dot and one short word — the kind, or "Moved" / "Overdue" — in the chip's colour.
-    const color = CHIP_TEXT[it.chip];
-    page.drawCircle({ x: colX(3) + PAD + 2.6, y: line1 + 3, size: 2.4, color });
-    text(fit(it.tag, semi, 8.8, COL_W[3] - 2 * PAD - 9), colX(3) + PAD + 9, line1, 8.8, semi, color);
+    // Status: one plain word under the amount (Pending / Postponed / Overdue) — a word, so it survives black & white.
+    const sc = STATUS_COLOR[it.status];
+    page.drawCircle({ x: colRight(2) - width(it.status, 8, semi) - 5, y: line1 - 8.2, size: 1.8, color: sc });
+    textRight(it.status, colRight(2), line1 - 11, 8, semi, sc);
+    // Type: what the entry is, in plain words — "EMI", "Shared Expense", "Assigned Expense".
+    const typeW = COL_W[3] - 2 * PAD;
+    text(safe(it.type), colX(3) + PAD, line1, sizeToFit(safe(it.type), 8.8, semi, typeW, 7), semi, BODY);
     y = top - l.h;
     hline(M, M + W, y, RULE, 0.4);
   };
@@ -299,7 +317,7 @@ export async function renderMonthlySettlementPdf(
     const r = receipt(p);
     const titleLines = cap(wrap(r.title, DESC_W + COL_W[0] - 8, semi, S.title), 2, semi, S.title, DESC_W);
     const subLines = r.sub ? cap(wrap(r.sub, DESC_W + COL_W[0] - 8, regular, S.meta), 2, regular, S.meta, DESC_W) : [];
-    const h = 24 + (titleLines.length - 1) * 12 + subLines.length * 10.5 + 6;
+    const h = Math.max(36, 24 + (titleLines.length - 1) * 12 + subLines.length * 10.5 + 6);
     return { titleLines, subLines, h };
   };
   const drawPayment = (p: MonthlyPayment) => {
@@ -310,7 +328,11 @@ export async function renderMonthlySettlementPdf(
     text(p.date === "Date not known" ? "Date n/k" : p.date.replace(/ \d{4}$/, ""), colX(0) + PAD, ly, 9.6, semi, INK);
     const dx = colX(0) + PAD + 50;
     l.titleLines.forEach((t, i) => text(fit(t, semi, S.title, colRight(2) - dx - 90), dx, ly - i * 12, S.title, semi, INK));
-    amount(p.amount, colRight(2), ly, S.money + 0.6, monoBold, p.inbound ? PAID : INK, 100);
+    // Money in is "+" and green, money out is "−" and red; the word beneath says it again for a black & white print.
+    const pc = p.status === "Received" ? PAID : p.status === "Paid" ? RED : CHIP_TEXT.advance;
+    const sign = p.status === "Paid" ? (textCustom ? "−" : "-") : "+";
+    amount(`${sign}${p.amount}`, colRight(2), ly, S.money + 0.6, monoBold, pc, 100);
+    textRight(p.status, colRight(2), ly - 11, 8, semi, pc);
     ly -= (l.titleLines.length - 1) * 12;
     l.subLines.forEach((t) => {
       ly -= 10.5;

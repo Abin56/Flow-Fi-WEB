@@ -62,6 +62,11 @@ export function cycleName(cycle: StatementCycle, today: Date = new Date()): stri
   return cycle.end.getFullYear() === today.getFullYear() ? m : `${m} ${cycle.end.getFullYear()}`;
 }
 
+/** "Dec 2026" — a cycle's name with its year always shown (the "Selected" line), where `cycleName` drops this year's. */
+export function cycleTitle(cycle: StatementCycle): string {
+  return `${MONTHS[cycle.end.getMonth()]} ${cycle.end.getFullYear()}`;
+}
+
 /** Where a stored expectation lands under today's start day — the cycle containing its last day. */
 export function resolveExpectedCycle(expected: Pick<DeferralExpectation, "cycle"> | null, startDay: number): StatementCycle | null {
   return expected == null ? null : cycleContaining(expected.cycle.end, startDay);
@@ -108,6 +113,8 @@ export interface DeferralView {
   deferral: PersonPaymentDeferral;
   /** Expected cycle under today's start day. */
   cycle: StatementCycle;
+  /** The exact day the person is expected to pay, when one was chosen (null: only the cycle is known). */
+  date: Date | null;
   status: DeferralStatus;
   /** Live remaining on the obligation (what is expected). */
   remaining: number;
@@ -125,10 +132,16 @@ export function deferralView(
   const cycle = resolveExpectedCycle(deferral.expected, startDay)!;
   const left = remaining ?? 0;
   const now = cycleContaining(today, startDay);
+  const date = deferral.expected.date ? dayStart(deferral.expected.date) : null;
+  // An exact date decides by day (still ahead → postponed; today → due now; passed → lapsed); without one, by cycle as before.
   const status: DeferralStatus =
-    left <= EPSILON ? "resolved" : cycle.start.getTime() > now.start.getTime() ? "postponed" : cycle.start.getTime() === now.start.getTime() ? "expectedNow" : "lapsed";
+    left <= EPSILON
+      ? "resolved"
+      : date != null
+        ? dayIdx(date) > dayIdx(today) ? "postponed" : dayIdx(date) === dayIdx(today) ? "expectedNow" : "lapsed"
+        : cycle.start.getTime() > now.start.getTime() ? "postponed" : cycle.start.getTime() === now.start.getTime() ? "expectedNow" : "lapsed";
   const top = deferral.frames[deferral.frames.length - 1];
-  return { deferral, cycle, status, remaining: Math.max(0, left), undoTo: top?.previous ? resolveExpectedCycle(top.previous, startDay) : null };
+  return { deferral, cycle, date, status, remaining: Math.max(0, left), undoTo: top?.previous ? resolveExpectedCycle(top.previous, startDay) : null };
 }
 
 /**
@@ -177,6 +190,12 @@ export interface PostponeRequest extends DeferralRequestBase {
   /** Live remaining when the user confirmed — a fully paid obligation cannot be postponed. */
   remaining: number;
   target: StatementCycle;
+  /**
+   * The exact day payment is now expected ("until 25 Nov"). When given it wins over `target`: the cycle is the one
+   * containing it, and it may fall in the obligation's own cycle (the lender's EMI can be due the 15th while the person
+   * is given until the 25th). Must be after today and after the obligation's own date.
+   */
+  targetDate?: Date | null;
   reason: DeferralReason | null;
   note: string | null;
   /** An explicit reminder to set; null leaves reminders alone (except re-dating one that would read overdue). */
@@ -262,7 +281,7 @@ export function planDeferralWrite(current: PersonPaymentDeferral | null, followU
     if (top.reminderTouched && sameReminder(snapshotOf(followUp), top.reminderAfter)) {
       followUpWrite = top.reminderBefore == null ? { op: "delete" } : { op: "set", value: followUpFrom(req, top.reminderBefore, followUp) };
     }
-    const history: DeferralHistoryEntry = { at: req.now, action: "undo", fromEnd: active.cycle.end, toEnd: top.previous?.cycle.end ?? null, reason: top.previous?.reason ?? null };
+    const history: DeferralHistoryEntry = { at: req.now, action: "undo", fromEnd: active.cycle.end, toEnd: top.previous?.cycle.end ?? null, toDate: top.previous?.date ?? null, reason: top.previous?.reason ?? null };
     return {
       kind: "write",
       deferral: {
@@ -278,14 +297,26 @@ export function planDeferralWrite(current: PersonPaymentDeferral | null, followU
 
   // ---- postpone (first move, move again, or change the expected cycle) ----
   if (!(req.remaining > EPSILON)) return { kind: "invalid", message: "Nothing is left to collect on this — it is already fully paid." };
-  const earliest = earliestTargetCycle(req.obligationDate, req.now, req.startDay);
-  const target = cycleContaining(req.target.end, req.startDay);
-  if (target.start.getTime() < earliest.start.getTime()) return { kind: "invalid", message: "Choose a future cycle after this one." };
-  const note = req.reason === "other" && req.note ? req.note.trim().slice(0, DEFERRAL_NOTE_MAX) || null : null;
   const today = dayStart(req.now);
+  const targetDate = req.targetDate ? dayStart(req.targetDate) : null;
+  let target: StatementCycle;
+  if (targetDate != null) {
+    if (dayIdx(targetDate) <= today.getTime()) return { kind: "invalid", message: "Choose a date after today." };
+    if (dayIdx(targetDate) <= dayIdx(req.obligationDate)) return { kind: "invalid", message: "Choose a date after the original due date." };
+    target = cycleContaining(targetDate, req.startDay);
+  } else {
+    const earliest = earliestTargetCycle(req.obligationDate, req.now, req.startDay);
+    target = cycleContaining(req.target.end, req.startDay);
+    if (target.start.getTime() < earliest.start.getTime()) return { kind: "invalid", message: "Choose a future cycle after this one." };
+  }
+  const note = req.reason === "other" && req.note ? req.note.trim().slice(0, DEFERRAL_NOTE_MAX) || null : null;
   if (req.reminder != null && dayIdx(req.reminder.remindOn) < today.getTime()) return { kind: "invalid", message: "Choose a reminder date from today onwards." };
 
-  const sameTarget = active != null && cycleContaining(active.cycle.end, req.startDay).start.getTime() === target.start.getTime();
+  const sameTarget =
+    active != null &&
+    (targetDate != null
+      ? active.date != null && dayIdx(active.date) === dayIdx(targetDate)
+      : active.date == null && cycleContaining(active.cycle.end, req.startDay).start.getTime() === target.start.getTime());
   if (sameTarget && active!.reason === req.reason && active!.note === note && req.reminder == null) return { kind: "noop", why: "unchanged", deferral: current };
 
   // Reminder: an explicit choice is used as-is. Otherwise an ACTIVE reminder dated before the new cycle
@@ -294,12 +325,13 @@ export function planDeferralWrite(current: PersonPaymentDeferral | null, followU
   const before = snapshotOf(followUp);
   let after: ReminderSnapshot | null = null;
   if (req.reminder != null) after = { kind: req.reminder.kind, remindOn: dayStart(req.reminder.remindOn), state: "active" };
-  else if (before != null && before.state === "active" && dayIdx(before.remindOn) < target.start.getTime()) after = { kind: cycleStartReminderKind(target, req.now, req.startDay), remindOn: target.start, state: "active" };
+  else if (before != null && before.state === "active" && dayIdx(before.remindOn) < (targetDate ?? target.start).getTime())
+    after = targetDate != null ? { kind: "date", remindOn: targetDate, state: "active" } : { kind: cycleStartReminderKind(target, req.now, req.startDay), remindOn: target.start, state: "active" };
   const touched = after != null && !sameReminder(before, after);
 
-  const expected: DeferralExpectation = { cycle: { start: target.start, end: target.end }, reason: req.reason, note };
+  const expected: DeferralExpectation = { cycle: { start: target.start, end: target.end }, date: targetDate, reason: req.reason, note };
   const frame: DeferralFrame = { previous: active, reminderTouched: touched, reminderBefore: touched ? before : null, reminderAfter: touched ? after : null };
-  const history: DeferralHistoryEntry = { at: req.now, action: "postpone", fromEnd: active?.cycle.end ?? null, toEnd: target.end, reason: req.reason };
+  const history: DeferralHistoryEntry = { at: req.now, action: "postpone", fromEnd: active?.cycle.end ?? null, toEnd: target.end, toDate: targetDate, reason: req.reason };
   return {
     kind: "write",
     deferral: {

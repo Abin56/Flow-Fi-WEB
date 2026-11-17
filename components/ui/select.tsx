@@ -7,6 +7,10 @@ import { CheckIcon, ChevronDownIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 function Select({ ...props }: React.ComponentProps<typeof SelectPrimitive.Root>) {
+  // A caller that passes `value={x || undefined}` flips the Select between uncontrolled and controlled
+  // as `x` fills in (React warns, and the trigger can show a stale label). A `value` prop that is present
+  // but undefined means "controlled, nothing chosen yet" — "" keeps it controlled and shows the placeholder.
+  if ("value" in props && props.value === undefined) props = { ...props, value: "" }
   return <SelectPrimitive.Root data-slot="select" {...props} />
 }
 

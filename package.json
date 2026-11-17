@@ -7,7 +7,7 @@
     "dev": "next dev",
     "prebuild": "node scripts/copy-ocr-assets.mjs",
     "build": "next build",
-    "postbuild": "node scripts/android-release.mjs stage",
+    "postbuild": "node scripts/fix-export-segment-paths.mjs && node scripts/android-release.mjs stage",
     "android:release:prepare": "node scripts/android-release.mjs prepare",
     "android:release:verify": "node scripts/android-release.mjs verify-remote",
     "start": "next start",

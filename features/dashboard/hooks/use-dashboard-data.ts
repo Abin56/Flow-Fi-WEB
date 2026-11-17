@@ -65,7 +65,8 @@ import { useSpendTransactions, withBuiltInChargeCategory } from "@/hooks/use-len
 import { lenderChargeNetWorthChangeFrom, lenderChargeNetWorthEvents } from "@/lib/engines/lender-charge-accounting";
 import { myConsumptionAmount } from "@/lib/engines/my-spend";
 
-import { compareTransactionsNewestFirst, effectiveMonth, isLoanPrincipalDisbursement, isNonIncomeExpenseMovement, signedAmount, type Transaction } from "@/lib/models/transaction";
+import { CASH_FLOW_WEEK_LABELS, weeklyCashFlowTotals } from "@/lib/engines/cycle-transaction-mapping";
+import { compareTransactionsNewestFirst, effectiveMonth, isLoanPrincipalDisbursement, signedAmount, type Transaction } from "@/lib/models/transaction";
 import { cardBillsForCard } from "@/lib/engines/card-cycle-bills";
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -78,14 +79,6 @@ type CategoryColor = (typeof CATEGORY_COLORS)[number] | "muted";
 
 function isThisMonth(date: Date, now: Date): boolean {
   return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth();
-}
-
-/** Day-of-month week buckets matching the reference design's "1-7 / 8-14 / 15-21 / 22-31" bars. */
-function weekBucketLabel(dayOfMonth: number): string {
-  if (dayOfMonth <= 7) return "1-7";
-  if (dayOfMonth <= 14) return "8-14";
-  if (dayOfMonth <= 21) return "15-21";
-  return "22-31";
 }
 
 function formatShortDate(date: Date, now: Date): string {
@@ -219,26 +212,10 @@ export function useDashboardData() {
 
   // --- Cash Flow (lib/engines/cash-flow.ts:cashFlowThisMonth via useCashFlowThisMonth) ---
   const cashFlow = useMemo(() => {
-    // Same cash boundary as `cashFlowThisMonth`: card purchases don't move cash; a transfer
-    // paying a card does (counted on its non-card, outgoing leg).
+    // Same "does this row count" rule and cash boundary as `cashFlowThisMonth` — see `weeklyCashFlowTotals`.
     const cardAccountIds = new Set((creditCards as CreditCardProfile[]).map((c) => c.accountId));
-    const cardPaymentTransferIds = new Set(
-      (transactions as Transaction[])
-        .filter((t) => t.transferId != null && t.type === "income" && cardAccountIds.has(t.accountId))
-        .map((t) => t.transferId as string),
-    );
-    const weekTotals = new Map<string, number>();
-    for (const t of transactions as Transaction[]) {
-      if (t.deletedAt != null || cardAccountIds.has(t.accountId)) continue;
-      const isCardPayment = t.transferId != null && t.type === "expense" && cardPaymentTransferIds.has(t.transferId);
-      if (isNonIncomeExpenseMovement(t) && !isCardPayment) continue;
-      const effective = effectiveMonth(t);
-      if (!isThisMonth(effective, now)) continue;
-      const label = weekBucketLabel(t.dateTime.getDate());
-      const delta = signedAmount(t);
-      weekTotals.set(label, (weekTotals.get(label) ?? 0) + delta);
-    }
-    const weeks = ["1-7", "8-14", "15-21", "22-31"].map((label) => ({
+    const weekTotals = weeklyCashFlowTotals(transactions as Transaction[], cardAccountIds, now, "net");
+    const weeks = CASH_FLOW_WEEK_LABELS.map((label) => ({
       label,
       value: weekTotals.get(label) ?? 0,
     }));

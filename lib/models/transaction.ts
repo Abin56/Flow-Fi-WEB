@@ -103,6 +103,14 @@ export interface Transaction extends SoftDeletableEntity {
   loanId: string | null;
   emiId: string | null;
   /**
+   * Web-only, additive (absent on every older document and on anything the mobile app writes): set when this ordinary
+   * expense was LINKED to an installment the user recorded as "already paid earlier" — the payment the money really was.
+   * The Transaction stays exactly what it was (an expense that already moved its account, counted once); the marker only
+   * says which installment payment it explains, so it cannot be linked twice and cannot be edited or deleted on its own
+   * (`declaredTransactionOwner` treats it as owned by that Loan / EMI). Cleared when that payment is reversed.
+   */
+  earlierPaymentLink?: EarlierPaymentLink | null;
+  /**
    * The specific `Installment` (and, 1:1, the `InstallmentPayment`) this
    * transaction's money movement backs. Null for every non-loan/EMI
    * transaction, and for the "sibling" installment-payment docs of a
@@ -222,6 +230,22 @@ export function isNonIncomeExpenseMovement(
   return transaction.transferId != null || isLoanPrincipalDisbursement(transaction) || transaction.isPersonLedgerMovement || isLenderChargeSettlement(transaction);
 }
 
+/** See `Transaction.earlierPaymentLink`. */
+export interface EarlierPaymentLink {
+  ownerType: "loan" | "emi";
+  ownerId: string;
+  scheduleId: string;
+  installmentId: string;
+  paymentId: string;
+}
+
+export function earlierPaymentLinkFromMap(value: unknown): EarlierPaymentLink | null {
+  if (value == null || typeof value !== "object") return null;
+  const m = value as Record<string, unknown>;
+  if ((m.ownerType !== "loan" && m.ownerType !== "emi") || [m.ownerId, m.scheduleId, m.installmentId, m.paymentId].some((x) => typeof x !== "string")) return null;
+  return { ownerType: m.ownerType, ownerId: m.ownerId as string, scheduleId: m.scheduleId as string, installmentId: m.installmentId as string, paymentId: m.paymentId as string };
+}
+
 /** The signed delta this transaction applies to its account's balance. */
 export function signedAmount(transaction: Transaction): number {
   return transaction.type === "income" ? transaction.amount : -transaction.amount;
@@ -303,6 +327,7 @@ export function transactionFromFirestore(
     source: transactionSourceFromName(data.source as string | undefined),
     loanId: (data.loanId as string | undefined) ?? null,
     emiId: (data.emiId as string | undefined) ?? null,
+    earlierPaymentLink: earlierPaymentLinkFromMap(data.earlierPaymentLink),
     installmentId: (data.installmentId as string | undefined) ?? null,
     installmentPaymentId: (data.installmentPaymentId as string | undefined) ?? null,
     paymentAllocationType:
@@ -345,6 +370,7 @@ export function transactionToFirestore(transaction: Transaction): DocumentData {
     paymentAllocationType: transaction.paymentAllocationType,
     isPersonLedgerMovement: transaction.isPersonLedgerMovement,
     // Written only when set — legacy / account-funded documents keep their exact shape.
+    ...(transaction.earlierPaymentLink != null ? { earlierPaymentLink: { ...transaction.earlierPaymentLink } } : {}),
     ...(transaction.fundedByPersonId != null ? { fundedByPersonId: transaction.fundedByPersonId } : {}),
     ...(transaction.transferFeeForId != null ? { transferFeeForId: transaction.transferFeeForId } : {}),
     ...(transaction.billPaymentId != null ? { billPaymentId: transaction.billPaymentId } : {}),

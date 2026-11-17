@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ACCOUNT_COLOR } from "@/features/accounts/lib/account-colors";
 import { formatCurrency } from "@/lib/format";
 
 /**
@@ -15,7 +16,7 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn(), replace: 
 
 const TOTAL = 123456;
 const item = (id: string, name: string, typeLabel: string, balance: number) => ({
-  id, name, typeLabel, bankId: null, mask: null, balance, balanceLabel: "Current balance", cardStyle: "compact", color: "blue",
+  id, name, typeLabel, bankId: null, mask: null, balance, balanceLabel: "Current balance", cardStyle: "compact", color: "blue", palette: ACCOUNT_COLOR.blue, colorValue: 0,
   accountHolder: "Me", accountNumberMasked: null, ifsc: null, branch: null, upiId: null, linkedSince: null,
 });
 const ITEMS = [item("a1", "Salary Bank", "Savings Account", 100000), item("a2", "Wallet Cash", "Cash", 23456)];

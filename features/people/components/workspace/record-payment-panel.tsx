@@ -46,6 +46,7 @@ import { DateInput } from "@/components/forms/date-input";
 import { ReminderPicker, type ReminderWhen } from "./follow-up";
 import { FlowSwitch, flowText, HeroAmount, PanelHeader, type FlowSwitchOption } from "./flow-switch";
 import { canPostponeRow, DeferralContext, PostponeFields, usePostponeDraft, type PostponeItem } from "./payment-deferral";
+import { EmiHandlingSection, type EmiHandle } from "./postpone-emi-handling";
 
 /** An existing payment, for editing: its lines per obligation key, advance, account and date. */
 export interface RecordPaymentInitial {
@@ -375,9 +376,33 @@ export function RecordPaymentPanel({
   }
   // The optional follow-ups (postpone the unpaid rest, reminder) live in one collapsed section.
   const [afterOpen, setAfterOpen] = useState(false);
+  // A single Loan / EMI installment share: "What about this EMI?" is answered in this same sheet (pay / already paid / later).
+  const emiItem = postponeItems.length === 1 && /^(emi|loan)-inst:/.test(postponeItems[0].row.key) ? postponeItems[0] : null;
+  const [emiHandle, setEmiHandle] = useState<EmiHandle | null>(null);
+  const [emiBusy, setEmiBusy] = useState(false);
+  const [emiError, setEmiError] = useState<string | null>(null);
+  const emiActive = emiItem != null && emiHandle != null && emiHandle.choice !== "later";
+  const postponeSaved = postponeItems.length > 0 && postponeItems.every((i) => postponeDraft.doneKeys.has(i.row.key));
+  // Postponement already saved (a retry of the bank step) or already in place and unchanged: only the EMI step is left to run.
+  const emiOnly = emiActive && (postponeSaved || postponeDraft.unchanged);
+  const postponeConfirmable = (emiOnly || postponeDraft.ready) && !emiBusy && !(emiActive && emiHandle?.blocker);
   async function submitPostpone() {
-    if (!postponing) return;
-    if (await postponeDraft.submit()) (onComplete ?? onCancel)();
+    if (!postponing || !postponeConfirmable) return;
+    setEmiError(null);
+    if (!emiOnly && !(await postponeDraft.submit())) return;
+    if (emiActive && emiHandle) {
+      setEmiBusy(true);
+      try {
+        await emiHandle.run();
+      } catch (e) {
+        // The postponement is saved; only the bank step failed — nothing was recorded for the lender.
+        setEmiError(e instanceof Error ? e.message : "Couldn't save the EMI step.");
+        return;
+      } finally {
+        setEmiBusy(false);
+      }
+    }
+    (onComplete ?? onCancel)();
   }
 
   /** One direction at a time — each side's obligations are settled on their own, never netted. */
@@ -670,7 +695,7 @@ export function RecordPaymentPanel({
                   {initial
                     ? "Editing a recorded payment — its direction can't change."
                     : postponing
-                      ? `${first} hasn't paid yet. Choose when you now expect it — nothing is recorded and no balance changes.`
+                      ? "Choose when to expect it. Nothing is recorded."
                       : theyPaid
                         ? `Money ${first} gave you. It lowers what ${first} owes you.`
                         : iOweTotal > PAYMENT_EPSILON
@@ -696,13 +721,13 @@ export function RecordPaymentPanel({
                     <CalendarClock className="size-4" />
                   </span>
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-[13px] font-bold text-foreground">Move when you expect {first}&apos;s payment</p>
+                    <p className="truncate text-[13px] font-bold text-foreground">{personName}</p>
                     <p className="truncate text-[11.5px] text-foreground/65">
                       {postponable.length === 1 ? postponable[0].title : `${postponeItems.length} of ${postponable.length} items selected`}
                     </p>
                   </div>
                   <div className="shrink-0 text-right">
-                    <p className="text-[10px] font-bold tracking-[0.08em] text-foreground/55 uppercase">Still owed</p>
+                    <p className="text-[10px] font-bold tracking-[0.08em] text-foreground/55 uppercase">Pending</p>
                     <p className="font-heading text-[17px] leading-tight font-bold tabular-nums text-foreground">{money(postponeDraft.remaining)}</p>
                   </div>
                 </div>
@@ -761,8 +786,11 @@ export function RecordPaymentPanel({
                   </fieldset>
                 )}
               </div>
-              <div className="rounded-[14px] border border-border bg-card p-3 shadow-e1">
-                <PostponeFields draft={postponeDraft} noMoneyNote compact />
+              <div className={cn("space-y-3", wideSheet && "min-w-0")}>
+                <div className="rounded-[14px] border border-border bg-card p-3 shadow-e1">
+                  <PostponeFields draft={postponeDraft} />
+                </div>
+                {emiItem && <EmiHandlingSection row={emiItem.row} onHandle={setEmiHandle} disabled={postponeDraft.busy || emiBusy} />}
               </div>
             </div>
           )}
@@ -771,8 +799,8 @@ export function RecordPaymentPanel({
               <div className="flex items-start gap-2.5 border-b border-border bg-secondary/40 px-4 py-2.5">
                 <CalendarClock className="mt-0.5 size-4 shrink-0 text-foreground/70" aria-hidden />
                 <div className="min-w-0">
-                  <p className="text-[13px] font-bold text-foreground">Move when you expect {first}&apos;s payment</p>
-                  <p className="text-xs text-foreground/70">Nothing is recorded — only the expected cycle changes.</p>
+                  <p className="text-[13px] font-bold text-foreground">{personName} · {money(postponeDraft.remaining)} pending</p>
+                  <p className="text-xs text-foreground/70">Nothing is recorded.</p>
                 </div>
               </div>
               <div className="px-4 py-3.5">
@@ -811,7 +839,12 @@ export function RecordPaymentPanel({
                   </ul>
                 </fieldset>
               )}
-              <PostponeFields draft={postponeDraft} noMoneyNote />
+              <PostponeFields draft={postponeDraft} />
+              {emiItem && (
+                <div className="mt-3">
+                  <EmiHandlingSection row={emiItem.row} onHandle={setEmiHandle} disabled={postponeDraft.busy || emiBusy} />
+                </div>
+              )}
               </div>
             </div>
           )}
@@ -1582,10 +1615,15 @@ export function RecordPaymentPanel({
                 No money recorded
               </span>
             </div>
-            {postponeDraft.error && (
+            {(postponeDraft.error || emiError) && (
               <p className={cn("mt-2 flex items-center gap-1.5 text-xs font-semibold text-expense", sheet && wideSheet && "col-span-2 row-start-2")} role="alert">
                 <CircleAlert className="size-3.5 shrink-0" aria-hidden />
-                {postponeDraft.error}
+                {emiError ? `Postponed, but the EMI step wasn't saved: ${emiError}` : postponeDraft.error}
+              </p>
+            )}
+            {emiActive && emiHandle?.blocker && (
+              <p className={cn("mt-1.5 text-[11.5px] font-medium text-foreground/65", sheet && wideSheet && "col-span-2 row-start-3")} data-testid="emi-still-needed">
+                Still needed: {emiHandle.blocker}
               </p>
             )}
             {postponable.length > 1 && postponeDraft.failures.length > 0 && (
@@ -1603,17 +1641,25 @@ export function RecordPaymentPanel({
               </button>
               <button
                 type="submit" form={formId}
-                disabled={!postponeDraft.ready}
-                aria-busy={postponeDraft.busy}
+                disabled={!postponeConfirmable}
+                aria-busy={postponeDraft.busy || emiBusy}
                 className={cn(sheet ? SHEET_BUTTON.primary : cn(WS_PRIMARY, "h-10"), "min-w-0 flex-1 truncate whitespace-nowrap transition-[opacity,transform] duration-150 active:scale-[0.985]")}
               >
-                {postponeDraft.busy && <Loader2 className="size-4 shrink-0 animate-spin" aria-hidden />}
+                {(postponeDraft.busy || emiBusy) && <Loader2 className="size-4 shrink-0 animate-spin" aria-hidden />}
                 <span className="truncate">
                   {postponeDraft.busy
                     ? "Postponing…"
-                    : postponeDraft.retrying
-                      ? `Retry ${money(postponeDraft.pendingRemaining)}`
-                      : `Postpone ${money(postponeDraft.pendingRemaining)}${sheet ? ` → ${cycleName(postponeDraft.target)}` : ""}`}
+                    : emiBusy
+                      ? "Saving the EMI…"
+                      : emiOnly
+                        ? postponeSaved
+                          ? `Retry: ${emiHandle?.action ?? "EMI step"}`
+                          : `${(emiHandle?.action ?? "Continue").replace(/^./, (c) => c.toUpperCase())}`
+                        : postponeDraft.retrying
+                          ? `Retry ${money(postponeDraft.pendingRemaining)}`
+                          : emiActive && emiHandle?.action
+                            ? `Postpone & ${emiHandle.action}`
+                            : `Postpone ${money(postponeDraft.pendingRemaining)}${sheet ? ` → ${cycleName(postponeDraft.target)}` : ""}`}
                 </span>
               </button>
             </div>

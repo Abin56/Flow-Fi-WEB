@@ -49,7 +49,8 @@ const INIT = () => {
     }
     if (window.__wasOpen && !open && seen.dialogOpen) mark("dialogClosed");
   };
-  new MutationObserver(scan).observe(document, { subtree: true, childList: true, characterData: true });
+  // `window.__lean` (performance benchmarks): skip the text scan — reading innerText on every mutation forces layout and distorts timings.
+  if (!window.__lean) new MutationObserver(scan).observe(document, { subtree: true, childList: true, characterData: true });
   const isCommit = (u) => String(u).includes(":commit");
   const of = window.fetch;
   window.fetch = function (...a) {
@@ -92,6 +93,7 @@ export async function launch(opts = {}) {
     egressViolations.push(`${route.request().method()} ${url.origin}${url.pathname.slice(0, 40)}`);
     return route.abort("blockedbyclient");
   });
+  if (opts.lean || process.env.QA_LEAN === "1") await ctx.addInitScript(() => { window.__lean = true; });
   await ctx.addInitScript(INIT);
   const page = await ctx.newPage();
   page.setDefaultTimeout(30000);
@@ -267,4 +269,12 @@ export async function createDocUnderUser(docPath, value) {
     body: JSON.stringify({ fields: Object.fromEntries(Object.entries(value).map(([k, x]) => [k, toFsValue(x)])) }),
   });
   if (!res.ok) throw new Error(`createDocUnderUser ${docPath} failed: ${res.status} ${await res.text()}`);
+}
+
+/** The Loan/EMI popup opens on "Upcoming"; per-installment rows (edit / mark unpaid / view payment) live on its "Schedule" tab (EMI: "All EMIs"). */
+export async function showSchedule(page) {
+  const tab = page.getByRole("tab", { name: /^(Schedule|All EMIs)/ }).first();
+  // Wait for it: in a freshly loaded tab the popup is not rendered yet when this is called.
+  await tab.waitFor({ state: "visible", timeout: 10000 }).catch(() => {});
+  if (await tab.isVisible().catch(() => false)) await tab.click();
 }
