@@ -10,7 +10,8 @@ describe("/privacy", () => {
     render(<PrivacyPage />);
     expect(screen.getByText(/off by default/)).toBeTruthy();
     expect(screen.getAllByText(/Anthropic/).length).toBeGreaterThan(0);
-    expect(document.body.textContent).toContain("A candidate does not contain the message text");
+    expect(document.body.textContent).toContain("A candidate does not contain the sender's address");
+    expect(document.body.textContent).toContain("the text of the SMS the candidate was read from");
   });
 
   it("links every contact mention to the official FlowFi email", () => {

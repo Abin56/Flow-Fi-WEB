@@ -71,11 +71,11 @@ function candidate(overrides: Partial<SmsTransactionCandidate> = {}): SmsTransac
 
 const PEOPLE = [{ id: "p1", name: "Asha" } as Person, { id: "p2", name: "Ravi" } as Person];
 
-function renderDrawer(opts: { onGoTo?: (id: string) => void; onOpenChange?: (open: boolean) => void; direction?: "debit" | "credit" } = {}) {
+function renderDrawer(opts: { onGoTo?: (id: string) => void; onOpenChange?: (open: boolean) => void; direction?: "debit" | "credit"; originalMessage?: string } = {}) {
   const calls: string[] = [];
   render(
     <CandidateDetailsModal
-      candidate={candidate({ direction: opts.direction ?? "debit" })}
+      candidate={candidate({ direction: opts.direction ?? "debit", originalMessage: opts.originalMessage })}
       onOpenChange={opts.onOpenChange ?? vi.fn()}
       duplicate={null}
       matchedTransaction={null}
@@ -103,6 +103,14 @@ describe("compact transaction inspector", () => {
     expect(within(dialog).getByRole("heading", { name: "Amazon" })).toBeTruthy();
     expect(within(dialog).getByText("Transaction Details")).toBeTruthy();
     expect(within(dialog).getAllByLabelText("Debit −₹500.00")).toHaveLength(1);
+  });
+
+  it("shows the original SMS text verbatim when the phone sent it", () => {
+    const text = "Rs.500.00 spent on HDFC Card XX4821 at AMAZON on 01-08-26. Ref UPI1234";
+    renderDrawer({ originalMessage: text });
+    fireEvent.click(screen.getByRole("button", { name: /^Original SMS/ }));
+    expect(screen.getByTestId("original-message-text").textContent).toBe(text);
+    expect(screen.queryByTestId("original-message-unavailable")).toBeNull();
   });
 
   it("folds Notes, the original SMS, parsing evidence and technical details until asked", () => {

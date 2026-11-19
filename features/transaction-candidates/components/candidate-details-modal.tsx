@@ -748,7 +748,7 @@ export function CandidateDetailsModal({
   const splitNeedsAttention = allocation != null && (allocation.balanced === false || allocation.duplicate != null);
   const splitTypeLabel = SPLIT_TYPE_OPTIONS.find((o) => o.value === currentDraft.splitType)?.label ?? "Split";
 
-  // What the phone parsed from the SMS — the message text itself never reaches FlowFi (see the model's privacy note).
+  // What the phone parsed from the SMS — the message text, when the phone sent it, is `originalMessage` (display-only; see the model's privacy note).
   const smsFacts = smsParsedFacts(currentCandidate, `${sign}${formatCurrencyPrecise(currentCandidate.amount)}`);
   const smsSummary = smsFacts
     .filter((f) => f.inSummary)
@@ -835,7 +835,7 @@ export function CandidateDetailsModal({
       <div className="flex min-w-0 flex-1 basis-64 items-center gap-3">
         <SheetAvatar compact tone={isExpense ? "debit" : "credit"}>{initials}</SheetAvatar>
         <div className="min-w-0">
-          <p className="flex items-center gap-1.5 text-[10.5px] font-semibold tracking-[0.1em] whitespace-nowrap text-hero-foreground/68 uppercase">
+          <p className="flex items-center gap-1.5 text-[10.5px] font-semibold tracking-widest whitespace-nowrap text-hero-foreground/68 uppercase">
             <span>Transaction Details</span>
             <span aria-hidden>·</span>
             <span className="inline-flex items-center gap-1">
@@ -909,7 +909,7 @@ export function CandidateDetailsModal({
               <span className="truncate">Ready to import — Ctrl+Enter</span>
             </p>
           ) : (
-            <div className="flex min-w-0 items-center gap-1.5 overflow-x-auto [scrollbar-width:none]">
+            <div className="flex min-w-0 items-center gap-1.5 overflow-x-auto scrollbar-none">
               <span className="shrink-0 text-[12.5px] font-medium text-foreground/72">Still needed:</span>
               {/* Only what is still missing: finished checks are noise, and the row's overflow can no longer hide the pending one. */}
               {pendingChecks.map((c) => (
@@ -1070,12 +1070,21 @@ export function CandidateDetailsModal({
                       </div>
                     ))}
                   </dl>
-                  <div className="flex flex-col gap-0.5 rounded-lg border border-dashed border-border-strong bg-card px-3 py-2" data-testid="original-message-unavailable">
-                    <p className="text-[11px] font-bold tracking-wide text-foreground uppercase">Original message unavailable</p>
-                    <p className="text-[12px] text-foreground/80">
-                      FlowFi never receives the SMS text — it stays on your phone (open the Android app&apos;s SMS Inbox to read it). What you see here is what the phone parsed from it.
-                    </p>
-                  </div>
+                  {currentCandidate.originalMessage ? (
+                    <div className="flex flex-col gap-1 rounded-lg border border-border-strong bg-card px-3 py-2" data-testid="original-message">
+                      <p className="text-[11px] font-bold tracking-wide text-foreground uppercase">Original message</p>
+                      <p className="text-[12.5px] leading-relaxed font-medium wrap-break-word whitespace-pre-wrap text-foreground" data-testid="original-message-text">
+                        {currentCandidate.originalMessage}
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col gap-0.5 rounded-lg border border-dashed border-border-strong bg-card px-3 py-2" data-testid="original-message-unavailable">
+                      <p className="text-[11px] font-bold tracking-wide text-foreground uppercase">Original message unavailable</p>
+                      <p className="text-[12px] text-foreground/80">
+                        This transaction was synced before message text was included. Open the Android app&apos;s SMS Inbox to sync it again, or read it there. What you see here is what the phone parsed from it.
+                      </p>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -1480,7 +1489,7 @@ export function CandidateDetailsModal({
         }}
       >
         {/* No corner X: "Keep editing" is the safe answer and Esc / outside-click already mean the same thing, so a third way out only blurs the choice. */}
-        <DialogContent showCloseButton={false} className="gap-5 p-6 sm:max-w-[26rem]">
+        <DialogContent showCloseButton={false} className="gap-5 p-6 sm:max-w-104">
           <DialogHeader className="items-center gap-3 text-center">
             <span className="flex size-12 items-center justify-center rounded-full bg-warning/15 text-warning-foreground ring-8 ring-warning/8" aria-hidden>
               <NotebookPen className="size-5" />

@@ -12,7 +12,7 @@ import { CONTACT_EMAIL, CONTACT_MAILTO } from "@/lib/config/contact";
  * .dart`; tombstones — firestore.rules `smsCandidateTombstones` (no delete); pairing — functions/src/sms-pairing.
  */
 
-const PRIVACY_POLICY_UPDATED = "25 October 2026";
+const PRIVACY_POLICY_UPDATED = "19 November 2026";
 
 export const metadata: Metadata = {
   title: "Privacy policy · FlowFi",
@@ -69,7 +69,7 @@ export default function PrivacyPage() {
           <List
             items={[
               "FlowFi reads bank SMS on your phone and recognises transactions there.",
-              "Parsed transaction details, not the message text, are saved to your FlowFi account for review.",
+              "Parsed transaction details and the text of each recognised bank message are saved to your FlowFi account, only you can read them, so you can review them on the web.",
               "Nothing becomes a transaction until you import it.",
               "AI help is off unless you turn it on. When on, unclear messages are sent with long numbers masked to Anthropic.",
               "FlowFi does not sell your data, show ads or use advertising identifiers.",
@@ -86,7 +86,8 @@ export default function PrivacyPage() {
             </p>
             <p>
               Matching messages are parsed on the phone into transaction details. The full message text, sender and
-              parsing results are stored in a database on the phone so you can review them in the app. Android backup is
+              parsing results are stored in a database on the phone so you can review them in the app. The message text
+              of a recognised transaction is also saved with its candidate (see below); the sender is not. Android backup is
               turned off for FlowFi, so this local data is not copied to your Google backup.
             </p>
           </Section>
@@ -103,11 +104,14 @@ export default function PrivacyPage() {
                 "merchant, bank name and the last 4 digits of the account or card",
                 "reference number, if the message has one",
                 "which of your FlowFi accounts or cards it matched, the confidence score and review reasons",
+                "the text of the SMS the candidate was read from, exactly as received, so you can read it on FlowFi Web",
                 "an internal message id and when the candidate was created",
               ]}
             />
             <p>
-              A candidate does <Strong>not</Strong> contain the message text or the sender&apos;s address. Candidates are
+              The message text is saved only for messages recognised as bank or payment transactions, never for other
+              messages, and it is shown on FlowFi Web read-only; it is never used to change a transaction. A candidate
+              does <Strong>not</Strong> contain the sender&apos;s address. Candidates are
               never recorded as transactions on their own: each one waits until you import or dismiss it.
             </p>
           </Section>
@@ -181,7 +185,7 @@ export default function PrivacyPage() {
             <List
               items={[
                 <>
-                  <Strong>Candidates</Strong> are kept until you import or dismiss them. Then the candidate is deleted
+                  <Strong>Candidates</Strong> are kept until you import or dismiss them. Then the candidate, including its message text, is deleted
                   and a small record is kept (its id, imported or dismissed, the linked transaction id and when) so the
                   same message isn&apos;t offered again. That record is kept indefinitely.
                 </>,
