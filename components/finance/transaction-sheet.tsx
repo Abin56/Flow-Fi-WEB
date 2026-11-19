@@ -31,20 +31,20 @@ const CONTENT = "mx-auto w-full max-w-[1360px]";
 
 /** Icon buttons sitting on the hero header. */
 const HERO_ICON =
-  "grid size-8 shrink-0 place-items-center rounded-[10px] text-hero-foreground/70 transition-colors hover:bg-white/10 hover:text-hero-foreground focus-visible:ring-2 focus-visible:ring-primary/70 focus-visible:outline-none disabled:opacity-35";
+  "grid size-8 shrink-0 place-items-center rounded-sm text-hero-foreground/70 transition-colors hover:bg-white/10 hover:text-hero-foreground focus-visible:ring-2 focus-visible:ring-primary/70 focus-visible:outline-none disabled:opacity-35";
 
 // ---- shared styles ---------------------------------------------------------------------------------------------------
 
 /** Text inputs and textareas inside a sheet. */
 export const SHEET_FIELD =
-  "h-10 w-full rounded-[10px] border border-border-strong bg-card px-3 text-sm text-foreground shadow-e1 outline-none transition-[border-color,box-shadow] placeholder:text-muted-foreground hover:border-muted-foreground focus-visible:border-primary-accent-text focus-visible:ring-0 focus-visible:shadow-[0_0_0_3px_oklch(0.912_0.185_126/0.4)] aria-invalid:border-expense";
+  "h-10 w-full rounded-sm border border-border-strong bg-card px-3 text-sm text-foreground shadow-e1 outline-none transition-[border-color,box-shadow] placeholder:text-muted-foreground hover:border-muted-foreground focus-visible:border-primary-accent-text focus-visible:ring-0 focus-visible:shadow-[0_0_0_3px_oklch(0.912_0.185_126/0.4)] aria-invalid:border-expense";
 /** Select triggers inside a sheet. */
 export const SHEET_TRIGGER =
-  "h-10 w-full rounded-[10px] border-border-strong bg-card px-3 text-sm shadow-e1 transition-[border-color,box-shadow] hover:border-muted-foreground focus-visible:border-primary-accent-text focus-visible:ring-0 focus-visible:shadow-[0_0_0_3px_oklch(0.912_0.185_126/0.4)] aria-invalid:border-expense dark:bg-card";
+  "h-10 w-full rounded-sm border-border-strong bg-card px-3 text-sm shadow-e1 transition-[border-color,box-shadow] hover:border-muted-foreground focus-visible:border-primary-accent-text focus-visible:ring-0 focus-visible:shadow-[0_0_0_3px_oklch(0.912_0.185_126/0.4)] aria-invalid:border-expense dark:bg-card";
 /** A field's label. */
 export const SHEET_LABEL = "text-[12px] font-medium text-foreground/70";
 
-const BUTTON = "inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-[10px] px-4 text-sm font-semibold whitespace-nowrap transition-[background-color,box-shadow,color,opacity] outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card disabled:pointer-events-none disabled:opacity-50";
+const BUTTON = "inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-sm px-4 text-sm font-semibold whitespace-nowrap transition-[background-color,box-shadow,color,opacity] outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card disabled:pointer-events-none disabled:opacity-50";
 export const SHEET_BUTTON = {
   primary: cn(BUTTON, "bg-primary text-primary-foreground shadow-e2 hover:bg-[var(--primary-hover)]"),
   /** The primary action while something is still missing: calm and neutral (it still explains itself on click). */
@@ -110,11 +110,11 @@ export function SheetNav({
     compact ? "size-7" : "size-8",
   );
   return (
-    <div className="flex items-center rounded-[12px] bg-white/[0.07] p-0.5 ring-1 ring-white/10" role="group" aria-label={label} title={title}>
+    <div className="flex items-center rounded-md bg-white/[0.07] p-0.5 ring-1 ring-white/10" role="group" aria-label={label} title={title}>
       <button type="button" className={arrow} aria-label={prevLabel} disabled={disabled || !onPrev} onClick={onPrev}>
         <ChevronLeft className="size-4" aria-hidden />
       </button>
-      <span data-testid={positionTestId} aria-live="polite" className={cn("text-center text-xs font-semibold text-hero-foreground tabular-nums", compact ? "min-w-[3.25rem]" : "min-w-[4rem]")}>
+      <span data-testid={positionTestId} aria-live="polite" className={cn("text-center text-xs font-semibold text-hero-foreground tabular-nums", compact ? "min-w-13" : "min-w-16")}>
         {position}
       </span>
       <button type="button" className={arrow} aria-label={nextLabel} disabled={disabled || !onNext} onClick={onNext}>
@@ -209,8 +209,8 @@ export function SheetPicker({
       >
         <span
           className={cn(
-            "grid shrink-0 place-items-center overflow-hidden [&>[role=img]]:size-full! [&>span]:size-full!",
-            compact ? "size-7 rounded-[8px]" : "size-9 rounded-[10px]",
+            "grid shrink-0 place-items-center overflow-hidden *:[[role=img]]:size-full! [&>span]:size-full!",
+            compact ? "size-7 rounded-[8px]" : "size-9 rounded-sm",
             selected ? (selected.credit ? CREDIT_TILE : "bg-secondary text-foreground/80") : "border border-dashed border-border bg-card text-foreground/72",
           )}
         >
@@ -227,7 +227,7 @@ export function SheetPicker({
           return (
             <div key={s.title ?? "all"}>
               {i > 0 && <SelectSeparator />}
-              <SelectGroup className={cn(credit && s.title && "rounded-md bg-violet-500/[0.06] pb-0.5 dark:bg-violet-400/[0.08]")}>
+              <SelectGroup className={cn(credit && s.title && "rounded-md bg-violet-500/6 pb-0.5 dark:bg-violet-400/8")}>
                 {s.title && (
                   <SelectLabel className={cn("flex items-center gap-1.5 pt-1.5 pb-1 text-[10px] font-semibold tracking-wide uppercase", credit && "text-violet-700 dark:text-violet-300")}>
                     {credit && <CreditCard className="size-3" strokeWidth={2.4} />}
@@ -237,7 +237,7 @@ export function SheetPicker({
                 {s.options.map((o) => (
                   <SelectItem key={o.value} value={o.value} className="py-2">
                     <span className="flex items-center gap-2.5">
-                      {o.icon && <span className={cn("grid size-7 shrink-0 place-items-center overflow-hidden rounded-[8px] [&>[role=img]]:size-full! [&>span]:size-full!", o.credit ? CREDIT_TILE : "bg-secondary text-foreground/80")}>{o.icon}</span>}
+                      {o.icon && <span className={cn("grid size-7 shrink-0 place-items-center overflow-hidden rounded-[8px] *:[[role=img]]:size-full! [&>span]:size-full!", o.credit ? CREDIT_TILE : "bg-secondary text-foreground/80")}>{o.icon}</span>}
                       <span className="flex min-w-0 flex-col">
                         <span className="truncate">{o.label}</span>
                         {o.detail && <span className="truncate text-[11px] text-muted-foreground">{o.detail}</span>}
@@ -469,7 +469,7 @@ export function TransactionSheet({
           "ease-[cubic-bezier(0.22,1,0.36,1)]",
           "data-open:zoom-in-100 data-open:fade-in-0 data-open:slide-in-from-top-5 data-closed:zoom-out-100 data-closed:fade-out-0 data-closed:slide-out-to-top-5 data-open:duration-200 data-closed:duration-150 motion-reduce:data-open:slide-in-from-top-0 motion-reduce:data-closed:slide-out-to-top-0",
           "max-h-[90dvh] max-sm:max-h-[88dvh]",
-          compact && "right-0 mx-auto w-[calc(100%-1rem)] max-w-[1040px] rounded-b-2xl sm:w-[calc(100%-2rem)] sm:max-w-[1040px] max-h-[94dvh]",
+          compact && "right-0 mx-auto w-[calc(100%-1rem)] max-w-260 rounded-b-2xl sm:w-[calc(100%-2rem)] sm:max-w-260 max-h-[94dvh]",
           className,
         )}
       >
@@ -479,7 +479,7 @@ export function TransactionSheet({
           <div className={cn(CONTENT, "relative flex items-start gap-3", compact ? "px-4 py-2.5 sm:px-5" : "gap-4 px-4 py-4 sm:px-6 lg:px-8")}>
             <div className="min-w-0 flex-1">{header}</div>
             {/* Window controls, styled as one family with the queue arrows. */}
-            <div className="flex shrink-0 items-center rounded-[12px] bg-white/[0.07] p-0.5 ring-1 ring-white/10">
+            <div className="flex shrink-0 items-center rounded-md bg-white/[0.07] p-0.5 ring-1 ring-white/10">
               <button type="button" className={HERO_ICON} aria-label={peek ? "Show details" : "Collapse sheet"} title={peek ? "Show details" : "Collapse to the header and actions"} onClick={togglePeek}>
                 {peek ? <ChevronDown className="size-4" /> : <ChevronUp className="size-4" />}
               </button>
@@ -490,14 +490,14 @@ export function TransactionSheet({
             </div>
           </div>
           {progress && progress.total > 1 && (
-            <div aria-hidden className="absolute inset-x-0 bottom-0 h-[3px] bg-white/[0.07]">
+            <div aria-hidden className="absolute inset-x-0 bottom-0 h-0.75 bg-white/[0.07]">
               <div className="h-full rounded-r-full bg-primary transition-[width] duration-300 ease-out motion-reduce:transition-none" style={{ width: `${Math.max(2, Math.min(100, (progress.current / progress.total) * 100))}%` }} />
             </div>
           )}
         </header>
 
         {/* Hidden, not unmounted, while peeking — values, open sections and split rows all survive. */}
-        <div className={cn("min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain bg-secondary/55 [scrollbar-gutter:stable]", peek && "hidden")} data-testid="sheet-body">
+        <div className={cn("min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain bg-secondary/55 scrollbar-gutter-stable", peek && "hidden")} data-testid="sheet-body">
           <div className={CONTENT}>{children}</div>
         </div>
 
