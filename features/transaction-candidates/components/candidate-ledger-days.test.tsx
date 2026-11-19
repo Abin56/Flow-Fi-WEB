@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SmsTransactionCandidate } from "@/lib/models/sms-transaction-candidate";
 import { deriveCandidateStatus } from "../lib/candidate-status";
 import { CandidateLedger, type LedgerGroup, type ScopeSelection } from "./candidate-ledger";
-import { DOCK_MAX, DOCK_REACH, dockScale } from "./day-navigator";
+import { DOCK_MAX, DOCK_REACH, RISE_MAX, RISE_REACH, dockRise, dockScale } from "./day-navigator";
 import type { CandidateRowModel } from "./candidate-row-parts";
 
 vi.mock("@/lib/firebase/client", () => ({ firebaseApp: {}, auth: {}, db: {}, storage: {} }));
@@ -425,6 +425,36 @@ describe("dockScale (the magnification curve)", () => {
   });
 });
 
+describe("dockRise (the arch)", () => {
+  it("is the crest under the pointer, a smooth bell over the neighbours, and nothing beyond the reach", () => {
+    expect(RISE_MAX).toBe(4.5);
+    expect(dockRise(0)).toBe(1);
+    const [one, two, three] = [dockRise(34), dockRise(68), dockRise(102)]; // 1, 2, 3 cells over
+    expect(one).toBeGreaterThan(0.6); // "moderately" — the next dates rise most
+    expect(one).toBeLessThan(0.8);
+    expect(two).toBeGreaterThan(0.15); // "only a little"
+    expect(two).toBeLessThan(0.35);
+    expect(three).toBeLessThan(0.08);
+    expect(dockRise(RISE_REACH)).toBe(0);
+    expect(dockRise(900)).toBe(0);
+  });
+  it("only ever falls as the pointer moves away, and never lifts without a pointer", () => {
+    let last = Infinity;
+    for (let x = 0; x <= RISE_REACH; x += 2) {
+      const r = dockRise(x);
+      expect(r).toBeLessThanOrEqual(last + 1e-9);
+      expect(r).toBeGreaterThanOrEqual(0);
+      last = r;
+    }
+    expect(dockRise(Infinity)).toBe(0);
+    expect(dockRise(Number.NaN)).toBe(0);
+  });
+  it("is wider than the growth curve, so a date two cells away lifts a little while it is hardly bigger", () => {
+    expect(dockRise(68)).toBeGreaterThan((dockScale(68) - 1) / (DOCK_MAX - 1) * 4);
+    expect(dockScale(68)).toBeLessThan(1.05);
+  });
+});
+
 describe("date strip under a mouse: magnification, wheel and drag", () => {
   // jsdom has no layout: give each date a 34px cell on a 34px pitch (so its centre is known), and drive animation frames by hand —
   // the dock EASES toward its targets over time, so a test advances the clock until it settles.
@@ -484,6 +514,7 @@ describe("date strip under a mouse: magnification, wheel and drag", () => {
 
   const dock = (day: string) => chipOf(day).style.getPropertyValue("--dock");
   const lift = (day: string) => chipOf(day).style.getPropertyValue("--lift");
+  const rise = (day: string) => chipOf(day).style.getPropertyValue("--rise");
   const centreOf = (index: number) => 117 + index * 34; // 100 + 17 + i*34
 
   /** Gives the strip a scrollable width (jsdom has none) and a settable scrollLeft. */
@@ -505,6 +536,31 @@ describe("date strip under a mouse: magnification, wheel and drag", () => {
     expect(near).toBeLessThan(1.25);
     expect(Number(dock("2026-10-21"))).toBeCloseTo(near, 3); // symmetric
     expect(Number(lift("2026-10-18"))).toBeCloseTo(1, 2); // the soft backdrop is at full strength under the pointer
+  });
+
+  it("raises the dates into an arch: the crest under the pointer, the neighbours lower, symmetric, and it glides with the pointer", () => {
+    renderGrid(baseRows());
+    const strip = screen.getByTestId("candidate-day-strip");
+    move(strip, centreOf(1), "mouse"); // over 18 Oct (03 and 21 are one cell either side)
+    expect(Number(rise("2026-10-18"))).toBeCloseTo(1, 2); // the crest
+    const side = Number(rise("2026-10-03"));
+    expect(side).toBeGreaterThan(0.6);
+    expect(side).toBeLessThan(0.8);
+    expect(Number(rise("2026-10-21"))).toBeCloseTo(side, 3);
+    // moving the pointer half a cell shifts the crest part-way: still smooth, never a jump
+    move(strip, centreOf(1) + 17, "mouse");
+    expect(Number(rise("2026-10-18"))).toBeLessThan(1);
+    expect(Number(rise("2026-10-21"))).toBeGreaterThan(Number(rise("2026-10-03")));
+  });
+
+  it("does not raise anything for touch or under reduced motion", () => {
+    renderGrid(baseRows());
+    const strip = screen.getByTestId("candidate-day-strip");
+    move(strip, centreOf(1), "touch");
+    expect(rise("2026-10-18")).toBe("");
+    vi.stubGlobal("matchMedia", (query: string) => ({ matches: /reduce/.test(query), media: query, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, onchange: null, dispatchEvent: () => false }));
+    move(strip, centreOf(1), "mouse");
+    expect(rise("2026-10-18")).toBe("");
   });
 
   it("flows with the pointer: moving along the row shifts the peak", () => {
@@ -529,6 +585,7 @@ describe("date strip under a mouse: magnification, wheel and drag", () => {
     for (const day of ["2026-10-03", "2026-10-18", "2026-10-21"]) {
       expect(dock(day)).toBe("1");
       expect(lift(day)).toBe("0");
+      expect(rise(day)).toBe("0");
     }
   });
 

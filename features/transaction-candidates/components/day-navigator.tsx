@@ -173,8 +173,13 @@ function MonthControl({ days, months, day, onSelect }: { days: readonly DayEntry
 /** How far a date is kept from the strip's faded edges when it is scrolled into view. */
 const EDGE_ROOM = 40;
 const FADE = 20;
-/** A date cell: fixed size, so nothing around it can ever move while a number inside it grows. */
+/**
+ * A date cell: fixed size, so nothing around it can ever move while a number inside it grows or rises. 34 wide; 38 tall = 5px of headroom
+ * above the number's zone (the arch of the wave rises into it — the strip clips vertically, so it must be reserved here) + the 26px zone
+ * + the 4px dot row + 3px below.
+ */
 const CELL = 34;
+const CELL_H = 38;
 
 /**
  * Magnification (macOS-Dock style, but on a FIXED layout): the number under the pointer reaches DOCK_MAX (1.5×); the effect falls off like a bell
@@ -192,10 +197,26 @@ const DRAG_SLOP = 4;
 /** How far (ms of release velocity) a flick keeps gliding. */
 const FLING_MS = 240;
 
+/**
+ * The wave: besides growing, a number RISES (a vertical translate) by up to RISE_MAX px, so the row bends into a smooth arch around the pointer.
+ * The arch is a little wider than the growth curve (σ ≈ RISE_SIGMA px) so the dates two cells away still lift slightly: at the usual 34px
+ * pitch that is 100% under the pointer, ~70% for the next date, ~24% for the one after, ~4% for the third, nothing beyond RISE_REACH. The
+ * CSS side (`translate: 0 calc(var(--rise) * -4.5px)` on the number) must agree with RISE_MAX.
+ */
+export const RISE_MAX = 4.5;
+export const RISE_SIGMA = 40;
+export const RISE_REACH = 130;
+
 /** The scale of a date whose centre is `distance` px from the pointer — 1 (at rest) when there is no pointer or it is far away. Pure. */
 export function dockScale(distance: number): number {
   if (!Number.isFinite(distance) || distance >= DOCK_REACH) return 1;
   return 1 + (DOCK_MAX - 1) * Math.exp(-(distance * distance) / (2 * DOCK_SIGMA * DOCK_SIGMA));
+}
+
+/** How far up the arch a date whose centre is `distance` px from the pointer sits: 0 (rest) … 1 (the crest). Multiply by RISE_MAX for px. Pure. */
+export function dockRise(distance: number): number {
+  if (!Number.isFinite(distance) || distance >= RISE_REACH) return 0;
+  return Math.exp(-(distance * distance) / (2 * RISE_SIGMA * RISE_SIGMA));
 }
 
 function useOverflowEdges(ref: RefObject<HTMLElement | null>, deps: unknown) {
@@ -253,6 +274,7 @@ function DayStrip({
   const frame = useRef(0);
   const lastTime = useRef(0);
   const scales = useRef(new Map<string, number>());
+  const rises = useRef(new Map<string, number>());
   const scrollTarget = useRef<number | null>(null);
   const loop = useRef<FrameRequestCallback>(() => {});
   const drag = useRef<{ id: number; startX: number; startLeft: number; active: boolean; samples: { t: number; x: number }[] } | null>(null);
@@ -294,7 +316,8 @@ function DayStrip({
       return { key, el, cx: r.left + r.width / 2 };
     });
     for (const entry of entries) {
-      const goal = dockScale(x == null ? Infinity : Math.abs(x - entry.cx));
+      const distance = x == null ? Infinity : Math.abs(x - entry.cx);
+      const goal = dockScale(distance);
       const from = scales.current.get(entry.key) ?? 1;
       let next = from + (goal - from) * k;
       if (Math.abs(next - goal) < 0.003) next = goal;
@@ -304,6 +327,15 @@ function DayStrip({
       entry.el.style.setProperty("--dock", resting ? "1" : next.toFixed(3));
       // 0 at rest → 1 at the peak: drives the soft background and the little lift behind the number.
       entry.el.style.setProperty("--lift", resting ? "0" : Math.min(1, (next - 1) / (DOCK_MAX - 1)).toFixed(3));
+
+      // The arch: the same easing, on its own (wider) curve, so the crest glides with the pointer and the whole row bends and relaxes smoothly.
+      const riseGoal = dockRise(distance);
+      const riseFrom = rises.current.get(entry.key) ?? 0;
+      let rise = riseFrom + (riseGoal - riseFrom) * k;
+      if (Math.abs(rise - riseGoal) < 0.004) rise = riseGoal;
+      else busy = true;
+      rises.current.set(entry.key, rise);
+      entry.el.style.setProperty("--rise", rise <= 0.004 ? "0" : rise.toFixed(3));
     }
 
     if (busy && typeof requestAnimationFrame === "function") frame.current = requestAnimationFrame((t) => loop.current(t));
@@ -537,8 +569,8 @@ function DayStrip({
             data-count={d.count}
             data-selected={on || undefined}
             onClick={() => onSelect(d.key)}
-            style={{ width: CELL, height: CELL }}
-            className="group/day flex shrink-0 cursor-pointer flex-col items-center justify-start gap-0.5 pt-0 pb-0.5 outline-none"
+            style={{ width: CELL, height: CELL_H }}
+            className="group/day flex shrink-0 cursor-pointer flex-col items-center justify-start pt-[5px] pb-[3px] outline-none"
           >
             {/* The number's zone is fixed (26px): the number is centred in it and grows from its middle, so nothing outside the cell is touched. */}
             <span className="flex h-[26px] items-center justify-center">
@@ -550,7 +582,8 @@ function DayStrip({
                 // backdrop whose strength follows the magnification (`--lift`).
                 className={cn(
                   "relative isolate flex h-[1.3em] min-w-[1.5em] items-center justify-center rounded-[0.4em] px-[0.22em] font-mono leading-none tracking-tight tabular-nums",
-                  "[font-size:calc(13px*var(--dock,1))] transition-[background-color,color,box-shadow] duration-150 ease-out motion-reduce:transition-none",
+                  // `translate` is the arch (`--rise` 0…1 × RISE_MAX px, eased in JS) — a visual shift only, so the cell, and with it the click target, never moves.
+                  "[font-size:calc(13px*var(--dock,1))] [translate:0_calc(var(--rise,0)*-4.5px)] transition-[background-color,color,box-shadow] duration-150 ease-out motion-reduce:transition-none",
                   "group-focus-visible/day:ring-2 group-focus-visible/day:ring-ring",
                   on
                     ? "bg-primary font-bold text-primary-foreground shadow-e1"

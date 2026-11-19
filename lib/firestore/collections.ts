@@ -11,6 +11,7 @@ export const FirestoreCollections = {
   categories: "categories",
   budgets: "budgets",
   savingsGoals: "savingsGoals",
+  savingsContributions: "contributions", // subcollection under savingsGoals/{goalId} — web-only, see lib/models/savings-contribution.ts
   people: "people", // creditors & debtors
   ledger: "ledger", // subcollection under people/{personId}
   advanceApplications: "advanceApplications", // subcollection under people/{personId}

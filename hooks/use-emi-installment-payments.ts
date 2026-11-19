@@ -13,6 +13,8 @@ import type { Installment } from "@/lib/models/payment-schedule";
 import { createInstallmentPaymentRepositoryFor, createInstallmentRepositoryFor } from "@/lib/repositories/repository-factory";
 import { useAuthStore } from "@/store/auth-store";
 import { useAllEmiInstallments } from "./use-emis";
+import { useTransactions } from "./use-transactions";
+import { paymentRowsKey } from "@/lib/engines/payment-rows-key";
 
 export interface EmiPaidRow {
   scheduleId: string;
@@ -24,6 +26,13 @@ export interface EmiPaidRow {
    * so Cash Flow / Month Cycle money-out totals skip it (`countsAsEmiCashOut`).
    */
   recordedEarlier: boolean;
+  /**
+   * Additive, read only by Reports / Analytics: the payment record (null for a legacy unrecorded remainder), its
+   * installment, and the Transaction it posted (attributes the payment to an account for the account filter).
+   */
+  paymentId?: string | null;
+  installmentId?: string;
+  transactionId?: string | null;
 }
 
 /** Whether an EMI payment row is money out for Cash Flow / Month Cycle (a payment recorded as already made earlier is not). */
@@ -36,7 +45,10 @@ export function useEmiInstallmentPayments(): { payments: EmiPaidRow[]; isLoading
   const { data: installments = [] } = useAllEmiInstallments();
 
   const paid = useMemo(() => (installments as Installment[]).filter((i) => i.deletedAt == null && i.amountPaid > 0), [installments]);
-  const fingerprint = useMemo(() => paid.map((i) => `${i.scheduleId}:${i.id}:${i.amountPaid}`).sort().join(","), [paid]);
+  // EMI payment Transactions — a date-only edit changes these even though every `amountPaid` stays the same.
+  const { data: transactions = [] } = useTransactions();
+  const linked = useMemo(() => transactions.filter((t) => t.emiId != null), [transactions]);
+  const fingerprint = useMemo(() => paymentRowsKey(paid, linked), [paid, linked]);
 
   const query = useQuery({
     queryKey: ["emiInstallmentPayments", uid, fingerprint],
@@ -49,12 +61,12 @@ export function useEmiInstallmentPayments(): { payments: EmiPaidRow[]; isLoading
         paid.map(async (installment) => {
           const repository = createInstallmentPaymentRepositoryFor(uid, installment.scheduleId, installment.id, createInstallmentRepositoryFor(uid, installment.scheduleId));
           const payments = (await repository.getAll()).filter((p) => p.deletedAt == null);
-          const rows = payments.map((p): EmiPaidRow => ({ scheduleId: installment.scheduleId, date: p.date, amount: p.amount, recordedEarlier: p.recordedEarlier != null }));
+          const rows = payments.map((p): EmiPaidRow => ({ scheduleId: installment.scheduleId, date: p.date, amount: p.amount, recordedEarlier: p.recordedEarlier != null, paymentId: p.id, installmentId: installment.id, transactionId: p.transactionId ?? null }));
           // A legacy installment whose `amountPaid` has no (or not all) payment records keeps the unrecorded part
           // at its due date, as before — never dropped from the totals. (Every recorded payment counts as a
           // record here, an "already paid earlier" one included — it must not reappear as unrecorded money.)
           const unrecorded = Math.round((installment.amountPaid - rows.reduce((s, r) => s + r.amount, 0)) * 100) / 100;
-          if (unrecorded > 0) rows.push({ scheduleId: installment.scheduleId, date: installment.dueDate, amount: unrecorded, recordedEarlier: false });
+          if (unrecorded > 0) rows.push({ scheduleId: installment.scheduleId, date: installment.dueDate, amount: unrecorded, recordedEarlier: false, paymentId: null, installmentId: installment.id, transactionId: null });
           return rows;
         }),
       );

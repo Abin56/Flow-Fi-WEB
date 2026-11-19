@@ -17,6 +17,11 @@ import { accountFromFirestore, accountToFirestore, type Account } from "@/lib/mo
 import { billFromFirestore, billToFirestore, type Bill } from "@/lib/models/bill";
 import { budgetFromFirestore, budgetToFirestore, type Budget } from "@/lib/models/budget";
 import { categoryFromFirestore, categoryToFirestore, type Category } from "@/lib/models/category";
+import {
+  savingsContributionFromFirestore,
+  savingsContributionToFirestore,
+  type SavingsContribution,
+} from "@/lib/models/savings-contribution";
 import { savingsGoalFromFirestore, savingsGoalToFirestore, type SavingsGoal } from "@/lib/models/savings-goal";
 import {
   creditCardProfileFromFirestore,
@@ -216,11 +221,32 @@ const savingsGoalConverter: FirestoreDataConverter<SavingsGoal> = {
   fromFirestore: savingsGoalFromFirestore,
 };
 
+const savingsContributionConverter: FirestoreDataConverter<SavingsContribution> = {
+  toFirestore: savingsContributionToFirestore,
+  fromFirestore: savingsContributionFromFirestore,
+};
+
+/** A goal's money entries live in its own `savingsGoals/{goalId}/contributions` subtree. */
+export function createSavingsContributionsCollection(uid: string, goalId: string) {
+  return collection(
+    db,
+    FirestoreCollections.users,
+    uid,
+    FirestoreCollections.savingsGoals,
+    goalId,
+    FirestoreCollections.savingsContributions,
+  ).withConverter(savingsContributionConverter);
+}
+
 export function createSavingsRepository(uid: string): SavingsRepository {
   const ref = collection(db, FirestoreCollections.users, uid, FirestoreCollections.savingsGoals).withConverter(
     savingsGoalConverter,
   );
-  return new SavingsRepository(ref);
+  // Real-money entries go through the SAME transfer pair "Add transfer" writes — never a second implementation.
+  return new SavingsRepository(ref, {
+    contributions: (goalId) => createSavingsContributionsCollection(uid, goalId),
+    transactions: createTransactionRepository(uid, createAccountRepository(uid)),
+  });
 }
 
 const personConverter: FirestoreDataConverter<Person> = {

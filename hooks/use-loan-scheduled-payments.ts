@@ -18,6 +18,8 @@ import type { Installment } from "@/lib/models/payment-schedule";
 import { createInstallmentPaymentRepositoryFor, createInstallmentRepositoryFor } from "@/lib/repositories/repository-factory";
 import { useAuthStore } from "@/store/auth-store";
 import { useAllLoanInstallments, useLoans } from "./use-loans";
+import { useTransactions } from "./use-transactions";
+import { paymentRowsKey } from "@/lib/engines/payment-rows-key";
 
 export function useLoanScheduledPayments(): { payments: LoanScheduledPayment[]; isLoading: boolean } {
   const uid = useAuthStore((s) => s.user?.uid);
@@ -29,13 +31,12 @@ export function useLoanScheduledPayments(): { payments: LoanScheduledPayment[]; 
     () => new Map((loans as Loan[]).map((l) => [l.scheduleId, l.direction])),
     [loans],
   );
+  // Loan payment Transactions — a date-only edit changes these even though every `amountPaid` stays the same.
+  const { data: transactions = [] } = useTransactions();
+  const linked = useMemo(() => transactions.filter((t) => t.loanId != null), [transactions]);
   const fingerprint = useMemo(
-    () =>
-      paid
-        .map((i) => `${i.scheduleId}:${i.id}:${i.amountPaid}:${directionBySchedule.get(i.scheduleId) ?? "?"}`)
-        .sort()
-        .join(","),
-    [paid, directionBySchedule],
+    () => paymentRowsKey(paid, linked, (i) => `:${directionBySchedule.get(i.scheduleId) ?? "?"}`),
+    [paid, linked, directionBySchedule],
   );
 
   const query = useQuery({
@@ -66,6 +67,10 @@ export function useLoanScheduledPayments(): { payments: LoanScheduledPayment[]; 
               deletedAt: p.deletedAt,
               installmentId: installment.id,
               scheduleId: installment.scheduleId,
+              paymentId: p.id,
+              allocationType: p.allocationType,
+              prepaymentPrincipalAmount: p.prepaymentPrincipalAmount ?? null,
+              recordedEarlier: p.recordedEarlier != null,
             }),
           );
         }),
