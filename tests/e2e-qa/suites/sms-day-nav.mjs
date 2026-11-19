@@ -584,6 +584,17 @@ const middleDay = (page) =>
     const chips = [...document.querySelectorAll('[data-testid="candidate-day-chip"]')];
     return chips.map((el) => ({ d: el.getAttribute("data-day"), x: Math.abs(el.getBoundingClientRect().left + 17 - mid) })).sort((a, b) => a.x - b.x)[0].d;
   });
+/** How many px each date's number is raised by the wave (its computed `translate` is "0px -Npx"), keyed by day. */
+const readRises = (page) =>
+  page.evaluate(() =>
+    Object.fromEntries(
+      [...document.querySelectorAll('[data-testid="candidate-day-chip"]')].map((c) => {
+        const t = getComputedStyle(c.querySelector('[data-testid="candidate-day-number"]')).translate;
+        const y = t && t !== "none" ? parseFloat(t.split(" ")[1] ?? "0") : 0;
+        return [c.getAttribute("data-day"), -(y || 0)];
+      }),
+    ),
+  );
 const numberFill = (page, day) => chip(page, day).evaluate((c) => getComputedStyle(c.querySelector('[data-testid="candidate-day-number"]')).backgroundColor);
 const liftOf = (page, day) => chip(page, day).evaluate((c) => Number(getComputedStyle(c.querySelector('[data-testid="candidate-day-number"]'), "::before").opacity));
 const clear = (c) => /rgba\(.*,\s*0\)$/.test(c) || c === "transparent";
@@ -619,8 +630,8 @@ scenario(
     chk("at rest every date number is its natural size", Object.values(rest).every((v) => Math.abs(v - 1) < 0.01), JSON.stringify(Object.values(rest).slice(0, 3)));
     const base = await rectsOf(page);
     notes.push(`cell ${base.chips[0]}, card ${base.card}, nav ${base.nav}`);
-    chk("each date cell is a fixed 34×34 target", base.chips.every((c) => Math.abs(c[2] - 34) < 0.6 && Math.abs(c[3] - 34) < 0.6), `${base.chips[0][2]}×${base.chips[0][3]}`);
-    chk("the whole navigator stays compact (card ≤ 46px)", base.card[3] <= 46, `${base.card[3]}px`);
+    chk("each date cell is a fixed 34×38 target (5px of headroom for the arch)", base.chips.every((c) => Math.abs(c[2] - 34) < 0.6 && Math.abs(c[3] - 38) < 0.6), `${base.chips[0][2]}×${base.chips[0][3]}`);
+    chk("the whole navigator stays compact (card ≤ 48px)", base.card[3] <= 48, `${base.card[3]}px`);
     await h.shot(page, "iday-dock-rest");
 
     // ── 5. Horizontal scrolling to the start with the mouse wheel — eased, and the page does not move ──
@@ -683,6 +694,86 @@ scenario(
     await h.shot(page, "iday-dock-hover-03");
     chk("moving to 03: it is now the peak (1.4–1.6×) and 01 has relaxed back (< 1.06)", sc["2026-08-03"] >= 1.4 && sc["2026-08-03"] <= 1.6 && sc["2026-08-01"] < 1.06, `03=${sc["2026-08-03"].toFixed(2)} 01=${sc["2026-08-01"].toFixed(2)}`);
     chk("…02 and 04 are the ~1.2× neighbours, equally", sc["2026-08-02"] > 1.15 && sc["2026-08-04"] > 1.15 && Math.abs(sc["2026-08-02"] - sc["2026-08-04"]) < 0.06, `${sc["2026-08-02"].toFixed(2)} / ${sc["2026-08-04"].toFixed(2)}`);
+
+
+    // ── THE WAVE: hover 15 — it is the crest, 14/16 lower, 13/17 a little, the rest at rest; the whole row forms a smooth arch ──
+    const c15 = await centreOfChip(page, "2026-08-15");
+    await page.mouse.move(c15.x, c15.y, { steps: 10 });
+    await settle(page, 450);
+    let ris = await readRises(page);
+    const day = (n) => `2026-08-${String(n).padStart(2, "0")}`;
+    const r = (n) => ris[day(n)];
+    notes.push(`wave at 15 (px): ${[10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20].map((n) => `${n}=${r(n).toFixed(2)}`).join(" ")}`);
+    await h.shot(page, "iday-dock-wave");
+    chk("hover 15: it is the crest and RISES ~4.5px", r(15) >= 4.0 && r(15) <= 5.0, `${r(15).toFixed(2)}px`);
+    chk("…14 and 16 rise moderately (2.7–3.8px), equally, less than the crest", r(14) >= 2.7 && r(14) <= 3.8 && Math.abs(r(14) - r(16)) < 0.25 && r(14) < r(15), `${r(14).toFixed(2)} / ${r(16).toFixed(2)}`);
+    chk("…13 and 17 rise only a little (0.5–1.7px)", r(13) >= 0.5 && r(13) <= 1.7 && r(17) >= 0.5 && r(17) <= 1.7 && r(13) < r(14), `${r(13).toFixed(2)} / ${r(17).toFixed(2)}`);
+    chk("…the others stay in their normal positions (12/18 < 0.5px, 11 and 19 and further = 0)", r(12) < 0.5 && r(18) < 0.5 && [10, 11, 19, 20].every((n) => r(n) < 0.05), `${r(12).toFixed(2)} ${r(11).toFixed(2)} ${r(10).toFixed(2)}`);
+    const seq = [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20].map(r);
+    const up = seq.slice(0, 6).every((v, i, a) => i === 0 || v >= a[i - 1] - 0.02);
+    const down = seq.slice(5).every((v, i, a) => i === 0 || v <= a[i - 1] + 0.02);
+    chk("the heights form ONE smooth arch (rising to 15, falling after it)", up && down, seq.map((v) => v.toFixed(1)).join(" "));
+    const geoW = await page.evaluate(() => {
+      const n = (d) => document.querySelector(`[data-testid="candidate-day-chip"][data-day="${d}"] [data-testid="candidate-day-number"]`).getBoundingClientRect();
+      const strip = document.querySelector('[data-testid="candidate-day-strip"]').getBoundingClientRect();
+      const cy = (b) => b.top + b.height / 2;
+      return { lift: cy(n("2026-08-10")) - cy(n("2026-08-15")), top: n("2026-08-15").top - strip.top, bottom: strip.bottom - n("2026-08-15").bottom };
+    });
+    chk("on screen the 15 really sits higher than a resting date (≈ its rise) and is not clipped by the bar", geoW.lift >= 3.5 && geoW.top >= -0.5 && geoW.bottom >= -0.5, JSON.stringify(geoW));
+    const duringW = await rectsOf(page);
+    const shiftedW = duringW.chips.some((c, i) => c.slice(0, 2).some((v, k) => Math.abs(v - still.chips[i][k]) > 0.6)) || duringW.card.some((v, k) => Math.abs(v - still.card[k]) > 0.6) || duringW.heading.some((v, k) => Math.abs(v - still.heading[k]) > 0.6) || duringW.grid.some((v, k) => Math.abs(v - still.grid[k]) > 0.6);
+    chk("the arch moves NOTHING in the layout: cells (click targets), card, heading and card grid stay exactly put", !shiftedW);
+    sc = await readScales(page);
+    chk("…it keeps the magnification: 15 is 1.4–1.6×, 14/16 ≈ 1.2×", sc[day(15)] >= 1.4 && sc[day(15)] <= 1.6 && sc[day(14)] > 1.15 && sc[day(14)] < 1.25, `${sc[day(15)].toFixed(2)} / ${sc[day(14)].toFixed(2)}`);
+
+    // ── the wave follows the pointer: sweep 15 → 22 and watch the crest travel ──
+    const c22 = await centreOfChip(page, "2026-08-22");
+    const waveSamples = [];
+    for (let i = 0; i <= 21; i++) {
+      await page.mouse.move(c15.x + ((c22.x - c15.x) * i) / 21, c15.y);
+      await page.waitForTimeout(45);
+      waveSamples.push(await readRises(page));
+    }
+    notes.push(`wave sweep sample sizes: ${waveSamples.map((v) => Object.keys(v).length).join(",")} url=${page.url()}`);
+    const crest = waveSamples.map((v) => Number(Object.entries(v).sort((a, b) => b[1] - a[1])[0][0].slice(-2)));
+    const crestH = waveSamples.map((v) => Math.max(...Object.values(v)));
+    let worstRise = 0;
+    for (let i = 1; i < waveSamples.length; i++) for (const k of Object.keys(waveSamples[i])) worstRise = Math.max(worstRise, Math.abs(waveSamples[i][k] - waveSamples[i - 1][k]));
+    notes.push(`wave sweep 15→22: crest ${crest.join(",")} · crest height min ${Math.min(...crestH.slice(2)).toFixed(2)} · worst step ${worstRise.toFixed(2)}px`);
+    chk("sweeping 15 → 22: the crest moves steadily forward with the cursor (never back, never skipping around)", crest.every((d, i) => i === 0 || d >= crest[i - 1]) && crest[0] <= 16 && crest[crest.length - 1] >= 21, crest.join(","));
+    chk("…the crest keeps its height as it travels (never dips below 3.4px — no pumping)", Math.min(...crestH.slice(2)) >= 3.4, Math.min(...crestH.slice(2)).toFixed(2));
+    chk("…no date ever jumps by more than 2px between samples (fluid, not stepping)", worstRise < 2, `${worstRise.toFixed(2)}px`);
+
+    // ── scrolling while hovering: the date that slides under a resting pointer takes the crest ──
+    const px = c22.x;
+    const py = c22.y;
+    await page.mouse.move(px, py);
+    await settle(page, 350);
+    const scrollBefore = (await stripInfo(page)).left;
+    await page.mouse.wheel(0, 260);
+    await settle(page, 900);
+    const scrollAfter = (await stripInfo(page)).left;
+    ris = await readRises(page);
+    const under = await page.evaluate(([x, y]) => document.elementFromPoint(x, y)?.closest('[data-testid="candidate-day-chip"]')?.getAttribute("data-day") ?? null, [px, py]);
+    const top = Object.entries(ris).sort((a, b) => b[1] - a[1])[0];
+    chk("hovering while the wheel scrolls: the crest passes to the date that slid under the pointer", scrollAfter > scrollBefore + 100 && under && top[0] === under && top[1] >= 3.8, `scroll ${scrollBefore}→${scrollAfter}, under=${under}, crest=${top[0]} ${top[1].toFixed(2)}px`);
+    await page.mouse.wheel(0, -5000);
+    await settle(page, 900);
+
+    // ── leaving: the arch relaxes smoothly (not an instant snap) ──
+    await page.mouse.move(c15.x, c15.y, { steps: 6 });
+    await settle(page, 400);
+    const crestNow = (await readRises(page))[day(15)];
+    await page.mouse.move(c15.x, c15.y + 240);
+    const l1 = Math.max(...Object.values(await readRises(page)));
+    await page.waitForTimeout(70);
+    const l2 = Math.max(...Object.values(await readRises(page)));
+    await settle(page, 700);
+    const l3 = Math.max(...Object.values(await readRises(page)));
+    notes.push(`leave: crest ${crestNow.toFixed(2)} → ${l1.toFixed(2)} → ${l2.toFixed(2)} → ${l3.toFixed(2)}`);
+    chk("moving away: the arch relaxes gently (still partly raised right after, lower a moment later) and every date ends at rest", crestNow >= 4 && l1 >= l2 && l2 > 0.05 && l2 < crestNow - 0.3 && l3 === 0, `${crestNow.toFixed(2)} → ${l1.toFixed(2)} → ${l2.toFixed(2)} → ${l3.toFixed(2)}`);
+    sc = await readScales(page);
+    chk("…and every date is its natural size again", Object.values(sc).every((v) => Math.abs(v - 1) < 0.01));
 
     // ── 3. Sweep across several dates: the peak follows, smoothly, no flicker ──
     const c12 = await centreOfChip(page, "2026-08-12");
@@ -798,6 +889,8 @@ scenario(
     await settle(page, 350);
     sc = await readScales(page);
     chk("magnification works on the new month too (10 Sep 1.4–1.6×, 03 Sep relaxed)", sc["2026-09-10"] >= 1.4 && sc["2026-09-10"] <= 1.6 && sc["2026-09-03"] < 1.2, `${sc["2026-09-10"].toFixed(2)} / ${sc["2026-09-03"].toFixed(2)}`);
+    const risSep = await readRises(page);
+    chk("…and so does the wave: 10 Sep is the crest (≥ 4px) and 03 Sep / 17 Sep (a cell-and-a-bit away) are lower but raised", risSep["2026-09-10"] >= 4 && risSep["2026-09-10"] > risSep["2026-09-17"] && risSep["2026-09-17"] > 0.5, `${risSep["2026-09-10"].toFixed(2)} / ${risSep["2026-09-17"].toFixed(2)}`);
     await page.mouse.click(c10s.x, c10s.y);
     await page.getByRole("heading", { name: "10 September 2026" }).waitFor({ timeout: 3000 });
     st = await readState(page);
@@ -830,6 +923,7 @@ scenario(
     await settle(page, 350);
     sc = await readScales(page);
     chk("with reduced motion on, nothing is magnified", Object.values(sc).every((v) => Math.abs(v - 1) < 0.01), JSON.stringify(Object.entries(sc).filter(([, v]) => Math.abs(v - 1) >= 0.01)));
+    chk("…and nothing is raised either (no wave)", Object.values(await readRises(page)).every((v) => v === 0));
     chk("nothing was written", (await countCandidates(uid)) === aug.length + sep.length);
   },
   { viewport: { width: 1440, height: 900 }, scheme: "light" },

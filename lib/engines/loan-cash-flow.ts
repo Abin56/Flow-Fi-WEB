@@ -28,6 +28,11 @@ export interface LoanScheduledPayment {
   /** The owning installment — lets a payment be dated against its installment (People statement). */
   installmentId?: string;
   scheduleId?: string;
+  /** Additive, read only by the Reports / Analytics Net Worth history (`debtPrincipalEvents`). */
+  paymentId?: string;
+  allocationType?: string;
+  prepaymentPrincipalAmount?: number | null;
+  recordedEarlier?: boolean;
 }
 
 /** True when the schedule is the only record of this payment's money movement (legacy, unlinked). */

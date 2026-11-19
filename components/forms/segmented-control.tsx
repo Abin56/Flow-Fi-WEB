@@ -42,7 +42,7 @@ export function SegmentedControl({ value, onChange, options, className }: Segmen
                 style={{ boxShadow: "var(--shadow-e1)" }}
               />
             )}
-            <span className="relative z-10">{option.label}</span>
+            <span className="relative z-[1]">{option.label}</span>
           </button>
         );
       })}

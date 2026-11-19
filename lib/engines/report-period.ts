@@ -129,13 +129,12 @@ export function trendPeriods(period: ReportPeriod, startDay: number, count: numb
     for (let i = count - 1; i >= 0; i--) out.push(build("month", monthRange(anchor.getFullYear(), anchor.getMonth() - i), true, now));
   }
   const years = new Set(out.map((p) => (p.kind === "cycle" ? p.end : p.start).getFullYear()));
-  if (years.size > 1) {
-    for (const p of out) {
-      const named = p.kind === "cycle" && !isWholeCalendarMonth(p) ? p.end : p.start;
-      p.shortLabel = `${named.toLocaleDateString("en-IN", { month: "short" })} '${String(named.getFullYear()).slice(2)}`;
-    }
-  }
-  return out;
+  if (years.size === 1) return out;
+  // New objects — never mutate the caller's period (it may be a frozen React value).
+  return out.map((p) => {
+    const named = p.kind === "cycle" && !isWholeCalendarMonth(p) ? p.end : p.start;
+    return { ...p, shortLabel: `${named.toLocaleDateString("en-IN", { month: "short" })} '${String(named.getFullYear()).slice(2)}` };
+  });
 }
 
 /** The period that contains `date` — the same kind as `period` (used to drill a trend bar back into a period). */

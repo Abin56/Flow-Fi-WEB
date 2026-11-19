@@ -24,6 +24,21 @@ export interface SavingsGoal extends SoftDeletableEntity {
   isCompleted: boolean;
   isArchived: boolean;
   createdAt: Date;
+  /**
+   * Web-only, additive (absent on documents the mobile app wrote — read with safe fallbacks).
+   *
+   * `openingAmount` — money that was already on the goal before it had a contribution history (a goal made
+   * by the mobile app, whose `currentAmount` was typed in). Saved money = openingAmount + the goal's
+   * contribution entries (see `lib/engines/savings-goals.ts`); `currentAmount` is then only a cache kept for
+   * the mobile app, never the source of truth on the web.
+   */
+  openingAmount: number;
+  /** Lucide-style icon key + accent token for the goal card. Purely cosmetic. */
+  icon: string | null;
+  accent: string | null;
+  /** Set by "Mark completed" below the target — a goal the user closed early (so it is not flagged as slipped). */
+  closedEarly: boolean;
+  completedAt: Date | null;
 }
 
 /**
@@ -70,6 +85,13 @@ export function savingsGoalFromFirestore(
     isCompleted: (data.isCompleted as boolean) ?? false,
     isArchived: (data.isArchived as boolean) ?? false,
     createdAt: (data.createdAt as Timestamp).toDate(),
+    // Additive web-only fields: a document the mobile app wrote has none. `openingAmount` falls back to
+    // `currentAmount` only while the goal has never been written by the web (no `openingAmount` key at all).
+    openingAmount: typeof data.openingAmount === "number" ? data.openingAmount : ((data.currentAmount as number) ?? 0),
+    icon: (data.icon as string | undefined) ?? null,
+    accent: (data.accent as string | undefined) ?? null,
+    closedEarly: (data.closedEarly as boolean | undefined) ?? false,
+    completedAt: (data.completedAt as Timestamp | undefined)?.toDate() ?? null,
     deletedAt: (data.deletedAt as Timestamp | undefined)?.toDate() ?? null,
     lastEditedAt: (data.lastEditedAt as Timestamp | undefined)?.toDate() ?? null,
     editHistory: ((data.editHistory as Record<string, unknown>[] | undefined) ?? []).map(auditEntryFromMap),
@@ -86,6 +108,11 @@ export function savingsGoalToFirestore(goal: SavingsGoal): DocumentData {
     isCompleted: goal.isCompleted,
     isArchived: goal.isArchived,
     createdAt: Timestamp.fromDate(goal.createdAt),
+    openingAmount: goal.openingAmount,
+    icon: goal.icon,
+    accent: goal.accent,
+    closedEarly: goal.closedEarly,
+    completedAt: goal.completedAt == null ? null : Timestamp.fromDate(goal.completedAt),
     deletedAt: goal.deletedAt == null ? null : Timestamp.fromDate(goal.deletedAt),
     lastEditedAt: goal.lastEditedAt == null ? null : Timestamp.fromDate(goal.lastEditedAt),
     editHistory: goal.editHistory.map(auditEntryToMap),

@@ -155,6 +155,13 @@ describe("report periods", () => {
     expect(series[series.length - 1].start).toEqual(p.start);
     expect(series[0].shortLabel).toMatch(/'25$/);
   });
+
+  it("REGRESSION: never mutates the caller's period (React freezes rendered values — Reports crashed after a year-crossing window)", () => {
+    const p = Object.freeze(resolveReportPeriod({ kind: "cycle", offset: 0 }, START_DAY, NOW));
+    const label = p.shortLabel;
+    expect(() => trendPeriods(p, START_DAY, 14, NOW)).not.toThrow();
+    expect(p.shortLabel).toBe(label);
+  });
 });
 
 describe("periodFigures — previous cycle (18 Oct – 17 Nov), hand-computed", () => {

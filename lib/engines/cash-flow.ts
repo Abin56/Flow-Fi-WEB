@@ -27,6 +27,8 @@ export interface CashFlowTransaction {
   isCreditCardAccount?: boolean;
   /** The cash-side (outgoing) leg of a transfer from a non-card account INTO a credit-card account — a card bill payment. */
   isCreditCardPayment?: boolean;
+  /** Transaction.dateTime — read only by `cashFlowForRange` for a day-granular (custom cycle / custom range) window. */
+  dateTime?: Date;
 }
 
 export interface CashFlowSummary {
