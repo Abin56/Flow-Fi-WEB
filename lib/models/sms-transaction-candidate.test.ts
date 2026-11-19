@@ -85,6 +85,16 @@ describe("smsTransactionCandidateFromFirestore", () => {
     expect(written.rawLastFour == null || String(written.rawLastFour).length <= 4).toBe(true);
   });
 
+  it("reads originalMessage verbatim when present, omits it when absent, and round-trips it", () => {
+    const text = "Rs.250.00 debited from a/c XX1234 on 19-11-26 to SWIGGY. Ref 998877";
+    const withText = smsTransactionCandidateFromFirestore(fakeSnapshot({ ...baseFirestoreData, originalMessage: text }));
+    expect(withText.originalMessage).toBe(text);
+    expect(smsTransactionCandidateToFirestore(withText).originalMessage).toBe(text);
+    const without = smsTransactionCandidateFromFirestore(fakeSnapshot(baseFirestoreData));
+    expect(without).not.toHaveProperty("originalMessage");
+    expect(smsTransactionCandidateToFirestore(without)).not.toHaveProperty("originalMessage");
+  });
+
   it("throws rather than defaulting when direction is missing — mirrors SmsTransactionCandidateCloud.fromFirestore's own guard, since a wrong guess would silently swap a credit for a debit", () => {
     const { direction: _direction, ...withoutDirection } = baseFirestoreData as typeof baseFirestoreData & { direction?: string };
     expect(() => smsTransactionCandidateFromFirestore(fakeSnapshot(withoutDirection))).toThrow(/no valid direction/);

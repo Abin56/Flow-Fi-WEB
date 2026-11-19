@@ -748,7 +748,7 @@ export function CandidateDetailsModal({
   const splitNeedsAttention = allocation != null && (allocation.balanced === false || allocation.duplicate != null);
   const splitTypeLabel = SPLIT_TYPE_OPTIONS.find((o) => o.value === currentDraft.splitType)?.label ?? "Split";
 
-  // What the phone parsed from the SMS — the message text itself never reaches FlowFi (see the model's privacy note).
+  // What the phone parsed from the SMS — the message text, when the phone sent it, is `originalMessage` (display-only; see the model's privacy note).
   const smsFacts = smsParsedFacts(currentCandidate, `${sign}${formatCurrencyPrecise(currentCandidate.amount)}`);
   const smsSummary = smsFacts
     .filter((f) => f.inSummary)
@@ -1070,12 +1070,21 @@ export function CandidateDetailsModal({
                       </div>
                     ))}
                   </dl>
-                  <div className="flex flex-col gap-0.5 rounded-lg border border-dashed border-border-strong bg-card px-3 py-2" data-testid="original-message-unavailable">
-                    <p className="text-[11px] font-bold tracking-wide text-foreground uppercase">Original message unavailable</p>
-                    <p className="text-[12px] text-foreground/80">
-                      FlowFi never receives the SMS text — it stays on your phone (open the Android app&apos;s SMS Inbox to read it). What you see here is what the phone parsed from it.
-                    </p>
-                  </div>
+                  {currentCandidate.originalMessage ? (
+                    <div className="flex flex-col gap-1 rounded-lg border border-border-strong bg-card px-3 py-2" data-testid="original-message">
+                      <p className="text-[11px] font-bold tracking-wide text-foreground uppercase">Original message</p>
+                      <p className="text-[12.5px] leading-relaxed font-medium break-words whitespace-pre-wrap text-foreground" data-testid="original-message-text">
+                        {currentCandidate.originalMessage}
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col gap-0.5 rounded-lg border border-dashed border-border-strong bg-card px-3 py-2" data-testid="original-message-unavailable">
+                      <p className="text-[11px] font-bold tracking-wide text-foreground uppercase">Original message unavailable</p>
+                      <p className="text-[12px] text-foreground/80">
+                        This transaction was synced before message text was included. Open the Android app&apos;s SMS Inbox to sync it again, or read it there. What you see here is what the phone parsed from it.
+                      </p>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

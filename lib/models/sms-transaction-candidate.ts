@@ -17,10 +17,11 @@
  * "existence == still pending, on Android's terms," not a shared, jointly-
  * writable state machine. See docs/sms-candidate-contract.md.
  *
- * PRIVACY: this interface must never gain a raw-SMS-body, sender, or full
- * phone-number field — `rawLastFour` is a masked last-4 digits hint only,
- * verified against the Dart model's own privacy test
- * (`sms_transaction_candidate_cloud_test.dart`).
+ * PRIVACY: this interface must never gain a sender or full phone-number field —
+ * `rawLastFour` is a masked last-4 digits hint only. The one exception, by the
+ * owner's decision (2026-11-19): `originalMessage`, the SMS text as received,
+ * uploaded by Android on the owner-only candidate document and shown read-only
+ * here. It is never parsed on the web (see docs/sms-candidate-contract.md).
  */
 
 import type { DocumentData, QueryDocumentSnapshot, SnapshotOptions } from "firebase/firestore";
@@ -110,6 +111,9 @@ export interface SmsTransactionCandidate {
   cardId: string | null;
 
   referenceNumber: string | null;
+
+  /** The SMS text exactly as received, display-only (never parsed here). Null for a candidate uploaded before this field existed. */
+  originalMessage?: string | null;
 
   /** The exact verdict `SmsConfidenceScorer` produced on-device — never recomputed here. */
   confidenceLevel: SmsCandidateConfidenceLevel;
@@ -231,6 +235,7 @@ export function smsTransactionCandidateFromFirestore(
     accountId: (data.accountId as string | undefined) ?? null,
     cardId: (data.cardId as string | undefined) ?? null,
     referenceNumber: (data.referenceNumber as string | undefined) ?? null,
+    ...(typeof data.originalMessage === "string" && data.originalMessage.length > 0 && { originalMessage: data.originalMessage }),
     confidenceLevel: (data.confidenceLevel as SmsCandidateConfidenceLevel | undefined) ?? "low",
     confidenceScore: (data.confidenceScore as number | undefined) ?? 0,
     needsReview: (data.needsReview as boolean | undefined) ?? true,
@@ -284,6 +289,7 @@ export function smsTransactionCandidateToFirestore(candidate: SmsTransactionCand
     accountId: candidate.accountId,
     cardId: candidate.cardId,
     referenceNumber: candidate.referenceNumber,
+    ...(candidate.originalMessage != null && { originalMessage: candidate.originalMessage }),
     confidenceLevel: candidate.confidenceLevel,
     confidenceScore: candidate.confidenceScore,
     needsReview: candidate.needsReview,

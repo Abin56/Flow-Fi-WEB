@@ -31,6 +31,7 @@ partial update to a candidate document — see "Lifecycle" below for why.
 | Field | Written by |
 |---|---|
 | `amount`, `direction`, `eventType`, `transactionDate`, `merchant`, `bankName`, `referenceNumber` | Android (parsed from the SMS) |
+| `originalMessage` | Android — optional; the SMS text exactly as received, only for a recognised transaction candidate. Web displays it read-only and never parses it |
 | `rawLastFour` | Android — the last-4 digits the SMS itself exposed, independent of whether `accountId`/`cardId` resolved |
 | `accountId`, `cardId` | Android — resolved on-device by `AccountCardMatcher` against the same `accounts`/`creditCards` Firestore collections the web app reads. **Already resolved by the time the web app sees it** — the web app only looks these ids up for display, it does not run its own matching. |
 | `confidenceLevel`, `confidenceScore` | Android (`SmsConfidenceScorer`) — consumed as-given, never recomputed |
@@ -138,11 +139,13 @@ pinned on both sides by "Android ↔ Web contract" tests.
 
 Verified directly against `sms_transaction_candidate_cloud_test.dart`'s own
 privacy test, which asserts the stored document never contains `body`,
-`rawBody`, `sender`, `smsBody`, `message`, or `userId`, and that
+`rawBody`, `sender`, `smsBody`, `message`, or `userId` (the owner-approved
+`originalMessage` field, added 2026-11-19, is the single exception: optional, SMS text as received, display-only on
+web), and that
 `rawLastFour` is never longer than 4 characters. This collection must
 **never** contain:
 
-- The full SMS body / raw text
+- The full SMS body / raw text, except the optional `originalMessage` field (2026-11-19)
 - OTP codes or any OTP-adjacent content
 - A full phone number
 - Any sender information at all (there is no `senderHint` field, unlike the
