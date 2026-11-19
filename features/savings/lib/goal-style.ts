@@ -1,11 +1,13 @@
 import { createElement } from "react";
 import {
+  Bike,
   Briefcase,
   Car,
   Gift,
   GraduationCap,
   HeartPulse,
   Home,
+  Landmark,
   Laptop,
   PiggyBank,
   Plane,
@@ -16,6 +18,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import type { GoalView } from "@/lib/engines/savings-goals";
+import { formatCurrency } from "@/lib/format";
 
 /** Cosmetic only — the icon + accent a goal card wears. Stored as plain keys on the goal. */
 export const GOAL_ICONS: { key: string; label: string; icon: LucideIcon }[] = [
@@ -26,6 +29,8 @@ export const GOAL_ICONS: { key: string; label: string; icon: LucideIcon }[] = [
   { key: "travel", label: "Travel", icon: Plane },
   { key: "home", label: "Home", icon: Home },
   { key: "car", label: "Vehicle", icon: Car },
+  { key: "bike", label: "Bicycle", icon: Bike },
+  { key: "landmark", label: "Deposit", icon: Landmark },
   { key: "education", label: "Education", icon: GraduationCap },
   { key: "health", label: "Health", icon: HeartPulse },
   { key: "gift", label: "Gift", icon: Gift },
@@ -82,3 +87,19 @@ export function dueLabel(view: Pick<GoalView, "daysLeft" | "status" | "goal">): 
 export function formatShortDate(d: Date): string {
   return d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
 }
+
+/** The one-line "where am I": needed per month, on-track state, or why it's flagged. */
+export function paceLine(view: GoalView): { text: string; tone: "neutral" | "warn" | "bad" | "good" } {
+  if (view.status === "completed") return { text: "Goal reached", tone: "good" };
+  if (view.status === "slipped") return { text: "Dropped below target — reopen to keep saving", tone: "warn" };
+  if (view.status === "overdue") return { text: `${formatCurrency(view.remaining)} still to go`, tone: "bad" };
+  if (view.requiredPerMonth != null) {
+    if (view.pace === "ahead") return { text: `Ahead · needs ${formatCurrency(view.requiredPerMonth)}/mo`, tone: "good" };
+    if (view.pace === "on-track") return { text: `On track · ${formatCurrency(view.requiredPerMonth)}/mo`, tone: "good" };
+    if (view.pace === "behind") return { text: `Needs ${formatCurrency(view.requiredPerMonth)}/mo to hit the date`, tone: "warn" };
+    return { text: `Save ${formatCurrency(view.requiredPerMonth)}/mo to hit the date`, tone: "neutral" };
+  }
+  return { text: view.saved > 0 ? `${formatCurrency(view.remaining)} to go` : "Add your first amount", tone: "neutral" };
+}
+
+export const TONE_TEXT = { neutral: "text-muted-foreground", warn: "text-warning-foreground dark:text-warning", bad: "text-expense", good: "text-success" } as const;

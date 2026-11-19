@@ -64,6 +64,16 @@ export function entryView(entry: SavingsContribution, activeTxIds: ReadonlySet<s
   return { entry, active, reversed, effect: round2(effect) };
 }
 
+/**
+ * An app-level lock still in force today (no end date = until the user unlocks it). A FlowFi reservation only —
+ * it never freezes anything at the bank.
+ */
+export function isGoalLockedNow(goal: Pick<SavingsGoal, "locked" | "lockedUntil">, now: Date): boolean {
+  return goal.locked && (goal.lockedUntil == null || startOfDay(now) < startOfDay(goal.lockedUntil));
+}
+
+export const LOCKED_WITHDRAWAL_MESSAGE = "This goal is locked — choose Emergency release to take money out.";
+
 /** Key for the opening/unlinked bucket in `heldByAccount` — money that is not tied to an account. */
 export const UNLINKED = "";
 
@@ -296,7 +306,7 @@ export function validateGoalInput(input: { name: string; target: number; dueDate
 export type MoneyEntryPlan =
   | { direction: "in"; mode: "earmark"; accountFree: number }
   | { direction: "in"; mode: "transfer"; sourceFree: number; sameAccount: boolean }
-  | { direction: "out"; mode: "earmark" | "transfer"; heldAtAccount: number; saved: number };
+  | { direction: "out"; mode: "earmark" | "transfer"; heldAtAccount: number; saved: number; locked?: boolean; emergency?: boolean };
 
 /** `null` = fine to record. Every message says what to change. */
 export function validateMoneyEntry(amount: number, plan: MoneyEntryPlan): string | null {
@@ -310,6 +320,7 @@ export function validateMoneyEntry(amount: number, plan: MoneyEntryPlan): string
     if (amount > plan.sourceFree + SAVINGS_EPSILON) return plan.sourceFree > 0 ? `Only ${compactInr(plan.sourceFree)} is free to move from this account.` : "This account has no free money to move.";
   }
   if (plan.direction === "out") {
+    if (plan.locked && !plan.emergency) return LOCKED_WITHDRAWAL_MESSAGE;
     if (amount > plan.saved + SAVINGS_EPSILON) return `This goal only has ${compactInr(plan.saved)}.`;
     if (amount > plan.heldAtAccount + SAVINGS_EPSILON) return `Only ${compactInr(plan.heldAtAccount)} of this goal is held there.`;
   }
@@ -329,5 +340,33 @@ export function removeEntryBlocker(view: GoalView, entryId: string): string | nu
   if (held - target.entry.amount < -SAVINGS_EPSILON || view.saved - target.entry.amount < -SAVINGS_EPSILON) {
     return "A later withdrawal already used this money — remove that withdrawal first.";
   }
+  return null;
+}
+
+export interface GoalAttention {
+  goalId: string;
+  name: string;
+  remaining: number;
+  /** Whole percent saved. */
+  percent: number;
+  note: string;
+}
+
+/**
+ * The ONE goal worth surfacing on the Dashboard's "Needs your attention" strip, or null when none is: an overdue
+ * goal first, then one due within 14 days with money left, then one that is behind its pace, then one that is
+ * nearly there (≥ 90%). Read-only over the same position the Savings page shows.
+ */
+export function goalAttention(position: SavingsPosition): GoalAttention | null {
+  const pick = (v: GoalView, note: string): GoalAttention => ({ goalId: v.goal.id, name: v.goal.name, remaining: v.remaining, percent: Math.round(v.progress * 100), note });
+  const open = position.open.filter((v) => v.remaining > SAVINGS_EPSILON);
+  const overdue = open.filter((v) => v.status === "overdue").sort((a, b) => (a.daysLeft ?? 0) - (b.daysLeft ?? 0))[0];
+  if (overdue) return pick(overdue, `${-(overdue.daysLeft ?? 0)} day${overdue.daysLeft === -1 ? "" : "s"} overdue`);
+  const soon = open.filter((v) => v.daysLeft != null && v.daysLeft >= 0 && v.daysLeft <= 14).sort((a, b) => (a.daysLeft ?? 0) - (b.daysLeft ?? 0))[0];
+  if (soon) return pick(soon, soon.daysLeft === 0 ? "Due today" : `Due in ${soon.daysLeft} day${soon.daysLeft === 1 ? "" : "s"}`);
+  const behind = open.filter((v) => v.pace === "behind" && v.requiredPerMonth != null).sort((a, b) => (b.requiredPerMonth ?? 0) - (a.requiredPerMonth ?? 0))[0];
+  if (behind) return pick(behind, `Needs ${compactInr(behind.requiredPerMonth ?? 0)}/month`);
+  const near = open.filter((v) => v.progress >= 0.9).sort((a, b) => b.progress - a.progress)[0];
+  if (near) return pick(near, "Almost there");
   return null;
 }

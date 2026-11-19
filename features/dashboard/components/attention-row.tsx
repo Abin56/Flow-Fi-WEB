@@ -10,7 +10,7 @@ const CTA_HREF: Record<AttentionRowItem["type"], string> = {
   bill: "/bills",
   emi: "/loans",
   budget: "/budgets",
-  goal: "/budgets",
+  goal: "/savings",
 };
 
 const STYLES = {

@@ -60,6 +60,22 @@ export interface MoneyEntryInput {
   accountId: string | null;
   counterAccountId?: string | null;
   note?: string;
+  /** Withdrawal from a locked goal through an explicit emergency release. */
+  emergency?: boolean;
+  allocationId?: string | null;
+}
+
+/** One goal's line in an "Allocate this month" action. `id` stays the same across retries of that line. */
+export interface AllocationLine {
+  id: string;
+  view: GoalView;
+  amount: number;
+}
+
+export interface AllocationResult {
+  /** Entry ids that are now stored (including ones a previous attempt already stored). */
+  done: string[];
+  failed: { id: string; goalName: string; message: string }[];
 }
 
 /** Create/edit/record/remove/archive/delete actions wired to the real repository, scoped to the signed-in user. */
@@ -95,6 +111,47 @@ export function useSavingsActions() {
         const delta = entry.active ? signed(entry.entry.direction, newAmount) - signed(entry.entry.direction, entry.entry.amount) : 0;
         return repository.editEntry(view.goal, entry.entry, patch, Math.max(0, view.saved + delta));
       },
+      /**
+       * Records one entry per line — each with its own stable id, so retrying after a partial failure writes only the
+       * lines that did not land (a stored line returns the stored entry). Sequential: transfers each need the
+       * source's fresh balance (`enforceFunds`).
+       */
+      allocate: async (
+        lines: readonly AllocationLine[],
+        opts: { mode: SavingsEntryMode; accountId: string; counterAccountId?: string | null; date: Date; allocationId: string; note?: string },
+        onMessage: (e: unknown) => string,
+      ): Promise<AllocationResult> => {
+        const result: AllocationResult = { done: [], failed: [] };
+        // Several lines can hit the same goal only once each; track saved-after per goal as we go.
+        const savedNow = new Map<string, number>();
+        for (const line of lines) {
+          if (!(line.amount > 0)) continue;
+          const before = savedNow.get(line.view.goal.id) ?? line.view.saved;
+          try {
+            await repository.recordEntry(line.view.goal, {
+              id: line.id,
+              direction: "in",
+              mode: opts.mode,
+              amount: line.amount,
+              date: opts.date,
+              accountId: opts.accountId,
+              counterAccountId: opts.mode === "transfer" ? (opts.counterAccountId ?? null) : null,
+              note: opts.note ?? "Monthly allocation",
+              categoryId: opts.mode === "transfer" ? categoryId : undefined,
+              savedAfter: before + line.amount,
+              allocationId: opts.allocationId,
+            });
+            savedNow.set(line.view.goal.id, before + line.amount);
+            result.done.push(line.id);
+          } catch (e) {
+            result.failed.push({ id: line.id, goalName: line.view.goal.name, message: onMessage(e) });
+          }
+        }
+        return result;
+      },
+      setPlan: (view: GoalView, monthlyTarget: number | null, planAccountId?: string | null) => repository.setPlan(view.goal, { monthlyTarget, planAccountId }),
+      setCycleSkipped: (view: GoalView, cycleKey: string, skipped: boolean) => repository.setCycleSkipped(view.goal, cycleKey, skipped),
+      setLock: (view: GoalView, locked: boolean, lockedUntil: Date | null) => repository.setLock(view.goal, { locked, lockedUntil }),
       markCompleted: (view: GoalView) => repository.markCompleted(view.goal, { saved: view.saved }),
       reopen: (goal: SavingsGoal) => repository.markIncomplete(goal),
       archive: (goal: SavingsGoal) => repository.archive(goal),

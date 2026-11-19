@@ -12,13 +12,14 @@
  *  - `goal.currentAmount` is kept up to date incrementally only as a cache for the mobile app.
  */
 
-import { type CollectionReference, doc, runTransaction } from "firebase/firestore";
+import { type CollectionReference, doc, getDoc, runTransaction } from "firebase/firestore";
 import { FirestoreCrudRepository } from "@/lib/firestore/firestore-crud-repository";
 import { recordEdit, updateField } from "@/lib/firestore/soft-deletable";
 import type { SavingsContribution, SavingsEntryDirection, SavingsEntryMode } from "@/lib/models/savings-contribution";
-import type { SavingsGoal } from "@/lib/models/savings-goal";
+import type { SavingsGoal, SavingsGoalKind } from "@/lib/models/savings-goal";
 import type { TransactionRepository } from "@/lib/repositories/transaction-repository";
 import { generateId } from "@/lib/utils/id-generator";
+import { isGoalLockedNow, LOCKED_WITHDRAWAL_MESSAGE } from "@/lib/engines/savings-goals";
 
 export interface CreateGoalParams {
   name: string;
@@ -27,6 +28,11 @@ export interface CreateGoalParams {
   notes?: string;
   icon?: string | null;
   accent?: string | null;
+  kind?: SavingsGoalKind;
+  monthlyTarget?: number | null;
+  planAccountId?: string | null;
+  locked?: boolean;
+  lockedUntil?: Date | null;
 }
 
 export interface EditGoalParams {
@@ -39,6 +45,13 @@ export interface EditGoalParams {
   accent?: string | null;
   /** What the goal holds right now (derived) — lets a target change re-evaluate completion. */
   savedNow?: number;
+  kind?: SavingsGoalKind;
+  /** null clears the monthly plan. */
+  monthlyTarget?: number | null;
+  planAccountId?: string | null;
+  locked?: boolean;
+  /** null = locked with no end date (when `locked`). */
+  lockedUntil?: Date | null;
 }
 
 export interface RecordEntryParams {
@@ -57,6 +70,10 @@ export interface RecordEntryParams {
   categoryId?: string;
   /** What the goal holds after this entry — drives auto-complete / re-open. */
   savedAfter: number;
+  /** Withdrawal from a locked goal — the user explicitly chose an emergency release. */
+  emergency?: boolean;
+  /** Groups the entries one "Allocate this month" action recorded. */
+  allocationId?: string | null;
 }
 
 export interface SavingsRepositoryDeps {
@@ -66,6 +83,31 @@ export interface SavingsRepositoryDeps {
 
 const ID_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+
+function validMonthly(v: number | null | undefined): void {
+  if (v == null) return;
+  if (!(v > 0) || !Number.isFinite(v) || round2(v) !== v) throw new Error("Enter a monthly amount greater than 0 with at most 2 decimal places");
+}
+
+/** Monthly plan fields — the plan start is set when a plan is first set (earlier cycles are never judged against it). */
+function applyPlan(goal: SavingsGoal, params: { monthlyTarget?: number | null; planAccountId?: string | null }): SavingsGoal {
+  let updated = goal;
+  if (params.monthlyTarget !== undefined && params.monthlyTarget !== updated.monthlyTarget) {
+    updated = recordEdit(updated, "monthlyTarget", String(updated.monthlyTarget ?? "none"), String(params.monthlyTarget ?? "none"));
+    updated = { ...updated, monthlyTarget: params.monthlyTarget, planSince: params.monthlyTarget == null ? null : (updated.planSince ?? new Date()) };
+  }
+  if (params.planAccountId !== undefined && params.planAccountId !== updated.planAccountId) updated = { ...updated, planAccountId: params.planAccountId };
+  return updated;
+}
+
+function applyLock(goal: SavingsGoal, params: { locked?: boolean; lockedUntil?: Date | null }): SavingsGoal {
+  if (params.locked === undefined && params.lockedUntil === undefined) return goal;
+  const locked = params.locked ?? goal.locked;
+  const until = locked ? (params.lockedUntil !== undefined ? params.lockedUntil : goal.lockedUntil) : null;
+  if (locked === goal.locked && (until?.getTime() ?? null) === (goal.lockedUntil?.getTime() ?? null)) return goal;
+  const label = (l: boolean, u: Date | null) => (l ? (u ? `locked until ${u.toDateString()}` : "locked") : "unlocked");
+  return { ...recordEdit(goal, "lock", label(goal.locked, goal.lockedUntil), label(locked, until)), locked, lockedUntil: until };
+}
 
 /** Re-evaluates a goal's completion after its saved amount changed — auto-complete on reaching, re-open on slipping. */
 function applyCompletion(goal: SavingsGoal, savedAfter: number, now: Date): SavingsGoal {
@@ -97,6 +139,9 @@ export class SavingsRepository extends FirestoreCrudRepository<SavingsGoal> {
       throw new Error("Target amount must be greater than 0");
     }
     if (!params.name.trim()) throw new Error("Give the goal a name");
+    validMonthly(params.monthlyTarget);
+    if (params.kind === "deposit" && !(params.monthlyTarget != null && params.monthlyTarget > 0)) throw new Error("A deposit-style fund needs a monthly amount");
+    const createdAt = new Date();
     const goal: SavingsGoal = {
       id: generateId(),
       name: params.name.trim(),
@@ -106,12 +151,19 @@ export class SavingsRepository extends FirestoreCrudRepository<SavingsGoal> {
       notes: params.notes ?? "",
       isCompleted: false,
       isArchived: false,
-      createdAt: new Date(),
+      createdAt,
       openingAmount: 0,
       icon: params.icon ?? null,
       accent: params.accent ?? null,
       closedEarly: false,
       completedAt: null,
+      kind: params.kind ?? "goal",
+      monthlyTarget: params.monthlyTarget ?? null,
+      planAccountId: params.planAccountId ?? null,
+      planSince: params.monthlyTarget != null ? createdAt : null,
+      skippedCycles: [],
+      locked: params.locked ?? false,
+      lockedUntil: params.locked ? (params.lockedUntil ?? null) : null,
       deletedAt: null,
       lastEditedAt: null,
       editHistory: [],
@@ -126,6 +178,7 @@ export class SavingsRepository extends FirestoreCrudRepository<SavingsGoal> {
       throw new Error("Target amount must be greater than 0");
     }
     if (params.name != null && !params.name.trim()) throw new Error("Give the goal a name");
+    validMonthly(params.monthlyTarget);
     await this.updateFresh(goal.id, (fresh) => {
       let updated = fresh;
       updated = updateField(updated, "name", updated.name, params.name?.trim(), (e, v) => ({ ...e, name: v }));
@@ -139,6 +192,9 @@ export class SavingsRepository extends FirestoreCrudRepository<SavingsGoal> {
       updated = updateField(updated, "notes", updated.notes, params.notes, (e, v) => ({ ...e, notes: v }));
       if (params.icon !== undefined && params.icon !== updated.icon) updated = { ...updated, icon: params.icon };
       if (params.accent !== undefined && params.accent !== updated.accent) updated = { ...updated, accent: params.accent };
+      if (params.kind !== undefined && params.kind !== updated.kind) updated = { ...recordEdit(updated, "kind", updated.kind, params.kind), kind: params.kind };
+      updated = applyPlan(updated, params);
+      updated = applyLock(updated, params);
       // A new target can reach (or fall short of) what is already saved.
       if (params.targetAmount != null && params.savedNow != null) updated = applyCompletion(updated, params.savedNow, new Date());
       return updated;
@@ -155,6 +211,11 @@ export class SavingsRepository extends FirestoreCrudRepository<SavingsGoal> {
     if (!(params.amount > 0) || round2(params.amount) !== params.amount) throw new Error("Enter an amount greater than 0 with at most 2 decimal places");
     if (goal.deletedAt != null) throw new Error("This goal was deleted");
     if (params.mode === "earmark" && params.accountId == null) throw new Error("Choose the account this money is in");
+    if (params.direction === "out" && !params.emergency) {
+      // Fresh read BEFORE any transfer leg is written — a lock set on another device still guards this withdrawal.
+      const freshSnap = await getDoc(doc(this.collection, goal.id));
+      if (isGoalLockedNow(freshSnap.exists() ? freshSnap.data() : goal, new Date())) throw new Error(LOCKED_WITHDRAWAL_MESSAGE);
+    }
 
     let transactionIds: string[] = [];
     if (params.mode === "transfer") {
@@ -185,6 +246,8 @@ export class SavingsRepository extends FirestoreCrudRepository<SavingsGoal> {
       if (entrySnap.exists()) return entrySnap.data();
       if (!goalSnap.exists() || goalSnap.data().deletedAt != null) throw new Error("This goal no longer exists");
       const fresh = goalSnap.data();
+      // An earmark release is re-checked inside the write (a transfer was guarded before its legs were written).
+      if (params.mode === "earmark" && params.direction === "out" && !params.emergency && isGoalLockedNow(fresh, now)) throw new Error(LOCKED_WITHDRAWAL_MESSAGE);
       const entry: SavingsContribution = {
         id: params.id,
         goalId: goal.id,
@@ -197,6 +260,8 @@ export class SavingsRepository extends FirestoreCrudRepository<SavingsGoal> {
         transactionIds,
         note: params.note ?? "",
         createdAt: now,
+        emergency: params.direction === "out" && params.emergency === true,
+        allocationId: params.allocationId ?? null,
         deletedAt: null,
         lastEditedAt: null,
         editHistory: [],
@@ -288,6 +353,28 @@ export class SavingsRepository extends FirestoreCrudRepository<SavingsGoal> {
         tx.set(goalRef, applyCompletion(updated, savedAfter, now));
       }
     });
+  }
+
+  /** Sets (or clears, with null) the monthly plan amount and the usual holding account. */
+  async setPlan(goal: SavingsGoal, params: { monthlyTarget: number | null; planAccountId?: string | null }): Promise<void> {
+    validMonthly(params.monthlyTarget);
+    await this.updateFresh(goal.id, (fresh) => applyPlan(fresh, params));
+  }
+
+  /** Skip (or un-skip) one Month Cycle of the plan — `cycleKey` is the cycle's start date key (YYYY-MM-DD). */
+  async setCycleSkipped(goal: SavingsGoal, cycleKey: string, skipped: boolean): Promise<void> {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(cycleKey)) throw new Error("Invalid cycle");
+    await this.updateFresh(goal.id, (fresh) => {
+      const has = fresh.skippedCycles.includes(cycleKey);
+      if (has === skipped) return fresh;
+      const skippedCycles = skipped ? [...fresh.skippedCycles, cycleKey].sort() : fresh.skippedCycles.filter((k) => k !== cycleKey);
+      return { ...recordEdit(fresh, "skippedCycle", skipped ? "" : cycleKey, skipped ? cycleKey : ""), skippedCycles };
+    });
+  }
+
+  /** App-level lock (a FlowFi reservation, not a bank freeze). `lockedUntil` null = until unlocked. */
+  async setLock(goal: SavingsGoal, params: { locked: boolean; lockedUntil?: Date | null }): Promise<void> {
+    await this.updateFresh(goal.id, (fresh) => applyLock(fresh, params));
   }
 
   /** "Mark completed" — below the target it is an explicit early close (never flagged as slipped later). */

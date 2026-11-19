@@ -36,6 +36,10 @@ export interface SavingsContribution extends SoftDeletableEntity {
   transactionIds: string[];
   note: string;
   createdAt: Date;
+  /** Withdrawal only — taken out of a LOCKED goal through an explicit emergency release (additive, default false). */
+  emergency: boolean;
+  /** Set when the entry was recorded by one "Allocate this month" action — groups the batch in history. */
+  allocationId: string | null;
 }
 
 const toDate = (v: unknown): Date | null => (v instanceof Timestamp ? v.toDate() : v instanceof Date ? v : null);
@@ -58,6 +62,8 @@ export function savingsContributionFromFirestore(snapshot: QueryDocumentSnapshot
     transactionIds: Array.isArray(d.transactionIds) ? (d.transactionIds as string[]) : [],
     note: (d.note as string | undefined) ?? "",
     createdAt: toDate(d.createdAt) ?? new Date(0),
+    emergency: d.emergency === true,
+    allocationId: typeof d.allocationId === "string" ? d.allocationId : null,
     deletedAt: toDate(d.deletedAt),
     lastEditedAt: toDate(d.lastEditedAt),
     editHistory: ((d.editHistory as Record<string, unknown>[] | undefined) ?? []).map(auditEntryFromMap),
@@ -76,6 +82,8 @@ export function savingsContributionToFirestore(c: SavingsContribution): Document
     transactionIds: c.transactionIds,
     note: c.note,
     createdAt: Timestamp.fromDate(c.createdAt),
+    emergency: c.emergency,
+    allocationId: c.allocationId,
     deletedAt: c.deletedAt == null ? null : Timestamp.fromDate(c.deletedAt),
     lastEditedAt: c.lastEditedAt == null ? null : Timestamp.fromDate(c.lastEditedAt),
     editHistory: c.editHistory.map((e) => ({ timestamp: Timestamp.fromDate(e.timestamp), field: e.field, oldValue: e.oldValue, newValue: e.newValue })),

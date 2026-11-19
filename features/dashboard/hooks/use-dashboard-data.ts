@@ -31,6 +31,9 @@
  */
 
 import { accountPaletteFor } from "@/features/accounts/lib/account-colors";
+import { useSavingsPosition } from "@/features/savings/hooks/use-savings-data";
+import { goalAttention } from "@/lib/engines/savings-goals";
+import { formatCurrency } from "@/lib/format";
 import { useHistoricalPaymentFlags } from "@/features/loans/hooks/use-historical-payment-flags";
 import { useLoans } from "@/hooks/use-loans";
 import { useMemo } from "react";
@@ -101,10 +104,12 @@ function categoryNameFor(categoryId: string, categories: Category[]): string {
 
 export interface DashboardNeedsAttentionItem {
   id: string;
-  type: "bill" | "budget";
+  type: "bill" | "budget" | "goal";
   title: string;
   subtitle: string;
   amount: number;
+  /** Savings goal only — whole percent saved. */
+  percent?: number;
   note: string;
   cta: string;
 }
@@ -403,10 +408,25 @@ export function useDashboardData() {
   }, [billItems, creditCards, statements, transactions, now]);
 
   // --- Needs Your Attention (bill alerts only — see gap note above): the overdue total and the next upcoming bill ---
-  const needsAttention = useMemo(
-    () => dashboardBillAttention(billItems, outstandingBills, now, formatLongDate) as DashboardNeedsAttentionItem[],
-    [billItems, outstandingBills, now],
-  );
+  // Savings: at most one goal that needs a nudge (overdue / due soon / behind pace / nearly there), read from the same
+  // derived position the Savings page shows, so the two can never disagree.
+  const { position: savingsPosition } = useSavingsPosition();
+  const needsAttention = useMemo(() => {
+    const items = dashboardBillAttention(billItems, outstandingBills, now, formatLongDate) as DashboardNeedsAttentionItem[];
+    const goal = goalAttention(savingsPosition);
+    if (!goal) return items;
+    const goalItem: DashboardNeedsAttentionItem = {
+      id: `goal-${goal.goalId}`,
+      type: "goal",
+      title: "Savings goal",
+      subtitle: goal.name,
+      amount: goal.remaining,
+      percent: goal.percent,
+      note: `${goal.note} · ${formatCurrency(goal.remaining)} to go`,
+      cta: "Add money",
+    };
+    return [...items, goalItem];
+  }, [billItems, outstandingBills, now, savingsPosition]);
 
   return {
     isLoading,

@@ -10,6 +10,7 @@ import {
   buildGoalView,
   buildSavingsPosition,
   freeInAccount,
+  goalAttention,
   fromDateKey,
   removeEntryBlocker,
   toDateKey,
@@ -45,6 +46,13 @@ function goal(p: Partial<SavingsGoal> = {}): SavingsGoal {
     accent: null,
     closedEarly: false,
     completedAt: null,
+    kind: "goal",
+    monthlyTarget: null,
+    planAccountId: null,
+    planSince: null,
+    skippedCycles: [],
+    locked: false,
+    lockedUntil: null,
     deletedAt: null,
     lastEditedAt: null,
     editHistory: [],
@@ -66,6 +74,8 @@ function entry(p: Partial<SavingsContribution> & { amount: number }): SavingsCon
     transactionIds: [],
     note: "",
     createdAt: day(9, 1),
+    emergency: false,
+    allocationId: null,
     deletedAt: null,
     lastEditedAt: null,
     editHistory: [],
@@ -350,5 +360,31 @@ describe("a savings transfer is invisible to income / outflow / spend and to net
     const before = calculateNetWorth([{ currentBalance: 35_000 }, { currentBalance: 0 }]);
     const after = calculateNetWorth([{ currentBalance: 23_000 }, { currentBalance: 12_000 }]);
     expect(after).toBe(before);
+  });
+});
+
+describe("dashboard attention", () => {
+  const pos = (goals: SavingsGoal[], entries: SavingsContribution[] = []) => buildSavingsPosition(goals, entries, null, NOW);
+
+  it("surfaces nothing when no goal needs a nudge", () => {
+    expect(goalAttention(pos([]))).toBeNull();
+    expect(goalAttention(pos([goal({ targetAmount: 100_000 })], [entry({ amount: 1_000 })]))).toBeNull();
+  });
+
+  it("an overdue goal wins, then one due within 14 days, then behind pace, then nearly there", () => {
+    const overdue = goal({ id: "a", name: "Overdue", dueDate: new Date(2026, 10, 10) });
+    const soon = goal({ id: "b", name: "Soon", dueDate: new Date(2026, 10, 25) });
+    const nearly = goal({ id: "c", name: "Nearly", targetAmount: 1_000 });
+    const e = [entry({ goalId: "c", amount: 950 }), entry({ goalId: "a", amount: 100 })];
+    expect(goalAttention(pos([nearly, soon, overdue], e))?.name).toBe("Overdue");
+    expect(goalAttention(pos([nearly, soon], e))?.name).toBe("Soon");
+    const a = goalAttention(pos([nearly], e));
+    expect(a?.name).toBe("Nearly");
+    expect(a?.percent).toBe(95);
+  });
+
+  it("a completed or fully-funded goal is never an alert", () => {
+    expect(goalAttention(pos([goal({ isCompleted: true, dueDate: new Date(2026, 10, 10), targetAmount: 100 })], [entry({ amount: 100 })]))).toBeNull();
+    expect(goalAttention(pos([goal({ dueDate: new Date(2026, 10, 10), targetAmount: 100 })], [entry({ amount: 100 })]))).toBeNull();
   });
 });

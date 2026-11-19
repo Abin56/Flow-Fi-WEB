@@ -310,3 +310,32 @@ for (const [scheme, vp] of [["light", { width: 1440, height: 900 }], ["dark", { 
     await h.shot(page, `sav-5-dialog-${scheme}-${vp.width}`);
   }, { viewport: vp, scheme });
 }
+
+scenario("sav-6-dashboard", "Savings: a goal due soon appears on the Dashboard's Needs-your-attention strip and links to Savings", async ({ page, logs }, chk) => {
+  await openSavings(page);
+  await page.getByTestId("new-goal").first().click();
+  await page.getByTestId("savings-goal-form").waitFor();
+  await page.getByTestId("goal-name").fill("Passport fee");
+  await page.getByTestId("goal-target").fill("9000");
+  const due = new Date(Date.now() + 5 * 86400000);
+  const pad = (n) => String(n).padStart(2, "0");
+  await page.getByPlaceholder("dd/mm/yyyy").first().fill(`${pad(due.getDate())}/${pad(due.getMonth() + 1)}/${due.getFullYear()}`);
+  await page.getByRole("button", { name: "Create goal" }).click();
+  await page.getByTestId("savings-goal-form").waitFor({ state: "hidden" });
+  await page.waitForTimeout(1000);
+  const g = await goalDoc("Passport fee");
+  chk("due date stored as the picked local day", g && g.dueDate && new Date(g.dueDate).getDate() === due.getDate(), g && g.dueDate);
+  chk("card says '5 days left'", /5 days left/.test(await card(page, "Passport fee").innerText()), await card(page, "Passport fee").innerText());
+
+  await h.go(page, "/dashboard");
+  await page.getByRole("heading", { level: 1 }).first().waitFor({ timeout: 90000 }).catch(() => {});
+  await page.waitForTimeout(3000);
+  const strip = page.locator('section[aria-label="Needs your attention"]');
+  chk("Dashboard attention strip lists the goal with its remaining amount", (await strip.count()) === 1 && /Passport fee/.test(await strip.innerText()) && /9,000/.test(await strip.innerText()), (await strip.innerText()).replace(/\s+/g, " ").slice(0, 200));
+  await h.shot(page, "sav-6-dashboard-light");
+  await strip.getByRole("button", { name: "Add money" }).click();
+  await page.waitForFunction(() => location.pathname.replace(/\/+$/, "") === "/savings", null, { timeout: 30000 });
+  chk("the CTA opens Savings", true);
+  const errs = logs.filter((l) => !/Select is changing|status of 400/.test(l));
+  chk("no console errors / page errors", errs.length === 0, errs.slice(0, 4).join(" || "));
+});

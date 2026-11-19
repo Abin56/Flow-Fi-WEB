@@ -29,7 +29,7 @@ import { accountBalanceDrift } from "@/lib/engines/stored-balance-drift";
 import { accountFromFirestore, accountToFirestore, type Account } from "@/lib/models/account";
 import { savingsContributionFromFirestore, savingsContributionToFirestore } from "@/lib/models/savings-contribution";
 import { savingsGoalFromFirestore, savingsGoalToFirestore } from "@/lib/models/savings-goal";
-import { transactionFromFirestore, transactionToFirestore, type Transaction } from "@/lib/models/transaction";
+import { transactionFromFirestore, transactionToFirestore } from "@/lib/models/transaction";
 import { AccountRepository } from "@/lib/repositories/account-repository";
 import { SavingsRepository } from "@/lib/repositories/savings-repository";
 import { TransactionRepository } from "@/lib/repositories/transaction-repository";

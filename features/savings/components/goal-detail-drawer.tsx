@@ -225,7 +225,7 @@ export function GoalDetailDrawer({
 
           <div className="grid grid-cols-2 gap-2">
             <Stat label="Remaining" value={formatCurrency(view.remaining)} />
-            <Stat label="Due" value={view.goal.dueDate ? formatShortDate(view.goal.dueDate) : "No deadline"} hint={due?.text} />
+            <Stat label="Due" value={view.goal.dueDate ? formatShortDate(view.goal.dueDate) : "No deadline"} hint={view.goal.dueDate ? due?.text : undefined} />
             <Stat label="Saving pace" value={view.pacePerMonth > 0 ? `${formatCurrency(view.pacePerMonth)}/mo` : "—"} hint="last 90 days" />
             <Stat label="Projected finish" value={view.projectedDate ? formatShortDate(view.projectedDate) : "—"} hint={view.requiredPerMonth != null ? `needs ${formatCurrency(view.requiredPerMonth)}/mo` : undefined} />
           </div>

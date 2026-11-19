@@ -39,7 +39,27 @@ export interface SavingsGoal extends SoftDeletableEntity {
   /** Set by "Mark completed" below the target — a goal the user closed early (so it is not flagged as slipped). */
   closedEarly: boolean;
   completedAt: Date | null;
+  /**
+   * Monthly planning (web-only, additive — absent on mobile-written documents, read with safe fallbacks):
+   *  - `kind`: "goal" = save toward a target; "deposit" = a deposit-style fund — a fixed monthly amount until a
+   *    maturity date (`lockedUntil`). Both use the same entries; the kind only changes how the plan reads.
+   *  - `monthlyTarget`: the recurring amount the user plans to put in each Month Cycle (a PLAN — never money saved).
+   *  - `planAccountId`: the account the user usually keeps this goal's money in (a default, never applied silently).
+   *  - `planSince`: when the monthly plan started — earlier cycles are not judged against it.
+   *  - `skippedCycles`: Month Cycle start keys (YYYY-MM-DD) the user chose to skip — no "missed" flag for them.
+   *  - `locked` / `lockedUntil`: an APP-LEVEL reservation. FlowFi asks for an explicit emergency release before
+   *    withdrawing; it is not a bank freeze or a fixed deposit and changes nothing at the bank.
+   */
+  kind: SavingsGoalKind;
+  monthlyTarget: number | null;
+  planAccountId: string | null;
+  planSince: Date | null;
+  skippedCycles: string[];
+  locked: boolean;
+  lockedUntil: Date | null;
 }
+
+export type SavingsGoalKind = "goal" | "deposit";
 
 /**
  * Mirrors `NumX.clampedProgress` applied to `currentAmount / targetAmount`
@@ -92,6 +112,13 @@ export function savingsGoalFromFirestore(
     accent: (data.accent as string | undefined) ?? null,
     closedEarly: (data.closedEarly as boolean | undefined) ?? false,
     completedAt: (data.completedAt as Timestamp | undefined)?.toDate() ?? null,
+    kind: data.kind === "deposit" ? "deposit" : "goal",
+    monthlyTarget: typeof data.monthlyTarget === "number" && data.monthlyTarget > 0 ? data.monthlyTarget : null,
+    planAccountId: (data.planAccountId as string | null | undefined) ?? null,
+    planSince: (data.planSince as Timestamp | undefined)?.toDate?.() ?? null,
+    skippedCycles: Array.isArray(data.skippedCycles) ? (data.skippedCycles as unknown[]).filter((k): k is string => typeof k === "string") : [],
+    locked: (data.locked as boolean | undefined) ?? false,
+    lockedUntil: (data.lockedUntil as Timestamp | undefined)?.toDate?.() ?? null,
     deletedAt: (data.deletedAt as Timestamp | undefined)?.toDate() ?? null,
     lastEditedAt: (data.lastEditedAt as Timestamp | undefined)?.toDate() ?? null,
     editHistory: ((data.editHistory as Record<string, unknown>[] | undefined) ?? []).map(auditEntryFromMap),
@@ -113,6 +140,13 @@ export function savingsGoalToFirestore(goal: SavingsGoal): DocumentData {
     accent: goal.accent,
     closedEarly: goal.closedEarly,
     completedAt: goal.completedAt == null ? null : Timestamp.fromDate(goal.completedAt),
+    kind: goal.kind,
+    monthlyTarget: goal.monthlyTarget,
+    planAccountId: goal.planAccountId,
+    planSince: goal.planSince == null ? null : Timestamp.fromDate(goal.planSince),
+    skippedCycles: goal.skippedCycles,
+    locked: goal.locked,
+    lockedUntil: goal.lockedUntil == null ? null : Timestamp.fromDate(goal.lockedUntil),
     deletedAt: goal.deletedAt == null ? null : Timestamp.fromDate(goal.deletedAt),
     lastEditedAt: goal.lastEditedAt == null ? null : Timestamp.fromDate(goal.lastEditedAt),
     editHistory: goal.editHistory.map(auditEntryToMap),
