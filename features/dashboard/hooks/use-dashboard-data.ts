@@ -62,11 +62,12 @@ import type { CreditCardProfile, Statement } from "@/lib/models/credit-card";
 import { useMySpendContext } from "@/hooks/use-my-spend-context";
 import { useLenderCharges } from "@/hooks/use-lender-charges";
 import { useSpendTransactions, withBuiltInChargeCategory } from "@/hooks/use-lender-charge-spend";
-import { lenderChargeNetWorthChangeFrom, lenderChargeNetWorthEvents } from "@/lib/engines/lender-charge-accounting";
+import { lenderChargeNetWorthEvents } from "@/lib/engines/lender-charge-accounting";
+import { netWorthAtCutoffs } from "@/lib/engines/net-worth-trend";
 import { myConsumptionAmount } from "@/lib/engines/my-spend";
 
 import { CASH_FLOW_WEEK_LABELS, weeklyCashFlowTotals } from "@/lib/engines/cycle-transaction-mapping";
-import { compareTransactionsNewestFirst, effectiveMonth, isLoanPrincipalDisbursement, signedAmount, type Transaction } from "@/lib/models/transaction";
+import { compareTransactionsNewestFirst, effectiveMonth, signedAmount, type Transaction } from "@/lib/models/transaction";
 import { cardBillsForCard } from "@/lib/engines/card-cycle-bills";
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -164,24 +165,12 @@ export function useDashboardData() {
   // receivable / payable moves with the cash), loan disbursements and loan / EMI payments (mostly principal).
   // It used to be a cumulative 7-day cash flow starting at 0 — not Net Worth at all.
   const netWorth = useMemo(() => {
-    const nwChanging = (transactions as Transaction[]).filter(
-      (t) =>
-        t.deletedAt == null &&
-        !t.excludeFromCalculations &&
-        t.transferId == null &&
-        !t.isPersonLedgerMovement &&
-        !isLoanPrincipalDisbursement(t) &&
-        t.loanId == null &&
-        t.emiId == null,
-    );
+    // The walk-back rule lives in `lib/engines/net-worth-trend.ts` (shared with Reports / Analytics' longer trends).
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const trend: number[] = [];
-    for (let i = 6; i >= 0; i--) {
-      const endOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate() - i + 1);
-      const after = nwChanging.filter((t) => t.dateTime.getTime() >= endOfDay.getTime()).reduce((sum, t) => sum + signedAmount(t), 0);
-      // Walk back every Net Worth movement after that day: transactions, and lender charges billed / reversed after it.
-      trend.push(Math.round((netWorthAmount - after - lenderChargeNetWorthChangeFrom(lenderChargeEvents, endOfDay)) * 100) / 100);
-    }
+    const dayEnds: Date[] = [];
+    for (let i = 6; i >= 0; i--) dayEnds.push(new Date(today.getFullYear(), today.getMonth(), today.getDate() - i + 1));
+    // Walk back every Net Worth movement after that day: transactions, and lender charges billed / reversed after it.
+    const trend = netWorthAtCutoffs({ transactions: transactions as Transaction[], netWorthNow: netWorthAmount, lenderChargeEvents, cutoffs: dayEnds });
     // Assets / Debt so borrowing is visible even when Net Worth doesn't move (borrowed money in the bank
     // raises assets and debt together). Debt is the shared `liabilityTotals` (remaining principal, card
     // debt counted once); the card part is the card accounts' own balances — the same figure Net Worth

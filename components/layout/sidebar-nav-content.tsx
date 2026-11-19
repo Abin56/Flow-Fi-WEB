@@ -29,6 +29,7 @@ import {
   type NavSection,
 } from "@/components/layout/nav-items";
 import { MAX_PINS, togglePin, useNavPrefs } from "@/components/layout/nav-prefs";
+import { NavLinkStatus, useNavPending } from "@/components/layout/nav-pending";
 import { NavScrollThumb } from "@/components/layout/nav-scroll-thumb";
 import { QuickAccess } from "@/components/layout/quick-access";
 import { useSmoothScroll } from "@/components/layout/use-smooth-scroll";
@@ -120,21 +121,15 @@ export function SidebarNavContent({
   const slide = reduceMotion ? { duration: 0 } : SLIDE;
   // "Jump to…" — filters the menu; Enter opens the first match. Presentation only (same routes).
   const router = useRouter();
-  // The page being opened (set on click, cleared once the URL changes) — drives the instant highlight and the top bar.
-  const [pendingHref, setPendingHref] = useState<string | null>(null);
-  const [lastPathname, setLastPathname] = useState(pathname);
-  if (pathname !== lastPathname) {
-    setLastPathname(pathname);
-    setPendingHref(null);
-  }
+  // The page the router is opening right now (see nav-pending.tsx) — drives the instant highlight; the top bar lives in the app shell.
+  const pendingHref = useNavPending();
   // Row under the mouse — one shared hover highlight glides between rows instead of each row blinking on/off.
   const [hoverHref, setHoverHref] = useState<string | null>(null);
   const prefs = useNavPrefs();
   const currentHref = navItemForPath(pathname)?.href;
   const warm = (href: string) => router.prefetch(href);
-  /** Opening a page from the menu: light it up at once (before the route has loaded) and close the mobile drawer. */
-  const handleGo = (item: NavItem, e: React.MouseEvent<HTMLAnchorElement>) => {
-    if (!e.metaKey && !e.ctrlKey && !e.shiftKey && e.button === 0 && !isNavItemActive(item, pathname)) setPendingHref(item.href);
+  /** Opening a page from the menu: close the mobile drawer. Nothing here may re-render a link before its click completes. */
+  const handleGo = () => {
     onNavigate?.();
   };
   // Warm every menu page once per session (when the browser is idle), so the first visit to each opens quickly.
@@ -174,13 +169,21 @@ export function SidebarNavContent({
   // Scroll-spy: the category whose heading was last to reach the top of the list is the "current" one.
   const spyFrame = useRef(0);
   // Edge fades: the list dissolves only on a side where more rows are hidden, so cut-off rows read as "scroll for more".
-  const [edges, setEdges] = useState({ up: false, down: false });
+  // Written straight onto the element (a mask on a scrolling list) rather than kept in React state: flipping state on
+  // the first scroll away from the top re-rendered the whole drawer in the middle of the glide.
+  const edgeKey = useRef<{ el: HTMLElement | null; key: string }>({ el: null, key: "" });
   const updateEdges = () => {
     const sc = scrollerRef.current;
     if (!sc) return;
     const up = sc.scrollTop > 2;
     const down = sc.scrollTop + sc.clientHeight < sc.scrollHeight - 2;
-    setEdges((prev) => (prev.up === up && prev.down === down ? prev : { up, down }));
+    const key = `${up ? 1 : 0}${down ? 1 : 0}`;
+    if (edgeKey.current.el === sc && edgeKey.current.key === key) return;
+    edgeKey.current = { el: sc, key };
+    // Soft dissolve at whichever edge has more rows hidden (mask, so it works on any background/theme).
+    const mask = `linear-gradient(to bottom, transparent 0, #000 ${up ? 22 : 0}px, #000 calc(100% - ${down ? 32 : 0}px), transparent 100%)`;
+    sc.style.maskImage = mask;
+    sc.style.webkitMaskImage = mask;
   };
   useEffect(() => {
     const sc = scrollerRef.current;
@@ -217,7 +220,26 @@ export function SidebarNavContent({
   const releaseHold = () => {
     holdRef.current = false;
   };
+  // While the list is moving (a wheel glide, a thumb drag) rows slide under a still pointer. Letting each one
+  // "enter" would re-render the whole drawer, start a hover-pill animation and prefetch a route per row — in the
+  // middle of the glide. So pointer-enter is ignored while it moves; once it settles, the row that ended up
+  // under the pointer gets the highlight.
+  const movingRef = useRef(false);
+  const idleTimer = useRef(0);
+  const pointerAt = useRef<{ x: number; y: number } | null>(null);
+  const settleHover = () => {
+    movingRef.current = false;
+    const sc = scrollerRef.current;
+    const at = pointerAt.current;
+    if (!sc || !at) return;
+    const hit = document.elementFromPoint(at.x, at.y);
+    if (!hit || !sc.contains(hit)) return;
+    setHoverHref(hit.closest<HTMLElement>("[data-nav-href]")?.dataset.navHref ?? null);
+  };
   const onListScroll = () => {
+    movingRef.current = true;
+    window.clearTimeout(idleTimer.current);
+    idleTimer.current = window.setTimeout(settleHover, 130);
     updateEdges();
     if (lockedRef.current || holdRef.current || spyFrame.current) return;
     spyFrame.current = window.requestAnimationFrame(() => {
@@ -230,6 +252,7 @@ export function SidebarNavContent({
       window.cancelAnimationFrame(spyFrame.current);
       window.clearTimeout(lockTimer.current);
       window.clearTimeout(flashTimer.current);
+      window.clearTimeout(idleTimer.current);
     },
     [],
   );
@@ -286,14 +309,14 @@ export function SidebarNavContent({
   });
   const motionOn = scrollMotion && !collapsed;
   const scrollItem = motionOn ? "drawer-item" : undefined;
-  // Soft dissolve at whichever edge has more rows hidden (mask, so it works on any background/theme).
-  const fadeTop = edges.up ? 22 : 0;
-  const fadeBottom = edges.down ? 32 : 0;
-  const listMask = `linear-gradient(to bottom, transparent 0, #000 ${fadeTop}px, #000 calc(100% - ${fadeBottom}px), transparent 100%)`;
 
   return (
     <div
       ref={rootRef}
+      data-smooth="own"
+      onPointerMove={(e) => {
+        if (e.pointerType === "mouse") pointerAt.current = { x: e.clientX, y: e.clientY };
+      }}
       onWheel={releaseHold}
       onTouchStart={releaseHold}
       onPointerDown={releaseHold}
@@ -305,18 +328,6 @@ export function SidebarNavContent({
         aria-hidden
         className="pointer-events-none absolute inset-x-0 top-0 h-44 bg-[radial-gradient(110%_70%_at_0%_0%,color-mix(in_oklab,var(--primary)_28%,transparent),transparent_72%)] opacity-80"
       />
-      {/* Slim loading bar along the top of the window while a page from the menu is opening. */}
-      {pendingHref != null && (
-        <div aria-hidden className="pointer-events-none fixed inset-x-0 top-0 z-command h-0.5 overflow-hidden">
-          <motion.div
-            className="h-full bg-primary-accent-text shadow-[0_0_8px_rgba(150,190,40,0.8)]"
-            initial={{ width: "0%" }}
-            animate={{ width: "85%" }}
-            transition={{ duration: reduceMotion ? 0 : 0.7, ease: [0.1, 0.8, 0.2, 1] }}
-          />
-        </div>
-      )}
-
       {/* Brand + collapse */}
       <div className={cn("relative flex h-10 shrink-0 items-center gap-2.5 px-4", collapsed && "justify-center px-0")}>
         <Link
@@ -369,7 +380,6 @@ export function SidebarNavContent({
                 } else if (e.key === "Enter" && firstMatch) {
                   e.preventDefault();
                   setQuery("");
-                  if (!isNavItemActive(firstMatch, pathname)) setPendingHref(firstMatch.href);
                   onNavigate?.();
                   router.push(firstMatch.href);
                 }
@@ -447,10 +457,9 @@ export function SidebarNavContent({
       <div
         ref={scrollerRef}
         onScroll={onListScroll}
-        style={{ maskImage: listMask, WebkitMaskImage: listMask }}
         className="nav-scroll relative h-full overflow-y-auto overscroll-contain pb-6"
       >
-        <nav className="flex flex-col gap-1 px-3" onMouseLeave={() => setHoverHref(null)}>
+        <nav className={cn("flex flex-col gap-1", collapsed ? "pr-[18px] pl-2" : "pr-[24px] pl-3")} onMouseLeave={() => setHoverHref(null)}>
           {groups.map((group) => {
             const holdsActive = group.items.some((item) => isNavItemActive(item, pathname));
             const SectionIcon = SECTION_ICON[group.section];
@@ -491,15 +500,10 @@ export function SidebarNavContent({
                     <Link
                       key={item.href}
                       href={item.href}
-                      onClick={(e) => handleGo(item, e)}
-                      onPointerDown={(e) => {
-                        if (e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !isNavItemActive(item, pathname)) setPendingHref(item.href);
-                      }}
-                      onPointerLeave={(e) => {
-                        // Pressed then dragged away without releasing: that's not a click, so drop the early highlight.
-                        if (e.buttons === 1 && pendingHref === item.href) setPendingHref(null);
-                      }}
+                      onClick={handleGo}
+                      data-nav-href={item.href}
                       onPointerEnter={(e) => {
+                        if (movingRef.current) return; // the list is scrolling under a still pointer (see settleHover)
                         if (e.pointerType === "mouse") setHoverHref(item.href);
                         warm(item.href);
                       }}
@@ -521,7 +525,7 @@ export function SidebarNavContent({
                           transition={slide}
                         >
                           {!collapsed && (
-                            <span className="absolute inset-y-[22%] -left-3 w-[3px] rounded-r-full bg-primary-accent-text shadow-[0_0_10px_rgba(150,190,40,0.8)]" />
+                            <span className="absolute inset-y-[22%] -left-3 w-[3px] rounded-r-full bg-primary-accent-text shadow-[0_0_10px_color-mix(in_oklch,var(--primary)_80%,transparent)]" />
                           )}
                         </motion.span>
                       )}
@@ -540,7 +544,7 @@ export function SidebarNavContent({
                         className={cn(
                           "relative flex size-[var(--nav-ibox)] shrink-0 items-center justify-center rounded-[9px] transition-[background-color,color,box-shadow,transform] duration-200 ease-[var(--nav-ease-spring)]",
                           active
-                            ? "bg-primary text-primary-foreground shadow-[0_3px_10px_-3px_rgba(150,190,40,0.75)]"
+                            ? "bg-primary text-primary-foreground shadow-[0_3px_10px_-3px_color-mix(in_oklch,var(--primary)_75%,transparent)]"
                             : "text-foreground/55 group-hover/item:-rotate-6 group-hover/item:scale-110 group-hover/item:bg-card group-hover/item:text-foreground group-hover/item:shadow-[0_1px_3px_rgba(0,0,0,0.08)]",
                         )}
                       >
@@ -563,6 +567,7 @@ export function SidebarNavContent({
                             <PeopleNavBadge collapsed={false} />
                           </span>
                         ))}
+                      <NavLinkStatus href={item.href} />
                     </Link>
                   );
 
@@ -620,7 +625,7 @@ export function SidebarNavContent({
           <p className="px-6 py-6 text-center text-xs text-foreground/60">No page matches “{query.trim()}”.</p>
         )}
       </div>
-      <NavScrollThumb scrollerRef={scrollerRef} scrollTo={glideTo} />
+      <NavScrollThumb scrollerRef={scrollerRef} scrollTo={glideTo} collapsed={collapsed} />
       </div>
 
       {/* Profile */}

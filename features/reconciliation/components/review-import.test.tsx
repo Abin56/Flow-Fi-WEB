@@ -118,6 +118,17 @@ describe("Review & Import", () => {
     expect(count("summary-to-check")).toBe("0");
   });
 
+  it("a row's warning is one compact indicator; clicking it opens that row's editor on the value to fix", () => {
+    open();
+    const flag = within(rowEl("ZOMATO")).getByTestId("row-check-label");
+    expect(flag.tagName).toBe("BUTTON"); // an icon, not a text badge
+    expect(flag.getAttribute("title")).toMatch(/Check amount/);
+    expect(screen.queryByTestId("row-editor")).toBeNull();
+    fireEvent.click(flag);
+    expect(rowEl("ZOMATO").getAttribute("aria-selected")).toBe("true");
+    expect(within(screen.getByTestId("row-editor")).getByTestId("confirm-row")).toBeTruthy();
+  });
+
   it("bulk Import new rows takes only clean unmatched charges: history fills SWIGGY, one pick fills the rest", () => {
     open();
     fireEvent.click(screen.getByTestId("bulk-import-open"));

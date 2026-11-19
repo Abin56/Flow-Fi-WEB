@@ -19,17 +19,23 @@ import {
   type CollectionReference,
   type DocumentData,
   type DocumentReference,
+  collection,
   doc,
   getDoc,
+  getDocs,
+  query,
   runTransaction,
   updateDoc,
+  where,
 } from "firebase/firestore";
+import { FirestoreCollections } from "@/lib/firestore/collections";
 import { FirestoreCrudRepository } from "@/lib/firestore/firestore-crud-repository";
 import { recordEdit } from "@/lib/firestore/soft-deletable";
 import {
   type Bill,
   type BillOccurrence,
   type BillRecurrence,
+  billOccurrenceFromFirestore,
   billOccurrenceStatus,
   billOccurrenceToFirestore,
   billRecurrenceNextDueDate,
@@ -157,11 +163,22 @@ export class BillRepository extends FirestoreCrudRepository<Bill> {
     }
     assertCustomIntervalValid(params.recurrence ?? bill.recurrence, params.customIntervalDays ?? bill.customIntervalDays);
 
+    // The form's "Next Due Date" IS the open cycle's due date (the template date is only ever the latest cycle's own day).
+    // Changing it must therefore move that cycle too, or Bills / Month Cycle would keep showing the old date. Looked up
+    // BEFORE the transaction (a web transaction cannot query); every fact is re-checked on fresh reads inside it.
+    const moveTo = params.nextDueDate != null && !sameDueDay(params.nextDueDate, bill.nextDueDate) ? params.nextDueDate : null;
+    const openCycle = moveTo ? await this.openCycleToMove(bill, moveTo, params) : null;
+
     await runTransaction(this.collection.firestore, async (tx) => {
       const ref = this.docRef(bill.id);
       const snap = await tx.get(ref);
       if (!snap.exists()) throw new Error("This bill no longer exists — refresh and try again");
       const fresh = snap.data();
+      const cycles = this.occurrencesCollection(bill.id);
+      const cycleRef = openCycle ? doc(cycles, openCycle.id) : null;
+      const cycleSnap = cycleRef ? await tx.get(cycleRef) : null;
+      // The deterministic id of the NEW day: a record already holding it (live or trashed) must never be overwritten or shadowed.
+      const takenSnap = openCycle && moveTo ? await tx.get(doc(cycles, billCycleId(bill.id, moveTo))) : null;
 
       let updated = fresh;
       const written: (keyof Bill)[] = [];
@@ -182,11 +199,65 @@ export class BillRepository extends FirestoreCrudRepository<Bill> {
       if (written.length === 0) return;
 
       assertCustomIntervalValid(updated.recurrence, updated.customIntervalDays);
+
+      // Move the open cycle in the same transaction — only while it is still the unsettled one we looked up.
+      if (written.includes("nextDueDate") && openCycle && moveTo && cycleRef && cycleSnap?.exists()) {
+        const cycle = cycleSnap.data();
+        const stillOpen = cycle.deletedAt == null && !cycle.isSkipped && cycle.amountPaid < cycle.amount && sameCalendarDay(cycle.dueDate, openCycle.dueDate);
+        if (stillOpen) {
+          if (takenSnap?.exists()) throw new BillEditError(`This bill already has a record for ${formatDay(moveTo)} — nothing was changed. Choose another date.`);
+          const edited = recordEdit(cycle, "dueDate", String(cycle.dueDate), String(moveTo));
+          const rawCycle = billOccurrenceToFirestore({ ...edited, dueDate: moveTo });
+          tx.update(cycleRef, { dueDate: rawCycle.dueDate, lastEditedAt: rawCycle.lastEditedAt, editHistory: rawCycle.editHistory });
+        }
+      }
+
       const raw = billToFirestore(updated);
       const patch: DocumentData = { lastEditedAt: raw.lastEditedAt, editHistory: raw.editHistory };
       for (const field of written) patch[field] = raw[field];
       tx.update(ref, patch);
     });
+  }
+
+  private occurrencesCollection(billId: string): CollectionReference<BillOccurrence> {
+    return collection(this.docRef(billId), FirestoreCollections.billOccurrences).withConverter({
+      toFirestore: billOccurrenceToFirestore,
+      fromFirestore: billOccurrenceFromFirestore,
+    });
+  }
+
+  /**
+   * The cycle a due-date edit should move: the bill's LATEST live cycle, when it is the one the template's date describes
+   * and is not settled (not paid, not skipped). A settled cycle is immutable history and a bill with no cycle yet simply
+   * materialises one at the new date, so for those the edit stays template-only. Throws `BillEditError` — before anything
+   * is written — when the move would collide with another cycle or leave the bill unable to roll forward.
+   */
+  private async openCycleToMove(bill: Bill, moveTo: Date, params: EditBillParams): Promise<BillOccurrence | null> {
+    const live = (await getDocs(query(this.occurrencesCollection(bill.id), where("deletedAt", "==", null)))).docs.map((d) => d.data());
+    if (live.length === 0) return null;
+    const latest = live.reduce((a, b) => (a.dueDate.getTime() > b.dueDate.getTime() ? a : b));
+    if (!sameDueDay(latest.dueDate, bill.nextDueDate)) return null; // template and cycle disagree (legacy) — leave the cycle alone
+    if (latest.isSkipped || latest.amountPaid >= latest.amount) return null;
+
+    if (live.some((o) => o.id !== latest.id && sameCalendarDay(o.dueDate, moveTo))) {
+      throw new BillEditError(`This bill already has a cycle due on ${formatDay(moveTo)} — nothing was changed. Choose another date.`);
+    }
+    // The cycle's document keeps the id of its ORIGINAL day. A later roll-forward addresses the next cycle by ITS day, so moving
+    // backwards by exactly the roll's steps would make it land on this very document and the bill would stop rolling. Refuse that.
+    const recurrence = params.recurrence ?? bill.recurrence;
+    if (recurrence !== "oneTime" && moveTo.getTime() < latest.dueDate.getTime()) {
+      const customDays = params.customIntervalDays ?? bill.customIntervalDays;
+      let day = moveTo;
+      for (let i = 0; i < 4000 && day.getTime() < latest.dueDate.getTime() && !sameCalendarDay(day, latest.dueDate); i += 1) {
+        day = billRecurrenceNextDueDate(recurrence, day, customDays);
+      }
+      if (sameCalendarDay(day, latest.dueDate)) {
+        throw new BillEditError(
+          `Moving the due date back to ${formatDay(moveTo)} would make this bill repeat onto the day it is currently due (${formatDay(latest.dueDate)}) — nothing was changed. Choose a later date.`,
+        );
+      }
+    }
+    return latest;
   }
 
   /**
@@ -284,6 +355,18 @@ export class BillEditConflictError extends Error {
     );
     this.name = "BillEditConflictError";
   }
+}
+
+/** An edit refused before anything was written (e.g. a due-date move that would collide with another cycle). The message is written for the user. */
+export class BillEditError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BillEditError";
+  }
+}
+
+function formatDay(d: Date): string {
+  return d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
 }
 
 /**

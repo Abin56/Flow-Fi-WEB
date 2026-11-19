@@ -44,7 +44,7 @@ function List({ items }: { items: ReactNode[] }) {
 
 function Contact() {
   return (
-    <a data-testid="privacy-contact" className="font-medium text-primary underline-offset-4 hover:underline" href={CONTACT_MAILTO}>
+    <a data-testid="privacy-contact" className="font-medium text-primary-accent-text underline-offset-4 hover:underline" href={CONTACT_MAILTO}>
       {CONTACT_EMAIL}
     </a>
   );

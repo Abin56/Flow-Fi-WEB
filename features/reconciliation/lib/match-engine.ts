@@ -8,7 +8,9 @@
  *    (D9: a shared-credit-limit sibling card is called out, but still only informational).
  *  - Same direction (Charge ↔ expense, Credit ↔ income).
  *  - Not soft-deleted (a deleted look-alike is a note).
- *  - Amount within ₹1.00 and date within ±3 IST calendar days (D4).
+ *  - Amount within the advisory bands and date within ±3 IST calendar days (D4). The widest band ("approx": a ₹298
+ *    statement line vs ₹300 typed by hand) needs supporting evidence — within a day, the same/similar merchant, or the
+ *    reference number — and is never an exact match. A similar amount alone never proves two transactions are one.
  *
  * One-to-one: an existing transaction backs at most one statement row. A user's Link claims its record first;
  * suggestions are only made for unique, mutual best matches (the same fixed-point rule as
@@ -37,13 +39,23 @@ export interface MatchContext {
 /** How far "Find another transaction" searches (and how far an explicit manual Link may reach). */
 export const MANUAL_LINK_WINDOW_DAYS = 31;
 
-const BAND_SCORE = { exact: 60, paise: 45, rounding: 35 } as const;
+const BAND_SCORE = { exact: 60, paise: 45, rounding: 35, approx: 20 } as const;
 const MERCHANT_SCORE = { same: 20, similar: 10, unknown: 0, different: -10 } as const;
+/** The approx band only counts when the dates are this close (or the merchant / reference agrees). */
+const APPROX_SUPPORT_DAYS = 1;
 
 function tierFor(band: MatchCandidate["amountBand"], dayGap: number, strength: MatchCandidate["merchantStrength"]): MatchTier {
   if (band === "exact" && dayGap === 0) return "exact";
   if (dayGap === 0 && (strength === "same" || strength === "similar")) return "same_merchant_date";
   return "near";
+}
+
+/**
+ * The matcher's evidence for one record against one row, or null when it isn't a possible match. Account boundaries
+ * are the caller's job (the matcher, the manual search and the cross-account hints each apply their own).
+ */
+export function evaluateCandidate(row: ReconRow, rowDay: number, rowPaise: number, record: ExistingRecord, windowDays: number): MatchCandidate | null {
+  return evaluate(row, rowDay, rowPaise, record, windowDays);
 }
 
 function evaluate(row: ReconRow, rowDay: number, rowPaise: number, record: ExistingRecord, windowDays: number): MatchCandidate | null {
@@ -55,6 +67,8 @@ function evaluate(row: ReconRow, rowDay: number, rowPaise: number, record: Exist
   const merchantScore = merchantSimilarity(row.description, record.description);
   const strength = merchantStrength(merchantScore);
   const referenceMatch = containsReference(row.referenceNumber, record.description, record.notes);
+  // A small typing/rounding difference alone proves nothing: it needs a close date, a matching merchant or the reference.
+  if (band === "approx" && Math.abs(dayGap) > APPROX_SUPPORT_DAYS && strength !== "same" && strength !== "similar" && !referenceMatch) return null;
   const score = BAND_SCORE[band] - 8 * Math.abs(dayGap) + MERCHANT_SCORE[strength] + (referenceMatch ? 25 : 0);
   return {
     recordId: record.id,
@@ -114,7 +128,7 @@ function formatDay(record: ExistingRecord): string {
 
 /**
  * "Find another transaction" for one row: committed, live transactions on the statement account with the same
- * direction, within ₹1.00 and ±31 IST days, optionally narrowed by a search over description/amount. The same
+ * direction, within the amount bands and ±31 IST days, optionally narrowed by a search over description/amount. The same
  * account/direction/amount boundaries as automatic matching — a manual Link can't cross accounts either.
  */
 export function manualLinkOptions(row: ReconRow, records: ExistingRecord[], accountId: string, query = ""): { record: ExistingRecord; candidate: MatchCandidate }[] {
@@ -183,7 +197,7 @@ export function matchRows(rows: ReconRow[], ctx: MatchContext): RowMatch[] {
       const otherRowsImport = ownerOfImportedId.get(record.id);
       if (otherRowsImport != null && otherRowsImport !== row.id) continue;
       // A record the user linked by hand ("Find another transaction") may sit further out in time — same account,
-      // same direction and the ₹1.00 band still apply.
+      // same direction and the amount bands still apply.
       const candidate = evaluate(row, rowDay, rowPaise, record, record.id === linkedId ? MANUAL_LINK_WINDOW_DAYS : windowDays);
 
       if (record.accountId === ctx.accountId) {

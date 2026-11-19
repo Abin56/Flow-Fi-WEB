@@ -46,6 +46,7 @@ interface StoredRow {
   confirmedFields: CaptureField[];
   needsReconfirm: boolean;
   captureExcluded?: boolean;
+  removedFromReview?: boolean;
   captureBaseline?: string;
   issues: StoredIssue[];
 }
@@ -126,6 +127,7 @@ function toStoredRow(row: ReconRow): StoredRow {
     confirmedFields: row.confirmedFields,
     needsReconfirm: row.needsReconfirm,
     ...(row.captureExcluded ? { captureExcluded: true } : {}),
+    ...(row.removedFromReview ? { removedFromReview: true } : {}),
     ...(row.captureBaseline ? { captureBaseline: row.captureBaseline } : {}),
     issues: row.issues.map((i) => ({ code: i.code, blocking: i.blocking, ...(i.strict ? { strict: true } : {}), ...(i.confirmOnly ? { confirmOnly: true } : {}), ...(i.field ? { field: i.field } : {}) })),
   };
@@ -162,6 +164,7 @@ function fromStoredRow(s: StoredRow, index: number): ReconRow {
     committedTransactionId: null,
     needsReconfirm: s.needsReconfirm,
     captureExcluded: s.captureExcluded === true,
+    ...(s.removedFromReview === true ? { removedFromReview: true } : {}),
     ...(typeof s.captureBaseline === "string" ? { captureBaseline: s.captureBaseline } : {}),
   };
 }

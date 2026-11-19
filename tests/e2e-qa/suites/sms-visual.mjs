@@ -6,6 +6,7 @@
  */
 import { scenario } from "../lib/core.mjs";
 import * as h from "../lib/harness.mjs";
+import { sameDayIso } from "../lib/inbox-days.mjs";
 import { BASE_URL, FIRESTORE_DOCS } from "../lib/env.mjs";
 
 const OWNER = { Authorization: "Bearer owner", "Content-Type": "application/json" };
@@ -14,12 +15,13 @@ const s = (v) => ({ stringValue: v });
 const n = (v) => ({ doubleValue: v });
 const nul = { nullValue: null };
 
+// The Inbox is browsed one day at a time: `daysAgo` is now how many MINUTES older than the newest candidate (all on one day), so every row is on screen and the old newest-first order is kept.
 async function putCandidate(uid, { id, amount, merchant, accountId, daysAgo, direction = "debit", eventType = "upiPayment", rawLastFour = null, confidenceLevel = "high", needsReview = false, reasons = [] }) {
   const fields = {
     amount: n(amount),
     direction: s(direction),
     eventType: s(eventType),
-    transactionDate: { timestampValue: new Date(Date.now() - daysAgo * DAY).toISOString() },
+    transactionDate: { timestampValue: sameDayIso(daysAgo) },
     merchant: merchant ? s(merchant) : nul,
     bankName: s("QA Bank"),
     rawLastFour: rawLastFour ? s(rawLastFour) : nul,
@@ -313,7 +315,7 @@ for (const scheme of ["light", "dark"]) {
       };
       const row = (t) => rowOf(page, t);
       await text("list: 'Review suggested' notice", row("BigBasket").getByText("Review suggested"));
-      await text("list: month heading", page.getByTestId("candidate-group").first().getByRole("heading"));
+      await text("list: day heading", page.getByTestId("candidate-day-heading").getByRole("heading"));
       await text("list: 'Needs account' notice", row("Uber").getByRole("button", { name: /Needs account/ }));
       await text("list: 'Possible duplicate' notice", row("QA groceries").getByText("Possible duplicate"));
       await text("list: 'Needs review' notice", row("Chai Point").getByText("Needs review", { exact: true }));

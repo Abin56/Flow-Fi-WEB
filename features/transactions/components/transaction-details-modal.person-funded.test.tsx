@@ -139,7 +139,7 @@ describe("Add Expense → Money I Borrowed → how did you borrow", () => {
 
     expect(screen.getByText("Received into *")).toBeTruthy();
     expect(screen.queryByText("Paid from")).toBeNull();
-    expect(screen.queryByText("Category *")).toBeNull();
+    expect(screen.queryByText("Category")).toBeNull();
     expect(screen.getByTestId("borrowed-cash-helper").textContent).toMatch(
       /1,000.* will be added to SBI\. You will owe AMMA .*1,000.*\. This is borrowing, not income or spending\./,
     );
@@ -189,7 +189,7 @@ describe("Add Expense → Money I Borrowed → how did you borrow", () => {
     await waitFor(() => expect(actions.createPersonFundedExpense).toHaveBeenCalledTimes(1));
     const [person, params] = actions.createPersonFundedExpense.mock.calls[0] as unknown as [Person, Record<string, unknown>];
     expect(person.id).toBe("amma");
-    expect(params).toMatchObject({ amount: 1000, categoryId: "food", description: "Restaurant" });
+    expect(params).toMatchObject({ amount: 1000, categoryId: "", description: "Restaurant" });
     expect(params).not.toHaveProperty("accountId");
     expect(actions.createTransaction).not.toHaveBeenCalled();
     expect(actions.recordBorrowedCash).not.toHaveBeenCalled();

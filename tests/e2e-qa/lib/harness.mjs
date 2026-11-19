@@ -19,6 +19,13 @@ export const egressViolations = [];
 
 /** Runs inside every page before app code: records event times, request timing and a few text milestones. */
 const INIT = () => {
+  // Review & Import jumps to the next waiting row after a decision by default. Older suites decide a row and keep
+  // inspecting it, so they start with Auto-next off; recon-vis switches it on to prove the default flow.
+  try {
+    if (localStorage.getItem("flowfi.recon.autoNext") === null) localStorage.setItem("flowfi.recon.autoNext", "0");
+  } catch {
+    /* storage unavailable */
+  }
   window.__ev = [];
   const seen = {};
   const mark = (n) => {

@@ -11,7 +11,7 @@ const ACCENTS = {
   primary: "bg-primary/20 text-foreground dark:text-primary-accent-text",
   warning: "bg-warning/20 text-warning-foreground dark:text-warning",
   success: "bg-success/12 text-success",
-  info: "bg-blue-500/12 text-blue-600 dark:text-blue-400",
+  info: "bg-royal/12 text-royal",
 } as const;
 
 export interface AccountsOverviewCardProps {

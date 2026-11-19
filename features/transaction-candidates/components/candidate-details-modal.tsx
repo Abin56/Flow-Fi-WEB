@@ -108,13 +108,14 @@ import {
   type CandidateImportDraft,
 } from "../lib/candidate-details-view";
 import type { CandidateDuplicateResult } from "../lib/candidate-duplicate";
-import { scheduleDelayedDismiss } from "../lib/delayed-dismiss";
+import { scheduleDelayedDismiss, UNDO_TOAST_OPTIONS, undoToastAction } from "../lib/delayed-dismiss";
+import { dismissedCandidateLabel } from "./ignore-candidate-button";
 import { ignoreCandidate, importCandidate, type CandidatePersonAssignment } from "../lib/import-candidate";
 import { deriveCandidateStatus } from "../lib/candidate-status";
 import type { CategorySuggestion } from "../lib/category-suggestions";
 import { buildDuplicateComparison } from "../lib/duplicate-comparison";
 import { describePartialImport, isRollbackIncomplete, type PartialImportNotice } from "../lib/import-messages";
-import { DuplicateComparisonCard } from "./duplicate-comparison";
+import { DuplicateFoldedLine, DuplicateResolutionCard } from "./duplicate-comparison";
 import { CandidateStatusBadge } from "./candidate-status-badge";
 import { handleEnterKey, handleModEnterKey } from "@/components/ui/enter-key";
 
@@ -377,6 +378,8 @@ export function CandidateDetailsModal({
   // View-only: the "Original SMS" strip, and the floating split editor.
   const [smsOpen, setSmsOpen] = useState(false);
   const [splitEditorOpen, setSplitEditorOpen] = useState(false);
+  // View-only: "Ignore warning" folds the duplicate card to one line. It never dismisses, resolves or imports anything.
+  const [duplicateHidden, setDuplicateHidden] = useState(false);
   // Inline validation only appears once the reviewer actually tries to import (never as a wall of red on open).
   const [showErrors, setShowErrors] = useState(false);
   // The draft as it was seeded for this candidate — what "unsaved edits" is measured against.
@@ -423,6 +426,7 @@ export function CandidateDetailsModal({
     setOpenPanel(null);
     setSmsOpen(false);
     setSplitEditorOpen(false);
+    setDuplicateHidden(false);
     setPendingClose(false);
     setPersonMode(false);
     setAddingPerson(false);
@@ -436,6 +440,7 @@ export function CandidateDetailsModal({
   const currentDraft = draft;
 
   const destinationOptions = buildDestinationOptions(accounts, creditCards);
+  const selectedAccountLabel = destinationOptions.find((o) => o.key === draft.destinationKey)?.label ?? null;
   const matchedAccountLabel = formatMatchedAccountLabel(currentCandidate, accounts, creditCards);
   const destinationState = candidateDestinationState(currentCandidate, accounts, creditCards);
   const matchedDestinationKey = resolveCandidateDestinationKey(currentCandidate, accounts, creditCards);
@@ -612,8 +617,9 @@ export function CandidateDetailsModal({
    * hides the candidate right away, deletes only after the undo window, and the toast's Undo cancels it.
    * `dismissing` guards against scheduling a second dismissal (e.g. a repeated Enter) for this open.
    */
-  function handleDismiss() {
+  function handleDismiss(reason: "dismissed" | "already-recorded" = "dismissed") {
     if (dismissing) return;
+    const alreadyRecorded = reason === "already-recorded";
     setDismissing(true);
     const { cancel } = scheduleDelayedDismiss({
       candidateId: currentCandidate.id,
@@ -633,12 +639,30 @@ export function CandidateDetailsModal({
         toast.error("Couldn't dismiss this candidate", error instanceof Error ? error.message : undefined);
       },
     });
-    toast.success("Candidate dismissed", `${currentCandidate.merchant ?? currentCandidate.bankName ?? "Transaction"} won't show in the review queue.`, {
-      label: "Undo",
-      onClick: cancel,
-    });
+    toast.success(
+      alreadyRecorded ? "Marked as already recorded" : "Candidate dismissed",
+      alreadyRecorded
+        ? `${dismissedCandidateLabel(currentCandidate)} — your existing transaction is unchanged and nothing was imported.`
+        : `${dismissedCandidateLabel(currentCandidate)} won't show in the review queue.`,
+      undoToastAction(cancel),
+      UNDO_TOAST_OPTIONS,
+    );
     setConfirmDismissOpen(false);
     onOpenChange(false);
+  }
+
+  /**
+   * "Import as new" from the duplicate card: the reviewer has just said this is a separate payment, so the duplicate warning is not
+   * asked a second time. Everything else is the normal import — same validation, same single atomic write, same candidate-id idempotency.
+   * An incomplete form writes NOTHING; it shows the inline errors, exactly like the footer's Import button.
+   */
+  function importAsNew() {
+    if (importing || dismissing || committed) return;
+    if (!ready) {
+      attemptImport(false);
+      return;
+    }
+    void handleImport(true, false);
   }
 
   /**
@@ -823,7 +847,8 @@ export function CandidateDetailsModal({
               {merchantName}
             </DialogTitle>
             <span className="shrink-0 rounded-full bg-card">
-              <CandidateStatusBadge candidate={currentCandidate} duplicate={duplicate} destinationState={displayDestinationState} compact />
+              {/* The duplicate is told by its own card below — not repeated here. */}
+              <CandidateStatusBadge candidate={currentCandidate} duplicate={null} destinationState={displayDestinationState} compact />
             </span>
           </div>
           <DialogDescription className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-0.5 text-[12px] text-hero-foreground/70">
@@ -832,6 +857,12 @@ export function CandidateDetailsModal({
               {dateAndTime(currentCandidate.transactionDate)}
             </span>
             <span>{smsCandidateEventTypeLabel(currentCandidate.eventType)}</span>
+            {selectedAccountLabel && (
+              <span className="inline-flex min-w-0 items-center gap-1.5" data-testid="header-account">
+                <Wallet className="size-3.5 shrink-0 text-hero-foreground/68" aria-hidden />
+                <span className="truncate">{selectedAccountLabel}</span>
+              </span>
+            )}
           </DialogDescription>
         </div>
       </div>
@@ -980,17 +1011,36 @@ export function CandidateDetailsModal({
           {(isDuplicate || similarMatch != null) &&
             !committed &&
             (comparison ? (
-              <DuplicateComparisonCard comparison={comparison} rechecked={isDuplicate} />
+              duplicateHidden ? (
+                <DuplicateFoldedLine onShow={() => setDuplicateHidden(false)} />
+              ) : (
+                <DuplicateResolutionCard
+                  comparison={comparison}
+                  rechecked={isDuplicate}
+                  busy={busy}
+                  importing={importing}
+                  onAlreadyRecorded={() => handleDismiss("already-recorded")}
+                  onImportAsNew={importAsNew}
+                  onIgnore={() => setDuplicateHidden(true)}
+                />
+              )
             ) : (
-              <div className="rounded-2xl border border-warning/60 bg-warning/8 p-4 text-xs text-foreground/90" data-testid="duplicate-comparison">
-                <p className="font-bold uppercase">Possible duplicate</p>
-                <p className="mt-1">{statusInfo.reasons[0] ?? statusInfo.explanation}</p>
-                <p className="mt-1 text-muted-foreground">Importing will re-check this and ask for your confirmation before anything is created.</p>
+              <div className="rounded-xl border border-warning/60 bg-warning/[0.07] px-3 py-2.5 text-xs text-foreground/90" data-testid="duplicate-comparison">
+                <p className="text-[13px] font-bold">Possible duplicate</p>
+                <p className="mt-0.5">{statusInfo.reasons[0] ?? statusInfo.explanation}</p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <button type="button" disabled={busy} onClick={() => handleDismiss("already-recorded")} data-testid="duplicate-already-recorded" className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border-strong bg-card px-3 text-[12.5px] font-semibold hover:bg-secondary disabled:opacity-50">
+                    Already recorded
+                  </button>
+                  <button type="button" disabled={busy} onClick={importAsNew} data-testid="duplicate-import-new" className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-[12.5px] font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50">
+                    Import as new
+                  </button>
+                </div>
               </div>
             ))}
 
           {/* One compact card: Category · Paid from · Whose expense in a row, the person/split editor only when chosen, then small toggles. */}
-          <section aria-label="Details" className="flex flex-col gap-2.5 rounded-xl border border-border bg-card p-3 shadow-e1 sm:p-3.5">
+          <section aria-label="Details" className="flex flex-col gap-3">
             {/* What the phone read from the message, on one line — open it for every parsed field. */}
             <div className="overflow-hidden rounded-lg border border-border-subtle bg-secondary/50" data-testid="sms-strip">
               <button
@@ -1045,7 +1095,9 @@ export function CandidateDetailsModal({
                 </TxnFieldRow>
                 {categorySuggestions.length > 0 && (
                   <div className="flex flex-wrap items-center gap-1.5" data-testid="category-suggestions">
-                    <p className="text-[11px] font-medium text-foreground/72">From history — suggestions only</p>
+                    <p className="text-[11px] font-medium text-foreground/72" title="From your history — suggestions only; nothing is chosen for you">
+                      Suggested
+                    </p>
                     {categorySuggestions.map((suggestion) => (
                       <button
                         key={suggestion.categoryId}
@@ -1054,9 +1106,8 @@ export function CandidateDetailsModal({
                         onClick={() => setDraft({ ...currentDraft, categoryId: suggestion.categoryId })}
                         className="inline-flex h-7 items-center gap-1.5 rounded-full border border-dashed border-border-strong bg-card px-2.5 text-[11.5px] font-semibold text-foreground transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none aria-pressed:border-solid aria-pressed:border-primary-accent-text/50 aria-pressed:bg-primary/12"
                       >
-                        {suggestion.name}
-                        <span className="font-normal text-foreground/72">
-                          · used {suggestion.count} of {suggestion.total} earlier
+                        <span title={`Used ${suggestion.count} of ${suggestion.total} times earlier`}>
+                          {suggestion.name} <span className="font-normal text-foreground/65 tabular-nums">{suggestion.count}×</span>
                         </span>
                       </button>
                     ))}
@@ -1088,8 +1139,8 @@ export function CandidateDetailsModal({
                 )}
                 {currentCandidate.rawLastFour != null && lastFourOptions.length > 0 && (
                   <div className="flex flex-wrap items-center gap-1.5" data-testid="last-four-suggestions">
-                    <p className="text-[11px] font-medium text-foreground/72">
-                      Ending •••• {currentCandidate.rawLastFour} — suggestions only; nothing is selected for you
+                    <p className="text-[11px] font-medium text-foreground/72" title="Suggestions only — nothing is selected for you">
+                      Ends •••• {currentCandidate.rawLastFour}
                     </p>
                     {lastFourOptions.map((option) => (
                       <button
@@ -1399,7 +1450,7 @@ export function CandidateDetailsModal({
       </TransactionSheet>
 
       <Dialog open={confirmDismissOpen} onOpenChange={setConfirmDismissOpen}>
-        <DialogContent onKeyDown={(e) => handleEnterKey(e, handleDismiss, { enabled: !dismissing, fromButtons: true })}>
+        <DialogContent onKeyDown={(e) => handleEnterKey(e, () => handleDismiss(), { enabled: !dismissing, fromButtons: true })}>
           <DialogHeader>
             <DialogTitle>Dismiss this candidate?</DialogTitle>
             <DialogDescription>
@@ -1412,7 +1463,7 @@ export function CandidateDetailsModal({
             <Button variant="outline" onClick={() => setConfirmDismissOpen(false)} disabled={dismissing}>
               Cancel
             </Button>
-            <Button variant="destructive" onClick={handleDismiss} disabled={dismissing}>
+            <Button variant="destructive" onClick={() => handleDismiss()} disabled={dismissing}>
               {dismissing ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
               Dismiss candidate
             </Button>

@@ -93,7 +93,7 @@ export function ReviewImportSummary({
   );
 }
 
-function Figure({ label, value, testId, amount, tone }: { label: string; value: string; testId: string; amount: number; tone?: "success" }) {
+export function Figure({ label, value, testId, amount, tone }: { label: string; value: string; testId: string; amount: number; tone?: "success" }) {
   return (
     <div className="flex min-w-0 flex-col @2xl:flex-row @2xl:items-baseline @2xl:gap-1.5" data-testid={testId} data-value={amount.toFixed(2)}>
       <dt className="text-[10.5px] font-medium tracking-wide text-muted-foreground uppercase">{label}</dt>
@@ -102,7 +102,7 @@ function Figure({ label, value, testId, amount, tone }: { label: string; value: 
   );
 }
 
-function Count({ label, value, testId, tone }: { label: string; value: number; testId: string; tone?: "warning" | "primary" }) {
+export function Count({ label, value, testId, tone }: { label: string; value: number; testId: string; tone?: "warning" | "primary" }) {
   return (
     <div className={cn("flex items-baseline gap-1", value === 0 && "opacity-60")} data-testid={testId}>
       <dt>{label}</dt>

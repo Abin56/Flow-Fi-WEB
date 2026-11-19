@@ -96,6 +96,49 @@ export function cashFlowThisMonth(params: {
   return { moneyIn, moneyOut, net: moneyIn - moneyOut };
 }
 
+export interface CashFlowRangeSummary extends CashFlowSummary {
+  /** Income transactions (not transfers, not card accounts). */
+  income: number;
+  /** Expense transactions paid from cash accounts (not transfers, not card accounts). */
+  expenses: number;
+  /** Cash side of card bill payments. */
+  creditCardPayments: number;
+}
+
+/**
+ * `cashFlowThisMonth` for ANY window — the same rows, the same exclusions, the same additions, so a calendar month
+ * resolves to exactly the figures the Dashboard shows (pinned by `cash-flow-range.test.ts`). `monthGranular` buckets by
+ * `effectiveMonth` (a calendar-month window, honouring a "count in month X" override); otherwise by the real
+ * `dateTime` (a custom mid-month cycle or a custom range spans parts of two calendar months).
+ * The EMI / loan / bill / money-received figures are range sums the caller computes, exactly as for the month.
+ */
+export function cashFlowForRange(params: {
+  transactions: CashFlowTransaction[];
+  range: { start: Date; end: Date };
+  monthGranular: boolean;
+  emiPaid: number;
+  loanPaid: number;
+  loanReceived?: number;
+  billsPaid?: number;
+  moneyReceived: number;
+}): CashFlowRangeSummary {
+  const { transactions, range, monthGranular, emiPaid, loanPaid, loanReceived = 0, billsPaid = 0, moneyReceived } = params;
+  const start = range.start.getTime();
+  const end = range.end.getTime();
+  const inRange = transactions.filter((t) => {
+    if (t.isDeleted) return false;
+    const at = (monthGranular ? t.effectiveMonth : (t.dateTime ?? t.effectiveMonth)).getTime();
+    return at >= start && at <= end;
+  });
+  const counted = inRange.filter((t) => !t.isTransfer && !t.isCreditCardAccount);
+  const income = counted.filter((t) => t.type === "income").reduce((sum, t) => sum + t.amount, 0);
+  const expenses = counted.filter((t) => t.type === "expense").reduce((sum, t) => sum + t.amount, 0);
+  const creditCardPayments = inRange.filter((t) => t.isCreditCardPayment && t.type === "expense").reduce((sum, t) => sum + t.amount, 0);
+  const moneyIn = income + moneyReceived + loanReceived;
+  const moneyOut = expenses + creditCardPayments + emiPaid + loanPaid + billsPaid;
+  return { moneyIn, moneyOut, net: moneyIn - moneyOut, income, expenses, creditCardPayments };
+}
+
 /** A single row's due/paid/remaining figures — mirrors DueCategoryBreakdown. */
 export interface DueCategoryBreakdown {
   due: number;

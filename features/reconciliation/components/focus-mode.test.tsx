@@ -4,7 +4,7 @@
  * graceful fallback, exit leaves the Focus Mode it started), Escape that never fights dialogs or the sheets, focus
  * returned to the toggle, the collapsible comparison dock (actions survive collapse) — and that none of it writes.
  */
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/firebase/client", () => ({ firebaseApp: {}, auth: {}, db: {}, storage: {} }));
@@ -62,6 +62,7 @@ beforeEach(() => {
   vi.setSystemTime(APPROVAL_NOW);
   sessionStorage.clear();
   localStorage.clear();
+  localStorage.setItem("flowfi.recon.autoNext", "0"); // these tests decide a row and then keep inspecting it
   setViewport(1600);
   useWorkspaceFocusStore.setState({ active: false });
   installFullscreen();
@@ -103,8 +104,8 @@ describe("Focus Mode", () => {
     expect(toggle().getAttribute("aria-label")).toBe("Exit Focus Mode");
     expect(screen.getByTestId("recon-workspace").dataset.focus).toBe("true");
     expect(screen.getByTestId("recon-workspace").className).toMatch(/100dvh-1\.5rem/);
-    // Both sheets, the dock and the approval bar are all still there.
-    for (const id of ["statement-sheet", "existing-sheet", "resolution-dock", "status-bar"]) expect(screen.getByTestId(id)).toBeTruthy();
+    // Both sheets and the approval bar are all still there.
+    for (const id of ["statement-sheet", "existing-sheet", "status-bar"]) expect(screen.getByTestId(id)).toBeTruthy();
     fireEvent.click(toggle());
     expect(focusOn()).toBe(false);
     await flushFrames();
@@ -131,8 +132,8 @@ describe("Focus Mode", () => {
   it("Escape with a dialog or popover open closes that, not Focus Mode", () => {
     renderStudio();
     fireEvent.click(toggle());
-    fireEvent.click(screen.getByTestId("resolve-merge_details"));
-    expect(screen.getByRole("dialog")).toBeTruthy();
+    fireEvent.click(within(screen.getAllByTestId("recon-row")[0]).getByTestId("quick-decide"));
+    expect(screen.getByRole("menu")).toBeTruthy();
     fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
     expect(focusOn()).toBe(true);
   });
@@ -183,40 +184,5 @@ describe("browser fullscreen", () => {
     expect(focusOn()).toBe(true);
     expect(screen.getByTestId("mobile-sheet-switch")).toBeTruthy();
     expect(screen.getByTestId("status-bar")).toBeTruthy();
-  });
-});
-
-describe("collapsible comparison dock", () => {
-  it("collapsing hides only the field diff — summary, effect, every resolution and Undo stay; D toggles; the choice is remembered", () => {
-    const { creates, readData } = renderStudio();
-    fireEvent.click(screen.getAllByTestId("recon-row")[0]);
-    expect(screen.getByTestId("field-diff")).toBeTruthy();
-    fireEvent.click(screen.getByTestId("dock-toggle"));
-    expect(screen.getByTestId("resolution-dock").dataset.collapsed).toBe("true");
-    expect(screen.getByTestId("dock-toggle").getAttribute("aria-expanded")).toBe("false");
-    expect(screen.queryByTestId("field-diff")).toBeNull();
-    for (const id of ["financial-effect", "resolve-keep_existing", "resolve-keep_both", "resolve-review_later", "resolve-skip", "undo-decision"]) expect(screen.getByTestId(id)).toBeTruthy();
-    expect(localStorage.getItem("flowfi.recon.dockCollapsed")).toBe("1");
-
-    // Decisions still work collapsed — and only change the draft.
-    fireEvent.click(screen.getByTestId("resolve-keep_existing"));
-    expect(screen.getAllByTestId("recon-row")[0].textContent).toMatch(/Keep existing/);
-    // Replace / Merge stay preview-only.
-    fireEvent.click(screen.getByTestId("resolve-replace_existing"));
-    expect((screen.getByTestId("preview-commit") as HTMLButtonElement).disabled).toBe(true);
-    fireEvent.click(screen.getByRole("button", { name: "Close preview" }));
-
-    fireEvent.keyDown(screen.getByRole("grid", { name: "Statement rows" }), { key: "d" });
-    expect(screen.getByTestId("resolution-dock").dataset.collapsed).toBe("false");
-    expect(screen.getByTestId("field-diff")).toBeTruthy();
-    expect(creates).not.toHaveBeenCalled();
-    expect(readData).not.toHaveBeenCalled();
-  });
-
-  it("starts collapsed when the viewer collapsed it before", () => {
-    localStorage.setItem("flowfi.recon.dockCollapsed", "1");
-    renderStudio();
-    fireEvent.click(screen.getAllByTestId("recon-row")[0]);
-    expect(screen.getByTestId("resolution-dock").dataset.collapsed).toBe("true");
   });
 });

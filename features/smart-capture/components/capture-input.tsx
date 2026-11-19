@@ -347,7 +347,7 @@ export function CaptureInput({
                   <span className="ml-auto text-xs text-muted-foreground tabular-nums">{Math.round(progress.progress * 100)}%</span>
                 </div>
                 <div className="h-1.5 overflow-hidden rounded-full bg-muted">
-                  <div className="h-full rounded-full bg-primary transition-[width] duration-300" style={{ width: `${Math.max(4, progress.progress * 100)}%` }} />
+                  <div className="h-full rounded-full bg-chart-1 transition-[width] duration-300" style={{ width: `${Math.max(4, progress.progress * 100)}%` }} />
                 </div>
                 <ClayButton variant="secondary" size="sm" className="self-end" onClick={() => abortRef.current?.abort()}>
                   Cancel

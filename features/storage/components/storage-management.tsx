@@ -51,7 +51,7 @@ function UsageBar({ percent, level, label }: { percent: number; level: string; l
       aria-valuenow={Math.round(clamped)}
       className="h-3 w-full overflow-hidden rounded-full bg-secondary"
     >
-      <div className={cn("h-full rounded-full transition-[width] duration-500", LEVEL_BAR[level] ?? "bg-primary")} style={{ width: `${clamped}%` }} />
+      <div className={cn("h-full rounded-full transition-[width] duration-500", LEVEL_BAR[level] ?? "bg-chart-1")} style={{ width: `${clamped}%` }} />
     </div>
   );
 }

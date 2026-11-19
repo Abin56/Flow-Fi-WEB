@@ -5,6 +5,7 @@
  */
 import { scenario } from "../lib/core.mjs";
 import * as h from "../lib/harness.mjs";
+import { choose, menuItem } from "../lib/recon.mjs";
 
 const ddmmyyyy = (offsetDays) => {
   const d = new Date(Date.now() + offsetDays * 86400000);
@@ -17,7 +18,7 @@ const overflow = (page) =>
   page.evaluate(() => ({
     doc: document.documentElement.scrollWidth - document.documentElement.clientWidth,
     main: document.querySelector("main").scrollWidth - document.querySelector("main").clientWidth,
-    inner: ["statement-sheet", "existing-sheet", "resolution-dock", "recon-grid-body", "existing-grid-body", "account-bar", "recon-toolbar", "status-bar"].map((id) => {
+    inner: ["statement-sheet", "existing-sheet", "recon-grid-body", "existing-grid-body", "account-bar", "recon-toolbar", "status-bar"].map((id) => {
       const el = document.querySelector(`[data-testid="${id}"]`);
       return el ? el.scrollWidth - el.clientWidth : 0;
     }),
@@ -32,7 +33,7 @@ const focusOn = async (page) => (await page.getByTestId("recon-workspace").getAt
 
 async function openWith(page, text) {
   await page.evaluate(() => window.next.router.push("/reconciliation"));
-  await page.getByRole("heading", { name: "Reconciliation" }).waitFor({ timeout: 240000 });
+  await page.getByRole("heading", { name: /Review & Import|Reconciliation/ }).waitFor({ timeout: 240000 });
   await page.getByRole("textbox", { name: "Statement rows" }).fill(text);
   await page.getByRole("button", { name: "Compare rows" }).click();
   await page.getByRole("button", { name: /(Choose|Change) statement account/ }).click();
@@ -75,6 +76,9 @@ async function nothingWritten(chk, before) {
 }
 
 scenario("recon-v2-desktop", "V2 desktop (1920, 1366): compact bars, dock collapse/expand, Focus Mode, Escape + focus return, fullscreen, divider, keyboard — zero writes", async ({ page }, chk) => {
+  // The app-wide fullscreen prompt (components/fullscreen/fullscreen-prompt.tsx) enters browser fullscreen on the first
+  // click anywhere — dismiss it, so this scenario tests Focus Mode itself (in fullscreen, Escape belongs to the browser).
+  await page.evaluate(() => localStorage.setItem("flowfi:fullscreen-dismissed", "1"));
   await seedExisting(page);
   const before = await Promise.all([h.list("transactions"), h.list("accounts")]);
   await openWith(page, rowsText(30));
@@ -84,7 +88,6 @@ scenario("recon-v2-desktop", "V2 desktop (1920, 1366): compact bars, dock collap
     await page.setViewportSize(vp);
     await page.waitForTimeout(500);
     await page.getByTestId("recon-row").first().click(); // r1: an exact match for a seeded transaction
-
     // ---- normal mode, dock expanded ----
     const acct = await box(page, "account-bar");
     chk(`${tag}: account bar is one line (≤ 44px)`, acct.height <= 44, acct.height);
@@ -95,33 +98,18 @@ scenario("recon-v2-desktop", "V2 desktop (1920, 1366): compact bars, dock collap
     chk(`${tag}: approval bar on screen`, bar.y + bar.height <= vp.height + 1, JSON.stringify(bar));
     let ov = await overflow(page);
     chk(`${tag}: no horizontal overflow (page, sheets, dock, bars)`, ov.doc <= 1 && ov.main <= 1 && ov.inner.every((o) => o <= 1), JSON.stringify(ov));
-    const dockExpanded = await box(page, "resolution-dock");
-    const bodyExpanded = await box(page, "recon-grid-body");
-    chk(`${tag}: dock shows the field diff when expanded`, (await page.getByTestId("field-diff").count()) === 1);
-    await h.shot(page, `v2-${vp.width}-normal-dock-expanded`);
-
-    // ---- dock collapsed: sheets get the room, actions stay ----
-    await page.getByTestId("dock-toggle").click();
-    await page.waitForTimeout(250);
-    const dockCollapsed = await box(page, "resolution-dock");
-    const bodyCollapsed = await box(page, "recon-grid-body");
-    chk(`${tag}: collapsed dock is much shorter`, dockCollapsed.height < dockExpanded.height - 40, JSON.stringify({ expanded: dockExpanded.height, collapsed: dockCollapsed.height }));
-    chk(`${tag}: the sheets grow into the freed space`, bodyCollapsed.height > bodyExpanded.height + 40, JSON.stringify({ before: bodyExpanded.height, after: bodyCollapsed.height }));
-    for (const id of ["resolve-keep_existing", "resolve-keep_both", "resolve-import_new", "resolve-review_later", "resolve-skip", "undo-decision", "financial-effect"]) {
-      chk(`${tag}: collapsed dock keeps ${id}`, (await page.getByTestId(id).count()) === 1 && (await page.getByTestId(id).isVisible()));
-    }
-    ov = await overflow(page);
-    chk(`${tag}: collapsed: no horizontal overflow`, ov.inner.every((o) => o <= 1), JSON.stringify(ov));
-    await h.shot(page, `v2-${vp.width}-normal-dock-collapsed`);
-    // A decision from the collapsed dock, then Undo — draft only.
-    await page.getByTestId("resolve-review_later").click();
-    chk(`${tag}: collapsed dock decides (Review later)`, /Review later/.test(await page.locator('[data-testid="recon-row"][aria-selected="true"]').innerText()));
+    // ---- no bottom dock: the sheets own the height, every action lives in the row's ⋯ menu ----
+    chk(`${tag}: no bottom action dock`, (await page.getByTestId("resolution-dock").count()) === 0);
+    const itemIds = ["keep_existing", "import", "review_later", "details", "remove"];
+    await (await menuItem(page, "keep_existing")).waitFor();
+    for (const id of itemIds) chk(`${tag}: the ⋯ menu has ${id}`, (await page.getByTestId(`resolve-${id}`).count()) === 1 && (await page.getByTestId(`resolve-${id}`).isVisible()));
+    await h.shot(page, `v2-${vp.width}-normal-row-menu`);
+    await page.keyboard.press("Escape");
+    // A decision from the menu, then Undo (bottom bar) — draft only.
+    await choose(page, "review_later");
+    chk(`${tag}: the menu decides (Review later)`, /Review later/.test(await page.locator('[data-testid="recon-row"][aria-selected="true"]').innerText()));
     await page.getByTestId("undo-decision").click();
-    chk(`${tag}: Undo from the collapsed dock`, /Undecided/.test(await page.locator('[data-testid="recon-row"][aria-selected="true"]').innerText()));
-    await page.getByRole("grid", { name: "Statement rows" }).focus();
-    await page.keyboard.press("d");
-    await page.waitForTimeout(200);
-    chk(`${tag}: D expands the dock again`, (await page.getByTestId("resolution-dock").getAttribute("data-collapsed")) === "false");
+    chk(`${tag}: Undo from the bottom bar`, (await page.locator('[data-testid="recon-row"][aria-selected="true"]').locator('[data-pending="true"]').count()) > 0);
 
     // ---- Focus Mode ----
     const sheetsBefore = await box(page, "dual-sheet");
@@ -137,11 +125,7 @@ scenario("recon-v2-desktop", "V2 desktop (1920, 1366): compact bars, dock collap
     chk(`${tag}: Focus Mode keeps approval on screen`, barFocus.y + barFocus.height <= vp.height + 1 && (await page.getByTestId("open-approval").isVisible()), JSON.stringify(barFocus));
     ov = await overflow(page);
     chk(`${tag}: Focus Mode: no horizontal overflow`, ov.doc <= 1 && ov.main <= 1 && ov.inner.every((o) => o <= 1), JSON.stringify(ov));
-    await h.shot(page, `v2-${vp.width}-focus-dock-expanded`);
-    await page.getByTestId("dock-toggle").click();
-    await page.waitForTimeout(200);
-    await h.shot(page, `v2-${vp.width}-focus-dock-collapsed`);
-    await page.getByTestId("dock-toggle").click();
+    await h.shot(page, `v2-${vp.width}-focus`);
 
     // Keyboard still works in Focus Mode; Escape inside a sheet does NOT leave it.
     await page.getByRole("grid", { name: "Statement rows" }).focus();
@@ -153,12 +137,12 @@ scenario("recon-v2-desktop", "V2 desktop (1920, 1366): compact bars, dock collap
     for (let i = 0; i < 18; i++) await page.keyboard.press("k"); // back to r1, which has a FlowFi match to preview
     await page.keyboard.press("Escape");
     chk(`${tag}: Escape inside a sheet keeps Focus Mode`, await focusOn(page));
-    // Escape with a dialog open closes the dialog only.
-    await page.getByTestId("resolve-merge_details").click();
-    await page.getByTestId("resolution-preview").waitFor();
+    // Escape with a menu open closes the menu only.
+    await page.locator('[data-testid="recon-row"][aria-selected="true"]').getByTestId("quick-decide").click();
+    await page.getByRole("menu", { name: /More options for row/ }).waitFor();
     await page.keyboard.press("Escape");
     await page.waitForTimeout(250);
-    chk(`${tag}: Escape closes the preview dialog, Focus Mode stays`, (await page.getByTestId("resolution-preview").count()) === 0 && (await focusOn(page)));
+    chk(`${tag}: Escape closes the menu, Focus Mode stays`, (await page.getByRole("menu").count()) === 0 && (await focusOn(page)));
     // Divider drag in Focus Mode.
     const d = await box(page, "sheet-divider");
     const leftBefore = (await box(page, "statement-sheet")).width;
@@ -173,9 +157,20 @@ scenario("recon-v2-desktop", "V2 desktop (1920, 1366): compact bars, dock collap
     // Escape outside the sheets leaves Focus Mode and returns focus to its toggle.
     await page.getByTestId("account-bar").click({ position: { x: 4, y: 4 } });
     await page.evaluate(() => document.activeElement?.blur?.());
+    const escapeContext = await page.evaluate(() => ({
+      active: document.activeElement?.tagName + "#" + (document.activeElement?.getAttribute("data-testid") ?? ""),
+      overlays: [...document.querySelectorAll('[role="dialog"], [role="menu"], [role="listbox"], [data-radix-popper-content-wrapper]')].map((el) => `${el.tagName}[${el.getAttribute("role") ?? ""}] ${el.getAttribute("data-testid") ?? ""} ${(el.textContent ?? "").slice(0, 60)}`),
+    }));
+    await page.evaluate(() => {
+      window.__escLog = [];
+      const rec = (phase) => (e) => e.key === "Escape" && window.__escLog.push(`${phase}:${e.target?.tagName}:prevented=${e.defaultPrevented}:fs=${!!document.fullscreenElement}`);
+      window.addEventListener("keydown", rec("capture"), true);
+      window.addEventListener("keydown", rec("bubble"));
+    });
     await page.keyboard.press("Escape");
     await page.waitForTimeout(300);
-    chk(`${tag}: Escape (outside the sheets) leaves Focus Mode`, !(await focusOn(page)));
+    const escLog = await page.evaluate(() => window.__escLog);
+    chk(`${tag}: Escape (outside the sheets) leaves Focus Mode`, !(await focusOn(page)), JSON.stringify({ escapeContext, escLog }));
     chk(`${tag}: focus returns to the Focus Mode toggle`, await page.getByTestId("focus-mode-toggle").evaluate((b) => b === document.activeElement));
     const c2 = await chrome(page);
     chk(`${tag}: sidebar + topbar back`, c2.sidebar !== "none" && c2.topbar !== "none", JSON.stringify(c2));

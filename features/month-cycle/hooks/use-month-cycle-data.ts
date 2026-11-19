@@ -30,7 +30,6 @@ import { useAllEmiInstallments } from "@/hooks/use-emis";
 import { useEmiInstallmentPayments } from "@/hooks/use-emi-installment-payments";
 import { useExpenses } from "@/hooks/use-expenses";
 import { useLoanScheduledPayments } from "@/hooks/use-loan-scheduled-payments";
-import { dashboardLoanPaidRows } from "@/lib/engines/loan-cash-flow";
 import { useBudgets } from "@/hooks/use-budgets";
 import { useCategories } from "@/hooks/use-categories";
 import { useTransactions } from "@/hooks/use-transactions";
@@ -50,10 +49,6 @@ import {
   amountFor,
   breakdownFor,
   percentChange,
-  type DashboardBillOccurrence,
-  type DashboardExpense,
-  type DashboardInstallment,
-  type DashboardTransaction,
   type DateRange,
   type DateRangeStrategy,
   type FinancialViewInputs,
@@ -64,12 +59,12 @@ import type { Budget } from "@/lib/models/budget";
 import type { Category } from "@/lib/models/category";
 import type { CreditCardProfile, Statement } from "@/lib/models/credit-card";
 import { cardBillsDueInCycle, cardBillsForCard } from "@/lib/engines/card-cycle-bills";
-import { isSplit, myShare, type Expense } from "@/lib/models/expense";
+import { isSplit, type Expense } from "@/lib/models/expense";
 import { useMySpendContext } from "@/hooks/use-my-spend-context";
 import { useSpendTransactions, withBuiltInChargeCategory } from "@/hooks/use-lender-charge-spend";
 import { isLenderChargeBillingRow } from "@/lib/engines/lender-charge-accounting";
 import { mySpendRows, summarizeMySpend } from "@/lib/engines/my-spend";
-import { caseAEmis, monthCycleDashboardTransactions, monthCycleEmiPaymentRows } from "@/lib/engines/cycle-transaction-mapping";
+import { monthCycleFinancialInputs } from "@/lib/engines/financial-view-inputs";
 import { compareTransactionsNewestFirst, isNonIncomeExpenseMovement, isPersonFunded, type Transaction } from "@/lib/models/transaction";
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -252,44 +247,18 @@ export function useMonthCycleData() {
     // The real previous cycle (same start day), not a window shifted by this one's length (WFI-P3-03).
     const previousRange: DateRange = adjacentCycleRange(monthCycleStartDay, range, -1);
 
-    // Case A EMIs (purchase already recorded on the card): their principal was spent at the purchase — see `caseAEmis`.
-    const caseA = caseAEmis(emis as Emi[], creditCards as CreditCardProfile[], transactions as Transaction[]);
     // Total OUTFLOW is cash: REAL transactions only. A billed lender charge moves no cash, so it is not in here —
     // it reaches "My spend" (accrual) below; its settlement payment, a real transaction, is counted here once.
-    const dashboardTransactions: DashboardTransaction[] = monthCycleDashboardTransactions(
-      transactions as Transaction[],
-      new Set((creditCards as CreditCardProfile[]).map((c) => c.accountId)),
-      new Set(caseA.map((e) => e.id)),
-    );
-    const dashboardExpenses: DashboardExpense[] = (expenses as Expense[]).map((e) => ({
-      transactionId: e.transactionId,
-      totalAmount: e.totalAmount,
-      isSplit: isSplit(e),
-      myShare: myShare(e),
-    }));
-    // A bill is outflow only through the account debit its payment posts (a normal expense Transaction, already in
-    // `transactions`). Occurrence `amountPaid` is never summed: paid-earlier / legacy bills moved no money.
-    const dashboardBillOccurrences: DashboardBillOccurrence[] = [];
-    // One row per EMI payment, dated by when it was PAID (WFI-P2-11) — an advance / late payment lands in its real cycle.
-    // A payment recorded as already made before FlowFi settled the schedule but was never cash out here.
-    const dashboardEmiInstallments: DashboardInstallment[] = monthCycleEmiPaymentRows(emiPayments, new Set(caseA.map((e) => e.scheduleId))).map((p) => ({ dueDate: p.date, amountPaid: p.amount }));
-    // Only schedule-only (legacy, unlinked) payments on money I borrowed — modern Loan payments are
-    // already counted through their linked Transaction, and lent-loan repayments are not spending.
-    const dashboardLoanInstallments: DashboardInstallment[] = dashboardLoanPaidRows(loanScheduledPayments);
-
-    const inputs: FinancialViewInputs = {
-      transactions: dashboardTransactions,
-      expenses: dashboardExpenses,
-      billOccurrences: dashboardBillOccurrences,
-      emiInstallments: dashboardEmiInstallments,
-      loanInstallments: dashboardLoanInstallments,
-      // The cycle counts card purchases when they happen (their own Transactions), so card
-      // accounts are NOT excluded and statement payments are NOT added on top — the default
-      // `combinedExpenses` shape would only show card spend once a statement is paid, and
-      // would double-count it if both were included.
-      creditCardStatements: [],
-      creditCardAccountIds: new Set<string>(),
-    };
+    // The rows (Case A EMIs, per-payment EMI dates, schedule-only loan rows, no bill occurrences, card purchases at
+    // swipe time) are built by the ONE shared builder that Reports / Analytics also use — see its doc comment.
+    const inputs: FinancialViewInputs = monthCycleFinancialInputs({
+      transactions: transactions as Transaction[],
+      creditCards: creditCards as CreditCardProfile[],
+      emis: emis as Emi[],
+      expenses: expenses as Expense[],
+      emiPayments,
+      loanScheduledPayments,
+    });
 
     const spent = amountFor("combinedExpenses", strategy, range, inputs);
     const previousSpent = amountFor("combinedExpenses", strategy, previousRange, inputs);

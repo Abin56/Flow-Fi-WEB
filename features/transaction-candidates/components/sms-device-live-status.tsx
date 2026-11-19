@@ -117,7 +117,7 @@ function SyncProgress({ p, s, now, paired }: { p: DevicePresenceView; s: Presenc
       <div className="flex flex-col gap-1.5" data-testid="sms-live-sync-progress">
         <div className="relative h-1.5 overflow-hidden rounded-full bg-border/70" role="progressbar" aria-label="Sync progress" {...(s.syncFraction !== null ? { "aria-valuenow": Math.round(s.syncFraction * 100), "aria-valuemin": 0, "aria-valuemax": 100 } : {})}>
           {s.syncFraction !== null ? (
-            <motion.span className="absolute inset-y-0 left-0 rounded-full bg-primary" initial={false} animate={{ width: `${s.syncFraction * 100}%` }} transition={reduceMotion ? { duration: 0 } : { duration: 0.4, ease: easings.out }} />
+            <motion.span className="absolute inset-y-0 left-0 rounded-full bg-chart-1" initial={false} animate={{ width: `${s.syncFraction * 100}%` }} transition={reduceMotion ? { duration: 0 } : { duration: 0.4, ease: easings.out }} />
           ) : (
             // Total unknown: an indeterminate sweep, never a made-up percentage.
             <motion.span

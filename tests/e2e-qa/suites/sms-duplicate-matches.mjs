@@ -8,6 +8,7 @@
  */
 import { scenario } from "../lib/core.mjs";
 import * as h from "../lib/harness.mjs";
+import { showCandidate } from "../lib/inbox-days.mjs";
 import { BASE_URL, FIRESTORE_DOCS } from "../lib/env.mjs";
 
 const OWNER = { Authorization: "Bearer owner", "Content-Type": "application/json" };
@@ -92,7 +93,7 @@ scenario("dupm-inbox", "Inbox rows show exact vs possible matches with the saved
   const candsBefore = (await h.list("smsTransactionCandidates")).length;
 
   const rowOf = (id) => page.locator(`[data-candidate-id="${id}"]`);
-  const panelKind = async (id) => (await rowOf(id).getByTestId("candidate-match-panel").count()) ? await rowOf(id).getByTestId("candidate-match-panel").getAttribute("data-match-kind") : null;
+  const panelKind = async (id) => (await showCandidate(page, id), await rowOf(id).getByTestId("candidate-match-panel").count()) ? await rowOf(id).getByTestId("candidate-match-panel").getAttribute("data-match-kind") : null;
 
   const exact = await panelKind("dupm-c-exact");
   const near = await panelKind("dupm-c-near");
@@ -104,17 +105,20 @@ scenario("dupm-inbox", "Inbox rows show exact vs possible matches with the saved
   chk("a match posted a day earlier is a POSSIBLE match", nextDay === "possible", nextDay);
   chk("an unrelated purchase shows no panel", unrelated === null, unrelated);
 
+  await showCandidate(page, "dupm-c-near"); // the Inbox is browsed one day at a time
   const nearPanel = rowOf("dupm-c-near").getByTestId("candidate-match-panel");
   const text = (await nearPanel.innerText()).replace(/\s+/g, " ");
   notes.push(`near panel: ${text}`);
   chk("the saved transaction's description, amount, category and source are visible in the row", /SWIGGY/.test(text) && /₹200(?![.\d])/.test(text) && /QA Food/.test(text) && /Statement import/.test(text), text);
   chk("it says the amount differs by ₹0.08 and that nothing is skipped for you", /Amount differs by ₹0\.08/.test(text) && /Nothing is skipped or merged/.test(text), text);
+  await showCandidate(page, "dupm-c-exact");
   chk("the exact row says Exact match in words", /Exact match — already imported/i.test((await rowOf("dupm-c-exact").getByTestId("candidate-match-panel").innerText()).replace(/\s+/g, " ")));
 
   // Layout: at desktop and phone widths the panel fits its row without sideways overflow.
   for (const [w, ht] of [[1366, 768], [390, 844]]) {
     await page.setViewportSize({ width: w, height: ht });
     await page.waitForTimeout(400);
+    await showCandidate(page, "dupm-c-near");
     await rowOf("dupm-c-near").scrollIntoViewIfNeeded();
     const m = await rowOf("dupm-c-near").evaluate((li) => {
       const p = li.querySelector('[data-testid="candidate-match-panel"]').getBoundingClientRect();
@@ -128,6 +132,7 @@ scenario("dupm-inbox", "Inbox rows show exact vs possible matches with the saved
 
   // The drawer shows the comparison for a similar (non-flagged) match, and importing is not blocked by it.
   await page.setViewportSize({ width: 1366, height: 768 });
+  await showCandidate(page, "dupm-c-near");
   await rowOf("dupm-c-near").getByRole("button", { name: /^Review/ }).click();
   const d = page.getByRole("dialog").first();
   await d.getByText("Transaction Details").first().waitFor({ timeout: 20000 });

@@ -88,8 +88,8 @@ function pickAccount(name = "QA Card") {
 const rowEl = (id: string) => screen.getAllByTestId("recon-row").find((r) => r.dataset.rowId === id)!;
 const states = () => Object.fromEntries(screen.getAllByTestId("recon-row").map((r) => [r.dataset.rowId, r.dataset.state]));
 
-/** Desktop: the full comparison (with the screenshot strip) opens from the dock's "Full details". */
-const openDetails = () => fireEvent.click(screen.getByTestId("dock-details"));
+/** Desktop: the full comparison (with the screenshot strip) opens with the O key. */
+const openDetails = () => fireEvent.keyDown(screen.getByRole("grid", { name: "Statement rows" }), { key: "o" });
 
 describe("Smart Capture → Reconciliation handoff", () => {
   it("takes the rows with their own ids, keeps the excluded row excluded (re-includable here), and shows the existing SMS transaction as a candidate", () => {

@@ -72,6 +72,22 @@ export interface ObligationItem {
   shared: SharedSplit | null;
   href: string;
   actionLabel: string;
+  /** Bill cycle (`BillOccurrence.id`) — set for `kind: "bill"` only. Lets a caller act on the exact cycle, never "the latest". */
+  occurrenceId?: string | null;
+  /** The schedule installment — set for loan / EMI rows. */
+  installmentId?: string | null;
+  /**
+   * Opens the OWNING module's own payment flow for exactly this obligation (Loan/EMI Record Payment, card Pay bill).
+   * Null for a bill (paid in place) or a card cycle that is still open. Presentation reads this instead of building
+   * a payment of its own, so a payment can only ever be recorded by the module that owns the money.
+   */
+  payHref?: string | null;
+  /** The account / card this obligation is tied to or billed through — display only. */
+  related?: string | null;
+  /** A card statement's issuer minimum due — only when the statement stores one (never invented). */
+  minimumDue?: number | null;
+  /** What is still left on the whole Loan / EMI behind an installment (principal outstanding / remaining installments) — display only. */
+  agreementRemaining?: { amount: number; label: string } | null;
 }
 
 const round2 = (v: number) => Math.round(v * 100) / 100;

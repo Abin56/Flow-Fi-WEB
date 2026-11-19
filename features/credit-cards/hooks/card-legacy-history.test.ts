@@ -163,9 +163,9 @@ describe("no double count between saved and unsaved statements", () => {
   const AUG = stored(c, "s-aug-sep", d(8, 17), d(9, 16), d(10, 5), 1500);
 
   it("before the Aug–Sep statement exists: ₹1,500 is uncovered; after it is saved: covered, uncovered ₹0, outstanding unchanged", () => {
-    expect(uncoveredClosedSpendForCard(c, t, [JUL, SEP]).map((w) => w.totalAmount)).toEqual([1500]);
+    expect(uncoveredClosedSpendForCard(c, t, [JUL, SEP], NOW).map((w) => w.totalAmount)).toEqual([1500]);
     const before = standingOf(c, [JUL, SEP], t).ownOutstanding;
-    expect(uncoveredClosedSpendForCard(c, t, [JUL, AUG, SEP])).toEqual([]);
+    expect(uncoveredClosedSpendForCard(c, t, [JUL, AUG, SEP], NOW)).toEqual([]);
     const after = standingOf(c, [JUL, AUG, SEP], t).ownOutstanding;
     expect(before).toBe(14500);
     expect(after).toBe(14500); // never ₹16,000
@@ -192,7 +192,7 @@ describe("no double count between saved and unsaved statements", () => {
     const tt = [txn(c.accountId, 700, d(8, 5)), txn(c.accountId, 300, d(8, 14))];
     const s = standingOf(c, [odd, SEP], tt);
     expect(s.ownOutstanding).toBe(1000);
-    expect(uncoveredClosedSpendForCard(c, tt, [odd, SEP]).reduce((x, w) => x + w.totalAmount, 0)).toBe(300);
+    expect(uncoveredClosedSpendForCard(c, tt, [odd, SEP], NOW).reduce((x, w) => x + w.totalAmount, 0)).toBe(300);
   });
 });
 

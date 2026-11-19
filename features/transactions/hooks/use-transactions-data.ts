@@ -381,12 +381,12 @@ export function useTransactionActions() {
        * account, atomically (`addEntryWithTransaction`). Never an expense, never income (the leg is an
        * `isPersonLedgerMovement`, excluded from My Spend/income).
        */
-      recordBorrowedCash: (person: Person, params: { amount: number; date: Date; accountId: string; note?: string }) =>
+      recordBorrowedCash: (person: Person, params: { amount: number; date: Date; accountId: string; note?: string; idempotencyKey?: string }) =>
         withErrorToast(async () => {
           const category = await createCategoryRepository(uid).getOrCreatePersonalLoanCategory();
           return createLedgerRepositoryFor(uid, person.id, personRepository).addEntryWithTransaction(
             person,
-            { type: "borrowed", amount: params.amount, date: params.date, note: params.note, receivedStatus: "yetToReceive" },
+            { type: "borrowed", amount: params.amount, date: params.date, note: params.note, receivedStatus: "yetToReceive", ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}) },
             { type: "income", accountId: params.accountId, categoryId: category.id, description: person.name },
             transactionRepository,
           );

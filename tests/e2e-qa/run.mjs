@@ -194,7 +194,10 @@ async function main() {
   const core = await import(pathToFileURL(path.join(here, "lib", "core.mjs")).href);
   const harness = await import(pathToFileURL(path.join(here, "lib", "harness.mjs")).href);
   const suiteDir = path.join(here, "suites");
-  for (const f of readdirSync(suiteDir).filter((n) => n.endsWith(".mjs") && n !== "safety.mjs").sort()) await import(pathToFileURL(path.join(suiteDir, f)).href);
+  for (const f of readdirSync(suiteDir).filter((n) => n.endsWith(".mjs") && n !== "safety.mjs").sort()) {
+    // One suite that fails to load (e.g. saved half-edited) must not take every other scenario down with it.
+    await import(pathToFileURL(path.join(suiteDir, f)).href).catch((e) => console.warn(`SKIPPED suite ${f}: ${String(e.message).split("\n")[0]}`));
+  }
   const ran = (await core.runAll(filter).catch((e) => (filter.startsWith("safety") ? 0 : Promise.reject(e)))) ?? 0;
   if (!filter || filter === "all" || filter.startsWith("safety")) {
     const { runSafetyChecks } = await import(pathToFileURL(path.join(suiteDir, "safety.mjs")).href);
@@ -202,6 +205,9 @@ async function main() {
     core.writeResults();
   }
 
+  // QA_SHOW_SERVER=1: print the dev server's own recent output (server-side errors never reach the browser console).
+  if (process.env.QA_SHOW_SERVER) console.log(`── dev server output (tail) ──
+${app.output().slice(-2500)}`);
   const all = Object.entries(core.results);
   const failed = all.filter(([, r]) => r.verdict !== "pass");
   console.log(`\n──────── QA summary ────────\n${all.length - failed.length} passed, ${failed.length} failed (${ran} scenarios + safety checks)`);

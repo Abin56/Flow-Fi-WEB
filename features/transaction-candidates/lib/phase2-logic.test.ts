@@ -7,7 +7,7 @@ import { candidateNeighbors } from "./candidate-navigation";
 import { importFieldErrors, initialImportDraft, isDraftDirty, type CandidateImportDraft } from "./candidate-details-view";
 import { stripInternalIds, deriveCandidateStatus } from "./candidate-status";
 import { suggestCategories } from "./category-suggestions";
-import { buildDuplicateComparison } from "./duplicate-comparison";
+import { buildDuplicateComparison, summarizeComparison } from "./duplicate-comparison";
 import { applyCandidateSearchAndFilters, DEFAULT_CANDIDATE_FILTERS, sortCandidates } from "./filters";
 import { bulkIneligibleReason, partitionBulkEligible } from "./bulk-selection";
 
@@ -255,5 +255,19 @@ describe("bulk eligibility", () => {
     const { eligible, blocked } = partitionBulkEligible(rows, (c) => c.id === "ok");
     expect(eligible.map((c) => c.id)).toEqual(["ok"]);
     expect(blocked.map((c) => c.id)).toEqual(["unmatched", "stale"]);
+  });
+});
+
+describe("summarizeComparison", () => {
+  it("counts same/similar rows and names what differs", () => {
+    const rows = [
+      { field: "amount", label: "Amount", candidate: "", existing: "", match: "same" },
+      { field: "date", label: "Date", candidate: "", existing: "", match: "same" },
+      { field: "merchant", label: "Merchant", candidate: "", existing: "", match: "different" },
+      { field: "account", label: "Account / card", candidate: "", existing: "", match: "same" },
+      { field: "direction", label: "Direction", candidate: "", existing: "", match: "unknown" },
+    ] as never;
+    expect(summarizeComparison({ rows }).text).toBe("3 matching details · Merchant differs");
+    expect(summarizeComparison({ rows }).differs).toEqual(["merchant"]);
   });
 });

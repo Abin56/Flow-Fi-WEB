@@ -24,6 +24,11 @@ export interface ReconRow extends ReviewRow {
    */
   captureExcluded?: boolean;
   /**
+   * The user took this row out of the review ("Remove from review"). It is excluded (`include` is false), never
+   * imported, and out of the list — only the Excluded filter shows it, to restore it. Nothing in FlowFi is touched.
+   */
+  removedFromReview?: boolean;
+  /**
    * Signature of the values Smart Capture handed over for this row (`captureSignature`). When the same capture is
    * handed over again after "Back to Smart Capture", a row whose signature is unchanged keeps its Reconciliation edits
    * and decision; a changed one is replaced and its decision cleared — never silently.
@@ -64,8 +69,12 @@ export interface ExistingRecord {
   rawLastFour: string | null;
 }
 
-/** How far apart the two amounts are (D4): exact, ≤ ₹0.10, ≤ ₹1.00. Anything larger is not a candidate. */
-export type AmountBand = "exact" | "paise" | "rounding";
+/**
+ * How far apart the two amounts are (D4): exact, ≤ ₹0.10, ≤ ₹1.00, or "approx" — a small typing/rounding difference
+ * (2% of the amount, ₹2–₹50, see `approxTolerance`) that only counts with supporting evidence. Anything larger is not
+ * a candidate.
+ */
+export type AmountBand = "exact" | "paise" | "rounding" | "approx";
 
 export type MerchantStrength = "same" | "similar" | "different" | "unknown";
 

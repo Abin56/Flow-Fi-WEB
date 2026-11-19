@@ -377,7 +377,7 @@ export function PeopleCycleSummary({ rows }: { rows: PeopleLedgerRow[] }) {
     <section aria-label="Cycle summary" className="@container overflow-hidden rounded-[16px] border border-border bg-card shadow-e1">
       <div className="flex flex-col @3xl:flex-row @3xl:items-stretch">
         {/* Hero */}
-        <div className="relative flex flex-col gap-1.5 overflow-hidden bg-gradient-to-br from-[#1d2330] via-[#262e3d] to-[#323b4d] px-5 py-5 text-white sm:px-6 @3xl:min-w-[20rem] @3xl:flex-1">
+        <div className="relative flex flex-col gap-1.5 overflow-hidden bg-[image:var(--gradient-hero)] px-5 py-5 text-white sm:px-6 @3xl:min-w-[20rem] @3xl:flex-1">
           <span aria-hidden className="pointer-events-none absolute -top-20 -right-16 size-56 rounded-full bg-success/25 blur-3xl" />
           <span aria-hidden className="pointer-events-none absolute -bottom-24 -left-16 size-52 rounded-full border border-white/10" />
           <span className="relative text-[11px] font-semibold tracking-[0.08em] text-white/75 uppercase">You need to receive · this cycle</span>

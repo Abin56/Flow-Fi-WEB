@@ -113,7 +113,7 @@ function ModeButton({ active, onClick, title, detail }: { active: boolean; onCli
       onClick={onClick}
       className={cn("flex items-start gap-2 rounded-xl border px-3 py-2 text-left transition-colors", active ? "border-primary/60 bg-primary/10" : "border-border hover:bg-muted")}
     >
-      <Check className={cn("mt-0.5 size-3.5 shrink-0", active ? "text-primary" : "opacity-0")} />
+      <Check className={cn("mt-0.5 size-3.5 shrink-0", active ? "text-primary-accent-text" : "opacity-0")} />
       <span className="min-w-0">
         <span className="block text-sm font-medium text-foreground">{title}</span>
         <span className="block text-xs text-muted-foreground">{detail}</span>

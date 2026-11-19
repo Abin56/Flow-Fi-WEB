@@ -27,7 +27,7 @@ export function ActionCell({
         variant="outline"
         size="icon-sm"
         aria-label="Open transaction controls"
-        className={cn("size-7", isFocused && "ring-2 ring-inset ring-primary")}
+        className={cn("size-7", isFocused && "ring-2 ring-inset ring-primary-accent-text")}
         onClick={() => {
           onFocus();
           onOpenInspector();

@@ -125,7 +125,7 @@ export function AnalyticsWorkspace() {
               <XAxis type="number" {...axisStyle} tickFormatter={formatCurrencyCompact} />
               <YAxis type="category" dataKey="category" {...axisStyle} width={110} />
               <Tooltip content={<ChartTooltip formatter={formatCurrency} />} cursor={{ fill: "var(--muted)", opacity: 0.4 }} />
-              <Bar dataKey="amount" name="Spent" fill="var(--primary)" radius={[0, 4, 4, 0]} maxBarSize={18} />
+              <Bar dataKey="amount" name="Spent" fill="var(--chart-1)" radius={[0, 4, 4, 0]} maxBarSize={18} />
             </BarChart>
           </ResponsiveContainer>
         )}

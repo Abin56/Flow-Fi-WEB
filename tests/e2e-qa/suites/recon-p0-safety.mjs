@@ -7,6 +7,7 @@
  */
 import { scenario } from "../lib/core.mjs";
 import * as h from "../lib/harness.mjs";
+import { choose, menuItem, openImportConfirm, pressOnGrid } from "../lib/recon.mjs";
 
 const ddmmyyyy = (offsetDays) => {
   const d = new Date(Date.now() + offsetDays * 86400000);
@@ -29,7 +30,7 @@ scenario("recon-p0-bank-internal-payments", "P0: bank-side card payments / own c
   const expense = (await h.list("categories")).find((c) => c.type === "expense" || c.type === "both")?.name;
 
   await page.evaluate(() => window.next.router.push("/reconciliation"));
-  await page.getByRole("heading", { name: "Reconciliation" }).waitFor({ timeout: 240000 });
+  await page.getByRole("heading", { name: /Review & Import|Reconciliation/ }).waitFor({ timeout: 240000 });
   await page.getByRole("textbox", { name: "Statement rows" }).fill(STATEMENT);
   await page.getByRole("button", { name: "Compare rows" }).click();
   await page.getByRole("button", { name: /(Choose|Change) statement account/ }).click();
@@ -45,23 +46,25 @@ scenario("recon-p0-bank-internal-payments", "P0: bank-side card payments / own c
   ]) {
     await rowLoc(page, id).click();
     await page.waitForTimeout(150);
-    chk(`${label}: Import new disabled`, await page.getByTestId("resolve-import_new").isDisabled());
-    const blocked = await page.getByTestId("dock-import-blocked").getAttribute("title");
+    const importItem = await menuItem(page, "import");
+    chk(`${label}: Import as transaction disabled`, await importItem.isDisabled());
+    const blocked = await importItem.getAttribute("title");
     chk(`${label}: the reason is shown`, reason.test(blocked ?? ""), blocked);
+    await page.keyboard.press("Escape");
     await page.getByRole("grid", { name: "Statement rows" }).focus();
     await page.keyboard.press("n"); // shortcut must not bypass the block
     await page.waitForTimeout(150);
-    chk(`${label}: the N shortcut can't import it`, (await page.getByTestId("import-confirm").count()) === 0 && /Undecided/.test(await rowLoc(page, id).innerText()));
+    chk(`${label}: the N shortcut can't import it`, (await page.getByTestId("import-confirm").count()) === 0 && (await rowLoc(page, id).locator('[data-pending="true"]').count()) > 0);
     if (id === "r1") await h.shot(page, "p0-blocked-card-payment");
-    await page.getByTestId("resolve-skip").click();
+    await pressOnGrid(page, "i");
   }
 
   // ---- rent NEFT: importable only with the explicit confirmation ----
   await rowLoc(page, "r4").click();
-  chk("rent NEFT: Import new is available", !(await page.getByTestId("resolve-import_new").isDisabled()));
-  await page.getByTestId("resolve-import_new").click();
+  chk("rent NEFT: Import as transaction is available", !(await (await menuItem(page, "import")).isDisabled()));
+  await page.keyboard.press("Escape");
+  await openImportConfirm(page);
   const pop = page.getByTestId("import-confirm");
-  await pop.waitFor();
   chk("rent NEFT: the own-account confirmation is asked", (await pop.getByTestId("own-transfer-confirm").count()) === 1);
   await pop.getByLabel("Category for import").selectOption(expense);
   chk("…submit stays disabled until it is ticked", await pop.getByTestId("import-confirm-submit").isDisabled());
@@ -73,8 +76,7 @@ scenario("recon-p0-bank-internal-payments", "P0: bank-side card payments / own c
 
   // ---- POS purchase: no confirmation needed ----
   await rowLoc(page, "r5").click();
-  await page.getByTestId("resolve-import_new").click();
-  await pop.waitFor();
+  await openImportConfirm(page);
   chk("POS purchase: no own-account confirmation", (await pop.getByTestId("own-transfer-confirm").count()) === 0);
   await pop.getByLabel("Category for import").selectOption(expense);
   await pop.getByTestId("import-confirm-submit").click();

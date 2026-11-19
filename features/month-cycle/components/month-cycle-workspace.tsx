@@ -958,7 +958,7 @@ export function MonthCycleWorkspace() {
       <section aria-label="Cycle summary" className="@container overflow-hidden rounded-[16px] border border-border-strong/60 bg-card shadow-e1">
         <div className="flex flex-col @5xl:flex-row @5xl:items-stretch">
           {/* Hero */}
-          <div className="relative flex flex-col gap-3 overflow-hidden bg-gradient-to-br from-[#1d2330] via-[#262e3d] to-[#323b4d] px-5 py-5 text-white sm:px-6 @5xl:min-w-[24rem] @5xl:max-w-[30rem]">
+          <div className="relative flex flex-col gap-3 overflow-hidden bg-[image:var(--gradient-hero)] px-5 py-5 text-white sm:px-6 @5xl:min-w-[24rem] @5xl:max-w-[30rem]">
             <span aria-hidden className="pointer-events-none absolute -top-20 -right-16 size-56 rounded-full bg-primary/25 blur-3xl" />
             <span aria-hidden className="pointer-events-none absolute -bottom-24 -left-16 size-52 rounded-full border border-white/10" />
             <div className="relative flex flex-wrap items-center justify-between gap-2">

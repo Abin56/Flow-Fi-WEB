@@ -494,3 +494,81 @@ describe("live revalidation — anything that moved since review stops the appro
     expect(await w.balance(w.cardA.id)).toBe(-180);
   });
 });
+
+describe("approximate amounts — ₹298 on the statement vs ₹300 typed by hand (2026-11-18)", () => {
+  async function typedByHand(w: World) {
+    await w.seed({ type: "expense", amount: 300, dateTime: ist("2026-10-10"), accountId: w.cardA.id, description: "Dinner share" });
+    return (await w.live())[0]!;
+  }
+  const statement = () => [row("a", [2026, 10, 10], "UPI/628323405861/DR/RAHUL/SBIN/rahul@oksbi", 298)];
+
+  it("the server-side recompute sees the ₹300 as a POSSIBLE match (₹2.00 apart) — never exact, never decided", async () => {
+    const w = await world();
+    const existing = await typedByHand(w);
+    const s = w.session(statement(), {}, w.cardA.id);
+    const a = analyzeSession(s, await w.fresh(), { now: NOW });
+    const m = a.matches.get("a")!;
+    expect(m.state).toBe("near_amount");
+    expect(m.candidates).toEqual([expect.objectContaining({ recordId: existing.id, amountBand: "approx", amountDeltaPaise: 200, tier: "near" })]);
+    const { plan } = await w.review(s);
+    expect(plan.rows[0]!.status).toBe("blocked"); // undecided — nothing is assumed
+  });
+
+  it("Import new without the 'separate transactions' acknowledgement is refused with zero writes", async () => {
+    const w = await world();
+    await typedByHand(w);
+    const s = w.session(statement(), { a: asNew() }, w.cardA.id);
+    const { plan, snapshot } = await w.review(s);
+    expect(plan.rows[0]!.reasons.join(" ")).toMatch(/different transaction/);
+    const before = await w.state();
+    expect((await runApproval({ session: s, reviewed: snapshot, repeatsAcknowledged: false, deps: w.baseDeps() })).status).toBe("stale");
+    expect(await w.state()).toEqual(before);
+  });
+
+  it("Keep existing writes nothing: the hand-typed ₹300 stays as it is and the balance doesn't move", async () => {
+    const w = await world();
+    const existing = await typedByHand(w);
+    const s = w.session(statement(), { a: { kind: "link", linkedRecordId: existing.id } }, w.cardA.id);
+    const before = await w.state();
+    const result = await w.approve(s);
+    expect(result.status).toBe("complete");
+    if (result.status === "complete") expect(result.outcomes.map((o) => o.kind)).toEqual(["linked"]);
+    expect(await w.state()).toEqual(before);
+    expect(await w.balance(w.cardA.id)).toBe(-300);
+  });
+
+  it("Keep both (acknowledged) imports the ₹298 exactly once — repeat approval and a double submit write nothing more", async () => {
+    const w = await world();
+    await typedByHand(w);
+    const s = w.session(statement(), { a: asNew("Food", { notSameAck: true, notOwnTransferAck: true }) }, w.cardA.id);
+    expect((await w.approve(s)).status).toBe("complete");
+    expect(await w.balance(w.cardA.id)).toBe(-598);
+    expect(await w.drift(w.cardA.id)).toBeNull();
+    // Repeat: a fresh review now sees the row as already imported, and nothing is written again.
+    const again = await w.approve(s);
+    expect(again.status).toBe("complete");
+    const [x, y] = await Promise.all([w.approve(s), w.approve(s)]);
+    expect([x.status, y.status].every((st) => st === "complete" || st === "busy")).toBe(true);
+    expect((await w.live()).filter((t) => t.amount === 298)).toHaveLength(1);
+    expect(await w.balance(w.cardA.id)).toBe(-598);
+  });
+
+  it("a ₹300 on ANOTHER card is never a candidate for this card, and importing here never touches it", async () => {
+    const w = await world();
+    await w.seed({ type: "expense", amount: 300, dateTime: ist("2026-10-10"), accountId: w.cardB.id, description: "Dinner share" });
+    const bBefore = await w.balance(w.cardB.id);
+    const s = w.session(statement(), { a: asNew("Food", { notOwnTransferAck: true }) }, w.cardA.id);
+    const a = analyzeSession(s, await w.fresh(), { now: NOW });
+    expect(a.matches.get("a")!).toMatchObject({ state: "no_match", candidates: [] });
+    expect((await w.approve(s)).status).toBe("complete");
+    expect(await w.balance(w.cardA.id)).toBe(-298);
+    expect(await w.balance(w.cardB.id)).toBe(bBefore);
+  });
+
+  it("a debit statement line never matches a ₹300 credit", async () => {
+    const w = await world();
+    await w.transactionRepository.createTransaction({ type: "income", amount: 300, dateTime: ist("2026-10-10"), accountId: w.cardA.id, description: "Refund", categoryId: "cat-food", source: "manual" });
+    const a = analyzeSession(w.session(statement(), {}, w.cardA.id), await w.fresh(), { now: NOW });
+    expect(a.matches.get("a")!.state).toBe("no_match");
+  });
+});

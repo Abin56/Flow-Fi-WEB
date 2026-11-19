@@ -95,6 +95,10 @@ A dev server mostly measures compile time and React's dev build. To measure what
 (`npm run build`) and serve `out/` — the QA portal only exists in dev builds, so benchmark a scratch copy whose
 `NODE_ENV === "development"` gates are relaxed, never the real tree.
 
+## Windows gotcha: `--copy` and drive-letter casing
+
+On Windows, `--copy` junctions `node_modules` back to the real checkout. If the launcher is started from a shell whose working directory has an upper-case drive letter (`C:…`) while the checkout was opened as `c:…`, webpack loads the same Next modules under both spellings, React contexts are duplicated and **every page** crashes with `invariant expected layout router to be mounted` (the portal never appears). Start the run from a lower-case path (`Set-Location c:Users…Flow-Fi-WEB` in PowerShell). `QA_SHOW_SERVER=1` prints the dev server's own output at the end of a run — the "multiple modules with names that only differ in casing" warning is the tell.
+
 ## Known limits
 
 Chrome only, mouse + keyboard (390×844 is viewport emulation, not a device); emulator latency, not production;

@@ -49,7 +49,6 @@ import { ClayBadge } from "@/components/clay/clay-badge";
 import { ClayAvatar } from "@/components/clay/clay-avatar";
 import { ClayButton } from "@/components/clay/clay-button";
 import { CurrencyField } from "@/components/forms/currency-field";
-import { ColorPicker } from "@/components/forms/color-picker";
 import { MultiSelect } from "@/components/forms/multi-select";
 import { SegmentedControl } from "@/components/forms/segmented-control";
 import { SliderField } from "@/components/forms/slider-field";
@@ -354,8 +353,6 @@ export function SettingsWorkspace() {
   // Theme is the live next-themes value (the same one the top bar toggles), not a stored-but-unused preference.
   const theme = themeMounted ? (activeTheme ?? "system") : "system";
   const setTheme = (v: string) => setActiveTheme(v);
-  const accentColor = preferences.accentColor;
-  const setAccentColor = (v: string) => update("accentColor", v);
   const density = preferences.density;
   const setDensity = (v: number) => update("density", v);
 
@@ -447,11 +444,11 @@ export function SettingsWorkspace() {
         </div>
 
         {/* Profile hero — who you are and what FlowFi holds for you (counts only). */}
-        <section aria-label="Your profile" className="relative overflow-hidden rounded-[20px] bg-gradient-to-br from-[#1d2330] via-[#262e3d] to-[#323b4d] px-5 py-5 text-white shadow-e1 sm:px-6">
+        <section aria-label="Your profile" className="relative overflow-hidden rounded-[20px] bg-[image:var(--gradient-hero)] px-5 py-5 text-white shadow-e1 sm:px-6">
           <span aria-hidden className="pointer-events-none absolute -top-20 -right-16 size-60 rounded-full bg-primary/25 blur-3xl" />
           <span aria-hidden className="pointer-events-none absolute -bottom-24 -left-16 size-52 rounded-full border border-white/10" />
           <div className="relative flex flex-wrap items-center gap-4">
-            <span className="rounded-full ring-2 ring-primary/70 ring-offset-2 ring-offset-[#262e3d]">
+            <span className="rounded-full ring-2 ring-primary/70 ring-offset-2 ring-offset-surface-hero">
               <ClayAvatar src={profilePhoto} name={authUser?.displayName ?? fullName} size={60} />
             </span>
             <div className="min-w-0 flex-1">
@@ -779,9 +776,12 @@ export function SettingsWorkspace() {
             </SettingsCard>
 
             <SettingsCard>
-              <CardHeading icon={Palette} iconClass="bg-purple/15 text-purple" title="Accent color" />
+              <CardHeading icon={Palette} iconClass="bg-purple/15 text-purple" title="Colours & theme" />
+              <p className="mt-2 text-sm text-muted-foreground">FlowFi Lime — Light or Dark, plus the lime accent and surface tone — lives in the Appearance tab.</p>
               <div className="mt-3">
-                <NotApplied><ColorPicker value={accentColor} onChange={setAccentColor} /></NotApplied>
+                <Button type="button" variant="outline" onClick={() => setTab("appearance")} data-testid="open-appearance-tab">
+                  Open Appearance <ChevronRight className="size-4" />
+                </Button>
               </div>
             </SettingsCard>
 

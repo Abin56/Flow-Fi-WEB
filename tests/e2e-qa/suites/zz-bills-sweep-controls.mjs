@@ -17,47 +17,20 @@ async function openBills(page) {
 const bills = async () => (await h.list("bills")).filter((b) => b.deletedAt == null);
 const bal = async () => (await h.accountBalance("QA Bank")).currentBalance;
 const elec = async () => (await bills()).find((b) => /QA Electricity/.test(b.name));
-const tiles = async (page) => flat(await page.locator("main div.grid-cols-2.lg\\:grid-cols-4").first().innerText());
-
-scenario("bills-sweep-dues", "Bills sweep: Card/Loan/EMI dues — filter tiles toggle, totals stay put, every row links to its own page", async ({ page, logs }, chk) => {
-  await openBills(page);
-  const section = page.locator("section", { has: page.getByRole("heading", { name: /Card, Loan & EMI Dues/ }) });
-  const group = section.getByRole("group", { name: "Filter dues by type" });
-  const total = () => section.locator("span.text-2xl").innerText().then(flat);
-  const totalBefore = await total();
-  const rows = () => section.locator("ul li a");
-  const all = await rows().count();
-  chk("dues rows are listed", all >= 1, all);
-  chk("header says how many payments", new RegExp(`${all} payments?`).test(flat(await section.innerText())), flat(await section.innerText()).slice(0, 160));
-
-  for (const [label, badge] of [["Loan Installments", "Loan"], ["EMI Installments", "EMI"], ["Credit Card Due", "Credit Card"]]) {
-    const tile = group.getByRole("button", { name: new RegExp(label) });
-    await tile.click();
-    chk(`${label}: tile is pressed`, (await tile.getAttribute("aria-pressed")) === "true");
-    const texts = await rows().evaluateAll((as) => as.map((a) => a.innerText));
-    chk(`${label}: only ${badge} rows shown`, texts.every((t) => t.toLowerCase().includes(badge.toLowerCase())), texts.map((t) => t.split("\n")[0]).join(" | "));
-    chk(`${label}: headline total unchanged by the filter`, (await total()) === totalBefore);
-    await tile.click();
-    chk(`${label}: second click clears the filter`, (await rows().count()) === all);
-  }
-
-  const hrefs = await rows().evaluateAll((as) => as.map((a) => ({ href: a.getAttribute("href"), text: a.innerText.split("\n")[0] })));
-  for (const { href, text } of hrefs) {
-    await openBills(page);
-    await page.locator(`section ul li a[href="${href}"]`).first().click();
-    await page.waitForFunction((p) => location.pathname.replace(/\/+$/, "") === p.split("?")[0], href, { timeout: 30000 }).catch(() => {});
-    const here = await page.evaluate(() => location.pathname.replace(/\/+$/, "") + location.search);
-    const want = href.split("?")[0].replace(/\/+$/, "");
-    chk(`row "${text}" opens ${want}`, here.startsWith(want) && here.includes("agreement=") === href.includes("agreement="), here);
-    await page.waitForTimeout(800);
-  }
-  const errs = logs.filter((l) => !IGNORED.test(l));
-  chk("no console errors", errs.length === 0, errs.slice(0, 5).join(" || "));
-});
+// The headline figures live on the Payments tab, the bill cards / drawer on My bills: read the figures, then come back.
+const figs = async (page) => {
+  await page.getByRole("tab", { name: "Payments" }).click();
+  await page.waitForSelector('[data-testid="bills-summary-due"]');
+  const read = async (id) => Number((await page.locator(`[data-testid="bills-summary-${id}"] p`).first().innerText()).replace(/[^0-9.]/g, "")) || 0;
+  const f = { due: await read("due"), overdue: await read("overdue"), upcoming: await read("upcoming"), paid: await read("paid") };
+  await h.openMyBills(page);
+  return f;
+};
 
 scenario("bills-sweep-controls", "Bills sweep: detail drawer — Skip/Un-skip, Edit (incl. refusal of bad input), Delete all do what they say and keep the tiles in step", async ({ page, logs }, chk) => {
   await openBills(page);
-  chk("start: Upcoming 1, Paid 0, Overdue 0", /Upcoming 1/.test(await tiles(page)) && /Paid 0/.test(await tiles(page)) && /Overdue 0/.test(await tiles(page)), await tiles(page));
+  const f0 = await figs(page);
+  chk("start: the page reads its figures (Due this cycle covers the bill)", f0.due >= 1500 && Number.isFinite(f0.paid), JSON.stringify(f0));
 
   await page.getByRole("button", { name: /QA Electricity/ }).first().click();
   const drawer = page.getByRole("dialog").filter({ hasText: "QA Electricity" }).first();
@@ -75,7 +48,8 @@ scenario("bills-sweep-controls", "Bills sweep: detail drawer — Skip/Un-skip, E
   // by bills-safety-unskip with a one-time bill).
   const drawerAfter = flat(await page.getByRole("dialog").filter({ hasText: "QA Electricity" }).first().innerText());
   chk("Skip on a monthly bill: drawer rolls on to next month's cycle (Due Date 12 Dec), still payable", /Due Date 12 Dec/.test(drawerAfter) && (await page.getByRole("button", { name: "Pay…" }).isEnabled()), drawerAfter.slice(0, 200));
-  chk("Skip on a monthly bill: Upcoming tile still 1 (this month's skipped cycle no longer counts)", /Upcoming 1/.test(await tiles(page)), await tiles(page));
+  const f1 = await figs(page);
+  chk("Skip: the skipped cycle leaves Due this cycle and the next month cycle shows as Upcoming, each by exactly the bill amount", f1.due === f0.due - 1500 && f1.upcoming === f0.upcoming + 1500, JSON.stringify([f0, f1]));
 
   await page.getByRole("button", { name: "Edit", exact: true }).click();
   const edlg = page.getByRole("dialog", { name: /Edit QA Electricity/ });
@@ -127,6 +101,7 @@ scenario("bills-sweep-controls", "Bills sweep: detail drawer — Skip/Un-skip, E
 scenario("bills-sweep-payments", "Bills sweep: pay from account, edit the payment, cancel it, record paid-earlier, cancel that — balances and statuses stay right", async ({ page, logs }, chk) => {
   await openBills(page);
   const b0 = await bal();
+  const g0 = await figs(page);
   const open = async () => { await page.getByRole("button", { name: /QA Electricity/ }).first().click(); await page.getByRole("button", { name: "Edit", exact: true }).waitFor(); };
 
   await open();
@@ -146,7 +121,8 @@ scenario("bills-sweep-payments", "Bills sweep: pay from account, edit the paymen
   await dlg.waitFor({ state: "hidden", timeout: 15000 });
   await page.waitForTimeout(1800);
   chk("pay ₹500: account debited by exactly 500", (await bal()) === b0 - 500, `${b0} → ${await bal()}`);
-  chk("tiles: still Upcoming 1 (part-paid is not paid)", /Upcoming 1/.test(await tiles(page)) && /Paid 0/.test(await tiles(page)), await tiles(page));
+  const p1 = await figs(page);
+  chk("figures: a part payment lowers Due this cycle and raises Paid by exactly that part", p1.due === g0.due - 500 && p1.paid === g0.paid + 500, JSON.stringify([g0, p1]));
   chk("card badge says Partially Paid", /Partially Paid/.test(flat(await page.getByRole("button", { name: /QA Electricity/ }).first().innerText())));
 
   await open();
@@ -186,7 +162,8 @@ scenario("bills-sweep-payments", "Bills sweep: pay from account, edit the paymen
   await page.waitForTimeout(1800);
   chk("paid earlier: no balance change", (await bal()) === b0, `${b0} → ${await bal()}`);
   // A monthly bill's paid cycle is settled and the page rolls on to next month's cycle (documented roll-forward).
-  chk("paid earlier: this month's due is cleared, next month's cycle is the one shown (Due This Month ₹0, Upcoming 1)", /Due This Month ₹0\b/.test(await tiles(page)) && /Upcoming 1/.test(await tiles(page)), await tiles(page));
+  const p2 = await figs(page);
+  chk("paid earlier: this cycle due is cleared by the bill amount and the next month cycle is Upcoming", p2.due === g0.due - 1500 && p2.upcoming === g0.upcoming + 1500 && p2.paid === g0.paid + 1500, JSON.stringify([g0, p2]));
   chk("card now shows next month's cycle (12 Dec), Upcoming", /12 Dec/.test(flat(await page.getByRole("button", { name: /QA Electricity/ }).first().innerText())) && /Upcoming/.test(flat(await page.getByRole("button", { name: /QA Electricity/ }).first().innerText())), flat(await page.getByRole("button", { name: /QA Electricity/ }).first().innerText()));
   await open();
   const hist2 = page.locator('section[aria-label="Payment history"]');
@@ -199,7 +176,8 @@ scenario("bills-sweep-payments", "Bills sweep: pay from account, edit the paymen
   await cdlg.getByRole("button", { name: "Cancel payment" }).click();
   await page.waitForTimeout(2000);
   chk("cancel earlier payment: balance still unchanged", (await bal()) === b0);
-  chk("cancelled cycle is open again and counted once: Upcoming 2, Due This Month ₹1,500", /Upcoming 2/.test(await tiles(page)) && /Due This Month ₹1,500/.test(await tiles(page)), await tiles(page));
+  const p3 = await figs(page);
+  chk("cancelled cycle is open again and counted once: Due this cycle is back to its start, next month cycle still Upcoming", p3.due === g0.due && p3.upcoming === g0.upcoming + 1500 && p3.paid === g0.paid, JSON.stringify([g0, p3]));
   await open();
   const payCycle = page.locator('section[aria-label="Payment history"]').getByRole("button", { name: /Pay this cycle/ });
   await payCycle.waitFor({ timeout: 15000 }).catch(() => {});

@@ -18,10 +18,10 @@ import { IgnoreCandidateButton } from "./ignore-candidate-button";
 vi.mock("@/lib/firebase/client", () => ({ firebaseApp: {}, auth: {}, db: {}, storage: {} }));
 
 type ToastAction = { label: string; onClick: () => void };
-const toastCalls: { title: string; action?: ToastAction }[] = [];
+const toastCalls: { title: string; description?: string; action?: ToastAction; options?: unknown }[] = [];
 vi.mock("@/store/toast-store", () => ({
   toast: {
-    success: (title: string, _description?: string, action?: ToastAction) => toastCalls.push({ title, action }),
+    success: (title: string, description?: string, action?: ToastAction, options?: unknown) => toastCalls.push({ title, description, action, options }),
     error: (title: string, _description?: string, action?: ToastAction) => toastCalls.push({ title, action }),
     info: vi.fn(),
   },
@@ -192,3 +192,51 @@ describe("5. list-level Dismiss (IgnoreCandidateButton) — unchanged semantics"
     expect(ctx.markHandled).not.toHaveBeenCalled();
   });
 });
+
+describe("list-level Dismiss — accidental-dismiss guards", () => {
+  function renderTwo(ctx: ReturnType<typeof setup>) {
+    render(
+      <>
+        <IgnoreCandidateButton candidate={candidate({ id: "a" })} candidateRepository={ctx.candidateRepository} onHide={ctx.onHide} onUnhide={ctx.onUnhide} />
+        <IgnoreCandidateButton candidate={candidate({ id: "b" })} candidateRepository={ctx.candidateRepository} onHide={ctx.onHide} onUnhide={ctx.onUnhide} />
+      </>,
+    );
+    return screen.getAllByTestId("candidate-dismiss");
+  }
+
+  it("a second pointer click at the same spot right after a dismissal (the next card reflowed under it) is ignored", () => {
+    vi.setSystemTime(new Date("2030-01-01T00:00:00Z"));
+    const ctx = setup();
+    const [a, b] = renderTwo(ctx);
+    fireEvent.click(a, { detail: 1, clientX: 100, clientY: 200 });
+    fireEvent.click(b, { detail: 1, clientX: 102, clientY: 201 });
+    expect(ctx.onHide).toHaveBeenCalledTimes(1);
+    expect(ctx.onHide).toHaveBeenCalledWith("a");
+  });
+
+  it("a deliberate click elsewhere, or later, still works", () => {
+    vi.setSystemTime(new Date("2030-02-01T00:00:00Z"));
+    const ctx = setup();
+    const [a, b] = renderTwo(ctx);
+    fireEvent.click(a, { detail: 1, clientX: 100, clientY: 200 });
+    fireEvent.click(b, { detail: 1, clientX: 100, clientY: 320 });
+    expect(ctx.onHide).toHaveBeenCalledTimes(2);
+  });
+
+  it("the second click of a double-click never dismisses", () => {
+    vi.setSystemTime(new Date("2030-03-01T00:00:00Z"));
+    const ctx = setup();
+    const [, b] = renderTwo(ctx);
+    fireEvent.click(b, { detail: 2, clientX: 5, clientY: 5 });
+    expect(ctx.onHide).not.toHaveBeenCalled();
+  });
+
+  it("the toast names the exact candidate (amount + day) and uses the non-merging, non-pausing Undo options", () => {
+    const ctx = setup();
+    render(<IgnoreCandidateButton candidate={candidate()} candidateRepository={ctx.candidateRepository} onHide={ctx.onHide} onUnhide={ctx.onUnhide} />);
+    fireEvent.click(screen.getByTestId("candidate-dismiss"));
+    expect(toastCalls.at(-1)?.description).toMatch(/Amazon · ₹500(.00)? · 01 Aug/);
+    expect(toastCalls.at(-1)?.options).toEqual({ duration: DISMISS_UNDO_WINDOW_MS, pausable: false, dedupe: false });
+  });
+});
+

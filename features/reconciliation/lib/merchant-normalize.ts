@@ -16,6 +16,11 @@ const NOISE = new Set([
   "PVT", "PRIVATE", "LTD", "LIMITED", "LLP", "INC", "CO", "CORP", "THE", "AND", "OF",
   "IN", "IND", "INDIA", "INR", "WWW", "COM", "NET", "ORG", "HTTP", "HTTPS",
   "PAYMENT", "PURCHASE", "SPENT", "DEBIT", "CREDIT", "CARD", "TRANSACTION", "VIA",
+  // UPI narrations ("UPI/6274…/CR/MOHAN/BKID/mohan@okaxis"): direction markers, IFSC bank prefixes and VPA handles name
+  // the rail, not the payee — two different people paid through the same bank must not look like the same merchant.
+  "DR", "CR", "BKID", "SBIN", "HDFC", "HDFCBANK", "ICIC", "ICICI", "UTIB", "KKBK", "PUNB", "BARB", "CNRB", "UBIN", "IDIB", "IOBA",
+  "YESB", "INDB", "FDRL", "IDFB", "PYTM", "AIRP", "CIUB", "KVBL", "SIBL", "CSBK",
+  "OKAXIS", "OKSBI", "OKHDFCBANK", "OKICICI", "YBL", "IBL", "AXL", "APL", "PTYES", "PTSBI", "PTHDFC", "PTAXIS",
   "BANGALORE", "BENGALURU", "BLR", "MUMBAI", "BOMBAY", "DELHI", "NEW", "NOIDA", "GURGAON", "GURUGRAM", "CHENNAI",
   "HYDERABAD", "PUNE", "KOLKATA", "KOCHI", "COCHIN", "ERNAKULAM", "TRIVANDRUM", "THIRUVANANTHAPURAM", "AHMEDABAD",
 ]);

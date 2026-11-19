@@ -19,8 +19,8 @@
  */
 
 import { readFileSync } from "node:fs";
-import { initializeTestEnvironment, type RulesTestEnvironment } from "@firebase/rules-unit-testing";
-import { collection, collectionGroup, doc, getDocs, type Firestore } from "firebase/firestore";
+import { assertFails, initializeTestEnvironment, type RulesTestEnvironment } from "@firebase/rules-unit-testing";
+import { collection, collectionGroup, deleteDoc, doc, getDoc, getDocs, updateDoc, type Firestore } from "firebase/firestore";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { resolveOwnership } from "@/lib/engines/debt-ownership";
@@ -31,6 +31,7 @@ import { outstandingPrincipalAfterPrepaymentsFor, principalPrepaidFor } from "@/
 import { countsFromSchedule } from "@/lib/engines/loan-cash-flow";
 import { emiReceivableThrough, personEmiObligations } from "@/lib/engines/person-emi-obligations";
 import { breakdownEntryOf, peopleNetWorthPosition, personPosition } from "@/lib/engines/person-position";
+import { runFinancialAudit } from "@/lib/engines/financial-audit";
 import { accountBalanceDrift, personBalanceDrift } from "@/lib/engines/stored-balance-drift";
 import { accountFromFirestore, accountToFirestore } from "@/lib/models/account";
 import { loanFromFirestore, loanToFirestore, type Loan } from "@/lib/models/loan";
@@ -120,6 +121,13 @@ function setup() {
       installmentDocRef: (scheduleId, installmentId) => doc(installmentsRef(scheduleId), installmentId),
       installmentPaymentDocRef: (scheduleId, installmentId, paymentId) => doc(paymentsRef(scheduleId, installmentId), paymentId),
       cashLegCategoryId: "cat-people",
+      // Same wiring as `createPersonPaymentRepository`: a repayment of an installment share needs a live agreement.
+      liveAgreementScheduleIds: async () => {
+        const emiDocs = (await getDocs(collection(db, "users", UID, "emis").withConverter({ toFirestore: emiToFirestore, fromFirestore: emiFromFirestore }))).docs.map((d) => d.data());
+        return [...emiDocs, ...(await loans.getAll())].filter((a) => a.deletedAt == null && a.scheduleId).map((a) => a.scheduleId);
+      },
+      scheduleDocRef: (scheduleId) =>
+        doc(collection(db, "users", UID, "paymentSchedules").withConverter({ toFirestore: paymentScheduleToFirestore, fromFirestore: paymentScheduleFromFirestore }), scheduleId),
     });
   return { db, accounts, accountsRef, transactionsRef, transactions, people, ledgerFor, installmentsRef, paymentsRef, loans, lender, personPayments };
 }
@@ -183,7 +191,7 @@ function handSign(e: { type: string; amount: number; increasesBalance: boolean }
 async function oracle(w: W) {
   const txns = (await rawTxns(w)).filter((t) => t.deletedAt == null);
   // Cash: a transaction flagged "don't count" never moved the account.
-  const cash = paise(5_000) + txns.filter((t) => !t.excludeFromCalculations).reduce((s, t) => s + (t.type === "income" ? paise(t.amount) : -paise(t.amount)), 0);
+  const cash = paise(5_000) + txns.filter((t) => !t.excludeFromCalculations && t.fundedByPersonId == null).reduce((s, t) => s + (t.type === "income" ? paise(t.amount) : -paise(t.amount)), 0);
   const installments = await rawInstallments(w);
   const paid = installments.reduce((s, i) => s + paise(i.amountPaid), 0);
   const outstanding = paise(30_000) - paid;
@@ -487,6 +495,42 @@ describe("Transaction idempotency — duplicate requests cannot create duplicate
     expect(paise((await w.accounts.getByKey(w.accountId))!.currentBalance)).toBe(paise(35_000 - 250));
   }, 90_000);
 
+  it("keyed 'borrowed cash' (People) and 'person paid directly': same save x2 and x4 concurrent -> ONE entry, ONE transaction, balances move once; different details refused", async () => {
+    const w = await world({ shared: false });
+    const person = (await w.people.getByKey(w.aId)) as Person;
+    const led = w.ledgerFor(w.aId);
+    const borrow = () => led.addEntryWithTransaction(person, { type: "borrowed", amount: 400, date: PAY_DATE, idempotencyKey: "borrow-key-0001" }, { type: "income", accountId: w.accountId, categoryId: "c" }, w.transactions);
+    await borrow();
+    await borrow();
+    await Promise.all([1, 2, 3, 4].map(() => borrow()));
+    expect((await led.getAll()).filter((e) => e.type === "borrowed").length).toBe(1);
+    expect((await w.transactions.getAll()).filter((t) => t.amount === 400).length).toBe(1);
+    expect(paise((await w.accounts.getByKey(w.accountId))!.currentBalance)).toBe(paise(35_400)); // +400 once
+    expect(paise((await w.people.getByKey(w.aId))!.currentBalance)).toBe(paise(-400)); // I owe A 400 once
+    await expect(led.addEntryWithTransaction(person, { type: "borrowed", amount: 999, date: PAY_DATE, idempotencyKey: "borrow-key-0001" }, { type: "income", accountId: w.accountId, categoryId: "c" }, w.transactions)).rejects.toThrow(/already saved with different details/);
+
+    const paid = () => led.createPersonFundedExpense(person, { amount: 250, date: PAY_DATE, categoryId: "food", idempotencyKey: "funded-key-0001" }, w.transactions);
+    await Promise.all([paid(), paid(), paid()]);
+    expect((await led.getAll()).filter((e) => e.amount === 250).length).toBe(1);
+    expect(paise((await w.people.getByKey(w.aId))!.currentBalance)).toBe(paise(-650)); // -400 - 250, once
+    expect(paise((await w.accounts.getByKey(w.accountId))!.currentBalance)).toBe(paise(35_400)); // a person-funded expense moves no account
+    await check(w, "after keyed People saves");
+  }, 90_000);
+
+  it("two SEPARATE saves with identical amount/description but different keys (or no key) are both kept - legitimate repeats are never merged", async () => {
+    const w = await world({ shared: false });
+    const person = (await w.people.getByKey(w.aId)) as Person;
+    const led = w.ledgerFor(w.aId);
+    const save = (key?: string) => led.addEntryWithTransaction(person, { type: "borrowed", amount: 100, date: PAY_DATE, note: "same", ...(key ? { idempotencyKey: key } : {}) }, { type: "income", accountId: w.accountId, categoryId: "c" }, w.transactions);
+    await save("save-one-0001");
+    await save("save-two-0002");
+    await save();
+    await save();
+    expect((await led.getAll()).filter((e) => e.amount === 100).length).toBe(4);
+    expect(paise((await w.accounts.getByKey(w.accountId))!.currentBalance)).toBe(paise(35_400));
+    await check(w, "after separate identical saves");
+  }, 90_000);
+
   it("WITHOUT a key a repeat IS a second transaction (the repository cannot know it is a retry) — so every entry point must pass one", async () => {
     const w = await world({ shared: false });
     const p = { type: "expense" as const, amount: 250, dateTime: PAY_DATE, accountId: w.accountId, categoryId: "food" };
@@ -574,4 +618,250 @@ describe("EMI deletion guard — two people sharing one EMI", () => {
     expect((await w.people.getByKey(w.b.id))!.currentBalance).toBe(0);
     expect((await w.emis.getAll()).length).toBe(0);
   }, 120_000);
+
+  // Server side: what Firestore rules do and do NOT enforce (probed with real direct writes).
+  const auditOf = async (w: Awaited<ReturnType<typeof emiWorld>>) => {
+    const ledger = (await Promise.all([w.a.id, w.b.id].map(async (id) => [...(await w.ledgerFor(id).getAll()), ...(await w.ledgerFor(id).getTrash())]))).flat();
+    const emis = [...(await w.emis.getAll()), ...(await w.emis.getTrash())];
+    // Exactly what `loadAuditData` does: installments are loaded only for schedules whose owner still exists.
+    const installments = (await Promise.all(emis.map(async (e) => (await getDocs(w.installmentsRef(e.scheduleId))).docs.map((d) => d.data())))).flat();
+    return runFinancialAudit({
+      accounts: await w.accounts.getAll(),
+      transactions: [...(await w.transactions.getAll()), ...(await w.transactions.getTrash())],
+      people: await w.people.getAll(),
+      ledgerEntries: ledger,
+      loans: [],
+      emis,
+      expenses: [],
+      installments,
+      payments: [],
+    });
+  };
+
+  it("SERVER: another signed-in user can read or write NONE of this user's financial documents", async () => {
+    const w = await emiWorld();
+    await w.pay(w.a.id, 500, "emi-sec-0001");
+    const intruder = testEnv.authenticatedContext("intruder-uid").firestore() as unknown as Firestore;
+    for (const path of [["accounts"], ["people"], ["emis"], ["loans"], ["transactions"], ["paymentSchedules"]]) {
+      await assertFails(getDocs(collection(intruder, "users", UID, ...path)));
+    }
+    await assertFails(deleteDoc(doc(intruder, "users", UID, "emis", w.emi.id)));
+    await assertFails(updateDoc(doc(intruder, "users", UID, "accounts", (await w.accounts.getAll())[0].id), { currentBalance: 1 }));
+  }, 90_000);
+
+  it("SERVER GAP (pinned): rules let the OWNER client delete an EMI that has a person repayment - the guard is client-side; the audit detects the aftermath and nothing is silently fixed", async () => {
+    const w = await emiWorld();
+    await w.pay(w.a.id, 500, "emi-gap-0001");
+    expect(await w.cash()).toBe(paise(50_500));
+    expect((await auditOf(w)).findings.filter((f) => f.category === "orphan-share-settlement")).toHaveLength(0); // consistent before
+
+    // A modified / outdated client skipping the guard: raw delete of the agreement document.
+    await deleteDoc(doc(w.db, "users", UID, "emis", w.emi.id));
+    expect((await getDoc(doc(w.db, "users", UID, "emis", w.emi.id))).exists()).toBe(false); // rules did NOT stop it
+
+    // The corruption this audit found: her stored repayment stays, the derived share is gone -> "I owe her 500", bank keeps +500.
+    expect(paise((await w.people.getByKey(w.a.id))!.currentBalance)).toBe(paise(-500));
+    expect(await w.cash()).toBe(paise(50_500));
+    // Backstop: the read-only audit reports it (high confidence, no automatic fix, no balance change proposed).
+    const findings = (await auditOf(w)).findings.filter((f) => f.category === "orphan-share-settlement");
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({ status: "confirmed", confidence: "high", amount: 500, proposal: { balanceDelta: null, needsDecision: true } });
+    // Reverting her repayment (the supported undo) restores a consistent world: bank 50,000, her balance 0, no finding.
+    const entries = await w.ledgerFor(w.a.id).getAll();
+    await w.personPayments(w.a.id).revertPayment((await w.people.getByKey(w.a.id)) as Person, entries[0].paymentId!);
+    expect(await w.cash()).toBe(paise(50_000));
+    expect((await w.people.getByKey(w.a.id))!.currentBalance).toBe(0);
+    expect((await auditOf(w)).findings.filter((f) => f.category === "orphan-share-settlement")).toHaveLength(0);
+  }, 90_000);
+
+  it("SERVER GAP (pinned): rules do not validate balances - a direct write of a wrong balance is accepted, and the drift detector catches it", async () => {
+    const w = await emiWorld();
+    const acc = (await w.accounts.getAll())[0];
+    await updateDoc(doc(w.db, "users", UID, "accounts", acc.id), { currentBalance: 12_345 });
+    const all = [...(await w.transactions.getAll()), ...(await w.transactions.getTrash())];
+    expect(accountBalanceDrift((await w.accounts.getByKey(acc.id))!, all)).not.toBeNull();
+  }, 60_000);
+
+  it("STALE TAB: a repayment recorded against an EMI installment AFTER the EMI was deleted is refused - it must not create an orphan repayment", async () => {
+    const w = await emiWorld();
+    await permanentlyDeleteAgreement(w.db as never, UID, "emi", w.emi.id); // no repayments yet, so the guard allows it
+    const cashBefore = await w.cash();
+    const outcome = await w.pay(w.a.id, 500, "stale-after-delete-0001").then(() => "accepted", (e: Error) => `refused: ${e.message}`);
+    // eslint-disable-next-line no-console
+    console.log("[stale-pay]", outcome, "cash", cashBefore, "->", await w.cash(), "A", (await w.people.getByKey(w.a.id))!.currentBalance);
+    expect(outcome, "a repayment against a deleted EMI must be refused").toMatch(/^refused/);
+    expect(await w.cash()).toBe(cashBefore);
+    expect((await w.people.getByKey(w.a.id))!.currentBalance).toBe(0);
+    expect((await auditOf(w)).findings.filter((f) => f.category === "orphan-share-settlement")).toHaveLength(0);
+  }, 90_000);
+
+  it("CONCURRENCY: a repayment recorded while the EMI is being deleted - across 16 races the invariant 'EMI gone => no live repayment' never breaks", async () => {
+    let deleted = 0;
+    let blocked = 0;
+    for (let i = 0; i < 16; i++) {
+      const w = await emiWorld();
+      // Stagger the repayment (0-375 ms) so the delete wins some races and the repayment wins others.
+      const delayedPay = async () => {
+        await new Promise((resolve) => setTimeout(resolve, i * 25));
+        return w.pay(w.a.id, 500, `race-pay-${i}-0001`);
+      };
+      const [del] = await Promise.allSettled([permanentlyDeleteAgreement(w.db as never, UID, "emi", w.emi.id), delayedPay()]);
+      const emiGone = (await w.emis.getAll()).length === 0;
+      const liveRepayments = (await w.ledgerFor(w.a.id).getAll()).filter((e) => e.obligationRef?.startsWith("emi-inst:")).length;
+      if (del.status === "fulfilled") deleted++;
+      else blocked++;
+      expect(emiGone && liveRepayments > 0, `race ${i}: EMI deleted but a live repayment remains`).toBe(false);
+      await testEnv.clearFirestore();
+    }
+    process.stdout.write(`
+[race-tally] delete succeeded ${deleted}x, blocked ${blocked}x
+`);
+  }, 400_000);
+});
+
+// ══════════════════════════ Part 5 — a loan WITH A PERSON, both directions, full lifecycle ══════════════════════════
+describe.each([
+  { direction: "given" as const, sign: 1, label: "loan GIVEN to a person (they owe me: receivable)" },
+  { direction: "taken" as const, sign: -1, label: "loan TAKEN from a person (I owe them: payable)" },
+])("Loan with a person — $label", ({ direction, sign }) => {
+  async function lendWorld() {
+    const s = setup();
+    const account = await s.accounts.createAccount({ name: "SBI", type: "bank", openingBalance: 50_000, colorValue: 0 });
+    const ravi = await s.people.createPerson({ name: "Ravi", avatarColorValue: 0, openingBalance: 0 });
+    const created = await s.loans.createAgreementWithOrigination({
+      idempotencyKey: `person-loan-${direction}-01`,
+      name: "Ravi loan",
+      category: "personal",
+      personId: ravi.id,
+      fundingSource: "person",
+      direction,
+      loanAmount: 30_000,
+      loanDate: LOAN_DATE,
+      firstDueDate: FIRST_DUE,
+      repaymentType: "installment",
+      installmentFrequency: "monthly",
+      installmentCount: 10,
+      movementAccountId: account.id,
+    });
+    return { ...s, accountId: account.id, raviId: ravi.id, loanId: created.loan.id, scheduleId: created.scheduleId };
+  }
+  type LW = Awaited<ReturnType<typeof lendWorld>>;
+  const loanOf = async (w: LW): Promise<Loan> => [...(await w.loans.getAll()), ...(await w.loans.getTrash())].find((l) => l.id === w.loanId)!;
+  const liveInst = async (w: LW) => (await getDocs(w.installmentsRef(w.scheduleId))).docs.map((d) => d.data()).filter((i) => i.deletedAt == null).sort((x, y) => x.sequenceNumber - y.sequenceNumber);
+  const pay = async (w: LW, amount: number, key: string, upcoming = false) =>
+    w.lender.record({ loan: await loanOf(w), scheduleInstallments: await liveInst(w), accountId: w.accountId, amount, date: PAY_DATE, idempotencyKey: key, includeUpcomingInstallments: upcoming });
+
+  /** Independent expectations from raw documents — plain arithmetic, hand-written direction rules. */
+  async function expected(w: LW) {
+    const txns = (await rawTxns(w as unknown as W)).filter((t) => t.deletedAt == null && !t.excludeFromCalculations);
+    const cash = paise(50_000) + txns.reduce((s, t) => s + (t.type === "income" ? paise(t.amount) : -paise(t.amount)), 0);
+    const outstanding = paise(30_000) - (await liveInst(w)).reduce((s, i) => s + paise(i.amountPaid), 0);
+    // Repayments (loan transactions other than the origination movement): given → money IN, taken → money OUT.
+    const repayments = txns.filter((t) => t.loanId != null && !t.id.startsWith("orig_"));
+    return {
+      cash,
+      outstanding,
+      net: sign * outstanding + 0, // positive = they owe me (+ 0 normalises a signed zero)
+      netWorth: cash + sign * outstanding,
+      moneyIn: repayments.filter((t) => t.type === "income").reduce((s, t) => s + paise(t.amount), 0),
+      moneyOut: repayments.filter((t) => t.type === "expense").reduce((s, t) => s + paise(t.amount), 0),
+    };
+  }
+  async function app(w: LW) {
+    const loan = await loanOf(w);
+    const all = (await getDocs(w.installmentsRef(w.scheduleId))).docs.map((d) => d.data());
+    const live = all.filter((i) => i.deletedAt == null);
+    const records = (await Promise.all(all.map((i) => getDocs(w.paymentsRef(w.scheduleId, i.id))))).flatMap((s) => s.docs.map((d) => d.data()));
+    const outstanding = outstandingPrincipalAfterPrepaymentsFor(loan.loanAmount, live, principalPrepaidFor(records));
+    const account = (await w.accounts.getByKey(w.accountId))!;
+    const person = (await w.people.getByKey(w.raviId)) as Person;
+    const position = personPosition({
+      personId: w.raviId,
+      currentBalance: person.currentBalance,
+      loans: loan.deletedAt == null ? [{ id: loan.id, personId: w.raviId, direction: loan.direction, outstandingPrincipal: outstanding, isDeleted: false }] : [],
+      ledgerEntries: [],
+      loanIds: new Set([loan.id]),
+    });
+    const sheet = loanBalanceSheet(loan.deletedAt == null ? [{ direction: loan.direction, outstandingPrincipal: outstanding }] : [], []);
+    const rows = cashFlowTransactions((await rawTxns(w as unknown as W)).filter((t) => t.deletedAt == null) as Transaction[], new Set())
+      .filter((t) => !t.isTransfer && t.effectiveMonth.getMonth() === NOW.getMonth() && t.effectiveMonth.getFullYear() === NOW.getFullYear());
+    return {
+      cash: paise(account.currentBalance),
+      outstanding: paise(outstanding),
+      net: paise(position.net),
+      owesMe: paise(position.owesMe),
+      iOwe: paise(position.iOwe),
+      netWorth: paise(netWorthWithLoans(account.currentBalance, sheet, position.directBalance)),
+      moneyIn: rows.filter((t) => t.type === "income").reduce((s, t) => s + paise(t.amount), 0),
+      moneyOut: rows.filter((t) => t.type === "expense").reduce((s, t) => s + paise(t.amount), 0),
+      stored: paise(person.currentBalance),
+    };
+  }
+  async function verify(w: LW, label: string) {
+    const e = await expected(w);
+    const a = await app(w);
+    expect(a.cash, `${label}: account`).toBe(e.cash);
+    expect(a.outstanding, `${label}: outstanding`).toBe(e.outstanding);
+    expect(a.net, `${label}: Ravi net (positive = owes me)`).toBe(e.net);
+    expect(a.owesMe, `${label}: owesMe`).toBe(Math.max(e.net, 0));
+    expect(a.iOwe, `${label}: iOwe`).toBe(Math.max(-e.net, 0));
+    expect(a.netWorth, `${label}: Net Worth`).toBe(e.netWorth);
+    expect(a.moneyIn, `${label}: Money In`).toBe(e.moneyIn);
+    expect(a.moneyOut, `${label}: Money Out`).toBe(e.moneyOut);
+    expect(a.stored, `${label}: no ledger entry is written for the loan`).toBe(0);
+    const all = [...(await w.transactions.getAll()), ...(await w.transactions.getTrash())];
+    for (const acc of await w.accounts.getAll()) expect(accountBalanceDrift(acc, all), `${label}: account drift`).toBeNull();
+    return e;
+  }
+
+  it("lend/borrow → partial → edit → full repayment → reverse → delete: every figure matches the hand-computed value, direction never flips, Net Worth never moves", async () => {
+    const w = await lendWorld();
+    const s0 = await verify(w, "L0 created");
+    expect(s0.cash).toBe(paise(50_000) + sign * -paise(30_000)); // given: 20,000 · taken: 80,000
+    expect(s0.net).toBe(sign * paise(30_000));
+    expect(s0.netWorth).toBe(paise(50_000)); // a loan neither creates nor destroys wealth
+    expect(s0.moneyIn + s0.moneyOut).toBe(0); // principal is not income/spending
+
+    const first = await pay(w, 3_000, "ln-pay-0001");
+    const s1 = await verify(w, "L1 partial repayment 3,000");
+    expect(s1.outstanding).toBe(paise(27_000));
+    expect(s1.net).toBe(sign * paise(27_000));
+    expect(s1.netWorth).toBe(paise(50_000));
+    expect(direction === "given" ? s1.moneyIn : s1.moneyOut).toBe(paise(3_000));
+
+    await w.lender.editPayment({
+      loan: await loanOf(w),
+      scheduleInstallments: await liveInst(w),
+      original: { transactionId: first.transactionId, paymentIds: first.paymentIds, installmentIds: first.installmentIds, overflowPaymentId: first.overflowPaymentId, overflowInstallmentId: first.overflowInstallmentId },
+      accountId: w.accountId,
+      amount: 2_000,
+      date: PAY_DATE,
+      idempotencyKey: "ln-edit-0001",
+    });
+    const s2 = await verify(w, "L2 repayment edited 3,000 → 2,000");
+    expect(s2.outstanding).toBe(paise(28_000));
+    expect(s2.netWorth).toBe(paise(50_000));
+
+    const rest = await pay(w, 28_000, "ln-pay-0002", true);
+    const s3 = await verify(w, "L3 fully repaid");
+    expect(s3.outstanding).toBe(0);
+    expect(s3.net).toBe(0); // fully settled: neither a receivable nor a payable, and never a sign flip
+    expect(s3.cash).toBe(paise(50_000));
+    expect(s3.netWorth).toBe(paise(50_000));
+
+    await w.lender.reversePayment({
+      loan: await loanOf(w), transactionId: rest.transactionId, paymentIds: rest.paymentIds, installmentIds: rest.installmentIds,
+      overflowPaymentId: rest.overflowPaymentId, overflowInstallmentId: rest.overflowInstallmentId, reversalIdempotencyKey: "ln-rev-0001",
+    });
+    const s4 = await verify(w, "L4 full repayment reversed");
+    expect(s4).toMatchObject({ outstanding: paise(28_000), net: sign * paise(28_000), netWorth: paise(50_000) });
+
+    // Delete the loan with a repayment still recorded: no person ledger entries exist for it, so the guard does not block;
+    // every owned movement (origination + repayment) is reversed and the account returns to its opening balance.
+    await permanentlyDeleteAgreement(w.db as never, UID, "loan", w.loanId);
+    expect(paise((await w.accounts.getByKey(w.accountId))!.currentBalance)).toBe(paise(50_000));
+    expect((await w.people.getByKey(w.raviId))!.currentBalance).toBe(0);
+    expect((await w.loans.getAll()).length).toBe(0);
+    expect((await w.transactions.getAll()).length).toBe(0);
+  }, 180_000);
 });

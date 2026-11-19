@@ -7,6 +7,7 @@
  */
 import { scenario } from "../lib/core.mjs";
 import * as h from "../lib/harness.mjs";
+import { choose, menuItem, openImportConfirm, pressOnGrid } from "../lib/recon.mjs";
 
 const TRUTH = [
   { date: "05/09/2026", desc: "SWIGGY BANGALORE", amount: "452.00", dir: "Dr" },
@@ -175,12 +176,11 @@ scenario("scap-paste", "Smart Capture (paste): Extract lands on Review & Import;
 
   // Duplicates: comparison dock → Keep existing for both exact matches; nothing written.
   await reconRow(page, "QA GROCERIES").click();
-  const dock = page.getByTestId("resolution-dock");
-  chk("the dock compares the groceries row with an existing FlowFi transaction", (await dock.getAttribute("data-record-id")) != null);
-  await dock.getByTestId("resolve-keep_existing").click();
+  chk("the right sheet compares the groceries row with an existing FlowFi transaction", (await page.getByTestId("existing-row").count()) > 0);
+  await choose(page, "keep_existing");
   chk("Keep existing recorded as the draft decision", (await reconRow(page, "QA GROCERIES").innerText()).includes("Keep existing"));
   await reconRow(page, "SALARY CREDIT").click();
-  await page.getByTestId("resolution-dock").getByTestId("resolve-keep_existing").click();
+  await choose(page, "keep_existing");
   await h.shot(page, "scap-paste-review");
 
   // The new charge: Import new via the bulk dialog, with a category.
@@ -250,7 +250,7 @@ for (const variant of ["crisp", "small", "lowContrast"]) {
 
     // The row's strip of the screenshot is shown beside the comparison, from memory only.
     await reconRow(page, TRUTH[0].desc.split(" ")[0]).click();
-    await page.getByTestId("dock-details").click();
+    await pressOnGrid(page, "o");
     const zoomImg = page.getByRole("dialog").getByTestId("row-zoom").locator("img");
     await zoomImg.waitFor({ timeout: 30000 });
     chk("the row's strip of the screenshot is shown beside the comparison", /^blob:/.test((await zoomImg.getAttribute("src")) ?? ""));
@@ -262,7 +262,7 @@ for (const variant of ["crisp", "small", "lowContrast"]) {
     await page.getByText("Restored your review").waitFor({ timeout: 120000 });
     await page.waitForFunction(() => [...document.querySelectorAll('[data-testid="recon-row"]')].every((r) => r.getAttribute("data-state") !== "pending"), null, { timeout: 60000 });
     await reconRow(page, TRUTH[0].desc.split(" ")[0]).click();
-    await page.getByTestId("dock-details").click();
+    await pressOnGrid(page, "o");
     await page.getByRole("dialog").getByTestId("screenshot-unavailable").waitFor({ timeout: 60000 });
     chk("after refresh: screenshot clearly marked unavailable", true);
     const stored = await page.evaluate(() => Object.keys(sessionStorage).map((k) => sessionStorage.getItem(k)).join(""));

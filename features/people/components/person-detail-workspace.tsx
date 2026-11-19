@@ -717,7 +717,7 @@ export function PersonDetailWorkspace({
         aria-expanded={inline === "settle"}
         aria-controls="person-inline-settle"
         title="Record money received from, or paid to, this person"
-        className={cn(WS_PRIMARY, "h-11 rounded-full px-5 text-[15px] shadow-[0_8px_20px_-10px_rgba(120,160,20,0.7)] lg:w-full", inline === "settle" && "ring-2 ring-primary-accent-text/40")}
+        className={cn(WS_PRIMARY, "h-11 rounded-full px-5 text-[15px] shadow-[0_8px_20px_-10px_color-mix(in_oklch,var(--primary-accent-text)_70%,transparent)] lg:w-full", inline === "settle" && "ring-2 ring-primary-accent-text/40")}
       >
         <HandCoins className="size-4" strokeWidth={2} />
         {inline === "settle" ? "Close" : "Record payment"}
@@ -1133,10 +1133,10 @@ export function PersonDetailWorkspace({
     <div ref={rootRef} onKeyDown={onKeyDown} className="flex min-w-0 scroll-mt-6 flex-col gap-4 px-1">
       {/* Identity — who, always visible; every mode renders below it. Navigation sits with the actions on the right. */}
       <div>
-        <header className="relative flex items-center gap-3.5 overflow-hidden rounded-[20px] bg-gradient-to-br from-[#1d2330] via-[#262e3d] to-[#323b4d] px-4 py-4 text-white shadow-e1 sm:px-5">
+        <header className="relative flex items-center gap-3.5 overflow-hidden rounded-[20px] bg-[image:var(--gradient-hero)] px-4 py-4 text-white shadow-e1 sm:px-5">
           <span aria-hidden className={cn("pointer-events-none absolute -top-20 -right-16 size-56 rounded-full blur-3xl", heroGlow)} />
           <span aria-hidden className="pointer-events-none absolute -bottom-24 -left-16 size-52 rounded-full border border-white/10" />
-          <span className={cn("relative shrink-0 rounded-full ring-2 ring-offset-2 ring-offset-[#262e3d]", heroRing)}>
+          <span className={cn("relative shrink-0 rounded-full ring-2 ring-offset-2 ring-offset-surface-hero", heroRing)}>
             <ClayAvatar name={person.name} size={52} fallbackClassName="bg-white/15 text-lg font-semibold text-white" />
           </span>
           <div className="relative flex min-w-0 flex-1 flex-col gap-0.5">

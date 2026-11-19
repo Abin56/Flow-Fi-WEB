@@ -1,40 +1,30 @@
 "use client";
 
 import { create } from "zustand";
-import { THEME_STORAGE_KEY, type StoredTheme } from "@/lib/theme/apply";
+import { THEME_STORAGE_KEY } from "@/lib/theme/apply";
 import { isHex } from "@/lib/theme/color";
-import { type ThemeSeed, seedFromDuo } from "@/lib/theme/derive";
-import { DEFAULT_PRESET_ID, THEME_PRESETS, findDuoPreset, findPreset } from "@/lib/theme/presets";
-
-const DEFAULT_THEME: StoredTheme = { presetId: DEFAULT_PRESET_ID, seed: THEME_PRESETS[0].seed };
-
-function sanitize(raw: unknown): StoredTheme {
-  if (!raw || typeof raw !== "object") return DEFAULT_THEME;
-  const r = raw as Partial<StoredTheme>;
-  const s = r.seed as Partial<ThemeSeed> | undefined;
-  const keys: (keyof ThemeSeed)[] = ["primary", "secondary", "accent", "background", "sidebar"];
-  if (!s || !keys.every((k) => typeof s[k] === "string" && isHex(s[k] as string))) return DEFAULT_THEME;
-  const known = (id: string) => id === "custom" || id === "duo" || !!findPreset(id) || !!findDuoPreset(id);
-  const presetId = typeof r.presetId === "string" && known(r.presetId) ? r.presetId : "custom";
-  const duo = Array.isArray(r.duo) && r.duo.length === 2 && r.duo.every((c) => typeof c === "string" && isHex(c)) ? (r.duo as [string, string]) : undefined;
-  return { presetId, seed: s as ThemeSeed, ...(duo ? { duo } : {}) };
-}
-
-function load(): StoredTheme {
-  if (typeof window === "undefined") return DEFAULT_THEME;
-  try {
-    const raw = window.localStorage.getItem(THEME_STORAGE_KEY);
-    return raw ? sanitize(JSON.parse(raw)) : DEFAULT_THEME;
-  } catch {
-    return DEFAULT_THEME;
-  }
-}
+import { findAccent, findSurface } from "@/lib/theme/lime";
+import { findBase } from "@/lib/theme/palette";
+import { CUSTOM_ID, type CustomSpec, DEFAULT_THEME, type StoredTheme, findTheme, sanitizeStoredTheme } from "@/lib/theme/themes";
 
 function persist(theme: StoredTheme) {
   try {
     window.localStorage.setItem(THEME_STORAGE_KEY, JSON.stringify(theme));
   } catch {
-    /* ignore — theme still applies this session */
+    /* ignore — the choice still applies this session */
+  }
+}
+
+/** Reads the saved choice. A value left by an older picker is mapped to the current model and rewritten. */
+function load(): StoredTheme {
+  if (typeof window === "undefined") return DEFAULT_THEME;
+  try {
+    const raw = window.localStorage.getItem(THEME_STORAGE_KEY);
+    const { theme, migrated } = sanitizeStoredTheme(raw ? JSON.parse(raw) : null);
+    if (migrated) persist(theme);
+    return theme;
+  } catch {
+    return DEFAULT_THEME;
   }
 }
 
@@ -42,13 +32,15 @@ interface ThemeState {
   theme: StoredTheme;
   hydrated: boolean;
   hydrate: () => void;
-  selectPreset: (id: string) => void;
-  /** Edits one colour; the theme becomes "custom". */
-  setColor: (key: keyof ThemeSeed, hex: string) => void;
-  /** Replaces the whole seed (smart-coordination result); the theme becomes "custom". */
-  setSeed: (seed: ThemeSeed) => void;
-  /** Two-colour theme: derives the full seed from Colour 1 + Colour 2. `presetId` defaults to "duo" (custom pair). */
-  setDuo: (a: string, b: string, presetId?: string) => void;
+  /** Picks FlowFi Lime or a preset from the gallery. */
+  selectTheme: (id: string) => void;
+  /** FlowFi Lime's own options. */
+  setAccent: (id: string) => void;
+  setSurface: (id: string) => void;
+  /** Edits the custom theme and makes it the active one. */
+  setCustom: (patch: Partial<CustomSpec>) => void;
+  /** Copies a preset's colours into the custom theme (so a preset can be tweaked) and activates it. */
+  customizeFrom: (id: string) => void;
   reset: () => void;
 }
 
@@ -64,18 +56,28 @@ export const useThemeStore = create<ThemeState>((set, get) => {
       if (get().hydrated) return;
       set({ theme: load(), hydrated: true });
     },
-    selectPreset: (id) => {
-      const preset = findPreset(id);
-      if (preset) commit({ presetId: preset.id, seed: preset.seed });
+    selectTheme: (id) => {
+      if (id === "lime" || id === CUSTOM_ID || findTheme(id)) commit({ ...get().theme, id });
     },
-    setColor: (key, hex) => {
-      if (!isHex(hex)) return;
-      commit({ presetId: "custom", seed: { ...get().theme.seed, [key]: hex } });
+    setAccent: (id) => {
+      if (findAccent(id)) commit({ ...get().theme, id: "lime", accent: id });
     },
-    setSeed: (seed) => commit({ presetId: "custom", seed }),
-    setDuo: (a, b, presetId = "duo") => {
-      if (!isHex(a) || !isHex(b)) return;
-      commit({ presetId, seed: seedFromDuo(a, b), duo: [a, b] });
+    setSurface: (id) => {
+      if (findSurface(id)) commit({ ...get().theme, id: "lime", surface: id });
+    },
+    setCustom: (patch) => {
+      const cur = get().theme.custom;
+      const next: CustomSpec = {
+        base: patch.base !== undefined && findBase(patch.base) ? patch.base : cur.base,
+        primary: patch.primary !== undefined && isHex(patch.primary) ? patch.primary.toLowerCase() : cur.primary,
+        secondary: patch.secondary === undefined ? cur.secondary : patch.secondary === null ? null : isHex(patch.secondary) ? patch.secondary.toLowerCase() : cur.secondary,
+      };
+      commit({ ...get().theme, id: CUSTOM_ID, custom: next });
+    },
+    customizeFrom: (id) => {
+      const spec = findTheme(id)?.spec;
+      if (!spec) return;
+      commit({ ...get().theme, id: CUSTOM_ID, custom: { base: spec.base, primary: spec.primary, secondary: spec.secondary ?? null } });
     },
     reset: () => commit(DEFAULT_THEME),
   };

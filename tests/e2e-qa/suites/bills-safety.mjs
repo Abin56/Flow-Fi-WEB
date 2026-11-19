@@ -13,6 +13,7 @@ const payments = async (billId) => h.list(`bills/${billId}/payments`);
 
 async function openDetail(page) {
   await h.go(page, "/bills");
+  await h.openMyBills(page);
   await page.waitForTimeout(2500);
   await page.getByRole("button", { name: /QA Electricity/ }).first().click();
 }
@@ -53,6 +54,7 @@ scenario("bills-safety-skip-paid", "F1: a PAID cycle that is still on screen (on
   // A one-time bill keeps its paid cycle as the current one (a recurring bill rolls straight on to next month's unpaid cycle).
   chk("fixture: bill made one-time", (await restPatch(`bills/${b0.id}`, { recurrence: { stringValue: "oneTime" } }, ["recurrence"])).ok);
   await h.go(page, "/bills");
+  await h.openMyBills(page);
   await page.waitForTimeout(2500);
   await page.getByRole("button", { name: /QA Electricity/ }).first().click();
   chk("Skip is enabled on the unpaid cycle", await page.getByRole("button", { name: "Skip", exact: true }).isEnabled());
@@ -75,6 +77,7 @@ scenario("bills-safety-skip-paid", "F1: a PAID cycle that is still on screen (on
 
 scenario("bills-safety-skip-stale", "F1: Skip pressed on a stale panel (another tab paid meanwhile) is refused with a message and overwrites nothing", async ({ page }, chk) => {
   await h.go(page, "/bills");
+  await h.openMyBills(page);
   await page.waitForTimeout(2500);
   await page.getByRole("button", { name: /QA Electricity/ }).first().click();
   const skip = page.getByRole("button", { name: "Skip", exact: true });
@@ -164,6 +167,7 @@ scenario("bills-safety-timezones", "F4: the Bills form shows and saves the SAME 
     const seen = await page.evaluate(() => ({ zone: Intl.DateTimeFormat().resolvedOptions().timeZone, offset: new Date("2027-01-19T17:00:00Z").getTimezoneOffset(), day: new Date("2027-01-19T17:00:00Z").getDate() }));
     chk(`${z.id}: the browser really is in that zone`, seen.offset === z.offset, JSON.stringify(seen));
     await h.go(page, "/bills");
+    await h.openMyBills(page);
     await page.waitForTimeout(3500);
     await page.getByRole("button", { name: /QA Electricity/ }).first().click();
     await page.waitForTimeout(800);
@@ -239,6 +243,7 @@ scenario("bills-safety-unskip-stale", "Unskip pressed on a stale panel (cycle no
 
 scenario("bills-safety-duplicate-review", "Duplicate Review panel: shows both occurrences, payments, totals effect and a recommendation — read-only, no write button", async ({ page }, chk) => {
   await h.go(page, "/bills");
+  await h.openMyBills(page);
   await page.waitForTimeout(2500);
   let b = await bill();
   for (let i = 0; i < 5 && !b; i++) {
@@ -285,6 +290,7 @@ scenario("bills-safety-duplicate-review", "Duplicate Review panel: shows both oc
 
 scenario("bills-safety-duplicate-blocked", "F3: a historical duplicate cycle blocks the bank debit with a manual-review message; nothing is written or rewritten", async ({ page }, chk) => {
   await h.go(page, "/bills");
+  await h.openMyBills(page);
   await page.waitForTimeout(2500);
   const b = await bill();
   const original = (await cycles(b.id))[0];

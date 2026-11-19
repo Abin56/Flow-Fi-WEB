@@ -171,6 +171,7 @@ function BillPaymentForm({
             <label className="flex flex-col gap-1">
               <span className="text-xs font-medium text-muted-foreground">Amount (due {formatCurrency(owedNow)})</span>
               <input type="number" className="clay-pressed h-10 rounded-xl px-3 text-sm outline-none" value={amountText} onChange={(e) => setAmountText(e.target.value)} />
+              {!editing && <span className="text-[11px] text-muted-foreground">Paying less than the full amount records a part payment — the rest stays due.</span>}
             </label>
             <label className="flex flex-col gap-1">
               <span className="text-xs font-medium text-muted-foreground">{mode === "earlier" ? "Date it was paid" : "Payment date"}</span>

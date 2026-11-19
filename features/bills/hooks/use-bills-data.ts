@@ -134,8 +134,15 @@ export function useBillActions() {
     if (!uid) return null;
     const billRepository = createBillRepository(uid);
 
+    // Every bill-cycle read model, not just this page's: the full cycle history (Dashboard "paid", My Money Completed)
+    // and the payment records (their real payment dates) are separate 60 s-stale queries. Invalidating only
+    // `bill-occurrences` left "Paid this cycle" showing the old figure until they went stale on their own.
     const invalidateOccurrences = () =>
-      queryClient.invalidateQueries({ queryKey: ["bill-occurrences", uid], exact: false });
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["bill-occurrences", uid], exact: false }),
+        queryClient.invalidateQueries({ queryKey: ["bill-occurrence-history", uid], exact: false }),
+        queryClient.invalidateQueries({ queryKey: ["billPayments", uid], exact: false }),
+      ]);
 
     return {
       createBill: async (params: CreateBillParams) => {
@@ -143,6 +150,8 @@ export function useBillActions() {
       },
       editBill: async (bill: Bill, params: EditBillParams) => {
         await billRepository.editBill(bill, params);
+        // A due-date edit also moves the open cycle — re-read the cycles so every view shows it at once.
+        await invalidateOccurrences();
       },
       deleteBill: async (bill: Bill) => {
         await billRepository.softDelete(bill);

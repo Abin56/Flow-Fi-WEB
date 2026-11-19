@@ -8,6 +8,7 @@
  */
 import { scenario } from "../lib/core.mjs";
 import * as h from "../lib/harness.mjs";
+import { choose, menuItem, openImportConfirm, pressOnGrid } from "../lib/recon.mjs";
 
 const ddmmyyyy = (offsetDays) => {
   const d = new Date(Date.now() + offsetDays * 86400000);
@@ -33,7 +34,7 @@ const cardBalance = async () => (await h.accountBalance("QA Credit Card")).curre
 
 async function openStudio(page) {
   await page.evaluate(() => window.next.router.push("/reconciliation"));
-  await page.getByRole("heading", { name: "Reconciliation" }).waitFor({ timeout: 240000 });
+  await page.getByRole("heading", { name: /Review & Import|Reconciliation/ }).waitFor({ timeout: 240000 });
 }
 
 async function pasteApprovalRows(page) {
@@ -56,7 +57,7 @@ async function injectDecisions(page, decisions) {
     sessionStorage.setItem(key, JSON.stringify(draft));
   }, decisions);
   await page.reload({ waitUntil: "domcontentloaded" });
-  await page.getByRole("heading", { name: "Reconciliation" }).waitFor({ timeout: 120000 });
+  await page.getByRole("heading", { name: /Review & Import|Reconciliation/ }).waitFor({ timeout: 120000 });
   await page.getByText("Restored your review").waitFor({ timeout: 30000 });
   await page.waitForFunction(() => document.querySelector('[data-row-id="r1"]')?.getAttribute("data-state") !== "pending", null, { timeout: 60000 });
   await page.waitForTimeout(800);
@@ -101,8 +102,7 @@ scenario(
     /** Keep both (a match exists — acknowledged explicitly) or Import new, from the comparison dock. */
     const importVia = async (id, category, creditAs) => {
       await rowBtn(id).click();
-      const both = page.getByTestId("resolve-keep_both");
-      await ((await both.isEnabled()) ? both : page.getByTestId("resolve-import_new")).click();
+      await openImportConfirm(page, id);
       const pop = page.getByTestId("import-confirm");
       const ack = pop.getByRole("checkbox", { name: "These are separate transactions" });
       if (await ack.count()) await ack.check();
@@ -114,9 +114,9 @@ scenario(
       await pop.getByTestId("import-confirm-submit").click();
     };
     await rowBtn("r1").click();
-    await page.getByTestId("resolve-keep_existing").click();
+    await choose(page, "keep_existing");
     await rowBtn("r4").click();
-    await page.getByTestId("resolve-skip").click();
+    await pressOnGrid(page, "i");
     await importVia("r2", cats.expense);
     await importVia("r3", cats.income, "Refund");
     await h.shot(page, "recon-approve-decided");
@@ -147,22 +147,22 @@ scenario(
     chk("deterministic import keys + provenance note", written.every((t) => t.id.startsWith("txn_imp_") && /Imported via Reconciliation/.test(t.notes)), written.map((t) => t.id).join(","));
 
     // Repeated approval after success: nothing left to import.
-    await dlg.getByRole("button", { name: "Back to review" }).click();
+    await dlg.getByRole("button", { name: /Back to (review|reconciliation)/ }).click();
     await page.waitForTimeout(800);
     const again = await openApproval(page);
     chk("re-opening the approval finds everything already imported — nothing to write", (await again.getByTestId("approval-nothing").count()) === 1);
-    await again.getByRole("button", { name: "Back to review" }).click();
+    await again.getByRole("button", { name: /Back to (review|reconciliation)/ }).click();
 
     // Refresh: draft restored, rows now detected as already imported through their deterministic keys.
     await page.reload({ waitUntil: "domcontentloaded" });
-    await page.getByRole("heading", { name: "Reconciliation" }).waitFor({ timeout: 120000 });
+    await page.getByRole("heading", { name: /Review & Import|Reconciliation/ }).waitFor({ timeout: 120000 });
     await page.getByText("Restored your review").waitFor({ timeout: 30000 });
     await page.waitForFunction(() => document.querySelector('[data-row-id="r2"]')?.getAttribute("data-state") !== "pending", null, { timeout: 60000 });
     await page.waitForTimeout(800);
     chk("after refresh the imported rows show 'already imported'", (await stateOf(page, "recon-row", "r2")) === "already_imported" && (await stateOf(page, "recon-row", "r3")) === "already_imported");
     const third = await openApproval(page);
     chk("after refresh there is still nothing to import", (await third.getByTestId("approval-nothing").count()) === 1);
-    await third.getByRole("button", { name: "Back to review" }).click();
+    await third.getByRole("button", { name: /Back to (review|reconciliation)/ }).click();
     chk("repeat/refresh never wrote again", (await cardTxns()).length === 2 && Math.abs((await cardBalance()) - (cardBefore - 152)) < 0.01);
     const ov = await overflowX(page);
     chk("no horizontal overflow", ov.doc <= 1 && ov.main <= 1, JSON.stringify(ov));

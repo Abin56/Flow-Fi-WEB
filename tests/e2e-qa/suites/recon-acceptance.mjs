@@ -43,7 +43,7 @@ const overflow = (page) =>
   page.evaluate(() => ({
     doc: document.documentElement.scrollWidth - document.documentElement.clientWidth,
     main: document.querySelector("main").scrollWidth - document.querySelector("main").clientWidth,
-    inner: ["statement-sheet", "existing-sheet", "resolution-dock", "recon-grid-body", "existing-grid-body"].map((id) => {
+    inner: ["statement-sheet", "existing-sheet", "recon-grid-body", "existing-grid-body"].map((id) => {
       const el = document.querySelector(`[data-testid="${id}"]`);
       return el ? el.scrollWidth - el.clientWidth : 0;
     }),
@@ -51,7 +51,7 @@ const overflow = (page) =>
 
 async function openStudio(page) {
   await page.evaluate(() => window.next.router.push("/reconciliation"));
-  await page.getByRole("heading", { name: "Reconciliation" }).waitFor({ timeout: 240000 });
+  await page.getByRole("heading", { name: /Review & Import|Reconciliation/ }).waitFor({ timeout: 240000 });
 }
 
 async function pasteAndChoose(page, text) {
@@ -159,7 +159,7 @@ scenario(
       await page.mouse.move(d.x + d.width / 2 - 160, d.y + d.height / 2, { steps: 8 });
       await page.mouse.up();
       const leftAfter = (await page.getByTestId("statement-sheet").boundingBox()).width;
-      chk(`${tag}: dragging the divider resizes the sheets (down to its readable minimum)`, leftAfter < leftBefore - 40 && leftAfter >= 470, JSON.stringify({ leftBefore, leftAfter }));
+      chk(`${tag}: dragging the divider resizes the sheets (down to its readable minimum)`, leftAfter < leftBefore - 40 && leftAfter >= 435 /* V3: statement minimum 440px */, JSON.stringify({ leftBefore, leftAfter }));
       const ov2 = await overflow(page);
       chk(`${tag}: still no sideways scroll at the narrower split`, ov2.inner.every((o) => o <= 1), JSON.stringify(ov2));
       await page.getByTestId("sheet-divider").focus();
@@ -228,39 +228,33 @@ scenario(
     await page.keyboard.press("Enter");
     chk("Enter keeps the picked FlowFi transaction", /Keep existing/.test(await rowLoc(page, "r4").innerText()), picked);
     await page.keyboard.press("z");
-    chk("Z undoes it", /Undecided/.test(await rowLoc(page, "r4").innerText()));
+    chk("Z undoes it", (await rowLoc(page, "r4").locator('[data-pending="true"]').count()) > 0);
     await page.keyboard.press("ArrowLeft");
     chk("← returns to the statement sheet", await grid.evaluate((g) => g === document.activeElement));
 
-    // Keep both confirmation: focus moves in, Escape closes, focus isn't dropped to <body>.
-    await page.keyboard.press("b");
-    const pop = page.getByTestId("import-confirm");
-    await pop.waitFor();
-    chk("B opens Keep both's confirmation with focus inside it", await pop.evaluate((el) => el.contains(document.activeElement)));
-    chk("…its submit is disabled until the acknowledgement + category", await pop.getByTestId("import-confirm-submit").isDisabled());
+    // Row menu: opens from the keyboard-reachable ⋯ button, Escape closes it and focus is not dropped to <body>.
+    const menuBtn = rowLoc(page, await page.getByTestId("existing-comparing").getAttribute("data-row-id")).getByTestId("quick-decide");
+    await menuBtn.focus();
+    await page.keyboard.press("Enter");
+    const menu = page.getByRole("menu", { name: /More options for row/ });
+    await menu.waitFor();
+    chk("the ⋯ menu opens from the keyboard and lists the row's actions", (await menu.getByRole("menuitem").count()) >= 3);
     await page.keyboard.press("Escape");
     await page.waitForTimeout(200);
-    chk("Escape closes it", (await pop.count()) === 0);
+    chk("Escape closes the menu", (await menu.count()) === 0);
     const focusAfter = await page.evaluate(() => document.activeElement?.tagName);
     chk("focus is not lost to <body> after closing", focusAfter !== "BODY", focusAfter);
     await h.shot(page, "accept-keyboard");
 
-    // Preview dialog focus.
-    await page.getByTestId("resolve-merge_details").click();
-    const preview = page.getByTestId("resolution-preview");
-    await preview.waitFor();
-    for (let i = 0; i < 8; i++) await page.keyboard.press("Tab");
-    chk("Tab stays inside the preview dialog (focus trap)", await preview.evaluate((el) => el.contains(document.activeElement)));
-    chk("preview dialog is named", (await page.getByRole("dialog", { name: /Merge details — preview only/ }).count()) === 1);
-    chk("commit is disabled", await preview.getByTestId("preview-commit").isDisabled());
-    await h.shot(page, "accept-merge-preview");
+    // Import as transaction: the row's editor opens (a dialog), Escape closes it, focus returns.
+    await page.keyboard.press("n");
+    const editor = page.getByTestId("row-editor-panel");
+    await editor.waitFor();
+    chk("N opens the row's editor with the Import as transaction button", (await page.getByTestId("import-as-transaction").count()) === 1);
+    await h.shot(page, "accept-import-editor");
     await page.keyboard.press("Escape");
-    await page.waitForTimeout(250);
-    chk("Escape closes the preview; focus returns to its button", await page.getByTestId("resolve-merge_details").evaluate((b) => b === document.activeElement));
-
-    // Accessible names on every dock control and both grids.
-    const unnamed = await page.getByTestId("resolution-dock").evaluate((dock) => [...dock.querySelectorAll("button")].filter((b) => !(b.getAttribute("aria-label") || b.textContent || "").trim()).length);
-    chk("every dock button has an accessible name", unnamed === 0, unnamed);
+    await page.waitForTimeout(300);
+    chk("Escape closes the editor", (await editor.count()) === 0 || !(await editor.isVisible()));
     chk("the divider is an accessible separator with a value", (await page.getByRole("separator", { name: "Resize the sheets" }).getAttribute("aria-valuenow")) !== null);
 
     // Approval dialog focus (decide everything quickly: skip all via the bulk-free path — I on each row).

@@ -12,6 +12,7 @@ import type { Transaction } from "@/lib/models/transaction";
 import { DRAFT_KEY_PREFIX, buildReconciliationDraft, saveReconciliationDraft } from "../lib/reconciliation-draft";
 import { reconRow } from "../lib/test-fixtures";
 import type { ReconRow } from "../lib/types";
+import { menuItem, openImportConfirm } from "./menu-test-utils";
 import { ReconciliationWorkspace, type ReconciliationData } from "./reconciliation-workspace";
 
 const NOW = new Date(2026, 9, 26, 12, 0, 0);
@@ -43,6 +44,7 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(NOW);
   sessionStorage.clear();
+  localStorage.setItem("flowfi.recon.autoNext", "0"); // these tests decide a row and then keep inspecting it
   setViewport(1600);
 });
 afterEach(() => {
@@ -123,10 +125,9 @@ function seedDraft(rows = ROWS, accountId: string | null = "acc-card") {
 
 const rowEl = (id: string) => screen.getAllByTestId("recon-row").find((r) => r.dataset.rowId === id)!;
 const existingIds = () => screen.queryAllByTestId("existing-row").map((r) => r.dataset.recordId);
-const dock = () => screen.getByTestId("resolution-dock");
 const grid = () => screen.getByRole("grid", { name: "Statement rows" });
 const select = (id: string) => fireEvent.click(rowEl(id));
-const resolve = (id: string) => screen.getByTestId(`resolve-${id}`) as HTMLButtonElement;
+const resolve = (id: string) => menuItem(id);
 
 describe("Reconciliation workspace — desktop", () => {
   it("restores the draft, shows each row's advisory state and never says 'duplicate'", () => {
@@ -135,22 +136,22 @@ describe("Reconciliation workspace — desktop", () => {
     expect(screen.getByText(/Restored your review/)).toBeTruthy();
     const states = Object.fromEntries(ROWS.map((r) => [r.id, rowEl(r.id).dataset.state]));
     expect(states).toEqual({ r1: "exact_candidate", r2: "near_amount", r3: "multiple", r4: "multiple", r5: "in_inbox", r6: "no_match", r7: "no_match" });
-    // A possible match is never labelled a duplicate — in either sheet or in the dock.
+    // A possible match is never labelled a duplicate — the statement sheet and the dock never use the word; the comparison
+    // band says "Possible duplicate" (a suggestion) and never "confirmed / exact duplicate".
     select("r1");
     expect(grid().textContent).not.toMatch(/duplicate/i);
-    expect(screen.getByTestId("existing-sheet").textContent).not.toMatch(/duplicate/i);
-    expect(dock().textContent).not.toMatch(/duplicate/i);
+    expect(screen.getByTestId("existing-sheet").textContent).not.toMatch(/(confirmed|exact|definite|is a) duplicate/i);
     expect(screen.getByTestId("privacy-notice").textContent).toMatch(/never saved/);
   });
 
-  it("other-account look-alike is a note in the dock, never a row in the Existing FlowFi sheet", () => {
+  it("other-account look-alike is a note in the full comparison, never a row in the Existing FlowFi sheet", () => {
     seedDraft();
     render(<ReconciliationWorkspace uid="u1" data={DATA} />);
     select("r7");
     expect(existingIds()).toEqual([]);
     fireEvent.click(screen.getByTestId("existing-mode-ledger"));
     expect(existingIds()).not.toContain("t-bank");
-    fireEvent.click(screen.getByTestId("dock-notes"));
+    fireEvent.keyDown(grid(), { key: "o" }); // the full comparison lists the notes
     expect(document.body.textContent).toMatch(/SBI Savings •••• 9981 — a different account/);
   });
 
@@ -161,7 +162,7 @@ describe("Reconciliation workspace — desktop", () => {
     g.focus();
     expect(rowEl("r1").getAttribute("aria-selected")).toBe("true");
     fireEvent.keyDown(g, { key: "l" });
-    expect(within(rowEl("r1")).getByText("Keep existing")).toBeTruthy();
+    expect(within(rowEl("r1")).getByTestId("decision-chip").textContent).toBe("Keep existing");
     fireEvent.keyDown(g, { key: "j" });
     expect(rowEl("r2").getAttribute("aria-selected")).toBe("true");
     fireEvent.keyDown(g, { key: "i" });
@@ -188,12 +189,11 @@ describe("Reconciliation workspace — desktop", () => {
     expect(resolve("keep_existing").title).toMatch(/Already kept by row 3/);
   });
 
-  it("Keep both on a row with a possible match needs the explicit acknowledgement and a category", () => {
+  it("Import as transaction on a row with a possible match needs the explicit acknowledgement and a category", () => {
     seedDraft();
     render(<ReconciliationWorkspace uid="u1" data={DATA} />);
     select("r2");
-    expect(resolve("import_new").disabled).toBe(true); // a possible match exists → Keep both, never a silent Import new
-    fireEvent.click(resolve("keep_both"));
+    openImportConfirm(); // the row's editor opens, then its import button asks for the rest
     const submit = screen.getByTestId("import-confirm-submit") as HTMLButtonElement;
     expect(submit.disabled).toBe(true);
     expect(screen.getByTestId("import-confirm").textContent).toMatch(/Needs the acknowledgement, a category/);
@@ -201,29 +201,29 @@ describe("Reconciliation workspace — desktop", () => {
     fireEvent.change(screen.getByLabelText("Category for import"), { target: { value: "Food" } });
     expect(submit.disabled).toBe(false);
     fireEvent.click(submit);
-    expect(within(rowEl("r2")).getByText("Keep both")).toBeTruthy();
-    expect(screen.getByTestId("financial-effect").textContent).toMatch(/adds 1 charge of ₹1,299\.00.*Existing FlowFi transactions stay unchanged/);
+    expect(within(rowEl("r2")).getByTestId("decision-chip").textContent).toBe("Keep both");
+    expect(JSON.parse(sessionStorage.getItem(`${DRAFT_KEY_PREFIX}u1`)!).decisions.r2).toMatchObject({ kind: "import_new", notSameAck: true, category: "Food" });
   });
 
-  it("N on a row with possible matches opens the Keep both confirmation instead of deciding", () => {
+  it("N on a row with possible matches opens the row's editor instead of deciding", () => {
     setViewport(1280);
     seedDraft();
     render(<ReconciliationWorkspace uid="u1" data={DATA} />);
     grid().focus();
     fireEvent.keyDown(grid(), { key: "n" });
-    expect(within(rowEl("r1")).getByText("Undecided")).toBeTruthy();
-    expect(screen.getByTestId("import-confirm").textContent).toMatch(/Keep both/);
+    expect(within(rowEl("r1")).getByTestId("decision-chip").dataset.pending).toBe("true");
+    expect(screen.getByTestId("import-as-transaction")).toBeTruthy();
   });
 
   it("D10: a row in a closed card bill can't be imported; one in the open cycle can", () => {
     seedDraft();
     render(<ReconciliationWorkspace uid="u1" data={DATA} />);
     select("r6");
-    expect(screen.getByTestId("dock-import-blocked").textContent).toMatch(/already closed/);
-    expect(resolve("import_new").disabled).toBe(true);
+    expect(resolve("import").disabled).toBe(true);
+    expect(resolve("import").textContent).toMatch(/already closed/);
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
     select("r7");
-    expect(screen.queryByTestId("dock-import-blocked")).toBeNull();
-    expect(resolve("import_new").disabled).toBe(false);
+    expect(resolve("import").disabled).toBe(false);
   });
 
   it("D11: an SMS waiting in the Inbox can be marked 'Handle in Inbox'", () => {
@@ -231,8 +231,8 @@ describe("Reconciliation workspace — desktop", () => {
     render(<ReconciliationWorkspace uid="u1" data={DATA} />);
     select("r5");
     expect(screen.getAllByTestId("existing-row").map((r) => r.dataset.role)).toEqual(["sms"]);
-    fireEvent.click(screen.getByTestId("resolve-inbox"));
-    expect(within(rowEl("r5")).getByText("Handle in Inbox")).toBeTruthy();
+    fireEvent.click(resolve("inbox"));
+    expect(within(rowEl("r5")).getByTestId("decision-chip").textContent).toBe("Handle in Inbox");
   });
 
   it("D5: bulk Keep existing covers only unique exact candidates, asks first, and can be undone", () => {
@@ -240,10 +240,10 @@ describe("Reconciliation workspace — desktop", () => {
     render(<ReconciliationWorkspace uid="u1" data={DATA} />);
     fireEvent.click(screen.getByRole("button", { name: /Keep existing for exact matches \(1\)/ }));
     fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Keep existing" }));
-    expect(within(rowEl("r1")).getByText("Keep existing")).toBeTruthy();
-    expect(within(rowEl("r3")).getByText("Undecided")).toBeTruthy();
+    expect(within(rowEl("r1")).getByTestId("decision-chip").textContent).toBe("Keep existing");
+    expect(within(rowEl("r3")).getByTestId("decision-chip").dataset.pending).toBe("true");
     fireEvent.click(screen.getByRole("button", { name: /Undo bulk keep \(1\)/ }));
-    expect(within(rowEl("r1")).getByText("Undecided")).toBeTruthy();
+    expect(within(rowEl("r1")).getByTestId("decision-chip").dataset.pending).toBe("true");
   });
 
   it("D6: editing an amount withdraws the decision and requires re-confirmation", () => {
@@ -254,15 +254,16 @@ describe("Reconciliation workspace — desktop", () => {
     const amount = screen.getByLabelText("Amount") as HTMLInputElement;
     fireEvent.change(amount, { target: { value: "452.50" } });
     fireEvent.blur(amount);
-    expect(within(rowEl("r1")).getByText("Undecided")).toBeTruthy();
+    expect(within(rowEl("r1")).getByTestId("decision-chip").dataset.pending).toBe("true");
     expect(within(rowEl("r1")).getByText("Edited — confirm values")).toBeTruthy();
-    select("r1");
-    expect(screen.getByTestId("dock-import-blocked").textContent).toMatch(/confirm the values/);
+    expect((screen.getByTestId("import-as-transaction") as HTMLButtonElement).disabled).toBe(true); // the editor's import waits for the confirmation
+    expect(screen.getByTestId("import-as-transaction").getAttribute("title")).toMatch(/confirm the values/);
     fireEvent.click(screen.getByRole("button", { name: /Values are correct/ }));
+    expect((screen.getByTestId("import-as-transaction") as HTMLButtonElement).disabled).toBe(false);
     expect(within(rowEl("r1")).queryByText("Edited — confirm values")).toBeNull();
     // Undo can't bring back the Keep existing the edit withdrew — it was made against the old amount.
     fireEvent.click(screen.getByTestId("undo-decision"));
-    expect(within(rowEl("r1")).getByText("Undecided")).toBeTruthy();
+    expect(within(rowEl("r1")).getByTestId("decision-chip").dataset.pending).toBe("true");
     expect(screen.getByTestId("undo-notice").textContent).toMatch(/changed since/);
     // Saved draft follows along — and never contains the raw statement text field.
     const saved = sessionStorage.getItem(`${DRAFT_KEY_PREFIX}u1`)!;
@@ -273,9 +274,14 @@ describe("Reconciliation workspace — desktop", () => {
   it("filters and search narrow the statement sheet", () => {
     seedDraft();
     render(<ReconciliationWorkspace uid="u1" data={DATA} />);
-    fireEvent.click(screen.getByRole("button", { name: /^Multiple/ }));
+    // Filters live in one compact menu; the toolbar's status chips are quick filters.
+    fireEvent.click(screen.getByTestId("filter-menu"));
+    fireEvent.click(screen.getByRole("radio", { name: /^Multiple candidates/ }));
     expect(screen.getAllByTestId("recon-row").map((r) => r.dataset.rowId)).toEqual(["r3", "r4"]);
-    fireEvent.click(screen.getByRole("button", { name: /^All/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Show all rows" }));
+    fireEvent.click(screen.getByTestId("status-possible"));
+    expect(screen.getAllByTestId("recon-row").map((r) => r.dataset.rowId)).toEqual(["r1", "r2", "r3", "r4", "r5"]);
+    fireEvent.click(screen.getByTestId("status-possible"));
     fireEvent.change(screen.getByLabelText("Search rows"), { target: { value: "1,299" } });
     expect(screen.getAllByTestId("recon-row").map((r) => r.dataset.rowId)).toEqual(["r2"]);
   });
@@ -285,12 +291,27 @@ describe("Reconciliation workspace — desktop", () => {
     fireEvent.change(screen.getByLabelText("Statement rows"), { target: { value: "24/10/2026  SWIGGY BANGALORE  452.00\n24/10/2026  NETFLIX COM  649.00" } });
     fireEvent.click(screen.getByRole("button", { name: "Compare rows" }));
     expect(screen.getByTestId("choose-account")).toBeTruthy();
-    expect(screen.getAllByTestId("recon-row").every((r) => r.dataset.state === "pending")).toBe(true);
-    expect(screen.getByTestId("existing-empty").textContent).toMatch(/Choose the statement account/);
+    // Nothing is compared: every row is "Account missing", with cross-account evidence only.
+    expect(screen.getAllByTestId("recon-row").every((r) => r.dataset.state === "pending" && r.dataset.accountMissing === "true")).toBe(true);
+    expect(screen.getByTestId("existing-hints-note").textContent).toMatch(/Account not verified/);
+    expect(screen.getAllByTestId("existing-hint-row").map((r) => r.dataset.accountId)).toEqual(["acc-card"]);
+    expect(screen.queryAllByTestId("existing-row")).toHaveLength(0);
     expect(screen.queryByTestId("resolution-dock")).toBeNull();
+    // A row with nothing similar anywhere still says to choose the account.
+    fireEvent.click(screen.getAllByTestId("recon-row")[1]);
+    expect(screen.getAllByTestId("existing-hint-row").map((r) => r.dataset.accountId)).toEqual(["acc-bank"]);
     const saved = sessionStorage.getItem(`${DRAFT_KEY_PREFIX}u1`)!;
     expect(saved).toContain("SWIGGY BANGALORE");
     expect(saved).not.toContain("24/10/2026  SWIGGY"); // the raw pasted line itself is never kept
+    // "Use account" is the user's explicit choice — then the real (single-account) matcher runs.
+    fireEvent.click(screen.getAllByTestId("recon-row")[0]);
+    fireEvent.click(screen.getByTestId("use-hint-account"));
+    expect(screen.getByTestId("selected-account").textContent).toMatch(/HDFC Millennia/);
+    expect(screen.getAllByTestId("recon-row").map((r) => r.dataset.state)).toEqual(["exact_candidate", "no_match"]);
+    // A similar transaction on ANOTHER account is listed as "not compared" — never a candidate.
+    fireEvent.click(screen.getAllByTestId("recon-row")[1]);
+    expect(screen.getByTestId("existing-other-accounts").textContent).toMatch(/Other accounts — not compared \(1\)/);
+    expect(screen.getAllByTestId("existing-hint-row").map((r) => r.dataset.recordId)).toEqual(["t-bank"]);
   });
 
   it("Discard removes the draft from this tab", () => {
@@ -352,7 +373,7 @@ describe("Reconciliation workspace — row bottom sheet", () => {
     fireEvent.doubleClick(rowEl("r2"));
     fireEvent.click(within(sheet()!).getByRole("button", { name: "Close row details" }));
     expect(sheet()).toBeNull();
-    for (const id of ["r2", "r3", "r4"]) expect(within(rowEl(id)).getByText("Undecided")).toBeTruthy();
+    for (const id of ["r2", "r3", "r4"]) expect(within(rowEl(id)).getByTestId("decision-chip").dataset.pending).toBe("true");
     expect(sessionStorage.getItem(`${DRAFT_KEY_PREFIX}u1`)).toBe(savedBefore);
   });
 

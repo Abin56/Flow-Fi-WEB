@@ -6,6 +6,7 @@
  */
 import { scenario } from "../lib/core.mjs";
 import * as h from "../lib/harness.mjs";
+import { sameDayIso } from "../lib/inbox-days.mjs";
 import { BASE_URL, FIRESTORE_DOCS } from "../lib/env.mjs";
 
 const OWNER = { Authorization: "Bearer owner", "Content-Type": "application/json" };
@@ -15,12 +16,13 @@ const s = (v) => ({ stringValue: v });
 const n = (v) => ({ doubleValue: v });
 const nul = { nullValue: null };
 
+// The Inbox is browsed one day at a time: `daysAgo` is now how many MINUTES older than the newest candidate (all on one day), so every row is on screen and the old newest-first order is kept.
 async function putCandidate(uid, { id, amount, merchant, accountId, daysAgo, direction = "debit", rawLastFour = null, confidenceLevel = "high", needsReview = false, reasons = [] }) {
   const fields = {
     amount: n(amount),
     direction: s(direction),
     eventType: s("upiPayment"),
-    transactionDate: { timestampValue: new Date(Date.now() - daysAgo * DAY).toISOString() },
+    transactionDate: { timestampValue: sameDayIso(daysAgo) },
     merchant: merchant ? s(merchant) : nul,
     bankName: s("QA Bank"),
     rawLastFour: rawLastFour ? s(rawLastFour) : nul,
@@ -247,7 +249,7 @@ scenario("sms-11-account-evidence-suggestions-duplicate", "Account evidence: a u
   d = await openDrawerFor(page, "Chaayos");
   const cs = d.getByTestId("category-suggestions");
   await cs.waitFor({ timeout: 10000 });
-  chk("the earlier choice is suggested with how often it was used", /Food/.test(await cs.innerText()) && /used 2 of 2 earlier/.test(await cs.innerText()), await cs.innerText());
+  chk("the earlier choice is suggested with how often it was used", /Food/.test(await cs.innerText()) && /2×/.test(await cs.innerText()), await cs.innerText());
   chk("it is NOT applied automatically: the Category field still shows its placeholder", /Select a category/.test(await d.getByRole("combobox").nth(0).innerText()));
   await h.shot(page, "sms-11-category-suggestion");
   await cs.getByRole("button", { name: /Food/ }).click();

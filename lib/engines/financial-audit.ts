@@ -60,7 +60,8 @@ export type FindingCategory =
   | "transfer-integrity"
   | "duplicate-movement"
   | "orphan-account-link"
-  | "earlier-payment-link";
+  | "earlier-payment-link"
+  | "orphan-share-settlement";
 
 export interface Proposal {
   /** What a correction would look like. Never applied by the audit. */
@@ -507,6 +508,33 @@ export function runFinancialAudit(input: AuditInput, now: Date = new Date()): Au
         proposal: { summary: "Decision needed; no automatic action.", accountId: t.accountId, balanceDelta: null, needsDecision: true },
       });
     }
+  }
+
+  // ---------------------------------------------------------------- 6b. Person repayments of an installment that no longer exists
+  // A person's SHARE of an EMI / Loan is derived from the installment, but their REPAYMENT is a stored ledger entry (and a real
+  // cash leg). If the agreement was removed while the repayment stayed — by another client, a direct write, or a deletion made
+  // before the delete guard existed — the share (receivable) disappears and the repayment remains, so the person reads as
+  // "I owe them". Detection only; correcting it is a user decision (revert the repayment, or keep it as a general payment).
+  const liveInstallmentIds = new Set(input.installments.filter((i) => i.deletedAt == null).map((i) => i.id));
+  const pName = new Map(input.people.map((p) => [p.id, p.name]));
+  for (const e of liveEntries) {
+    const m = /^(emi|loan)-inst:(.+)$/.exec(e.obligationRef ?? "");
+    if (m == null || e.sourceKind !== (m[1] === "emi" ? "emiInstallment" : "loanInstallment")) continue;
+    if (liveInstallmentIds.has(m[2])) continue;
+    add({
+      id: `orphan-share-settlement:${e.id}`,
+      category: "orphan-share-settlement",
+      status: "confirmed",
+      confidence: "high",
+      title: `Repayment from ${pName.get(e.personId) ?? e.personId} for a ${m[1] === "emi" ? "EMI" : "Loan"} installment that no longer exists`,
+      reason: `A ${e.amount.toFixed(2)} repayment is still recorded against installment ${m[2]}, but that installment (and its agreement) is gone. The share they owed vanished while the repayment stayed, so their balance can read as "I owe them".`,
+      date: e.date,
+      amount: e.amount,
+      accountId: null,
+      accountName: null,
+      refs: [{ kind: "ledgerEntry", id: e.id }, { kind: "person", id: e.personId }],
+      proposal: { summary: "Decision needed: revert the repayment in People, or keep it as a general payment. No automatic action.", accountId: null, balanceDelta: null, needsDecision: true },
+    });
   }
 
   // ---------------------------------------------------------------- 7. People receipts ↔ cash legs

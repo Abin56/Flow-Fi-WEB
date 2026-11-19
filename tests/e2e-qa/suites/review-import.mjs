@@ -10,6 +10,7 @@
  */
 import { scenario } from "../lib/core.mjs";
 import * as h from "../lib/harness.mjs";
+import { choose, menuItem, openImportConfirm, pressOnGrid } from "../lib/recon.mjs";
 
 const day = (offset) => new Date(Date.now() + offset * 86400000);
 const ddmmyyyy = (offset) => {
@@ -205,9 +206,8 @@ scenario("rimp-flow", "Capture → Review & Import: OCR checks, exact/near/repea
   chk("nothing was decided automatically", (await reconRows(page)).every((r) => r.decision === ""));
   // Near match: the user decides — Same transaction (Keep existing → skipped at import), side by side in the dock.
   await page.locator(`[data-testid="recon-row"][data-row-id="${cafe.id}"]`).click();
-  const dock = page.getByTestId("resolution-dock");
-  chk("the dock compares the cafe row with FlowFi's ₹100.70 side by side", /100\.70/.test(await dock.innerText()));
-  await dock.getByTestId("resolve-keep_existing").click();
+  chk("the right sheet lists FlowFi's ₹100.70 for the cafe row", /100\.70/.test(await page.getByTestId("existing-sheet").innerText()));
+  await choose(page, "keep_existing");
   // Exact: bulk Keep existing (confirmed).
   await page.getByRole("button", { name: /Keep existing for exact matches/ }).click();
   await page.getByRole("alertdialog").getByRole("button", { name: "Keep existing" }).click().catch(async () => page.getByRole("dialog").getByRole("button", { name: "Keep existing" }).click());
@@ -228,7 +228,7 @@ scenario("rimp-flow", "Capture → Review & Import: OCR checks, exact/near/repea
   // The credit: its own decision (Skip here — a credit is never bulk-imported or assumed).
   const refund = (await reconRows(page)).find((r) => /REFUND/.test(r.desc));
   await page.locator(`[data-testid="recon-row"][data-row-id="${refund.id}"]`).click();
-  await page.getByTestId("resolution-dock").getByTestId("resolve-skip").click();
+  await pressOnGrid(page, "i");
 
   rows = await reconRows(page);
   notes.push(`decisions: ${JSON.stringify(rows.map((r) => [r.desc, r.decision]))}`);

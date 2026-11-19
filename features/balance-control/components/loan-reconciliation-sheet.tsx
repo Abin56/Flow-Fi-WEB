@@ -149,7 +149,7 @@ function CauseDetail({ cause, agreementId, ready, cardLinkedName, emiCase }: { c
   const { resolution, impact } = cause;
   const href = handoffHref(agreementId, resolution);
   const pastHref = resolution.kind === "recordPayment" && resolution.view === "pay" ? handoffHref(agreementId, { ...resolution, view: "past" }) : null;
-  const linkClass = "inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:underline";
+  const linkClass = "inline-flex items-center gap-1.5 text-sm font-medium text-primary-accent-text hover:underline";
   return (
     <section data-testid="loan-cause-detail" className="flex flex-col gap-3">
       <h3 className="text-sm font-semibold text-foreground">{cause.label}</h3>

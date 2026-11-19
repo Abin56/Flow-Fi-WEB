@@ -46,9 +46,9 @@ export function ForecastCard({ title, description, data, format, className }: Fo
             <Line
               type="monotone"
               dataKey="actual"
-              stroke="var(--primary)"
+              stroke="var(--chart-1)"
               strokeWidth={2}
-              dot={{ r: 4, fill: "var(--primary)", strokeWidth: 2, stroke: "var(--card)" }}
+              dot={{ r: 4, fill: "var(--chart-1)", strokeWidth: 2, stroke: "var(--card)" }}
               connectNulls={false}
               name="Actual"
             />

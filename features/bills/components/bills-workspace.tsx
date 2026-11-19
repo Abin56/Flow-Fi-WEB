@@ -14,15 +14,12 @@ import {
   EmptyState,
   FormDialog,
   SectionLabel,
-  SmartToolbar,
 } from "@/components/finance";
 import { ScrollNav } from "@/components/layout/scroll-nav";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAccounts } from "@/hooks/use-accounts";
 import { useCategories } from "@/hooks/use-categories";
-import { formatCurrency } from "@/lib/format";
-import { billObligationStats, outstandingBillOccurrences } from "@/lib/engines/bill-obligations";
 import { billOccurrenceStatus, billOccurrenceRemainingAmount, type Bill, type BillOccurrence, type BillRecurrence, type PaymentRecord } from "@/lib/models/bill";
 import { BillPaymentDialog } from "@/features/bills/components/bill-payment-dialog";
 import { BillPaymentCancelDialog, type CancelTarget } from "@/features/bills/components/bill-payment-cancel-dialog";
@@ -31,7 +28,11 @@ import type { Account } from "@/lib/models/account";
 import type { Category } from "@/lib/models/category";
 import { Receipt } from "lucide-react";
 import { BillCard, RECURRENCE_LABEL } from "@/features/bills/components/bill-card";
-import { UpcomingDuesSection } from "@/features/bills/components/upcoming-dues-section";
+import { BillsCycleSwitcher } from "@/features/bills/components/bills-cycle-switcher";
+import { BillsPaymentList } from "@/features/bills/components/bills-payment-list";
+import { BillsSummary } from "@/features/bills/components/bills-summary";
+import { useBillsOverview } from "@/features/bills/hooks/use-bills-overview";
+import type { ObligationItem } from "@/features/my-money/lib/my-money";
 import { useBillActions, useBillRows, type BillRow } from "@/features/bills/hooks/use-bills-data";
 import { Banner } from "@/components/feedback/banner";
 import { dayToDate, toDay } from "@/features/bills/lib/bill-form-date";
@@ -84,6 +85,8 @@ function formFromBill(bill: Bill): BillFormState {
 
 export function BillsWorkspace() {
   const { rows, cycles, isLoading, refreshOccurrences } = useBillRows();
+  const overview = useBillsOverview({ billRows: rows, billCycles: cycles, billsLoading: isLoading });
+  const [tab, setTab] = useState<"payments" | "bills">("payments");
   const actions = useBillActions();
   const { data: accounts = [] } = useAccounts();
   const { data: categories = [] } = useCategories();
@@ -158,15 +161,6 @@ export function BillsWorkspace() {
       setCancelling(false);
     }
   }, [actions, activeBillId, cancelTarget, cancelling]);
-
-  // Occurrence-level: every unpaid / part-paid cycle counts once, including an older cycle reopened by a cancelled
-  // payment — the same figures Month Cycle uses (`lib/engines/bill-obligations.ts`). "Paid" is still per bill (its current cycle).
-  const stats = useMemo(() => {
-    const now = new Date();
-    const obligations = billObligationStats(outstandingBillOccurrences(cycles, now), now);
-    const paidCount = rows.filter(({ occurrence }) => occurrence && billOccurrenceStatus(occurrence, now) === "paid").length;
-    return { ...obligations, paidCount };
-  }, [rows, cycles]);
 
   // Read-only duplicate-cycle detection (`lib/engines/bill-duplicate-cycles.ts`) — same "same bill, same due calendar
   // day" grouping `BillPaymentRepository` uses to BLOCK a payment. Payments aren't loaded here (every payment of
@@ -297,6 +291,25 @@ export function BillsWorkspace() {
     void refreshOccurrences();
   }
 
+  /** A Payments-list row (or paid group) for a regular bill opens the same detail panel a bill card does. */
+  function openBillById(billId: string) {
+    const row = rows.find((r) => r.bill.id === billId);
+    if (row) openRow(row);
+  }
+
+  /**
+   * "Pay now" on a Payments row: the existing Pay dialog, aimed at that row's EXACT cycle (an older cycle reopened by a
+   * cancelled payment included), never "whatever the bill's latest cycle is". Same atomic, idempotent write as every
+   * other bill payment — this adds no payment path of its own.
+   */
+  function payBillObligation(item: ObligationItem) {
+    const row = rows.find((r) => r.bill.id === item.sourceId);
+    const occurrence = cycles.find((c) => c.occurrence.id === item.occurrenceId)?.occurrence ?? row?.occurrence ?? null;
+    if (!row || !occurrence) return;
+    setActiveRow(row);
+    openPay(null, occurrence);
+  }
+
   if (isLoading) {
     return (
       <div className="flex flex-col gap-6 px-1">
@@ -316,66 +329,95 @@ export function BillsWorkspace() {
   }
 
   return (
-    <div className="flex flex-col gap-6 px-1">
-      <SmartToolbar
-        left={
+    <div className="flex flex-col gap-5 px-1">
+      <header className="flex flex-wrap items-end justify-between gap-3">
+        <div className="min-w-0">
           <div className="flex items-baseline gap-2">
-            <h1 className="font-heading text-xl font-semibold tracking-tight text-foreground">Bills</h1>
+            <h1 className="font-heading text-2xl font-bold tracking-tight text-foreground sm:text-[1.75rem]">Bills</h1>
             <span className="text-sm text-muted-foreground">{rows.length} bills</span>
           </div>
-        }
-        actions={
-          <div className="flex items-center gap-2">
-            {duplicateGroups.length > 0 && (
-              <ClayButton size="sm" variant="secondary" onClick={() => setDuplicatesOpen(true)} className="gap-1.5 text-warning-foreground">
-                <AlertTriangle className="size-3.5" />
-                {duplicateGroups.length} duplicate cycle{duplicateGroups.length > 1 ? "s" : ""}
-              </ClayButton>
-            )}
-            <ClayButton size="sm" onClick={openAdd} className="gap-1.5">
-              <Plus className="size-3.5" />
-              Add Bill
+          <p className="mt-0.5 text-sm text-foreground/70">What you need to pay, what is overdue and what is due next — bills, loans, EMIs and card bills in one place.</p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <BillsCycleSwitcher
+            nav={overview.nav}
+            periodLabel={overview.periodLabel}
+            rangeLabel={overview.rangeLabel}
+            isCustomCycle={overview.isCustomCycle}
+            isCurrent={overview.isCurrent}
+            startDay={overview.startDay}
+            selectedEnd={overview.cycleRange.end}
+          />
+          {duplicateGroups.length > 0 && (
+            <ClayButton size="sm" variant="secondary" onClick={() => setDuplicatesOpen(true)} className="gap-1.5 text-warning-foreground">
+              <AlertTriangle className="size-3.5" />
+              {duplicateGroups.length} duplicate cycle{duplicateGroups.length > 1 ? "s" : ""}
             </ClayButton>
-          </div>
-        }
-      />
+          )}
+          <ClayButton size="sm" onClick={openAdd} className="gap-1.5">
+            <Plus className="size-3.5" />
+            Add Bill
+          </ClayButton>
+        </div>
+      </header>
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <div className="flex flex-col gap-2 rounded-3xl border border-border/50 bg-card p-4">
-          <p className="text-xs font-medium text-muted-foreground">Bills Due This Month</p>
-          <p className="font-mono text-xl font-semibold tabular-nums text-foreground">{formatCurrency(stats.dueThisMonth)}</p>
-        </div>
-        <div className="flex flex-col gap-2 rounded-3xl border border-expense/20 bg-expense/8 p-4">
-          <p className="text-xs font-medium text-muted-foreground">Overdue</p>
-          <p className="font-mono text-xl font-semibold tabular-nums text-expense">{stats.overdueCount}</p>
-          {stats.overdueCount > 0 && <p className="font-mono text-xs tabular-nums text-expense">{formatCurrency(stats.overdueAmount)} outstanding</p>}
-        </div>
-        <div className="flex flex-col gap-2 rounded-3xl border border-success/20 bg-success/8 p-4">
-          <p className="text-xs font-medium text-muted-foreground">Paid</p>
-          <p className="font-mono text-xl font-semibold tabular-nums text-success">{stats.paidCount}</p>
-        </div>
-        <div className="flex flex-col gap-2 rounded-3xl border border-primary/20 bg-primary/8 p-4">
-          <p className="text-xs font-medium text-muted-foreground">Upcoming</p>
-          <p className="font-mono text-xl font-semibold tabular-nums text-primary-accent-text">{stats.upcomingCount}</p>
-        </div>
+      <div role="tablist" aria-label="Bills views" className="flex items-center gap-1 self-start rounded-[9px] border border-border-strong/60 bg-card p-0.5">
+        {(
+          [
+            ["payments", "Payments"],
+            ["bills", `My bills (${rows.length})`],
+          ] as const
+        ).map(([value, label]) => (
+          <button
+            key={value}
+            type="button"
+            role="tab"
+            id={`bills-tab-${value}`}
+            aria-selected={tab === value}
+            aria-controls={`bills-panel-${value}`}
+            onClick={() => setTab(value)}
+            className={cn(
+              "h-8 rounded-[7px] px-3 text-xs font-semibold transition-colors focus-visible:ring-2 focus-visible:ring-primary-accent-text focus-visible:outline-none",
+              tab === value ? "bg-primary text-primary-foreground" : "text-foreground/75 hover:bg-secondary",
+            )}
+          >
+            {label}
+          </button>
+        ))}
       </div>
 
-      <UpcomingDuesSection />
-
-      {rows.length === 0 ? (
-        <EmptyState
-          icon={Receipt}
-          title="No bills yet"
-          description="Add a recurring or one-time bill to start tracking due dates and payments."
-          actionLabel="Add Bill"
-          onAction={openAdd}
-        />
+      {tab === "payments" ? (
+        <div role="tabpanel" id="bills-panel-payments" aria-labelledby="bills-tab-payments" className="flex flex-col gap-5">
+          {overview.isLoading ? (
+            <div className="flex flex-col gap-3" aria-busy="true">
+              <Skeleton className="h-28 rounded-[14px]" />
+              <Skeleton className="h-64 rounded-[14px]" />
+            </div>
+          ) : (
+            <>
+              <BillsSummary data={overview} />
+              <BillsPaymentList data={overview} handlers={{ onOpenBill: openBillById, onPayBill: payBillObligation }} />
+            </>
+          )}
+        </div>
       ) : (
-        <Stagger className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
-          {rows.map((row) => (
-            <BillCard key={row.bill.id} row={row} onClick={() => openRow(row)} />
-          ))}
-        </Stagger>
+        <div role="tabpanel" id="bills-panel-bills" aria-labelledby="bills-tab-bills">
+          {rows.length === 0 ? (
+            <EmptyState
+              icon={Receipt}
+              title="No bills yet"
+              description="Add a recurring or one-time bill to start tracking due dates and payments."
+              actionLabel="Add Bill"
+              onAction={openAdd}
+            />
+          ) : (
+            <Stagger className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+              {rows.map((row) => (
+                <BillCard key={row.bill.id} row={row} onClick={() => openRow(row)} />
+              ))}
+            </Stagger>
+          )}
+        </div>
       )}
 
       <DetailDrawer
@@ -483,7 +525,7 @@ export function BillsWorkspace() {
           })()}
       </DetailDrawer>
 
-      {activeRow?.occurrence && (
+      {activeRow && (payOccurrence ?? activeRow.occurrence) && (
         <BillPaymentDialog
           open={payOpen}
           onOpenChange={(o) => {
@@ -495,7 +537,7 @@ export function BillsWorkspace() {
             }
           }}
           bill={activeRow.bill}
-          occurrence={payOccurrence ?? activeRow.occurrence}
+          occurrence={(payOccurrence ?? activeRow.occurrence)!}
           editing={editingPayment}
         />
       )}

@@ -14,7 +14,7 @@ import { EmptyState } from "@/components/finance";
 import type { ReportsData } from "@/features/reports/hooks/use-reports-data";
 import { formatCurrency, formatCurrencyCompact } from "@/lib/format";
 
-const SLICE_COLORS = ["var(--primary)", "var(--purple)", "var(--success)", "var(--chart-2)", "var(--warning)", "var(--chart-3)", "var(--chart-4)"];
+const SLICE_COLORS = ["var(--chart-1)", "var(--purple)", "var(--success)", "var(--chart-2)", "var(--warning)", "var(--chart-3)", "var(--chart-4)"];
 
 export function SpendingTab({ data }: { data: ReportsData }) {
   const { categorySpending, spendingHeatmap } = data;

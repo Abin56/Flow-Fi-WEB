@@ -1,7 +1,8 @@
 "use client";
 
 /**
- * The spine between the two sheets: drag (or ←/→, Home/End when focused) to change how much room each sheet gets.
+ * The spine between the two sheets: drag (or ←/→, Home/End when focused) to change how much room each sheet gets;
+ * double-click (or = when focused) returns to an even 50/50 split.
  * The split is a per-viewer convenience only — kept in localStorage, and the page works the same without it.
  * The spine also carries the link between the sheets: how many FlowFi transactions could be the selected row.
  */
@@ -16,19 +17,21 @@ export const SPLIT_MAX = 65;
 const SPLIT_DEFAULT = 56;
 const STORAGE_KEY = "flowfi.recon.split";
 /** Each sheet keeps a readable width whatever the window: the statement's description, FlowFi's merchant. */
-const STATEMENT_MIN_PX = 480;
-const EXISTING_MIN_PX = 400;
+const STATEMENT_MIN_PX = 440;
+const EXISTING_MIN_PX = 340;
+/** The balanced layout double-click (or =) returns to. */
+export const SPLIT_BALANCED = 50;
 
 export interface SplitBounds {
   min: number;
   max: number;
 }
 
-/** The split range for a container this many px wide: pixel minimums, turned into percentages, within 30–70%. */
+/** The split range for a container this many px wide: pixel minimums, turned into percentages, within 25–75%. */
 export function splitBounds(width: number): SplitBounds {
   if (!(width > 0)) return { min: SPLIT_MIN, max: SPLIT_MAX };
-  const min = Math.max(30, Math.ceil((STATEMENT_MIN_PX / width) * 100));
-  const max = Math.min(70, Math.floor(100 - (EXISTING_MIN_PX / width) * 100));
+  const min = Math.max(25, Math.ceil((STATEMENT_MIN_PX / width) * 100));
+  const max = Math.min(75, Math.floor(100 - (EXISTING_MIN_PX / width) * 100));
   return min <= max ? { min, max } : { min: 50, max: 50 };
 }
 
@@ -107,9 +110,12 @@ export function SheetDivider({ split, onSplit, bounds, containerRef, linkCount }
           setActive(false);
           e.currentTarget.releasePointerCapture?.(e.pointerId);
         }}
+        onDoubleClick={() => onSplit(SPLIT_BALANCED)}
+        title="Drag to resize · double-click for 50/50"
         onKeyDown={(e) => {
           const step = e.shiftKey ? 10 : 4;
-          if (e.key === "ArrowLeft") onSplit(split - step);
+          if (e.key === "=" || e.key === "0") onSplit(SPLIT_BALANCED);
+          else if (e.key === "ArrowLeft") onSplit(split - step);
           else if (e.key === "ArrowRight") onSplit(split + step);
           else if (e.key === "Home") onSplit(bounds.min);
           else if (e.key === "End") onSplit(bounds.max);

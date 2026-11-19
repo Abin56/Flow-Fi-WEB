@@ -12,34 +12,37 @@ import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
-export type ReconFilter = "all" | "open" | "exact" | "near" | "multiple" | "no_match" | "in_inbox" | "conflict" | "imported" | "decided" | "excluded";
+export type ReconFilter = "all" | "open" | "possible" | "exact" | "near" | "multiple" | "no_match" | "in_inbox" | "conflict" | "imported" | "decided" | "excluded";
 export type ReconSort = "statement" | "date" | "amount" | "attention";
 
 export const FILTER_LABEL: Record<ReconFilter, string> = {
   all: "All",
-  open: "Needs decision",
-  exact: "Exact",
-  near: "Near",
-  multiple: "Multiple",
+  open: "Pending",
+  possible: "Possible matches",
+  exact: "Exact match",
+  near: "Similar amount or date",
+  multiple: "Multiple candidates",
   no_match: "No match",
   in_inbox: "In Inbox",
-  conflict: "Needs review",
+  conflict: "Conflicts",
   imported: "Imported",
-  decided: "Decided",
+  decided: "Reviewed",
   excluded: "Excluded",
 };
 
-const FILTER_HINT: Partial<Record<ReconFilter, string>> = {
+export const FILTER_HINT: Partial<Record<ReconFilter, string>> = {
   open: "Rows without a final decision yet — including “Review later”.",
-  exact: "Possible match with the same amount and day.",
-  near: "Possible match where the amount or date differs slightly.",
+  possible: "Any row with a FlowFi transaction that could be the same one (exact or similar).",
+  decided: "Rows you have made a valid decision for.",
+  exact: "Same account, amount and day as one FlowFi transaction.",
+  near: "A FlowFi transaction where the amount or date differs slightly.",
   no_match: "Nothing similar on this account.",
   excluded: "Left out in Smart Capture — never compared or imported.",
 };
 
-const SORT_LABEL: Record<ReconSort, string> = { statement: "Statement order", date: "Date", amount: "Amount (high → low)", attention: "Needs attention first" };
+export const SORT_LABEL: Record<ReconSort, string> = { statement: "Statement order", date: "Date", amount: "Amount (high → low)", attention: "Needs attention first" };
 
-const SHORTCUTS: { keys: string; does: string }[] = [
+export const SHORTCUTS: { keys: string; does: string }[] = [
   { keys: "J / K  or  ↓ / ↑", does: "Move within a sheet" },
   { keys: "→ / ←", does: "Switch sheet (statement ⇄ FlowFi)" },
   { keys: "U", does: "Jump to the next undecided row" },
@@ -52,6 +55,7 @@ const SHORTCUTS: { keys: string; does: string }[] = [
   { keys: "?", does: "Review later" },
   { keys: "Z", does: "Undo the last draft decision" },
   { keys: "D", does: "Show / hide the field comparison" },
+  { keys: "=", does: "Divider focused: back to a 50/50 split" },
   { keys: "F", does: "Focus Mode on / off" },
   { keys: "Esc", does: "Leave Focus Mode (outside the sheets)" },
 ];
@@ -84,7 +88,7 @@ export function ReconToolbar({
   undoCount: number;
   onUndo: () => void;
 }) {
-  const filters = (Object.keys(FILTER_LABEL) as ReconFilter[]).filter((f) => f === "all" || f === "open" || counts[f] > 0);
+  const filters = (Object.keys(FILTER_LABEL) as ReconFilter[]).filter((f) => f !== "possible" && (f === "all" || f === "open" || counts[f] > 0));
   return (
     <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5" data-testid="recon-toolbar">
       <div className="order-1 flex w-full flex-wrap items-center gap-2 lg:order-none lg:ml-auto lg:w-auto">

@@ -1,15 +1,33 @@
 /**
  * Money and calendar-day comparison for reconciliation — integer paise (no float drift) and IST calendar days.
  *
- * Amount bands (D4) are ADVISORY: a ₹0.02 or ₹1.00 difference makes a record a *possible* match to show the user,
- * never a rounded or merged value. Nothing here changes an amount.
+ * Amount bands (D4) are ADVISORY: a ₹0.02, ₹1.00 or ₹2.00 difference makes a record a *possible* match to show the
+ * user, never a rounded or merged value. Nothing here changes an amount.
+ *
+ * The "approx" band (2026-11-18) catches typing slips and rounded manual entries — a ₹298 statement line that was
+ * entered by hand as ₹300. It is deliberately narrow (2% of the amount, at least ₹2, at most ₹50 and never more than
+ * 10% of the amount) and the matcher only accepts it with supporting evidence (see match-engine.ts). It can never make
+ * an "exact" match.
  */
 
 import type { AmountBand } from "./types";
 
 export const PAISE_BAND_MAX = 10; // ₹0.10
 export const ROUNDING_BAND_MAX = 100; // ₹1.00
+/** Approximate band: a share of the larger amount, floored and capped (paise). */
+export const APPROX_BAND_PERCENT = 2;
+export const APPROX_BAND_FLOOR = 200; // ₹2.00
+export const APPROX_BAND_CAP = 5000; // ₹50.00
+/** …and never more than this share of the amount, so a ₹12 line never "matches" a ₹14 one. */
+export const APPROX_BAND_MAX_SHARE = 10;
 export const DATE_WINDOW_DAYS = 3;
+
+/** The widest difference (paise) the approx band allows for amounts of this size. */
+export function approxTolerance(aPaise: number, bPaise: number): number {
+  const larger = Math.max(Math.abs(aPaise), Math.abs(bPaise));
+  const share = Math.max(APPROX_BAND_FLOOR, Math.round((larger * APPROX_BAND_PERCENT) / 100));
+  return Math.max(ROUNDING_BAND_MAX, Math.min(APPROX_BAND_CAP, share, Math.floor((larger * APPROX_BAND_MAX_SHARE) / 100)));
+}
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** India Standard Time has no daylight saving — a fixed +05:30. */
@@ -19,13 +37,19 @@ export function toPaise(amount: number): number {
   return Math.round(amount * 100);
 }
 
-/** The band two amounts fall in, or null when they're more than ₹1.00 apart (not a candidate). */
+/** The band two amounts fall in, or null when they're further apart than the approx band allows (not a candidate). */
 export function amountBand(aPaise: number, bPaise: number): AmountBand | null {
   const diff = Math.abs(aPaise - bPaise);
   if (diff === 0) return "exact";
   if (diff <= PAISE_BAND_MAX) return "paise";
   if (diff <= ROUNDING_BAND_MAX) return "rounding";
+  if (diff <= approxTolerance(aPaise, bPaise)) return "approx";
   return null;
+}
+
+/** "₹2.00" — the plain size of a paise difference. */
+export function formatPaise(paise: number): string {
+  return `₹${(Math.abs(paise) / 100).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 /**

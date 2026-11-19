@@ -28,7 +28,6 @@ import { useSpendTransactions, withBuiltInChargeCategory } from "@/hooks/use-len
 import { useTransactions } from "@/hooks/use-transactions";
 import { useAllBillOccurrences } from "@/features/bills/hooks/use-bill-occurrence-history";
 import { useBillRows } from "@/features/bills/hooks/use-bills-data";
-import { billObligationsInCycle, outstandingBillOccurrences } from "@/lib/engines/bill-obligations";
 import { useBillPayments } from "@/features/history/hooks/use-history-payment-sources";
 import { useEmiRows } from "@/features/emi/hooks/use-emi-data";
 import { useLoanRows } from "@/features/loans/hooks/use-loans-data";
@@ -36,31 +35,18 @@ import { usePeopleLedgerEntries, usePeopleRows } from "@/features/people/hooks/u
 import { usePeopleCycleStatements } from "@/features/people/hooks/use-person-cycle-statement";
 import { attentionItems, openRemainingByKey, useAllPersonFollowUps } from "@/features/people/hooks/use-person-follow-ups";
 import { useMonthCycleStartDay } from "@/features/settings/hooks/use-user-preferences";
-import { cardBillsDueInCycle, cardBillsForCard } from "@/lib/engines/card-cycle-bills";
-import { emiPurchaseRepresentedOnCard } from "@/lib/engines/credit-utilization";
-import { hasOwnershipShares } from "@/lib/engines/debt-ownership";
-import { linkedPeopleForCard, linkedPeopleForInstallments, peopleLedgerHref } from "@/lib/engines/linked-people-readiness";
-import { loanCycleDues } from "@/lib/engines/loan-cycle-dues";
+import { peopleLedgerHref } from "@/lib/engines/linked-people-readiness";
 import { adjacentCycleRange, cycleRangeFor, cycleRangeForMonth, isInCycle, mySpendBucketDate } from "@/lib/engines/month-cycle-range";
 import { mySpendRows, summarizeMySpend } from "@/lib/engines/my-spend";
 import type { PersonCycleStatement, StatementCategory, StatementCycle } from "@/lib/engines/person-cycle-statement";
 import { peopleDirectionSides } from "@/lib/engines/person-position";
-import { isCardBillPaymentLeg } from "@/lib/repositories/credit-card-repository";
 import type { Account } from "@/lib/models/account";
 import type { Category } from "@/lib/models/category";
 import type { CreditCardProfile, Statement } from "@/lib/models/credit-card";
 import type { Person } from "@/lib/models/person";
 import type { Transaction } from "@/lib/models/transaction";
-import {
-  compareObligations,
-  groupCompleted,
-  obligationStatus,
-  sharedSplitFrom,
-  spendComparison,
-  summarizeToPay,
-  type ObligationItem,
-  type PaymentEvent,
-} from "@/features/my-money/lib/my-money";
+import { buildCompletedEvents, buildCycleObligations, makeCardLookup } from "@/features/my-money/lib/cycle-obligations";
+import { groupCompleted, spendComparison, summarizeToPay } from "@/features/my-money/lib/my-money";
 
 /** Whole history — every installment share and its live `remainingNow` (same window the payment gate reads). */
 const ALL_TIME: StatementCycle = { start: new Date(1970, 0, 1), end: new Date(2200, 0, 1) };
@@ -166,156 +152,30 @@ export function useMyMoneyData() {
   const accountList = accounts as Account[];
   const cardList = useMemo(() => (cards as CreditCardProfile[]).filter((c) => c.deletedAt == null), [cards]);
 
-  /** Card display label + the card-funded-EMI rule, shared by To pay and Completed. */
-  const cardLookup = useMemo(() => {
-    const accountById = new Map(accountList.map((a) => [a.id, a]));
-    const cardById = new Map(cardList.map((c) => [c.id, c]));
-    const txnById = new Map(txns.filter((t) => t.deletedAt == null).map((t) => [t.id, t]));
-    const label = (card: CreditCardProfile) => {
-      const name = accountById.get(card.accountId)?.name ?? "Credit card";
-      return card.lastFourDigits ? `${name} ••${card.lastFourDigits}` : name;
-    };
-    /** The tracked card whose bill already carries this agreement's purchase (Case A), else null. */
-    const carriedByCard = (linkedCreditCardId: string | null | undefined, purchaseTransactionId: string | null | undefined) => {
-      const card = linkedCreditCardId ? cardById.get(linkedCreditCardId) : undefined;
-      if (!card) return null;
-      return emiPurchaseRepresentedOnCard(purchaseTransactionId ?? null, txnById.get(purchaseTransactionId ?? ""), card.accountId) ? label(card) : null;
-    };
-    return { label, carriedByCard };
-  }, [accountList, cardList, txns]);
+  /** Card display label + the card-funded-EMI rule, shared by To pay and Completed (`cycle-obligations.ts`). */
+  const cardLookup = useMemo(() => makeCardLookup({ accounts: accountList, cards: cardList, transactions: txns }), [accountList, cardList, txns]);
 
   const peopleStatements = useMemo(() => Object.values(statementsByPersonId) as PersonCycleStatement[], [statementsByPersonId]);
 
-  // ── To pay: every obligation owed in the period ──
-  const obligations = useMemo(() => {
-    const items: ObligationItem[] = [];
-    const ledgerEntries = Object.values(entriesByPersonId).flat();
-
-    for (const card of cardList) {
-      const cardTxns = txns.filter((t) => t.accountId === card.accountId);
-      const bills = cardBillsForCard(card, cardTxns, statements as Statement[], now);
-      const openingBalance = accountList.find((a) => a.id === card.accountId)?.openingBalance ?? 0;
-      for (const bill of cardBillsDueInCycle(bills, cycleRange, now)) {
-        const readiness = linkedPeopleForCard({
-          statements: peopleStatements,
-          ledgerEntries,
-          transactions: txns,
-          cardAccountId: card.accountId,
-          cardOpeningBalance: openingBalance,
-          lenderDue: bill.remaining,
-          chargeScope: new Set(bill.chargeIds),
-        });
-        items.push({
-          key: `card:${card.id}:${bill.id}`,
-          kind: "card",
-          sourceId: card.id,
-          title: cardLookup.label(card),
-          detail: bill.isClosed ? `Statement ${shortDate(bill.periodStart)} – ${shortDate(bill.periodEnd)}` : `Statement closes ${shortDate(bill.periodEnd)}`,
-          dueDate: bill.dueDate,
-          amountDue: bill.totalAmount,
-          amountPaid: bill.amountPaid,
-          remaining: bill.remaining,
-          status: obligationStatus(bill.dueDate, bill.remaining, now),
-          carriedForward: bill.carriedForward,
-          countsTowardTotal: true,
-          note: card.sharedLimitId ? "Shares a credit limit · billed separately" : null,
-          billStillOpen: !bill.isClosed,
-          shared: sharedSplitFrom(readiness),
-          href: bill.isClosed ? `/credit-cards?card=${encodeURIComponent(card.id)}&pay=1` : `/credit-cards?card=${encodeURIComponent(card.id)}`,
-          actionLabel: bill.isClosed ? "Pay bill" : "View card",
-        });
-      }
-    }
-
-    for (const row of loanRows) {
-      if (row.direction !== "taken") continue;
-      const loan = row.loan;
-      const carriedBy = cardLookup.carriedByCard(loan.linkedCreditCardId, loan.purchaseTransactionId);
-      const paidByOther = row.payerPersonId != null ? (row.payerName ?? "someone else") : null;
-      const sharesInstallments = hasOwnershipShares(loan) || loan.beneficiaryRepaysInstallments === true;
-      for (const due of loanCycleDues({ id: loan.id, isClosed: loan.isClosed, installments: row.installments }, cycleRange, now)) {
-        items.push({
-          key: `loan:${loan.id}:${due.installmentId}`,
-          kind: "loan",
-          sourceId: loan.id,
-          title: loan.name?.trim() || row.lenderName,
-          detail: `${row.lenderName} · Installment ${due.sequenceNumber} of ${due.installmentCount}`,
-          dueDate: due.dueDate,
-          amountDue: due.amountDue,
-          amountPaid: due.amountPaid,
-          remaining: due.remaining,
-          status: obligationStatus(due.dueDate, due.remaining, now),
-          carriedForward: due.carriedForward,
-          countsTowardTotal: carriedBy == null && paidByOther == null,
-          note: carriedBy ? `Included in ${carriedBy} bill` : paidByOther ? `Paid to the lender by ${paidByOther}` : null,
-          billStillOpen: false,
-          shared: sharesInstallments
-            ? sharedSplitFrom(linkedPeopleForInstallments({ statements: peopleStatements, installmentIds: [due.installmentId], sourceKind: "loan", lenderDue: due.amountDue }))
-            : null,
-          href: `/loans?agreement=${encodeURIComponent(loan.id)}`,
-          actionLabel: due.isPartiallyPaid ? "Continue payment" : "Pay",
-        });
-      }
-    }
-
-    for (const row of emiRows) {
-      const emi = row.emi;
-      const isClosed = row.status === "closed" || row.status === "completed";
-      const carriedBy = cardLookup.carriedByCard(emi.linkedCreditCardId, emi.purchaseTransactionId);
-      const sharesInstallments = hasOwnershipShares(emi) || emi.beneficiaryRepaysInstallments === true;
-      for (const due of loanCycleDues({ id: emi.id, isClosed, installments: row.installments }, cycleRange, now)) {
-        items.push({
-          key: `emi:${emi.id}:${due.installmentId}`,
-          kind: "emi",
-          sourceId: emi.id,
-          title: emi.name,
-          detail: `${emi.lenderName ? `${emi.lenderName} · ` : ""}EMI ${due.sequenceNumber} of ${due.installmentCount}`,
-          dueDate: due.dueDate,
-          amountDue: due.amountDue,
-          amountPaid: due.amountPaid,
-          remaining: due.remaining,
-          status: obligationStatus(due.dueDate, due.remaining, now),
-          carriedForward: due.carriedForward,
-          countsTowardTotal: carriedBy == null,
-          note: carriedBy ? `Included in ${carriedBy} bill` : null,
-          billStillOpen: false,
-          shared: sharesInstallments
-            ? sharedSplitFrom(linkedPeopleForInstallments({ statements: peopleStatements, installmentIds: [due.installmentId], sourceKind: "emi", lenderDue: due.amountDue }))
-            : null,
-          href: `/loans?agreement=${encodeURIComponent(emi.id)}`,
-          actionLabel: due.isPartiallyPaid ? "Continue payment" : "Pay",
-        });
-      }
-    }
-
-    // Bills: every outstanding cycle (a cycle reopened by a cancelled payment is owed again), once each.
-    const billById = new Map(billRows.map((r) => [r.bill.id, r]));
-    for (const { billId, occurrence, remaining } of billObligationsInCycle(outstandingBillOccurrences(billCycles, now), cycleRange, now).items) {
-      const row = billById.get(billId);
-      if (!row) continue;
-      items.push({
-        key: `bill:${billId}:${occurrence.id}`,
-        kind: "bill",
-        sourceId: billId,
-        title: row.bill.name,
-        detail: row.category?.name ?? "Bill",
-        dueDate: occurrence.dueDate,
-        amountDue: occurrence.amount,
-        amountPaid: occurrence.amountPaid,
-        remaining,
-        status: obligationStatus(occurrence.dueDate, remaining, now),
-        carriedForward: !isInCycle(occurrence.dueDate, cycleRange),
-        countsTowardTotal: true,
-        note: null,
-        billStillOpen: false,
-        shared: null,
-        href: "/bills",
-        actionLabel: occurrence.amountPaid > 0 ? "Continue payment" : "Pay",
-      });
-    }
-
-    return items.sort(compareObligations);
-  }, [cardList, txns, statements, accountList, cycleRange, now, entriesByPersonId, peopleStatements, cardLookup, loanRows, emiRows, billRows, billCycles]);
+  // ── To pay: every obligation owed in the period — the same builder Bills uses, so the two pages cannot disagree ──
+  const obligations = useMemo(
+    () =>
+      buildCycleObligations({
+        cards: cardList,
+        transactions: txns,
+        statements: statements as Statement[],
+        accounts: accountList,
+        loanRows,
+        emiRows,
+        billRows,
+        billCycles,
+        cycleRange,
+        now,
+        lookup: cardLookup,
+        people: { statements: peopleStatements, ledgerEntries: Object.values(entriesByPersonId).flat() },
+      }),
+    [cardList, txns, statements, accountList, cycleRange, now, entriesByPersonId, peopleStatements, cardLookup, loanRows, emiRows, billRows, billCycles],
+  );
 
   const toPay = useMemo(() => summarizeToPay(obligations), [obligations]);
 
@@ -403,51 +263,25 @@ export function useMyMoneyData() {
   }, [spendTxns, mySpendCtx, isCustomCycle, cycleRange, previousRange, spendCategories, isPast]);
 
   // ── Completed: payments made in the period ──
-  const completed = useMemo(() => {
-    const events: PaymentEvent[] = [];
-    for (const card of cardList) {
-      for (const t of txns) {
-        if (t.accountId !== card.accountId || t.deletedAt != null || !isCardBillPaymentLeg(t)) continue;
-        events.push({ kind: "card", sourceId: card.id, title: cardLookup.label(card), date: t.dateTime, amount: t.amount, href: `/credit-cards?card=${encodeURIComponent(card.id)}` });
-      }
-    }
-    const loanBySchedule = new Map(loanRows.map((r) => [r.loan.scheduleId, r]));
-    for (const p of loanPayments) {
-      const row = p.scheduleId ? loanBySchedule.get(p.scheduleId) : undefined;
-      if (!row || p.deletedAt != null || p.direction !== "taken") continue;
-      // A card-funded purchase is paid through the card bill — its installment record is not a second payment.
-      if (cardLookup.carriedByCard(row.loan.linkedCreditCardId, row.loan.purchaseTransactionId)) continue;
-      events.push({ kind: "loan", sourceId: row.loan.id, title: row.loan.name?.trim() || row.lenderName, date: p.date, amount: p.amount, href: `/loans?agreement=${encodeURIComponent(row.loan.id)}` });
-    }
-    const emiBySchedule = new Map(emiRows.map((r) => [r.emi.scheduleId, r]));
-    for (const p of emiPayments) {
-      const row = emiBySchedule.get(p.scheduleId);
-      if (!row) continue;
-      if (cardLookup.carriedByCard(row.emi.linkedCreditCardId, row.emi.purchaseTransactionId)) continue;
-      events.push({ kind: "emi", sourceId: row.emi.id, title: row.emi.name, date: p.date, amount: p.amount, href: `/loans?agreement=${encodeURIComponent(row.emi.id)}` });
-    }
-    // Bills: each occurrence's live `amountPaid` is authoritative; its `PaymentRecord`s supply the real payment
-    // dates (oldest first, capped at `amountPaid`, so a just-reverted record never counts). Any part no record
-    // covers yet (legacy, or a payment the record list hasn't caught up with) stays undated — never given the due date.
-    const billNameById = new Map(billRows.map((r) => [r.bill.id, r.bill.name]));
-    for (const o of billOccurrences) {
-      if (o.deletedAt != null || o.amountPaid <= 0) continue;
-      const name = billNameById.get(o.billId);
-      if (!name) continue;
-      const records = (billPaymentsByBillId[o.billId] ?? [])
-        .filter((r) => r.deletedAt == null && r.occurrenceId === o.id && r.amount > 0)
-        .sort((a, b) => a.date.getTime() - b.date.getTime());
-      let left = o.amountPaid;
-      for (const r of records) {
-        if (left <= 0.005) break;
-        const amount = round2(Math.min(r.amount, left));
-        left = round2(left - amount);
-        events.push({ kind: "bill", sourceId: o.billId, title: name, date: r.date, amount, href: "/bills" });
-      }
-      if (left > 0.005) events.push({ kind: "bill", sourceId: o.billId, title: name, date: null, periodAnchor: o.dueDate, amount: left, href: "/bills" });
-    }
-    return groupCompleted(events, cycleRange);
-  }, [cardList, txns, cardLookup, loanRows, loanPayments, emiRows, emiPayments, billRows, billOccurrences, billPaymentsByBillId, cycleRange]);
+  const completed = useMemo(
+    () =>
+      groupCompleted(
+        buildCompletedEvents({
+          cards: cardList,
+          transactions: txns,
+          lookup: cardLookup,
+          loanRows,
+          loanPayments,
+          emiRows,
+          emiPayments,
+          billRows,
+          billOccurrences,
+          billPaymentsByBillId,
+        }),
+        cycleRange,
+      ),
+    [cardList, txns, cardLookup, loanRows, loanPayments, emiRows, emiPayments, billRows, billOccurrences, billPaymentsByBillId, cycleRange],
+  );
 
   const periodLabel = isCustomCycle
     ? `${shortDate(cycleRange.start)} – ${shortDate(cycleRange.end)}`

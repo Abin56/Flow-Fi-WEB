@@ -84,7 +84,7 @@ retiredScenario("scap-layout-viewports", "Smart Capture review fits the viewport
 scenario("recon-layout-viewports", "Reconciliation fits the viewport on desktop, keyboard selection stays visible, mobile scrolls naturally — and nothing is written", async ({ page }, chk) => {
   const before = await Promise.all([h.list("transactions"), h.list("accounts")]);
   await page.evaluate(() => window.next.router.push("/reconciliation"));
-  await page.getByRole("heading", { name: "Reconciliation" }).waitFor({ timeout: 240000 });
+  await page.getByRole("heading", { name: /Review & Import|Reconciliation/ }).waitFor({ timeout: 240000 });
   await page.getByRole("textbox", { name: "Statement rows" }).fill(rowsText(26));
   await page.getByRole("button", { name: "Compare rows" }).click();
   chk("no account is pre-selected", (await page.getByTestId("account-bar").getAttribute("data-selected")) === "false");
@@ -109,10 +109,8 @@ scenario("recon-layout-viewports", "Reconciliation fits the viewport on desktop,
     chk(`${tag}: both sheets side by side`, sheets[0].x + sheets[0].width <= sheets[1].x + 1 && sheets[1].x + sheets[1].width <= vp.width + 1, JSON.stringify(sheets));
     const existing = await page.getByTestId("existing-grid-body").evaluate((el) => getComputedStyle(el).overflowY);
     chk(`${tag}: the FlowFi sheet body scrolls on its own`, existing === "auto", existing);
-    const dockBox = await box(page, "resolution-dock");
-    chk(`${tag}: comparison dock above the action bar, on screen`, dockBox.y + dockBox.height <= bar.y + 1, JSON.stringify({ dockBox, bar }));
-    const sideOverflow = await page.evaluate(() => ["statement-sheet", "existing-sheet", "resolution-dock"].map((id) => { const el = document.querySelector(`[data-testid="${id}"]`); return el.scrollWidth - el.clientWidth; }));
-    chk(`${tag}: no sideways scroll inside the sheets or dock`, sideOverflow.every((o) => o <= 1), JSON.stringify(sideOverflow));
+    const sideOverflow = await page.evaluate(() => ["statement-sheet", "existing-sheet"].map((id) => { const el = document.querySelector(`[data-testid="${id}"]`); return el.scrollWidth - el.clientWidth; }));
+    chk(`${tag}: no sideways scroll inside the sheets`, sideOverflow.every((o) => o <= 1), JSON.stringify(sideOverflow));
     const docked = false;
 
     // Keyboard: move down past the fold — the selected row stays inside the grid's visible body.

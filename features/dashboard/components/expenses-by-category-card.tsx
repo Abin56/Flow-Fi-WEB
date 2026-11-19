@@ -11,7 +11,7 @@ const DOT_COLOR = {
   purple: "bg-purple",
   pink: "bg-expense",
   warning: "bg-warning",
-  info: "bg-blue-500",
+  info: "bg-royal",
   success: "bg-success",
   muted: "bg-muted-foreground/50",
 } as const;
@@ -20,7 +20,7 @@ const CHART_COLOR: Record<keyof typeof DOT_COLOR, string> = {
   purple: "var(--purple)",
   pink: "var(--expense)",
   warning: "var(--warning)",
-  info: "#3b82f6",
+  info: "var(--royal)",
   success: "var(--success)",
   muted: "var(--muted-foreground)",
 };

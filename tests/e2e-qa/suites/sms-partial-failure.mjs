@@ -6,6 +6,7 @@
  */
 import { scenario } from "../lib/core.mjs";
 import * as h from "../lib/harness.mjs";
+import { sameDayIso } from "../lib/inbox-days.mjs";
 import { BASE_URL, FIRESTORE_DOCS, HOST, PORTS, PROJECT_ID } from "../lib/env.mjs";
 
 const OWNER = { Authorization: "Bearer owner", "Content-Type": "application/json" };
@@ -15,12 +16,13 @@ const s = (v) => ({ stringValue: v });
 const n = (v) => ({ doubleValue: v });
 const nul = { nullValue: null };
 
+// The Inbox is browsed one day at a time: `daysAgo` is now how many MINUTES older than the newest candidate (all on one day), so every row is on screen and the old newest-first order is kept.
 async function putCandidate(uid, { id, amount, merchant, accountId, daysAgo }) {
   const fields = {
     amount: n(amount),
     direction: s("debit"),
     eventType: s("upiPayment"),
-    transactionDate: { timestampValue: new Date(Date.now() - daysAgo * DAY).toISOString() },
+    transactionDate: { timestampValue: sameDayIso(daysAgo) },
     merchant: s(merchant),
     bankName: s("QA Bank"),
     rawLastFour: nul,

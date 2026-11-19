@@ -8,6 +8,7 @@
  */
 import { scenario } from "../lib/core.mjs";
 import * as h from "../lib/harness.mjs";
+import { choose, menuItem, openImportConfirm, pressOnGrid } from "../lib/recon.mjs";
 
 const ddmmyyyy = (offsetDays) => {
   const d = new Date(Date.now() + offsetDays * 86400000);
@@ -36,7 +37,7 @@ const overflowX = (page) => page.evaluate(() => ({ doc: document.documentElement
 async function openStudio(page) {
   // New route: the first dev compile can exceed h.go's 30s wait.
   await page.evaluate(() => window.next.router.push("/reconciliation"));
-  await page.getByRole("heading", { name: "Reconciliation" }).waitFor({ timeout: 240000 });
+  await page.getByRole("heading", { name: /Review & Import|Reconciliation/ }).waitFor({ timeout: 240000 });
 }
 
 async function pasteAndChooseCard(page) {
@@ -65,7 +66,7 @@ scenario(
     chk("a row with nothing on the card is 'no match'", states.r3 === "no_match", states.r3);
     chk("the bank's ₹850 groceries is NOT matched across accounts", states.r5 === "no_match", states.r5);
     const mainText = await page.locator("main").evaluate((m) => { const c = m.cloneNode(true); c.querySelectorAll("header").forEach((h) => h.remove()); return c.textContent ?? ""; });
-    chk("no 'duplicate' wording outside the step header", !/duplicate/i.test(mainText), (mainText.match(/.{0,60}duplicate.{0,40}/i) ?? [""])[0]);
+    chk("no 'confirmed / exact duplicate' wording outside the step header (a match is only ever a 'Possible duplicate')", !/(confirmed|exact|definite|is a) duplicate/i.test(mainText), (mainText.match(/.{0,60}duplicate.{0,40}/i) ?? [""])[0]);
     chk("bulk Link offers nothing when the only exact match has a twin", await page.getByRole("button", { name: /Keep existing for exact matches \(0\)/ }).isDisabled());
 
     // Dual sheets: New statement beside Existing FlowFi, each its own scroll region.
@@ -79,28 +80,29 @@ scenario(
     await page.getByTestId("existing-mode-ledger").click();
     chk("the bank's transaction is never in the card's FlowFi sheet", !/QA BANK GROCERIES/i.test(await page.getByTestId("existing-sheet").innerText()));
     await page.getByTestId("existing-mode-matches").click();
-    await page.getByTestId("dock-notes").click();
-    chk("other-account look-alike shown as a note", /QA Bank.*a different account/.test(await page.locator("[data-radix-popper-content-wrapper]").innerText()));
+    await pressOnGrid(page, "o"); // the full comparison lists the notes
+    chk("other-account look-alike shown as a note", /QA Bank.*a different account/.test(await page.getByTestId("match-panel").innerText()));
     await page.keyboard.press("Escape");
+    await page.waitForTimeout(300);
 
     // D10: the closed-cycle row can't be imported.
     await page.locator('[data-testid="recon-row"][data-row-id="r4"]').click();
-    chk("closed card bill blocks Import new (D10)", (await page.getByTestId("resolve-import_new").isDisabled()) && /already closed/.test(await page.getByTestId("dock-import-blocked").innerText()));
+    const importItem = await menuItem(page, "import");
+    chk("closed card bill blocks Import as transaction (D10)", (await importItem.isDisabled()) && /already closed/.test((await importItem.getAttribute("title")) ?? ""));
+    await page.keyboard.press("Escape");
 
     // Multiple: r1's FlowFi sheet lists the candidate; Replace/Merge are previews only.
     await page.locator('[data-testid="recon-row"][data-row-id="r1"]').click();
-    await page.getByTestId("resolve-merge_details").click();
-    const preview = page.getByTestId("resolution-preview");
-    chk("Merge details is a preview with commit disabled", (await preview.getByTestId("preview-commit").isDisabled()) && /can't do/.test(await preview.getByTestId("preview-unsupported").innerText()));
-    await h.shot(page, "recon-desktop-merge-preview");
-    await preview.getByRole("button", { name: "Close preview" }).click();
+    await h.shot(page, "recon-desktop-multiple");
 
     // One-to-one: keep r1's match, then r2 can't keep the same purchase.
-    await page.getByTestId("resolve-keep_existing").click();
+    await choose(page, "keep_existing");
     chk("r1 kept in the draft", (await page.locator('[data-testid="recon-row"][data-row-id="r1"]').innerText()).includes("Keep existing"));
     chk("r2 can no longer take the same transaction", (await stateOf(page, "recon-row", "r2")) === "conflict");
     await page.locator('[data-testid="recon-row"][data-row-id="r2"]').click();
-    chk("…its Keep existing is disabled with the reason", (await page.getByTestId("resolve-keep_existing").isDisabled()) && /Already kept by row 1/.test((await page.getByTestId("resolve-keep_existing").getAttribute("title")) ?? ""));
+    const keepItem = await menuItem(page, "keep_existing");
+    chk("…its Keep existing is disabled with the reason", (await keepItem.isDisabled()) && /Already kept by row 1/.test((await keepItem.getAttribute("title")) ?? ""));
+    await page.keyboard.press("Escape");
     await h.shot(page, "recon-desktop-dual");
 
     // Keyboard: J moves, I ignores (start from row 1 — the steps above left row 2 selected).
@@ -111,7 +113,7 @@ scenario(
     await page.keyboard.press("i");
     chk("keyboard J/J/I ignores row 3", (await page.locator('[data-testid="recon-row"][data-row-id="r3"]').innerText()).includes("Skipped"));
     await page.keyboard.press("z");
-    chk("Z undoes the last draft decision", (await page.locator('[data-testid="recon-row"][data-row-id="r3"]').innerText()).includes("Undecided"));
+    chk("Z undoes the last draft decision", (await page.locator('[data-testid="recon-row"][data-row-id="r3"] [data-pending="true"]').count()) > 0);
     await page.keyboard.press("i");
     await page.keyboard.press("ArrowRight");
     chk("→ moves focus into the Existing FlowFi sheet", await page.getByRole("grid", { name: "Existing FlowFi transactions" }).evaluate((g) => g === document.activeElement));
@@ -130,7 +132,7 @@ scenario(
 
     // Refresh: the draft comes back (rows + decisions) from this tab only.
     await page.reload({ waitUntil: "domcontentloaded" });
-    await page.getByRole("heading", { name: "Reconciliation" }).waitFor({ timeout: 120000 });
+    await page.getByRole("heading", { name: /Review & Import|Reconciliation/ }).waitFor({ timeout: 120000 });
     await page.getByText("Restored your review").waitFor({ timeout: 30000 });
     await page.waitForFunction(() => document.querySelector('[data-row-id="r1"]')?.getAttribute("data-state") !== "pending");
     chk("refresh restores decisions", (await page.locator('[data-testid="recon-row"][data-row-id="r1"]').innerText()).includes("Keep existing"));
@@ -154,7 +156,7 @@ scenario(
     await pasteAndChooseCard(page);
     chk("both sheets render at 1280", (await page.getByTestId("statement-sheet").isVisible()) && (await page.getByTestId("existing-sheet").isVisible()));
     await page.locator('[data-testid="recon-row"][data-row-id="r3"]').click();
-    await page.getByTestId("dock-details").click();
+    await pressOnGrid(page, "o");
     const drawer = page.getByRole("dialog");
     await drawer.getByTestId("match-panel").waitFor();
     await page.waitForTimeout(500); // let the slide-in finish before measuring

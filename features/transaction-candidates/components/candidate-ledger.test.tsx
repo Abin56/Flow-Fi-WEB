@@ -3,13 +3,17 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SmsTransactionCandidate } from "@/lib/models/sms-transaction-candidate";
 import { deriveCandidateStatus } from "../lib/candidate-status";
-import { CandidateLedger, merchantInitials, type LedgerGroup } from "./candidate-ledger";
+import { CandidateLedger, merchantInitials, type LedgerGroup, type ScopeSelection } from "./candidate-ledger";
 import type { CandidateRowModel } from "./candidate-row-parts";
 
 vi.mock("@/lib/firebase/client", () => ({ firebaseApp: {}, auth: {}, db: {}, storage: {} }));
 vi.mock("@/store/toast-store", () => ({ toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  // The open day is remembered for the session — never let one test's choice leak into the next.
+  window.sessionStorage.removeItem("flowfi.inbox.day");
+});
 
 function candidate(o: Partial<SmsTransactionCandidate> & { id: string }): SmsTransactionCandidate {
   return {
@@ -51,7 +55,15 @@ function row(c: SmsTransactionCandidate, over: Partial<CandidateRowModel> = {}, 
   };
 }
 
-function renderLedger(groups: LedgerGroup[], extra: { onReview?: (id: string) => void; onToggle?: (id: string, c: boolean) => void } = {}) {
+function renderLedger(
+  groups: LedgerGroup[],
+  extra: {
+    onReview?: (id: string) => void;
+    onToggle?: (id: string, c: boolean) => void;
+    onToggleAll?: (checked: boolean, scopeIds?: readonly string[]) => void;
+    selectionForScope?: (ids: readonly string[]) => ScopeSelection;
+  } = {},
+) {
   const total = groups.reduce((n, g) => n + g.rows.length, 0);
   return render(
     <CandidateLedger
@@ -61,7 +73,8 @@ function renderLedger(groups: LedgerGroup[], extra: { onReview?: (id: string) =>
       allSelected={false}
       someSelected={false}
       selectAllDisabled={false}
-      onToggleAll={() => {}}
+      onToggleAll={extra.onToggleAll ?? (() => {})}
+      selectionForScope={extra.selectionForScope}
       onToggle={extra.onToggle ?? (() => {})}
       onReview={extra.onReview ?? (() => {})}
       candidateRepository={null}
@@ -97,15 +110,18 @@ describe("CandidateLedger", () => {
     { key: "2026-09-30", label: "30 September 2026", dateText: null, flat: false, rows: [row(candidate({ id: "sep", merchant: "Zomato", transactionDate: new Date(2026, 8, 30, 12) }))] },
   ];
 
-  it("groups rows under day headings (Yesterday + its real date) that show a COUNT, never a money total", () => {
+  it("shows the open day (the first row's day) with a COUNT, never a money total — the other days are one click away", () => {
     renderLedger(groups);
-    const oct = screen.getByRole("heading", { name: /Yesterday/ }).closest("section")!;
-    expect(within(oct).getByText("21 October 2026")).toBeTruthy();
-    expect(within(oct).getByText("6 transactions")).toBeTruthy();
-    expect(screen.getByText("1 transaction")).toBeTruthy(); // singular
+    // Day-wise: only 21 October's six rows are on screen; the single 30 September row is not.
+    expect(screen.getByRole("heading", { name: "21 October 2026" })).toBeTruthy();
+    expect(screen.getByTestId("candidate-day-total").textContent).toBe("6 transactions");
+    expect(screen.getAllByTestId("candidate-row")).toHaveLength(6);
+    expect(screen.getByTestId("candidate-day-heading").textContent).not.toMatch(/₹/);
+    // …and September is reachable from the month control, with its singular count.
+    fireEvent.click(screen.getByTestId("candidate-month-prev"));
     expect(screen.getByRole("heading", { name: "30 September 2026" })).toBeTruthy();
-    // Nothing in a month header is a currency amount.
-    expect(oct.querySelector("h2")!.parentElement!.textContent).not.toMatch(/₹/);
+    expect(screen.getByTestId("candidate-day-total").textContent).toBe("1 transaction");
+    expect(screen.getAllByTestId("candidate-row")).toHaveLength(1);
   });
 
   it("a clean row shows no status badge, no 'No issues flagged', and no notice", () => {
@@ -120,6 +136,9 @@ describe("CandidateLedger", () => {
     const rowOf = (id: string) => screen.getAllByTestId("candidate-row").find((r) => r.getAttribute("data-candidate-id") === id)!;
     expect(rowOf("unmatched").textContent).toMatch(/Needs account/);
     expect(rowOf("dup").textContent).toMatch(/Possible duplicate/);
+    // Told exactly once — by the corner sticker, not repeated as a notice.
+    expect(rowOf("dup").textContent!.match(/Possible duplicate/g)).toHaveLength(1);
+    expect(within(rowOf("dup")).getByTestId("candidate-match-badge")).toBeTruthy();
     expect(rowOf("review").textContent).toMatch(/Review suggested/);
     // …and a possible duplicate is never called a certain one.
     expect(rowOf("dup").textContent).not.toMatch(/duplicate of|is a duplicate/i);
@@ -246,28 +265,33 @@ describe("inline possible-match panel", () => {
     }) as never;
   const group = (rows: CandidateRowModel[]): LedgerGroup => ({ key: "g", label: "October 2026", dateText: null, flat: false, rows }) as never;
 
-  it("shows the previously imported transaction inside the row, labelled possible, with why it matched", () => {
+  it("shows one compact badge, labelled possible; clicking reveals the saved transaction and why it matched", () => {
     const c = candidate({ id: "c1" });
     renderLedger([group([row(c, { matches: [match()] })])]);
+    const badge = screen.getByTestId("candidate-match-badge");
+    expect(badge.textContent).toContain("Possible duplicate");
+    expect(badge.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(badge);
+    expect(badge.getAttribute("aria-expanded")).toBe("true");
     const panel = screen.getByTestId("candidate-match-panel");
     expect(panel.getAttribute("data-match-kind")).toBe("possible");
-    expect(within(panel).getByText(/Possible match — similar transaction already imported/)).toBeTruthy();
     expect(within(panel).getByText("SWIGGY BANGALORE")).toBeTruthy();
     expect(within(panel).getByText("₹321.08")).toBeTruthy();
     expect(within(panel).getByText("Amount differs by ₹0.08")).toBeTruthy();
     expect(within(panel).getByText("Food")).toBeTruthy();
-    expect(within(panel).getByText(/Nothing is skipped or merged for you/)).toBeTruthy();
   });
 
-  it("labels an exact match differently, in words", () => {
+  it("an exact match keeps the possible wording (a match is never called certain), flagged exact only as data", () => {
     renderLedger([group([row(candidate({ id: "c2" }), { matches: [match({ kind: "exact", reasons: ["Same merchant", "Same day", "Same amount"] })] })])]);
-    expect(within(screen.getByTestId("candidate-match-panel")).getByText(/Exact match — already imported/)).toBeTruthy();
+    expect(screen.getByTestId("candidate-row-matches").getAttribute("data-match-kind")).toBe("exact");
+    expect(screen.getByTestId("candidate-match-badge").textContent).toContain("Possible duplicate");
   });
 
   it("shows the best match first and reveals the others on request; Compare opens the review", () => {
     const onReview = vi.fn();
     const second = match({ transactionId: "t2", existing: { description: "SWIGGY INSTAMART", dateText: "22 Oct 2026", amountText: "₹321.00", directionText: "Expense", accountLabel: null, categoryLabel: null, sourceLabel: null } });
     renderLedger([group([row(candidate({ id: "c3" }), { matches: [match(), second] })])], { onReview });
+    fireEvent.click(screen.getByTestId("candidate-match-badge"));
     expect(screen.getAllByTestId("candidate-match")).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: /Show 1 more similar/ }));
     expect(screen.getAllByTestId("candidate-match")).toHaveLength(2);
@@ -283,5 +307,45 @@ describe("inline possible-match panel", () => {
     renderLedger([withMatch]);
     expect(screen.getByTestId("candidate-row").getAttribute("data-lane")).toBe("noIssues");
     expect(screen.getByRole("button", { name: /^Review/ })).toBeTruthy();
+  });
+});
+
+describe("list / grid layout", () => {
+  afterEach(() => {
+    try {
+      window.localStorage.removeItem("flowfi.inbox.layout");
+      window.sessionStorage.removeItem("flowfi.inbox.day");
+    } catch {
+      // ignore
+    }
+  });
+  const g = (rows: CandidateRowModel[]): LedgerGroup => ({ key: "g", label: "October 2026", dateText: null, flat: false, rows }) as never;
+
+  it("starts as a list and switches to grid cards with the same rows, sticker and actions", () => {
+    const onReview = vi.fn();
+    renderLedger([g([row(candidate({ id: "a" })), row(candidate({ id: "b" }), {}, "matched", true)])], { onReview });
+    expect(screen.queryByTestId("candidate-grid")).toBeNull();
+    expect(screen.getByRole("button", { name: "List view" }).getAttribute("aria-pressed")).toBe("true");
+
+    fireEvent.click(screen.getByRole("button", { name: "Grid view" }));
+    const grid = screen.getByTestId("candidate-grid");
+    const cards = within(grid).getAllByTestId("candidate-row");
+    expect(cards).toHaveLength(2);
+    expect(cards.every((c) => c.getAttribute("data-layout") === "grid")).toBe(true);
+    // One sticker, only on the flagged card.
+    expect(within(grid).getAllByTestId("candidate-match-badge")).toHaveLength(1);
+    expect(within(cards[1]).getByTestId("candidate-match-badge")).toBeTruthy();
+    // Review works from a card; empty card space opens it too.
+    fireEvent.click(within(cards[0]).getByRole("button", { name: /^Review/ }));
+    expect(onReview).toHaveBeenCalledWith("a");
+    fireEvent.click(cards[1]);
+    expect(onReview).toHaveBeenCalledWith("b");
+    expect(window.localStorage.getItem("flowfi.inbox.layout")).toBe("grid");
+  });
+
+  it("remembers Grid for the next visit", () => {
+    window.localStorage.setItem("flowfi.inbox.layout", "grid");
+    renderLedger([g([row(candidate({ id: "a" }))])]);
+    expect(screen.getByTestId("candidate-grid")).toBeTruthy();
   });
 });

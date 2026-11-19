@@ -86,7 +86,7 @@ function ScheduleDiff({ before, after }: { before: PlannedInstallment[]; after: 
         );
       })}
       {rows > PREVIEW_ROWS && (
-        <button type="button" onClick={() => setAll((v) => !v)} className="w-full border-t border-border px-3 py-1.5 text-left text-xs font-medium text-primary hover:bg-secondary/40" data-testid="emi-terms-schedule-toggle">
+        <button type="button" onClick={() => setAll((v) => !v)} className="w-full border-t border-border px-3 py-1.5 text-left text-xs font-medium text-primary-accent-text hover:bg-secondary/40" data-testid="emi-terms-schedule-toggle">
           {all ? "Show fewer" : `Show all ${rows} unpaid installments`}
         </button>
       )}

@@ -22,7 +22,7 @@ export function AccountsStats({ accountCount, onExplain }: { accountCount?: numb
     // take a big share of the viewport, so viewport breakpoints (lg:) squeezed the figures out of sight.
     <section aria-label="Summary" className="@container overflow-hidden rounded-[16px] border border-border-strong/60 bg-card shadow-e1">
      <div className="flex flex-col @4xl:flex-row @4xl:items-stretch">
-      <div className="relative flex flex-col gap-1.5 overflow-hidden bg-gradient-to-br from-[#1d2330] via-[#262e3d] to-[#323b4d] px-5 py-5 text-white sm:px-6 @4xl:min-w-80">
+      <div className="relative flex flex-col gap-1.5 overflow-hidden bg-[image:var(--gradient-hero)] px-5 py-5 text-white sm:px-6 @4xl:min-w-80">
         <span aria-hidden className="pointer-events-none absolute -top-20 -right-16 size-56 rounded-full bg-primary/25 blur-3xl" />
         <span aria-hidden className="pointer-events-none absolute -bottom-24 -left-16 size-52 rounded-full border border-white/10" />
         <span className="relative inline-flex items-center gap-1.5 text-[11px] font-semibold tracking-[0.08em] text-white/75 uppercase">

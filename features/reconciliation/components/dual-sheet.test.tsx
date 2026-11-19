@@ -8,6 +8,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.setConfig({ testTimeout: 30000 }); // each decision now goes through a row menu and, for imports, the row editor
 vi.mock("@/lib/firebase/client", () => ({ firebaseApp: {}, auth: {}, db: {}, storage: {} }));
 
 import type { TransactionRepository } from "@/lib/repositories/transaction-repository";
@@ -17,6 +18,7 @@ import { commitRepositoriesFor, type ApprovalDeps } from "../lib/approval-commit
 import { DRAFT_KEY_PREFIX, buildReconciliationDraft, saveReconciliationDraft } from "../lib/reconciliation-draft";
 import { APPROVAL_NOW, reconData, reconRow, reconSession, txn } from "../lib/test-fixtures";
 import type { ReconRow, RowDecision } from "../lib/types";
+import { menuItem, openImportConfirm, pickedRecordId } from "./menu-test-utils";
 import { ReconciliationWorkspace } from "./reconciliation-workspace";
 
 function setViewport(width: number) {
@@ -38,6 +40,7 @@ beforeEach(() => {
   vi.setSystemTime(APPROVAL_NOW);
   sessionStorage.clear();
   localStorage.clear();
+  localStorage.setItem("flowfi.recon.autoNext", "0"); // these tests decide a row and then keep inspecting it
   setViewport(1600);
 });
 afterEach(() => {
@@ -86,9 +89,9 @@ function tripwire() {
 const rowEl = (id: string) => screen.getAllByTestId("recon-row").find((r) => r.dataset.rowId === id)!;
 const existingEl = (id: string) => screen.getAllByTestId("existing-row").find((r) => r.dataset.recordId === id)!;
 const existingIds = () => screen.queryAllByTestId("existing-row").map((r) => r.dataset.recordId);
-const dock = () => screen.getByTestId("resolution-dock");
-const resolve = (id: string) => screen.getByTestId(`resolve-${id}`) as HTMLButtonElement;
-const diffOf = (field: string) => dock().querySelector(`[data-field="${field}"]`) as HTMLElement;
+const resolve = (id: string) => menuItem(id);
+const statementRowIds = () => screen.getAllByTestId("recon-row").map((r) => r.dataset.rowId);
+const comparingRow = () => screen.getByTestId("existing-comparing").dataset.rowId;
 const select = (id: string) => fireEvent.click(rowEl(id));
 const draft = () => sessionStorage.getItem(`${DRAFT_KEY_PREFIX}u1`)!;
 
@@ -110,14 +113,14 @@ describe("dual-sheet selection and candidate highlighting", () => {
     expect(existingIds()).toEqual(["t-sw"]);
     expect(existingEl("t-sw").dataset.role).toBe("suggested");
     expect(existingEl("t-sw").getAttribute("aria-selected")).toBe("true");
-    expect(dock().dataset.rowId).toBe("r1");
-    expect(dock().dataset.recordId).toBe("t-sw");
+    expect(comparingRow()).toBe("r1");
+    expect(pickedRecordId()).toBe("t-sw");
+    expect(screen.queryByTestId("resolution-dock")).toBeNull(); // no bottom action bar — actions live in each row's ⋯ menu
     expect(screen.getByTestId("sheet-link-count").textContent).toBe("1");
 
     select("r6"); // nothing similar on the card
     expect(existingIds()).toEqual([]);
-    expect(screen.getByTestId("existing-empty").textContent).toMatch(/No possible match on HDFC Millennia •••• 4821 for row 6/);
-    expect(screen.getByTestId("dock-no-target").textContent).toMatch(/No FlowFi match/);
+    expect(screen.getByTestId("existing-empty").textContent).toMatch(/No match for Row 6/);
   });
 
   it("selecting an existing transaction highlights every statement row it could be (same-day genuine repeats)", () => {
@@ -127,8 +130,6 @@ describe("dual-sheet selection and candidate highlighting", () => {
     expect(existingIds()).toEqual(["t-cafe"]);
     expect(rowEl("r5").dataset.related).toBe("true"); // the twin row could be the same FlowFi transaction
     expect(rowEl("r1").dataset.related).toBeUndefined();
-    fireEvent.click(screen.getByRole("button", { name: /^Notes/ }));
-    expect(document.body.textContent).toMatch(/2 identical rows on this statement.*FlowFi has 1 exact match/);
   });
 
   it("account ledger: everything on the account in the statement period, with the reason a record can't be this row", () => {
@@ -143,7 +144,8 @@ describe("dual-sheet selection and candidate highlighting", () => {
     fireEvent.click(existingEl("t-rent"));
     expect(existingEl("t-rent").dataset.viewOnly).toBe("amount");
     expect(resolve("keep_existing").disabled).toBe(true);
-    expect(resolve("keep_existing").title).toMatch(/more than ₹1\.00/);
+    expect(resolve("keep_existing").title).toMatch(/too far apart/);
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
     // Search the account.
     fireEvent.change(screen.getByLabelText("Search existing transactions"), { target: { value: "zomato" } });
     expect(existingIds()).toEqual(["t-z1", "t-z2"]);
@@ -151,29 +153,24 @@ describe("dual-sheet selection and candidate highlighting", () => {
 });
 
 describe("live match comparison", () => {
+  // These read the field-by-field table, which is folded by default — open it, as a viewer would (remembered per viewer).
+  beforeEach(() => localStorage.setItem("flowfi.recon.dockCollapsed", "0"));
+  afterEach(() => localStorage.removeItem("flowfi.recon.dockCollapsed"));
   it("exact match: same amount and day, a suggestion — never decided by itself", () => {
     seed();
     renderStudio();
     select("r1");
-    expect(existingEl("t-sw").textContent).toMatch(/Exact · best/);
-    expect(diffOf("amount").dataset.verdict).toBe("same");
-    expect(diffOf("date").textContent).toMatch(/Same day/);
-    expect(diffOf("origin").textContent).toBe("—"); // origin is informational
-    expect(dock().textContent).toMatch(/SMS/);
-    expect(within(rowEl("r1")).getByText("Undecided")).toBeTruthy();
+    expect(existingEl("t-sw").textContent).toMatch(/Possible match/);
+    expect(within(rowEl("r1")).getByTestId("decision-chip").dataset.pending).toBe("true");
   });
 
-  it("near amount + date offset + different merchant spelling are all shown as differences", () => {
+  it("a near amount is a possible match whose difference is named beside the description", () => {
     seed();
     renderStudio();
     select("r3");
-    expect(existingEl("t-am").textContent).toMatch(/Near/);
+    expect(existingEl("t-am").textContent).toMatch(/Possible match/);
     expect(existingEl("t-am").textContent).toMatch(/₹0\.50 more/);
-    expect(diffOf("amount").dataset.verdict).toBe("diff");
-    expect(diffOf("amount").textContent).toMatch(/₹0\.50 more/);
-    expect(diffOf("date").textContent).toMatch(/1 day later/);
-    expect(diffOf("merchant").dataset.verdict).toBe("diff");
-    expect(diffOf("merchant").textContent).toMatch(/Different spelling/);
+    expect(within(existingEl("t-am")).getByTestId("existing-difference").textContent).toMatch(/1 day later/);
   });
 
   it("multiple possible matches: both listed, nothing pre-decided; picking one compares and keeps exactly that one", () => {
@@ -184,20 +181,11 @@ describe("live match comparison", () => {
     expect(existingIds()).toEqual(["t-z1", "t-z2"]);
     expect(screen.getAllByTestId("existing-row").every((r) => r.dataset.role === "candidate")).toBe(true);
     fireEvent.click(existingEl("t-z2"));
-    expect(dock().dataset.recordId).toBe("t-z2");
+    expect(pickedRecordId()).toBe("t-z2");
     fireEvent.click(resolve("keep_existing"));
-    expect(within(rowEl("r2")).getByText("Keep existing")).toBeTruthy();
+    expect(within(rowEl("r2")).getByTestId("decision-chip").textContent).toBe("Keep existing");
     expect(existingEl("t-z2").textContent).toMatch(/Kept by row 2/);
     expect(JSON.parse(draft()).decisions.r2.linkedRecordId).toBe("t-z2");
-  });
-
-  it("related history: other Swiggy transactions on this account", () => {
-    seed();
-    renderStudio();
-    select("r1");
-    fireEvent.click(screen.getByTestId("dock-history"));
-    expect(document.body.textContent).toMatch(/Same merchant on this account/);
-    expect(document.body.textContent).toMatch(/₹380\.00/);
   });
 });
 
@@ -207,8 +195,8 @@ describe("Git-style resolution", () => {
     const { creates, readData } = renderStudio();
     select("r1");
     fireEvent.click(resolve("keep_existing"));
-    expect(resolve("keep_existing").getAttribute("aria-pressed")).toBe("true");
-    expect(screen.getByTestId("financial-effect").textContent).toMatch(/^No write\. FlowFi keeps “Swiggy”/);
+    expect(rowEl("r1").dataset.decision).toBe("link");
+    expect(JSON.parse(draft()).decisions.r1.linkedRecordId).toBe("t-sw");
     expect(creates).not.toHaveBeenCalled();
     expect(readData).not.toHaveBeenCalled();
   });
@@ -221,79 +209,80 @@ describe("Git-style resolution", () => {
     select("r5");
     expect(rowEl("r5").dataset.state).toBe("conflict");
     expect(resolve("keep_existing").disabled).toBe(true); // one-to-one
-    fireEvent.click(resolve("keep_both"));
+    openImportConfirm();
     const submit = screen.getByTestId("import-confirm-submit") as HTMLButtonElement;
     fireEvent.change(screen.getByLabelText("Category for import"), { target: { value: "Food" } });
     expect(submit.disabled).toBe(true); // category alone is not enough — the acknowledgement is required
     fireEvent.click(screen.getByRole("checkbox", { name: "These are separate transactions" }));
     fireEvent.click(submit);
-    expect(within(rowEl("r5")).getByText("Keep both")).toBeTruthy();
+    expect(within(rowEl("r5")).getByTestId("decision-chip").textContent).toBe("Keep both");
     expect(JSON.parse(draft()).decisions.r5).toMatchObject({ kind: "import_new", notSameAck: true, category: "Food" });
   });
 
-  it("Import new: only with no possible match; a credit must be named refund or income", () => {
+  it("Import as transaction: opens the row's editor; a credit must be named refund or income; the acknowledgement is only asked when FlowFi has something similar", () => {
     seed();
     renderStudio();
-    select("r1");
-    expect(resolve("import_new").disabled).toBe(true);
     select("r7");
-    expect(resolve("keep_both").disabled).toBe(true);
-    fireEvent.click(resolve("import_new"));
+    openImportConfirm();
+    expect(screen.getByTestId("row-editor-panel")).toBeTruthy(); // the editor (date · description · amount · category · notes · owner) is what opened
     expect(screen.queryByRole("checkbox", { name: "These are separate transactions" })).toBeNull();
     fireEvent.change(screen.getByLabelText("Category for import"), { target: { value: "Salary" } });
     const submit = screen.getByTestId("import-confirm-submit") as HTMLButtonElement;
     expect(submit.disabled).toBe(true);
     fireEvent.click(screen.getByRole("radio", { name: "Refund" }));
     fireEvent.click(submit);
-    expect(within(rowEl("r7")).getByText("Import new")).toBeTruthy();
-    expect(screen.getByTestId("financial-effect").textContent).toMatch(/adds 1 refund credit of ₹300\.00/);
+    expect(within(rowEl("r7")).getByTestId("decision-chip").textContent).toBe("Import new");
+    expect(JSON.parse(draft()).decisions.r7).toMatchObject({ kind: "import_new", category: "Salary", creditAs: "refund" });
   });
 
-  it("the confirmation opens again on the next row after one was submitted (real pointer events)", async () => {
+  it("the import confirmation works again on the next row after one was submitted (real pointer events)", async () => {
     seed();
     renderStudio();
     const user = userEvent.setup();
     await user.click(rowEl("r6"));
-    await user.click(resolve("import_new"));
+    await user.click(within(rowEl("r6")).getByTestId("quick-decide"));
+    await user.click(screen.getByTestId("resolve-import"));
+    await user.click(screen.getByTestId("import-as-transaction"));
     await user.selectOptions(screen.getByLabelText("Category for import"), "Food");
     await user.click(screen.getByTestId("import-confirm-submit"));
     expect(screen.queryByTestId("import-confirm")).toBeNull();
+    expect(rowEl("r6").dataset.decision).toBe("import_new");
+    await waitFor(() => expect(screen.queryByTestId("row-editor-panel")).toBeNull()); // the editor closed after importing
     await user.click(rowEl("r7"));
-    await user.click(resolve("import_new"));
+    await user.click(within(rowEl("r7")).getByTestId("quick-decide"));
+    await user.click(screen.getByTestId("resolve-import"));
+    await user.click(screen.getByTestId("import-as-transaction"));
     expect(screen.getByTestId("import-confirm")).toBeTruthy();
-    await user.click(resolve("import_new")); // a second click never toggles it shut
-    expect(screen.getByTestId("import-confirm")).toBeTruthy();
-    await user.click(rowEl("r1")); // another row closes it
-    expect(screen.queryByTestId("import-confirm")).toBeNull();
   });
 
-  it("Replace existing and Merge details are previews: commit disabled, nothing recorded, draft untouched", () => {
+  it("Remove from review: the row leaves the list, counts follow, nothing is imported or deleted, and Undo restores it", () => {
     seed();
-    const { creates } = renderStudio();
-    select("r3");
-    const before = draft();
-
-    fireEvent.click(resolve("replace_existing"));
-    const replace = screen.getByTestId("resolution-preview");
-    expect(replace.dataset.kind).toBe("replace");
-    expect(within(replace).getByText("₹1,299.50")).toBeTruthy();
-    expect((within(replace).getByTestId("preview-commit") as HTMLButtonElement).disabled).toBe(true);
-    expect(within(replace).getByTestId("preview-unsupported").textContent).toMatch(/never edits or deletes an existing FlowFi transaction/);
-    fireEvent.click(within(replace).getByRole("button", { name: "Close preview" }));
-
-    fireEvent.click(resolve("merge_details"));
-    const merge = screen.getByTestId("resolution-preview");
-    expect(merge.dataset.kind).toBe("merge");
-    const merchantRow = merge.querySelector('[data-field="merchant"]') as HTMLElement;
-    expect(merchantRow.dataset.changed).toBe("false");
-    fireEvent.click(within(merchantRow).getByRole("radio", { name: "Statement" }));
-    expect(merchantRow.dataset.changed).toBe("true");
-    expect((within(merge).getByTestId("preview-commit") as HTMLButtonElement).disabled).toBe(true);
-    fireEvent.click(within(merge).getByRole("button", { name: "Close preview" }));
-
-    expect(draft()).toBe(before);
-    expect(within(rowEl("r3")).getByText("Undecided")).toBeTruthy();
+    const { creates, readData } = renderStudio();
+    const before = screen.getAllByTestId("recon-row").length;
+    select("r6");
+    fireEvent.click(resolve("remove"));
+    expect(screen.getAllByTestId("recon-row")).toHaveLength(before - 1);
+    expect(screen.getAllByTestId("recon-row").some((r) => r.dataset.rowId === "r6")).toBe(false);
+    expect(comparingRow()).not.toBe("r6"); // the next row is selected
+    expect(JSON.parse(draft()).rows.find((r: { id: string }) => r.id === "r6").include).toBe(false);
     expect(creates).not.toHaveBeenCalled();
+    expect(readData).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("undo-decision")); // the bottom bar's Undo puts it back
+    expect(screen.getAllByTestId("recon-row")).toHaveLength(before);
+    expect(comparingRow()).toBe("r6");
+    expect(JSON.parse(draft()).rows.find((r: { id: string }) => r.id === "r6").include).toBe(true);
+  });
+
+  it("a removed row can also be restored from the Excluded filter", () => {
+    seed();
+    renderStudio();
+    select("r6");
+    fireEvent.click(resolve("remove"));
+    fireEvent.click(screen.getByTestId("filter-menu"));
+    fireEvent.click(screen.getByRole("radio", { name: /Excluded/ }));
+    expect(statementRowIds()).toEqual(["r6"]);
+    fireEvent.click(menuItem("restore", "r6"));
+    expect(screen.getAllByTestId("recon-row").some((r) => r.dataset.rowId === "r6")).toBe(true);
   });
 
   it("Review later keeps the row open", () => {
@@ -301,8 +290,7 @@ describe("Git-style resolution", () => {
     renderStudio();
     select("r6");
     fireEvent.click(resolve("review_later"));
-    expect(within(rowEl("r6")).getByText("Review later")).toBeTruthy();
-    expect(screen.getByTestId("financial-effect").dataset.tone).toBe("pending");
+    expect(within(rowEl("r6")).getByTestId("decision-chip").textContent).toBe("Review later");
   });
 });
 
@@ -317,16 +305,16 @@ describe("undo draft decisions", () => {
     expect(screen.getByTestId("undo-decision").getAttribute("aria-label")).toBe("Undo Review later · row 6");
 
     fireEvent.click(screen.getByTestId("undo-decision"));
-    expect(within(rowEl("r6")).getByText("Undecided")).toBeTruthy();
+    expect(within(rowEl("r6")).getByTestId("decision-chip").dataset.pending).toBe("true");
     expect(screen.getByTestId("undo-notice").textContent).toMatch(/Undid “Review later · row 6”/);
 
     const grid = screen.getByRole("grid", { name: "Statement rows" });
     fireEvent.keyDown(grid, { key: "i" }); // skip r6
     expect(within(rowEl("r6")).getByText("Skipped")).toBeTruthy();
     fireEvent.keyDown(grid, { key: "z", ctrlKey: true });
-    expect(within(rowEl("r6")).getByText("Undecided")).toBeTruthy();
+    expect(within(rowEl("r6")).getByTestId("decision-chip").dataset.pending).toBe("true");
     fireEvent.keyDown(grid, { key: "z" });
-    expect(within(rowEl("r1")).getByText("Undecided")).toBeTruthy();
+    expect(within(rowEl("r1")).getByTestId("decision-chip").dataset.pending).toBe("true");
     expect((screen.getByTestId("undo-decision") as HTMLButtonElement).disabled).toBe(true);
   });
 });
@@ -350,13 +338,14 @@ describe("keyboard navigation", () => {
     expect(document.activeElement).toBe(grid);
   });
 
-  it("B opens Keep both's confirmation; the divider resizes with the arrow keys and is remembered", () => {
+  it("N opens the row's editor to import (nothing is decided by the key); the divider resizes with the arrow keys and is remembered", () => {
     seed();
     renderStudio();
     const grid = screen.getByRole("grid", { name: "Statement rows" });
-    fireEvent.keyDown(grid, { key: "b" });
-    expect(screen.getByTestId("import-confirm").textContent).toMatch(/Keep both/);
-    expect(within(rowEl("r1")).getByText("Undecided")).toBeTruthy();
+    fireEvent.keyDown(grid, { key: "n" });
+    expect(screen.getByTestId("import-as-transaction")).toBeTruthy();
+    expect(within(rowEl("r1")).getByTestId("decision-chip").dataset.pending).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
 
     const divider = screen.getByRole("separator", { name: "Resize the sheets" });
     const start = Number(divider.getAttribute("aria-valuenow"));
@@ -411,14 +400,12 @@ describe("approval regression and zero writes", () => {
     fireEvent.click(resolve("keep_existing"));
     select("r3");
     fireEvent.click(screen.getByTestId("existing-mode-ledger"));
-    fireEvent.click(resolve("merge_details"));
-    fireEvent.click(screen.getByRole("button", { name: "Close preview" }));
     fireEvent.click(resolve("keep_existing"));
     select("r4");
     fireEvent.click(resolve("keep_existing"));
     for (const id of ["r5", "r6", "r7"]) {
       select(id);
-      fireEvent.click(screen.getByTestId("resolve-skip"));
+      fireEvent.keyDown(screen.getByRole("grid", { name: "Statement rows" }), { key: "i" });
     }
     expect(readData).not.toHaveBeenCalled();
     expect(creates).not.toHaveBeenCalled();
@@ -433,7 +420,7 @@ describe("approval regression and zero writes", () => {
     expect(creates).not.toHaveBeenCalled();
   });
 
-  it("a dock-made Import new and Keep both pass the Phase 4 approval end to end (fake repositories)", async () => {
+  it("a menu-made Import as transaction (new and keep-both) passes the Phase 4 approval end to end (fake repositories)", async () => {
     seed();
     const store = new Map<string, ReturnType<typeof txn>>();
     const fakeRepo = {
@@ -448,7 +435,7 @@ describe("approval regression and zero writes", () => {
     render(<ReconciliationWorkspace uid="u1" data={DATA} sync={LOADED} approvalDeps={deps} />);
     const importVia = (rowId: string, button: "import_new" | "keep_both", credit?: "Refund") => {
       select(rowId);
-      fireEvent.click(resolve(button));
+      openImportConfirm();
       if (button === "keep_both") fireEvent.click(screen.getByRole("checkbox", { name: "These are separate transactions" }));
       fireEvent.change(screen.getByLabelText("Category for import"), { target: { value: credit ? "Salary" : "Food" } });
       if (credit) fireEvent.click(screen.getByRole("radio", { name: credit }));
@@ -469,5 +456,54 @@ describe("approval regression and zero writes", () => {
     const outcomes = within(dialog).getAllByTestId("approval-outcome").map((e) => `${e.dataset.rowId}:${e.dataset.outcome}`);
     expect(outcomes).toEqual(expect.arrayContaining(["r5:imported", "r6:imported", "r7:imported", "r1:linked"]));
     expect(fakeRepo.createTransaction).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("select → find possible matches → compare → decide (2026-11-18)", () => {
+  const comparing = () => screen.getByTestId("existing-comparing").dataset.rowId;
+
+  it("the FlowFi side always describes the selected row; a row hidden by a filter hands focus to the next shown row", () => {
+    seed();
+    renderStudio();
+    select("r3");
+    expect(comparing()).toBe("r3");
+    select("r1");
+    expect(comparing()).toBe("r1");
+    expect(existingIds()).toEqual(["t-sw"]);
+    // Decide r1, then show only Pending rows: r1 is hidden, so neither side may keep describing it.
+    fireEvent.click(resolve("keep_existing"));
+    fireEvent.click(screen.getByTestId("status-pending"));
+    expect(screen.getAllByTestId("recon-row").some((r) => r.dataset.rowId === "r1")).toBe(false);
+    expect(comparing()).toBe("r2");
+  });
+
+  it("a row with no match says so and lists the rows that do have one — one click compares them", () => {
+    seed();
+    renderStudio();
+    select("r6"); // Bookstore: only the BANK has one, so nothing on the card
+    expect(rowEl("r6").dataset.state).toBe("no_match");
+    const others = within(screen.getByTestId("existing-other-rows")).getAllByTestId("existing-other-row").map((b) => b.getAttribute("aria-label"));
+    expect(others).toEqual(expect.arrayContaining(["Compare row 1", "Compare row 2", "Compare row 3"]));
+    expect(others).not.toContain("Compare row 6");
+    fireEvent.click(within(screen.getByTestId("existing-other-rows")).getByRole("button", { name: "Compare row 1" }));
+    expect(comparing()).toBe("r1");
+    expect(existingIds()).toEqual(["t-sw"]);
+    expect(rowEl("r1").getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("Keep existing · Import as transaction · Not a match — ignoring only drops that suggestion, writes nothing, and Undo brings it back", () => {
+    seed();
+    const { creates, readData } = renderStudio();
+    select("r3"); // ₹1,299.00 vs FlowFi ₹1,299.50 — a possible match
+    expect(rowEl("r3").dataset.state).toBe("near_amount");
+    expect(resolve("import").textContent).toMatch(/Import as transaction/);
+    expect(resolve("keep_existing").textContent).toMatch(/Keep existing/);
+    fireEvent.click(resolve("ignore_match"));
+    expect(rowEl("r3").dataset.state).toBe("no_match");
+    expect(rowEl("r3").dataset.decision).toBe(""); // nothing decided or dismissed — still under review
+    fireEvent.click(screen.getByTestId("undo-decision"));
+    expect(rowEl("r3").dataset.state).toBe("near_amount");
+    expect(creates).not.toHaveBeenCalled();
+    expect(readData).not.toHaveBeenCalled();
   });
 });

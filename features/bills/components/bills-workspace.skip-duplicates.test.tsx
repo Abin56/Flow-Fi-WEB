@@ -49,10 +49,27 @@ vi.mock("@/features/bills/hooks/use-bills-data", () => ({
 vi.mock("@/hooks/use-accounts", () => ({ useAccounts: () => ({ data: [] }) }));
 vi.mock("@/hooks/use-categories", () => ({ useCategories: () => ({ data: [] }) }));
 vi.mock("@/lib/firebase/client", () => ({ firebaseApp: {}, auth: {}, db: {}, storage: {} }));
-vi.mock("@/features/bills/hooks/use-upcoming-dues", () => ({
-  UPCOMING_DUES_HORIZON_DAYS: 7,
-  useUpcomingDues: () => ({ items: [], totals: { creditCard: 0, loan: 0, emi: 0, total: 0, overdue: 0, includedInCardBills: 0 }, isLoading: false }),
-}));
+// The Payments tab's data is covered by bills-workspace.payments.test.tsx; these tests exercise the "My bills" tab + drawer.
+vi.mock("@/features/bills/hooks/use-bills-overview", async () => {
+  const { buildBillsOverview } = await import("@/features/bills/lib/bills-overview");
+  const range = { start: new Date(2026, 9, 1), end: new Date(2026, 9, 31, 23, 59, 59) };
+  return {
+    useBillsOverview: () => ({
+      isLoading: false,
+      now: new Date(2026, 9, 25),
+      startDay: 1,
+      isCustomCycle: false,
+      cycleRange: range,
+      nextRange: range,
+      isCurrent: true,
+      periodLabel: "October 2026",
+      nextPeriodLabel: "November 2026",
+      rangeLabel: "1 Oct – 31 Oct",
+      nav: { previous: vi.fn(), next: vi.fn(), current: vi.fn(), pickMonth: vi.fn() },
+      ...buildBillsOverview({ cycleObligations: [], nextCycleObligations: [], completed: { groups: [], total: 0 } }),
+    }),
+  };
+});
 
 function renderWorkspace() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -73,6 +90,7 @@ afterEach(() => {
 });
 
 async function openBill() {
+  fireEvent.click(screen.getByRole("tab", { name: /My bills/ }));
   fireEvent.click(screen.getByText("QA Electricity"));
   await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
 }

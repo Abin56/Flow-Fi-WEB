@@ -15,16 +15,16 @@ import { formatRowDate, type AccountIdentity } from "./recon-ui";
 
 export type AccountOption = AccountIdentity;
 
-export function ReconAccountBar({
-  options,
-  accountId,
-  onChange,
-  status,
-  onRetry,
-  period,
-  expiresAt,
-  storageFailed,
-}: {
+/** An evidence-based guess at the statement account (account-hints.ts) — offered, never applied for the user. */
+export interface AccountSuggestionView {
+  id: string;
+  label: string;
+  /** Statement rows with a similar transaction on that account, of `total` rows compared. */
+  rows: number;
+  total: number;
+}
+
+type AccountBarProps = {
   options: AccountOption[];
   accountId: string | null;
   onChange: (id: string) => void;
@@ -34,7 +34,150 @@ export function ReconAccountBar({
   period: { from: Date; to: Date } | null;
   expiresAt: number | null;
   storageFailed: boolean;
-}) {
+  /** "inline": one compact segment of the desktop review toolbar. "bar" (default): the standalone phone bar. */
+  variant?: "bar" | "inline";
+  suggestion?: AccountSuggestionView | null;
+};
+
+function draftText(expiresAt: number | null): string {
+  return `Draft kept in this tab for 12 hours at most${expiresAt ? ` (until ${new Date(expiresAt).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })})` : ""}`;
+}
+
+function AccountPicker({ options, accountId, onChange, selected, compact }: { options: AccountOption[]; accountId: string | null; onChange: (id: string) => void; selected: boolean; compact?: boolean }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <ClayButton
+          size="sm"
+          variant={selected ? (compact ? "ghost" : "secondary") : "primary"}
+          className={cn(compact && "h-6 px-2 text-xs")}
+          aria-label={selected ? "Change statement account" : "Choose statement account"}
+          data-testid="account-picker"
+        >
+          {selected ? "Change" : "Choose account"}
+          <ChevronDown className="size-3.5" />
+        </ClayButton>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-80 p-1.5">
+        {options.length === 0 ? (
+          <p className="px-2 py-3 text-sm text-muted-foreground">No active accounts. Add one in Accounts first.</p>
+        ) : (
+          <ul role="listbox" aria-label="Accounts" className="flex max-h-80 flex-col gap-0.5 overflow-y-auto">
+            {options.map((o) => {
+              const active = o.id === accountId;
+              const OptionIcon = o.isCard ? CreditCard : Landmark;
+              return (
+                <li key={o.id}>
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={active}
+                    aria-label={`${o.name}${o.last4 ? ` •••• ${o.last4}` : ""} · ${o.kind}`}
+                    data-testid="account-option"
+                    onClick={() => {
+                      setOpen(false);
+                      if (!active) onChange(o.id);
+                    }}
+                    className={cn("flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none", active && "bg-primary/10")}
+                  >
+                    <OptionIcon className="size-4 shrink-0 text-muted-foreground" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium text-foreground">{o.name}</span>
+                      <span className="block text-[11px] text-muted-foreground">
+                        {o.kind}
+                        {o.last4 ? ` · •••• ${o.last4}` : ""}
+                      </span>
+                    </span>
+                    {active && <Check className="size-4 shrink-0 text-primary-accent-text" />}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+export function ReconAccountBar(props: AccountBarProps) {
+  if (props.variant === "inline") return <InlineAccount {...props} />;
+  return <AccountBar {...props} />;
+}
+
+/**
+ * The desktop toolbar's account segment: one line — the account (or "Account not matched" + an evidence-based
+ * suggestion the user may take), the statement period and the draft notice as a lock with a tooltip.
+ */
+function InlineAccount({ options, accountId, onChange, status, onRetry, period, expiresAt, storageFailed, suggestion }: AccountBarProps) {
+  const selected = options.find((o) => o.id === accountId) ?? null;
+  const missing = accountId != null && selected == null && status === "ready";
+  const Icon = selected?.isCard ? CreditCard : Landmark;
+  const privacy = storageFailed ? "This browser isn't keeping a draft — your review lasts until you leave or refresh." : `${draftText(expiresAt)}. Screenshots and raw text are never saved.`;
+  return (
+    <section aria-label="Statement account" data-testid="account-bar" data-selected={selected ? "true" : "false"} className={cn("flex h-7 min-w-0 items-center gap-1.5 rounded-md px-1.5", selected ? "bg-transparent" : "bg-warning/10 ring-1 ring-warning/40")}>
+      {selected ? <Icon className="size-3.5 shrink-0 text-primary-accent-text" aria-hidden /> : <AlertTriangle className="size-3.5 shrink-0 text-warning" aria-hidden />}
+      <span className="sr-only">Statement account</span>
+      {status === "loading" && !selected ? (
+        <p className="flex items-center gap-1.5 text-xs text-muted-foreground" data-testid="accounts-loading">
+          <Loader2 className="size-3.5 animate-spin" /> Loading your accounts…
+        </p>
+      ) : status === "error" && !selected ? (
+        <p className="text-xs text-danger" role="alert" data-testid="accounts-error">
+          Couldn&apos;t load your accounts, so none can be chosen yet.
+        </p>
+      ) : selected ? (
+        <p className="flex min-w-0 items-center gap-1.5" data-testid="selected-account" title={`${selected.name}${selected.last4 ? ` •••• ${selected.last4}` : ""} · ${selected.kind} — matches are checked on this account only`}>
+          <span className="max-w-[12rem] truncate text-[13px] font-semibold text-foreground">{selected.name}</span>
+          <span className="sr-only">{selected.kind}</span>
+          {selected.last4 && <span className="font-mono text-[11px] whitespace-nowrap text-muted-foreground tabular-nums">•••• {selected.last4}</span>}
+        </p>
+      ) : (
+        <p className="relative flex min-w-0 items-center gap-1 text-xs whitespace-nowrap" data-testid="choose-account" title="Choose the card or account this statement belongs to. Nothing is pre-selected.">
+          <span className="sr-only">No account selected. </span>
+          <span className="font-semibold text-warning">{missing ? "Account removed" : "Account not matched"}</span>
+          <span className="sr-only">{missing ? "The account chosen earlier no longer exists — choose another." : "Choose the card or account this statement belongs to. Nothing is pre-selected."}</span>
+        </p>
+      )}
+      {status === "error" ? (
+        <ClayButton size="sm" variant="secondary" className="h-6 px-2 text-xs" onClick={onRetry}>
+          <RefreshCw className="size-3.5" /> Retry
+        </ClayButton>
+      ) : (
+        <AccountPicker options={options} accountId={accountId} onChange={onChange} selected={!!selected} compact />
+      )}
+      {!selected && suggestion && (
+        <button
+          type="button"
+          onClick={() => onChange(suggestion.id)}
+          className="inline-flex h-6 min-w-0 items-center gap-1 rounded-md border border-primary/40 bg-primary/10 px-1.5 text-[11px] font-medium text-foreground hover:bg-primary/15 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+          title={`${suggestion.rows} of ${suggestion.total} statement rows have a similar transaction on ${suggestion.label}. Choosing it is up to you — matches are recalculated for that account.`}
+          aria-label={`Use ${suggestion.label} as the statement account (${suggestion.rows} of ${suggestion.total} rows look similar there)`}
+          data-testid="account-suggestion"
+        >
+          <span className="text-muted-foreground">Likely</span>
+          <span className="max-w-[10rem] truncate font-semibold">{suggestion.label}</span>
+          <span className="text-muted-foreground tabular-nums">
+            {suggestion.rows}/{suggestion.total}
+          </span>
+          <span className="font-semibold text-primary-accent-text">Use</span>
+        </button>
+      )}
+      {period && (
+        <span className="hidden text-[11px] whitespace-nowrap text-muted-foreground tabular-nums xl:inline">
+          {formatRowDate(period.from)} – {formatRowDate(period.to, true)}
+        </span>
+      )}
+      <p className="relative grid size-5 shrink-0 place-items-center text-muted-foreground" data-testid="privacy-notice" title={privacy}>
+        <Lock className="size-3" aria-hidden />
+        <span className="sr-only">{privacy}</span>
+      </p>
+    </section>
+  );
+}
+
+function AccountBar({ options, accountId, onChange, status, onRetry, period, expiresAt, storageFailed }: AccountBarProps) {
   const [open, setOpen] = useState(false);
   const selected = options.find((o) => o.id === accountId) ?? null;
   const missing = accountId != null && selected == null && status === "ready";

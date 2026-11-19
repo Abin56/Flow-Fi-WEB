@@ -7,7 +7,7 @@
  */
 
 import { safeDocs } from "@/lib/firestore/safe-docs";
-import { type CollectionReference, doc, type DocumentReference, getDocs, query, runTransaction, where } from "firebase/firestore";
+import { type CollectionReference, doc, type DocumentReference, getDocs, query, runTransaction, type Transaction as FirestoreTransaction, where } from "firebase/firestore";
 import { FirestoreCrudRepository } from "@/lib/firestore/firestore-crud-repository";
 import { recordEdit, updateField } from "@/lib/firestore/soft-deletable";
 import { type LedgerEntry, type LedgerEntryType, type LedgerSourceKind, type Person, signedAmount } from "@/lib/models/person";
@@ -161,6 +161,32 @@ export class PersonRepository extends FirestoreCrudRepository<Person> {
   }
 }
 
+/** Deterministic ledger-entry id of one keyed Save action (see `LedgerRepository.addEntryWithTransaction`). */
+export function ledgerEntryIdForKey(idempotencyKey: string): string {
+  if (!/^[A-Za-z0-9_-]{8,128}$/.test(idempotencyKey)) throw new Error("Ledger idempotency key must be 8–128 letters, digits, '-' or '_'");
+  return `led_${idempotencyKey}`;
+}
+
+/**
+ * The first result of a keyed save, read INSIDE the caller's Firestore transaction (so a concurrent duplicate forces a
+ * retry and then finds it). Null = this save has not happened yet. A repeat with a different amount is refused — it is
+ * not the same save, and silently returning the old one would hide the user's change.
+ */
+async function readKeyedEntry(
+  tx: FirestoreTransaction,
+  entryRef: DocumentReference<LedgerEntry>,
+  transactionRepository: TransactionRepository,
+  amount: number,
+): Promise<{ entry: LedgerEntry; transaction: Transaction } | null> {
+  const snap = await tx.get(entryRef);
+  if (!snap.exists()) return null;
+  const entry = snap.data();
+  if (Math.abs(entry.amount - amount) >= 0.005) throw new Error("This entry was already saved with different details. Close and reopen it to edit the saved one.");
+  const transaction = entry.transactionRef != null ? await transactionRepository.getInTransaction(tx, entry.transactionRef) : null;
+  if (transaction == null) throw new Error("This entry was already saved, but its transaction can't be found — nothing was changed.");
+  return { entry, transaction };
+}
+
 /**
  * Ledger-entry persistence for one person's
  * `users/{uid}/people/{personId}/ledger` subcollection. Constructed
@@ -277,6 +303,13 @@ export class LedgerRepository extends FirestoreCrudRepository<LedgerEntry> {
       obligationRef?: string | null;
       increasesBalance?: boolean;
       receivedStatus?: ReceivedStatus;
+      /**
+       * One Save action's identity (8–128 letters, digits, '-' or '_'). With it the entry and its cash leg get
+       * deterministic ids, so a repeat of the SAME save (double submit, retry after a lost response, a concurrent
+       * duplicate) returns the first result and writes nothing — it never posts a second cash leg or balance move.
+       * A repeat whose amount differs is refused. Omitted: every call is a new entry (legitimate separate saves).
+       */
+      idempotencyKey?: string;
     },
     transactionParams: {
       type: TransactionType;
@@ -292,7 +325,7 @@ export class LedgerRepository extends FirestoreCrudRepository<LedgerEntry> {
       throw new Error("Amount must be greater than 0");
     }
 
-    const entryId = generateId();
+    const entryId = params.idempotencyKey != null ? ledgerEntryIdForKey(params.idempotencyKey) : generateId();
     const db = this.collection.firestore;
     const entryRef = doc(this.collection, entryId);
     const personRef = this.personRepository.docRef(person.id);
@@ -303,8 +336,17 @@ export class LedgerRepository extends FirestoreCrudRepository<LedgerEntry> {
     await runTransaction(db, async (tx) => {
       const personSnap = await tx.get(personRef);
       if (!personSnap.exists()) throw new Error("Person not found");
+      if (params.idempotencyKey != null) {
+        const prior = await readKeyedEntry(tx, entryRef, transactionRepository, params.amount);
+        if (prior) {
+          entry = prior.entry;
+          transaction = prior.transaction;
+          return;
+        }
+      }
 
       transaction = await transactionRepository.createTransactionInTransaction(tx, {
+        ...(params.idempotencyKey != null ? { idempotencyKey: params.idempotencyKey } : {}),
         type: transactionParams.type,
         enforceFunds: transactionParams.enforceFunds === true && transactionParams.type === "expense",
         amount: params.amount,
@@ -368,6 +410,8 @@ export class LedgerRepository extends FirestoreCrudRepository<LedgerEntry> {
       notes?: string;
       excludeFromCalculations?: boolean;
       accountingMonth?: Date | null;
+      /** One Save action's identity — a repeat of the same save returns the first result and writes nothing (see `addEntryWithTransaction`). */
+      idempotencyKey?: string;
     },
     transactionRepository: TransactionRepository,
   ): Promise<{ entry: LedgerEntry; transaction: Transaction }> {
@@ -375,7 +419,7 @@ export class LedgerRepository extends FirestoreCrudRepository<LedgerEntry> {
       throw new Error("Amount must be greater than 0");
     }
 
-    const entryId = generateId();
+    const entryId = params.idempotencyKey != null ? ledgerEntryIdForKey(params.idempotencyKey) : generateId();
     const db = this.collection.firestore;
     const entryRef = doc(this.collection, entryId);
     const personRef = this.personRepository.docRef(person.id);
@@ -386,8 +430,17 @@ export class LedgerRepository extends FirestoreCrudRepository<LedgerEntry> {
     await runTransaction(db, async (tx) => {
       const personSnap = await tx.get(personRef);
       if (!personSnap.exists()) throw new Error("Person not found");
+      if (params.idempotencyKey != null) {
+        const prior = await readKeyedEntry(tx, entryRef, transactionRepository, params.amount);
+        if (prior) {
+          entry = prior.entry;
+          transaction = prior.transaction;
+          return;
+        }
+      }
 
       transaction = await transactionRepository.createTransactionInTransaction(tx, {
+        ...(params.idempotencyKey != null ? { idempotencyKey: params.idempotencyKey } : {}),
         type: "expense",
         amount: params.amount,
         dateTime: params.date,

@@ -249,6 +249,16 @@ export function invalidateAfterEdit(decisions: Record<string, RowDecision>, rowI
   return { ...decisions, [rowId]: { ...current, kind: current.kind === "link" || current.kind === "import_new" ? null : current.kind, linkedRecordId: null, notSameAck: false, creditAs: null, notOwnTransferAck: false, rejectedRecordIds: [], bulkId: null } };
 }
 
+/** Which captured value a row's check label points at — so its editor can open with that field in focus. */
+export function attentionFieldOf(row: ReconRow): "amount" | "date" | "direction" | "description" | null {
+  const label = rowCheckLabel(row);
+  if (!label) return null;
+  if (/amount/i.test(label)) return "amount";
+  if (/date/i.test(label)) return "date";
+  if (/debit\/credit/i.test(label)) return "direction";
+  return null;
+}
+
 /**
  * What a captured row still needs, in two or three words for the statement table — null when nothing. "Fix …" = a
  * value has to be corrected or picked; "Check …" = values are present and one look settles it.

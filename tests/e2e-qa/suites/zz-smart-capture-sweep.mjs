@@ -350,13 +350,13 @@ scenario("sc-sweep-duplicates", "Smart Capture sweep: duplicates against FlowFi 
 
   // The dock for the exact row compares with the right FlowFi transaction
   await reconRow(tab, "SW EXACT").click();
-  const dock = tab.getByTestId("resolution-dock");
-  await dock.waitFor({ timeout: 30000 });
-  const dockText = flat(await dock.innerText());
-  chk("dock for the exact duplicate shows the existing SW EXACT CAFE ₹640.00", /SW EXACT CAFE/i.test(dockText) && /640\.00/.test(dockText), dockText.slice(0, 220));
+  const sheet = tab.getByTestId("existing-sheet");
+  await tab.getByTestId("existing-row").first().waitFor({ timeout: 30000 });
+  const dockText = flat(await sheet.innerText());
+  chk("the FlowFi sheet for the exact duplicate lists the existing SW EXACT CAFE ₹640.00", /SW EXACT CAFE/i.test(dockText) && /640\.00/.test(dockText), dockText.slice(0, 220));
   await reconRow(tab, "SW NEAR").click();
-  const nearText = flat(await tab.getByTestId("resolution-dock").innerText());
-  chk("dock for the near row shows FlowFi's ₹100.70 beside the statement's ₹100.00", /100\.70/.test(nearText) && /100\.00/.test(nearText), nearText.slice(0, 220));
+  const nearText = flat(await tab.getByTestId("existing-sheet").innerText());
+  chk("the FlowFi sheet for the near row lists FlowFi's ₹100.70", /100\.70/.test(nearText), nearText.slice(0, 220));
   chk("NOTHING written while reviewing duplicates", (await snapshotWrites()) === before);
   await tab.close();
 
@@ -538,7 +538,7 @@ for (const style of ["standard", "rupee", "drcr"]) {
     chk("every row is either read exactly or carries a check", truth.every((t, i) => rows[i] && ((paise(rows[i].amount ?? -1) === paise(t.amount) && rows[i].dir === t.dir) || !!rows[i].check)), JSON.stringify(rows.map((r) => [r.desc, r.amount, r.dir, r.check])));
     // The screenshot is shown beside the row, from memory
     await reconRow(page, "SWIGGY").click();
-    await page.getByTestId("dock-details").click().catch(() => {});
+    await page.getByRole("grid", { name: "Statement rows" }).press("o").catch(() => {});
     chk("the source screenshot strip is available for the row", (await page.getByRole("dialog").getByTestId("row-zoom").locator("img").count()) >= 1);
     await page.keyboard.press("Escape");
     chk("NOTHING written", (await snapshotWrites()) === before);

@@ -679,6 +679,12 @@ export function createPersonPaymentRepository(uid: string, personId: string, cas
     installmentPaymentDocRef: (scheduleId, installmentId, paymentId) =>
       createInstallmentPaymentRepositoryFor(uid, scheduleId, installmentId, createInstallmentRepositoryFor(uid, scheduleId)).docRef(paymentId),
     cashLegCategoryId,
+    // "The EMI / Loan still exists" check for installment-share repayments (see `assertAgreementStillExists`).
+    liveAgreementScheduleIds: async () => {
+      const [emis, loans] = await Promise.all([createEmiRepository(uid).getAll(), createLoanRepository(uid).getAll()]);
+      return [...emis, ...loans].filter((a) => a.deletedAt == null && a.scheduleId).map((a) => a.scheduleId);
+    },
+    scheduleDocRef: (scheduleId) => createPaymentScheduleRepository(uid).docRef(scheduleId),
   });
 }
 

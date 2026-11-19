@@ -445,17 +445,20 @@ export function ReconRowSheet({
   stateLabel,
   onClose,
   onCompare,
+  importSlot,
   children,
 }: {
   open: boolean;
   row: ReconRow;
   rowNumber: number;
   nav?: { position: number; total: number; onPrev?: () => void; onNext?: () => void };
-  /** The row's review state in words ("Undecided", "Keep existing" …). */
+  /** The row's review state in words ("Needs review", "Keep existing" …). */
   stateLabel?: string | null;
   onClose: () => void;
   /** Present when the row has been compared with FlowFi. */
   onCompare?: (rowId: string) => void;
+  /** The "Import as transaction" button (with its confirmation) — present while the row can still be imported. */
+  importSlot?: React.ReactNode;
   children: React.ReactNode;
 }) {
   /** J / K move between rows when no field or menu has focus — like the statement grid. Moving never decides anything. */
@@ -517,7 +520,8 @@ export function ReconRowSheet({
               <GitCompareArrows className="size-4" /> Compare with FlowFi
             </button>
           )}
-          <button type="button" onClick={onClose} className={cn(SHEET_BUTTON.primary, "h-9 px-6")}>
+          {importSlot}
+          <button type="button" onClick={onClose} className={cn(importSlot ? SHEET_BUTTON.secondary : SHEET_BUTTON.primary, "h-9 px-6")}>
             Done
           </button>
         </div>

@@ -29,6 +29,24 @@ export interface DuplicateComparison {
   summary: string;
 }
 
+export interface ComparisonGist {
+  /** Rows that read "same" or "similar" (unknown rows count for neither side). */
+  matching: number;
+  /** Lower-case labels of the rows that clearly differ, e.g. ["merchant"]. */
+  differs: string[];
+  /** "3 matching details · Merchant differs" — one line, never an id. */
+  text: string;
+}
+
+/** The one-line reading of a comparison for the compact card; the full table stays behind "Compare details". */
+export function summarizeComparison(comparison: Pick<DuplicateComparison, "rows">): ComparisonGist {
+  const matching = comparison.rows.filter((r) => r.match === "same" || r.match === "similar").length;
+  const differs = comparison.rows.filter((r) => r.match === "different").map((r) => r.label.split(" /")[0].toLowerCase());
+  const head = `${matching} matching ${matching === 1 ? "detail" : "details"}`;
+  const tail = differs.length > 0 ? ` · ${differs.map((d, i) => (i === 0 ? d.charAt(0).toUpperCase() + d.slice(1) : d)).join(", ")} ${differs.length > 1 ? "differ" : "differs"}` : "";
+  return { matching, differs, text: head + tail };
+}
+
 const AMOUNT_EPSILON = 0.005;
 /** Same rounding-level tolerance the fuzzy finder uses: under ₹1, or within max(₹1, 1%), reads as "similar". */
 function amountsSimilar(a: number, b: number): boolean {

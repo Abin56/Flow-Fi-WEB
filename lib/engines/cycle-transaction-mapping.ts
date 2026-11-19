@@ -111,6 +111,8 @@ export function cashFlowTransactions(
       isTransfer: isNonIncomeExpenseMovement(t) && !isLenderChargeSettlement(t),
       isCreditCardAccount,
       isCreditCardPayment: t.transferId != null && !isCreditCardAccount && cardPaymentTransferIds.has(t.transferId),
+      // Read only by `cashFlowForRange` for a day-granular window; `cashFlowThisMonth` ignores it.
+      dateTime: t.dateTime,
     };
   });
 }

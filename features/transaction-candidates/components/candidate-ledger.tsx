@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * The Inbox list: a transaction-led ledger grouped by month, replacing the old status-first table + card stack. ONE row
+ * The Inbox list: a transaction-led ledger browsed Month → Day → rows (the day bar in `day-navigator.tsx`), replacing the old status-first table + card stack. ONE row
  * component serves every width — it reflows from its container (not the viewport, because the app's sidebar leaves a
  * 768px tablet only ~500px):
  *
@@ -17,15 +17,18 @@
  */
 
 import { BankLogo } from "@/components/finance/bank-logo";
-import { ArrowDownLeft, ArrowUpRight, ChevronDown, ChevronRight, CopyX, MessageSquareText, ScanSearch, TriangleAlert } from "lucide-react";
+import { ArrowDownLeft, ArrowUpRight, ChevronDown, ChevronRight, LayoutGrid, MessageSquareText, Rows3, ScanSearch, TriangleAlert } from "lucide-react";
 import { memo, useEffect, useId, useMemo, useRef, useState, type MouseEvent } from "react";
+import { revealBlock } from "@/features/people/lib/row-reveal";
 import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
 import { smsCandidateEventTypeLabel, type SmsTransactionCandidate } from "@/lib/models/sms-transaction-candidate";
 import type { SmsTransactionCandidateRepository } from "@/lib/repositories/sms-transaction-candidate-repository";
 import type { MatchedIdentity } from "../lib/candidate-account-matching";
 import { looksLikeRawReference } from "../lib/candidate-details-view";
+import { buildDayIndex } from "../lib/candidate-day-nav";
 import type { CandidateGroup } from "../lib/candidate-month-groups";
+import { candidateDayKey } from "../lib/filters";
 import {
   amountSummary,
   candidateTitle,
@@ -36,7 +39,8 @@ import {
   signedAmountText,
   type CandidateRowModel,
 } from "./candidate-row-parts";
-import { CandidateMatchPanel } from "./candidate-match-panel";
+import { CandidateMatchPanel, DuplicateSticker } from "./candidate-match-panel";
+import { DayHeading, DayNavBar, useSelectedDay } from "./day-navigator";
 import { IgnoreCandidateButton } from "./ignore-candidate-button";
 
 const INTERACTIVE = "button, a, input, label, [role='checkbox'], [role='combobox']";
@@ -71,19 +75,26 @@ export function merchantInitials(merchant: string | null): string | null {
  * Neutral monogram tile — the same quiet surface for every merchant, never a logo or a random hue (so it can't suggest a
  * business the SMS didn't name). The corner arrow carries direction as a SHAPE, so debit vs credit never rests on colour.
  */
-function MerchantAvatar({ candidate }: { candidate: Pick<SmsTransactionCandidate, "merchant" | "direction"> }) {
+function MerchantAvatar({ candidate, compact = false }: { candidate: Pick<SmsTransactionCandidate, "merchant" | "direction">; compact?: boolean }) {
   const initials = merchantInitials(candidate.merchant);
   const credit = candidate.direction === "credit";
   return (
-    <span aria-hidden className="relative flex size-10 shrink-0 items-center justify-center rounded-xl border border-border bg-secondary text-[13px] font-semibold tracking-wide text-foreground">
-      {initials ?? <MessageSquareText className="size-4 text-muted-foreground" />}
+    <span
+      aria-hidden
+      className={cn(
+        "relative flex shrink-0 items-center justify-center border border-border bg-secondary font-semibold tracking-wide text-foreground",
+        compact ? "size-8 rounded-[7px] text-[11.5px]" : "size-10 rounded-xl text-[13px]",
+      )}
+    >
+      {initials ?? <MessageSquareText className={cn("text-muted-foreground", compact ? "size-3.5" : "size-4")} />}
       <span
         className={cn(
-          "absolute -right-1 -bottom-1 flex size-[18px] items-center justify-center rounded-full border-2 border-card",
+          "absolute flex items-center justify-center rounded-full border-2 border-card",
+          compact ? "-right-1 -bottom-1 size-[15px]" : "-right-1 -bottom-1 size-[18px]",
           credit ? "bg-success text-success-foreground" : "bg-foreground text-background",
         )}
       >
-        {credit ? <ArrowDownLeft className="size-2.5" strokeWidth={3} /> : <ArrowUpRight className="size-2.5" strokeWidth={3} />}
+        {credit ? <ArrowDownLeft className={compact ? "size-2" : "size-2.5"} strokeWidth={3} /> : <ArrowUpRight className={compact ? "size-2" : "size-2.5"} strokeWidth={3} />}
       </span>
     </span>
   );
@@ -107,21 +118,18 @@ function LedgerAmount({ candidate, className }: { candidate: Pick<SmsTransaction
 
 const NOTICE_BASE = "inline-flex h-8 max-w-full items-center gap-1.5 rounded-full border px-2.5 text-xs font-semibold whitespace-nowrap text-foreground";
 
-function AttentionNotice({ row, onReview }: { row: CandidateRowModel; onReview: (id: string) => void }) {
+/** Grid cards: a small squared tag that sits on the account line instead of a full pill on its own line. */
+const NOTICE_COMPACT = "h-6 gap-1 rounded-[5px] px-1.5 text-[11.5px]";
+
+function AttentionNotice({ row, onReview, compact = false }: { row: CandidateRowModel; onReview: (id: string) => void; compact?: boolean }) {
   const { candidate, status } = row;
   const title = candidateTitle(candidate);
   const detail = [status.explanation, ...status.reasons].filter(Boolean).join(" ");
 
   if (status.lane === "noIssues") return null;
 
-  if (status.lane === "duplicate") {
-    return (
-      <span className={cn(NOTICE_BASE, "border-danger/60 bg-danger/12")} title={detail}>
-        <CopyX className="size-3.5 shrink-0 text-danger" aria-hidden />
-        Possible duplicate
-      </span>
-    );
-  }
+  // A possible duplicate is told ONCE, by the row's corner sticker — never repeated here.
+  if (status.lane === "duplicate") return null;
 
   if (status.lane === "needsAccount") {
     // The one notice that is also an action: it opens the review drawer where the destination is chosen.
@@ -130,7 +138,7 @@ function AttentionNotice({ row, onReview }: { row: CandidateRowModel; onReview: 
         type="button"
         onClick={() => onReview(candidate.id)}
         title={detail}
-        className={cn(NOTICE_BASE, "border-warning/70 bg-warning/20 transition-colors hover:bg-warning/30 motion-reduce:transition-none", FOCUS_RING)}
+        className={cn(NOTICE_BASE, "border-warning/70 bg-warning/20 transition-colors hover:bg-warning/30 motion-reduce:transition-none", FOCUS_RING, compact && NOTICE_COMPACT)}
       >
         <TriangleAlert className="size-3.5 shrink-0 text-warning-foreground dark:text-warning" aria-hidden />
         Needs account
@@ -145,7 +153,7 @@ function AttentionNotice({ row, onReview }: { row: CandidateRowModel; onReview: 
 
   const low = candidate.confidenceLevel === "low";
   return (
-    <span className={cn(NOTICE_BASE, "border-warning/50 bg-warning/10")} title={detail}>
+    <span className={cn(NOTICE_BASE, "border-warning/50 bg-warning/10", compact && NOTICE_COMPACT)} title={detail}>
       <ScanSearch className="size-3.5 shrink-0 text-warning-foreground dark:text-warning" aria-hidden />
       {low ? "Needs review" : "Review suggested"}
     </span>
@@ -155,11 +163,11 @@ function AttentionNotice({ row, onReview }: { row: CandidateRowModel; onReview: 
 // ── bank / card identity ──
 
 /** Verified match only: the bank's logo (existing BankLogo, monogram fallback), the card/account name and the masked last four. */
-export function IdentityChip({ identity, className }: { identity: MatchedIdentity; className?: string }) {
+export function IdentityChip({ identity, className, logoSize = 18, logoShape }: { identity: MatchedIdentity; className?: string; logoSize?: number; logoShape?: "circle" | "square" }) {
   const label = `${identity.name}${identity.last4 ? ` •••• ${identity.last4}` : ""}`;
   return (
     <span className={cn("inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-full border border-border bg-secondary/60 py-0.5 pr-2 pl-0.5 text-xs font-semibold text-foreground", className)} title={`${identity.kind === "card" ? "Credit card" : "Account"}: ${label}`}>
-      <BankLogo bankId={identity.bankId} size={18} />
+      <BankLogo bankId={identity.bankId} size={logoSize} {...(logoShape ? { shape: logoShape } : {})} />
       <span className="min-w-0 truncate">{identity.name}</span>
       {identity.last4 && <span className="shrink-0 font-medium text-muted-foreground tabular-nums">•••• {identity.last4}</span>}
     </span>
@@ -182,7 +190,7 @@ function quickPreviewFacts(row: CandidateRowModel): string[] {
           : "an account now ends in these digits";
     facts.push(`Matched to ${row.rematch.label} by last-4${row.rematch.bankConfirmed ? " and bank" : ""} — ${why}.`);
   }
-  if (status.lane !== "noIssues") {
+  if (status.lane !== "noIssues" && status.lane !== "duplicate") {
     const detail = status.explanation || status.reasons.join(" ");
     if (detail) facts.push(detail);
   }
@@ -221,12 +229,15 @@ function Dot() {
  * Memoized: opening the details sheet re-renders the whole workspace, and re-drawing every row of a long inbox at that
  * moment is what made the sheet's slide-in stutter. A row only redraws when its own model (or the stable `actions`) changes.
  */
-const LedgerRow = memo(function LedgerRow({ row, actions, showDate }: { row: CandidateRowModel; actions: RowActions; showDate: boolean }) {
+const LedgerRow = memo(function LedgerRow({ row, actions, showDate, index }: { row: CandidateRowModel; actions: RowActions; showDate: boolean; index: number }) {
   const { candidate, status } = row;
   const isDuplicate = status.lane === "duplicate";
   const matches = row.matches ?? [];
-  // A similar saved transaction the strict check didn't flag: a softer, warning-toned rail (the lane and every count are unchanged).
-  const hasSoftMatch = !isDuplicate && matches.length > 0;
+  // Strict duplicate OR a similar saved transaction the strict check didn't flag: both get the same single corner sticker
+  // (the lane and every count are unchanged — the sticker is presentation only).
+  const flagged = isDuplicate || matches.length > 0;
+  const [matchesOpen, setMatchesOpen] = useState(false);
+  const matchesId = useId();
   const unnamed = candidate.merchant == null;
   // Under a day heading the date is already known — show the time instead (only when the candidate carries one).
   const d = candidate.transactionDate;
@@ -252,14 +263,28 @@ const LedgerRow = memo(function LedgerRow({ row, actions, showDate }: { row: Can
         // Rows past the first screenful skip layout + paint until they near the viewport (the browser remembers each row's real height
         // once seen), which keeps scrolling smooth through a long inbox. The first rows are never skipped, so they are always fully
         // rendered, readable (innerText) and focusable the moment the list appears; `auto` keeps find-in-page and scrollIntoView working.
-        row.number > 20 && "[contain-intrinsic-size:auto_4.5rem] [content-visibility:auto]",
-        row.selected ? "bg-primary/12 hover:bg-primary/16" : isDuplicate ? "bg-danger/[0.05] hover:bg-danger/[0.09]" : "hover:bg-muted/60",
+        index >= 20 && "[contain-intrinsic-size:auto_4.5rem] [content-visibility:auto]",
+        row.selected ? "bg-primary/12 hover:bg-primary/16" : "hover:bg-muted/60",
         "focus-within:bg-muted/60",
       )}
     >
-      {/* State rail: lime = selected, red = duplicate. Colour-independent cues (the notice text, the checked box) always accompany it. */}
-      <span aria-hidden className={cn("absolute inset-y-0 left-0 w-[3px]", row.selected ? "bg-primary" : isDuplicate ? "bg-danger" : hasSoftMatch ? "bg-warning" : "bg-transparent")} />
-      <div className="grid grid-cols-[2.75rem_2.5rem_minmax(0,1fr)_auto] items-center gap-x-2.5 gap-y-1.5 py-2 pr-2.5 pl-1 @4xl:grid-cols-[2.75rem_2.5rem_minmax(0,1fr)_10rem_9rem_11rem] @4xl:gap-y-0 @4xl:py-2.5 @4xl:pr-3">
+      {/* State rail: lime = selected (the checked box says it too). A duplicate is told by the corner sticker alone. */}
+      <span aria-hidden className={cn("absolute inset-y-0 left-0 w-[3px]", row.selected ? "bg-primary" : "bg-transparent")} />
+      {flagged && (
+        <DuplicateSticker
+          exact={isDuplicate || matches[0]?.kind === "exact"}
+          open={matches.length > 0 ? matchesOpen : null}
+          controls={matches.length > 0 ? matchesId : undefined}
+          onClick={() => (matches.length > 0 ? setMatchesOpen((o) => !o) : actions.onReview(candidate.id))}
+        />
+      )}
+      <div
+        className={cn(
+          "grid grid-cols-[2.75rem_2.5rem_minmax(0,1fr)_auto] items-center gap-x-2.5 gap-y-1.5 py-2 pr-2.5 pl-1 @4xl:grid-cols-[2.75rem_2.5rem_minmax(0,1fr)_10rem_9rem_11rem] @4xl:gap-y-0 @4xl:py-2.5 @4xl:pr-3",
+          // Room for the corner sticker, so it never sits on the avatar or the merchant name.
+          flagged && "pt-6 @4xl:pt-6",
+        )}
+      >
         <RowCheckbox row={row} onToggle={actions.onToggle} className="col-start-1 row-start-1" />
         <div className="col-start-2 row-start-1">
           <MerchantAvatar candidate={candidate} />
@@ -308,6 +333,8 @@ const LedgerRow = memo(function LedgerRow({ row, actions, showDate }: { row: Can
                 .join(" · ")}
             </span>
           )}
+          {/* The saved transaction(s) behind the sticker — folded until the sticker is clicked. */}
+          {matches.length > 0 && <CandidateMatchPanel id={matchesId} matches={matches} open={matchesOpen} onCompare={() => actions.onReview(candidate.id)} />}
           {/* Narrow only: the notice sits with the merchant it's about. Wide rows use the aligned notice column below. */}
           <div className="mt-1 flex empty:hidden @4xl:hidden">
             <AttentionNotice row={row} onReview={actions.onReview} />
@@ -335,11 +362,6 @@ const LedgerRow = memo(function LedgerRow({ row, actions, showDate }: { row: Can
           </div>
         </div>
       </div>
-      {matches.length > 0 && (
-        <div className="pr-3 pb-2.5 pl-3 @4xl:pb-3 @4xl:pl-16" data-testid="candidate-row-matches">
-          <CandidateMatchPanel matches={matches} onCompare={() => actions.onReview(candidate.id)} />
-        </div>
-      )}
       {previewOpen && previewFacts.length > 0 && (
         <div className="pb-2.5 pl-16 pr-3 @4xl:pb-2" data-testid="candidate-quick-preview">
           <ul className="flex flex-col gap-1 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs leading-snug text-muted-foreground">
@@ -355,30 +377,159 @@ const LedgerRow = memo(function LedgerRow({ row, actions, showDate }: { row: Can
   );
 });
 
-// ── groups ───────────────────────────────────────────────────────────────────────────────────────────────────────
+// ── grid card: the same facts and actions as a row, laid out as a tile ───────────────────────────────────────────
 
-const LedgerGroupSection = memo(function LedgerGroupSection({ group, actions, stickyTop }: { group: LedgerGroup; actions: RowActions; stickyTop: number }) {
-  const headingId = useId();
-  const count = group.rows.length;
+/**
+ * Grid view tile. Presentation only — the same `CandidateRowModel`, the same checkbox / Review / Dismiss controls and the same
+ * single duplicate sticker as the list row; a click on empty card space opens Review, exactly like a row.
+ */
+const LedgerCard = memo(function LedgerCard({ row, actions, index }: { row: CandidateRowModel; actions: RowActions; index: number }) {
+  const { candidate, status } = row;
+  const isDuplicate = status.lane === "duplicate";
+  const matches = row.matches ?? [];
+  const flagged = isDuplicate || matches.length > 0;
+  const [matchesOpen, setMatchesOpen] = useState(false);
+  const matchesId = useId();
+  const unnamed = candidate.merchant == null;
+  const d = candidate.transactionDate;
+  const hasTime = d.getHours() !== 0 || d.getMinutes() !== 0;
+  const dayText = d.toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
+  const timeText = hasTime ? d.toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit", hour12: true }) : null;
+  const credit = candidate.direction === "credit";
+
+  function onCardClick(e: MouseEvent<HTMLLIElement>) {
+    if ((e.target as HTMLElement).closest(INTERACTIVE)) return;
+    // Clicks bubble here from portalled content too (the Dismiss tooltip) — only a click inside the card itself counts.
+    if (!e.currentTarget.contains(e.target as Node)) return;
+    // Selecting text (to copy an amount or merchant) is not a request to open Review.
+    if (window.getSelection()?.toString()) return;
+    actions.onReview(candidate.id);
+  }
+
   return (
-    <section aria-labelledby={headingId} data-testid="candidate-group" data-group-key={group.key}>
-      <div style={{ top: stickyTop }} className="sticky z-[1] flex items-baseline justify-between gap-3 bg-background px-1 py-1.5">
-        <h2 id={headingId} className="flex items-baseline gap-2 font-heading text-[15px] font-semibold tracking-tight text-foreground">
-          {group.label}
-          {group.dateText && <span className="text-xs font-medium tracking-normal text-muted-foreground">{group.dateText}</span>}
-        </h2>
-        <p className="text-xs font-medium text-muted-foreground tabular-nums">
-          {count} {count === 1 ? "transaction" : "transactions"}
-        </p>
+    <li
+      data-testid="candidate-row"
+      data-layout="grid"
+      data-candidate-id={candidate.id}
+      data-lane={status.lane}
+      onClick={onCardClick}
+      style={{ animationDelay: `${Math.min(index, 12) * 25}ms` }}
+      className={cn(
+        // Neutral surface, 10px corners; colour is only an accent (left rail, amount, direction tag). No hover lift: a card that moves
+        // under the pointer invites a mis-click on the action row.
+        "group/card relative isolate flex cursor-pointer flex-col overflow-hidden rounded-[10px] border bg-card shadow-e1",
+        "animate-in fade-in-0 fill-mode-backwards duration-200 motion-reduce:animate-none",
+        "transition-[box-shadow,border-color,background-color] duration-150 hover:shadow-e2 motion-reduce:transition-none",
+        row.selected ? "border-primary bg-primary/[0.04] ring-1 ring-primary/40" : flagged ? "border-danger/35 hover:border-danger/55" : "border-border hover:border-border-strong",
+      )}
+    >
+      {/* Direction rail: Money In = green, Money Out = coral. The sign, the tag and the avatar arrow say it too — never colour alone. */}
+      <span aria-hidden className={cn("pointer-events-none absolute inset-y-0 left-0 w-[3px]", credit ? "bg-success/75" : "bg-expense/60")} />
+      {flagged && (
+        <DuplicateSticker
+          exact={isDuplicate || matches[0]?.kind === "exact"}
+          open={matches.length > 0 ? matchesOpen : null}
+          controls={matches.length > 0 ? matchesId : undefined}
+          onClick={() => (matches.length > 0 ? setMatchesOpen((o) => !o) : actions.onReview(candidate.id))}
+        />
+      )}
+
+      <div className={cn("flex flex-col gap-1.5 pr-2.5 pb-2.5 pl-3.5", flagged ? "pt-6" : "pt-2.5")}>
+        {/* Date · time, and selection (the 32px target overlaps the padding so it adds no height). */}
+        <div className="flex h-4 items-center justify-between gap-2">
+          <span className="truncate text-[11.5px] font-medium text-muted-foreground tabular-nums">
+            {dayText}
+            {timeText && <span className="text-muted-foreground/80"> · {timeText}</span>}
+          </span>
+          <RowCheckbox row={row} onToggle={actions.onToggle} className="-my-2 -mr-1.5 size-8" />
+        </div>
+
+        {/* Amount — the strongest element — with its direction tag. */}
+        <div className="flex items-center justify-between gap-2">
+          <span
+            aria-label={`${credit ? "Credit" : "Debit"} ${amountSummary(candidate)}`}
+            className={cn("truncate font-heading text-[22px] leading-[1.1] font-bold tracking-tight tabular-nums", credit ? "text-success" : "text-foreground")}
+          >
+            {signedAmountText(candidate)}
+          </span>
+          <span
+            aria-hidden
+            className={cn(
+              "inline-flex shrink-0 items-center gap-0.5 rounded-[4px] px-1.5 py-[3px] text-[10px] leading-none font-bold tracking-[0.06em] uppercase",
+              credit ? "bg-success/12 text-success" : "bg-expense/10 text-expense",
+            )}
+          >
+            {credit ? <ArrowDownLeft className="size-3" strokeWidth={2.75} /> : <ArrowUpRight className="size-3" strokeWidth={2.75} />}
+            {credit ? "Credit" : "Debit"}
+          </span>
+        </div>
+
+        {/* Merchant + transaction type */}
+        <div className="flex min-w-0 items-center gap-2">
+          <MerchantAvatar candidate={candidate} compact />
+          <div className="flex min-w-0 flex-1 flex-col leading-tight">
+            <span className={cn("truncate text-[13.5px] font-semibold", unnamed ? "text-muted-foreground" : "text-foreground")} title={candidate.merchant ?? undefined}>
+              {unnamed ? "Unknown merchant" : candidateTitle(candidate)}
+            </span>
+            <span className="truncate text-[11.5px] text-muted-foreground">{smsCandidateEventTypeLabel(candidate.eventType)}</span>
+          </div>
+        </div>
+
+        {/* Account line — the attention notice (Needs account / Needs review) shares it on ONE line, so flagged cards keep the same
+            height; the account text truncates first (full text in its tooltip). */}
+        <div className="flex min-h-6 min-w-0 items-center gap-1.5 text-[11.5px] text-muted-foreground">
+          {row.identity ? (
+            <IdentityChip identity={row.identity} logoSize={16} logoShape="square" className="max-w-full min-w-0 rounded-[5px] border-transparent bg-secondary/70 py-[3px] pr-1.5 pl-[3px] text-[11.5px]" />
+          ) : (
+            <span className="min-w-0 truncate" title={row.accountHint}>
+              {row.accountHint}
+            </span>
+          )}
+          {row.accountSuggestion && (
+            <span className="min-w-0 truncate font-medium text-foreground/80" data-testid="account-suggestion" title="A saved account ends in the same last-4 — open Review to confirm it.">
+              Suggested: {row.accountSuggestion}
+            </span>
+          )}
+          <span className="ml-auto flex shrink-0 empty:hidden">
+            <AttentionNotice row={row} onReview={actions.onReview} compact />
+          </span>
+        </div>
+
+        {matches.length > 0 && <CandidateMatchPanel id={matchesId} matches={matches} open={matchesOpen} onCompare={() => actions.onReview(candidate.id)} />}
       </div>
-      <ul className="divide-y divide-border overflow-hidden rounded-2xl border border-border bg-card shadow-e1" aria-labelledby={headingId}>
-        {group.rows.map((row) => (
-          <LedgerRow key={row.candidate.id} row={row} actions={actions} showDate={group.flat} />
-        ))}
-      </ul>
-    </section>
+
+      {/* Actions: Review (primary, fills on card hover — a card click opens it too) at the left; Dismiss, labelled, at the far right,
+          so the two are never side by side. */}
+      <div className="mt-auto flex items-center justify-between gap-2 border-t border-border-subtle px-2 py-1.5">
+        <ReviewButton
+          candidate={candidate}
+          onReview={actions.onReview}
+          className="h-[30px] min-w-[5.5rem] rounded-[7px] px-3 text-[13px] group-hover/card:border-primary group-hover/card:bg-primary group-hover/card:text-primary-foreground hover:bg-[var(--primary-hover)]"
+        />
+        {actions.candidateRepository && (
+          <IgnoreCandidateButton
+            candidate={candidate}
+            candidateRepository={actions.candidateRepository}
+            onHide={actions.onHide}
+            onUnhide={actions.onUnhide}
+            className={cn("h-[30px] shrink-0 rounded-[7px] px-2 text-[12.5px] text-muted-foreground", FOCUS_RING)}
+          />
+        )}
+      </div>
+    </li>
   );
 });
+
+// ── groups ───────────────────────────────────────────────────────────────────────────────────────────────────────
+
+export type LedgerLayout = "list" | "grid";
+
+/** What "Select all eligible" would do for a set of cards — computed by the workspace with the same bulk-selection rules as the list. */
+export interface ScopeSelection {
+  allSelected: boolean;
+  someSelected: boolean;
+  disabled: boolean;
+}
 
 export function CandidateLedger({
   groups,
@@ -388,11 +539,12 @@ export function CandidateLedger({
   someSelected,
   selectAllDisabled,
   onToggleAll,
+  selectionForScope,
   stickyTop = 0,
   ...liveActions
 }: {
   groups: LedgerGroup[];
-  /** Where a month heading sticks (px, sticky-offset space): right under the page's own pinned bars. */
+  /** Where a day heading / the day bar sticks (px, sticky-offset space): right under the page's own pinned bars. */
   stickyTop?: number;
   /** Rows currently shown / total in the queue — "Showing 12 of 126". */
   shownCount: number;
@@ -400,7 +552,10 @@ export function CandidateLedger({
   allSelected: boolean;
   someSelected: boolean;
   selectAllDisabled: boolean;
-  onToggleAll: (checked: boolean) => void;
+  /** `scopeIds` is the open day's rows (Grid and List alike): "all" means those — never rows the reviewer can't see. */
+  onToggleAll: (checked: boolean, scopeIds?: readonly string[]) => void;
+  /** The select-all state for just the open day's rows. Without it the whole-list state above is used. */
+  selectionForScope?: (scopeIds: readonly string[]) => ScopeSelection;
 } & RowActions) {
   // A stable `actions` object: its handlers always call the latest props, so the memoized rows never see a new identity
   // (and never act on a stale closure). Only the repository — which rows read as a value — can change it.
@@ -419,6 +574,44 @@ export function CandidateLedger({
     }),
     [candidateRepository],
   );
+  const [layout, setLayout] = useLedgerLayout();
+  const grid = layout === "grid";
+
+  // ── Month → Day → Cards (Grid) or Rows (List) ──
+  // The days come from the rows the workspace already filtered and sorted, so every count follows the active filters, and a
+  // card that is dismissed (or imported) leaves its day's count at once.
+  const allRows = useMemo(() => groups.flatMap((g) => g.rows), [groups]);
+  const dayIndex = useMemo(() => buildDayIndex(allRows, (r) => r.candidate.transactionDate), [allRows]);
+  // A date sort opens on the day of its first row (Oldest first → the oldest day); any other sort opens on the newest day.
+  const firstRowDay = groups[0] && !groups[0].flat && allRows[0] ? candidateDayKey(allRows[0].candidate.transactionDate) : null;
+  const { day, select: selectDay } = useSelectedDay(dayIndex.days, firstRowDay);
+  const dayRows = useMemo(() => (day ? (dayIndex.byDay.get(day) ?? []) : []), [dayIndex, day]);
+  const selectedElsewhere = useMemo(() => {
+    let n = 0;
+    for (const [key, list] of dayIndex.byDay) if (key !== day) for (const r of list) if (r.selected) n++;
+    return n;
+  }, [dayIndex, day]);
+
+  const idBase = useId();
+  const panelId = `${idBase}-panel`;
+  const dayHeadingId = `${idBase}-heading`;
+  const dayHeadingRef = useRef<HTMLDivElement>(null);
+  // Changing day can leave the page scrolled past the new day's heading (a long day, then a short one): bring it back under the
+  // pinned bars. A no-op when the heading is already in view, so it never moves the page needlessly.
+  const shownDay = useRef(day);
+  useEffect(() => {
+    if (shownDay.current === day) return;
+    shownDay.current = day;
+    if (dayHeadingRef.current) revealBlock(dayHeadingRef.current);
+  }, [day]);
+
+  // "Select all" means the open day's rows in either layout — never rows the reviewer can't see.
+  const scopeIds = dayRows.map((r) => r.candidate.id);
+  const scoped = selectionForScope ? selectionForScope(scopeIds) : null;
+  const allOn = scoped ? scoped.allSelected : allSelected;
+  const someOn = scoped ? scoped.someSelected : someSelected;
+  const selectOff = scoped ? scoped.disabled : selectAllDisabled;
+
   return (
     <div className="@container flex flex-col" data-testid="candidates-ledger">
       <div className="flex min-h-9 items-center justify-between gap-3 px-1">
@@ -433,22 +626,104 @@ export function CandidateLedger({
             </>
           )}
         </p>
-        <label className={cn("flex min-h-10 cursor-pointer items-center gap-2.5 text-sm font-medium text-foreground", selectAllDisabled && "cursor-not-allowed opacity-60")}>
-          <Checkbox
-            className={CHECKBOX_CLASS}
-            checked={allSelected ? true : someSelected ? "indeterminate" : false}
-            disabled={selectAllDisabled}
-            onCheckedChange={(checked) => onToggleAll(checked === true)}
-            aria-label="Select all visible candidates that can be imported together"
+        <div className="flex items-center gap-3">
+          <LayoutSwitch value={layout} onChange={setLayout} />
+          <label className={cn("flex min-h-10 cursor-pointer items-center gap-2.5 text-sm font-medium text-foreground", selectOff && "cursor-not-allowed opacity-60")}>
+            <Checkbox
+              className={CHECKBOX_CLASS}
+              checked={allOn ? true : someOn ? "indeterminate" : false}
+              disabled={selectOff}
+              onCheckedChange={(checked) => onToggleAll(checked === true, scopeIds)}
+              aria-label="Select all visible candidates on this day that can be imported together"
+            />
+            Select all eligible on this day
+          </label>
+        </div>
+      </div>
+
+      {day && (
+        <>
+          <DayNavBar days={dayIndex.days} months={dayIndex.months} selected={day} onSelect={selectDay} stickyTop={stickyTop} idBase={idBase} panelId={panelId} />
+          <DayHeading
+            selected={day}
+            count={dayRows.length}
+            selectedElsewhere={selectedElsewhere}
+            headingId={dayHeadingId}
+            headingRef={dayHeadingRef}
           />
-          Select all eligible
-        </label>
-      </div>
-      <div className="flex flex-col gap-1">
-        {groups.map((group) => (
-          <LedgerGroupSection key={group.key} group={group} actions={actions} stickyTop={stickyTop} />
-        ))}
-      </div>
+          {/* Keyed by day: the rows of a newly chosen day fade in (the same short fade a card always had; none under reduced motion) instead of snapping. */}
+          <div role="tabpanel" id={panelId} aria-labelledby={`${idBase}-${day}`} data-testid="candidate-group" data-group-key={day}>
+            {grid ? (
+              <ul key={day} className="grid grid-cols-[repeat(auto-fill,minmax(14.5rem,1fr))] gap-2.5 pt-0.5 pb-2.5" aria-labelledby={dayHeadingId} data-testid="candidate-grid">
+                {dayRows.map((row, i) => (
+                  <LedgerCard key={row.candidate.id} row={row} actions={actions} index={i} />
+                ))}
+              </ul>
+            ) : (
+              <ul
+                key={day}
+                className="animate-in divide-y divide-border overflow-hidden rounded-2xl border border-border bg-card shadow-e1 fade-in-0 duration-150 motion-reduce:animate-none"
+                aria-labelledby={dayHeadingId}
+                data-testid="candidate-list"
+              >
+                {dayRows.map((row, i) => (
+                  <LedgerRow key={row.candidate.id} row={row} actions={actions} showDate={false} index={i} />
+                ))}
+              </ul>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+const LAYOUT_KEY = "flowfi.inbox.layout";
+
+/** List / Grid preference — a per-viewer convenience only (storage may be unavailable; it then simply defaults to List). */
+function useLedgerLayout(): [LedgerLayout, (next: LedgerLayout) => void] {
+  const [layout, setLayoutState] = useState<LedgerLayout>("list");
+  useEffect(() => {
+    try {
+      if (window.localStorage.getItem(LAYOUT_KEY) === "grid") setLayoutState("grid");
+    } catch {
+      // storage blocked: keep List
+    }
+  }, []);
+  function setLayout(next: LedgerLayout) {
+    setLayoutState(next);
+    try {
+      window.localStorage.setItem(LAYOUT_KEY, next);
+    } catch {
+      // storage blocked: the choice lasts for this visit only
+    }
+  }
+  return [layout, setLayout];
+}
+
+function LayoutSwitch({ value, onChange }: { value: LedgerLayout; onChange: (next: LedgerLayout) => void }) {
+  const options = [
+    { value: "list" as const, label: "List view", Icon: Rows3 },
+    { value: "grid" as const, label: "Grid view", Icon: LayoutGrid },
+  ];
+  return (
+    <div role="group" aria-label="Layout" className="inline-flex shrink-0 rounded-[10px] border border-border-strong bg-card p-0.5" data-testid="layout-switch">
+      {options.map(({ value: v, label, Icon }) => {
+        const on = value === v;
+        return (
+          <button
+            key={v}
+            type="button"
+            aria-pressed={on}
+            aria-label={label}
+            title={label}
+            onClick={() => onChange(v)}
+            className={cn("inline-flex size-8 items-center justify-center rounded-lg transition-colors motion-reduce:transition-none", FOCUS_RING, on ? "bg-foreground text-background" : "text-muted-foreground hover:bg-secondary hover:text-foreground")}
+          >
+            <Icon className="size-4" aria-hidden />
+          </button>
+        );
+      })}
     </div>
   );
 }

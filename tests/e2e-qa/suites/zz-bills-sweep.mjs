@@ -20,8 +20,11 @@ scenario("bills-sweep-render", "Bills sweep: page renders, tiles + cards + dues 
   await openBills(page);
   const main = flat(await page.locator("main").innerText());
   await h.shot(page, "bills-sweep-desktop-light");
-  for (const t of ["Bills Due This Month", "Overdue", "Paid", "Upcoming", "Card, Loan & EMI Dues", "QA Electricity"]) chk(`page shows "${t}"`, main.includes(t), main.slice(0, 200));
+  for (const t of ["Due this cycle", "Overdue", "Upcoming", "Paid", "Payments", "My bills"]) chk(`page shows "${t}"`, main.includes(t), main.slice(0, 200));
   chk("Add Bill button present", (await page.getByRole("button", { name: "Add Bill" }).count()) >= 1);
+  await h.openMyBills(page);
+  chk("the bill cards are on the My bills tab", (await page.getByRole("button", { name: /QA Electricity/ }).count()) >= 1);
+  await page.getByRole("tab", { name: "Payments" }).click();
   chk("no 'NaN' / 'undefined' / 'Infinity' / '[object' text", !/NaN|undefined|Infinity|\[object/.test(main), (main.match(/.{0,30}(NaN|undefined|Infinity|\[object).{0,30}/) || [""])[0]);
   chk("no skeleton left after load", (await page.locator('main [class*="animate-pulse"]').count()) === 0);
   chk("header count matches cards", /(\d+) bills/.test(main) && Number(/(\d+) bills/.exec(main)[1]) === (await bills()).length, /(\d+) bills/.exec(main)?.[0]);
@@ -100,6 +103,7 @@ scenario("bills-sweep-add-validation", "Bills sweep: Add Bill refuses a blank na
   await page.waitForTimeout(1500);
   const net = (await bills()).find((b) => b.name === "QA Internet");
   chk("valid bill is stored", !!net && Number(net.amount) === 999, JSON.stringify(net && [net.name, net.amount]));
+  await h.openMyBills(page);
   chk("valid bill appears as a card", (await page.getByRole("button", { name: /QA Internet/ }).count()) >= 1);
   const errs = logs.filter((l) => !IGNORED.test(l));
   chk("no console errors", errs.length === 0, errs.slice(0, 5).join(" || "));
@@ -107,6 +111,7 @@ scenario("bills-sweep-add-validation", "Bills sweep: Add Bill refuses a blank na
 
 scenario("bills-sweep-pay-date", "Bills sweep: Pay dialog refuses a cleared / incomplete payment date instead of posting a 1900 debit", async ({ page, logs }, chk) => {
   await openBills(page);
+  await h.openMyBills(page);
   await page.getByRole("button", { name: /QA Electricity/ }).first().click();
   await page.getByRole("button", { name: "Pay…" }).click();
   const dlg = page.getByRole("dialog", { name: /Pay QA Electricity/ });

@@ -27,6 +27,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ConfirmDialog, EmptyState } from "@/components/finance";
 import { SHOW_AT as COMPACT_BAR_SHOW_AT, useCompactHeader } from "@/components/layout/compact-header";
 import { ScrollNav } from "@/components/layout/scroll-nav";
+import { FOCUS_TOGGLE_TESTID, useFocusMode } from "@/features/reconciliation/hooks/use-focus-mode";
 import { SmsInboxEmptyState } from "@/features/transaction-candidates/components/sms-inbox-empty-state";
 import { SmsSyncStatusBar } from "@/features/transaction-candidates/components/sms-sync-status-bar";
 import { formatCurrencyExact } from "@/lib/format";
@@ -89,14 +90,14 @@ import {
 import { buildFilterChips, type FilterChip } from "../lib/candidate-filter-chips";
 import { parseCandidateViewState, serializeCandidateViewState } from "../lib/candidate-filter-url";
 import { groupCandidatesForDisplay } from "../lib/candidate-month-groups";
-import { scheduleDelayedDismiss } from "../lib/delayed-dismiss";
+import { scheduleDelayedDismiss, UNDO_TOAST_OPTIONS, undoToastAction } from "../lib/delayed-dismiss";
 import { bulkImportCandidates, ignoreCandidate } from "../lib/import-candidate";
 import { bulkImportSummaryText, summarizeBulkImport, type PartialImportNotice } from "../lib/import-messages";
 import { BulkImportDialog, type BulkImportSelection } from "./bulk-import-dialog";
 import { CandidateBulkBar } from "./candidate-bulk-bar";
 import { CandidateCompactBar } from "./candidate-compact-bar";
 import { CandidateDetailsModal } from "./candidate-details-modal";
-import { CandidateLedger, CandidateLedgerSkeleton, type LedgerGroup } from "./candidate-ledger";
+import { CandidateLedger, CandidateLedgerSkeleton, type LedgerGroup, type ScopeSelection } from "./candidate-ledger";
 import { CandidateFilterSheet } from "./candidate-filter-sheet";
 import { CandidateOverview } from "./candidate-overview";
 import { candidateTitle, FOCUS_RING, type CandidateRowModel } from "./candidate-row-parts";
@@ -204,19 +205,12 @@ export function TransactionCandidatesWorkspace() {
     });
   }, []);
 
-  // Same fullscreen pattern as Transaction Studio's own toggle — `fixed inset-0` overlay, Escape to exit.
-  const [fullscreen, setFullscreen] = useState(false);
-  useEffect(() => {
-    if (!fullscreen) return;
-    function onKeyDown(e: KeyboardEvent) {
-      if (e.key !== "Escape") return;
-      // Escape belongs to an open popup first (it closes that popup), not to the fullscreen toggle underneath it.
-      if (document.querySelector('[role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"]')) return;
-      setFullscreen(false);
-    }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [fullscreen]);
+  // Full screen = the shell's Focus Mode (shared with Reconciliation): the app shell hides the sidebar + topbar and drops its
+  // padding, and the Inbox keeps scrolling in the shell's own <main> exactly as it does normally. It used to be a private
+  // `fixed inset-0` overlay at z-hero (3) inside <main> — a SECOND scroll container whose sticky offsets needed special-casing,
+  // and which shell chrome with a higher z-index (the sidebar's nav scroll track) painted over while you scrolled.
+  // The hook also owns Escape (never while a dialog/menu is open or while typing) and turns itself off when the page unmounts.
+  const { focus: fullscreen, toggleFocus: toggleFullscreen } = useFocusMode();
 
   // Ids whose Dismiss is currently in its undo window (see `delayed-dismiss.ts`) — hidden from every view of the list
   // immediately, before the real Firestore delete actually runs.
@@ -395,10 +389,31 @@ export function TransactionCandidatesWorkspace() {
   const allVisibleSelected = selectableVisibleCandidates.length > 0 && selectableVisibleCandidates.every((c) => selectedIds.has(c.id));
   const someVisibleSelected = selectableVisibleCandidates.some((c) => selectedIds.has(c.id));
 
-  function toggleSelectAllVisible(checked: boolean) {
+  /**
+   * What "Select all eligible" may pick: from the whole visible list, or — in Grid view, which shows one day at a time — only from
+   * the cards of the open day (`scopeIds`), so it can never tick rows the reviewer can't see. The same bulk-selection rules apply
+   * either way: eligible rows that match the current selection's account + direction (or, with none, the first row's).
+   */
+  function selectableIn(scopeIds?: readonly string[]): SmsTransactionCandidate[] {
+    if (!scopeIds) return selectableVisibleCandidates;
+    const inScope = new Set(scopeIds);
+    return selectableRows(
+      eligibleVisible.filter((c) => inScope.has(c.id)),
+      selectionAnchor,
+      groupKeyOf,
+    );
+  }
+
+  function selectionForScope(scopeIds: readonly string[]): ScopeSelection {
+    const selectable = selectableIn(scopeIds);
+    return { allSelected: selectable.length > 0 && selectable.every((c) => selectedIds.has(c.id)), someSelected: selectable.some((c) => selectedIds.has(c.id)), disabled: selectable.length === 0 };
+  }
+
+  function toggleSelectAllVisible(checked: boolean, scopeIds?: readonly string[]) {
+    const target = selectableIn(scopeIds);
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      for (const c of selectableVisibleCandidates) {
+      for (const c of target) {
         if (checked) next.add(c.id);
         else next.delete(c.id);
       }
@@ -553,8 +568,9 @@ export function TransactionCandidatesWorkspace() {
     void runBulkImport(candidatesToRetry, true, bulkSelection);
   }
 
-  function dismissWithUndo(candidatesToDismiss: SmsTransactionCandidate[]) {
-    if (!repositories) return () => {};
+  /** Returns the batch's Undo: `true` when every candidate was restored, `false` when any delete had already started. */
+  function dismissWithUndo(candidatesToDismiss: SmsTransactionCandidate[]): () => boolean {
+    if (!repositories) return () => true;
     const cancels = candidatesToDismiss.map(
       (c) =>
         scheduleDelayedDismiss({
@@ -573,13 +589,13 @@ export function TransactionCandidatesWorkspace() {
           },
         }).cancel,
     );
-    return () => cancels.forEach((cancel) => cancel());
+    return () => cancels.map((cancel) => cancel()).every(Boolean);
   }
 
   function handleBulkDismissSelected() {
     if (!repositories || selectedCandidates.length === 0) return;
     const undo = dismissWithUndo(selectedCandidates);
-    toast.success("Dismissed", `${selectedCandidates.length} candidate${selectedCandidates.length === 1 ? "" : "s"} won't show in the review queue.`, { label: "Undo", onClick: undo });
+    toast.success("Dismissed", `${selectedCandidates.length} candidate${selectedCandidates.length === 1 ? "" : "s"} won't show in the review queue.`, undoToastAction(undo), UNDO_TOAST_OPTIONS);
     setSelectedIds(new Set());
     setBulkDismissConfirmOpen(false);
   }
@@ -589,7 +605,7 @@ export function TransactionCandidatesWorkspace() {
     const c = candidateById.get(candidateId);
     if (!c) return;
     const undo = dismissWithUndo([c]);
-    toast.success("Removed from the queue", `${candidateTitle(c)} won't show in the review queue.`, { label: "Undo", onClick: undo });
+    toast.success("Removed from the queue", `${candidateTitle(c)} won't show in the review queue.`, undoToastAction(undo), UNDO_TOAST_OPTIONS);
   }
 
   // Lane counts for exactly the rows each lane would show (search + account/month/direction applied), so they always add up.
@@ -694,10 +710,10 @@ export function TransactionCandidatesWorkspace() {
     );
   }
 
-  // Where the pinned views + filter bar sticks. In full screen the scroller is this root itself (padding p-4), not the shell's
-  // <main>, so it cancels that 16px instead and the shared compact bar (which watches <main>) is not used.
-  const pinTop = fullscreen ? -16 : stackTop;
-  const showCompactBar = !fullscreen && !(viewState.phase === "ready" && candidates.length === 0);
+  // Where the pinned views + filter bar sticks — the same in full screen (it is still <main> that scrolls; `stackTop` re-reads
+  // <main>'s padding, which Focus Mode changes).
+  const pinTop = stackTop;
+  const showCompactBar = !(viewState.phase === "ready" && candidates.length === 0);
   // Once the overview has scrolled away (the compact bar is in), the pinned views + filters shrink to ONE slim row beside the bar
   // instead of two tall stacked blocks, so the list keeps the screen. Full screen has no compact bar and keeps the full controls.
   const condensed = showCompactBar && barProgress >= COMPACT_BAR_SHOW_AT;
@@ -708,11 +724,8 @@ export function TransactionCandidatesWorkspace() {
       ref={rootRef}
       className={cn(
         // The inbox is an ordinary page that scrolls with the app shell's <main> (the month headers stick to it) — that shell
-        // already pads it, so no extra padding here. Full screen is the exception: a fixed overlay that scrolls itself.
+        // already pads it, so no extra padding here. Full screen too: Focus Mode only removes the chrome around <main>.
         "flex min-w-0 flex-col gap-2.5 px-1 sm:gap-3",
-        // z-hero, not z-50: it must stay below the dialog/sheet z-index tokens (app/globals.css) so the review
-        // drawer still renders on top while full screen is on — z-50 sat above --z-dialog and hid it silently.
-        fullscreen && "fixed inset-0 z-hero overflow-y-auto bg-background p-4",
       )}
     >
       {showCompactBar && (
@@ -736,7 +749,9 @@ export function TransactionCandidatesWorkspace() {
           type="button"
           aria-label={fullscreen ? "Exit full screen" : "Full screen"}
           title={fullscreen ? "Exit full screen (Esc)" : "Full screen"}
-          onClick={() => setFullscreen((v) => !v)}
+          onClick={toggleFullscreen}
+          data-testid={FOCUS_TOGGLE_TESTID}
+          aria-pressed={fullscreen}
           className={cn("flex size-11 shrink-0 items-center justify-center rounded-[10px] border border-border-strong bg-card text-foreground hover:bg-secondary lg:size-10", FOCUS_RING)}
         >
           {fullscreen ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
@@ -772,7 +787,6 @@ export function TransactionCandidatesWorkspace() {
               "after:pointer-events-none after:absolute after:inset-x-0 after:top-full after:h-3 after:bg-gradient-to-b after:from-background after:to-transparent after:opacity-0 after:transition-opacity after:content-[''] motion-reduce:after:transition-none",
               condensed && "after:opacity-100",
               rowLayout && (condensed ? "lg:flex-row lg:items-center" : "lg:flex-row lg:items-start"),
-              fullscreen && "pt-4",
             )}
           >
             <div className="min-w-0 shrink-0 lg:max-w-full">
@@ -846,6 +860,7 @@ export function TransactionCandidatesWorkspace() {
             someSelected={someVisibleSelected}
             selectAllDisabled={selectableVisibleCandidates.length === 0}
             onToggleAll={toggleSelectAllVisible}
+            selectionForScope={selectionForScope}
             onToggle={toggleRowSelected}
             onReview={setDetailCandidateId}
             candidateRepository={repositories?.candidateRepository ?? null}
@@ -965,6 +980,7 @@ export function TransactionCandidatesWorkspace() {
         confirmLabel={bulkRunning ? "Importing…" : "Import anyway"}
         onConfirm={handleBulkImportDuplicatesAnyway}
       />
+      {/* Hidden in full screen: Focus Mode's slim padding leaves it no gutter, so it would sit on the right-hand column. */}
       {!fullscreen && <ScrollNav />}
     </div>
   );

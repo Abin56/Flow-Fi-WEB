@@ -33,6 +33,7 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(APPROVAL_NOW);
   sessionStorage.clear();
+  localStorage.setItem("flowfi.recon.autoNext", "0"); // these tests decide a row and then keep inspecting it
   setViewport(1600);
 });
 afterEach(() => {
@@ -61,33 +62,33 @@ function seed(decisions: Record<string, Partial<RowDecision>> = {}) {
 }
 
 const rowEl = (id: string) => screen.getAllByTestId("recon-row").find((r) => r.dataset.rowId === id)!;
-/** Desktop: the full comparison (MatchPanel) opens in a drawer from the dock's "Full details"; phones show it in the row's sheet. */
-const panel = () => screen.queryByTestId("match-panel") ?? (fireEvent.click(screen.getByTestId("dock-details")), screen.getByTestId("match-panel"));
+/** Desktop: the full comparison (MatchPanel) opens in a drawer (key O); phones show it in the row's sheet. */
+const panel = () => screen.queryByTestId("match-panel") ?? (fireEvent.keyDown(screen.getByRole("grid", { name: "Statement rows" }), { key: "o" }), screen.getByTestId("match-panel"));
 const menuOf = (id: string) => within(rowEl(id)).getByTestId("quick-decide");
 
 describe("quick-decide menu", () => {
   it("decides a row from the grid, shows what each choice does, and clears it again", () => {
     seed();
     render(<ReconciliationWorkspace uid="u1" data={DATA} sync={LOADED} />);
-    expect(within(rowEl("r3")).getByText("Undecided")).toBeTruthy();
+    expect(within(rowEl("r3")).getByTestId("decision-chip").dataset.pending).toBe("true");
 
     fireEvent.click(menuOf("r3"));
-    expect(screen.getByRole("menuitem", { name: /^Import new/ })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: /^Import as transaction/ })).toBeTruthy();
     expect(screen.queryByRole("menuitem", { name: /Clear my decision/ })).toBeNull();
-    fireEvent.click(screen.getByRole("menuitem", { name: /Skip this transaction/ }));
-    expect(within(rowEl("r3")).getByText("Skipped")).toBeTruthy();
+    fireEvent.click(screen.getByRole("menuitem", { name: /Review later/ }));
+    expect(within(rowEl("r3")).getByTestId("decision-chip").textContent).toBe("Review later");
     expect(rowEl("r3").getAttribute("aria-selected")).toBe("true");
 
     fireEvent.click(menuOf("r3"));
     fireEvent.click(screen.getByRole("menuitem", { name: /Clear my decision/ }));
-    expect(within(rowEl("r3")).getByText("Undecided")).toBeTruthy();
+    expect(within(rowEl("r3")).getByTestId("decision-chip").dataset.pending).toBe("true");
   });
 
   it("keeps a rule-blocked choice visible but disabled, with the reason", () => {
     seed();
     render(<ReconciliationWorkspace uid="u1" data={DATA} sync={LOADED} />);
     fireEvent.click(menuOf("r5")); // dated inside a closed card bill
-    const add = screen.getByRole("menuitem", { name: /^Import new/ }) as HTMLButtonElement;
+    const add = screen.getByRole("menuitem", { name: /^Import as transaction/ }) as HTMLButtonElement;
     expect(add.disabled).toBe(true);
     expect(add.textContent).toMatch(/already closed/);
   });
@@ -96,9 +97,9 @@ describe("quick-decide menu", () => {
     seed();
     render(<ReconciliationWorkspace uid="u1" data={DATA} sync={LOADED} />);
     fireEvent.click(menuOf("r1"));
-    fireEvent.click(screen.getByRole("menuitem", { name: /^Keep both/ }));
-    expect(within(rowEl("r1")).getByText("Undecided")).toBeTruthy();
-    expect(screen.getByTestId("resolution-dock").dataset.rowId).toBe("r1");
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Import as transaction/ }));
+    expect(within(rowEl("r1")).getByTestId("decision-chip").dataset.pending).toBe("true"); // opening the editor decides nothing
+    fireEvent.click(screen.getByTestId("import-as-transaction"));
     expect(screen.getByTestId("import-confirm").textContent).toMatch(/these are separate transactions/);
   });
 
@@ -118,18 +119,18 @@ describe("next undecided", () => {
     fireEvent.click(screen.getByTestId("next-open"));
     expect(rowEl("r2").getAttribute("aria-selected")).toBe("true");
 
-    fireEvent.click(menuOf("r2"));
-    fireEvent.click(screen.getByRole("menuitem", { name: /Skip this transaction/ }));
+    select("r2");
+    fireEvent.keyDown(screen.getByRole("grid", { name: "Statement rows" }), { key: "i" }); // skip
     fireEvent.click(screen.getByTestId("next-open"));
     expect(rowEl("r3").getAttribute("aria-selected")).toBe("true");
-    fireEvent.click(menuOf("r3"));
-    fireEvent.click(screen.getByRole("menuitem", { name: /Skip this transaction/ }));
+    select("r3");
+    fireEvent.keyDown(screen.getByRole("grid", { name: "Statement rows" }), { key: "i" }); // skip
 
     // r5 is the last one; once it's decided the review is complete.
     fireEvent.click(screen.getByTestId("next-open"));
     expect(rowEl("r5").getAttribute("aria-selected")).toBe("true");
-    fireEvent.click(menuOf("r5"));
-    fireEvent.click(screen.getByRole("menuitem", { name: /Skip this transaction/ }));
+    select("r5");
+    fireEvent.keyDown(screen.getByRole("grid", { name: "Statement rows" }), { key: "i" }); // skip
     expect(screen.queryByTestId("next-open")).toBeNull();
     expect((screen.getByTestId("open-approval") as HTMLButtonElement).disabled).toBe(false);
     expect(screen.getByRole("progressbar", { name: "Review progress" }).getAttribute("aria-valuenow")).toBe("100");

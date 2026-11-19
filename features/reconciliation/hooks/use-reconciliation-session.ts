@@ -117,6 +117,9 @@ export function useReconciliationSession(uid: string | null | undefined, account
         const valueEdit = "date" in patch || "description" in patch || "amount" in patch || "direction" in patch;
         return { ...s, rows: s.rows.map((r) => (r.id === rowId ? editRow(r, patch) : r)), decisions: valueEdit ? invalidateAfterEdit(s.decisions, rowId) : s.decisions };
       }),
+    /** Remove a row from this review (or put it back): the existing include switch plus a marker that hides it from the list. Draft only. */
+    setRemoved: (rowId: string, removed: boolean) =>
+      update((s) => ({ ...s, rows: s.rows.map((r) => (r.id === rowId ? { ...editRow(r, { include: !removed }), removedFromReview: removed ? true : undefined } : r)) })),
     confirmRow: (rowId: string) => update((s) => ({ ...s, rows: s.rows.map((r) => (r.id === rowId ? confirmRowValues(r) : r)) })),
     confirmField: (rowId: string, field: CaptureField) => update((s) => ({ ...s, rows: s.rows.map((r) => (r.id === rowId ? confirmRowField(r, field) : r)) })),
     decide: (rowId: string, patch: Partial<RowDecision>) => update((s) => ({ ...s, decisions: setDecision(s.decisions, rowId, patch) })),

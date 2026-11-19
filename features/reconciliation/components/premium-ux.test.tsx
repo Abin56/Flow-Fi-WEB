@@ -16,6 +16,7 @@ import type { ReconciliationData } from "../lib/analyze";
 import { DRAFT_KEY_PREFIX, buildReconciliationDraft, saveReconciliationDraft } from "../lib/reconciliation-draft";
 import { APPROVAL_NOW, reconData, reconRow, reconSession, txn } from "../lib/test-fixtures";
 import type { ReconRow, RowDecision } from "../lib/types";
+import { menuItem, openImportConfirm } from "./menu-test-utils";
 import { ReconciliationWorkspace } from "./reconciliation-workspace";
 
 function setViewport(width: number) {
@@ -36,6 +37,7 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(APPROVAL_NOW);
   sessionStorage.clear();
+  localStorage.setItem("flowfi.recon.autoNext", "0"); // these tests decide a row and then keep inspecting it
   setViewport(1600);
 });
 afterEach(() => {
@@ -76,8 +78,8 @@ function tripwire() {
 
 const rowEl = (id: string) => screen.getAllByTestId("recon-row").find((r) => r.dataset.rowId === id)!;
 const states = () => Object.fromEntries(screen.getAllByTestId("recon-row").map((r) => [r.dataset.rowId, r.dataset.state]));
-/** Desktop: the full comparison (MatchPanel) opens in a drawer from the dock's "Full details"; phones show it in the row's sheet. */
-const panel = () => screen.queryByTestId("match-panel") ?? (fireEvent.click(screen.getByTestId("dock-details")), screen.getByTestId("match-panel"));
+/** Desktop: the full comparison (MatchPanel) opens in a drawer (key O); phones show it in the row's sheet. */
+const panel = () => screen.queryByTestId("match-panel") ?? (fireEvent.keyDown(screen.getByRole("grid", { name: "Statement rows" }), { key: "o" }), screen.getByTestId("match-panel"));
 const select = (id: string) => fireEvent.click(rowEl(id));
 const count = (key: string) => screen.getByTestId(`readiness-${key}`).querySelector("dd")!.textContent;
 
@@ -117,10 +119,10 @@ describe("statement account bar", () => {
     render(<ReconciliationWorkspace uid="u1" data={DATA} sync={LOADED} />);
     expect(states()).toMatchObject({ r1: "near_amount", r2: "no_match" }); // the bank's Netflix is never a card candidate
     select("r1");
-    fireEvent.click(screen.getByTestId("resolve-keep_existing"));
+    fireEvent.click(menuItem("keep_existing"));
     select("r2");
-    fireEvent.click(screen.getByTestId("resolve-skip"));
-    expect(within(rowEl("r1")).getByText("Keep existing")).toBeTruthy();
+    fireEvent.keyDown(screen.getByRole("grid", { name: "Statement rows" }), { key: "i" });
+    expect(within(rowEl("r1")).getByTestId("decision-chip").textContent).toBe("Keep existing");
 
     pick("SBI Savings");
     const dialog = screen.getByRole("dialog");
@@ -129,7 +131,7 @@ describe("statement account bar", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Change account" }));
 
     expect(screen.getByTestId("selected-account").textContent).toMatch(/SBI Savings/);
-    expect(within(rowEl("r1")).getByText("Undecided")).toBeTruthy(); // stale "already recorded" withdrawn
+    expect(within(rowEl("r1")).getByTestId("decision-chip").dataset.pending).toBe("true"); // stale "already recorded" withdrawn
     expect(within(rowEl("r2")).getByText("Skipped")).toBeTruthy(); // skip doesn't depend on the account
     expect(states()).toMatchObject({ r1: "no_match", r2: "exact_candidate" }); // the card's Swiggy no longer counts
   });
@@ -151,7 +153,7 @@ describe("duplicate comparison", () => {
     expect(field("Flags")).toMatch(/no split\/EMI/);
     expect(field("Context")).toMatch(/Team lunch/);
     // Near match: a suggestion — nothing decided yet, and choices never edit the FlowFi record.
-    expect(within(rowEl("r1")).getByText("Undecided")).toBeTruthy();
+    expect(within(rowEl("r1")).getByTestId("decision-chip").dataset.pending).toBe("true");
     expect(panel().textContent).toMatch(/only suggestions until you decide/);
   });
 
@@ -205,14 +207,12 @@ describe("draft-only editor and zero writes", () => {
 
     // A full review pass — decisions, comparison, account change — still writes nothing.
     select("r1");
-    fireEvent.click(screen.getByTestId("resolve-merge_details"));
-    fireEvent.click(screen.getByRole("button", { name: "Close preview" }));
-    fireEvent.click(screen.getByTestId("resolve-keep_existing"));
+    fireEvent.click(menuItem("keep_existing"));
     select("r3");
-    fireEvent.click(screen.getByTestId("resolve-import_new"));
+    openImportConfirm();
     fireEvent.change(screen.getByLabelText("Category for import"), { target: { value: "Food" } });
     fireEvent.click(screen.getByTestId("import-confirm-submit"));
-    expect(within(rowEl("r3")).getByText("Import new")).toBeTruthy();
+    expect(within(rowEl("r3")).getByTestId("decision-chip").textContent).toBe("Import new");
     pick("SBI Savings");
     fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Change account" }));
     expect(readData).not.toHaveBeenCalled();
@@ -221,12 +221,11 @@ describe("draft-only editor and zero writes", () => {
 });
 
 describe("layout contracts", () => {
-  it("desktop: each sheet's body is its own scroll region; the dock and action bar are fixed parts of the workspace (not floating over rows)", () => {
+  it("desktop: each sheet's body is its own scroll region; the progress bar is a fixed part of the workspace (not floating over rows)", () => {
     seed("acc-card");
     render(<ReconciliationWorkspace uid="u1" data={DATA} sync={LOADED} />);
     expect(screen.getByTestId("recon-grid-body").className).toMatch(/overflow-y-auto/);
     expect(screen.getByTestId("existing-grid-body").className).toMatch(/overflow-y-auto/);
-    expect(screen.getByTestId("resolution-dock").className).toMatch(/shrink-0/);
     const bar = screen.getByTestId("status-bar");
     expect(bar.className).toMatch(/shrink-0/);
     expect(bar.className).not.toMatch(/sticky/);

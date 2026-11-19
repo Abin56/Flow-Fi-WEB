@@ -170,6 +170,7 @@ scenario("card-cancel", "Credit Card: open payment then Cancel", async ({ page }
 scenario("bill-pay", "Bills: Pay from my account now (QA Bank ₹1,500)", async ({ page }, chk) => {
   const before = await bal("QA Bank");
   await h.go(page, "/bills");
+  await h.openMyBills(page);
   await page.waitForTimeout(2500);
   await page.getByRole("button", { name: /QA Electricity/ }).click();
   await page.getByRole("button", { name: "Pay…" }).click();
@@ -196,6 +197,7 @@ scenario("bill-pay", "Bills: Pay from my account now (QA Bank ₹1,500)", async 
 scenario("bill-earlier", "Bills: Already paid earlier — no balance change", async ({ page }, chk) => {
   const before = await bal("QA Bank");
   await h.go(page, "/bills");
+  await h.openMyBills(page);
   await page.waitForTimeout(2500);
   await page.getByRole("button", { name: /QA Electricity/ }).click();
   await page.getByRole("button", { name: "Pay…" }).click();
@@ -216,6 +218,7 @@ scenario("bill-earlier", "Bills: Already paid earlier — no balance change", as
 
 scenario("bill-cancel-edit", "Bills: Cancel the pay dialog, then Edit the bill amount", async ({ page }, chk) => {
   await h.go(page, "/bills");
+  await h.openMyBills(page);
   await page.waitForTimeout(2500);
   await page.getByRole("button", { name: /QA Electricity/ }).click();
   await page.getByRole("button", { name: "Pay…" }).click();

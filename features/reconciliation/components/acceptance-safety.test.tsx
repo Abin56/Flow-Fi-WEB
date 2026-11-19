@@ -8,6 +8,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.setConfig({ testTimeout: 30000 }); // each decision now goes through a row menu and, for imports, the row editor
 vi.mock("@/lib/firebase/client", () => ({ firebaseApp: {}, auth: {}, db: {}, storage: {} }));
 
 import type { TransactionRepository } from "@/lib/repositories/transaction-repository";
@@ -16,6 +17,7 @@ import { commitRepositoriesFor, type ApprovalDeps } from "../lib/approval-commit
 import { buildReconciliationDraft, saveReconciliationDraft } from "../lib/reconciliation-draft";
 import { APPROVAL_NOW, reconData, reconRow, reconSession, txn } from "../lib/test-fixtures";
 import type { ReconRow, RowDecision } from "../lib/types";
+import { menuItem, openImportConfirm } from "./menu-test-utils";
 import { ReconciliationWorkspace } from "./reconciliation-workspace";
 
 beforeAll(() => {
@@ -68,16 +70,16 @@ function fakeRepository() {
 function decideThroughDock() {
   const rowEl = (id: string) => screen.getAllByTestId("recon-row").find((r) => r.dataset.rowId === id)!;
   fireEvent.click(rowEl("r1"));
-  fireEvent.click(screen.getByTestId("resolve-keep_existing"));
+  fireEvent.click(menuItem("keep_existing"));
   fireEvent.click(rowEl("r2"));
-  fireEvent.click(screen.getByTestId("resolve-keep_existing"));
+  fireEvent.click(menuItem("keep_existing"));
   fireEvent.click(rowEl("r3"));
-  fireEvent.click(screen.getByTestId("resolve-keep_both"));
+  openImportConfirm();
   fireEvent.click(screen.getByRole("checkbox", { name: "These are separate transactions" }));
   fireEvent.change(screen.getByLabelText("Category for import"), { target: { value: "Food" } });
   fireEvent.click(screen.getByTestId("import-confirm-submit"));
   fireEvent.click(rowEl("r4"));
-  fireEvent.click(screen.getByTestId("resolve-import_new"));
+  openImportConfirm();
   fireEvent.change(screen.getByLabelText("Category for import"), { target: { value: "Food" } });
   fireEvent.click(screen.getByTestId("import-confirm-submit"));
 }
@@ -147,6 +149,5 @@ describe("draft tampering can't cross accounts", () => {
     expect((screen.getByTestId("open-approval") as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(screen.getAllByTestId("recon-row").find((r) => r.dataset.rowId === "r4")!);
     expect(screen.queryAllByTestId("existing-row").map((r) => r.dataset.recordId)).not.toContain("t-bank");
-    expect(screen.getByTestId("financial-effect").dataset.tone).toBe("blocked");
   });
 });

@@ -200,7 +200,7 @@ const CATEGORY_TONE: Record<string, "primary" | "success" | "warning" | "purple"
 };
 
 const CATEGORY_CHART_COLOR: Record<string, string> = {
-  primary: "var(--primary)",
+  primary: "var(--chart-1)",
   success: "var(--success)",
   warning: "var(--warning)",
   purple: "var(--purple)",
@@ -1949,7 +1949,7 @@ function ActivityHeader({
       {/* Hero — the selected card's own colour, its identity and the three figures that matter. Scrolls away. */}
       <div
         className="relative overflow-hidden px-4 pt-9 pb-5 text-white sm:px-6"
-        style={{ background: !showingAll && card ? cardFaceGradient(card) : "linear-gradient(135deg, #1f2430 0%, #3a4252 100%)" }}
+        style={{ background: !showingAll && card ? cardFaceGradient(card) : "var(--gradient-hero)" }}
       >
         <span aria-hidden className="pointer-events-none absolute -top-20 -right-16 size-56 rounded-full bg-white/10 blur-3xl" />
         <span aria-hidden className="pointer-events-none absolute -bottom-24 -left-10 size-48 rounded-full border border-white/10" />

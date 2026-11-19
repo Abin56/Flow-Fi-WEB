@@ -137,7 +137,7 @@ export function ScrollNav() {
       ref={anchorRef}
       role="group"
       aria-label="Page scroll control"
-      className="fixed top-1/2 right-1.5 z-hero hidden -translate-y-1/2 flex-col items-center gap-1 rounded-full border border-border-strong/50 bg-card/95 px-1 py-1.5 shadow-e1 backdrop-blur-sm sm:right-2.5 sm:flex"
+      className="scroll-nav fixed top-1/2 right-1.5 z-hero hidden -translate-y-1/2 flex-col items-center gap-1 rounded-full border border-border-strong/50 bg-card/95 px-1 py-1.5 shadow-e1 backdrop-blur-sm sm:right-2.5 sm:flex"
     >
       <button
         type="button"

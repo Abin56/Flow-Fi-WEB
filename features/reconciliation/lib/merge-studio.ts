@@ -1,7 +1,7 @@
 /**
  * The dual-sheet merge studio's view model — pure, read-only. It never matches anything itself: every candidate,
  * band, day gap and merchant verdict comes from the Phase 1–4 matcher (`RowMatch`) or from `manualLinkOptions` (the
- * matcher's own manual-link search, same account / direction / ₹1.00 / ±31-day boundaries). This file only arranges
+ * matcher's own manual-link search, same account / direction / amount-band / ±31-day boundaries). This file only arranges
  * that evidence for the two sheets, says which Git-style resolution maps to which existing draft decision, and
  * previews what can't be done.
  *
@@ -16,9 +16,9 @@
 
 import { isComplete } from "@/features/smart-capture/lib/capture-review";
 import { formatCurrencyPrecise } from "@/lib/format";
-import { calendarDayIndex, describeAmountDelta, describeDayGap, toPaise, DATE_WINDOW_DAYS } from "./amounts-and-days";
+import { amountBand, calendarDayIndex, describeAmountDelta, describeDayGap, formatPaise, toPaise, DATE_WINDOW_DAYS } from "./amounts-and-days";
 import { importBlockReasons, type RowGateContext } from "./decisions";
-import { manualLinkOptions, MANUAL_LINK_WINDOW_DAYS } from "./match-engine";
+import { evaluateCandidate, manualLinkOptions, MANUAL_LINK_WINDOW_DAYS } from "./match-engine";
 import { merchantSimilarity, merchantStrength } from "./merchant-normalize";
 import type { DecisionKind, ExistingRecord, MatchCandidate, ReconRow, RowDecision, RowMatch } from "./types";
 
@@ -40,7 +40,7 @@ export interface ExistingEntry {
    * - `suggested`: the matcher's unique, mutual best candidate (still only a suggestion).
    * - `candidate`: any other possible match the matcher found.
    * - `sms`: an SMS for the same event, still waiting in the Inbox.
-   * - `linkable`: outside the automatic ±3-day window but inside the manual-link search (±31 days, ₹1.00).
+   * - `linkable`: outside the automatic ±3-day window but inside the manual-link search (±31 days, same amount bands).
    * - `context`: on the account, but not something this row could be.
    */
   role: "imported" | "suggested" | "candidate" | "sms" | "linkable" | "context";
@@ -86,8 +86,15 @@ function viewOnlyFor(row: ReconRow | null, record: ExistingRecord): { code: View
   if (record.kind === "sms_pending") return { code: "sms", message: "Still an SMS in the Transaction Inbox — handle it there." };
   if (!isComplete(row)) return { code: "incomplete", message: "The statement row needs a date, amount and Debit/Credit first." };
   if (record.direction !== row.direction) return { code: "direction", message: row.direction === "credit" ? "This is a charge; the statement row is a credit." : "This is a credit; the statement row is a charge." };
-  if (Math.abs(record.amountPaise - toPaise(row.amount!)) > 100) return { code: "amount", message: "Amounts differ by more than ₹1.00." };
-  if (Math.abs(record.day - calendarDayIndex(row.date!)) > MANUAL_LINK_WINDOW_DAYS) return { code: "window", message: `More than ${MANUAL_LINK_WINDOW_DAYS} days apart.` };
+  const rowPaise = toPaise(row.amount!);
+  const rowDay = calendarDayIndex(row.date!);
+  const apart = formatPaise(record.amountPaise - rowPaise);
+  if (amountBand(record.amountPaise, rowPaise) == null) return { code: "amount", message: `Amounts differ by ${apart} — too far apart to be the same transaction.` };
+  if (Math.abs(record.day - rowDay) > MANUAL_LINK_WINDOW_DAYS) return { code: "window", message: `More than ${MANUAL_LINK_WINDOW_DAYS} days apart.` };
+  // Inside the bands but the matcher still says no: an approx amount with nothing else agreeing.
+  if (!evaluateCandidate(row, rowDay, rowPaise, record, MANUAL_LINK_WINDOW_DAYS)) {
+    return { code: "amount", message: `${apart} apart and nothing else agrees (date, merchant or reference) — not a possible match.` };
+  }
   return null;
 }
 
@@ -253,6 +260,37 @@ export function fieldDiffs(params: { row: ReconRow; record: ExistingRecord; cand
       detail: candidate?.referenceMatch ? "Reference matches" : "",
     },
   ];
+}
+
+export interface EvidenceTag {
+  key: "amount" | "date" | "merchant" | "reference" | "account";
+  label: string;
+  /** agree = this evidence supports "same transaction"; differ = it argues against / needs checking. */
+  verdict: "agree" | "differ";
+}
+
+/**
+ * Why a record might be the row, as a few compact tags ("Same day", "₹2.00 more in FlowFi", "Same merchant"). Display
+ * only — built from the matcher's own candidate evidence, never re-scored. `sameAccount` false marks a cross-account
+ * hint, which is never a match.
+ */
+export function evidenceTags(candidate: MatchCandidate, opts: { sameAccount?: boolean } = {}): EvidenceTag[] {
+  const tags: EvidenceTag[] = [];
+  tags.push({ key: "amount", label: candidate.amountDeltaPaise === 0 ? "Same amount" : describeAmountDelta(candidate.amountDeltaPaise), verdict: candidate.amountDeltaPaise === 0 ? "agree" : "differ" });
+  tags.push({ key: "date", label: describeDayGap(candidate.dayGap).replace(" in FlowFi", ""), verdict: candidate.dayGap === 0 ? "agree" : "differ" });
+  if (candidate.merchantStrength === "same" || candidate.merchantStrength === "similar") tags.push({ key: "merchant", label: candidate.merchantStrength === "same" ? "Same merchant" : "Similar merchant", verdict: "agree" });
+  else if (candidate.merchantStrength === "different") tags.push({ key: "merchant", label: "Different merchant", verdict: "differ" });
+  if (candidate.referenceMatch) tags.push({ key: "reference", label: "Reference matches", verdict: "agree" });
+  if (opts.sameAccount === false) tags.push({ key: "account", label: "Other account", verdict: "differ" });
+  else if (opts.sameAccount === true) tags.push({ key: "account", label: "Same account", verdict: "agree" });
+  return tags;
+}
+
+/** One short line for a dense cell: "₹2.00 more · Same day · Same merchant". */
+export function evidenceSummary(candidate: MatchCandidate): string {
+  return evidenceTags(candidate)
+    .map((t) => t.label.replace(" in FlowFi", ""))
+    .join(" · ");
 }
 
 /** Other transactions with the same (or similar) merchant on the same account — read-only context, newest first. */
@@ -422,13 +460,17 @@ export function financialEffect(params: { row: ReconRow; match: RowMatch; decisi
   const money = row.amount != null ? formatCurrencyPrecise(row.amount) : "no amount";
   switch (decision.kind) {
     case null:
-      return { tone: "pending", text: "Undecided — final approval waits for this row. Nothing is written yet." };
+      return { tone: "pending", text: "Needs review — final approval waits for this row. Nothing is written yet." };
     case "link":
       // An invalid link (stale, claimed, or not on this account) never reads as "FlowFi keeps …".
       if (errors.length > 0) return { tone: "blocked", text: `Not ready: ${errors[0]}` };
-      return linked
-        ? { tone: "none", text: `No write. FlowFi keeps “${linked.description || "this transaction"}” (${existingDate(linked.dateTime)}, ${formatCurrencyPrecise(linked.amount)}); this statement row is skipped.` }
-        : { tone: "blocked", text: errors[0] ?? "Choose the FlowFi transaction to keep." };
+      if (!linked) return { tone: "blocked", text: errors[0] ?? "Choose the FlowFi transaction to keep." };
+      {
+        // Keeping a near-amount match never adjusts it: say so, so a ₹298 vs ₹300 difference isn't silently accepted.
+        const delta = row.amount != null ? linked.amountPaise - toPaise(row.amount) : 0;
+        const differs = delta !== 0 ? ` Amounts differ by ${formatPaise(delta)} — FlowFi keeps its own ${formatCurrencyPrecise(linked.amount)}; correct it from Transactions if the statement is right.` : "";
+        return { tone: "none", text: `No write. FlowFi keeps “${linked.description || "this transaction"}” (${existingDate(linked.dateTime)}, ${formatCurrencyPrecise(linked.amount)}); this statement row is skipped.${differs}` };
+      }
     case "import_new": {
       if (match.state === "already_imported") return { tone: "none", text: "Imported earlier from this exact row — nothing more is written." };
       if (errors.length > 0) return { tone: "blocked", text: `Not ready: ${errors[0]}` };

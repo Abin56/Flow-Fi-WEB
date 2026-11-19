@@ -49,7 +49,7 @@ const TONE_ICON_CLASS: Record<string, string> = {
 };
 
 const TYPE_CHART_COLOR: Record<string, string> = {
-  primary: "var(--primary)",
+  primary: "var(--chart-1)",
   success: "var(--success)",
   warning: "var(--warning)",
   expense: "var(--expense)",
@@ -457,7 +457,7 @@ export function BudgetsWorkspace() {
                 <BarChart data={dailyChartData} margin={{ top: 4, right: 0, bottom: 0, left: 0 }}>
                   <YAxis hide domain={[0, "dataMax + 500"]} />
                   <XAxis dataKey="label" tickLine={false} axisLine={false} interval={0} tick={{ fontSize: 10, fill: "var(--muted-foreground)" }} />
-                  <Bar dataKey="value" radius={[3, 3, 0, 0]} fill="var(--primary)" />
+                  <Bar dataKey="value" radius={[3, 3, 0, 0]} fill="var(--chart-1)" />
                 </BarChart>
               </ResponsiveContainer>
             </div>

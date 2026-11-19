@@ -42,8 +42,8 @@ export function CellShell({
         align === "end" && "justify-end",
         align === "center" && "justify-center",
         !isFocused && !isEditing && "hover:ring-1 hover:ring-inset hover:ring-primary/25",
-        isFocused && !isEditing && "z-10 ring-2 ring-inset ring-primary",
-        isEditing && "z-10 bg-surface-elevated ring-2 ring-inset ring-primary shadow-[0_0_0_1px_var(--surface)]",
+        isFocused && !isEditing && "z-10 ring-2 ring-inset ring-primary-accent-text",
+        isEditing && "z-10 bg-surface-elevated ring-2 ring-inset ring-primary-accent-text shadow-[0_0_0_1px_var(--surface)]",
         className,
       )}
       onClick={onFocus}

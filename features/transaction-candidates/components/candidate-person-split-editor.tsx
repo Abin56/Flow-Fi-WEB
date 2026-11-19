@@ -134,7 +134,7 @@ export function CandidatePersonSplitEditor({
         <button
           type="button"
           onClick={() => onChange({ splitOpen: true })}
-          className="inline-flex items-center gap-1.5 self-start text-xs font-medium text-primary hover:underline"
+          className="inline-flex items-center gap-1.5 self-start text-xs font-medium text-primary-accent-text hover:underline"
         >
           <SplitSquareHorizontal className="size-3.5" />
           Split with more people instead

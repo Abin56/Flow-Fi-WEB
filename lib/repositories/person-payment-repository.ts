@@ -39,7 +39,7 @@ import {
 import { recordEdit } from "@/lib/firestore/soft-deletable";
 import { PAYMENT_EPSILON, round2, type AdvanceUse, type PaymentDirection } from "@/lib/engines/person-payment";
 import type { Expense } from "@/lib/models/expense";
-import type { Installment, InstallmentPayment } from "@/lib/models/payment-schedule";
+import type { Installment, InstallmentPayment, PaymentSchedule } from "@/lib/models/payment-schedule";
 import { type AdvanceApplication, type LedgerEntry, type LedgerSourceKind, type Person, signedAmount } from "@/lib/models/person";
 import type { PurposeFund, PurposeLink } from "@/lib/models/purpose-fund";
 import type { Transaction } from "@/lib/models/transaction";
@@ -174,6 +174,13 @@ export interface PersonPaymentDeps {
   cashLegCategoryId: string;
   /** `people/{personId}/purposeFunds` — required only to record money kept for a purpose. */
   purposeFunds?: CollectionReference<PurposeFund>;
+  /**
+   * Both together switch on the "the EMI / Loan still exists" check for a repayment of an installment share (`derived`
+   * route): the schedule ids of the user's LIVE EMIs and Loans (read just before the write), and a schedule document
+   * reference. Without them (tests, fakes) the check is skipped. See `assertAgreementStillExists`.
+   */
+  liveAgreementScheduleIds?: () => Promise<string[]>;
+  scheduleDocRef?: (scheduleId: string) => DocumentReference<PaymentSchedule>;
 }
 
 type PaymentGroup = { entries: LedgerEntry[]; applications: AdvanceApplication[]; funds: PurposeFund[] };
@@ -195,6 +202,7 @@ export class PersonPaymentRepository {
    */
   async recordPayment(person: Person, input: RecordPaymentInput): Promise<string> {
     const paymentId = input.idempotencyKey ? personPaymentIdFor(input.idempotencyKey) : generateId();
+    const owners = await this.liveOwnerSchedules(input);
     await runTransaction(this.db, async (tx) => {
       const session = new TxSession(tx);
       if (input.idempotencyKey) {
@@ -206,7 +214,7 @@ export class PersonPaymentRepository {
       if (fresh.exists() && Math.abs(fresh.data().currentBalance - person.currentBalance) > PAYMENT_EPSILON) {
         throw new StalePersonPaymentError(person.name);
       }
-      await this.recordInSession(session, person, input, paymentId);
+      await this.recordInSession(session, person, input, paymentId, owners);
       session.flush();
     });
     return paymentId;
@@ -264,10 +272,11 @@ export class PersonPaymentRepository {
       dateKnown: !(unknownDate != null && unknownDate.date.getTime() === input.date.getTime()),
       idempotencyKey: undefined,
     };
+    const owners = await this.liveOwnerSchedules(carried);
     await runTransaction(this.db, async (tx) => {
       const session = new TxSession(tx);
       await this.revertInSession(session, person, pre);
-      const { advanceEntryId } = await this.recordInSession(session, person, carried, newPaymentId);
+      const { advanceEntryId } = await this.recordInSession(session, person, carried, newPaymentId, owners);
       if (advanceEntryId) {
         for (const a of pre.applications) {
           if (a.deletedAt != null) continue;
@@ -441,7 +450,42 @@ export class PersonPaymentRepository {
     return { entries, applications, funds };
   }
 
-  private async recordInSession(session: TxSession, person: Person, input: RecordPaymentInput, paymentId: string): Promise<{ advanceEntryId: string | null }> {
+  /** Schedule ids of the user's live EMIs / Loans — only when this payment settles an installment share and the check is wired. */
+  private async liveOwnerSchedules(input: RecordPaymentInput): Promise<string[] | null> {
+    const { liveAgreementScheduleIds, scheduleDocRef } = this.deps;
+    if (liveAgreementScheduleIds == null || scheduleDocRef == null) return null;
+    if (!input.lines.some((l) => l.route.kind === "derived")) return null;
+    return liveAgreementScheduleIds();
+  }
+
+  /**
+   * A repayment of a person's EMI / Loan share is only valid while that agreement exists. The share is DERIVED from the
+   * installment; the repayment is STORED. Recording one against an agreement that was deleted elsewhere (a stale tab) would
+   * leave a repayment with no share — the person would read as "I owe them" while the bank keeps the money.
+   *
+   * Checked INSIDE the transaction: the installment must exist, be live, and sit under the schedule of a live agreement
+   * whose schedule is not stamped deleted. The deletion stamps that schedule in its own transaction, so a delete that
+   * commits first makes this refuse, and one that commits in between forces this transaction to retry and then refuse.
+   */
+  private async assertAgreementStillExists(session: TxSession, obligationRef: string, scheduleIds: readonly string[]): Promise<void> {
+    const installmentId = obligationRef.slice(obligationRef.indexOf(":") + 1);
+    for (const scheduleId of scheduleIds) {
+      const inst = await session.get(this.deps.installmentDocRef(scheduleId, installmentId));
+      if (!inst.exists() || inst.data().deletedAt != null) continue;
+      const schedule = await session.get(this.deps.scheduleDocRef!(scheduleId));
+      // No schedule document at all (legacy / half-finished delete elsewhere) is NOT a deletion marker: fail open, never block a real repayment.
+      if (!schedule.exists() || schedule.data().deletedAt == null) return;
+    }
+    throw new Error("This EMI or Loan no longer exists, so a repayment can't be recorded against it. Nothing was recorded.");
+  }
+
+  private async recordInSession(
+    session: TxSession,
+    person: Person,
+    input: RecordPaymentInput,
+    paymentId: string,
+    owners: readonly string[] | null = null,
+  ): Promise<{ advanceEntryId: string | null }> {
     const { direction, date, accountId } = input;
     const note = input.note?.trim() ?? "";
     const lines = input.lines.filter((l) => l.amount > PAYMENT_EPSILON).map((l) => ({ ...l, amount: round2(l.amount) }));
@@ -490,6 +534,7 @@ export class PersonPaymentRepository {
         if (!parent.exists() || parent.data().deletedAt != null) throw new Error("A selected obligation no longer exists.");
         if (line.amount > parent.data().amount + PAYMENT_EPSILON) throw new Error("A payment line is more than its obligation.");
       }
+      if (line.route.kind === "derived" && owners != null) await this.assertAgreementStillExists(session, line.route.obligationRef, owners);
       if (line.route.kind === "split") {
         const inst = await session.get(this.deps.installmentDocRef(line.route.scheduleId, line.route.installmentId));
         if (!inst.exists() || inst.data().deletedAt != null) throw new Error("A selected split share no longer exists.");

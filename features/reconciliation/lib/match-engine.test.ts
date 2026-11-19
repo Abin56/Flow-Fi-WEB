@@ -22,7 +22,14 @@ describe("amount bands (D4) — advisory, never rounding", () => {
     [1000, 1000.1, "paise"],
     [1000.5, 1001, "rounding"],
     [1000, 1001, "rounding"],
-    [1000, 1001.01, null],
+    [1000, 1001.01, "approx"],
+    [298, 300, "approx"],
+    [300.01, 300, "paise"],
+    [1000, 1020, "approx"], // 2% of ₹1,020
+    [1000, 1021, null],
+    [12, 14, null], // never more than 10% of the amount
+    [10000, 10050, "approx"], // capped at ₹50
+    [10000, 10051, null],
   ])("₹%s vs ₹%s → %s", (a, b, band) => {
     expect(amountBand(toPaise(a), toPaise(b))).toBe(band);
   });
@@ -42,8 +49,63 @@ describe("amount bands (D4) — advisory, never rounding", () => {
     expect(m.get("r2")!.candidates[0]).toMatchObject({ recordId: "t2", amountBand: "rounding", amountDeltaPaise: 50 });
   });
 
-  it("₹1,000.00 vs ₹1,001.01 is not a candidate at all", () => {
-    expect(run([reconRow({ id: "r1", amount: 1000 })], [record({ id: "t1", amount: 1001.01 })]).get("r1")!.state).toBe("no_match");
+  it("₹1,000.00 vs ₹1,021.00 is not a candidate at all", () => {
+    expect(run([reconRow({ id: "r1", amount: 1000 })], [record({ id: "t1", amount: 1021 })]).get("r1")!.state).toBe("no_match");
+  });
+});
+
+describe("approximate amounts (₹298 vs ₹300) — possible, never exact", () => {
+  it("₹298 on the statement vs ₹300 typed by hand, same day and account → a possible match with the ₹2 difference", () => {
+    const m = run([reconRow({ id: "r1", amount: 298, description: "UPI/628323405861/DR/RAHUL/SBIN/rahul@oksbi" })], [record({ id: "t1", amount: 300, description: "Dinner share" })]);
+    const match = m.get("r1")!;
+    expect(match.state).toBe("near_amount");
+    expect(match.candidates[0]).toMatchObject({ recordId: "t1", amountBand: "approx", amountDeltaPaise: 200, dayGap: 0, tier: "near" });
+    expect(match.suggestedRecordId).toBe("t1"); // only a comparison target — never a decision
+  });
+
+  it("₹300.01 vs ₹300.00 → a possible match (paise band), not exact", () => {
+    const m = run([reconRow({ id: "r1", amount: 300.01 })], [record({ id: "t1", amount: 300 })]);
+    expect(m.get("r1")!.state).toBe("same_merchant_date");
+    expect(m.get("r1")!.candidates[0]).toMatchObject({ amountBand: "paise", amountDeltaPaise: -1 });
+  });
+
+  it("an approx amount alone is not evidence: 3 days apart with a different merchant is no match", () => {
+    const m = run([reconRow({ id: "r1", amount: 298, description: "AMAZON" })], [record({ id: "t1", amount: 300, description: "Petrol", iso: "2026-09-08T10:00:00+05:30" })]);
+    expect(m.get("r1")!.state).toBe("no_match");
+  });
+
+  it("…but the same merchant or the reference number supports it across the ±3-day window", () => {
+    const merchant = run([reconRow({ id: "r1", amount: 298, description: "SWIGGY" })], [record({ id: "t1", amount: 300, description: "Swiggy", iso: "2026-09-08T10:00:00+05:30" })]);
+    expect(merchant.get("r1")!.candidates[0]).toMatchObject({ amountBand: "approx", dayGap: 3 });
+    const ref = run([reconRow({ id: "r1", amount: 298, description: "NEFT", referenceNumber: "628323405861" })], [record({ id: "t1", amount: 300, description: "Paid rent", notes: "ref 628323405861", iso: "2026-09-08T10:00:00+05:30" })]);
+    expect(ref.get("r1")!.candidates[0]).toMatchObject({ amountBand: "approx", referenceMatch: true });
+  });
+
+  it("an exact transaction outranks an approx one, and the approx one still needs Keep both's acknowledgement", () => {
+    const m = run([reconRow({ id: "r1", amount: 300 })], [record({ id: "t-approx", amount: 298 }), record({ id: "t-exact", amount: 300 })]);
+    expect(m.get("r1")).toMatchObject({ state: "exact_candidate", suggestedRecordId: "t-exact" });
+    expect(m.get("r1")!.candidates.map((c) => c.recordId)).toEqual(["t-exact", "t-approx"]);
+  });
+
+  it("several near transactions → every one is listed, best first, and nothing is picked as confirmed", () => {
+    const m = run([reconRow({ id: "r1", amount: 298, description: "CAFE" })], [record({ id: "a", amount: 300, description: "Cafe" }), record({ id: "b", amount: 297, description: "Cafe" })]);
+    const match = m.get("r1")!;
+    expect(match.candidates.map((c) => c.recordId).sort()).toEqual(["a", "b"]);
+    expect(["near_amount", "same_merchant_date", "multiple"]).toContain(match.state);
+  });
+
+  it("never pairs a debit with a credit, however close the amount", () => {
+    expect(run([reconRow({ id: "r1", amount: 298 })], [record({ id: "t1", amount: 300, direction: "credit" })]).get("r1")!.state).toBe("no_match");
+  });
+
+  it("never crosses accounts, even with an approx amount on the same day", () => {
+    const m = run([reconRow({ id: "r1", amount: 298 })], [record({ id: "t1", amount: 300, accountId: "acc-bank" })]);
+    expect(m.get("r1")!.candidates).toHaveLength(0);
+  });
+
+  it("UPI rail words don't make two payees 'similar' (same bank code, different person)", () => {
+    expect(merchantStrength(merchantSimilarity("UPI/627632125367/DR/JIO/HDFC/jio@okhdfcbank", "UPI/111/DR/RAHUL/HDFC/rahul@okhdfcbank"))).toBe("different");
+    expect(merchantStrength(merchantSimilarity("UPI/627481159639/CR/MOHAN /BKID/mohankoda/UPI", "Mohan"))).toBe("same");
   });
 });
 

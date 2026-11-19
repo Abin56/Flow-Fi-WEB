@@ -5,7 +5,7 @@
  * never worded or coloured as a confirmed duplicate — "exact candidate" stays neutral until the user links it.
  */
 
-import { CheckCircle2, CircleDashed, CircleHelp, Copy, EyeOff, Inbox, Link2, Plus, Search, Split, TriangleAlert, Layers } from "lucide-react";
+import { CheckCircle2, CircleHelp, Copy, EyeOff, Inbox, Link2, Plus, Search, Split, TriangleAlert, Layers } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatCurrencyPrecise } from "@/lib/format";
@@ -36,17 +36,25 @@ const TONE_TEXT: Record<Tone, string> = {
   muted: "text-muted-foreground",
 };
 
+/**
+ * Match status vocabulary (2026-11-19): Possible match · No match · Account missing · Imported · Excluded. Every
+ * similarity — even identical amount, day and account — is only a "Possible match" that needs checking; it is never
+ * called a duplicate and never linked for the user. The evidence is explained once, beside the compared rows.
+ */
 export const STATE_META: Record<MatchState, { label: string; short: string; tone: Tone; icon: LucideIcon; hint: string }> = {
-  exact_candidate: { label: "Possible match · exact", short: "Exact", tone: "primary", icon: Copy, hint: "Same account, amount and day as one FlowFi transaction. Still only a possible match — you decide." },
-  near_amount: { label: "Possible match · near", short: "Near", tone: "warning", icon: CircleDashed, hint: "Amount or date differs slightly. A suggestion only — compare before deciding." },
-  same_merchant_date: { label: "Same merchant & day", short: "Merchant", tone: "warning", icon: CircleDashed, hint: "Same merchant and day; the amount differs slightly." },
-  multiple: { label: "Multiple matches", short: "Multiple", tone: "warning", icon: Layers, hint: "More than one FlowFi transaction could be this row." },
-  no_match: { label: "No match", short: "None", tone: "muted", icon: Search, hint: "Nothing on this account looks like this row." },
+  exact_candidate: { label: "Possible match", short: "Possible", tone: "primary", icon: Copy, hint: "Same account, amount and day as one FlowFi transaction. Still your decision — nothing is linked for you." },
+  near_amount: { label: "Possible match", short: "Possible", tone: "primary", icon: Copy, hint: "A similar FlowFi transaction — the amount or date differs. Needs checking before you decide." },
+  same_merchant_date: { label: "Possible match", short: "Possible", tone: "primary", icon: Copy, hint: "Same merchant and day; the amount differs slightly. Needs checking before you decide." },
+  multiple: { label: "Possible matches", short: "Multiple", tone: "primary", icon: Layers, hint: "More than one FlowFi transaction could be this row." },
+  no_match: { label: "No match", short: "No match", tone: "muted", icon: Search, hint: "Nothing on this account looks like this row." },
   in_inbox: { label: "In Inbox", short: "Inbox", tone: "purple", icon: Inbox, hint: "An SMS for this is waiting in the Transaction Inbox." },
-  conflict: { label: "Needs review", short: "Review", tone: "danger", icon: TriangleAlert, hint: "Something doesn't add up — check it by hand." },
-  already_imported: { label: "Already imported", short: "Imported", tone: "success", icon: CheckCircle2, hint: "This exact row was imported earlier." },
+  conflict: { label: "Conflict", short: "Conflict", tone: "danger", icon: TriangleAlert, hint: "Something doesn't add up — check it by hand." },
+  already_imported: { label: "Imported", short: "Imported", tone: "success", icon: CheckCircle2, hint: "This exact row was imported earlier." },
   excluded: { label: "Excluded", short: "Excluded", tone: "muted", icon: EyeOff, hint: "Excluded from this review." },
 };
+
+/** "Account missing" — the statement account isn't chosen, so nothing is compared yet (hints only). */
+export const ACCOUNT_MISSING_META = { label: "Account missing", tone: "warning" as Tone, icon: TriangleAlert, hint: "Choose the statement account — matches are only checked on that one account." };
 
 /**
  * Decision vocabulary — Git-merge style. `label` is the action ("Keep existing — skip import"); `short` is how a made
@@ -103,9 +111,15 @@ export function StateBadge({ state, compact = false }: { state: MatchState; comp
 
 /** Both sheets' column header row: fixed over the scrolling body, slightly stronger rules than the body's. */
 export const SHEET_HEAD =
-  "grid h-8 shrink-0 items-stretch border-b border-border-strong/60 bg-muted/60 text-[10.5px] font-semibold tracking-[0.06em] text-muted-foreground uppercase [&>*:not(:first-child)]:border-border/60!";
-/** Both sheets' title bar — flat, one line. */
-export const SHEET_TITLE_BAR = "flex min-h-10 shrink-0 items-center gap-x-2 gap-y-1.5 border-b border-border-strong/60 bg-card px-3 py-1.5";
+  "grid h-7 shrink-0 items-stretch border-b border-border-strong/70 bg-muted/70 text-[10px] font-semibold tracking-[0.06em] text-muted-foreground uppercase [&>*:not(:first-child)]:border-border/70!";
+/** Both sheets' title bar — flat, one slim line. */
+export const SHEET_TITLE_BAR = "flex h-9 shrink-0 items-center gap-x-2 border-b border-border-strong/60 bg-card px-2.5";
+/** Spreadsheet frame shared by both sheets: square-ish, ruled, no shadow. */
+export const SHEET_FRAME = "@container flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-border-strong/70 bg-card";
+/** One spreadsheet row: 36px, ruled cells, zebra striping. */
+export const SHEET_ROW = "relative grid h-9 cursor-pointer scroll-my-1 items-stretch border-b border-border/60 transition-colors even:bg-muted/[0.22]";
+/** Ruled cells: stretch to the row, centre the content, hairline column rules. */
+export const SHEET_CELLS = "[&>*]:self-stretch [&>*]:content-center [&>*]:px-2 [&>*:not(:first-child)]:border-l [&>*:not(:first-child)]:border-border/45";
 
 /** A compact match indicator for dense grids: icon + label in the state's colour, no pill. Same words as StateBadge. */
 export function Mark({ tone = "neutral", icon: Icon, children, className, title }: { tone?: Tone; icon?: LucideIcon; children: React.ReactNode; className?: string; title?: string }) {
@@ -133,20 +147,28 @@ export function decisionShort(kind: DecisionKind, keepBoth = false): string {
   return kind === "import_new" && keepBoth ? KEEP_BOTH_LABEL : DECISION_META[kind].short;
 }
 
+/** The label of a row nobody has decided yet — one word for "your decision is still needed". */
+export function pendingLabelFor(_possibleMatch = false): string {
+  return "Needs review";
+}
+
+/** The row's decision as quiet text: an amber dot while open, the outcome (ticked) once decided. No pills. */
 export function DecisionChip({ kind, keepBoth = false }: { kind: DecisionKind | null; keepBoth?: boolean }) {
   if (!kind) {
     return (
-      <span className="inline-flex items-center gap-1.5 rounded-full border border-warning/35 bg-warning/10 px-2 py-0.5 text-xs font-medium text-warning">
-        <span aria-hidden className="size-1.5 rounded-full bg-warning" />
-        Undecided
+      <span data-testid="decision-chip" data-pending="true" title="No decision yet — this row still needs your review." className="inline-flex max-w-full items-center gap-1.5 text-[12px] leading-4 font-medium text-foreground/70">
+        <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-muted-foreground/60" />
+        <span className="truncate">{pendingLabelFor()}</span>
       </span>
     );
   }
   const meta = DECISION_META[kind];
+  const Icon = kind === "investigate" || kind === "inbox" ? meta.icon : CheckCircle2;
   return (
-    <Chip tone={meta.tone} icon={meta.icon} title={meta.label}>
-      {decisionShort(kind, keepBoth)}
-    </Chip>
+    <span data-testid="decision-chip" data-pending="false" title={meta.label} className={cn("inline-flex max-w-full min-w-0 items-center gap-1.5 text-[12px] leading-4 font-medium", TONE_TEXT[meta.tone === "primary" ? "primary" : meta.tone])}>
+      <Icon className="size-3.5 shrink-0" aria-hidden />
+      <span className="truncate">{decisionShort(kind, keepBoth)}</span>
+    </span>
   );
 }
 

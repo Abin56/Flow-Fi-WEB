@@ -10,6 +10,7 @@ const isDev = process.env.NODE_ENV === "development";
 const nextConfig: NextConfig = {
   ...(isDev ? {} : { output: "export" as const }),
   trailingSlash: true,
+  experimental: { agentUpgrade: "security" },
   images: { unoptimized: true },
   ...(isDev
     ? {

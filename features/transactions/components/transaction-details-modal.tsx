@@ -21,7 +21,7 @@
  */
 
 import { accountAfterKindSwitch, initialAddAccountId } from "@/features/transactions/lib/initial-account";
-import { useRef, useState, type ReactNode } from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
@@ -50,6 +50,7 @@ import {
   SplitSquareHorizontal,
   Trash2,
   UserPlus,
+  Sparkles,
   Users,
   Wallet,
   X,
@@ -95,6 +96,10 @@ import type { ExpenseParticipantInput } from "@/lib/repositories/expense-reposit
 import { CardStatementChangedError, OwnedTransactionEditError, type EditTransactionParams } from "@/lib/repositories/transaction-repository";
 import { formatMonthYear, isSameMonth, transactionFlagFor } from "@/features/transactions/lib/transaction-flag";
 import { useDuplicateGuardedCreate } from "@/lib/services/duplicate-detection/use-duplicate-guarded-create";
+import { suggestCategoryForDescription } from "@/features/transactions/lib/category-suggestion";
+import { buildDescriptionHistory, suggestDescriptionCompletions } from "@/features/transactions/lib/description-autocomplete";
+import { resolveDescriptionAndCategory } from "@/features/transactions/lib/description-category";
+import { toast } from "@/store/toast-store";
 import { resolveMixedSplit } from "@/lib/split/mixed-split";
 import { WS_FIELD, WS_GHOST, WS_PRIMARY, WS_SECONDARY, WS_SELECT_TRIGGER } from "@/features/people/components/workspace/person-workspace-ui";
 import { choiceClass } from "@/features/loans/components/loan-emi-ui";
@@ -372,6 +377,54 @@ const CATEGORY_TONE_CLASS: Record<string, string> = {
   neutral: "bg-muted text-muted-foreground",
 };
 
+/** Small, optional "Suggested: X  [Apply] [×]" line under the Description field. Never saves anything itself. */
+function SuggestionChip({
+  label,
+  value,
+  applyLabel,
+  onApply,
+  onDismiss,
+  testId,
+}: {
+  label: string;
+  value: string;
+  applyLabel: string;
+  onApply: () => void;
+  onDismiss: () => void;
+  testId: string;
+}) {
+  return (
+    <div data-testid={testId} className="mt-2 flex min-w-0 items-center gap-2 text-[13px] leading-none">
+      <Sparkles aria-hidden className="size-4 shrink-0 text-primary-accent-text" />
+      <span className="min-w-0 truncate font-medium text-foreground/80">
+        Suggested {label.toLowerCase()}: <span className="font-bold text-foreground">{value}</span>
+      </span>
+      <button
+        type="button"
+        tabIndex={-1}
+        aria-label={applyLabel}
+        onClick={onApply}
+        className="ml-1 inline-flex h-7 shrink-0 items-center gap-1 rounded-[7px] border border-primary-accent-text bg-primary px-2.5 text-xs font-bold text-primary-foreground outline-none transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <Check aria-hidden className="size-3.5" strokeWidth={2.5} />
+        Apply
+      </button>
+      <button
+        type="button"
+        tabIndex={-1}
+        aria-label={`Dismiss suggested ${label.toLowerCase()}`}
+        onClick={onDismiss}
+        className="inline-flex size-7 shrink-0 items-center justify-center rounded-[7px] text-foreground/70 outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <X aria-hidden className="size-4" />
+      </button>
+    </div>
+  );
+}
+
+/** Radix Select items can't have an empty value, so "No category" uses this sentinel (mapped back to ""). */
+const NO_CATEGORY_VALUE = "__none__";
+
 /** Category picker — same reasoning as `AccountSelect`: an attractive 2-column grid of icon tiles
  *  that opens in a dropdown whose list scrolls inside its own floating popover, so a growing
  *  category list never affects the popup's own height. */
@@ -380,11 +433,14 @@ function CategorySelect({
   value,
   onChange,
   type,
+  allowClear = false,
 }: {
   categories: Category[];
   value: string;
   onChange: (id: string) => void;
   type: CategoryType;
+  /** Offers a "No category" choice (an optional category — see `resolveDescriptionAndCategory`). */
+  allowClear?: boolean;
 }) {
   const selected = categories.find((c) => c.id === value);
   const [manageOpen, setManageOpen] = useState(false);
@@ -392,9 +448,9 @@ function CategorySelect({
 
   return (
     <>
-    <Select open={pickerOpen} onOpenChange={setPickerOpen} value={value || undefined} onValueChange={onChange}>
+    <Select open={pickerOpen} onOpenChange={setPickerOpen} value={value || undefined} onValueChange={(next) => onChange(next === NO_CATEGORY_VALUE ? "" : next)}>
       <SelectTrigger className={TXN_TRIGGER}>
-        <SelectValue placeholder="Select category">
+        <SelectValue placeholder={allowClear ? "Optional" : "Select category"}>
           {selected &&
             (() => {
               const Icon = categoryIconFor(selected.iconKey);
@@ -412,6 +468,11 @@ function CategorySelect({
       </SelectTrigger>
       <SelectContent className="w-(--radix-select-trigger-width) rounded-[8px] border-border-strong">
         <div className="grid max-h-64 grid-cols-2 gap-1 overflow-y-auto p-1">
+          {allowClear && value !== "" && (
+            <SelectItem value={NO_CATEGORY_VALUE} className={cn(GRID_OPTION_CLASS, choiceClass(false), "col-span-2")}>
+              <span className="truncate text-xs font-medium text-muted-foreground">No category</span>
+            </SelectItem>
+          )}
           {categories.map((c) => {
             const Icon = categoryIconFor(c.iconKey);
             const tone = categoryToneFor(c.iconKey);
@@ -594,6 +655,16 @@ export function TransactionDetailsModal({
   const [feeCategoryId, setFeeCategoryId] = useState("");
   const [viaApp, setViaApp] = useState("");
   const [categoryId, setCategoryId] = useState("");
+  // Suggestion chips the user dismissed (by suggested category id) — a dismissed suggestion never comes back
+  // until the form is reopened. Display-only state: nothing here is ever saved.
+  const [dismissedCategorySuggestions, setDismissedCategorySuggestions] = useState<string[]>([]);
+  const [dismissedDescriptionSuggestions, setDismissedDescriptionSuggestions] = useState<string[]>([]);
+  // Typing autocomplete under Description (display-only): the list only opens while the user types, and
+  // `descActive` is the highlighted row (-1 none). `descNavigated` = the user moved with the arrow keys, which is
+  // what lets a plain Enter pick the row instead of its usual "next field".
+  const [descListOpen, setDescListOpen] = useState(false);
+  const [descActive, setDescActive] = useState(-1);
+  const [descNavigated, setDescNavigated] = useState(false);
   const [exclude, setExclude] = useState(false);
   const [reassign, setReassign] = useState(false);
   const [month, setMonth] = useState<Date>(new Date());
@@ -632,6 +703,10 @@ export function TransactionDetailsModal({
   const duplicateGuard = useDuplicateGuardedCreate(
     existingTransactions.map((t) => ({ id: t.id, description: t.description, amount: t.amount, dateTime: t.dateTime, accountId: t.accountId, type: t.type })),
   );
+
+  // Previous descriptions for the typing autocomplete — built from data this form already receives, per kind.
+  const autocompleteKind = kind === "income" ? "income" : "expense";
+  const descriptionHistory = useMemo(() => buildDescriptionHistory(existingTransactions, autocompleteKind), [existingTransactions, autocompleteKind]);
 
   const amountRef = useRef<HTMLInputElement>(null);
   const descriptionRef = useRef<HTMLInputElement>(null);
@@ -697,7 +772,6 @@ export function TransactionDetailsModal({
       setBorrowFunding(transaction.fundedByPersonId != null ? "person" : null);
       setAddingPerson(autoFocusAssign && transaction.linkedPersonId == null);
     } else {
-      const firstCategory = categories.find((c) => (defaultKind === "income" ? c.type !== "expense" : c.type !== "income"));
       // The account is always the user's deliberate choice — never "the first one in Firestore order". The form
       // starts with an account only when it was opened from a specific account's context (`initialAccountId`).
       const startAccountId = initialAddAccountId({ kind: defaultKind, accounts, contextAccountId: initialAccountId });
@@ -713,7 +787,8 @@ export function TransactionDetailsModal({
       setFeeChargedTo("source");
       setFeeCategoryId(defaultFeeCategoryId(categories));
       setViaApp("");
-      setCategoryId(firstCategory?.id ?? "");
+      // No category is pre-picked: description or category is enough, so an untouched picker means "uncategorized".
+      setCategoryId("");
       setExclude(false);
       setReassign(false);
       setMonth(new Date());
@@ -723,6 +798,11 @@ export function TransactionDetailsModal({
       setAddingPerson(false);
     }
     setNewPersonName("");
+    setDismissedCategorySuggestions([]);
+    setDismissedDescriptionSuggestions([]);
+    setDescListOpen(false);
+    setDescActive(-1);
+    setDescNavigated(false);
     setFormError(null);
     setInvalidField(null);
     setSplitAttempted(false);
@@ -762,6 +842,33 @@ export function TransactionDetailsModal({
   const flag = transaction ? transactionFlagFor(transaction) : null;
   const monthChanged = transaction ? !isSameMonth(month, transaction.dateTime) : false;
   const filteredCategories = categories.filter((c) => (kind === "income" ? c.type !== "expense" : c.type !== "income"));
+  // Optional suggestion chips (plain income / expense only). Category chip: only while NO category is chosen, so a
+  // manual choice is never second-guessed. Description chip: only while the description is empty and a category is
+  // chosen, so typed text is never overwritten. Both stay hidden once dismissed.
+  const suggestionsApply = (kind === "income" || kind === "expense") && !borrowsCash && !isTransferLeg;
+  const suggestedCategory =
+    suggestionsApply && categoryId === "" && description.trim() !== ""
+      ? suggestCategoryForDescription({ description, kind: kind === "income" ? "income" : "expense", categories: filteredCategories })
+      : null;
+  const shownCategorySuggestion = suggestedCategory != null && !dismissedCategorySuggestions.includes(suggestedCategory.id) ? suggestedCategory : null;
+  const chosenCategory = categoryId !== "" ? filteredCategories.find((c) => c.id === categoryId) : undefined;
+  const shownDescriptionSuggestion =
+    suggestionsApply && description.trim() === "" && chosenCategory != null && !dismissedDescriptionSuggestions.includes(chosenCategory.id) ? chosenCategory : null;
+  // Typing autocomplete rows (only while the list is open, i.e. after the user typed; never on open or on Apply).
+  const descCompletion =
+    suggestionsApply && descListOpen
+      ? suggestDescriptionCompletions({ text: description, kind: autocompleteKind, categories: filteredCategories, history: descriptionHistory })
+      : { suggestions: [], preselect: false };
+  const descRows = descCompletion.suggestions;
+  const descListShown = descRows.length > 0;
+  // Which row is highlighted: the user's arrow choice, else the first row when it directly continues the typed text.
+  const descHighlight = !descListShown ? -1 : descActive >= 0 ? Math.min(descActive, descRows.length - 1) : descCompletion.preselect ? 0 : -1;
+  const acceptDescription = (text: string) => {
+    setDescription(text);
+    setDescListOpen(false);
+    setDescActive(-1);
+    setDescNavigated(false);
+  };
   // Income can't be received into a credit card account, so it's excluded from the picker for
   // that kind — same reasoning as `filteredCategories` above, just on the account list instead.
   const filteredAccounts = kind === "income" || borrowsCash ? accounts.filter((a) => a.type !== "card") : accounts;
@@ -897,8 +1004,10 @@ export function TransactionDetailsModal({
     const amountValue = Number(amount);
     if (!amount.trim() || Number.isNaN(amountValue) || amountValue <= 0) return fail("amount", "Enter an amount greater than 0.");
     if (amountValue !== Math.round(amountValue * 100) / 100) return fail("amount", "Amounts can have at most 2 decimal places.");
-    if (!description.trim() && kind !== "transfer" && !borrowsCash) return fail("description", "Description is required.");
-    if (kind !== "transfer" && !borrowsCash && !categoryId) return fail("category", "Select a category.");
+    if (kind !== "transfer" && !borrowsCash) {
+      const resolved = resolveDescriptionAndCategory({ description, categoryId, categories: filteredCategories });
+      if (!resolved.ok) return fail("description", resolved.message);
+    }
     if (!date) return fail("date", "Select a date.");
     const dateValue = new Date(date);
     const today = new Date();
@@ -991,8 +1100,7 @@ export function TransactionDetailsModal({
     ? []
     : [
         { field: "amount", label: "Amount", done: Number(amount) > 0 },
-        ...(kind !== "transfer" && !borrowsCash ? [{ field: "description" as const, label: "Description", done: description.trim() !== "" }] : []),
-        ...(kind !== "transfer" && !borrowsCash ? [{ field: "category" as const, label: "Category", done: categoryId !== "" }] : []),
+        ...(kind !== "transfer" && !borrowsCash ? [{ field: "description" as const, label: "Description or category", done: description.trim() !== "" || categoryId !== "" }] : []),
         ...(!personPaysDirectly ? [{ field: "account" as const, label: kind === "transfer" ? "From account" : "Account", done: accountId !== "" }] : []),
         ...(kind === "transfer" ? [{ field: "destination" as const, label: "To account", done: destinationAccountId !== "" }] : []),
       ];
@@ -1044,6 +1152,16 @@ export function TransactionDetailsModal({
     setOwnerEditLink(null);
     setInvalidField(null);
 
+    // Description or category (at least one — validate() just checked): a category-only save takes the category's
+    // name as its description; a description-only save is uncategorized (""). Transfers and People borrowings keep
+    // their own rules and are passed through untouched.
+    const resolved = kind === "transfer" || borrowsCash ? null : resolveDescriptionAndCategory({ description, categoryId, categories: filteredCategories });
+    await persistTransaction(resolved?.ok ? resolved.description : description, resolved?.ok ? resolved.categoryId : categoryId);
+  }
+
+  /** Everything after validation. `description` / `categoryId` are the RESOLVED values (parameters deliberately
+   *  shadow the form state), so the duplicate check, create, edit, split and person-funded writes all agree. */
+  async function persistTransaction(description: string, categoryId: string) {
     const amountValue = Number(amount);
     // Editing: an untouched day keeps the stored timestamp exactly, so a save that doesn't change the date is never
     // treated as a date change (owned People / Loan transactions refuse those outside their owner's write path).
@@ -1115,6 +1233,7 @@ export function TransactionDetailsModal({
             date: dateTime,
             accountId,
             note: [description.trim(), notes.trim()].filter(Boolean).join(" — ") || undefined,
+            idempotencyKey: transferKey,
           });
         } else if (personPaysDirectly) {
           const person = people.find((p) => p.id === personId);
@@ -1128,6 +1247,7 @@ export function TransactionDetailsModal({
             notes,
             excludeFromCalculations: exclude,
             accountingMonth: reassign ? month : null,
+            idempotencyKey: transferKey,
           });
         } else if (kind === "transfer") {
           // Within the opened statement → a payment OF that statement (beyond it is the explicit full / extra choice).
@@ -1213,7 +1333,10 @@ export function TransactionDetailsModal({
             }
           }
         }
-        op.succeed({ toast: { title: "Transaction added" } });
+        // The write has committed: confirm now. (`op.succeed` would hold the progress card for SUCCESS_HOLD_MS
+        // before the toast — pure waiting after the work is done.) Failures never reach here.
+        op.dismiss();
+        toast.success(kind === "transfer" ? "Transfer added" : "Transaction added");
       } else {
         const transactionEdits: Omit<EditTransactionParams, "linkedPersonId" | "clearLinkedPersonId" | "owesPersonToggle"> = {
           amount: amountValue,
@@ -1303,7 +1426,8 @@ export function TransactionDetailsModal({
             transactionEdits,
           });
         }
-        op.succeed({ toast: { title: "Transaction updated" } });
+        op.dismiss();
+        toast.success("Transaction updated");
       }
       setJustSaved(true);
       setTransferKey(crypto.randomUUID());
@@ -1328,10 +1452,10 @@ export function TransactionDetailsModal({
           setMeLocked(false);
           setView("form");
           amountRef.current?.focus();
-        }, 260);
+        }, 120);
       } else {
         // Brief success flash before closing — purely cosmetic, doesn't delay the actual save.
-        setTimeout(() => onOpenChange(false), 260);
+        setTimeout(() => onOpenChange(false), 120);
       }
     } catch (e) {
       // The form keeps everything entered and shows why inline (the action also toasts) — the progress
@@ -1383,6 +1507,12 @@ export function TransactionDetailsModal({
           onEscapeKeyDown={(e) => {
             // The "More options" card is a layer inside this drawer: Esc dismisses just that card, never the whole
             // drawer (and the entry in progress). Radix handles Esc in the capture phase, before the card's own onKeyDown.
+            // Same for the Description suggestions: Esc just closes that list.
+            if (descListShown) {
+              e.preventDefault();
+              setDescListOpen(false);
+              return;
+            }
             if (moreOpen) {
               e.preventDefault();
               setMoreOpen(false);
@@ -1852,9 +1982,9 @@ export function TransactionDetailsModal({
                     if (next === "" || /^\d*\.?\d*$/.test(next)) setAmount(next);
                   }}
                   onKeyDown={(e) => {
-                    // Description is required: until it's filled, Enter steps there instead of hitting a
-                    // validation error; once filled, Enter falls through to the form's submit (Save).
-                    if (e.key === "Enter" && !e.shiftKey && !description.trim()) {
+                    // Description or category is required: until one is given, Enter steps to Description instead of
+                    // hitting a validation error; once given, Enter falls through to the form's submit (Save).
+                    if (e.key === "Enter" && !e.shiftKey && !description.trim() && (kind === "transfer" || borrowsCash || !categoryId)) {
                       e.preventDefault();
                       descriptionRef.current?.focus();
                     }
@@ -1901,19 +2031,119 @@ export function TransactionDetailsModal({
               {/* Description → Category → Date (validation order). A transfer has no category, so Date sits beside Description. */}
               <div className="grid grid-cols-2 gap-2.5">
               <div className={cn("col-span-2 min-w-0", kind === "transfer" && "sm:col-span-1")}>
-              <FormRow label={kind === "transfer" || borrowsCash ? "Description" : "Description *"} field="description" error={fieldError("description")}>
-                <Input
-                  ref={descriptionRef}
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  placeholder={kind === "income" ? "e.g. Salary, Freelance payment" : kind === "transfer" ? (paysCardBill ? "e.g. Card bill payment" : "e.g. Savings sweep") : "e.g. Blue Tokai Coffee"}
-                  className={TXN_FIELD}
-                />
+              <FormRow label="Description" field="description" error={fieldError("description")}>
+                <div className="relative">
+                  <Input
+                    ref={descriptionRef}
+                    value={description}
+                    onChange={(e) => {
+                      setDescription(e.target.value);
+                      setDescListOpen(true);
+                      setDescActive(-1);
+                      setDescNavigated(false);
+                    }}
+                    onBlur={() => setDescListOpen(false)}
+                    onKeyDown={(e) => {
+                      // Autocomplete keys — only while the list is showing; otherwise every key behaves exactly as before.
+                      if (!descListShown || e.nativeEvent.isComposing) return;
+                      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                        e.preventDefault();
+                        setDescNavigated(true);
+                        const last = descRows.length - 1;
+                        setDescActive(e.key === "ArrowDown" ? (descHighlight >= last ? 0 : descHighlight + 1) : descHighlight <= 0 ? last : descHighlight - 1);
+                      } else if (e.key === "Tab" && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey && descHighlight >= 0) {
+                        e.preventDefault(); // Tab accepts the ready completion; the next Tab moves on as usual
+                        acceptDescription(descRows[descHighlight].text);
+                      } else if (e.key === "Enter" && descNavigated && descHighlight >= 0 && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey) {
+                        e.preventDefault(); // only after arrowing to a row — a plain Enter keeps moving to the next field
+                        acceptDescription(descRows[descHighlight].text);
+                      }
+                    }}
+                    placeholder={kind === "income" ? "e.g. Salary, Freelance payment" : kind === "transfer" ? (paysCardBill ? "e.g. Card bill payment" : "e.g. Savings sweep") : "e.g. Blue Tokai Coffee"}
+                    autoComplete="off"
+                    role="combobox"
+                    aria-autocomplete="list"
+                    aria-expanded={descListShown}
+                    aria-controls="txn-description-suggestions"
+                    aria-activedescendant={descHighlight >= 0 ? `txn-description-suggestion-${descHighlight}` : undefined}
+                    className={TXN_FIELD}
+                  />
+                  {descListShown && (
+                    <ul
+                      id="txn-description-suggestions"
+                      role="listbox"
+                      aria-label="Description suggestions"
+                      data-testid="description-autocomplete"
+                      className="absolute top-full right-0 left-0 z-40 mt-1 flex flex-col gap-0.5 rounded-[8px] border border-border-strong bg-popover p-1 text-popover-foreground shadow-lg"
+                    >
+                      {descRows.map((row, i) => {
+                        const typed = description.replace(/\s+/g, " ").trim();
+                        const startsWithTyped = row.text.toLowerCase().startsWith(typed.toLowerCase());
+                        const active = i === descHighlight;
+                        return (
+                          <li
+                            key={`${row.source}-${row.text}`}
+                            id={`txn-description-suggestion-${i}`}
+                            role="option"
+                            aria-selected={active}
+                            // mousedown (not click) + preventDefault: the field keeps focus, so the list never blurs shut first.
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              acceptDescription(row.text);
+                              descriptionRef.current?.focus();
+                            }}
+                            className={cn(
+                              "flex h-9 cursor-pointer items-center gap-2 rounded-[6px] px-2.5 text-sm text-foreground/80 hover:bg-primary/10",
+                              active && "bg-primary/15 text-foreground",
+                            )}
+                          >
+                            <span className="min-w-0 flex-1 truncate">
+                              {startsWithTyped ? (
+                                <>
+                                  {row.text.slice(0, typed.length)}
+                                  <span className="font-semibold text-foreground">{row.text.slice(typed.length)}</span>
+                                </>
+                              ) : (
+                                row.text
+                              )}
+                            </span>
+                            {active && i === 0 && descCompletion.preselect && !descNavigated ? (
+                              <kbd className="hidden shrink-0 rounded-[5px] border border-border-strong bg-muted px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground sm:inline">Tab</kbd>
+                            ) : (
+                              row.source !== "keyword" && <span className="shrink-0 text-[11px] text-muted-foreground">{row.source === "history" ? "Used before" : "Category"}</span>
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </div>
               </FormRow>
+              {shownCategorySuggestion && (
+                <SuggestionChip
+                  testId="category-suggestion"
+                  label="Category"
+                  value={shownCategorySuggestion.name}
+                  applyLabel={`Use ${shownCategorySuggestion.name} as the category`}
+                  onApply={() => setCategoryId(shownCategorySuggestion.id)}
+                  onDismiss={() => setDismissedCategorySuggestions((list) => [...list, shownCategorySuggestion.id])}
+                />
+              )}
+              {shownDescriptionSuggestion && (
+                <SuggestionChip
+                  testId="description-suggestion"
+                  label="Description"
+                  value={shownDescriptionSuggestion.name}
+                  applyLabel={`Use ${shownDescriptionSuggestion.name} as the description`}
+                  onApply={() => setDescription(shownDescriptionSuggestion.name)}
+                  onDismiss={() => setDismissedDescriptionSuggestions((list) => [...list, shownDescriptionSuggestion.id])}
+                />
+              )}
               </div>
                 {kind !== "transfer" && !borrowsCash && (
-                  <FormRow label="Category *" field="category" error={fieldError("category")}>
+                  <FormRow label="Category" field="category" error={fieldError("category")}>
                     <CategorySelect
+                      allowClear
                       categories={filteredCategories}
                       value={categoryId}
                       onChange={setCategoryId}

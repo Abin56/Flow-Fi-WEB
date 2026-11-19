@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { CommandPalette } from "@/components/command-palette/command-palette";
 import { MobileSidebar } from "@/components/layout/mobile-sidebar";
+import { NavProgressBar } from "@/components/layout/nav-pending";
 import { NavShortcuts } from "@/components/layout/nav-shortcuts";
 import { OfflineBanner } from "@/components/layout/offline-banner";
 import { Sidebar } from "@/components/layout/sidebar";
@@ -60,6 +61,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </main>
       </div>
 
+      <NavProgressBar />
       <NavShortcuts />
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
     </div>

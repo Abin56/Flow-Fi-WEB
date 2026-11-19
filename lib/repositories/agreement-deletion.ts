@@ -199,6 +199,8 @@ interface Gathered {
   ledgerEntries: LedgerEntry[];
   dependentExpenseTransactionIds: string[];
   livePersonSettlementCount: number;
+  /** Every installment id of the agreement's schedule — what a person's repayment's `obligationRef` points at. */
+  installmentIds: string[];
   installmentCount: number;
   paidInstallmentCount: number;
   paymentCount: number;
@@ -212,9 +214,14 @@ function ledgerPersonId(kind: AgreementKind, agreement: Loan | Emi): string | nu
 }
 
 /** Live People-ledger entries that settle one of this agreement's installments (`emi-inst:` / `loan-inst:` refs). */
-async function countLivePersonSettlements(r: Refs, agreement: Loan | Emi, installmentIds: ReadonlySet<string>): Promise<number> {
+/** The people whose repayments can settle this agreement's installments (shares, beneficiary, payer). */
+function participantPersonIds(agreement: Loan | Emi): string[] {
   const a = agreement as { ownershipShares?: { personId: string | null }[] | null; beneficiaryPersonId?: string | null; payerPersonId?: string | null };
-  const personIds = new Set<string>([...(a.ownershipShares ?? []).map((s) => s.personId), a.beneficiaryPersonId, a.payerPersonId].filter((id): id is string => !!id));
+  return [...new Set([...(a.ownershipShares ?? []).map((s) => s.personId), a.beneficiaryPersonId, a.payerPersonId].filter((id): id is string => !!id))];
+}
+
+async function countLivePersonSettlements(r: Refs, agreement: Loan | Emi, installmentIds: ReadonlySet<string>): Promise<number> {
+  const personIds = participantPersonIds(agreement);
   let count = 0;
   for (const personId of personIds) {
     const snap = await getDocs(query(r.ledger(personId), where("sourceKind", "in", ["emiInstallment", "loanInstallment"])));
@@ -250,6 +257,7 @@ async function gather(r: Refs, kind: AgreementKind, agreement: Loan | Emi): Prom
     ledgerEntries,
     dependentExpenseTransactionIds: await readDependentExpenseTransactionIds(r, ownedIds),
     livePersonSettlementCount: await countLivePersonSettlements(r, agreement, new Set(leaves.installments.map((i) => i.id))),
+    installmentIds: leaves.installments.map((i) => i.id),
     installmentCount: leaves.installments.length,
     paidInstallmentCount: leaves.installments.filter((d) => ((d.data() as { amountPaid?: number }).amountPaid ?? 0) > 0).length,
     paymentCount: paymentDocs.filter((p) => p.deletedAt == null).length,
@@ -328,6 +336,16 @@ export async function permanentlyDeleteAgreement(
     const agreementRef: DocumentReference = kind === "loan" ? r.loan(agreementId) : r.emi(agreementId);
     const fresh = await tx.get(agreementRef);
     if (!fresh.exists()) return null; // a concurrent attempt got there first — nothing to reverse twice
+    // The repayment guard is re-evaluated HERE, against current documents, not only before the transaction started: a
+    // person's repayment recorded since then (another tab/device) must still stop the delete. (A query can't run inside a
+    // Firestore transaction, so this is a fresh read immediately before the writes — the window is milliseconds, not the
+    // whole gather. Closing it completely needs a server-side check; see docs/backend-server-side-protection.md.)
+    //
+    // The participants' own documents are READ through the transaction first. Every repayment writes its person's balance,
+    // so one that commits after this point makes THIS transaction conflict and retry — and the retry's recount then sees it.
+    // (Without these reads the recount is a plain query: a repayment landing between it and the commit would go unnoticed.)
+    for (const personId of participantPersonIds(g.agreement)) await tx.get(doc(r.people, personId));
+    const liveSettlements = await countLivePersonSettlements(r, g.agreement, new Set(g.installmentIds));
     const transactions: Transaction[] = [];
     for (const id of ownedIds) {
       const snap = await tx.get(doc(r.transactions, id));
@@ -346,7 +364,7 @@ export async function permanentlyDeleteAgreement(
       transactions,
       ledgerEntries,
       dependentExpenseTransactionIds: g.dependentExpenseTransactionIds,
-      livePersonSettlementCount: g.livePersonSettlementCount,
+      livePersonSettlementCount: liveSettlements,
     });
     const accounts = new Map<string, Account>();
     for (const id of plan.accountDeltas.keys()) {

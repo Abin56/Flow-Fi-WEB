@@ -5,6 +5,7 @@
  */
 import { scenario } from "../lib/core.mjs";
 import * as h from "../lib/harness.mjs";
+import { sameDayIso, selectAllDays, shownTotal } from "../lib/inbox-days.mjs";
 import { BASE_URL, FIRESTORE_DOCS, HOST, PORTS, PROJECT_ID } from "../lib/env.mjs";
 
 const OWNER = { Authorization: "Bearer owner", "Content-Type": "application/json" };
@@ -18,9 +19,10 @@ const nul = { nullValue: null };
 /** Writes one synthetic candidate document in Android's shape to the emulator. */
 async function putCandidate(
   uid,
-  { id, amount, merchant, accountId, daysAgo, dateIso, direction = "debit", eventType = "upiPayment", rawLastFour = null, confidenceLevel = "high", needsReview = false, reasons = [] },
+  { id, amount, merchant, accountId, daysAgo, minutesAgo, dateIso, direction = "debit", eventType = "upiPayment", rawLastFour = null, confidenceLevel = "high", needsReview = false, reasons = [] },
 ) {
-  const when = dateIso ?? new Date(Date.now() - daysAgo * DAY).toISOString();
+  // The Inbox is browsed one day at a time. `minutesAgo` puts a row on yesterday (all on one day, so every row is on screen); `daysAgo` spreads rows over days.
+  const when = dateIso ?? (minutesAgo != null ? sameDayIso(minutesAgo) : new Date(Date.now() - daysAgo * DAY).toISOString());
   const fields = {
     amount: n(amount),
     direction: s(direction),
@@ -219,7 +221,8 @@ scenario("sms-4-bulk-duplicates", "Bulk import: lookalike is held for review, re
   await page.getByText("Swiggy").first().waitFor({ timeout: 30000 });
   const balBefore = (await qaBank()).currentBalance;
 
-  await page.getByRole("checkbox", { name: "Select all visible candidates" }).click();
+  // Day-wise Inbox: "Select all" is per day, so tick each of the three days (two rows 2 days ago, one 9 days ago).
+  await selectAllDays(page);
   await page.getByRole("button", { name: /Import selected \(3\)/ }).click();
   const dialog = page.getByRole("dialog").first();
   await dialog.getByText(/Import 3 transactions/).waitFor({ timeout: 20000 });
@@ -240,7 +243,7 @@ scenario("sms-4-bulk-duplicates", "Bulk import: lookalike is held for review, re
   await sleep(1000);
   const afterCancel = (await h.list("transactions")).filter((t) => t.source === "sms").length;
   check("Cancel writes nothing more", afterCancel === imported.length, afterCancel);
-  const stillPending = await page.getByText(/Swiggy|Uber|Zomato/).count();
+  const stillPending = await shownTotal(page); // across all days (only the open day's rows are on screen)
   check("the flagged candidate is still pending in the list", stillPending >= 1, stillPending);
   await h.shot(page, "sms-4-after-cancel");
 
@@ -426,10 +429,10 @@ scenario("sms-7-bulk-safety", "Bulk: mixed accounts/directions can't be combined
   const uid = await h.authUid();
   const bank = await qaBank();
   const cash = await h.accountBalance("QA Cash");
-  await putCandidate(uid, { id: "sms-blk-bank01", amount: 411, merchant: "Swiggy", accountId: bank.id, daysAgo: 3 });
-  await putCandidate(uid, { id: "sms-blk-bank02", amount: 412, merchant: "Zomato", accountId: bank.id, daysAgo: 4 });
-  await putCandidate(uid, { id: "sms-blk-cash01", amount: 413, merchant: "Uber", accountId: cash.id, daysAgo: 5 });
-  await putCandidate(uid, { id: "sms-blk-cred01", amount: 500, merchant: "Refundco", accountId: bank.id, daysAgo: 6, direction: "credit", eventType: "refund" });
+  await putCandidate(uid, { id: "sms-blk-bank01", amount: 411, merchant: "Swiggy", accountId: bank.id, minutesAgo: 0 });
+  await putCandidate(uid, { id: "sms-blk-bank02", amount: 412, merchant: "Zomato", accountId: bank.id, minutesAgo: 1 });
+  await putCandidate(uid, { id: "sms-blk-cash01", amount: 413, merchant: "Uber", accountId: cash.id, minutesAgo: 2 });
+  await putCandidate(uid, { id: "sms-blk-cred01", amount: 500, merchant: "Refundco", accountId: bank.id, minutesAgo: 3, direction: "credit", eventType: "refund" });
   await openCandidates(page);
   await page.getByText("Swiggy").first().waitFor({ timeout: 40000 });
   await page.getByText("Uber").first().waitFor({ timeout: 20000 });
@@ -512,7 +515,8 @@ scenario("sms-8-unreadable-notice", "A malformed candidate document is reported,
 
 /** The app shell's scrolling <main>: the inbox is a normal page that scrolls with it. */
 const listScroller = (page) => page.locator("main");
-const rowCount = (page) => page.getByTestId("candidate-row").count();
+/** Candidates the current filters list across ALL days (the Inbox shows one day at a time, so rows on screen would undercount). */
+const rowCount = (page) => shownTotal(page);
 /** router.replace is applied asynchronously, so URL assertions poll. */
 async function waitUrl(page, re, ms = 8000) {
   const until = Date.now() + ms;
@@ -549,7 +553,8 @@ scenario("sms-14-advanced-filters-url-scroll", "Advanced filters AND together, s
       direction: i % 6 === 0 ? "credit" : "debit",
       confidenceLevel: i % 5 === 0 ? "low" : "high",
       needsReview: i % 5 === 0,
-      dateIso: new Date(2026, month, day, 12, 0).toISOString(),
+      // The last 24 share one day (29 Oct): a long day to scroll, while the first 12 spread over three months for the day dock.
+      dateIso: i >= 12 ? new Date(2026, 9, 29, 12, 0, i).toISOString() : new Date(2026, month, day, 12, 0).toISOString(),
     };
     seeded.push(c);
     await putCandidate(uid, c);
@@ -558,12 +563,15 @@ scenario("sms-14-advanced-filters-url-scroll", "Advanced filters AND together, s
   await page.getByText("Swiggy").first().waitFor({ timeout: 40000 });
   check("all 36 candidates are listed", await waitRowCount(page, 36), String(await rowCount(page)));
 
-  const keys = await page.getByTestId("candidate-group").evaluateAll((els) => els.map((e) => e.getAttribute("data-group-key")));
-  const distinctDays = new Set(seeded.map((c) => c.dateIso.slice(0, 10))).size;
-  check("grouped by transaction day, newest day first", keys.length === distinctDays && keys.every((k, n) => n === 0 || keys[n - 1] > k) && new Set(keys).size === keys.length, keys.slice(0, 4).join(","));
-  const firstHeading = await page.getByTestId("candidate-group").first().locator("h2").innerText();
-  check("day headings show the full date (e.g. 29 October 2026 / 30 September 2026)", /[0-9]{1,2} (August|September|October) 2026/.test(firstHeading), firstHeading);
-  void distinctDays;
+  const localKey = (c) => {
+    const d = new Date(c.dateIso);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  };
+  const newest = seeded.map(localKey).sort().at(-1);
+  const openKey = await page.getByTestId("candidate-group").getAttribute("data-group-key");
+  check("opens on the newest day, one day at a time (the month control + day dock replace the long scroll)", openKey === newest && (await page.getByTestId("candidate-day-nav").count()) === 1, `${openKey} vs ${newest}`);
+  const firstHeading = await page.getByTestId("candidate-day-heading").locator("h2").innerText();
+  check("the day heading shows the full date (e.g. 29 October 2026)", /[0-9]{1,2} (August|September|October) 2026/.test(firstHeading), firstHeading);
 
   // ── search is debounced, and lands in the URL ──
   const swiggy = seeded.filter((c) => c.merchant === "Swiggy").length;
@@ -647,9 +655,10 @@ scenario("sms-14-advanced-filters-url-scroll", "Advanced filters AND together, s
     const pinned = document.querySelector('[role="group"][aria-label="Inbox views"]')?.closest(".sticky");
     if (!pinned) return false;
     const bottom = pinned.getBoundingClientRect().bottom;
-    return [...document.querySelectorAll('[data-testid="candidate-group"] h2')].some((h) => Math.abs(h.parentElement.getBoundingClientRect().top - bottom) <= 2);
+    const nav = document.querySelector('[data-testid="candidate-day-nav"]');
+    return !!nav && Math.abs(nav.getBoundingClientRect().top - bottom) <= 2;
   });
-  check("the current month heading sticks under the pinned views + filter bar while scrolling", stuck);
+  check("the day bar sticks under the pinned views + filter bar while scrolling", stuck);
   const pinnedBar = await page.evaluate(() => {
     const pinned = document.querySelector('[role="group"][aria-label="Inbox views"]')?.closest(".sticky");
     const bar = document.querySelector('[data-compact-bar]');

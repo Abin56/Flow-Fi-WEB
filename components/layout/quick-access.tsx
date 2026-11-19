@@ -3,8 +3,8 @@
 import { motion, useReducedMotion } from "framer-motion";
 import { History, Star } from "lucide-react";
 import Link from "next/link";
-import type { MouseEvent } from "react";
-import { NAV_BY_HREF, type NavItem } from "@/components/layout/nav-items";
+import { NAV_BY_HREF } from "@/components/layout/nav-items";
+import { NavLinkStatus } from "@/components/layout/nav-pending";
 import { MAX_PINS } from "@/components/layout/nav-prefs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
@@ -18,7 +18,7 @@ interface QuickAccessProps {
   pendingHref: string | null;
   /** Keeps this instance's sliding highlight apart from other mounted copies of the menu. */
   layoutScope?: string;
-  onGo: (item: NavItem, event: MouseEvent<HTMLAnchorElement>) => void;
+  onGo: () => void;
   onWarm: (href: string) => void;
 }
 
@@ -63,7 +63,7 @@ export function QuickAccess({ pins, recents, currentHref, pendingHref, layoutSco
               <TooltipTrigger asChild>
                 <Link
                   href={item.href}
-                  onClick={(e) => onGo(item, e)}
+                  onClick={onGo}
                   onMouseEnter={() => onWarm(item.href)}
                   onFocus={() => onWarm(item.href)}
                   aria-current={active ? "page" : undefined}
@@ -79,7 +79,7 @@ export function QuickAccess({ pins, recents, currentHref, pendingHref, layoutSco
                     <motion.span
                       layoutId={`${layoutScope}qa-active`}
                       aria-hidden
-                      className="absolute inset-0 rounded-[11px] bg-primary shadow-[0_4px_14px_-4px_rgba(150,190,40,0.6)]"
+                      className="absolute inset-0 rounded-[11px] bg-primary shadow-[0_4px_14px_-4px_color-mix(in_oklch,var(--primary)_60%,transparent)]"
                       transition={reduceMotion ? { duration: 0 } : { type: "spring", stiffness: 900, damping: 52, mass: 0.6 }}
                     />
                   ) : (
@@ -93,6 +93,7 @@ export function QuickAccess({ pins, recents, currentHref, pendingHref, layoutSco
                     )}
                   />
                   <span className="relative truncate">{item.label}</span>
+                  <NavLinkStatus href={item.href} />
                 </Link>
               </TooltipTrigger>
               <TooltipContent side="right">
@@ -124,7 +125,7 @@ export function QuickAccess({ pins, recents, currentHref, pendingHref, layoutSco
               <Link
                 key={item.href}
                 href={item.href}
-                onClick={(e) => onGo(item, e)}
+                onClick={onGo}
                 onMouseEnter={() => onWarm(item.href)}
                 onFocus={() => onWarm(item.href)}
                 title={`Recent: ${item.label}`}
@@ -132,6 +133,7 @@ export function QuickAccess({ pins, recents, currentHref, pendingHref, layoutSco
               >
                 <Icon className="size-3.5 shrink-0" />
                 <span className="truncate">{item.label}</span>
+                <NavLinkStatus href={item.href} />
               </Link>
             );
           })}

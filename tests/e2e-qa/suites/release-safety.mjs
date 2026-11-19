@@ -9,6 +9,7 @@
  */
 import { scenario } from "../lib/core.mjs";
 import * as h from "../lib/harness.mjs";
+import { choose, menuItem, openImportConfirm, pressOnGrid } from "../lib/recon.mjs";
 
 const ddmmyyyy = (offsetDays) => {
   const d = new Date(Date.now() + offsetDays * 86400000);
@@ -122,7 +123,7 @@ scenario(
 
     const importVia = async (n, ack) => {
       await row(n).click();
-      await page.getByTestId(ack ? "resolve-keep_both" : "resolve-import_new").click();
+      await openImportConfirm(page);
       const pop = page.getByTestId("import-confirm");
       await pop.getByLabel("Category for import").selectOption({ label: expense.name });
       if (ack) {
@@ -135,7 +136,7 @@ scenario(
     await page.getByRole("button", { name: /Expand row 5$/ }).click();
     await page.getByLabel("Notes").fill("QA note — keep the receipt");
     await page.getByRole("button", { name: "Done" }).click(); // the row sheet closes; the note is already in the draft
-    chk("near-amount row: Import new is not offered while a match exists", await (async () => { await row(1).click(); return page.getByTestId("resolve-import_new").isDisabled(); })());
+    chk("near-amount row: Import as transaction still asks for the 'separate transactions' acknowledgement", await (async () => { await row(1).click(); await openImportConfirm(page); const asks = (await page.getByRole("checkbox", { name: "These are separate transactions" }).count()) === 1; await page.keyboard.press("Escape"); await page.keyboard.press("Escape"); return asks; })());
     chk("Review & approve waits for the near-amount row", await page.getByTestId("open-approval").isDisabled());
     await importVia(1, true);
     chk("…and allowed once confirmed", await page.getByTestId("open-approval").isEnabled());
@@ -191,7 +192,7 @@ scenario(
     // A second tab comparing the same rows must see them as recorded, never as new.
     const tab = await ctx.newPage();
     await tab.goto(new URL("/reconciliation", page.url()).href, { waitUntil: "domcontentloaded", timeout: 240000 });
-    await tab.getByRole("heading", { name: "Reconciliation" }).waitFor({ timeout: 240000 });
+    await tab.getByRole("heading", { name: /Review & Import|Reconciliation/ }).waitFor({ timeout: 240000 });
     await tab.getByRole("textbox", { name: "Statement rows" }).fill([rows[1], rows[2], rows[4]].join("\n"));
     await tab.getByRole("button", { name: "Compare rows" }).click();
     await tab.getByRole("button", { name: /(Choose|Change) statement account/ }).click();

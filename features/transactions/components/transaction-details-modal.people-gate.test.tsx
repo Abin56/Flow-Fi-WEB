@@ -139,7 +139,7 @@ describe("Add Expense — every field and function retained", () => {
 
     expect(amountInput()).toBeTruthy();
     expect(screen.getByPlaceholderText("e.g. Blue Tokai Coffee")).toBeTruthy();
-    expect(screen.getByText("Category *")).toBeTruthy();
+    expect(screen.getByText("Category")).toBeTruthy();
     expect(screen.getByText("Date *")).toBeTruthy();
     expect(screen.getByText("Paid from")).toBeTruthy();
     expect(screen.getByText("Assign to a person")).toBeTruthy();
@@ -160,7 +160,26 @@ describe("Add Expense — every field and function retained", () => {
     await user.type(screen.getByPlaceholderText("e.g. Blue Tokai Coffee"), "Lunch");
     await user.keyboard("{Control>}{Enter}{/Control}");
     await waitFor(() => expect(actions.createTransaction).toHaveBeenCalledTimes(1));
-    expect(actions.createTransaction.mock.calls[0][0]).toMatchObject({ type: "expense", amount: 450, accountId: "sbi", categoryId: "food", description: "Lunch" });
+    expect(actions.createTransaction.mock.calls[0][0]).toMatchObject({ type: "expense", amount: 450, accountId: "sbi", categoryId: "", description: "Lunch" });
+  });
+
+  it("Case D — neither description nor category: nothing is saved and the user is told what to enter", async () => {
+    const user = userEvent.setup();
+    renderAdd();
+    await user.type(amountInput(), "450");
+    await user.keyboard("{Control>}{Enter}{/Control}");
+    expect(await screen.findAllByText("Enter a description or select a category.")).not.toHaveLength(0);
+    expect(actions.createTransaction).not.toHaveBeenCalled();
+  });
+
+  it("a double Ctrl+Enter still writes exactly one transaction", async () => {
+    const user = userEvent.setup();
+    renderAdd();
+    await user.type(amountInput(), "450");
+    await user.type(screen.getByPlaceholderText("e.g. Blue Tokai Coffee"), "Lunch");
+    await user.keyboard("{Control>}{Enter}{Enter}{/Control}");
+    await waitFor(() => expect(actions.createTransaction).toHaveBeenCalled());
+    expect(actions.createTransaction).toHaveBeenCalledTimes(1);
   });
 
   it("a People gate passed to the popup never affects an expense", async () => {

@@ -24,6 +24,7 @@ scenario("bill-insufficient", "Bills: ₹1,500 bill paid from QA Cash holding on
   const cashBefore = await bal("QA Cash");
 
   await h.go(page, "/bills");
+  await h.openMyBills(page);
   await page.waitForTimeout(2500);
   await page.getByRole("button", { name: /QA Electricity/ }).click();
   await page.getByRole("button", { name: "Pay…" }).click();

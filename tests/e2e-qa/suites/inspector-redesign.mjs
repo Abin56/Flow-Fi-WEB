@@ -6,6 +6,7 @@
  */
 import { scenario } from "../lib/core.mjs";
 import * as h from "../lib/harness.mjs";
+import { sameDayIso } from "../lib/inbox-days.mjs";
 import { BASE_URL, FIRESTORE_DOCS } from "../lib/env.mjs";
 
 const TAG = process.env.INSP_TAG || "after";
@@ -22,12 +23,13 @@ const s = (v) => ({ stringValue: v });
 const n = (v) => ({ doubleValue: v });
 const nul = { nullValue: null };
 
+// The Inbox is browsed one day at a time: `daysAgo` is now how many MINUTES older than the newest candidate (all on one day), so every row is on screen and the old newest-first order is kept.
 async function putCandidate(uid, { id, amount, merchant, accountId, daysAgo, rawLastFour = null, confidenceLevel = "high", needsReview = false, reasons = [] }) {
   const fields = {
     amount: n(amount),
     direction: s("debit"),
     eventType: s("upiPayment"),
-    transactionDate: { timestampValue: new Date(Date.now() - daysAgo * DAY).toISOString() },
+    transactionDate: { timestampValue: sameDayIso(daysAgo) },
     merchant: s(merchant),
     bankName: s("QA Bank"),
     rawLastFour: rawLastFour ? s(rawLastFour) : nul,
@@ -164,7 +166,7 @@ function statementText() {
 scenario("insp-recon", "Reconciliation row editor: a full-width bottom sheet with both tables visible above it at 1920/1366/1080; phone sheet at 820/390; nothing written", async ({ page }, chk, notes) => {
   const txnsBefore = (await h.list("transactions")).length;
   await page.evaluate(() => window.next.router.push("/reconciliation"));
-  await page.getByRole("heading", { name: "Reconciliation" }).waitFor({ timeout: 240000 });
+  await page.getByRole("heading", { name: /Review & Import|Reconciliation/ }).waitFor({ timeout: 240000 });
   await page.getByRole("textbox", { name: "Statement rows" }).fill(statementText());
   await page.getByRole("button", { name: "Compare rows" }).click();
   await page.getByTestId("choose-account").waitFor();
@@ -287,7 +289,7 @@ scenario("insp-smooth", "Opening the Inbox sheet on a long list stays smooth: fr
 scenario("insp-focus", "Reconciliation in Focus Mode: expanding a row still opens the full-width top sheet over the whole viewport", async ({ page }, chk, notes) => {
   await page.setViewportSize({ width: 1920, height: 1080 });
   await page.evaluate(() => window.next.router.push("/reconciliation"));
-  await page.getByRole("heading", { name: "Reconciliation" }).waitFor({ timeout: 240000 });
+  await page.getByRole("heading", { name: /Review & Import|Reconciliation/ }).waitFor({ timeout: 240000 });
   await page.getByRole("textbox", { name: "Statement rows" }).fill(statementText());
   await page.getByRole("button", { name: "Compare rows" }).click();
   await page.getByTestId("choose-account").waitFor();

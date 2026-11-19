@@ -56,7 +56,7 @@ export function CategoriesTab({ data }: { data: ReportsData }) {
             legend={
               <ChartLegend
                 entries={[
-                  { label: "Spent", color: "var(--primary)" },
+                  { label: "Spent", color: "var(--chart-1)" },
                   { label: "Budget", color: "var(--muted-foreground)", dashed: true },
                 ]}
               />

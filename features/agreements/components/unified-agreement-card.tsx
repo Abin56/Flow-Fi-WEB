@@ -58,7 +58,7 @@ export function UnifiedAgreementCard({ agreement, onOpen }: { agreement: Unified
 
       <div className="space-y-2">
         <div className="h-2 overflow-hidden rounded-full bg-muted" style={{ boxShadow: "var(--shadow-pressed-sm)" }}>
-          <div className="h-full rounded-full bg-primary transition-[width] duration-500" style={{ width: `${progress}%` }} />
+          <div className="h-full rounded-full bg-chart-1 transition-[width] duration-500" style={{ width: `${progress}%` }} />
         </div>
         <p className="text-xs text-muted-foreground">{Math.round(progress)}% of principal repaid</p>
       </div>
