@@ -179,6 +179,9 @@ function mount(): () => void {
   const measure = (b: Bar): Layout | null => {
     const el = b.el;
     if (!el.isConnected) return null;
+    // Behind an open modal (sheet/dialog) the page is inert: Radix marks it aria-hidden. Its capsule would float over the
+    // sheet at the sidebar's gutter, ignoring the sheet's size — so while a modal is open only containers inside it get one.
+    if (isDoc(el) ? document.querySelector('[role="dialog"][data-open], [role="dialog"][data-state="open"]') : el.closest('[aria-hidden="true"]')) return null;
     const { r, gutterStart, gutter } = geometry(b);
     const visible = b.axis === "y" ? r.bottom - r.top : r.right - r.left;
     const max = b.axis === "y" ? el.scrollHeight - el.clientHeight : el.scrollWidth - el.clientWidth;
