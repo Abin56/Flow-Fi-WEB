@@ -1,3 +1,6 @@
+"use client";
+
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { CreditCard } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -6,9 +9,9 @@ import { formatCurrency } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 function toneFor(percent: number) {
-  if (percent >= 90) return { bar: "bg-expense", text: "text-expense" };
-  if (percent >= 70) return { bar: "bg-warning", text: "text-warning-foreground dark:text-warning" };
-  return { bar: "bg-success", text: "text-success" };
+  if (percent >= 90) return { bar: "bg-expense", text: "text-expense", chip: "bg-expense/12 text-expense" };
+  if (percent >= 70) return { bar: "bg-warning", text: "text-warning-foreground dark:text-warning", chip: "bg-warning/20 text-warning-foreground dark:text-warning" };
+  return { bar: "bg-success", text: "text-success", chip: "bg-success/12 text-success" };
 }
 
 export interface CreditUtilizationCardProps {
@@ -21,12 +24,32 @@ export interface CreditUtilizationCardProps {
   isLoading?: boolean;
 }
 
+/** Bars grow from zero on mount — a one-off entrance, no layout shift. */
+function useGrow() {
+  const [shown, setShown] = useState(false);
+  useEffect(() => {
+    const id = requestAnimationFrame(() => setShown(true));
+    return () => cancelAnimationFrame(id);
+  }, []);
+  return shown;
+}
+
 /** `utilization` comes from `lib/engines/credit-utilization.ts`, composed in `useDashboardData`. */
 export function CreditUtilizationCard({ utilization, isLoading }: CreditUtilizationCardProps) {
   const overall = toneFor(utilization.percent);
+  const grown = useGrow();
   return (
     <DashPanel label="Credit card utilization">
-      <DashPanelHeader icon={CreditCard} title="Credit card utilization" href="/credit-cards" />
+      <DashPanelHeader
+        icon={CreditCard}
+        title="Credit card utilization"
+        href="/credit-cards"
+        aside={
+          !isLoading && utilization.cards.length > 0 ? (
+            <span className={cn("rounded-[4px] px-1.5 text-[11px] font-bold tabular-nums", overall.chip)}>{Math.round(utilization.percent)}%</span>
+          ) : undefined
+        }
+      />
       {isLoading ? (
         <div className="flex flex-col gap-3 p-4">
           <Skeleton className="h-8 w-full" />
@@ -45,22 +68,22 @@ export function CreditUtilizationCard({ utilization, isLoading }: CreditUtilizat
           }
         />
       ) : (
-        <div className="grid flex-1 grid-cols-1 md:grid-cols-[16rem_minmax(0,1fr)] md:divide-x md:divide-border-strong/40">
-          <div className="flex flex-col gap-2 border-b border-border-strong/40 px-4 py-3 md:border-b-0">
+        <div className="grid flex-1 grid-cols-1 sm:grid-cols-[12.5rem_minmax(0,1fr)] sm:divide-x sm:divide-border-strong/35">
+          <div className="flex flex-col justify-center gap-1.5 border-b border-border-strong/35 bg-secondary/25 px-4 py-3 sm:border-b-0">
             <p className={DASH_LABEL}>Outstanding</p>
-            <p className="text-[26px] leading-tight font-bold tracking-tight text-foreground tabular-nums">{formatCurrency(utilization.totalOutstanding)}</p>
+            <p className="text-[22px] leading-tight font-bold tracking-tight text-foreground tabular-nums">{formatCurrency(utilization.totalOutstanding)}</p>
             <div className="h-2 overflow-hidden rounded-full bg-secondary">
-              <div className={cn("h-full rounded-full", overall.bar)} style={{ width: `${Math.min(utilization.percent, 100)}%` }} />
+              <div className={cn("h-full rounded-full transition-[width] duration-700 ease-out motion-reduce:transition-none", overall.bar)} style={{ width: grown ? `${Math.min(utilization.percent, 100)}%` : "0%" }} />
             </div>
             <p className="text-xs text-muted-foreground tabular-nums">
               <span className={cn("font-bold", overall.text)}>{Math.round(utilization.percent)}% used</span> of {formatCurrency(utilization.totalCreditLimit)}
             </p>
           </div>
-          <div className="divide-y divide-border-strong/40">
+          <div className="max-h-[11.5rem] divide-y divide-border-strong/35 overflow-y-auto">
             {utilization.cards.map((card) => {
               const tone = toneFor(card.percent);
               return (
-                <div key={card.id} className="px-4 py-2.5">
+                <div key={card.id} className="px-4 py-2.5 transition-colors hover:bg-secondary/45">
                   <div className="flex items-center justify-between gap-2 text-xs">
                     <span className="truncate font-semibold text-foreground">{card.name}</span>
                     <span className="shrink-0 text-muted-foreground tabular-nums">
@@ -69,7 +92,7 @@ export function CreditUtilizationCard({ utilization, isLoading }: CreditUtilizat
                     </span>
                   </div>
                   <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-secondary">
-                    <div className={cn("h-full rounded-full", tone.bar)} style={{ width: `${Math.min(card.percent, 100)}%` }} />
+                    <div className={cn("h-full rounded-full transition-[width] duration-700 ease-out motion-reduce:transition-none", tone.bar)} style={{ width: grown ? `${Math.min(card.percent, 100)}%` : "0%" }} />
                   </div>
                 </div>
               );

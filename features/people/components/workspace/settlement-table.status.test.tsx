@@ -91,38 +91,33 @@ describe("table status wording", () => {
 });
 
 describe("collapsed row treatments", () => {
-  it("only a fully paid row gets the completion stamp — beside its text, never striking it; unpaid and part-paid are not green", () => {
+  it("only a fully paid row reads Fully paid — never struck through; unpaid and part-paid are not green", () => {
     renderTable();
     const paid = tableRow("ledger:paid");
-    const stamp = within(paid).getByTestId("completion-stamp");
-    expect(stamp.textContent).toBe("Received ₹375");
-    // The stamp follows the description on the same line; nothing is struck through.
-    expect(stamp.parentElement!.contains(within(paid).getByText("Petrol"))).toBe(true);
     expect(paid.innerHTML).not.toContain("line-through");
-    for (const key of ["ledger:part", "ledger:open"]) expect(within(tableRow(key)).queryByTestId("completion-stamp")).toBeNull();
-    // Status stays short (the stamp has the amount): a restrained green check, no filled pill.
+    // Status stays short: a restrained green check, no filled pill.
     const paidStatus = within(paid).getByText("Fully paid");
     expect(paidStatus.className).toContain("[&>svg]:text-success");
     expect(paidStatus.className).not.toContain("bg-success");
-    // Phone row: the stamp takes the status's place, so it is said once there too.
-    const phone = document.querySelector<HTMLElement>('li[data-obligation-key="ledger:paid"]')!;
-    expect(within(phone).getByTestId("completion-stamp").textContent).toBe("Received ₹375");
-    expect(within(phone).queryByText("Fully paid")).toBeNull();
+    for (const key of ["ledger:part", "ledger:open"]) expect(within(tableRow(key)).queryByText("Fully paid")).toBeNull();
     // The received row itself sits on the neutral surface; only Status carries the success colour.
     expect(tableRow("ledger:paid").className).not.toMatch(/bg-success/);
-    const left = within(tableRow("ledger:open")).getByText("₹2,000 to receive");
+    const left = within(tableRow("ledger:open")).getByText("Pending");
     expect(left.className).not.toMatch(/success/);
-    expect(within(tableRow("ledger:part")).getByText("Got ₹200 · ₹175 left").className).not.toMatch(/bg-success/);
+    // A part-paid item reads "Partial"; the got / left figures sit in its supporting line.
+    expect(within(tableRow("ledger:part")).getByText("Partial").className).not.toMatch(/bg-success/);
+    expect(within(tableRow("ledger:part")).getByText(/₹200 paid · ₹175 left/)).toBeTruthy();
   });
 
   it("a postponed row says where it moved, marks its first due date, and keeps its remaining visible", () => {
     renderTable(new Map([["ledger:open", postponed()]]));
     const tr = tableRow("ledger:open");
-    const status = within(tr).getByText("Moved to Nov cycle");
+    const status = within(tr).getByText("Postponed");
     expect(status.className).toContain("border-dashed");
     expect(status.className).not.toMatch(/bg-success/);
-    // Said once — the row's secondary note does not repeat the status.
-    expect(within(tr).getAllByText("Moved to Nov cycle")).toHaveLength(1);
+    // The pill is short; where it moved is in its tooltip and the row's supporting note.
+    expect(status.getAttribute("title")).toMatch(/Moved to Nov cycle/);
+    expect(within(tr).getAllByText("Postponed")).toHaveLength(1);
     const date = within(tr).getByText("05 Oct");
     expect(date.className).toContain("line-through");
     expect(date.className).toContain("decoration-dashed");
@@ -131,7 +126,7 @@ describe("collapsed row treatments", () => {
     expect(within(tr).getByText("Trip dinner").className).not.toContain("line-through");
     expect(within(tr).getAllByText("₹2,000").length).toBeGreaterThan(0);
     // The phone row says the same.
-    expect(screen.getAllByText("Moved to Nov cycle")).toHaveLength(2);
+    expect(screen.getAllByText("Postponed")).toHaveLength(2);
   });
 });
 
@@ -139,16 +134,13 @@ describe("received rows are restrained", () => {
   it("a payment-received row: neutral surface, light-tint money-in chip and amount, Status shows success", () => {
     renderTable();
     const rows = document.querySelectorAll<HTMLElement>("tr[data-obligation-key]");
-    // The general payment row (ledger:general). Its Type chip now reads "Money in · Received" (was "Payment received").
+    // The general payment row (ledger:general). Money in lands in its own column.
     const received = [...rows].find((r) => r.getAttribute("data-obligation-key") === "ledger:general")!;
     expect(received.className).toContain("bg-card");
     expect(received.className).not.toMatch(/success/);
-    // The flow chip is a light tint (money in), never a solid filled badge.
-    for (const badge of within(received).getAllByText("Money in · Received")) expect(badge.className).not.toMatch(/bg-success(?![/\w-])/);
     for (const amount of within(received).getAllByText(/^\+?₹100$/)) expect(amount.className).toMatch(/text-success/); // money-in amounts carry the flow tone (colour-coded in/out); the ROW surface stays neutral
     expect(within(received).getByText("Received").className).toContain("[&>svg]:text-success");
-    // A payment is money moving, not a completed obligation — no completion stamp.
-    expect(within(received).queryByTestId("completion-stamp")).toBeNull();
+    expect(within(received).queryByText("Fully paid")).toBeNull();
   });
 });
 
@@ -177,14 +169,12 @@ describe("payments that complete an item", () => {
     expect(completionLabel(byAmount(100))).toBeNull(); // not for one item
   });
 
-  it("the stamped payment row shows the line and a short Fully paid status; the others keep Received", () => {
+  it("a payment that cleared its item reads Fully paid; the others keep Received", () => {
     render(<SettlementTable personId="A" personName="SHAMBU" rows={cycleRows()} isLoading={false} lookups={lookupsFor(EARLIER)} accountForEntry={() => null} handlers={{} as never} empty={null} />);
     const cleared = tableRow(byAmount(375).row.key);
-    expect(within(cleared).getByTestId("completion-stamp").textContent).toBe("Received ₹375");
     expect(within(cleared).getByText("Fully paid")).toBeTruthy();
     for (const n of [200, 100]) {
       const tr = tableRow(byAmount(n).row.key);
-      expect(within(tr).queryByTestId("completion-stamp")).toBeNull();
       expect(within(tr).getByText("Received")).toBeTruthy();
     }
   });

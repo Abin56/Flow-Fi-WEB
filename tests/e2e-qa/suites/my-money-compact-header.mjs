@@ -35,6 +35,10 @@ for (const [vpName, vp] of Object.entries(VPS)) {
   for (const scheme of ["light", "dark"]) {
     const id = `mmcompact-${vpName}-${scheme}`;
     scenario(id, `My Money compact bar: ${vpName} ${vp.width}x${vp.height}, ${scheme} theme`, async ({ page }, chk) => {
+      // Enough realistic data that the (compact) page is taller than the viewport — the bar only shows after scrolling.
+      await h.addFixture(page, "shared-emi");
+      await h.addFixture(page, "history");
+      await h.addFixture(page, "card-emi");
       await goTo(page, "/my-money");
       await page.getByRole("heading", { level: 1, name: "My Money" }).waitFor();
       await page.waitForTimeout(2500);
@@ -131,6 +135,10 @@ for (const [vpName, vp] of Object.entries(VPS)) {
 
 scenario("mmcompact-reduced-motion", "My Money compact bar: prefers-reduced-motion — no slide", async ({ page }, chk) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
+  // Enough realistic data that the (compact) page is taller than the viewport — the bar only shows after scrolling.
+  await h.addFixture(page, "shared-emi");
+  await h.addFixture(page, "history");
+  await h.addFixture(page, "card-emi");
   await goTo(page, "/my-money");
   await page.getByRole("heading", { level: 1, name: "My Money" }).waitFor();
   await page.waitForTimeout(2000);

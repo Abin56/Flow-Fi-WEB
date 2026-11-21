@@ -15,12 +15,17 @@
  *    when it is the sole record of the consumption (an installment purchase / card EMI whose purchase was
  *    never recorded as its own Transaction). Repaying cash borrowed (a "Money I Borrowed" loan) or an EMI
  *    whose purchase Transaction is recorded would count the same consumption twice, so it doesn't.
+ *  - When that repayment DOES count, only MY ownership share of the installment is spend (`ownerInstallmentShare`,
+ *    the same split the People receivable and Loan/EMI cards already use) — a person's assigned share is
+ *    their economic consumption, reimbursed through the People ledger, never mine.
  *  - A down payment (loan-linked, no allocation) is an ordinary purchase and counts.
  *  - Reimbursements from people are People ledger movements / installment settlements — they never
  *    reduce historical My Spend (no netting).
  * Spend is bucketed by its own date — never by the date a card bill, loan or person is later paid.
  */
 
+import { ownerInstallmentShare } from "@/lib/engines/installment-participants";
+import type { OwnershipSource } from "@/lib/engines/debt-ownership";
 import { myShare, type Expense } from "@/lib/models/expense";
 import { isLenderChargeSettlement } from "@/lib/models/lender-charge";
 import type { PaymentAllocationType } from "@/lib/models/payment-schedule";
@@ -80,6 +85,12 @@ export interface MySpendContext {
    * silently disappears when an agreement isn't loaded.
    */
   repaymentIsConsumptionByAgreementId?: ReadonlyMap<string, boolean>;
+  /**
+   * Ownership source per loan/EMI id, for repayments that DO count as consumption — splits the installment
+   * so an assigned person's share never counts as mine. Agreements absent from the map keep the pre-existing
+   * behaviour (counted in full — nothing assigned).
+   */
+  ownershipSourceByAgreementId?: ReadonlyMap<string, OwnershipSource>;
 }
 
 const REPAYMENT_ALLOCATIONS: ReadonlySet<PaymentAllocationType> = new Set(["regularEmi", "advanceEmi", "principalPrepayment"]);
@@ -91,10 +102,15 @@ function round2(n: number): number {
 export function buildMySpendContext(params: {
   expenses: readonly MySpendExpense[];
   repaymentIsConsumptionByAgreementId?: ReadonlyMap<string, boolean>;
+  ownershipSourceByAgreementId?: ReadonlyMap<string, OwnershipSource>;
 }): MySpendContext {
   const expensesByTransactionId = new Map<string, MySpendExpense>();
   for (const e of params.expenses) if (e.deletedAt == null) expensesByTransactionId.set(e.transactionId, e);
-  return { expensesByTransactionId, repaymentIsConsumptionByAgreementId: params.repaymentIsConsumptionByAgreementId };
+  return {
+    expensesByTransactionId,
+    repaymentIsConsumptionByAgreementId: params.repaymentIsConsumptionByAgreementId,
+    ownershipSourceByAgreementId: params.ownershipSourceByAgreementId,
+  };
 }
 
 export function classifyForMySpend(t: MySpendTransaction, ctx: MySpendContext): MySpendClassification {
@@ -112,6 +128,13 @@ export function classifyForMySpend(t: MySpendTransaction, ctx: MySpendContext): 
   if (agreementId != null && t.paymentAllocationType != null && REPAYMENT_ALLOCATIONS.has(t.paymentAllocationType)) {
     const counts = ctx.repaymentIsConsumptionByAgreementId?.get(agreementId) ?? true;
     if (!counts) return none("liabilityRepayment", t.amount);
+    // The installment IS my consumption, but only to the extent ownership assigns it to me — a shared
+    // Loan/EMI's assigned portion is the other person's consumption, settled through the People ledger.
+    const source = ctx.ownershipSourceByAgreementId?.get(agreementId);
+    if (source != null) {
+      const myAmount = round2(Math.max(0, Math.min(t.amount, ownerInstallmentShare(source, t.amount))));
+      return { kind: "consumption", grossAmount: t.amount, myAmount, othersAmount: round2(t.amount - myAmount) };
+    }
   }
 
   const expense = ctx.expensesByTransactionId.get(t.id);
@@ -145,16 +168,33 @@ export function repaymentRecognitionByAgreement(params: {
  * The `MySpendContext` built from the raw live records — exactly what `useMySpendContext` subscribes to, so
  * every surface (and the tests) classify against the same split shares and repayment recognition.
  */
+type OwnershipRecord = { id: string; deletedAt?: Date | null } & OwnershipSource;
+
+/** Only agreements that actually assign a share to someone else need an entry — the rest default to "all mine". */
+function ownershipSourceMap(records: readonly OwnershipRecord[]): Map<string, OwnershipSource> {
+  const map = new Map<string, OwnershipSource>();
+  for (const r of records) {
+    if (r.deletedAt != null) continue;
+    const hasShares = (r.ownershipShares?.length ?? 0) > 0;
+    const hasBeneficiary = r.beneficiaryPersonId != null && r.beneficiaryRepaysInstallments === true;
+    if (hasShares || hasBeneficiary) {
+      map.set(r.id, { ownershipShares: r.ownershipShares, beneficiaryPersonId: r.beneficiaryPersonId, beneficiaryRepaysInstallments: r.beneficiaryRepaysInstallments });
+    }
+  }
+  return map;
+}
+
 export function mySpendContextFromRecords(params: {
   transactions: readonly Pick<MySpendTransaction, "id" | "deletedAt" | "excludeFromCalculations">[];
   expenses: readonly Expense[];
-  loans: readonly { id: string; agreementKind?: "loan" | "installmentPurchase"; purchaseTransactionId?: string | null }[];
-  emis: readonly { id: string; purchaseTransactionId: string | null }[];
+  loans: readonly ({ id: string; agreementKind?: "loan" | "installmentPurchase"; purchaseTransactionId?: string | null } & OwnershipRecord)[];
+  emis: readonly ({ id: string; purchaseTransactionId: string | null } & OwnershipRecord)[];
 }): MySpendContext {
   const liveTransactionIds = new Set(params.transactions.filter((t) => t.deletedAt == null && !t.excludeFromCalculations).map((t) => t.id));
   return buildMySpendContext({
     expenses: params.expenses.map((e) => ({ transactionId: e.transactionId, totalAmount: e.totalAmount, myShare: myShare(e), deletedAt: e.deletedAt })),
     repaymentIsConsumptionByAgreementId: repaymentRecognitionByAgreement({ loans: params.loans, emis: params.emis, liveTransactionIds }),
+    ownershipSourceByAgreementId: ownershipSourceMap([...params.loans, ...params.emis]),
   });
 }
 

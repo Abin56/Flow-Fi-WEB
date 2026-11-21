@@ -137,19 +137,25 @@ export function trendPeriods(period: ReportPeriod, startDay: number, count: numb
   });
 }
 
+/**
+ * The `{kind:"cycle", offset}` selection whose cycle CONTAINS `day` — the number of cycles between today's
+ * cycle and that one. Shared by `selectionForTrendPoint` (drilling a trend bar back into a period) and the
+ * top-bar's global Month Cycle navigator (keeping Reports/Analytics in step with whatever cycle it shows).
+ */
+export function cycleSelectionForDay(day: Date, startDay: number, now: Date): ReportPeriodSelection {
+  let offset = 0;
+  let range = cycleRangeFor(startDay, now);
+  const target = cycleRangeFor(startDay, day).start.getTime();
+  const step = target < range.start.getTime() ? -1 : 1;
+  for (let guard = 0; guard < 1200 && range.start.getTime() !== target; guard++) {
+    range = adjacentCycleRange(startDay, range, step);
+    offset += step;
+  }
+  return { kind: "cycle", offset };
+}
+
 /** The period that contains `date` — the same kind as `period` (used to drill a trend bar back into a period). */
 export function selectionForTrendPoint(point: ReportPeriod, startDay: number, now: Date): ReportPeriodSelection {
-  if (point.kind === "cycle") {
-    // Count cycles between today's and this one.
-    let offset = 0;
-    let range = cycleRangeFor(startDay, now);
-    const target = point.start.getTime();
-    const step = target < range.start.getTime() ? -1 : 1;
-    for (let guard = 0; guard < 600 && range.start.getTime() !== target; guard++) {
-      range = adjacentCycleRange(startDay, range, step);
-      offset += step;
-    }
-    return { kind: "cycle", offset };
-  }
+  if (point.kind === "cycle") return cycleSelectionForDay(point.start, startDay, now);
   return { kind: "month", year: point.start.getFullYear(), month: point.start.getMonth() };
 }

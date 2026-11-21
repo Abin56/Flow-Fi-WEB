@@ -35,9 +35,10 @@ import { BankLogo } from "@/components/finance/bank-logo";
 import { useAccounts } from "@/hooks/use-accounts";
 import { ProgressRing } from "@/components/foundation/progress-ring";
 import { CompactHeaderBar, useCompactHeader } from "@/components/layout/compact-header";
-import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuLabel, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatCurrency } from "@/lib/format";
@@ -58,7 +59,7 @@ type Accent = "primary" | "expense" | "warning" | "success" | "purple";
 const ACCENT_BG: Record<Accent, string> = {
   primary: "bg-primary/10 text-primary-accent-text",
   expense: "bg-expense/10 text-expense",
-  warning: "bg-warning/15 text-warning-foreground",
+  warning: "bg-warning/15 text-warning-foreground dark:text-warning",
   success: "bg-success/12 text-success",
   purple: "bg-purple/12 text-purple",
 };
@@ -85,7 +86,7 @@ const ACCOUNT_BAR_CYCLE: Accent[] = ["success", "primary", "warning", "purple", 
 const TONE_BADGE: Record<ToneName, string> = {
   primary: "bg-primary/10 text-primary-accent-text",
   expense: "bg-expense/10 text-expense",
-  warning: "bg-warning/15 text-warning-foreground",
+  warning: "bg-warning/15 text-warning-foreground dark:text-warning",
   success: "bg-success/12 text-success",
   purple: "bg-purple/12 text-purple",
   neutral: "bg-muted text-muted-foreground",
@@ -93,7 +94,7 @@ const TONE_BADGE: Record<ToneName, string> = {
 
 const LABEL = "text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase";
 const PANEL =
-  "overflow-hidden rounded-[16px] border border-border-strong/60 bg-card shadow-e1 transition-[box-shadow,border-color] duration-200 hover:border-border-strong hover:shadow-[0_14px_34px_-18px_rgba(0,0,0,0.3)]";
+  "overflow-hidden rounded-[12px] border border-border-strong/60 bg-card shadow-e1 transition-[box-shadow,border-color] duration-300 hover:border-border-strong hover:shadow-e2";
 const LINK = "flex h-7 shrink-0 items-center gap-1 rounded-[6px] px-2 text-xs font-semibold text-primary-accent-text transition-colors hover:bg-primary/15";
 
 /** Section panel header — title (with icon), an optional figure, and View all. */
@@ -117,10 +118,10 @@ function PanelHeader({
   subtitle?: string;
 }) {
   return (
-    <div className={cn("flex items-center justify-between gap-3 border-b border-border-strong/50 bg-gradient-to-r to-transparent px-4 py-3", ACCENT_TINT[accent])}>
+    <div className={cn("flex items-center justify-between gap-3 border-b border-border-strong/50 bg-gradient-to-r to-transparent px-4 py-2.5", ACCENT_TINT[accent])}>
       <div className="flex min-w-0 items-center gap-2.5">
-        <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-full", ACCENT_BG[accent])}>
-          <Icon className="size-4" strokeWidth={1.9} />
+        <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-full", ACCENT_BG[accent])}>
+          <Icon className="size-3.5" strokeWidth={1.9} />
         </span>
         <div className="min-w-0">
           <h2 className="truncate font-heading text-[15px] leading-tight font-semibold text-foreground">{title}</h2>
@@ -145,7 +146,21 @@ function PanelHeader({
   );
 }
 
-function PanelEmpty({ title, description, icon: Icon = Sparkles }: { title: string; description: string; icon?: LucideIcon }) {
+function PanelEmpty({ title, description, icon: Icon = Sparkles, compact = false }: { title: string; description: string; icon?: LucideIcon; compact?: boolean }) {
+  if (compact) {
+    // Single-row variant for panels that are usually empty — keeps the page from spending a tall block on "nothing here".
+    return (
+      <div className="flex items-center gap-3 px-4 py-4">
+        <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-secondary text-foreground/55 ring-4 ring-secondary/40">
+          <Icon className="size-4" strokeWidth={1.75} />
+        </span>
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-foreground">{title}</p>
+          <p className="text-xs text-foreground/65">{description}</p>
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-2 px-4 py-6 text-center">
       <span className="flex size-10 items-center justify-center rounded-full bg-secondary text-foreground/55 ring-4 ring-secondary/40">
@@ -159,50 +174,12 @@ function PanelEmpty({ title, description, icon: Icon = Sparkles }: { title: stri
   );
 }
 
-function StatCell({
-  icon: Icon,
-  label,
-  amount,
-  meta,
-  accent,
-  href,
-}: {
-  icon: LucideIcon;
-  label: string;
-  amount: number;
-  meta?: string;
-  accent: Accent;
-  href: string;
-}) {
-  return (
-    <Link
-      href={href}
-      className="group relative flex min-w-0 flex-col justify-center overflow-hidden rounded-[12px] border border-border-strong/60 bg-card px-3.5 py-3.5 shadow-e1 transition-[transform,box-shadow,border-color] duration-200 hover:-translate-y-0.5 hover:border-border-strong hover:shadow-[0_12px_28px_-14px_rgba(0,0,0,0.3)]"
-    >
-      <span aria-hidden className={cn("absolute inset-x-0 top-0 h-[3px]", ACCENT_BAR[accent])} />
-      <ArrowRight className="absolute top-3 right-3 size-3.5 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" strokeWidth={2} />
-      <span className="flex min-w-0 items-center gap-3">
-      <span className={cn("flex size-10 shrink-0 items-center justify-center rounded-full", ACCENT_BG[accent])}>
-        <Icon className="size-4.5" strokeWidth={1.9} />
-      </span>
-      <span className="min-w-0">
-        <span className="block truncate text-xs font-medium text-foreground/70">{label}</span>
-        <span className="block text-lg leading-tight font-bold text-foreground tabular-nums">
-          <AnimatedNumber value={amount} format={formatCurrency} />
-        </span>
-        {meta && <span className="block truncate text-[11px] text-foreground/60">{meta}</span>}
-      </span>
-      </span>
-    </Link>
-  );
-}
-
 function UpcomingRow({ item, icon: Icon, accent }: { item: MonthCycleUpcomingItem; icon: LucideIcon; accent: Accent }) {
   const overdue = item.daysLeft < 0;
   return (
-    <div className="flex items-center justify-between gap-3 px-4 py-2.5 transition-colors hover:bg-secondary/50">
+    <div className="group flex items-center justify-between gap-3 px-4 py-2 transition-colors duration-150 hover:bg-secondary/50">
       <div className="flex min-w-0 items-center gap-2.5">
-        <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-[8px]", ACCENT_BG[accent])}>
+        <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-[8px] transition-transform duration-200 group-hover:scale-105", ACCENT_BG[accent])}>
           <Icon className="size-4" strokeWidth={1.75} />
         </span>
         <div className="min-w-0">
@@ -220,11 +197,11 @@ function UpcomingRow({ item, icon: Icon, accent }: { item: MonthCycleUpcomingIte
 
 function PersonRow({ item, tone }: { item: MonthCyclePersonItem; tone: "expense" | "success" }) {
   return (
-    <div className="flex items-center justify-between gap-3 px-4 py-2.5 transition-colors hover:bg-secondary/50">
+    <div className="group flex items-center justify-between gap-3 px-4 py-2 transition-colors duration-150 hover:bg-secondary/50">
       <div className="flex min-w-0 items-center gap-2.5">
         <span
           className={cn(
-            "flex size-8 shrink-0 items-center justify-center rounded-full text-xs font-bold",
+            "flex size-8 shrink-0 items-center justify-center rounded-full text-xs font-bold transition-transform duration-200 group-hover:scale-105",
             tone === "success" ? "bg-success/12 text-success" : "bg-expense/10 text-expense",
           )}
         >
@@ -257,52 +234,86 @@ function PersonRow({ item, tone }: { item: MonthCyclePersonItem; tone: "expense"
   );
 }
 
+/** One account's share of the cycle's outflow. The colour stripe on the left is the same colour as its segment in the share bar above. */
 function AccountSpendRow({ item, accent, bankId }: { item: MonthCycleAccountSpend; accent: Accent; bankId: string | null }) {
-  const reduceMotion = useReducedMotion();
   return (
-    <div className="flex flex-col gap-1.5 px-4 py-2.5">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-2.5">
-          {bankId ? (
-            <BankLogo bankId={bankId} size={28} />
-          ) : (
-            <span className={cn("flex size-7 shrink-0 items-center justify-center rounded-full", ACCENT_BG[accent])}>
-              <Wallet2 className="size-3.5" strokeWidth={1.75} />
-            </span>
-          )}
-          <p className="truncate text-sm font-semibold text-foreground">
-            {item.name}
-            {item.mask && <span className="ml-1.5 text-xs font-normal text-muted-foreground tabular-nums">•••• {item.mask}</span>}
-          </p>
-        </div>
-        <span className="shrink-0 text-[15px] font-bold text-foreground tabular-nums">{formatCurrency(item.amount)}</span>
+    <div className="relative flex items-center justify-between gap-3 py-2.5 pr-4 pl-5 transition-colors duration-150 hover:bg-secondary/40">
+      <span aria-hidden className={cn("absolute inset-y-2.5 left-0 w-[3px] rounded-r-full", ACCENT_BAR[accent])} />
+      <div className="flex min-w-0 items-center gap-2.5">
+        {bankId ? (
+          <BankLogo bankId={bankId} size={30} />
+        ) : (
+          <span className={cn("flex size-[30px] shrink-0 items-center justify-center rounded-full", ACCENT_BG[accent])}>
+            <Wallet2 className="size-3.5" strokeWidth={1.75} />
+          </span>
+        )}
+        <p className="truncate text-sm font-semibold text-foreground">
+          {item.name}
+          {item.mask && <span className="ml-1.5 text-xs font-normal text-muted-foreground tabular-nums">•••• {item.mask}</span>}
+        </p>
       </div>
-      <div className="flex items-center gap-2 pl-9.5">
-        <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-secondary">
-          <motion.div
-            className={cn("h-full rounded-full", ACCENT_BAR[accent])}
-            initial={reduceMotion ? false : { width: 0 }}
-            animate={{ width: `${item.percentOfTotal}%` }}
-            transition={{ duration: 0.7, ease: [0.22, 1, 0.36, 1] }}
-          />
-        </div>
-        <span className="w-10 shrink-0 text-right text-[11px] font-semibold text-foreground/75 tabular-nums">{item.percentOfTotal}%</span>
+      <div className="flex shrink-0 flex-col items-end">
+        <span className="text-[15px] leading-tight font-bold text-foreground tabular-nums">{formatCurrency(item.amount)}</span>
+        <span className="text-[11px] leading-tight font-semibold text-foreground/65 tabular-nums">{item.percentOfTotal}%</span>
       </div>
     </div>
   );
 }
 
-function GlanceCell({ icon: Icon, label, value, meta, accent }: { icon: LucideIcon; label: string; value: string; meta: string; accent: Accent }) {
+/** One fact in the glance strip — a hairline-separated cell, not a box of its own. Label stays before the value (read in that order). */
+function GlanceCell({ icon: Icon, label, value, meta, accent, muted = false }: { icon: LucideIcon; label: string; value: string; meta: string; accent: Accent; muted?: boolean }) {
   return (
-    <div className="flex min-w-0 items-center gap-3 rounded-[12px] border border-border-strong/50 bg-secondary/30 px-3 py-3 transition-colors hover:bg-secondary/60">
-      <span className={cn("flex size-10 shrink-0 items-center justify-center rounded-full", ACCENT_BG[accent])}>
+    <div className="group flex min-w-0 items-center gap-3 bg-card px-4 py-3 transition-colors duration-150 hover:bg-secondary/40">
+      <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-[10px] transition-transform duration-200 group-hover:scale-105", ACCENT_BG[accent], muted && "opacity-60")}>
         <Icon className="size-4" strokeWidth={1.75} />
       </span>
       <div className="min-w-0">
         <p className="truncate text-[11px] font-medium text-muted-foreground">{label}</p>
-        <p className="truncate text-sm font-bold text-foreground">{value}</p>
+        <p className={cn("truncate text-[17px] leading-snug font-bold tabular-nums", muted ? "text-foreground/45" : "text-foreground")}>{value}</p>
         <p className="truncate text-[11px] text-muted-foreground">{meta}</p>
       </div>
+    </div>
+  );
+}
+
+/** A people side (give / receive): the label and its amount are the column's header — there is no separate tile row repeating them. */
+function PeopleSideColumn({
+  label,
+  total,
+  count,
+  shown,
+  tone,
+  emptyText,
+  children,
+}: {
+  label: string;
+  total: number;
+  count: number;
+  shown: number;
+  tone: "expense" | "success";
+  emptyText: string;
+  children: React.ReactNode;
+}) {
+  const give = tone === "expense";
+  const more = count - shown;
+  return (
+    <div className="flex min-w-0 flex-col">
+      <div className={cn("flex items-center justify-between gap-3 border-b border-border-strong/40 px-4 py-2.5", give ? "bg-warning/8" : "bg-success/8")}>
+        <div className="min-w-0">
+          <p className={cn("text-[11px] font-semibold tracking-[0.06em] uppercase", give ? "text-warning-foreground dark:text-warning" : "text-success")}>{label}</p>
+          <p className="text-[11px] text-foreground/60">{count === 0 ? "Nobody" : `${count} ${count === 1 ? "person" : "people"}`}</p>
+        </div>
+        <p className={cn("shrink-0 text-xl leading-none font-bold tabular-nums", total === 0 ? "text-foreground/45" : give ? "text-expense" : "text-success")}>{formatCurrency(total)}</p>
+      </div>
+      <div className="flex-1 divide-y divide-border-strong/40">
+        {shown === 0 ? <p className="px-4 py-3 text-xs text-muted-foreground">{emptyText}</p> : children}
+      </div>
+      {more > 0 && (
+        <Link href="/people" className="flex items-center justify-between border-t border-border-strong/40 px-4 py-2 text-xs font-semibold text-primary-accent-text transition-colors hover:bg-primary/10">
+          +{more} more {more === 1 ? "person" : "people"}
+          <ArrowRight className="size-3" strokeWidth={2} />
+        </Link>
+      )}
     </div>
   );
 }
@@ -572,118 +583,236 @@ function CycleProgress({ start, end, daysLeft }: { start: Date; end: Date; daysL
   );
 }
 
-function SummaryTile({ label, icon: Icon, tone, chip, children }: { label: string; icon: LucideIcon; tone: string; chip: string; children: React.ReactNode }) {
-  return (
-    <div className="flex min-w-0 items-center gap-3 rounded-[12px] border border-border-strong/50 bg-secondary/40 px-3 py-3">
-      <span className={cn("flex size-[50px] shrink-0 items-center justify-center rounded-full", chip)}>
-        <Icon className="size-5" strokeWidth={1.9} />
-      </span>
-      <span className="min-w-0">
+/** One shape for all four supporting figures — same height, chip, label / value / meta rhythm. */
+function SummaryTile({
+  label,
+  icon: Icon,
+  tone,
+  chip,
+  meta,
+  leading,
+  href,
+  children,
+}: {
+  label: string;
+  icon?: LucideIcon;
+  tone?: string;
+  chip?: string;
+  meta?: React.ReactNode;
+  /** Replaces the icon chip (the budget ring). */
+  leading?: React.ReactNode;
+  href?: string;
+  children: React.ReactNode;
+}) {
+  const body = (
+    <>
+      {leading ?? (
+        <span aria-hidden className={cn("flex size-[46px] shrink-0 items-center justify-center rounded-full ring-4 ring-secondary/50 transition-transform duration-200 group-hover/tile:scale-105", chip)}>
+          {Icon && <Icon className="size-5" strokeWidth={1.8} />}
+        </span>
+      )}
+      <span className="min-w-0 flex-1">
         <span className={cn(LABEL, "block")}>{label}</span>
-        <span className={cn("block text-xl leading-tight font-bold tabular-nums", tone)}>{children}</span>
+        <span className={cn("block truncate text-[1.4rem] leading-tight font-bold tracking-tight tabular-nums", tone)}>{children}</span>
+        <span className="block min-h-4 truncate text-[11px] text-foreground/65">{meta}</span>
       </span>
-    </div>
+    </>
+  );
+  const cls =
+    "group/tile flex min-h-[84px] min-w-0 items-center gap-3 rounded-[12px] border border-border-strong/50 bg-secondary/35 px-3.5 py-3 transition-colors duration-150 hover:bg-secondary/65";
+  return href ? (
+    <Link href={href} className={cn(cls, "focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none")}>
+      {body}
+    </Link>
+  ) : (
+    <div className={cls}>{body}</div>
   );
 }
 
 type UpcomingKey = "emi" | "loans" | "cards" | "bills";
 
-/** The four "due this cycle" lists as one tabbed panel — same items, totals and links as the old four panels. */
-function UpcomingTabs({
-  panels,
-}: {
-  panels: {
-    key: UpcomingKey;
-    icon: LucideIcon;
-    accent: Accent;
-    title: string;
-    total: number;
-    href: string;
-    addLabel: string;
-    items: MonthCycleUpcomingItem[];
-    emptyTitle: string;
-    emptyDescription: string;
-  }[];
-}) {
+type CommitmentPanel = {
+  key: UpcomingKey;
+  icon: LucideIcon;
+  accent: Accent;
+  title: string;
+  total: number;
+  href: string;
+  addLabel: string;
+  items: MonthCycleUpcomingItem[];
+  /** One line under the title in the rail — the figure's own breakdown (e.g. "₹x this cycle · ₹y overdue"). */
+  meta: string;
+  emptyTitle: string;
+  emptyDescription: string;
+};
+
+type PeopleSide = { total: number; count: number };
+
+const peopleCount = (n: number) => `${n} ${n === 1 ? "person" : "people"}`;
+
+/**
+ * Everything the cycle asks of you, in one workspace: a rail that totals and splits what is due by type (and lists the
+ * two people balances beside it), and the selected type's items next to it. Replaces the old six-tile strip plus the
+ * four-tab panel, which showed the same totals twice. Same figures, items and links — presentation only.
+ */
+function CommitmentsPanel({ panels, give, receive }: { panels: CommitmentPanel[]; give: PeopleSide; receive: PeopleSide }) {
   const [tab, setTab] = useState<UpcomingKey>(() => panels.find((p) => p.items.length > 0)?.key ?? panels[0].key);
   const reduceMotion = useReducedMotion();
   const active = panels.find((p) => p.key === tab) ?? panels[0];
+  const ActiveIcon = active.icon;
+  const sum = panels.reduce((s, p) => s + p.total, 0);
+  const itemCount = panels.reduce((n, p) => n + p.items.length, 0);
   return (
-    <section aria-label="Upcoming this cycle" className={cn(PANEL, "flex flex-col")}>
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border-strong/50 bg-gradient-to-r from-expense/8 to-transparent px-4 py-3">
-        <div className="flex min-w-0 items-center gap-2.5">
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-expense/10 text-expense">
-            <CalendarClock className="size-4" strokeWidth={1.9} />
-          </span>
-          <div className="min-w-0">
+    <section aria-label="Upcoming this cycle" className={cn(PANEL, "@container")}>
+      <div className="grid @3xl:grid-cols-[20rem_minmax(0,1fr)]">
+        {/* ── Rail: the total, what it is made of, and the way to each part ── */}
+        <div className="flex min-w-0 flex-col border-b border-border-strong/50 bg-secondary/20 @3xl:border-r @3xl:border-b-0">
+          <div className="px-4 pt-3.5 pb-3">
             <h2 className="font-heading text-[15px] leading-tight font-semibold text-foreground">Due this cycle</h2>
             <p className="text-xs text-foreground/65">EMIs, loans, card bills and bills to pay</p>
+            <p className="mt-2.5 flex items-baseline gap-2">
+              <span className={cn("text-[1.6rem] leading-none font-bold tracking-tight tabular-nums", sum === 0 ? "text-foreground/50" : "text-foreground")}>{formatCurrency(sum)}</span>
+              <span className="text-xs text-foreground/65 tabular-nums">
+                {itemCount} item{itemCount === 1 ? "" : "s"}
+              </span>
+            </p>
+            {/* Share of the total by type — a true proportion, drawn only when there is something due. */}
+            <div role="img" aria-label="Share of the amount due, by type" className="mt-2.5 flex h-2 gap-0.5 overflow-hidden rounded-full bg-secondary">
+              {sum > 0 &&
+                panels
+                  .filter((p) => p.total > 0)
+                  .map((p) => <span key={p.key} title={`${p.title} ${formatCurrency(p.total)}`} className={cn("h-full rounded-full", ACCENT_BAR[p.accent])} style={{ width: `${(p.total / sum) * 100}%` }} />)}
+            </div>
+          </div>
+
+          <div role="tablist" aria-label="Due this cycle" className="grid grid-cols-2 gap-1 px-2 pb-2 @3xl:grid-cols-1">
+            {panels.map((p) => {
+              const selected = p.key === tab;
+              const Icon = p.icon;
+              const hasOverdue = p.items.some((i) => i.daysLeft < 0);
+              const share = sum > 0 && p.total > 0 ? Math.max(1, Math.round((p.total / sum) * 100)) : null;
+              return (
+                <button
+                  key={p.key}
+                  type="button"
+                  role="tab"
+                  id={`mc-due-tab-${p.key}`}
+                  aria-selected={selected}
+                  aria-controls="mc-due-list"
+                  onClick={() => setTab(p.key)}
+                  className={cn(
+                    "relative flex min-w-0 items-center gap-2.5 rounded-[10px] px-2.5 py-2 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+                    selected ? "text-foreground" : "text-foreground/75 hover:bg-secondary/70 hover:text-foreground",
+                  )}
+                >
+                  {selected && (
+                    <motion.span
+                      layoutId="mc-due-tab"
+                      aria-hidden
+                      className="absolute inset-0 rounded-[10px] bg-card shadow-e1 ring-1 ring-border-strong/70"
+                      transition={reduceMotion ? { duration: 0 } : { type: "spring", stiffness: 500, damping: 40 }}
+                    />
+                  )}
+                  <span className={cn("relative flex size-9 shrink-0 items-center justify-center rounded-[9px]", ACCENT_BG[p.accent], p.total === 0 && !selected && "opacity-60")}>
+                    <Icon className="size-4" strokeWidth={1.8} />
+                    {hasOverdue && (
+                      <span className="absolute -top-0.5 -right-0.5 size-2.5 rounded-full bg-expense ring-2 ring-card">
+                        <span className="sr-only">Has overdue items</span>
+                      </span>
+                    )}
+                  </span>
+                  <span className="relative min-w-0 flex-1">
+                    <span className="flex items-center gap-1.5 text-xs font-semibold">
+                      {p.title}
+                      <span className="rounded-full bg-secondary px-1.5 text-[10.5px] font-semibold text-foreground/70 tabular-nums">{p.items.length}</span>
+                    </span>
+                    <span className="block truncate text-[11px] text-foreground/60">{p.meta}</span>
+                  </span>
+                  <span className="relative shrink-0 text-right">
+                    <span className={cn("block text-sm leading-tight font-bold tabular-nums", p.total === 0 ? "text-foreground/45" : "text-foreground")}>{formatCurrency(p.total)}</span>
+                    <span className="block text-[10.5px] leading-tight text-foreground/55 tabular-nums">{share != null ? `${share}%` : " "}</span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* People balances sit with the commitments but go to the People Ledger, not to a list here. */}
+          <div className="mt-auto border-t border-border-strong/50 px-2 py-2">
+            <p className={cn(LABEL, "px-2 pb-1")}>With people</p>
+            <div className="grid grid-cols-2 gap-1 @3xl:grid-cols-1">
+              {(
+                [
+                  { label: "You need to give", side: give, accent: "warning" as const },
+                  { label: "You need to receive", side: receive, accent: "success" as const },
+                ] as const
+              ).map(({ label, side, accent }) => (
+                <Link
+                  key={label}
+                  href="/people"
+                  className="group/ppl flex min-w-0 items-center gap-2.5 rounded-[10px] px-2.5 py-1.5 transition-colors hover:bg-secondary/70 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                >
+                  <span aria-hidden className={cn("flex size-9 shrink-0 items-center justify-center rounded-[9px]", ACCENT_BG[accent], side.total === 0 && "opacity-60")}>
+                    <Users className="size-4" strokeWidth={1.8} />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-xs font-semibold text-foreground">{label}</span>
+                    <span className="block truncate text-[11px] text-foreground/60">{peopleCount(side.count)}</span>
+                  </span>
+                  <span className={cn("shrink-0 text-sm font-bold tabular-nums", side.total === 0 ? "text-foreground/45" : "text-foreground")}>{formatCurrency(side.total)}</span>
+                  <ArrowRight aria-hidden className="size-3.5 shrink-0 -translate-x-1 text-foreground/40 opacity-0 transition-[opacity,transform] group-hover/ppl:translate-x-0 group-hover/ppl:opacity-100" strokeWidth={2} />
+                </Link>
+              ))}
+            </div>
           </div>
         </div>
-        <span className="rounded-full bg-secondary px-2.5 py-1 text-xs font-semibold text-foreground tabular-nums">
-          {panels.reduce((n, p) => n + p.items.length, 0)} items · {formatCurrency(panels.reduce((s, p) => s + p.total, 0))}
-        </span>
-      </div>
-      <div role="tablist" aria-label="Due this cycle" className="grid grid-cols-2 gap-1 border-b border-border-strong/40 p-2 sm:grid-cols-4">
-        {panels.map((p) => {
-          const selected = p.key === tab;
-          const Icon = p.icon;
-          return (
-            <button
-              key={p.key}
-              type="button"
-              role="tab"
-              aria-selected={selected}
-              onClick={() => setTab(p.key)}
-              className={cn(
-                "relative flex min-w-0 items-center gap-2.5 rounded-[10px] px-2.5 py-2 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
-                selected ? "text-foreground" : "text-foreground/70 hover:bg-secondary/60 hover:text-foreground",
-              )}
-            >
-              {selected && (
-                <motion.span
-                  layoutId="mc-upcoming-tab"
-                  aria-hidden
-                  className="absolute inset-0 rounded-[10px] bg-secondary ring-1 ring-border-strong/60"
-                  transition={{ type: "spring", stiffness: 500, damping: 40 }}
-                />
-              )}
-              <span className={cn("relative flex size-8 shrink-0 items-center justify-center rounded-[8px]", ACCENT_BG[p.accent])}>
-                <Icon className="size-4" strokeWidth={1.75} />
+
+        {/* ── Detail: the selected type's items ── */}
+        <div className="flex min-w-0 flex-col">
+          <div className={cn("flex items-center justify-between gap-3 border-b border-border-strong/50 bg-gradient-to-r to-transparent px-4 py-3", ACCENT_TINT[active.accent])}>
+            <div className="flex min-w-0 items-center gap-2.5">
+              <span aria-hidden className={cn("flex size-8 shrink-0 items-center justify-center rounded-full", ACCENT_BG[active.accent])}>
+                <ActiveIcon className="size-3.5" strokeWidth={1.9} />
               </span>
-              <span className="relative min-w-0">
-                <span className="block truncate text-xs font-semibold">
-                  {p.title}
-                  <span className="ml-1 text-foreground/55 tabular-nums">{p.items.length}</span>
-                </span>
-                <span className="block truncate text-sm font-bold text-foreground tabular-nums">{formatCurrency(p.total)}</span>
-              </span>
-            </button>
-          );
-        })}
-      </div>
-      <motion.div
-        key={active.key}
-        initial={reduceMotion ? false : { opacity: 0, y: 6 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.18 }}
-        className="flex-1 divide-y divide-border-strong/40"
-      >
-        {active.items.length === 0 ? (
-          <PanelEmpty icon={active.icon} title={active.emptyTitle} description={active.emptyDescription} />
-        ) : (
-          active.items.map((item) => <UpcomingRow key={item.id} item={item} icon={active.icon} accent={active.accent} />)
-        )}
-      </motion.div>
-      <div className="flex items-center justify-between border-t border-border-strong/40 px-4 py-2">
-        <Link href={active.href} className="flex items-center gap-1.5 text-xs font-semibold text-primary-accent-text hover:underline">
-          <Plus className="size-3.5" strokeWidth={2} />
-          {active.addLabel}
-        </Link>
-        <Link href={active.href} className={LINK}>
-          Open {active.title.toLowerCase()}
-          <ArrowRight className="size-3" strokeWidth={2} />
-        </Link>
+              <div className="min-w-0">
+                <p className="truncate font-heading text-[15px] leading-tight font-semibold text-foreground">{active.title}</p>
+                <p className="truncate text-xs text-foreground/65">
+                  {active.items.length === 0 ? "Nothing due" : active.meta}
+                </p>
+              </div>
+            </div>
+            <div className="shrink-0 text-right">
+              <p className="text-[10px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">Total</p>
+              <p className="text-sm leading-tight font-bold text-foreground tabular-nums">{formatCurrency(active.total)}</p>
+            </div>
+          </div>
+          <motion.div
+            key={active.key}
+            id="mc-due-list"
+            role="tabpanel"
+            aria-labelledby={`mc-due-tab-${active.key}`}
+            initial={reduceMotion ? false : { opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.18 }}
+            className="flex-1 divide-y divide-border-strong/40"
+          >
+            {active.items.length === 0 ? (
+              <PanelEmpty compact icon={active.icon} title={active.emptyTitle} description={active.emptyDescription} />
+            ) : (
+              active.items.map((item) => <UpcomingRow key={item.id} item={item} icon={active.icon} accent={active.accent} />)
+            )}
+          </motion.div>
+          <div className="flex items-center justify-between border-t border-border-strong/40 px-4 py-2">
+            <Link href={active.href} className="flex items-center gap-1.5 text-xs font-semibold text-primary-accent-text hover:underline">
+              <Plus className="size-3.5" strokeWidth={2} />
+              {active.addLabel}
+            </Link>
+            <Link href={active.href} className={LINK}>
+              Open {active.key === "emi" ? "EMIs" : active.title.toLowerCase()}
+              <ArrowRight className="size-3" strokeWidth={2} />
+            </Link>
+          </div>
+        </div>
       </div>
     </section>
   );
@@ -716,7 +845,6 @@ function Reveal({ id, children }: { id: string; children: React.ReactNode }) {
 
 const SECTIONS = [
   { id: "mc-overview", label: "Overview", icon: Sparkles },
-  { id: "mc-obligations", label: "Obligations", icon: Banknote },
   { id: "mc-due", label: "Due", icon: CalendarClock },
   { id: "mc-people", label: "People & accounts", icon: Users },
   { id: "mc-glance", label: "At a glance", icon: ListChecks },
@@ -789,7 +917,7 @@ export function MonthCycleWorkspace() {
 
   if (data.isLoading) {
     return (
-      <div className="flex min-w-0 flex-col gap-5 px-1">
+      <div className="flex min-w-0 flex-col gap-4 px-1">
         <Skeleton className="h-14 w-full rounded-[10px]" />
         <Skeleton className="h-32 w-full rounded-[10px]" />
         <Skeleton className="h-28 w-full rounded-[10px]" />
@@ -820,7 +948,7 @@ export function MonthCycleWorkspace() {
   const barButton = "flex size-10 shrink-0 items-center justify-center rounded-[6px] text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground";
 
   return (
-    <div className="flex min-w-0 flex-col gap-5 px-1">
+    <div className="flex min-w-0 flex-col gap-4 px-1">
       {/* ── Compact bar: zero-height sticky slot (no layout footprint); the same handlers as the header below ── */}
       <CompactHeaderBar label="Month Cycle quick bar" progress={barProgress} reduceMotion={barReduceMotion} top={barTop}>
         <span className="hidden min-w-0 shrink-0 truncate px-2 font-heading text-sm font-bold tracking-tight text-foreground min-[480px]:block">Month Cycle</span>
@@ -882,8 +1010,8 @@ export function MonthCycleWorkspace() {
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-2">
           <div ref={watchTitle}>
-            <h1 className="font-heading text-2xl font-bold tracking-tight text-foreground">Month Cycle</h1>
-            <p className="mt-0.5 text-sm text-muted-foreground">Everything that moves your money this cycle.</p>
+            <h1 className="font-heading text-[22px] leading-tight font-bold tracking-tight text-foreground sm:text-2xl">Month Cycle</h1>
+            <p className="mt-0.5 text-[13px] text-muted-foreground">Everything that moves your money this cycle.</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <div className="flex items-center rounded-[8px] border border-border-strong bg-card p-0.5">
@@ -939,6 +1067,15 @@ export function MonthCycleWorkspace() {
               </TooltipTrigger>
               <TooltipContent>{cycleInfoText}</TooltipContent>
             </Tooltip>
+            {!data.isFollowingGlobalCycle && (
+              <button
+                type="button"
+                onClick={data.followGlobalCycle}
+                className="inline-flex h-7 items-center gap-1 rounded-[6px] border border-dashed border-border-strong px-2 text-xs font-semibold text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+              >
+                Sync with top-bar cycle
+              </button>
+            )}
           </div>
         </div>
 
@@ -958,7 +1095,7 @@ export function MonthCycleWorkspace() {
       <section aria-label="Cycle summary" className="@container overflow-hidden rounded-[16px] border border-border-strong/60 bg-card shadow-e1">
         <div className="flex flex-col @5xl:flex-row @5xl:items-stretch">
           {/* Hero */}
-          <div className="relative flex flex-col gap-3 overflow-hidden bg-[image:var(--gradient-hero)] px-5 py-5 text-white sm:px-6 @5xl:min-w-[24rem] @5xl:max-w-[30rem]">
+          <div className="relative flex flex-col gap-2.5 overflow-hidden bg-[image:var(--gradient-hero)] px-5 py-4 text-white sm:px-6 @5xl:min-w-[24rem] @5xl:max-w-[30rem]">
             <span aria-hidden className="pointer-events-none absolute -top-20 -right-16 size-56 rounded-full bg-primary/25 blur-3xl" />
             <span aria-hidden className="pointer-events-none absolute -bottom-24 -left-16 size-52 rounded-full border border-white/10" />
             <div className="relative flex flex-wrap items-center justify-between gap-2">
@@ -968,7 +1105,7 @@ export function MonthCycleWorkspace() {
             <button
               type="button"
               onClick={() => setShowExpenseList(true)}
-              className="relative w-fit text-left text-[38px] leading-none font-bold tracking-tight tabular-nums transition-opacity hover:opacity-85 sm:text-[42px]"
+              className="relative w-fit text-left text-[34px] leading-none font-bold tracking-tight tabular-nums transition-opacity hover:opacity-85 sm:text-[38px]"
             >
               <AnimatedNumber value={spent} format={formatCurrency} />
             </button>
@@ -998,121 +1135,112 @@ export function MonthCycleWorkspace() {
           </div>
 
           {/* Supporting figures */}
-          <div className="grid min-w-0 flex-1 grid-cols-2 gap-2.5 p-3 @xl:grid-cols-4 @5xl:grid-cols-2 @5xl:p-4">
-            <SummaryTile label="Income" icon={Wallet} tone="text-success" chip="bg-success/12 text-success">
+          <div className="grid min-w-0 flex-1 auto-rows-fr grid-cols-2 content-center gap-2.5 p-3.5 @xl:grid-cols-4 @5xl:grid-cols-2">
+            <SummaryTile label="Income" icon={Wallet} tone="text-success" chip="bg-success/12 text-success" meta="Received this cycle">
               <AnimatedNumber value={financialView.income} format={formatCurrency} />
             </SummaryTile>
-            <SummaryTile label="Net balance" icon={TrendingUp} tone={net < 0 ? "text-expense" : "text-foreground"} chip={net < 0 ? "bg-expense/10 text-expense" : "bg-primary/20 text-foreground dark:text-primary-accent-text"}>
+            <SummaryTile
+              label="Net balance"
+              icon={TrendingUp}
+              tone={net < 0 ? "text-expense" : "text-foreground"}
+              chip={net < 0 ? "bg-expense/10 text-expense" : "bg-primary/20 text-foreground dark:text-primary-accent-text"}
+              meta="Income − spend"
+            >
               <AnimatedNumber value={net} format={formatCurrency} />
             </SummaryTile>
-            <div className="flex min-w-0 items-center gap-3 rounded-[12px] border border-border-strong/50 bg-secondary/40 px-3 py-3">
-              <ProgressRing value={budgetPercent ?? 0} size={50} strokeWidth={5}>
-                <span className="text-[11px] font-bold tabular-nums">{budgetPercent != null ? `${budgetPercent}%` : "—"}</span>
-              </ProgressRing>
-              <div className="min-w-0">
-                <p className={LABEL}>Budget</p>
-                <p className="truncate text-xs font-medium text-foreground">
-                  {data.budgetOverview ? `of ${formatCurrency(data.budgetOverview.limit)} used` : "No budget set"}
-                </p>
-              </div>
-            </div>
-            <div className="flex min-w-0 items-center gap-3 rounded-[12px] border border-border-strong/50 bg-secondary/40 px-3 py-3">
-              <span className="flex size-[50px] shrink-0 items-center justify-center rounded-full bg-success/12 text-success">
-                <PiggyBank className="size-5" strokeWidth={1.75} />
-              </span>
-              <div className="min-w-0">
-                <p className={LABEL}>Saved</p>
-                <p className="text-lg leading-tight font-bold text-foreground tabular-nums">{data.savingsRatePercent}%</p>
-                <p className="truncate text-[11px] text-foreground/65">of {formatCurrency(financialView.income)} income</p>
-              </div>
-            </div>
+            <SummaryTile
+              label="Budget"
+              href={data.budgetOverview ? undefined : "/budgets"}
+              tone={data.budgetOverview?.isOverBudget ? "text-expense" : data.budgetOverview ? undefined : "text-foreground/70"}
+              meta={data.budgetOverview ? `of ${formatCurrency(data.budgetOverview.limit)} used` : "Tap to set one"}
+              leading={
+                <ProgressRing value={budgetPercent ?? 0} size={46} strokeWidth={5}>
+                  <span className="text-[10.5px] font-bold tabular-nums">{budgetPercent != null ? `${budgetPercent}%` : "—"}</span>
+                </ProgressRing>
+              }
+            >
+              {data.budgetOverview ? `${formatCurrency(Math.max(data.budgetOverview.remaining, 0))} left` : "No budget set"}
+            </SummaryTile>
+            <SummaryTile label="Saved" icon={PiggyBank} chip="bg-success/12 text-success" meta={`of ${formatCurrency(financialView.income)} income`}>
+              {data.savingsRatePercent}%
+            </SummaryTile>
           </div>
         </div>
       </section>
       </Reveal>
 
-      <Reveal id="mc-obligations">
-      {/* ── Obligations this cycle — every figure opens its workspace ── */}
-      <section aria-label="Obligations" className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 xl:grid-cols-6">
-        <StatCell icon={Banknote} label="EMI (total)" amount={data.emi.total} meta={`${data.emi.count} due this month`} accent="primary" href="/emi" />
-        <StatCell icon={Landmark} label="Loans (payable)" amount={data.loans.total} meta={
-            data.loans.carriedOverdue > 0
-              ? `${formatCurrency(data.loans.dueThisCycle)} this cycle · ${formatCurrency(data.loans.carriedOverdue)} overdue`
-              : `${data.loans.count} installment${data.loans.count === 1 ? "" : "s"} due`
-          } accent="purple" href="/loans" />
-        <StatCell icon={CreditCard} label="Credit card bills" amount={data.cards.total} meta={`${data.cards.count} bills due`} accent="expense" href="/credit-cards" />
-        <StatCell icon={Users} label="You need to give" amount={data.peopleSides.totalToGive} meta={`${data.peopleSides.giveCount} people`} accent="warning" href="/people" />
-        <StatCell icon={Users} label="You need to receive" amount={data.peopleSides.totalToReceive} meta={`${data.peopleSides.receiveCount} people`} accent="success" href="/people" />
-        <StatCell icon={Receipt} label="Bills (utility & others)" amount={data.bills.total} meta={data.bills.overdueCount > 0 ? `${formatCurrency(data.bills.total - data.bills.overdueTotal)} this cycle · ${formatCurrency(data.bills.overdueTotal)} overdue` : `${data.bills.count} bills due`} accent="success" href="/bills" />
-      </section>
-      </Reveal>
-
       <Reveal id="mc-due">
-      {/* ── Upcoming this cycle — one tabbed panel ── */}
-      <UpcomingTabs
+      {/* ── Due this cycle — one workspace: total + split by type + people balances, and the selected type's items ── */}
+      <CommitmentsPanel
+        give={{ total: data.peopleSides.totalToGive, count: data.peopleSides.giveCount }}
+        receive={{ total: data.peopleSides.totalToReceive, count: data.peopleSides.receiveCount }}
         panels={[
-          { key: "emi", icon: Banknote, accent: "primary", title: "EMI", total: data.emi.total, href: "/emi", addLabel: "Add EMI", items: data.emi.items, emptyTitle: "No EMIs due", emptyDescription: "Active EMI installments due this cycle appear here." },
-          { key: "loans", icon: Landmark, accent: "purple", title: "Loans", total: data.loans.total, href: "/loans", addLabel: "Add loan", items: data.loans.items, emptyTitle: "No loan EMIs due", emptyDescription: "Active loan installments due this cycle appear here." },
-          { key: "cards", icon: CreditCard, accent: "expense", title: "Card bills", total: data.cards.total, href: "/credit-cards", addLabel: "Add card bill", items: data.cards.items, emptyTitle: "No card bills due", emptyDescription: "Unpaid statements due this cycle appear here." },
-          { key: "bills", icon: Receipt, accent: "success", title: "Bills", total: data.bills.total, href: "/bills", addLabel: "Add bill", items: data.bills.items, emptyTitle: "No bills due", emptyDescription: "Utility and other recurring bills due this cycle appear here." },
+          { key: "emi", icon: Banknote, accent: "primary", title: "EMI", total: data.emi.total, href: "/emi", addLabel: "Add EMI", items: data.emi.items, meta: `${data.emi.count} due this month`, emptyTitle: "No EMIs due", emptyDescription: "Active EMI installments due this cycle appear here." },
+          {
+            key: "loans", icon: Landmark, accent: "purple", title: "Loans", total: data.loans.total, href: "/loans", addLabel: "Add loan", items: data.loans.items,
+            meta:
+              data.loans.carriedOverdue > 0
+                ? `${formatCurrency(data.loans.dueThisCycle)} this cycle · ${formatCurrency(data.loans.carriedOverdue)} overdue`
+                : `${data.loans.count} installment${data.loans.count === 1 ? "" : "s"} due`,
+            emptyTitle: "No loan EMIs due", emptyDescription: "Active loan installments due this cycle appear here.",
+          },
+          { key: "cards", icon: CreditCard, accent: "expense", title: "Card bills", total: data.cards.total, href: "/credit-cards", addLabel: "Add card bill", items: data.cards.items, meta: `${data.cards.count} bill${data.cards.count === 1 ? "" : "s"} due`, emptyTitle: "No card bills due", emptyDescription: "Unpaid statements due this cycle appear here." },
+          {
+            key: "bills", icon: Receipt, accent: "success", title: "Bills", total: data.bills.total, href: "/bills", addLabel: "Add bill", items: data.bills.items,
+            meta:
+              data.bills.overdueCount > 0
+                ? `${formatCurrency(data.bills.total - data.bills.overdueTotal)} this cycle · ${formatCurrency(data.bills.overdueTotal)} overdue`
+                : `${data.bills.count} bill${data.bills.count === 1 ? "" : "s"} due`,
+            emptyTitle: "No bills due", emptyDescription: "Utility and other recurring bills due this cycle appear here.",
+          },
         ]}
       />
       </Reveal>
 
       <Reveal id="mc-people">
       {/* ── People + account spend ── */}
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
         <section aria-label="People ledger" className={cn(PANEL, "@container flex flex-col")}>
           <PanelHeader icon={Users} accent="warning" title="People ledger" subtitle="Money between you and others" href="/people" />
-          {/* Gross sides + held advance — never one net figure that hides an advance inside "to receive". */}
-          <dl className="grid grid-cols-3 gap-2 border-b border-border-strong/40 p-3">
-            {[
-              { label: "To receive", value: data.peopleSides.totalToReceive, tone: data.peopleSides.totalToReceive > 0 ? "text-success" : "text-foreground", tile: "bg-success/8 ring-success/20" },
-              { label: "To give", value: data.peopleSides.totalToGive, tone: data.peopleSides.totalToGive > 0 ? "text-expense" : "text-foreground", tile: "bg-expense/6 ring-expense/20" },
-              { label: "Advance held", value: data.peopleSides.advanceHeld, tone: "text-foreground", tile: "bg-secondary/60 ring-border-strong/50" },
-            ].map((f) => (
-              <div key={f.label} className={cn("rounded-[10px] px-3 py-2 text-center ring-1", f.tile)}>
-                <dt className="text-[10px] font-semibold tracking-[0.06em] text-foreground/65 uppercase">{f.label}</dt>
-                <dd className={cn("text-base leading-tight font-bold tabular-nums", f.tone)}>{formatCurrency(f.value)}</dd>
-              </div>
-            ))}
-          </dl>
+          {/* Gross sides, never one net figure: each column's header IS its total (no separate tile row repeating it),
+              and a held advance is shown on its own below instead of being folded into "to receive". */}
           {data.peopleYouNeedToGive.length === 0 && data.peopleHandoverPending.length === 0 ? (
             <PanelEmpty icon={Users} title="No pending balances" description="Money you're owed or owe will show up here." />
           ) : (
-            <div className="grid min-w-0 flex-1 @xl:grid-cols-2 @xl:divide-x @xl:divide-border-strong/40">
-              <div className="min-w-0">
-                <div className="flex items-center justify-between border-b border-border-strong/40 bg-warning/8 px-4 py-2">
-                  <p className="text-[11px] font-semibold tracking-[0.06em] text-warning-foreground uppercase dark:text-warning">You need to give</p>
-                  <p className="text-xs font-bold text-warning-foreground tabular-nums dark:text-warning">{formatCurrency(data.peopleSides.totalToGive)}</p>
-                </div>
-                <div className="divide-y divide-border-strong/40">
-                  {data.peopleYouNeedToGive.length === 0 ? (
-                    <p className="px-4 py-3 text-xs text-muted-foreground">Nothing to give right now.</p>
-                  ) : (
-                    data.peopleYouNeedToGive.map((p) => <PersonRow key={p.id} item={p} tone="expense" />)
-                  )}
-                </div>
-              </div>
-              <div className="min-w-0 border-t border-border-strong/40 @xl:border-t-0">
-                <div className="flex items-center justify-between border-b border-border-strong/40 bg-success/8 px-4 py-2">
-                  <p className="text-[11px] font-semibold tracking-[0.06em] text-success uppercase">You need to receive</p>
-                  <p className="text-xs font-bold text-success tabular-nums">{formatCurrency(data.peopleSides.totalToReceive)}</p>
-                </div>
-                <div className="divide-y divide-border-strong/40">
-                  {data.peopleHandoverPending.length === 0 ? (
-                    <p className="px-4 py-3 text-xs text-muted-foreground">Nothing to receive right now.</p>
-                  ) : (
-                    data.peopleHandoverPending.map((p) => <PersonRow key={p.id} item={p} tone="success" />)
-                  )}
-                </div>
-              </div>
+            <div className="grid min-w-0 flex-1 @xl:grid-cols-2 [&>*+*]:border-t [&>*+*]:border-border-strong/40 @xl:[&>*+*]:border-t-0 @xl:[&>*+*]:border-l">
+              <PeopleSideColumn
+                label="You need to give"
+                total={data.peopleSides.totalToGive}
+                count={data.peopleSides.giveCount}
+                shown={data.peopleYouNeedToGive.length}
+                tone="expense"
+                emptyText="Nothing to give right now."
+              >
+                {data.peopleYouNeedToGive.map((p) => <PersonRow key={p.id} item={p} tone="expense" />)}
+              </PeopleSideColumn>
+              <PeopleSideColumn
+                label="You need to receive"
+                total={data.peopleSides.totalToReceive}
+                count={data.peopleSides.receiveCount}
+                shown={data.peopleHandoverPending.length}
+                tone="success"
+                emptyText="Nothing to receive right now."
+              >
+                {data.peopleHandoverPending.map((p) => <PersonRow key={p.id} item={p} tone="success" />)}
+              </PeopleSideColumn>
             </div>
           )}
-          <Link href="/people" className="flex items-center gap-1.5 border-t border-border-strong/40 px-4 py-2.5 text-xs font-semibold text-primary-accent-text transition-colors hover:bg-primary/10">
-            <Plus className="size-3.5" strokeWidth={2} />
-            Add person
-          </Link>
+          <div className="flex items-center justify-between gap-3 border-t border-border-strong/40 pr-4">
+            <Link href="/people" className="flex items-center gap-1.5 px-4 py-2.5 text-xs font-semibold text-primary-accent-text transition-colors hover:bg-primary/10">
+              <Plus className="size-3.5" strokeWidth={2} />
+              Add person
+            </Link>
+            {data.peopleSides.advanceHeld > 0 && (
+              <p className="text-xs text-foreground/70">
+                Advance held <span className="font-bold text-foreground tabular-nums">{formatCurrency(data.peopleSides.advanceHeld)}</span>
+              </p>
+            )}
+          </div>
         </section>
 
         <section aria-label="Account spend" className={cn(PANEL, "flex flex-col")}>
@@ -1120,16 +1248,36 @@ export function MonthCycleWorkspace() {
           {data.accountSpends.length === 0 ? (
             <PanelEmpty icon={Wallet} title="No spending yet this month" description="Expenses posted this cycle will be grouped by account here." />
           ) : (
-            <div className="divide-y divide-border-strong/40">
-              {data.accountSpends.map((account, index) => (
-                <AccountSpendRow
-                  key={account.id}
-                  item={account}
-                  accent={ACCOUNT_BAR_CYCLE[index % ACCOUNT_BAR_CYCLE.length]}
-                  bankId={bankIdByAccount.get(account.id) ?? null}
-                />
-              ))}
-            </div>
+            <>
+              {/* One bar for the whole outflow, split by account — each row below carries its segment's colour. */}
+              <div className="px-4 pt-3 pb-2">
+                <div role="img" aria-label="Share of this cycle's outflow, by account" className="flex h-2 gap-0.5 overflow-hidden rounded-full bg-secondary">
+                  {data.accountSpends.map((account, index) =>
+                    account.percentOfTotal > 0 ? (
+                      <span
+                        key={account.id}
+                        title={`${account.name} ${formatCurrency(account.amount)}`}
+                        className={cn("h-full rounded-full", ACCENT_BAR[ACCOUNT_BAR_CYCLE[index % ACCOUNT_BAR_CYCLE.length]])}
+                        style={{ width: `${account.percentOfTotal}%` }}
+                      />
+                    ) : null,
+                  )}
+                </div>
+              </div>
+              <div className="divide-y divide-border-strong/40">
+                {data.accountSpends.map((account, index) => (
+                  <AccountSpendRow
+                    key={account.id}
+                    item={account}
+                    accent={ACCOUNT_BAR_CYCLE[index % ACCOUNT_BAR_CYCLE.length]}
+                    bankId={bankIdByAccount.get(account.id) ?? null}
+                  />
+                ))}
+              </div>
+              <p className="mt-auto border-t border-border-strong/40 px-4 py-2 text-[11px] text-foreground/60">
+                {data.accountSpends.length} account{data.accountSpends.length === 1 ? "" : "s"} with spending this cycle
+              </p>
+            </>
           )}
         </section>
       </div>
@@ -1141,8 +1289,9 @@ export function MonthCycleWorkspace() {
       <Reveal id="mc-glance">
       {/* ── Month at a glance ── */}
       <section aria-label="Month at a glance" className={PANEL}>
-        <PanelHeader icon={Sparkles} accent="purple" title="Month at a glance" subtitle="Quick facts about this cycle" />
-        <div className="grid grid-cols-1 gap-2 p-3 sm:grid-cols-2 lg:grid-cols-5">
+        <h2 className="sr-only">Month at a glance</h2>
+        {/* Five facts as one hairline-divided strip (gap-px over a border-coloured ground), not five boxes inside a box. */}
+        <div className="grid grid-cols-1 gap-px bg-border-strong/40 sm:grid-cols-2 lg:grid-cols-5 sm:max-lg:[&>*:last-child:nth-child(odd)]:col-span-2">
           <GlanceCell
             icon={ShoppingBag}
             label="Highest spend"
@@ -1153,6 +1302,7 @@ export function MonthCycleWorkspace() {
                 : "No expenses yet"
             }
             accent="expense"
+            muted={!data.monthSummary.highestSpendCategory}
           />
           <GlanceCell
             icon={Wallet2}
@@ -1164,9 +1314,10 @@ export function MonthCycleWorkspace() {
                 : "No activity yet"
             }
             accent="primary"
+            muted={!data.monthSummary.mostUsedAccount}
           />
           <GlanceCell icon={ListChecks} label="Total transactions" value={String(data.monthSummary.totalTransactions)} meta="This month" accent="purple" />
-          <GlanceCell icon={TrendingUp} label="Avg. daily spend" value={formatCurrency(data.monthSummary.avgDailySpend)} meta="Per day" accent="warning" />
+          <GlanceCell icon={TrendingUp} label="Avg. daily spend" value={formatCurrency(data.monthSummary.avgDailySpend)} meta="Per day" accent="warning" muted={data.monthSummary.avgDailySpend === 0} />
           <GlanceCell icon={CalendarClock} label="Pending actions" value={String(data.monthSummary.pendingActionsCount)} meta="EMI, bills & settlements" accent="success" />
         </div>
       </section>
@@ -1175,42 +1326,53 @@ export function MonthCycleWorkspace() {
       <Reveal id="mc-budget">
       {/* ── Budget ── */}
       <section aria-label="Budget overview" className={PANEL}>
-        <PanelHeader icon={PiggyBank} accent="success" title="Budget overview" subtitle="Your monthly limit and how much is used" figure={data.budgetOverview?.limit} figureLabel="Total budget" />
         {data.budgetOverview ? (
-          <div className="flex flex-col gap-3 px-4 py-4">
-            <div className="h-2.5 w-full overflow-hidden rounded-full bg-secondary">
-              <motion.div
-                className={cn("h-full rounded-full", data.budgetOverview.isOverBudget ? "bg-expense" : "bg-primary-accent-text")}
-                initial={{ width: 0 }}
-                animate={{ width: `${Math.min(100, Math.round(data.budgetOverview.usageRatio * 100))}%` }}
-                transition={{ duration: 0.8, ease: [0.22, 1, 0.36, 1] }}
-              />
-            </div>
-            <div className="flex flex-wrap items-end justify-between gap-x-3 gap-y-2">
-              <div>
-                <p className={LABEL}>Used</p>
-                <p className="text-lg leading-tight font-bold text-foreground tabular-nums">{formatCurrency(data.budgetOverview.spent)}</p>
-              </div>
-              <Link href="/budgets" className={LINK}>
-                Manage budget
-                <ArrowRight className="size-3" strokeWidth={2} />
-              </Link>
-              <div className="text-right">
-                <p className={LABEL}>Remaining</p>
-                <p className={cn("text-lg leading-tight font-bold tabular-nums", data.budgetOverview.isOverBudget ? "text-expense" : "text-foreground")}>
-                  {formatCurrency(Math.max(data.budgetOverview.remaining, 0))}
+          <>
+            <PanelHeader icon={PiggyBank} accent="success" title="Budget overview" subtitle="Your monthly limit and how much is used" figure={data.budgetOverview.limit} figureLabel="Total budget" />
+            <div className="flex flex-col gap-2.5 px-4 py-3">
+              <div className="flex items-end justify-between gap-3">
+                <p className="flex items-baseline gap-2">
+                  <span className={cn("text-2xl leading-none font-bold tabular-nums", data.budgetOverview.isOverBudget ? "text-expense" : "text-foreground")}>
+                    {Math.round(data.budgetOverview.usageRatio * 100)}%
+                  </span>
+                  <span className="text-xs text-foreground/65">{data.budgetOverview.isOverBudget ? "of budget — over the limit" : "of budget used"}</span>
                 </p>
+                <Link href="/budgets" className={LINK}>
+                  Manage budget
+                  <ArrowRight className="size-3" strokeWidth={2} />
+                </Link>
+              </div>
+              <div className="h-2.5 w-full overflow-hidden rounded-full bg-secondary">
+                <motion.div
+                  className={cn("h-full rounded-full", data.budgetOverview.isOverBudget ? "bg-expense" : "bg-primary-accent-text")}
+                  initial={{ width: 0 }}
+                  animate={{ width: `${Math.min(100, Math.round(data.budgetOverview.usageRatio * 100))}%` }}
+                  transition={{ duration: 0.8, ease: [0.22, 1, 0.36, 1] }}
+                />
+              </div>
+              <div className="flex items-end justify-between gap-3">
+                <div>
+                  <p className={LABEL}>Used</p>
+                  <p className="text-lg leading-tight font-bold text-foreground tabular-nums">{formatCurrency(data.budgetOverview.spent)}</p>
+                </div>
+                <div className="text-right">
+                  <p className={LABEL}>{data.budgetOverview.isOverBudget ? "Over by" : "Remaining"}</p>
+                  <p className={cn("text-lg leading-tight font-bold tabular-nums", data.budgetOverview.isOverBudget ? "text-expense" : "text-foreground")}>
+                    {formatCurrency(data.budgetOverview.isOverBudget ? Math.abs(data.budgetOverview.remaining) : Math.max(data.budgetOverview.remaining, 0))}
+                  </p>
+                </div>
               </div>
             </div>
-          </div>
+          </>
         ) : (
-          <div className="flex flex-wrap items-center gap-3 px-4 py-4">
-            <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-primary/20 text-foreground dark:text-primary-accent-text">
+          // Nothing to chart yet — one prompt row (the old header + body said "Budget" twice over an empty panel).
+          <div className="flex flex-wrap items-center gap-3 bg-gradient-to-r from-success/10 to-transparent px-4 py-3">
+            <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-success/12 text-success">
               <PiggyBank className="size-4.5" strokeWidth={1.9} />
             </span>
             <div className="min-w-0 flex-1">
-              <p className="text-sm font-semibold text-foreground">No monthly budget set</p>
-              <p className="text-xs text-foreground/65">Set an overall monthly budget to see how much of it this cycle uses.</p>
+              <h2 className="font-heading text-[15px] leading-tight font-semibold text-foreground">No monthly budget set</h2>
+              <p className="text-xs text-foreground/65">Set an overall monthly limit to see how much of it this cycle uses.</p>
             </div>
             <Link
               href="/budgets"
@@ -1231,48 +1393,56 @@ export function MonthCycleWorkspace() {
           : "Cycle totals reflect the current calendar month and update live as you record payments and transactions."}
       </p>
 
-      {/* ── Expense list — the cycle's expenses as a ledger ── */}
-      <Dialog open={showExpenseList} onOpenChange={setShowExpenseList}>
-        <DialogContent
+      {/* ── Expense list — the cycle's expenses as a ledger, in a side sheet that keeps the dashboard in view ── */}
+      <Sheet open={showExpenseList} onOpenChange={setShowExpenseList}>
+        <SheetContent
+          side="right"
           showCloseButton={false}
-          className="flex max-h-[88vh] w-full flex-col gap-0 overflow-hidden rounded-[10px] border border-border-strong/60 p-0 shadow-[var(--shadow-e4)] sm:max-w-3xl lg:max-w-5xl"
+          overlayClassName="bg-black/20 backdrop-blur-none dark:bg-black/35"
+          // A floating card docked to the right edge, not a full-height drawer: inset on all sides and height
+          // capped-not-fixed (h-auto + max-h), so a short list (the common case) hugs its own content instead of
+          // leaving a wall of empty space below it; a long one still caps at the viewport and scrolls internally.
+          className="w-[calc(100%-1.5rem)] gap-0 overflow-hidden rounded-2xl border border-border-strong/60 bg-popover p-0 shadow-[var(--shadow-e4)] data-[side=right]:inset-y-3 data-[side=right]:right-3 data-[side=right]:h-auto data-[side=right]:max-h-[calc(100vh-1.5rem)] data-[side=right]:w-[calc(100%-1.5rem)] data-[side=right]:sm:max-w-xl data-[side=right]:lg:max-w-2xl"
         >
-          <DialogTitle className="sr-only">{isMine ? "My spend this cycle" : "Total outflow this cycle"}</DialogTitle>
-          <div className="flex shrink-0 flex-wrap items-end justify-between gap-3 border-b border-border-strong/60 bg-gradient-to-br from-expense/[0.08] to-transparent px-5 py-4 dark:from-expense/[0.14]">
-            <div>
-              <p className={LABEL}>
-                {isMine ? "My spend" : "Total outflow"} · {data.monthRangeLabel}
-              </p>
-              <p className="mt-1 text-[30px] leading-none font-bold tracking-tight text-foreground tabular-nums">
-                <AnimatedNumber value={spent} format={formatCurrency} />
-              </p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                {data.expenseRows.length} transaction{data.expenseRows.length === 1 ? "" : "s"} this cycle
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              <ViewToggle isMine={isMine} onChange={setExpenseView} />
+          <SheetTitle className="sr-only">{isMine ? "My spend this cycle" : "Total outflow this cycle"}</SheetTitle>
+          <div className="relative shrink-0 overflow-hidden bg-[image:var(--gradient-hero)] px-5 pt-5 pb-4 text-white">
+            <span aria-hidden className="pointer-events-none absolute -top-16 -right-12 size-44 rounded-full bg-primary/25 blur-3xl" />
+            <div className="relative flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-[11px] font-semibold tracking-[0.08em] text-white/75 uppercase">
+                  {isMine ? "My spend" : "Total outflow"} · {data.monthRangeLabel}
+                </p>
+                <p className="mt-1.5 text-[32px] leading-none font-bold tracking-tight tabular-nums">
+                  <AnimatedNumber value={spent} format={formatCurrency} />
+                </p>
+                <p className="mt-1.5 text-xs text-white/70">
+                  {data.expenseRows.length} transaction{data.expenseRows.length === 1 ? "" : "s"} this cycle
+                </p>
+              </div>
               <button
                 type="button"
                 onClick={() => setShowExpenseList(false)}
                 aria-label="Close"
-                className="flex size-8 items-center justify-center rounded-[6px] text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+                className="flex size-8 shrink-0 items-center justify-center rounded-full bg-white/12 text-white/85 ring-1 ring-white/20 transition-colors hover:bg-white/20 hover:text-white"
               >
                 <X className="size-4" />
               </button>
             </div>
+            <div className="relative mt-4">
+              <ViewToggle isMine={isMine} onChange={setExpenseView} onDark />
+            </div>
           </div>
 
-          <div className="min-h-0 flex-1 overflow-auto overscroll-contain">
+          <ScrollArea className="min-h-0 flex-1">
             {!isMine && <OutflowBreakdown breakdown={financialView.spentBreakdown} total={financialView.spent} />}
             {data.expenseRows.length === 0 ? (
               <PanelEmpty title="No expenses this cycle" description="Transactions in this cycle will appear here." />
             ) : (
               <ExpenseTable rows={data.expenseRows} isMine={isMine} />
             )}
-          </div>
-        </DialogContent>
-      </Dialog>
+          </ScrollArea>
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }

@@ -3,6 +3,7 @@
 import {
   AlertTriangle,
   ArrowDownLeft,
+  ArrowRight,
   ArrowUpRight,
   CalendarClock,
   Check,
@@ -16,6 +17,7 @@ import {
   Info,
   Eye,
   Landmark,
+  Layers,
   MoreHorizontal,
   Pencil,
   PiggyBank,
@@ -35,9 +37,10 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import type { LedgerRowHandlers } from "@/features/people/components/person-activity-feed";
 import { OwnPaymentRevert } from "@/features/people/components/workspace/own-payment-revert";
 import { EntryEditForm, EntrySettleForm, InlineReveal, isEditable, LoanPayLink, DELETE_BLOCK_NOTE } from "@/features/people/components/workspace/ledger-ui";
-import { compareRowsNewestFirst, groupByMonth, sequence, type LedgerRow, type PaymentRecord } from "@/features/people/lib/person-ledger-rows";
+import { groupByMonth, type LedgerRow, type PaymentRecord } from "@/features/people/lib/person-ledger-rows";
 import { transactionHref } from "@/features/people/lib/people-return-link";
 import { REVEAL_DELAY_MS, revealBlock, useRevealWhenItGrows } from "@/features/people/lib/row-reveal";
+import { compareItemsNewestFirst, type PaymentLine, type StatementBalance } from "@/features/people/lib/statement-balance";
 import {
   linkedExpense,
   paidSoFar,
@@ -65,7 +68,7 @@ import type { Installment } from "@/lib/models/payment-schedule";
 import { RecordPaymentDialog, type PaymentTarget } from "@/features/loans/components/record-payment-dialog";
 import { useAllLoanInstallments } from "@/hooks/use-loans";
 import { FollowUpControl, FollowUpNote } from "./follow-up";
-import { DeferralControl, DeferralNote, useRowDeferral } from "./payment-deferral";
+import { canPostponeRow, DeferralControl, DeferralNote, useRowDeferral } from "./payment-deferral";
 
 /**
  * The People settlement reconciliation table — one component for the Person workspace's Activity and the
@@ -112,7 +115,7 @@ export const FAMILY: Record<Family, { tint: string; edge: string; text: string }
  * amber while it is pending (either way), red when overdue, neutral for later or informational states.
  * Table-only — the statement / PDF keep their own chips. "advance" is the table's held-advance treatment.
  */
-type StatusStyle = SettlementStatusTone | "advance" | "postponed";
+type StatusStyle = SettlementStatusTone | "advance" | "postponed" | "balance";
 
 const STATUS_STYLE: Record<StatusStyle, string> = {
   due: "bg-settle-emi-badge text-settle-emi-text",
@@ -120,7 +123,7 @@ const STATUS_STYLE: Record<StatusStyle, string> = {
   partial: "bg-card text-settle-emi-text ring-1 ring-inset ring-settle-emi-edge",
   // Done: no fill — high-contrast text, a small green check is the only success mark.
   settled: "text-foreground/85 [&>svg]:text-success",
-  overdue: "bg-expense text-expense-foreground",
+  overdue: "bg-expense/12 text-expense ring-1 ring-inset ring-expense/25",
   upcoming: "bg-settle-carried-badge text-settle-carried-text",
   received: "text-foreground/85 [&>svg]:text-success",
   // Money you sent: same restrained form, neutral check — distinct from money received.
@@ -130,6 +133,8 @@ const STATUS_STYLE: Record<StatusStyle, string> = {
   advance: "bg-settle-advance-tint text-settle-advance-text ring-1 ring-inset ring-settle-advance-edge/50",
   // Still owed, only expected later: dashed outline — never the filled green of "paid".
   postponed: "border border-dashed border-primary-accent-text/70 bg-card text-primary-accent-text",
+  // Open item inside an overall balance that general payments reduced: informational outline — not "due", not "paid".
+  balance: "bg-card text-settle-receivable-text ring-1 ring-inset ring-settle-receivable-edge/70",
 };
 
 const STATUS_ICON: Partial<Record<StatusStyle, LucideIcon>> = {
@@ -143,6 +148,7 @@ const STATUS_ICON: Partial<Record<StatusStyle, LucideIcon>> = {
   upcoming: CalendarClock,
   advance: PiggyBank,
   postponed: CalendarClock,
+  balance: Layers,
 };
 
 /**
@@ -268,8 +274,8 @@ const BANK_STATUS: Record<EmiRowStatus, string> = {
 };
 
 const TH =
-  "sticky top-0 z-[2] border-r border-b border-r-border-strong/50 border-b-border-strong bg-secondary px-2.5 py-1.5 text-left text-[10.5px] font-bold tracking-[0.07em] whitespace-nowrap text-foreground/75 uppercase last:border-r-0";
-const TD = "border-r border-b border-r-border-strong/40 border-b-border-strong/55 px-2.5 py-[3px] align-middle last:border-r-0";
+  "sticky top-0 z-[2] border-b border-b-border-strong/70 bg-secondary/90 px-2.5 py-1.5 text-left text-[10.5px] font-bold tracking-[0.07em] whitespace-nowrap text-foreground/55 uppercase backdrop-blur";
+const TD = "border-b border-b-border-strong/30 px-2.5 py-1 align-middle";
 const NUM = "text-right tabular-nums whitespace-nowrap";
 
 const isPaymentKind = (k: SettlementKind) => k === "paymentReceived" || k === "paymentMade" || k === "advance" || k === "advanceApplied";
@@ -368,7 +374,16 @@ export interface SettlementRowView {
   split: { original: number; participantCount: number; shareLabel: string; share: number } | null;
   /** Entry ids (this row's and its payments') whose received date isn't known — their stored date is a placeholder. */
   unknownDates: ReadonlySet<string>;
+  /**
+   * Set when the row reads "Part of balance": payments were made toward the overall balance without choosing items, so this
+   * open item isn't paid on its own. `credit` = what those general payments add up to (vs. the open items), `owed` = what is
+   * still owed overall on that side. Both are the existing `GeneralCredit` figures — display only, never re-allocated.
+   */
+  balance?: { credit: number; owed: number } | null;
 }
+
+/** "Part of balance" — the exact wording `settlementStatus` gives an open item while general payments exist. */
+const PART_OF_BALANCE = "Part of balance";
 
 export function viewOf(row: LedgerRow, personName: string, lookups: SettlementLookups, carried = false, personId?: string): SettlementRowView {
   const kind = settlementKind(row, lookups);
@@ -376,7 +391,10 @@ export function viewOf(row: LedgerRow, personName: string, lookups: SettlementLo
   const tone = settlementTone(row, kind);
   const shareLabel = row.direction === "iOwe" ? "Your share" : `${personName.split(" ")[0]}'s share`;
   const share = row.direction === "iOwe" ? row.amount : (ctx?.personShare ?? row.amount);
+  const status = receivedEarlierStatus(row, kind, lookups) ?? tableStatus(row, kind, personName, lookups.generalCredit);
+  const creditSide = row.direction === "theyOwe" ? lookups.generalCredit?.theyOwe : row.direction === "iOwe" ? lookups.generalCredit?.iOwe : null;
   return {
+    balance: row.state === "open" && status.label === PART_OF_BALANCE && creditSide ? { credit: creditSide.credit, owed: creditSide.owed } : null,
     row,
     kind,
     family: carried ? "carried" : TONE_FAMILY[tone],
@@ -384,7 +402,7 @@ export function viewOf(row: LedgerRow, personName: string, lookups: SettlementLo
     title: settlementTitle(row, kind, personName),
     typeLabel: tableTypeLabel(kind, row, lookups),
     relation: relationLine(row, kind, personName, money),
-    status: receivedEarlierStatus(row, kind, lookups) ?? tableStatus(row, kind, personName, lookups.generalCredit),
+    status,
     paid: isPaymentKind(kind) ? row.amount : paidSoFar(row),
     carried,
     // The row amount is one share of a bigger bill — say whose, next to the original total.
@@ -418,19 +436,6 @@ export function completionLabel(v: SettlementRowView): string | null {
   return null;
 }
 
-function CompletionStamp({ label, className }: { label: string; className?: string }) {
-  return (
-    <span data-testid="completion-stamp" className={cn("flex min-w-[8.5rem] flex-1 items-center gap-1.5", className)}>
-      <span aria-hidden className="h-px min-w-2 flex-1 bg-success/35" />
-      <span className="inline-flex shrink-0 items-center gap-1 text-[10.5px] leading-none font-semibold whitespace-nowrap text-foreground/80 tabular-nums">
-        <Check className="size-3 text-success" strokeWidth={2.75} aria-hidden />
-        {label}
-      </span>
-      <span aria-hidden className="h-px min-w-2 flex-1 bg-success/35" />
-    </span>
-  );
-}
-
 /**
  * The LENDER side of a person's Loan / EMI share row (the schedule's `amountPaid` / due date): "Bank paid", "Bank part
  * paid", "Bank overdue" or "Bank due 5 Nov". Always shown, so the row's own status ("₹1,000 to receive") is never read
@@ -460,10 +465,12 @@ function BankPaidChip({ rowKey }: { rowKey: string }) {
       title={chip.title}
       data-testid="lender-chip"
       className={cn(
-        "shrink-0 rounded-[4px] px-1.5 text-[10.5px] leading-4 font-bold whitespace-nowrap",
+        "inline-flex shrink-0 items-center gap-1 rounded-[4px] px-1.5 text-[10.5px] leading-4 font-bold whitespace-nowrap",
         chip.tone === "paid" ? "bg-success/10 text-success" : chip.tone === "overdue" ? "bg-expense/10 text-expense" : chip.tone === "part" ? "bg-settle-carried-badge text-settle-carried-text" : "bg-secondary text-foreground/70",
       )}
     >
+      {/* The bank icon marks this as the LENDER side — never the person's reimbursement. */}
+      <Landmark className="size-2.5 shrink-0" strokeWidth={2.5} aria-hidden />
       {chip.label}
     </span>
   );
@@ -527,6 +534,7 @@ function StatusLegend({ hasLenderRows }: { hasLenderRows: boolean }) {
     ["Received ₹X · Got ₹X · ₹Y left", "Money they paid you — in full, or part of it."],
     ["You need to pay ₹X · Paid ₹X", "What you owe them, and what you have paid them."],
     ["Moved to Nov cycle · Postponed until 25 Nov", "Collection postponed — the amount is still owed; nothing else changes. The bank's own EMI date is separate."],
+    ["Part of balance · ₹X left overall", "Payments were made toward the overall balance without choosing items. This item isn't marked paid on its own; ₹X is what is still owed overall."],
     ["Received earlier", "Paid before FlowFi — already in your account balance, so no account changed."],
     ["Advance available · Advance used", "Money they gave ahead — it settles something only when you apply it."],
     ...(hasLenderRows
@@ -561,32 +569,12 @@ function StatusLegend({ hasLenderRows }: { hasLenderRows: boolean }) {
 /** Kinds that come from an EMI / loan installment schedule. */
 const isEmiKind = (k: SettlementKind) => k === "emi" || k === "loanEmi" || k === "loanInstallment";
 
-/** A solid "EMI" mark at the start of the row's title — so an installment is told apart from a one-off expense at a glance. */
-function EmiChip({ className }: { className?: string }) {
-  return (
-    <span
-      data-testid="emi-chip"
-      title="This row is an EMI installment"
-      className={cn("inline-flex h-[18px] shrink-0 items-center gap-1 rounded-[4px] bg-primary px-1.5 text-[10.5px] leading-none font-extrabold tracking-wide whitespace-nowrap text-primary-foreground", className)}
-    >
-      <CalendarClock className="size-3" strokeWidth={2.5} aria-hidden />
-      EMI
-    </span>
-  );
-}
-
-/** An earlier cycle's obligation that is still open. */
-function CarriedChip() {
-  return <span className="shrink-0 rounded-[4px] bg-settle-carried-badge px-1.5 text-[10.5px] leading-4 font-bold whitespace-nowrap text-settle-carried-text">Previous unpaid</span>;
-}
-
 /**
  * Split rows and money that already moved (received / paid / advance used) sit on the neutral surface — the
  * Status column carries their meaning. Open obligations, held advances and earlier-cycle rows keep their tint.
  */
 function rowTint(v: SettlementRowView): string {
-  const moved = !v.carried && (v.kind === "paymentReceived" || v.kind === "paymentMade" || v.kind === "advanceApplied");
-  return v.family === "split" || moved ? "bg-card" : FAMILY[v.family].tint;
+  return v.carried ? "bg-settle-carried-tint/45" : "bg-card";
 }
 
 /**
@@ -643,8 +631,8 @@ export function TypeBadge({ kind, family, label, className, flow }: { kind: Sett
 }
 
 /** One line: icon + short label. The longer sentence is the hover title; the expansion spells it out. */
-export function StatusPill({ status, kind, postponed = false }: { status: SettlementRowView["status"]; kind?: SettlementKind; postponed?: boolean }) {
-  const style: StatusStyle = postponed ? "postponed" : kind === "advance" ? "advance" : status.tone;
+export function StatusPill({ status, kind, postponed = false, balance = false }: { status: SettlementRowView["status"]; kind?: SettlementKind; postponed?: boolean; balance?: boolean }) {
+  const style: StatusStyle = postponed ? "postponed" : balance ? "balance" : kind === "advance" ? "advance" : status.tone;
   const Icon = STATUS_ICON[style];
   return (
     <span
@@ -664,15 +652,58 @@ function RowStatus({ v }: { v: SettlementRowView }) {
     const until = deferral.date ? formatStatementDate(deferral.date, true) : null;
     const detail = until ? `${v.status.label} · was due ${formatStatementDate(v.row.date, true)}` : `${v.status.label} · first due in the ${deferral.from} cycle`;
     // Part received before it was moved: what came in stays visible — the move covers only what is left.
-    const label =
+    const full =
       v.row.state === "partial"
         ? until ? `Got ${money(v.paid ?? 0)} · rest until ${until}` : `Got ${money(v.paid ?? 0)} · rest in ${deferral.name} cycle`
         : until ? `Postponed until ${until}` : `Moved to ${deferral.name} cycle`;
-    return <StatusPill status={{ ...v.status, label, detail }} postponed />;
+    return <StatusPill status={{ ...v.status, label: "Postponed", detail: `${full}. ${detail}` }} postponed />;
   }
   // The row's completion stamp already says "Received ₹375" — Status stays short.
   if (completionLabel(v) != null) return <StatusPill status={{ ...v.status, label: "Fully paid" }} kind={v.kind} />;
+  // Inside an overall balance that general payments reduced: the item isn't paid on its own — say what is owed overall.
+  if (v.balance) {
+    return (
+      <span data-testid="balance-status">
+        <StatusPill status={{ ...v.status, label: "Partial", detail: balanceExplanation(v) }} kind={v.kind} balance />
+      </span>
+    );
+  }
+  // A part-paid item reads "Partial"; the got / left figures sit in the supporting line and the tooltip.
+  if (v.row.state === "partial") return <StatusPill status={{ ...v.status, label: "Partial", detail: v.status.label }} kind={v.kind} />;
+  // Untouched and not overdue: "Pending" — what is owed is in the supporting line and the tooltip.
+  if (v.row.state === "open" && (v.status.tone === "due" || v.status.tone === "payable")) return <StatusPill status={{ ...v.status, label: "Pending", detail: v.status.label }} kind={v.kind} />;
   return <StatusPill status={v.status} kind={v.kind} />;
+}
+
+/**
+ * Why a row reads "Part of balance", in one sentence built from the existing figures: general payments (not tied to
+ * items) reduced the overall balance, this item isn't marked paid on its own, and what is still owed overall.
+ */
+export function balanceExplanation(v: Pick<SettlementRowView, "row" | "balance">, personName?: string): string {
+  if (!v.balance) return "";
+  const who = v.row.direction === "iOwe" ? "You" : personName ? personName.split(" ")[0] : "They";
+  return `${who} paid ${money(v.balance.credit)} toward the overall balance without choosing items, so this item isn't marked paid on its own. ${
+    v.balance.owed < 0.005 ? "Nothing is owed overall." : `${money(v.balance.owed)} is still owed overall.`
+  }`;
+}
+
+/**
+ * A postponed row's timeline in one line: the original due date → the revised collection cycle (or exact day) → what is
+ * still owed. Display only — the live deferral and the row's own remaining.
+ */
+function PostponedTrail({ v, className }: { v: SettlementRowView; className?: string }) {
+  const deferral = useRowDeferral(v.row.key, v.row.date);
+  if (deferral?.status !== "postponed" || v.row.state === "settled") return null;
+  const target = deferral.date ? formatStatementDate(deferral.date) : `${deferral.name} cycle`;
+  return (
+    <span data-testid="postponed-trail" title={`Collection postponed to ${deferral.range}. Still owed until it is paid — the totals don't change.`} className={cn("inline-flex min-w-0 items-center gap-1 text-[11px] leading-tight font-semibold whitespace-nowrap text-primary-accent-text tabular-nums", className)}>
+      <CalendarClock className="size-3 shrink-0" aria-hidden />
+      <span className="text-foreground/60 line-through decoration-dashed">Due {formatStatementDate(v.row.date)}</span>
+      <ArrowRight className="size-3 shrink-0" aria-hidden />
+      <span>Collect {deferral.date ? "on" : "in"} {target}</span>
+      <span className="font-medium text-foreground/65">· {money(v.row.remaining ?? 0)} still owed</span>
+    </span>
+  );
 }
 
 /** Row date on one line. A postponed row's date is struck with a dashed line: its first due period has passed. */
@@ -708,42 +739,17 @@ function Amount({ value, strong, tone, flow }: { value: number | null; strong?: 
 function RemainingAmount({ v }: { v: SettlementRowView }) {
   if (v.row.state == null) return <span className="text-foreground/45">—</span>;
   if (v.row.state === "settled") return <span className="inline-flex items-center gap-1 text-[13px] font-semibold text-foreground/65 tabular-nums"><Check className="size-3.5 text-success" strokeWidth={2.5} />{money(0)}</span>;
+  // Part of an overall balance: the item's own figure is not what is owed overall — shown quietly, never as amber "due".
+  if (v.balance) {
+    return (
+      <span title={`This item's own amount. ${balanceExplanation(v)}`}>
+        <Amount value={v.row.remaining ?? 0} strong tone="text-foreground/70" />
+      </span>
+    );
+  }
   // Still owed: pending amber (overdue red, yours to pay in its own tone) — never success green.
   const tone = v.row.overdue ? "text-expense" : v.row.direction === "iOwe" ? "text-settle-payable-text" : "text-settle-emi-text";
   return <Amount value={v.row.remaining ?? 0} strong tone={tone} />;
-}
-
-/**
- * Desktop amount cell: what is still remaining, prominent; the original amount (a split row's share,
- * labelled as such) and what has been paid sit underneath as one secondary line. Rows with no
- * remaining state (payments) show their own figure instead.
- */
-function AmountFigures({ v, muted }: { v: SettlementRowView; muted: boolean }) {
-  const { row } = v;
-  const original = isPaymentKind(v.kind) ? null : row.amount;
-  const flow = flowOf(v);
-  if (row.state == null) return <Amount value={v.paid ?? original} strong={flow != null} flow={flow} tone={muted ? "text-foreground/75" : undefined} />;
-  const paid = v.paid ?? 0;
-  return (
-    <>
-      <RemainingAmount v={v} />
-      <p className="text-[10.5px] leading-tight font-medium whitespace-nowrap text-foreground/60 tabular-nums">
-        {original != null &&
-          (flow ? (
-            // Cash rows: the original amount carries the direction ("−₹2,000 given"); what came back is "repaid".
-            <>
-              <span className={cn("font-semibold", FLOW_TONE[flow.dir])}>{signedMoney(flow, original)}</span> {flow.noun}
-            </>
-          ) : v.split ? (
-            v.split.shareLabel
-          ) : (
-            <>of {money(original)}</>
-          ))}
-        {original != null && paid > 0 && " · "}
-        {paid > 0 && (flow ? <>{money(paid)} repaid</> : <>paid {money(paid)}</>)}
-      </p>
-    </>
-  );
 }
 
 /** Phone row figure: what is still left on an open row (with its original when part paid), else the amount. */
@@ -767,6 +773,70 @@ function MobileFigure({ v }: { v: SettlementRowView }) {
 // ---------------------------------------------------------------------------------------------------
 // Expansion — the row's own reconciliation: breakdown, progress, history, source, actions
 // ---------------------------------------------------------------------------------------------------
+
+/** The cash a row moved, for the Money in / Money out columns — only where money really changed hands. */
+function cashOf(v: SettlementRowView): { dir: "in" | "out"; amount: number } | null {
+  const flow = flowOf(v);
+  if (!flow) return null;
+  return { dir: flow.dir, amount: v.row.state == null ? (v.paid ?? v.row.amount) : v.row.amount };
+}
+
+/**
+ * The row's OWN amount for the Amount column — the transaction / installment share itself, never a running balance.
+ * Only where no cash moved (cash rows already read in Money in / Money out); tone follows who owes whom.
+ */
+function ItemAmount({ v }: { v: SettlementRowView }) {
+  if (cashOf(v)) return <span className="text-foreground/25">—</span>;
+  const { row } = v;
+  const tone =
+    row.state === "settled"
+      ? "text-foreground/60"
+      : row.direction === "theyOwe"
+        ? "text-settle-receivable-text"
+        : row.direction === "iOwe"
+          ? "text-settle-payable-text"
+          : "text-foreground";
+  const who = row.direction === "theyOwe" ? "to receive" : row.direction === "iOwe" ? "to pay" : null;
+  return (
+    <span className={cn("text-[13.5px] font-semibold", tone)} title={`${v.typeLabel} · ${money(row.amount)}${who ? ` ${who}` : ""} (this item only — not a running balance)`}>
+      {money(row.amount)}
+    </span>
+  );
+}
+
+/** Outstanding with the person after this line — one side only, never netted; "settled" once it reaches zero. */
+function BalanceFigure({ b, align = "right" }: { b: StatementBalance | undefined; align?: "right" | "left" }) {
+  if (!b) return <span className="text-foreground/30">—</span>;
+  const settled = Math.abs(b.amount) < 0.005;
+  const ahead = b.amount < -0.005;
+  const tone = settled ? "text-success" : ahead ? "text-settle-advance-text" : b.side === "receivable" ? "text-settle-receivable-text" : "text-settle-payable-text";
+  const word = settled ? "settled" : ahead ? "paid ahead" : b.side === "receivable" ? "owes you" : "you owe";
+  return (
+    <span className={cn("block", align === "right" ? "text-right" : "text-left")} data-testid="row-balance">
+      <span className={cn("block font-heading text-[13.5px] leading-tight font-bold tabular-nums", tone)}>{money(Math.abs(b.amount))}</span>
+      <span className="block text-[10px] leading-tight font-medium text-foreground/55">{word}</span>
+    </span>
+  );
+}
+
+function IconAction({ label, onClick, children, href, testId, tone }: { label: string; onClick?: () => void; children: React.ReactNode; href?: string; testId?: string; tone?: "danger" }) {
+  const cls = cn(
+    "flex size-7 shrink-0 items-center justify-center rounded-[8px] text-foreground/65 outline-none transition-colors hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
+    tone === "danger" && "hover:bg-expense/10 hover:text-expense",
+  );
+  if (href) {
+    return (
+      <Link href={href} title={label} aria-label={label} data-testid={testId} className={cls}>
+        {children}
+      </Link>
+    );
+  }
+  return (
+    <button type="button" title={label} aria-label={label} data-testid={testId} onClick={onClick} className={cls}>
+      {children}
+    </button>
+  );
+}
 
 function Line({ label, value, strong, tone, indent }: { label: React.ReactNode; value: React.ReactNode; strong?: boolean; tone?: string; indent?: boolean }) {
   return (
@@ -825,19 +895,58 @@ function SettlementSummary({ v, personName }: { v: SettlementRowView; personName
 /** An EMI share's two separate statuses — the bank's installment and the person's reimbursement — as two small chips. */
 function EmiStatusChips({ v, personName }: { v: SettlementRowView; personName: string }) {
   const s = v.row.statementRow;
+  const deferral = useRowDeferral(v.row.key, v.row.date);
   if ((v.kind !== "emi" && v.kind !== "loanEmi") || !s?.emi) return null;
   const first = personName.split(" ")[0];
+  const postponed = deferral?.status === "postponed" && v.row.state !== "settled";
+  // The person's side in plain words — a postponed share is "not paid yet", never mistaken for "Part of balance" or "paid".
+  const reimbursement = postponed
+    ? `Not paid yet · moved to ${deferral.date ? formatStatementDate(deferral.date) : `${deferral.name} cycle`}`
+    : v.balance
+      ? `Not paid on its own · ${money(v.balance.owed)} left overall`
+      : v.status.label;
   return (
     <div className="flex flex-wrap gap-1.5 text-[11.5px]" data-testid="emi-status-chips">
       <span className="inline-flex items-center gap-1 rounded-full border border-border-strong/70 px-2 py-0.5">
+        <Landmark className="size-3 text-foreground/55" strokeWidth={2} aria-hidden />
         <span className="text-foreground/65">Bank EMI</span>
         <span className={cn("font-semibold", s.emi.status === "overdue" ? "text-expense" : "text-foreground")}>{BANK_STATUS[s.emi.status]}</span>
       </span>
-      <span className="inline-flex items-center gap-1 rounded-full border border-border-strong/70 px-2 py-0.5">
+      <span className={cn("inline-flex items-center gap-1 rounded-full border px-2 py-0.5", postponed ? "border-dashed border-primary-accent-text/60" : "border-border-strong/70")}>
+        <HandCoins className="size-3 text-foreground/55" strokeWidth={2} aria-hidden />
         <span className="text-foreground/65">{first}&apos;s reimbursement</span>
-        <span className="font-semibold text-foreground">{v.status.label}</span>
+        <span className="font-semibold text-foreground">{reimbursement}</span>
       </span>
     </div>
+  );
+}
+
+/**
+ * One short context line in the expanded row, only where the status needs it: why an item reads "Part of balance", or a
+ * postponed share's original date → revised collection → still owed. Paying the bank is never treated as their payment.
+ */
+function RowContextNote({ v, personName }: { v: SettlementRowView; personName: string }) {
+  const deferral = useRowDeferral(v.row.key, v.row.date);
+  const first = personName.split(" ")[0];
+  const postponed = deferral?.status === "postponed" && v.row.state !== "settled";
+  if (!postponed && !v.balance) return null;
+  const isEmi = v.kind === "emi" || v.kind === "loanEmi";
+  return (
+    <p data-testid="row-context-note" className="flex items-start gap-1.5 rounded-[6px] bg-secondary/70 px-2 py-1 text-[11.5px] leading-snug text-foreground/80">
+      <Info className="mt-px size-3.5 shrink-0 text-foreground/55" aria-hidden />
+      <span>
+        {postponed ? (
+          <>
+            Was due <b className="font-semibold text-foreground">{formatStatementDate(v.row.date, true)}</b> · now expected{" "}
+            <b className="font-semibold text-foreground">{deferral.date ? `on ${formatStatementDate(deferral.date, true)}` : `in the ${deferral.name} cycle (${deferral.range})`}</b> ·{" "}
+            <b className="font-semibold text-foreground">{money(v.row.remaining ?? 0)}</b> stays owed until {v.row.direction === "iOwe" ? "you pay" : `${first} pays`}.
+          </>
+        ) : (
+          balanceExplanation(v, personName)
+        )}
+        {isEmi && " Paying the bank is separate — it never counts as their payment to you."}
+      </span>
+    </p>
   );
 }
 
@@ -1103,6 +1212,35 @@ function RowActionButtons({
           {compact ? "Record" : row.state === "partial" ? "Record rest" : "Record payment"}
         </button>
       ) : null}
+      {compact && (
+        <span className="hidden items-center gap-0.5 2xl:flex">
+          {onToggleDetails && (
+            <IconAction label={detailsOpen ? "Hide details" : "View details"} onClick={onToggleDetails} testId="row-action-details">
+              <Eye className="size-4" strokeWidth={1.75} />
+            </IconAction>
+          )}
+          {canEdit && (
+            <IconAction label={`Edit ${v.title}`} onClick={() => (editing ? handlers.onEditCancel?.() : handlers.onEditStart!(row))} testId="row-action-edit">
+              <Pencil className="size-4" strokeWidth={1.75} />
+            </IconAction>
+          )}
+          {canPostponeRow(row) && handlers.onPostpone && !unavailable && (
+            <IconAction label="Postpone the due date" onClick={() => handlers.onPostpone!(row)} testId="row-action-postpone">
+              <CalendarClock className="size-4" strokeWidth={1.75} />
+            </IconAction>
+          )}
+          {row.ownPayment?.undo != null && handlers.onUndoPayment && (
+            <IconAction label="Revert this payment" onClick={() => handlers.onUndoPayment!(row, row.ownPayment!)} testId="row-action-revert" tone="danger">
+              <Undo2 className="size-4" strokeWidth={1.75} />
+            </IconAction>
+          )}
+          {menuSource && source && (
+            <IconAction label={source.label} href={source.href} testId="row-action-open">
+              <ExternalLink className="size-4" strokeWidth={1.75} />
+            </IconAction>
+          )}
+        </span>
+      )}
       {unavailable && (
         <span className="text-[12px] text-muted-foreground" title="Its source transaction was deleted. Reverse the payment recorded against it to clear this entry.">
           Original transaction is no longer available
@@ -1205,7 +1343,8 @@ interface ExpansionProps {
 /**
  * The expanded row — a natural extension of the row above it. By default: what it is (title, type, date, who it is
  * with), the money at a glance, the one primary action, and the payment timing. Everything else — the split of the
- * bill, payment history, the transaction's own facts, the reminder — sits behind one "More details" toggle.
+ * bill's split (who took part, each share) stays visible; payment history, the transaction's own facts and the
+ * reminder sit behind one "More details" toggle.
  * Every figure and handler is the row's existing one; this component only arranges them.
  */
 function Expansion(props: ExpansionProps) {
@@ -1260,7 +1399,15 @@ function ExpansionCard({ v, personId, personName, lookups, accountForEntry, hand
       <div className="space-y-2 px-3 pt-2 pb-2">
         {row.state != null && !isPaymentKind(v.kind) ? <SettlementSummary v={v} personName={personName} /> : <Breakdown v={v} personName={personName} />}
         <EmiStatusChips v={v} personName={personName} />
+        <RowContextNote v={v} personName={personName} />
         <OwnPaymentRevert row={row} onUndo={onUndo} onEdit={onEditPayment} />
+        {allocation && (
+          // Who took part and each stored share — visible as soon as the row opens, separate from the settlement above.
+          <div data-testid="row-split-details">
+            <SectionLabel>Split details</SectionLabel>
+            <SplitAllocationBreakdown allocation={allocation} focusName={personName} className="max-w-4xl" />
+          </div>
+        )}
       </div>
 
       {/* Payment timing (only where it applies) and the two disclosure controls share one quiet line. */}
@@ -1283,13 +1430,6 @@ function ExpansionCard({ v, personId, personName, lookups, accountForEntry, hand
 
       {detailsOpen && (
         <div id={detailsId} data-testid="row-details" className="space-y-3 border-t border-border-strong/50 px-3 py-2.5 duration-150 animate-in fade-in-0">
-          {allocation && (
-            // The whole purchase and every stored share, across the panel's full width; the settlement above is separate.
-            <div>
-              <SectionLabel>Split details</SectionLabel>
-              <SplitAllocationBreakdown allocation={allocation} focusName={personName} className="max-w-4xl" />
-            </div>
-          )}
           <div className="grid gap-x-8 gap-y-3 md:grid-cols-2">
             <DetailFacts v={v} cycleLabelOf={cycleLabelOf} />
             <div className="min-w-0 space-y-3">
@@ -1326,6 +1466,10 @@ export interface SettlementTableProps {
   linkedTrail?: (rowKey: string) => React.ReactNode;
   /** Sticky header offset container: the table's header sticks to the top of its scrolling parent. */
   className?: string;
+  /** Payments recorded against an obligation, listed as their own statement lines. */
+  paymentLines?: readonly PaymentLine[];
+  /** Running outstanding balance after every line, by line key. */
+  balances?: ReadonlyMap<string, StatementBalance>;
 }
 
 /** A lump payment applied to many installments reads as one folded line, not a wall of identical rows. */
@@ -1345,7 +1489,7 @@ export function foldPaymentRows(rows: readonly LedgerRow[]): FoldItem[] {
   return out;
 }
 
-export function SettlementTable({ personId, personName, rows, carriedRows = [], isLoading, lookups, accountForEntry, handlers, empty, cycleLabelOf, className, linkedTrail }: SettlementTableProps) {
+export function SettlementTable({ personId, personName, rows, carriedRows = [], isLoading, lookups, accountForEntry, handlers, empty, cycleLabelOf, className, linkedTrail, paymentLines = [], balances }: SettlementTableProps) {
   const [openKey, setOpenKey] = useState<string | null>(null);
   const [openFolds, setOpenFolds] = useState<ReadonlySet<string>>(new Set());
   // Deep link from a lender-payment screen (`?obligation=<row key>`): open and scroll to that row once.
@@ -1395,7 +1539,7 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
       </div>
     );
   }
-  if (rows.length === 0 && carriedRows.length === 0) return <>{empty}</>;
+  if (rows.length === 0 && carriedRows.length === 0 && paymentLines.length === 0) return <>{empty}</>;
 
   const toggle = (row: LedgerRow) => {
     if (handlers.settlingKey === row.key) handlers.onSettleCancel();
@@ -1408,11 +1552,21 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
   // One chronological, newest-first list: an earlier cycle's unpaid item sits under its own month between the
   // current months (never in a separate block on top, which read Oct → Sep → Nov). It keeps its "Previous unpaid"
   // chip, "From <cycle>" line and tint, so it is still told apart at a glance.
-  const merged = [...carriedRows.map((row) => ({ row, carried: true })), ...rows.map((row) => ({ row, carried: false }))].sort((a, b) => compareRowsNewestFirst(a.row, b.row));
-  const groups = groupByMonth(merged, (t) => t.row.date);
-  type GroupItem = FoldItem | { kind: "carried"; row: LedgerRow };
+  type Entry = { kind: "row"; row: LedgerRow; carried: boolean } | { kind: "pay"; line: PaymentLine };
+  const merged: Entry[] = [
+    ...carriedRows.map((row): Entry => ({ kind: "row", row, carried: true })),
+    ...rows.map((row): Entry => ({ kind: "row", row, carried: false })),
+    ...paymentLines.map((line): Entry => ({ kind: "pay", line })),
+  ].sort((a, b) =>
+    compareItemsNewestFirst(
+      a.kind === "row" ? { kind: "row", row: a.row } : { kind: "pay", line: a.line },
+      b.kind === "row" ? { kind: "row", row: b.row } : { kind: "pay", line: b.line },
+    ),
+  );
+  const groups = groupByMonth(merged, (t) => (t.kind === "row" ? t.row.date : t.line.payment.date));
+  type GroupItem = FoldItem | { kind: "carried"; row: LedgerRow } | { kind: "pay"; line: PaymentLine };
   /** A month's items in order: brought-forward rows stand alone; consecutive current rows may fold into one payment line. */
-  const itemsOf = (g: { rows: { row: { row: LedgerRow; carried: boolean } }[] }): GroupItem[] => {
+  const itemsOf = (g: { rows: { row: Entry }[] }): GroupItem[] => {
     const out: GroupItem[] = [];
     let batch: LedgerRow[] = [];
     const flush = () => {
@@ -1420,7 +1574,10 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
       batch = [];
     };
     for (const { row: t } of g.rows) {
-      if (t.carried) {
+      if (t.kind === "pay") {
+        flush();
+        out.push({ kind: "pay", line: t.line });
+      } else if (t.carried) {
         flush();
         out.push({ kind: "carried", row: t.row });
       } else batch.push(t.row);
@@ -1428,7 +1585,6 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
     flush();
     return out;
   };
-  const total = rows.length + carriedRows.length;
   const expansionProps = { personId, personName, lookups, accountForEntry, handlers, cycleLabelOf };
 
   const toggleFold = (id: string) =>
@@ -1442,12 +1598,113 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
   const foldTitle = (f: Extract<FoldItem, { kind: "fold" }>) => settlementTitle(f.rows[0], "paymentReceived", personName);
   const foldMeta = (f: Extract<FoldItem, { kind: "fold" }>) => `${f.rows.length} installments · ${money(f.rows.reduce((sum, r) => sum + r.amount, 0))} in total`;
 
-  const desktopRow = (v: SettlementRowView, n: number) => {
+  const first = personName.split(" ")[0];
+  const payTitle = (p: PaymentRecord) => (p.source === "advance" ? "Advance applied" : p.direction === "youPaid" ? `Payment to ${first}` : `Payment from ${first}`);
+  const payLeft = (l: PaymentLine) => (l.payment.remainingAfter < 0.005 ? "now cleared" : `${money(l.payment.remainingAfter)} left on it`);
+  const payActions = (l: PaymentLine) => {
+    const p = l.payment;
+    const edit = handlers.editablePayment?.(p) && handlers.onEditPayment ? () => handlers.onEditPayment!(p) : null;
+    return (
+      <div className="flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
+        {edit && (
+          <button type="button" onClick={edit} title="Edit this payment" className="flex h-6 items-center gap-1 rounded-[6px] px-1.5 text-[11.5px] font-semibold text-foreground/70 outline-none hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring">
+            <Pencil className="size-3.5" strokeWidth={1.75} />
+            Edit
+          </button>
+        )}
+        {p.undo && handlers.onUndoPayment ? (
+          <button type="button" onClick={() => handlers.onUndoPayment!(l.parent, p)} title={p.undo.kind === "payment" ? "Revert this payment" : "Undo this payment"} className="flex h-6 items-center gap-1 rounded-[6px] px-1.5 text-[11.5px] font-semibold text-foreground/70 outline-none hover:bg-expense/10 hover:text-expense focus-visible:ring-2 focus-visible:ring-ring">
+            <Undo2 className="size-3.5" strokeWidth={1.75} />
+            {p.undo.kind === "payment" ? "Revert" : "Undo"}
+          </button>
+        ) : p.undoBlock ? (
+          <span title={p.undoBlock} className="text-foreground/50">
+            <Info className="size-3.5" aria-hidden />
+          </span>
+        ) : null}
+      </div>
+    );
+  };
+  const payRow = (l: PaymentLine) => {
+    const p = l.payment;
+    const inbound = p.direction === "theyPaid";
+    const cash = p.source === "cash";
+    const Icon = inbound ? ArrowDownLeft : ArrowUpRight;
+    return (
+      <tr key={`pay:${l.key}`} data-payment-line={l.key} className="transition-colors duration-150 hover:bg-secondary/45">
+        <td className={cn(TD, "w-[5rem]")}>
+          <span className="text-[13px] leading-tight font-medium whitespace-nowrap text-foreground/80 tabular-nums">{formatStatementDate(p.date)}</span>
+        </td>
+        <td className={cn(TD, "w-full max-w-0")}>
+          <div className="flex min-w-0 items-center gap-2">
+            <span aria-hidden className={cn("inline-flex size-6 shrink-0 items-center justify-center rounded-full", cash ? (inbound ? "bg-success/10 text-success" : "bg-expense/10 text-expense") : "bg-settle-advance-tint text-settle-advance-text")}>
+              <Icon className="size-3.5" strokeWidth={2.25} />
+            </span>
+            <span className="shrink-0 truncate text-[13.5px] leading-tight font-semibold text-foreground">{payTitle(p)}</span>
+            <span className="min-w-0 truncate text-[11.5px] leading-tight text-foreground/60" title={`Applied to ${l.parent.title} · ${payLeft(l)}`}>
+              Applied to {l.parent.title} · {payLeft(l)}
+            </span>
+          </div>
+        </td>
+        <td className={cn(TD, NUM, "w-[6rem]")}>{cash && inbound ? <span className="text-[13.5px] font-semibold text-success">{money(p.amount)}</span> : <span className="text-foreground/25">—</span>}</td>
+        <td className={cn(TD, NUM, "w-[6rem]")}>{cash && !inbound ? <span className="text-[13.5px] font-semibold text-expense">{money(p.amount)}</span> : <span className="text-foreground/25">—</span>}</td>
+        <td className={cn(TD, NUM, "w-[6.5rem]")}>{cash ? <span className="text-foreground/25">—</span> : <span className="text-[13.5px] font-semibold text-settle-advance-text" title="Advance applied — no cash moved">{money(p.amount)}</span>}</td>
+        <td className={cn(TD, "w-[8rem]")}>
+          <span className="inline-flex h-5 items-center gap-1 rounded-full bg-success/10 px-2 text-[11px] leading-none font-semibold whitespace-nowrap text-success">
+            {cash ? (inbound ? "Received" : "Paid") : "Advance used"}
+          </span>
+        </td>
+        <td className={cn(TD, "w-[9rem] py-0.5 2xl:w-[15rem]")}>{payActions(l)}</td>
+      </tr>
+    );
+  };
+  const mobilePayRow = (l: PaymentLine) => {
+    const p = l.payment;
+    const inbound = p.direction === "theyPaid";
+    const cash = p.source === "cash";
+    return (
+      <li key={`pay:${l.key}`} data-payment-line={l.key} className={cn("border-b border-l-[4px] border-b-border-strong/55 bg-secondary/15 px-3 py-1.5", cash ? (inbound ? "border-l-success/55" : "border-l-expense/55") : "border-l-settle-advance-edge/60")}>
+        <div className="flex items-baseline justify-between gap-3">
+          <p className="flex min-w-0 items-center gap-1.5 text-[13.5px] leading-snug font-semibold text-foreground">
+            <CornerDownRight className="size-3.5 shrink-0 text-foreground/35" aria-hidden />
+            <span className="truncate">{payTitle(p)}</span>
+          </p>
+          <span className={cn("shrink-0 text-[13.5px] font-semibold tabular-nums", cash ? (inbound ? "text-success" : "text-expense") : "text-settle-advance-text")}>
+            {cash ? (inbound ? "+" : "−") : ""}
+            {money(p.amount)}
+          </span>
+        </div>
+        <p className="mt-0.5 truncate text-[11.5px] font-medium text-foreground/70">
+          {formatStatementDate(p.date)} · Applied to {l.parent.title} · {payLeft(l)}
+        </p>
+        <div className="mt-0.5 flex items-center justify-between gap-2">
+          <span className="flex items-baseline gap-1 text-[11px] text-foreground/60">
+            <span>Balance</span>
+            <BalanceFigure b={balances?.get(l.key)} align="left" />
+          </span>
+          {payActions(l)}
+        </div>
+      </li>
+    );
+  };
+
+  /** The row's one supporting line: type · amount · relation, plus what is paid / left — kept short, details live in the row's panel. */
+  const supportingText = (v: SettlementRowView) => {
+    const { row } = v;
+    const obligation = row.state != null;
+    // The item's amount has its own column and a running balance is not shown here — only what this line IS, and, for a
+    // part-paid item, its own paid / left split.
+    const head = [v.carried && cycleLabelOf ? `From ${cycleLabelOf(row.date)}` : null, v.typeLabel].filter(Boolean).join(" · ");
+    const progress = obligation && !v.balance && row.state === "partial" ? `${money(v.paid ?? 0)} paid · ${money(row.remaining ?? 0)} left` : null;
+    return [head, v.relation, progress].filter(Boolean).join(" · ");
+  };
+
+  const desktopRow = (v: SettlementRowView) => {
     const { row } = v;
     const open = isOpen(row);
     const fam = FAMILY[v.family];
     const muted = row.state === "settled";
-    const stamp = completionLabel(v);
+    const cash = cashOf(v);
     return (
       <Fragment key={row.key}>
         <tr
@@ -1463,51 +1720,51 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
               toggle(row);
             }
           }}
-          className={cn("group cursor-pointer transition-colors", rowTint(v), "hover:brightness-[0.97] dark:hover:brightness-110", open && "outline-2 -outline-offset-2 outline-primary-accent-text/60")}
+          className={cn("group cursor-pointer transition-colors duration-150", rowTint(v), "hover:bg-secondary/55 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring", open && "bg-secondary/45")}
         >
-          <td className={cn(TD, "hidden w-10 border-l-[4px] text-right text-[11px] font-semibold text-foreground/60 tabular-nums lg:table-cell", fam.edge)}>{sequence(n, total)}</td>
-          <td className={cn(TD, "w-[4.75rem] border-l-[4px] lg:border-l-0", fam.edge)}>
-            <RowDate v={v} className="text-[13px] leading-tight font-semibold text-foreground" />
+          <td className={cn(TD, "w-[5rem] border-l-[3px]", fam.edge)}>
+            <RowDate v={v} className="text-[13px] leading-tight font-medium text-foreground/85" />
           </td>
           <td className={cn(TD, "w-full max-w-0")}>
-            <div className="flex min-w-0 items-center gap-1.5">
-              <ChevronDown className={cn("size-3.5 shrink-0 text-foreground/50 transition-transform", open && "rotate-180")} strokeWidth={2} aria-hidden />
-              <FlowMark v={v} />
-              {isEmiKind(v.kind) && <EmiChip />}
-              <span className={cn("truncate text-[13.5px] leading-tight font-semibold", muted ? "text-foreground/80" : "text-foreground")}>{v.title}</span>
-              <TypeBadge kind={v.kind} family={v.typeFamily} label={v.typeLabel} flow={flowOf(v)} className="h-[18px] xl:hidden" />
-              {v.carried && <CarriedChip />}
-              {(v.kind === "emi" || v.kind === "loanEmi") && <BankPaidChip rowKey={v.row.key} />}
-              {stamp && <CompletionStamp label={stamp} className="ml-1" />}
+            <div className="flex min-w-0 items-center gap-2">
+              <FlowMark v={v} className="size-6" />
+              <div className="min-w-0 flex-1">
+                {/* One line: title · chips · what it is. Postponement / follow-up notes drop to a second line only when they exist. */}
+                <div className="flex min-w-0 items-center gap-1.5">
+                  <span className={cn("max-w-[60%] shrink-0 truncate text-[13.5px] leading-tight font-semibold", muted ? "text-foreground/80" : "text-foreground")}>{v.title}</span>
+                  {(v.kind === "emi" || v.kind === "loanEmi") && <BankPaidChip rowKey={v.row.key} />}
+                  <ChevronDown className={cn("size-3.5 shrink-0 text-foreground/40 transition-transform", open && "rotate-180")} strokeWidth={2} aria-hidden />
+                  {v.split ? (
+                    <SplitSummary split={v.split} className="min-w-0 flex-nowrap overflow-hidden" />
+                  ) : v.row.statementRow?.settles && (v.kind === "paymentReceived" || v.kind === "paymentMade") ? (
+                    <RepaysLine v={v} />
+                  ) : (
+                    <p className="min-w-0 truncate text-[11.5px] leading-tight text-foreground/60" title={supportingText(v)}>
+                      {supportingText(v)}
+                    </p>
+                  )}
+                </div>
+                <div className="flex min-w-0 items-baseline gap-x-3 empty:hidden">
+                  {row.state !== "settled" && <DeferralNote rowKey={row.key} rowDate={row.date} hidePostponed className="shrink-0 whitespace-nowrap" />}
+                  <PostponedTrail v={v} className="shrink-0" />
+                  <FollowUpNote rowKey={row.key} className="flex" />
+                </div>
+                {linkedTrail?.(row.key) && <div>{linkedTrail(row.key)}</div>}
+              </div>
             </div>
-            {/* One secondary line: split figures (they already say whose share) or the plain relation. */}
-            <div className="flex min-w-0 items-baseline gap-x-3 pl-5">
-              {v.split ? (
-                <SplitSummary split={v.split} className="min-w-0 flex-nowrap overflow-hidden" />
-              ) : v.row.statementRow?.settles && (v.kind === "paymentReceived" || v.kind === "paymentMade") ? (
-                <RepaysLine v={v} />
-              ) : (
-                <p className="min-w-0 truncate text-[11.5px] leading-tight font-medium text-foreground/75">
-                  {v.carried && cycleLabelOf ? `From ${cycleLabelOf(row.date)} · ` : ""}
-                  {v.relation}
-                </p>
-              )}
-              {row.state !== "settled" && <DeferralNote rowKey={row.key} rowDate={row.date} hidePostponed className="shrink-0 whitespace-nowrap" />}
-            </div>
-            {linkedTrail?.(row.key) && <div className="pl-5">{linkedTrail(row.key)}</div>}
           </td>
-          <td className={cn(TD, "hidden w-[11rem] xl:table-cell")}><TypeBadge kind={v.kind} family={v.typeFamily} label={v.typeLabel} flow={flowOf(v)} /></td>
-          <td className={cn(TD, NUM, "w-[9.5rem]")}>
-            <AmountFigures v={v} muted={muted} />
-            <FollowUpNote rowKey={row.key} className="flex justify-end" />
+          <td className={cn(TD, NUM, "w-[6rem]")}>{cash?.dir === "in" ? <span className="text-[13.5px] font-semibold text-success">{money(cash.amount)}</span> : <span className="text-foreground/25">—</span>}</td>
+          <td className={cn(TD, NUM, "w-[6rem]")}>{cash?.dir === "out" ? <span className="text-[13.5px] font-semibold text-expense">{money(cash.amount)}</span> : <span className="text-foreground/25">—</span>}</td>
+          <td className={cn(TD, NUM, "w-[6.5rem]")}>
+            <ItemAmount v={v} />
           </td>
-          <td className={cn(TD, "w-[11.5rem] max-w-[11.5rem]")}><RowStatus v={v} /></td>
-          <td className={cn(TD, "w-[8.5rem] py-0.5")}><RowActionButtons v={v} handlers={handlers} lookups={lookups} compact detailsOpen={open} onToggleDetails={() => toggle(row)} /></td>
+          <td className={cn(TD, "w-[8rem] max-w-[8rem]")}><RowStatus v={v} /></td>
+          <td className={cn(TD, "w-[9rem] py-0.5 2xl:w-[15rem]")}><RowActionButtons v={v} handlers={handlers} lookups={lookups} compact detailsOpen={open} onToggleDetails={() => toggle(row)} /></td>
         </tr>
         <tr aria-hidden={!open}>
-          <td colSpan={7} className={cn("p-0", open && "border-b border-border-strong/60 bg-secondary/60")}>
+          <td colSpan={7} className={cn("p-0", open && "border-b border-border-strong/45 bg-secondary/45")}>
             <InlineReveal open={open}>
-              <div className="px-3 py-2 lg:pl-12">
+              <div className="px-3 pt-0.5 pb-2.5 lg:pl-[5.75rem]">
                 <Expansion v={v} {...expansionProps} onCollapse={() => toggle(row)} />
               </div>
             </InlineReveal>
@@ -1521,15 +1778,13 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
     const { row } = v;
     const open = isOpen(row);
     const fam = FAMILY[v.family];
-    const stamp = completionLabel(v);
     return (
       <li key={row.key} data-obligation-key={row.key} className={cn("border-b border-l-[4px] border-b-border-strong/55", rowTint(v), fam.edge)}>
         <button type="button" onClick={() => toggle(row)} aria-expanded={open} className="block w-full px-3 py-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset">
           {/* Line 1: what it is · the figure that matters (what is left, or the amount once paid). */}
           <div className="flex items-baseline justify-between gap-3">
-            <p className={cn("flex min-w-0 items-center gap-1.5 text-[13.5px] leading-snug font-semibold", row.state === "settled" ? "text-foreground/80" : "text-foreground")}>
-              <FlowMark v={v} className="size-5 self-center" />
-              {isEmiKind(v.kind) && <EmiChip />}
+            <p className={cn("flex min-w-0 items-center gap-2 text-[13.5px] leading-snug font-semibold", row.state === "settled" ? "text-foreground/80" : "text-foreground")}>
+              <FlowMark v={v} className="size-6 self-center" />
               <span className="truncate">{v.title}</span>
             </p>
             <MobileFigure v={v} />
@@ -1537,16 +1792,21 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
           {/* Line 2: type · date · status. Paid / left / moved are in the status, so no separate grid. A completed
               row shows its completion stamp in the status's place, filling the line's free space. */}
           <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
-            <TypeBadge kind={v.kind} family={v.typeFamily} label={v.typeLabel} flow={flowOf(v)} className="h-[18px]" />
             <RowDate v={v} className="text-[11.5px] font-medium text-foreground/70" />
-            {v.carried && <CarriedChip />}
-              {(v.kind === "emi" || v.kind === "loanEmi") && <BankPaidChip rowKey={v.row.key} />}
-            <span className={cn("ml-auto flex max-w-full min-w-0 items-center gap-1", stamp && "flex-1")}>
-              {stamp ? <CompletionStamp label={stamp} className="min-w-[7.5rem]" /> : <RowStatus v={v} />}
+            <span className="text-[11.5px] text-foreground/55">· {v.carried && cycleLabelOf ? `From ${cycleLabelOf(row.date)} · ` : ""}{v.typeLabel}</span>
+            {(v.kind === "emi" || v.kind === "loanEmi") && <BankPaidChip rowKey={v.row.key} />}
+            <span className="ml-auto flex max-w-full min-w-0 items-center gap-1">
+              <RowStatus v={v} />
               <ChevronDown className={cn("size-4 shrink-0 text-foreground/55 transition-transform", open && "rotate-180")} aria-hidden />
             </span>
           </div>
           {v.split && <SplitSummary split={v.split} className="mt-0.5" />}
+          {balances?.get(row.key) && (
+            <p className="mt-0.5 flex items-baseline justify-end gap-1 text-[11px] text-foreground/60">
+              <span>Balance</span>
+              <BalanceFigure b={balances.get(row.key)} />
+            </p>
+          )}
           <RepaysLine v={v} className="mt-0.5" />
           {row.state !== "settled" && <DeferralNote rowKey={row.key} rowDate={row.date} hidePostponed className="mt-0.5 flex" />}
           <FollowUpNote rowKey={row.key} className="mt-0.5 flex" />
@@ -1565,9 +1825,9 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
   const countLabel = (g: MonthGroup) => `${g.rows.length} ${g.rows.length === 1 ? "transaction" : "transactions"}`;
   const monthHeadingRow = (g: MonthGroup) => (
     <tr>
-      <td colSpan={7} className="border-t-2 border-b border-t-border-strong border-b-border-strong/70 bg-secondary px-3 py-0.5">
-        <span className="text-[11.5px] font-bold tracking-[0.08em] whitespace-nowrap text-foreground uppercase">{g.label}</span>
-        <span className="ml-2 text-[11.5px] font-medium whitespace-nowrap text-foreground/70">{countLabel(g)}</span>
+      <td colSpan={7} className="border-b border-b-border-strong/40 bg-secondary/35 px-3 py-1">
+        <span className="text-[11px] font-bold tracking-[0.08em] whitespace-nowrap text-foreground/80 uppercase">{g.label}</span>
+        <span className="ml-2 rounded-full bg-card px-2 py-px text-[10.5px] font-medium whitespace-nowrap text-foreground/55 ring-1 ring-border-strong/50 ring-inset">{countLabel(g)}</span>
       </td>
     </tr>
   );
@@ -1578,21 +1838,20 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
     </li>
   );
 
-  let n = 0;
   return (
     <TooltipProvider>
     <div className={className}>
       {/* md+: the reconciliation table */}
-      <table className="hidden w-full border-separate border-spacing-0 text-sm md:table">
+      <table className="hidden w-full border-separate border-spacing-0 text-sm xl:table">
         <thead>
           <tr>
-            <th className={cn(TH, "hidden w-10 text-right lg:table-cell")}>#</th>
-            <th className={cn(TH, "w-[4.75rem]")}>Date</th>
-            <th className={cn(TH, "w-full")}>What</th>
-            <th className={cn(TH, "hidden w-[11rem] xl:table-cell")}>Type</th>
-            <th className={cn(TH, "w-[9.5rem] text-right")} title="Still remaining, with this person's original amount (for a split, their share) and what has been paid underneath">Amount</th>
-            <th className={cn(TH, "w-[11.5rem]")}>Status</th>
-            <th className={cn(TH, "w-[8.5rem] text-right")}>Actions</th>
+            <th className={cn(TH, "w-[5rem]")}>Date</th>
+            <th className={cn(TH, "w-full")}>Transaction</th>
+            <th className={cn(TH, "w-[6rem] text-right")} title="Cash that came in on this line">Money in</th>
+            <th className={cn(TH, "w-[6rem] text-right")} title="Cash that went out on this line">Money out</th>
+            <th className={cn(TH, "w-[6.5rem] text-right")} title="This line's own amount — the transaction or installment share where no cash moved. Not a running balance.">Amount</th>
+            <th className={cn(TH, "w-[8rem]")}>Status</th>
+            <th className={cn(TH, "w-[9rem] text-right 2xl:w-[15rem]")}>Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -1600,8 +1859,9 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
             <Fragment key={g.key}>
               {monthHeadingRow(g)}
               {itemsOf(g).map((item) => {
-                if (item.kind === "carried") return desktopRow(viewOf(item.row, personName, lookups, true, personId), ++n);
-                if (item.kind === "row") return desktopRow(viewOf(item.row, personName, lookups, false, personId), ++n);
+                if (item.kind === "pay") return payRow(item.line);
+                if (item.kind === "carried") return desktopRow(viewOf(item.row, personName, lookups, true, personId));
+                if (item.kind === "row") return desktopRow(viewOf(item.row, personName, lookups, false, personId));
                 const open = foldIsOpen(item);
                 return (
                   <Fragment key={item.id}>
@@ -1614,7 +1874,7 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
                         </button>
                       </td>
                     </tr>
-                    {open && item.rows.map((row) => desktopRow(viewOf(row, personName, lookups, false, personId), ++n))}
+                    {open && item.rows.map((row) => desktopRow(viewOf(row, personName, lookups, false, personId)))}
                   </Fragment>
                 );
               })}
@@ -1624,11 +1884,12 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
       </table>
 
       {/* Phone: compact financial rows */}
-      <ul className="flex flex-col md:hidden">
+      <ul className="flex flex-col xl:hidden">
         {groups.map((g) => (
           <Fragment key={g.key}>
             {monthHeadingItem(g)}
             {itemsOf(g).map((item) => {
+              if (item.kind === "pay") return mobilePayRow(item.line);
               if (item.kind === "carried") return mobileRow(viewOf(item.row, personName, lookups, true, personId));
               if (item.kind === "row") return mobileRow(viewOf(item.row, personName, lookups, false, personId));
               const open = foldIsOpen(item);

@@ -12,7 +12,6 @@ import {
   cycleKeyOf,
   depositCount,
   depositTarget,
-  estimateSpendingBuffer,
   goalCyclePlan,
   goalPlanHistory,
   lockedByAccount,
@@ -156,7 +155,7 @@ describe("monthly plan summary across goals", () => {
 describe("capacity — what can be set aside without touching commitments", () => {
   const due = (total: number): DueBreakdown => ({ total, overdue: 0, card: 0, loan: total, emi: 0, bill: 0, count: 1 });
 
-  it("free money = balance − reserved per account (never below 0), then − due − buffer", () => {
+  it("free money = balance − reserved per account (never below 0), then − due (no forecast spending)", () => {
     const c = savingsCapacity({
       accounts: [
         { id: "bank", currentBalance: 50_000 },
@@ -167,21 +166,20 @@ describe("capacity — what can be set aside without touching commitments", () =
         ["cash", 3_000], // more reserved than held → 0 free, never negative
       ]),
       due: due(15_000),
-      spendingBuffer: 5_000,
     });
-    expect(c).toEqual({ inAccounts: 52_000, reserved: 13_000, free: 40_000, due: 15_000, buffer: 5_000, safeToSave: 20_000, shortBy: 0 });
+    expect(c).toEqual({ inAccounts: 52_000, reserved: 13_000, free: 40_000, due: 15_000, safeToSave: 25_000, shortBy: 0 });
   });
 
   it("reports a shortfall instead of a negative safe amount", () => {
-    const c = savingsCapacity({ accounts: [{ id: "bank", currentBalance: 8_000 }], reservedByAccount: new Map(), due: due(10_000), spendingBuffer: 1_000 });
+    const c = savingsCapacity({ accounts: [{ id: "bank", currentBalance: 8_000 }], reservedByAccount: new Map(), due: due(10_000) });
     expect(c.safeToSave).toBe(0);
-    expect(c.shortBy).toBe(3_000);
+    expect(c.shortBy).toBe(2_000);
   });
 
-  it("the spending buffer is the typical cycle's spend minus what's already spent — no history, no invented buffer", () => {
-    expect(estimateSpendingBuffer([12_000, 0, 18_000], 5_000)).toEqual({ typical: 15_000, buffer: 10_000 });
-    expect(estimateSpendingBuffer([12_000], 14_000)).toEqual({ typical: 12_000, buffer: 0 });
-    expect(estimateSpendingBuffer([0, 0], 3_000)).toEqual({ typical: null, buffer: 0 });
+  it("never deducts a guess at everyday spending: safe to save is exactly free − due", () => {
+    const c = savingsCapacity({ accounts: [{ id: "bank", currentBalance: 34_500 }], reservedByAccount: new Map(), due: due(500) });
+    expect(c.safeToSave).toBe(34_000);
+    expect(c).not.toHaveProperty("buffer");
   });
 
   it("typical surplus ignores cycles with no income", () => {

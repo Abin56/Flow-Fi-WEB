@@ -41,8 +41,11 @@ function tx(p: Partial<Tx> & { amount: number }): Tx {
   };
 }
 const exp = (transactionId: string, totalAmount: number, myShare: number, deletedAt: Date | null = null): MySpendExpense => ({ transactionId, totalAmount, myShare, deletedAt });
-const ctxOf = (expenses: MySpendExpense[] = [], agreements?: Map<string, boolean>): MySpendContext =>
-  buildMySpendContext({ expenses, repaymentIsConsumptionByAgreementId: agreements });
+const ctxOf = (
+  expenses: MySpendExpense[] = [],
+  agreements?: Map<string, boolean>,
+  ownership?: Map<string, { ownershipShares?: { personId: string | null; amount: number }[] | null; beneficiaryPersonId?: string | null; beneficiaryRepaysInstallments?: boolean }>,
+): MySpendContext => buildMySpendContext({ expenses, repaymentIsConsumptionByAgreementId: agreements, ownershipSourceByAgreementId: ownership });
 
 /** User-configured cycle 18 Sep → 17 Oct (inclusive, end at 23:59:59.999). */
 const CYCLE = { start: new Date(2026, 8, 18), end: new Date(2026, 9, 17, 23, 59, 59, 999) };
@@ -151,6 +154,62 @@ describe("My Spend — funding never decides spend", () => {
 
   it("excludeFromCalculations and deleted transactions never count", () => {
     expect(spend([tx({ amount: 900, excludeFromCalculations: true }), tx({ amount: 400, deletedAt: d(9, 21) })], ctxOf())).toBe(0);
+  });
+});
+
+describe("My Spend — EMI/Loan installments assigned to a person (ownership split)", () => {
+  it("31. fully assigned EMI (₹5,000, 100% to a person, purchase unrecorded) → ₹0 my spend", () => {
+    const recorded = repaymentRecognitionByAgreement({ loans: [], emis: [{ id: "E1", purchaseTransactionId: null }], liveTransactionIds: new Set() });
+    const ownership = new Map([["E1", { beneficiaryPersonId: "AMMA", beneficiaryRepaysInstallments: true }]]);
+    const emiPay = tx({ amount: 5000, emiId: "E1", paymentAllocationType: "regularEmi" });
+    const c = classifyForMySpend(emiPay, ctxOf([], recorded, ownership));
+    expect(c).toEqual({ kind: "consumption", grossAmount: 5000, myAmount: 0, othersAmount: 5000 });
+    expect(spend([emiPay], ctxOf([], recorded, ownership))).toBe(0);
+  });
+
+  it("32. partially assigned EMI (₹5,000, 40% mine / 60% a person) → ₹2,000 my spend", () => {
+    const recorded = repaymentRecognitionByAgreement({ loans: [], emis: [{ id: "E2", purchaseTransactionId: null }], liveTransactionIds: new Set() });
+    const ownership = new Map([
+      [
+        "E2",
+        {
+          ownershipShares: [
+            { personId: null, amount: 2000 },
+            { personId: "AMMA", amount: 3000 },
+          ],
+        },
+      ],
+    ]);
+    const emiPay = tx({ amount: 5000, emiId: "E2", paymentAllocationType: "regularEmi" });
+    expect(spend([emiPay], ctxOf([], recorded, ownership))).toBe(2000);
+  });
+
+  it("33. fully assigned Loan installment (loanId path) → ₹0, and unaffected unassigned agreements still count in full", () => {
+    const recorded = repaymentRecognitionByAgreement({
+      loans: [{ id: "L3", agreementKind: "installmentPurchase", purchaseTransactionId: null }],
+      emis: [],
+      liveTransactionIds: new Set(),
+    });
+    const ownership = new Map([["L3", { beneficiaryPersonId: "SANJU", beneficiaryRepaysInstallments: true }]]);
+    const assignedPay = tx({ amount: 3000, loanId: "L3", paymentAllocationType: "regularEmi" });
+    const unassignedPay = tx({ amount: 1000, emiId: "unknown", paymentAllocationType: "regularEmi" });
+    expect(spend([assignedPay, unassignedPay], ctxOf([], recorded, ownership))).toBe(1000);
+  });
+
+  it("34. reimbursement received from the assigned person never reduces My Spend further (already ₹0/₹2,000)", () => {
+    const recorded = repaymentRecognitionByAgreement({ loans: [], emis: [{ id: "E1", purchaseTransactionId: null }], liveTransactionIds: new Set() });
+    const ownership = new Map([["E1", { beneficiaryPersonId: "AMMA", beneficiaryRepaysInstallments: true }]]);
+    const emiPay = tx({ amount: 5000, emiId: "E1", paymentAllocationType: "regularEmi" });
+    const reimbursed = tx({ amount: 5000, type: "income", isPersonLedgerMovement: true });
+    expect(spend([emiPay, reimbursed], ctxOf([], recorded, ownership))).toBe(0);
+  });
+
+  it("35. edit: reassigning ownership mid-stream is purely recomputed (no stale state)", () => {
+    const recorded = repaymentRecognitionByAgreement({ loans: [], emis: [{ id: "E4", purchaseTransactionId: null }], liveTransactionIds: new Set() });
+    const emiPay = tx({ amount: 4000, emiId: "E4", paymentAllocationType: "regularEmi" });
+    expect(spend([emiPay], ctxOf([], recorded))).toBe(4000); // not yet assigned
+    const nowAssigned = new Map([["E4", { beneficiaryPersonId: "AMMA", beneficiaryRepaysInstallments: true }]]);
+    expect(spend([emiPay], ctxOf([], recorded, nowAssigned))).toBe(0); // reassigned
   });
 });
 

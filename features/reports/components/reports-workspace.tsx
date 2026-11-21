@@ -5,7 +5,7 @@ import { useCallback, useMemo, useState } from "react";
 import { ScrollNav } from "@/components/layout/scroll-nav";
 import { Skeleton } from "@/components/ui/skeleton";
 import { downloadCsv } from "@/features/transaction-studio/lib/export-csv";
-import { useFinancialReportData, useReportPeriodSelection } from "@/features/reports/hooks/use-financial-report-data";
+import { useFinancialReportData, useSyncedReportPeriod } from "@/features/reports/hooks/use-financial-report-data";
 import { periodReportCsv } from "@/features/reports/lib/report-csv";
 import { selectionForTrendPoint, type ReportPeriod } from "@/lib/engines/report-period";
 import { formatCurrencyCompact } from "@/lib/format";
@@ -38,7 +38,7 @@ function readTab(): DetailTab {
  */
 export function ReportsWorkspace() {
   const data = useFinancialReportData();
-  const [selection, setSelection] = useReportPeriodSelection("reports");
+  const [selection, setSelection, isFollowingGlobalCycle, followGlobalCycle] = useSyncedReportPeriod("reports");
   const [view, setView] = useState<FlowView>("flow");
   const [windowSize, setWindowSize] = useState<"6" | "12">("6");
   const [showTable, setShowTable] = useState(false);
@@ -201,6 +201,15 @@ export function ReportsWorkspace() {
       <div className="sticky top-0 z-20 -mx-1 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-b-2xl bg-background/95 px-1 py-1.5 backdrop-blur-md before:pointer-events-none before:absolute before:inset-x-0 before:-top-10 before:h-10 before:bg-background before:content-['']" data-testid="rep-controls">
         <h1 className="mr-1 font-heading text-xl font-semibold tracking-tight text-foreground">Reports</h1>
         <PeriodBar selection={selection} onChange={setSelection} period={period} startDay={data.startDay} now={data.now} resolve={resolve} />
+        {!isFollowingGlobalCycle && (
+          <button
+            type="button"
+            onClick={followGlobalCycle}
+            className="inline-flex h-7 items-center gap-1 rounded-[6px] border border-dashed border-border-strong px-2 text-xs font-semibold text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+          >
+            Sync with top-bar cycle
+          </button>
+        )}
         <div className="flex flex-wrap items-center gap-2 @6xl:ml-auto">
           <span className="text-[11px] text-muted-foreground" data-testid="rep-compare-note">
             Compared with {previousPeriod.label}

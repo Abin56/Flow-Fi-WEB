@@ -281,6 +281,34 @@ export function buildSavingsPosition(
 }
 
 // ---------------------------------------------------------------------------------------------------------
+// Transactions-page identification — which real transactions ARE a savings transfer leg
+
+export interface SavingsTransactionTag {
+  goalId: string;
+  goalName: string;
+  /** "in" = money moving INTO this goal's account (a deposit); "out" = a withdrawal transferred elsewhere. */
+  direction: SavingsContribution["direction"];
+}
+
+/**
+ * Every live transaction id that is one leg of an active savings "transfer" entry (never "earmark" — an
+ * earmark moves no money, so it never has a transaction to tag), mapped to the goal it belongs to and
+ * which side of the transfer it is. Reversing/deleting a leg elsewhere already stops its entry counting
+ * (`entryView`'s `reversed`), so it drops out of this map too — nothing here can drift from Transactions.
+ */
+export function savingsTransactionTags(goals: readonly SavingsGoal[], contributions: readonly SavingsContribution[]): Map<string, SavingsTransactionTag> {
+  const nameById = new Map(goals.map((g) => [g.id, g.name]));
+  const tags = new Map<string, SavingsTransactionTag>();
+  for (const c of contributions) {
+    if (c.mode !== "transfer" || c.deletedAt != null) continue;
+    const goalName = nameById.get(c.goalId);
+    if (!goalName) continue;
+    for (const txId of c.transactionIds) tags.set(txId, { goalId: c.goalId, goalName, direction: c.direction });
+  }
+  return tags;
+}
+
+// ---------------------------------------------------------------------------------------------------------
 // Validation (shared by the dialogs and the repository so the same rule guards the UI and the write)
 
 /** Accounts that can hold or fund goal money — a credit card is a liability, never savings. */

@@ -2,7 +2,7 @@ import Link from "next/link";
 import { ChevronRight, Landmark, Wallet } from "lucide-react";
 import { BankLogo } from "@/components/finance/bank-logo";
 import { Skeleton } from "@/components/ui/skeleton";
-import { DASH_LABEL, DashEmpty, DashFooterLink, DashPanel, DashPanelHeader } from "@/features/dashboard/components/dash-ui";
+import { DASH_LABEL, DASH_ROW, DashEmpty, DashFooterLink, DashPanel, DashPanelHeader } from "@/features/dashboard/components/dash-ui";
 import type { AccountPalette } from "@/features/accounts/lib/account-colors";
 import { formatCurrency } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -33,7 +33,7 @@ export interface AccountsOverviewCardProps {
 
 /**
  * `accountsOverview` comes from real Accounts + `calculateNetWorth` via `useDashboardData`. The monthly change
- * isn't tracked yet (reported as 0), so it's only shown when non-zero.
+ * isn't tracked yet (reported as 0), so it's only shown when non-zero. The account list scrolls inside the panel.
  */
 export function AccountsOverviewCard({ accountsOverview, isLoading }: AccountsOverviewCardProps) {
   return (
@@ -41,22 +41,24 @@ export function AccountsOverviewCard({ accountsOverview, isLoading }: AccountsOv
       <DashPanelHeader icon={Wallet} title="Accounts" />
       {isLoading ? (
         <div className="flex flex-col gap-2 p-4">
-          <Skeleton className="h-8 w-40" />
+          <Skeleton className="h-7 w-40" />
           {Array.from({ length: 3 }, (_, i) => (
-            <Skeleton key={i} className="h-9 w-full rounded-[6px]" />
+            <Skeleton key={i} className="h-8 w-full rounded-[6px]" />
           ))}
         </div>
       ) : (
         <>
-          <div className="border-b border-border-strong/40 px-4 py-3">
+          <div className="flex items-baseline justify-between gap-3 border-b border-border-strong/35 bg-secondary/25 px-4 py-2.5">
             <p className={DASH_LABEL}>Total balance</p>
-            <p className="text-[26px] leading-tight font-bold tracking-tight text-foreground tabular-nums">{formatCurrency(accountsOverview.totalBalance)}</p>
-            {accountsOverview.changeThisMonth !== 0 && (
-              <p className={cn("text-xs font-semibold", accountsOverview.changeThisMonth > 0 ? "text-success" : "text-expense")}>
-                {accountsOverview.changeThisMonth > 0 ? "+" : ""}
-                {formatCurrency(accountsOverview.changeThisMonth)} this month
-              </p>
-            )}
+            <div className="text-right">
+              <p className="text-xl leading-tight font-bold tracking-tight text-foreground tabular-nums">{formatCurrency(accountsOverview.totalBalance)}</p>
+              {accountsOverview.changeThisMonth !== 0 && (
+                <p className={cn("text-xs font-semibold", accountsOverview.changeThisMonth > 0 ? "text-success" : "text-expense")}>
+                  {accountsOverview.changeThisMonth > 0 ? "+" : ""}
+                  {formatCurrency(accountsOverview.changeThisMonth)} this month
+                </p>
+              )}
+            </div>
           </div>
           {accountsOverview.accounts.length === 0 ? (
             <DashEmpty
@@ -69,27 +71,27 @@ export function AccountsOverviewCard({ accountsOverview, isLoading }: AccountsOv
               }
             />
           ) : (
-            <div className="divide-y divide-border-strong/40">
+            <div className="max-h-[14.5rem] divide-y divide-border-strong/35 overflow-y-auto">
               {accountsOverview.accounts.map((account) => {
                 const Icon = account.mask ? Landmark : Wallet;
                 return (
-                  <Link key={account.id} href="/accounts" className="group flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-secondary/50">
+                  <Link key={account.id} href="/accounts" className={cn(DASH_ROW, "group")}>
                     {account.bankId ? (
-                      <BankLogo bankId={account.bankId} size={32} shape="square" />
+                      <BankLogo bankId={account.bankId} size={28} shape="square" />
                     ) : (
                       <span
-                        className={cn("flex size-8 shrink-0 items-center justify-center rounded-[8px]", account.palette ? account.palette.onGradient : ACCENTS[account.accent])}
+                        className={cn("flex size-7 shrink-0 items-center justify-center rounded-[7px]", account.palette ? account.palette.onGradient : ACCENTS[account.accent])}
                         style={account.palette ? { background: account.palette.gradient } : undefined}
                       >
-                        <Icon className="size-4" strokeWidth={1.75} />
+                        <Icon className="size-3.5" strokeWidth={1.9} />
                       </span>
                     )}
                     <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-semibold text-foreground">{account.name}</p>
-                      {account.mask && <p className="text-xs text-muted-foreground tabular-nums">•••• {account.mask}</p>}
+                      <p className="truncate text-[13px] leading-snug font-semibold text-foreground">{account.name}</p>
+                      {account.mask && <p className="text-[11.5px] leading-snug text-muted-foreground tabular-nums">•••• {account.mask}</p>}
                     </div>
-                    <p className="shrink-0 text-[15px] font-bold text-foreground tabular-nums">{formatCurrency(account.balance)}</p>
-                    <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+                    <p className="shrink-0 text-sm font-bold text-foreground tabular-nums">{formatCurrency(account.balance)}</p>
+                    <ChevronRight className="size-3.5 shrink-0 text-muted-foreground transition-transform duration-200 group-hover:translate-x-0.5" />
                   </Link>
                 );
               })}

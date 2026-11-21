@@ -321,7 +321,11 @@ export function SidebarNavContent({
       onTouchStart={releaseHold}
       onPointerDown={releaseHold}
       onKeyDown={releaseHold}
-      className="nav-root relative flex h-full min-h-0 flex-col py-3"
+      // isolate: nav-thumb-track's z-index:30 (and the per-row pin button's z-10) only need to out-rank siblings
+      // *inside* the sidebar. Without a stacking context of its own this div has none, so those values competed
+      // directly against the global --z-dialog (5) scale and won — the capsule floated above every open
+      // dialog/sheet overlay. Isolating caps them here; the whole rail still paints in normal DOM order outside.
+      className="nav-root relative isolate flex h-full min-h-0 flex-col py-3"
     >
       {/* Soft brand glow behind the header — decorative. */}
       <div

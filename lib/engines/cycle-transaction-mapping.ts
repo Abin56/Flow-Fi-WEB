@@ -137,12 +137,14 @@ export function cashFlowWeekLabel(dayOfMonth: number): CashFlowWeekLabel {
  *  - `net`: income − expense per week; card-account rows (liability, not cash) excluded; transfers / loan principal /
  *    People settlement cash excluded, except the cash side of a card bill payment (the Dashboard bars).
  *  - `expenses`: expense amount per week, no card-account exclusion (the Reports bars, which also show card spend).
+ *  - `in` / `out`: the two halves of `net` — the same rows, split by sign — so `in − out` is exactly `net` every week
+ *    (the Dashboard's mirrored money-in / money-out bars).
  */
 export function weeklyCashFlowTotals(
   transactions: readonly Transaction[],
   cardAccountIds: ReadonlySet<string>,
   now: Date,
-  mode: "net" | "expenses",
+  mode: "net" | "expenses" | "in" | "out",
 ): Map<CashFlowWeekLabel, number> {
   const cardPaymentTransferIds = new Set(
     transactions.filter((t) => t.transferId != null && t.type === "income" && cardAccountIds.has(t.accountId)).map((t) => t.transferId as string),
@@ -150,7 +152,7 @@ export function weeklyCashFlowTotals(
   const totals = new Map<CashFlowWeekLabel, number>();
   for (const t of transactions) {
     if (!counts(t)) continue;
-    if (mode === "net") {
+    if (mode !== "expenses") {
       if (cardAccountIds.has(t.accountId)) continue;
       const isCardPayment = t.transferId != null && t.type === "expense" && cardPaymentTransferIds.has(t.transferId);
       if (isNonIncomeExpenseMovement(t) && !isCardPayment) continue;
@@ -160,7 +162,9 @@ export function weeklyCashFlowTotals(
     const month = effectiveMonth(t);
     if (month.getFullYear() !== now.getFullYear() || month.getMonth() !== now.getMonth()) continue;
     const label = cashFlowWeekLabel(t.dateTime.getDate());
-    totals.set(label, (totals.get(label) ?? 0) + (mode === "net" ? signedAmount(t) : t.amount));
+    const signed = mode === "expenses" ? t.amount : signedAmount(t);
+    const add = mode === "in" ? Math.max(signed, 0) : mode === "out" ? Math.max(-signed, 0) : signed;
+    totals.set(label, (totals.get(label) ?? 0) + add);
   }
   return totals;
 }

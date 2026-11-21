@@ -138,6 +138,7 @@ function renderWorkspace() {
 afterEach(() => {
   cleanup();
   paymentCalls = [];
+  window.localStorage.clear();
 });
 
 describe("Bills dashboard — Payments tab", () => {
@@ -221,6 +222,23 @@ describe("Bills dashboard — Payments tab", () => {
     const paid = screen.getByTestId("bills-paid-row");
     expect(within(paid).getByText("Water")).toBeTruthy();
     expect(within(paid).getByText(formatCurrency(700))).toBeTruthy();
+  });
+
+  it("Grid view shows the same payments as cards with the same actions, and is remembered", async () => {
+    renderWorkspace();
+    const listKinds = screen.getAllByTestId("bills-row").map((r) => r.getAttribute("data-kind"));
+    fireEvent.click(screen.getByRole("button", { name: "Grid view" }));
+    expect(screen.getByRole("button", { name: "Grid view" }).getAttribute("aria-pressed")).toBe("true");
+    const cards = screen.getAllByTestId("bills-row");
+    expect(cards.map((r) => r.getAttribute("data-kind"))).toEqual(listKinds);
+    const home = cards.find((r) => within(r).queryByText("Home Loan"))!;
+    expect(within(home).getByRole("link", { name: "Pay: Home Loan" }).getAttribute("href")).toBe("/loans?agreement=home&installment=h1&pay=1");
+    expect(screen.getAllByTestId("bills-paid-row")).toHaveLength(1);
+    // the same exact-cycle Pay dialog opens from a card
+    const oldCard = cards.find((r) => within(r).queryByText("From an earlier cycle"))!;
+    fireEvent.click(within(oldCard).getByRole("button", { name: "Pay now: Electricity" }));
+    expect((await screen.findByRole("dialog", { name: "Pay dialog" })).textContent).toContain("paying e0");
+    expect(window.localStorage.getItem("flowfi.bills.view")).toBe("grid");
   });
 
   it("the 'My bills' tab still holds every bill for editing", async () => {

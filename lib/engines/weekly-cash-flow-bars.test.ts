@@ -61,4 +61,22 @@ describe("weeklyCashFlowTotals — bars sum to the headline Money In − Money O
     expect(sum(weeklyCashFlowTotals(bill, cardIds, NOW, "net"))).toBe(-2_000);
     expect(headline(bill).net).toBe(-2_000);
   });
+
+  it("in / out are the two halves of net: same rows, split by sign, in − out = net every week", () => {
+    const mixed = [
+      ...rows(),
+      tx({ id: "refund", type: "income", amount: 400, dateTime: day(9) }),
+      tx({ id: "pay-out", amount: 2_000, dateTime: day(12), transferId: "bill1", accountId: BANK }),
+      tx({ id: "pay-in", type: "income", amount: 2_000, dateTime: day(12), transferId: "bill1", accountId: CARD }),
+      tx({ id: "cardBuy", amount: 999, dateTime: day(6), accountId: CARD }),
+    ];
+    const net = weeklyCashFlowTotals(mixed, cardIds, NOW, "net");
+    const inn = weeklyCashFlowTotals(mixed, cardIds, NOW, "in");
+    const out = weeklyCashFlowTotals(mixed, cardIds, NOW, "out");
+    expect(Object.fromEntries(inn)).toEqual({ "1-7": 5_000, "8-14": 400, "15-21": 0 });
+    expect(Object.fromEntries(out)).toEqual({ "1-7": 0, "8-14": 2_300, "15-21": 1_200 });
+    for (const [label, v] of net) expect((inn.get(label) ?? 0) - (out.get(label) ?? 0)).toBe(v);
+    expect(sum(inn)).toBe(headline(mixed).moneyIn);
+    expect(sum(out)).toBe(headline(mixed).moneyOut);
+  });
 });

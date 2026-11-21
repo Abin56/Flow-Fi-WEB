@@ -17,12 +17,22 @@ export async function secondTab(ctx, path) {
 
 /* ───────────── People Ledger ───────────── */
 
-export async function openPerson(page, name) {
+export async function openPerson(page, name, { tab = "Transactions" } = {}) {
   // `trailingSlash: true` (next.config, since 2026-10-26): the People page is served at "/people/".
   if (!/\/people\/?(\?|$)/.test(page.url())) await h.go(page, "/people");
   await page.waitForTimeout(2500);
   await page.getByRole("button", { name: new RegExp(`Open ${name}`) }).click();
   await page.waitForTimeout(2000);
+  // The person page opens on its Overview tab; most scenarios work on the transaction rows — pass `tab: null` to stay.
+  if (tab) await showPersonTab(page, tab);
+}
+
+/** Switches the person page's content tab ("Overview" | "Linked EMIs" | "Transactions" | "Details"). */
+export async function showPersonTab(page, tab) {
+  const t = page.getByRole("tab", { name: new RegExp(`^${tab}`) }).first();
+  if ((await t.count()) === 0) return;
+  if ((await t.getAttribute("aria-selected")) !== "true") await t.click();
+  await page.waitForTimeout(400);
 }
 
 /**

@@ -22,6 +22,7 @@ import { InlineReveal } from "./ledger-ui";
 import { WS_PAD, WS_PRIMARY, WS_SECONDARY } from "./person-workspace-ui";
 import { applySettlementFilters, CycleReconciliation, CyclePaymentHistory, SettlementFilters } from "./settlement-summary";
 import { SettlementTable } from "./settlement-table";
+import type { PaymentLine, StatementBalance } from "@/features/people/lib/statement-balance";
 import { linkedTrailFor } from "@/features/people/components/linked-funds";
 import { useMonthCycleStartDay } from "@/features/settings/hooks/use-user-preferences";
 
@@ -100,6 +101,8 @@ export function TransactionLedgerMode({
   renderSplit,
   deleteAllCount,
   carriedForward = null,
+  paymentLines = [],
+  balances,
   onDeleteAll,
 }: {
   personId: string;
@@ -135,6 +138,9 @@ export function TransactionLedgerMode({
   /** The selected cycle's previous pending (engine value) — shown while viewing that cycle. */
   carriedForward?: CarriedForward | null;
   onDeleteAll?: () => void;
+  /** Statement lines: recorded payments and the running balance (display only). */
+  paymentLines?: readonly PaymentLine[];
+  balances?: ReadonlyMap<string, StatementBalance>;
 }) {
   const [status, setStatus] = useState<SettlementStatusFilter>("all");
   const [type, setType] = useState<SettlementTypeFilter>("all");
@@ -315,6 +321,8 @@ export function TransactionLedgerMode({
           personName={personName}
           rows={visible}
           carriedRows={carried}
+          paymentLines={paymentLines.filter((l) => !new Set(rows.map((r) => r.key)).has(l.key))}
+          balances={balances}
           isLoading={isLoading}
           lookups={lookups}
           accountForEntry={lookups.accountForEntry}

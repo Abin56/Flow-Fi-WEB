@@ -16,6 +16,7 @@ import { signOut } from "@/services/auth/auth-service";
 import { useAuthStore } from "@/store/auth-store";
 import { useProfilePhoto } from "@/features/settings/hooks/use-user-preferences";
 import { cn } from "@/lib/utils";
+import { GlobalCycleNavigator } from "@/components/layout/global-cycle-navigator";
 
 function IconButton({
   children,
@@ -72,27 +73,31 @@ export function Topbar({
         </kbd>
       </button>
 
-      <div className="ml-auto flex items-center gap-0.5 sm:gap-1">
-        <IconButton aria-label="Notifications" disabled title="Coming soon" className="size-8 opacity-50 disabled:cursor-not-allowed">
-          <Bell className="size-4" />
-        </IconButton>
+      <div className="ml-auto flex items-center gap-1.5 sm:gap-2">
+        <GlobalCycleNavigator />
 
-        <IconButton aria-label="Toggle theme" onClick={() => setTheme(theme === "dark" ? "light" : "dark")} className="hidden size-8 sm:flex">
-          {mounted && theme === "dark" ? <Sun className="size-4" /> : <Moon className="size-4" />}
-        </IconButton>
+        <div className="flex items-center gap-0.5 sm:gap-1">
+          <IconButton aria-label="Notifications" disabled title="Coming soon" className="size-8 opacity-50 disabled:cursor-not-allowed">
+            <Bell className="size-4" />
+          </IconButton>
 
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <button type="button" className="ml-0.5 rounded-full focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none">
-              <ClayAvatar src={profilePhoto} name={user?.displayName} size={30} />
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-56">
-            <DropdownMenuLabel className="truncate">{user?.email ?? "Signed in"}</DropdownMenuLabel>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={() => signOut()}>Sign out</DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+          <IconButton aria-label="Toggle theme" onClick={() => setTheme(theme === "dark" ? "light" : "dark")} className="hidden size-8 sm:flex">
+            {mounted && theme === "dark" ? <Sun className="size-4" /> : <Moon className="size-4" />}
+          </IconButton>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button type="button" className="ml-0.5 rounded-full focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none">
+                <ClayAvatar src={profilePhoto} name={user?.displayName} size={30} />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56">
+              <DropdownMenuLabel className="truncate">{user?.email ?? "Signed in"}</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={() => signOut()}>Sign out</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       </div>
     </div>
   );

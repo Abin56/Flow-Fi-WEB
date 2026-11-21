@@ -2,7 +2,8 @@
 
 /** Small presentational pieces shared by the Savings workspace — no data, no money logic. */
 
-import { CheckCircle2, CircleDashed, CircleDot, CircleSlash, MinusCircle, XCircle } from "lucide-react";
+import { CheckCircle2, ChevronDown, CircleDashed, CircleDot, CircleSlash, MinusCircle, XCircle } from "lucide-react";
+import { AnimatePresence, motion } from "framer-motion";
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import type { PlanCycleStatus } from "@/lib/engines/savings-plan";
@@ -68,20 +69,51 @@ export function AmountInput({
   );
 }
 
-/** Two or more radio cards ("Set aside" vs "Move money"). */
+/**
+ * Two or three mutually exclusive options. Default = compact segmented control (hints live in the tooltip, not on screen);
+ * `variant="cards"` keeps the roomier radio cards with their hint text.
+ */
 export function ChoiceCards<T extends string>({
   value,
   options,
   onChange,
   label,
   className,
+  variant = "segmented",
 }: {
   value: T;
   options: { value: T; title: string; hint: string; icon?: ReactNode }[];
   onChange: (v: T) => void;
   label: string;
   className?: string;
+  variant?: "segmented" | "cards";
 }) {
+  if (variant === "segmented") {
+    return (
+      <div role="radiogroup" aria-label={label} className={cn("grid gap-0.5 rounded-xl bg-muted/70 p-0.5", options.length === 2 ? "grid-cols-2" : "grid-cols-3", className)}>
+        {options.map((o) => {
+          const on = o.value === value;
+          return (
+            <button
+              key={o.value}
+              type="button"
+              role="radio"
+              aria-checked={on}
+              title={o.hint}
+              onClick={() => onChange(o.value)}
+              className={cn(
+                "flex h-9 min-w-0 items-center justify-center gap-1.5 rounded-[10px] px-2 text-[13px] font-semibold transition-all duration-200 outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                on ? "bg-card text-foreground shadow-sm ring-1 ring-border/70" : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {o.icon && <span className={cn("shrink-0", on ? "text-primary-accent-text" : "")}>{o.icon}</span>}
+              <span className="truncate">{o.title}</span>
+            </button>
+          );
+        })}
+      </div>
+    );
+  }
   return (
     <div role="radiogroup" aria-label={label} className={cn("grid gap-2", options.length === 2 ? "grid-cols-2" : "grid-cols-1 sm:grid-cols-3", className)}>
       {options.map((o) => {
@@ -157,6 +189,57 @@ export function InlineNote({ tone = "muted", children, icon, testId, role }: { t
     >
       {icon && <span className="mt-0.5 shrink-0">{icon}</span>}
       <span className="min-w-0">{children}</span>
+    </div>
+  );
+}
+
+/** Optional settings that stay out of the way until asked for. `summary` shows what's currently set while collapsed. */
+export function Disclosure({
+  title,
+  summary,
+  icon,
+  open,
+  onOpenChange,
+  children,
+  testId,
+}: {
+  title: string;
+  summary?: ReactNode;
+  icon?: ReactNode;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  children: ReactNode;
+  testId?: string;
+}) {
+  return (
+    <div className="overflow-hidden rounded-2xl border border-border/60 bg-muted/15" data-testid={testId} data-open={open || undefined}>
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => onOpenChange(!open)}
+        className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left transition-colors hover:bg-muted/40"
+      >
+        {icon && <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">{icon}</span>}
+        <span className="min-w-0 flex-1">
+          <span className="block text-[13px] font-semibold text-foreground">{title}</span>
+          {!open && summary && <span className="block truncate text-[11px] text-muted-foreground">{summary}</span>}
+        </span>
+        <ChevronDown className={cn("size-4 shrink-0 text-muted-foreground transition-transform duration-300", open && "rotate-180")} />
+      </button>
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div
+            key="body"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
+            className="overflow-hidden"
+          >
+            <div className="flex flex-col gap-3 border-t border-border/50 px-3 py-3">{children}</div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

@@ -34,7 +34,8 @@ import { categoryIconFor, categoryToneFor, type ToneName } from "@/features/tran
 import { useMyMoneyData, type CollectItem, type MyMoneyData } from "@/features/my-money/hooks/use-my-money-data";
 import { daysUntil, type CompletedGroup, type ObligationItem, type ObligationKind, type ObligationStatus, type SharedPerson } from "@/features/my-money/lib/my-money";
 
-const PANEL = "overflow-hidden rounded-[14px] border border-border-strong/60 bg-card shadow-e1";
+const PANEL =
+  "overflow-hidden rounded-[12px] border border-border-strong/60 bg-card shadow-e1 transition-[box-shadow,border-color] duration-300 hover:border-border-strong hover:shadow-e2";
 const LABEL = "text-[11px] font-semibold tracking-[0.06em] text-foreground/70 uppercase";
 const ACTION =
   "inline-flex h-8 shrink-0 items-center gap-1 rounded-[7px] border border-border-strong bg-card px-2.5 text-xs font-semibold text-foreground transition-colors hover:border-primary-accent-text/60 hover:bg-primary/10 focus-visible:ring-2 focus-visible:ring-primary-accent-text focus-visible:outline-none";
@@ -54,15 +55,15 @@ const STATUS_LABEL: Record<ObligationStatus, string> = {
 };
 const STATUS_CHIP: Record<ObligationStatus, string> = {
   overdue: "bg-expense/12 text-expense ring-1 ring-expense/25",
-  dueToday: "bg-warning/20 text-warning-foreground ring-1 ring-warning/40",
-  dueSoon: "bg-warning/12 text-warning-foreground ring-1 ring-warning/30",
+  dueToday: "bg-warning/20 text-warning-foreground dark:text-warning ring-1 ring-warning/40",
+  dueSoon: "bg-warning/12 text-warning-foreground dark:text-warning ring-1 ring-warning/30",
   upcoming: "bg-secondary text-foreground/80 ring-1 ring-border-strong/60",
   paid: "bg-success/12 text-success ring-1 ring-success/25",
 };
 const TONE_BADGE: Record<ToneName, string> = {
   primary: "bg-primary/10 text-primary-accent-text",
   expense: "bg-expense/10 text-expense",
-  warning: "bg-warning/15 text-warning-foreground",
+  warning: "bg-warning/15 text-warning-foreground dark:text-warning",
   success: "bg-success/12 text-success",
   purple: "bg-purple/12 text-purple",
   neutral: "bg-muted text-foreground/70",
@@ -100,8 +101,8 @@ function relativeDue(item: ObligationItem, now: Date): string {
 
 const TILE_TONE: Record<ObligationStatus, string> = {
   overdue: "bg-expense/10 text-expense ring-expense/30",
-  dueToday: "bg-warning/18 text-warning-foreground ring-warning/45",
-  dueSoon: "bg-warning/12 text-warning-foreground ring-warning/35",
+  dueToday: "bg-warning/18 text-warning-foreground dark:text-warning ring-warning/45",
+  dueSoon: "bg-warning/12 text-warning-foreground dark:text-warning ring-warning/35",
   upcoming: "bg-secondary/70 text-foreground ring-border-strong/60",
   paid: "bg-success/10 text-success ring-success/30",
 };
@@ -111,12 +112,12 @@ function DateTile({ date, status, muted }: { date: Date; status: ObligationStatu
     <span
       aria-hidden
       className={cn(
-        "flex w-11 shrink-0 flex-col items-center justify-center rounded-[9px] py-1 ring-1",
+        "flex w-10 shrink-0 flex-col items-center justify-center rounded-[8px] py-1 ring-1 transition-transform duration-200 group-hover/row:scale-105",
         muted ? "bg-muted text-foreground/60 ring-border-strong/50" : TILE_TONE[status],
       )}
     >
-      <span className="text-[10px] leading-none font-semibold tracking-[0.06em] uppercase opacity-85">{date.toLocaleDateString("en-IN", { month: "short" })}</span>
-      <span className="font-heading text-lg leading-tight font-bold tabular-nums">{date.getDate()}</span>
+      <span className="text-[9.5px] leading-none font-semibold tracking-[0.06em] uppercase opacity-85">{date.toLocaleDateString("en-IN", { month: "short" })}</span>
+      <span className="font-heading text-base leading-tight font-bold tabular-nums">{date.getDate()}</span>
     </span>
   );
 }
@@ -140,15 +141,15 @@ function PanelHeader({
   action?: { href: string; label: string };
 }) {
   return (
-    <div className="flex items-start gap-3 border-b border-border-strong/50 px-4 py-3.5 sm:px-5">
-      <span aria-hidden className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-[9px] bg-primary/10 text-primary-accent-text">
+    <div className="flex items-center gap-3 border-b border-border-strong/50 bg-secondary/25 px-4 py-3 sm:px-5">
+      <span aria-hidden className="flex size-8 shrink-0 items-center justify-center rounded-[10px] bg-primary/10 text-primary-accent-text">
         <Icon className="size-4" strokeWidth={1.9} />
       </span>
       <div className="min-w-0 flex-1">
-        <h2 id={id} className="font-heading text-base leading-tight font-semibold text-foreground">
+        <h2 id={id} className="font-heading text-[15px] leading-tight font-semibold text-foreground">
           {title}
         </h2>
-        <div className="mt-0.5 space-y-0.5 text-xs text-foreground/70">{subtitle}</div>
+        <div className="space-y-0.5 text-xs leading-snug text-foreground/70">{subtitle}</div>
       </div>
       {action && (
         <Link href={action.href} className="group inline-flex shrink-0 items-center gap-1 rounded-[6px] py-1 text-xs font-semibold text-primary-accent-text hover:underline focus-visible:ring-2 focus-visible:ring-primary-accent-text focus-visible:outline-none">
@@ -194,7 +195,7 @@ function PeriodPicker({ data }: { data: MyMoneyData }) {
             {data.periodLabel}
             <CalendarDays className="size-3.5 text-foreground/60" />
           </span>
-          {!data.isCustomCycle ? null : <span className="block text-[11px] leading-tight text-foreground/65 tabular-nums">{data.rangeLabel}</span>}
+          <span className="block text-[11px] leading-tight text-foreground/65 tabular-nums">{data.rangeLabel}</span>
         </button>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-64 p-3">
@@ -240,15 +241,15 @@ function Header({ data, titleRef }: { data: MyMoneyData; /** Callback ref on the
   return (
     <header className="flex flex-wrap items-end justify-between gap-3">
       <div ref={titleRef} className="min-w-0">
-        <h1 className="font-heading text-2xl font-bold tracking-tight text-foreground sm:text-[1.75rem]">My Money</h1>
-        <p className="mt-0.5 text-sm text-foreground/70">Your spending, upcoming payments, and money to collect — all in one place.</p>
+        <h1 className="font-heading text-[22px] leading-tight font-bold tracking-tight text-foreground sm:text-2xl">My Money</h1>
+        <p className="mt-0.5 text-[13px] text-foreground/70">Your spending, upcoming payments, and money to collect — all in one place.</p>
       </div>
       <div className="flex flex-wrap items-center gap-2">
         {!data.isCurrent && (
           <button
             type="button"
             onClick={data.nav.current}
-            className="inline-flex h-8 items-center gap-1 rounded-[7px] border border-border-strong bg-card px-2.5 text-xs font-semibold text-foreground transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-primary-accent-text focus-visible:outline-none"
+            className="inline-flex h-9 items-center gap-1.5 rounded-full border border-primary-accent-text/40 bg-primary/10 px-3 text-xs font-semibold text-foreground transition-colors hover:bg-primary/20 focus-visible:ring-2 focus-visible:ring-primary-accent-text focus-visible:outline-none"
           >
             <RotateCcw className="size-3" strokeWidth={2} />
             This month
@@ -268,6 +269,15 @@ function Header({ data, titleRef }: { data: MyMoneyData; /** Callback ref on the
             ? `Periods follow your Month Cycle: the ${ordinalDay(data.startDay)} of each month to the day before the next. Card bills keep their own statement and due dates.`
             : "Periods follow your Month Cycle (calendar month). Card bills keep their own statement and due dates."}
         </InfoTip>
+        {!data.nav.isFollowingGlobalCycle && (
+          <button
+            type="button"
+            onClick={data.nav.followGlobal}
+            className="inline-flex h-7 items-center gap-1 rounded-[6px] border border-dashed border-border-strong px-2 text-xs font-semibold text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+          >
+            Sync with top-bar cycle
+          </button>
+        )}
       </div>
     </header>
   );
@@ -283,11 +293,14 @@ function SummaryCell({
   meta,
   tip,
   className,
-  accent = "bg-border-strong/70",
+  accent = "bg-secondary text-foreground/60",
+  bar = "bg-border-strong",
 }: {
   className?: string;
+  /** Thin status stripe along the cell's top edge — the figure's state at a glance. */
+  bar?: string;
   icon: LucideIcon;
-  /** Thin top bar signalling the figure's state. */
+  /** The icon chip's tint — signals the figure's state (overdue, due soon, clear, neutral). */
   accent?: string;
   label: string;
   amount: number;
@@ -296,15 +309,19 @@ function SummaryCell({
   tip: string;
 }) {
   return (
-    <div className={cn("relative flex min-w-0 flex-col gap-1.5 border-border-strong/50 px-4 pt-4 pb-3.5 transition-colors hover:bg-secondary/25 sm:px-5", className)}>
-      <span aria-hidden className={cn("absolute inset-x-0 top-0 h-[3px]", accent)} />
-      <div className="flex items-center gap-1.5">
-        <Icon aria-hidden className="size-3.5 shrink-0 text-foreground/55" strokeWidth={2} />
-        <span className={LABEL}>{label}</span>
-        <InfoTip label={`What ${label} means`}>{tip}</InfoTip>
+    <div className={cn("group/cell relative flex min-w-0 items-start gap-3 border-border-strong/50 px-4 py-3 transition-colors duration-200 hover:bg-secondary/30 sm:px-5", className)}>
+      <span aria-hidden className={cn("absolute inset-x-0 top-0 h-[2px] opacity-60 transition-opacity duration-200 group-hover/cell:opacity-100", bar)} />
+      <span aria-hidden className={cn("mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-[11px] ring-1 ring-inset ring-current/10 transition-transform duration-200 group-hover/cell:scale-105", accent)}>
+        <Icon className="size-4" strokeWidth={2} />
+      </span>
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <div className="flex items-center gap-1">
+          <span className={LABEL}>{label}</span>
+          <InfoTip label={`What ${label} means`}>{tip}</InfoTip>
+        </div>
+        <span className={cn("font-heading text-[1.3rem] leading-tight font-bold tracking-tight break-words text-foreground tabular-nums sm:text-[1.5rem]", tone)}>{formatCurrency(amount)}</span>
+        <span className="min-h-[1rem] line-clamp-2 text-xs leading-snug text-foreground/65">{meta}</span>
       </div>
-      <span className={cn("font-heading text-[1.4rem] leading-none font-bold tracking-tight break-words text-foreground tabular-nums sm:text-[1.75rem]", tone)}>{formatCurrency(amount)}</span>
-      <span className="min-h-[1rem] text-xs leading-snug text-foreground/70">{meta}</span>
     </div>
   );
 }
@@ -320,9 +337,10 @@ function Summary({ data }: { data: MyMoneyData }) {
           label="To pay"
           icon={Wallet}
           className="border-r border-b lg:border-b-0"
+          bar={toPay.overdue > 0 ? "bg-expense" : toPay.dueSoon > 0 ? "bg-warning" : toPay.count === 0 ? "bg-success" : "bg-primary-accent-text"}
           amount={toPay.total}
           tone={toPay.count === 0 ? "text-success" : toPay.overdue > 0 ? "text-expense" : undefined}
-          accent={toPay.overdue > 0 ? "bg-expense" : toPay.dueSoon > 0 ? "bg-warning" : toPay.count === 0 ? "bg-success" : "bg-primary"}
+          accent={toPay.overdue > 0 ? "bg-expense/10 text-expense" : toPay.dueSoon > 0 ? "bg-warning/15 text-warning-foreground dark:text-warning" : toPay.count === 0 ? "bg-success/12 text-success" : "bg-primary/10 text-primary-accent-text"}
           meta={
             toPay.count === 0 ? (
               "Nothing due"
@@ -330,7 +348,7 @@ function Summary({ data }: { data: MyMoneyData }) {
               <span>
                 {toPay.overdue > 0 && <span className="font-semibold text-expense">{formatCurrency(toPay.overdue)} overdue</span>}
                 {toPay.overdue > 0 && toPay.dueSoon > 0 && " · "}
-                {toPay.dueSoon > 0 && <span className="font-semibold text-warning-foreground">{formatCurrency(toPay.dueSoon)} due soon</span>}
+                {toPay.dueSoon > 0 && <span className="font-semibold text-warning-foreground dark:text-warning">{formatCurrency(toPay.dueSoon)} due soon</span>}
               </span>
             ) : (
               `${toPay.count} payment${toPay.count === 1 ? "" : "s"} · next ${shortDate(toPay.next!.dueDate)}`
@@ -342,9 +360,10 @@ function Summary({ data }: { data: MyMoneyData }) {
           label="To collect"
           icon={HandCoins}
           className="border-b lg:border-r lg:border-b-0"
+          bar={collect.total > 0 ? "bg-success" : "bg-border-strong"}
           amount={collect.total}
           tone={collect.total > 0 ? "text-success" : undefined}
-          accent="bg-success"
+          accent="bg-success/12 text-success"
           meta={collect.items.length === 0 ? "No one owes you today" : `Outstanding today · ${collect.items.length} ${collect.items.length === 1 ? "person" : "people"}`}
           tip="The total other people owe you as of today, from the People Ledger — everything still outstanding, not only this period. Money you hold as an advance is not counted here."
         />
@@ -352,7 +371,8 @@ function Summary({ data }: { data: MyMoneyData }) {
           label="My spending"
           icon={ShoppingBag}
           className="border-r"
-          accent="bg-primary"
+          bar="bg-primary-accent-text"
+          accent="bg-primary/10 text-primary-accent-text"
           amount={spending.mySpend}
           meta={
             comparison.kind === "change" ? (
@@ -374,7 +394,8 @@ function Summary({ data }: { data: MyMoneyData }) {
         <SummaryCell
           label="Completed"
           icon={CheckCircle2}
-          accent="bg-success/60"
+          bar={completed.total > 0 ? "bg-success" : "bg-border-strong"}
+          accent="bg-success/12 text-success"
           amount={completed.total}
           meta={completed.groups.length === 0 ? "No payments yet" : `${completed.groups.length} obligation${completed.groups.length === 1 ? "" : "s"} paid`}
           tip="Card bills, loan and EMI installments, and bills you paid during this period, by payment date. A bill payment with no recorded date is listed under the bill it paid and marked as such."
@@ -388,16 +409,22 @@ function Summary({ data }: { data: MyMoneyData }) {
 function NextUp({ data, next }: { data: MyMoneyData; next: ObligationItem | null }) {
   if (next == null) {
     return (
-      <div className="flex items-center gap-2 border-t border-border-strong/50 bg-success/[0.06] px-4 py-2.5 text-sm text-foreground sm:px-5">
-        <CheckCircle2 className="size-4 shrink-0 text-success" />
+      <div className="flex items-center gap-2 border-t border-border-strong/50 bg-success/[0.05] px-4 py-1.5 text-xs font-medium text-foreground/75 sm:px-5">
+        <CheckCircle2 className="size-3.5 shrink-0 text-success" />
         <span>{data.isPast ? "Nothing from this period is still unpaid." : "You're all caught up for this period."}</span>
       </div>
     );
   }
   const urgent = next.status === "overdue";
   return (
-    <div className={cn("flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-border-strong/50 px-4 py-2.5 sm:px-5", urgent ? "bg-expense/[0.06]" : "bg-warning/[0.07]")}>
-      <span className={cn("text-[11px] font-bold tracking-[0.06em] uppercase", urgent ? "text-expense" : "text-warning-foreground")}>Next</span>
+    <div className={cn("flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-border-strong/50 px-4 py-1.5 sm:px-5", urgent ? "bg-expense/[0.06]" : "bg-warning/[0.07]")}>
+      <span className={cn("inline-flex items-center gap-1.5 text-[11px] font-bold tracking-[0.06em] uppercase", urgent ? "text-expense" : "text-warning-foreground dark:text-warning")}>
+        <span aria-hidden className="relative flex size-1.5">
+          <span className={cn("absolute inline-flex size-full animate-ping rounded-full opacity-60 motion-reduce:animate-none", urgent ? "bg-expense" : "bg-warning")} />
+          <span className={cn("relative inline-flex size-1.5 rounded-full", urgent ? "bg-expense" : "bg-warning")} />
+        </span>
+        Next
+      </span>
       <span className="min-w-0 flex-1 text-sm text-foreground">
         <span className="font-semibold">{next.title}</span>
         <span className="text-foreground/70"> · </span>
@@ -416,7 +443,7 @@ function NextUp({ data, next }: { data: MyMoneyData; next: ObligationItem | null
 
 const PERSON_STATE: Record<SharedPerson["state"], { label: string; className: string }> = {
   received: { label: "Received", className: "text-success" },
-  partial: { label: "Partly received", className: "text-warning-foreground" },
+  partial: { label: "Partly received", className: "text-warning-foreground dark:text-warning" },
   pending: { label: "Waiting", className: "text-foreground/70" },
 };
 
@@ -490,41 +517,39 @@ function ObligationRow({ item, now }: { item: ObligationItem; now: Date }) {
   return (
     <li
       className={cn(
-        "border-l-[3px] px-4 py-3 transition-colors hover:bg-secondary/40 sm:px-5",
+        "group/row border-l-[3px] px-4 py-2.5 transition-colors duration-150 hover:bg-secondary/40 sm:px-5",
         muted ? "border-l-transparent" : item.status === "overdue" ? "border-l-expense" : item.status === "dueToday" || item.status === "dueSoon" ? "border-l-warning" : "border-l-transparent",
       )}
     >
-      <div className="flex items-start gap-3">
+      <div className="flex items-center gap-3">
         <DateTile date={item.dueDate} status={item.status} muted={muted} />
         <div className="min-w-0 flex-1">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <p className="truncate text-sm font-semibold text-foreground">{item.title}</p>
-              <p className="flex min-w-0 items-center gap-1 text-xs text-foreground/70">
-                <Icon className="size-3 shrink-0" strokeWidth={2} aria-hidden />
-                <span className="truncate">
-                  {KIND_LABEL[item.kind]} · {item.detail}
-                </span>
-              </p>
-            </div>
-            <div className="shrink-0 text-right">
-              <p className={cn("text-[15px] leading-tight font-bold tabular-nums", muted ? "text-foreground/60" : "text-foreground")}>{formatCurrency(item.remaining)}</p>
-              {partial && <p className="text-[11px] text-foreground/65 tabular-nums">of {formatCurrency(item.amountDue)}</p>}
-            </div>
-          </div>
-
-          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+          <p className="truncate text-sm leading-snug font-semibold text-foreground">{item.title}</p>
+          <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+            <span className="flex min-w-0 items-center gap-1 text-xs text-foreground/70">
+              <Icon className="size-3 shrink-0" strokeWidth={2} aria-hidden />
+              <span className="truncate">
+                {KIND_LABEL[item.kind]} · {item.detail}
+              </span>
+            </span>
             {urgentChip && <Chip className={STATUS_CHIP[item.status]}>{STATUS_LABEL[item.status]}</Chip>}
-            {partial && <Chip className="bg-warning/12 text-warning-foreground ring-1 ring-warning/30">Partially paid</Chip>}
+            {partial && <Chip className="bg-warning/12 text-warning-foreground dark:text-warning ring-1 ring-warning/30">Partially paid</Chip>}
             {item.billStillOpen && <Chip className="bg-secondary text-foreground/80 ring-1 ring-border-strong/60">Bill still open</Chip>}
             {muted && <Chip className="bg-muted text-foreground/75 ring-1 ring-border-strong/60">Not in total</Chip>}
-            <span className={cn("text-xs", item.status === "overdue" ? "font-semibold text-expense" : "text-foreground/75")}>{relativeDue(item, now)}</span>
-            <Link href={item.href} className={cn(ACTION, "ml-auto")} aria-label={`${muted ? "View" : item.actionLabel}: ${item.title}`}>
-              {muted ? "View" : item.actionLabel}
-              <ArrowRight className="size-3" strokeWidth={2.2} />
-            </Link>
+            <span className={cn("text-xs whitespace-nowrap", item.status === "overdue" ? "font-semibold text-expense" : "text-foreground/75")}>{relativeDue(item, now)}</span>
           </div>
+        </div>
+        <div className="shrink-0 text-right">
+          <p className={cn("text-[15px] leading-tight font-bold tabular-nums", muted ? "text-foreground/60" : "text-foreground")}>{formatCurrency(item.remaining)}</p>
+          {partial && <p className="text-[11px] text-foreground/65 tabular-nums">of {formatCurrency(item.amountDue)}</p>}
+        </div>
+        <Link href={item.href} className={cn(ACTION, "group/act")} aria-label={`${muted ? "View" : item.actionLabel}: ${item.title}`}>
+          {muted ? "View" : item.actionLabel}
+          <ArrowRight className="size-3 transition-transform duration-200 group-hover/act:translate-x-0.5" strokeWidth={2.2} />
+        </Link>
+      </div>
 
+      <div className="pl-[52px]">
           {partial && (
             <div className="mt-2 flex items-center gap-2">
               <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-secondary" role="progressbar" aria-valuenow={paidPercent} aria-valuemin={0} aria-valuemax={100} aria-label="Paid so far">
@@ -537,7 +562,6 @@ function ObligationRow({ item, now }: { item: ObligationItem; now: Date }) {
           {item.note && <p className="mt-1.5 text-xs text-foreground/70">{item.note}</p>}
           {item.billStillOpen && <p className="mt-1 text-xs text-foreground/70">Amount so far — new purchases until the statement closes are added.</p>}
           {item.shared && <SharedBreakdown item={item} />}
-        </div>
       </div>
     </li>
   );
@@ -596,6 +620,44 @@ function CoveredElsewhere({ items, now }: { items: ObligationItem[]; now: Date }
   );
 }
 
+/** Paid vs still-to-pay for the period — a derived, display-only meter over figures the page already shows. */
+function PeriodProgress({ data }: { data: MyMoneyData }) {
+  const paid = data.completed.total;
+  const left = data.toPay.total;
+  const sum = paid + left;
+  if (sum <= 0) return null;
+  const percent = Math.min(100, Math.round((paid / sum) * 100));
+  const overdue = data.toPay.overdue > 0;
+  return (
+    <div className="border-b border-border-strong/50 px-4 py-3 sm:px-5">
+      <div className="flex items-baseline justify-between gap-3 text-xs">
+        <span className={LABEL}>Period progress</span>
+        <span className="font-semibold text-foreground tabular-nums">{percent}% paid</span>
+      </div>
+      <div
+        className="mt-1.5 flex h-2 overflow-hidden rounded-full bg-secondary"
+        role="progressbar"
+        aria-label="Share of this period's payments already paid"
+        aria-valuenow={percent}
+        aria-valuemin={0}
+        aria-valuemax={100}
+      >
+        <div className="h-full rounded-full bg-success transition-[width] duration-500 motion-reduce:transition-none" style={{ width: `${percent}%` }} />
+      </div>
+      <div className="mt-1.5 flex items-center justify-between gap-3 text-[11px] text-foreground/70">
+        <span className="inline-flex items-center gap-1.5">
+          <span aria-hidden className="size-1.5 rounded-full bg-success" />
+          Paid <span className="font-semibold text-foreground tabular-nums">{formatCurrency(paid)}</span>
+        </span>
+        <span className="inline-flex items-center gap-1.5">
+          <span aria-hidden className={cn("size-1.5 rounded-full", overdue ? "bg-expense" : left > 0 ? "bg-warning" : "bg-border-strong")} />
+          Left <span className={cn("font-semibold tabular-nums", overdue ? "text-expense" : "text-foreground")}>{formatCurrency(left)}</span>
+        </span>
+      </div>
+    </div>
+  );
+}
+
 function ToPayPanel({ data }: { data: MyMoneyData }) {
   const counted = data.obligations.filter((i) => i.countsTowardTotal);
   const attention = counted.filter((i) => i.status === "overdue" || i.status === "dueToday" || i.status === "dueSoon");
@@ -610,17 +672,18 @@ function ToPayPanel({ data }: { data: MyMoneyData }) {
         title="Payments this period"
         subtitle={
           <p>
-            {toPay.count === 0 ? "Nothing to pay" : `${formatCurrency(toPay.total)} across ${toPay.count} payment${toPay.count === 1 ? "" : "s"}`}
+            {toPay.count === 0 ? "All clear" : `${formatCurrency(toPay.total)} across ${toPay.count} payment${toPay.count === 1 ? "" : "s"}`}
             {toPay.othersStillOwe > 0 && <> · {formatCurrency(toPay.othersStillOwe)} of it is others&apos; share to collect</>}
           </p>
         }
       />
+      <PeriodProgress data={data} />
       {collect.totalToGive > 0 && (
         <Link
           href="/people"
           className="group flex items-center gap-2 border-b border-border-strong/50 bg-warning/[0.08] px-4 py-2 text-xs transition-colors hover:bg-warning/[0.14] focus-visible:ring-2 focus-visible:ring-primary-accent-text focus-visible:outline-none focus-visible:ring-inset sm:px-5"
         >
-          <Users aria-hidden className="size-3.5 shrink-0 text-warning-foreground" />
+          <Users aria-hidden className="size-3.5 shrink-0 text-warning-foreground dark:text-warning" />
           <span className="font-semibold text-foreground">You also owe people {formatCurrency(collect.totalToGive)}</span>
           <span className="ml-auto flex items-center gap-1 font-semibold text-primary-accent-text">
             Review
@@ -630,12 +693,14 @@ function ToPayPanel({ data }: { data: MyMoneyData }) {
       )}
 
       {data.obligations.length === 0 ? (
-        <div className="flex flex-col items-center gap-2 px-5 py-9 text-center">
-          <span className="flex size-11 items-center justify-center rounded-full bg-success/12 text-success">
-            <CheckCircle2 className="size-5" />
+        <div className="flex items-center gap-3 bg-success/[0.04] px-4 py-5 sm:px-5">
+          <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-success/12 text-success ring-4 ring-success/[0.07]">
+            <CheckCircle2 className="size-5" strokeWidth={1.9} />
           </span>
-          <p className="text-sm font-semibold text-foreground">No card bills, installments or bills due</p>
-          <p className="max-w-xs text-xs text-foreground/70">Nothing is scheduled or overdue for this period.</p>
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-foreground">No card bills, installments or bills due</p>
+            <p className="text-xs text-foreground/65">Nothing is scheduled or overdue for this period.</p>
+          </div>
         </div>
       ) : (
         <div className="[&>*:first-child>h3]:border-t-0 [&>*:first-child>button]:border-t-0">
@@ -663,23 +728,28 @@ function CompletedPanel({ data }: { data: MyMoneyData }) {
         type="button"
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
-        className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-secondary/40 focus-visible:ring-2 focus-visible:ring-primary-accent-text focus-visible:outline-none focus-visible:ring-inset sm:px-5"
+        className={cn(
+          "flex w-full items-center justify-between gap-3 bg-secondary/25 px-4 py-3 text-left transition-colors hover:bg-secondary/50 focus-visible:ring-2 focus-visible:ring-primary-accent-text focus-visible:outline-none focus-visible:ring-inset sm:px-5",
+          open && "border-b border-border-strong/50",
+        )}
       >
-        <span className="flex items-center gap-2.5">
-          <span className="flex size-8 items-center justify-center rounded-full bg-success/12 text-success">
-            <CheckCircle2 className="size-4" />
+        <span className="flex items-center gap-3">
+          <span aria-hidden className="flex size-8 shrink-0 items-center justify-center rounded-[10px] bg-success/12 text-success">
+            <CheckCircle2 className="size-4" strokeWidth={1.9} />
           </span>
           <span>
-            <span className="block font-heading text-base font-semibold text-foreground">Completed</span>
+            <span className="block font-heading text-[15px] leading-tight font-semibold text-foreground">Completed</span>
             <span className="block text-xs text-foreground/70">
               {groups.length} paid · {formatCurrency(total)}
             </span>
           </span>
         </span>
-        <ChevronDown className={cn("size-4 text-foreground/70 transition-transform", open && "rotate-180")} />
+        <span aria-hidden className="flex size-7 items-center justify-center rounded-full text-foreground/65">
+          <ChevronDown className={cn("size-4 transition-transform duration-200", open && "rotate-180")} />
+        </span>
       </button>
       {open && (
-        <ul className="divide-y divide-border-strong/40 border-t border-border-strong/50">
+        <ul className="divide-y divide-border-strong/40 motion-safe:animate-in motion-safe:fade-in-0 motion-safe:duration-200">
           {groups.map((g) => (
             <CompletedRow key={g.key} group={g} />
           ))}
@@ -703,15 +773,25 @@ function CompletedRow({ group }: { group: CompletedGroup }) {
   const Icon = KIND_ICON[group.kind];
   return (
     <li>
-      <Link href={group.href} className="flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-secondary/40 focus-visible:bg-secondary/60 focus-visible:outline-none sm:px-5">
-        <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-success/10 text-success" aria-hidden>
-          <Icon className="size-3.5" strokeWidth={1.9} />
-        </span>
+      <Link href={group.href} className="group/row flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-secondary/40 focus-visible:bg-secondary/60 focus-visible:outline-none sm:px-5">
+        {group.lastDate ? (
+          <DateTile date={group.lastDate} status="paid" muted={false} />
+        ) : (
+          <span className="flex w-10 shrink-0 items-center justify-center self-stretch rounded-[8px] bg-success/10 py-1 text-success ring-1 ring-success/30" aria-hidden>
+            <Icon className="size-4" strokeWidth={1.9} />
+          </span>
+        )}
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-sm font-semibold text-foreground">{group.title}</span>
-          <span className="block truncate text-xs text-foreground/70">{completedWhen(group)}</span>
+          <span className="block truncate text-sm leading-snug font-semibold text-foreground">{group.title}</span>
+          <span className="mt-0.5 flex min-w-0 items-center gap-1 text-xs text-foreground/70">
+            <Icon className="size-3 shrink-0" strokeWidth={2} aria-hidden />
+            <span className="truncate">{completedWhen(group)}</span>
+          </span>
         </span>
-        <span className="shrink-0 text-sm font-bold text-foreground tabular-nums">{formatCurrency(group.amount)}</span>
+        <span className="flex shrink-0 items-center gap-1">
+          <span className="text-[15px] font-bold text-foreground tabular-nums">{formatCurrency(group.amount)}</span>
+          <ChevronRight aria-hidden className="-mr-1 size-3.5 text-foreground/30 transition-all group-hover/row:translate-x-0.5 group-hover/row:text-foreground/70" />
+        </span>
       </Link>
     </li>
   );
@@ -723,7 +803,7 @@ const COLLECT_PREVIEW = 5;
 
 function expectedText(expected: NonNullable<CollectItem["expected"]>): { text: string; className: string } {
   if (expected.status === "overdue") return { text: `Follow up · expected ${shortDate(expected.date)}`, className: "font-semibold text-expense" };
-  if (expected.status === "dueToday") return { text: "Expected today", className: "font-semibold text-warning-foreground" };
+  if (expected.status === "dueToday") return { text: "Expected today", className: "font-semibold text-warning-foreground dark:text-warning" };
   return { text: `Expected ${shortDate(expected.date)}`, className: "text-foreground/75" };
 }
 
@@ -740,10 +820,15 @@ function CollectPanel({ data }: { data: MyMoneyData }) {
         action={{ href: "/people", label: "People Ledger" }}
         subtitle={
           <>
-            <p>
-              {formatCurrency(collect.total)} outstanding today{data.isCurrent ? "" : " — not limited to this period"}
+            <p title={data.isCurrent ? undefined : "Everything still outstanding today — not limited to this period"}>
+              <span className="font-semibold text-foreground tabular-nums">{formatCurrency(collect.total)}</span> outstanding today{data.isCurrent ? "" : " · all periods"}
             </p>
-            {collect.collectedInPeriod > 0 && <p className="font-medium text-success">{formatCurrency(collect.collectedInPeriod)} received in this period</p>}
+            {collect.collectedInPeriod > 0 && (
+              <p className="inline-flex items-center gap-1 rounded-full bg-success/10 px-2 py-px text-[11px] font-semibold text-success tabular-nums">
+                <CheckCircle2 aria-hidden className="size-3" />
+                {formatCurrency(collect.collectedInPeriod)} received in this period
+              </p>
+            )}
           </>
         }
       />
@@ -756,16 +841,21 @@ function CollectPanel({ data }: { data: MyMoneyData }) {
             const expected = p.expected ? expectedText(p.expected) : null;
             return (
               <li key={p.personId}>
-                <Link href={p.href} className="group flex items-start gap-3 px-4 py-3 transition-colors hover:bg-secondary/40 focus-visible:bg-secondary/60 focus-visible:outline-none">
-                  <span className={cn("mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full text-xs font-bold", avatarTone(p.name))} aria-hidden>
+                <Link href={p.href} className="group flex items-start gap-3 px-4 py-2.5 transition-colors hover:bg-secondary/40 focus-visible:bg-secondary/60 focus-visible:outline-none">
+                  <span className={cn("mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-full text-sm font-bold ring-2 ring-card transition-transform duration-200 group-hover:scale-105", avatarTone(p.name))} aria-hidden>
                     {p.name.trim().charAt(0).toUpperCase() || "?"}
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm font-semibold text-foreground">{p.name}</span>
                     <span className="block truncate text-xs text-foreground/70">{p.reasons.length > 0 ? p.reasons.slice(0, 2).join(" · ") : "Waiting to receive"}</span>
                     {(expected || p.partlyReceived > 0 || p.alsoOwe > 0) && (
-                      <span className="mt-0.5 flex flex-wrap gap-x-2 text-[11px]">
-                        {expected && <span className={expected.className}>{expected.text}</span>}
+                      <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px]">
+                        {expected && (
+                          <span className={cn("inline-flex items-center gap-1", expected.className)}>
+                            <CalendarDays aria-hidden className="size-3 shrink-0" strokeWidth={2} />
+                            {expected.text}
+                          </span>
+                        )}
                         {p.partlyReceived > 0 && <span className="text-foreground/75">{formatCurrency(p.partlyReceived)} already received</span>}
                         {p.alsoOwe > 0 && <span className="text-foreground/75">You owe them {formatCurrency(p.alsoOwe)}</span>}
                       </span>
@@ -817,8 +907,11 @@ function SpendingPanel({ data }: { data: MyMoneyData }) {
     <section aria-labelledby="mm-spending" className={PANEL}>
       <PanelHeader id="mm-spending" icon={ShoppingBag} title="Where your money went" subtitle={<p>Your own spending, by category</p>} action={{ href: "/transactions", label: "Transactions" }} />
 
+      {categories.length === 0 && (
+        <p className="px-4 py-4 text-xs text-foreground/70 sm:px-5">No spending of your own recorded for this period yet.</p>
+      )}
       {categories.length > 0 && (
-        <ul className="flex flex-col gap-2.5 px-4 py-3">
+        <ul className="flex flex-col gap-3 px-4 py-3.5">
           {categories.map((c) => {
             const Icon = categoryIconFor(c.iconKey);
             return (
@@ -857,16 +950,21 @@ function SpendingPanel({ data }: { data: MyMoneyData }) {
       )}
 
       {(spending.sharedMine > 0 || spending.othersShare > 0) && (
-        <dl className="grid gap-1 border-t border-border-strong/50 bg-secondary/40 px-4 py-2.5 text-xs">
+        <dl className="grid gap-1.5 border-t border-border-strong/50 bg-secondary/40 px-4 py-3 text-xs">
           {spending.sharedMine > 0 && (
-            <div className="flex justify-between gap-2">
-              <dt className="text-foreground/75">Your part of shared expenses</dt>
+            <div className="flex items-center justify-between gap-2">
+              <dt className="flex items-center gap-1.5 text-foreground/75">
+                <Users aria-hidden className="size-3.5 shrink-0 text-foreground/55" />
+                Your part of shared expenses
+              </dt>
               <dd className="font-semibold text-foreground tabular-nums">{formatCurrency(spending.sharedMine)}</dd>
             </div>
           )}
           {spending.othersShare > 0 && (
-            <div className="flex justify-between gap-2">
-              <dt className="text-foreground/75">Paid for others (not your spending)</dt>
+            <div className="flex items-center justify-between gap-2">
+              <dt className="flex items-center gap-1.5 text-foreground/75">
+                <HandCoins aria-hidden className="size-3.5 shrink-0 text-foreground/55" />
+                Paid for others (not your spending)</dt>
               <dd className="font-semibold text-foreground tabular-nums">{formatCurrency(spending.othersShare)}</dd>
             </div>
           )}
@@ -906,7 +1004,7 @@ export function MyMoneyWorkspace() {
       <MyMoneyCompactBar progress={barProgress} reduceMotion={barReduceMotion} top={barTop} data={data} next={data.toPay.next} />
       <Header data={data} titleRef={watchTitle} />
       <Summary data={data} />
-      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,22rem)]">
+      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,22rem)] xl:grid-cols-[minmax(0,1fr)_minmax(0,24rem)] 2xl:grid-cols-[minmax(0,1fr)_minmax(0,26rem)]">
         <div className="flex min-w-0 flex-col gap-4">
           <ToPayPanel data={data} />
           <CompletedPanel data={data} />

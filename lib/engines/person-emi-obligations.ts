@@ -54,7 +54,10 @@ export interface EmiObligationLoanSource {
 export type EmiObligationInstallment = Pick<
   Installment,
   "id" | "scheduleId" | "sequenceNumber" | "dueDate" | "amountDue" | "amountPaid" | "isSkipped" | "deletedAt" | "createdAt"
->;
+> & {
+  /** Principal inside `amountDue` (the rest is interest/charges). Absent/null = the whole installment is principal. */
+  principalPortion?: number | null;
+};
 
 /** Lender-side installment state — shown for context only; never settles the Person. */
 export type LenderInstallmentStatus = "upcoming" | "partial" | "paid" | "overdue";
@@ -71,6 +74,11 @@ export interface PersonEmiObligation {
   createdAt: Date;
   /** What the Person owes me for this installment (their share on a shared agreement). */
   amount: number;
+  /**
+   * The principal inside `amount` (their share of the installment's `principalPortion`); `amount − principalAmount`
+   * is their share of interest/charges. Used only to value the not-yet-due receivable (`assignedFuturePrincipal`).
+   */
+  principalAmount: number;
   /** The whole installment the lender expects — equals `amount` unless the agreement is shared. */
   installmentAmount: number;
   lenderStatus: LenderInstallmentStatus;
@@ -138,6 +146,8 @@ export function personEmiObligations(params: {
     const amount = personInstallmentShare(source.owner, inst.amountDue, personId);
     if (amount <= 0) continue;
     seen.add(inst.id);
+    const principalBase = inst.principalPortion != null ? Math.min(Math.max(inst.principalPortion, 0), inst.amountDue) : inst.amountDue;
+    const principalAmount = Math.min(personInstallmentShare(source.owner, principalBase, personId), amount);
     result.push({
       key: `${source.kind === "emi" ? "emi-inst" : "loan-inst"}:${inst.id}`,
       installmentId: inst.id,
@@ -148,6 +158,7 @@ export function personEmiObligations(params: {
       dueDate: inst.dueDate,
       createdAt: inst.createdAt,
       amount,
+      principalAmount,
       installmentAmount: inst.amountDue,
       lenderStatus: lenderStatus(inst, now),
     });
@@ -157,6 +168,20 @@ export function personEmiObligations(params: {
 
 function dayIndex(d: Date): number {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+}
+
+/**
+ * The PRINCIPAL people owe me through installments NOT yet due after `through` (the same cutoff
+ * `emiReceivableThrough` uses, so every installment is counted on exactly one side of it: a due share is a
+ * receivable in full, a later one only for its principal). This is the "someone else's part of a loan I
+ * legally carry" receivable that offsets the lender / card liability in Net Worth. Interest on a future
+ * installment is never counted (unaccrued). Independent of whether I have already paid the lender, and of
+ * the people's repayments (those are People cash legs — a share paid ahead nets against this).
+ */
+export function assignedFuturePrincipal(obligations: readonly PersonEmiObligation[], through: Date): number {
+  const cutoff = dayIndex(through);
+  const total = obligations.filter((o) => dayIndex(o.dueDate) > cutoff).reduce((s, o) => s + o.principalAmount, 0);
+  return Math.round(total * 100) / 100;
 }
 
 /** Total the Person owes me for installments due on or before `through` (inclusive, by day). */

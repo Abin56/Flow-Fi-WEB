@@ -35,6 +35,7 @@ import { usePeopleLedgerEntries, usePeopleRows } from "@/features/people/hooks/u
 import { usePeopleCycleStatements } from "@/features/people/hooks/use-person-cycle-statement";
 import { attentionItems, openRemainingByKey, useAllPersonFollowUps } from "@/features/people/hooks/use-person-follow-ups";
 import { useMonthCycleStartDay } from "@/features/settings/hooks/use-user-preferences";
+import { useGlobalCycle } from "@/features/month-cycle/hooks/use-global-cycle";
 import { peopleLedgerHref } from "@/lib/engines/linked-people-readiness";
 import { adjacentCycleRange, cycleRangeFor, cycleRangeForMonth, isInCycle, mySpendBucketDate } from "@/lib/engines/month-cycle-range";
 import { mySpendRows, summarizeMySpend } from "@/lib/engines/my-spend";
@@ -96,16 +97,27 @@ export function useMyMoneyData() {
   const isCustomCycle = startDay > 1;
 
   // Selected period — held as a day inside it (null = today's), stepped from its own edges (Month Cycle's rule).
-  const [referenceDay, setReferenceDay] = useState<Date | null>(null);
+  // Follows the top-bar's global cycle until the user moves this page's own nav, which detaches it into a
+  // local override (`nav.followGlobal` re-attaches it) — the same follow/override split as the Month Cycle page.
+  const globalCycle = useGlobalCycle();
+  const [localReferenceDay, setLocalReferenceDay] = useState<Date | null>(null);
+  const [isFollowingGlobalCycle, setIsFollowingGlobalCycle] = useState(true);
+  const referenceDay = isFollowingGlobalCycle ? globalCycle.referenceDay : localReferenceDay;
   const cycleRange = useMemo(() => cycleRangeFor(startDay, referenceDay ?? now), [startDay, referenceDay, now]);
   const previousRange = useMemo(() => adjacentCycleRange(startDay, cycleRange, -1), [startDay, cycleRange]);
   const isCurrent = isInCycle(now, cycleRange);
   const isPast = cycleRange.end.getTime() < now.getTime();
+  const overrideLocally = (day: Date | null) => {
+    setIsFollowingGlobalCycle(false);
+    setLocalReferenceDay(day);
+  };
   const nav = {
-    previous: () => setReferenceDay(adjacentCycleRange(startDay, cycleRange, -1).start),
-    next: () => setReferenceDay(adjacentCycleRange(startDay, cycleRange, 1).start),
-    current: () => setReferenceDay(null),
-    pickMonth: (year: number, month: number) => setReferenceDay(cycleRangeForMonth(startDay, year, month).start),
+    previous: () => overrideLocally(adjacentCycleRange(startDay, cycleRange, -1).start),
+    next: () => overrideLocally(adjacentCycleRange(startDay, cycleRange, 1).start),
+    current: () => overrideLocally(null),
+    pickMonth: (year: number, month: number) => overrideLocally(cycleRangeForMonth(startDay, year, month).start),
+    isFollowingGlobalCycle,
+    followGlobal: () => setIsFollowingGlobalCycle(true),
   };
 
   const { data: transactions = [], isLoading: transactionsLoading } = useTransactions();

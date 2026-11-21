@@ -42,7 +42,10 @@ function SheetOverlay({
       // remounted its overlay after the content and left a dimmed, unclickable drawer. Still above all page content.
       style={{ zIndex: "calc(var(--z-dialog) - 1)" }}
       className={cn(
-        "fixed inset-0 bg-black/50 duration-100 supports-backdrop-filter:backdrop-blur-sm data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0 dark:bg-black/65",
+        // Plain (unprefixed) utilities, like DialogOverlay — so a caller's overlayClassName (e.g. "backdrop-blur-none",
+        // the convention used everywhere else in the app) actually wins the tailwind-merge conflict instead of losing
+        // silently to a variant-qualified class of the same name.
+        "fixed inset-0 bg-black/50 backdrop-blur-sm duration-100 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0 dark:bg-black/65",
         className
       )}
       {...props}
@@ -55,17 +58,20 @@ function SheetContent({
   children,
   side = "right",
   showCloseButton = true,
+  overlayClassName,
   onOpenAutoFocus,
   onCloseAutoFocus,
   ...props
 }: React.ComponentProps<typeof SheetPrimitive.Content> & {
   side?: "top" | "right" | "bottom" | "left"
   showCloseButton?: boolean
+  /** Extra classes for this sheet's backdrop (e.g. a lighter, unblurred scrim that keeps the page behind it readable). */
+  overlayClassName?: string
 }) {
   const returnFocus = useReturnFocus(onOpenAutoFocus, onCloseAutoFocus)
   return (
     <SheetPortal>
-      <SheetOverlay />
+      <SheetOverlay className={overlayClassName} />
       <SheetPrimitive.Content
         data-slot="sheet-content"
         data-side={side}

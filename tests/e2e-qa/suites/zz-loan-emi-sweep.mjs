@@ -54,7 +54,8 @@ async function summary(page) {
     next: /NEXT PAYMENT\s*(₹[\d,.]+)\s*(.*?)\s*DUE/i.exec(t),
     overdue: Number(/(\d+) overdue/.exec(t)?.[1] ?? 0),
     active: Number(/ACTIVE\s*(\d+)/i.exec(t)?.[1] ?? NaN),
-    closed: Number(/CLOSED\s*(\d+)/i.exec(t)?.[1] ?? NaN),
+    // "N closed" appears under Active only once something is closed; absent means 0.
+    closed: Number(/(\d+)\s*closed/i.exec(t)?.[1] ?? 0),
   };
 }
 const showing = async (page) => {
@@ -88,7 +89,7 @@ scenario("le-sweep-render", "Loan & EMI sweep: every section renders, no console
             const m = document.querySelector("main");
             const right = m.getBoundingClientRect().right;
             const clipped = (el) => { for (let n = el.parentElement; n && n !== m; n = n.parentElement) { if (getComputedStyle(n).overflowX !== "visible") return true; } return false; };
-            return [...m.querySelectorAll("*")].filter((el) => el.getBoundingClientRect().right > right + 1 && el.getBoundingClientRect().width > 0 && !clipped(el)).slice(0, 6).map((el) => `${el.tagName.toLowerCase()}.${String(el.className).split(" ").slice(0, 3).join(".")} +${Math.round(el.getBoundingClientRect().right - right)} "${el.innerText.slice(0, 24).replace(/\s+/g, " ")}"`);
+            return [...m.querySelectorAll("*")].filter((el) => el.getBoundingClientRect().right > right + 1 && el.getBoundingClientRect().width > 0 && !clipped(el)).slice(0, 6).map((el) => `${el.tagName.toLowerCase()}.${String(el.className).split(" ").slice(0, 3).join(".")} +${Math.round(el.getBoundingClientRect().right - right)} "${(el.innerText ?? el.textContent ?? "").slice(0, 24).replace(/\s+/g, " ")}"`);
           })
         : [];
       chk(`${name} ${vp.width}px ${scheme}: no horizontal overflow`, o.doc <= 1 && o.main <= 1, JSON.stringify(o) + (culprits.length ? ` culprits: ${culprits.join(" | ")}` : ""));

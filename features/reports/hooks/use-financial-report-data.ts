@@ -37,7 +37,8 @@ import { personEmiObligations } from "@/lib/engines/person-emi-obligations";
 import { cycleContaining } from "@/lib/engines/person-cycle-statement";
 import { usePersonPositions } from "@/features/people/hooks/use-people-data";
 import { buildPeriodReportSources, periodDetail, periodFigures, type PeriodDetail, type PeriodFigures, type PeriodReportSources } from "@/lib/engines/period-report";
-import { previousReportPeriod, resolveReportPeriod, trendPeriods, type ReportPeriod, type ReportPeriodSelection } from "@/lib/engines/report-period";
+import { cycleSelectionForDay, previousReportPeriod, resolveReportPeriod, trendPeriods, type ReportPeriod, type ReportPeriodSelection } from "@/lib/engines/report-period";
+import { useGlobalCycle } from "@/features/month-cycle/hooks/use-global-cycle";
 import type { Account } from "@/lib/models/account";
 import type { Category } from "@/lib/models/category";
 import type { CreditCardProfile } from "@/lib/models/credit-card";
@@ -72,6 +73,10 @@ export interface CurrentPosition {
   /** Loan principal owed to me. */
   lentReceivable: number;
   peopleReceivable: number;
+  /** Principal people owe me through not-yet-due installments of loans/EMIs I carry — inside assets, offsets liabilities. */
+  assignedReceivable: number;
+  /** Part of total liabilities that belongs to other people (their share of loans/cards in my name). */
+  assignedDebt: number;
   peoplePayable: number;
   cardOutstanding: number;
   cardLimit: number;
@@ -115,6 +120,28 @@ export function useReportPeriodSelection(scope: "reports" | "analytics") {
     [scope],
   );
   return [selection, setSelection] as const;
+}
+
+/**
+ * `useReportPeriodSelection`, but defaulting to following the top-bar's global Month Cycle (recomputed as the
+ * equivalent `{kind:"cycle", offset}` every render, never written back to the page's own stored selection)
+ * until the user picks a period HERE, which detaches it into the page's own selection — `followGlobalCycle()`
+ * (3rd/4th return values) re-attaches it. Same follow/override split as Month Cycle, My Money and People Ledger.
+ */
+export function useSyncedReportPeriod(scope: "reports" | "analytics"): [ReportPeriodSelection, (next: ReportPeriodSelection) => void, boolean, () => void] {
+  const [storedSelection, setStoredSelection] = useReportPeriodSelection(scope);
+  const [isFollowingGlobalCycle, setIsFollowingGlobalCycle] = useState(true);
+  const globalCycle = useGlobalCycle();
+
+  const selection = isFollowingGlobalCycle
+    ? cycleSelectionForDay(globalCycle.referenceDay ?? globalCycle.now, globalCycle.monthCycleStartDay, globalCycle.now)
+    : storedSelection;
+  const setSelection = (next: ReportPeriodSelection) => {
+    setIsFollowingGlobalCycle(false);
+    setStoredSelection(next);
+  };
+
+  return [selection, setSelection, isFollowingGlobalCycle, () => setIsFollowingGlobalCycle(true)];
 }
 
 export interface ReportFilters {
@@ -309,6 +336,8 @@ export function useFinancialReportData(filters: ReportFilters = {}) {
       totalLiabilities: composition.debt,
       lentReceivable: balance.sheet.lentPrincipal,
       peopleReceivable: balance.peopleReceivable,
+      assignedReceivable: balance.assignedReceivable,
+      assignedDebt: Math.min(balance.assignedDebt, composition.debt),
       peoplePayable: balance.peoplePayable,
       cardOutstanding: cardTotals.utilized,
       cardLimit: cardTotals.creditLimit,

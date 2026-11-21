@@ -37,6 +37,8 @@ const data = {
   goToCycleForMonth: vi.fn(),
   goToNextCycle: vi.fn(),
   goToPreviousCycle: vi.fn(),
+  isFollowingGlobalCycle: true,
+  followGlobalCycle: vi.fn(),
   isCurrentCycle: true,
   isCustomCycle: true,
   monthCycleStartDay: 18,
@@ -190,7 +192,7 @@ describe("Month Cycle compact bar — shown", () => {
     const nav = screen.getByRole("navigation", { name: "Month cycle sections" });
     expect(nav.className).toContain("sticky");
     expect(nav.style.top).toBe("64px");
-    for (const name of ["Overview", "Obligations", "Due", "People & accounts", "At a glance", "Budget"]) {
+    for (const name of ["Overview", "Due", "People & accounts", "At a glance", "Budget"]) {
       expect(within(nav).getByRole("button", { name })).toBeTruthy();
     }
     expect(nav.closest("[data-compact-bar]")).toBeNull();
@@ -198,7 +200,7 @@ describe("Month Cycle compact bar — shown", () => {
 
   it("section anchors leave room for the bar and SectionNav", () => {
     renderPage();
-    for (const id of ["mc-overview", "mc-obligations", "mc-due", "mc-people", "mc-glance", "mc-budget"]) {
+    for (const id of ["mc-overview", "mc-due", "mc-people", "mc-glance", "mc-budget"]) {
       const el = document.getElementById(id)!;
       expect((el.className + (el.firstElementChild?.className ?? "")).includes("scroll-mt-28")).toBe(true);
     }

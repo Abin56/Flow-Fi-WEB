@@ -16,6 +16,7 @@
  * with principal left is not the same as that principal being repaid).
  */
 
+import { fromPaise, resolveOwnership, splitByOwnership, toPaise, type OwnershipSource } from "@/lib/engines/debt-ownership";
 import type { LoanDirection } from "@/lib/models/loan";
 
 export interface LoanPrincipalPosition {
@@ -121,8 +122,36 @@ export function liabilityTotals(sheet: LoanBalanceSheet, cardOutstanding: number
   return { creditCards, loans, emis, loanDebt: loans + emis, total: creditCards + loans + emis };
 }
 
-export function netWorthWithLoans(accountBalances: number, sheet: LoanBalanceSheet, peopleDirectBalance = 0): number {
-  return accountBalances + sheet.lentPrincipal - sheet.borrowedPrincipal - sheet.emiPrincipal - sheet.cardLockedEmiPrincipal + peopleDirectBalance;
+/**
+ * `assignedReceivable` = the principal people owe me through installments not yet due on a Loan/EMI they share
+ * (`assignedFuturePrincipal`). The lender / card still holds ME liable for the whole principal (it stays in the
+ * liability above, never hidden); the part that belongs to someone else is a matching receivable, so it offsets
+ * in Net Worth instead of making it look as if I had spent that money. Nothing is assumed paid: a person's
+ * repayment later is a cash-in / receivable-out swap and moves Net Worth by nothing.
+ */
+export function netWorthWithLoans(accountBalances: number, sheet: LoanBalanceSheet, peopleDirectBalance = 0, assignedReceivable = 0): number {
+  return (
+    accountBalances + sheet.lentPrincipal - sheet.borrowedPrincipal - sheet.emiPrincipal - sheet.cardLockedEmiPrincipal + peopleDirectBalance + assignedReceivable
+  );
+}
+
+/**
+ * How much of the outstanding Loan/EMI principal economically belongs to other people (shares with a person),
+ * from each agreement's ownership — a view on the legal liability, never a change to it. Debt stays whole.
+ */
+export function assignedOutstandingPrincipal(
+  agreements: readonly { outstandingPrincipal: number; source: OwnershipSource & { deletedAt?: Date | null } }[],
+): number {
+  let paise = 0;
+  for (const a of agreements) {
+    if (a.source.deletedAt != null) continue;
+    const outstanding = Math.max(a.outstandingPrincipal, 0);
+    if (outstanding <= 0) continue;
+    for (const part of splitByOwnership(outstanding, resolveOwnership(a.source, outstanding))) {
+      if (part.personId != null) paise += toPaise(part.amount);
+    }
+  }
+  return fromPaise(paise);
 }
 
 /**

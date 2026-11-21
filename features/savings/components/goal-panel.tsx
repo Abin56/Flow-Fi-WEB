@@ -1,9 +1,8 @@
 "use client";
 
 /**
- * The expanded goal — an integrated panel that opens in place under its card (no side drawer, no stacked dialogs):
- * overview on the left (progress, pace, where the money is, lock), and one working area on the right with tabs for
- * Add money · Withdraw · History · Plan & lock · Edit. Destructive steps (undo a transfer, delete) still confirm.
+ * The goal details body of the Savings side sheet: header, one tab strip (Add · Withdraw · History · Plan & lock · Edit)
+ * and a single working area. Destructive steps (undo a transfer, delete) still confirm in a dialog above the sheet.
  */
 
 import {
@@ -26,8 +25,8 @@ import {
   Settings2,
   Siren,
   Trash2,
-  X,
 } from "lucide-react";
+import { motion } from "framer-motion";
 import { useMemo, useState, type ReactNode } from "react";
 import { ClayBadge } from "@/components/clay/clay-badge";
 import { ClayButton } from "@/components/clay/clay-button";
@@ -76,16 +75,6 @@ export interface GoalPanelProps {
   onArchive: (view: GoalView) => void;
   onUnarchive: (view: GoalView) => void;
   onDelete: (view: GoalView) => void;
-}
-
-function Stat({ label, value, hint, tone }: { label: string; value: string; hint?: string; tone?: keyof typeof TONE_TEXT }) {
-  return (
-    <div className="min-w-0 rounded-xl bg-muted/40 px-3 py-2">
-      <p className="truncate text-[10.5px] font-medium text-muted-foreground">{label}</p>
-      <p className={cn("truncate font-mono text-[13px] font-semibold tabular-nums", tone ? TONE_TEXT[tone] : "text-foreground")}>{value}</p>
-      {hint && <p className="truncate text-[10px] text-muted-foreground">{hint}</p>}
-    </div>
-  );
 }
 
 /** Running total of active entries over time — step line + target line. */
@@ -183,9 +172,9 @@ function EntryRow({ e, view, accounts, accountFree, onSave, onRemove }: { e: Ent
   }
 
   return (
-    <li className={cn("py-2", !e.active && "opacity-60")} data-testid="savings-entry" data-reversed={e.reversed || undefined} data-direction={e.entry.direction} data-mode={e.entry.mode} data-emergency={e.entry.emergency || undefined}>
+    <li className={cn("border-b border-border/40 py-2 last:border-b-0", !e.active && "opacity-60")} data-testid="savings-entry" data-reversed={e.reversed || undefined} data-direction={e.entry.direction} data-mode={e.entry.mode} data-emergency={e.entry.emergency || undefined}>
       <div className="flex items-center gap-2.5">
-        <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-xl", e.reversed ? "bg-muted text-muted-foreground" : e.entry.emergency ? "bg-expense/15 text-expense" : isIn ? "bg-success/15 text-success" : "bg-warning/25 text-warning-foreground")}>
+        <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-xl", e.reversed ? "bg-muted text-muted-foreground" : e.entry.emergency ? "bg-expense/15 text-expense" : isIn ? "bg-success/15 text-success" : "bg-warning/25 text-warning-foreground dark:text-warning")}>
           {e.reversed ? <Ban className="size-4" /> : <Icon className="size-4" />}
         </span>
         <div className="min-w-0 flex-1">
@@ -341,9 +330,9 @@ function PlanTab({ view, plan, history, cycleLabel, accounts, onSetPlan, onSkip,
         <div className="flex items-start gap-3 rounded-2xl border border-border/60 px-3 py-2.5">
           <span className={cn("mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-xl", locked ? "bg-purple/15 text-purple" : "bg-muted text-muted-foreground")}>{locked ? <Lock className="size-4" /> : <LockOpen className="size-4" />}</span>
           <div className="min-w-0 flex-1">
-            <p className="text-[13px] font-medium text-foreground">Lock this goal&apos;s money</p>
+            <p className="text-[13px] font-medium text-foreground">Lock this goal</p>
             <p className="text-[11px] leading-snug text-muted-foreground">
-              A FlowFi reservation that asks for an emergency release before any withdrawal. It is <strong>not</strong> a bank freeze or a fixed deposit — the money stays in your account.
+              Asks for an emergency release before any withdrawal. Not a bank freeze — the money stays in your account.
             </p>
             {lock.matured && <p className="mt-1 text-[11px] font-medium text-success">The lock ended on {formatShortDate(lock.until!)} — this money is available.</p>}
           </div>
@@ -366,22 +355,32 @@ function PlanTab({ view, plan, history, cycleLabel, accounts, onSetPlan, onSkip,
   );
 }
 
-function TabButton({ on, onClick, icon, children, testId }: { on: boolean; onClick: () => void; icon: ReactNode; children: ReactNode; testId?: string }) {
+function TabButton({ on, onClick, icon, children, testId, layoutId }: { on: boolean; onClick: () => void; icon: ReactNode; children: ReactNode; testId?: string; layoutId: string }) {
   return (
     <button
       type="button"
       role="tab"
+      id={`${layoutId}-${testId}`}
+      aria-controls={`${layoutId}-panel`}
       aria-selected={on}
       data-testid={testId}
       onClick={onClick}
-      className={cn("inline-flex shrink-0 items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold transition-all", on ? "bg-foreground text-background shadow-sm" : "text-muted-foreground hover:bg-muted hover:text-foreground")}
+      className={cn("relative inline-flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-[10px] px-1 py-1.5 text-[11.5px] font-semibold whitespace-nowrap sm:px-2 sm:text-xs transition-colors", on ? "text-background" : "text-muted-foreground hover:text-foreground")}
     >
-      {icon}
-      {children}
+      {on && <motion.span layoutId={layoutId} className="absolute inset-0 rounded-[10px] bg-foreground shadow-sm" transition={{ type: "spring", stiffness: 420, damping: 34 }} />}
+      <span className="relative flex items-center gap-1.5">
+        <span className="hidden sm:inline-flex">{icon}</span>
+        {children}
+      </span>
     </button>
   );
 }
 
+/**
+ * A goal's details, inside the Savings side sheet: a compact header (progress, key numbers, where the money is), one
+ * tab strip (Add · Withdraw · History · Plan & lock · Edit) and a single scrolling working area. Destructive steps
+ * (undo a transfer, delete) still confirm in a dialog above the sheet.
+ */
 export function GoalPanel(props: GoalPanelProps) {
   const { view, tab, onTab, plan, accounts, reservedByAccount } = props;
   const byId = useMemo(() => new Map(accounts.map((a) => [a.id, a])), [accounts]);
@@ -398,127 +397,143 @@ export function GoalPanel(props: GoalPanelProps) {
     const a = id ? byId.get(id) : undefined;
     return a ? Math.max(0, a.currentBalance - (reservedByAccount.get(a.id) ?? 0)) : 0;
   };
+  // History grouped by month (entries arrive newest first), each month with its net effect on the goal.
+  const monthGroups = useMemo(() => {
+    const fmt = new Intl.DateTimeFormat("en-IN", { month: "long", year: "numeric" });
+    const out: { key: string; label: string; net: number; rows: EntryView[] }[] = [];
+    for (const e of view.entries) {
+      const d = e.entry.date;
+      const key = `${d.getFullYear()}-${d.getMonth()}`;
+      const last = out[out.length - 1];
+      const effect = e.active ? e.effect : 0;
+      if (last && last.key === key) {
+        last.rows.push(e);
+        last.net = round2(last.net + effect);
+      } else out.push({ key, label: fmt.format(d), net: round2(effect), rows: [e] });
+    }
+    return out;
+  }, [view.entries]);
   const activeTab: PanelTab = !canMove && (tab === "add" || tab === "withdraw") ? "history" : tab;
+  const tabLayout = `panel-tab-${view.goal.id}`;
 
   return (
-    <section
-      className="surface-flat relative overflow-hidden rounded-[26px] border-transparent"
-      style={{ boxShadow: `0 0 0 2px ${accent}, var(--shadow-card)` }}
-      data-testid="savings-goal-panel"
-      aria-label={`${view.goal.name} details`}
-    >
-      <span aria-hidden className="pointer-events-none absolute -top-24 -left-24 size-64 rounded-full opacity-[0.10] blur-3xl" style={{ background: accent }} />
-      <div className="relative grid gap-0 lg:grid-cols-[minmax(0,330px)_minmax(0,1fr)]">
-        {/* Overview */}
-        <div className="flex flex-col gap-3 border-b border-border/50 p-4 lg:border-r lg:border-b-0 lg:p-5">
-          <div className="flex items-center gap-4">
-            <ProgressRing value={pct} size={96} strokeWidth={9} color={done ? "var(--success)" : accent}>
-              <span className="flex flex-col items-center leading-none">
-                <span className="text-xl font-bold tabular-nums text-foreground">{pct}%</span>
-                <span className="mt-0.5 text-[9.5px] text-muted-foreground">saved</span>
+    <section className="grid gap-4 lg:grid-cols-[340px_minmax(0,1fr)] lg:items-start" data-testid="savings-goal-panel" aria-label={`${view.goal.name} details`} style={{ ["--goal-accent" as string]: accent }}>
+      {/* Header */}
+      <header className="surface-flat relative overflow-hidden rounded-[20px] px-4 pt-5 pb-4 lg:sticky lg:top-4">
+        <span aria-hidden className="pointer-events-none absolute inset-x-0 top-0 h-[3px]" style={{ background: done ? "var(--success)" : accent }} />
+        <div className="flex items-center gap-3">
+          <ProgressRing value={pct} size={58} strokeWidth={6} color={done ? "var(--success)" : accent}>
+            <span className="font-mono text-[13px] font-bold tabular-nums text-foreground">{pct}%</span>
+          </ProgressRing>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5">
+              <span className="flex size-5 shrink-0 items-center justify-center rounded-md" style={{ background: `color-mix(in oklab, ${accent} 20%, transparent)`, color: accent }}>
+                {renderGoalIcon(view.goal.icon, "size-3")}
               </span>
-            </ProgressRing>
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-1.5">
-                <span className="flex size-7 items-center justify-center rounded-lg" style={{ background: `color-mix(in oklab, ${accent} 20%, transparent)`, color: accent }}>
-                  {renderGoalIcon(view.goal.icon, "size-4")}
-                </span>
-                {done ? <ClayBadge tone="success">Completed</ClayBadge> : view.status === "overdue" ? <ClayBadge tone="expense">Overdue</ClayBadge> : view.status === "slipped" ? <ClayBadge tone="warning">Below target</ClayBadge> : archived ? <ClayBadge>Archived</ClayBadge> : <ClayBadge tone="primary">In progress</ClayBadge>}
-                {lock.active && (
-                  <ClayBadge tone="purple" className="inline-flex items-center gap-1">
-                    <Lock className="size-3" /> Locked
-                  </ClayBadge>
-                )}
-              </div>
-              <p className="mt-1.5 font-mono text-2xl leading-tight font-bold tabular-nums text-foreground" data-testid="panel-saved">
+              <h2 className="truncate font-heading text-base font-semibold text-foreground">{view.goal.name}</h2>
+            </div>
+            <p className="mt-0.5 flex flex-wrap items-baseline gap-x-1.5">
+              <span className="font-mono text-[22px] leading-tight font-bold tabular-nums text-foreground" data-testid="panel-saved">
                 {formatCurrency(view.saved)}
-              </p>
-              <p className="text-xs text-muted-foreground">
+              </span>
+              <span className="text-xs text-muted-foreground">
                 of {formatCurrency(view.target)}
-                {view.ratio > 1 ? ` · ${Math.round(view.ratio * 100)}% of target` : ""}
-              </p>
-            </div>
+                {view.ratio > 1 ? ` · ${Math.round(view.ratio * 100)}%` : ""}
+              </span>
+            </p>
           </div>
-          <p className={cn("rounded-xl bg-muted/40 px-3 py-2 text-xs font-medium", TONE_TEXT[pace.tone])}>{pace.text}</p>
-          <div className="grid grid-cols-2 gap-2">
-            <Stat label="Remaining" value={formatCurrency(view.remaining)} />
-            <Stat label={view.goal.kind === "deposit" ? "Matures" : "Target date"} value={view.goal.dueDate ? formatShortDate(view.goal.dueDate) : "No deadline"} hint={view.goal.dueDate ? due.text : undefined} tone={due.tone === "neutral" ? undefined : due.tone} />
-            <Stat label="Saving pace" value={view.pacePerMonth > 0 ? `${formatCurrency(view.pacePerMonth)}/mo` : "—"} hint="last 90 days" />
-            <Stat label="Projected finish" value={view.projectedDate ? formatShortDate(view.projectedDate) : "—"} hint={view.requiredPerMonth != null ? `needs ${formatCurrency(view.requiredPerMonth)}/mo` : undefined} />
-          </div>
-          <Trend view={view} accent={accent} />
-          {held.length > 0 && (
-            <div className="flex flex-col gap-1.5">
-              <p className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">Held in</p>
-              <ul className="flex flex-col gap-1">
-                {held.map(([id, amt]) => {
-                  const acc = byId.get(id);
-                  return (
-                    <li key={id || "opening"} className="flex items-center justify-between gap-2 rounded-xl bg-muted/30 px-3 py-1.5 text-xs">
-                      {id === UNLINKED ? (
-                        <span className="flex items-center gap-1.5">
-                          <PiggyBank className="size-3.5" /> Opening balance
-                        </span>
-                      ) : acc ? (
-                        <AccountLabel account={acc} size={14} showKind={false} />
-                      ) : (
-                        <span>Removed account</span>
-                      )}
-                      <span className="font-mono font-semibold tabular-nums">{formatCurrency(amt)}</span>
-                    </li>
-                  );
-                })}
-              </ul>
-              <p className="text-[10.5px] leading-snug text-muted-foreground">Set-aside money stays in the account and counts in its balance — it is reserved for this goal.</p>
-            </div>
-          )}
-          {view.goal.notes && <p className="rounded-xl bg-muted/25 px-3 py-2 text-xs text-foreground/85">{view.goal.notes}</p>}
         </div>
 
-        {/* Working area */}
-        <div className="flex min-w-0 flex-col gap-3 p-4 lg:p-5">
-          <div className="flex items-center gap-2">
-            <div role="tablist" aria-label={`${view.goal.name} actions`} className="flex min-w-0 flex-1 gap-1 overflow-x-auto rounded-2xl bg-muted/50 p-1 [scrollbar-width:none]">
-              {canMove && (
-                <TabButton on={activeTab === "add"} onClick={() => onTab("add")} icon={<Plus className="size-3.5" />} testId="tab-add">
-                  Add money
-                </TabButton>
-              )}
-              {canMove && (
-                <TabButton on={activeTab === "withdraw"} onClick={() => onTab("withdraw")} icon={<Minus className="size-3.5" />} testId="tab-withdraw">
-                  Withdraw
-                </TabButton>
-              )}
-              <TabButton on={activeTab === "history"} onClick={() => onTab("history")} icon={<History className="size-3.5" />} testId="tab-history">
-                History <span className="opacity-60">{view.entries.length}</span>
-              </TabButton>
-              {!archived && (
-                <TabButton on={activeTab === "plan"} onClick={() => onTab("plan")} icon={lock.active ? <Lock className="size-3.5" /> : <Repeat2 className="size-3.5" />} testId="tab-plan">
-                  Plan & lock
-                </TabButton>
-              )}
-              <TabButton on={activeTab === "edit"} onClick={() => onTab("edit")} icon={<Settings2 className="size-3.5" />} testId="tab-edit">
-                Edit
-              </TabButton>
-            </div>
-            <ClayButton variant="ghost" size="icon" className="size-8 shrink-0 rounded-xl" aria-label="Close goal" onClick={props.onClose} data-testid="panel-close">
-              <X className="size-4" />
-            </ClayButton>
-          </div>
+        <div className="mt-2.5 flex flex-wrap items-center gap-x-2 gap-y-1">
+          {done ? <ClayBadge tone="success">Completed</ClayBadge> : view.status === "overdue" ? <ClayBadge tone="expense">Overdue</ClayBadge> : view.status === "slipped" ? <ClayBadge tone="warning">Below target</ClayBadge> : archived ? <ClayBadge>Archived</ClayBadge> : <ClayBadge tone="primary">In progress</ClayBadge>}
+          {lock.active && (
+            <ClayBadge tone="purple" className="inline-flex items-center gap-1">
+              <Lock className="size-3" /> Locked
+            </ClayBadge>
+          )}
+          {view.goal.kind === "deposit" && <ClayBadge>Fund</ClayBadge>}
+          <span className={cn("text-xs font-medium", TONE_TEXT[pace.tone])}>{pace.text}</span>
+        </div>
 
-          <div key={activeTab} className="animate-in duration-300 fade-in-0 slide-in-from-bottom-1">
-            {activeTab === "add" && (
-              <MoneyComposer direction="in" view={view} accounts={accounts} reservedByAccount={reservedByAccount} suggestedAmount={plan && plan.remaining > 0 ? plan.remaining : null} onSubmit={props.onRecord} onDone={() => onTab("history")} />
-            )}
-            {activeTab === "withdraw" &&
-              (view.saved <= 0 ? (
-                <InlineNote>There&apos;s nothing in this goal to withdraw yet.</InlineNote>
-              ) : (
-                <MoneyComposer direction="out" view={view} accounts={accounts} reservedByAccount={reservedByAccount} onSubmit={props.onRecord} onDone={() => onTab("history")} />
-              ))}
-            {activeTab === "history" &&
-              (view.entries.length === 0 ? (
-                <div className="flex flex-col items-center gap-2 py-8 text-center text-xs text-muted-foreground">
+        <dl className="mt-2.5 grid grid-cols-2 gap-y-1.5 rounded-xl bg-muted/40 py-1.5 sm:grid-cols-4 sm:divide-x sm:divide-border/60">
+          {[
+            { label: "Left", value: formatCurrency(view.remaining), tone: undefined as keyof typeof TONE_TEXT | undefined },
+            { label: view.goal.kind === "deposit" ? "Matures" : "Target date", value: view.goal.dueDate ? formatShortDate(view.goal.dueDate) : "None", tone: due.tone === "neutral" ? undefined : due.tone },
+            { label: "Pace / mo", value: view.pacePerMonth > 0 ? formatCurrency(view.pacePerMonth) : "—", tone: undefined },
+            { label: "Finish by", value: view.projectedDate ? formatShortDate(view.projectedDate) : "—", tone: undefined },
+          ].map((s) => (
+            <div key={s.label} className="min-w-0 px-2.5">
+              <dt className="truncate text-[10px] font-medium text-muted-foreground">{s.label}</dt>
+              <dd className={cn("truncate font-mono text-xs font-semibold tabular-nums", s.tone ? TONE_TEXT[s.tone] : "text-foreground")}>{s.value}</dd>
+            </div>
+          ))}
+        </dl>
+
+        {held.length > 0 && (
+          <div className="mt-2 flex flex-wrap items-center gap-1.5" data-testid="panel-held">
+            <span className="text-[10.5px] font-medium text-muted-foreground">In</span>
+            {held.map(([id, amt]) => {
+              const acc = byId.get(id);
+              return (
+                <span key={id || "opening"} className="inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-card px-2 py-0.5 text-[11px]">
+                  {id === UNLINKED ? (
+                    <span className="flex items-center gap-1">
+                      <PiggyBank className="size-3" /> Opening
+                    </span>
+                  ) : acc ? (
+                    <AccountLabel account={acc} size={13} showKind={false} />
+                  ) : (
+                    <span>Removed account</span>
+                  )}
+                  <span className="font-mono font-semibold tabular-nums">{formatCurrency(amt)}</span>
+                </span>
+              );
+            })}
+          </div>
+        )}
+      </header>
+
+      <div className="surface-flat min-w-0 overflow-hidden rounded-[20px]">
+      {/* Tabs */}
+      <div role="tablist" aria-label={`${view.goal.name} actions`} className="mx-3 mt-3 flex shrink-0 gap-0.5 rounded-xl bg-muted/70 p-0.5">
+        {canMove && (
+          <TabButton layoutId={tabLayout} on={activeTab === "add"} onClick={() => onTab("add")} icon={<Plus className="size-3.5" />} testId="tab-add">
+            Add
+          </TabButton>
+        )}
+        {canMove && (
+          <TabButton layoutId={tabLayout} on={activeTab === "withdraw"} onClick={() => onTab("withdraw")} icon={<Minus className="size-3.5" />} testId="tab-withdraw">
+            Withdraw
+          </TabButton>
+        )}
+        <TabButton layoutId={tabLayout} on={activeTab === "history"} onClick={() => onTab("history")} icon={<History className="size-3.5" />} testId="tab-history">
+          History <span className="opacity-60">{view.entries.length}</span>
+        </TabButton>
+        {!archived && (
+          <TabButton layoutId={tabLayout} on={activeTab === "plan"} onClick={() => onTab("plan")} icon={lock.active ? <Lock className="size-3.5" /> : <Repeat2 className="size-3.5" />} testId="tab-plan">
+            Plan &amp; lock
+          </TabButton>
+        )}
+        <TabButton layoutId={tabLayout} on={activeTab === "edit"} onClick={() => onTab("edit")} icon={<Settings2 className="size-3.5" />} testId="tab-edit">
+          Edit
+        </TabButton>
+      </div>
+
+      {/* Working area */}
+      <div className="px-4 py-4">
+        <div key={activeTab} role="tabpanel" id={`${tabLayout}-panel`} aria-labelledby={`${tabLayout}-tab-${activeTab}`} className="animate-in duration-300 fade-in-0 slide-in-from-bottom-1">
+          {activeTab === "add" && <MoneyComposer direction="in" view={view} accounts={accounts} reservedByAccount={reservedByAccount} suggestedAmount={plan && plan.remaining > 0 ? plan.remaining : null} onSubmit={props.onRecord} onDone={() => onTab("history")} />}
+          {activeTab === "withdraw" &&
+            (view.saved <= 0 ? (
+              <InlineNote>There&apos;s nothing in this goal to withdraw yet.</InlineNote>
+            ) : (
+              <MoneyComposer direction="out" view={view} accounts={accounts} reservedByAccount={reservedByAccount} onSubmit={props.onRecord} onDone={() => onTab("history")} />
+            ))}
+          {activeTab === "history" && (
+            <div className="flex flex-col gap-3">
+              {view.goal.notes && <p className="rounded-xl bg-muted/40 px-3 py-2 text-xs text-foreground/85">{view.goal.notes}</p>}
+              {view.entries.length === 0 ? (
+                <div className="flex flex-col items-center gap-2 py-10 text-center text-xs text-muted-foreground">
                   <PiggyBank className="size-6 opacity-60" />
                   No money added yet.
                   {canMove && (
@@ -528,44 +543,58 @@ export function GoalPanel(props: GoalPanelProps) {
                   )}
                 </div>
               ) : (
-                <ul className="max-h-[380px] divide-y divide-border/50 overflow-y-auto pr-1" data-testid="savings-history">
-                  {view.entries.map((e) => (
-                    <EntryRow key={e.entry.id} e={e} view={view} accounts={byId} accountFree={freeOf(e.entry.accountId)} onSave={(patch) => props.onEditEntry(view, e, patch)} onRemove={() => props.onRemoveEntry(view, e)} />
-                  ))}
-                </ul>
-              ))}
-            {activeTab === "plan" && <PlanTab {...props} />}
-            {activeTab === "edit" && (
-              <div className="flex flex-col gap-4">
-                <GoalEditor view={view} accounts={accounts} onSubmit={(values) => props.onEditGoal(view, values)} onCancel={() => onTab(canMove ? "add" : "history")} />
-                <div className="flex flex-wrap gap-2 border-t border-border/50 pt-3">
-                  {!done && !archived && (
-                    <ClayButton variant="secondary" size="sm" className="gap-1.5" onClick={() => props.onComplete(view)}>
-                      <CheckCircle2 className="size-3.5" /> Mark completed
-                    </ClayButton>
-                  )}
-                  {done && (
-                    <ClayButton variant="secondary" size="sm" className="gap-1.5" onClick={() => props.onReopen(view)}>
-                      <RotateCcw className="size-3.5" /> Reopen
-                    </ClayButton>
-                  )}
-                  {archived ? (
-                    <ClayButton variant="secondary" size="sm" className="gap-1.5" onClick={() => props.onUnarchive(view)}>
-                      <ArchiveRestore className="size-3.5" /> Unarchive
-                    </ClayButton>
-                  ) : (
-                    <ClayButton variant="secondary" size="sm" className="gap-1.5" onClick={() => props.onArchive(view)}>
-                      <Archive className="size-3.5" /> Archive
-                    </ClayButton>
-                  )}
-                  <ClayButton variant="ghost" size="sm" className="ml-auto gap-1.5 text-expense hover:text-expense" onClick={() => props.onDelete(view)}>
-                    <Trash2 className="size-3.5" /> Delete goal
+                <>
+                  <Trend view={view} accent={accent} />
+                  <ul className="flex flex-col" data-testid="savings-history">
+                    {monthGroups.flatMap((g) => [
+                      <li key={`${g.key}-head`} className="flex items-baseline justify-between gap-2 pt-3 pb-1 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase first:pt-0" data-testid="savings-history-month">
+                        <span>{g.label}</span>
+                        <span className={cn("font-mono tabular-nums normal-case", g.net > 0 ? "text-success" : g.net < 0 ? "text-foreground" : "")}>
+                          {g.net > 0 ? "+" : g.net < 0 ? "−" : ""}
+                          {formatCurrency(Math.abs(g.net))}
+                        </span>
+                      </li>,
+                      ...g.rows.map((e) => (
+                        <EntryRow key={e.entry.id} e={e} view={view} accounts={byId} accountFree={freeOf(e.entry.accountId)} onSave={(patch) => props.onEditEntry(view, e, patch)} onRemove={() => props.onRemoveEntry(view, e)} />
+                      )),
+                    ])}
+                  </ul>
+                </>
+              )}
+            </div>
+          )}
+          {activeTab === "plan" && <PlanTab {...props} />}
+          {activeTab === "edit" && (
+            <div className="flex flex-col gap-4">
+              <GoalEditor view={view} accounts={accounts} onSubmit={(values) => props.onEditGoal(view, values)} onCancel={() => onTab(canMove ? "add" : "history")} />
+              <div className="flex flex-wrap gap-2 border-t border-border/50 pt-3">
+                {!done && !archived && (
+                  <ClayButton variant="secondary" size="sm" className="gap-1.5" onClick={() => props.onComplete(view)}>
+                    <CheckCircle2 className="size-3.5" /> Mark completed
                   </ClayButton>
-                </div>
+                )}
+                {done && (
+                  <ClayButton variant="secondary" size="sm" className="gap-1.5" onClick={() => props.onReopen(view)}>
+                    <RotateCcw className="size-3.5" /> Reopen
+                  </ClayButton>
+                )}
+                {archived ? (
+                  <ClayButton variant="secondary" size="sm" className="gap-1.5" onClick={() => props.onUnarchive(view)}>
+                    <ArchiveRestore className="size-3.5" /> Unarchive
+                  </ClayButton>
+                ) : (
+                  <ClayButton variant="secondary" size="sm" className="gap-1.5" onClick={() => props.onArchive(view)}>
+                    <Archive className="size-3.5" /> Archive
+                  </ClayButton>
+                )}
+                <ClayButton variant="ghost" size="sm" className="ml-auto gap-1.5 text-expense hover:text-expense" onClick={() => props.onDelete(view)}>
+                  <Trash2 className="size-3.5" /> Delete goal
+                </ClayButton>
               </div>
-            )}
-          </div>
+            </div>
+          )}
         </div>
+      </div>
       </div>
     </section>
   );

@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { CalendarClock, ListChecks, Plus, Search, SlidersHorizontal, Trash2, Wallet, X, type LucideIcon } from "lucide-react";
+import { Plus, Search, Trash2, Wallet, X } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { useMemo, useState } from "react";
 import { ClayButton } from "@/components/clay/clay-button";
@@ -13,7 +13,7 @@ import { EmiWorkspace } from "@/features/emi/components/emi-workspace";
 import { useEmiActions, useEmiRows } from "@/features/emi/hooks/use-emi-data";
 import { LoanCard, loanDisplayName, loanNextDueAmount } from "@/features/loans/components/loan-card";
 import { LoanEmiAddDialog } from "@/features/loans/components/loan-emi-add-dialog";
-import { AmountDisplay, LE_RADIUS, LOAN_EMI_INPUT, Money, daysUntil, dueLabel } from "@/features/loans/components/loan-emi-ui";
+import { LE_RADIUS, LOAN_EMI_INPUT, Money, daysUntil, dueLabel } from "@/features/loans/components/loan-emi-ui";
 import { MyCommitmentsSummary } from "@/features/loans/components/my-commitments-summary";
 import { LoansWorkspace } from "@/features/loans/components/loans-workspace";
 import { OwnershipConfirmDialog, type OwnershipConfirmTarget } from "@/features/loans/components/ownership-confirm-dialog";
@@ -44,12 +44,12 @@ function FilterPills<T extends string>({ options, value, onChange, ariaLabel }: 
             aria-checked={active}
             onClick={() => onChange(o.value)}
             className={cn(
-              "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border pr-1.5 pl-3 text-xs whitespace-nowrap transition-colors duration-150 outline-none focus-visible:ring-2 focus-visible:ring-ring",
-              active ? "border-primary-accent-text bg-primary font-semibold text-primary-foreground" : "border-border bg-secondary/50 font-medium text-foreground hover:bg-secondary",
+              "inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border pr-1 pl-2.5 text-xs whitespace-nowrap transition-colors duration-150 outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              active ? "border-primary-accent-text bg-primary font-semibold text-primary-foreground" : "border-border bg-card font-medium text-foreground hover:bg-secondary",
             )}
           >
             {o.label}
-            <span className={cn("grid h-5 min-w-5 place-items-center rounded-full px-1.5 text-[11px] font-semibold tabular-nums", active ? "bg-black/15" : "bg-card text-muted-foreground")}>{o.count}</span>
+            <span className={cn("grid h-5 min-w-5 place-items-center rounded-full px-1 text-[11px] font-semibold tabular-nums", active ? "bg-black/15" : "bg-secondary text-muted-foreground")}>{o.count}</span>
           </button>
         );
       })}
@@ -110,14 +110,12 @@ interface Entry {
   nextDate: Date | null;
 }
 
-function Metric({ label, icon: Icon, children }: { label: string; icon?: LucideIcon; children: React.ReactNode }) {
+/** One cell of the summary strip: a quiet label over its figure. `divided` draws the hairline that separates it from the cell before. */
+function Metric({ label, divided, className, children }: { label: string; divided?: boolean; className?: string; children: React.ReactNode }) {
   return (
-    <div className="flex min-w-0 flex-col gap-1 py-3 @xl:px-4">
-      <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">
-        {Icon && <Icon className="size-3.5 text-foreground" />}
-        {label}
-      </span>
-      <div className="min-w-0 truncate text-sm font-semibold text-foreground tabular-nums">{children}</div>
+    <div className={cn("flex min-w-0 flex-col gap-0.5 px-4 py-2.5", divided && "border-t border-border @3xl:border-t-0 @3xl:border-l", className)}>
+      <span className="text-xs font-medium text-muted-foreground">{label}</span>
+      <div className="min-w-0 text-sm font-semibold text-foreground tabular-nums">{children}</div>
     </div>
   );
 }
@@ -249,13 +247,13 @@ export function LoanEmiWorkspace() {
   const showTypes = typeOptions.length > 2;
 
   return (
-    <div className="flex min-w-0 flex-col gap-5 px-1">
+    <div className="flex min-w-0 flex-col gap-3 px-1">
       <header className="flex items-center justify-between gap-3">
-        <div className="flex min-w-0 flex-col gap-0.5">
-          <h1 className="font-heading text-2xl font-bold tracking-tight text-foreground">Loan &amp; EMI</h1>
-          <p className="text-sm text-muted-foreground">Track what you owe, installments and repayments.</p>
+        <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-0">
+          <h1 className="font-heading text-xl font-bold tracking-tight text-foreground">Loan &amp; EMI</h1>
+          <p className="text-[13px] text-muted-foreground">Track what you owe, installments and repayments.</p>
         </div>
-        <ClayButton className={cn(PRIMARY_CTA, "shrink-0 gap-1.5 px-4")} onClick={openAdd}>
+        <ClayButton size="sm" className={cn(PRIMARY_CTA, "shrink-0 gap-1.5 px-3")} onClick={openAdd}>
           <Plus className="size-4" strokeWidth={2} />
           Add
         </ClayButton>
@@ -263,10 +261,10 @@ export function LoanEmiWorkspace() {
 
       {isLoading ? (
         <>
-          <Skeleton className={cn(LE_RADIUS.panel, "h-32")} />
+          <Skeleton className={cn(LE_RADIUS.panel, "h-16")} />
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
             {Array.from({ length: 3 }, (_, i) => (
-              <Skeleton key={i} className={cn(LE_RADIUS.card, "h-48")} />
+              <Skeleton key={i} className={cn(LE_RADIUS.card, "h-40")} />
             ))}
           </div>
         </>
@@ -288,65 +286,93 @@ export function LoanEmiWorkspace() {
         </div>
       ) : (
         <>
-          {/* Summary — one defined panel: the total first and largest, then the next payment and counts. */}
+          {/* Summary — one slim strip: total, next payment (with its date), active count. Every figure is the sum of what the cards below show. */}
           <section aria-label="Summary" className={cn(LE_RADIUS.panel, "@container border border-border bg-card shadow-e1")}>
-           <div className="flex flex-col @4xl:flex-row @4xl:items-stretch">
-            <div className="flex flex-col gap-2 px-5 py-4 sm:px-6 @4xl:min-w-72 @4xl:border-r @4xl:border-border">
-              <span className="text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">Total outstanding</span>
-              <AmountDisplay amount={summary.owed} size="lg" />
-              {summary.toReceive > 0 && (
-                <span className="flex items-baseline gap-1 text-xs text-muted-foreground">
-                  + <Money amount={summary.toReceive} className="text-sm text-success" /> to receive from loans you gave
+            <div className="grid grid-cols-2 @3xl:grid-cols-[minmax(13rem,1fr)_minmax(0,1.7fr)_minmax(7rem,0.6fr)]">
+              <Metric label="Total outstanding" className="col-span-2 @3xl:col-span-1">
+                <span className="flex min-w-0 flex-wrap items-baseline gap-x-2.5 gap-y-0.5">
+                  <Money amount={summary.owed} className="text-2xl leading-tight text-foreground" />
+                  {summary.toReceive > 0 && (
+                    <span className="flex items-baseline gap-1 text-xs font-normal text-muted-foreground">
+                      + <Money amount={summary.toReceive} className="text-xs text-success" /> to receive from loans you gave
+                    </span>
+                  )}
                 </span>
-              )}
-            </div>
-            <div className="grid min-w-0 flex-1 grid-cols-2 gap-x-4 border-t border-border px-5 @xl:grid-cols-4 @xl:gap-x-0 @xl:divide-x @xl:divide-border @xl:px-2 @4xl:border-t-0">
-              <Metric label="Next payment" icon={Wallet}>
+              </Metric>
+              <Metric label="Next payment" divided>
                 {summary.next ? (
-                  <span className="flex min-w-0 flex-col">
-                    <Money amount={summary.next.amount} className="text-lg text-foreground" />
-                    <span className="truncate text-xs font-medium text-muted-foreground">{summary.next.name}</span>
+                  <span className="flex min-w-0 flex-wrap items-baseline gap-x-2.5 gap-y-0.5">
+                    <Money amount={summary.next.amount} className="text-xl leading-tight text-foreground" />
+                    {/* Name, then when — one line, no separate "Due" box. */}
+                    <span className="flex min-w-0 items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                      <span className="truncate">{summary.next.name}</span>
+                      {nextDays != null && (
+                        <>
+                          <span aria-hidden>·</span>
+                          <span className={cn("shrink-0 font-semibold", nextDays < 0 ? "text-expense" : nextDays <= 3 ? "text-warning-foreground dark:text-warning" : "text-foreground")}>
+                            {dueLabel(summary.next.date)}
+                          </span>
+                        </>
+                      )}
+                    </span>
+                    {summary.overdueCount > 0 && <span className="text-xs font-semibold text-expense">{summary.overdueCount} overdue</span>}
                   </span>
                 ) : (
-                  <span className="font-normal text-muted-foreground">Nothing due</span>
+                  <span className="text-sm font-normal text-muted-foreground">Nothing due</span>
                 )}
               </Metric>
-              <Metric label="Due" icon={CalendarClock}>
-                <span className="flex min-w-0 flex-col">
-                  {summary.next && nextDays != null ? (
-                    <span className={cn("font-semibold", nextDays < 0 ? "text-expense" : nextDays <= 3 ? "text-warning-foreground dark:text-warning" : "text-foreground")}>
-                      {dueLabel(summary.next.date)}
-                    </span>
-                  ) : (
-                    <span className="font-normal text-muted-foreground">—</span>
-                  )}
-                  {summary.overdueCount > 0 && <span className="text-xs font-semibold text-expense">{summary.overdueCount} overdue</span>}
+              <Metric label="Active" divided>
+                <span className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                  <span className="font-heading text-xl leading-tight font-bold">{summary.activeCount}</span>
+                  {/* Closed is shown only once something is closed — a permanent "0" is noise. */}
+                  {summary.closedCount > 0 && <span className="text-xs font-medium text-muted-foreground">{summary.closedCount} closed</span>}
                 </span>
               </Metric>
-              <Metric label="Active" icon={ListChecks}>
-                <span className="font-heading text-lg font-semibold">{summary.activeCount}</span>
-              </Metric>
-              <Metric label="Closed">
-                <span className="font-heading text-lg font-semibold text-muted-foreground">{summary.closedCount}</span>
-              </Metric>
             </div>
-           </div>
           </section>
 
           <MyCommitmentsSummary loanRows={loanRows} emiRows={emiRows} defaultExpanded={false} />
 
           {/* Obligations — a titled list with a solid rule under its toolbar, then the record cards. */}
           {/* Columns follow the section's width (not the viewport), so the sidebar can't squeeze two cards into a tablet. */}
-          <section aria-label="Loans and EMIs" className="@container flex flex-col gap-3">
-            <div className="flex flex-wrap items-center gap-2 border-b border-border pb-3">
-              <h2 className="mr-1 font-heading text-lg font-semibold text-foreground">
-                All obligations <span className="ml-1 rounded-full bg-secondary px-2.5 py-0.5 align-middle text-xs font-semibold text-muted-foreground tabular-nums">{entries.length}</span>
+          <section aria-label="Loans and EMIs" className="@container flex flex-col gap-2.5">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+              <h2 className="mr-1 font-heading text-base font-semibold text-foreground">
+                All obligations <span className="ml-1 rounded-full bg-secondary px-2 py-0.5 align-middle text-xs font-semibold text-muted-foreground tabular-nums">{entries.length}</span>
               </h2>
+              {/* Filters live in the heading row — no second boxed bar, no "Filter" caption. Pills show only when there is something to choose between. */}
+              {(showStatus || showTypes) && (
+                <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-2">
+                  {showTypes && <FilterPills ariaLabel="Type" options={typeOptions} value={typeFilter} onChange={setTypeFilter} />}
+                  {showStatus && showTypes && <span aria-hidden className="hidden h-6 w-px shrink-0 bg-border-strong sm:block" />}
+                  {showStatus && <FilterPills ariaLabel="Status" options={statusOptions} value={statusFilter} onChange={setStatusFilter} />}
+                </div>
+              )}
+              <div className="ml-auto flex shrink-0 items-center gap-2">
+                {/* Always in the DOM for assistive tech; visible only once a filter narrows the list. */}
+                <span className={cn("tabular-nums", filtersActive ? "rounded-full bg-secondary px-2.5 py-1 text-xs font-medium text-muted-foreground" : "sr-only")} aria-live="polite">
+                  Showing {visible.length} of {entries.length}
+                </span>
+                {filtersActive && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSearch("");
+                      setTypeFilter("all");
+                      setStatusFilter("all");
+                    }}
+                    className="inline-flex items-center gap-1 rounded-full border border-border-strong bg-card px-2.5 py-1 text-xs font-medium text-foreground hover:bg-secondary"
+                  >
+                    <X aria-hidden className="size-3" />
+                    Reset
+                  </button>
+                )}
+              </div>
               {entries.length > 4 && (
-                <div className="relative w-full sm:ml-auto sm:w-80">
-                  <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+                <div className="relative w-full sm:w-72">
+                  <Search className="pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-muted-foreground" />
                   <input
-                    className={cn(LOAN_EMI_INPUT, "h-9 rounded-full pr-8 pl-9")}
+                    className={cn(LOAN_EMI_INPUT, "h-8 rounded-full pr-8 pl-9 text-[13px]")}
                     placeholder={searchExample}
                     title="Finds a loan or EMI by its name, lender, loan number or an amount — 700 finds amounts around ₹700; try 500-1000, >5000 or <1000 (outstanding, total or next EMI)"
                     aria-label="Search loans and EMIs by name, lender, loan number or amount"
@@ -364,7 +390,7 @@ export function LoanEmiWorkspace() {
                 <ClayButton
                   variant="secondary"
                   size="sm"
-                  className={cn(SECONDARY_BTN, "gap-1.5", entries.length <= 4 && "ml-auto")}
+                  className={cn(SECONDARY_BTN, "gap-1.5")}
                   onClick={() => setTrashRequest((n) => n + 1)}
                 >
                   <Trash2 className="size-3.5" />
@@ -372,38 +398,6 @@ export function LoanEmiWorkspace() {
                 </ClayButton>
               )}
             </div>
-            {(showStatus || showTypes) && (
-              <div className={cn(LE_RADIUS.card, "flex flex-col gap-2 border border-border bg-card p-2.5 shadow-e1 sm:flex-row sm:items-center sm:gap-3")}>
-                <span className="inline-flex shrink-0 items-center gap-1.5 px-1 text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">
-                  <SlidersHorizontal aria-hidden className="size-3.5" />
-                  Filter
-                </span>
-                <div className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
-                  {showTypes && <FilterPills ariaLabel="Type" options={typeOptions} value={typeFilter} onChange={setTypeFilter} />}
-                  {showStatus && showTypes && <span aria-hidden className="hidden h-6 w-px shrink-0 bg-border-strong sm:block" />}
-                  {showStatus && <FilterPills ariaLabel="Status" options={statusOptions} value={statusFilter} onChange={setStatusFilter} />}
-                </div>
-                <div className="flex shrink-0 items-center gap-2 sm:ml-auto">
-                  <span className="rounded-full bg-secondary px-2.5 py-1 text-xs font-medium text-muted-foreground tabular-nums" aria-live="polite">
-                    Showing {visible.length} of {entries.length}
-                  </span>
-                  {filtersActive && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSearch("");
-                        setTypeFilter("all");
-                        setStatusFilter("all");
-                      }}
-                      className="inline-flex items-center gap-1 rounded-full border border-border-strong bg-card px-2.5 py-1 text-xs font-medium text-foreground hover:bg-secondary"
-                    >
-                      <X aria-hidden className="size-3" />
-                      Reset
-                    </button>
-                  )}
-                </div>
-              </div>
-            )}
 
             {visible.length === 0 ? (
               <div className={cn(LE_RADIUS.panel, "border border-dashed border-border bg-card")}>
@@ -420,7 +414,7 @@ export function LoanEmiWorkspace() {
                 />
               </div>
             ) : (
-              <Stagger className="grid grid-cols-1 items-start gap-3 @[38rem]:grid-cols-2 @[66rem]:grid-cols-3">
+              <Stagger className="grid grid-cols-1 items-start gap-3 @[38rem]:grid-cols-2 @[62rem]:grid-cols-3 @[96rem]:grid-cols-4">
                 {visible.map((entry) => {
                   if (entry.source === "loan") {
                     const row = loanById.get(entry.id)!;

@@ -2,46 +2,44 @@
 
 import { useState } from "react";
 import {
-  ArrowDownLeft,
-  ArrowUpRight,
+  ArrowDownUp,
   CalendarDays,
-  Check,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
   RotateCcw,
   Search,
-  Activity,
-  Wallet,
   X,
 } from "lucide-react";
-import { ClayAvatar } from "@/components/clay/clay-avatar";
-import { cyclePosition } from "@/features/people/lib/settlement-presentation";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Skeleton } from "@/components/ui/skeleton";
-import { FilterTabs, LE_RADIUS, Money } from "@/features/loans/components/loan-emi-ui";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { PEOPLE_SORTS, type PeopleSort } from "@/features/people/lib/people-sort";
+import { FilterTabs, LE_RADIUS } from "@/features/loans/components/loan-emi-ui";
 import {
   cycleContaining,
-  directionHeadline,
   formatCycleLabel,
-  perspectiveAmount,
   sameCycle,
   shiftCycle,
   type PersonCycleStatement,
   type StatementCycle,
   type StatementDirection,
 } from "@/lib/engines/person-cycle-statement";
-import { money } from "@/lib/engines/person-cycle-statement-share";
 import { useMonthCycleStartDay } from "@/features/settings/hooks/use-user-preferences";
 import { ordinalDay } from "@/lib/engines/month-cycle-range";
 import { cn } from "@/lib/utils";
 import { DateInput } from "@/components/forms/date-input";
 
 /**
- * The People Ledger list — one row per person for the selected cycle, read straight from that
- * person's `PersonCycleStatement` (previous pending → this cycle → settlements → current pending).
- * Amounts are shown from the side of the closing position (`perspectiveAmount`), so "₹500" under
- * "You owe them" means you owe ₹500; the direction is always said in words, colour only supports it.
+ * People Ledger list controls — the cycle navigator, the cycle totals and the search / filter toolbar. The people
+ * themselves are drawn by `PeopleLedgerGrid` (cards) and the cycle overview by `PeopleCycleOverview`; every figure
+ * is read straight from each person's `PersonCycleStatement`.
  */
 
 export type PeopleFilter = "all" | StatementDirection;
@@ -50,6 +48,9 @@ export interface PeopleLedgerRow {
   id: string;
   name: string;
   statement: PersonCycleStatement;
+  /** Newest ledger activity (any cycle) — display + "Recent activity" sort only. */
+  lastActive?: Date | null;
+  lastActiveLabel?: string;
 }
 
 const FILTERS: { value: PeopleFilter; label: string }[] = [
@@ -59,21 +60,7 @@ const FILTERS: { value: PeopleFilter; label: string }[] = [
   { value: "settled", label: "Settled" },
 ];
 
-const DIRECTION_TONE: Record<
-  StatementDirection,
-  { label: string; edge: string; icon: typeof Check; ring: string }
-> = {
-  theyOwe: { label: "text-success", edge: "bg-success", icon: ArrowDownLeft, ring: "ring-success/60" },
-  iOwe: { label: "text-expense", edge: "bg-expense", icon: ArrowUpRight, ring: "ring-expense/55" },
-  settled: { label: "text-muted-foreground", edge: "bg-transparent", icon: Check, ring: "ring-border" },
-};
-
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
-const hasValue = (v: number) => Math.abs(v) >= 0.005;
-const signed = (v: number) => (v > 0 ? `+${money(v)}` : money(v));
-
-const LABEL = "text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase";
 
 /** "2026-08-05" → local midnight, or null. */
 function parseDateInput(value: string): Date | null {
@@ -99,14 +86,21 @@ export function PeopleCycleControl({
   cycle,
   onCycleChange,
   direction,
+  isFollowingGlobalCycle,
+  onFollowGlobalCycle,
 }: {
   cycle: StatementCycle;
   onCycleChange: (cycle: StatementCycle) => void;
   direction: -1 | 0 | 1;
+  /** Whether this list is showing the same cycle as the top-bar's global navigator. Omit to hide the sync affordance (e.g. a scoped sub-view). */
+  isFollowingGlobalCycle?: boolean;
+  onFollowGlobalCycle?: () => void;
 }) {
   const startDay = useMonthCycleStartDay();
   const current = cycleContaining(new Date(), startDay);
   const isCurrent = sameCycle(cycle, current);
+  // Whole days from today to the cycle's last day (inclusive) — display only, from the cycle's own end date.
+  const daysLeft = isCurrent ? Math.max(0, Math.round((cycle.end.getTime() - new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()).getTime()) / 86_400_000)) : null;
   const navButton = cn(
     LE_RADIUS.control,
     "flex h-9 shrink-0 cursor-pointer items-center gap-1 px-2 text-sm font-medium text-foreground outline-none transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:text-muted-foreground disabled:hover:bg-transparent",
@@ -143,6 +137,11 @@ export function PeopleCycleControl({
         <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-foreground">
           <span className="size-1.5 rounded-full bg-primary-accent-text" aria-hidden />
           Current cycle
+          {daysLeft != null && (
+            <span className="font-medium text-muted-foreground tabular-nums">
+              · {daysLeft === 0 ? "last day" : `${daysLeft} ${daysLeft === 1 ? "day" : "days"} left`}
+            </span>
+          )}
         </span>
       ) : (
         <button
@@ -155,6 +154,16 @@ export function PeopleCycleControl({
         >
           <RotateCcw className="size-3.5" strokeWidth={2} />
           Back to current
+        </button>
+      )}
+
+      {isFollowingGlobalCycle === false && (
+        <button
+          type="button"
+          onClick={onFollowGlobalCycle}
+          className="inline-flex h-7 items-center gap-1 rounded-[6px] border border-dashed border-border-strong px-2 text-xs font-semibold text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+        >
+          Sync with top-bar cycle
         </button>
       )}
     </div>
@@ -367,113 +376,31 @@ export function cycleTotals(rows: PeopleLedgerRow[]) {
   return { toReceive: round2(toReceive), receiveCount, toPay: round2(toPay), payCount, advanceHeld: round2(advanceHeld), advanceHeldCount, activity };
 }
 
-export function PeopleCycleSummary({ rows }: { rows: PeopleLedgerRow[] }) {
-  const { toReceive, receiveCount, toPay, payCount, advanceHeld, advanceHeldCount, activity } = cycleTotals(rows);
-  // Receive vs give as one bar — display only, from the same cycle totals (never netted into one figure).
-  const both = toReceive + toPay;
-  const receivePct = both > 0 ? (toReceive / both) * 100 : 0;
-
-  return (
-    <section aria-label="Cycle summary" className="@container overflow-hidden rounded-[16px] border border-border bg-card shadow-e1">
-      <div className="flex flex-col @3xl:flex-row @3xl:items-stretch">
-        {/* Hero */}
-        <div className="relative flex flex-col gap-1.5 overflow-hidden bg-[image:var(--gradient-hero)] px-5 py-5 text-white sm:px-6 @3xl:min-w-[20rem] @3xl:flex-1">
-          <span aria-hidden className="pointer-events-none absolute -top-20 -right-16 size-56 rounded-full bg-success/25 blur-3xl" />
-          <span aria-hidden className="pointer-events-none absolute -bottom-24 -left-16 size-52 rounded-full border border-white/10" />
-          <span className="relative text-[11px] font-semibold tracking-[0.08em] text-white/75 uppercase">You need to receive · this cycle</span>
-          <Money amount={Math.round(toReceive)} className="relative text-[36px] leading-none text-white sm:text-[40px]" />
-          <span className="relative text-xs text-white/70">
-            {receiveCount === 0
-              ? "Nothing to receive at the end of this cycle"
-              : `Across ${receiveCount} ${receiveCount === 1 ? "person" : "people"}`}
-          </span>
-          {both > 0 && (
-            <div className="relative mt-2 flex flex-col gap-1.5">
-              <div className="flex h-2 w-full overflow-hidden rounded-full bg-white/15" aria-hidden>
-                <span className="h-full bg-success transition-[width] duration-700" style={{ width: `${receivePct}%` }} />
-                <span className="h-full bg-expense transition-[width] duration-700" style={{ width: `${100 - receivePct}%` }} />
-              </div>
-              <p className="flex flex-wrap gap-x-3 text-[11px] text-white/75">
-                <span className="inline-flex items-center gap-1">
-                  <span className="size-2 rounded-full bg-success" /> Receive {money(toReceive)}
-                </span>
-                <span className="inline-flex items-center gap-1">
-                  <span className="size-2 rounded-full bg-expense" /> Give {money(toPay)}
-                </span>
-              </p>
-            </div>
-          )}
-        </div>
-
-        {/* Supporting figures */}
-        <div className={cn("grid min-w-0 gap-2.5 p-3 @3xl:p-4", advanceHeld > 0 ? "grid-cols-1 @lg:grid-cols-3 @3xl:w-[34rem]" : "grid-cols-1 @lg:grid-cols-2 @3xl:w-[24rem]")}>
-          <SummaryTile icon={ArrowUpRight} chip="bg-expense/10 text-expense" label="You need to give">
-            <Money amount={Math.round(toPay)} className={cn("text-lg leading-none", toPay > 0 ? "text-expense" : "text-foreground/55")} />
-            <span className="text-xs text-foreground/60">{payCount === 0 ? "Nothing" : `${payCount} ${payCount === 1 ? "person" : "people"}`}</span>
-          </SummaryTile>
-          {advanceHeld > 0 && (
-            // Money people paid ahead, not yet applied — held for them: not owed by them, not owed by you.
-            <SummaryTile icon={Wallet} chip="bg-primary/25 text-foreground dark:text-primary-accent-text" label="Advance held">
-              <Money amount={Math.round(advanceHeld)} className="text-lg leading-none text-foreground" />
-              <span className="text-xs text-foreground/60">
-                Not applied yet · {advanceHeldCount} {advanceHeldCount === 1 ? "person" : "people"}
-              </span>
-            </SummaryTile>
-          )}
-          <SummaryTile icon={Activity} chip="bg-purple/12 text-purple" label="Activity">
-            <span className="font-heading text-lg leading-none font-bold text-foreground tabular-nums">{activity}</span>
-            <span className="text-xs text-foreground/60">{activity === 1 ? "entry" : "entries"} this cycle</span>
-          </SummaryTile>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function SummaryTile({ icon: Icon, chip, label, children }: { icon: typeof Wallet; chip: string; label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex min-w-0 items-center gap-3 rounded-[12px] border border-border bg-secondary/40 px-3.5 py-3">
-      <span className={cn("flex size-10 shrink-0 items-center justify-center rounded-full", chip)}>
-        <Icon className="size-4.5" strokeWidth={2} />
-      </span>
-      <span className="flex min-w-0 flex-col gap-1">
-        <span className={LABEL}>{label}</span>
-        {children}
-      </span>
-    </div>
-  );
-}
-
-export function PeopleCycleSummarySkeleton() {
-  return (
-    <div className={cn(LE_RADIUS.panel, "flex flex-col gap-2 border border-border bg-card px-5 py-4 sm:px-6")}>
-      <Skeleton className="h-3 w-36" />
-      <Skeleton className="h-9 w-44" />
-      <Skeleton className="h-3 w-28" />
-    </div>
-  );
-}
-
 // ---------------------------------------------------------------------------------------------------
 // Toolbar
 
-/** Search on the left, direction filters (with selected-cycle counts) on the right. */
+/** Search, direction filters (with selected-cycle counts) and the sort menu — one compact row. */
 export function PeopleListToolbar({
   search,
   onSearchChange,
   filter,
   onFilterChange,
   counts,
+  sort,
+  onSortChange,
 }: {
   search: string;
   onSearchChange: (value: string) => void;
   filter: PeopleFilter;
   onFilterChange: (value: PeopleFilter) => void;
   counts: Record<PeopleFilter, number>;
+  sort: PeopleSort;
+  onSortChange: (value: PeopleSort) => void;
 }) {
+  const sortLabel = PEOPLE_SORTS.find((s) => s.value === sort)?.label ?? "Sort";
   return (
-    <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
-      <div className="relative w-full sm:max-w-60">
+    <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center">
+      <div className="relative w-full sm:max-w-56">
         <Search
           className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
           strokeWidth={1.75}
@@ -503,238 +430,30 @@ export function PeopleListToolbar({
         options={FILTERS.map((f) => ({ ...f, count: counts[f.value] }))}
         className="w-full overflow-x-auto sm:w-auto"
       />
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------------------------------
-// Person row
-
-function Figure({
-  label,
-  value,
-  sub,
-  muted,
-}: {
-  label: string;
-  value: string;
-  sub?: string | null;
-  muted: boolean;
-}) {
-  return (
-    <span className="flex flex-col items-end gap-0.5">
-      <span className="text-[11px] font-medium text-muted-foreground xl:hidden">{label}</span>
-      <span className={cn("text-sm font-semibold tabular-nums", muted ? "text-muted-foreground" : "text-foreground")}>
-        {value}
-      </span>
-      {sub && <span className="text-[11px] font-medium text-muted-foreground tabular-nums">{sub}</span>}
-    </span>
-  );
-}
-
-/** Shared desktop column template — the header row and every person row use it. It needs ~660px, which only fits
- *  from xl (below that the sidebar leaves too little room), so phones and tablets use the stacked row instead. */
-const ROW_GRID = "xl:grid-cols-[minmax(0,1fr)_7rem_8rem_8rem_10rem_1rem] xl:gap-x-5";
-
-/**
- * The cycle's payment status in the shared settlement wording (`settlement-presentation.ts`), from engine
- * values only: paid something but still pending → partial; pending with nothing paid → due; nothing
- * pending after activity or a payment → paid in full.
- */
-function cycleStatus(s: PeopleLedgerRow["statement"], moved: number): { label: string; className: string } | null {
-  if (s.direction !== "settled") {
-    if (moved > 0.005) return { label: "Partially paid", className: "border-warning/60 bg-warning/10 text-foreground" };
-    return s.direction === "theyOwe"
-      ? { label: "Payment due", className: "border-success/50 bg-success/10 text-foreground" }
-      : { label: "You need to pay", className: "border-expense/50 bg-expense/10 text-foreground" };
-  }
-  if (moved > 0.005 || Math.abs(s.cycleActivity) >= 0.005) return { label: "Paid in full", className: "border-border-strong bg-secondary text-foreground" };
-  return null;
-}
-
-/** One gross direction in a person row, as a tinted chip: "↙ Receive ₹1,000". */
-function DirectionFigure({ side, amount }: { side: "theyOwe" | "iOwe"; amount: number }) {
-  const receive = side === "theyOwe";
-  const Icon = receive ? ArrowDownLeft : ArrowUpRight;
-  return (
-    <span
-      className={cn(
-        "flex w-full max-w-[10rem] items-center justify-between gap-2 rounded-full border px-2.5 py-1",
-        receive ? "border-success/30 bg-success/10" : "border-expense/30 bg-expense/10",
-      )}
-    >
-      <span className={cn("inline-flex items-center gap-1 text-[11px] font-semibold", receive ? "text-success" : "text-expense")}>
-        <Icon className="size-3.5" strokeWidth={2.25} aria-hidden />
-        {receive ? "Receive" : "Give"}
-      </span>
-      <span className="font-heading text-[15px] leading-tight font-bold whitespace-nowrap tabular-nums text-foreground">{money(amount)}</span>
-    </span>
-  );
-}
-
-function PersonRow({
-  row,
-  onOpen,
-  index,
-}: {
-  row: PeopleLedgerRow;
-  onOpen: () => void;
-  index: number;
-}) {
-  const s = row.statement;
-  const tone = DIRECTION_TONE[s.direction];
-  const DirIcon = tone.icon;
-  const previous = perspectiveAmount(s, s.previousPending);
-  const activity = perspectiveAmount(s, s.cycleActivity);
-  const n = s.rows.length;
-  const isSettled = s.direction === "settled";
-  const activityText = hasValue(activity) ? signed(activity) : money(0);
-  // Real money this cycle and advance held apart from pending — engine values via `cyclePosition`.
-  const pos = cyclePosition(s, row.name);
-  const moved = pos.cashReceived > 0 ? pos.cashReceived : pos.cashPaid;
-  const movedText = pos.cashReceived > 0 ? money(pos.cashReceived) : pos.cashPaid > 0 ? `Paid ${money(pos.cashPaid)}` : money(0);
-  const status = cycleStatus(s, moved);
-  // Held money, never folded into the amount above: their advance is not something you owe them.
-  const advanceText = pos.advance ? `${pos.advance.from === "them" ? "Advance held" : "Advance paid"} ${money(pos.advance.amount)}` : null;
-  const bothSides = s.toReceive > 0 && s.toGive > 0;
-
-  return (
-    <li
-      className="animate-in fade-in fill-mode-both duration-200 ease-out"
-      style={{ animationDelay: `${Math.min(index, 8) * 20}ms` }}
-    >
-      <button
-        type="button"
-        onClick={onOpen}
-        aria-label={`Open ${row.name}'s ledger — ${
-          bothSides ? `You need to receive ${money(s.toReceive)}, you need to give ${money(s.toGive)}` : `${directionHeadline(s.direction)}${isSettled ? "" : ` ${money(s.amount)}`}`
-        }`}
-        className={cn(
-          "group relative grid w-full cursor-pointer grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1.5 px-4 py-3.5 text-left outline-none transition-colors duration-150 hover:bg-gradient-to-r hover:from-secondary/80 hover:to-transparent focus-visible:bg-secondary/60 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset xl:px-5",
-          ROW_GRID,
-        )}
-      >
-        <span className={cn("absolute top-3 bottom-3 left-0 w-[3px] rounded-r-full transition-all duration-200 group-hover:top-2 group-hover:bottom-2 group-hover:w-1", tone.edge)} aria-hidden />
-
-        {/* Identity */}
-        <span className="flex min-w-0 items-center gap-3">
-          <span className={cn("shrink-0 rounded-full ring-2 ring-offset-2 ring-offset-card transition-transform duration-200 group-hover:scale-105", tone.ring)}>
-            <ClayAvatar name={row.name} size={36} />
-          </span>
-          <span className="flex min-w-0 flex-col">
-            <span className="truncate font-heading text-[15px] leading-tight font-semibold text-foreground">{row.name}</span>
-            <span className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted-foreground">
-              {status && (
-                <span className={cn("rounded-full border px-2 py-px text-[11px] font-semibold", status.className)}>{status.label}</span>
-              )}
-              {advanceText && <span className="rounded-full border border-primary-accent-text/50 bg-primary/15 px-2 py-px text-[11px] font-semibold text-foreground">{advanceText}</span>}
-              {!status && !advanceText && (n === 0 ? "No activity" : `${n} ${n === 1 ? "activity" : "activities"}`)}
-            </span>
-          </span>
-        </span>
-
-        {/* Desktop: previous + this cycle columns */}
-        <span className="hidden xl:block">
-          <Figure label="Previous" value={money(previous)} muted={!hasValue(previous)} />
-        </span>
-        <span className="hidden xl:block">
-          <Figure label="This cycle" value={activityText} muted={!hasValue(activity)} />
-        </span>
-        <span className="hidden xl:block">
-          <Figure label={pos.cashPaid > 0 && pos.cashReceived <= 0 ? "Paid" : "Received"} value={movedText} muted={moved <= 0} />
-        </span>
-
-        {/* Current pending + who owes whom — both directions, gross, when both are open (never netted) */}
-        {bothSides ? (
-          <span className="flex min-w-0 flex-col items-end gap-1">
-            <DirectionFigure side="theyOwe" amount={s.toReceive} />
-            <DirectionFigure side="iOwe" amount={s.toGive} />
-          </span>
-        ) : (
-        <span className="flex flex-col items-end gap-0.5">
-          <span
-            key={`${s.cycle.start.getTime()}-${s.currentPending}`}
-            className={cn(
-              "font-heading text-xl leading-tight font-bold tracking-tight tabular-nums animate-in fade-in duration-200",
-              isSettled ? "text-muted-foreground" : "text-foreground",
-            )}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            aria-label={`Sort people: ${sortLabel}`}
+            className="ml-auto inline-flex h-9 shrink-0 cursor-pointer items-center gap-1.5 rounded-full border border-border bg-card px-3 text-xs font-semibold text-foreground outline-none transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:border-primary-accent-text"
           >
-            {money(s.amount)}
-          </span>
-          <span className={cn("inline-flex items-center gap-1 text-xs font-semibold", tone.label)}>
-            <DirIcon className="size-3.5" strokeWidth={2} aria-hidden />
-            {directionHeadline(s.direction)}
-          </span>
-        </span>
-        )}
-
-        <ChevronRight
-          className="hidden size-4 text-muted-foreground transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-foreground xl:block"
-          strokeWidth={2}
-          aria-hidden
-        />
-
-        {/* Phone / tablet: the trail on one line under the name */}
-        <span className="col-span-2 flex flex-wrap gap-x-1.5 pl-12 text-xs text-muted-foreground tabular-nums xl:hidden">
-          <span>
-            Previous <span className="font-semibold text-foreground">{money(previous)}</span>
-          </span>
-          <span aria-hidden>·</span>
-          <span>
-            This cycle <span className="font-semibold text-foreground">{activityText}</span>
-          </span>
-          <span aria-hidden>·</span>
-          <span>
-            {pos.cashPaid > 0 && pos.cashReceived <= 0 ? "Paid" : "Received"} <span className="font-semibold text-foreground">{movedText.replace(/^Paid /, "")}</span>
-          </span>
-        </span>
-      </button>
-    </li>
-  );
-}
-
-export function PeopleLedgerList({
-  rows,
-  onOpen,
-}: {
-  rows: PeopleLedgerRow[];
-  onOpen: (id: string) => void;
-}) {
-  return (
-    <div>
-      <div className={cn("hidden border-b border-border px-5 py-2 xl:grid", ROW_GRID)} aria-hidden>
-        <span className={LABEL}>Person</span>
-        <span className={cn(LABEL, "text-right")}>Previous</span>
-        <span className={cn(LABEL, "text-right")}>This cycle</span>
-        <span className={cn(LABEL, "text-right")}>Received / paid</span>
-        <span className={cn(LABEL, "text-right")}>Current pending</span>
-        <span />
-      </div>
-      <ul className="divide-y divide-border">
-        {rows.map((row, i) => (
-          <PersonRow key={row.id} row={row} index={i} onOpen={() => onOpen(row.id)} />
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-export function PeopleLedgerListSkeleton() {
-  return (
-    <div className="divide-y divide-border">
-      {Array.from({ length: 4 }, (_, i) => (
-        <div key={i} className="flex items-center gap-3 px-5 py-4">
-          <Skeleton className="size-9 shrink-0 rounded-full" />
-          <div className="flex flex-col gap-2">
-            <Skeleton className="h-4 w-32" />
-            <Skeleton className="h-3 w-20" />
-          </div>
-          <div className="ml-auto flex flex-col items-end gap-2">
-            <Skeleton className="h-5 w-24" />
-            <Skeleton className="h-3 w-20" />
-          </div>
-        </div>
-      ))}
+            <ArrowDownUp className="size-3.5 text-muted-foreground" strokeWidth={2} aria-hidden />
+            <span className="text-muted-foreground">Sort</span>
+            {sortLabel}
+            <ChevronDown className="size-3.5 text-muted-foreground" strokeWidth={2} aria-hidden />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-48 rounded-[10px]">
+          <DropdownMenuLabel className="text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">Sort people</DropdownMenuLabel>
+          <DropdownMenuRadioGroup value={sort} onValueChange={(v) => onSortChange(v as PeopleSort)}>
+            {PEOPLE_SORTS.map((s) => (
+              <DropdownMenuRadioItem key={s.value} value={s.value} className="cursor-pointer">
+                {s.label}
+              </DropdownMenuRadioItem>
+            ))}
+          </DropdownMenuRadioGroup>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   );
 }

@@ -253,6 +253,31 @@ export function personBalanceBreakdown(
   loanIds: ReadonlySet<string>,
   advanceApplications: readonly BreakdownAdvanceApplication[] = [],
 ): PersonBalanceBreakdown {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { shareRefund, ...breakdown } = breakdownWithRefund(position, entries, loanIds, advanceApplications);
+  return breakdown;
+}
+
+/**
+ * Installment-share settlements beyond what is due (a share paid ahead of its cycle) — already inside the gross
+ * `toGive`, and exactly offset by that share's upcoming principal (`assignedFuturePrincipal`). Gross displays net the
+ * two so a prepaid share is shown as neither receivable nor payable.
+ */
+export function personShareRefund(
+  position: PersonPosition,
+  entries: readonly BreakdownLedgerEntry[],
+  loanIds: ReadonlySet<string>,
+  advanceApplications: readonly BreakdownAdvanceApplication[] = [],
+): number {
+  return breakdownWithRefund({ ...position, loanPayable: 0, loanReceivable: 0 }, entries, loanIds, advanceApplications).shareRefund;
+}
+
+function breakdownWithRefund(
+  position: PersonPosition,
+  entries: readonly BreakdownLedgerEntry[],
+  loanIds: ReadonlySet<string>,
+  advanceApplications: readonly BreakdownAdvanceApplication[],
+): PersonBalanceBreakdown & { shareRefund: number } {
   const active = entries.filter((e) => !e.isDeleted && !isLegacyLoanLedgerEntry(e, loanIds));
   const byId = new Map(active.map((e) => [e.id, e]));
   const settledByParent = new Map<string, number>();
@@ -347,6 +372,7 @@ export function personBalanceBreakdown(
     loanReceivable: position.loanReceivable,
     emiReceivable: position.emiReceivable,
     emiReceivableOpen: emiOpen,
+    shareRefund: round2(shareRefund),
     advance,
     toGive,
     toReceive,

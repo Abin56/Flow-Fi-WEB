@@ -543,6 +543,8 @@ export function PeopleTab({ detail, position }: { detail: PeriodDetail; position
         </div>
         <div className="mt-2 divide-y divide-border/50">
           <FigureRow label="Net with people" value={<span className={netPos >= 0 ? "text-success" : "text-expense"}>{signedCurrency(netPos)}</span>} />
+          {position.assignedReceivable > 0 && <FigureRow label="Owed for upcoming EMIs I carry for others" value={formatCurrency(position.assignedReceivable)} />}
+          {position.assignedDebt > 0 && <FigureRow label="Debt in my name that others repay" value={formatCurrency(position.assignedDebt)} />}
           {position.lentReceivable > 0 && <FigureRow label="Loans I gave (principal due)" value={formatCurrency(position.lentReceivable)} />}
         </div>
       </div>

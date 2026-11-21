@@ -58,17 +58,18 @@ function Figure({ label, children, hint, tooltip, tile, icon: Icon, tone = "neut
   );
 }
 
+/** One at-a-glance figure, inline: "Label ₹amount ›". The whole segment opens the list; zero values fade back (set by the caller). */
 function GlanceChip({ label, tone, children, onClick }: { label: string; tone: keyof typeof TONES; children: React.ReactNode; onClick?: () => void }) {
-  const cls = cn("inline-flex items-baseline gap-2 rounded-full border border-border px-3 py-1", TONES[tone].tile);
+  const cls = cn("inline-flex min-w-0 items-baseline gap-1.5 rounded-[6px] px-2.5 py-1", tone === "hero" && "bg-primary/15");
   const inner = (
     <>
-      <span className="text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">{label}</span>
+      <span className="text-xs font-medium whitespace-nowrap text-muted-foreground">{label}</span>
       {children}
-      {onClick && <ChevronRight aria-hidden className="size-3.5 self-center text-muted-foreground" />}
+      {onClick && <ChevronRight aria-hidden className="size-3.5 shrink-0 self-center text-muted-foreground" />}
     </>
   );
   return onClick ? (
-    <button type="button" onClick={onClick} aria-label={`${label} — open the EMI list`} className={cn(cls, "cursor-pointer outline-none transition-shadow hover:shadow-md focus-visible:ring-2 focus-visible:ring-ring")}>
+    <button type="button" onClick={onClick} aria-label={`${label} — open the EMI list`} className={cn(cls, "cursor-pointer outline-none transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring")}>
       {inner}
     </button>
   ) : (
@@ -173,13 +174,36 @@ export function MyCommitmentsSummary({ loanRows, emiRows, defaultExpanded = true
   const incomplete = s.review.installments > 0 || s.overdue.reviewInstallments > 0;
 
   return (
-    <section aria-label="My EMI commitments" className={cn(LE_RADIUS.panel, "@container flex flex-col gap-4 border border-border bg-card p-4 shadow-e1 sm:px-6")}>
-      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-border pb-3">
-        <h2 className="font-heading text-lg font-semibold text-foreground">
+    <section aria-label="My EMI commitments" className={cn(LE_RADIUS.panel, "@container flex flex-col gap-3 border border-border bg-card shadow-e1", expanded ? "p-4 sm:px-5" : "px-3 py-2 sm:px-4")}>
+      {/* Collapsed: title, the month's figures and the controls share ONE row (wrapping on a narrow screen). Expanded: title + controls only; the figures move into the tiles below. */}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+        <h2 className="font-heading text-base font-semibold whitespace-nowrap text-foreground">
           My EMI — Confirmed{" "}
-          <span className="ml-1 rounded-full bg-secondary px-2.5 py-0.5 align-middle text-xs font-medium text-muted-foreground">{window.label}</span>
+          <span className="ml-1 rounded-full bg-secondary px-2 py-0.5 align-middle text-xs font-medium text-muted-foreground">{window.label}</span>
         </h2>
-        <div className="flex items-center gap-2">
+
+        {!expanded && (
+          // Wants ~26rem: beside the title on a wide panel, on its own full-width line (after the controls) on a narrow one — never squeezed to nothing.
+          <div className="order-3 flex min-w-0 flex-[1_1_26rem] flex-wrap items-center gap-x-1 gap-y-1 @5xl:order-1" aria-label="Summary at a glance">
+            {monthEmpty ? (
+              <span className="text-[13px] text-muted-foreground">No installments fall due in {window.label}.</span>
+            ) : (
+              <>
+                <GlanceChip label="My EMI" tone="hero" onClick={() => openSheet("mine")}><Money amount={rupees(m.scheduledPaise)} className={cn("text-[15px]", m.scheduledPaise === 0 && "text-muted-foreground")} /></GlanceChip>
+                <GlanceChip label="Paid" tone="good" onClick={() => openSheet("mine")}><Money amount={rupees(m.attributedPaidPaise)} className={cn("text-[15px]", m.attributedPaidPaise > 0 ? "text-success" : "text-muted-foreground")} /></GlanceChip>
+                <GlanceChip label="Still to pay" tone={m.remainingPaise > 0 ? "warn" : "good"} onClick={() => openSheet("mine")}>
+                  <Money amount={rupees(m.remainingPaise)} className={cn("text-[15px]", m.remainingPaise > 0 ? "text-expense" : "text-muted-foreground")} />
+                </GlanceChip>
+                {s.others.installments > 0 && (
+                  <GlanceChip label="Others’ share" tone="others" onClick={() => openSheet("others")}><Money amount={rupees(s.others.scheduledPaise)} className="text-[15px] text-violet-700 dark:text-violet-300" /></GlanceChip>
+                )}
+                {incomplete && <span className="ml-1 rounded-full bg-warning/15 px-2 py-0.5 text-xs font-semibold text-warning-foreground dark:text-warning">Not your full EMI — unconfirmed owners</span>}
+              </>
+            )}
+          </div>
+        )}
+
+        <div className="order-2 ml-auto flex items-center gap-2">
           <ChoiceChips ariaLabel={window.custom ? "Cycle" : "Month"} options={monthOptions(window.custom)} value={offset} onChange={setOffset} />
           <button
             type="button"
@@ -191,26 +215,6 @@ export function MyCommitmentsSummary({ loanRows, emiRows, defaultExpanded = true
           </button>
         </div>
       </div>
-
-      {!expanded && (
-        <div className="flex flex-wrap items-center gap-2" aria-label="Summary at a glance">
-          {monthEmpty ? (
-            <span className="text-sm text-muted-foreground">No installments fall due in {window.label}.</span>
-          ) : (
-            <>
-              <GlanceChip label="My EMI" tone="hero" onClick={() => openSheet("mine")}><Money amount={rupees(m.scheduledPaise)} className="text-base" /></GlanceChip>
-              <GlanceChip label="Paid" tone="good" onClick={() => openSheet("mine")}><Money amount={rupees(m.attributedPaidPaise)} className="text-base text-success" /></GlanceChip>
-              <GlanceChip label="Still to pay" tone={m.remainingPaise > 0 ? "warn" : "good"} onClick={() => openSheet("mine")}>
-                <Money amount={rupees(m.remainingPaise)} className={cn("text-base", m.remainingPaise > 0 && "text-expense")} />
-              </GlanceChip>
-              {s.others.installments > 0 && (
-                <GlanceChip label="Others’ share" tone="others" onClick={() => openSheet("others")}><Money amount={rupees(s.others.scheduledPaise)} className="text-base" /></GlanceChip>
-              )}
-              {incomplete && <span className="rounded-full bg-warning/15 px-2.5 py-1 text-xs font-semibold text-warning-foreground dark:text-warning">Not your full EMI — unconfirmed owners</span>}
-            </>
-          )}
-        </div>
-      )}
 
       {expanded && (
         <>

@@ -18,7 +18,7 @@ function makeData(over: Partial<MyMoneyData> = {}): MyMoneyData {
   return {
     periodLabel: "Oct 2026",
     isCurrent: true,
-    nav: { previous: vi.fn(), next: vi.fn(), current: vi.fn(), pickMonth: vi.fn() },
+    nav: { previous: vi.fn(), next: vi.fn(), current: vi.fn(), pickMonth: vi.fn(), isFollowingGlobalCycle: true, followGlobal: vi.fn() },
     toPay: { total: 5000, count: 2, overdue: 0, overdueCount: 0, dueSoon: 0, othersStillOwe: 0, next: null },
     ...over,
   } as unknown as MyMoneyData;

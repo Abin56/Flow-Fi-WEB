@@ -38,11 +38,12 @@ const scrollMain = (page, top) => page.evaluate((t) => { document.querySelector(
 /** The cycle picker's trigger text in the page header (not the compact bar): "<Month Year> cycle <range>". */
 const headerPicker = (page) => page.locator("main header").getByRole("button", { name: "Choose cycle" });
 
+/** The two "With people" links inside the Due workspace (the old six-tile strip was folded into it): label · count · amount. */
 async function obligations(page) {
-  const cells = await page.locator('section[aria-label="Obligations"] a').evaluateAll((as) =>
+  const cells = await page.locator('section[aria-label="Upcoming this cycle"] a[href^="/people"]').evaluateAll((as) =>
     as.map((a) => ({ href: a.getAttribute("href"), lines: a.innerText.split("\n").map((l) => l.trim()).filter(Boolean) })),
   );
-  return cells.map((c) => ({ href: c.href, label: c.lines[0], amount: c.lines[1], meta: c.lines.slice(2).join(" ") }));
+  return cells.map((c) => ({ href: c.href, label: c.lines[0], meta: c.lines[1], amount: c.lines[2] }));
 }
 
 async function tabInfo(page) {
@@ -50,8 +51,9 @@ async function tabInfo(page) {
     els.map((e) => ({ text: e.innerText.replace(/\s+/g, " ").trim(), selected: e.getAttribute("aria-selected") === "true" })),
   );
   return tabs.map((t) => {
-    const m = /^(EMI|Loans|Card bills|Bills)\s*(\d+)\s*(.*)$/.exec(t.text);
-    return { title: m?.[1], count: m ? Number(m[2]) : NaN, total: m ? num(m[3]) : NaN, selected: t.selected, raw: t.text };
+    // "<Title> <count> <meta…> <₹total> [<share>%]" — the total is the last ₹ figure (meta can carry its own).
+    const m = /^(EMI|Loans|Card bills|Bills)\s*(\d+)\s*(.*?)\s*(₹[\d,.]+)\s*(?:\d+%)?$/.exec(t.text);
+    return { title: m?.[1], count: m ? Number(m[2]) : NaN, meta: m?.[3] ?? "", total: m ? num(m[4]) : NaN, selected: t.selected, raw: t.text };
   });
 }
 
@@ -68,7 +70,6 @@ scenario("mc-sweep-render", "Month Cycle sweep: every section renders, no consol
 
   for (const [label, sel] of [
     ["Cycle summary", 'section[aria-label="Cycle summary"]'],
-    ["Obligations", 'section[aria-label="Obligations"]'],
     ["Upcoming this cycle", 'section[aria-label="Upcoming this cycle"]'],
     ["People ledger", 'section[aria-label="People ledger"]'],
     ["Account spend", 'section[aria-label="Account spend"]'],
@@ -77,8 +78,8 @@ scenario("mc-sweep-render", "Month Cycle sweep: every section renders, no consol
     ["section nav", 'nav[aria-label="Month cycle sections"]'],
   ]) chk(`section present: ${label}`, (await page.locator(sel).count()) === 1, sel);
 
-  chk("six section-nav pills", (await page.locator('nav[aria-label="Month cycle sections"] button').count()) === 6);
-  chk("six obligation tiles", (await page.locator('section[aria-label="Obligations"] a').count()) === 6);
+  chk("five section-nav pills", (await page.locator('nav[aria-label="Month cycle sections"] button').count()) === 5);
+  chk("two people links in the Due workspace", (await page.locator('section[aria-label="Upcoming this cycle"] a[href^="/people"]').count()) === 2);
   chk("four Due tabs", (await page.locator('section[aria-label="Upcoming this cycle"] [role="tab"]').count()) === 4);
   chk("no 'NaN' / 'undefined' / 'Infinity' / '[object' text", !/NaN|undefined|Infinity|\[object/.test(main), (main.match(/.{0,30}(NaN|undefined|Infinity|\[object).{0,30}/) || [""])[0]);
   chk("no skeleton left after load", (await page.locator('main [class*="animate-pulse"]').count()) === 0);
@@ -125,22 +126,19 @@ scenario("mc-sweep-render", "Month Cycle sweep: every section renders, no consol
 scenario("mc-sweep-figures", "Month Cycle sweep: figures agree wherever the same number appears (tiles, tabs, people, dialog, glance, budget)", async ({ page, logs }, chk, notes) => {
   await openMC(page);
 
-  // ── Obligations tiles vs Due tabs ──
+  // ── Due workspace: rail count text vs the tab's own count, and the rail total vs Σ tabs ──
   const tiles = await obligations(page);
   const byLabel = Object.fromEntries(tiles.map((t) => [t.label, t]));
   const tabs = await tabInfo(page);
   const tab = (t) => tabs.find((x) => x.title === t);
-  chk("EMI tile == EMI tab total", num(byLabel["EMI (total)"]?.amount) === tab("EMI")?.total, `${byLabel["EMI (total)"]?.amount} vs ${tab("EMI")?.total}`);
-  chk("Loans tile == Loans tab total", num(byLabel["Loans (payable)"]?.amount) === tab("Loans")?.total, `${byLabel["Loans (payable)"]?.amount} vs ${tab("Loans")?.total}`);
-  chk("Card tile == Card bills tab total", num(byLabel["Credit card bills"]?.amount) === tab("Card bills")?.total, `${byLabel["Credit card bills"]?.amount} vs ${tab("Card bills")?.total}`);
-  chk("Bills tile == Bills tab total", num(byLabel["Bills (utility & others)"]?.amount) === tab("Bills")?.total, `${byLabel["Bills (utility & others)"]?.amount} vs ${tab("Bills")?.total}`);
-  chk("EMI tile count text matches EMI tab count", new RegExp(`^${tab("EMI")?.count} due this month`).test(byLabel["EMI (total)"]?.meta ?? ""), byLabel["EMI (total)"]?.meta);
-  chk("Card tile count text matches Card bills tab count", new RegExp(`^${tab("Card bills")?.count} bills? due`).test(byLabel["Credit card bills"]?.meta ?? ""), byLabel["Credit card bills"]?.meta);
+  chk("all four Due tabs parse (title, count, total)", tabs.length === 4 && tabs.every((t) => t.title && Number.isFinite(t.count) && Number.isFinite(t.total)), tabs.map((t) => t.raw).join(" | "));
+  chk("EMI tab count text matches its item count", new RegExp(`^${tab("EMI")?.count} due this month`).test(tab("EMI")?.meta ?? ""), tab("EMI")?.meta);
+  chk("Card bills tab count text matches its item count", new RegExp(`^${tab("Card bills")?.count} bills? due`).test(tab("Card bills")?.meta ?? ""), tab("Card bills")?.meta);
 
   // ── Each tab: header total == Σ rows, count == rows ──
-  const headerPill = flat(await page.locator('section[aria-label="Upcoming this cycle"] > div').first().innerText());
-  const hm = /(\d+) items · (.+)$/.exec(headerPill);
-  chk("Due header pill = Σ tab counts and Σ tab totals", !!hm && Number(hm[1]) === tabs.reduce((n, t) => n + t.count, 0) && num(hm[2]) === tabs.reduce((s, t) => s + t.total, 0), `${headerPill} vs ${tabs.map((t) => `${t.title}:${t.count}/${t.total}`).join(",")}`);
+  const headerPill = flat(await page.locator('section[aria-label="Upcoming this cycle"] h2').first().locator("xpath=..").innerText());
+  const hm = /(₹[\d,.]+)\s*(\d+) items?/.exec(headerPill);
+  chk("Due rail total = Σ tab totals and item count = Σ tab counts", !!hm && Number(hm[2]) === tabs.reduce((n, t) => n + t.count, 0) && num(hm[1]) === tabs.reduce((s, t) => s + t.total, 0), `${headerPill} vs ${tabs.map((t) => `${t.title}:${t.count}/${t.total}`).join(",")}`);
   let totalRows = 0;
   for (const t of tabs) {
     await page.locator('section[aria-label="Upcoming this cycle"]').getByRole("tab", { name: new RegExp(`^${t.title}`) }).click();
@@ -158,17 +156,18 @@ scenario("mc-sweep-figures", "Month Cycle sweep: figures agree wherever the same
   }
   chk("Month-at-a-glance 'Pending actions' == Σ due rows", Number(flat(await page.locator('section[aria-label="Month at a glance"]').innerText()).match(/Pending actions (\d+)/)?.[1]) === totalRows, `rows ${totalRows}`);
 
-  // ── People: tiles == ledger tiles == section headers ──
+  // ── People: rail rows == ledger column headers (each header is the side total; no separate tile row) ──
   const give = num(byLabel["You need to give"]?.amount);
   const recv = num(byLabel["You need to receive"]?.amount);
   const ledger = flat(await page.locator('section[aria-label="People ledger"]').innerText());
-  const gotRecv = num(ledger.match(/TO RECEIVE\s*(₹[\d,]+)/i)?.[1] ?? "");
-  const gotGive = num(ledger.match(/TO GIVE\s*(₹[\d,]+)/i)?.[1] ?? "");
-  chk("'You need to receive' tile == ledger 'To receive'", recv === gotRecv, `${recv} vs ${gotRecv}`);
-  chk("'You need to give' tile == ledger 'To give'", give === gotGive, `${give} vs ${gotGive}`);
-  const sideHdr = async (title) => num((await page.locator(`section[aria-label="People ledger"] p:text-is("${title}")`).first().locator("xpath=following-sibling::p").first().innerText().catch(() => "0")));
-  if (give > 0) chk("ledger 'You need to give' header == tile", (await sideHdr("You need to give")) === give);
-  if (recv > 0) chk("ledger 'You need to receive' header == tile", (await sideHdr("You need to receive")) === recv);
+  const hasCols = await page.locator('section[aria-label="People ledger"] p:text-is("You need to give")').count();
+  const sideHdr = async (title) => num((await page.locator(`section[aria-label="People ledger"] p:text-is("${title}")`).first().locator("xpath=../following-sibling::p").first().innerText().catch(() => "0")));
+  if (hasCols) {
+    chk("ledger 'You need to give' header == rail row", (await sideHdr("You need to give")) === give);
+    chk("ledger 'You need to receive' header == rail row", (await sideHdr("You need to receive")) === recv);
+  } else {
+    chk("no pending balances: both rail rows are 0", give === 0 && recv === 0, `give ${give} recv ${recv}`);
+  }
   const rowsTxt = await page.locator('section[aria-label="People ledger"] .divide-y > div').evaluateAll((rs) => rs.map((r) => r.innerText.split("\n").map((l) => l.trim()).filter(Boolean)));
   chk("people rows each show a name + an amount", rowsTxt.every((r) => r.length >= 2 && r.some((l) => /^₹[\d,]+$/.test(l))), JSON.stringify(rowsTxt).slice(0, 200));
   chk("empty-side placeholders are not shown next to real rows with amounts", !(give > 0 && /Nothing to give right now/.test(ledger)) && !(recv > 0 && /Nothing to receive right now/.test(ledger)));
@@ -206,7 +205,7 @@ scenario("mc-sweep-figures", "Month Cycle sweep: figures agree wherever the same
   const dlg = page.getByRole("dialog");
   await dlg.waitFor();
   await page.waitForTimeout(900);
-  const dlgMineTotal = num(await stable(dlg.locator("p.text-\\[30px\\]")));
+  const dlgMineTotal = num(await stable(dlg.locator("p.text-\\[32px\\]")));
   chk("Mine view: dialog headline == hero figure", dlgMineTotal === heroMine, `${dlgMineTotal} vs ${heroMine}`);
   const tableRows = async () => dlg.locator("tbody tr").evaluateAll((rs) => rs.map((r) => [...r.querySelectorAll("td")].map((td) => td.innerText.replace(/\s+/g, " ").trim())));
   const tr = await tableRows();
@@ -217,7 +216,7 @@ scenario("mc-sweep-figures", "Month Cycle sweep: figures agree wherever the same
   await h.shot(page, "mc-sweep-dialog-mine");
   await dlg.getByRole("radio", { name: "Combined" }).click();
   await page.waitForTimeout(900);
-  const dlgCombTotal = num(await stable(dlg.locator("p.text-\\[30px\\]")));
+  const dlgCombTotal = num(await stable(dlg.locator("p.text-\\[32px\\]")));
   const lines = await dlg.locator('section[aria-label="Total outflow breakdown"] dl > div').evaluateAll((ds) => ds.map((d) => [...d.children].map((c) => c.innerText.trim())));
   const parts = lines.filter((l) => l[0] !== "Total outflow");
   const brTotal = num(lines.find((l) => l[0] === "Total outflow")?.[1] ?? "0");
@@ -396,7 +395,7 @@ scenario("mc-sweep-controls", "Month Cycle sweep: cycle navigation, picker, togg
 
   // ── Section nav pills scroll to their section and mark themselves current ──
   const nav = page.getByRole("navigation", { name: "Month cycle sections" });
-  for (const [name, id] of [["Budget", "mc-budget"], ["At a glance", "mc-glance"], ["People & accounts", "mc-people"], ["Due", "mc-due"], ["Obligations", "mc-obligations"], ["Overview", "mc-overview"]]) {
+  for (const [name, id] of [["Budget", "mc-budget"], ["At a glance", "mc-glance"], ["People & accounts", "mc-people"], ["Due", "mc-due"], ["Overview", "mc-overview"]]) {
     await nav.getByRole("button", { name }).click();
     await page.waitForTimeout(1300);
     const top = await page.locator(`#${id}`).evaluate((el) => Math.round(el.getBoundingClientRect().top - document.querySelector("main").getBoundingClientRect().top));
@@ -551,11 +550,11 @@ scenario("mc-sweep-clipped-text", "Month Cycle sweep: records where tiles / tabs
     await page.waitForTimeout(700);
     const clipped = await page.evaluate(() => {
       const out = [];
-      const scopes = ['section[aria-label="Obligations"]', 'section[aria-label="Upcoming this cycle"] [role="tablist"]', 'section[aria-label="Cycle summary"]'];
+      const scopes = ['section[aria-label="Upcoming this cycle"] a[href^="/people"]', 'section[aria-label="Upcoming this cycle"] [role="tablist"]', 'section[aria-label="Cycle summary"]'];
       for (const sel of scopes) {
         for (const el of document.querySelectorAll(`${sel} *`)) {
           if (getComputedStyle(el).overflow !== "hidden" && getComputedStyle(el).textOverflow !== "ellipsis") continue;
-          if (el.scrollWidth > el.clientWidth + 1 && el.textContent.trim().length > 0 && el.children.length === 0) out.push(`${sel.includes("Obligations") ? "tile" : sel.includes("tablist") ? "tab" : "summary"}: "${el.textContent.trim().slice(0, 26)}"`);
+          if (el.scrollWidth > el.clientWidth + 1 && el.textContent.trim().length > 0 && el.children.length === 0) out.push(`${sel.includes("/people") ? "people link" : sel.includes("tablist") ? "tab" : "summary"}: "${el.textContent.trim().slice(0, 26)}"`);
         }
       }
       return out;

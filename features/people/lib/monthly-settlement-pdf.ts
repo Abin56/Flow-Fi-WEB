@@ -8,7 +8,7 @@
  */
 import fontkit from "@pdf-lib/fontkit";
 import { PDFDocument, PDFName, PDFNull, StandardFonts, setCharacterSpacing, rgb, type PDFFont, type PDFPage, type RGB } from "pdf-lib";
-import { money2, monthlySettlementView, tidyAccount, type MonthlyItem, type MonthlyPayment } from "@/features/people/lib/monthly-settlement-model";
+import { money2, monthlySettlementView, tidyAccount, type MonthlySummaryLine } from "@/features/people/lib/monthly-settlement-model";
 import { pdfSafe, type StatementAmountFonts, type StatementTextFonts } from "@/features/people/lib/person-statement-pdf";
 import type { StatementViewOptions } from "@/features/people/lib/person-statement-pdf-model";
 import { hexToUnit, STATEMENT_CHIP, STATEMENT_INK, type StatementChip } from "@/features/people/lib/statement-palette";
@@ -21,14 +21,10 @@ const MUTED = hex(STATEMENT_INK.muted);
 const FAINT = hex(STATEMENT_INK.faint);
 const RULE = hex(STATEMENT_INK.rule);
 const RULE_STRONG = hex(STATEMENT_INK.ruleStrong);
-const HEAD = hex(STATEMENT_INK.head);
 const NAVY = hex(STATEMENT_INK.navy);
-const NAVY_TINT = hex(STATEMENT_INK.navyTint);
 const MIDNIGHT = hex(STATEMENT_INK.midnight);
 const ON_MID = hex(STATEMENT_INK.onMidnight);
-const ON_MID_MUTED =hex(STATEMENT_INK.onMidnightMuted);
 const GOLD = hex(STATEMENT_INK.gold);
-const GOLD_LIGHT = hex(STATEMENT_INK.goldLight);
 const WHITE = rgb(1, 1, 1);
 const CHIP_TEXT = Object.fromEntries(Object.entries(STATEMENT_CHIP).map(([k, v]) => [k, hex(v.text)])) as Record<StatementChip, RGB>;
 const PAID = CHIP_TEXT.paid;
@@ -37,20 +33,11 @@ const PAGE_W = 595.28;
 const PAGE_H = 841.89;
 const M = 36;
 const W = PAGE_W - 2 * M;
-const PAD = 7;
-/** Date · Description (rest) · Amount (with its status word beneath) · Type — a payment no longer ties to one item,
- * so there is no Paid / Remaining breakdown per row; Type is what the entry is ("EMI", "Shared Expense", …). */
-const FIXED = [46, 0, 84, 104];
-const STATUS_COLOR = { Pending: BODY, Postponed: CHIP_TEXT.upcoming, Overdue: CHIP_TEXT.overdue } as const;
 const RED = CHIP_TEXT.overdue;
-const COL_W = FIXED.map((w) => (w === 0 ? W - FIXED.reduce((s, x) => s + x, 0) : w));
-const colX = (i: number) => M + COL_W.slice(0, i).reduce((s, w) => s + w, 0);
-const colRight = (i: number) => colX(i) + COL_W[i] - PAD;
-const DESC_W = COL_W[1] - 2 * PAD;
-/** Type sizes (pt): nothing under 8 except the tracked small-caps signposts. */
-const S = { title: 10, money: 9.6, meta: 8.2, label: 6.8 } as const;
+/** Type sizes (pt): nothing under 7.4 except the tracked small-caps signposts. */
+const S = { title: 8.8, money: 8.8, meta: 7.4, label: 5.8 } as const;
 const TRACK = 0.8;
-const FOOTER_H = 48;
+const FOOTER_H = 42;
 const BOTTOM = FOOTER_H + 10;
 const GENERATED = new Intl.DateTimeFormat("en-IN", { day: "2-digit", month: "short", year: "numeric" });
 
@@ -75,10 +62,12 @@ export async function renderMonthlySettlementPdf(
   const semi = textCustom ? await embed(textCustom.semibold) : helveticaBold;
   const bold = textCustom ? await embed(textCustom.bold) : helveticaBold;
   const heavy = textCustom ? await embed(textCustom.extrabold) : helveticaBold;
-  const monoRegular = amountCustom ? await embed(amountCustom.regular) : regular;
-  const monoBold = amountCustom ? await embed(amountCustom.bold) : bold;
+  // Figures share the text face (Plus Jakarta Sans) so amounts read like the rest of the page; `fig*` below sets the digits
+  // on a fixed advance (tabular numerals), so a column of amounts lines up digit for digit.
+  const monoRegular = textCustom ? regular : amountCustom ? await embed(amountCustom.regular) : regular;
+  const monoBold = textCustom ? semi : amountCustom ? await embed(amountCustom.bold) : bold;
   const textFaces = new Set<PDFFont>([regular, medium, semi, bold, heavy]);
-  const unicodeFaces = new Set<PDFFont>([...(textCustom ? [regular, medium, semi, bold, heavy] : []), ...(amountCustom ? [monoRegular, monoBold] : [])]);
+  const unicodeFaces = new Set<PDFFont>([...(textCustom ? [regular, medium, semi, bold, heavy] : []), ...(amountCustom && !textCustom ? [monoRegular, monoBold] : [])]);
   const heavyFace = (f: PDFFont) => f === semi || f === bold || f === heavy || f === monoBold;
   const mono = (f: PDFFont) => (heavyFace(f) ? monoBold : monoRegular);
   const charsets = new Map<PDFFont, Set<number>>();
@@ -96,7 +85,7 @@ export async function renderMonthlySettlementPdf(
   };
   // Amounts inside a sentence ("₹3,000.00") use the figure face, so ₹ reads the same everywhere.
   const runs = (s: string, f: PDFFont) => {
-    return amountCustom && textFaces.has(f) && s.includes("₹")
+    return amountCustom && !textCustom && textFaces.has(f) && s.includes("₹")
       ? s.split(/(₹[\d,]+(?:\.\d+)?)/).filter(Boolean).map((p) => ({ s: p, font: p.startsWith("₹") ? mono(f) : f }))
       : [{ s, font: f }];
   };
@@ -129,13 +118,39 @@ export async function renderMonthlySettlementPdf(
     tracked(s, right - trackedW(s, size, f, tr), yy, size, f, color, tr);
   const box = (x: number, yy: number, w: number, h: number, fill: RGB) => page.drawRectangle({ x, y: yy, width: w, height: h, color: fill });
   const hline = (x0: number, x1: number, yy: number, color = RULE, t = 0.5) => page.drawLine({ start: { x: x0, y: yy }, end: { x: x1, y: yy }, thickness: t, color });
-  const sizeToFit = (s: string, size: number, f: PDFFont, maxW: number, min = 7) => {
+  // Tabular figures: every digit takes the widest digit's advance (a narrow "1" is centred in its cell); separators keep
+  // their own width. Right-aligned, so thousands separators and decimals fall in the same place on every row.
+  const digitCell = new Map<PDFFont, number>();
+  const cellOf = (f: PDFFont, size: number) => {
+    let w = digitCell.get(f);
+    if (w === undefined) {
+      w = Math.max(...[..."0123456789"].map((d) => f.widthOfTextAtSize(encode(d, f), 1)));
+      digitCell.set(f, w);
+    }
+    return w * size;
+  };
+  const figWidth = (str: string, size: number, f: PDFFont) =>
+    [...str].reduce((w, ch) => w + (/\d/.test(ch) ? cellOf(f, size) : f.widthOfTextAtSize(encode(ch, f), size)), 0);
+  const fig = (str: string, x: number, yy: number, size: number, f: PDFFont, color: RGB) => {
+    let cx = x;
+    for (const ch of str) {
+      const e = encode(ch, f);
+      const w = f.widthOfTextAtSize(e, size);
+      const cell = /\d/.test(ch) ? cellOf(f, size) : w;
+      if (e) page.drawText(e, { x: cx + (cell - w) / 2, y: yy, size, font: f, color });
+      cx += cell;
+    }
+  };
+  const figFit = (str: string, size: number, f: PDFFont, maxW: number, min = 7) => {
     let sz = size;
-    while (sz > min && width(s, sz, f) > maxW) sz -= 0.25;
+    while (sz > min && figWidth(str, sz, f) > maxW) sz -= 0.25;
     return sz;
   };
-  const amount = (s: string, right: number, yy: number, size: number, f: PDFFont, color: RGB, maxW: number) =>
-    textRight(money2(s), right, yy, sizeToFit(money2(s), size, mono(f), maxW), mono(f), color);
+  const amount = (s: string, right: number, yy: number, size: number, f: PDFFont, color: RGB, maxW: number) => {
+    const t = safe(money2(s));
+    const sz = figFit(t, size, mono(f), maxW);
+    fig(t, right - figWidth(t, sz, mono(f)), yy, sz, mono(f), color);
+  };
   /** Word wrap that never truncates an amount: "₹ 5,000" stays whole, long words break by characters. */
   const wrap = (label: string, w: number, f: PDFFont, size: number): string[] => {
     const lines: string[] = [];
@@ -164,91 +179,43 @@ export async function renderMonthlySettlementPdf(
   };
   const cap = (lines: string[], max: number, f: PDFFont, size: number, w: number) => (lines.length <= max ? lines : [...lines.slice(0, max - 1), fit(lines.slice(max - 1).join(" "), f, size, w)]);
 
-  // ---- Header ----
-  const HERO_H = 68;
+  const first = v.personName.split(" ")[0];
+  const generated = GENERATED.format(options.now ?? new Date());
+
+  // ---- Header: invoice-style masthead — wordmark left, statement details right ----
+  const SURFACE = hex(STATEMENT_INK.surface);
+  const RIGHT = M + W - 8;
   const drawHero = () => {
     const top = PAGE_H;
-    box(0, top - HERO_H, PAGE_W, HERO_H, MIDNIGHT);
-    box(0, top - HERO_H, PAGE_W, 1.4, GOLD);
-    text("FlowFi", M, top - 25, 16, heavy, WHITE);
-    const bx = M + width("FlowFi", 16, heavy) + 10;
-    page.drawLine({ start: { x: bx, y: top - 15 }, end: { x: bx, y: top - 28 }, thickness: 0.7, color: GOLD });
-    tracked("MONTHLY SETTLEMENT", bx + 10, top - 24.2, 6.8, semi, GOLD_LIGHT, 1.4);
-    const nameW = W - 230;
-    const nameSize = sizeToFit(v.personName, 20, bold, nameW, 12);
-    const generated = GENERATED.format(options.now ?? new Date());
-    const meta: [string, string][] = [["PERIOD", v.cycleLabel], ["AS OF", v.asOf]];
-    if (generated !== v.asOf) meta.push(["GENERATED", generated]);
-    const rows = meta.length === 3 ? [22, 36, 50] : [24, 49];
+    box(0, top - 6, PAGE_W, 6, MIDNIGHT);
+    box(0, top - 7.2, PAGE_W, 1.2, GOLD);
+    y = top - 40;
+    text("FlowFi", M, y, 20, heavy, NAVY);
+    tracked("MONTHLY SETTLEMENT", M + 1, y - 14, 6, semi, GOLD, 1.5);
+    const meta: [string, string][] = [["PERIOD", v.cycleLabel], ["AS OF", v.asOf], ["PREPARED BY", v.ownerName]];
     meta.forEach(([label, value], i) => {
-      const shown = fit(value, medium, 8.8, 150);
-      textRight(shown, M + W, top - rows[i], 8.8, medium, ON_MID);
-      trackedRight(label, M + W - width(shown, 8.8, medium) - 12, top - rows[i], 5.8, semi, ON_MID_MUTED, 1);
+      const yy = y + 4 - i * 12.5;
+      tracked(label, M + W - 215, yy, 5.6, semi, MUTED, 1);
+      text(fit(value, semi, 8.6, 135), M + W - 135, yy, 8.6, semi, INK);
     });
-    text(fit(v.personName, bold, nameSize, nameW), M, top - 52, nameSize, bold, WHITE);
-    y = top - HERO_H - 16;
+    y -= 36;
+    hline(M, M + W, y, RULE_STRONG, 0.7);
+    // From / For
+    y -= 16;
+    tracked("STATEMENT FOR", M, y, 5.6, semi, MUTED, 1);
+    text(fit(v.personName, bold, 12.5, 240), M, y - 15, 12.5, bold, INK);
+    tracked("FROM", M + 280, y, 5.6, semi, MUTED, 1);
+    text(fit(v.ownerName, bold, 12.5, 240), M + 280, y - 15, 12.5, bold, INK);
+    y -= 32;
   };
   const drawContinued = () => {
-    const h = 28;
+    const h = 26;
     box(0, PAGE_H - h, PAGE_W, h, MIDNIGHT);
     box(0, PAGE_H - h, PAGE_W, 1.2, GOLD);
-    text("FlowFi", M, PAGE_H - 18, 10.5, heavy, WHITE);
+    text("FlowFi", M, PAGE_H - 17, 10.5, heavy, WHITE);
     const x = M + width("FlowFi", 10.5, heavy) + 10;
-    text(fit(`Monthly Settlement  ·  ${v.personName}  ·  ${v.cycleLabel}  ·  continued`, medium, 7.6, M + W - x), x, PAGE_H - 17.5, 7.6, medium, ON_MID);
+    text(fit(`Monthly Settlement  ·  ${v.personName}  ·  ${v.cycleLabel}  ·  continued`, medium, 7.4, M + W - x), x, PAGE_H - 16.5, 7.4, medium, ON_MID);
     y = PAGE_H - h - 14;
-  };
-
-  // ---- Summary: one strong amount (with due-now / moved beneath it), then the sum that produces it ----
-  const drawSummary = () => {
-    const LEFT_W = 206;
-    const rowH = (l: (typeof v.lines)[number]) => (l.note ? 36 : 25);
-    const bodyH = v.lines.reduce((s, l) => s + rowH(l), 0) + 20;
-    const hl = cap(wrap(settled ? "Nothing left to settle" : v.headline, LEFT_W - 32, medium, 9.6), 2, medium, 9.6, LEFT_W - 32);
-    // Due this cycle / Postponed sit under the total — the total itself never drops by what is postponed.
-    const splitTop = 69 + (hl.length - 1) * 12 + 16;
-    const H = Math.max(100, bodyH, v.split ? splitTop + 2 * 14 + 8 : 0);
-    const top = y;
-    page.drawRectangle({ x: M, y: top - H, width: W, height: H, color: WHITE, borderColor: RULE_STRONG, borderWidth: 0.7 });
-    box(M + 0.35, top - H + 0.35, LEFT_W, H - 0.7, NAVY_TINT);
-    box(M + 0.35, top - H + 0.35, 3, H - 0.7, NAVY);
-    const ix = M + 18;
-    tracked(settled ? "ALL SETTLED" : "TOTAL OUTSTANDING", ix, top - 21, S.label + 0.4, semi, NAVY, 1.1);
-    const total = money2(v.outstanding);
-    const size = sizeToFit(total, 25, monoBold, LEFT_W - 32, 14);
-    text(total, ix, top - 52, size, monoBold, settled ? PAID : NAVY);
-    hl.forEach((t, i) => text(t, ix, top - 69 - i * 12, 9.6, medium, BODY));
-    if (v.split) {
-      const rows: [string, string, RGB][] = [
-        ["Due this cycle", v.split.dueNow, INK],
-        [`Postponed to ${v.split.postponedTo}`, v.split.postponed, CHIP_TEXT.upcoming],
-      ];
-      rows.forEach(([label, value, color], i) => {
-        const by = top - splitTop - i * 14;
-        text(fit(label, semi, 8.6, LEFT_W - 32 - 62), ix, by, 8.6, semi, color);
-        amount(value, M + LEFT_W - 14, by, 9, monoBold, color, 70);
-      });
-    }
-    const lx = M + LEFT_W + 20;
-    const vr = M + W - 16;
-    let ly = top - 14;
-    for (const l of v.lines) {
-      const last = l.key === "outstanding";
-      const base = ly - 12;
-      if (last) hline(lx, vr, ly - 1, RULE_STRONG, 0.6);
-      if (l.op) text(l.op === "−" ? (textCustom ? "−" : "-") : l.op, lx, base, 9, medium, FAINT);
-      text(l.label, lx + 14, base, 9.6, last ? semi : medium, last ? INK : BODY);
-      amount(l.value, vr, base, 10, last ? monoBold : monoRegular, l.key === "applied" ? PAID : INK, 130);
-      if (l.note) text(fit(money2(l.note), regular, S.meta, vr - lx - 14), lx + 14, base - 12, S.meta, regular, MUTED);
-      ly -= rowH(l);
-    }
-    y = top - H - 20;
-  };
-
-  const sectionTitle = (title: string, caption: string) => {
-    box(M, y - 11, 2.4, 11, GOLD);
-    text(title, M + 8, y - 9.4, 12.5, bold, INK);
-    text(caption, M + 8 + width(title, 12.5, bold) + 9, y - 9.4, S.meta, regular, MUTED);
-    y -= 22;
   };
   const ensure = (h: number, redraw?: () => void) => {
     if (y - h >= BOTTOM) return;
@@ -257,144 +224,155 @@ export async function renderMonthlySettlementPdf(
     redraw?.();
   };
 
-  // ---- Items table ----
-  const COLS = ["Date", "Description", "Amount", "Type"];
-  const tableHeader = () => {
-    box(M, y - 20, W, 20, HEAD);
-    hline(M, M + W, y - 20, RULE_STRONG, 0.7);
-    COLS.forEach((c, i) => {
-      const label = c.toUpperCase();
-      if (i === 2) trackedRight(label, colRight(i), y - 13, S.label, semi, BODY);
-      else tracked(label, colX(i) + PAD, y - 13, S.label, semi, BODY);
-    });
-    y -= 20;
-  };
-  const GROUP_H = 25;
-  const groupBand = (label: string) => {
-    page.drawCircle({ x: colX(0) + PAD + 1.6, y: y - 14, size: 1.6, color: GOLD });
-    tracked(label, colX(0) + PAD + 8, y - 16.6, S.label, semi, NAVY);
-    y -= GROUP_H;
-  };
-  const itemLayout = (it: MonthlyItem) => {
-    const titleLines = cap(wrap(it.title, DESC_W, semi, S.title), 3, semi, S.title, DESC_W);
-    const noteLines = it.detail ? cap(wrap(money2(it.detail), DESC_W, regular, S.meta), 2, regular, S.meta, DESC_W) : [];
-    return { titleLines, noteLines, h: Math.max(36, 24 + titleLines.length * 12 + noteLines.length * 10.2 - (noteLines.length ? 3 : 0)) };
-  };
-  const drawItem = (it: MonthlyItem) => {
-    const l = itemLayout(it);
-    ensure(l.h + 4, tableHeader);
+  // ---- Amount due: one slim band, like the "amount due" line of an invoice ----
+  const drawDue = () => {
+    const H = 46;
     const top = y;
-    const line1 = top - 19;
-    const dm = it.date.match(/^(\d{1,2}) ([A-Za-z]{3})(?: (\d{4}))?$/);
-    if (dm) {
-      text(dm[1], colX(0) + PAD, line1 - 0.5, 12.5, semi, INK);
-      tracked(`${dm[2].toUpperCase()}${dm[3] ? ` ${dm[3]}` : ""}`, colX(0) + PAD + 0.3, line1 - 11, 6.4, semi, MUTED, 0.7);
-    } else text(it.date, colX(0) + PAD, line1, S.meta, regular, FAINT);
-    const dx = colX(1) + PAD;
-    l.titleLines.forEach((t, i) => text(t, dx, line1 - i * 12, S.title, semi, INK));
-    l.noteLines.forEach((t, i) => text(t, dx, line1 - (l.titleLines.length - 1) * 12 - 11.5 - i * 10.2, S.meta, regular, MUTED));
-    amount(it.amount, colRight(2), line1, S.money, monoBold, it.amount === "—" ? FAINT : INK, COL_W[2] - 2 * PAD);
-    // Status: one plain word under the amount (Pending / Postponed / Overdue) — a word, so it survives black & white.
-    const sc = STATUS_COLOR[it.status];
-    page.drawCircle({ x: colRight(2) - width(it.status, 8, semi) - 5, y: line1 - 8.2, size: 1.8, color: sc });
-    textRight(it.status, colRight(2), line1 - 11, 8, semi, sc);
-    // Type: what the entry is, in plain words — "EMI", "Shared Expense", "Assigned Expense".
-    const typeW = COL_W[3] - 2 * PAD;
-    text(safe(it.type), colX(3) + PAD, line1, sizeToFit(safe(it.type), 8.8, semi, typeW, 7), semi, BODY);
-    y = top - l.h;
-    hline(M, M + W, y, RULE, 0.4);
+    box(M, top - H, W, H, MIDNIGHT);
+    box(M, top - 1.2, W, 1.2, GOLD);
+    tracked(settled ? "ALL SETTLED" : "BALANCE TO PAY", M + 14, top - 17, 5.8, semi, GOLD, 1.3);
+    text(fit(settled ? "Nothing left to pay" : v.headline, medium, 9.2, 300), M + 14, top - 32, 9.2, medium, WHITE);
+    const total = money2(v.outstanding);
+    const size = figFit(total, 22, bold, 200, 14);
+    fig(total, M + W - 14 - figWidth(total, size, bold), top - 30, size, bold, settled ? hex(STATEMENT_INK.settledOnMidnight) : WHITE);
+    y = top - H - 6;
+    // Due now vs postponed, one plain line under the band.
+    const sub = v.split
+      ? `${money2(v.split.dueNow)} to pay now  ·  ${money2(v.split.postponed)} postponed to ${v.split.postponedTo}`
+      : v.mixed
+        ? `${first} owes ${money2(v.mixed.theyOwe)}  ·  ${v.ownerShort} owes ${money2(v.mixed.ownerOwes)}`
+        : "";
+    if (sub) {
+      textRight(sub, M + W, y - 8, 8, semi, v.split ? CHIP_TEXT.upcoming : MUTED);
+      y -= 14;
+    }
+    y -= 14;
   };
 
-  // ---- Payments: a compact receipt ledger — date · where it arrived · amount, then what it was toward ----
-  const receipt = (p: MonthlyPayment) => {
-    const source = p.source ? tidyAccount(p.source) : "";
-    // The statement already says who paid (section caption), so a receipt is titled by where it arrived.
-    if (p.inbound && !p.advance && source.startsWith("Received in")) return { title: source, sub: p.note ?? "" };
-    if (p.inbound && !p.advance) return { title: "Payment received", sub: [source, p.note].filter(Boolean).join("  ·  ") };
-    return { title: p.label, sub: [source, p.note].filter(Boolean).join("  ·  ") };
+  // ---- Tables: navy header row, zebra rows. Date · Description · Type/Note · Amount ----
+  const COL_DATE = M + 8;
+  const COL_WHAT = M + 58;
+  const MIDW = 104;
+  const COL_MID = M + W - 100 - MIDW;
+  const WHAT_W = COL_MID - COL_WHAT - 8;
+  const heading = (title: string, caption: string) => {
+    text(title, M, y - 9, 10, bold, INK);
+    if (caption) textRight(caption, M + W, y - 8.5, S.meta, regular, MUTED);
+    y -= 17;
   };
-  const payLayout = (p: MonthlyPayment) => {
-    const r = receipt(p);
-    const titleLines = cap(wrap(r.title, DESC_W + COL_W[0] - 8, semi, S.title), 2, semi, S.title, DESC_W);
-    const subLines = r.sub ? cap(wrap(r.sub, DESC_W + COL_W[0] - 8, regular, S.meta), 2, regular, S.meta, DESC_W) : [];
-    const h = Math.max(36, 24 + (titleLines.length - 1) * 12 + subLines.length * 10.5 + 6);
-    return { titleLines, subLines, h };
+  const header = (labels: [string, string, string, string]) => {
+    box(M, y - 16, W, 16, MIDNIGHT);
+    tracked(labels[0].toUpperCase(), COL_DATE, y - 10.6, 5.6, semi, WHITE, 0.9);
+    tracked(labels[1].toUpperCase(), COL_WHAT, y - 10.6, 5.6, semi, WHITE, 0.9);
+    tracked(labels[2].toUpperCase(), COL_MID, y - 10.6, 5.6, semi, WHITE, 0.9);
+    trackedRight(labels[3].toUpperCase(), RIGHT, y - 10.6, 5.6, semi, WHITE, 0.9);
+    y -= 16;
   };
-  const drawPayment = (p: MonthlyPayment) => {
-    const l = payLayout(p);
-    ensure(l.h + 4);
+  const dateText = (date: string) => date.replace(/ \d{4}$/, "").replace("Date not known", "Date n/k");
+  let stripe = 0;
+  const row = (date: string, title: string, sub: string, mid: string, value: string, color: RGB, redraw: () => void) => {
+    const titleLines = cap(wrap(title, WHAT_W, semi, S.title), 2, semi, S.title, WHAT_W);
+    const subLines = sub ? cap(wrap(money2(sub), WHAT_W, regular, S.meta), 2, regular, S.meta, WHAT_W) : [];
+    const h = Math.max(22, 10 + titleLines.length * 10.4 + subLines.length * 8.8 + 4);
+    ensure(h + 2, redraw);
     const top = y;
-    let ly = top - 19;
-    text(p.date === "Date not known" ? "Date n/k" : p.date.replace(/ \d{4}$/, ""), colX(0) + PAD, ly, 9.6, semi, INK);
-    const dx = colX(0) + PAD + 50;
-    l.titleLines.forEach((t, i) => text(fit(t, semi, S.title, colRight(2) - dx - 90), dx, ly - i * 12, S.title, semi, INK));
-    // Money in is "+" and green, money out is "−" and red; the word beneath says it again for a black & white print.
-    const pc = p.status === "Received" ? PAID : p.status === "Paid" ? RED : CHIP_TEXT.advance;
-    const sign = p.status === "Paid" ? (textCustom ? "−" : "-") : "+";
-    amount(`${sign}${p.amount}`, colRight(2), ly, S.money + 0.6, monoBold, pc, 100);
-    textRight(p.status, colRight(2), ly - 11, 8, semi, pc);
-    ly -= (l.titleLines.length - 1) * 12;
-    l.subLines.forEach((t) => {
-      ly -= 10.5;
-      text(t, dx, ly, S.meta, regular, MUTED);
-    });
-    y = top - l.h;
-    hline(M, M + W, y, RULE, 0.4);
+    if (stripe++ % 2 === 1) box(M, top - h, W, h, SURFACE);
+    const l1 = top - 14;
+    text(dateText(date), COL_DATE, l1, 8.2, medium, BODY);
+    titleLines.forEach((t, i) => text(t, COL_WHAT, l1 - i * 10.4, S.title, semi, INK));
+    subLines.forEach((t, i) => text(t, COL_WHAT, l1 - (titleLines.length - 1) * 10.4 - 9.8 - i * 8.8, S.meta, regular, MUTED));
+    if (mid) text(fit(mid, regular, 8, MIDW - 8), COL_MID, l1, 8, regular, BODY);
+    amount(value, RIGHT, l1, S.money, monoBold, color, 96);
+    y = top - h;
+  };
+  const subLabel = (label: string) => {
+    ensure(30);
+    tracked(label, COL_DATE, y - 12, 5.6, semi, NAVY, 1);
+    y -= 17;
+    stripe = 0;
   };
 
   // ---- Compose ----
   drawHero();
-  drawSummary();
+  drawDue();
 
+  const itemHeader = () => {
+    stripe = 0;
+    header(["Date", "Description", "Type", "Amount"]);
+  };
+  heading("Items this month", v.items.length === 0 ? "" : `${v.items.length} ${v.items.length === 1 ? "item" : "items"}`);
+  ensure(34);
+  itemHeader();
+  if (v.items.length === 0) {
+    text("No new items this month.", COL_WHAT, y - 14, S.title, regular, MUTED);
+    y -= 22;
+  }
   const cycleItems = v.items.filter((i) => i.group === "cycle").length;
   const earlier = v.items.filter((i) => i.group !== "cycle").length;
-  sectionTitle("This cycle's items", v.items.length === 0 ? "" : `${v.items.length} ${v.items.length === 1 ? "line" : "lines"}`);
-  ensure(18 + (v.items[0] ? itemLayout(v.items[0]).h : 30), undefined);
-  tableHeader();
-  if (v.items.length === 0) {
-    box(M, y - 26, W, 26, WHITE);
-    text("No new items this cycle.", colX(1) + PAD, y - 16, S.title, regular, MUTED);
-    y -= 26;
-    hline(M, M + W, y, RULE, 0.6);
-  }
-  let band: "earlier" | "cycle" | null = null;
   const bands = earlier > 0 && cycleItems > 0;
+  let band: "earlier" | "cycle" | null = null;
   for (const it of v.items) {
     const g = it.group === "cycle" ? "cycle" : "earlier";
-    if (bands && g !== band) {
-      ensure(GROUP_H + itemLayout(it).h + 4, tableHeader);
-      groupBand(g === "cycle" ? "THIS CYCLE" : "EARLIER BALANCE");
-    }
+    if (bands && g !== band) subLabel(g === "cycle" ? "THIS MONTH" : "FROM EARLIER MONTHS");
     band = g;
-    drawItem(it);
+    row(it.date, it.title, it.detail, it.type, it.amount, it.amount === "—" ? FAINT : INK, itemHeader);
   }
-  // The one closing line — the engine's own balance, never summed from the items above (nothing is tied to one
-  // item anymore, so there is nothing left for a Remaining column to add up).
-  if (v.items.length > 0) {
-    ensure(28, tableHeader);
-    hline(M, M + W, y, RULE_STRONG, 0.7);
-    textRight(v.closing.label, colRight(1) - 6, y - 16, S.meta + 0.6, semi, INK);
-    amount(v.closing.value, colRight(2), y - 16, S.money + 0.4, monoBold, INK, COL_W[2] - 2 * PAD);
-    y -= 24;
-  }
-  y -= 4;
+  hline(M, M + W, y, RULE_STRONG, 0.7);
+  y -= 18;
 
   if (v.payments.length > 0) {
-    y -= 18;
-    ensure(36 + payLayout(v.payments[0]).h);
-    sectionTitle("Payments this cycle", `${v.payments.length} ${v.payments.length === 1 ? "payment" : "payments"}${v.payments.every((x) => x.inbound && !x.advance) ? `  ·  received from ${v.personName}` : ""}`);
-    hline(M, M + W, y, RULE_STRONG, 0.7);
-    v.payments.forEach(drawPayment);
-    if (v.payments.length > 1 && v.totalPaid) {
-      ensure(26);
-      textRight("Total received", colRight(1) - 6, y - 17, S.meta + 0.6, semi, BODY);
-      amount(v.totalPaid, colRight(2), y - 17, S.money + 0.4, monoBold, PAID, 100);
-      y -= 26;
+    ensure(17 + 16 + 26);
+    heading("Payments received", `${v.payments.length} ${v.payments.length === 1 ? "payment" : "payments"}`);
+    const payHeader = () => {
+      stripe = 0;
+      header(["Date", "Received in", "Toward", "Amount"]);
+    };
+    payHeader();
+    for (const p of v.payments) {
+      const src = p.source ? tidyAccount(p.source) : "";
+      const m = src.match(/^(?:Received in|Paid from) (.+)$/);
+      const inbound = p.inbound && !p.advance;
+      const title = inbound ? (m ? m[1] : src || "Payment received") : p.label;
+      const pc = p.status === "Received" ? PAID : p.status === "Paid" ? RED : CHIP_TEXT.advance;
+      const sign = p.status === "Paid" ? (textCustom ? "−" : "-") : "+";
+      row(p.date, title, !inbound && src ? src : "", p.note ?? "", `${sign}${p.amount}`, pc, payHeader);
     }
+    hline(M, M + W, y, RULE_STRONG, 0.7);
+    y -= 18;
+  }
+
+  // ---- Totals: the invoice's closing block, bottom right; the plain-words note sits to its left ----
+  {
+    const line = (k: MonthlySummaryLine["key"]) => v.lines.find((l) => l.key === k);
+    const none = money2("₹0");
+    const got = line("applied");
+    const rows = [
+      { label: "Balance from earlier months", value: line("previous")?.value ?? none, color: INK },
+      { label: "Added this month", value: line("new")?.value ?? none, color: INK },
+      { label: `Paid by ${first}`, value: got ? `${textCustom ? "−" : "-"}${got.value}` : none, color: got ? PAID : FAINT },
+    ];
+    const TW = 236;
+    const x0 = M + W - TW;
+    const h = rows.length * 15 + 34;
+    ensure(h + 6);
+    const top = y;
+    const noteLines = wrap("Payments are counted against the whole balance, not against one item. Item amounts are the original amounts.", x0 - M - 24, regular, S.meta);
+    noteLines.forEach((t, i) => text(t, M, top - 11 - i * 9.6, S.meta, regular, MUTED));
+    let ry = top;
+    rows.forEach((r) => {
+      text(r.label, x0, ry - 11, 8.6, regular, BODY);
+      amount(r.value, RIGHT, ry - 11, 8.8, monoRegular, r.color, 90);
+      ry -= 15;
+    });
+    box(x0, ry - 24, TW, 22, SURFACE);
+    box(x0, ry - 3.2, TW, 1.2, NAVY);
+    text(settled ? "All settled" : "Balance to pay", x0 + 0, ry - 17, 9.4, bold, INK);
+    amount(line("outstanding")?.value ?? v.closing.value, RIGHT, ry - 17, 10, monoBold, settled ? PAID : NAVY, 96);
+    y = ry - 32;
   }
   if (v.advance) {
     ensure(26);
-    y -= 10;
+    y -= 6;
     text(`${v.advance.label} ${v.advance.value} — held apart, not part of the total outstanding.`, M, y - 8, S.meta + 0.4, regular, MUTED);
     y -= 16;
   }
@@ -404,12 +382,9 @@ export async function renderMonthlySettlementPdf(
   pages.forEach((p, i) => {
     page = p;
     hline(M, M + W, FOOTER_H, RULE_STRONG, 0.6);
-    // The total is stated once, in the summary; a multi-page document repeats it per page so a loose page still says what is owed.
-    text(settled ? "Settled — nothing outstanding" : v.headline, M, FOOTER_H - 15, 9.4, semi, INK);
-    if (pages.length > 1 && !settled) textRight(`Outstanding ${money2(v.outstanding)}`, M + W, FOOTER_H - 15, 9.4, semi, BODY);
-    const left = `Prepared by ${v.ownerName}  ·  Period ${v.cycleLabel}`;
-    text(fit(left, regular, S.meta, W - 80), M, FOOTER_H - 30, S.meta, regular, MUTED);
-    if (pages.length > 1) textRight(`Page ${i + 1} of ${pages.length}`, M + W, FOOTER_H - 30, S.meta, semi, BODY);
+    text(fit(`Prepared by ${v.ownerName}  ·  Period ${v.cycleLabel}`, medium, S.meta, W - 90), M, FOOTER_H - 14, S.meta, medium, BODY);
+    textRight(`Page ${i + 1} of ${pages.length}`, M + W, FOOTER_H - 14, S.meta, semi, BODY);
+    text(`Generated ${generated} by FlowFi`, M, FOOTER_H - 26, 6.8, regular, MUTED);
   });
   doc.catalog.set(PDFName.of("OpenAction"), doc.context.obj([pages[0].ref, PDFName.of("FitH"), PDFNull]));
   return doc.save();

@@ -117,11 +117,10 @@ describe("People Ledger table — split row, collapsed", () => {
     expect(share.textContent!.replace(/\s/g, "")).toBe(`Sojan'sshare${money(490)}`.replace(/\s/g, ""));
     // The old one-sentence line is gone.
     expect(tr.textContent).not.toContain("Total price");
-    // Amount column: header is "Amount" (not "Original"), and the ₹490 is captioned as Sojan's share.
+    // Statement columns: the table reads Date · Transaction · Money in · Money out · Amount · Status · Actions.
     expect(screen.getAllByRole("columnheader").map((h) => h.textContent)).toContain("Amount");
     expect(screen.getAllByRole("columnheader").map((h) => h.textContent)).not.toContain("Original");
-    const amountCell = within(tr).getAllByText(money(490)).map((el) => el.closest("td")!).find((td) => td.textContent!.includes("Sojan's share") && !td.textContent!.includes("Original"))!;
-    expect(amountCell).toBeTruthy();
+    expect(screen.getAllByRole("columnheader").map((h) => h.textContent)).not.toContain("Outstanding");
     // Collapsed: no participant matrix yet.
     expect(within(expansionOf(tr)).queryByText("Tripthee")).toBeNull();
   });
@@ -144,11 +143,10 @@ describe("People Ledger table — split row, expanded through the row's own togg
     fireEvent.click(tr);
     expect(tr.getAttribute("aria-expanded")).toBe("true");
     const exp = expansionOf(tr);
-    // Default view: the person's settlement only — the whole-bill allocation is one click away.
+    // Default view: the person's settlement AND the whole-bill allocation — no extra click needed.
     expect(within(exp).getByText("Sojan's settlement")).toBeTruthy();
-    expect(within(exp).queryByText("Split details")).toBeNull();
-    openDetails(exp);
     expect(within(exp).getByText("Split details")).toBeTruthy();
+    expect(within(exp).queryByTestId("row-details")).toBeNull();
     const section = exp.querySelector("section")!;
     expect(within(section).getByText("Original total")).toBeTruthy();
     expect(within(section).getByText(money(2080))).toBeTruthy();

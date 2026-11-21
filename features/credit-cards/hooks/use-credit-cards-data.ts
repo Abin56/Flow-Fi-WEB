@@ -69,7 +69,7 @@ import {
   unbilledSpendForCard,
   uncoveredClosedSpendForCard,
 } from "@/lib/repositories/credit-card-repository";
-import { cardBillsForCard, cardStatementPaymentScope, type CardStatementPaymentScope } from "@/lib/engines/card-cycle-bills";
+import { cardBillsForCard, cardStatementPaymentScope, type CardBill, type CardStatementPaymentScope } from "@/lib/engines/card-cycle-bills";
 import { useCardUtilizationEmis } from "@/hooks/use-card-utilization-emis";
 import { useAccounts } from "@/hooks/use-accounts";
 import { useTransactions } from "@/hooks/use-transactions";
@@ -202,6 +202,9 @@ export interface CreditCardStandingView {
   /** What Pay bill settles for this PHYSICAL card: its closed statements' remaining (oldest first), with
    *  the open cycle's spend reported separately — never the card's or facility's whole outstanding. */
   statementPayment: CardStatementPaymentScope;
+  /** Every bill of this PHYSICAL card (closed + open cycle) as `cardBillsForCard` built it — the same list
+   *  `statementPayment` is derived from. Exposed read-only so presentation (usage breakdown) never rebuilds it. */
+  bills: CardBill[];
   sharedLimit: SharedLimitView | null;
 }
 
@@ -288,10 +291,8 @@ export function computeCreditCardStandings(input: {
   return cardList.map((card): CreditCardStandingView => {
     const cardStatements = utilizationStatementsFor(card.id);
     const rawStatements = settledByCardId.get(card.id)?.statements ?? [];
-    const statementPayment = cardStatementPaymentScope(
-      cardBillsForCard(card, transactionsByAccountId.get(card.accountId) ?? [], statementsByCardId.get(card.id) ?? [], now),
-      now,
-    );
+    const bills = cardBillsForCard(card, transactionsByAccountId.get(card.accountId) ?? [], statementsByCardId.get(card.id) ?? [], now);
+    const statementPayment = cardStatementPaymentScope(bills, now);
     const own = cardOwnStanding(toUtilizationCard(card), cardStatements, currentCycleByCardId.get(card.id) ?? null);
     const sharedLimit = resolvedSharedLimit(card);
 
@@ -314,6 +315,7 @@ export function computeCreditCardStandings(input: {
         effectiveCreditLimit: sharedLimit.creditLimit,
         ownOutstanding: own.outstanding,
         statementPayment,
+        bills,
         sharedLimit: {
           id: sharedLimit.id,
           name: sharedLimit.name,
@@ -337,6 +339,7 @@ export function computeCreditCardStandings(input: {
       effectiveCreditLimit: card.creditLimit,
       ownOutstanding: own.outstanding,
       statementPayment,
+      bills,
       sharedLimit: null,
     };
   });
@@ -544,6 +547,8 @@ export interface CreditCardViewItem {
   ownUsage: number;
   /** Pay bill's scope — closed statements due vs the open cycle's spend (see `CreditCardStandingView`). */
   statementPayment: CardStatementPaymentScope;
+  /** This physical card's bills (see `CreditCardStandingView.bills`) — read-only, for presentation. */
+  bills: CardBill[];
   /** The facility this card shares its limit with, plus its sibling cards' display identity. */
   sharedLimit: (SharedLimitView & { siblings: { id: string; name: string; last4: string; network: string }[] }) | null;
   card: CreditCardProfile;
@@ -633,6 +638,7 @@ function toViewItem(
     loungeVisitsLeft: 0,
     ownUsage: standing.ownOutstanding,
     statementPayment: standing.statementPayment,
+    bills: standing.bills,
     sharedLimit:
       standing.sharedLimit == null
         ? null

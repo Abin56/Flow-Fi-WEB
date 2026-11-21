@@ -38,6 +38,9 @@ for (const [vpName, vp] of Object.entries(VPS)) {
   for (const scheme of ["light", "dark"]) {
     const id = `mccompact-${vpName}-${scheme}`;
     scenario(id, `Month Cycle compact bar: ${vpName} ${vp.width}x${vp.height}, ${scheme} theme`, async ({ page }, chk) => {
+      // Enough realistic data that the (compact) page is taller than the viewport — the bar only shows after scrolling.
+      await h.addFixture(page, "shared-emi");
+      await h.addFixture(page, "history");
       await goTo(page, "/month-cycle");
       await page.getByRole("heading", { level: 1, name: "Month Cycle" }).waitFor();
       await page.waitForTimeout(2500);
@@ -155,6 +158,9 @@ for (const [vpName, vp] of Object.entries(VPS)) {
 
 scenario("mccompact-reduced-motion", "Month Cycle compact bar: prefers-reduced-motion — no slide or gradual fade", async ({ page }, chk) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
+  // Enough realistic data that the (compact) page is taller than the viewport — the bar only shows after scrolling.
+  await h.addFixture(page, "shared-emi");
+  await h.addFixture(page, "history");
   await goTo(page, "/month-cycle");
   await page.getByRole("heading", { level: 1, name: "Month Cycle" }).waitFor();
   await page.waitForTimeout(2000);

@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { CalendarClock, CreditCard, Receipt } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
-import { DashEmpty, DashPanel, DashPanelHeader } from "@/features/dashboard/components/dash-ui";
+import { DASH_ROW, DashEmpty, DashPanel, DashPanelHeader } from "@/features/dashboard/components/dash-ui";
 import { formatCurrency } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -30,16 +30,22 @@ export interface UpcomingPaymentsCardProps {
 
 /**
  * `payments` merges `Bill.nextDueDate` and active `Statement.dueDate` (unpaid, via
- * `statementStatus` != "paid"), sorted soonest-first, via `useDashboardData`.
+ * `statementStatus` != "paid"), sorted soonest-first, via `useDashboardData`. The list scrolls inside the panel
+ * so the dashboard row keeps a steady height however many payments are due.
  */
 export function UpcomingPaymentsCard({ payments, isLoading }: UpcomingPaymentsCardProps) {
   return (
     <DashPanel label="Upcoming payments">
-      <DashPanelHeader icon={CalendarClock} title="Upcoming payments" href="/bills" />
+      <DashPanelHeader
+        icon={CalendarClock}
+        title="Upcoming payments"
+        href="/bills"
+        aside={!isLoading && payments.length > 0 ? <span className="rounded-[4px] bg-secondary px-1.5 text-[11px] font-bold text-foreground/75 tabular-nums">{payments.length}</span> : undefined}
+      />
       {isLoading ? (
         <div className="flex flex-col gap-2 p-4">
           {Array.from({ length: 4 }, (_, i) => (
-            <Skeleton key={i} className="h-9 w-full rounded-[6px]" />
+            <Skeleton key={i} className="h-8 w-full rounded-[6px]" />
           ))}
         </div>
       ) : payments.length === 0 ? (
@@ -53,23 +59,28 @@ export function UpcomingPaymentsCard({ payments, isLoading }: UpcomingPaymentsCa
           }
         />
       ) : (
-        <div className="max-h-80 divide-y divide-border-strong/40 overflow-y-auto">
+        <div className="max-h-[17.5rem] divide-y divide-border-strong/35 overflow-y-auto py-0.5">
           {payments.map((payment) => {
             const Icon = payment.type === "statement" ? CreditCard : Receipt;
             return (
-              <div key={payment.id} className="flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-secondary/50">
-                <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-[8px]", payment.type === "statement" ? "bg-purple/12 text-purple" : "bg-primary/20 text-foreground dark:text-primary-accent-text")}>
-                  <Icon className="size-4" strokeWidth={1.75} />
+              <div key={payment.id} className={cn(DASH_ROW, "group")}>
+                <span
+                  className={cn(
+                    "flex size-7 shrink-0 items-center justify-center rounded-[7px] transition-transform duration-200 group-hover:scale-105",
+                    payment.type === "statement" ? "bg-purple/12 text-purple" : "bg-primary/20 text-foreground dark:text-primary-accent-text",
+                  )}
+                >
+                  <Icon className="size-3.5" strokeWidth={1.9} />
                 </span>
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-semibold text-foreground">{payment.title}</p>
-                  <p className="truncate text-xs text-muted-foreground">
+                  <p className="truncate text-[13px] leading-snug font-semibold text-foreground">{payment.title}</p>
+                  <p className="truncate text-[11.5px] leading-snug text-muted-foreground">
                     {payment.subtitle} · {payment.date}
                   </p>
                 </div>
                 <div className="flex shrink-0 flex-col items-end gap-0.5">
-                  <p className="text-[16px] font-bold text-foreground tabular-nums">{formatCurrency(payment.amount)}</p>
-                  <span className={cn("rounded-[4px] px-1.5 text-[10.5px] font-semibold", payment.overdue ? "bg-expense/12 text-expense" : chipClass(payment.daysLeft))}>
+                  <p className="text-sm leading-tight font-bold text-foreground tabular-nums">{formatCurrency(payment.amount)}</p>
+                  <span className={cn("rounded-[4px] px-1.5 text-[10.5px] leading-[1.45] font-semibold", payment.overdue ? "bg-expense/12 text-expense" : chipClass(payment.daysLeft))}>
                     {payment.overdue ? `${Math.abs(payment.daysLeft)}d overdue` : payment.daysLeft <= 0 ? "Due today" : `${payment.daysLeft}d left`}
                   </span>
                 </div>

@@ -8,7 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { PeriodBar } from "@/features/reports/components/period-bar";
 import { Segmented, signedCurrency } from "@/features/reports/components/report-ui";
 import { buildInsights } from "@/features/analytics/lib/insights";
-import { useFinancialReportData, useReportPeriodSelection, type FinancialReportData } from "@/features/reports/hooks/use-financial-report-data";
+import { useFinancialReportData, useSyncedReportPeriod, type FinancialReportData } from "@/features/reports/hooks/use-financial-report-data";
 import type { PeriodDetail } from "@/lib/engines/period-report";
 import { selectionForTrendPoint, type ReportPeriod } from "@/lib/engines/report-period";
 import { formatCurrency, formatCurrencyCompact } from "@/lib/format";
@@ -54,7 +54,7 @@ function readTab(): ExploreTab {
 export function AnalyticsWorkspace() {
   const [accountIds, setAccountIds] = useState<string[]>([]);
   const data = useFinancialReportData({ accountIds });
-  const [selection, setSelection] = useReportPeriodSelection("analytics");
+  const [selection, setSelection, isFollowingGlobalCycle, followGlobalCycle] = useSyncedReportPeriod("analytics");
   const [windowSize, setWindowSize] = useState<WindowSize>("12");
   const [view, setView] = useState<MainView>("flow");
   const [compare, setCompare] = useState(false);
@@ -137,6 +137,15 @@ export function AnalyticsWorkspace() {
       <div className="sticky top-0 z-20 -mx-1 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-b-2xl bg-background/95 px-1 py-1.5 backdrop-blur-md before:pointer-events-none before:absolute before:inset-x-0 before:-top-10 before:h-10 before:bg-background before:content-['']" data-testid="an-controls">
         <h1 className="mr-1 font-heading text-xl font-semibold tracking-tight text-foreground">Analytics</h1>
         <PeriodBar selection={selection} onChange={setSelection} period={focused} startDay={data.startDay} now={data.now} resolve={resolve} />
+        {!isFollowingGlobalCycle && (
+          <button
+            type="button"
+            onClick={followGlobalCycle}
+            className="inline-flex h-7 items-center gap-1 rounded-[6px] border border-dashed border-border-strong px-2 text-xs font-semibold text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+          >
+            Sync with top-bar cycle
+          </button>
+        )}
         <div className="flex flex-wrap items-center gap-2 @6xl:ml-auto">
           <Segmented
             value={windowSize}

@@ -4,7 +4,11 @@ import { cn } from "@/lib/utils";
 
 /** Shared dashboard surface language — matches the Transactions / Accounts / Credit Cards workspaces. */
 export const DASH_LABEL = "text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase";
-export const DASH_PANEL = "overflow-hidden rounded-[10px] border border-border-strong/60 bg-card shadow-e1";
+export const DASH_PANEL =
+  "overflow-hidden rounded-[12px] border border-border-strong/60 bg-card shadow-e1 transition-[box-shadow,border-color] duration-300 hover:border-border-strong hover:shadow-e2";
+
+/** One compact list row: used by every list panel so rows line up across the grid. */
+export const DASH_ROW = "flex items-center gap-3 px-4 py-2 transition-colors duration-150 hover:bg-secondary/55";
 
 export function DashPanel({ className, children, label }: { className?: string; children: React.ReactNode; label?: string }) {
   return (
@@ -29,30 +33,38 @@ export function DashPanelHeader({
   aside?: React.ReactNode;
 }) {
   return (
-    <div className="flex items-center justify-between gap-3 border-b border-border-strong/50 px-4 py-3">
-      <h2 className="flex min-w-0 items-center gap-2 font-heading text-[15px] font-semibold text-foreground">
+    <div className="flex h-11 shrink-0 items-center justify-between gap-3 border-b border-border-strong/45 px-4">
+      <h2 className="flex min-w-0 items-center gap-2 font-heading text-[14px] font-semibold text-foreground">
         <Icon className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.75} />
         <span className="truncate">{title}</span>
       </h2>
       <div className="flex shrink-0 items-center gap-2">
         {aside}
-        {href && (
-          <Link
-            href={href}
-            className="flex h-7 items-center gap-1 rounded-[6px] px-2 text-xs font-semibold text-primary-accent-text transition-colors hover:bg-primary/15"
-          >
-            {hrefLabel}
-            <ArrowRight className="size-3" strokeWidth={2} />
-          </Link>
-        )}
+        {href && <DashLink href={href}>{hrefLabel}</DashLink>}
       </div>
     </div>
   );
 }
 
+/** Small accent link with a nudging arrow — the header "View all" style. */
+export function DashLink({ href, children, className }: { href: string; children: React.ReactNode; className?: string }) {
+  return (
+    <Link
+      href={href}
+      className={cn(
+        "group/link flex h-7 items-center gap-1 rounded-[6px] px-2 text-xs font-semibold text-primary-accent-text transition-colors hover:bg-primary/15",
+        className,
+      )}
+    >
+      {children}
+      <ArrowRight className="size-3 transition-transform duration-200 group-hover/link:translate-x-0.5" strokeWidth={2} />
+    </Link>
+  );
+}
+
 export function DashEmpty({ title, description, action }: { title: string; description: string; action?: React.ReactNode }) {
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-1 px-4 py-8 text-center">
+    <div className="flex flex-1 flex-col items-center justify-center gap-1 px-4 py-6 text-center">
       <p className="text-sm font-semibold text-foreground">{title}</p>
       <p className="text-xs text-muted-foreground">{description}</p>
       {action && <div className="mt-2">{action}</div>}
@@ -65,10 +77,26 @@ export function DashFooterLink({ href, children }: { href: string; children: Rea
   return (
     <Link
       href={href}
-      className="mt-auto flex items-center justify-center gap-1 border-t border-border-strong/40 px-4 py-2.5 text-xs font-semibold text-primary-accent-text transition-colors hover:bg-primary/10"
+      className="group/link mt-auto flex shrink-0 items-center justify-center gap-1 border-t border-border-strong/40 px-4 py-2 text-xs font-semibold text-primary-accent-text transition-colors hover:bg-primary/10"
     >
       {children}
-      <ArrowRight className="size-3" strokeWidth={2} />
+      <ArrowRight className="size-3 transition-transform duration-200 group-hover/link:translate-x-0.5" strokeWidth={2} />
     </Link>
+  );
+}
+
+/** Themed tooltip body for dashboard charts — card surface, ink text, a colour swatch for identity. */
+export function DashChartTooltip({ title, rows }: { title: string; rows: { label: string; value: string; swatch?: string }[] }) {
+  return (
+    <div className="pointer-events-none min-w-36 rounded-[8px] border border-border-strong/70 bg-popover px-2.5 py-2 text-xs text-popover-foreground shadow-e3">
+      <p className="mb-1 font-semibold text-foreground">{title}</p>
+      {rows.map((r) => (
+        <p key={r.label} className="flex items-center gap-2">
+          {r.swatch && <span className="size-2 shrink-0 rounded-[3px]" style={{ background: r.swatch }} aria-hidden />}
+          <span className="flex-1 text-muted-foreground">{r.label}</span>
+          <span className="font-semibold text-foreground tabular-nums">{r.value}</span>
+        </p>
+      ))}
+    </div>
   );
 }

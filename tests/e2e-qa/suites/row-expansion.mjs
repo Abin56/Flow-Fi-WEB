@@ -18,7 +18,7 @@ const panel = (page) => page.locator('[data-testid="row-expansion"]:visible').fi
 async function expandShare(page) {
   await f.openPerson(page, "QA Priya");
   if (isMobile(page)) await page.locator('li[data-obligation-key]', { hasText: /EMI share/ }).first().locator("button[aria-expanded]").first().click();
-  else await page.locator('tr[data-obligation-key]', { hasText: /EMI share/ }).first().locator("td").nth(2).click();
+  else await page.locator('tr[data-obligation-key]', { hasText: /EMI share/ }).first().locator("td").nth(1).click();
   await panel(page).waitFor();
   await page.waitForTimeout(900); // the row's own animation + reveal
   return panel(page);
@@ -123,7 +123,7 @@ const scrollBody = (fits) => async ({ page }, chk) => {
   const lastKey = await last.getAttribute("data-obligation-key");
   await last.scrollIntoViewIfNeeded();
   const mainBefore = await page.evaluate(() => document.querySelector("main")?.scrollTop ?? 0);
-  await last.locator("td").nth(2).click();
+  await last.locator("td").nth(1).click();
   await page.waitForTimeout(1500); // animation (220ms) + reveal + smooth scroll
   const p = await placement(page, '[data-testid="row-expansion"]');
   chk("the panel's bottom is inside the visible area (or its row header leads when it is taller)", p != null && (p.bottom <= p.viewBottom + 2 || (p.height > p.viewBottom - p.viewTop && p.top >= p.viewTop - 2)), JSON.stringify(p));

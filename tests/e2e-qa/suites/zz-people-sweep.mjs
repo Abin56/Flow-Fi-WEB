@@ -127,7 +127,7 @@ scenario("pp-sweep-list-controls", "People sweep: search, filter chips, cycle na
   await page.getByRole("button", { name: "Next cycle" }).first().click();
   await page.waitForTimeout(900);
   chk("Next cycle returns to the starting range", (await cycleLabel()) === start, await cycleLabel());
-  chk("on the current cycle 'Next' is disabled (no future cycles) and 'Current cycle' is shown instead of 'Back to current'", (await page.getByRole("button", { name: "Next cycle" }).first().isDisabled()) && (await page.getByRole("button", { name: "Back to current" }).count()) === 0 && (await page.getByText("Current cycle", { exact: true }).count()) >= 1);
+  chk("on the current cycle 'Next' is disabled (no future cycles) and 'Current cycle' is shown instead of 'Back to current'", (await page.getByRole("button", { name: "Next cycle" }).first().isDisabled()) && (await page.getByRole("button", { name: "Back to current" }).count()) === 0 && (await page.getByText(/^Current cycle/).count()) >= 1);
   await page.getByRole("button", { name: "Previous cycle" }).first().click();
   await page.waitForTimeout(600);
   await page.getByRole("button", { name: "Previous cycle" }).first().click();

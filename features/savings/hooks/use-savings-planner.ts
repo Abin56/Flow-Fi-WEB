@@ -8,6 +8,9 @@
  *  - Income, outflow, My Spend per cycle → `useFinancialReportData().figuresFor` (the Reports / Analytics period engine,
  *    Month Cycle meaning). Savings transfers are invisible to all of these (proved in `savings-goals.test.ts`).
  *  - Goal money → `useSavingsPosition` (derived from entries).
+ * Safe to save = recorded balances − goal money already set aside − commitments still unpaid. Nothing predicted (no
+ * everyday-spending buffer, no expected income) ever enters it. Account balances are the live `currentBalance`
+ * values and do not depend on the selected cycle; only the "still due" list does.
  * Every combination of those figures is in `lib/engines/savings-plan.ts`. Nothing here writes.
  */
 
@@ -17,7 +20,6 @@ import { useFinancialReportData } from "@/features/reports/hooks/use-financial-r
 import { useSavingsPosition } from "@/features/savings/hooks/use-savings-data";
 import { isSavingsAccount, round2 } from "@/lib/engines/savings-goals";
 import {
-  estimateSpendingBuffer,
   lockedByAccount,
   monthlyPlanSummary,
   savingsCapacity,
@@ -32,7 +34,7 @@ export interface PlannerCycle extends CycleWindow {
   daysLeft: number;
 }
 
-export function useSavingsPlanner(spendingBufferOverride: number | null) {
+export function useSavingsPlanner() {
   const savings = useSavingsPosition();
   const money = useMyMoneyData();
   const report = useFinancialReportData();
@@ -77,14 +79,19 @@ export function useSavingsPlanner(spendingBufferOverride: number | null) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `hasRecordsIn` is a fresh closure each render over `firstRecordDate`, which `figuresFor` already tracks via its sources.
   }, [reportLoading, figuresFor, resolve, report.firstRecordDate]);
 
-  const spend = useMemo(() => estimateSpendingBuffer(figures?.past.map((f) => f.mySpend) ?? [], money.spending.mySpend), [figures, money.spending.mySpend]);
   const surplus = useMemo(() => (figures ? typicalSurplus(figures.past.map((f) => ({ income: f.income, outflow: f.outflow }))) : null), [figures]);
 
-  const buffer = spendingBufferOverride ?? spend.buffer;
   const savingAccounts = useMemo(() => savings.accounts.filter(isSavingsAccount), [savings.accounts]);
+  // Shown in the breakdown so every rupee in "In your accounts" can be traced to an account — and the accounts that
+  // are NOT counted (card-type accounts, which are liabilities here) are named instead of silently missing.
+  const countedAccounts = useMemo(() => savingAccounts.map((a) => ({ id: a.id, name: a.name, last4: a.accountNumberLast4 ?? null, balance: a.currentBalance })), [savingAccounts]);
+  const leftOutAccounts = useMemo(
+    () => savings.accounts.filter((a) => a.deletedAt == null && !isSavingsAccount(a)).map((a) => ({ id: a.id, name: a.name, last4: a.accountNumberLast4 ?? null, balance: a.currentBalance })),
+    [savings.accounts],
+  );
   const capacity = useMemo(
-    () => savingsCapacity({ accounts: savingAccounts, reservedByAccount: savings.position.reservedByAccount, due, spendingBuffer: buffer }),
-    [savingAccounts, savings.position.reservedByAccount, due, buffer],
+    () => savingsCapacity({ accounts: savingAccounts, reservedByAccount: savings.position.reservedByAccount, due }),
+    [savingAccounts, savings.position.reservedByAccount, due],
   );
 
   const plan = useMemo(() => monthlyPlanSummary(savings.position, cycle, money.now), [savings.position, cycle, money.now]);
@@ -100,8 +107,8 @@ export function useSavingsPlanner(spendingBufferOverride: number | null) {
     spentThisCycle: money.spending.mySpend,
     incomeThisCycle: figures?.current.income ?? null,
     outflowThisCycle: figures?.current.outflow ?? null,
-    typicalSpend: spend.typical,
-    suggestedBuffer: spend.buffer,
+    countedAccounts,
+    leftOutAccounts,
     surplus,
     capacity,
     plan,

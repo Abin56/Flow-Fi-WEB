@@ -7,7 +7,8 @@
  *   income              green filled row        — money genuinely came in
  *   expense             plain row               — money spent
  *   settlement kinds    neutral row + rail + ✓  — an obligation was paid / reduced
- *   borrowing / lending violet debt row          — an obligation was created
+ *   lending              violet debt row         — I lent money, an obligation was created
+ *   received from person plain row + name accent — a person-related inflow, never the loud debt wash
  *   transfer            grey row                — money moved between my own accounts
  */
 
@@ -27,7 +28,7 @@ export type TransactionSemanticKind =
   | "personRepaid"
   | "borrowedFromPerson";
 
-export type RowTreatment = "income" | "expense" | "transfer" | "debt" | "borrowed" | "settled";
+export type RowTreatment = "income" | "expense" | "transfer" | "debt" | "borrowed" | "settled" | "personCash";
 
 export interface TransactionPresentation {
   kind: TransactionSemanticKind;
@@ -71,8 +72,10 @@ export function getTransactionPresentation(
     // People cash legs: Borrowed / Received Back come in; Repaid (and Record Payment "I paid") go out.
     // A People "Borrowed" entry's own cash leg (known from the ledger, never the description): money in that must be repaid.
     if (incoming && borrowedFromPerson) return make("borrowedFromPerson", "borrowed", "Borrowed", "Borrowed money", "You need to repay");
+    // Received from a person reads as a plain row — row-wide violet is reserved for lending (see `debt`
+    // above). The person themselves is the accent, carried by `TransactionPresentation.kind`, never the row.
     return incoming
-      ? make("personReceived", "debt", "People", "Received from person", "Received from person")
+      ? make("personReceived", "personCash", "People", "Received from person", "Received from person")
       : make("personRepaid", "settled", "People", "Paid back to person", "Repaid");
   }
   if (t.emiId != null && !incoming) return make("emiPayment", "settled", "EMI payment", "EMI repayment", "EMI paid");

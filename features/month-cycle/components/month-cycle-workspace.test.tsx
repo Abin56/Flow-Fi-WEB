@@ -38,6 +38,8 @@ const data = {
   goToCycleForMonth: vi.fn(),
   goToNextCycle: vi.fn(),
   goToPreviousCycle: vi.fn(),
+  isFollowingGlobalCycle: true,
+  followGlobalCycle: vi.fn(),
   isCurrentCycle: true,
   isCustomCycle: true,
   monthCycleStartDay: 18,
@@ -104,5 +106,47 @@ describe("Month Cycle — cycle picker", () => {
     fireEvent.click(screen.getByRole("button", { name: "Next year" }));
     fireEvent.click(screen.getByRole("button", { name: "Jan" }));
     expect(data.goToCycleForMonth).toHaveBeenCalledWith(2027, 0);
+  });
+});
+
+describe("Month Cycle — lower sections (UI only)", () => {
+  const person = (id: string, name: string, amount: number) => ({ id, name, note: "", amount, toGive: 0, toReceive: amount, net: amount, daysSince: 3 });
+  const snapshot = { ...data };
+  afterEach(() => Object.assign(data, snapshot));
+
+  it("People ledger: each side's header holds its total once; +N more past the list cap; advance shown only when held", () => {
+    Object.assign(data, {
+      peopleSides: { giveCount: 0, receiveCount: 8, totalToGive: 0, totalToReceive: 5000, advanceHeld: 700 },
+      peopleHandoverPending: [person("a", "Asha", 2000), person("b", "Ravi", 3000)],
+    });
+    render(<TooltipProvider><MonthCycleWorkspace /></TooltipProvider>);
+    const ledger = within(screen.getByRole("region", { name: "People ledger" }));
+    // One figure per side — the old tile row repeating it is gone.
+    expect(ledger.getAllByText(formatCurrency(5000))).toHaveLength(1);
+    expect(ledger.getByText("8 people")).toBeTruthy();
+    expect(ledger.getByText("+6 more people")).toBeTruthy();
+    expect(ledger.getByText("Nothing to give right now.")).toBeTruthy();
+    expect(ledger.getByText(formatCurrency(700))).toBeTruthy();
+  });
+
+  it("People ledger: no advance line when none is held", () => {
+    render(<TooltipProvider><MonthCycleWorkspace /></TooltipProvider>);
+    expect(within(screen.getByRole("region", { name: "People ledger" })).queryByText(/Advance held/)).toBeNull();
+  });
+
+  it("Budget: with no budget the panel is one prompt row; set → percent used, and over-budget shows the overshoot", () => {
+    render(<TooltipProvider><MonthCycleWorkspace /></TooltipProvider>);
+    const empty = within(screen.getByRole("region", { name: "Budget overview" }));
+    expect(empty.getByText("No monthly budget set")).toBeTruthy();
+    expect(empty.getByRole("link", { name: /Set a budget/ })).toBeTruthy();
+    cleanup();
+
+    Object.assign(data, { budgetOverview: { limit: 10000, spent: 12500, remaining: -2500, usageRatio: 1.25, isOverBudget: true } });
+    render(<TooltipProvider><MonthCycleWorkspace /></TooltipProvider>);
+    const over = within(screen.getByRole("region", { name: "Budget overview" }));
+    expect(over.getByText("125%")).toBeTruthy();
+    expect(over.getByText("Over by")).toBeTruthy();
+    expect(over.getByText(formatCurrency(2500))).toBeTruthy();
+    expect(over.getByRole("link", { name: /Manage budget/ })).toBeTruthy();
   });
 });

@@ -17,14 +17,12 @@ import { PeopleCompactBar } from "@/features/people/components/people-compact-ba
 import {
   cycleTotals,
   PeopleCycleControl,
-  PeopleCycleSummary,
-  PeopleCycleSummarySkeleton,
-  PeopleLedgerList,
-  PeopleLedgerListSkeleton,
   PeopleListToolbar,
   type PeopleFilter,
   type PeopleLedgerRow,
 } from "@/features/people/components/people-ledger-list";
+import { PeopleCycleOverview, PeopleCycleOverviewSkeleton } from "@/features/people/components/people-cycle-overview";
+import { PeopleLedgerGrid, PeopleLedgerGridSkeleton } from "@/features/people/components/people-ledger-grid";
 import { cycleContaining } from "@/lib/engines/person-cycle-statement";
 import { useMonthCycleStartDay } from "@/features/settings/hooks/use-user-preferences";
 import {
@@ -34,7 +32,6 @@ import {
 import type { AddEntryParams } from "@/features/people/components/workspace/add-entry-panel";
 import type { EditPersonPatch } from "@/features/people/components/workspace/edit-person-mode";
 import type { EntryEditValues } from "@/features/people/components/workspace/ledger-ui";
-import { LE_RADIUS } from "@/features/loans/components/loan-emi-ui";
 import {
   WS_PRIMARY,
   WS_SECONDARY,
@@ -48,6 +45,7 @@ import { usePeople } from "@/hooks/use-people";
 import type { StatementCycle } from "@/lib/engines/person-cycle-statement";
 import { useSelectedCycle } from "@/features/people/hooks/use-selected-cycle";
 import { CYCLE_PARAM, parseCycleAnchor, VIEW_PARAM } from "@/features/people/lib/people-return-link";
+import { sortPeople, type PeopleSort } from "@/features/people/lib/people-sort";
 import type { LedgerEntry, Person } from "@/lib/models/person";
 import { cn } from "@/lib/utils";
 import { toast } from "@/store/toast-store";
@@ -80,7 +78,7 @@ export function PeopleWorkspace() {
   const [returnLedgerPersonId, setReturnLedgerPersonId] = useState<string | null>(() =>
     initialParams.get(VIEW_PARAM) === "ledger" ? initialParams.get("person") : null,
   );
-  const [cycle, setCycleState] = useSelectedCycle(undefined, returnAnchor);
+  const [cycle, setCycleState, , isFollowingGlobalCycle, followGlobalCycle] = useSelectedCycle(undefined, returnAnchor);
   const [cycleDirection, setCycleDirection] = useState<-1 | 0 | 1>(0);
   function setCycle(next: StatementCycle) {
     const delta = next.start.getTime() - cycle.start.getTime();
@@ -93,6 +91,24 @@ export function PeopleWorkspace() {
 
   const [filter, setFilter] = useState<PeopleFilter>("all");
   const [search, setSearch] = useState("");
+  const [sort, setSortState] = useState<PeopleSort>("amountDesc");
+  // The chosen sort is a per-viewer convenience: remembered on this device, harmless when storage is unavailable.
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(SORT_KEY);
+      if (saved === "amountDesc" || saved === "amountAsc" || saved === "name" || saved === "recent") setSortState(saved);
+    } catch {
+      /* blocked storage — keep the default */
+    }
+  }, []);
+  function setSort(next: PeopleSort) {
+    setSortState(next);
+    try {
+      window.localStorage.setItem(SORT_KEY, next);
+    } catch {
+      /* blocked storage — the choice lasts for this visit */
+    }
+  }
   // The open person lives in the URL (`?person=<id>`) via the native History API, which Next's router
   // syncs with `useSearchParams` — so browser Back/Forward move between the list and a person. List
   // state (cycle, search, filter) stays in this component, which never unmounts.
@@ -227,6 +243,13 @@ export function PeopleWorkspace() {
     await actions.deleteLedgerEntries(person, entries);
   }
 
+  /** Newest ledger activity per person (display + "Recent activity" sort only) — read from the existing rows. */
+  const lastActiveById = useMemo(() => {
+    const map = new Map<string, { at: Date; label: string }>();
+    for (const p of people) if (p.activity[0]) map.set(p.id, { at: p.activity[0].rawDate, label: p.lastActivity });
+    return map;
+  }, [people]);
+
   /** One row per person for the selected cycle — the person's own statement, never a re-sum. */
   const ledgerRows = useMemo<PeopleLedgerRow[]>(
     () =>
@@ -236,9 +259,11 @@ export function PeopleWorkspace() {
           id: p.id,
           name: p.name,
           statement: statementsByPersonId[p.id],
+          lastActive: lastActiveById.get(p.id)?.at ?? null,
+          lastActiveLabel: lastActiveById.get(p.id)?.label,
         }))
         .sort(byPosition),
-    [rawPeople, statementsByPersonId],
+    [rawPeople, statementsByPersonId, lastActiveById],
   );
 
   const searched = useMemo(() => {
@@ -260,10 +285,10 @@ export function PeopleWorkspace() {
     [searched],
   );
 
-  const visible =
-    filter === "all"
-      ? searched
-      : searched.filter((r) => r.statement.direction === filter);
+  const visible = useMemo(
+    () => sortPeople(filter === "all" ? searched : searched.filter((r) => r.statement.direction === filter), sort),
+    [searched, filter, sort],
+  );
 
   const selected = selectedId
     ? people.find((p) => p.id === selectedId)
@@ -362,7 +387,7 @@ export function PeopleWorkspace() {
   }
 
   return (
-    <div className="flex min-w-0 flex-col gap-5 px-1 pb-10">
+    <div className="flex min-w-0 flex-col gap-4 px-1 pb-10">
       <PeopleCompactBar
         progress={barProgress}
         reduceMotion={barReduceMotion}
@@ -376,14 +401,23 @@ export function PeopleWorkspace() {
         addDisabled={!actions}
       />
       <div ref={watchTitle} className="flex flex-col">
-        <header className="flex items-center justify-between gap-3">
+        <header className="flex flex-wrap items-center gap-x-6 gap-y-3">
           <div className="flex min-w-0 flex-col gap-0.5">
             <h1 className="font-heading text-2xl font-bold tracking-tight text-foreground">
               People Ledger
             </h1>
-            <p className="text-sm text-muted-foreground">
+            <p className="text-[13px] text-muted-foreground">
               Money between you and the people in your life.
             </p>
+          </div>
+          <div className="ml-auto min-w-0">
+            <PeopleCycleControl
+              cycle={cycle}
+              onCycleChange={setCycle}
+              direction={cycleDirection}
+              isFollowingGlobalCycle={isFollowingGlobalCycle}
+              onFollowGlobalCycle={followGlobalCycle}
+            />
           </div>
           <button
             type="button"
@@ -409,18 +443,10 @@ export function PeopleWorkspace() {
         />
       </div>
 
-      <PeopleCycleControl
-        cycle={cycle}
-        onCycleChange={setCycle}
-        direction={cycleDirection}
-      />
-
       {isLoading ? (
         <>
-          <PeopleCycleSummarySkeleton />
-          <section className={cn(LE_RADIUS.panel, "border border-border bg-card")}>
-            <PeopleLedgerListSkeleton />
-          </section>
+          <PeopleCycleOverviewSkeleton />
+          <PeopleLedgerGridSkeleton />
         </>
       ) : ledgerRows.length === 0 ? (
         <section className="flex flex-col items-center gap-4 rounded-[16px] border-2 border-dashed border-border bg-gradient-to-b from-success/10 to-card px-6 py-12 text-center">
@@ -451,41 +477,38 @@ export function PeopleWorkspace() {
         // Keyed by cycle: the summary and list for one cycle are never shown under another's label.
         <div
           key={cycle.start.getTime()}
-          className="flex animate-in flex-col gap-5 fade-in duration-200"
+          className="flex animate-in flex-col gap-4 fade-in duration-200"
         >
-          <PeopleCycleSummary rows={ledgerRows} />
+          <PeopleCycleOverview rows={ledgerRows} />
           <UpcomingCycleAlert onOpen={openPerson} />
           <PeopleAttention onOpenPerson={openPerson} />
 
-          <section aria-label="People" className="flex flex-col gap-3">
+          <section aria-label="People" className="flex flex-col gap-2.5">
             <PeopleListToolbar
               search={search}
               onSearchChange={setSearch}
               filter={filter}
               onFilterChange={setFilter}
               counts={counts}
+              sort={sort}
+              onSortChange={setSort}
             />
-            <div className="overflow-hidden rounded-[16px] border border-border bg-card shadow-e1">
-              {visible.length === 0 ? (
-                <div className="px-6 py-12 text-center">
-                  <p className="text-sm font-semibold text-foreground">
-                    {search.trim()
-                      ? "No one matches that search"
-                      : "No one in this group for this cycle"}
-                  </p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {search.trim()
-                      ? "Try a different name."
-                      : "Everyone is still listed under All — or pick another cycle."}
-                  </p>
-                </div>
-              ) : (
-                <PeopleLedgerList rows={visible} onOpen={openPerson} />
-              )}
-            </div>
-            <p className="px-1 text-xs text-muted-foreground">
-              Open a person to add, settle, split or share their statement for this cycle.
-            </p>
+            {visible.length === 0 ? (
+              <div className="flex flex-col items-center rounded-[14px] border border-dashed border-border px-6 py-8 text-center">
+                <p className="text-sm font-semibold text-foreground">
+                  {search.trim()
+                    ? "No one matches that search"
+                    : "No one in this group for this cycle"}
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {search.trim()
+                    ? "Try a different name."
+                    : "Everyone is still listed under All — or pick another cycle."}
+                </p>
+              </div>
+            ) : (
+              <PeopleLedgerGrid rows={visible} onOpen={openPerson} />
+            )}
           </section>
         </div>
       )}
@@ -495,6 +518,8 @@ export function PeopleWorkspace() {
     </div>
   );
 }
+
+const SORT_KEY = "flowfi:people-sort";
 
 /** The app shell's scrolling `<main>` — the page scrolls there, not on the window. */
 function scroller(): HTMLElement | null {

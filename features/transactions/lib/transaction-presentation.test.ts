@@ -26,7 +26,7 @@ describe("getTransactionPresentation — semantics, never the sign alone", () =>
     expect(p({ isPersonLedgerMovement: true })).toMatchObject({ kind: "personRepaid", row: "settled", detail: "Paid back to person", status: "Repaid", incoming: false });
   });
   it("G — a person paying me is money in but never Income", () => {
-    expect(p({ type: "income", isPersonLedgerMovement: true })).toMatchObject({ kind: "personReceived", row: "debt", incoming: true });
+    expect(p({ type: "income", isPersonLedgerMovement: true })).toMatchObject({ kind: "personReceived", row: "personCash", incoming: true });
   });
   it("borrowed from a person: its own ledger-identified cash leg gets the borrowed outline, not Income or plain People", () => {
     expect(p({ type: "income", isPersonLedgerMovement: true }, { borrowedFromPerson: true })).toMatchObject({ kind: "borrowedFromPerson", row: "borrowed", label: "Borrowed", detail: "Borrowed money", status: "You need to repay", incoming: true });

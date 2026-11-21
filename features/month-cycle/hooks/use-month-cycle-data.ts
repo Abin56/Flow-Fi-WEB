@@ -44,6 +44,7 @@ import { formatCurrency } from "@/lib/format";
 import { usePeopleRows, usePeopleStats } from "@/features/people/hooks/use-people-data";
 import { peopleDirectionSides } from "@/lib/engines/person-position";
 import { useMonthCycleStartDay } from "@/features/settings/hooks/use-user-preferences";
+import { useGlobalCycle } from "@/features/month-cycle/hooks/use-global-cycle";
 import { adjacentCycleRange, cycleRangeFor, cycleRangeForMonth, isInCycle, mySpendBucketDate } from "@/lib/engines/month-cycle-range";
 import {
   amountFor,
@@ -166,14 +167,26 @@ export function useMonthCycleData() {
   //     correctly read as overdue rather than "days left". ---
   //     The browsed cycle is held as a day inside it (null = today's cycle); prev/next step from the shown
   //     cycle's own edges, so no cycle is ever skipped or repeated. ---
-  const [referenceDay, setReferenceDay] = useState<Date | null>(null);
+  //
+  //     Follows the top-bar's global cycle until the user moves the switcher ON THIS PAGE, which detaches
+  //     it into a local override (global navigation elsewhere no longer moves this page) — `followGlobalCycle`
+  //     re-attaches it. This page never writes the global cycle; only the top bar does.
+  const globalCycle = useGlobalCycle();
+  const [localReferenceDay, setLocalReferenceDay] = useState<Date | null>(null);
+  const [isFollowingGlobalCycle, setIsFollowingGlobalCycle] = useState(true);
+  const referenceDay = isFollowingGlobalCycle ? globalCycle.referenceDay : localReferenceDay;
   const referenceDate = referenceDay ?? now;
   const cycleRange = useMemo(() => cycleRangeFor(monthCycleStartDay, referenceDate), [monthCycleStartDay, referenceDate]);
   const isCurrentCycle = isInCycle(now, cycleRange);
-  const goToPreviousCycle = () => setReferenceDay(adjacentCycleRange(monthCycleStartDay, cycleRange, -1).start);
-  const goToNextCycle = () => setReferenceDay(adjacentCycleRange(monthCycleStartDay, cycleRange, 1).start);
-  const goToCurrentCycle = () => setReferenceDay(null);
-  const goToCycleForMonth = (year: number, month: number) => setReferenceDay(cycleRangeForMonth(monthCycleStartDay, year, month).start);
+  const overrideLocally = (day: Date | null) => {
+    setIsFollowingGlobalCycle(false);
+    setLocalReferenceDay(day);
+  };
+  const goToPreviousCycle = () => overrideLocally(adjacentCycleRange(monthCycleStartDay, cycleRange, -1).start);
+  const goToNextCycle = () => overrideLocally(adjacentCycleRange(monthCycleStartDay, cycleRange, 1).start);
+  const goToCurrentCycle = () => overrideLocally(null);
+  const goToCycleForMonth = (year: number, month: number) => overrideLocally(cycleRangeForMonth(monthCycleStartDay, year, month).start);
+  const followGlobalCycle = () => setIsFollowingGlobalCycle(true);
 
   const { data: transactions = [], isLoading: transactionsLoading } = useTransactions();
   const { data: accounts = [], isLoading: accountsLoading } = useAccounts();
@@ -565,6 +578,9 @@ export function useMonthCycleData() {
     goToNextCycle,
     goToCurrentCycle,
     goToCycleForMonth,
+    /** True while this page is showing the same cycle as the top-bar's global navigator. */
+    isFollowingGlobalCycle,
+    followGlobalCycle,
     financialView,
     savingsRatePercent,
     expenseRows,

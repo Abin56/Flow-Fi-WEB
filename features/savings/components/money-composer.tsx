@@ -119,10 +119,10 @@ function Composer({ direction, view, accounts, reservedByAccount, suggestedAmoun
   const preview = (() => {
     if (!amountValid || amount <= 0) return null;
     const amt = formatCurrency(round2(amount));
-    if (isIn && effectiveMode === "earmark") return `No money moves. ${amt} of ${account?.name ?? "this account"} is set aside for ${goalName} — your balances and net worth stay exactly as they are.`;
-    if (isIn) return `${amt} moves from ${counter?.name ?? "…"} to ${account?.name ?? "…"} as a transfer. It is not an expense, and net worth doesn't change.`;
-    if (effectiveMode === "earmark") return `No money moves. ${amt} is released from ${goalName}${account ? ` and becomes free money in ${account.name}` : ""}.`;
-    return `${amt} moves from ${account?.name ?? "…"} to ${counter?.name ?? "…"} as a transfer. It is not income, and net worth doesn't change.`;
+    if (isIn && effectiveMode === "earmark") return `No money moves. ${amt} of ${account?.name ?? "this account"} is set aside for ${goalName}.`;
+    if (isIn) return `${amt} moves ${counter?.name ?? "…"} → ${account?.name ?? "…"} as a transfer — not an expense.`;
+    if (effectiveMode === "earmark") return `No money moves. ${amt} is released${account ? ` and free again in ${account.name}` : ""}.`;
+    return `${amt} moves ${account?.name ?? "…"} → ${counter?.name ?? "…"} as a transfer — not income.`;
   })();
 
   const quick = isIn
@@ -139,10 +139,10 @@ function Composer({ direction, view, accounts, reservedByAccount, suggestedAmoun
             </span>
             <div className="min-w-0 flex-1">
               <p className="text-[13px] font-semibold text-foreground">Locked{lock.until ? ` until ${formatShortDate(lock.until)}` : ""}</p>
-              <p className="text-[11px] leading-snug text-muted-foreground">A FlowFi reservation — your bank account is not frozen. Withdrawing now is an emergency release and is marked in the history.</p>
+              <p className="text-[11px] leading-snug text-muted-foreground">Withdrawing now is an emergency release, marked in the history. Your bank isn&apos;t frozen.</p>
             </div>
             <label className="flex shrink-0 cursor-pointer items-center gap-2 text-xs font-medium text-foreground">
-              <span>Emergency release</span>
+              <span>Emergency</span>
               <Switch checked={emergency} onCheckedChange={setEmergency} aria-label="Emergency release" data-testid="savings-emergency" />
             </label>
           </div>
@@ -183,7 +183,7 @@ function Composer({ direction, view, accounts, reservedByAccount, suggestedAmoun
           )
         )}
 
-        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
+        <div className="grid gap-3">
           <label className="flex flex-col gap-1">
             <FieldLabel>Amount</FieldLabel>
             <AmountInput value={amountText} onChange={setAmountText} ariaLabel="Amount" testId="savings-amount" autoFocus size="lg" />
@@ -201,7 +201,7 @@ function Composer({ direction, view, accounts, reservedByAccount, suggestedAmoun
               <>
                 <FieldLabel hint={account ? `Free ${formatCurrency(accountFree)}` : undefined}>Money is in</FieldLabel>
                 <AccountSelect accounts={usable.map((a) => ({ ...a, currentBalance: freeInAccount(a, reservedByAccount.get(a.id) ?? 0) }))} value={accountId} onChange={setAccountId} showBalance ariaLabel="Account the money is in" />
-                {account && <p className="text-[11px] text-muted-foreground">{formatCurrency(accountFree)} free of {formatCurrency(account.currentBalance)} — the rest is already set aside.</p>}
+                
               </>
             )}
             {isIn && effectiveMode === "transfer" && (
@@ -241,7 +241,7 @@ function Composer({ direction, view, accounts, reservedByAccount, suggestedAmoun
                 </div>
                 {unlinked && (
                   <p className="flex items-center gap-1 text-[11px] text-muted-foreground">
-                    <Lock className="size-3" /> This starting amount isn&apos;t tied to an account, so it can only be released.
+                    <Lock className="size-3" /> Opening money can only be released.
                   </p>
                 )}
                 {effectiveMode === "transfer" && (
@@ -274,7 +274,7 @@ function Composer({ direction, view, accounts, reservedByAccount, suggestedAmoun
       )}
       {lockedOut && emergency && amountValid && amount > 0 && !problem && (
         <InlineNote tone="warn" icon={<ShieldAlert className="size-3.5" />}>
-          This is recorded as an <strong>emergency withdrawal</strong>. The goal stays locked for the rest of its money.
+          Recorded as an <strong>emergency withdrawal</strong>. The rest stays locked.
         </InlineNote>
       )}
       {(problem || error) && (
@@ -287,7 +287,7 @@ function Composer({ direction, view, accounts, reservedByAccount, suggestedAmoun
         <ClayButton variant="ghost" size="sm" onClick={onDone} disabled={busy}>
           Cancel
         </ClayButton>
-        <ClayButton size="sm" className={cn("h-9 px-4", !isIn && emergency && "bg-expense text-expense-foreground")} onClick={submit} disabled={busy || !!problem} data-testid="savings-money-submit">
+        <ClayButton size="sm" className={cn("h-9 flex-1 px-4 sm:flex-none", !isIn && emergency && "bg-expense text-expense-foreground")} onClick={submit} disabled={busy || !!problem} data-testid="savings-money-submit">
           {busy ? "Saving…" : isIn ? "Add money" : emergency ? "Withdraw (emergency)" : "Withdraw"}
         </ClayButton>
       </div>

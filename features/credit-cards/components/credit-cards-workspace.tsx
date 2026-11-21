@@ -1,10 +1,8 @@
 ﻿"use client";
 
 import {
-  Activity,
   ArrowRight,
   CalendarClock,
-  ChevronRight,
   Layers,
   CreditCard as CreditCardIcon,
   Download,
@@ -37,7 +35,6 @@ import Link from "next/link";
 import { useCompactHeader } from "@/components/layout/compact-header";
 import { CreditCardsCompactBar } from "@/features/credit-cards/components/credit-cards-compact-bar";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Cell, Pie, PieChart, ResponsiveContainer } from "recharts";
 import { ClayButton } from "@/components/clay/clay-button";
 import { CardPaymentCancelDialog } from "@/features/credit-cards/components/card-payment-cancel-dialog";
 import { transactionsHrefForAccount } from "@/features/transactions/lib/account-filter-param";
@@ -72,17 +69,20 @@ import {
   colorValueForCardAccent,
   pickedCardAccent,
   type CardAccent,
-  useCardTransactions,
   useCreditCardActions,
   useCreditCardTotals,
   useCreditCardViewItems,
-  useRecentCreditCardTransactions,
   type CreditCardDeletionImpact,
   type CreditCardViewItem,
 } from "@/features/credit-cards/hooks/use-credit-cards-data";
 import { CARD_GRADIENT, CreditCardTile, cardFaceGradient } from "@/features/credit-cards/components/credit-card-tile";
 import { CardLimitSection } from "@/features/credit-cards/components/card-limit-section";
 import { CardFormPreview, type PreviewCard } from "@/features/credit-cards/components/card-form-preview";
+import { CreditUsageBar, CreditUsageBreakdownView } from "@/features/credit-cards/components/credit-usage-bar";
+import { ActivityEmpty, CardBillsView, CardSpendingView, CardTransactionsView, DuePill, type ActivityTxnRow } from "@/features/credit-cards/components/card-activity-views";
+import { useCreditUsageBreakdowns } from "@/features/credit-cards/hooks/use-credit-usage-breakdown";
+import { cardDueStatus, type CreditUsageBreakdown } from "@/features/credit-cards/lib/card-usage-breakdown";
+import { compareTransactionsNewestFirst } from "@/lib/models/transaction";
 import { useAuthStore } from "@/store/auth-store";
 import { fetchCardBillState } from "@/lib/repositories/repository-factory";
 import type { CardBillState } from "@/lib/repositories/card-bill-people-gate";
@@ -189,49 +189,6 @@ function cardFormFromCard(card: CreditCardViewItem, accounts: Account[]): CardFo
   };
 }
 
-/**
- * Real `Transaction.type` only distinguishes Income/Expense (see the doc
- * comment atop `use-credit-cards-data.ts` for why a richer fixed category
- * set like the mock's isn't invented here).
- */
-const CATEGORY_TONE: Record<string, "primary" | "success" | "warning" | "purple" | "expense" | "neutral"> = {
-  Income: "success",
-  Expense: "expense",
-};
-
-const CATEGORY_CHART_COLOR: Record<string, string> = {
-  primary: "var(--chart-1)",
-  success: "var(--success)",
-  warning: "var(--warning)",
-  purple: "var(--purple)",
-  expense: "var(--expense)",
-  neutral: "var(--muted-foreground)",
-};
-
-const TONE_ICON_CLASS: Record<string, string> = {
-  neutral: "bg-muted text-muted-foreground",
-  primary: "bg-primary/12 text-primary-accent-text",
-  success: "bg-success/15 text-success",
-  expense: "bg-expense/12 text-expense",
-  warning: "bg-warning/20 text-warning-foreground",
-  purple: "bg-purple/15 text-purple",
-};
-
-const CATEGORY_ICON: Record<string, LucideIcon> = {
-  Income: Wallet,
-  Expense: Receipt,
-};
-
-function categoryTone(category: string) {
-  return CATEGORY_TONE[category] ?? "neutral";
-}
-
-function daysUntil(date: Date): number {
-  const now = new Date();
-  const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-  return Math.round((startOfDay(date) - startOfDay(now)) / 86_400_000);
-}
-
 function formatShortDate(date: Date): string {
   return date.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
 }
@@ -245,7 +202,8 @@ function billPeriodLabel(b: Pick<CardBill, "periodStart" | "periodEnd">): string
 export function CreditCardsWorkspace() {
   const { items: creditCards, isLoading: cardsLoading } = useCreditCardViewItems();
   const { totals: engineTotals, isLoading: totalsLoading } = useCreditCardTotals();
-  const { rows: recentCardTransactions, isLoading: recentLoading } = useRecentCreditCardTransactions(Number.POSITIVE_INFINITY);
+  // What each card's credit is used for (Loan / EMI vs Purchases) — presentation over the same engine figures.
+  const usage = useCreditUsageBreakdowns(creditCards);
   const { data: accounts = [] } = useAccounts();
   const { data: sharedLimits = [] } = useSharedCreditLimits();
   const actions = useCreditCardActions();
@@ -634,9 +592,17 @@ export function CreditCardsWorkspace() {
   const activeCard = (activeCardId != null ? creditCards.find((c) => c.id === activeCardId) : undefined) ?? defaultActiveCard;
   // What the Card activity tabs show: the selected card, or every card with "All cards".
   const activityCards = activityAllCards || !activeCard ? creditCards : creditCards.filter((c) => c.id === activeCard.id);
-  // Every loaded card transaction (newest first) for the scope, so an empty list really means none recorded.
-  const activityPool = activityAllCards || !activeCard ? recentCardTransactions : recentCardTransactions.filter((t) => t.card.id === activeCard.id);
-  const activityTransactions = activityPool.slice(0, 8);
+  // Every live card transaction (newest first) for the scope, so an empty list really means none recorded.
+  const activityRows = useMemo<ActivityTxnRow[]>(() => {
+    const scopeCards = activityAllCards || !activeCard ? creditCards : [activeCard];
+    const cardByAccountId = new Map(scopeCards.map((c) => [c.card.accountId, c]));
+    return scopeCards
+      .flatMap((c) => usage.transactionsByAccountId.get(c.card.accountId) ?? [])
+      .sort(compareTransactionsNewestFirst)
+      .map((t) => ({ transaction: t, card: cardByAccountId.get(t.accountId) }));
+  }, [activityAllCards, activeCard, creditCards, usage.transactionsByAccountId]);
+  const categoryById = useMemo(() => new Map(txnCategories.map((c) => [c.id, c.name])), [txnCategories]);
+  const categoryName = (id: string) => categoryById.get(id) ?? null;
 
   const totals = {
     creditLimit: engineTotals.creditLimit,
@@ -648,29 +614,7 @@ export function CreditCardsWorkspace() {
     spentThisMonth: engineTotals.spentThisMonth,
   };
 
-  // Rounded/capped at 100 for display only — the underlying percentage itself
-  // always comes from the engine's creditUtilizationPercent, never recomputed here.
-  const utilization = activeCard ? Math.min(100, Math.round(activeCard.utilizationPercent)) : 0;
-  const available = activeCard ? activeCard.available : 0;
-  const dueInDays = activeCard?.dueDate ? daysUntil(activeCard.dueDate) : null;
-
-  const { transactions: activeCardTransactions } = useCardTransactions(activeCard?.card);
-
-  const spendByCategory = useMemo(() => {
-    const totals = new Map<string, number>();
-    for (const t of activeCardTransactions) {
-      const category = t.type === "income" ? "Income" : "Expense";
-      totals.set(category, (totals.get(category) ?? 0) + t.amount);
-    }
-    const total = [...totals.values()].reduce((s, v) => s + v, 0);
-    return [...totals.entries()]
-      .map(([category, amount]) => ({ category, amount, percent: total === 0 ? 0 : Math.round((amount / total) * 1000) / 10 }))
-      .sort((a, b) => b.amount - a.amount);
-  }, [activeCardTransactions]);
-
-  const spendTotal = spendByCategory.reduce((s, c) => s + c.amount, 0);
-
-  const isLoading = cardsLoading || totalsLoading || recentLoading;
+  const isLoading = cardsLoading || totalsLoading;
 
   // Preview which gradient this card will actually be assigned — accent is "index in list order"
   // (see ACCENT_CYCLE in use-credit-cards-data.ts), so a new card lands at the current list length.
@@ -1019,8 +963,16 @@ export function CreditCardsWorkspace() {
   // so open the existing sheet on Bills for the selected card, then bring that section to the top once it has mounted.
   const viewStatements = () => {
     openActivitySheet("bills", false);
+    // Measured, not a fixed offset: the pinned header (card + tabs) is taller when it wraps on narrow screens.
     requestAnimationFrame(() =>
-      requestAnimationFrame(() => document.getElementById("upcoming-statements")?.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "start" })),
+      requestAnimationFrame(() => {
+        const body = document.getElementById("card-activity-body");
+        const target = document.getElementById("upcoming-statements");
+        const pinned = document.querySelector("#card-activity [data-activity-header]");
+        if (!body || !target) return;
+        const offset = target.getBoundingClientRect().top - (pinned?.getBoundingClientRect().bottom ?? body.getBoundingClientRect().top) - 8;
+        body.scrollTo({ top: body.scrollTop + offset, behavior: reduceMotion ? "auto" : "smooth" });
+      }),
     );
   };
   const scrollToCards = () => document.getElementById("my-credit-cards")?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -1112,9 +1064,23 @@ export function CreditCardsWorkspace() {
   // The engine's exposure ratio (outstanding + locked card-EMI principal) — the same one `available` uses,
   // so "used" and "available" always add up to the limit. Rounded/capped for display only.
   const totalUtilization = Math.min(100, Math.round(totals.utilizationPercent));
+  const activeUsage = activeCard ? (usage.byCardId.get(activeCard.id) ?? null) : null;
+  const payStatement = (c: CreditCardViewItem) => {
+    setPayChoice("statement");
+    setPayCard(c);
+  };
+  const payFull = (c: CreditCardViewItem) => {
+    setPayChoice("full");
+    setPayCard(c);
+  };
+  // Only filters the existing Transactions list to this card's account — nothing is re-read as income/expense.
+  const openCardHistory = (c: CreditCardViewItem) => {
+    router.replace(`/credit-cards?card=${encodeURIComponent(c.id)}`, { scroll: false });
+    router.push(transactionsHrefForAccount(c.card.accountId));
+  };
 
   return (
-    <div className="flex min-w-0 flex-col gap-5 px-1">
+    <div className="flex min-w-0 flex-col gap-4 px-1">
       {/* ── Compact bar: zero-height sticky slot, a sibling of (never inside) the scaled card grid below; figures are the summary's own ── */}
       <CreditCardsCompactBar
         progress={barProgress}
@@ -1129,221 +1095,213 @@ export function CreditCardsWorkspace() {
       />
       {header}
 
-      {/* ── Summary — one panel: what's used leads, limit / available / this month support it ── */}
-      <section id="cc-summary" aria-label="Summary" className="@container overflow-hidden rounded-[10px] border border-border-strong/60 bg-card shadow-e1">
-       <div className="flex flex-col @4xl:flex-row @4xl:items-stretch">
-        <div className="flex flex-col gap-2 bg-gradient-to-br from-expense/[0.08] to-transparent px-5 py-4 sm:px-6 @4xl:min-w-[22rem] @4xl:border-r @4xl:border-border-strong/50 dark:from-expense/[0.14]">
-          <span className={cn(CC_LABEL, "inline-flex items-center gap-1.5")}>
-            <PieChartIcon className="size-3.5 text-foreground" strokeWidth={1.75} />
-            Credit used
-          </span>
-          <p className="text-[32px] leading-none font-bold tracking-tight text-foreground tabular-nums sm:text-[36px]">{formatCurrency(totals.usedCredit)}</p>
-          {totals.lockedEmiPrincipal > 0 && (
-            <p className="text-xs text-muted-foreground tabular-nums">
-              Outstanding <span className="font-semibold text-foreground">{formatCurrency(totals.utilized)}</span> · EMI locked{" "}
-              <span className="font-semibold text-foreground">{formatCurrency(totals.lockedEmiPrincipal)}</span>
-            </p>
-          )}
-          <div className="flex items-center gap-2.5">
-            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-secondary">
-              <div className={cn("h-full rounded-full", totalUtilization >= 80 ? "bg-expense" : "bg-primary-accent-text")} style={{ width: `${totalUtilization}%` }} />
+      {/* ── Summary — Credit used and WHY (Loan / EMI vs Purchases), then limit / available / outstanding / this month ── */}
+      <section id="cc-summary" aria-label="Summary" className="overflow-hidden rounded-[12px] border border-border-strong/60 bg-card shadow-e1">
+        <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)]">
+          <div className="flex min-w-0 flex-col gap-3 bg-gradient-to-br from-purple/[0.06] via-transparent to-transparent px-5 py-4 dark:from-purple/[0.12]">
+            <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-1">
+              <div className="min-w-0">
+                <span className={cn(CC_LABEL, "inline-flex items-center gap-1.5")}>
+                  <PieChartIcon className="size-3.5 text-foreground" strokeWidth={1.75} />
+                  Credit used
+                </span>
+                <p className="mt-1.5 text-[30px] leading-none font-bold tracking-tight text-foreground tabular-nums">{formatCurrency(totals.usedCredit)}</p>
+              </div>
+              <span className="pb-0.5 text-xs text-muted-foreground tabular-nums">
+                <span className={cn("font-semibold", totalUtilization >= 80 ? "text-expense" : "text-foreground")}>{totalUtilization}% used</span> of{" "}
+                {formatCurrency(totals.creditLimit)}
+              </span>
             </div>
-            <span className="text-xs font-semibold text-foreground tabular-nums">{totalUtilization}% used</span>
+            <CreditUsageBreakdownView breakdown={usage.total} layout="row" />
+          </div>
+          <div className="grid grid-cols-2 border-t border-border-strong/50 lg:border-t-0 lg:border-l">
+            <SummaryFigure icon={Wallet} tone="bg-purple/12 text-purple" label="Credit limit" value={formatCurrency(totals.creditLimit)} />
+            <SummaryFigure icon={ShieldCheck} tone="bg-success/12 text-success" label="Available" value={formatCurrency(totals.available)} />
+            <SummaryFigure icon={Receipt} tone="bg-chart-2/12 text-chart-2" label="Outstanding" value={formatCurrency(totals.utilized)} hint="Billed + not billed yet" />
+            <SummaryFigure icon={ShoppingBag} tone="bg-warning/20 text-warning-foreground dark:text-warning" label="Spent this month" value={formatCurrency(totals.spentThisMonth)} hint="Current statement cycles" />
           </div>
         </div>
-        <div className="grid min-w-0 flex-1 grid-cols-1 border-t border-border-strong/50 @xl:grid-cols-3 @xl:divide-x @xl:divide-border-strong/50 @4xl:border-t-0">
-          <SummaryFigure icon={Wallet} tone="bg-purple/12 text-purple" label="Credit limit" value={formatCurrency(totals.creditLimit)} />
-          <SummaryFigure icon={ShieldCheck} tone="bg-success/12 text-success" label="Available" value={formatCurrency(totals.available)} />
-          <SummaryFigure icon={ShoppingBag} tone="bg-warning/20 text-warning-foreground dark:text-warning" label="Spent this month" value={formatCurrency(totals.spentThisMonth)} />
-        </div>
-       </div>
       </section>
 
       {/* Stays perfectly still while the activity sheet slides over it — the dim comes from the sheet's own backdrop
           (one cheap fixed layer), never from scaling/fading this grid, which repainted every card on each frame. */}
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_20rem] xl:items-start">
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_22rem] xl:items-start">
         {/* ── Card selection ── */}
-        <div className="flex min-w-0 flex-col gap-6 xl:col-start-1 xl:row-start-1">
-          {/* scroll-mt-20: "Manage cards" (More menu) scrolls here, and the compact bar covers the top 56px */}
-          <section id="my-credit-cards" aria-label="My credit cards" className="flex scroll-mt-20 flex-col gap-3">
-            <div className="flex flex-wrap items-center gap-2 border-b border-border-strong/50 pb-3">
-              <h2 className="mr-auto font-heading text-base font-semibold text-foreground">
-                My credit cards <span className="ml-0.5 text-sm font-semibold text-muted-foreground tabular-nums">{creditCards.length}</span>
-              </h2>
-              <div role="radiogroup" aria-label="View" className="flex items-center rounded-[6px] border border-border-strong bg-card p-0.5">
-                {(
-                  [
-                    { value: "grid", icon: LayoutGrid, label: "Cards" },
-                    { value: "list", icon: List, label: "List" },
-                  ] as const
-                ).map((v) => (
-                  <button
-                    key={v.value}
-                    type="button"
-                    role="radio"
-                    aria-checked={viewMode === v.value}
-                    onClick={() => setViewMode(v.value)}
-                    className={cn(
-                      "flex h-7 items-center gap-1.5 rounded-[4px] px-2.5 text-xs font-semibold transition-colors",
-                      viewMode === v.value ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-secondary hover:text-foreground",
-                    )}
-                  >
-                    <v.icon className="size-3.5" strokeWidth={1.75} />
-                    {v.label}
-                  </button>
-                ))}
-              </div>
+        {/* scroll-mt-20: "Manage cards" (More menu) scrolls here, and the compact bar covers the top 56px */}
+        <section id="my-credit-cards" aria-label="My credit cards" className="flex min-w-0 scroll-mt-20 flex-col gap-3 xl:col-start-1 xl:row-start-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="mr-auto font-heading text-base font-semibold text-foreground">
+              My credit cards <span className="ml-0.5 text-sm font-semibold text-muted-foreground tabular-nums">{creditCards.length}</span>
+            </h2>
+            <button type="button" onClick={() => openActivitySheet("bills", true)} className={cn(CC_UTILITY, "h-8 text-xs font-semibold")}>
+              <Layers className="size-3.5" strokeWidth={2} />
+              All cards activity
+            </button>
+            <div role="radiogroup" aria-label="View" className="flex items-center rounded-[6px] border border-border-strong bg-card p-0.5">
+              {(
+                [
+                  { value: "grid", icon: LayoutGrid, label: "Cards" },
+                  { value: "list", icon: List, label: "List" },
+                ] as const
+              ).map((v) => (
+                <button
+                  key={v.value}
+                  type="button"
+                  role="radio"
+                  aria-checked={viewMode === v.value}
+                  onClick={() => setViewMode(v.value)}
+                  className={cn(
+                    "flex h-7 items-center gap-1.5 rounded-[4px] px-2.5 text-xs font-semibold transition-colors",
+                    viewMode === v.value ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-secondary hover:text-foreground",
+                  )}
+                >
+                  <v.icon className="size-3.5" strokeWidth={1.75} />
+                  {v.label}
+                </button>
+              ))}
             </div>
+          </div>
 
-            {viewMode === "grid" ? (
-              <Stagger className="grid grid-cols-1 gap-3 sm:grid-cols-[repeat(auto-fill,minmax(15.5rem,1fr))]">
-                {creditCards.map((card) => (
-                  <CreditCardTile
-                    key={card.id}
-                    card={card}
-                    bankId={bankIdOf(card)}
-                    active={card.id === activeCard?.id}
-                    partnerHighlighted={hoveredSharedLimitId != null && card.sharedLimit?.id === hoveredSharedLimitId && card.id !== hoveredCardId}
-                    onHoverChange={(hovered) => {
-                      setHoveredCardId(hovered ? card.id : null);
-                      setHoveredSharedLimitId(hovered ? (card.sharedLimit?.id ?? null) : null);
-                    }}
-                    onClick={() => selectCard(card.id)}
-                    onEdit={() => openEdit(card)}
-                    onDelete={() => {
-                      setCardDeletionImpact(null);
-                      setDeletingCard(card);
-                    }}
-                  />
-                ))}
-                {/* Card activity as the grid's last tile, so it sits beside the cards instead of below the fold. */}
-                <ActivityLauncher
-                  card={activeCard}
-                  bankId={activeCard ? bankIdOf(activeCard) : null}
-                  onOpen={(tab, all) => openActivitySheet(tab, all)}
-                  className="h-full"
+          {viewMode === "grid" ? (
+            // Card-sized tracks, in px not rem (the app's root font is ~13px, so rem widths came out narrow and the
+            // px-sized content made the card near-square). 360–440px wide → landscape tiles, left-aligned,
+            // instead of stretching to fill whatever width the column has. items-start keeps every card its own true shape.
+            <Stagger className="grid grid-cols-1 items-start justify-items-start gap-4 sm:grid-cols-[repeat(auto-fill,minmax(360px,440px))]">
+              {creditCards.map((card) => (
+                <CreditCardTile
+                  key={card.id}
+                  card={card}
+                  bankId={bankIdOf(card)}
+                  active={card.id === activeCard?.id}
+                  partnerHighlighted={hoveredSharedLimitId != null && card.sharedLimit?.id === hoveredSharedLimitId && card.id !== hoveredCardId}
+                  onHoverChange={(hovered) => {
+                    setHoveredCardId(hovered ? card.id : null);
+                    setHoveredSharedLimitId(hovered ? (card.sharedLimit?.id ?? null) : null);
+                  }}
+                  onClick={() => selectCard(card.id)}
+                  onEdit={() => openEdit(card)}
+                  onDelete={() => {
+                    setCardDeletionImpact(null);
+                    setDeletingCard(card);
+                  }}
                 />
-              </Stagger>
-            ) : (
-              <div className="overflow-hidden rounded-[10px] border border-border-strong/70 bg-card shadow-e1">
-                <table className="w-full border-separate border-spacing-0 text-sm">
-                  <thead>
-                    <tr>
-                      <th className={CC_TH}>Card</th>
-                      <th className={cn(CC_TH, "hidden w-36 text-right sm:table-cell")}>Used</th>
-                      <th className={cn(CC_TH, "hidden w-36 text-right md:table-cell")}>Limit</th>
-                      <th className={cn(CC_TH, "w-36")}>Utilization</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {creditCards.map((card) => {
-                      const util = Math.min(100, Math.round(card.utilizationPercent));
-                      const active = card.id === activeCard?.id;
-                      return (
-                        <tr
-                          key={card.id}
-                          onClick={() => selectCard(card.id)}
-                          // Keyboard: the row is one tab stop; Enter/Space selects the card, same as a click.
-                          tabIndex={0}
-                          aria-current={active || undefined}
-                          onKeyDown={(e) => {
-                            if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
-                              e.preventDefault();
-                              selectCard(card.id);
-                            }
-                          }}
-                          className={cn("cursor-pointer transition-colors hover:bg-secondary/60 [&:last-child>td]:border-b-0", active && "bg-primary/10 hover:bg-primary/15")}
-                        >
-                          <td className={cn(CC_TD, "max-w-0")}>
-                            <div className="flex min-w-0 items-center gap-3">
-                              <CardChip card={card} bankId={bankIdOf(card)} />
-                              <div className="min-w-0">
-                                <CardTitleLine card={card} />
-                              </div>
+              ))}
+            </Stagger>
+          ) : (
+            <div className="overflow-hidden rounded-[10px] border border-border-strong/70 bg-card shadow-e1">
+              <table className="w-full border-separate border-spacing-0 text-sm">
+                <thead>
+                  <tr>
+                    <th className={CC_TH}>Card</th>
+                    <th className={cn(CC_TH, "w-32 text-right")}>Credit used</th>
+                    <th className={cn(CC_TH, "hidden w-56 lg:table-cell")}>Loan / EMI · Purchases</th>
+                    <th className={cn(CC_TH, "hidden w-32 text-right md:table-cell")}>Limit</th>
+                    <th className={cn(CC_TH, "w-32")}>Utilization</th>
+                    <th className={cn(CC_TH, "hidden w-40 text-right 2xl:table-cell")}>Bill</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {creditCards.map((card) => {
+                    const util = Math.min(100, Math.round(card.utilizationPercent));
+                    const active = card.id === activeCard?.id;
+                    const b = usage.byCardId.get(card.id);
+                    const due = cardDueStatus(card.statementPayment);
+                    return (
+                      <tr
+                        key={card.id}
+                        onClick={() => selectCard(card.id)}
+                        // Keyboard: the row is one tab stop; Enter/Space selects the card, same as a click.
+                        tabIndex={0}
+                        aria-current={active || undefined}
+                        onKeyDown={(e) => {
+                          if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
+                            e.preventDefault();
+                            selectCard(card.id);
+                          }
+                        }}
+                        className={cn("cursor-pointer transition-colors hover:bg-secondary/60 [&:last-child>td]:border-b-0", active && "bg-primary/10 hover:bg-primary/15")}
+                      >
+                        <td className={cn(CC_TD, "max-w-0")}>
+                          <div className="flex min-w-0 items-center gap-3">
+                            <CardChip card={card} bankId={bankIdOf(card)} />
+                            <div className="min-w-0">
+                              <CardTitleLine card={card} />
+                              <p className="truncate text-[11px] text-muted-foreground 2xl:hidden">{due.dueDate ? `Bill ${formatCurrency(due.amount)} · ${due.label}` : "No bill due"}</p>
                             </div>
-                          </td>
-                          <td className={cn(CC_TD, "hidden text-right sm:table-cell")}>
-                            <span className="text-[16px] font-bold text-foreground tabular-nums">{formatCurrency(card.usedCredit)}</span>
-                            {card.lockedEmiPrincipal > 0 && (
-                              <span className="block text-[11px] text-muted-foreground tabular-nums">incl. {formatCurrency(card.lockedEmiPrincipal)} EMI</span>
-                            )}
-                          </td>
-                          <td className={cn(CC_TD, "hidden text-right text-foreground/85 tabular-nums md:table-cell")}>{formatCurrency(card.creditLimit)}</td>
-                          <td className={CC_TD}>
-                            <UtilizationBar percent={util} />
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </section>
-        </div>
+                          </div>
+                        </td>
+                        <td className={cn(CC_TD, "text-right")}>
+                          <span className="text-[15px] font-bold text-foreground tabular-nums">{formatCurrency(card.usedCredit)}</span>
+                        </td>
+                        <td className={cn(CC_TD, "hidden lg:table-cell")}>
+                          {b && (
+                            <div className="flex flex-col gap-1">
+                              <CreditUsageBar breakdown={b} height="h-1.5" />
+                              <p className="flex items-center gap-3 text-[11px] text-muted-foreground tabular-nums">
+                                <span className="inline-flex items-center gap-1">
+                                  <span className="size-2 rounded-[2px] bg-purple" />
+                                  {formatCurrency(b.loanEmi)}
+                                </span>
+                                <span className="inline-flex items-center gap-1">
+                                  <span className="size-2 rounded-[2px] bg-chart-2" />
+                                  {formatCurrency(b.purchases)}
+                                </span>
+                                {b.unsplit > 0.005 && <span>· {formatCurrency(b.unsplit)} not split</span>}
+                              </p>
+                            </div>
+                          )}
+                        </td>
+                        <td className={cn(CC_TD, "hidden text-right text-foreground/85 tabular-nums md:table-cell")}>{formatCurrency(card.creditLimit)}</td>
+                        <td className={CC_TD}>
+                          <UtilizationBar percent={util} />
+                        </td>
+                        <td className={cn(CC_TD, "hidden text-right 2xl:table-cell")}>
+                          {due.dueDate ? (
+                            <div className="flex flex-col items-end gap-0.5">
+                              <span className="font-semibold text-foreground tabular-nums">{formatCurrency(due.amount)}</span>
+                              <DuePill tone={due.tone} label={due.label} className="h-5 px-2 text-[10.5px]" />
+                            </div>
+                          ) : (
+                            <DuePill tone="clear" label="No bill due" className="h-5 px-2 text-[10.5px]" />
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
 
-        <aside style={{ top: stackTop }} className="flex min-w-0 flex-col gap-5 xl:sticky xl:col-start-2 xl:row-span-2 xl:row-start-1">
-          {activeCard && (
+        <aside style={{ top: stackTop }} className="flex min-w-0 flex-col gap-4 xl:sticky xl:col-start-2 xl:row-start-1">
+          {activeCard && activeUsage && (
             <SelectedCardPanel
               card={activeCard}
+              usage={activeUsage}
               bankId={bankIdOf(activeCard)}
               siblingBankId={(id) => {
                 const sibling = creditCards.find((c) => c.id === id);
                 return sibling ? bankIdOf(sibling) : null;
               }}
-              utilization={utilization}
-              available={available}
-              dueInDays={dueInDays}
+              nextClose={statementWindowForDate(activeCard.card, new Date()).periodEnd}
               reduceMotion={reduceMotion}
-              onPayBill={() => {
-                setPayChoice("statement");
-                setPayCard(activeCard);
-              }}
-              onStatement={() => {
-                openActivitySheet("bills", false);
-              }}
+              onPayBill={() => payStatement(activeCard)}
+              onPayFull={() => payFull(activeCard)}
+              onOpenActivity={(tab) => openActivitySheet(tab, false)}
               onEdit={() => openEdit(activeCard)}
               onAddToShared={() => openAddToSharedLimit(activeCard.sharedLimit!.id)}
-              onViewTransactions={() => {
-                // Only filters the existing Transactions list to this card's account — nothing is re-read as income/expense.
-                router.replace(`/credit-cards?card=${encodeURIComponent(activeCard.id)}`, { scroll: false });
-                router.push(transactionsHrefForAccount(activeCard.card.accountId));
-              }}
-              payScope={
-                <PayScope
-                  scope={payScopeOf(activeCard)}
-                  ownOutstanding={activeCard.ownUsage}
-                  onPayStatement={() => {
-                    setPayChoice("statement");
-                    setPayCard(activeCard);
-                  }}
-                  onPayFull={() => {
-                    setPayChoice("full");
-                    setPayCard(activeCard);
-                  }}
-                />
-              }
+              onViewTransactions={() => openCardHistory(activeCard)}
               linkedNotice={
                 <LinkedFundsPayNotice
                   funds={linkedPendingForCard(linkedFunds, activeCard.card.accountId)}
                   accountName={(id) => accounts.find((a) => a.id === id)?.name}
-                  className="mx-4 mb-3"
+                  className="mx-3 mb-3"
                 />
               }
             />
           )}
-
         </aside>
-
-        {/* ── Card activity (List view): the selected card's bills, transactions and spending — in Cards view it is a tile in the grid ── */}
-        {viewMode !== "grid" && (
-          <ActivityLauncher
-            card={activeCard}
-            bankId={activeCard ? bankIdOf(activeCard) : null}
-            onOpen={(tab, all) => openActivitySheet(tab, all)}
-            className="xl:col-start-1 xl:row-start-2"
-          />
-        )}
       </div>
 
       {/* The activity bottom sheet — slides up over the page, so the summary and cards above never move. Portalled
@@ -1383,17 +1341,17 @@ export function CreditCardsWorkspace() {
               }}
               style={sheetBox ? { top: sheetBox.top, left: sheetBox.left, width: sheetBox.width, bottom: 0 } : undefined}
               // Its own compositor layer, and no backdrop-filter anywhere inside, so each frame of the slide is a plain transform.
-              className="fixed z-attached flex flex-col overflow-hidden rounded-t-[24px] bg-card shadow-[0_-28px_70px_-24px_rgba(0,0,0,0.45)] ring-1 ring-border-strong/60 will-change-transform [backface-visibility:hidden]"
+              className="fixed z-attached flex flex-col overflow-hidden rounded-t-[20px] bg-background shadow-[0_-28px_70px_-24px_rgba(0,0,0,0.45)] ring-1 ring-border-strong/60 will-change-transform [backface-visibility:hidden]"
             >
-              {/* Grab handle (drag down) — floats over the hero */}
-              <div className="pointer-events-none absolute inset-x-0 top-0 z-[2] flex justify-center pt-2">
+              {/* Grab handle (drag down) */}
+              <div className="pointer-events-none absolute inset-x-0 top-0 z-[2] flex justify-center pt-1.5">
                 <button
                   type="button"
                   aria-label="Drag down to close"
                   onPointerDown={(e) => sheetDrag.start(e)}
-                  className="pointer-events-auto flex h-6 w-20 cursor-grab touch-none items-center justify-center rounded-full outline-none active:cursor-grabbing focus-visible:ring-2 focus-visible:ring-white"
+                  className="pointer-events-auto flex h-5 w-20 cursor-grab touch-none items-center justify-center rounded-full outline-none active:cursor-grabbing focus-visible:ring-2 focus-visible:ring-ring"
                 >
-                  <span className="block h-1.5 w-11 rounded-full bg-white/60 shadow-[0_1px_2px_rgba(0,0,0,0.2)]" />
+                  <span className="block h-1 w-10 rounded-full bg-foreground/25" />
                 </button>
               </div>
               <div id="card-activity-body" className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-[env(safe-area-inset-bottom)]">
@@ -1416,29 +1374,20 @@ export function CreditCardsWorkspace() {
               animate={{ opacity: 1, y: 0 }}
               exit={reduceMotion ? undefined : { opacity: 0, y: -4 }}
               transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
-              className="mx-auto w-full max-w-5xl px-4 pt-5 pb-8 sm:px-6"
+              className="mx-auto w-full max-w-6xl px-4 pt-4 pb-8 sm:px-6"
             >
           {activityTab === "bills" && (
-            <div id="upcoming-statements" className="scroll-mt-28">
+            <div id="upcoming-statements" className="scroll-mt-32">
               {!activityAllCards && activeCard ? (
-                <SelectedCardBill
+                <CardBillsView
                   card={activeCard}
                   nextClose={statementWindowForDate(activeCard.card, new Date()).periodEnd}
-                  onPayStatement={() => {
-                    setPayChoice("statement");
-                    setPayCard(activeCard);
-                  }}
-                  onPayFull={() => {
-                    setPayChoice("full");
-                    setPayCard(activeCard);
-                  }}
-                  onHistory={() => {
-                    router.replace(`/credit-cards?card=${encodeURIComponent(activeCard.id)}`, { scroll: false });
-                    router.push(transactionsHrefForAccount(activeCard.card.accountId));
-                  }}
+                  onPayStatement={() => payStatement(activeCard)}
+                  onPayFull={() => payFull(activeCard)}
+                  onHistory={() => openCardHistory(activeCard)}
                 />
               ) : (
-                <div className="overflow-x-auto rounded-[16px] border border-border-strong/60 bg-card shadow-e1">
+                <div className="overflow-x-auto rounded-[14px] border border-border-strong/60 bg-card shadow-e1">
                   <table className="w-full table-fixed border-separate border-spacing-0 text-sm">
                     <thead>
                       <tr>
@@ -1455,6 +1404,7 @@ export function CreditCardsWorkspace() {
                       {activityCards.map((card) => {
                         const scope = card.statementPayment;
                         const bill = scope.current;
+                        const due = cardDueStatus(scope);
                         const nextClose = statementWindowForDate(card.card, new Date()).periodEnd;
                         return (
                           <tr key={card.id} className="transition-colors hover:bg-secondary/40 [&:last-child>td]:border-b-0">
@@ -1463,13 +1413,12 @@ export function CreditCardsWorkspace() {
                                 <CardChip card={card} bankId={bankIdOf(card)} />
                                 <div className="min-w-0">
                                   <CardTitleLine card={card} />
-                                  <p className={cn("truncate text-xs font-medium tabular-nums", scope.currentOverdue ? "text-expense" : "text-foreground/75")}>
-                                    {bill == null
-                                      ? `No bill due · closes ${formatShortDate(nextClose)}`
-                                      : scope.currentOverdue
-                                        ? `Overdue · was due ${formatShortDate(bill.dueDate)}`
-                                        : `Due ${formatShortDate(bill.dueDate)}`}
-                                  </p>
+                                  <div className="mt-0.5 flex min-w-0 items-center gap-2">
+                                    <DuePill tone={due.tone} label={due.label} className="h-5 px-2 text-[10.5px]" />
+                                    <span className="truncate text-xs text-foreground/70 tabular-nums">
+                                      {bill == null ? `Next statement ${formatShortDate(nextClose)}` : `${due.tone === "overdue" ? "Was due" : "Due"} ${formatShortDate(bill.dueDate)}`}
+                                    </span>
+                                  </div>
                                 </div>
                               </div>
                             </td>
@@ -1506,10 +1455,7 @@ export function CreditCardsWorkspace() {
                                 {bill && (
                                   <button
                                     type="button"
-                                    onClick={() => {
-                                      setPayChoice("statement");
-                                      setPayCard(card);
-                                    }}
+                                    onClick={() => payStatement(card)}
                                     className="flex h-7 items-center gap-1 rounded-[6px] border border-primary-accent-text bg-primary px-2.5 text-xs font-semibold text-primary-foreground hover:opacity-90"
                                   >
                                     Pay now
@@ -1532,14 +1478,7 @@ export function CreditCardsWorkspace() {
                                       View payment history
                                     </DropdownMenuItem>
                                     {card.ownUsage > scope.statementDue + 0.005 && (
-                                      <DropdownMenuItem
-                                        onSelect={() => {
-                                          setPayChoice("full");
-                                          setPayCard(card);
-                                        }}
-                                      >
-                                        Pay full outstanding {formatCurrency(card.ownUsage)}
-                                      </DropdownMenuItem>
+                                      <DropdownMenuItem onSelect={() => payFull(card)}>Pay full outstanding {formatCurrency(card.ownUsage)}</DropdownMenuItem>
                                     )}
                                     <DropdownMenuItem disabled>
                                       Download statement
@@ -1560,202 +1499,36 @@ export function CreditCardsWorkspace() {
           )}
 
           {activityTab === "transactions" && (
-            <div className="flex flex-col gap-4">
-              {/* Section bar — what is listed, and the way to the full history. */}
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-                <div className="mr-auto min-w-0">
-                  <p className="font-heading text-base font-semibold text-foreground">
-                    {activityAllCards || !activeCard ? "Recent transactions · all cards" : "Recent transactions"}
-                  </p>
-                  <p className="text-xs text-foreground/60 tabular-nums">
-                    {activityPool.length > activityTransactions.length
-                      ? `Showing latest ${activityTransactions.length} of ${activityPool.length}`
-                      : `${activityTransactions.length} transaction${activityTransactions.length === 1 ? "" : "s"}`}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (activityAllCards || !activeCard) {
-                      router.push("/transactions");
-                      return;
-                    }
-                    router.replace(`/credit-cards?card=${encodeURIComponent(activeCard.id)}`, { scroll: false });
-                    router.push(transactionsHrefForAccount(activeCard.card.accountId));
-                  }}
-                  className="group flex h-9 items-center gap-1.5 rounded-full border border-border-strong/70 bg-card px-3.5 text-xs font-semibold text-foreground shadow-e1 outline-none transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                  {activityAllCards || !activeCard ? "Full card transaction history" : `Full ${activeCard.name} •••• ${activeCard.last4} history`}
-                  <ArrowRight className="size-3.5 transition-transform group-hover:translate-x-0.5" strokeWidth={2} />
-                </button>
-              </div>
-
-              {activityTransactions.length === 0 ? (
-                <div className="rounded-[16px] border border-dashed border-border-strong/70 bg-card">
-                  <ActivityEmpty
-                    icon={Receipt}
-                    title={recentLoading ? "Loading transactions…" : "No transactions in this activity preview"}
-                    detail={
-                      recentLoading
-                        ? undefined
-                        : activityAllCards || !activeCard
-                          ? "Card purchases and payments will appear here."
-                          : "Older or filtered transactions are in the full history."
-                    }
-                  />
-                </div>
-              ) : (
-                // One rounded group per day (Today / Yesterday / 12 Oct 2026); the day label stays pinned under the tabs.
-                activityTransactions
-                  .reduce<{ day: string; items: { txn: (typeof activityTransactions)[number]; i: number }[] }[]>((groups, txn, i) => {
-                    const day = activityDayLabel(txn.date);
-                    const last = groups[groups.length - 1];
-                    if (last && last.day === day) last.items.push({ txn, i });
-                    else groups.push({ day, items: [{ txn, i }] });
-                    return groups;
-                  }, [])
-                  .map((group) => (
-                    <section key={group.day} aria-label={group.day} className="flex flex-col gap-2">
-                      <h3 className="sticky top-[65px] z-[1] -mx-1 flex items-center gap-2 bg-card px-1 py-1.5 text-[11px] font-semibold tracking-[0.08em] text-foreground/55 uppercase">
-                        <span aria-hidden className="size-1.5 rounded-full bg-primary-accent-text" />
-                        {group.day}
-                        <span className="font-medium tracking-normal normal-case text-foreground/45">
-                          · {group.items.length} {group.items.length === 1 ? "transaction" : "transactions"}
-                        </span>
-                      </h3>
-                      <ul className="flex flex-col divide-y divide-border-strong/40 rounded-[16px] border border-border-strong/60 bg-card shadow-e1">
-                        {group.items.map(({ txn, i }) => {
-                          const Icon = CATEGORY_ICON[txn.category] ?? Receipt;
-                          const cardView = creditCards.find((c) => c.id === txn.card.id);
-                          const incoming = txn.category === "Income";
-                          const kind = txn.isBillPayment
-                            ? { label: "Bill payment", tone: "bg-primary/15 text-primary-accent-text" }
-                            : incoming
-                              ? { label: "Credit", tone: "bg-success/12 text-success" }
-                              : { label: "Debit", tone: "bg-secondary text-foreground/70" };
-                          return (
-                            <motion.li
-                              key={txn.id}
-                              initial={reduceMotion ? false : { opacity: 0, y: 6 }}
-                              animate={{ opacity: 1, y: 0 }}
-                              transition={{ duration: 0.22, delay: Math.min(i, 10) * 0.03, ease: [0.22, 1, 0.36, 1] }}
-                              className="group/txn flex items-center gap-3.5 px-3.5 py-3 transition-colors first:rounded-t-[16px] last:rounded-b-[16px] hover:bg-secondary/50 sm:px-4"
-                            >
-                              {/* Category icon; on All cards a swatch of the card's own colour sits on its corner. */}
-                              <span className="relative shrink-0">
-                                <span className={cn("flex size-11 items-center justify-center rounded-[14px]", TONE_ICON_CLASS[categoryTone(txn.category)])}>
-                                  <Icon className="size-[18px]" />
-                                </span>
-                                {(activityAllCards || !activeCard) && cardView && (
-                                  <span
-                                    aria-hidden
-                                    className="absolute -right-1 -bottom-1 h-3.5 w-5 rounded-[4px] shadow-sm ring-2 ring-card"
-                                    style={{ background: cardFaceGradient(cardView) }}
-                                  />
-                                )}
-                              </span>
-
-                              <div className="min-w-0 flex-1">
-                                <p className="truncate text-[15px] font-semibold text-foreground">{txn.merchant}</p>
-                                <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5">
-                                  <span className={cn("rounded-full px-2 py-0.5 text-[10.5px] font-semibold", kind.tone)}>{kind.label}</span>
-                                  {txn.category && !txn.isBillPayment && !incoming && (
-                                    <span className="max-w-[10rem] truncate rounded-full border border-border-strong/60 px-2 py-0.5 text-[10.5px] font-medium text-foreground/70">
-                                      {txn.category}
-                                    </span>
-                                  )}
-                                  {(activityAllCards || !activeCard) && cardView && (
-                                    <span className="flex min-w-0 items-center gap-1 rounded-full bg-secondary px-2 py-0.5 text-[10.5px] font-medium text-foreground/75">
-                                      <CreditCardIcon className="size-3 shrink-0" strokeWidth={2} />
-                                      <span className="truncate">
-                                        {cardView.name} •••• {cardView.last4}
-                                      </span>
-                                    </span>
-                                  )}
-                                </div>
-                              </div>
-
-                              <div className="flex shrink-0 flex-col items-end">
-                                <span className={cn("text-base font-bold tracking-tight whitespace-nowrap tabular-nums", incoming ? "text-success" : "text-foreground")}>
-                                  {incoming ? "+" : "−"}
-                                  {formatCurrency(txn.amount)}
-                                </span>
-                                <span className="text-[11px] text-foreground/55 tabular-nums">
-                                  {txn.date.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
-                                </span>
-                              </div>
-
-                              {txn.isBillPayment ? (
-                                <DropdownMenu>
-                                  <DropdownMenuTrigger asChild>
-                                    <button
-                                      type="button"
-                                      aria-label="Payment actions"
-                                      className="flex size-8 shrink-0 items-center justify-center rounded-full text-foreground/60 transition-colors hover:bg-secondary hover:text-foreground data-[state=open]:bg-secondary"
-                                    >
-                                      <MoreHorizontal className="size-4" strokeWidth={1.75} />
-                                    </button>
-                                  </DropdownMenuTrigger>
-                                  <DropdownMenuContent align="end" className="min-w-52 rounded-[8px]">
-                                    <DropdownMenuItem className="text-expense" onSelect={() => setCancelPaymentId(txn.id)}>
-                                      Cancel recorded payment
-                                    </DropdownMenuItem>
-                                    <DropdownMenuItem onSelect={() => router.push(transactionsHrefForAccount(txn.card.accountId))}>View history</DropdownMenuItem>
-                                  </DropdownMenuContent>
-                                </DropdownMenu>
-                              ) : (
-                                <span aria-hidden className="hidden size-8 shrink-0 sm:block" />
-                              )}
-                            </motion.li>
-                          );
-                        })}
-                      </ul>
-                    </section>
-                  ))
-              )}
-            </div>
+            <CardTransactionsView
+              rows={activityRows}
+              showCard={activityAllCards || !activeCard}
+              financed={usage.financed}
+              categoryName={categoryName}
+              loading={usage.isLoading}
+              fullHistoryLabel={activityAllCards || !activeCard ? "Full card transaction history" : `Full ${activeCard.name} •••• ${activeCard.last4} history`}
+              onFullHistory={() => {
+                if (activityAllCards || !activeCard) {
+                  router.push("/transactions");
+                  return;
+                }
+                openCardHistory(activeCard);
+              }}
+              onCancelPayment={(id) => setCancelPaymentId(id)}
+              onViewHistory={(accountId) => router.push(transactionsHrefForAccount(accountId))}
+            />
           )}
 
-          {activityTab === "spending" && (
-            <div aria-label="Spending summary" className="rounded-[16px] border border-border-strong/60 bg-card p-5 shadow-e1 sm:p-6">
-              {spendByCategory.length === 0 ? (
-                <ActivityEmpty icon={PieChartIcon} title="No spending to show yet" detail={`Purchases on ${activeCard?.name ?? "this card"} will be grouped by category here.`} />
-              ) : (
-                <div className="grid grid-cols-1 items-center gap-6 sm:grid-cols-[13rem_minmax(0,1fr)]">
-                  <div className="relative mx-auto flex size-52 items-center justify-center rounded-full bg-secondary/60 p-4">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <PieChart>
-                        <Pie data={spendByCategory} dataKey="amount" nameKey="category" innerRadius="70%" outerRadius="100%" paddingAngle={2} stroke="none">
-                          {spendByCategory.map((item) => (
-                            <Cell key={item.category} fill={CATEGORY_CHART_COLOR[categoryTone(item.category)]} />
-                          ))}
-                        </Pie>
-                      </PieChart>
-                    </ResponsiveContainer>
-                    <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-                      <span className="text-[10px] font-semibold tracking-[0.08em] text-foreground/60 uppercase">Total spent</span>
-                      <span className="text-xl font-bold tracking-tight text-foreground tabular-nums">{formatCurrency(spendTotal)}</span>
-                    </div>
-                  </div>
-                  <ul className="flex min-w-0 flex-col gap-2">
-                    {spendByCategory.map((item) => (
-                      <li key={item.category} className="flex flex-col gap-2 rounded-[12px] border border-border-strong/50 bg-secondary/30 px-3.5 py-3">
-                        <div className="flex items-center gap-2 text-sm">
-                          <span className="size-2.5 shrink-0 rounded-full" style={{ background: CATEGORY_CHART_COLOR[categoryTone(item.category)] }} />
-                          <span className="min-w-0 flex-1 truncate font-medium text-foreground">{item.category}</span>
-                          <span className="shrink-0 font-bold text-foreground tabular-nums">{formatCurrency(item.amount)}</span>
-                          <span className="w-12 shrink-0 rounded-full bg-card px-1.5 py-0.5 text-center text-[11px] font-semibold text-foreground/70 tabular-nums ring-1 ring-border-strong/50">{item.percent}%</span>
-                        </div>
-                        <div className="h-2 overflow-hidden rounded-full bg-secondary">
-                          <div className="h-full rounded-full" style={{ width: `${item.percent}%`, background: CATEGORY_CHART_COLOR[categoryTone(item.category)] }} />
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </div>
-          )}
+          {activityTab === "spending" &&
+            (activeCard ? (
+              <CardSpendingView
+                card={activeCard}
+                transactions={usage.transactionsByAccountId.get(activeCard.card.accountId) ?? []}
+                financed={usage.financed}
+                categoryName={categoryName}
+              />
+            ) : (
+              <ActivityEmpty icon={PieChartIcon} title="Select a card" detail="Spending is shown for one card at a time." />
+            ))}
             </motion.div>
           </AnimatePresence>
               </div>
@@ -1867,15 +1640,16 @@ const CC_FORM_COMBOBOX =
   "h-9 rounded-[6px] border-border-strong bg-card transition-[border-color,box-shadow] duration-150 hover:border-muted-foreground focus:border-primary-accent-text focus:ring-2 focus:ring-ring dark:bg-input";
 const CC_INPUT = cn(LOAN_EMI_INPUT, "h-9");
 
-function SummaryFigure({ icon: Icon, tone, label, value }: { icon: typeof Wallet; tone: string; label: string; value: string }) {
+function SummaryFigure({ icon: Icon, tone, label, value, hint }: { icon: typeof Wallet; tone: string; label: string; value: string; hint?: string }) {
   return (
-    <div className="flex items-center gap-3 border-b border-border-strong/40 px-4 py-2.5 last:border-b-0 @xl:border-b-0">
+    <div className="flex min-w-0 items-center gap-3 border-border-strong/40 px-4 py-3 [&:nth-child(-n+2)]:border-b [&:nth-child(odd)]:border-r">
       <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-[8px]", tone)}>
         <Icon className="size-4" strokeWidth={1.75} />
       </span>
       <div className="min-w-0">
         <p className={CC_LABEL}>{label}</p>
-        <p className="mt-0.5 text-lg leading-tight font-bold text-foreground tabular-nums">{value}</p>
+        <p className="mt-0.5 truncate text-lg leading-tight font-bold text-foreground tabular-nums">{value}</p>
+        {hint && <span className="block truncate text-[10.5px] text-muted-foreground">{hint}</span>}
       </div>
     </div>
   );
@@ -1884,14 +1658,6 @@ function SummaryFigure({ icon: Icon, tone, label, value }: { icon: typeof Wallet
 type ActivityTab = "bills" | "transactions" | "spending";
 
 const noopSubscribe = () => () => {};
-
-/** "Today", "Yesterday", or "12 Oct 2026" — headings for the activity transaction list. */
-function activityDayLabel(date: Date): string {
-  const d = daysUntil(date);
-  if (d === 0) return "Today";
-  if (d === -1) return "Yesterday";
-  return date.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
-}
 
 /** Sheet motion: a critically damped spring in (no bounce, no wobble), a quicker ease out. */
 const SHEET_OPEN = { type: "spring", duration: 0.45, bounce: 0 } as const;
@@ -1903,17 +1669,10 @@ const ACTIVITY_TABS: { value: ActivityTab; label: string; icon: LucideIcon }[] =
   { value: "spending", label: "Spending", icon: PieChartIcon },
 ];
 
-/** Activity launcher rows: icon tone + one-line hint per tab. */
-const LAUNCHER_ROW: Record<ActivityTab, { tone: string; hint: string }> = {
-  bills: { tone: "bg-purple/12 text-purple", hint: "Statements and due dates" },
-  transactions: { tone: "bg-success/12 text-success", hint: "Charges and payments" },
-  spending: { tone: "bg-warning/20 text-warning-foreground dark:text-warning", hint: "Where the money went" },
-};
-
 /**
- * Card activity header — which card (logo, name, network, last 4), the This card / All cards scope, the
- * Bills · Transactions · Spending tabs, and one line saying exactly what's shown. Pinned (compact) so the
- * card context stays visible while the content scrolls; sits on the app's `attached` layer, under dialogs.
+ * Card activity header — ONE compact pinned bar: which card (mini card face, name, last 4), its key figures (the
+ * same Credit used / Available the tile shows, and the bill status from `cardDueStatus`), the This card / All cards
+ * scope and Back to cards; then the Bills · Transactions · Spending tabs. Replaces the tall dark hero.
  */
 function ActivityHeader({
   card,
@@ -1938,54 +1697,66 @@ function ActivityHeader({
   const scoped = tab !== "spending";
   const showingAll = scoped && (allCards || !card);
   const network = card ? (NETWORK_NAME[card.card.cardNetwork ?? ""] ?? null) : null;
-  const what = tab === "bills" ? "Current bill" : tab === "transactions" ? "Recent transactions" : "Spending by category";
+  const what = tab === "bills" ? "Bills & payments" : tab === "transactions" ? "Recent transactions" : "Spending";
   const context = showingAll ? `${tab === "bills" ? "Bills" : "Recent transactions"} across all ${cardCount} cards` : what;
-  const dueIn = card?.dueDate ? daysUntil(card.dueDate) : null;
-  const dueLabel = dueIn == null ? "No bill due" : dueIn <= 0 ? "Due today" : `Due in ${dueIn}d`;
+  const due = card ? cardDueStatus(card.statementPayment) : null;
   const util = card ? Math.min(100, Math.round(card.utilizationPercent)) : 0;
 
   return (
-    <>
-      {/* Hero — the selected card's own colour, its identity and the three figures that matter. Scrolls away. */}
-      <div
-        className="relative overflow-hidden px-4 pt-9 pb-5 text-white sm:px-6"
-        style={{ background: !showingAll && card ? cardFaceGradient(card) : "var(--gradient-hero)" }}
-      >
-        <span aria-hidden className="pointer-events-none absolute -top-20 -right-16 size-56 rounded-full bg-white/10 blur-3xl" />
-        <span aria-hidden className="pointer-events-none absolute -bottom-24 -left-10 size-48 rounded-full border border-white/10" />
-        <span aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-black/15 to-transparent" />
-
-        <div className="relative mx-auto max-w-5xl">
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
-          <div className="mr-auto flex min-w-0 items-center gap-3">
-            {!showingAll && card ? (
-              bankId ? (
-                <BankLogo bankId={bankId} size={44} className="shadow-lg ring-2 ring-white/50" />
-              ) : (
-                <span className="h-8 w-11 shrink-0 rounded-[6px] border border-white/30 bg-white/15" />
-              )
-            ) : (
-              <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-white/15 ring-1 ring-white/25">
-                <CreditCardIcon className="size-5" strokeWidth={1.9} />
-              </span>
-            )}
-            <div className="min-w-0">
-              <p className="flex min-w-0 items-center gap-2">
-                <span className="truncate font-heading text-xl leading-tight font-bold tracking-tight">{!showingAll && card ? card.name : "All cards"}</span>
-                {!showingAll && network && (
-                  <span className="shrink-0 rounded-[4px] bg-white/20 px-1.5 py-0.5 text-[10px] leading-none font-bold tracking-wide italic">{network}</span>
-                )}
-              </p>
-              <p className="mt-0.5 truncate text-xs text-white/80">
-                {!showingAll && card ? <span className="mr-1.5 font-mono tracking-[0.14em]">•••• {card.last4}</span> : null}
-                {context}
-              </p>
-            </div>
+    <div data-activity-header className="sticky top-0 z-attached border-b border-border-strong/50 bg-card shadow-[0_8px_18px_-16px_rgba(0,0,0,0.45)]">
+      <span aria-hidden className="absolute inset-x-0 top-0 h-1" style={{ background: !showingAll && card ? cardFaceGradient(card) : "var(--gradient-hero)" }} />
+      <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-5 gap-y-2 px-4 pt-5 pb-2 sm:px-6">
+        {/* Identity */}
+        <div className="mr-auto flex min-w-0 items-center gap-3">
+          {!showingAll && card ? (
+            <span className="relative flex h-9 w-14 shrink-0 items-center justify-center overflow-hidden rounded-[7px] shadow-[0_4px_10px_-4px_rgba(0,0,0,0.45)]" style={{ background: cardFaceGradient(card) }}>
+              {bankId ? <BankLogo bankId={bankId} size={22} className="ring-white/50" /> : <CreditCardIcon className="size-4 text-white/85" strokeWidth={1.9} />}
+            </span>
+          ) : (
+            <span className="flex size-9 shrink-0 items-center justify-center rounded-[10px] bg-secondary text-foreground/75">
+              <Layers className="size-4" strokeWidth={1.9} />
+            </span>
+          )}
+          <div className="min-w-0">
+            <p className="flex min-w-0 items-center gap-2">
+              <span className="truncate font-heading text-base leading-tight font-bold tracking-tight text-foreground">{!showingAll && card ? card.name : "All cards"}</span>
+              {!showingAll && network && (
+                <span className="shrink-0 rounded-[4px] border border-border-strong/70 px-1 py-px text-[10px] leading-none font-semibold tracking-wide text-muted-foreground">{network}</span>
+              )}
+            </p>
+            <p className="truncate text-xs text-muted-foreground">
+              {!showingAll && card ? <span className="mr-1.5 font-mono tracking-[0.14em]">•••• {card.last4}</span> : null}
+              {context}
+            </p>
           </div>
+        </div>
 
-          <div className="flex items-center gap-2">
+        {/* Key figures — the same ones the tile shows (Credit used includes locked EMI principal) */}
+        {!showingAll && card && due && (
+          <dl className="hidden items-center gap-5 lg:flex">
+            <div className="min-w-0">
+              <dt className={CC_LABEL}>{card.sharedLimit ? "Shared credit used" : "Credit used"}</dt>
+              <dd className="flex items-baseline gap-1.5 text-[15px] font-bold text-foreground tabular-nums">
+                {formatCurrency(card.usedCredit)}
+                <span className={cn("text-[11px] font-semibold", util >= 80 ? "text-expense" : "text-muted-foreground")}>{util}%</span>
+              </dd>
+            </div>
+            <div className="min-w-0">
+              <dt className={CC_LABEL}>Available</dt>
+              <dd className="text-[15px] font-bold text-success tabular-nums">{formatCurrency(card.available)}</dd>
+            </div>
+            <div className="min-w-0">
+              <dt className={CC_LABEL}>Bill</dt>
+              <dd>
+                <DuePill tone={due.tone} label={due.dueDate ? `${formatCurrency(due.amount)} · ${due.label}` : due.label} />
+              </dd>
+            </div>
+          </dl>
+        )}
+
+        <div className="flex items-center gap-2">
           {scoped && (
-            <div role="radiogroup" aria-label="Show activity for" className="flex items-center rounded-full bg-black/20 p-0.5 ring-1 ring-white/15">
+            <div role="radiogroup" aria-label="Show activity for" className="flex items-center rounded-full bg-secondary p-0.5">
               {[
                 { all: false, label: "This card", title: card ? `Only ${card.name} •••• ${card.last4}` : undefined },
                 { all: true, label: `All cards · ${cardCount}`, title: `All ${cardCount} cards` },
@@ -2000,8 +1771,8 @@ function ActivityHeader({
                     title={opt.title}
                     onClick={() => onAllCards(opt.all)}
                     className={cn(
-                      "h-8 rounded-full px-3.5 text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-white",
-                      selected ? "bg-white font-semibold text-neutral-900 shadow-sm" : "font-medium text-white/80 hover:text-white",
+                      "h-8 rounded-full px-3 text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+                      selected ? "bg-card font-semibold text-foreground shadow-[0_1px_4px_-1px_rgba(0,0,0,0.2)]" : "font-medium text-foreground/65 hover:text-foreground",
                     )}
                   >
                     {opt.label}
@@ -2010,47 +1781,21 @@ function ActivityHeader({
               })}
             </div>
           )}
-            <button
-              type="button"
-              onClick={onClose}
-              title="Back to cards"
-              className="flex h-9 items-center gap-1 rounded-full bg-white/15 pr-3 pl-2 text-xs font-semibold text-white ring-1 ring-white/25 outline-none transition-colors hover:bg-white/25 focus-visible:ring-2 focus-visible:ring-white"
-            >
-              <ChevronDown className="size-4" strokeWidth={2.25} />
-              <span className="max-sm:sr-only">Back to cards</span>
-            </button>
-          </div>
-        </div>
-
-        {!showingAll && card && (
-          <div className="mt-5 overflow-hidden rounded-[16px] bg-white/[0.12] shadow-[inset_0_1px_0_rgba(255,255,255,0.2)] ring-1 ring-white/15">
-            <dl className="grid grid-cols-3 divide-x divide-white/15">
-              {[
-                { label: card.sharedLimit ? "This card used" : "Used", value: formatCurrency(card.ownUsage) },
-                { label: card.sharedLimit ? "Shared available" : "Available", value: formatCurrency(card.available) },
-                { label: "Payment", value: dueLabel, warn: dueIn != null && dueIn <= 5 },
-              ].map((m) => (
-                <div key={m.label} className="min-w-0 px-3 py-3 sm:px-4">
-                  <dt className="truncate text-[10.5px] font-semibold tracking-[0.08em] text-white/70 uppercase">{m.label}</dt>
-                  <dd className={cn("mt-1 truncate text-lg leading-tight font-bold tracking-tight tabular-nums sm:text-xl", m.warn && "text-red-200")}>{m.value}</dd>
-                </div>
-              ))}
-            </dl>
-            <div className="flex items-center gap-3 border-t border-white/12 px-3 py-2.5 sm:px-4">
-              <span className="text-[10.5px] font-semibold tracking-[0.08em] text-white/70 uppercase">{card.sharedLimit ? "Shared limit used" : "Limit used"}</span>
-              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-black/25">
-                <div className={cn("h-full rounded-full", util >= 80 ? "bg-red-300" : "bg-white")} style={{ width: `${util}%` }} />
-              </div>
-              <span className="text-xs font-bold tabular-nums">{util}%</span>
-            </div>
-          </div>
-        )}
+          <button
+            type="button"
+            onClick={onClose}
+            title="Back to cards"
+            className="flex h-9 items-center gap-1 rounded-full border border-border-strong/70 bg-card pr-3 pl-2 text-xs font-semibold text-foreground outline-none transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <ChevronDown className="size-4" strokeWidth={2.25} />
+            <span className="max-sm:sr-only">Back to cards</span>
+          </button>
         </div>
       </div>
 
-      {/* Tabs — pinned while the content scrolls; on the app's `attached` layer, under dialogs. */}
-      <div className="sticky top-0 z-attached h-[65px] border-b border-border-strong/50 bg-card px-4 py-2.5 shadow-[0_6px_14px_-12px_rgba(0,0,0,0.35)]">
-        <div role="tablist" aria-label="Card activity" className="relative mx-auto grid max-w-lg grid-cols-3 gap-1 rounded-full bg-secondary p-1">
+      {/* Tabs — part of the pinned bar, so the card context and the tabs stay visible together */}
+      <div className="mx-auto max-w-6xl px-4 pb-2.5 sm:px-6">
+        <div role="tablist" aria-label="Card activity" className="relative inline-grid grid-cols-3 gap-1 rounded-full bg-secondary p-1">
           {ACTIVITY_TABS.map(({ value, label, icon: Icon }) => {
             const selected = tab === value;
             return (
@@ -2061,7 +1806,7 @@ function ActivityHeader({
                 aria-selected={selected}
                 onClick={() => onTab(value)}
                 className={cn(
-                  "relative flex h-9 items-center justify-center gap-1.5 rounded-full text-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+                  "relative flex h-8 min-w-32 items-center justify-center gap-1.5 rounded-full px-4 text-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
                   selected ? "font-semibold text-foreground" : "font-medium text-foreground/65 hover:text-foreground",
                 )}
               >
@@ -2075,281 +1820,14 @@ function ActivityHeader({
                 )}
                 <Icon className="relative size-4" strokeWidth={selected ? 2.25 : 1.9} />
                 <span className="relative">{label}</span>
-                {selected && <span aria-hidden className="relative size-1.5 rounded-full bg-primary-accent-text" />}
               </button>
             );
           })}
         </div>
       </div>
-    </>
-  );
-}
-
-/**
- * In-page entry to the Card activity sheet — the selected card, then a stack of rows: one per tab, then "All cards".
- * Clicking a card opens the sheet too; this keeps it discoverable (and reopenable) without a click on a card.
- */
-function ActivityLauncher({
-  card,
-  bankId,
-  onOpen,
-  className,
-}: {
-  card: CreditCardViewItem | undefined;
-  bankId: string | null;
-  onOpen: (tab: ActivityTab, allCards: boolean) => void;
-  className?: string;
-}) {
-  return (
-    <div
-      className={cn(
-        "relative flex min-w-0 flex-col overflow-hidden rounded-[16px] border border-border-strong/60 bg-card shadow-[0_10px_28px_-14px_rgba(0,0,0,0.25),0_2px_6px_-2px_rgba(0,0,0,0.08)]",
-        className,
-      )}
-    >
-      {/* Header — tinted with the selected card's own gradient, so it reads as "this card's activity". */}
-      <div className="relative flex min-w-0 items-center gap-3 px-4 pt-3.5 pb-3">
-        {card && <span aria-hidden className="pointer-events-none absolute inset-0 opacity-[0.12] dark:opacity-[0.22]" style={{ background: cardFaceGradient(card) }} />}
-        {card && <span aria-hidden className="pointer-events-none absolute inset-x-0 top-0 h-[3px]" style={{ background: cardFaceGradient(card) }} />}
-        <span className="relative flex size-9 shrink-0 items-center justify-center rounded-full bg-card shadow-e1 ring-1 ring-border-strong/50">
-          {card && bankId ? <BankLogo bankId={bankId} size={24} /> : <Activity className="size-4 text-foreground/70" strokeWidth={2} />}
-        </span>
-        <div className="relative min-w-0">
-          <p className={CC_LABEL}>Card activity</p>
-          <p className="truncate text-sm font-bold text-foreground">
-            {card ? (
-              <>
-                {card.name} <span className="font-semibold tracking-[0.12em] text-foreground/60">•••• {card.last4}</span>
-              </>
-            ) : (
-              "Select a card"
-            )}
-          </p>
-        </div>
-      </div>
-
-      {/* Stacked rows: one per tab — each opens the activity sheet over the page. */}
-      <div className="flex flex-1 flex-col gap-1 px-2 pb-2">
-        {ACTIVITY_TABS.map(({ value, label, icon: Icon }) => (
-          <button
-            key={value}
-            type="button"
-            disabled={!card}
-            onClick={() => onOpen(value, false)}
-            className="group flex min-h-12 flex-1 items-center gap-3 rounded-[10px] px-2.5 py-1.5 text-left outline-none transition-colors hover:bg-secondary/70 focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
-          >
-            <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-[10px] transition-transform group-hover:scale-105", LAUNCHER_ROW[value].tone)}>
-              <Icon className="size-4" strokeWidth={1.9} />
-            </span>
-            <span className="mr-auto min-w-0">
-              <span className="block truncate text-sm font-semibold text-foreground">{label}</span>
-              <span className="block truncate text-[11px] text-muted-foreground">{LAUNCHER_ROW[value].hint}</span>
-            </span>
-            <span className="flex size-7 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-all group-hover:translate-x-0.5 group-hover:bg-card group-hover:text-foreground group-hover:shadow-e1">
-              <ChevronRight className="size-4" strokeWidth={2} />
-            </span>
-          </button>
-        ))}
-      </div>
-
-      {/* Footer — every card's activity at once. */}
-      <button
-        type="button"
-        onClick={() => onOpen("bills", true)}
-        className="group flex h-11 items-center gap-2 border-t border-border-strong/50 bg-secondary/40 px-4 text-left text-xs font-semibold text-foreground/80 outline-none transition-colors hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-      >
-        <Layers className="size-3.5" strokeWidth={2} />
-        <span className="mr-auto">Activity across all cards</span>
-        <ArrowRight className="size-3.5 transition-transform group-hover:translate-x-0.5" strokeWidth={2} />
-      </button>
     </div>
   );
 }
-
-/** Compact, honest empty state for an activity tab. */
-function ActivityEmpty({ icon: Icon, title, detail }: { icon: LucideIcon; title: string; detail?: string }) {
-  return (
-    <div className="flex flex-col items-center gap-3 px-6 py-10 text-center">
-      <span className="flex size-14 items-center justify-center rounded-full bg-secondary text-foreground/55 ring-8 ring-secondary/40">
-        <Icon className="size-6" strokeWidth={1.75} />
-      </span>
-      <div className="max-w-sm">
-        <p className="text-sm font-semibold text-foreground">{title}</p>
-        {detail && <p className="mt-1 text-xs text-foreground/65">{detail}</p>}
-      </div>
-    </div>
-  );
-}
-
-/**
- * The selected card's current bill — the one its Pay now pays (`statementPayment.current`), shown as a
- * summary instead of a one-row table. Amounts and the pay rules come straight from the existing scope.
- */
-function SelectedCardBill({
-  card,
-  nextClose,
-  onPayStatement,
-  onPayFull,
-  onHistory,
-}: {
-  card: CreditCardViewItem;
-  nextClose: Date;
-  onPayStatement: () => void;
-  onPayFull: () => void;
-  onHistory: () => void;
-}) {
-  const scope = card.statementPayment;
-  const bill = scope.current;
-  const canPayFull = card.ownUsage > scope.statementDue + 0.005;
-  const dueIn = bill ? daysUntil(bill.dueDate) : null;
-  const status = !bill
-    ? { label: "No bill due", tone: "bg-secondary text-foreground/75" }
-    : scope.currentOverdue
-      ? { label: "Overdue", tone: "bg-expense/12 text-expense" }
-      : dueIn != null && dueIn <= 5
-        ? { label: dueIn <= 0 ? "Due today" : `Due in ${dueIn} day${dueIn === 1 ? "" : "s"}`, tone: "bg-warning/15 text-foreground" }
-        : { label: dueIn != null ? `Due in ${dueIn} days` : "Due", tone: "bg-success/12 text-success" };
-
-  if (!bill) {
-    return (
-      <div className="flex flex-col gap-4">
-        <div className="flex flex-col gap-4 rounded-[16px] border border-border-strong/60 bg-gradient-to-br from-success/[0.07] via-card to-card p-5 shadow-e1 sm:flex-row sm:items-center sm:p-6">
-          <div className="flex min-w-0 flex-1 items-center gap-4">
-            <span className="flex size-12 shrink-0 items-center justify-center rounded-full bg-success/12 text-success ring-4 ring-success/[0.06]">
-              <ShieldCheck className="size-6" strokeWidth={1.9} />
-            </span>
-            <div className="min-w-0">
-              <p className="font-heading text-base font-semibold text-foreground">You&apos;re all clear — no bill due</p>
-              <p className="mt-0.5 text-sm text-foreground/65">Nothing to pay on this card until the next statement is generated.</p>
-            </div>
-          </div>
-          <div className="flex shrink-0 flex-wrap items-center gap-2">
-            {canPayFull && (
-              <button type="button" onClick={onPayFull} className={CC_ACTIVITY_SECONDARY}>
-                Pay full outstanding {formatCurrency(card.ownUsage)}
-              </button>
-            )}
-            <button type="button" onClick={onHistory} className={CC_ACTIVITY_GHOST}>
-              Statement history
-              <ArrowRight className="size-3.5" strokeWidth={2} />
-            </button>
-          </div>
-        </div>
-        <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <BillInfoTile icon={CalendarClock} tone="bg-purple/12 text-purple" label="Next statement closes" value={formatShortDate(nextClose)} />
-          <BillInfoTile
-            icon={ShoppingBag}
-            tone="bg-warning/20 text-warning-foreground dark:text-warning"
-            label="Spent, not billed yet"
-            value={formatCurrency(card.ownUsage > 0.005 ? card.ownUsage : 0)}
-          />
-        </dl>
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-end justify-between gap-4 rounded-[16px] border border-border-strong/60 bg-gradient-to-br from-primary/[0.08] via-card to-card p-5 shadow-e1 sm:p-6">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            {/* Once part of the bill is paid, the big figure is what is LEFT — the label says so. */}
-            <span className={CC_LABEL}>{bill.amountPaid > 0.005 ? "Remaining bill" : "Bill amount"}</span>
-            <span className={cn("rounded-full px-2 py-0.5 text-[11px] font-semibold", status.tone)}>{status.label}</span>
-          </div>
-          <p className={cn("mt-2 text-[34px] leading-none font-bold tracking-tight tabular-nums", scope.currentOverdue ? "text-expense" : "text-foreground")}>
-            {formatCurrency(scope.statementDue)}
-          </p>
-          {/* The bill as a whole: its total, what was paid toward it, what is left — never per transaction. */}
-          {bill.amountPaid > 0.005 && (
-            <p className="mt-1.5 text-xs font-medium text-foreground/80 tabular-nums" data-testid="card-bill-paid-summary">
-              Bill {formatCurrency(bill.totalAmount)} · Paid <span className="font-semibold text-success">{formatCurrency(bill.amountPaid)}</span> · Remaining{" "}
-              <span className="font-semibold text-foreground">{formatCurrency(bill.remaining)}</span>
-            </p>
-          )}
-          {scope.cardOutstanding > scope.statementDue + 0.005 && (
-            <p className="mt-1 text-xs font-medium text-foreground/70 tabular-nums">of {formatCurrency(scope.cardOutstanding)} outstanding on this card</p>
-          )}
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {canPayFull && (
-            <button type="button" onClick={onPayFull} className={CC_ACTIVITY_SECONDARY}>
-              Pay full {formatCurrency(card.ownUsage)}
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={onPayStatement}
-            className="flex h-9 items-center gap-1.5 rounded-[8px] border border-primary-accent-text bg-primary px-4 text-sm font-semibold text-primary-foreground outline-none hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <Wallet className="size-4" strokeWidth={2} />
-            Pay bill
-          </button>
-        </div>
-      </div>
-
-      <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <BillInfoTile icon={FileText} tone="bg-purple/12 text-purple" label="Statement" value={billPeriodLabel(bill)} />
-        <BillInfoTile
-          icon={CalendarClock}
-          tone={scope.currentOverdue ? "bg-expense/12 text-expense" : "bg-success/12 text-success"}
-          label="Due date"
-          value={formatShortDate(bill.dueDate)}
-          danger={scope.currentOverdue}
-        />
-        {/* Only an issuer figure from a stored statement — never a made-up ₹0. */}
-        <BillInfoTile
-          icon={Wallet}
-          tone="bg-warning/20 text-warning-foreground dark:text-warning"
-          label="Minimum due"
-          value={bill.minimumDue != null ? formatCurrency(bill.minimumDue) : "Not tracked"}
-          muted={bill.minimumDue == null}
-        />
-        <BillInfoTile icon={RefreshCw} tone="bg-secondary text-foreground/70" label="Next statement" value={formatShortDate(nextClose)} />
-      </dl>
-
-      <button type="button" onClick={onHistory} className={cn(CC_ACTIVITY_GHOST, "self-start")}>
-        Statement history
-        <ArrowRight className="size-3.5" strokeWidth={2} />
-      </button>
-    </div>
-  );
-}
-
-/** One labelled figure in the bill view — tinted icon, small caps label, value. */
-function BillInfoTile({
-  icon: Icon,
-  tone,
-  label,
-  value,
-  danger,
-  muted,
-}: {
-  icon: LucideIcon;
-  tone: string;
-  label: string;
-  value: string;
-  danger?: boolean;
-  muted?: boolean;
-}) {
-  return (
-    <div className="flex min-w-0 items-center gap-3 rounded-[14px] border border-border-strong/50 bg-card px-4 py-3.5 shadow-e1">
-      <span className={cn("flex size-10 shrink-0 items-center justify-center rounded-[12px]", tone)}>
-        <Icon className="size-[18px]" strokeWidth={1.9} />
-      </span>
-      <div className="min-w-0">
-        <dt className={CC_LABEL}>{label}</dt>
-        <dd className={cn("mt-0.5 truncate text-[15px] font-bold tabular-nums", danger ? "text-expense" : muted ? "font-medium text-foreground/60" : "text-foreground")}>{value}</dd>
-      </div>
-    </div>
-  );
-}
-
-const CC_ACTIVITY_SECONDARY =
-  "flex h-9 items-center rounded-[8px] border border-border-strong bg-card px-3 text-sm font-semibold text-foreground outline-none transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring";
-const CC_ACTIVITY_GHOST =
-  "flex h-8 items-center gap-1 rounded-[6px] px-2 text-xs font-semibold text-foreground/80 outline-none transition-colors hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring";
-
 
 const NETWORK_NAME: Record<string, string> = { visa: "VISA", mastercard: "Mastercard", rupay: "RuPay", amex: "AMEX" };
 
@@ -2400,203 +1878,214 @@ function UtilizationBar({ percent }: { percent: number }) {
 }
 
 /**
- * Right-hand selected-card panel. Presentation only — every figure is the card's existing standing
- * (`usedCredit`, `available`, `creditLimit`, `ownUsage`, `currentBalance`, `statementPayment`) and every
- * button calls the workspace's existing handler.
+ * Right-hand selected-card panel, top to bottom in the order you'd act: who (card identity), how much credit is
+ * used and WHY (Loan / EMI vs Purchases), the bill to pay (status, amount, dates, Pay bill), then the card's
+ * activity and settings. Presentation only — every figure is the card's existing standing / Pay Now scope and
+ * every button calls the workspace's existing handler.
  */
 function SelectedCardPanel({
   card,
+  usage,
   bankId,
   siblingBankId,
-  utilization,
-  available,
-  dueInDays,
+  nextClose,
   reduceMotion,
-  payScope,
   linkedNotice,
   onPayBill,
-  onStatement,
+  onPayFull,
+  onOpenActivity,
   onEdit,
   onAddToShared,
   onViewTransactions,
 }: {
   card: CreditCardViewItem;
+  usage: CreditUsageBreakdown;
   bankId: string | null;
   siblingBankId: (siblingId: string) => string | null;
-  utilization: number;
-  available: number;
-  dueInDays: number | null;
+  nextClose: Date;
   reduceMotion: boolean | null;
-  payScope: React.ReactNode;
   linkedNotice: React.ReactNode;
   onPayBill: () => void;
-  onStatement: () => void;
+  onPayFull: () => void;
+  onOpenActivity: (tab: ActivityTab) => void;
   onEdit: () => void;
   onAddToShared: () => void;
   onViewTransactions: () => void;
 }) {
   const shared = card.sharedLimit;
   const network = NETWORK_NAME[card.card.cardNetwork ?? ""] ?? null;
-  const limit = card.creditLimit;
-  // Shared bar: this card's own usage, the other cards' share of the shared outstanding, then what's free.
+  const utilization = Math.min(100, Math.round(card.utilizationPercent));
+  const scope = card.statementPayment;
+  const bill = scope.current;
+  const due = cardDueStatus(scope);
+  const canPayFull = card.ownUsage > scope.statementDue + 0.005;
+  const later = Math.round((scope.closedDue - scope.statementDue) * 100) / 100;
+  // Shared facility: this card's own usage vs the other cards' share of the pooled outstanding.
   const othersUsage = shared ? Math.max(0, card.currentBalance - card.ownUsage) : 0;
-  const pct = (v: number) => (limit > 0 ? Math.min(100, Math.max(0, (v / limit) * 100)) : 0);
-  const dueTone = dueInDays != null && dueInDays <= 5 ? "text-expense" : "text-foreground";
 
   return (
     <motion.section
       key={card.id}
       aria-label="Selected card"
-      initial={reduceMotion ? false : { opacity: 0, y: 10, scale: 0.985 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
-      className="overflow-hidden rounded-[12px] border border-border-strong/60 bg-card shadow-e1"
+      initial={reduceMotion ? false : { opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.26, ease: [0.22, 1, 0.36, 1] }}
+      className="overflow-hidden rounded-[14px] border border-border-strong/60 bg-card shadow-e1"
     >
-      {/* Card face */}
-      <div style={{ background: cardFaceGradient(card) }} className="relative flex flex-col gap-3 overflow-hidden p-4 text-white">
-        <span className="pointer-events-none absolute -top-14 -right-10 size-36 rounded-full bg-white/10 blur-2xl" aria-hidden />
-        <div className="relative flex items-start justify-between gap-2">
-          <div className="flex min-w-0 items-center gap-2.5">
-            {bankId && <BankLogo bankId={bankId} size={30} className="ring-white/40" />}
-            <div className="min-w-0">
-              <h3 className="truncate font-heading text-base leading-tight font-semibold">{card.name}</h3>
-              <p className="mt-0.5 font-mono text-xs tracking-[0.16em] text-white/80">•••• {card.last4}</p>
-            </div>
-          </div>
-          <div className="flex shrink-0 flex-col items-end gap-1">
-            {network && <span className="text-xs font-bold tracking-wide text-white/85 italic">{network}</span>}
-            {card.isPrimary && <span className="rounded-[4px] bg-white/20 px-1.5 py-0.5 text-[10px] font-semibold">Primary</span>}
-          </div>
+      {/* Identity band — the card's own colour */}
+      <div style={{ background: cardFaceGradient(card) }} className="relative flex items-center gap-2.5 overflow-hidden px-4 py-3 text-white">
+        <span className="pointer-events-none absolute -top-12 -right-8 size-32 rounded-full bg-white/10 blur-2xl" aria-hidden />
+        {bankId && <BankLogo bankId={bankId} size={28} className="relative ring-white/40" />}
+        <div className="relative min-w-0 flex-1">
+          <h3 className="truncate font-heading text-[15px] leading-tight font-semibold">{card.name}</h3>
+          <p className="mt-0.5 flex items-center gap-2 text-[11px] text-white/80">
+            <span className="font-mono tracking-[0.16em]">•••• {card.last4}</span>
+            {network && <span className="font-bold tracking-wide italic">{network}</span>}
+            {card.isPrimary && <span className="rounded-[4px] bg-white/20 px-1.5 py-px text-[10px] font-semibold">Primary</span>}
+          </p>
         </div>
-
-        <div className="relative">
-          <p className="text-[11px] font-semibold tracking-[0.06em] text-white/75 uppercase">{shared ? "This card used" : "Credit used"}</p>
-          <p className="text-[26px] leading-tight font-bold tracking-tight tabular-nums">{formatCurrency(card.usedCredit)}</p>
-          {card.lockedEmiPrincipal > 0 && (
-            <p className="text-xs text-white/80 tabular-nums">
-              Outstanding {formatCurrency(card.currentBalance)} · EMI locked {formatCurrency(card.lockedEmiPrincipal)}
-            </p>
-          )}
-        </div>
-
-        <div className="relative">
-          <div className="flex items-center justify-between text-xs text-white/80">
-            <span>{shared ? "Shared limit used" : "Utilization"}</span>
-            <span className="font-semibold text-white tabular-nums">{utilization}%</span>
-          </div>
-          <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-white/20">
-            <motion.div
-              className={cn("h-full rounded-full", utilization >= 80 ? "bg-red-400" : "bg-white")}
-              initial={reduceMotion ? false : { width: 0 }}
-              animate={{ width: `${utilization}%` }}
-              transition={{ duration: 0.7, ease: [0.22, 1, 0.36, 1] }}
-            />
-          </div>
-        </div>
+        <button
+          type="button"
+          onClick={onEdit}
+          aria-label="Card settings"
+          title="Card settings"
+          className="relative flex size-8 shrink-0 items-center justify-center rounded-[8px] bg-white/15 text-white ring-1 ring-white/25 outline-none transition-colors hover:bg-white/25 focus-visible:ring-2 focus-visible:ring-white"
+        >
+          <Settings className="size-4" strokeWidth={2} />
+        </button>
       </div>
 
-      {/* Limit */}
-      <div className="flex flex-col gap-3 px-4 py-3.5">
+      {/* Credit used — and what it's used for */}
+      <div className="flex flex-col gap-3 px-4 pt-3.5 pb-3">
         <div className="flex items-end justify-between gap-3">
           <div className="min-w-0">
-            <p className={CC_LABEL}>{shared ? "Shared available" : "Available"}</p>
-            <p className="text-xl font-bold text-success tabular-nums">{formatCurrency(available)}</p>
+            <p className={CC_LABEL}>{shared ? "Shared credit used" : "Credit used"}</p>
+            <p className="mt-0.5 text-[24px] leading-none font-bold tracking-tight text-foreground tabular-nums">{formatCurrency(card.usedCredit)}</p>
           </div>
-          <div className="text-right">
-            <p className={CC_LABEL}>{shared ? "Shared limit" : "Credit limit"}</p>
-            <p className="text-sm font-semibold text-foreground tabular-nums">{formatCurrency(limit)}</p>
+          <div className="shrink-0 text-right">
+            <p className={CC_LABEL}>{shared ? "Shared available" : "Available"}</p>
+            <p className="mt-0.5 text-[17px] leading-none font-bold text-success tabular-nums">{formatCurrency(card.available)}</p>
           </div>
         </div>
-
+        <p className="-mt-1.5 text-[11px] text-muted-foreground tabular-nums">
+          <span className={cn("font-semibold", utilization >= 80 ? "text-expense" : "text-foreground")}>{utilization}%</span> of {formatCurrency(card.creditLimit)}{" "}
+          {shared ? "shared limit" : "limit"}
+          {card.lockedEmiPrincipal > 0 && <> · outstanding {formatCurrency(card.currentBalance)}</>}
+        </p>
+        <CreditUsageBreakdownView breakdown={usage} layout="stack" barHeight="h-2" />
         {shared && (
-          <>
-            <div className="flex h-2 w-full overflow-hidden rounded-full bg-secondary" aria-hidden>
-              <span className="h-full bg-foreground/80" style={{ width: `${pct(card.ownUsage)}%` }} />
-              <span className="h-full bg-foreground/35" style={{ width: `${pct(othersUsage)}%` }} />
+          <div className="flex flex-col gap-1.5 rounded-[10px] bg-secondary/60 px-3 py-2 text-xs">
+            <div className="flex items-center justify-between gap-2 tabular-nums">
+              <span className="text-foreground/70">
+                This card <span className="font-semibold text-foreground">{formatCurrency(card.ownUsage)}</span>
+              </span>
+              <span className="text-foreground/70">
+                Other cards <span className="font-semibold text-foreground">{formatCurrency(othersUsage)}</span>
+              </span>
             </div>
-            <dl className="grid grid-cols-3 gap-2 text-xs">
-              <div className="min-w-0">
-                <dt className="flex items-center gap-1 text-foreground/70">
-                  <span className="size-2 rounded-full bg-foreground/80" />
-                  This card
-                </dt>
-                <dd className="font-semibold text-foreground tabular-nums">{formatCurrency(card.ownUsage)}</dd>
-              </div>
-              <div className="min-w-0">
-                <dt className="flex items-center gap-1 text-foreground/70">
-                  <span className="size-2 rounded-full bg-foreground/35" />
-                  Other cards
-                </dt>
-                <dd className="font-semibold text-foreground tabular-nums">{formatCurrency(othersUsage)}</dd>
-              </div>
-              <div className="min-w-0">
-                <dt className="flex items-center gap-1 text-foreground/70">
-                  <span className="size-2 rounded-full bg-secondary ring-1 ring-border-strong" />
-                  Shared total
-                </dt>
-                <dd className="font-semibold text-foreground tabular-nums">{formatCurrency(card.currentBalance)}</dd>
-              </div>
-            </dl>
             {shared.siblings.length > 0 && (
               <div className="flex flex-wrap items-center gap-1.5">
-                <span className="text-xs text-foreground/70">Shared with</span>
+                <span className="text-foreground/70">Shared with</span>
                 {shared.siblings.map((s) => (
-                  <span key={s.id} className="inline-flex items-center gap-1.5 rounded-full border border-border-strong/70 py-0.5 pr-2 pl-0.5 text-xs font-medium text-foreground">
-                    {siblingBankId(s.id) ? <BankLogo bankId={siblingBankId(s.id)} size={18} /> : <Link2 className="ml-1 size-3" />}
+                  <span key={s.id} className="inline-flex items-center gap-1.5 rounded-full border border-border-strong/70 bg-card py-0.5 pr-2 pl-0.5 font-medium text-foreground">
+                    {siblingBankId(s.id) ? <BankLogo bankId={siblingBankId(s.id)} size={16} /> : <Link2 className="ml-1 size-3" />}
                     {s.name}
-                    <span className="font-mono text-[11px] text-foreground/65">•••• {s.last4}</span>
+                    <span className="font-mono text-[10.5px] text-foreground/65">•••• {s.last4}</span>
                   </span>
                 ))}
               </div>
             )}
-          </>
+          </div>
         )}
       </div>
 
-      {/* Dates */}
-      <div className="grid grid-cols-2 gap-2 px-4 pb-3.5">
-        <div className="rounded-[8px] bg-secondary/60 px-3 py-2">
-          <p className={CC_LABEL}>Next statement</p>
-          <p className="text-sm font-semibold text-foreground tabular-nums">{card.statementDate ? formatShortDate(card.statementDate) : "—"}</p>
+      {/* The bill — status, amount, dates and Pay bill get the visual priority */}
+      <div
+        className={cn(
+          "mx-3 mb-3 flex flex-col gap-2 rounded-[12px] border p-3",
+          due.tone === "overdue" ? "border-expense/35 bg-expense/[0.06]" : due.tone === "soon" ? "border-warning/50 bg-warning/[0.08]" : "border-border-strong/60 bg-secondary/40",
+        )}
+        data-testid="cc-pay-scope"
+      >
+        <div className="flex items-center justify-between gap-2">
+          <span className={CC_LABEL}>{!bill ? "Bill" : bill.amountPaid > 0.005 ? "Remaining bill" : due.tone === "overdue" ? "Overdue bill" : "Bill due"}</span>
+          <DuePill tone={due.tone} label={due.label} />
         </div>
-        <div className="rounded-[8px] bg-secondary/60 px-3 py-2">
-          <p className={CC_LABEL}>Payment due</p>
-          <p className={cn("text-sm font-semibold tabular-nums", dueTone)}>
-            {dueInDays == null ? "No due date" : dueInDays <= 0 ? "Due today" : `${dueInDays} days left`}
+        <div>
+          <p className={cn("text-[26px] leading-none font-bold tracking-tight tabular-nums", due.tone === "overdue" ? "text-expense" : "text-foreground")}>
+            {formatCurrency(bill ? scope.statementDue : 0)}
           </p>
+          {bill && bill.amountPaid > 0.005 && (
+            <p className="mt-1 text-[11px] font-medium text-foreground/80 tabular-nums" data-testid="card-bill-paid-summary">
+              Bill {formatCurrency(bill.totalAmount)} · Paid <span className="font-semibold text-success">{formatCurrency(bill.amountPaid)}</span> · Remaining{" "}
+              <span className="font-semibold text-foreground">{formatCurrency(bill.remaining)}</span>
+            </p>
+          )}
+          {!bill && (
+            <p className="mt-1 text-[11px] text-foreground/70 tabular-nums">
+              {card.ownUsage > 0.005 ? `${formatCurrency(card.ownUsage)} outstanding · not billed yet` : "Nothing outstanding on this card"}
+            </p>
+          )}
         </div>
-      </div>
-
-      {/* Pay — the existing pay scope (current bill / pay full), unchanged */}
-      {payScope}
-
-      {/* Actions */}
-      <div className="grid grid-cols-2 gap-2 border-t border-border-strong/40 px-4 py-3">
-        <button
-          type="button"
-          onClick={onPayBill}
-          className="col-span-2 flex h-10 items-center justify-center gap-1.5 rounded-[8px] border border-primary-accent-text bg-primary text-sm font-semibold text-primary-foreground outline-none hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          <Wallet className="size-4" strokeWidth={2} />
-          Pay bill
-        </button>
-        <button type="button" onClick={onStatement} className={CC_PANEL_ACTION}>
-          <FileText className="size-4 text-purple" strokeWidth={2} />
-          Statement
-        </button>
-        <button type="button" onClick={onEdit} className={CC_PANEL_ACTION}>
-          <Settings className="size-4 text-foreground/70" strokeWidth={2} />
-          Card settings
-        </button>
-        <button type="button" disabled className={cn(CC_PANEL_ACTION, "col-span-2 cursor-not-allowed opacity-60")}>
-          <RefreshCw className="size-4 text-success" strokeWidth={2} />
-          Convert to EMI
-          <span className={cn(CC_SOON, "ml-1")}>Soon</span>
-        </button>
+        <dl className="grid grid-cols-2 divide-x divide-border-strong/40 rounded-[8px] bg-card py-1.5 text-xs ring-1 ring-border-strong/40">
+          <div className="min-w-0 px-2.5">
+            <dt className="text-[10px] font-semibold tracking-[0.05em] text-muted-foreground uppercase">Payment due</dt>
+            <dd className={cn("truncate font-semibold tabular-nums", due.tone === "overdue" ? "text-expense" : "text-foreground")}>{bill ? formatShortDate(bill.dueDate) : "No bill due"}</dd>
+          </div>
+          <div className="min-w-0 px-2.5">
+            <dt className="text-[10px] font-semibold tracking-[0.05em] text-muted-foreground uppercase">Next statement</dt>
+            <dd className="truncate font-semibold text-foreground tabular-nums">{formatShortDate(nextClose)}</dd>
+          </div>
+        </dl>
+        {bill && (later > 0.005 || scope.unbilled > 0.005) && (
+          <p className="text-[11px] text-foreground/70 tabular-nums">
+            Not in this bill: {later > 0.005 && <>{formatCurrency(later)} later bills · </>}
+            {formatCurrency(scope.unbilled)} not billed yet
+          </p>
+        )}
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={onPayBill}
+            className="flex h-10 flex-1 items-center justify-center gap-1.5 rounded-[8px] border border-primary-accent-text bg-primary text-sm font-semibold text-primary-foreground shadow-[0_6px_16px_-8px_rgba(0,0,0,0.35)] outline-none transition-[opacity,transform] hover:opacity-90 active:scale-[0.98] focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <Wallet className="size-4" strokeWidth={2} />
+            Pay bill
+          </button>
+          {/* The bill's own details (Bills view) sit right beside paying it. */}
+          <button type="button" onClick={() => onOpenActivity("bills")} className={cn(CC_PANEL_ACTION, "h-10 px-3")}>
+            <FileText className="size-4 text-purple" strokeWidth={2} />
+            Statement
+          </button>
+        </div>
+        {canPayFull && (
+          <button
+            type="button"
+            onClick={onPayFull}
+            className="-mt-1 self-center text-xs font-semibold text-primary-accent-text underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            Pay full outstanding {formatCurrency(card.ownUsage)}
+          </button>
+        )}
       </div>
 
       {/* People money received for purchases on this card — held in another account until the bill is paid. */}
       {linkedNotice}
+
+      {/* The card's activity — opens the activity sheet on that view */}
+      <div className="grid grid-cols-2 gap-1.5 px-3 pb-3">
+        {(
+          [
+            { tab: "transactions", label: "Transactions", icon: Receipt, tone: "text-chart-2" },
+            { tab: "spending", label: "Spending", icon: PieChartIcon, tone: "text-warning-foreground dark:text-warning" },
+          ] as const
+        ).map((a) => (
+          <button key={a.tab} type="button" onClick={() => onOpenActivity(a.tab)} className={CC_PANEL_ACTION}>
+            <a.icon className={cn("size-4", a.tone)} strokeWidth={2} />
+            {a.label}
+          </button>
+        ))}
+      </div>
 
       <div className="flex flex-col border-t border-border-strong/40">
         {shared && (
@@ -2608,103 +2097,30 @@ function SelectedCardPanel({
             <Plus className="size-4 text-foreground/60" />
           </button>
         )}
-        <button type="button" onClick={onViewTransactions} className={CC_PANEL_LINK}>
-          <span className="flex items-center gap-2">
-            <Receipt className="size-4 text-foreground/70" />
-            View all card transactions
-          </span>
-          <ArrowRight className="size-4 text-foreground/60" />
-        </button>
+        <div className="flex items-center justify-between gap-2 px-2 py-1.5">
+          <button
+            type="button"
+            onClick={onViewTransactions}
+            className="group flex h-8 min-w-0 items-center gap-1.5 rounded-[6px] px-2 text-[13px] font-semibold text-foreground outline-none transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <span className="truncate">View all card transactions</span>
+            <ArrowRight className="size-3.5 shrink-0 text-foreground/60 transition-transform group-hover:translate-x-0.5" />
+          </button>
+          <button type="button" disabled className="flex h-8 shrink-0 cursor-not-allowed items-center gap-1 rounded-[6px] px-1.5 text-xs font-semibold text-foreground/55">
+            <RefreshCw className="size-3.5" strokeWidth={2} />
+            Convert to EMI
+            <span className={CC_SOON}>Soon</span>
+          </button>
+        </div>
       </div>
     </motion.section>
   );
 }
 
 const CC_PANEL_ACTION =
-  "flex h-9 items-center justify-center gap-1.5 rounded-[8px] border border-border-strong/70 bg-card text-[13px] font-semibold text-foreground outline-none transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring";
+  "flex h-9 items-center justify-center gap-1.5 rounded-[8px] border border-border-strong/70 bg-card px-1 text-[12.5px] font-semibold text-foreground outline-none transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring";
 const CC_PANEL_LINK =
-  "flex h-11 items-center justify-between px-4 text-sm font-semibold text-foreground outline-none transition-colors [&+&]:border-t [&+&]:border-border-strong/40 hover:bg-secondary/60 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset";
-
-/**
- * What "Pay bill" pays, on this physical card's own statement cycle: the ONE current bill (primary
- * action), then what stays on the card for later (next statements + new purchases). Paying the whole
- * outstanding is a separate, secondary action; with no closed statement unpaid, nothing reads as "due".
- */
-function PayScope({
-  scope,
-  ownOutstanding,
-  onPayStatement,
-  onPayFull,
-}: {
-  scope: CardStatementPaymentScope;
-  ownOutstanding: number;
-  onPayStatement: () => void;
-  onPayFull: () => void;
-}) {
-  if (scope.statementDue <= 0 && ownOutstanding <= 0) return null;
-  const bill = scope.current;
-  const later = Math.round((scope.closedDue - scope.statementDue + scope.unbilled) * 100) / 100;
-  return (
-    <div className="flex flex-col gap-2 border-t border-border-strong/40 px-4 py-2.5 text-xs" data-testid="cc-pay-scope">
-      <dl className="min-w-0 space-y-0.5">
-        {bill ? (
-          <div className="flex flex-wrap items-baseline gap-x-1.5">
-            {/* Once part of the bill is paid, the figure is what is LEFT — the label says so. */}
-            <dt className="text-foreground/75">{bill.amountPaid > 0.005 ? (scope.currentOverdue ? "Overdue · remaining" : "Remaining bill") : scope.currentOverdue ? "Overdue bill" : "Current bill"}</dt>
-            <dd className="font-semibold text-foreground tabular-nums">{formatCurrency(scope.statementDue)}</dd>
-            <dd className={cn("text-foreground/75", scope.currentOverdue && "font-semibold text-expense")}>
-              · {billPeriodLabel(bill)} · {scope.currentOverdue ? "was due" : "due"} {formatShortDate(bill.dueDate)}
-            </dd>
-          </div>
-        ) : null}
-        {/* The bill as a whole — its total, what was paid toward it, what is left (never per transaction). */}
-        {bill && bill.amountPaid > 0.005 && (
-          <div className="flex flex-wrap items-baseline gap-x-1.5 tabular-nums" data-testid="card-bill-paid-summary">
-            <dt className="text-foreground/75">Bill {formatCurrency(bill.totalAmount)}</dt>
-            <dd className="text-foreground/75">
-              · Paid <span className="font-semibold text-success">{formatCurrency(bill.amountPaid)}</span> · Remaining{" "}
-              <span className="font-semibold text-foreground">{formatCurrency(bill.remaining)}</span>
-            </dd>
-          </div>
-        )}
-        {!bill && (
-          <div className="flex flex-wrap items-baseline gap-x-1.5">
-            <dt className="text-foreground/75">Current outstanding</dt>
-            <dd className="font-semibold text-foreground tabular-nums">{formatCurrency(ownOutstanding)}</dd>
-            <dd className="text-foreground/75">· no bill due yet</dd>
-          </div>
-        )}
-        {bill && later > 0.005 && (
-          <div className="flex flex-wrap items-baseline gap-x-1.5">
-            <dt className="text-foreground/75">Later bills</dt>
-            <dd className="font-medium text-foreground/85 tabular-nums">{formatCurrency(later)}</dd>
-            <dd className="text-foreground/75">· not part of this payment</dd>
-          </div>
-        )}
-      </dl>
-      <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1">
-        {bill && (
-          <button
-            type="button"
-            onClick={onPayStatement}
-            className="h-7 rounded-[6px] border border-primary-accent-text bg-primary px-2.5 font-semibold text-primary-foreground outline-none hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            Pay bill {formatCurrency(scope.statementDue)}
-          </button>
-        )}
-        {ownOutstanding > scope.statementDue + 0.005 && (
-          <button
-            type="button"
-            onClick={onPayFull}
-            className="font-semibold text-primary-accent-text underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            Pay full outstanding {formatCurrency(ownOutstanding)}
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}
+  "flex h-10 items-center justify-between px-4 text-sm font-semibold text-foreground outline-none transition-colors [&+&]:border-t [&+&]:border-border-strong/40 hover:bg-secondary/60 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset";
 
 /**
  * Inside Pay bill, under the amount: which ONE bill the pre-filled amount pays — its period, due date and

@@ -12,7 +12,15 @@ import { useAccounts } from "@/hooks/use-accounts";
 import { useCategories } from "@/hooks/use-categories";
 import { useSavingsContributions, useSavingsGoals } from "@/hooks/use-savings";
 import { useTransactions } from "@/hooks/use-transactions";
-import { buildSavingsPosition, removeEntryBlocker, type EntryView, type GoalView, type SavingsPosition } from "@/lib/engines/savings-goals";
+import {
+  buildSavingsPosition,
+  removeEntryBlocker,
+  savingsTransactionTags,
+  type EntryView,
+  type GoalView,
+  type SavingsPosition,
+  type SavingsTransactionTag,
+} from "@/lib/engines/savings-goals";
 import type { Account } from "@/lib/models/account";
 import type { SavingsContribution, SavingsEntryDirection, SavingsEntryMode } from "@/lib/models/savings-contribution";
 import type { SavingsGoal } from "@/lib/models/savings-goal";
@@ -48,6 +56,17 @@ export function useSavingsPosition(): {
   const position = useMemo(() => buildSavingsPosition(goals, contributions, activeTxIds, new Date()), [goals, contributions, activeTxIds]);
 
   return { position, accounts, isLoading: goalsLoading || entriesLoading };
+}
+
+/**
+ * For the Transactions page's "Savings" badge: which live transactions are a goal's real transfer leg, reusing
+ * the Savings page's own live listeners (no new Firestore subscription). An earmark never appears here — it
+ * has no transaction to tag.
+ */
+export function useSavingsTransactionTags(): ReadonlyMap<string, SavingsTransactionTag> {
+  const { data: goals = [] } = useSavingsGoals();
+  const { data: contributions = [] } = useSavingsContributions();
+  return useMemo(() => savingsTransactionTags(goals, contributions), [goals, contributions]);
 }
 
 export interface MoneyEntryInput {

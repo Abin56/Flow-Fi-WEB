@@ -275,3 +275,90 @@ describe("security rules", () => {
     await expect(setDoc(doc(intruder, "users", UID, "savingsGoals", w.goal.id, "contributions", "x"), { amount: 1 })).rejects.toThrow();
   });
 });
+
+describe("monthly planning, locks and allocations (additive fields)", () => {
+  it("a goal is created with its plan + lock; plan, skip and lock changes are stored and audited", async () => {
+    const w = await world();
+    const until = new Date(2027, 4, 1);
+    const g = await w.savings.createGoal({ name: "Vehicle", targetAmount: 60_000, kind: "deposit", monthlyTarget: 5_000, planAccountId: w.bank.id, locked: true, lockedUntil: until });
+    let stored = (await getDoc(doc(w.db, "users", UID, "savingsGoals", g.id))).data()!;
+    expect(stored).toMatchObject({ kind: "deposit", monthlyTarget: 5_000, planAccountId: w.bank.id, locked: true, skippedCycles: [] });
+    expect(stored.planSince).not.toBeNull();
+    expect(stored.lockedUntil.toDate().getTime()).toBe(until.getTime());
+
+    let fresh = (await w.savings.getByKey(g.id))!;
+    await w.savings.setPlan(fresh, { monthlyTarget: 4_000 });
+    await w.savings.setCycleSkipped((await w.savings.getByKey(g.id))!, "2026-11-01", true);
+    await w.savings.setCycleSkipped((await w.savings.getByKey(g.id))!, "2026-11-01", true); // idempotent
+    await w.savings.setLock((await w.savings.getByKey(g.id))!, { locked: false });
+    fresh = (await w.savings.getByKey(g.id))!;
+    expect(fresh.monthlyTarget).toBe(4_000);
+    expect(fresh.skippedCycles).toEqual(["2026-11-01"]);
+    expect(fresh.locked).toBe(false);
+    expect(fresh.lockedUntil).toBeNull();
+    expect(fresh.editHistory.map((e) => e.field)).toEqual(expect.arrayContaining(["monthlyTarget", "skippedCycle", "lock"]));
+    await expect(w.savings.createGoal({ name: "Bad fund", targetAmount: 1_000, kind: "deposit" })).rejects.toThrow(/monthly amount/);
+  });
+
+  it("a locked goal refuses a plain withdrawal (release AND transfer) and writes nothing; an emergency release is recorded and flagged", async () => {
+    const w = await world();
+    await w.record({ ...base, id: "sav_lock_in_00000001", direction: "in", mode: "transfer", amount: 6_000, accountId: w.vault.id, counterAccountId: w.bank.id, savedAfter: 6_000 });
+    await w.record({ ...base, id: "sav_lock_in_00000002", direction: "in", mode: "earmark", amount: 4_000, accountId: w.bank.id, savedAfter: 10_000 });
+    await w.savings.setLock((await w.savings.getByKey(w.goal.id))!, { locked: true, lockedUntil: null });
+    const txBefore = (await w.liveTx()).length;
+    const bankBefore = await w.balance(w.bank.id);
+    const vaultBefore = await w.balance(w.vault.id);
+
+    await expect(w.record({ ...base, id: "sav_lock_out_0000001", direction: "out", mode: "earmark", amount: 1_000, accountId: w.bank.id, savedAfter: 9_000 })).rejects.toThrow(/locked/);
+    await expect(w.record({ ...base, id: "sav_lock_out_0000002", direction: "out", mode: "transfer", amount: 1_000, accountId: w.vault.id, counterAccountId: w.bank.id, savedAfter: 9_000 })).rejects.toThrow(/locked/);
+    expect((await w.liveTx()).length).toBe(txBefore);
+    expect(await w.balance(w.bank.id)).toBe(bankBefore);
+    expect(await w.balance(w.vault.id)).toBe(vaultBefore);
+    expect((await w.entries()).length).toBe(2);
+    expect((await w.view()).saved).toBe(10_000);
+
+    // Emergency: a real transfer out of the vault, flagged; balances move by exactly the amount, net worth unchanged.
+    const nw = calculateNetWorth(await w.allAccounts());
+    await w.record({ ...base, id: "sav_lock_out_0000003", direction: "out", mode: "transfer", amount: 2_500, accountId: w.vault.id, counterAccountId: w.bank.id, savedAfter: 7_500, emergency: true, note: "Hospital" });
+    expect(await w.balance(w.vault.id)).toBe(vaultBefore - 2_500);
+    expect(await w.balance(w.bank.id)).toBe(bankBefore + 2_500);
+    expect(calculateNetWorth(await w.allAccounts())).toBe(nw);
+    expect(await w.drift(w.vault.id)).toBeNull();
+    const out = (await w.entries()).find((e) => e.id === "sav_lock_out_0000003")!;
+    expect(out).toMatchObject({ direction: "out", emergency: true, note: "Hospital" });
+    expect(out.transactionIds).toHaveLength(2);
+    expect((await w.view()).saved).toBe(7_500);
+    // The goal is still locked for the rest.
+    expect((await w.savings.getByKey(w.goal.id))!.locked).toBe(true);
+  });
+
+  it("an expired lock no longer blocks a withdrawal", async () => {
+    const w = await world();
+    await w.record({ ...base, id: "sav_exp_in_000000001", direction: "in", mode: "earmark", amount: 3_000, accountId: w.bank.id, savedAfter: 3_000 });
+    await w.savings.setLock((await w.savings.getByKey(w.goal.id))!, { locked: true, lockedUntil: new Date(2020, 0, 1) });
+    await w.record({ ...base, id: "sav_exp_out_00000001", direction: "out", mode: "earmark", amount: 1_000, accountId: w.bank.id, savedAfter: 2_000 });
+    expect((await w.view()).saved).toBe(2_000);
+  });
+
+  it("allocation entries carry their allocationId; retrying the same line ids after a partial failure writes each line once", async () => {
+    const w = await world();
+    const other = await w.savings.createGoal({ name: "Bicycle", targetAmount: 20_000, monthlyTarget: 2_000 });
+    const lines = [
+      { goal: (await w.savings.getByKey(w.goal.id))!, id: "alc0000000001_laptop", amount: 5_000 },
+      { goal: (await w.savings.getByKey(other.id))!, id: "alc0000000001_bike", amount: 2_000 },
+    ];
+    // First attempt: the second line "fails" (simulated by not running it); retry runs both — line 1 must not double.
+    await w.savings.recordEntry(lines[0].goal, { ...base, id: lines[0].id, direction: "in", mode: "earmark", amount: 5_000, accountId: w.bank.id, savedAfter: 5_000, allocationId: "alc0000000001" });
+    for (const l of lines) {
+      await w.savings.recordEntry((await w.savings.getByKey(l.goal.id))!, { ...base, id: l.id, direction: "in", mode: "earmark", amount: l.amount, accountId: w.bank.id, savedAfter: l.amount, allocationId: "alc0000000001" });
+    }
+    const laptop = await w.entries();
+    expect(laptop).toHaveLength(1);
+    expect(laptop[0].allocationId).toBe("alc0000000001");
+    const bikeEntries = (await getDocs(collection(w.db, "users", UID, "savingsGoals", other.id, "contributions"))).docs.map((d) => d.data());
+    expect(bikeEntries).toHaveLength(1);
+    expect(bikeEntries[0].allocationId).toBe("alc0000000001");
+    expect(await w.liveTx()).toHaveLength(0); // set-aside allocation: no transactions
+    expect(await w.balance(w.bank.id)).toBe(50_000);
+  });
+});

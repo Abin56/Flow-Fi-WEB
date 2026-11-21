@@ -1,16 +1,20 @@
 "use client";
 
 /**
- * Savings — a personal planning workspace on one page:
- *   hero (safe to save now · this month's plan · saved in goals) → optional inline Allocation studio →
- *   goals grid where a card expands IN PLACE into its panel (add / withdraw / history / plan & lock / edit) and a new
- *   goal is composed inline. Only destructive steps open a confirmation.
- * All money figures come from `use-savings-planner` (shared engines); all writes go through `useSavingsActions`.
+ * Savings — a small set of real screens instead of one dashboard with sliding drawers:
+ *   Overview   the money picture (safe to save · this month · saved) + active goals + what needs attention
+ *   Goals      every goal as cards or a list, with tabs, sort and layout
+ *   Plan       split this month's savings across goals (the allocation studio)
+ *   Goal       one goal's own screen: summary beside Add · Withdraw · History · Plan & lock · Edit
+ *   New goal   a focused form with a live preview
+ * The current screen lives in the URL (`?tab=goals|plan`, `?goal=<id>`, `?new=1`), so Back, reload and links work.
+ * Only destructive steps open a confirmation. All money figures come from `use-savings-planner` (shared engines);
+ * all writes go through `useSavingsActions` — this file only arranges screens and routes user actions to them.
  */
 
-import { AlertTriangle, CheckCircle2, Info, PiggyBank, Plus, Sparkles, Target } from "lucide-react";
-import { AnimatePresence, motion } from "framer-motion";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ArrowLeft, LayoutGrid, List, Plus, Sparkles, Target } from "lucide-react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { ClayButton } from "@/components/clay/clay-button";
 import { ConfirmDialog } from "@/components/finance";
 import { SegmentedControl } from "@/components/forms/segmented-control";
@@ -18,81 +22,107 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { formatCurrency } from "@/lib/format";
 import { adjacentCycleRange } from "@/lib/engines/month-cycle-range";
 import { cycleKeyOf, goalCyclePlan, goalPlanHistory, type CycleWindow } from "@/lib/engines/savings-plan";
-import type { EntryView, GoalView, SavingsInsight } from "@/lib/engines/savings-goals";
+import type { EntryView, GoalView } from "@/lib/engines/savings-goals";
 import { cn } from "@/lib/utils";
 import { toast } from "@/store/toast-store";
 import { userFacingMessage } from "@/features/transactions/lib/error-toast";
 import { useMonthCycleStartDay } from "@/features/settings/hooks/use-user-preferences";
 import { useSavingsActions } from "@/features/savings/hooks/use-savings-data";
 import { useSavingsPlanner } from "@/features/savings/hooks/use-savings-planner";
-import { PlannerHero } from "@/features/savings/components/planner-hero";
 import { AllocationStudio } from "@/features/savings/components/allocation-studio";
-import { GoalTile } from "@/features/savings/components/goal-tile";
+import { GoalTile, type GoalLayout } from "@/features/savings/components/goal-tile";
 import { GoalPanel, type PanelTab } from "@/features/savings/components/goal-panel";
-import { GOAL_TEMPLATES, GoalEditor, type GoalFormValues } from "@/features/savings/components/goal-editor";
-import { renderGoalIcon } from "@/features/savings/lib/goal-style";
+import { GoalEditor, type GoalFormValues } from "@/features/savings/components/goal-editor";
+import { SavingsOverview } from "@/features/savings/components/savings-overview";
 import type { SavingsGoalKind } from "@/lib/models/savings-goal";
 
 type Tab = "open" | "completed" | "archived";
-type Confirm = { kind: "delete"; goalId: string } | { kind: "complete"; goalId: string } | { kind: "remove-entry"; goalId: string; entryId: string } | null;
+type SortKey = "default" | "deadline" | "progress" | "remaining" | "name";
+const SORT_OPTIONS: { value: SortKey; label: string }[] = [
+  { value: "default", label: "Default order" },
+  { value: "deadline", label: "Nearest deadline" },
+  { value: "progress", label: "Most progress" },
+  { value: "remaining", label: "Most left to save" },
+  { value: "name", label: "Name A–Z" },
+];
 
-const BUFFER_KEY = "flowfi.savings.spendingBuffer";
-
-function readBuffer(): number | null {
-  try {
-    const raw = localStorage.getItem(BUFFER_KEY);
-    if (raw == null) return null;
-    const n = Number(raw);
-    return Number.isFinite(n) && n >= 0 ? n : null;
-  } catch {
-    return null;
+/** Display order only — never changes which goals exist or any figure on them. */
+function sortViews(views: readonly GoalView[], key: SortKey): readonly GoalView[] {
+  if (key === "default") return views;
+  const out = [...views];
+  switch (key) {
+    case "deadline":
+      // Goals without a deadline go last.
+      return out.sort((a, b) => (a.daysLeft == null ? 1 : 0) - (b.daysLeft == null ? 1 : 0) || (a.daysLeft ?? 0) - (b.daysLeft ?? 0));
+    case "progress":
+      return out.sort((a, b) => b.progress - a.progress);
+    case "remaining":
+      return out.sort((a, b) => b.remaining - a.remaining);
+    case "name":
+      return out.sort((a, b) => a.goal.name.localeCompare(b.goal.name, "en", { sensitivity: "base" }));
   }
 }
 
-const INSIGHT_STYLE: Record<SavingsInsight["tone"], { icon: typeof Info; cls: string }> = {
-  good: { icon: CheckCircle2, cls: "text-success" },
-  warn: { icon: AlertTriangle, cls: "text-warning-foreground dark:text-warning" },
-  bad: { icon: AlertTriangle, cls: "text-expense" },
-  info: { icon: Info, cls: "text-muted-foreground" },
+type Preset = { name: string; icon: string; kind?: SavingsGoalKind; target?: number } | null;
+type Screen = { kind: "overview" } | { kind: "goals" } | { kind: "plan" } | { kind: "goal"; id: string } | { kind: "new" };
+type Confirm = { kind: "delete"; goalId: string } | { kind: "complete"; goalId: string } | { kind: "remove-entry"; goalId: string; entryId: string } | null;
+
+const ROOT = "/savings";
+const LAYOUT_KEY = "flowfi.savings.layout";
+
+const hrefFor = (s: Screen): string => {
+  switch (s.kind) {
+    case "overview":
+      return ROOT;
+    case "goals":
+      return `${ROOT}?tab=goals`;
+    case "plan":
+      return `${ROOT}?tab=plan`;
+    case "goal":
+      return `${ROOT}?goal=${encodeURIComponent(s.id)}`;
+    case "new":
+      return `${ROOT}?new=1`;
+  }
 };
 
-const panelMotion = {
-  initial: { opacity: 0, y: -8, scale: 0.99 },
-  animate: { opacity: 1, y: 0, scale: 1 },
-  exit: { opacity: 0, y: -6, scale: 0.99 },
-  transition: { duration: 0.24, ease: [0.22, 1, 0.36, 1] as const },
-};
+function readLayout(): GoalLayout {
+  try {
+    return localStorage.getItem(LAYOUT_KEY) === "row" ? "row" : "card";
+  } catch {
+    return "card";
+  }
+}
 
 export function SavingsWorkspace() {
-  const [bufferOverride, setBufferOverride] = useState<number | null>(null);
-  useEffect(() => setBufferOverride(readBuffer()), []);
-  const planner = useSavingsPlanner(bufferOverride);
+  const router = useRouter();
+  const params = useSearchParams();
+  const planner = useSavingsPlanner();
   const { position, accounts, isLoading, cycle, now } = planner;
   const actions = useSavingsActions();
   const startDay = useMonthCycleStartDay();
 
   const [tab, setTab] = useState<Tab>("open");
-  const [expandedId, setExpandedId] = useState<string | null>(null);
   const [panelTab, setPanelTab] = useState<PanelTab>("add");
-  const [composer, setComposer] = useState<{ preset: { name: string; icon: string; kind?: SavingsGoalKind; target?: number } | null } | null>(null);
-  const [allocating, setAllocating] = useState(false);
+  const [preset, setPreset] = useState<Preset>(null);
+  // Each visit to the Plan screen is a fresh studio (new allocation id, nothing locked).
+  const [studioRun, setStudioRun] = useState(0);
+  const justCreated = useRef(false);
   const [confirm, setConfirm] = useState<Confirm>(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
-  const panelRef = useRef<HTMLDivElement>(null);
-  const studioRef = useRef<HTMLDivElement>(null);
 
-  const setBuffer = useCallback((v: number | null) => {
-    setBufferOverride(v);
-    try {
-      if (v == null) localStorage.removeItem(BUFFER_KEY);
-      else localStorage.setItem(BUFFER_KEY, String(v));
-    } catch {
-      // per-viewer convenience only
-    }
-  }, []);
+  const goalParam = params.get("goal");
+  const screen: Screen = goalParam ? { kind: "goal", id: goalParam } : params.get("new") ? { kind: "new" } : params.get("tab") === "goals" ? { kind: "goals" } : params.get("tab") === "plan" ? { kind: "plan" } : { kind: "overview" };
+
+  const go = useCallback(
+    (next: Screen, mode: "push" | "replace" = "push") => {
+      if (next.kind === "plan") setStudioRun((n) => n + 1);
+      if (mode === "replace") router.replace(hrefFor(next));
+      else router.push(hrefFor(next));
+    },
+    [router],
+  );
 
   const viewById = useMemo(() => new Map(position.views.map((v) => [v.goal.id, v])), [position.views]);
-  const accountsById = useMemo(() => new Map(accounts.map((a) => [a.id, a])), [accounts]);
   const planByGoal = useMemo(() => new Map(planner.plan.goals.map((g) => [g.goalId, g])), [planner.plan.goals]);
 
   // The last six Month Cycles (oldest first) for each goal's track record.
@@ -107,21 +137,23 @@ export function SavingsWorkspace() {
     return out;
   }, [cycle.start, cycle.end, startDay]);
 
-  const shown = tab === "open" ? position.open : tab === "completed" ? position.completed : position.archived;
-  const expanded = expandedId ? (viewById.get(expandedId) ?? null) : null;
+  const [sort, setSort] = useState<SortKey>("default");
+  // Per-viewer preference; the page prerenders as a skeleton, so reading it at first render can't mismatch.
+  const [layout, setLayoutState] = useState<GoalLayout>(() => (typeof window === "undefined" ? "card" : readLayout()));
+  const setLayout = useCallback((next: GoalLayout) => {
+    setLayoutState(next);
+    try {
+      localStorage.setItem(LAYOUT_KEY, next);
+    } catch {
+      // per-viewer convenience only
+    }
+  }, []);
+  const unsorted = tab === "open" ? position.open : tab === "completed" ? position.completed : position.archived;
+  const shown = useMemo(() => sortViews(unsorted, sort), [unsorted, sort]);
+
+  const goalView = screen.kind === "goal" ? (viewById.get(screen.id) ?? null) : null;
   const confirmView = confirm ? (viewById.get(confirm.goalId) ?? null) : null;
   const confirmEntry = confirm?.kind === "remove-entry" && confirmView ? (confirmView.entries.find((e) => e.entry.id === confirm.entryId) ?? null) : null;
-
-  useEffect(() => {
-    if (!expandedId) return;
-    const t = setTimeout(() => panelRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" }), 260);
-    return () => clearTimeout(t);
-  }, [expandedId]);
-  useEffect(() => {
-    if (!allocating) return;
-    const t = setTimeout(() => studioRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" }), 200);
-    return () => clearTimeout(t);
-  }, [allocating]);
 
   async function guarded(title: string, run: () => Promise<unknown>, success?: string) {
     try {
@@ -134,12 +166,15 @@ export function SavingsWorkspace() {
     }
   }
 
-  const toggle = (v: GoalView, t?: PanelTab) => {
-    if (expandedId === v.goal.id && !t) return setExpandedId(null);
+  const openGoal = (v: GoalView, t?: PanelTab) => {
     const canMove = v.status !== "completed" && !v.goal.isArchived;
     setPanelTab(t ?? (canMove ? (v.entries.length === 0 ? "add" : "history") : "history"));
-    setExpandedId(v.goal.id);
-    setComposer(null);
+    go({ kind: "goal", id: v.goal.id });
+  };
+  const openComposer = (next: Preset = null) => {
+    setPreset(next);
+    setTab("open");
+    go({ kind: "new" });
   };
 
   async function createGoal(values: GoalFormValues) {
@@ -159,8 +194,10 @@ export function SavingsWorkspace() {
     });
     setTab("open");
     toast.success(`${values.name} created`, values.monthlyTarget ? `Plan: ${formatCurrency(values.monthlyTarget)} every month` : undefined);
+    // The same flow moves on to the new goal's own screen, ready for its first amount.
+    justCreated.current = true;
     setPanelTab("add");
-    setExpandedId(goal.id);
+    go({ kind: "goal", id: goal.id }, "replace");
   }
 
   async function runConfirm() {
@@ -169,7 +206,7 @@ export function SavingsWorkspace() {
     try {
       if (confirm.kind === "delete") {
         const ok = await guarded("Couldn't delete the goal", () => actions.deleteGoal(confirmView.goal), `${confirmView.goal.name} deleted`);
-        if (ok && expandedId === confirm.goalId) setExpandedId(null);
+        if (ok && screen.kind === "goal" && screen.id === confirm.goalId) go({ kind: "goals" }, "replace");
       } else if (confirm.kind === "complete") {
         await guarded("Couldn't complete the goal", () => actions.markCompleted(confirmView), `${confirmView.goal.name} completed`);
       } else if (confirmEntry) {
@@ -186,13 +223,12 @@ export function SavingsWorkspace() {
       <div className="flex flex-col gap-4 px-1">
         <h1 className="font-heading text-2xl font-bold tracking-tight text-foreground">Savings</h1>
         <div className="grid gap-3 lg:grid-cols-12">
-          <Skeleton className="h-72 rounded-[26px] lg:col-span-5" />
-          <Skeleton className="h-72 rounded-[26px] lg:col-span-4" />
-          <Skeleton className="h-72 rounded-[26px] lg:col-span-3" />
+          <Skeleton className="h-44 rounded-[22px] lg:col-span-5" />
+          <Skeleton className="h-44 rounded-[22px] lg:col-span-7" />
         </div>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          {Array.from({ length: 3 }).map((_, i) => (
-            <Skeleton key={i} className="h-52 rounded-[22px]" />
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-3">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Skeleton key={i} className="h-36 rounded-[20px]" />
           ))}
         </div>
       </div>
@@ -234,211 +270,274 @@ export function SavingsWorkspace() {
   const blocker = confirm?.kind === "remove-entry" && confirmView && actions ? actions.removeBlocker(confirmView, confirm.entryId) : null;
 
   const panelFor = (v: GoalView) => (
-    <motion.div key={`panel-${v.goal.id}`} ref={panelRef} className="col-span-full" {...panelMotion}>
-      <GoalPanel
-        view={v}
-        tab={panelTab}
-        onTab={setPanelTab}
-        plan={planByGoal.get(v.goal.id) ?? (v.status === "completed" ? null : goalCyclePlan(v, cycle, now))}
-        history={goalPlanHistory(v, historyCycles, now).map((plan, i) => ({ label: historyCycles[i].label, plan }))}
-        cycleLabel={`This month · ${cycle.rangeLabel}`}
-        accounts={accounts}
-        reservedByAccount={position.reservedByAccount}
-        onClose={() => setExpandedId(null)}
-        onRecord={async (view, input) => {
-          if (!actions) throw new Error("Not signed in");
-          if (input.mode === "transfer" && !actions.hasTransferCategory) throw new Error('Create a "Transfer" category first (Settings → Categories), then try again.');
-          await actions.recordEntry(view, input);
-          toast.success(input.direction === "in" ? `Added ${formatCurrency(input.amount)} to ${view.goal.name}` : input.emergency ? `Emergency withdrawal of ${formatCurrency(input.amount)} recorded` : `Withdrew ${formatCurrency(input.amount)} from ${view.goal.name}`);
-        }}
-        onEditGoal={async (view, values) => {
-          if (!actions) throw new Error("Not signed in");
-          await actions.editGoal(view, { name: values.name, targetAmount: values.targetAmount, dueDate: values.dueDate, clearDueDate: values.dueDate == null, notes: values.notes, icon: values.icon, accent: values.accent, kind: values.kind });
-          toast.success("Goal updated");
-        }}
-        onSetPlan={async (view, monthly, accountId) => {
-          if (!actions) throw new Error("Not signed in");
-          await actions.setPlan(view, monthly, accountId);
-          toast.success(monthly == null ? "Monthly plan removed" : `Plan saved: ${formatCurrency(monthly)} every month`);
-        }}
-        onSkip={async (view, skipped) => {
-          if (!actions) throw new Error("Not signed in");
-          await actions.setCycleSkipped(view, cycleKeyOf(cycle), skipped);
-          toast.success(skipped ? `${view.goal.name} skipped this month` : "Skip undone");
-        }}
-        onLock={async (view, locked, until) => {
-          if (!actions) throw new Error("Not signed in");
-          await actions.setLock(view, locked, until);
-          toast.success(locked ? `${view.goal.name} locked${until ? ` until ${until.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}` : ""}` : `${view.goal.name} unlocked`);
-        }}
-        onEditEntry={async (view, entry: EntryView, patch) => {
-          if (!actions) throw new Error("Not signed in");
-          await actions.editEntry(view, entry, patch);
-          toast.success("Entry updated");
-        }}
-        onRemoveEntry={(view, entry) => setConfirm({ kind: "remove-entry", goalId: view.goal.id, entryId: entry.entry.id })}
-        onComplete={(view) => setConfirm({ kind: "complete", goalId: view.goal.id })}
-        onReopen={(view) => void guarded("Couldn't reopen the goal", async () => actions?.reopen(view.goal), `${view.goal.name} reopened`)}
-        onArchive={(view) => void guarded("Couldn't archive the goal", async () => actions?.archive(view.goal), `${view.goal.name} archived`).then((ok) => ok && setExpandedId(null))}
-        onUnarchive={(view) => void guarded("Couldn't unarchive the goal", async () => actions?.unarchive(view.goal), `${view.goal.name} restored`).then((ok) => ok && setExpandedId(null))}
-        onDelete={(view) => setConfirm({ kind: "delete", goalId: view.goal.id })}
-      />
-    </motion.div>
+    <GoalPanel
+      key={v.goal.id}
+      view={v}
+      tab={panelTab}
+      onTab={setPanelTab}
+      plan={planByGoal.get(v.goal.id) ?? (v.status === "completed" ? null : goalCyclePlan(v, cycle, now))}
+      history={goalPlanHistory(v, historyCycles, now).map((plan, i) => ({ label: historyCycles[i].label, plan }))}
+      cycleLabel={`This month · ${cycle.rangeLabel}`}
+      accounts={accounts}
+      reservedByAccount={position.reservedByAccount}
+      onClose={() => go({ kind: "goals" })}
+      onRecord={async (view, input) => {
+        if (!actions) throw new Error("Not signed in");
+        if (input.mode === "transfer" && !actions.hasTransferCategory) throw new Error('Create a "Transfer" category first (Settings → Categories), then try again.');
+        await actions.recordEntry(view, input);
+        toast.success(input.direction === "in" ? `Added ${formatCurrency(input.amount)} to ${view.goal.name}` : input.emergency ? `Emergency withdrawal of ${formatCurrency(input.amount)} recorded` : `Withdrew ${formatCurrency(input.amount)} from ${view.goal.name}`);
+      }}
+      onEditGoal={async (view, values) => {
+        if (!actions) throw new Error("Not signed in");
+        await actions.editGoal(view, { name: values.name, targetAmount: values.targetAmount, dueDate: values.dueDate, clearDueDate: values.dueDate == null, notes: values.notes, icon: values.icon, accent: values.accent, kind: values.kind });
+        toast.success("Goal updated");
+      }}
+      onSetPlan={async (view, monthly, accountId) => {
+        if (!actions) throw new Error("Not signed in");
+        await actions.setPlan(view, monthly, accountId);
+        toast.success(monthly == null ? "Monthly plan removed" : `Plan saved: ${formatCurrency(monthly)} every month`);
+      }}
+      onSkip={async (view, skipped) => {
+        if (!actions) throw new Error("Not signed in");
+        await actions.setCycleSkipped(view, cycleKeyOf(cycle), skipped);
+        toast.success(skipped ? `${view.goal.name} skipped this month` : "Skip undone");
+      }}
+      onLock={async (view, locked, until) => {
+        if (!actions) throw new Error("Not signed in");
+        await actions.setLock(view, locked, until);
+        toast.success(locked ? `${view.goal.name} locked${until ? ` until ${until.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}` : ""}` : `${view.goal.name} unlocked`);
+      }}
+      onEditEntry={async (view, entry: EntryView, patch) => {
+        if (!actions) throw new Error("Not signed in");
+        await actions.editEntry(view, entry, patch);
+        toast.success("Entry updated");
+      }}
+      onRemoveEntry={(view, entry) => setConfirm({ kind: "remove-entry", goalId: view.goal.id, entryId: entry.entry.id })}
+      onComplete={(view) => setConfirm({ kind: "complete", goalId: view.goal.id })}
+      onReopen={(view) => void guarded("Couldn't reopen the goal", async () => actions?.reopen(view.goal), `${view.goal.name} reopened`)}
+      onArchive={(view) => void guarded("Couldn't archive the goal", async () => actions?.archive(view.goal), `${view.goal.name} archived`).then((ok) => ok && go({ kind: "goals" }, "replace"))}
+      onUnarchive={(view) => void guarded("Couldn't unarchive the goal", async () => actions?.unarchive(view.goal), `${view.goal.name} restored`).then((ok) => ok && go({ kind: "goals" }, "replace"))}
+      onDelete={(view) => setConfirm({ kind: "delete", goalId: view.goal.id })}
+    />
   );
 
-  const openComposer = (preset: { name: string; icon: string; kind?: SavingsGoalKind; target?: number } | null = null) => {
-    setTab("open");
-    setExpandedId(null);
-    setComposer({ preset });
-  };
+  // ── screens ──────────────────────────────────────────────────────────────────────────────────────────
+  const deep = screen.kind === "goal" || screen.kind === "new";
+  const navItems: { id: "overview" | "goals" | "plan"; label: string }[] = [
+    { id: "overview", label: "Overview" },
+    { id: "goals", label: `Goals${position.open.length > 0 ? ` · ${position.open.length}` : ""}` },
+    { id: "plan", label: "Plan this month" },
+  ];
 
-  return (
-    <div className="flex flex-col gap-4 px-1 pb-6" data-testid="savings-page">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div className="min-w-0">
-          <h1 className="font-heading text-2xl font-bold tracking-tight text-foreground">Savings</h1>
-          <p className="mt-0.5 text-sm text-muted-foreground">
-            Plan this month&apos;s money, fund your goals, keep emergencies covered · <span className="font-medium text-foreground/80">{cycle.label}</span>
-          </p>
-        </div>
+  const goalsScreen = (
+    <div className="flex flex-col gap-3" data-testid="savings-goals-screen">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <SegmentedControl value={tab} onChange={(v) => setTab(v as Tab)} options={tabOptions} className="savings-tabs" />
         <div className="flex items-center gap-2">
-          {hasAny && (
-            <ClayButton variant="secondary" size="sm" className="h-9 gap-1.5 px-3.5" onClick={() => setAllocating((v) => !v)} data-testid="header-allocate">
-              <Sparkles className="size-3.5" /> Allocate
-            </ClayButton>
+          {shown.length > 1 && (
+            <label className="flex shrink-0 items-center gap-1.5 text-[11.5px] font-medium text-muted-foreground">
+              Sort
+              <select
+                value={sort}
+                onChange={(e) => setSort(e.target.value as SortKey)}
+                aria-label="Sort goals"
+                data-testid="savings-sort"
+                className="h-8 rounded-lg border border-border/60 bg-card px-2 text-xs font-semibold text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                {SORT_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </label>
           )}
-          <ClayButton size="sm" className="h-9 gap-1.5 px-4" onClick={() => openComposer()} data-testid="new-goal">
-            <Plus className="size-3.5" /> New goal
-          </ClayButton>
-        </div>
-      </div>
-
-      <PlannerHero planner={planner} accounts={accounts} allocating={allocating} onAllocate={() => setAllocating((v) => !v)} onBufferChange={setBuffer} bufferOverridden={bufferOverride != null} />
-
-      <AnimatePresence initial={false}>
-        {allocating && (
-          <motion.div key="studio" ref={studioRef} initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }} className="overflow-hidden">
-            {position.open.length === 0 ? (
-              <div className="surface-flat flex flex-wrap items-center justify-between gap-3 rounded-[26px] p-5 text-sm text-muted-foreground">
-                <span>Create a goal first — then split this month&apos;s money across your goals here.</span>
-                <ClayButton size="sm" onClick={() => openComposer()}>
-                  <Plus className="size-3.5" /> New goal
-                </ClayButton>
-              </div>
-            ) : (
-              <AllocationStudio
-                goals={position.open}
-                plan={planner.plan}
-                safeToSave={planner.capacity.safeToSave}
-                cycleLabel={cycle.label}
-                cycleEndLabel={cycle.end.toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
-                accounts={accounts}
-                reservedByAccount={position.reservedByAccount}
-                hasTransferCategory={actions?.hasTransferCategory ?? false}
-                onClose={() => setAllocating(false)}
-                onApply={async (lines, opts) => {
-                  if (!actions) throw new Error("Not signed in");
-                  const result = await actions.allocate(lines, { ...opts, date: new Date() }, (e) => userFacingMessage(e) ?? (e instanceof Error ? e.message : "Couldn't save"));
-                  if (result.done.length > 0) toast.success(`Allocated to ${result.done.length} goal${result.done.length === 1 ? "" : "s"}`);
-                  if (result.failed.length > 0) toast.error(`${result.failed.length} line${result.failed.length === 1 ? "" : "s"} failed`, "Retry the failed lines — saved lines won't be repeated.");
-                  return result;
-                }}
-                onSavePlans={async (rows) => {
-                  if (!actions) return;
-                  await guarded("Couldn't save the monthly plans", () => Promise.all(rows.map((r) => actions.setPlan(r.view, r.amount))), `Monthly plan updated for ${rows.length} goal${rows.length === 1 ? "" : "s"}`);
-                }}
-              />
-            )}
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {hasAny && (
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <SegmentedControl value={tab} onChange={(v) => { setTab(v as Tab); setExpandedId(null); }} options={tabOptions} className="savings-tabs" />
-          {position.insights.length > 0 && (
-            <ul className="flex min-w-0 flex-wrap justify-end gap-1.5" data-testid="savings-insights">
-              {position.insights.map((i) => {
-                const { icon: Icon, cls } = INSIGHT_STYLE[i.tone];
-                return (
-                  <li key={i.id} className="flex max-w-full items-center gap-1.5 rounded-full border border-border/60 bg-card px-2.5 py-1 text-[11.5px] text-foreground/85">
-                    <Icon className={cn("size-3.5 shrink-0", cls)} />
-                    <span className="truncate">{i.text}</span>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </div>
-      )}
-
-      {hasAny || composer ? (
-        <div className="grid grid-flow-row-dense grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3" data-testid="savings-goal-grid">
-          <AnimatePresence initial={false}>
-            {composer && (
-              <motion.div key="composer" className="col-span-full" {...panelMotion}>
-                <div className="surface-flat rounded-[26px] p-4 shadow-[0_0_0_2px_var(--primary)] sm:p-5">
-                  <GoalEditor view={null} accounts={accounts} preset={composer.preset} onSubmit={createGoal} onCancel={() => setComposer(null)} />
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-          {shown.length === 0 && !composer && (
-            <div className="surface-flat col-span-full flex items-center gap-3 rounded-[22px] px-4 py-6 text-sm text-muted-foreground">
-              <Target className="size-4 shrink-0" />
-              {tab === "open" ? "All your goals are completed or archived — start a new one when you're ready." : tab === "completed" ? "Completed goals will collect here." : "Nothing archived."}
-            </div>
-          )}
-          {shown.map((v) => (
-            <Fragment key={v.goal.id}>
-              <GoalTile
-                view={v}
-                plan={tab === "open" ? (planByGoal.get(v.goal.id) ?? null) : null}
-                accountsById={accountsById}
-                expanded={expandedId === v.goal.id}
-                onToggle={() => toggle(v)}
-                onQuickAdd={() => toggle(v, "add")}
-                showAdd={tab === "open"}
-              />
-              <AnimatePresence initial={false}>{expanded && expanded.goal.id === v.goal.id && panelFor(expanded)}</AnimatePresence>
-            </Fragment>
-          ))}
-          {tab === "open" && !composer && shown.length > 0 && (
-            <button
-              type="button"
-              onClick={() => openComposer()}
-              className="group flex min-h-48 flex-col items-center justify-center gap-2 rounded-[22px] border-2 border-dashed border-border/70 p-4 text-sm text-muted-foreground transition-colors hover:border-primary hover:bg-primary/5 hover:text-foreground"
-              data-testid="new-goal-tile"
-            >
-              <span className="flex size-10 items-center justify-center rounded-2xl bg-muted transition-colors group-hover:bg-primary group-hover:text-primary-foreground">
-                <Plus className="size-5" />
-              </span>
-              <span className="font-semibold">New goal or fund</span>
-              <span className="text-[11px]">Bicycle, vehicle, emergency fund, a monthly deposit…</span>
-            </button>
-          )}
-        </div>
-      ) : (
-        <div className="surface-flat flex flex-col items-center gap-4 rounded-[26px] px-6 py-10 text-center" data-testid="savings-empty">
-          <span className="flex size-14 items-center justify-center rounded-3xl bg-primary/18 text-primary-accent-text">
-            <PiggyBank className="size-7" />
-          </span>
-          <div>
-            <p className="text-lg font-semibold text-foreground">Start your first savings goal</p>
-            <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">Pick what you&apos;re saving for, choose a monthly amount, and keep the money set aside in an account you already have — or move it into a savings account.</p>
-          </div>
-          <div className="flex flex-wrap justify-center gap-2">
-            {GOAL_TEMPLATES.map((t) => (
-              <button key={t.name} type="button" className="inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-muted/30 px-3 py-1.5 text-xs font-medium text-foreground/80 transition-colors hover:border-primary hover:text-foreground" onClick={() => openComposer(t)}>
-                {renderGoalIcon(t.icon, "size-3.5")}
-                {t.name}
+          <div role="group" aria-label="Goal layout" className="inline-flex rounded-[9px] border border-border/60 bg-card p-0.5">
+            {(
+              [
+                ["card", "Cards", LayoutGrid],
+                ["row", "List", List],
+              ] as const
+            ).map(([value, label, LayoutIcon]) => (
+              <button
+                key={value}
+                type="button"
+                aria-pressed={layout === value}
+                aria-label={`${label} layout`}
+                title={`${label} layout`}
+                onClick={() => setLayout(value)}
+                className={cn(
+                  "flex h-7 items-center gap-1.5 rounded-[7px] px-2.5 text-xs font-semibold transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+                  layout === value ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                )}
+              >
+                <LayoutIcon className="size-3.5" aria-hidden />
+                <span className="hidden sm:inline">{label}</span>
               </button>
             ))}
           </div>
-          <ClayButton size="sm" className="gap-1.5" onClick={() => openComposer()}>
-            <Plus className="size-3.5" /> Create a goal
-          </ClayButton>
         </div>
+      </div>
+
+      <div className={layout === "row" ? "flex flex-col gap-2" : "grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3"} data-testid="savings-goal-grid">
+        {shown.length === 0 && (
+          <div className="surface-flat col-span-full flex items-center gap-3 rounded-[20px] px-4 py-5 text-sm text-muted-foreground">
+            <Target className="size-4 shrink-0" />
+            {tab === "open" ? "No active goals — start a new one when you're ready." : tab === "completed" ? "Completed goals will collect here." : "Nothing archived."}
+          </div>
+        )}
+        {shown.map((v) => (
+          <GoalTile key={v.goal.id} view={v} plan={tab === "open" ? (planByGoal.get(v.goal.id) ?? null) : null} selected={false} onOpen={() => openGoal(v)} onQuickAdd={() => openGoal(v, "add")} showAdd={tab === "open"} layout={layout} />
+        ))}
+        {tab === "open" && (
+          <button
+            type="button"
+            onClick={() => openComposer()}
+            className={cn(
+              "group border-2 border-dashed border-border/70 text-muted-foreground transition-colors hover:border-primary hover:bg-primary/5 hover:text-foreground",
+              layout === "row" ? "flex items-center justify-center gap-2 rounded-2xl px-4 py-3 text-sm" : "flex min-h-[10.5rem] flex-col items-center justify-center gap-1.5 rounded-[20px] p-4 text-sm",
+            )}
+            data-testid="new-goal-tile"
+          >
+            <span className="flex size-9 items-center justify-center rounded-xl bg-muted transition-colors group-hover:bg-primary group-hover:text-primary-foreground">
+              <Plus className="size-4" />
+            </span>
+            <span className="font-semibold">New goal or fund</span>
+          </button>
+        )}
+      </div>
+    </div>
+  );
+
+  const planScreen =
+    position.open.length === 0 ? (
+      <div className="surface-flat flex flex-col items-center gap-3 rounded-[22px] px-6 py-10 text-center">
+        <Sparkles className="size-6 text-primary-accent-text" />
+        <p className="text-sm font-semibold text-foreground">Create a goal first</p>
+        <p className="max-w-xs text-xs text-muted-foreground">Then split this month&apos;s money across your goals here.</p>
+        <ClayButton size="sm" onClick={() => openComposer()}>
+          <Plus className="size-3.5" /> New goal
+        </ClayButton>
+      </div>
+    ) : (
+      <AllocationStudio
+        key={studioRun}
+        goals={position.open}
+        plan={planner.plan}
+        safeToSave={planner.capacity.safeToSave}
+        cycleLabel={cycle.label}
+        cycleEndLabel={cycle.end.toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
+        accounts={accounts}
+        reservedByAccount={position.reservedByAccount}
+        hasTransferCategory={actions?.hasTransferCategory ?? false}
+        onClose={() => go({ kind: "overview" })}
+        onApply={async (lines, opts) => {
+          if (!actions) throw new Error("Not signed in");
+          const result = await actions.allocate(lines, { ...opts, date: new Date() }, (e) => userFacingMessage(e) ?? (e instanceof Error ? e.message : "Couldn't save"));
+          if (result.done.length > 0) toast.success(`Allocated to ${result.done.length} goal${result.done.length === 1 ? "" : "s"}`);
+          if (result.failed.length > 0) toast.error(`${result.failed.length} line${result.failed.length === 1 ? "" : "s"} failed`, "Retry the failed lines — saved lines won't be repeated.");
+          return result;
+        }}
+        onSavePlans={async (rows) => {
+          if (!actions) return;
+          await guarded("Couldn't save the monthly plans", () => Promise.all(rows.map((r) => actions.setPlan(r.view, r.amount))), `Monthly plan updated for ${rows.length} goal${rows.length === 1 ? "" : "s"}`);
+        }}
+      />
+    );
+
+  const overview = (
+    <SavingsOverview
+      planner={planner}
+      accounts={accounts}
+      onAllocate={() => go({ kind: "plan" })}
+      planByGoal={planByGoal}
+      onOpenGoal={(v) => openGoal(v)}
+      onQuickAdd={(v) => openGoal(v, "add")}
+      onSeeGoals={() => go({ kind: "goals" })}
+      onNewGoal={openComposer}
+    />
+  );
+
+  return (
+    <div className="flex flex-col gap-4 px-1 pb-10" data-testid="savings-page">
+      {deep ? (
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => go({ kind: "goals" })}
+            className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2 text-sm font-semibold text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+            data-testid="savings-back"
+          >
+            <ArrowLeft className="size-4" /> Goals
+          </button>
+          <span className="text-muted-foreground/60">/</span>
+          <h1 className="min-w-0 truncate font-heading text-lg font-bold tracking-tight text-foreground">{screen.kind === "new" ? "New goal" : (goalView?.goal.name ?? "Goal")}</h1>
+        </div>
+      ) : (
+        <>
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div className="min-w-0">
+              <h1 className="font-heading text-2xl font-bold tracking-tight text-foreground">Savings</h1>
+              <p className="mt-0.5 text-sm font-medium text-muted-foreground">{cycle.label}</p>
+            </div>
+            <ClayButton size="sm" className="h-9 gap-1.5 px-4" onClick={() => openComposer()} data-testid="new-goal">
+              <Plus className="size-3.5" /> New goal
+            </ClayButton>
+          </div>
+          <nav aria-label="Savings sections" className="-mt-1 flex gap-1 overflow-x-auto border-b border-border/60 [scrollbar-width:none]" data-testid="savings-nav">
+            {navItems.map((n) => {
+              const active = screen.kind === n.id;
+              return (
+                <button
+                  key={n.id}
+                  type="button"
+                  aria-current={active ? "page" : undefined}
+                  data-testid={`savings-nav-${n.id}`}
+                  onClick={() => !active && go({ kind: n.id })}
+                  className={cn(
+                    "relative -mb-px shrink-0 px-3.5 py-2.5 text-sm font-semibold whitespace-nowrap transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+                    active ? "text-foreground" : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {n.label}
+                  <span aria-hidden className={cn("absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-primary transition-opacity", active ? "opacity-100" : "opacity-0")} />
+                </button>
+              );
+            })}
+          </nav>
+        </>
+      )}
+
+      {(screen.kind === "overview" || (screen.kind === "goals" && !hasAny)) && overview}
+      {screen.kind === "goals" && hasAny && goalsScreen}
+      {screen.kind === "plan" && planScreen}
+      {screen.kind === "goal" &&
+        (goalView ? (
+          panelFor(goalView)
+        ) : (
+          <div className="surface-flat flex flex-col items-center gap-3 rounded-[22px] px-6 py-10 text-center">
+            <p className="text-sm font-semibold text-foreground">This goal isn&apos;t available</p>
+            <ClayButton size="sm" variant="secondary" onClick={() => go({ kind: "goals" }, "replace")}>
+              Back to goals
+            </ClayButton>
+          </div>
+        ))}
+      {screen.kind === "new" && (
+        <GoalEditor
+          layout="screen"
+          view={null}
+          accounts={accounts}
+          preset={preset}
+          onSubmit={createGoal}
+          onCancel={() => {
+            // A successful create already moved on to the new goal's screen — don't navigate back.
+            if (justCreated.current) {
+              justCreated.current = false;
+              return;
+            }
+            go({ kind: "goals" });
+          }}
+        />
       )}
 
       <ConfirmDialog

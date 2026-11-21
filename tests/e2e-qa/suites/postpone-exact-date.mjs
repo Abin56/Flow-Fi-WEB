@@ -22,7 +22,7 @@ const sched = async () => JSON.stringify((await f.scheduleState("emi", SHARED)).
 export async function openShare(page) {
   await f.openPerson(page, "QA Priya");
   // The "Linked EMIs" card above the table also says "QA Shared EMI" — expand the TABLE row, not that card.
-  await page.locator("tr", { hasText: /EMI share/ }).first().locator("td").nth(2).click();
+  await page.locator("tr", { hasText: /EMI share/ }).first().locator("td").nth(1).click();
   await page.waitForTimeout(900);
   await page.getByRole("button", { name: /postpone payment/i }).first().click();
   const group = page.getByRole("group", { name: "Postpone payment" });

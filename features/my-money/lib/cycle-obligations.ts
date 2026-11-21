@@ -55,7 +55,9 @@ export function makeCardLookup(params: { accounts: readonly Account[]; cards: re
   const txnById = new Map(params.transactions.filter((t) => t.deletedAt == null).map((t) => [t.id, t]));
   const label = (card: CreditCardProfile) => {
     const name = accountById.get(card.accountId)?.name ?? "Credit card";
-    return card.lastFourDigits ? `${name} ••${card.lastFourDigits}` : name;
+    // The account name often already carries the digits ("SBI ●●●● 0282") — don't repeat them.
+    if (!card.lastFourDigits || name.includes(card.lastFourDigits)) return name;
+    return `${name} ••${card.lastFourDigits}`;
   };
   const carriedByCard: CardLookup["carriedByCard"] = (linkedCreditCardId, purchaseTransactionId) => {
     const card = linkedCreditCardId ? cardById.get(linkedCreditCardId) : undefined;

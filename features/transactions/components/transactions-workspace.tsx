@@ -23,6 +23,7 @@ import {
   Maximize2,
   Minimize2,
   Pencil,
+  PiggyBank,
   Plus,
   Receipt,
   Scale,
@@ -42,6 +43,7 @@ import {
 import { useRouter, useSearchParams } from "next/navigation";
 import { Fragment, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { readPeopleReturnContext, type PeopleReturnContext } from "@/features/people/lib/people-return-link";
+import { useSavingsTransactionTags } from "@/features/savings/hooks/use-savings-data";
 import { toast } from "@/store/toast-store";
 import { ClayButton } from "@/components/clay/clay-button";
 import { ScrollNav } from "@/components/layout/scroll-nav";
@@ -53,7 +55,9 @@ import {
   FormDialog,
 } from "@/components/finance";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { formatCurrency } from "@/lib/format";
+import { formatCurrency, formatCurrencyPrecise } from "@/lib/format";
+import { SplitAllocationBreakdown } from "@/components/finance/split-allocation-breakdown";
+import { splitAllocation, type SplitAllocation } from "@/lib/split/split-allocation";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -90,6 +94,7 @@ import { cn } from "@/lib/utils";
 import { DateInput } from "@/components/forms/date-input";
 import { StatementFootnote, StatementHeader, StatementNeedsAccount, StatementTable } from "@/features/transactions/components/transactions-statement-view";
 import { buildTransactionStatementView } from "@/features/transactions/lib/transaction-statement";
+import { AccountBalanceHover, AccountBalanceRail, AccountFilterMenu, SelectedAccountBalance, accountBalanceViewFor, type AccountBalanceView } from "@/features/transactions/components/account-balance-preview";
 
 /**
  * Corner-ribbon tag for a Loan/EMI-generated transaction card — "EMI" only for a payment tied to
@@ -215,8 +220,12 @@ type FormKind = "expense" | "income" | "transfer";
 export function TransactionsWorkspace() {
   const { rows, accounts, categories, isLoading } = useTransactionRows();
   // Canonical card standings (shared limits pooled) — only for the Add Transfer preview's available-credit warning.
-  const { standings: cardStandings } = useCreditCardStandings();
+  const { standings: cardStandings, isLoading: standingsLoading } = useCreditCardStandings();
   const cardAvailableCredit = useMemo(() => new Map(cardStandings.map((s) => [s.card.accountId, s.available])), [cardStandings]);
+  // Balance previews (filter menu, selected-account line, row hover) read these same standings and each
+  // account's stored balance — display only, nothing recomputed.
+  const standingByAccountId = useMemo(() => new Map(cardStandings.map((s) => [s.card.accountId, s])), [cardStandings]);
+  const balanceFor = (a: Account): AccountBalanceView => accountBalanceViewFor(a, standingByAccountId, standingsLoading);
   const actions = useTransactionActions();
   const { data: people = [] } = usePeople();
   const { data: expenses = [], isLoading: expensesLoading } = useExpenses();
@@ -226,17 +235,24 @@ export function TransactionsWorkspace() {
   // uses (`isOwed`): an expense transaction with `linkedPersonId` AND `owesPersonToggle`. A row is a Split
   // only when its Expense is a real split (`isSplit`) and it is NOT such an assignment.
   const personNameById = useMemo(() => new Map(people.map((p) => [p.id, p.name])), [people]);
+  // The stored allocation (total + every participant's share) per split row — read-only, shown in the expanded row.
   const splitTransactionIds = useMemo(() => {
-    const ids = new Set<string>();
+    const byId = new Map<string, SplitAllocation>();
     for (const r of rows) {
       const t = r.transaction;
       const expense = expenseByTransactionId.get(t.id);
-      if (expense && isSplitExpense(expense) && !isAssignedToPerson(t)) ids.add(t.id);
+      if (!expense || !isSplitExpense(expense) || isAssignedToPerson(t)) continue;
+      const allocation = splitAllocation(expense);
+      if (allocation) byId.set(t.id, allocation);
     }
-    return ids;
+    return byId;
   }, [rows, expenseByTransactionId]);
   const assigneeFor = (t: Transaction): string | null =>
     isAssignedToPerson(t) ? (personNameById.get(t.linkedPersonId!) ?? "a person") : null;
+  // The person behind a People-ledger movement (Received / Repaid / Borrowed) — display only, read from
+  // the same `linkedPersonId` reference tag the ledger entry already carries.
+  const personNameFor = (t: Transaction): string | null =>
+    t.isPersonLedgerMovement && t.linkedPersonId != null ? (personNameById.get(t.linkedPersonId) ?? "a person") : null;
   // Loan-generated rows read as "Loan EMI — Home Loan" / "Extra Principal Payment — …" from their
   // persisted loan metadata instead of the raw stored description; every other row is unchanged.
   // Display only: an unnamed loan reads by its lender (as on the Loans page), and an installment payment
@@ -626,6 +642,7 @@ export function TransactionsWorkspace() {
   }
 
   const hasTransactions = rows.length > 0;
+  const selectedAccount = accountFilter ? accounts.find((a) => a.id === accountFilter) : undefined;
   const accountName = (id: string) => accounts.find((a) => a.id === id)?.name ?? (accountFilterState.lookedUp?.id === id ? accountFilterState.lookedUp.name : "Account");
   const categoryName = (id: string) => categories.find((c) => c.id === id)?.name ?? "Category";
   const activeChips: { key: string; label: string; clear: () => void }[] = [
@@ -728,13 +745,11 @@ export function TransactionsWorkspace() {
         </div>
       </header>
 
-      {/* ── What the current list adds up to ── */}
-      {hasTransactions && <ViewSummary rows={filtered} />}
-
       {/* ── Toolbar: search · date · filters · view ── */}
       <div className="flex flex-col gap-2.5">
         <div className="flex flex-wrap items-center gap-2">
-          <label className="flex h-9 w-full min-w-0 items-center gap-2 rounded-full border border-border-strong bg-card px-3.5 text-sm transition-colors focus-within:border-primary-accent-text focus-within:ring-2 focus-within:ring-ring sm:w-72 dark:bg-input">
+          {/* Grows into the free space (so the placeholder is never cut off) but stays one row with the filters and view switch at laptop widths. */}
+          <label className="flex h-9 w-full min-w-0 items-center gap-2 rounded-full border border-border-strong bg-card px-3.5 text-sm transition-colors focus-within:border-primary-accent-text focus-within:ring-2 focus-within:ring-ring sm:w-auto sm:max-w-sm sm:min-w-56 sm:flex-1 dark:bg-input">
             <Search className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.75} />
             <input
               type="text"
@@ -806,9 +821,22 @@ export function TransactionsWorkspace() {
             </PopoverContent>
           </Popover>
 
-          {filters.map((f) => (
-            <FilterMenu key={f.id} filter={f} label={FILTER_LABEL[f.id] ?? f.label} />
-          ))}
+          {filters.map((f) =>
+            f.id === "account" ? (
+              // Same filter (value/onChange), with each account's balance beside its name.
+              <AccountFilterMenu
+                key={f.id}
+                accounts={accounts}
+                value={accountFilter}
+                onChange={f.onChange}
+                balanceFor={balanceFor}
+                triggerClassName={TX_FILTER}
+                activeTriggerClassName={TX_FILTER_ACTIVE}
+              />
+            ) : (
+              <FilterMenu key={f.id} filter={f} label={FILTER_LABEL[f.id] ?? f.label} />
+            ),
+          )}
 
           <div className="ml-auto flex items-center gap-1.5">
             <div role="radiogroup" aria-label="View" className="flex items-center rounded-full border border-border-strong bg-card p-0.5">
@@ -827,13 +855,14 @@ export function TransactionsWorkspace() {
                   aria-label={v.label}
                   title={v.value === "statement" ? "Statement — Debit, Credit and running balance for one account" : v.label}
                   onClick={() => setViewMode(v.value)}
+                  // The selected view names itself; the others are icons (their name is in aria-label/title) — a third of the width.
                   className={cn(
-                    "flex h-8 items-center gap-1.5 rounded-full px-2.5 text-xs font-semibold transition-colors sm:px-3",
-                    viewMode === v.value ? "bg-primary text-primary-foreground shadow-e1" : "text-muted-foreground hover:bg-secondary hover:text-foreground",
+                    "flex h-8 items-center gap-1.5 rounded-full px-2.5 text-xs font-semibold transition-colors",
+                    viewMode === v.value ? "bg-primary pr-3 text-primary-foreground shadow-e1" : "text-muted-foreground hover:bg-secondary hover:text-foreground",
                   )}
                 >
                   <v.icon className="size-3.5" strokeWidth={2} />
-                  {v.text}
+                  {viewMode === v.value && v.text}
                 </button>
               ))}
             </div>
@@ -845,10 +874,21 @@ export function TransactionsWorkspace() {
               className={cn(TX_UTILITY, "rounded-full border border-border-strong bg-card")}
             >
               {fullscreen ? <Minimize2 className="size-4" strokeWidth={1.75} /> : <Maximize2 className="size-4" strokeWidth={1.75} />}
-              <span className="hidden lg:inline">{fullscreen ? "Exit" : "Expand"}</span>
+              <span className="hidden 2xl:inline">{fullscreen ? "Exit" : "Expand"}</span>
             </button>
           </div>
         </div>
+
+        {/* Every account's current balance, always on screen — a chip is a one-click shortcut to the Account filter. */}
+        <AccountBalanceRail
+          accounts={accounts}
+          balanceFor={balanceFor}
+          activeId={accountFilter}
+          onSelect={(id) => {
+            setAccountFilter(id);
+            setPage(1);
+          }}
+        />
 
         {accountFilterState.invalidId && (
           <Banner
@@ -880,9 +920,14 @@ export function TransactionsWorkspace() {
             <button type="button" onClick={clearFilters} className="ml-1 text-xs font-semibold text-primary-accent-text hover:underline">
               Clear filters
             </button>
+            {/* One account filtered → its balance as of now, on this same line (Statement view already shows it in its header). */}
+            {selectedAccount && !statementMode && <SelectedAccountBalance account={selectedAccount} view={balanceFor(selectedAccount)} />}
           </div>
         )}
       </div>
+
+      {/* ── What the list below adds up to — sits under the controls that change it ── */}
+      {hasTransactions && <ViewSummary rows={filtered} />}
 
       {/* ── Ledger ── */}
       {!hasTransactions ? (
@@ -924,7 +969,7 @@ export function TransactionsWorkspace() {
                   ) : null}
                 </div>
               ) : (
-                <div className={cn("min-h-0 overflow-auto overscroll-contain", fullscreen ? "flex-1" : "max-h-[calc(100dvh-24rem)] min-h-[18rem]")}>
+                <div className={cn("min-h-0 overflow-auto overscroll-contain", fullscreen ? "flex-1" : "max-h-[calc(100dvh-31rem)] min-h-[18rem]")}>
                   <StatementTable
                     view={statementView}
                     rows={statementPageRows}
@@ -946,7 +991,7 @@ export function TransactionsWorkspace() {
               </button>
             </div>
           ) : viewMode === "list" ? (
-            <div className={cn("min-h-0 overflow-auto overscroll-contain", fullscreen ? "flex-1" : "max-h-[calc(100dvh-17rem)] min-h-[18rem]")}>
+            <div className={cn("min-h-0 overflow-auto overscroll-contain", fullscreen ? "flex-1" : "max-h-[calc(100dvh-24rem)] min-h-[18rem]")}>
               <LedgerTable
                 rows={pageRows}
                 offset={(safePage - 1) * rowsPerPage}
@@ -955,14 +1000,23 @@ export function TransactionsWorkspace() {
                 borrowedIds={borrowedTransactionIds}
                 displayDescription={displayDescription}
                 isSplit={(id) => splitTransactionIds.has(id)}
+                splitFor={(id) => splitTransactionIds.get(id) ?? null}
                 assigneeFor={assigneeFor}
+                personNameFor={personNameFor}
                 onOpen={openDetails}
                 onDelete={setQuickDeleteRow}
+                balanceFor={balanceFor}
+                accountFilter={accountFilter}
+                onFilterAccount={(id) => {
+                  setAccountFilter(id);
+                  setPage(1);
+                }}
               />
             </div>
           ) : (
-            <div className={cn("min-h-0 overflow-auto overscroll-contain p-3", fullscreen ? "flex-1" : "max-h-[calc(100dvh-17rem)]")}>
-              <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 xl:grid-cols-3">
+            <div className={cn("min-h-0 overflow-auto overscroll-contain p-2.5", fullscreen ? "flex-1" : "max-h-[calc(100dvh-24rem)]")}>
+              {/* Grid items stretch within a row, so cards beside each other share a height; rows size to their content (no forced equal rows = no dead space). */}
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
                 {pageRows.map((row) => {
                   const iconKey = row.category?.iconKey ?? "other";
                   const Icon = categoryIconFor(iconKey);
@@ -974,7 +1028,7 @@ export function TransactionsWorkspace() {
                       type="button"
                       onClick={() => openDetails(row)}
                       className={cn(
-                        "flex min-w-0 flex-col gap-2 rounded-[8px] border border-border-strong/60 bg-card p-3 text-left transition-colors hover:border-border-strong hover:bg-secondary/50",
+                        "flex min-w-0 flex-col gap-1 rounded-[8px] border border-border-strong/60 bg-card px-2.5 py-2 text-left transition-colors hover:border-border-strong hover:bg-secondary/50 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
                         isDuplicate && "border-l-[3px] border-l-danger",
                       )}
                     >
@@ -982,15 +1036,21 @@ export function TransactionsWorkspace() {
                         <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-[8px]", TONE_ICON_CLASS[categoryToneFor(iconKey)])}>
                           <Icon className="size-4" />
                         </span>
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate text-sm font-semibold text-foreground">{displayDescription(t) || (t.transferId ? TRANSFER_SIDE_LABEL[transferSideOf(t)] : "(No description)")}</span>
-                          <span className="block truncate text-xs text-muted-foreground">
+                        <span className="flex min-w-0 flex-1 flex-col">
+                          <span className="truncate text-sm leading-snug font-semibold text-foreground">{displayDescription(t) || (t.transferId ? TRANSFER_SIDE_LABEL[transferSideOf(t)] : "(No description)")}</span>
+                          {/* One compact meta line: date · category · account (full text on hover). */}
+                          <span
+                            className="truncate text-xs leading-snug text-muted-foreground"
+                            title={`${shortDate(t.dateTime)} ${t.dateTime.getFullYear()} · ${row.category?.name ?? "Uncategorized"} · ${paidFromLabel(t, row.account?.name, personNameById) ?? "Unknown"}`}
+                          >
                             {shortDate(t.dateTime)} {t.dateTime.getFullYear()} · {row.category?.name ?? "Uncategorized"} · {paidFromLabel(t, row.account?.name, personNameById) ?? "Unknown"}
                           </span>
                         </span>
                         <Amount transaction={t} />
                       </span>
-                      <TxnBadges transaction={t} isSplit={splitTransactionIds.has(t.id)} assignedTo={assigneeFor(t)} isDuplicate={isDuplicate} />
+                      <span className="flex pl-[2.625rem] empty:hidden">
+                        <TxnBadges transaction={t} isSplit={splitTransactionIds.has(t.id)} assignedTo={assigneeFor(t)} isDuplicate={isDuplicate} />
+                      </span>
                     </button>
                   );
                 })}
@@ -1341,8 +1401,9 @@ const MONTH_BANDS = [
 const monthBand = (d: Date) => MONTH_BANDS[monthKeyOf(d) % MONTH_BANDS.length];
 
 const TH =
-  "sticky top-0 z-[2] border-b border-b-border-strong/70 bg-secondary/90 px-2 py-2.5 text-left text-[11px] font-semibold tracking-[0.06em] whitespace-nowrap text-foreground/65 uppercase backdrop-blur sm:px-3";
-const TD = "border-b border-b-border-strong/30 px-2 py-2.5 align-middle sm:px-3";
+  "sticky top-0 z-[2] border-b border-b-border-strong/70 bg-secondary/90 px-2 py-1.5 text-left text-[10.5px] font-semibold tracking-[0.06em] whitespace-nowrap text-foreground/65 uppercase backdrop-blur sm:px-3";
+/** Spreadsheet density: one line per row, ~34px tall. */
+const TD = "border-b border-b-border-strong/30 px-2 py-[5px] align-middle sm:px-2.5";
 const COLS = 7;
 
 function shortDate(d: Date): string {
@@ -1425,17 +1486,19 @@ function ViewSummary({ rows }: { rows: { transaction: Transaction }[] }) {
     },
   ];
   return (
-    <section aria-label="This view" className="grid grid-cols-2 gap-2.5 lg:grid-cols-4">
+    // One strip, hairline-divided (gap-px over a border-coloured ground) — not four separate cards. Each cell stays a direct child.
+    <section
+      aria-label="This view"
+      title="Totals for the transactions currently listed (after search and filters)"
+      className="grid grid-cols-2 gap-px overflow-hidden rounded-[12px] border border-border-strong/60 bg-border-strong/40 shadow-e1 lg:grid-cols-4"
+    >
       {tiles.map((tile) => (
-        <div key={tile.label} className="flex min-w-0 items-center gap-3 rounded-[14px] border border-border-strong/60 bg-card px-3.5 py-3 shadow-e1">
-          <span className={cn("flex size-10 shrink-0 items-center justify-center rounded-full", tile.chip)}>
-            <tile.icon className="size-4.5" strokeWidth={2} />
+        <div key={tile.label} className="flex min-w-0 items-center gap-2.5 bg-card px-3.5 py-1.5">
+          <span className={cn("flex size-7 shrink-0 items-center justify-center rounded-full", tile.chip)}>
+            <tile.icon className="size-3.5" strokeWidth={2} />
           </span>
           <div className="min-w-0">
-            <p className="truncate text-[11px] font-semibold tracking-[0.06em] text-foreground/65 uppercase">
-              {tile.label}
-              <span className="ml-1 font-medium tracking-normal normal-case text-foreground/45">· in this view</span>
-            </p>
+            <p className="truncate text-[11px] font-semibold tracking-[0.06em] text-foreground/65 uppercase">{tile.label}</p>
             <p className={cn("truncate text-lg leading-tight font-bold tabular-nums", tile.tone)}>{tile.value}</p>
             {"meta" in tile && tile.meta ? <p className="truncate text-[11px] text-foreground/60">{tile.meta}</p> : null}
           </div>
@@ -1479,12 +1542,15 @@ function Amount({
   presentation = getTransactionPresentation(transaction),
   withLabel = false,
   size = "md",
+  inline = false,
 }: {
   transaction: Transaction;
   /** From `getTransactionPresentation` (with the row's card context) — never the sign alone. */
   presentation?: TransactionPresentation;
   withLabel?: boolean;
   size?: "md" | "lg";
+  /** Ledger density: label sits LEFT of the amount on the same line (amount stays first in the DOM). */
+  inline?: boolean;
 }) {
   const { incoming, row, settled, status } = presentation;
   // "Already paid earlier": a real payment, but no account was debited — muted, unsigned and captioned so it never reads as money out.
@@ -1493,11 +1559,11 @@ function Amount({
   // Borrowed: the note points at the obligation ('repay', outward), not at the money coming in.
   const Icon = settled ? Check : row === "borrowed" ? ArrowUpRight : incoming ? ArrowDownLeft : ArrowUpRight;
   return (
-    <span className="flex shrink-0 flex-col items-end gap-1">
+    <span className={cn("flex shrink-0", inline ? "flex-row-reverse items-center justify-start gap-2" : "flex-col items-end gap-1")}>
       <span
         className={cn(
           "font-bold tracking-tight whitespace-nowrap tabular-nums",
-          size === "lg" ? "text-[15px] leading-tight sm:text-[16px]" : "text-[15px] leading-tight",
+          inline ? "text-[14px] leading-tight" : size === "lg" ? "text-[15px] leading-tight sm:text-[16px]" : "text-[15px] leading-tight",
           // Only real income is green; a paid obligation is money out, shown in strong neutral text.
           historical ? "text-muted-foreground" : row === "income" ? "text-success" : "text-foreground",
         )}
@@ -1524,7 +1590,7 @@ function Amount({
                 ? "font-medium text-success"
                 : row === "expense"
                   ? "font-medium text-expense"
-                  : row === "debt"
+                  : row === "debt" || row === "personCash"
                     ? cn("font-medium", PURPLE_TEXT)
                     : "font-medium text-foreground/70",
           )}
@@ -1541,7 +1607,8 @@ const BADGE = "inline-flex h-[18px] shrink-0 items-center gap-1 rounded-[4px] bo
 
 /**
  * The existing markers — Loan/EMI (`loanTagFor`), accounting flag (`transactionFlagFor`), possible
- * duplicate — plus Split (a linked Expense) and Transfer (`transferId`) read from the same row data.
+ * duplicate — plus Split (a linked Expense), Transfer (`transferId`) and Savings (a goal's real transfer
+ * leg, `useSavingsTransactionTags`) read from the same row data.
  */
 function TxnBadges({
   transaction,
@@ -1562,9 +1629,21 @@ function TxnBadges({
   const historical = isHistoricalPayment(transaction);
   // The generic "Not counted" flag is replaced by the specific reason for a historical payment.
   const flag = historical ? null : transactionFlagFor(transaction);
-  if (!loanTag && !flag && !historical && !isSplit && !assignedTo && !isDuplicate && !transaction.transferId) return null;
+  // Reuses the Savings page's own live listeners (shared-subscription registry) — no new Firestore read.
+  const savingsTags = useSavingsTransactionTags();
+  const savingsTag = savingsTags.get(transaction.id) ?? null;
+  if (!loanTag && !flag && !historical && !isSplit && !assignedTo && !isDuplicate && !transaction.transferId && !savingsTag) return null;
   return (
     <span className="flex flex-wrap items-center gap-1">
+      {savingsTag && (
+        <span
+          className={cn(BADGE, "max-w-36 border-border/60 bg-muted/40 text-muted-foreground")}
+          title={`${savingsTag.direction === "in" ? "Moved into" : "Moved out of"} your "${savingsTag.goalName}" savings goal`}
+        >
+          <PiggyBank className="size-3 shrink-0" aria-hidden />
+          <span className="truncate">Savings · {savingsTag.goalName}</span>
+        </span>
+      )}
       {loanTag && (
         <span className={cn(BADGE, "border-debt-border bg-debt-surface text-debt-text")}>
           <Landmark className="size-3" aria-hidden />
@@ -1614,9 +1693,14 @@ function LedgerTable({
   borrowedIds,
   displayDescription,
   isSplit,
+  splitFor,
   assigneeFor,
+  personNameFor,
   onOpen,
   onDelete,
+  balanceFor,
+  accountFilter,
+  onFilterAccount,
 }: {
   rows: TransactionRow[];
   offset: number;
@@ -1626,9 +1710,17 @@ function LedgerTable({
   borrowedIds: ReadonlySet<string>;
   displayDescription: (t: Transaction) => string;
   isSplit: (transactionId: string) => boolean;
+  /** The stored split (original total + every participant's share) for a split row, else null. */
+  splitFor: (transactionId: string) => SplitAllocation | null;
   assigneeFor: (t: Transaction) => string | null;
+  /** The person behind a People-ledger movement (Received / Repaid / Borrowed) — the row's only accent. */
+  personNameFor: (t: Transaction) => string | null;
   onOpen: (row: TransactionRow) => void;
   onDelete: (row: TransactionRow) => void;
+  /** Current balance of an account (display only) — shown when hovering a row's account name. */
+  balanceFor: (a: Account) => AccountBalanceView;
+  accountFilter: string | null;
+  onFilterAccount: (accountId: string) => void;
 }) {
   const [openId, setOpenId] = useState<string | null>(null);
   const pad = String(total).length < 2 ? 2 : String(total).length;
@@ -1648,14 +1740,14 @@ function LedgerTable({
       <thead>
         <tr>
           <th className={cn(TH, "hidden w-12 text-right lg:table-cell")}>#</th>
-          <th className={cn(TH, "w-[4.5rem]")}>Date</th>
+          <th className={cn(TH, "w-[6.25rem]")}>Date</th>
           <th className={TH}>Description</th>
-          <th className={cn(TH, "hidden w-28 xl:table-cell")}>Type</th>
-          <th className={cn(TH, "hidden w-40 lg:table-cell")}>Account</th>
-          <th className={cn(TH, "w-28 text-right sm:w-40")}>Amount</th>
+          <th className={cn(TH, "hidden w-48 xl:table-cell")}>Type</th>
+          <th className={cn(TH, "hidden w-56 lg:table-cell")}>Account</th>
+          <th className={cn(TH, "w-28 text-right sm:w-52")}>Amount</th>
           {/* Edit / Delete move into the expanded row wherever the table is narrow (phones, and the md range where the
               sidebar takes a third of the screen) — tap a row — so Description keeps room. */}
-          <th className={cn(TH, "hidden w-[7.25rem] sm:table-cell md:hidden lg:table-cell")}>
+          <th className={cn(TH, "hidden w-[6.25rem] sm:table-cell md:hidden lg:table-cell")}>
             <span className="sr-only sm:not-sr-only">Actions</span>
           </th>
         </tr>
@@ -1687,6 +1779,7 @@ function LedgerTable({
           });
           const tone: RowTone = presentation.row;
           const edge = isDuplicate ? ROW_TONE.duplicate.edge : ROW_TONE[tone].edge;
+          const personName = personNameFor(t);
           return (
             <Fragment key={t.id}>
               {(i === 0 || monthKeyOf(rows[i - 1].transaction.dateTime) !== monthKeyOf(t.dateTime)) && (
@@ -1695,7 +1788,7 @@ function LedgerTable({
                     colSpan={7}
                     className={cn(
                       // Glass band: a translucent colour gradient over the table, frosted, with a light top sheen.
-                      "border-y border-l-4 border-y-white/40 bg-gradient-to-r px-3 py-2 text-xs font-bold text-foreground uppercase tracking-wide backdrop-blur-md backdrop-saturate-150",
+                      "border-y border-l-4 border-y-white/40 bg-gradient-to-r px-3 py-1 text-[11px] font-bold text-foreground uppercase tracking-wide backdrop-blur-md backdrop-saturate-150",
                       "shadow-[inset_0_1px_0_rgb(255_255_255/0.55),inset_0_-1px_0_rgb(0_0_0/0.04)] dark:border-y-white/10 dark:shadow-[inset_0_1px_0_rgb(255_255_255/0.08)]",
                       monthBand(t.dateTime),
                     )}
@@ -1714,8 +1807,8 @@ function LedgerTable({
                   // One combined outline around both legs: strong top on the first, strong bottom on the
                   // second, strong right edge on both, rounded outer corners, no rule between them.
                   role && "[&>td:last-child]:border-r [&>td:last-child]:border-r-border-strong",
-                  role === "first" && "[&>td]:border-t [&>td]:border-t-border-strong [&>td]:border-b-transparent",
-                  role === "second" && "[&>td]:border-b-border-strong",
+                  role === "first" && "[&>td]:border-t [&>td]:border-t-border-strong [&>td]:border-b-transparent [&>td]:pb-2.5",
+                  role === "second" && "[&>td]:border-b-border-strong [&>td]:pt-2.5",
                   // Borrowed money: one outline around the whole logical row, drawn on the cells' own
                   // borders so the grid's vertical separators stay intact.
                   tone === "borrowed" && !isDuplicate && BORROWED_OUTLINE,
@@ -1738,18 +1831,20 @@ function LedgerTable({
                   )}
                 >
                   {role === "first" && route && <TransferCenterLine route={route} isCardPayment={presentation.kind === "cardPayment"} />}
-                  <p className="text-sm leading-tight font-semibold text-foreground">{shortDate(t.dateTime)}</p>
-                  <p className="text-[11px] leading-tight text-muted-foreground">{t.dateTime.getFullYear()}</p>
+                  <p className="text-[13px] leading-tight font-semibold text-foreground">
+                    {shortDate(t.dateTime)} <span className="text-[11px] font-normal text-muted-foreground">{t.dateTime.getFullYear()}</span>
+                  </p>
                 </td>
                 <td className={cn(TD, "relative max-w-0", loanTag && "pr-20 xl:pr-3")}>
                   {/* The Type column already names the loan/EMI kind at xl+, so the corner tag only shows where Type is hidden. */}
                   {loanTag && <CornerTag label={loanTag.label} className="xl:hidden" />}
-                  <div className="flex min-w-0 items-center gap-2.5">
-                    <span className={cn("hidden size-8 shrink-0 items-center justify-center rounded-[8px] sm:flex", TONE_ICON_CLASS[categoryToneFor(iconKey)])}>
-                      <Icon className="size-4" />
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className={cn("hidden size-6 shrink-0 items-center justify-center rounded-[6px] sm:flex", TONE_ICON_CLASS[categoryToneFor(iconKey)])}>
+                      <Icon className="size-3.5" />
                     </span>
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate font-semibold text-foreground">
+                    {/* One line: description, then category · person · badges — shrinks before the description does. */}
+                    <div className="flex min-w-0 flex-1 items-center gap-2">
+                      <p className="min-w-[35%] shrink truncate text-[13px] leading-tight font-semibold text-foreground">
                         {displayDescription(t) ||
                           (side
                             ? mate
@@ -1757,61 +1852,83 @@ function LedgerTable({
                               : TRANSFER_SIDE_LABEL[side]
                             : "(No description)")}
                       </p>
-                      <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
+                      <div className="flex min-w-0 shrink-[3] items-center gap-x-1.5 overflow-hidden">
                         {/* One metadata line: category · account (when the Account column is hidden) · markers.
                             "Uncategorized" is noise on transfers/loans/people rows, so it only shows on plain income/expense. */}
-                        <span className="truncate text-xs text-muted-foreground">
+                        <span className="truncate text-[11.5px] text-muted-foreground">
                           {row.category?.name ?? (tone === "income" || tone === "expense" ? "Uncategorized" : null)}
                           <span className="lg:hidden">
                             {row.category || tone === "income" || tone === "expense" ? " · " : ""}
                             {paidFromLabel(row.transaction, row.account?.name) ?? "Unknown account"}
                           </span>
                         </span>
+                        {/* The row stays plain — this name is the only accent carrying "a person is involved". */}
+                        {personName && (
+                          <span className="inline-flex max-w-32 items-center gap-1 truncate text-xs font-semibold text-debt-text" title={personName}>
+                            <User className="size-3 shrink-0" strokeWidth={2.25} aria-hidden />
+                            <span className="truncate">{personName}</span>
+                          </span>
+                        )}
                         <TxnBadges transaction={t} isSplit={isSplit(t.id)} assignedTo={assigneeFor(t)} isDuplicate={isDuplicate} hideLoan />
                       </div>
                     </div>
                   </div>
                 </td>
-                <td className={cn(TD, "hidden xl:table-cell")}>
+                <td className={cn(TD, "hidden max-w-0 xl:table-cell")}>
                   <TypeTag transaction={t} presentation={presentation} />
                 </td>
                 <td className={cn(TD, "hidden max-w-0 lg:table-cell")}>
-                  <p className="flex min-w-0 items-center gap-1.5 truncate text-xs text-foreground/85">
-                    {row.account && paidFromLabel(row.transaction, row.account.name) === row.account.name && <AccountMark account={row.account} size={16} />}
-                    <span className="truncate">{paidFromLabel(row.transaction, row.account?.name) ?? "Unknown"}</span>
-                  </p>
+                  <div className="flex min-w-0 items-center gap-1.5">
+                  {row.account && paidFromLabel(row.transaction, row.account.name) === row.account.name ? (
+                    // The account that moved: hover / click for its balance as of now. Person-funded rows have no account movement, so stay plain.
+                    <AccountBalanceHover
+                      account={row.account}
+                      view={balanceFor(row.account)}
+                      rowDate={t.dateTime}
+                      isFiltered={accountFilter === row.account.id}
+                      onFilter={() => onFilterAccount(row.account!.id)}
+                    >
+                      <AccountMark account={row.account} size={16} />
+                      <span className="truncate text-xs text-foreground/85">{row.account.name}</span>
+                    </AccountBalanceHover>
+                  ) : (
+                    <p className="flex min-w-0 items-center gap-1.5 truncate text-xs text-foreground/85">
+                      <span className="truncate">{paidFromLabel(row.transaction, row.account?.name) ?? "Unknown"}</span>
+                    </p>
+                  )}
                   {mate && (
-                    <p className="mt-0.5 flex min-w-0 items-center gap-1 text-[11px] text-muted-foreground" title={route ?? undefined}>
+                    <p className="flex max-w-[55%] min-w-0 shrink-0 items-center gap-1 text-[11px] text-muted-foreground" title={route ?? undefined}>
                       {side === "sent" ? <ArrowRight className="size-3 shrink-0" strokeWidth={2} /> : <ArrowLeft className="size-3 shrink-0" strokeWidth={2} />}
                       <span className="truncate">
                         {side === "sent" ? "to" : "from"} <span className="font-medium text-foreground/80">{mateName}</span>
                       </span>
                     </p>
                   )}
+                  </div>
                 </td>
                 <td className={cn(TD, "text-right")}>
-                  <Amount transaction={t} presentation={presentation} withLabel size="lg" />
+                  <Amount transaction={t} presentation={presentation} withLabel inline />
                 </td>
                 <td className={cn(TD, "hidden px-1.5 sm:table-cell md:hidden lg:table-cell")} onClick={(e) => e.stopPropagation()}>
-                  <div className="flex items-center justify-end gap-1.5">
-                    {/* Edit · Delete — one compact joined control */}
-                    <div className="flex h-7 items-stretch overflow-hidden rounded-[7px] border border-border-strong/70 bg-card shadow-[0_1px_1px_rgb(0_0_0/0.04)]">
+                  <div className="flex items-center justify-end gap-0.5">
+                    {/* Edit · Delete — ghost icons: quiet at rest (a bordered pair on every row was the loudest thing in the table),
+                        full strength on row hover / keyboard focus. Same buttons, labels and handlers. */}
+                    <div className="flex items-center gap-0.5 opacity-60 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 motion-reduce:transition-none">
                       <button
                         type="button"
                         onClick={() => onOpen(row)}
                         title="Edit transaction"
                         aria-label="Edit transaction"
-                        className="flex w-8 items-center justify-center text-foreground/70 transition-colors outline-none hover:bg-primary/20 hover:text-foreground focus-visible:bg-primary/20 dark:hover:text-primary-accent-text"
+                        className="flex size-6 items-center justify-center rounded-full text-foreground/75 transition-colors outline-none hover:bg-primary/25 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring dark:hover:text-primary-accent-text"
                       >
                         <Pencil className="size-3.5" strokeWidth={1.75} />
                       </button>
-                      <span className="w-px bg-border-strong/60" aria-hidden />
                       <button
                         type="button"
                         onClick={() => onDelete(row)}
                         title="Delete transaction"
                         aria-label="Delete transaction"
-                        className="flex w-8 items-center justify-center text-foreground/70 transition-colors outline-none hover:bg-expense/10 hover:text-expense focus-visible:bg-expense/10"
+                        className="flex size-6 items-center justify-center rounded-full text-foreground/75 transition-colors outline-none hover:bg-expense/10 hover:text-expense focus-visible:ring-2 focus-visible:ring-ring"
                       >
                         <Trash2 className="size-3.5" strokeWidth={1.75} />
                       </button>
@@ -1822,7 +1939,7 @@ function LedgerTable({
                       title={open ? "Hide details" : "Show details"}
                       onClick={toggle}
                       className={cn(
-                        "flex size-7 items-center justify-center rounded-full text-muted-foreground transition-colors outline-none hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
+                        "flex size-6 items-center justify-center rounded-full text-muted-foreground transition-colors outline-none hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
                         open && "bg-secondary text-foreground",
                       )}
                     >
@@ -1841,6 +1958,7 @@ function LedgerTable({
                           onOpen={() => onOpen(row)}
                           onDelete={() => onDelete(row)}
                           isSplit={isSplit(t.id)}
+                          split={splitFor(t.id)}
                           assignedTo={assigneeFor(t)}
                           isDuplicate={isDuplicate}
                         />}
@@ -1903,6 +2021,9 @@ const ROW_TONE: Record<RowTone, { edge: string; rest: string; open: string }> = 
     rest: "bg-success/[0.035] hover:bg-secondary/70 dark:bg-success/[0.05]",
     open: "bg-secondary",
   },
+  // Money received from a person: the SAME plain row as an ordinary transaction — no row-wide wash. The
+  // person is named in the Description cell (see `PersonNameTag`) and the badge below, never the whole row.
+  personCash: { edge: "border-l-transparent", rest: "hover:bg-secondary/70", open: "bg-secondary" },
   duplicate: { edge: "border-l-danger", rest: "bg-danger/[0.08] hover:bg-danger/[0.12]", open: "bg-danger/[0.14]" },
 };
 
@@ -1914,47 +2035,60 @@ function TypeTag({ transaction, presentation = getTransactionPresentation(transa
   const detail = presentation.detail === label ? "" : presentation.detail;
   if (row === "transfer") {
     return (
-      <span className="inline-flex flex-col gap-0.5">
+      <span className="flex min-w-0 items-center gap-1.5">
         <span className={cn(BADGE, "w-fit border-border-strong bg-secondary text-foreground")}>
           <ArrowLeftRight className="size-3" strokeWidth={2} aria-hidden />
           {label}
         </span>
-        <span className="text-[11px] leading-tight font-medium whitespace-nowrap text-foreground/70">{detail}</span>
+        <span className="min-w-0 truncate text-[11px] leading-tight font-medium text-foreground/70" title={detail || undefined}>{detail}</span>
       </span>
     );
   }
   if (row === "settled") {
     // Neutral badge, success outline + ✓ — "an obligation was paid", not "money came in".
     return (
-      <span className="inline-flex flex-col gap-0.5">
+      <span className="flex min-w-0 items-center gap-1.5">
         <span className={cn(BADGE, "w-fit border-success/70 bg-card text-foreground")}>
           <CheckCircle2 className="size-3 text-success" strokeWidth={2.5} aria-hidden />
           {label}
         </span>
-        <span className="text-[11px] leading-tight font-medium whitespace-nowrap text-foreground/75">{detail}</span>
+        <span className="min-w-0 truncate text-[11px] leading-tight font-medium text-foreground/75" title={detail || undefined}>{detail}</span>
       </span>
     );
   }
   if (row === "borrowed") {
     // Deep-violet outlined badge + inbound icon: "money received" — the amount column says it must be repaid.
     return (
-      <span className="inline-flex flex-col gap-0.5">
+      <span className="flex min-w-0 items-center gap-1.5">
         <span className={cn(BADGE, "w-fit border-debt-strong bg-card font-bold text-debt-strong")}>
           <ArrowDownLeft className="size-3" strokeWidth={2.5} aria-hidden />
           {label}
         </span>
-        <span className="text-[11px] leading-tight font-medium whitespace-nowrap text-foreground/75">{detail}</span>
+        <span className="min-w-0 truncate text-[11px] leading-tight font-medium text-foreground/75" title={detail || undefined}>{detail}</span>
       </span>
     );
   }
   if (row === "debt") {
     return (
-      <span className="inline-flex flex-col gap-0.5">
+      <span className="flex min-w-0 items-center gap-1.5">
         <span className={cn(BADGE, "w-fit border-debt-border bg-card text-debt-text")}>
           <Landmark className="size-3" strokeWidth={2} aria-hidden />
           {label}
         </span>
-        <span className="text-[11px] leading-tight font-medium whitespace-nowrap text-foreground/70">{detail}</span>
+        <span className="min-w-0 truncate text-[11px] leading-tight font-medium text-foreground/70" title={detail || undefined}>{detail}</span>
+      </span>
+    );
+  }
+  if (row === "personCash") {
+    // Minimal accent only: a quiet outline badge in the same refined violet text used for the person's
+    // name — never the bold, filled "debt" badge (that stays reserved for an actual obligation).
+    return (
+      <span className="flex min-w-0 items-center gap-1.5">
+        <span className={cn(BADGE, "w-fit border-border-strong bg-card text-debt-text")}>
+          <User className="size-3" strokeWidth={2} aria-hidden />
+          {label}
+        </span>
+        <span className="min-w-0 truncate text-[11px] leading-tight font-medium text-foreground/70" title={detail || undefined}>{detail}</span>
       </span>
     );
   }
@@ -1979,7 +2113,7 @@ function TransferCenterLine({ route, isCardPayment = false }: { route: string; i
   return (
     <span aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex h-0 items-center gap-2 px-3">
       <span className="flex-1 border-t border-dashed border-border-strong/70" />
-      <span className="inline-flex h-5 min-w-0 items-center gap-1.5 rounded-full border border-border-strong bg-card px-2.5 text-[10.5px] font-semibold whitespace-nowrap text-foreground shadow-[0_1px_2px_rgb(0_0_0/0.08)]">
+      <span className="inline-flex h-[18px] min-w-0 items-center gap-1.5 rounded-full border border-border-strong bg-card px-2.5 text-[10px] font-semibold whitespace-nowrap text-foreground shadow-[0_1px_2px_rgb(0_0_0/0.08)]">
         {isCardPayment ? <CreditCard className="size-3 shrink-0" strokeWidth={1.75} /> : <ArrowUpDown className="size-3 shrink-0" strokeWidth={1.75} />}
         {isCardPayment ? "Card bill payment" : "Transfer"}
         <span className="hidden font-medium text-muted-foreground sm:inline">· one linked movement · {route}</span>
@@ -2064,6 +2198,7 @@ function RowDetails({
   onOpen,
   onDelete,
   isSplit,
+  split,
   assignedTo,
   isDuplicate,
 }: {
@@ -2072,6 +2207,8 @@ function RowDetails({
   onOpen: () => void;
   onDelete: () => void;
   isSplit: boolean;
+  /** Stored split allocation — who took part and each share. Display only. */
+  split: SplitAllocation | null;
   assignedTo: string | null;
   isDuplicate: boolean;
 }) {
@@ -2123,6 +2260,15 @@ function RowDetails({
             <Fact icon={Shapes} label="Category" tone="amber">{row.category?.name ?? "Uncategorized"}</Fact>
             <Fact icon={CreditCard} label="Payment method" tone="green">{paymentMethodFor(t, row.account)}</Fact>
           </div>
+          {split && (
+            <div className="border-t border-border-strong/40 px-4 py-3" data-testid="row-split-breakdown">
+              <p className="mb-1.5 flex items-center gap-1.5 text-[11px] font-medium tracking-[0.04em] text-muted-foreground uppercase">
+                <Split className="size-3.5" strokeWidth={1.75} aria-hidden />
+                Split with
+              </p>
+              <SplitAllocationBreakdown allocation={split} format={formatCurrencyPrecise} title="Total expense" />
+            </div>
+          )}
           {t.notes.trim() && (
             <div className="flex items-start gap-3 border-t border-border-strong/40 px-4 py-3">
               <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-[8px]", FACT_TONE.neutral)}>

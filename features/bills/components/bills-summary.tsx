@@ -32,7 +32,7 @@ function Cell({
   testId: string;
 }) {
   return (
-    <div data-testid={testId} className="relative flex min-w-0 flex-col gap-1.5 px-4 pt-4 pb-3.5 sm:px-5">
+    <div data-testid={testId} className="relative flex min-w-0 flex-col gap-1 px-4 pt-3.5 pb-3 sm:px-5">
       <span aria-hidden className={cn("absolute inset-x-0 top-0 h-[3px]", accent)} />
       <div className="flex items-center gap-1.5 text-[11px] font-semibold tracking-[0.06em] text-foreground/70 uppercase">
         <Icon className="size-3.5" strokeWidth={2} aria-hidden />

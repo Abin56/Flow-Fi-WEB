@@ -70,7 +70,7 @@ const data = {
   startDay: 1,
   isCurrent: true,
   isPast: false,
-  nav: { previous: vi.fn(), next: vi.fn(), current: vi.fn(), pickMonth: vi.fn() },
+  nav: { previous: vi.fn(), next: vi.fn(), current: vi.fn(), pickMonth: vi.fn(), isFollowingGlobalCycle: true, followGlobal: vi.fn() },
   obligations,
   toPay: summarizeToPay(obligations),
   collect: {

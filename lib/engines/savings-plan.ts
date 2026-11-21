@@ -157,9 +157,8 @@ export interface CapacityInput {
   accounts: readonly { id: string; currentBalance: number }[];
   /** Goal money already reserved per account (`SavingsPosition.reservedByAccount`). */
   reservedByAccount: ReadonlyMap<string, number>;
+  /** Confirmed commitments still unpaid this cycle — real obligations only, never a forecast of everyday spending. */
   due: DueBreakdown;
-  /** Everyday spending expected for the rest of the cycle (see `estimateSpendingBuffer`) — user-adjustable. */
-  spendingBuffer: number;
 }
 
 export interface Capacity {
@@ -170,10 +169,9 @@ export interface Capacity {
   /** Σ per-account free money (balance − reserved, never below 0 per account). */
   free: number;
   due: number;
-  buffer: number;
-  /** free − due − buffer, never below 0: what can be set aside now without touching commitments. */
+  /** free − due, never below 0: what can be set aside now without touching commitments. */
   safeToSave: number;
-  /** How far free money falls short of what is due + the buffer (0 when it doesn't). */
+  /** How far free money falls short of what is due (0 when it doesn't). */
   shortBy: number;
 }
 
@@ -188,28 +186,15 @@ export function savingsCapacity(input: CapacityInput): Capacity {
     free += Math.max(0, a.currentBalance - r);
   }
   const due = Math.max(0, input.due.total);
-  const buffer = Math.max(0, input.spendingBuffer);
-  const after = free - due - buffer;
+  const after = free - due;
   return {
     inAccounts: round2(inAccounts),
     reserved: round2(reserved),
     free: round2(free),
     due: round2(due),
-    buffer: round2(buffer),
     safeToSave: round2(Math.max(0, after)),
     shortBy: round2(Math.max(0, -after)),
   };
-}
-
-/**
- * Everyday spending still expected this cycle: the typical cycle's My Spend (mean of recent complete cycles that had
- * any activity) minus what was already spent this cycle, never below 0. No history → 0 (nothing is invented).
- */
-export function estimateSpendingBuffer(pastCycleSpend: readonly number[], spentThisCycle: number): { typical: number | null; buffer: number } {
-  const real = pastCycleSpend.filter((v) => v > SAVINGS_EPSILON);
-  if (real.length === 0) return { typical: null, buffer: 0 };
-  const typical = round2(real.reduce((s, v) => s + v, 0) / real.length);
-  return { typical, buffer: round2(Math.max(0, typical - Math.max(0, spentThisCycle))) };
 }
 
 /**
@@ -285,7 +270,7 @@ export function checkAllocation(
   let warning: string | null = over ? `${over.goalName} only needs ${compactInr(over.goalRemaining)} more — the extra will count past its target.` : null;
   if (total > opts.safeToSave + SAVINGS_EPSILON) {
     const dip = round2(total - opts.safeToSave);
-    warning = `${compactInr(dip)} of this is money your commitments${opts.dueLabel ? ` ${opts.dueLabel}` : ""} or everyday spending still need. You can still go ahead.`;
+    warning = `${compactInr(dip)} of this is money your commitments${opts.dueLabel ? ` ${opts.dueLabel}` : ""} still need. You can still go ahead.`;
   }
   return { total, error: null, warning };
 }

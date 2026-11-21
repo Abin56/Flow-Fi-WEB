@@ -131,7 +131,7 @@ export function useDashboardData() {
   const { standings: cardStandings, isLoading: cardStandingsLoading } = useCreditCardStandings();
 
   // Net Worth adds loan principal to account balances (Decision 6 — see `netWorthWithLoans`).
-  const { netWorth: netWorthAmount, sheet: balanceSheet, peoplePayable, peopleAdvanceHeld, unpaidLenderCharges, isLoading: balanceSheetLoading } = useLoanBalanceSheet();
+  const { netWorth: netWorthAmount, sheet: balanceSheet, peoplePayable, peopleAdvanceHeld, assignedReceivable, emiDueReceivable, assignedDebt, unpaidLenderCharges, isLoading: balanceSheetLoading } = useLoanBalanceSheet();
   // Billed lender charges: dated Net Worth events for the trend, and one-time expenses on their billed date for spend.
   const { charges: lenderCharges } = useLenderCharges();
   const lenderChargeEvents = useMemo(() => lenderChargeNetWorthEvents(lenderCharges), [lenderCharges]);
@@ -201,17 +201,27 @@ export function useDashboardData() {
       peopleDebt: peoplePayable,
       loanDebt: debt.loanDebt,
       lenderChargeDebt: unpaidLenderCharges,
+      assignedReceivable,
+      emiDueReceivable,
+      // How much of the (legally mine) debt belongs to other people / is my own — a view on `debt`, never a change.
+      assignedDebt: Math.min(assignedDebt, debt.total),
+      myDebt: Math.max(composition.debt - Math.min(assignedDebt, debt.total), 0),
     };
-  }, [netWorthAmount, balanceSheet, peoplePayable, peopleAdvanceHeld, unpaidLenderCharges, lenderChargeEvents, accounts, creditCards, transactions, now]);
+  }, [netWorthAmount, balanceSheet, peoplePayable, peopleAdvanceHeld, assignedReceivable, emiDueReceivable, assignedDebt, unpaidLenderCharges, lenderChargeEvents, accounts, creditCards, transactions, now]);
 
   // --- Cash Flow (lib/engines/cash-flow.ts:cashFlowThisMonth via useCashFlowThisMonth) ---
   const cashFlow = useMemo(() => {
     // Same "does this row count" rule and cash boundary as `cashFlowThisMonth` — see `weeklyCashFlowTotals`.
     const cardAccountIds = new Set((creditCards as CreditCardProfile[]).map((c) => c.accountId));
     const weekTotals = weeklyCashFlowTotals(transactions as Transaction[], cardAccountIds, now, "net");
+    // Money in / out per week: the same rows as `net`, split by sign — so in − out is exactly the week's net.
+    const weekIn = weeklyCashFlowTotals(transactions as Transaction[], cardAccountIds, now, "in");
+    const weekOut = weeklyCashFlowTotals(transactions as Transaction[], cardAccountIds, now, "out");
     const weeks = CASH_FLOW_WEEK_LABELS.map((label) => ({
       label,
       value: weekTotals.get(label) ?? 0,
+      moneyIn: weekIn.get(label) ?? 0,
+      moneyOut: weekOut.get(label) ?? 0,
     }));
     return {
       income: cashFlowSummary.moneyIn,

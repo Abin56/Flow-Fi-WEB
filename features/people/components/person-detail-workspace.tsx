@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, Bell, Calendar, ChevronDown, HandCoins, ListX, Mail, MoreHorizontal, Paperclip, Pencil, Phone, Plus, Share2, Split, StickyNote, Trash2, Users } from "lucide-react";
+import { ArrowLeft, Bell, Calendar, ChevronRight, HandCoins, ListX, Mail, MoreHorizontal, Paperclip, Pencil, Phone, Plus, Share2, Split, StickyNote, Trash2, Users } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, cloneElement } from "react";
 import { useRouter } from "next/navigation";
 import { ClayAvatar } from "@/components/clay/clay-avatar";
@@ -22,13 +22,20 @@ import { useSelectedCycle } from "@/features/people/hooks/use-selected-cycle";
 import { usePersonPendingSplitParticipants } from "@/features/people/hooks/use-person-pending-split-participants";
 import { usePersonUpcomingEmi } from "@/features/people/hooks/use-person-upcoming-emi";
 import { useSettlementLookups } from "@/features/people/hooks/use-settlement-lookups";
+import { buildStatementBalances, paymentLinesOf } from "@/features/people/lib/statement-balance";
 import { buildLedgerRows, cycleShowingNewEntry, type LedgerRow, type PaymentRecord } from "@/features/people/lib/person-ledger-rows";
 import type { PendingSplitParticipant } from "@/lib/engines/person-pending-split-participants";
-import { PersonCycleStatementSection } from "@/features/people/components/cycle-statement/person-cycle-statement-section";
+import { PersonSettlementStrip } from "@/features/people/components/cycle-statement/person-cycle-statement-section";
+import { StatementBreakdown, StatementCalculation } from "@/features/people/components/cycle-statement/statement-parts";
+import { PersonBalanceStory } from "@/features/people/components/person-balance-story";
+import { CyclePaymentHistory } from "@/features/people/components/workspace/settlement-summary";
+import { PersonOpenItems } from "@/features/people/components/person-open-items";
+import { PersonTabBar, personTabId, personTabPanelId, type PersonTab } from "@/features/people/components/person-section-nav";
+import { EmiAgreementList, EmiHeaderColumn, LinkedEmisPanel, useRepaysToggle } from "@/features/people/components/linked-emis-panel";
 import { PersonActivityFeed, type CarriedForward, type LedgerRowHandlers, type LedgerScope } from "@/features/people/components/person-activity-feed";
 import { AddEntryPanel, type AddEntryParams } from "@/features/people/components/workspace/add-entry-panel";
 import { EditPersonMode, type EditPersonPatch } from "@/features/people/components/workspace/edit-person-mode";
-import { InlineReveal, LedgerConfirmDialog, PeopleDrawer, type EntryEditValues, type EntrySettleValues } from "@/features/people/components/workspace/ledger-ui";
+import { LedgerConfirmDialog, PeopleDrawer, type EntryEditValues, type EntrySettleValues } from "@/features/people/components/workspace/ledger-ui";
 import { LE_RADIUS } from "@/features/loans/components/loan-emi-ui";
 import { DateInput } from "@/components/forms/date-input";
 import { WS_FIELD, WS_PRIMARY, WS_SECONDARY, WsLabel } from "@/features/people/components/workspace/person-workspace-ui";
@@ -94,7 +101,7 @@ const HEADER_BUTTON =
 /** A compact secondary Person action — quieter than Add, the same 32px height as the ledger's controls. */
 const ACTION_SECONDARY = cn(
   WS_SECONDARY,
-  "h-9 gap-1.5 rounded-full px-3 text-[13px] [&>svg]:text-foreground/70 lg:h-auto lg:flex-col lg:gap-1 lg:rounded-[14px] lg:py-2.5 lg:text-xs lg:[&>svg]:size-4.5",
+  "h-8 gap-1.5 rounded-full px-3 text-[12.5px] [&>svg]:text-foreground/70 lg:justify-center lg:px-2",
 );
 
 function DetailRow({ icon: Icon, label, children }: { icon: typeof Calendar; label: string; children: React.ReactNode }) {
@@ -130,6 +137,32 @@ function SectionTitle({ icon: Icon, children }: { icon?: typeof Calendar; childr
 /** The sides on which this person has advance held right now (their advance, or advance I paid them). */
 function advanceSides(available: ReturnType<typeof advanceRemaining>): ("theyOwe" | "iOwe")[] {
   return (["theyOwe", "iOwe"] as const).filter((side) => available.filter((a) => a.side === side).reduce((s, a) => s + a.remaining, 0) > 0.005);
+}
+
+const TABS: readonly PersonTab[] = ["overview", "emis", "transactions", "details"];
+
+/** `?tab=` wins; a deep link to one row (`?obligation=` without `settle`) or a return to the ledger opens Transactions. */
+function initialTabFrom(initialView: "ledger" | null | undefined): PersonTab {
+  if (typeof window === "undefined") return "overview";
+  const params = new URLSearchParams(window.location.search);
+  const asked = params.get("tab") as PersonTab | null;
+  if (asked && TABS.includes(asked)) return asked;
+  if (initialView === "ledger" || (params.get("obligation") && params.get("settle") !== "1")) return "transactions";
+  return "overview";
+}
+
+/** One Overview card — a titled surface with an optional action on the right. */
+function OverviewCard({ title, meta, action, children, className, testId }: { title: string; meta?: React.ReactNode; action?: React.ReactNode; children: React.ReactNode; className?: string; testId?: string }) {
+  return (
+    <section aria-label={title} data-testid={testId} className={cn("min-w-0 rounded-[14px] border border-border bg-card px-4 pt-3 pb-3.5 shadow-e1", className)}>
+      <div className="mb-1.5 flex min-w-0 items-baseline gap-2">
+        <h2 className="font-heading text-[14px] font-semibold text-foreground">{title}</h2>
+        {meta && <span className="min-w-0 truncate text-[11.5px] font-medium text-foreground/55">{meta}</span>}
+        {action && <span className="ml-auto shrink-0">{action}</span>}
+      </div>
+      {children}
+    </section>
+  );
 }
 
 export function PersonDetailWorkspace({
@@ -187,8 +220,17 @@ export function PersonDetailWorkspace({
   const [direction, setDirection] = useState<"forward" | "back">("forward");
   const [cycle, setCycle, cycleStartDay] = useSelectedCycle(initialCycle);
   const [inline, setInline] = useState<InlineAction>(null);
-  /** Details (contact, EMI, notes, attachments) are secondary — collapsed under Activity until asked for. */
-  const [detailsOpen, setDetailsOpen] = useState(false);
+  /** Which content tab is showing — Overview · Linked EMIs · Transactions · Details. Kept in `?tab=` so a reload stays put. */
+  const [tab, setTabState] = useState<PersonTab>(() => initialTabFrom(initialView));
+  const setTab = (next: PersonTab) => {
+    setTabState(next);
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    if (next === "overview") params.delete("tab");
+    else params.set("tab", next);
+    const rest = params.toString();
+    window.history.replaceState(window.history.state, "", `${window.location.pathname}${rest ? `?${rest}` : ""}`);
+  };
   /** The expanded ledger's own navigation (Transactions ↔ Settle / Split) — kept here so Escape can step back. */
   const [ledgerView, setLedgerView] = useState<LedgerView>("transactions");
   const [scope, setScope] = useState<LedgerScope>("cycle");
@@ -209,6 +251,7 @@ export function PersonDetailWorkspace({
   const [advanceKey, setAdvanceKey] = useState<string | null>(null);
   const advanceReturnRef = useRef<string | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
+  const headerRef = useRef<HTMLElement>(null);
   const { statement, allTimeStatement, ledgerEntries, isLoading, linkedEmis, linkedEmiSummaries, setRepays, advanceApplications } = usePersonCycleStatement(person.id, cycle);
   const { pending, trackedShareRefs: trackedAll, isLoading: sharesLoading } = usePersonPendingSplitParticipants(person.id);
   // Until expenses have loaded, whether a share is tracked is unknown — keep it conservative (null).
@@ -262,6 +305,16 @@ export function PersonDetailWorkspace({
   }, [allRows, cycle]);
   const cycleLabelOf = (d: Date) => `${formatCycleLabel(cycleContaining(d, cycleStartDay), false)} cycle`;
   const scopeCounts = { cycle: cycleRows.length, all: allRows.length };
+  // Bank-statement view: the running outstanding balance after every line (whole history, so it never depends on the
+  // selected cycle) and each recorded payment as its own line. Derived from the rows — nothing is stored or recomputed.
+  const statementBalances = useMemo(() => buildStatementBalances(allRows), [allRows]);
+  const statementPaymentLines = useMemo(() => {
+    const all = paymentLinesOf(allRows);
+    if (scope === "all") return all;
+    const from = new Date(cycle.start.getFullYear(), cycle.start.getMonth(), cycle.start.getDate()).getTime();
+    const to = new Date(cycle.end.getFullYear(), cycle.end.getMonth(), cycle.end.getDate() + 1).getTime();
+    return all.filter((l) => l.payment.date.getTime() >= from && l.payment.date.getTime() < to);
+  }, [allRows, scope, cycle]);
   // The cycle view is always the cycle picked with ‹ › (shared by the statement, the list and the expanded ledger).
   const cycleLabel = "Selected cycle";
   const rowsLoading = isLoading || statement == null;
@@ -423,6 +476,8 @@ export function PersonDetailWorkspace({
           advanceReturnRef.current = back;
           setAdvanceKey(key);
           setAdvanceOpen("theyOwe");
+          // The Apply advance panel lives on the Overview tab.
+          setTabState("overview");
           rootRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
         }}
         onCancel={closePayment}
@@ -505,6 +560,19 @@ export function PersonDetailWorkspace({
       },
     };
   }, [allRows, deferrals, cycleStartDay, person.id, person.name, deferralActions, onRecordPayment]);
+  // Postponed money is still owed — only its due date moved. Summed from the live deferral views (never from payments).
+  const postponedSummary = useMemo(() => {
+    const remainingByKey = new Map(allRows.map((r) => [r.key, r.remaining ?? 0]));
+    let amount = 0;
+    let until: Date | null = null;
+    for (const d of deferrals) {
+      const view = deferralView(d, remainingByKey.get(d.obligationKey), cycleStartDay);
+      if (!view || view.status !== "postponed" || view.remaining < 0.005) continue;
+      amount += view.remaining;
+      if (view.date && (!until || view.date < until)) until = view.date;
+    }
+    return { amount, until: until ? formatStatementDate(until, true) : null };
+  }, [allRows, deferrals, cycleStartDay]);
   const heldSides = advanceSides(advanceAvailable);
   // Deep link from a lender payment (`?applyAdvance=1&obligation=<key>`): opens the existing Apply advance panel
   // with that obligation preselected, once. Nothing is applied until the user confirms.
@@ -542,6 +610,7 @@ export function PersonDetailWorkspace({
       advanceReturnRef.current = back && isInAppPath(back) ? back : null;
       setAdvanceKey(key);
       setAdvanceOpen("theyOwe");
+      setTabState("overview");
       rootRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     });
   }, [isLoading, onApplyAdvance, heldTheyOwe]);
@@ -653,6 +722,7 @@ export function PersonDetailWorkspace({
           if (initial) openPayment({ initial });
         }
       : undefined,
+    onPostpone: onRecordPayment ? (row) => openPayment({ preselectKey: row.key, intent: "postpone" }) : undefined,
     onUndoPayment:
       onDeleteEntries || onUndoSplitReceived || onRevertPayment || onRemoveAdvanceApplications
         ? (row, payment) => {
@@ -707,9 +777,9 @@ export function PersonDetailWorkspace({
   const secondaryAction = (active: boolean) =>
     cn(ACTION_SECONDARY, active && "border-primary-accent-text bg-primary/10 font-semibold [&>svg]:text-foreground");
 
-  /** The Person's actions — Add is primary; Settle, Split and Share are quieter, in one group. */
+  /** The Person's actions — Record payment is primary; Add, Split and Share are quieter, in one row under it. */
   const actionBar = (
-    <div role="group" aria-label="Actions" className="flex flex-wrap items-center gap-2 lg:flex-col lg:items-stretch lg:gap-2.5">
+    <div role="group" aria-label="Actions" className="flex flex-col gap-1.5">
       <button
         type="button"
         onClick={() => (inline === "settle" ? closePayment() : openPayment({}))}
@@ -717,12 +787,12 @@ export function PersonDetailWorkspace({
         aria-expanded={inline === "settle"}
         aria-controls="person-inline-settle"
         title="Record money received from, or paid to, this person"
-        className={cn(WS_PRIMARY, "h-11 rounded-full px-5 text-[15px] shadow-[0_8px_20px_-10px_color-mix(in_oklch,var(--primary-accent-text)_70%,transparent)] lg:w-full", inline === "settle" && "ring-2 ring-primary-accent-text/40")}
+        className={cn(WS_PRIMARY, "h-10 w-full rounded-full px-5 text-[14px] shadow-[0_8px_20px_-10px_color-mix(in_oklch,var(--primary-accent-text)_70%,transparent)] transition-transform active:scale-[0.98]", inline === "settle" && "ring-2 ring-primary-accent-text/40")}
       >
         <HandCoins className="size-4" strokeWidth={2} />
         {inline === "settle" ? "Close" : "Record payment"}
       </button>
-      <div className="flex flex-wrap gap-1.5 lg:grid lg:grid-cols-3">
+      <div className="grid grid-cols-3 gap-1.5">
         <button
           type="button"
           onClick={() => toggleInline("add")}
@@ -756,7 +826,7 @@ export function PersonDetailWorkspace({
   );
 
   const loansNote = (person.loanReceivable > 0 || person.loanPayable > 0) && (
-    <p className="mt-4 max-w-md text-xs leading-relaxed text-muted-foreground">
+    <p className="text-[11.5px] leading-relaxed text-foreground/65">
       Loans are settled from the Loan, outside this statement. Overall incl. loans: you need to receive {formatCurrency(person.breakdown.toReceive)}
       {" · "}you need to give {formatCurrency(person.breakdown.toGive)}
       {person.loanReceivable > 0 && ` · Loans — you need to receive ${formatCurrency(person.loanReceivable)}`}
@@ -764,277 +834,315 @@ export function PersonDetailWorkspace({
     </p>
   );
 
-  // Balance summary — explains the overall position from the People engine's own breakdown (never a re-sum):
-  // each borrowed/gave entry stays its own obligation, and the two directions are settled separately —
-  // the net is a summary line only (it never drives Record Payment, Full payment or allocation).
+  // Overall position — the header shows the two sides (and any advance) from the People engine's own breakdown; this card
+  // explains them: the net (a summary line only — it never drives Record Payment, Full payment or allocation), what makes up
+  // the balance, and the loans note. Nothing is re-summed here.
   const b = person.breakdown;
-  const summaryLines: { label: string; amount: number; tone: "expense" | "success" }[] = [
-    { label: "You need to give", amount: b.toGive, tone: "expense" },
-    { label: "You need to receive", amount: b.toReceive, tone: "success" },
-  ];
-  // Unapplied advance: held money — shown beside the two sides, never inside either of them.
   const hasAdvance = Math.abs(b.advance) >= 0.005;
   const breakdownNote = Math.abs(b.unlinked) >= 0.005 || b.loanPayable > 0 || b.loanReceivable > 0 || b.emiReceivableOpen > 0;
-  const balanceSummary = (b.toGive > 0 || b.toReceive > 0 || hasAdvance) && (
-    <div aria-label="Balance summary" className="mt-4 text-[13px] tabular-nums">
-      <p className="text-[11px] font-bold tracking-[0.08em] text-foreground/75 uppercase">Overall with {person.name.split(" ")[0]}</p>
-      <dl className="mt-1.5 grid grid-cols-1 gap-1.5">
-        {summaryLines.map((l) => (
-          <div
-            key={l.label}
-            className={cn(
-              "flex items-baseline justify-between gap-3 rounded-[12px] px-3 py-2 ring-1",
-              l.amount > 0 ? (l.tone === "expense" ? "bg-expense/6 ring-expense/20" : "bg-success/8 ring-success/20") : "bg-secondary/50 ring-border",
-            )}
-          >
-            <dt className="font-medium text-foreground">{l.label}</dt>
-            <dd className={cn("font-semibold", l.amount > 0 ? (l.tone === "expense" ? "text-expense" : "text-success") : "text-foreground/60")}>
-              {formatCurrency(l.amount)}
-            </dd>
-          </div>
-        ))}
-        {hasAdvance && (
-          <div className="flex items-baseline justify-between gap-3 rounded-[12px] bg-primary/10 px-3 py-2 ring-1 ring-primary-accent-text/25 sm:col-span-2">
-            <dt className="font-medium text-foreground">{b.advance < 0 ? "Advance held (not applied)" : "Advance you paid (not applied)"}</dt>
-            <dd className="font-semibold text-foreground">{formatCurrency(Math.abs(b.advance))}</dd>
-          </div>
-        )}
-      </dl>
-      {((b.toGive > 0 && b.toReceive > 0) || (hasAdvance && (b.toGive > 0 || b.toReceive > 0))) && (
+  const showNet = (b.toGive > 0 && b.toReceive > 0) || (hasAdvance && (b.toGive > 0 || b.toReceive > 0));
+  const overallDetails = (showNet || breakdownNote || loansNote) && (
+    <div className="space-y-2 text-[12.5px] tabular-nums">
+      {showNet && (
         // Secondary on purpose: the two sides are separate obligations — the net never means "nothing to do".
-        <p className="mt-0.5 text-[11.5px] text-foreground/70">
+        <p className="text-foreground/75">
           {hasAdvance
-            ? `Net position ${formatCurrency(Math.abs(b.net))} ${b.net > 0 ? "in your favour" : b.net < 0 ? `in ${person.name.split(" ")[0]}'s favour` : "even"} · includes the advance held · Summary only.`
+            ? `Net position ${formatCurrency(Math.abs(b.net))} ${b.net > 0 ? "in your favour" : b.net < 0 ? `in ${firstName}'s favour` : "even"} · includes the advance held · Summary only.`
             : `Net ${formatCurrency(Math.abs(b.net))} ${b.net > 0 ? "to receive" : b.net < 0 ? "to give" : "even"} · Summary only — payments are settled separately.`}
         </p>
       )}
       {breakdownNote && (
-        <details className="group mt-1">
-          <summary className="flex cursor-pointer list-none items-center gap-1 text-xs font-medium text-foreground/70 hover:text-foreground [&::-webkit-details-marker]:hidden">
-            How this is calculated
-            <ChevronDown className="size-3.5 transition-transform group-open:rotate-180" strokeWidth={1.75} />
-          </summary>
-          <p className="mt-1 rounded-[6px] bg-secondary/60 px-2.5 py-1.5 text-[11px] leading-snug text-foreground/80">
-            Open borrowed {formatCurrency(b.borrowedOpen)} · Open given {formatCurrency(b.gaveOpen)}
-            {Math.abs(b.unlinked) >= 0.005 &&
-              ` · Payments/adjustments not tied to one transaction ${b.unlinked > 0 ? "+" : "−"}${formatCurrency(Math.abs(b.unlinked))}`}
-            {b.loanPayable > 0 && ` · Loans — you need to give ${formatCurrency(b.loanPayable)}`}
-            {b.loanReceivable > 0 && ` · Loans — you need to receive ${formatCurrency(b.loanReceivable)}`}
-            {b.emiReceivableOpen > 0 && ` · EMI shares — you need to receive ${formatCurrency(b.emiReceivableOpen)}`}
-          </p>
-        </details>
+        <dl className="divide-y divide-border-strong/45 rounded-[10px] bg-secondary/45 px-3 py-1" aria-label="How this is calculated">
+          {[
+            { label: "Open borrowed", value: formatCurrency(b.borrowedOpen) },
+            { label: "Open given", value: formatCurrency(b.gaveOpen) },
+            ...(Math.abs(b.unlinked) >= 0.005 ? [{ label: "Payments / adjustments not tied to one transaction", value: `${b.unlinked > 0 ? "+" : "−"}${formatCurrency(Math.abs(b.unlinked))}` }] : []),
+            ...(b.emiReceivableOpen > 0 ? [{ label: "EMI shares — you need to receive", value: formatCurrency(b.emiReceivableOpen) }] : []),
+            ...(b.loanReceivable > 0 ? [{ label: "Loans — you need to receive", value: formatCurrency(b.loanReceivable) }] : []),
+            ...(b.loanPayable > 0 ? [{ label: "Loans — you need to give", value: formatCurrency(b.loanPayable) }] : []),
+          ].map((l) => (
+            <div key={l.label} className="flex items-baseline justify-between gap-3 py-1">
+              <dt className="min-w-0 text-foreground/70">{l.label}</dt>
+              <dd className="shrink-0 font-semibold text-foreground">{l.value}</dd>
+            </div>
+          ))}
+        </dl>
       )}
+      {loansNote}
     </div>
   );
 
-  const overview = (
-    <div className="flex flex-col gap-5">
-      <div>
-        {/* Financial context — position (hero) · statement · actions, divided by rules, not boxes */}
-        <div className="grid gap-x-8 gap-y-4 rounded-[20px] border border-border bg-card p-4 shadow-e1 sm:p-5 lg:grid-cols-[minmax(0,1fr)_16rem]">
-          <PersonCycleStatementSection
-            statement={statement}
-            isLoading={isLoading}
-            cycle={cycle}
-            onCycleChange={setCycle}
-            linkedEmis={linkedEmis}
-            linkedEmiSummaries={linkedEmiSummaries}
-            setRepays={setRepays}
-            highlights={
-              <>
-                <DeferralCycleSummary cycle={cycle} />
-                {upcomingEmi.length > 0 && (
-                  <span
-                    title={upcomingEmi.slice(0, 5).map((e) => `${e.label} · ${formatCurrency(e.amount)}`).join("\n")}
-                    className="inline-flex items-center gap-1 rounded-full bg-primary/20 px-2 py-0.5 text-[11.5px] font-medium text-foreground tabular-nums ring-1 ring-primary-accent-text/30"
-                  >
-                    <span className="text-[10px] font-bold tracking-wide text-primary-accent-text">EMI</span>
-                    {upcomingEmi.length} upcoming <span className="font-bold">{formatCurrency(upcomingEmi.reduce((t, e) => t + e.amount, 0))}</span>
-                  </span>
-                )}
-              </>
-            }
-            footnote={
-              <>
-                {balanceSummary}
-                {loansNote}
-              </>
-            }
+  // Linked EMI responsibility — for the header's third column and the tab's count / attention dot.
+  const { savingId: savingLink, toggle: toggleRepays } = useRepaysToggle(setRepays);
+  const emiCount = linkedEmiSummaries.length + linkedEmis.filter((x) => !linkedEmiSummaries.some((sm) => sm.key === `${x.kind}:${x.id}`)).length;
+  const emiOverdue = linkedEmiSummaries.some((sm) => sm.status === "overdue");
+  const upcomingTotal = upcomingEmi.reduce((t, e) => t + e.amount, 0);
+  const emiColumn =
+    emiCount > 0 || upcomingEmi.length > 0 ? (
+      <EmiHeaderColumn
+        summaries={linkedEmiSummaries}
+        owedNow={b.emiReceivableOpen}
+        fallbackLater={{ label: upcomingEmi.length > 0 ? `${upcomingEmi.length} upcoming` : "Upcoming", amount: upcomingTotal }}
+      />
+    ) : undefined;
+
+  const highlights = (
+    <>
+      <DeferralCycleSummary cycle={cycle} />
+      {upcomingEmi.length > 0 && (
+        <span
+          title={upcomingEmi.slice(0, 5).map((e) => `${e.label} · ${formatCurrency(e.amount)}`).join("\n")}
+          className="inline-flex items-center gap-1 rounded-full bg-primary/20 px-2 py-0.5 text-[11.5px] font-medium text-foreground tabular-nums ring-1 ring-primary-accent-text/30"
+        >
+          <span className="text-[10px] font-bold tracking-wide text-primary-accent-text">EMI</span>
+          {upcomingEmi.length} upcoming <span className="font-bold">{formatCurrency(upcomingTotal)}</span>
+        </span>
+      )}
+    </>
+  );
+
+  /** Popups and inline panels the actions open — mounted once, whichever tab is showing. */
+  const actionSurfaces = (
+    <>
+      <PeopleDrawer id="person-inline-add" compact width="sm" open={inline === "add" && onAddEntry != null} onOpenChange={(o) => !o && setInline(null)} title={`Add transaction with ${person.name}`}>
+        {onAddEntry && <AddEntryPanel personName={person.name} onCancel={() => setInline(null)} onSave={saveNewEntry} />}
+      </PeopleDrawer>
+      {/* Record payment opens as the Transaction Details top sheet (the panel portals itself) — the person page stays underneath */}
+      <div id="person-inline-settle">{rawPerson && inline === "settle" && paymentPanel != null && cloneElement(paymentPanel, { sheet: true })}</div>
+      {/* Split is the one focused popup — the person page stays underneath, unchanged */}
+      <PeopleDrawer id="person-inline-split" compact width="wide" open={inline === "split" && rawPerson != null} onOpenChange={(o) => !o && setInline(null)} title={`Split expense with ${person.name}`}>
+        {rawPerson && (
+          <SplitExpenseMode person={rawPerson} accounts={accounts} categories={categories} people={people} closeable onBack={() => setInline(null)} onDone={() => setInline(null)} />
+        )}
+      </PeopleDrawer>
+    </>
+  );
+
+  const untiedOwed = generalCredit && generalCredit.theyOwe.credit >= 0.005 ? generalCredit.theyOwe.owed : null;
+  const overviewTab = (
+    <div className="flex flex-col gap-3">
+      {/* 1 · The cycle maths, once: previous ± new − received = remaining, with how the payments were applied */}
+      <PersonBalanceStory statement={statement} personName={person.name} isLoading={isLoading} />
+
+      {/* 2 · What is still open (actionable) beside the linked agreements */}
+      <div className={cn("grid items-start gap-3", linkedEmiSummaries.length > 0 && "xl:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]")}>
+        <OverviewCard
+          title="Open items"
+          meta={openObligations.length > 0 ? `${openObligations.length} unpaid · overdue first` : "all settled"}
+          action={
+            openObligations.length > 0 ? (
+              <button type="button" onClick={() => setTab("transactions")} className="rounded-[6px] text-[12px] font-semibold text-primary-accent-text outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring">
+                All transactions →
+              </button>
+            ) : undefined
+          }
+          testId="person-overview-open"
+        >
+          <PersonOpenItems
+            personName={person.name}
+            obligations={openObligations}
+            onRecord={rawPerson && onRecordPayment ? (key) => openPayment({ preselectKey: key }) : undefined}
+            onPostpone={rawPerson && onRecordPayment ? (key) => openPayment({ preselectKey: key, intent: "postpone" }) : undefined}
+            generalCreditOwed={untiedOwed}
           />
-          <div className="min-w-0 lg:border-l lg:border-border lg:pl-6">{actionBar}</div>
-        </div>
-        {/* Inline actions — open as a workspace state right under the position, full width; one at a time */}
-        <PeopleDrawer id="person-inline-add" compact width="sm" open={inline === "add" && onAddEntry != null} onOpenChange={(o) => !o && setInline(null)} title={`Add transaction with ${person.name}`}>
-          {onAddEntry && (
-            <AddEntryPanel
-              personName={person.name}
-              onCancel={() => setInline(null)}
-              onSave={saveNewEntry}
-            />
-          )}
-        </PeopleDrawer>
-        {/* Money to use — received money held for specific purposes (not income, not advance) */}
-        {rawPerson && <MoneyToUseSection person={rawPerson} entries={ledgerEntries} onRevertPayment={onRevertPayment} />}
-        {onApplyAdvance &&
-          heldSides.map((side) => (
-            <ApplyAdvancePanel
-              key={side}
-              personName={person.name}
-              side={side}
-              available={advanceAvailable}
-              obligations={openObligations}
-              cycle={cycle}
-              open={advanceOpen === side}
-              preselectKey={side === "theyOwe" ? advanceKey : null}
-              onOpenChange={(o) => {
-                setAdvanceOpen(o ? side : null);
-                if (!o) advanceReturnRef.current = null;
-              }}
-              onConfirm={async (targets) => {
-                await onApplyAdvance({ targets, date: new Date() });
-                const back = advanceReturnRef.current;
-                advanceReturnRef.current = null;
-                toast.success(back ? "Advance applied — no money moved. Back to your payment" : "Advance applied");
-                if (back) router.push(back);
-              }}
-            />
-          ))}
-        {/* Record payment opens as the Transaction Details top sheet (the panel portals itself) — the person page stays underneath */}
-        <div id="person-inline-settle">{rawPerson && inline === "settle" && paymentPanel != null && cloneElement(paymentPanel, { sheet: true })}</div>
-        {/* Split is the one focused popup — the person page stays underneath, unchanged */}
-        <PeopleDrawer id="person-inline-split" compact width="wide" open={inline === "split" && rawPerson != null} onOpenChange={(o) => !o && setInline(null)} title={`Split expense with ${person.name}`}>
-          {rawPerson && (
-            <SplitExpenseMode
-              person={rawPerson}
-              accounts={accounts}
-              categories={categories}
-              people={people}
-              closeable
-              onBack={() => setInline(null)}
-              onDone={() => setInline(null)}
-            />
-          )}
-        </PeopleDrawer>
+        </OverviewCard>
+        {linkedEmiSummaries.length > 0 && (
+          <OverviewCard
+            title="EMI agreements"
+            meta={`${linkedEmiSummaries.length} linked`}
+            action={
+              <button type="button" onClick={() => setTab("emis")} className="rounded-[6px] text-[12px] font-semibold text-primary-accent-text outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring">
+                Linked EMIs →
+              </button>
+            }
+            testId="person-overview-emis"
+          >
+            <EmiAgreementList personName={person.name} summaries={linkedEmiSummaries} onOpen={() => setTab("emis")} />
+          </OverviewCard>
+        )}
       </div>
 
-      {/* Activity — the main body, full width */}
-      <section aria-label="Activity" className="flex min-w-0 flex-col rounded-[20px] border border-border bg-card p-3 shadow-e1 sm:p-4">
-        <PersonActivityFeed
-          personId={person.id}
-          personName={person.name}
-          rows={scopeRows}
-          carriedRows={carriedRows}
-          lookups={lookups}
-          statement={statement}
-          cycleLabelOf={cycleLabelOf}
-          isLoading={rowsLoading}
-          scope={scope}
-          onScopeChange={(next) => {
-            setScope(next);
-            setSettlingKey(null);
-            setEditingKey(null);
-          }}
-          counts={scopeCounts}
-          cycleLabel={cycleLabel}
-          onAdd={
-            onAddEntry
-              ? () => {
-                  setInline("add");
-                  rootRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-                }
-              : undefined
-          }
-          onExpand={() => go({ kind: "ledger" })}
-          handlers={rowHandlers}
-          carriedForward={carriedForward}
-        />
-      </section>
-
-      {/* Details — secondary information, one line until opened */}
-      <section aria-label="Details" className="-mt-1 border-b border-border-strong/75">
-        <button
-          type="button"
-          aria-expanded={detailsOpen}
-          aria-controls="person-details"
-          onClick={() => setDetailsOpen((o) => !o)}
-          className="flex w-full min-w-0 items-center gap-3 rounded-[6px] py-2.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          <span className="shrink-0 text-sm font-semibold text-foreground">Details</span>
-          <span className="min-w-0 truncate text-xs text-muted-foreground">
-            {[
-              person.firstTransaction && `First transaction ${person.firstTransaction}`,
-              upcomingEmi.length > 0 ? `${upcomingEmi.length} upcoming EMI` : "No upcoming EMI",
-              person.notes ? "Notes" : null,
-              contact || null,
-            ]
-              .filter(Boolean)
-              .join(" · ")}
-          </span>
-          <ChevronDown className={cn("ml-auto size-4 shrink-0 text-muted-foreground transition-transform", detailsOpen && "rotate-180")} strokeWidth={1.75} />
-        </button>
-        <InlineReveal open={detailsOpen}>
-          <div id="person-details" className="grid gap-x-8 gap-y-5 pt-1 pb-5 sm:grid-cols-2 xl:grid-cols-4">
-            <div className="min-w-0">
-              <SectionTitle icon={Users}>Person</SectionTitle>
-              <div className="mt-1 divide-y divide-border-strong/60">
-                <DetailRow icon={Calendar} label="First transaction">
-                  {person.firstTransaction || "—"}
-                </DetailRow>
-                <DetailRow icon={Users} label="Relationship">
-                  {person.relationship || "—"}
-                </DetailRow>
-                {person.phone && (
-                  <DetailRow icon={Phone} label="Phone">
-                    {person.phone}
-                  </DetailRow>
-                )}
-                {person.email && (
-                  <DetailRow icon={Mail} label="Email">
-                    {person.email}
-                  </DetailRow>
-                )}
-              </div>
-            </div>
-
-            <div className="min-w-0">
-              <SectionTitle icon={Bell}>Upcoming EMI</SectionTitle>
-              {upcomingEmi.length === 0 ? (
-                <p className="mt-2 text-sm text-muted-foreground">No upcoming EMI</p>
-              ) : (
-                <div className="mt-1 divide-y divide-border-strong/60">
-                  {upcomingEmi.slice(0, 5).map((item) => (
-                    <div key={item.loanId} className="flex items-start justify-between gap-3 py-2 text-sm">
-                      <div className="flex min-w-0 flex-col">
-                        <span className="truncate font-medium text-foreground">{item.label}</span>
-                        <span className="text-xs text-muted-foreground">
-                          Due {item.dueDate.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
-                          {item.isPayerOnly && " · Pays this for you"}
-                        </span>
-                      </div>
-                      <span className="font-semibold text-foreground tabular-nums">{formatCurrency(item.amount)}</span>
-                    </div>
-                  ))}
+      {/* 3 · Secondary details, on demand */}
+      <details data-testid="person-overview-more" className="group rounded-[14px] border border-border bg-card shadow-e1 open:pb-3.5">
+        <summary className="flex cursor-pointer list-none items-center gap-2 rounded-[14px] px-4 py-2.5 text-[12.5px] font-semibold text-foreground outline-none hover:bg-secondary/50 focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+          <ChevronRight className="size-4 text-muted-foreground transition-transform duration-200 group-open:rotate-90" aria-hidden />
+          More details
+          <span className="truncate text-[11.5px] font-medium text-muted-foreground">All time with {firstName} · how it&apos;s calculated · each payment · postponements</span>
+        </summary>
+        {!isLoading && statement && (
+          <div className="grid gap-x-6 gap-y-4 px-4 pt-1 duration-200 animate-in fade-in-0 xl:grid-cols-2">
+            <div className="flex min-w-0 flex-col gap-4">
+              {overallDetails && (
+                <div>
+                  <p className="mb-1 text-[11px] font-semibold text-muted-foreground">All time</p>
+                  {overallDetails}
                 </div>
               )}
+              <div className="flex flex-wrap items-center gap-1.5 empty:hidden">{highlights}</div>
+              <div id="person-payment-history" data-testid="payment-history-details">
+                <p className="mb-1 text-[11px] font-semibold text-muted-foreground">Each payment and what it was applied to</p>
+                <CyclePaymentHistory statement={statement} personName={person.name} accountForEntry={lookups.accountForEntry} incomeForEntry={lookups.incomeForEntry} className="[&>h3]:sr-only" />
+              </div>
             </div>
-
-            <div className="min-w-0">
-              <SectionTitle icon={StickyNote}>Notes</SectionTitle>
-              {person.notes ? (
-                <p className="mt-2 text-sm whitespace-pre-wrap text-foreground">{person.notes}</p>
-              ) : (
-                <p className="mt-2 text-sm text-muted-foreground">No notes yet.</p>
-              )}
-            </div>
-
-            <div className="min-w-0">
-              <SectionTitle icon={Paperclip}>Attachments</SectionTitle>
-              <p className="mt-2 text-sm text-muted-foreground">No attachments yet.</p>
+            <div className="min-w-0 space-y-3">
+              <p className="text-[11px] font-semibold text-muted-foreground">How this cycle is calculated</p>
+              <StatementBreakdown statement={statement} />
+              <StatementCalculation statement={statement} />
             </div>
           </div>
-        </InlineReveal>
-      </section>
+        )}
+      </details>
+      {/* Money to use — received money held for specific purposes (not income, not advance) */}
+      {rawPerson && <MoneyToUseSection person={rawPerson} entries={ledgerEntries} onRevertPayment={onRevertPayment} />}
+      {onApplyAdvance &&
+        heldSides.map((side) => (
+          <ApplyAdvancePanel
+            key={side}
+            personName={person.name}
+            side={side}
+            available={advanceAvailable}
+            obligations={openObligations}
+            cycle={cycle}
+            open={advanceOpen === side}
+            preselectKey={side === "theyOwe" ? advanceKey : null}
+            onOpenChange={(o) => {
+              setAdvanceOpen(o ? side : null);
+              if (!o) advanceReturnRef.current = null;
+            }}
+            onConfirm={async (targets) => {
+              await onApplyAdvance({ targets, date: new Date() });
+              const back = advanceReturnRef.current;
+              advanceReturnRef.current = null;
+              toast.success(back ? "Advance applied — no money moved. Back to your payment" : "Advance applied");
+              if (back) router.push(back);
+            }}
+          />
+        ))}
     </div>
+  );
+
+  const emisTab = (
+    <section aria-label="Linked EMIs" id="person-linked-emis" className={cn(emiCount === 0 && "rounded-[16px] border border-border bg-card p-4 shadow-e1")}>
+      {emiCount > 0 ? (
+        <LinkedEmisPanel personName={person.name} summaries={linkedEmiSummaries} sources={linkedEmis} savingId={savingLink} onToggle={toggleRepays} generalCredit={generalCredit} />
+      ) : (
+        <div className="flex flex-col items-start gap-1 py-6">
+          <p className="text-sm font-semibold text-foreground">No EMIs linked to {firstName}</p>
+          <p className="text-[12.5px] text-foreground/60">Share a Loan or EMI with {firstName} from its own screen — their monthly share, payments and progress then show up here.</p>
+        </div>
+      )}
+    </section>
+  );
+
+  const transactionsTab = (
+    <section id="person-sec-transactions" aria-label="Activity" className="flex min-w-0 flex-col">
+      <PersonActivityFeed
+        personId={person.id}
+        personName={person.name}
+        rows={scopeRows}
+        carriedRows={carriedRows}
+        lookups={lookups}
+        statement={statement}
+        cycleLabelOf={cycleLabelOf}
+        isLoading={rowsLoading}
+        scope={scope}
+        onScopeChange={(next) => {
+          setScope(next);
+          setSettlingKey(null);
+          setEditingKey(null);
+        }}
+        counts={scopeCounts}
+        paymentLines={statementPaymentLines}
+        balances={statementBalances}
+        outstanding={{ toReceive: person.breakdown.toReceive, toGive: person.breakdown.toGive }}
+        postponed={postponedSummary}
+        cycleLabel={cycleLabel}
+        onAdd={onAddEntry ? () => setInline("add") : undefined}
+        onExpand={() => go({ kind: "ledger" })}
+        handlers={rowHandlers}
+        carriedForward={carriedForward}
+      />
+    </section>
+  );
+
+  const detailsTab = (
+    <section id="person-sec-details" aria-label="Details" className="rounded-[16px] border border-border bg-card p-4 shadow-e1">
+      <div id="person-details" className="grid gap-x-8 gap-y-5 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="min-w-0">
+          <SectionTitle icon={Users}>Person</SectionTitle>
+          <div className="mt-1 divide-y divide-border-strong/60">
+            <DetailRow icon={Calendar} label="First transaction">
+              {person.firstTransaction || "—"}
+            </DetailRow>
+            <DetailRow icon={Users} label="Relationship">
+              {person.relationship || "—"}
+            </DetailRow>
+            {person.phone && (
+              <DetailRow icon={Phone} label="Phone">
+                {person.phone}
+              </DetailRow>
+            )}
+            {person.email && (
+              <DetailRow icon={Mail} label="Email">
+                {person.email}
+              </DetailRow>
+            )}
+          </div>
+        </div>
+
+        <div className="min-w-0">
+          <SectionTitle icon={Bell}>Upcoming EMI</SectionTitle>
+          {upcomingEmi.length === 0 ? (
+            <p className="mt-2 text-sm text-muted-foreground">No upcoming EMI</p>
+          ) : (
+            <div className="mt-1 divide-y divide-border-strong/60">
+              {upcomingEmi.slice(0, 5).map((item) => (
+                <div key={item.loanId} className="flex items-start justify-between gap-3 py-2 text-sm">
+                  <div className="flex min-w-0 flex-col">
+                    <span className="truncate font-medium text-foreground">{item.label}</span>
+                    <span className="text-xs text-muted-foreground">
+                      Due {item.dueDate.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
+                      {item.isPayerOnly && " · Pays this for you"}
+                    </span>
+                  </div>
+                  <span className="font-semibold text-foreground tabular-nums">{formatCurrency(item.amount)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="min-w-0">
+          <SectionTitle icon={StickyNote}>Notes</SectionTitle>
+          {person.notes ? (
+            <p className="mt-2 text-sm whitespace-pre-wrap text-foreground">{person.notes}</p>
+          ) : (
+            <p className="mt-2 text-sm text-muted-foreground">No notes yet.</p>
+          )}
+        </div>
+
+        <div className="min-w-0">
+          <SectionTitle icon={Paperclip}>Attachments</SectionTitle>
+          <p className="mt-2 text-sm text-muted-foreground">No attachments yet.</p>
+        </div>
+      </div>
+    </section>
+  );
+
+  const tabPanels: Record<PersonTab, React.ReactNode> = { overview: overviewTab, emis: emisTab, transactions: transactionsTab, details: detailsTab };
+  const overview = (
+    <>
+      <div
+        key={tab}
+        role="tabpanel"
+        id={personTabPanelId(tab)}
+        aria-labelledby={personTabId(tab)}
+        className="min-w-0 animate-in duration-200 ease-out fade-in-0 slide-in-from-bottom-1 motion-reduce:animate-none"
+      >
+        {tabPanels[tab]}
+      </div>
+      {actionSurfaces}
+    </>
   );
 
   let content: React.ReactNode = overview;
@@ -1049,6 +1157,8 @@ export function PersonDetailWorkspace({
         personName={person.name}
         rows={scopeRows}
         carriedRows={carriedRows}
+        paymentLines={statementPaymentLines}
+        balances={statementBalances}
         statement={statement}
         lookups={lookups}
         cycleLabelOf={cycleLabelOf}
@@ -1130,18 +1240,21 @@ export function PersonDetailWorkspace({
   return (
     <FollowUpContext.Provider value={followUpContext}>
     <DeferralContext.Provider value={deferralContext}>
-    <div ref={rootRef} onKeyDown={onKeyDown} className="flex min-w-0 scroll-mt-6 flex-col gap-4 px-1">
-      {/* Identity — who, always visible; every mode renders below it. Navigation sits with the actions on the right. */}
-      <div>
-        <header className="relative flex items-center gap-3.5 overflow-hidden rounded-[20px] bg-[image:var(--gradient-hero)] px-4 py-4 text-white shadow-e1 sm:px-5">
-          <span aria-hidden className={cn("pointer-events-none absolute -top-20 -right-16 size-56 rounded-full blur-3xl", heroGlow)} />
-          <span aria-hidden className="pointer-events-none absolute -bottom-24 -left-16 size-52 rounded-full border border-white/10" />
+    <div ref={rootRef} onKeyDown={onKeyDown} className="isolate flex min-w-0 scroll-mt-6 flex-col gap-3 px-1">
+      {/* `isolate`: the sticky tab bar (z-20) and sticky table headers stay ordered among themselves but can no longer
+          out-stack the dialogs/sheets (--z-dialog, portaled to <body>) opened from this page. */}
+      {/* Identity + money at a glance — one compact card: who (on the brand band), then this cycle's settlement, the overall
+          position, EMI responsibility and the actions. Every mode renders below it. */}
+      <header ref={headerRef} className="overflow-hidden rounded-[18px] border border-border bg-card shadow-e1 duration-300 animate-in fade-in-0">
+        <div className="relative flex items-center gap-3 overflow-hidden bg-[image:var(--gradient-hero)] px-4 py-2.5 text-white">
+          <span aria-hidden className={cn("pointer-events-none absolute -top-16 -right-10 size-40 rounded-full blur-3xl", heroGlow)} />
+          <span aria-hidden className="pointer-events-none absolute -bottom-20 left-1/3 size-40 rounded-full border border-white/10" />
           <span className={cn("relative shrink-0 rounded-full ring-2 ring-offset-2 ring-offset-surface-hero", heroRing)}>
-            <ClayAvatar name={person.name} size={52} fallbackClassName="bg-white/15 text-lg font-semibold text-white" />
+            <ClayAvatar name={person.name} size={38} fallbackClassName="bg-white/15 text-[15px] font-semibold text-white" />
           </span>
-          <div className="relative flex min-w-0 flex-1 flex-col gap-0.5">
-            <h1 className="truncate font-heading text-2xl leading-tight font-bold tracking-tight">{person.name}</h1>
-            <p className="truncate text-sm text-white/70">{subline}</p>
+          <div className="relative flex min-w-0 flex-1 items-center gap-x-3 gap-y-0">
+            <h1 className="truncate font-heading text-[20px] leading-tight font-bold tracking-tight">{person.name}</h1>
+            <p className="truncate rounded-full bg-white/10 px-2.5 py-0.5 text-[12px] font-medium text-white/75 ring-1 ring-white/10 ring-inset">{subline}</p>
           </div>
           <div className="relative flex shrink-0 items-center gap-1 [&_button]:border-white/20 [&_button]:bg-white/10 [&_button]:text-white [&_button:hover]:bg-white/20 [&_svg]:text-white!">
             <button type="button" onClick={onBack} title="Back to People Ledger" className={BACK_BUTTON}>
@@ -1171,11 +1284,7 @@ export function PersonDetailWorkspace({
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="min-w-48 rounded-[8px]">
                   {onDeleteEntries && (
-                    <DropdownMenuItem
-                      variant="destructive"
-                      disabled={bulkPlan.entries.length === 0}
-                      onSelect={openBulkDelete}
-                    >
+                    <DropdownMenuItem variant="destructive" disabled={bulkPlan.entries.length === 0} onSelect={openBulkDelete}>
                       <ListX strokeWidth={1.75} />
                       Delete all transactions
                     </DropdownMenuItem>
@@ -1191,8 +1300,53 @@ export function PersonDetailWorkspace({
               </DropdownMenu>
             )}
           </div>
-        </header>
-      </div>
+        </div>
+        <div className="flex flex-col gap-3 px-3.5 py-3 lg:flex-row lg:items-stretch lg:gap-5">
+          <div className="min-w-0 flex-1">
+            <PersonSettlementStrip
+              statement={statement}
+              isLoading={isLoading}
+              cycle={cycle}
+              onCycleChange={setCycle}
+              firstName={firstName}
+              overall={{ toReceive: b.toReceive, toGive: b.toGive, advance: b.advance }}
+              third={emiColumn}
+            />
+          </div>
+          <div className="shrink-0 lg:w-[14rem] lg:border-l lg:border-border-strong/60 lg:pl-5">{actionBar}</div>
+        </div>
+      </header>
+
+      {/* Sticky tabs — Overview / Linked EMIs / Transactions / Details switch the content below; once the header scrolls away
+          the bar also carries the name, the balance and Record payment. */}
+      {(mode.kind === "overview" || mode.kind === "ledger" || mode.kind === "share") && (
+        <PersonTabBar
+          tabs={[
+            { id: "overview", label: "Overview" },
+            { id: "emis", label: "Linked EMIs", count: emiCount, alert: emiOverdue },
+            { id: "transactions", label: "Transactions", count: scopeCounts[scope] },
+            { id: "details", label: "Details" },
+          ]}
+          active={tab}
+          onChange={setTab}
+          watchRef={headerRef}
+          name={person.name}
+          balance={
+            statement == null
+              ? null
+              : statement.toReceive > 0 && statement.toGive > 0
+                ? `${money(statement.toReceive)} to receive · ${money(statement.toGive)} to give`
+                : statement.direction === "theyOwe"
+                  ? `${money(statement.amount)} to receive`
+                  : statement.direction === "iOwe"
+                    ? `${money(statement.amount)} to give`
+                    : "All settled"
+          }
+          balanceTone={statement?.direction === "theyOwe" ? "text-settle-receivable-text" : statement?.direction === "iOwe" ? "text-settle-payable-text" : "text-success"}
+          onRecordPayment={() => (inline === "settle" ? undefined : openPayment({}))}
+          recordDisabled={!rawPerson || !onRecordPayment}
+        />
+      )}
 
       {/* Mode content — slides in from the right going deeper, from the left coming back */}
       <div

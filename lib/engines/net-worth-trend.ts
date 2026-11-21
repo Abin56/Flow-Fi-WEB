@@ -228,16 +228,20 @@ export function accountBalancesAtCutoffs(params: {
  * Shares use the EMI's current share settings — the history of share-setting changes is not stored.
  */
 export function personShareEvents(
-  obligations: readonly { dueDate: Date; amount: number }[],
+  obligations: readonly { dueDate: Date; amount: number; principalAmount?: number }[],
   cycleStartOf: (d: Date) => Date,
   now: Date,
 ): DebtPrincipalEvent[] {
   const out: DebtPrincipalEvent[] = [];
   for (const o of obligations) {
-    if (o.amount <= 0) continue;
+    // The principal part of a share is a receivable from the day the loan exists (it offsets the liability that
+    // Net Worth carries throughout — `assignedFuturePrincipal`), so only the interest/charges part of the share
+    // enters on its cycle start.
+    const delta = o.amount - Math.min(Math.max(o.principalAmount ?? 0, 0), o.amount);
+    if (delta <= 0) continue;
     const start = cycleStartOf(o.dueDate);
     if (start.getTime() > now.getTime()) continue;
-    out.push({ date: start, delta: o.amount });
+    out.push({ date: start, delta });
   }
   return out;
 }

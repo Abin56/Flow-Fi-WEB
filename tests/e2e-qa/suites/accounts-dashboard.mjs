@@ -129,7 +129,8 @@ scenario("dash-stale", "Dashboard: no stale balance after a Loan payment (client
   const total = text.match(/TOTAL BALANCE[\s|]*₹([\d,]+)/)?.[1];
   const persisted = (await bal("QA Bank")) + (await bal("QA Cash"));
   chk("dashboard total equals the persisted balance right after the payment", total && Math.abs(num(total) - persisted) < 1, `${total} vs ${persisted} (before ${before})`);
-  const debt = text.match(/Debt[\s|]*₹([\d,]+)/)?.[1];
+  // The Net worth card's legal-debt total ("What you legally owe", formerly the "Debt" tile).
+  const debt = text.match(/(?:What you legally owe|Debt)[\s|]*₹([\d,]+)/)?.[1];
   chk("Debt tile moved (loan principal reduced)", debt && num(debt) < 411269, `Debt ${debt}`);
 });
 

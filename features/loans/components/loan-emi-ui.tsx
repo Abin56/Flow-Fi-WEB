@@ -255,9 +255,9 @@ function relativeDue(days: number): string | null {
   return days <= 7 ? `in ${days} days` : null;
 }
 
-/** Small uppercase label above a card metric. */
+/** Quiet plain-case label above a card metric. */
 function MetricLabel({ children, className }: { children: React.ReactNode; className?: string }) {
-  return <span className={cn("block text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase", className)}>{children}</span>;
+  return <span className={cn("block text-xs font-medium text-muted-foreground", className)}>{children}</span>;
 }
 
 /**
@@ -317,19 +317,18 @@ export function DebtCard({
         }}
         className={cn(
           LE_RADIUS.card,
-          "group @container flex cursor-pointer flex-col gap-4 border border-border bg-card p-4 shadow-e1 outline-none",
-          "transition-[border-color,box-shadow,transform] duration-150 ease-out hover:border-border-strong hover:shadow-e2 motion-safe:hover:-translate-y-px",
+          "group @container flex cursor-pointer flex-col gap-2.5 border border-border bg-card p-3.5 shadow-e1 outline-none",
+          "transition-[border-color,box-shadow] duration-150 ease-out hover:border-border-strong hover:shadow-e2",
           "focus-visible:border-primary-accent-text focus-visible:ring-2 focus-visible:ring-ring",
           muted && "bg-secondary",
         )}
       >
-        {/* Header — status and chevron share the name's line (the name truncates, full name on hover); the
-            type · source · rate line runs full width beneath, wrapping the source down rather than hiding it. */}
-        <div className="flex items-start gap-3">
-          <span className={cn(LE_RADIUS.control, "flex size-9 shrink-0 items-center justify-center border border-border bg-secondary text-foreground")}>
-            <Icon className="size-[18px]" strokeWidth={1.75} />
+        {/* Header — name, status and chevron on one line; type · owner · source · rate on a single quiet line beneath. */}
+        <div className="flex items-start gap-2.5">
+          <span className={cn(LE_RADIUS.control, "flex size-8 shrink-0 items-center justify-center border border-border bg-secondary text-foreground")}>
+            <Icon className="size-4" strokeWidth={1.75} />
           </span>
-          <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
             <div className="flex min-w-0 items-center gap-1.5">
               <h3
                 title={name}
@@ -338,7 +337,7 @@ export function DebtCard({
                 {name}
               </h3>
               {badges.map((b) => (
-                <ClayBadge key={b.label} tone={b.tone} className="shrink-0 rounded-[5px] px-2 py-0.5 text-[11px] font-semibold whitespace-nowrap">
+                <ClayBadge key={b.label} tone={b.tone} className="shrink-0 rounded-[5px] px-1.5 py-px text-[11px] font-semibold whitespace-nowrap">
                   {b.label}
                 </ClayBadge>
               ))}
@@ -347,7 +346,7 @@ export function DebtCard({
                 className="size-4 shrink-0 text-muted-foreground transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-foreground"
               />
             </div>
-            <p className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-muted-foreground">
+            <p className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted-foreground">
               {tag && (
                 <span className="shrink-0 rounded-[4px] border border-border bg-secondary px-1.5 py-px text-[11px] font-medium text-foreground">{tag}</span>
               )}
@@ -384,32 +383,32 @@ export function DebtCard({
           </div>
         </div>
 
-        {/* Primary metrics — two columns split by a hairline, not boxed tiles. */}
-        <dl className={cn("grid gap-x-4", hasNext ? "grid-cols-2" : "grid-cols-1")}>
-          <div className="flex min-w-0 flex-col gap-1.5">
+        {/* Primary metrics — two columns split by a hairline. Amount and its secondary fact share a line, wrapping only when narrow. */}
+        <dl className={cn("grid gap-x-3.5", hasNext ? "grid-cols-2" : "grid-cols-1")}>
+          <div className="flex min-w-0 flex-col gap-0.5">
             <dt>
               <MetricLabel>{outstandingLabel}</MetricLabel>
             </dt>
-            <dd className="flex min-w-0 flex-col gap-1">
-              <Money amount={outstanding} className={cn("text-[22px] leading-none", muted ? "text-muted-foreground" : "text-foreground")} />
+            <dd className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
+              <Money amount={outstanding} className={cn("text-xl leading-tight", muted ? "text-muted-foreground" : "text-foreground")} />
               {hasTotal && (
-                <span className="truncate text-xs text-muted-foreground">
+                <span className="text-xs whitespace-nowrap text-muted-foreground">
                   {totalLabel} <span className="font-semibold text-foreground tabular-nums">{formatCurrency(totalAmount!)}</span>
                 </span>
               )}
             </dd>
           </div>
           {hasNext && (
-            <div className="flex min-w-0 flex-col gap-1.5 border-l border-border pl-4">
+            <div className="flex min-w-0 flex-col gap-0.5 border-l border-border pl-3.5">
               <dt>
                 <MetricLabel className={cn(late && "text-expense")}>{cadence ? "Next EMI" : "Next payment"}</MetricLabel>
               </dt>
-              <dd className="flex min-w-0 flex-col gap-1">
-                <Money amount={nextAmount!} className={cn("text-[22px] leading-none", late ? "text-expense" : "text-foreground")} />
-                {/* Date, then how near it is — inline on a wide card, stacked under the date on a narrow one. */}
-                <span className="flex min-w-0 flex-col gap-0.5 text-xs @[26rem]:flex-row @[26rem]:items-center @[26rem]:gap-1">
+              <dd className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                <Money amount={nextAmount!} className={cn("text-xl leading-tight", late ? "text-expense" : "text-foreground")} />
+                {/* Date, then how near it is — same line when it fits. */}
+                <span className="flex min-w-0 flex-wrap items-center gap-x-1 text-xs">
                   <span className="flex items-center gap-1">
-                    <CalendarClock aria-hidden className={cn("size-3.5 shrink-0", late ? "text-expense" : "text-muted-foreground")} strokeWidth={1.75} />
+                    <CalendarClock aria-hidden className={cn("size-3 shrink-0", late ? "text-expense" : "text-muted-foreground")} strokeWidth={1.75} />
                     <span className={cn("font-semibold whitespace-nowrap", late ? "text-expense" : "text-foreground")}>{formatDueDate(nextDate!)}</span>
                   </span>
                   {relative && (
@@ -419,15 +418,13 @@ export function DebtCard({
                         late ? "font-semibold text-expense" : soon ? "font-semibold text-warning-foreground dark:text-warning" : "text-muted-foreground",
                       )}
                     >
-                      <span aria-hidden className="hidden @[26rem]:inline">
-                        ·{" "}
-                      </span>
+                      <span aria-hidden>·{" "}</span>
                       {relative}
                     </span>
                   )}
                 </span>
                 {hasNext && ownership?.myShare != null && (
-                  <span className="text-xs text-muted-foreground">
+                  <span className="text-xs whitespace-nowrap text-muted-foreground">
                     My share <span className="font-semibold text-foreground tabular-nums">{formatCurrency(ownership.myShare)}</span>
                   </span>
                 )}
@@ -436,80 +433,74 @@ export function DebtCard({
           )}
         </dl>
 
-        {(total > 1 || links.length > 0) && (
-          <div className="flex flex-col gap-3">
-            {/* Installment completion — a count of installments, deliberately not a share of principal repaid. */}
-            {total > 1 && (
-              <div className="flex flex-col gap-1.5">
-                <div className="flex items-baseline justify-between gap-2 text-xs">
-                  <span className="font-medium text-muted-foreground">Installments paid</span>
-                  <span className="text-right text-muted-foreground tabular-nums">
-                    <span className="font-semibold text-foreground">
-                      {paid} of {total}
-                    </span>
-                    {/* A partly covered installment (e.g. an advance's remainder) is never counted as paid. */}
-                    {partial > 0 && <> · {partial} partial</>} · {left} left
-                  </span>
-                </div>
-                <div
-                  className="flex h-1.5 w-full overflow-hidden rounded-[2px] bg-border"
-                  role="progressbar"
-                  aria-valuemin={0}
-                  aria-valuemax={total}
-                  aria-valuenow={paid}
-                  aria-label={`${paid} of ${total} installments paid${partial > 0 ? `, ${partial} partly paid` : ""}, ${left} left`}
-                >
-                  <div className="h-full bg-primary-accent-text transition-[width] duration-700 ease-out" style={{ width: `${paidPct}%` }} />
-                  {partialPct > 0 && <div className="h-full bg-primary-accent-text/40" style={{ width: `${partialPct}%` }} />}
-                </div>
-              </div>
-            )}
+        {/* Installment completion — one line: label, bar, count. A count of installments, deliberately not a share of principal repaid. */}
+        {total > 1 && (
+          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs">
+            <span className="font-medium text-muted-foreground">Installments paid</span>
+            <div
+              className="flex h-1.5 min-w-16 flex-1 overflow-hidden rounded-full bg-border"
+              role="progressbar"
+              aria-valuemin={0}
+              aria-valuemax={total}
+              aria-valuenow={paid}
+              aria-label={`${paid} of ${total} installments paid${partial > 0 ? `, ${partial} partly paid` : ""}, ${left} left`}
+            >
+              <div className="h-full bg-primary-accent-text transition-[width] duration-700 ease-out" style={{ width: `${paidPct}%` }} />
+              {partialPct > 0 && <div className="h-full bg-primary-accent-text/40" style={{ width: `${partialPct}%` }} />}
+            </div>
+            <span className="text-right whitespace-nowrap text-muted-foreground tabular-nums">
+              <span className="font-semibold text-foreground">
+                {paid} of {total}
+              </span>
+              {/* A partly covered installment (e.g. an advance's remainder) is never counted as paid. */}
+              {partial > 0 && <> · {partial} partial</>} · {left} left
+            </span>
+          </div>
+        )}
 
-            {/* People Ledger assignment + linked records — one compact wrapping row, only when there are any. */}
-            {links.length > 0 && (
-              <div className="flex flex-wrap items-center gap-1.5 border-t border-border pt-3">
-                {people.length > 0 && (
-                  <span className="mr-0.5 text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">
-                    {people.length > 1 ? "Split between" : people[0].person!.role}
-                  </span>
-                )}
-                {people.map(({ label, person }) => {
-                  const isYou = person!.name === "You";
-                  return (
-                    <span
-                      key={label}
-                      title={label}
-                      className={cn(
-                        "inline-flex max-w-full min-w-0 items-center gap-1.5 rounded-full border py-0.5 pr-2.5 pl-0.5 text-xs",
-                        isYou ? "border-border bg-secondary text-muted-foreground" : "border-success/40 bg-success/10 text-foreground",
-                      )}
-                    >
-                      <span
-                        aria-hidden
-                        className={cn(
-                          "flex size-5 shrink-0 items-center justify-center rounded-full text-[10.5px] font-bold uppercase",
-                          isYou ? "bg-border text-foreground" : "bg-success text-white",
-                        )}
-                      >
-                        {person!.name.trim().charAt(0) || "?"}
-                      </span>
-                      <span className="max-w-[9rem] truncate font-bold uppercase">{person!.name}</span>
-                      {person!.amount && <span className={cn("shrink-0 font-semibold tabular-nums", !isYou && "text-success")}>{person!.amount}</span>}
-                    </span>
-                  );
-                })}
-                {chips.map(({ icon: LinkIcon, label }) => (
-                  <span
-                    key={label}
-                    title={label}
-                    className="inline-flex max-w-full min-w-0 items-center gap-1 rounded-full border border-border bg-secondary px-2.5 py-0.5 text-xs font-medium text-foreground"
-                  >
-                    <LinkIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" strokeWidth={1.75} />
-                    <span className="truncate">{label}</span>
-                  </span>
-                ))}
-              </div>
+        {/* People Ledger assignment + linked records — one compact wrapping row, only when there are any. */}
+        {links.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5 border-t border-border pt-2.5">
+            {people.length > 0 && (
+              <span className="mr-0.5 text-xs font-medium text-muted-foreground">
+                {people.length > 1 ? "Split between" : people[0].person!.role}
+              </span>
             )}
+            {people.map(({ label, person }) => {
+              const isYou = person!.name === "You";
+              return (
+                <span
+                  key={label}
+                  title={label}
+                  className={cn(
+                    "inline-flex max-w-full min-w-0 items-center gap-1.5 rounded-full border py-0.5 pr-2 pl-0.5 text-xs",
+                    isYou ? "border-border bg-secondary text-muted-foreground" : "border-success/40 bg-success/10 text-foreground",
+                  )}
+                >
+                  <span
+                    aria-hidden
+                    className={cn(
+                      "flex size-[18px] shrink-0 items-center justify-center rounded-full text-[10px] font-bold uppercase",
+                      isYou ? "bg-border text-foreground" : "bg-success text-white",
+                    )}
+                  >
+                    {person!.name.trim().charAt(0) || "?"}
+                  </span>
+                  <span className="max-w-[9rem] truncate font-semibold uppercase">{person!.name}</span>
+                  {person!.amount && <span className={cn("shrink-0 font-semibold tabular-nums", !isYou && "text-success")}>{person!.amount}</span>}
+                </span>
+              );
+            })}
+            {chips.map(({ icon: LinkIcon, label }) => (
+              <span
+                key={label}
+                title={label}
+                className="inline-flex max-w-full min-w-0 items-center gap-1 rounded-full border border-border bg-secondary px-2 py-0.5 text-xs font-medium text-foreground"
+              >
+                <LinkIcon aria-hidden className="size-3 shrink-0 text-muted-foreground" strokeWidth={1.75} />
+                <span className="truncate">{label}</span>
+              </span>
+            ))}
           </div>
         )}
       </div>
