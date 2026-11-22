@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bulkDraftDate, bulkItemKey, historicalCandidates, planBulkRecordedEarlier, runBulkRecordedEarlier, type BulkItem } from "./bulk-recorded-earlier";
+import { bulkDraftDate, bulkItemKey, historicalCandidates, planBulkRecordedEarlier, runBulkRecordedEarlier, splitByPayer, type BulkItem } from "./bulk-recorded-earlier";
 import { planLoanPaymentCore } from "./loan-payment-core";
 import { RecordedEarlierError } from "./recorded-earlier";
 import type { Loan } from "@/lib/models/loan";
@@ -125,5 +125,26 @@ describe("an installment paid ahead (not due yet) — still recordable as a past
     expect(unknown).toEqual({ ok: false, errors: { i10: "Not due yet — enter the date it was paid." } });
     const known = planBulkRecordedEarlier({ candidates, draft: [{ installmentId: "i10", amount: "", date: "2026-01-02" }], batchId: "b", today: TODAY });
     expect(known.ok).toBe(true);
+  });
+});
+
+describe("splitByPayer", () => {
+  const candidates = historicalCandidates([inst(1), inst(2), inst(3)], [], TODAY);
+  const plan = planBulkRecordedEarlier({ candidates, draft: candidates.map((c) => ({ installmentId: c.installment.id, amount: "", date: "2026-10-01" })), batchId: "b", today: TODAY });
+
+  it("only the installments I pay count toward the account total; the rest are recorded as paid by someone else", () => {
+    if (!plan.ok) throw new Error("plan");
+    const s = splitByPayer(plan.items, (id) => (id === "i2" ? "other" : "me"));
+    expect(s.mine.map((i) => i.installment.id)).toEqual(["i1", "i3"]);
+    expect(s.other.map((i) => i.installment.id)).toEqual(["i2"]);
+    expect(s.mineTotal).toBe(6000);
+  });
+
+  it("every installment keeps its own idempotency key whichever payer it has, so a retry can't record one twice", () => {
+    if (!plan.ok) throw new Error("plan");
+    const s = splitByPayer(plan.items, () => "other");
+    expect(s.mine).toEqual([]);
+    expect(s.mineTotal).toBe(0);
+    expect(s.other.map((i) => i.idempotencyKey)).toEqual(["i1", "i2", "i3"].map((id) => bulkItemKey("b", id)));
   });
 });

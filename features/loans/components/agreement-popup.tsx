@@ -3,7 +3,7 @@
 import { createContext, useContext, useLayoutEffect, useState, type ReactNode } from "react";
 import { CheckCircle2, ChevronRight } from "lucide-react";
 import { ClayBadge } from "@/components/clay/clay-badge";
-import { StackBase } from "@/components/finance/stack-layer";
+import { InlineHostSlot, StackBase, useStackBase } from "@/components/finance/stack-layer";
 import { DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { AmountDisplay, InstallmentProgress, LE_RADIUS, Money, dueLabel, type DebtCardBadge } from "@/features/loans/components/loan-emi-ui";
 import { cn } from "@/lib/utils";
@@ -31,8 +31,8 @@ const TAB_LABEL: Record<PopupTab, string> = { overview: "Overview", upcoming: "U
 /** The window is "wide" (rail beside the schedule) from this width, measured on the window itself. */
 const WIDE_AT = 720;
 
-/** Where the footer's actions are drawn: stacked in the rail, or as one pinned bar. */
-const FooterLayout = createContext<"rail" | "bar">("bar");
+/** Where the footer's actions are drawn: stacked in the rail, as one pinned bar, or in a dedicated page's header. */
+const FooterLayout = createContext<"rail" | "bar" | "page">("bar");
 
 /** The "next installment" / "fully paid" card under the progress bar. */
 export function NextStrip({ next, total, overdue }: { next: { dueDate: Date; amount: number; sequenceNumber: number } | null; total: number; overdue: boolean }) {
@@ -65,7 +65,7 @@ function SectionLabel({ children }: { children: ReactNode }) {
   return <h3 className="text-[11px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">{children}</h3>;
 }
 
-export function AgreementPopup({
+function AgreementWindow({
   open,
   onOpenChange,
   eyebrow,
@@ -253,13 +253,172 @@ export function AgreementPopup({
   );
 }
 
+/** One cell of the workspace's stats strip. */
+export interface WorkspaceStat {
+  label: string;
+  value: ReactNode;
+  tone?: "expense" | "success";
+}
+
+/** Where the record opens as the workspace's right panel instead of a window — set by the dedicated `/loans/[id]` route. */
+export interface AgreementPageOptions {
+  /** The one-line facts under the title (lender · rate · next due …). */
+  facts: string;
+  stats: WorkspaceStat[];
+  /** The Schedule tab: the installment grid and the selected installment's strip (built by the dialog, which owns selection). */
+  schedule: ReactNode;
+  people?: ReactNode;
+  peopleCount?: number;
+}
+
+/**
+ * The one component the Loan and EMI details use: a window over the list (default, unchanged), or — given `page` — the
+ * workspace's right panel. Both draw the very same record through the same handlers; nothing is recomputed here.
+ */
+export function AgreementPopup(props: Parameters<typeof AgreementWindow>[0] & { page?: AgreementPageOptions }) {
+  const { page, ...rest } = props;
+  if (page) return <AgreementPage {...rest} {...page} />;
+  return <AgreementWindow {...rest} />;
+}
+
+type PageTab = "schedule" | "history" | "people" | "details";
+
+/**
+ * The right panel of the Loan & EMI workspace: a compact header (name, facts, the payment actions), one stats strip, then
+ * tabs — Schedule (grid + selected installment), Payment history, People, Details. Payment forms and the other actions
+ * open as compact popups over the workspace, which stays visible behind. Same slots, same handlers as the window.
+ */
+function AgreementPage({
+  eyebrow,
+  title,
+  facts,
+  badges,
+  stats,
+  outstandingLabel,
+  outstanding,
+  paid,
+  total,
+  partial,
+  schedule,
+  details,
+  history,
+  allCount,
+  historyCount,
+  people,
+  peopleCount = 0,
+  footer,
+  testId,
+}: Omit<Parameters<typeof AgreementWindow>[0], "open" | "onOpenChange" | "comingUp" | "detailsTitle" | "upcoming" | "all" | "upcomingCount"> & AgreementPageOptions) {
+  useStackBase(true);
+  const [tab, setTab] = useState<PageTab>("schedule");
+  const showPeople = people != null && peopleCount > 0;
+  const tabs: { value: PageTab; label: string; count?: number }[] = [
+    { value: "schedule", label: "Schedule", count: allCount },
+    { value: "history", label: "Payment history", count: historyCount },
+    ...(showPeople ? [{ value: "people" as const, label: "People", count: peopleCount }] : []),
+    { value: "details", label: "Details" },
+  ];
+  const percent = total > 0 ? Math.min(100, Math.round((paid / total) * 100)) : 0;
+
+  return (
+    <div data-testid={testId} className="relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-[10px] border border-border bg-card shadow-e2">
+      <header className="flex shrink-0 flex-wrap items-start justify-between gap-x-4 gap-y-2 border-b border-border bg-gradient-to-b from-secondary/70 to-card px-4 pt-3 pb-2.5">
+        <div className="flex min-w-0 flex-col gap-0.5">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+            <span className="rounded-[4px] bg-foreground/[0.07] px-1.5 py-px text-[10px] font-bold tracking-[0.08em] text-muted-foreground uppercase">{eyebrow}</span>
+            <h1 className="min-w-0 truncate font-heading text-base leading-tight font-bold tracking-tight text-foreground">{title}</h1>
+            {badges.map((b) => (
+              <ClayBadge key={b.label} tone={b.tone} className="rounded-[4px] px-1.5 py-px text-[10.5px] font-semibold">
+                {b.label}
+              </ClayBadge>
+            ))}
+          </div>
+          <p className="truncate text-xs text-muted-foreground">{facts}</p>
+        </div>
+        <FooterLayout.Provider value="page">{footer}</FooterLayout.Provider>
+      </header>
+
+      <div className="grid shrink-0 grid-cols-[minmax(9rem,1.3fr)_repeat(auto-fit,minmax(6.5rem,1fr))] divide-x divide-border border-b border-border bg-card" aria-label="Summary">
+        <div className="flex min-w-0 flex-col justify-center gap-0.5 px-4 py-2">
+          <span className="text-[10.5px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">{outstandingLabel}</span>
+          <AmountDisplay amount={outstanding} size="md" className="text-[22px]" />
+        </div>
+        {stats.map((st) => (
+          <div key={st.label} className="flex min-w-0 flex-col justify-center gap-0.5 px-3 py-2">
+            <span className="truncate text-[10.5px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">{st.label}</span>
+            <span className={cn("truncate text-[13px] font-semibold tabular-nums", st.tone === "expense" ? "text-expense" : st.tone === "success" ? "text-success" : "text-foreground")}>{st.value}</span>
+          </div>
+        ))}
+        {total > 0 && (
+          <div className="flex min-w-0 flex-col justify-center gap-1 px-3 py-2">
+            <span className="flex items-baseline justify-between gap-1 text-[10.5px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">
+              Progress <span className="text-xs tracking-normal text-foreground normal-case tabular-nums">{percent}%</span>
+            </span>
+            <InstallmentProgress paid={paid} total={total} partial={partial} />
+          </div>
+        )}
+      </div>
+
+      <div role="tablist" aria-label="Sections" className="flex shrink-0 items-center gap-0.5 overflow-x-auto border-b border-border bg-secondary/40 px-2">
+        {tabs.map(({ value, label, count }) => {
+          const active = value === tab;
+          return (
+            <button
+              key={value}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              onClick={() => setTab(value)}
+              className={cn(
+                "relative inline-flex h-9 shrink-0 items-center gap-1.5 px-2.5 text-[12.5px] whitespace-nowrap outline-none transition-colors duration-150 focus-visible:rounded-[6px] focus-visible:ring-2 focus-visible:ring-ring",
+                active ? "font-semibold text-foreground" : "font-medium text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {label}
+              {count != null && <span className={cn("grid h-[18px] min-w-[18px] place-items-center rounded-full px-1 text-[10.5px] tabular-nums", active ? "bg-primary text-primary-foreground" : "bg-secondary text-muted-foreground")}>{count}</span>}
+              <span aria-hidden className={cn("absolute inset-x-2 bottom-0 h-0.5 rounded-full transition-opacity duration-150", active ? "bg-foreground opacity-100" : "opacity-0")} />
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="relative min-h-0 flex-1">
+        {/* Kept mounted (just hidden) so the selected installment survives a visit to another tab. */}
+        <div role="tabpanel" aria-label="Schedule" hidden={tab !== "schedule"} className={cn("@container absolute inset-0 min-h-0 flex-col", tab === "schedule" ? "flex" : "hidden")}>
+          {schedule}
+        </div>
+        {/* Payments and the other action layers open HERE, over the tab, merged into the workspace — no popup. */}
+        <InlineHostSlot className="absolute inset-0 z-10 bg-card" />
+        {tab !== "schedule" && (
+          <div role="tabpanel" aria-label={tabs.find((t) => t.value === tab)?.label} className="@container absolute inset-0 flex min-h-0 flex-col">
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4 duration-150 animate-in fade-in-0 motion-reduce:animate-none">
+              {tab === "history" ? history : tab === "people" ? people : <div className="flex flex-col gap-4">{details}</div>}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /**
  * The window's actions. In the rail: Record Payment on top, the quieter money action under it (each full width), then
  * the record management under a rule. In the narrow window: one pinned bar. `money` lists the quieter action first and
  * the primary one last; the layout decides the order and widths, so the buttons carry no width classes of their own.
  */
 export function AgreementFooter({ note, money, manage }: { note?: string; money: ReactNode; manage: ReactNode }) {
-  const rail = useContext(FooterLayout) === "rail";
+  const layout = useContext(FooterLayout);
+  const rail = layout === "rail";
+  if (layout === "page") {
+    // The page header: the money actions in one row (the primary last), the record management quietly under them.
+    return (
+      <div className="flex min-w-0 flex-col items-end gap-1.5" data-testid="agreement-actions">
+        {note && <p className="text-xs text-muted-foreground">{note}</p>}
+        <div className="flex flex-wrap items-center justify-end gap-1.5 [&_button]:h-8 [&_button]:rounded-[6px] [&_button]:px-2.5 [&_button]:text-xs">{money}</div>
+        <div className="flex flex-wrap items-center justify-end gap-0.5 [&_button]:h-7">{manage}</div>
+      </div>
+    );
+  }
   return (
     <div className="flex flex-col">
       {note && <p className="px-4 pt-3 text-xs text-muted-foreground">{note}</p>}

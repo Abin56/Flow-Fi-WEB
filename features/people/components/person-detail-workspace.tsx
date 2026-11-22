@@ -928,7 +928,7 @@ export function PersonDetailWorkspace({
       <div className={cn("grid items-start gap-3", linkedEmiSummaries.length > 0 && "xl:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]")}>
         <OverviewCard
           title="Open items"
-          meta={openObligations.length > 0 ? `${openObligations.length} unpaid · overdue first` : "all settled"}
+          meta={openObligations.length > 0 ? `${openObligations.length} unpaid` : "all settled"}
           action={
             openObligations.length > 0 ? (
               <button type="button" onClick={() => setTab("transactions")} className="rounded-[6px] text-[12px] font-semibold text-primary-accent-text outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring">

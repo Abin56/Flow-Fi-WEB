@@ -15,7 +15,10 @@ const nextConfig: NextConfig = {
   ...(isDev
     ? {
         async rewrites() {
-          return [{ source: "/statement-review/:documentId((?!_$)[^/]+)", destination: "/statement-review/_" }];
+          return [
+            { source: "/statement-review/:documentId((?!_$)[^/]+)", destination: "/statement-review/_" },
+            { source: "/loans/:agreementId((?!_$)[^/]+)", destination: "/loans/_" },
+          ];
         },
       }
     : {}),

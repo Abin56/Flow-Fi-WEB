@@ -219,7 +219,12 @@ export function RecordPaymentPanel({
   const options = obligations.filter((o) => o.side === side);
   // A new payment always lowers the overall balance. An edit keeps the payment's own kind (so a payment
   // recorded the old, per-item way before this was simplified stays editable in that shape).
-  const [mode, setMode] = useState<ApplyMode>(() => (initial ? (GENERAL_PAYMENT_KEY in initial.lines ? "general" : "items") : "general"));
+  // Exception: a payment started from ONE EMI / Loan installment item ("Received" on that Open Item) belongs to that
+  // installment — it is written against its own obligation key (`derived` route), so Loan & EMI shows that person's share
+  // as received. Recording it as a general payment would lower the overall balance but leave the installment share open.
+  const [mode, setMode] = useState<ApplyMode>(() =>
+    initial ? (GENERAL_PAYMENT_KEY in initial.lines ? "general" : "items") : preselected?.isEmi && preselected.target.kind === "derivedInstallment" ? "items" : "general",
+  );
   const formId = useId();
   const general = mode === "general";
   // The overall balance on this side, earlier general payments included — an edit counts its own general part as open again.

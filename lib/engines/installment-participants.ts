@@ -24,7 +24,14 @@ import { cycleName, deferralView } from "@/lib/engines/person-payment-deferral";
 import type { PersonPaymentDeferral } from "@/lib/models/person-payment-deferral";
 import type { Installment } from "@/lib/models/payment-schedule";
 
-type StatementLike = Pick<PersonCycleStatement, "personId" | "personName" | "rows"> & Partial<Pick<PersonCycleStatement, "advanceBalance">>;
+type StatementLike = Pick<PersonCycleStatement, "personId" | "personName" | "rows"> & Partial<Pick<PersonCycleStatement, "advanceBalance" | "toReceive">>;
+
+/** Paid toward the overall balance with no item chosen — see `InstallmentParticipant.generalCredit`. */
+function generalCreditOf(st: StatementLike): number {
+  if (st.toReceive == null) return 0;
+  const open = st.rows.filter((r) => r.kind === "obligation" && r.remainingNow != null && r.signedAmount > 0).reduce((t, r) => t + r.remainingNow!, 0);
+  return round2(Math.max(0, open - st.toReceive));
+}
 type InstallmentLike = Pick<Installment, "id" | "sequenceNumber" | "dueDate" | "amountDue" | "amountPaid" | "isSkipped" | "deletedAt">;
 
 export interface ShareLine {
@@ -53,6 +60,12 @@ export interface InstallmentParticipant {
    * `advanceBalance`, they-paid-me side only). Display only: it settles nothing until applied in People.
    */
   advanceHeld?: number;
+  /**
+   * Money this person already paid me toward their OVERALL balance without choosing an item (People "general payment"): the
+   * open items' remaining minus the person's gross amount to receive — the same rule as People's `generalCreditOf`. Display
+   * only: it is NOT assigned to any installment, so no share is marked received and nothing is requested twice.
+   */
+  generalCredit?: number;
 }
 
 export interface InstallmentBreakdown {
@@ -116,7 +129,7 @@ export function installmentBreakdown(params: {
     if (current == null && carried.length === 0) continue;
     const outstanding = round2((current?.remaining ?? 0) + carried.reduce((t, l) => t + l.remaining, 0));
     const advanceHeld = round2(Math.max(0, -(st.advanceBalance ?? 0)));
-    participants.push({ personId: st.personId, personName: st.personName, current, carried, outstanding, advanceHeld });
+    participants.push({ personId: st.personId, personName: st.personName, current, carried, outstanding, advanceHeld, generalCredit: generalCreditOf(st) });
   }
   participants.sort((a, b) => b.outstanding - a.outstanding || a.personName.localeCompare(b.personName));
 

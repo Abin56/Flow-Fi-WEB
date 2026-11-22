@@ -65,7 +65,8 @@ import {
   createLoanRepository,
   createPersonRepository,
 } from "@/lib/repositories/repository-factory";
-import { LoanAdvancePaymentRepository, type EditLoanPaymentParams, type ReversePaymentParams } from "@/lib/repositories/loan-advance-payment-repository";
+import { personPaymentReverter } from "@/lib/repositories/agreement-person-revert";
+import { LoanAdvancePaymentRepository,type EditLoanPaymentParams, type ReversePaymentParams } from "@/lib/repositories/loan-advance-payment-repository";
 import { db } from "@/lib/firebase/client";
 import {
   permanentlyDeleteAgreement,
@@ -417,8 +418,9 @@ export function useLoanActions() {
        * every payment / advance / extra principal / Borrow More movement, legacy People entries — then
        * removes its schedule. See `lib/repositories/agreement-deletion.ts`. Reads everything fresh.
        */
-      permanentlyDeleteLoan: async (loan: Pick<Loan, "id">, opts: { onStage?: (stage: AgreementDeletionStage) => void } = {}) =>
-        permanentlyDeleteAgreement(db, uid, "loan", loan.id, opts),
+      permanentlyDeleteLoan: async (loan: Pick<Loan, "id">, opts: { onStage?: (stage: AgreementDeletionStage) => void; reverseRepayments?: boolean } = {}) =>
+        // People repayments are only reversed when the user explicitly chose to — never as a silent side effect.
+        permanentlyDeleteAgreement(db, uid, "loan", loan.id, { onStage: opts.onStage, ...(opts.reverseRepayments ? { revertPersonPayment: personPaymentReverter(uid) } : {}) }),
       /** Read-only: what `permanentlyDeleteLoan` would change — for its confirmation. */
       previewPermanentDeletion: (loan: Pick<Loan, "id">) => previewAgreementDeletion(db, uid, "loan", loan.id),
       /** Finishes any Loan/EMI permanent deletion interrupted after its money step. Best-effort. */

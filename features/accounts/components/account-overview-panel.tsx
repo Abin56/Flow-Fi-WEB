@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Bell, Check, ChevronRight, Copy, Download, EyeOff, Eye, Info, Landmark, Pencil, Receipt, RefreshCcw, Star, Trash2, TrendingUp, Wallet, X } from "lucide-react";
+import { Bell, Check, ChevronRight, Copy, Download, EyeOff, Eye, Info, Landmark, ListChecks, Pencil, Receipt, RefreshCcw, Star, Trash2, TrendingUp, Wallet, X } from "lucide-react";
 import { motion, useReducedMotion } from "framer-motion";
 import { useState } from "react";
 import { Line, LineChart, ResponsiveContainer } from "recharts";
@@ -55,6 +55,7 @@ export function AccountOverviewPanel({
   onClose,
   onEdit,
   onDelete,
+  onManageTransactions,
   onViewTransactions,
   onExplainBalance,
   linkedFunds,
@@ -67,6 +68,8 @@ export function AccountOverviewPanel({
   onViewTransactions?: () => void;
   onEdit?: () => void;
   onDelete?: () => void;
+  /** Opens "delete selected / all transactions" — the account itself is kept. */
+  onManageTransactions?: () => void;
   /** People money held in this account for a card bill / EMI still to be paid — informational, never subtracted. */
   linkedFunds?: { funds: LinkedFund[]; total: number };
 }) {
@@ -151,7 +154,7 @@ export function AccountOverviewPanel({
       </div>
 
       {/* Quick actions */}
-      <div className="grid grid-cols-3 gap-2 border-b border-border-strong/40 p-3">
+      <div className="grid grid-cols-4 gap-2 border-b border-border-strong/40 p-3">
         {onViewTransactions && (
           <button type="button" onClick={onViewTransactions} className={QUICK}>
             <span className="flex size-8 items-center justify-center rounded-full bg-primary/25 text-foreground dark:text-primary-accent-text">
@@ -166,6 +169,14 @@ export function AccountOverviewPanel({
               <Pencil className="size-4" strokeWidth={2} />
             </span>
             Edit
+          </button>
+        )}
+        {onManageTransactions && (
+          <button type="button" onClick={onManageTransactions} className={QUICK}>
+            <span className="flex size-8 items-center justify-center rounded-full bg-secondary text-foreground">
+              <ListChecks className="size-4" strokeWidth={2} />
+            </span>
+            Manage txns
           </button>
         )}
         {onDelete && (

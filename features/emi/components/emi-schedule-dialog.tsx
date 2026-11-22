@@ -2,6 +2,12 @@
 
 import { ArrowUpRight, Building2, CreditCard, History, Lock, LockOpen, Pencil, Trash2, UserRound, Wallet } from "lucide-react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { AgreementPeopleTab } from "@/features/loans/components/agreement-people-tab";
+import { useState } from "react";
+import { AgreementScheduleTab } from "@/features/loans/components/agreement-schedule-tab";
+import { TheyPaidDialog } from "@/features/loans/components/they-paid-dialog";
+import { useAgreementPeople } from "@/features/loans/hooks/use-agreement-people";
 import { ClayButton } from "@/components/clay/clay-button";
 import { cn } from "@/lib/utils";
 import { AgreementFooter, AgreementPopup, NextStrip } from "@/features/loans/components/agreement-popup";
@@ -36,6 +42,8 @@ interface EmiScheduleDialogProps {
   historyLoading: boolean;
   /** Opens a recorded payment's details (where it can be edited). */
   onViewPayment: (action: RecordedPaymentAction) => void;
+  /** Draw as the dedicated page (`/loans/[id]`) instead of a window — same content and handlers. */
+  page?: boolean;
 }
 
 function GoTo({ href, label }: { href: string; label: string }) {
@@ -53,9 +61,14 @@ function GoTo({ href, label }: { href: string; label: string }) {
 /** EMI details, laid out exactly like `LoanScheduleDialog` — outstanding balance first, key facts,
  *  what it's linked to, then the installment schedule. `row` is resolved live by the parent from
  *  Firestore-backed rows, so every persisted change re-renders it in place. */
-export function EmiScheduleDialog({ open, onOpenChange, row, onDelete, onRecordPayment, onRecordPastPayments, onToggleClose, onEditTerms, statusBusy = false, paymentActions, historyLoading, onViewPayment }: EmiScheduleDialogProps) {
+export function EmiScheduleDialog({ open, onOpenChange, row, onDelete, onRecordPayment, onRecordPastPayments, onToggleClose, onEditTerms, statusBusy = false, paymentActions, historyLoading, onViewPayment, page }: EmiScheduleDialogProps) {
   // Shared EMI: each installment's People side on its row, next to (never merged with) the lender status.
   const peopleStatus = useInstallmentPeopleStatus(row ? { sourceKind: "emi", source: row.emi, installments: row.installments } : null);
+  const pathname = usePathname();
+  const { people } = useAgreementPeople(page && row ? { sourceKind: "emi", source: row.emi, installments: row.installments } : null);
+  // "They paid": the installment whose share the person already paid — the dialog mounts fresh per open (one batch id per save).
+  const [theyPaid, setTheyPaid] = useState<{ id: string; n: number } | null>(null);
+  const askTheyPaid = (installmentId: string) => setTheyPaid((prev) => ({ id: installmentId, n: (prev?.n ?? 0) + 1 }));
   if (!row) return null;
 
   const totalPaid = row.installments.reduce((sum, i) => sum + i.amountPaid, 0);
@@ -86,6 +99,7 @@ export function EmiScheduleDialog({ open, onOpenChange, row, onDelete, onRecordP
     onViewPayment,
     fallbackSourceLabel: cardLabel,
     peopleStatus,
+    onTheyPaid: (i: Installment) => askTheyPaid(i.id),
   };
   const upcomingCount = row.installments.filter((i) => !i.isSkipped && remainingAmount(i) > 0).length;
 
@@ -93,10 +107,42 @@ export function EmiScheduleDialog({ open, onOpenChange, row, onDelete, onRecordP
   const moneyBtn = "h-10 gap-1.5 rounded-[8px] px-3 text-[13px] whitespace-nowrap";
 
   return (
+    <>
     <AgreementPopup
       open={open}
       onOpenChange={onOpenChange}
-      testId="emi-popup"
+      testId={page ? "emi-page" : "emi-popup"}
+      page={
+        page
+          ? {
+              facts: `${row.emi.lenderName ?? EMI_TYPE_LABEL[row.emi.loanType]}${interest ? ` · ${+interest.ratePercent.toFixed(2)}% ${interest.period === "monthly" ? "p.m." : "p.a."} ${interest.type === "flat" ? "flat" : "reducing"}` : " · No interest"}${cardLabel ? ` · ${cardLabel}` : ""}`,
+              stats: [
+                { label: "Original", value: formatCurrency(row.emi.principalAmount) },
+                { label: "Installment", value: formatCurrency(installmentAmount) },
+                { label: "Paid so far", value: formatCurrency(totalPaid) },
+                { label: "Total left", value: formatCurrency(row.remainingBalance) },
+                { label: "Next due", value: nextPayable ? formatDateLong(nextPayable.dueDate) : "—", tone: nextOverdue ? "expense" : undefined },
+              ],
+              schedule: (
+                <AgreementScheduleTab
+                  installments={row.installments}
+                  actions={paymentActions}
+                  closed={isClosed}
+                  total={row.emi.installmentCount}
+                  lent={false}
+                  people={people}
+                  onPay={(i) => onRecordPayment(row, i)}
+                  onViewPayment={onViewPayment}
+                  onTheyPaid={(i) => askTheyPaid(i.id)}
+                  peopleTarget={{ sourceKind: "emi", source: row.emi, installments: row.installments }}
+                  returnTo={pathname || "/loans/"}
+                />
+              ),
+              people: <AgreementPeopleTab people={people} returnTo={pathname || "/loans/"} onTheyPaid={askTheyPaid} />,
+              peopleCount: people.length,
+            }
+          : undefined
+      }
       eyebrow="EMI"
       title={row.emi.name}
       subtitle={`${row.emi.lenderName ?? EMI_TYPE_LABEL[row.emi.loanType]}${interest ? ` · ${+interest.ratePercent.toFixed(2)}% ${interest.period === "monthly" ? "p.m." : "p.a."} ${interest.type === "flat" ? "flat" : "reducing"}` : " · No interest"}`}
@@ -130,7 +176,7 @@ export function EmiScheduleDialog({ open, onOpenChange, row, onDelete, onRecordP
               { label: "Original amount", value: formatCurrency(row.emi.principalAmount) },
               { label: "Installment", value: formatCurrency(installmentAmount), strong: true },
               { label: "Paid so far", value: formatCurrency(totalPaid) },
-              { label: "Left incl. interest", value: formatCurrency(row.remainingBalance) },
+              { label: "Total left", value: formatCurrency(row.remainingBalance) },
               {
                 label: "Next due",
                 value: nextPayable ? formatDateLong(nextPayable.dueDate) : "—",
@@ -196,6 +242,18 @@ export function EmiScheduleDialog({ open, onOpenChange, row, onDelete, onRecordP
         />
       }
     />
+    {theyPaid && (
+      <TheyPaidDialog
+        key={theyPaid.n}
+        open
+        onOpenChange={(o) => !o && setTheyPaid(null)}
+        sourceKind="emi"
+        source={row.emi}
+        installments={row.installments}
+        installmentId={theyPaid.id}
+      />
+    )}
+    </>
   );
 }
 

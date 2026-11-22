@@ -128,12 +128,14 @@ interface CreditCardTileProps {
   onClick: () => void;
   onEdit?: () => void;
   onDelete?: () => void;
+  /** Opens "delete selected / all transactions" for this card (the card itself stays). */
+  onManageTransactions?: () => void;
 }
 
 /** Compact, card-proportioned tile styled after real bank card art — a solid gradient face (not a clay surface)
  *  with identity on top, credit used / limit and the utilization bar at the bottom, and the bill status as a
  *  footer. Presentation only: a pointer-following tilt + glare, a hover shine sweep and an animated usage bar. */
-export function CreditCardTile({ card, bankId, active, partnerHighlighted, onHoverChange, onClick, onEdit, onDelete }: CreditCardTileProps) {
+export function CreditCardTile({ card, bankId, active, partnerHighlighted, onHoverChange, onClick, onEdit, onDelete, onManageTransactions }: CreditCardTileProps) {
   // The engine's exposure ratio (outstanding + locked card-EMI principal) — recomputing from the account
   // balance alone hid a card-linked EMI's lock, so the tile disagreed with Available.
   const utilization = Math.min(100, Math.round(card.utilizationPercent));
@@ -260,6 +262,7 @@ export function CreditCardTile({ card, bankId, active, partnerHighlighted, onHov
                     onKeyDown={(e) => e.stopPropagation()}
                   >
                     <DropdownMenuItem onSelect={() => onEdit?.()}>Edit</DropdownMenuItem>
+                    {onManageTransactions && <DropdownMenuItem onSelect={() => onManageTransactions()}>Manage transactions</DropdownMenuItem>}
                     <DropdownMenuItem className="text-expense" onSelect={() => onDelete?.()}>
                       Delete
                     </DropdownMenuItem>

@@ -31,12 +31,14 @@ export function AgreementDeleteDialog({
   kind: "loan" | "emi";
   name: string;
   loadImpact: () => Promise<AgreementDeletionImpact | null>;
-  onConfirm: () => void | Promise<void>;
+  /** `reverseRepayments` is true only after the user explicitly chose to reverse people's repayments too. */
+  onConfirm: (options: { reverseRepayments: boolean }) => void | Promise<void>;
   busy: boolean;
   /** Installments still unpaid. When present, confirming a delete first asks whether to settle and close instead. */
   outstanding?: { count: number; amount: number } | null;
 }) {
   const [askSettle, setAskSettle] = useState(false);
+  const [askRepay, setAskRepay] = useState(false);
   const [impact, setImpact] = useState<AgreementDeletionImpact | null | undefined>(undefined);
   const [loadedFor, setLoadedFor] = useState<string | null>(null);
   const label = kind === "loan" ? "loan" : "EMI";
@@ -60,12 +62,17 @@ export function AgreementDeleteDialog({
 
   const hasOutstanding = outstanding != null && outstanding.count > 0;
   // Last confirmation before erasing: with unpaid installments left, offer "settle and close" first.
+  const repayments = impact?.personRepaymentCount ?? 0;
   function guardedConfirm() {
     if (hasOutstanding) setAskSettle(true);
-    else void onConfirm();
+    else if (repayments > 0) setAskRepay(true);
+    else void onConfirm({ reverseRepayments: false });
   }
   function handleOpenChange(next: boolean) {
-    if (!next) setAskSettle(false);
+    if (!next) {
+      setAskSettle(false);
+      setAskRepay(false);
+    }
     onOpenChange(next);
   }
 
@@ -90,8 +97,75 @@ export function AgreementDeleteDialog({
             <ClayButton variant="primary" onClick={() => handleOpenChange(false)} disabled={busy}>
               Settle {label} &amp; close
             </ClayButton>
-            <ClayButton variant="ghost" onClick={() => void onConfirm()} disabled={busy} className="text-danger">
+            <ClayButton
+              variant="ghost"
+              onClick={() => {
+                if (repayments > 0) {
+                  setAskSettle(false);
+                  setAskRepay(true);
+                } else void onConfirm({ reverseRepayments: false });
+              }}
+              disabled={busy}
+              className="text-danger"
+            >
               {busy ? "Deleting…" : "Delete anyway"}
+            </ClayButton>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    );
+  }
+
+  // Something this agreement doesn't own stands in the way (a person's repayment of another item, a shared expense…):
+  // say exactly what and change nothing — never cascade into records that belong to other modules.
+  if (open && impact?.blockedReason) {
+    return (
+      <Dialog open onOpenChange={handleOpenChange}>
+        <DialogContent className="gap-5 sm:max-w-md">
+          <DialogHeader className="flex-row items-start gap-3 pr-8">
+            <span className="flex size-10 shrink-0 items-center justify-center rounded-none bg-danger/12 text-danger">
+              <AlertTriangle className="size-5" />
+            </span>
+            <div className="flex min-w-0 flex-col gap-1.5">
+              <DialogTitle className="text-base leading-snug text-foreground">This {label} can&apos;t be deleted yet</DialogTitle>
+              <DialogDescription className="leading-relaxed">{impact.blockedReason} Nothing has been changed.</DialogDescription>
+            </div>
+          </DialogHeader>
+          <DialogFooter>
+            <ClayButton variant="primary" onClick={() => handleOpenChange(false)}>
+              Close
+            </ClayButton>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    );
+  }
+
+  // People repaid part of this agreement: reversing those repayments is a separate, explicit choice.
+  if (open && askRepay && repayments > 0) {
+    const many = repayments !== 1;
+    return (
+      <Dialog open onOpenChange={(next) => { if (!busy) handleOpenChange(next); }}>
+        <DialogContent className="gap-5 sm:max-w-md">
+          <DialogHeader className="flex-row items-start gap-3 pr-8">
+            <span className="flex size-10 shrink-0 items-center justify-center rounded-none bg-danger/12 text-danger">
+              <AlertTriangle className="size-5" />
+            </span>
+            <div className="flex min-w-0 flex-col gap-1.5">
+              <DialogTitle className="text-base leading-snug text-foreground">People have repaid part of this {label}</DialogTitle>
+              <DialogDescription className="leading-relaxed">
+                {repayments} repayment{many ? "s" : ""} received from people {many ? "are" : "is"} recorded against it and can&apos;t stay without the {label}. Continuing also reverses{" "}
+                {many ? "those repayments" : "that repayment"} in People and takes the money back out of the account {many ? "they were" : "it was"} received into. To keep that history,
+                cancel and revert {many ? "them" : "it"} in People yourself first.
+              </DialogDescription>
+            </div>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:flex-col sm:space-x-0">
+            <ClayButton variant="primary" onClick={() => handleOpenChange(false)} disabled={busy}>
+              Cancel — keep everything
+            </ClayButton>
+            <ClayButton variant="ghost" onClick={() => void onConfirm({ reverseRepayments: true })} disabled={busy} className="text-danger">
+              {busy ? "Deleting…" : `Reverse ${many ? "them" : "it"} and delete`}
             </ClayButton>
           </DialogFooter>
         </DialogContent>
@@ -121,12 +195,19 @@ export function AgreementDeleteDialog({
         ? [{ label: `Its installments, payments and linked money movements`, count: 1 }]
         : [
             { label: `${impact.installmentCount} installment${impact.installmentCount === 1 ? "" : "s"}, paid and upcoming`, count: impact.installmentCount },
+            { label: `${impact.transactionCount} linked transaction${impact.transactionCount === 1 ? "" : "s"} it created, removed from Transactions`, count: impact.transactionCount },
             { label: `${impact.paymentCount} recorded payment${impact.paymentCount === 1 ? "" : "s"}`, count: impact.paymentCount },
             ...impact.accountEffects.map((e) => ({
-              label: e.delta > 0 ? `${formatCurrency(e.delta)} goes back into ${e.accountName}` : `${formatCurrency(-e.delta)} is taken back out of ${e.accountName}`,
+              label:
+                e.delta > 0
+                  ? `${formatCurrency(e.delta)} goes back into ${e.accountName} (a correction — no refund transaction is created)`
+                  : `${formatCurrency(-e.delta)} is taken back out of ${e.accountName} (a correction — no refund transaction is created)`,
               count: 1,
             })),
             { label: `${impact.ledgerEntryCount} People ledger entr${impact.ledgerEntryCount === 1 ? "y" : "ies"} it created`, count: impact.ledgerEntryCount },
+            ...(impact.personRepaymentCount > 0
+              ? [{ label: `${impact.personRepaymentCount} repayment${impact.personRepaymentCount === 1 ? "" : "s"} received from people — reversed, and the money taken back out of the account it went into`, count: impact.personRepaymentCount }]
+              : []),
             { label: `Its dues, outstanding balance and any card credit it holds`, count: 1 },
           ];
 

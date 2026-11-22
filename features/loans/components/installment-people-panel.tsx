@@ -32,7 +32,10 @@ export function InstallmentPeoplePanel({
   onPostpone,
   pressed,
   className,
+  dense = false,
 }: {
+  /** Slim one-line rows (the payment popup) instead of the roomy cards. */
+  dense?: boolean;
   breakdown: InstallmentBreakdown | null;
   loading: boolean;
   /** In-app path People returns to after recording. */
@@ -57,13 +60,14 @@ export function InstallmentPeoplePanel({
   }
   return (
     <section aria-label="Who pays this installment" className={cn("flex flex-col gap-2", className)}>
-      <h3 className="text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">Shared with</h3>
-      <ul className="flex flex-col gap-2">
+      {!dense && <h3 className="text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">Shared with</h3>}
+      <ul className={cn("flex flex-col", dense ? "divide-y divide-border overflow-hidden rounded-[8px] border border-border bg-card" : "gap-2")}>
         {breakdown.participants.map((p) => (
           <ParticipantRow
             key={p.personId}
             participant={p}
             returnTo={returnTo}
+            dense={dense}
             inline={inline?.has(p.personId) ?? false}
             onReceive={onReceive}
             onPostpone={onPostpone}
@@ -111,6 +115,7 @@ const tintOf = (name: string) => AVATAR_TINT[[...name].reduce((h, c) => h + c.ch
 function ParticipantRow({
   participant: p,
   returnTo,
+  dense,
   inline,
   onReceive,
   onPostpone,
@@ -118,6 +123,7 @@ function ParticipantRow({
 }: {
   participant: InstallmentParticipant;
   returnTo?: string;
+  dense: boolean;
   inline: boolean;
   onReceive?: (personId: string) => void;
   onPostpone?: (personId: string) => void;
@@ -139,8 +145,96 @@ function ParticipantRow({
   const carriedTotal = p.carried.reduce((t, l) => t + l.remaining, 0);
   const carriedMoved = p.carried.some((l) => viewOf(l)?.status === "postponed");
   const advance = p.advanceHeld ?? 0;
+  // Paid toward the overall balance, no installment chosen — kept apart: it never marks this share received.
+  const general = p.generalCredit ?? 0;
+  const generalNote =
+    firstOpen && general > PAYMENT_EPSILON ? (
+      <span className="text-settle-receivable-text" data-testid={`general-${p.personId}`} title="Recorded in People toward the overall balance, not against an installment — so this share still shows as open. Recording it again would count it twice.">
+        {formatCurrency(general)} already received from {p.personName}, not linked to an installment — it lowers their overall balance.
+      </span>
+    ) : null;
   const receiveOn = inline && pressed?.(p.personId, "collect") === true;
   const postponeOn = inline && pressed?.(p.personId, "postpone") === true;
+
+  if (dense) {
+    // One slim row: who · their share · where it stands · the two People actions. Same facts and the same links as the card.
+    const act = "inline-flex h-7 items-center justify-center gap-1 rounded-[6px] border px-2 text-xs font-semibold whitespace-nowrap outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring";
+    const receiveCls = cn(act, ACTION_RECEIVE, receiveOn && ACTION_ON);
+    const postponeCls = cn(act, ACTION_POSTPONE, postponeOn && ACTION_ON);
+    return (
+      <li className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2" data-testid={`share-row-${p.personId}`}>
+        <span aria-hidden className={cn("grid size-7 shrink-0 place-items-center rounded-full text-[11px] font-bold text-foreground ring-1 ring-black/5", tintOf(p.personName))}>
+          {initials(p.personName)}
+        </span>
+        <div className="flex min-w-0 flex-1 basis-40 flex-col gap-0.5">
+          <span className="flex items-baseline gap-2">
+            <span className="truncate text-[13px] font-semibold text-foreground">{p.personName}</span>
+            <span className="shrink-0 text-[13px] font-semibold text-foreground tabular-nums">{formatCurrency(cur?.share ?? carriedTotal)}</span>
+          </span>
+          <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11.5px] text-muted-foreground">
+            {status && (
+              <span data-testid={`share-${p.personId}`} className="inline-flex items-center gap-1">
+                <span className={cn("inline-flex items-center gap-1 font-semibold", received ? "text-[oklch(0.44_0.13_149)] dark:text-success" : partial ? "text-warning-foreground dark:text-warning" : "text-expense")}>
+                  {received && <Check className="size-3" strokeWidth={2.75} aria-hidden />}
+                  {status}
+                </span>
+                {moved && (
+                  <>
+                    <span aria-hidden> · </span>
+                    <span className={cn("inline-flex items-center gap-1", curView?.status === "lapsed" ? "text-warning-foreground dark:text-warning" : "text-settle-receivable-text")}>
+                      <CalendarClock className="size-3 shrink-0" aria-hidden />
+                      {moved}
+                    </span>
+                  </>
+                )}
+              </span>
+            )}
+            {p.carried.length > 0 && (
+              <span>
+                + {formatCurrency(carriedTotal)} still owed from {p.carried.map((l) => `#${l.sequenceNumber}`).join(", ")}
+                {carriedMoved && <span className="text-settle-receivable-text"> · moved</span>}
+              </span>
+            )}
+            {generalNote}
+            {firstOpen && advance > PAYMENT_EPSILON && (
+              <span className="text-settle-advance-text" data-testid={`advance-${p.personId}`}>
+                Holding {formatCurrency(advance)} advance —{" "}
+                <Link href={peopleApplyAdvanceHref(p.personId, firstOpen.key, returnTo)} aria-label={`Apply ${p.personName}'s ${formatCurrency(advance)} advance in People — no money moves`} className="font-semibold underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                  Apply advance
+                </Link>
+              </span>
+            )}
+          </span>
+        </div>
+        {firstOpen && (
+          <div className="flex shrink-0 gap-1.5" data-testid={`share-actions-${p.personId}`}>
+            {inline && onReceive ? (
+              <button type="button" aria-pressed={receiveOn} aria-label={`Record money received from ${p.personName} here`} onClick={() => onReceive(p.personId)} className={receiveCls}>
+                <HandCoins className="size-3.5" aria-hidden />
+                Record received
+              </button>
+            ) : (
+              <Link href={peopleSettleHref(p.personId, firstOpen.key, returnTo)} aria-label={`Record money received from ${p.personName} in People`} title={`Record money received from ${p.personName} in People`} className={receiveCls}>
+                <HandCoins className="size-3.5" aria-hidden />
+                Record received
+              </Link>
+            )}
+            {inline && onPostpone ? (
+              <button type="button" aria-pressed={postponeOn} aria-label={`Postpone ${p.personName}'s share here`} onClick={() => onPostpone(p.personId)} className={postponeCls}>
+                <CalendarClock className="size-3.5" aria-hidden />
+                Postpone
+              </button>
+            ) : (
+              <Link href={peoplePostponeHref(p.personId, firstOpen.key, returnTo)} aria-label={`Postpone collecting ${p.personName}'s share in People`} title={`Postpone collecting ${p.personName}'s share in People`} className={postponeCls}>
+                <CalendarClock className="size-3.5" aria-hidden />
+                {moved ? "Change" : "Postpone"}
+              </Link>
+            )}
+          </div>
+        )}
+      </li>
+    );
+  }
 
   return (
     <li className="@container rounded-xl border border-border bg-card p-3 shadow-e1">
@@ -178,6 +272,7 @@ function ParticipantRow({
                 )}
               </span>
             )}
+            {generalNote && <span className="text-xs">{generalNote}</span>}
             {firstOpen && advance > PAYMENT_EPSILON && (
               <span className="text-xs text-settle-advance-text" data-testid={`advance-${p.personId}`}>
                 Holding {formatCurrency(advance)} advance from {p.personName} — not applied to this share yet.{" "}

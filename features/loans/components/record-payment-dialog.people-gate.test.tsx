@@ -46,6 +46,7 @@ vi.mock("@tanstack/react-query", () => ({ useQueryClient: () => ({ invalidateQue
 let mockSbiBalance = 10000;
 vi.mock("@/hooks/use-accounts", () => ({ useAccounts: () => ({ data: [{ id: "sbi", name: "SBI", type: "bank", isDefault: true, deletedAt: null, currentBalance: mockSbiBalance }] }) }));
 vi.mock("@/hooks/use-transactions", () => ({ useTransactions: () => ({ data: [] }) }));
+vi.mock("@/hooks/use-people", () => ({ usePeople: () => ({ data: [] }) }));
 // The paying account is never defaulted: a native select stands in for the Radix one so tests choose it explicitly.
 vi.mock("@/components/finance/account-label", () => ({
   AccountSelect: ({ accounts, value, onChange, ariaLabel }: { accounts: { id: string; name: string }[]; value: string; onChange: (id: string) => void; ariaLabel?: string }) => (
@@ -285,21 +286,33 @@ describe("B — AMMA and JOHN haven't paid", () => {
     expect(reimbRecord).not.toHaveBeenCalled();
   });
 
-  it("answering 'Yes' also pays the lender, with the 'already paid' acknowledgement — still no People entry", async () => {
+  it("answering 'Yes' pays the lender AND records each person's receipt in People (lender first), only for what was marked received", async () => {
     const user = userEvent.setup();
     peopleState = { readiness: BOTH_PENDING(), isLoading: false };
     breakdownState = { breakdown: BOTH_PENDING_BREAKDOWN(), isLoading: false };
+    reimbLines = [
+      { personId: "amma", personName: "AMMA", installmentId: "i1", sequenceNumber: 1, dueDate: day(-1), obligationKey: "emi-inst:i1", share: 1000, received: 0, remaining: 1000 },
+      { personId: "john", personName: "JOHN", installmentId: "i1", sequenceNumber: 1, dueDate: day(-1), obligationKey: "emi-inst:i1", share: 1000, received: 0, remaining: 1000 },
+    ];
     renderDialog(emiTarget());
     await user.click(screen.getByRole("radio", { name: "Yes, already paid" }));
     expect(screen.queryByTestId("share-not-paid-warning")).toBeNull();
     await pickAccount(user);
-    await user.click(footer("Pay ₹3,000 to lender"));
-    await waitFor(() => expect(emiRecordPayment).toHaveBeenCalledTimes(1));
+    // Saying "yes" without saying who paid what can't be saved — it would leave People contradicting the answer.
+    expect(footer("Pay ₹3,000 to lender").disabled).toBe(true);
+    await user.click(within(screen.getByRole("radiogroup", { name: "AMMA" })).getByRole("radio", { name: "Received in full" }));
+    await user.click(within(screen.getByRole("radiogroup", { name: "Where is AMMA's money" })).getByRole("radio", { name: "Add to my account" }));
+    await user.click(footer("Pay ₹3,000 to lender · ₹1,000 from people"));
+    await waitFor(() => expect(reimbRecord).toHaveBeenCalledTimes(1));
+    expect(emiRecordPayment).toHaveBeenCalledTimes(1);
+    expect(emiRecordPayment.mock.invocationCallOrder[0]).toBeLessThan(reimbRecord.mock.invocationCallOrder[0]);
     expect(emiRecordPayment.mock.calls[0][2]).toMatchObject({
       note: "Marked: AMMA and JOHN already paid their share of this.",
       peopleGateAcknowledgement: { acknowledgedUnsettledPeople: true, reason: "Marked: AMMA and JOHN already paid their share of this." },
     });
-    expect(reimbRecord).not.toHaveBeenCalled();
+    const [items] = reimbRecord.mock.calls[0];
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ personId: "amma", obligationKey: "emi-inst:i1", amount: 1000, recordedEarlier: false });
   });
 
   it("Loan: answering 'No' forwards the acknowledgement", async () => {
@@ -957,5 +970,60 @@ describe("L — an EMI paid ahead (not due yet) can still be recorded as a past 
     expect(emiRecordPayment.mock.calls[0][2]).toMatchObject({ amount: 3000, targetInstallmentId: "i2", recordedEarlier: { dateKnown: true }, accountId: null });
     // Not due yet → the past-payment date starts on today, never the future due date.
     expect((emiRecordPayment.mock.calls[0][2] as { date: Date }).date.toDateString()).toBe(new Date().toDateString());
+  });
+});
+
+describe("M — who is paying the lender", () => {
+  function pastEmiTarget(): PaymentTarget {
+    const installments = [installment("i1", 1, "emi", -90), { ...installment("i2", 2, "emi", -60), amountPaid: 3000 }, installment("i3", 3, "emi", -30), installment("i4", 4, "emi", 20)];
+    return { kind: "emi", row: { emi: { id: "src", name: "Home EMI", installmentCount: 4 }, installments, nextInstallment: installments[0], remainingBalance: 9000 } as never };
+  }
+  it("'<person> paid directly': recorded as already paid — no account, the payer named in the note, the payment dialog says so", async () => {
+    const user = userEvent.setup();
+    breakdownState = { breakdown: breakdownOf([{ id: "sanju", name: "SANJU", current: line("emi-inst:i1", 1, 1000, 0) }]), isLoading: false };
+    reimbLines = [];
+    renderDialog(emiTarget());
+    await user.click(screen.getByRole("radio", { name: "SANJU paid directly" }));
+    expect(screen.getByTestId("payer-hint").textContent).toContain("No money leaves your accounts");
+    await user.click(footer(/Save payment made by SANJU of ₹3,000/));
+    await waitFor(() => expect(emiRecordPayment).toHaveBeenCalledTimes(1));
+    const call = emiRecordPayment.mock.calls[0][2] as { accountId: unknown; recordedEarlier: unknown; note: string; enforceFunds: boolean };
+    expect(call.accountId).toBeNull();
+    expect(call.recordedEarlier).toMatchObject({ dateKnown: true });
+    expect(call.note).toContain("Paid directly by SANJU");
+    expect(call.enforceFunds).toBe(false);
+  });
+
+  it("'I'm paying' is the default and stays a normal account payment; switching back after choosing the other payer restores it", async () => {
+    const user = userEvent.setup();
+    breakdownState = { breakdown: breakdownOf([{ id: "sanju", name: "SANJU", current: line("emi-inst:i1", 1, 1000, 1000) }]), isLoading: false };
+    renderDialog(emiTarget());
+    expect(screen.getByRole("radio", { name: "I'm paying" }).getAttribute("aria-checked")).toBe("true");
+    await user.click(screen.getByRole("radio", { name: "SANJU paid directly" }));
+    expect(screen.getByRole("radio", { name: "SANJU paid directly" }).getAttribute("aria-checked")).toBe("true");
+    await user.click(screen.getByRole("radio", { name: "I'm paying" }));
+    await pickAccount(user);
+    await user.click(footer("Pay ₹3,000 to lender"));
+    await waitFor(() => expect(emiRecordPayment).toHaveBeenCalledTimes(1));
+    expect(emiRecordPayment.mock.calls[0][2]).toMatchObject({ accountId: "sbi", recordedEarlier: null, enforceFunds: true });
+  });
+
+  it("Pay several: each installment has its own payer — mine debit the account once, the other is recorded as paid with no account", async () => {
+    const user = userEvent.setup();
+    emiRecordPayment.mockImplementation(async () => ({ alreadyRecorded: false, applied: 0, allocationType: "regularEmi" }));
+    renderDialog(pastEmiTarget());
+    await user.click(screen.getByRole("radio", { name: /pay several/i }));
+    await user.click(screen.getByRole("button", { name: /select all unpaid \(2\)/i }));
+    await user.click(footer("Review 2 EMIs · ₹6,000"));
+    await user.click(within(screen.getByRole("radiogroup", { name: "Who paid #3" })).getByRole("radio", { name: "Paid by someone else" }));
+    await pickAccount(user);
+    expect(screen.getByTestId("payment-source-after").textContent).toBe("₹7,000"); // only the ₹3,000 I pay leaves SBI
+    await user.click(footer("Record 2 EMIs · ₹3,000 from my account"));
+    await waitFor(() => expect(emiRecordPayment).toHaveBeenCalledTimes(2));
+    const [mine, other] = emiRecordPayment.mock.calls.map((c) => c[2] as Record<string, unknown>);
+    expect(mine).toMatchObject({ targetInstallmentId: "i1", accountId: "sbi", enforceFunds: true, recordedEarlier: null });
+    expect(other).toMatchObject({ targetInstallmentId: "i3", accountId: null, enforceFunds: false, recordedEarlier: { dateKnown: true } });
+    expect(other.note).toContain("Paid directly by someone else");
+    expect(mine.idempotencyKey).not.toBe(other.idempotencyKey);
   });
 });

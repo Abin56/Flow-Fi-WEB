@@ -42,6 +42,7 @@ export function PaymentSheet({
   refreshing = false,
   operation = null,
   pending = [],
+  summary,
   cancelLabel = "Cancel",
 }: {
   open: boolean;
@@ -73,40 +74,50 @@ export function PaymentSheet({
   operation?: OperationSnapshot | null;
   /** What is still missing before the primary action works — shown as "Still needed" chips. */
   pending?: string[];
+  /** Shown beside Cancel / Confirm once nothing is missing — what pressing Confirm will do, in one line. */
+  summary?: React.ReactNode;
   cancelLabel?: string;
 }) {
   const busy = loading || success;
   // Opened from a Loan/EMI popup: a compact layer beside it instead of the full-width top sheet. Same header, body and footer.
   const inStack = useInStack();
+  // Over the Loan & EMI workspace it is a compact light popup in the workspace's own style; the top sheet keeps its dark header.
+  const muted = inStack ? "text-muted-foreground" : "text-hero-foreground/68";
   const header = (
     <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
       <div className="flex min-w-0 flex-1 basis-64 items-center gap-3">
-        <SheetAvatar compact>
-          <Icon className="size-[18px]" strokeWidth={2} />
-        </SheetAvatar>
+        {inStack ? (
+          <span aria-hidden className="grid size-9 shrink-0 place-items-center rounded-[10px] bg-primary text-primary-foreground ring-1 ring-primary-accent-text/40 shadow-e1">
+            <Icon className="size-[18px]" strokeWidth={2} />
+          </span>
+        ) : (
+          <SheetAvatar compact>
+            <Icon className="size-[18px]" strokeWidth={2} />
+          </SheetAvatar>
+        )}
         <div className="min-w-0">
-          <p className="text-[10.5px] font-semibold tracking-[0.1em] whitespace-nowrap text-hero-foreground/68 uppercase">{eyebrow}</p>
+          <p className={cn("text-[10.5px] font-semibold tracking-[0.1em] whitespace-nowrap uppercase", muted)}>{eyebrow}</p>
           <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1">
-            <DialogTitle className="max-w-full truncate font-heading text-[15px] leading-tight font-bold tracking-tight text-hero-foreground">{title}</DialogTitle>
+            <DialogTitle className={cn("max-w-full truncate font-heading text-[15px] leading-tight font-bold tracking-tight", inStack ? "text-foreground" : "text-hero-foreground")}>{title}</DialogTitle>
             {chip && (
               <span
                 className={cn(
-                  "shrink-0 rounded-full bg-card px-2 py-0.5 text-[11px] font-semibold",
-                  chip.tone === "danger" ? "text-[oklch(0.5_0.19_25)]" : "text-foreground/80",
+                  "shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold",
+                  inStack ? (chip.tone === "danger" ? "bg-expense/10 text-expense" : "bg-secondary text-foreground/80 ring-1 ring-border") : cn("bg-card", chip.tone === "danger" ? "text-[oklch(0.5_0.19_25)]" : "text-foreground/80"),
                 )}
               >
                 {chip.label}
               </span>
             )}
           </div>
-          <DialogDescription className={description ? "mt-0.5 truncate text-[12px] text-hero-foreground/70" : "sr-only"}>{description ?? title}</DialogDescription>
+          <DialogDescription className={description ? cn("mt-0.5 truncate text-[12px]", inStack ? "text-muted-foreground" : "text-hero-foreground/70") : "sr-only"}>{description ?? title}</DialogDescription>
         </div>
       </div>
       {(hero != null || facts != null) && (
         <section aria-label="Payment summary" className="flex min-w-0 flex-col items-start gap-1 sm:items-end">
           {hero != null && (
             <div className="flex flex-col sm:items-end">
-              {heroLabel && <span className="text-[10.5px] font-semibold tracking-[0.1em] whitespace-nowrap text-hero-foreground/68 uppercase">{heroLabel}</span>}
+              {heroLabel && <span className={cn("text-[10.5px] font-semibold tracking-[0.1em] whitespace-nowrap uppercase", muted)}>{heroLabel}</span>}
               {hero}
             </div>
           )}
@@ -125,7 +136,7 @@ export function PaymentSheet({
               <span className="grid size-5 shrink-0 place-items-center rounded-full bg-success text-success-foreground">
                 <Check className="size-3" strokeWidth={3} />
               </span>
-              <span className="truncate">Ready</span>
+              <span className="truncate">{summary ?? "Ready"}</span>
             </p>
           )
         ) : (
@@ -190,7 +201,7 @@ export function PaymentSheet({
 
   if (inStack) {
     return (
-      <StackLayer tone="hero" size="wide" instant={instant} toolbar={toolbar} open={open} onRequestClose={() => onOpenChange(false)} closeDisabled={busy} header={header} footer={footerWithOperation} onKeyDown={onKeyDown}>
+      <StackLayer tone="light" size="popup" instant={instant} toolbar={toolbar} open={open} onRequestClose={() => onOpenChange(false)} closeDisabled={busy} header={header} footer={footerWithOperation} onKeyDown={onKeyDown}>
         {body}
       </StackLayer>
     );

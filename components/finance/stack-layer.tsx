@@ -14,7 +14,8 @@
  * else (People, the Add flow, …) keeps its own look. The shells only draw — nothing here writes any data.
  */
 
-import { createContext, useContext, useEffect, useSyncExternalStore, type KeyboardEvent, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useId, useLayoutEffect, useMemo, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { ChevronLeft, X } from "lucide-react";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
@@ -49,6 +50,85 @@ function useRegister(open: boolean, kind: "base" | "layer") {
       emit();
     };
   }, [open, kind]);
+}
+
+// ---- an inline host: layers drawn inside the page instead of over it --------------------------------------------------
+
+/** Which layer holds the inline slot right now (one at a time). */
+function createSlotStore() {
+  let owner: string | null = null;
+  const listeners = new Set<() => void>();
+  const emit = () => listeners.forEach((l) => l());
+  return {
+    get: () => owner,
+    subscribe: (l: () => void) => {
+      listeners.add(l);
+      return () => void listeners.delete(l);
+    },
+    claim: (id: string) => {
+      if (owner == null) {
+        owner = id;
+        emit();
+      }
+    },
+    release: (id: string) => {
+      if (owner === id) {
+        owner = null;
+        emit();
+      }
+    },
+  };
+}
+type SlotStore = ReturnType<typeof createSlotStore>;
+
+interface InlineHostValue {
+  el: HTMLElement | null;
+  setEl: (el: HTMLElement | null) => void;
+  store: SlotStore;
+}
+const InlineHostCtx = createContext<InlineHostValue | null>(null);
+
+/**
+ * Everything inside may draw its action layers (Record Payment, Past payments, a payment's details …) INTO the page's
+ * `InlineHostSlot` instead of opening a window over it. The shells are the same — only where they are drawn changes.
+ * One layer owns the slot at a time; a layer that opens while another holds it (a confirm) falls back to a window.
+ */
+export function InlineHostProvider({ children }: { children: ReactNode }) {
+  const [el, setEl] = useState<HTMLElement | null>(null);
+  const [store] = useState(createSlotStore);
+  const value = useMemo<InlineHostValue>(() => ({ el, setEl, store }), [el, store]);
+  return <InlineHostCtx.Provider value={value}>{children}</InlineHostCtx.Provider>;
+}
+
+/** Where inline layers are drawn. Hidden while empty; the caller sizes and positions it. */
+export function InlineHostSlot({ className }: { className?: string }) {
+  const host = useContext(InlineHostCtx);
+  return <div ref={host?.setEl} data-inline-host="" className={cn("empty:hidden", className)} />;
+}
+
+/** Marks a dedicated page as the base the layers sit on, so they read "Back" and return to it. */
+export function useStackBase(open: boolean) {
+  useRegister(open, "base");
+}
+
+type SlotState = "off" | "pending" | "inline" | "modal";
+const noSubscribe = () => () => undefined;
+
+function useInlineSlot(open: boolean): { state: SlotState; el: HTMLElement | null } {
+  const host = useContext(InlineHostCtx);
+  const id = useId();
+  const el = host?.el ?? null;
+  const store = host?.store ?? null;
+  const owner = useSyncExternalStore(store ? store.subscribe : noSubscribe, () => store?.get() ?? null, () => null);
+  useLayoutEffect(() => {
+    if (open && el && store && owner == null) store.claim(id);
+  }, [open, el, store, owner, id]);
+  useLayoutEffect(() => {
+    if (!open || !store) return;
+    return () => store.release(id);
+  }, [open, store, id]);
+  if (!open || !host || !el) return { state: "off", el: null };
+  return { state: owner === id ? "inline" : owner == null ? "pending" : "modal", el };
 }
 
 const InStack = createContext(false);
@@ -162,7 +242,8 @@ export function StackLayer({
   closeDisabled?: boolean;
   closeLabel?: string;
   tone?: "hero" | "light";
-  size?: "wide" | "compact";
+  /** "popup": the compact payment popup — a centred card (~50rem) sized to its content, over a dimmed workspace. */
+  size?: "wide" | "compact" | "popup";
   /** Skip the enter animation — a sibling layer of the same flow just closed, so this one replaces it in place. */
   instant?: boolean;
   /** Must contain the layer's `DialogTitle`. */
@@ -178,6 +259,17 @@ export function StackLayer({
   const { base } = useStackState();
   const hero = tone === "hero";
   const wide = size === "wide";
+  const popup = size === "popup";
+  const slot = useInlineSlot(open);
+  if (slot.state === "pending") return null;
+  if (slot.state === "inline" && slot.el) {
+    return createPortal(
+      <InlineSurface base={base} closeLabel={closeLabel} closeDisabled={closeDisabled} onRequestClose={onRequestClose} header={header} toolbar={toolbar} footer={footer} onKeyDown={onKeyDown} testId={testId} bodyClassName={bodyClassName}>
+        {children}
+      </InlineSurface>,
+      slot.el,
+    );
+  }
   return (
     <Dialog open={open} onOpenChange={(next) => !next && !closeDisabled && onRequestClose()}>
       <DialogContent
@@ -186,7 +278,10 @@ export function StackLayer({
         data-stack-layer=""
         data-size={size}
         // The base stays visible behind (dimmed by its own step-back); a clear scrim only on a phone, where the layer covers most of it.
-        overlayClassName={cn("bg-transparent backdrop-blur-none dark:bg-transparent max-sm:bg-black/30 max-sm:dark:bg-black/50", instant && "data-open:animate-none")}
+        overlayClassName={cn(
+          popup ? "bg-black/35 backdrop-blur-[2px] dark:bg-black/60" : "bg-transparent backdrop-blur-none dark:bg-transparent max-sm:bg-black/30 max-sm:dark:bg-black/50",
+          instant && "data-open:animate-none",
+        )}
         onKeyDown={onKeyDown}
         onEscapeKeyDown={blurFieldOnEscape}
         onInteractOutside={(e) => e.preventDefault()}
@@ -197,10 +292,14 @@ export function StackLayer({
           "top-auto bottom-0 left-0 w-full max-w-none translate-x-0 translate-y-0 rounded-t-[20px] rounded-b-none max-h-[92dvh] max-sm:data-open:slide-in-from-bottom-8 max-sm:data-closed:slide-out-to-bottom-8",
           wide && "max-sm:h-[92dvh]",
           // Tablet and up, always centred: a wide layer is the base window's own footprint, a compact one a card over it.
-          "sm:top-1/2 sm:left-1/2 sm:bottom-auto sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-[18px] sm:data-open:slide-in-from-right-6 sm:data-closed:slide-out-to-right-6",
-          wide
-            ? "sm:h-[min(46rem,calc(100dvh-1.5rem))] sm:max-h-none sm:w-[calc(100%-1rem)] sm:max-w-[62rem]"
-            : "sm:w-[36rem] sm:max-w-[calc(100vw-2rem)] sm:max-h-[calc(100dvh-1.5rem)]",
+          "sm:top-1/2 sm:left-1/2 sm:bottom-auto sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-[18px]",
+          // The popup eases up and in (scale + fade) and out again; the others slide in beside the window.
+          popup ? "sm:rounded-[14px] sm:data-open:zoom-in-95 sm:data-open:slide-in-from-bottom-2 sm:data-closed:zoom-out-95 sm:duration-200" : "sm:data-open:slide-in-from-right-6 sm:data-closed:slide-out-to-right-6",
+          popup
+            ? "sm:w-[50rem] sm:max-w-[calc(100vw-2rem)] sm:max-h-[min(46rem,calc(100dvh-2rem))]"
+            : wide
+              ? "sm:h-[min(46rem,calc(100dvh-1.5rem))] sm:max-h-none sm:w-[calc(100%-1rem)] sm:max-w-[62rem]"
+              : "sm:w-[36rem] sm:max-w-[calc(100vw-2rem)] sm:max-h-[calc(100dvh-1.5rem)]",
           instant && "data-open:animate-none sm:data-open:animate-none",
         )}
       >
@@ -242,6 +341,76 @@ export function StackLayer({
         </div>
         {footer && <div className="shrink-0 border-t border-border bg-card pb-[env(safe-area-inset-bottom)]">{footer}</div>}
       </DialogContent>
+    </Dialog>
+  );
+}
+
+/** A layer drawn inside the page: the same header, toolbar, scrolling body and footer, filling the host (light surface, matching the workspace). */
+function InlineSurface({
+  base,
+  closeLabel,
+  closeDisabled,
+  onRequestClose,
+  header,
+  toolbar,
+  footer,
+  children,
+  onKeyDown,
+  testId,
+  bodyClassName,
+}: {
+  base: boolean;
+  closeLabel: string;
+  closeDisabled: boolean;
+  onRequestClose: () => void;
+  header: ReactNode;
+  toolbar?: ReactNode;
+  footer?: ReactNode;
+  children: ReactNode;
+  onKeyDown?: (e: KeyboardEvent<HTMLDivElement>) => void;
+  testId?: string;
+  bodyClassName?: string;
+}) {
+  return (
+    <Dialog open>
+      <section
+        data-testid={testId}
+        data-stack-layer=""
+        data-inline-layer=""
+        onKeyDown={(e) => {
+          // Keys from a window opened over this one (a confirm) bubble through the React tree — only our own count.
+          if (!e.currentTarget.contains(e.target as Node)) return;
+          onKeyDown?.(e as unknown as KeyboardEvent<HTMLDivElement>);
+          if (e.key === "Escape" && !closeDisabled && !e.defaultPrevented) {
+            const active = document.activeElement;
+            if (active instanceof HTMLElement && active.matches('input:not([type="checkbox"]):not([type="radio"]), textarea')) setTimeout(() => active.blur(), 0);
+            else onRequestClose();
+          }
+        }}
+        className="flex h-full min-h-0 flex-col overflow-hidden bg-card text-foreground duration-200 animate-in fade-in-0 slide-in-from-right-3 motion-reduce:animate-none"
+      >
+        <header className="relative shrink-0 border-b border-border bg-gradient-to-b from-secondary/70 to-card">
+          <div className="relative flex items-start gap-2 px-3 py-2.5">
+            {base && (
+              <button type="button" aria-label="Back" onClick={onRequestClose} disabled={closeDisabled} className="mt-0.5 inline-flex h-8 shrink-0 items-center gap-0.5 rounded-[6px] pr-2.5 pl-1.5 text-xs font-semibold text-foreground outline-none transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40">
+                <ChevronLeft className="size-4" strokeWidth={2} />
+                Back
+              </button>
+            )}
+            <div className="min-w-0 flex-1">{header}</div>
+            {!base && (
+              <button type="button" aria-label={closeLabel} onClick={onRequestClose} disabled={closeDisabled} className={cn(CLOSE_BUTTON, "text-muted-foreground hover:bg-secondary hover:text-foreground")}>
+                <X className="size-4" strokeWidth={1.75} />
+              </button>
+            )}
+          </div>
+        </header>
+        {toolbar && <div className="shrink-0 border-b border-border bg-card px-3 py-2">{toolbar}</div>}
+        <div data-testid="layer-body" className={cn("@container min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain bg-card", bodyClassName)}>
+          {children}
+        </div>
+        {footer && <div className="shrink-0 border-t border-border bg-card">{footer}</div>}
+      </section>
     </Dialog>
   );
 }

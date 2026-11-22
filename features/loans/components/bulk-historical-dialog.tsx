@@ -8,7 +8,8 @@ import { PaymentSourceSummary, isUnderfunded } from "@/components/finance/paymen
 import { DateInput } from "@/components/forms/date-input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useEmiActions } from "@/features/emi/hooks/use-emi-data";
-import { Field, LOAN_EMI_INPUT, Money, formatDueDate } from "@/features/loans/components/loan-emi-ui";
+import { Money, formatDueDate } from "@/features/loans/components/loan-emi-ui";
+import { PAY_INPUT, PayField } from "@/features/loans/components/pay-ui";
 import { PaymentSheet } from "@/features/loans/components/payment-sheet";
 import { DERIVED_QUERY_PREFIXES, type PaymentTarget } from "@/features/loans/components/record-payment-dialog";
 import { HistoricalPeopleReconcile, useHistoricalReconcile } from "@/features/loans/components/historical-people-reconcile";
@@ -24,6 +25,8 @@ import {
   isBulkDone,
   planBulkRecordedEarlier,
   runBulkRecordedEarlier,
+  splitByPayer,
+  type BulkPayer,
   type BulkDateMode,
   type BulkDraftItem,
   type BulkItem,
@@ -128,6 +131,14 @@ export function BulkHistoricalDialog({
   const plan = planBulkRecordedEarlier({ candidates, draft: draftItems, batchId });
   const selectedTotal = picked.reduce((t, c) => t + c.remaining, 0);
   const reviewTotal = plan.ok ? plan.total : null;
+  // Pay several: who paid the lender for EACH installment — me from an account (default), or someone else directly (recorded as
+  // already paid: no account moves). Fixed once recording starts; every installment keeps its own idempotency key.
+  const [paidBy, setPaidBy] = useState<Record<string, BulkPayer>>({});
+  const payerOf = (id: string): BulkPayer => (fromAccount && !lent && paidBy[id] === "other" ? "other" : "me");
+  const payerSplit = plan.ok ? splitByPayer(plan.items, payerOf) : null;
+  const otherCount = payerSplit?.other.length ?? 0;
+  const mineCount = payerSplit?.mine.length ?? 0;
+  const mineTotal = payerSplit ? payerSplit.mineTotal : null;
   const started = Object.keys(results).length > 0;
   const failed = pending.filter((c) => results[c.installment.id]?.status === "failed");
   const doneCount = picked.filter((c) => isBulkDone(results[c.installment.id])).length;
@@ -157,9 +168,9 @@ export function BulkHistoricalDialog({
   const needsAccount = loanRow != null || (emiRow != null && emiRow.emi.linkedCreditCardId == null);
   const account = accounts.find((a) => a.id === accountId) ?? null;
   // Only the installments still to be written count (a retry has already recorded the rest).
-  const underfunded = fromAccount && !lent && needsAccount && isUnderfunded(account, reviewTotal);
+  const underfunded = fromAccount && !lent && needsAccount && mineCount > 0 && isUnderfunded(account, mineTotal);
   // The account must be chosen when it moves (pay now) — or, for a Loan paid earlier, anchors the record. An EMI paid earlier posts nothing.
-  const accountRequired = fromAccount ? needsAccount : loanRow != null;
+  const accountRequired = fromAccount ? needsAccount && (loanRow != null || mineCount > 0) : loanRow != null;
   const plural = (n: number) => `${n} ${unit}${n === 1 ? "" : "s"}`;
   // Past payments: the date answer is complete (a chosen mode; "one date" needs that date).
   const datesReady = dateMode != null && !(dateMode === "same" && sameDate === "");
@@ -189,8 +200,11 @@ export function BulkHistoricalDialog({
   const setField = (id: string, field: "amount" | "date", value: string) => setDraft((d) => ({ ...d, [id]: { amount: d[id]?.amount ?? "", date: d[id]?.date ?? "", [field]: value } }));
 
   async function recordOne(item: BulkItem): Promise<{ alreadyRecorded: boolean }> {
-    const recordedEarlier = fromAccount ? null : { dateKnown: item.dateKnown };
-    const peopleGateAcknowledgement = fromAccount
+    // From my account only for the installments I pay; one someone else paid directly is the plain recorded-earlier write.
+    const mine = fromAccount && payerOf(item.installment.id) === "me";
+    const recordedEarlier = mine ? null : { dateKnown: item.dateKnown };
+    const note = fromAccount && !mine ? "Paid directly by someone else — no account of mine moved" : undefined;
+    const peopleGateAcknowledgement = mine
       ? { acknowledgedUnsettledPeople: true as const, reason: `Bulk payment from my account — people's shares stay owed` }
       : RECORDED_EARLIER_PEOPLE_ACK;
     if (loanRow) {
@@ -202,7 +216,8 @@ export function BulkHistoricalDialog({
           date: item.date,
           idempotencyKey: item.idempotencyKey,
           includeUpcomingInstallments: true,
-          enforceFunds: fromAccount && !lent,
+          enforceFunds: mine && !lent,
+          note,
           peopleGateAcknowledgement,
           recordedEarlier,
           onlyInstallmentId: item.installment.id,
@@ -214,11 +229,12 @@ export function BulkHistoricalDialog({
     if (!emiRow || !emiActions) throw new Error("Not signed in");
     return emiActions.recordPayment(emiRow.emi, emiRow.installments, {
       amount: item.amount,
-      accountId: fromAccount && needsAccount ? accountId : null,
-      enforceFunds: fromAccount && needsAccount && !lent,
+      accountId: mine && needsAccount ? accountId : null,
+      enforceFunds: mine && needsAccount && !lent,
       idempotencyKey: item.idempotencyKey,
       targetInstallmentId: item.installment.id,
       date: item.date,
+      note,
       peopleGateAcknowledgement,
       recordedEarlier,
       onlyTargetInstallment: true,
@@ -295,7 +311,9 @@ export function BulkHistoricalDialog({
               ? `Retry ${failed.length} failed`
               : peopleFailed > 0
                 ? `Retry ${peopleFailed} people's payment${peopleFailed === 1 ? "" : "s"}`
-                : `${fromAccount ? (lent ? "Receive" : "Pay") : "Record"} ${plural(picked.length)}${reviewTotal != null ? ` · ${formatCurrency(reviewTotal)}` : ""}${reconcileTotal > 0.005 ? ` · ${formatCurrency(reconcileTotal)} from people` : ""}`;
+                : fromAccount && !lent && otherCount > 0
+                  ? `Record ${plural(picked.length)}${mineCount > 0 && mineTotal != null ? ` · ${formatCurrency(mineTotal)} from my account` : " as paid by someone else"}`
+                  : `${fromAccount ? (lent ? "Receive" : "Pay") : "Record"} ${plural(picked.length)}${reviewTotal != null ? ` · ${formatCurrency(reviewTotal)}` : ""}${reconcileTotal > 0.005 ? ` · ${formatCurrency(reconcileTotal)} from people` : ""}`;
   const confirmDisabled =
     step === "select"
       ? picked.length === 0 || history.isLoading
@@ -406,14 +424,14 @@ export function BulkHistoricalDialog({
               </div>
             </div>
             {dateMode === "same" && (
-              <Field label={lent ? "Date received" : "Date paid"}>
-                <DateInput className={LOAN_EMI_INPUT} aria-label="One date for all" value={sameDate} max={todayInput()} onChange={(e) => setSameDate(e.target.value)} />
-              </Field>
+              <PayField label={lent ? "Date received" : "Date paid"}>
+                <DateInput className={PAY_INPUT} aria-label="One date for all" value={sameDate} max={todayInput()} onChange={(e) => setSameDate(e.target.value)} />
+              </PayField>
             )}
             {loanRow && (
-              <Field label={lent ? "Received into · for your records" : "Paid from · for your records"} hint="Its balance won't change.">
-                <AccountSelect className={LOAN_EMI_INPUT} accounts={accounts} value={accountId} onChange={setAccountId} ariaLabel="Account (record only)" />
-              </Field>
+              <PayField label={lent ? "Received into · for your records" : "Paid from · for your records"} hint="Its balance won't change.">
+                <AccountSelect className={PAY_INPUT} accounts={accounts} value={accountId} onChange={setAccountId} ariaLabel="Account (record only)" />
+              </PayField>
             )}
           </div>
           <div className="flex flex-col gap-3">
@@ -431,7 +449,7 @@ export function BulkHistoricalDialog({
                       <input
                         type="number"
                         inputMode="decimal"
-                        className={cn(LOAN_EMI_INPUT, "h-9")}
+                        className={PAY_INPUT}
                         aria-label={`Amount for #${c.installment.sequenceNumber}`}
                         placeholder={String(c.remaining)}
                         value={draft[id]?.amount ?? ""}
@@ -439,7 +457,7 @@ export function BulkHistoricalDialog({
                       />
                       {dateMode === "each" && (
                         <DateInput
-                          className={cn(LOAN_EMI_INPUT, "h-9")}
+                          className={PAY_INPUT}
                           aria-label={`Date paid for #${c.installment.sequenceNumber}`}
                           value={draft[id]?.date ?? ""}
                           max={todayInput()}
@@ -464,7 +482,7 @@ export function BulkHistoricalDialog({
       {step === "people" && !fromAccount && (
         <section aria-label="People's shares" className="flex flex-col gap-2">
           <p className="text-xs text-muted-foreground">
-            These are your past payments to the lender. They don&apos;t mark anyone as having paid you — tick only what a person really paid you back; the rest stays pending in People.
+            Mark what each person has paid you back. The rest stays owed in People.
           </p>
           <HistoricalPeopleReconcile state={reconcile} accounts={accounts} showInstallment locked={false} />
         </section>
@@ -560,7 +578,7 @@ export function BulkHistoricalDialog({
                       <input
                         type="number"
                         inputMode="decimal"
-                        className={cn(LOAN_EMI_INPUT, "h-9")}
+                        className={PAY_INPUT}
                         aria-label={`Amount for #${c.installment.sequenceNumber}`}
                         placeholder={String(c.remaining)}
                         value={draft[id]?.amount ?? ""}
@@ -568,6 +586,26 @@ export function BulkHistoricalDialog({
                         onChange={(e) => setField(id, "amount", e.target.value)}
                       />
                     </div>
+                    {!lent && (
+                      <div role="radiogroup" aria-label={`Who paid #${c.installment.sequenceNumber}`} className="flex w-fit gap-0.5 rounded-[8px] border border-border bg-secondary p-0.5">
+                        {([["me", "I pay"], ["other", "Paid by someone else"]] as const).map(([value, label]) => (
+                          <button
+                            key={value}
+                            type="button"
+                            role="radio"
+                            aria-checked={payerOf(id) === value}
+                            disabled={started}
+                            onClick={() => setPaidBy((p) => ({ ...p, [id]: value }))}
+                            className={cn(
+                              "h-6 rounded-[6px] px-2 text-[11px] font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60",
+                              payerOf(id) === value ? "bg-card text-foreground shadow-e1 ring-1 ring-primary-accent-text" : "text-muted-foreground hover:text-foreground",
+                            )}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                     {error && <span className="text-xs text-expense">{error}</span>}
                     {result?.status === "failed" && <span className="text-xs text-expense">{result.error}</span>}
                   </li>
@@ -581,11 +619,11 @@ export function BulkHistoricalDialog({
               </p>
             )}
           </div>
-          <TotalCard label={lent ? "You receive" : "You pay"} amount={reviewTotal} caption={plural(picked.length)}>
-            {needsAccount && (
-              <Field label={lent ? "Received into" : "Paid from"}>
+          <TotalCard label={lent ? "You receive" : "You pay"} amount={lent ? reviewTotal : mineTotal} caption={`${plural(picked.length)}${otherCount > 0 ? ` · ${otherCount} paid by someone else` : ""}`}>
+            {needsAccount && accountRequired && (
+              <PayField label={lent ? "Received into" : mineCount === 0 ? "Record under account · no balance change" : "Paid from"}>
                 <AccountSelect
-                  className={LOAN_EMI_INPUT}
+                  className={PAY_INPUT}
                   accounts={accounts}
                   value={accountId}
                   onChange={(id) => !started && setAccountId(id)}
@@ -593,19 +631,21 @@ export function BulkHistoricalDialog({
                   showBalance={!lent}
                   ariaLabel={lent ? "Received into account" : "Paid from account"}
                 />
-              </Field>
+              </PayField>
             )}
-            <Field label="Payment date">
-              <DateInput className={LOAN_EMI_INPUT} aria-label="Payment date" value={payDate} max={todayInput()} disabled={started} onChange={(e) => setPayDate(e.target.value)} />
-            </Field>
+            <PayField label="Payment date">
+              <DateInput className={PAY_INPUT} aria-label="Payment date" value={payDate} max={todayInput()} disabled={started} onChange={(e) => setPayDate(e.target.value)} />
+            </PayField>
             <div className="flex flex-col gap-1.5 border-t border-border pt-3" data-testid="bulk-balance-preview">
-              {needsAccount && account && reviewTotal != null ? (
+              {!lent && mineCount === 0 && otherCount > 0 ? (
+                <span className="text-muted-foreground">No money leaves your accounts — these are recorded as paid by someone else.</span>
+              ) : needsAccount && account && reviewTotal != null ? (
                 lent ? (
                   <span className="text-muted-foreground">
                     {formatCurrency(reviewTotal)} will be added to {account.name}.
                   </span>
                 ) : (
-                  <PaymentSourceSummary account={account} amount={reviewTotal} paymentLabel={`${plural(picked.length)} payment`} className="border-0 bg-transparent p-0" />
+                  <PaymentSourceSummary account={account} amount={mineTotal} paymentLabel={`${plural(picked.length)} payment`} className="border-0 bg-transparent p-0" />
                 )
               ) : (
                 !needsAccount && <span className="text-muted-foreground">Charged to the linked card.</span>

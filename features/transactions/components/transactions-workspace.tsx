@@ -1,6 +1,7 @@
 "use client";
 
 import { AccountLabel, AccountMark, AccountOptions } from "@/components/finance/account-label";
+import { AccountChip } from "@/components/finance/account-chip";
 import {
   ArrowDownLeft,
   ArrowLeftRight,
@@ -1401,9 +1402,9 @@ const MONTH_BANDS = [
 const monthBand = (d: Date) => MONTH_BANDS[monthKeyOf(d) % MONTH_BANDS.length];
 
 const TH =
-  "sticky top-0 z-[2] border-b border-b-border-strong/70 bg-secondary/90 px-2 py-1.5 text-left text-[10.5px] font-semibold tracking-[0.06em] whitespace-nowrap text-foreground/65 uppercase backdrop-blur sm:px-3";
+  "sticky top-0 z-[2] border-b border-r border-b-border-strong/70 border-r-border-strong/50 bg-secondary/90 px-2 py-1.5 text-left text-[10.5px] font-semibold tracking-[0.06em] whitespace-nowrap text-foreground/65 uppercase backdrop-blur last:border-r-0 sm:px-3";
 /** Spreadsheet density: one line per row, ~34px tall. */
-const TD = "border-b border-b-border-strong/30 px-2 py-[5px] align-middle sm:px-2.5";
+const TD = "border-b border-r border-b-border-strong/60 border-r-border-strong/40 px-2 py-[5px] align-middle last:border-r-0 sm:px-2.5";
 const COLS = 7;
 
 function shortDate(d: Date): string {
@@ -1580,19 +1581,20 @@ function Amount({
       )}
       {withLabel && !historical && (
         <span
+          title={status}
           className={cn(
-            "inline-flex items-center gap-0.5 text-[11px] leading-tight whitespace-nowrap",
+            "inline-flex items-center gap-1 text-[11.5px] leading-none font-semibold whitespace-nowrap",
             settled
-              ? "rounded-[4px] border border-success/60 bg-success/12 px-1 font-bold tracking-wide text-success uppercase"
+              ? "text-success"
               : row === "borrowed"
-                ? "rounded-[4px] border border-debt-strong px-1 font-bold text-debt-strong"
+                ? "text-debt-strong"
                 : row === "income"
-                ? "font-medium text-success"
-                : row === "expense"
-                  ? "font-medium text-expense"
-                  : row === "debt" || row === "personCash"
-                    ? cn("font-medium", PURPLE_TEXT)
-                    : "font-medium text-foreground/70",
+                  ? "text-success"
+                  : row === "expense"
+                    ? "text-expense"
+                    : row === "debt" || row === "personCash"
+                      ? PURPLE_TEXT
+                      : "text-foreground/70",
           )}
         >
           <Icon className="size-3" strokeWidth={settled ? 2.75 : 2} aria-hidden />
@@ -1888,8 +1890,7 @@ function LedgerTable({
                       isFiltered={accountFilter === row.account.id}
                       onFilter={() => onFilterAccount(row.account!.id)}
                     >
-                      <AccountMark account={row.account} size={16} />
-                      <span className="truncate text-xs text-foreground/85">{row.account.name}</span>
+                      <AccountChip account={row.account} dense={mate != null} />
                     </AccountBalanceHover>
                   ) : (
                     <p className="flex min-w-0 items-center gap-1.5 truncate text-xs text-foreground/85">
@@ -1897,11 +1898,10 @@ function LedgerTable({
                     </p>
                   )}
                   {mate && (
-                    <p className="flex max-w-[55%] min-w-0 shrink-0 items-center gap-1 text-[11px] text-muted-foreground" title={route ?? undefined}>
+                    <p className="flex min-w-0 items-center gap-1 text-[11px] text-muted-foreground" title={route ?? undefined}>
                       {side === "sent" ? <ArrowRight className="size-3 shrink-0" strokeWidth={2} /> : <ArrowLeft className="size-3 shrink-0" strokeWidth={2} />}
-                      <span className="truncate">
-                        {side === "sent" ? "to" : "from"} <span className="font-medium text-foreground/80">{mateName}</span>
-                      </span>
+                      <span className="sr-only">{side === "sent" ? "to" : "from"}</span>
+                      {mate.account ? <AccountChip account={mate.account} dense /> : <span className="truncate font-medium text-foreground/80">{mateName}</span>}
                     </p>
                   )}
                   </div>
@@ -2027,80 +2027,33 @@ const ROW_TONE: Record<RowTone, { edge: string; rest: string; open: string }> = 
   duplicate: { edge: "border-l-danger", rest: "bg-danger/[0.08] hover:bg-danger/[0.12]", open: "bg-danger/[0.14]" },
 };
 
-/** Type column tag — label + icon + tone, so meaning never rests on colour alone. Transfer legs read as
- *  "Sent"/"Received" in the neutral transfer tone, never as Income/Expense. */
+/** Type column — an icon and a label in the row's tone, no box. Transfer legs read in the neutral transfer tone, never as
+ *  Income/Expense. What happened ("Card bill paid", "Received from person") is the Amount column's job, so the detail is
+ *  only the hover tip here. */
+const TYPE_TEXT = "inline-flex min-w-0 items-center gap-1.5 text-[12.5px] leading-tight font-semibold whitespace-nowrap";
 function TypeTag({ transaction, presentation = getTransactionPresentation(transaction) }: { transaction: Transaction; presentation?: TransactionPresentation }) {
   const { row, label } = presentation;
-  // A second line that just repeats the badge ("Loan repayment" / "Loan repayment") is dropped.
-  const detail = presentation.detail === label ? "" : presentation.detail;
-  if (row === "transfer") {
-    return (
-      <span className="flex min-w-0 items-center gap-1.5">
-        <span className={cn(BADGE, "w-fit border-border-strong bg-secondary text-foreground")}>
-          <ArrowLeftRight className="size-3" strokeWidth={2} aria-hidden />
-          {label}
-        </span>
-        <span className="min-w-0 truncate text-[11px] leading-tight font-medium text-foreground/70" title={detail || undefined}>{detail}</span>
-      </span>
-    );
-  }
-  if (row === "settled") {
-    // Neutral badge, success outline + ✓ — "an obligation was paid", not "money came in".
-    return (
-      <span className="flex min-w-0 items-center gap-1.5">
-        <span className={cn(BADGE, "w-fit border-success/70 bg-card text-foreground")}>
-          <CheckCircle2 className="size-3 text-success" strokeWidth={2.5} aria-hidden />
-          {label}
-        </span>
-        <span className="min-w-0 truncate text-[11px] leading-tight font-medium text-foreground/75" title={detail || undefined}>{detail}</span>
-      </span>
-    );
-  }
-  if (row === "borrowed") {
-    // Deep-violet outlined badge + inbound icon: "money received" — the amount column says it must be repaid.
-    return (
-      <span className="flex min-w-0 items-center gap-1.5">
-        <span className={cn(BADGE, "w-fit border-debt-strong bg-card font-bold text-debt-strong")}>
-          <ArrowDownLeft className="size-3" strokeWidth={2.5} aria-hidden />
-          {label}
-        </span>
-        <span className="min-w-0 truncate text-[11px] leading-tight font-medium text-foreground/75" title={detail || undefined}>{detail}</span>
-      </span>
-    );
-  }
-  if (row === "debt") {
-    return (
-      <span className="flex min-w-0 items-center gap-1.5">
-        <span className={cn(BADGE, "w-fit border-debt-border bg-card text-debt-text")}>
-          <Landmark className="size-3" strokeWidth={2} aria-hidden />
-          {label}
-        </span>
-        <span className="min-w-0 truncate text-[11px] leading-tight font-medium text-foreground/70" title={detail || undefined}>{detail}</span>
-      </span>
-    );
-  }
-  if (row === "personCash") {
-    // Minimal accent only: a quiet outline badge in the same refined violet text used for the person's
-    // name — never the bold, filled "debt" badge (that stays reserved for an actual obligation).
-    return (
-      <span className="flex min-w-0 items-center gap-1.5">
-        <span className={cn(BADGE, "w-fit border-border-strong bg-card text-debt-text")}>
-          <User className="size-3" strokeWidth={2} aria-hidden />
-          {label}
-        </span>
-        <span className="min-w-0 truncate text-[11px] leading-tight font-medium text-foreground/70" title={detail || undefined}>{detail}</span>
-      </span>
-    );
-  }
-  if (row === "income") {
-    return (
-      <span className={cn(BADGE, "border-success/50 bg-success/12 text-success")}>
-        <ArrowDownLeft className="size-3" strokeWidth={2.25} aria-hidden />
-        Income
-      </span>
-    );
-  }
-  return <span className="text-xs font-medium text-foreground/85">{label}</span>;
+  const tip = presentation.detail === label ? undefined : presentation.detail;
+  const [Icon, tone, iconTone]: [typeof ArrowLeftRight, string, string] =
+    row === "transfer"
+      ? [ArrowLeftRight, "text-foreground/80", "text-foreground/60"]
+      : row === "settled"
+        ? [CheckCircle2, "text-foreground", "text-success"]
+        : row === "borrowed"
+          ? [ArrowDownLeft, "text-debt-strong", "text-debt-strong"]
+          : row === "debt"
+            ? [Landmark, PURPLE_TEXT, PURPLE_TEXT]
+            : row === "personCash"
+              ? [User, PURPLE_TEXT, PURPLE_TEXT]
+              : row === "income"
+                ? [ArrowDownLeft, "text-success", "text-success"]
+                : [ArrowUpRight, "text-foreground/85", "text-expense"];
+  return (
+    <span title={tip} className={cn(TYPE_TEXT, tone)}>
+      <Icon className={cn("size-3.5 shrink-0", iconTone)} strokeWidth={2.25} aria-hidden />
+      <span className="truncate">{label}</span>
+    </span>
+  );
 }
 
 /**

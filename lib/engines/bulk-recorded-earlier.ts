@@ -206,3 +206,17 @@ export async function runBulkRecordedEarlier(
   }
   return results;
 }
+
+/** Who paid the lender for one installment of a "Pay several" batch: me (an account is debited) or someone else, directly. */
+export type BulkPayer = "me" | "other";
+
+/**
+ * Splits planned items by payer. `mine` are paid from my account now; `other` were paid by someone else directly and are
+ * recorded as already paid (no account moves). Only `mineTotal` may ever be checked against / taken from an account. Pure.
+ */
+export function splitByPayer(items: readonly BulkItem[], payerOf: (installmentId: string) => BulkPayer): { mine: BulkItem[]; other: BulkItem[]; mineTotal: number } {
+  const mine: BulkItem[] = [];
+  const other: BulkItem[] = [];
+  for (const item of items) (payerOf(item.installment.id) === "other" ? other : mine).push(item);
+  return { mine, other, mineTotal: round2(mine.reduce((t, i) => t + i.amount, 0)) };
+}

@@ -31,6 +31,7 @@ import { BankCombobox, DestructiveDeleteDialog } from "@/components/finance";
 import { deletionImpactRows, deletionWarningRows } from "@/features/accounts/lib/deletion-presentation";
 import { useGuardedSubmit } from "@/components/finance/use-guarded-submit";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { AccountTransactionsManager } from "@/features/accounts/components/account-transactions-manager";
 import { AccountOverviewPanel } from "@/features/accounts/components/account-overview-panel";
 import { useCompactHeader } from "@/components/layout/compact-header";
 import { AccountsCompactBar, AccountsHeader } from "@/features/accounts/components/accounts-header";
@@ -232,6 +233,7 @@ export function AccountsWorkspace() {
   const [editingAccount, setEditingAccount] = useState<Account | null>(null);
   const [deletingAccount, setDeletingAccount] = useState<Account | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [manageTxnsAccountId, setManageTxnsAccountId] = useState<string | null>(null);
   const [deletionImpact, setDeletionImpact] = useState<AccountDeletionImpact | CreditCardDeletionImpact | null>(null);
   const [form, setForm] = useState<AccountFormState>(() => emptyAccountForm(colorValueForAccountColor("blue")));
   const [formError, setFormError] = useState<string | null>(null);
@@ -616,6 +618,7 @@ export function AccountsWorkspace() {
             const raw = (rawAccounts as Account[]).find((a) => a.id === selected.id);
             if (raw) openEdit(raw);
           }}
+          onManageTransactions={() => setManageTxnsAccountId(selected.id)}
           onDelete={() => {
             const raw = (rawAccounts as Account[]).find((a) => a.id === selected.id);
             if (raw) {
@@ -1136,6 +1139,15 @@ export function AccountsWorkspace() {
       </Dialog>
 
       <BalanceBreakdownSheet scope={breakdownScope} onClose={closeBreakdown} />
+
+      {manageTxnsAccountId != null && (
+        <AccountTransactionsManager
+          open
+          kind={cardAccountIds.has(manageTxnsAccountId) ? "card" : "account"}
+          accountId={manageTxnsAccountId}
+          onOpenChange={(open) => !open && setManageTxnsAccountId(null)}
+        />
+      )}
 
       <DestructiveDeleteDialog
         key={deletingAccount?.id ?? "none"}

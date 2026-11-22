@@ -1,15 +1,14 @@
 ﻿"use client";
 
 import { Plus, Search, Trash2, Wallet, X } from "lucide-react";
-import { useSearchParams } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
 import { ClayButton } from "@/components/clay/clay-button";
 import { EmptyState } from "@/components/finance";
 import { Stagger } from "@/components/foundation/animated-container";
 import { ScrollNav } from "@/components/layout/scroll-nav";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmiCard } from "@/features/emi/components/emi-card";
-import { EmiWorkspace } from "@/features/emi/components/emi-workspace";
 import { useEmiActions, useEmiRows } from "@/features/emi/hooks/use-emi-data";
 import { LoanCard, loanDisplayName, loanNextDueAmount } from "@/features/loans/components/loan-card";
 import { LoanEmiAddDialog } from "@/features/loans/components/loan-emi-add-dialog";
@@ -128,6 +127,7 @@ function Metric({ label, divided, className, children }: { label: string; divide
  */
 export function LoanEmiWorkspace() {
   const searchParams = useSearchParams();
+  const router = useRouter();
   const handoffKind = CREATE_HANDOFF[searchParams.get("create") ?? ""] ?? null;
   const { rows: loanRows, isLoading: loansLoading } = useLoanRows();
   const { rows: emiRows, isLoading: emisLoading } = useEmiRows();
@@ -136,8 +136,6 @@ export function LoanEmiWorkspace() {
 
   // A fresh `key` per open so every Add starts from a clean form with a new idempotency key.
   const [add, setAdd] = useState<{ open: boolean; seq: number; kind: AddKind | null }>({ open: handoffKind != null, seq: 0, kind: handoffKind });
-  const [loanOpenRequest, setLoanOpenRequest] = useState<{ id: string; seq: number } | null>(null);
-  const [emiOpenRequest, setEmiOpenRequest] = useState<{ id: string; seq: number } | null>(null);
   const [trashRequest, setTrashRequest] = useState(0);
   const [ownershipTarget, setOwnershipTarget] = useState<OwnershipConfirmTarget | null>(null);
   const loanActions = useLoanActions();
@@ -145,6 +143,18 @@ export function LoanEmiWorkspace() {
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+
+  // Every deep link into a record (`?agreement=<id>[&pay=1&installment=…][&adjust=…]` from People, My Money, Activity,
+  // Balance Control …) now lands on that record's own page, with the rest of the query handed along unchanged.
+  const agreementParam = searchParams.get("agreement");
+  useEffect(() => {
+    if (!agreementParam) return;
+    const rest = new URLSearchParams(searchParams.toString());
+    rest.delete("agreement");
+    const query = rest.toString();
+    router.replace(`/loans/${encodeURIComponent(agreementParam)}/${query ? `?${query}` : ""}`);
+  }, [agreementParam, searchParams, router]);
+  const openDetails = (id: string) => router.push(`/loans/${encodeURIComponent(id)}/`);
 
   function openAdd() {
     setAdd((a) => ({ open: true, seq: a.seq + 1, kind: null }));
@@ -245,6 +255,11 @@ export function LoanEmiWorkspace() {
   const filtersActive = search !== "" || typeFilter !== "all" || statusFilter !== "all";
   const showStatus = summary.closedCount > 0;
   const showTypes = typeOptions.length > 2;
+
+  if (agreementParam) {
+    // Handing over to the record's page — nothing of the list to show meanwhile.
+    return <Skeleton className={cn(LE_RADIUS.panel, "mx-1 h-40")} aria-busy="true" />;
+  }
 
   return (
     <div className="flex min-w-0 flex-col gap-3 px-1">
@@ -423,7 +438,7 @@ export function LoanEmiWorkspace() {
                         key={entry.key}
                         row={row}
                         tag={entry.label}
-                        onClick={() => setLoanOpenRequest((r) => ({ id: entry.id, seq: (r?.seq ?? 0) + 1 }))}
+                        onClick={() => openDetails(entry.id)}
                         onOwnershipAction={(mode) => setOwnershipTarget({ source: "loan", id: entry.id, name: loanDisplayName(row), mode })}
                       />
                     );
@@ -434,7 +449,7 @@ export function LoanEmiWorkspace() {
                       key={entry.key}
                       row={row}
                       tag={entry.label}
-                      onClick={() => setEmiOpenRequest((r) => ({ id: entry.id, seq: (r?.seq ?? 0) + 1 }))}
+                      onClick={() => openDetails(entry.id)}
                       onOwnershipAction={(mode) => setOwnershipTarget({ source: "emi", id: entry.id, name: row.emi.name, mode })}
                     />
                   );
@@ -445,9 +460,8 @@ export function LoanEmiWorkspace() {
         </>
       )}
 
-      {/* The records' own dialogs (details, edit, payments, trash) — list-less, opened from the cards above. */}
-      <LoansWorkspace openRequest={loanOpenRequest} trashRequest={trashRequest} />
-      <EmiWorkspace openRequest={emiOpenRequest} />
+      {/* The Loan trash — list-less. A record's details, payments and edit live on its own page (`/loans/[id]`). */}
+      <LoansWorkspace trashRequest={trashRequest} />
 
       <OwnershipConfirmDialog
         target={ownershipTarget}

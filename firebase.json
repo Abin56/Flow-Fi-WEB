@@ -45,6 +45,10 @@
       {
         "source": "/statement-review/*",
         "destination": "/statement-review/_/index.html"
+      },
+      {
+        "source": "/loans/*",
+        "destination": "/loans/_/index.html"
       }
     ],
     "headers": [

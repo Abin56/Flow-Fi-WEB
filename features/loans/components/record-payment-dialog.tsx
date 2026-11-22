@@ -9,19 +9,8 @@ import { usePathname } from "next/navigation";
 import { useEmiActions, type EmiRow } from "@/features/emi/hooks/use-emi-data";
 import { emiCardLabel } from "@/features/emi/components/emi-card";
 import { loanDisplayName } from "@/features/loans/components/loan-card";
-import {
-  AmountInput,
-  ChoiceChips,
-  Field,
-  FieldGroup,
-  LE_RADIUS,
-  LOAN_EMI_INPUT,
-  Money,
-  Reveal,
-  SegmentedControl,
-  daysUntil,
-  formatDueDate,
-} from "@/features/loans/components/loan-emi-ui";
+import { LE_RADIUS, Money, Reveal, daysUntil, formatDueDate } from "@/features/loans/components/loan-emi-ui";
+import { AmountTile, PAY_INPUT, PAY_LABEL, PayAmountInput, PayCard, PaySegmented, PayField, PayGroup, PayMore, PayStepHead, ReceiptLine } from "@/features/loans/components/pay-ui";
 import { AddElsewhereLink } from "@/features/loans/components/loans-workspace";
 import { isStaleInstallmentError, STALE_INSTALLMENT_MESSAGE } from "@/lib/engines/stale-installment";
 import { planEmiPaymentAllocation } from "@/features/emi/lib/emi-payment-allocation";
@@ -31,6 +20,10 @@ import { useLinkedFunds } from "@/features/people/hooks/use-linked-funds";
 import { linkedFundsForInstallment } from "@/lib/engines/linked-funds";
 import { InstallmentPeoplePanel } from "@/features/loans/components/installment-people-panel";
 import { useInstallmentBreakdown } from "@/features/loans/hooks/use-installment-breakdown";
+import { uncountedAssigneeId } from "@/features/loans/lib/uncounted-assignee";
+import Link from "next/link";
+import { usePeople } from "@/hooks/use-people";
+import type { Person } from "@/lib/models/person";
 import { openShareStatuses } from "@/lib/engines/installment-participants";
 import { usePeoplePaymentDeferrals } from "@/features/people/hooks/use-payment-deferrals";
 import { useMonthCycleStartDay } from "@/features/settings/hooks/use-user-preferences";
@@ -82,8 +75,6 @@ import { DateInput } from "@/components/forms/date-input";
 import { PaymentSheet } from "@/features/loans/components/payment-sheet";
 import { PaymentIntentSwitch, type PaymentIntent } from "@/features/loans/components/payment-intent-switch";
 import { useWideBox } from "@/components/finance/use-wide-box";
-import { SheetRail } from "@/components/finance/transaction-sheet";
-import { PanelSection } from "@/components/finance/context-panel";
 import { BulkHistoricalDialog } from "@/features/loans/components/bulk-historical-dialog";
 import { HistoricalPeopleReconcile, useHistoricalReconcile } from "@/features/loans/components/historical-people-reconcile";
 
@@ -121,33 +112,6 @@ function todayInput(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-/** One selectable amount row: radio + label/hint on the left, the figure on the right. Neutral when selected (strong edge, filled dot). */
-function AmountChoice({ active, label, hint, amount, onSelect }: { active: boolean; label: string; hint?: string; amount?: number; onSelect: () => void }) {
-  return (
-    <button
-      type="button"
-      role="radio"
-      aria-checked={active}
-      onClick={onSelect}
-      className={cn(
-        LE_RADIUS.control,
-        "flex w-full items-center gap-3 border px-3 py-2 text-left transition-[background-color,border-color] duration-150 outline-none focus-visible:ring-2 focus-visible:ring-ring",
-        active ? "border-foreground bg-secondary" : "border-border hover:border-border-strong hover:bg-secondary/60",
-      )}
-    >
-      <span aria-hidden className={cn("flex size-4 shrink-0 items-center justify-center rounded-full border-[1.5px]", active ? "border-foreground" : "border-border-strong")}>
-        {active && <span className="size-2 rounded-full bg-foreground" />}
-      </span>
-      <span className="flex min-w-0 flex-1 flex-col">
-        <span className="truncate text-sm font-medium text-foreground">{label}</span>
-        {/* Wraps instead of truncating: on a phone the hint carries the warning (e.g. "not a bank closure amount"). */}
-        {hint && <span className="text-[11px] leading-snug text-muted-foreground">{hint}</span>}
-      </span>
-      {amount != null && <Money exact amount={amount} className="text-sm text-foreground" />}
-    </button>
-  );
-}
-
 /** One label / value row of the payment preview: label left (may wrap), value right-aligned and never split mid-figure. */
 function PreviewRow({ label, children, tone }: { label: React.ReactNode; children: React.ReactNode; tone?: "good" | "bad" }) {
   return (
@@ -177,7 +141,7 @@ function CardImpact({ plan, cardLabel }: { plan: ReturnType<typeof planCardEmiLe
   const caseA = plan.emiCase === "A";
   return (
     <div className="flex flex-col gap-1.5 border-t border-border pt-2" data-testid="card-impact">
-      <h4 className="text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">Credit card impact</h4>
+      <h4 className={PAY_LABEL}>Credit card impact</h4>
       {plan.principalTransfer > 0 ? (
         <PreviewRow label="Paid toward card balance">
           <Money exact amount={plan.principalTransfer} className="text-xs" />
@@ -279,6 +243,9 @@ export function RecordPaymentDialog({
   // One per mount — its synchronous guard blocks a double click/double submit (state updates are async).
   const [submission] = useState(createPaymentSubmission);
   const [mode, setMode] = useState<PayMode>("now");
+  // "Who is paying the lender?" = the assigned person, directly. It is the existing "already paid" recording (no account of
+  // mine moves — Loan: excluded record, EMI: no transaction) named for what happened; the payer is saved in the payment's note.
+  const [directPayer, setDirectPayer] = useState(false);
   // Once a save was attempted the mode is fixed: a retry reuses the same idempotency key, so it must be
   // the same kind of payment (an attempt that did commit is then found, never recorded a second time).
   const [modeLocked, setModeLocked] = useState(false);
@@ -289,7 +256,6 @@ export function RecordPaymentDialog({
   // On a wide sheet "What will happen" opens in the right-hand work area, beside the people (not under them).
   const [gridBox] = useWideBox(856);
   // The people step folds itself once the share question is answered; the user's own toggle wins.
-  const [peoplePick, setPeoplePick] = useState<boolean | null>(null);
   // One installment chosen in Record past payments, handed to the single past-payment form below — the existing
   // single write path, unchanged (same allocation, identity, edit and reversal behaviour).
   const [pinnedPast, setPinnedPast] = useState<Installment | null>(null);
@@ -406,6 +372,10 @@ export function RecordPaymentDialog({
   const gateLoading = !earlier && peopleGated && linkedPeopleLoading;
   const needsConfirm = !earlier && peopleGated && !gateLoading && settlement.blocked;
   const peopleAck = earlier ? RECORDED_EARLIER_PEOPLE_ACK : peopleShareAcknowledgement(shareAnswer, settlement.attention.map((p) => p.personName));
+  // "Yes, already paid" on a normal payment: the person's money really was received, so it is recorded in People as its own
+  // per-person receipt (the same writer as a past payment) right after the lender payment — never only a note.
+  const yesRecord = !earlier && !lent && peopleGated && shareAnswer === "yes" && (needsConfirm || modeLocked);
+  const recordsPeople = earlier || yesRecord;
   const pathname = usePathname();
   // People sends the user back to exactly this payment (same agreement, Record Payment reopened, same installment).
   const agreementId = loanRow?.loan.id ?? emiRow?.emi.id ?? null;
@@ -417,6 +387,12 @@ export function RecordPaymentDialog({
       ? { sourceKind: isLoan ? ("loan" as const) : ("emi" as const), source: breakdownSource, installments: breakdownInstallments, installmentId: next.id }
       : null;
   const { breakdown, isLoading: breakdownLoading } = useInstallmentBreakdown(breakdownTarget);
+  const { data: allPeople = [] } = usePeople();
+  const uncountedAssigneeKey = uncountedAssigneeId(breakdownSource);
+  const uncountedAssignee = uncountedAssigneeKey ? { id: uncountedAssigneeKey, name: (allPeople as Person[]).find((p) => p.id === uncountedAssigneeKey)?.name ?? "The linked person" } : null;
+  // Who "paid directly" names: the people sharing this installment, else the person linked to it, else the loan's payer.
+  const sharingNames = (breakdown?.participants ?? []).filter((p) => (p.current?.share ?? 0) > 0.005).map((p) => p.personName);
+  const payerName = sharingNames.length > 0 ? peopleNames(sharingNames) : (uncountedAssignee?.name ?? loanRow?.payerName ?? "Someone else");
   // Past payment: whether the people sharing it had already paid me back — answered per person, written as
   // People settlements AFTER the lender record. The installments are fixed at the first save (afterwards
   // the dialog's "next" installment moves on), and a saved lender record is never written again.
@@ -425,7 +401,7 @@ export function RecordPaymentDialog({
   const [lenderDone, setLenderDone] = useState(false);
   const reconcile = useHistoricalReconcile({
     target:
-      earlier && !lent && breakdownSource && breakdownInstallments && (reconcileIds ?? touched).length > 0
+      recordsPeople && !lent && breakdownSource && breakdownInstallments && (reconcileIds ?? touched).length > 0
         ? {
             sourceKind: isLoan ? "loan" : "emi",
             source: breakdownSource,
@@ -435,7 +411,7 @@ export function RecordPaymentDialog({
         : null,
     defaultAccountId: accountId,
     // The people's rows start on the date already given for the lender payment — not asked again from today's calendar.
-    defaultDateOf: () => (dateUnknown ? null : earlierDate),
+    defaultDateOf: () => (earlier ? (dateUnknown ? null : earlierDate) : date),
   });
   const reconcileItems = reconcile.plan.ok ? reconcile.plan.items : [];
   const reconcileTotal = reconcile.plan.ok ? reconcile.plan.summary.total : 0;
@@ -508,7 +484,7 @@ export function RecordPaymentDialog({
             ? "The date must stay the transaction's — unlink it to change it."
             : null;
   const blocked =
-    remainingUnconfirmed || next == null || error != null || earlierDateError != null || (needsAccount && accountId === "") || underfunded || (earlier && !lent && reconcile.blocker != null) || linkMismatch != null;
+    remainingUnconfirmed || next == null || error != null || earlierDateError != null || (needsAccount && accountId === "") || underfunded || (recordsPeople && !lent && reconcile.blocker != null) || (yesRecord && !lenderDone && reconcileItems.length === 0) || linkMismatch != null;
   function pickLink(t: Transaction) {
     setLinkedTx(t);
     setChoice("custom");
@@ -531,7 +507,7 @@ export function RecordPaymentDialog({
         })
       : null;
   // Saved in the payment's own note — the only durable place for it (no separate audit field exists).
-  const paymentNote = [peopleAck && !earlier ? peopleAck.reason : null, note.trim() || null].filter(Boolean).join(" · ") || undefined;
+  const paymentNote = [directPayer && earlier ? `Paid directly by ${payerName}` : null, peopleAck && !earlier ? peopleAck.reason : null, note.trim() || null].filter(Boolean).join(" · ") || undefined;
 
   /**
    * Record past payments → exactly one installment picked: it is recorded through the single past-payment form
@@ -575,8 +551,8 @@ export function RecordPaymentDialog({
     setModeLocked(true);
     const recordedEarlier = earlier ? { dateKnown: !dateUnknown } : null;
     // Frozen at submit: what the user saw and answered.
-    const peopleItems = earlier && !lent ? reconcileItems : [];
-    if (earlier && !lent) setReconcileIds(touched.map((i) => i.id));
+    const peopleItems = recordsPeople && !lent ? reconcileItems : [];
+    if (recordsPeople && !lent) setReconcileIds(touched.map((i) => i.id));
     let peopleFailed = 0;
     const stages = paymentStages({ reamortizes });
     let title = earlier ? "Past payment recorded" : "Payment recorded successfully";
@@ -645,7 +621,7 @@ export function RecordPaymentDialog({
               description = emiPaymentOutcome(emiAllocation);
             }
           }
-          if (earlier) {
+          if (recordsPeople) {
             lenderSaved.current = true;
             setLenderDone(true);
           }
@@ -653,7 +629,8 @@ export function RecordPaymentDialog({
             const r = await reconcile.run(peopleItems);
             peopleFailed = peopleItems.filter((i) => r[i.key]?.status === "failed").length;
             const added = peopleItems.filter((i) => !i.recordedEarlier).reduce((t, i) => t + i.amount, 0);
-            description = peopleItems.length === 0 ? "Nothing marked received — the pending amount stays owed in People." : added > 0 ? `People's payments recorded — ${formatCurrencyExact(added)} added to your account.` : "People's payments recorded. No account balance changed.";
+            if (yesRecord) description = `People's receipts recorded${added > 0 ? ` — ${formatCurrencyExact(added)} added to your account` : " — no account balance changed"}.`;
+            else description = peopleItems.length === 0 ? "Nothing marked received — the pending amount stays owed in People." : added > 0 ? `People's payments recorded — ${formatCurrencyExact(added)} added to your account.` : "People's payments recorded. No account balance changed.";
           }
         },
         refresh: () => Promise.all(DERIVED_QUERY_PREFIXES.map((key) => queryClient.invalidateQueries({ queryKey: [key], exact: false }))),
@@ -704,12 +681,12 @@ export function RecordPaymentDialog({
       : lenderDone && reconcile.failed.length > 0
         ? "Retry people's payments"
       : earlier
-        ? `Save past payment${amountLabel ? ` of ${amountLabel}` : ""}${reconcileTotal > 0.005 ? ` · ${formatCurrencyExact(reconcileTotal)} from people` : ""}`
+        ? `${directPayer ? `Save payment made by ${payerName}` : "Save past payment"}${amountLabel ? ` of ${amountLabel}` : ""}${reconcileTotal > 0.005 ? ` · ${formatCurrencyExact(reconcileTotal)} from people` : ""}`
         : needsConfirm && shareAnswer == null
           ? "Has their share been paid?"
           : lent
             ? `Record ${amountLabel ?? "repayment"} received`
-            : `Pay ${amountLabel ?? "installment"} to lender`;
+            : `Pay ${amountLabel ?? "installment"} to lender${yesRecord && reconcileTotal > 0.005 ? ` · ${formatCurrencyExact(reconcileTotal)} from people` : ""}`;
   const confirmDisabled = lenderDone ? reconcile.failed.length === 0 || saving : earlier ? blocked : gateLoading || (needsConfirm && shareAnswer == null) || blocked;
 
   // Where the money goes — the account (or card) only. What people owe is its own line (`peopleImpact`).
@@ -728,7 +705,7 @@ export function RecordPaymentDialog({
   const previewShown = !(reamortizes && prepaymentPreview && loanFigures) && (loanPreview != null || emiAllocation != null);
   // People: the lender payment never settles anyone — say who still owes, and that postponements stay as they are.
   const peopleImpact =
-    earlier || lent || participants.length === 0
+    earlier || lent || yesRecord || participants.length === 0
       ? null
       : stillOwing.length > 0
         ? `${peopleNames(stillOwing.map((p) => p.personName))} still ${stillOwing.length === 1 ? "owes" : "owe"} you ${formatCurrencyExact(stillOwing.reduce((t, p) => t + p.outstanding, 0))} — paying the lender doesn't mark anyone as paid.`
@@ -741,11 +718,8 @@ export function RecordPaymentDialog({
   const lentAccount = lent && needsAccount ? (accounts.find((a) => a.id === accountId) ?? null) : null;
   const remainingOption = options.find((o) => o.choice === "remaining") ?? null;
   const leadingOptions = options.filter((o) => o.choice !== "remaining");
-  // Wide sheet: the people list on the left, "what will happen" on the right, once there is something to show.
-  const showRail = next != null && !earlier && showPaymentDetails;
   // A single past payment: how much / when on the left, "have the people sharing it already paid you?" on the right.
   const earlierSplit = earlier && next != null && showPaymentDetails && !lent;
-  const peopleOpen = peoplePick ?? !(needsConfirm && shareAnswer != null);
   // What still blocks the primary action, in plain words (the footer's "Still needed").
   const pending: string[] = [];
   if (!lenderDone && !gateLoading && !saving) {
@@ -756,19 +730,12 @@ export function RecordPaymentDialog({
       if (remainingUnconfirmed) pending.push("Confirm all remaining");
       if (underfunded) pending.push("Enough balance");
       if (earlierDateError != null) pending.push("Date");
-      if (earlier && !lent && reconcile.blocker != null) pending.push("People answers");
+      if (recordsPeople && !lent && reconcile.blocker != null) pending.push("People answers");
+      else if (yesRecord && reconcileItems.length === 0) pending.push("What they paid (or answer No)");
     }
   }
   // Collapsible steps: numbered in the order shown, each with a one-line recap for when it is folded.
-  const peopleStepShown = next != null && (showPeople || needsConfirm);
-  const amountStep = peopleStepShown ? 2 : 1;
-  const peopleSummary = needsConfirm
-    ? shareAnswer === "yes"
-      ? "Already paid"
-      : shareAnswer === "no"
-        ? "Not paid yet"
-        : "Received or not?"
-    : `${participants.length} ${participants.length === 1 ? "person" : "people"}`;
+  const peopleStepShown = next != null && (showPeople || needsConfirm || yesRecord);
   const dateSummary =
     earlier && dateUnknown ? "Date not known" : earlier && earlierDateError ? "Date needed" : paymentDate.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
   const sourceSummary = needsAccount ? (accountName ?? "Choose account") : earlier ? null : cardLabel;
@@ -776,22 +743,55 @@ export function RecordPaymentDialog({
   const otherWaysShown = otherWaysOpen || effectiveChoice === "custom" || effectiveChoice === "extra" || effectiveChoice === "remaining";
 
   // The flow's pages — Pay now / Past payment / Pay several — are tabs of one sheet: this switch is pinned on every page.
-  const intentValue: PaymentIntent = view === "payMany" ? "many" : view === "past" || earlier ? "past" : "now";
+  const intentValue: PaymentIntent = view === "payMany" ? "many" : view === "past" || (earlier && !directPayer) ? "past" : "now";
   const switchIntent = (v: PaymentIntent) => {
     if (modeLocked || saving) return;
     if (v === "now") {
       if (view === "pay" && !earlier) return;
       setMode("now");
+      setDirectPayer(false);
       setView("pay");
     } else if (v === "past") {
-      if (view === "past" || (view === "pay" && earlier)) return;
+      if (view === "past" || (view === "pay" && earlier && !directPayer)) return;
+      setDirectPayer(false);
       setView("past");
     } else {
       if (view === "payMany") return;
+      setDirectPayer(false);
       setView("payMany");
     }
     setSwitched(true);
   };
+  // "Who is paying the lender?" — me (a normal payment from an account) or the assigned person, who paid the lender directly.
+  const choosePayer = (who: "me" | "other") => {
+    if (modeLocked || saving || next == null) return;
+    if (who === "me") {
+      setMode("now");
+      setPinnedPast(null);
+      setLinkedTx(null);
+      setDirectPayer(false);
+      return;
+    }
+    const first = firstUnpaidInstallment(target);
+    if (first && recordOnePast(first)) setDirectPayer(true);
+  };
+  const payerChoice =
+    !lent && next != null && !modeLocked && (directPayer || !earlier) ? (
+      <PayGroup label="Who is paying the lender?">
+        <PaySegmented<"me" | "other">
+          ariaLabel="Who is paying the lender"
+          options={[
+            { value: "me", label: "I'm paying" },
+            { value: "other", label: `${payerName} paid directly` },
+          ]}
+          value={directPayer ? "other" : "me"}
+          onChange={choosePayer}
+        />
+        <p className="text-[11px] text-muted-foreground" data-testid="payer-hint">
+          {directPayer ? "Recorded as paid. No money leaves your accounts." : "Takes the amount out of the account you choose."}
+        </p>
+      </PayGroup>
+    ) : null;
   const intentToolbar = target && (view !== "pay" || next != null) ? <PaymentIntentSwitch value={intentValue} onChange={switchIntent} lent={lent} isLoan={isLoan} disabled={modeLocked || saving || success} /> : undefined;
 
   if ((view === "past" || view === "payMany") && target) {
@@ -810,500 +810,501 @@ export function RecordPaymentDialog({
     );
   }
 
+  // ---- The popup's interior ------------------------------------------------------------------------------------------------
+  // Presentation only: every value, condition and handler below is the one the dialog already had. The structure is a "payment
+  // ticket": a statement strip (what the LENDER is owed), the People card (what PEOPLE owe you — a separate thing), then the
+  // form on the left and a plain receipt on the right.
+  const amountTitle = earlier ? "How much was paid" : lent ? "How much are you receiving?" : "How much are you paying?";
+
+  const summaryStrip = next ? (
+    <section aria-label="Payment summary" className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 rounded-[10px] border border-border bg-gradient-to-b from-card to-secondary/50 px-4 py-2.5 shadow-e1">
+      <div className="flex flex-col gap-1">
+        <span className={PAY_LABEL}>{lent ? "To receive" : "To pay lender"}</span>
+        <span className="font-heading text-[26px] leading-none font-bold tracking-tight whitespace-nowrap text-foreground tabular-nums">{formatCurrencyExact(remainingAmount(next))}</span>
+      </div>
+      <dl className="flex flex-wrap items-center divide-x divide-border">
+        {next.amountPaid > 0 && <StripFact label="Already paid" value={formatCurrencyExact(Math.min(next.amountPaid, next.amountDue))} />}
+        {breakdown && participants.length > 0 && <StripFact label="Your share" value={formatCurrencyExact(breakdown.yourShare)} />}
+        {breakdown && participants.length > 0 && <StripFact label="Owed to you by others" value={formatCurrencyExact(othersUnpaidNow)} tone={othersUnpaidNow > 0.005 ? "owed" : "done"} />}
+        <StripFact label={lent ? "Total still to receive" : isLoan ? "Loan outstanding" : "EMI outstanding"} value={formatCurrencyExact(outstanding)} muted />
+      </dl>
+    </section>
+  ) : null;
+
+  // What PEOPLE owe you: their own tinted card, apart from the payment to the bank.
+  const peopleCard = peopleStepShown ? (
+    <PayCard
+      tone="people"
+      testId="people-card"
+      title="From people"
+      aside={participants.length > 0 ? othersUnpaidNow > 0.005 ? <>Owed to you <Money exact amount={othersUnpaidNow} className="ml-1 text-xs text-foreground" /></> : "All received" : undefined}
+    >
+      {/* Display only — each person's own "Record received" / "Postpone" opens their People Ledger directly. */}
+      {showPeople && <InstallmentPeoplePanel dense breakdown={breakdown} loading={breakdownLoading} returnTo={returnPath} />}
+      {needsConfirm && <PeopleShareConfirm dense names={settlement.attention.map((p) => p.personName)} amount={settlement.outstanding} answer={shareAnswer} onAnswer={(a) => !modeLocked && setShareAnswer(a)} />}
+      {yesRecord && <HistoricalPeopleReconcile state={reconcile} accounts={accounts} showInstallment={(reconcileIds ?? touched).length > 1} locked={lenderDone && reconcile.failed.length === 0} />}
+    </PayCard>
+  ) : null;
+
+  const amountBody = (
+    <>
+      <div role="radiogroup" aria-label={amountTitle} className="flex flex-wrap gap-1.5">
+        {leadingOptions.map((o) => (
+          <AmountTile key={o.choice} active={effectiveChoice === o.choice} label={o.label} hint={o.hint} amount={o.amount} onSelect={() => setChoice(o.choice)} />
+        ))}
+        {otherWaysShown && (
+          <>
+            <AmountTile
+              active={effectiveChoice === "custom"}
+              label={earlier ? "A different amount" : "Part payment"}
+              hint={
+                earlier
+                  ? "Part of an installment, or several in order"
+                  : isLoan && loanRow?.loan.repaymentType !== "oneTime"
+                    ? "Pay only some of it, or a different amount. What's left stays due"
+                    : "Pay only some of the amount. What's left stays due"
+              }
+              onSelect={() => setChoice("custom")}
+            />
+            {extraAvailable && loanFigures && (
+              <AmountTile
+                active={effectiveChoice === "extra"}
+                label={lent ? "Repayment + extra payment" : "Installment + extra payment"}
+                hint={`${formatCurrencyExact(loanFigures.dueAmount)} due now is paid first · your extra lowers the loan balance (principal)`}
+                onSelect={() => setChoice("extra")}
+              />
+            )}
+            {remainingOption && (
+              <AmountTile
+                active={effectiveChoice === "remaining"}
+                label={`${remainingOption.label} · advanced`}
+                hint={remainingOption.hint}
+                amount={remainingOption.amount}
+                onSelect={() => {
+                  setRemainingAck(false);
+                  setChoice("remaining");
+                }}
+              />
+            )}
+          </>
+        )}
+      {!otherWaysShown && (
+        <div className="basis-full">
+          <button
+            type="button"
+            aria-expanded={false}
+            onClick={() => setOtherWaysOpen(true)}
+            className="flex items-center gap-1 rounded-[6px] px-1 py-0.5 text-xs font-semibold text-foreground underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            data-testid="other-ways-toggle"
+          >
+            <ChevronDown className="size-3.5" aria-hidden />
+            {earlier ? "A different amount" : "Part payment, extra payment or pay everything"}
+          </button>
+        </div>
+      )}
+      {otherWaysShown && effectiveChoice === "custom" && (
+        <Reveal className="flex basis-full flex-col gap-2">
+          <PayField label="Amount">
+            <PayAmountInput
+              value={customAmount}
+              autoFocus
+              onChange={(v) => {
+                setCustomAmount(v);
+                setCustomTouched(true);
+              }}
+            />
+          </PayField>
+          {!earlier && extra > 0 && loanRow?.loan.repaymentType !== "oneTime" && (
+            <div className="flex flex-col gap-1.5">
+              <span className="text-xs font-semibold text-foreground">
+                <Money exact amount={extra} className="text-xs" /> is more than what&apos;s due now. Where should the extra go?
+              </span>
+              <PaySegmented<ExtraTreatment>
+                ariaLabel="Apply the extra amount to"
+                options={[
+                  { value: "reducePrincipal", label: "Lower the loan balance" },
+                  { value: "payUpcoming", label: "Pay upcoming installments" },
+                ]}
+                value={treatment}
+                onChange={setTreatment}
+              />
+              <p className="text-[11px] text-muted-foreground">
+                {treatment === "payUpcoming"
+                  ? "Fills your next installments in order (an advance payment). Anything beyond them lowers the loan balance."
+                  : "The extra reduces the amount you still owe (the principal), so future interest is lower."}
+              </p>
+            </div>
+          )}
+        </Reveal>
+      )}
+      {otherWaysShown && effectiveChoice === "extra" && loanFigures && (
+        <Reveal className="flex basis-full flex-col gap-1.5">
+          <PayField label="Extra amount" hint="Goes straight to reducing what you owe, on top of this installment.">
+            <PayAmountInput
+              value={extraAmount}
+              autoFocus
+              onChange={(v) => {
+                setExtraAmount(v);
+                setCustomTouched(true);
+              }}
+            />
+          </PayField>
+          {extraValid && (
+            <p className="text-xs text-muted-foreground" data-testid="extra-total">
+              {formatCurrencyExact(loanFigures.dueAmount)} due now + {formatCurrencyExact(extraValue)} extra ={" "}
+              <span className="font-semibold text-foreground">{formatCurrencyExact(loanFigures.dueAmount + extraValue)}</span> in total
+            </p>
+          )}
+        </Reveal>
+      )}
+      {otherWaysShown && effectiveChoice === "remaining" && remainingOption && !earlier && (
+        <Reveal className="basis-full">
+          <label className="flex items-start gap-2 rounded-[6px] border border-warning/50 bg-warning/10 px-3 py-2 text-xs leading-snug text-foreground" data-testid="remaining-warning">
+            <input type="checkbox" className="mt-0.5 size-4 shrink-0 accent-foreground" checked={remainingAck} onChange={(e) => setRemainingAck(e.target.checked)} />
+            <span>
+              <span className="block font-semibold">This pays every remaining installment in one go.</span>
+              <span className="block text-muted-foreground">It takes {formatCurrencyExact(remainingOption.amount)} out of your account at once. I understand and want to continue.</span>
+            </span>
+          </label>
+        </Reveal>
+      )}
+      </div>
+      {showError && (
+        <p role="alert" className="text-xs font-semibold text-expense">
+          {error}
+        </p>
+      )}
+    </>
+  );
+
+  const whenBody = (
+    <>
+      {cardLinked && !earlier && !modeLocked && cardLabel && (
+        <PayGroup label="How will you pay this EMI?">
+          <PaySegmented
+            ariaLabel="EMI funding"
+            options={[
+              { value: "card", label: `Charge to ${cardLabel}` },
+              { value: "bank", label: "Pay from a bank account" },
+            ]}
+            value={fundingMode}
+            onChange={setFundingMode}
+          />
+        </PayGroup>
+      )}
+
+      <div className={cn("grid grid-cols-1 gap-2.5", needsAccount ? "@lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]" : "")}>
+        {needsAccount && (
+          <PayField label={earlier ? (directPayer ? "Record under account · no balance change" : `${lent ? "Received into" : "Paid from"} · for your records`) : lent ? "Received into" : "Paid from"}>
+            {accounts.length === 0 ? (
+              <span className="flex h-9 items-center justify-between gap-2 rounded-[6px] border border-dashed border-border bg-secondary px-3 text-xs text-muted-foreground">
+                Add an account first
+                <AddElsewhereLink href="/accounts" label="Go to Accounts" />
+              </span>
+            ) : (
+              <AccountSelect
+                className={PAY_INPUT}
+                accounts={selectableAccounts}
+                value={accountId}
+                onChange={setAccountId}
+                placeholder={lent ? "Choose account" : "Choose paying account"}
+                showBalance={fundsApply}
+                ariaLabel={lent ? "Received into account" : "Paid from account"}
+              />
+            )}
+          </PayField>
+        )}
+        <PayField label={earlier ? (lent ? "Date received" : "Date paid") : "Payment date"}>
+          <span className="relative">
+            {earlier ? (
+              <DateInput className={PAY_INPUT} aria-label={lent ? "Date received" : "Date paid"} value={dateUnknown ? "" : earlierDate} max={today} disabled={dateUnknown} onChange={(e) => setEarlierDate(e.target.value)} />
+            ) : (
+              <DateInput className={PAY_INPUT} aria-label="Payment date" value={date} onChange={(e) => setDate(e.target.value)} />
+            )}
+          </span>
+        </PayField>
+        {earlier && (
+          <PayField label="Note" className="@lg:col-span-2">
+            <input className={PAY_INPUT} aria-label="Note" placeholder="Note or reference (optional)" value={note} onChange={(e) => setNote(e.target.value)} />
+          </PayField>
+        )}
+      </div>
+
+      {backdated && (
+        <div role="note" className="flex flex-col gap-1 rounded-[6px] border border-warning/50 bg-warning/10 px-3 py-2 text-xs leading-snug text-foreground" data-testid="backdate-hint">
+          <p className="text-[10.5px] font-semibold tracking-[0.06em] text-warning-foreground uppercase dark:text-warning">Back-dated payment</p>
+          <p className="[overflow-wrap:anywhere]">
+            This records a real {lent ? "credit to" : needsAccount ? "payment from" : "charge on"} <span className="font-semibold">{backdatedSource}</span> dated{" "}
+            <span className="font-semibold whitespace-nowrap">{paymentDate.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}</span>; its balance changes from that date.
+          </p>
+          {!modeLocked && (
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-warning/30 pt-1.5">
+              <span className="text-muted-foreground">{lent ? "Received" : "Paid"} before FlowFi, already in your balance?</span>
+              <button type="button" onClick={() => setView("past")} className="font-semibold underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                {lent ? "Record past repayments instead" : "Record past payments instead"}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {earlier && (
+        <>
+          <label className="flex items-center gap-2 text-xs font-medium text-foreground">
+            <input type="checkbox" className="size-4 accent-foreground" checked={dateUnknown} onChange={(e) => setDateUnknown(e.target.checked)} />
+            I don&apos;t know the exact date
+            {dateUnknown && anchor && <span className="font-normal text-muted-foreground">· saved as “date not known”</span>}
+          </label>
+          {earlierDateError && (
+            <p role="alert" className="text-xs font-semibold text-expense">
+              {earlierDateError}
+            </p>
+          )}
+          {!lent && !directPayer && (
+            <LinkTransactionField
+              related={linkSplit.related}
+              others={linkSplit.others}
+              owed={anchor ? Math.max(0, anchor.amountDue - anchor.amountPaid) : 0}
+              dueDate={anchor?.dueDate ?? new Date()}
+              linked={linkedTx}
+              accountName={(id) => accounts.find((a) => a.id === id)?.name ?? "Account"}
+              mismatch={linkMismatch}
+              onPick={pickLink}
+              onClear={() => setLinkedTx(null)}
+            />
+          )}
+          {!lent && !earlierSplit && <HistoricalPeopleReconcile state={reconcile} accounts={accounts} showInstallment={(reconcileIds ?? touched).length > 1} locked={lenderDone && reconcile.failed.length === 0} viaLender={directPayer} />}
+          {!earlierSplit && (
+            <p className="text-xs font-medium text-foreground/80" data-testid="past-payment-effect">
+              No account balance changes for the {lent ? "repayment" : "lender payment"}.
+            </p>
+          )}
+        </>
+      )}
+    </>
+  );
+
+  // The lender side in ONE card: 1 · amount, 2 · where it comes from and when.
+  const payCard = (
+    <PayCard title={earlier ? "Past payment" : lent ? "Receive the repayment" : "Pay the lender"} aside={amountLabel} testId="pay-card">
+      <div className="flex flex-col gap-2.5" data-testid="amount-card">
+        <PayStepHead n={1} label={amountTitle} />
+        {amountBody}
+      </div>
+      <div className="flex flex-col gap-2.5 border-t border-border pt-3" data-testid="when-card">
+        <PayStepHead n={2} label={earlier ? "When" : needsAccount ? (lent ? "Received into · date" : "Paid from · date") : "Paid with · date"} value={[sourceSummary, dateSummary].filter(Boolean).join(" · ")} />
+        {whenBody}
+      </div>
+    </PayCard>
+  );
+
+  // Until the People question is answered the lender card waits — shown, so the layout never jumps.
+  const lockedCard =
+    next != null && !earlier && peopleStepShown && !showPaymentDetails ? (
+      <PayCard title="Pay the lender" testId="pay-card-locked">
+        <div className="flex min-h-[9rem] flex-col items-center justify-center gap-1 rounded-[8px] border border-dashed border-border-strong bg-secondary/40 px-4 py-6 text-center">
+          <p className="text-[13px] font-semibold text-foreground">Answer the question about people first</p>
+          <p className="text-xs text-muted-foreground">Then choose the amount, the account and the date.</p>
+        </div>
+      </PayCard>
+    ) : null;
+
+  // "What will happen" — read off the same allocation the write performs; the bank side first, People under it.
+  const receiptCard =
+    showPaymentDetails && !earlier && planAmount != null ? (
+      <PayCard title="What will happen" aside={amountLabel}>
+        <section aria-label="Payment preview" className="flex flex-col gap-2.5" data-testid="payment-impact">
+          {reamortizes && prepaymentPreview && loanFigures ? (
+            <div className="flex flex-col gap-1.5">
+              <ReceiptLine label="Due now · paid first">
+                <Money exact amount={Math.max(0, planAmount - extra)} className="text-xs text-foreground" />
+              </ReceiptLine>
+              <ReceiptLine label="Extra · reduces principal">
+                <Money exact amount={extra} className="text-xs text-foreground" />
+              </ReceiptLine>
+              <PreviewLine label="Remaining principal" before={<Money exact amount={prepaymentPreview.principalBefore} />} after={<Money exact amount={prepaymentPreview.principalAfter} />} />
+              {solved && <PreviewLine label="Installments left" before={prepaymentPreview.installmentCountBefore} after={solved.remainingInstallmentCount} />}
+              {prepaymentPreview.outcome?.kind === "unsolvable" && (
+                <p className="text-[11px] text-warning-foreground dark:text-warning">The schedule can&apos;t be re-planned automatically; the payment is still recorded.</p>
+              )}
+            </div>
+          ) : loanPreview ? (
+            <PaymentPreview
+              bare
+              source={sourceLine}
+              coverage={loanPreview.coverage}
+              extraPrincipal={loanPreview.extraPrincipal}
+              outstandingBefore={loanRow!.outstandingPrincipal}
+              outstandingAfter={loanPreview.outstandingAfter}
+              nextDue={loanPreview.nextDue}
+            />
+          ) : emiAllocation ? (
+            <PaymentPreview
+              bare
+              source={sourceLine}
+              coverage={paymentCoverage(emiAllocation.portions.map((p) => ({ sequenceNumber: p.installment.sequenceNumber, amount: p.amount, remainingAfter: p.remainingAfter })))}
+              outstandingBefore={emiAllocation.remainingBefore}
+              outstandingAfter={emiAllocation.remainingAfter}
+              nextDue={
+                emiNext
+                  ? {
+                      amount: emiNext.remaining,
+                      covered: Math.max(0, emiNext.installment.amountDue - emiNext.remaining),
+                      sequenceNumber: emiNext.installment.sequenceNumber,
+                      dueDate: emiNext.installment.dueDate,
+                    }
+                  : null
+              }
+            />
+          ) : null}
+          {fundsApply && payingAccount && <PaymentSourceSummary account={payingAccount} amount={planAmount} paymentLabel={isLoan ? "Loan payment" : "EMI payment"} />}
+          {lentAccount && <PreviewLine label={lentAccount.name} before={<Money exact amount={lentAccount.currentBalance} />} after={<Money exact amount={lentAccount.currentBalance + planAmount} />} />}
+          {!previewShown && sourceLine}
+          {emiRow && cardLabel && legPlan != null && <CardImpact plan={legPlan} cardLabel={cardLabel} />}
+          {peopleImpact && (
+            <p className="border-t border-border pt-2 text-xs text-foreground/85" data-testid="people-impact">
+              <span className="font-semibold text-foreground">People: </span>
+              {peopleImpact}
+            </p>
+          )}
+          {postponedImpact && <p className="text-xs text-foreground/80">{postponedImpact}</p>}
+        </section>
+      </PayCard>
+    ) : null;
+
   return (
     <PaymentSheet
       open={open}
       onOpenChange={onOpenChange}
       toolbar={intentToolbar}
       instant={switched}
-      eyebrow={earlier ? "Past payment" : lent ? "Repayment" : isLoan ? "Loan payment" : "EMI payment"}
+      eyebrow={earlier ? (directPayer ? "Paid directly" : "Past payment") : lent ? "Repayment" : isLoan ? "Loan payment" : "EMI payment"}
       icon={earlier ? History : Wallet}
-      title={earlier ? (lent ? "Record past repayment" : "Record past payment") : lent ? "Record repayment" : isLoan ? "Pay installment" : "Pay EMI"}
+      title={earlier ? (directPayer ? `Paid by ${payerName}` : lent ? "Record past repayment" : "Record past payment") : lent ? "Record repayment" : isLoan ? "Pay installment" : "Pay EMI"}
       description={next ? `${name} · Installment #${next.sequenceNumber} of ${totalCount}` : name}
       chip={next ? { label: overdue ? `Overdue · ${formatDueDate(next.dueDate)}` : `Due ${formatDueDate(next.dueDate)}`, tone: overdue ? "danger" : "neutral" } : null}
-      heroLabel={next ? (lent ? "To receive" : "To pay lender") : undefined}
-      hero={
-        next ? (
-          <span className="font-heading text-[26px] leading-none font-bold tracking-tight whitespace-nowrap text-hero-foreground tabular-nums sm:text-[30px]">
-            {formatCurrencyExact(remainingAmount(next))}
-          </span>
-        ) : undefined
-      }
-      facts={
-        next ? (
-          <dl className="flex flex-wrap gap-x-4 gap-y-0.5 text-[11.5px] sm:justify-end">
-            {next.amountPaid > 0 && <SummaryFact hero label="Already paid" value={formatCurrencyExact(Math.min(next.amountPaid, next.amountDue))} />}
-            {breakdown && participants.length > 0 && <SummaryFact hero label="Your share" value={formatCurrencyExact(breakdown.yourShare)} />}
-            {breakdown && participants.length > 0 && (
-              <SummaryFact hero label="Owed to you by others" value={formatCurrencyExact(othersUnpaidNow)} tone={othersUnpaidNow > 0.005 ? "owed" : "done"} />
-            )}
-            <SummaryFact hero label={lent ? "Total still to receive" : isLoan ? "Loan outstanding" : "EMI outstanding"} value={formatCurrencyExact(outstanding)} muted />
-          </dl>
-        ) : undefined
-      }
       onConfirm={submit}
       confirmLabel={confirmLabel}
       confirmDisabled={confirmDisabled}
       pending={pending}
+      summary={
+        planAmount != null && amountLabel ? (
+          <>
+            {earlier ? (directPayer ? `Paid by ${payerName}` : "Past payment") : lent ? "Receive" : "Pay"} <span className="tabular-nums">{amountLabel}</span>
+            <span className="font-medium text-foreground/65">
+              {" · "}
+              {[earlier ? "no balance change" : sourceSummary ? `${needsAccount ? (lent ? "into" : "from") : "on"} ${sourceSummary}` : null, dateSummary].filter(Boolean).join(" · ")}
+            </span>
+          </>
+        ) : undefined
+      }
       loading={saving}
       success={success}
       refreshing={refreshing}
       operation={operation.snapshot}
     >
-      <div ref={gridBox}>
-      <div
-        className={cn(
-          "grid gap-3",
-          earlierSplit ? "@4xl:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)] @4xl:items-start" : showRail ? "@4xl:grid-cols-[minmax(0,1fr)_minmax(0,380px)] @4xl:items-start" : "mx-auto max-w-[760px]",
+      <div ref={gridBox} className="flex flex-col gap-3">
+        {!next && <p className="rounded-[10px] border border-border bg-card p-3.5 text-sm font-semibold text-success shadow-e1">Fully paid — nothing is due.</p>}
+        {through && (
+          <p role="note" className="rounded-[10px] border border-border bg-card px-3 py-2 text-xs text-foreground shadow-e1" data-testid="through-note">
+            You picked installment #{through.last}. Loan installments are paid in order, so{" "}
+            {through.count === 2 ? `#${through.first} (still unpaid) is` : `#${through.first}–#${through.last - 1} (still unpaid) are`} paid first. Choose below what to pay.
+          </p>
         )}
-      >
-        <div className="flex min-w-0 flex-col gap-3">
-          {!next && <p className="rounded-xl border border-border bg-card p-3.5 text-sm font-semibold text-success shadow-e1">Fully paid — nothing is due.</p>}
-          {through && (
-            <p role="note" className="rounded-xl border border-border bg-card px-3 py-2.5 text-xs text-foreground shadow-e1" data-testid="through-note">
-              You picked installment #{through.last}. Loan installments are paid in order, so{" "}
-              {through.count === 2 ? `#${through.first} (still unpaid) is` : `#${through.first}–#${through.last - 1} (still unpaid) are`} paid first. Choose below what to pay.
-            </p>
-          )}
-          {/* 2 — Who shares it, and (when someone hasn't paid) how to go on. */}
-          {peopleStepShown && (
-            <PanelSection className="shadow-e1" open={peopleOpen} onOpenChange={setPeoplePick} title={<StepTitle n={1}>{needsConfirm ? "Shared with people · received or not?" : "Shared with people"}</StepTitle>} summary={peopleSummary}>
-              <div className="flex flex-col gap-3">
-                {/* Display only — each person's own "Record received" / "Postpone" opens their People Ledger directly. */}
-                {showPeople && <InstallmentPeoplePanel breakdown={breakdown} loading={breakdownLoading} returnTo={returnPath} />}
-                {needsConfirm && (
-                  <PeopleShareConfirm names={settlement.attention.map((p) => p.personName)} amount={settlement.outstanding} answer={shareAnswer} onAnswer={setShareAnswer} />
-                )}
-              </div>
-            </PanelSection>
-          )}
+        {summaryStrip}
+        {payerChoice}
 
-          {/* 3 — The payment itself: what is being paid, from where, when — then exactly what will happen. */}
-          {showPaymentDetails && next && (
-            <>
-              {earlier && (
-                <div className="flex flex-col gap-1 rounded-[6px] border border-border bg-secondary px-3 py-2" data-testid="past-payment-header">
-                  <span className="text-sm font-semibold text-foreground">
-                    Past payment <span className="font-normal text-muted-foreground">· {lent ? "received" : "paid"} before FlowFi — no account balance changes</span>
-                  </span>
-                  {!modeLocked && (
-                    <span className="flex flex-wrap gap-x-3 text-xs">
-                      <button type="button" onClick={() => setView("past")} className="font-semibold text-foreground underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                        Choose other installments
-                      </button>
-                      <button type="button" onClick={() => setMode("now")} className="font-semibold text-foreground underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                        {lent ? "Receive it now instead" : "Pay it now instead"}
-                      </button>
-                    </span>
-                  )}
-                </div>
-              )}
+        {/* Linked to a person but not set to repay: nothing is added to their People Ledger — say so, never change it here. */}
+        {uncountedAssignee != null && next != null && !lent && (
+          <p role="note" className="rounded-[10px] border border-border bg-card px-3 py-2 text-xs text-foreground shadow-e1" data-testid="uncounted-assignee-note">
+            <span className="font-semibold">{uncountedAssignee.name}</span> is linked to this {isLoan ? "loan" : "EMI"} but isn&apos;t set to repay it, so no share is added to their People Ledger and nothing here marks them as paid. To track what they owe you,{" "}
+            <Link href={`/people?person=${uncountedAssignee.id}`} className="font-semibold underline underline-offset-2">
+              turn on &ldquo;repays me&rdquo; on their page
+            </Link>
+            .
+          </p>
+        )}
 
-              <PanelSection
-                className="shadow-e1"
-                defaultOpen
-                title={<StepTitle n={amountStep}>{earlier ? "How much was paid" : lent ? "How much are you receiving?" : "How much are you paying?"}</StepTitle>}
-                summary={amountLabel ?? "Choose an amount"}
-              >
-                <div className="flex flex-col gap-3">
-                  <div role="radiogroup" aria-label={earlier ? "How much was paid" : lent ? "How much are you receiving?" : "How much are you paying?"} className="flex flex-col gap-1.5">
-                    {leadingOptions.map((o) => (
-                      <AmountChoice key={o.choice} active={effectiveChoice === o.choice} label={o.label} hint={o.hint} amount={o.amount} onSelect={() => setChoice(o.choice)} />
-                    ))}
-                    {!otherWaysShown && (
-                      <button
-                        type="button"
-                        aria-expanded={false}
-                        onClick={() => setOtherWaysOpen(true)}
-                        className="flex items-center gap-1.5 self-start rounded-[6px] px-1 py-1 text-xs font-semibold text-foreground underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                        data-testid="other-ways-toggle"
-                      >
-                        <ChevronDown className="size-3.5" aria-hidden />
-                        {earlier ? "A different amount" : "Part payment, extra payment or pay everything"}
-                      </button>
-                    )}
-                    {otherWaysShown && (
-                      <>
-                        <AmountChoice
-                          active={effectiveChoice === "custom"}
-                          label={earlier ? "A different amount" : "Part payment"}
-                          hint={
-                            earlier
-                              ? "Part of an installment, or several in order"
-                              : isLoan && loanRow?.loan.repaymentType !== "oneTime"
-                                ? "Pay only some of it, or a different amount. What's left stays due"
-                                : "Pay only some of the amount. What's left stays due"
-                          }
-                          onSelect={() => setChoice("custom")}
-                        />
-                        {effectiveChoice === "custom" && (
-                          <Reveal className="flex flex-col gap-2 pb-1 pl-7">
-                            <Field label="Amount">
-                              <AmountInput
-                                value={customAmount}
-                                autoFocus
-                                onChange={(v) => {
-                                  setCustomAmount(v);
-                                  setCustomTouched(true);
-                                }}
-                              />
-                            </Field>
-                            {!earlier && extra > 0 && loanRow?.loan.repaymentType !== "oneTime" && (
-                              <div className="flex flex-col gap-2">
-                                <span className="text-xs font-semibold text-foreground">
-                                  <Money exact amount={extra} className="text-xs" /> is more than what&apos;s due now. Where should the extra go?
-                                </span>
-                                <SegmentedControl<ExtraTreatment>
-                                  ariaLabel="Apply the extra amount to"
-                                  size="sm"
-                                  className="sm:w-full"
-                                  options={[
-                                    { value: "reducePrincipal", label: "Lower the loan balance" },
-                                    { value: "payUpcoming", label: "Pay upcoming installments" },
-                                  ]}
-                                  value={treatment}
-                                  onChange={setTreatment}
-                                />
-                                <p className="text-[11px] text-muted-foreground">
-                                  {treatment === "payUpcoming"
-                                    ? "Fills your next installments in order (an advance payment). Anything beyond them lowers the loan balance."
-                                    : "The extra reduces the amount you still owe (the principal), so future interest is lower."}
-                                </p>
-                              </div>
-                            )}
-                          </Reveal>
-                        )}
-                        {extraAvailable && loanFigures && (
-                          <AmountChoice
-                            active={effectiveChoice === "extra"}
-                            label={lent ? "Repayment + extra payment" : "Installment + extra payment"}
-                            hint={`${formatCurrencyExact(loanFigures.dueAmount)} due now is paid first · your extra lowers the loan balance (principal)`}
-                            onSelect={() => setChoice("extra")}
-                          />
-                        )}
-                        {effectiveChoice === "extra" && loanFigures && (
-                          <Reveal className="flex flex-col gap-1.5 pb-1 pl-7">
-                            <Field label="Extra amount" hint="Goes straight to reducing what you owe, on top of this installment.">
-                              <AmountInput
-                                value={extraAmount}
-                                autoFocus
-                                onChange={(v) => {
-                                  setExtraAmount(v);
-                                  setCustomTouched(true);
-                                }}
-                              />
-                            </Field>
-                            {extraValid && (
-                              <p className="text-xs text-muted-foreground" data-testid="extra-total">
-                                {formatCurrencyExact(loanFigures.dueAmount)} due now + {formatCurrencyExact(extraValue)} extra ={" "}
-                                <span className="font-semibold text-foreground">{formatCurrencyExact(loanFigures.dueAmount + extraValue)}</span> in total
-                              </p>
-                            )}
-                          </Reveal>
-                        )}
-                        {remainingOption && (
-                          <AmountChoice
-                            active={effectiveChoice === "remaining"}
-                            label={`${remainingOption.label} · advanced`}
-                            hint={remainingOption.hint}
-                            amount={remainingOption.amount}
-                            onSelect={() => {
-                              setRemainingAck(false);
-                              setChoice("remaining");
-                            }}
-                          />
-                        )}
-                        {effectiveChoice === "remaining" && remainingOption && !earlier && (
-                          <Reveal className="pb-1 pl-7">
-                            <label className="flex items-start gap-2 rounded-[6px] border border-warning/50 bg-warning/10 px-3 py-2 text-xs leading-snug text-foreground" data-testid="remaining-warning">
-                              <input type="checkbox" className="mt-0.5 size-4 shrink-0 accent-foreground" checked={remainingAck} onChange={(e) => setRemainingAck(e.target.checked)} />
-                              <span>
-                                <span className="block font-semibold">This pays every remaining installment in one go.</span>
-                                <span className="block text-muted-foreground">
-                                  It takes {formatCurrencyExact(remainingOption.amount)} out of your account at once. I understand and want to continue.
-                                </span>
-                              </span>
-                            </label>
-                          </Reveal>
-                        )}
-                      </>
-                    )}
-                  </div>
-                  {showError && (
-                    <p role="alert" className="text-xs font-semibold text-expense">
-                      {error}
-                    </p>
-                  )}
-                </div>
-              </PanelSection>
-
-              <PanelSection
-                className="shadow-e1"
-                defaultOpen
-                title={<StepTitle n={amountStep + 1}>{earlier ? "When, and details" : needsAccount ? (lent ? "Received into, and when" : "Paid from, and when") : "Paid with, and when"}</StepTitle>}
-                summary={[sourceSummary, dateSummary].filter(Boolean).join(" · ")}
-              >
-                <div className="flex flex-col gap-3">
-                  {cardLinked && !earlier && !modeLocked && cardLabel && (
-                    <FieldGroup label="How will you pay this EMI?">
-                      <ChoiceChips
-                        ariaLabel="EMI funding"
-                        options={[
-                          { value: "card", label: `Charge to ${cardLabel}` },
-                          { value: "bank", label: "Pay from a bank account" },
-                        ]}
-                        value={fundingMode}
-                        onChange={setFundingMode}
-                      />
-                    </FieldGroup>
-                  )}
-
-                  <div className="grid grid-cols-1 gap-3 @md:grid-cols-2">
-                    {needsAccount && (
-                      <Field label={earlier ? `${lent ? "Received into" : "Paid from"} · for your records` : lent ? "Received into" : "Paid from"}>
-                        {accounts.length === 0 ? (
-                          <span className="flex h-10 items-center justify-between gap-2 rounded-[6px] border border-dashed border-border bg-secondary px-3 text-xs text-muted-foreground">
-                            Add an account first
-                            <AddElsewhereLink href="/accounts" label="Go to Accounts" />
-                          </span>
-                        ) : (
-                          <AccountSelect
-                            className={LOAN_EMI_INPUT}
-                            accounts={selectableAccounts}
-                            value={accountId}
-                            onChange={setAccountId}
-                            placeholder={lent ? "Choose account" : "Choose paying account"}
-                            showBalance={fundsApply}
-                            ariaLabel={lent ? "Received into account" : "Paid from account"}
-                          />
-                        )}
-                      </Field>
-                    )}
-                    <Field label={earlier ? (lent ? "Date received" : "Date paid") : "Payment date"}>
-                      <span className="relative">
-                        {earlier ? (
-                          <DateInput
-                            className={LOAN_EMI_INPUT}
-                            aria-label={lent ? "Date received" : "Date paid"}
-                            value={dateUnknown ? "" : earlierDate}
-                            max={today}
-                            disabled={dateUnknown}
-                            onChange={(e) => setEarlierDate(e.target.value)}
-                          />
-                        ) : (
-                          <DateInput className={LOAN_EMI_INPUT} aria-label="Payment date" value={date} onChange={(e) => setDate(e.target.value)} />
-                        )}
-                      </span>
-                    </Field>
-                    {earlier && (
-                      <Field label="Note">
-                        <input className={LOAN_EMI_INPUT} aria-label="Note" placeholder="Note or reference (optional)" value={note} onChange={(e) => setNote(e.target.value)} />
-                      </Field>
-                    )}
-                  </div>
-
-                  {backdated && (
-                    <div role="note" className="flex flex-col gap-1.5 rounded-[6px] border border-warning/50 bg-warning/10 px-3 py-2.5 text-xs leading-snug text-foreground" data-testid="backdate-hint">
-                      <p className="text-[11px] font-semibold tracking-[0.06em] text-warning-foreground uppercase dark:text-warning">Back-dated payment</p>
-                      <p className="[overflow-wrap:anywhere]">
-                        This records a real {lent ? "credit to" : needsAccount ? "payment from" : "charge on"} <span className="font-semibold">{backdatedSource}</span> dated{" "}
-                        <span className="font-semibold whitespace-nowrap">{paymentDate.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}</span>; its balance changes from that date.
-                      </p>
-                      {!modeLocked && (
-                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-warning/30 pt-1.5">
-                          <span className="text-muted-foreground">{lent ? "Received" : "Paid"} before FlowFi, already in your balance?</span>
-                          <button type="button" onClick={() => setView("past")} className="font-semibold underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                            {lent ? "Record past repayments instead" : "Record past payments instead"}
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {earlier && (
+        {next != null && !earlier && (peopleStepShown || showPaymentDetails) && (
+          // Left: the lender payment. Right: what PEOPLE owe you, then what will happen — each side in its own column.
+          <div className="grid gap-3 @2xl:grid-cols-[minmax(0,1fr)_minmax(0,22rem)] @2xl:items-start">
+            <div className="flex min-w-0 flex-col gap-3">{showPaymentDetails ? payCard : lockedCard}</div>
+            <div className="flex min-w-0 flex-col gap-3">
+              {peopleCard}
+              {receiptCard}
+              {showPaymentDetails && !lent && <LinkedFundsPayNotice funds={linkedFundsForInstallment(linkedFunds, next.id)} accountName={(id) => accounts.find((a) => a.id === id)?.name} onUseAccount={needsAccount ? setAccountId : undefined} />}
+              {showPaymentDetails && (
+                <PayMore title="More options" summary={note.trim() || (emiRow ? "Note, GST, fees" : "Note")}>
+                  <PayField label="Note">
+                    <input className={PAY_INPUT} placeholder="Optional" value={note} onChange={(e) => setNote(e.target.value)} />
+                  </PayField>
+                  {emiRow && (
                     <>
-                      <label className="flex items-center gap-2 text-xs font-medium text-foreground">
-                        <input type="checkbox" className="size-4 accent-foreground" checked={dateUnknown} onChange={(e) => setDateUnknown(e.target.checked)} />
-                        I don&apos;t know the exact date
-                        {dateUnknown && anchor && <span className="font-normal text-muted-foreground">· saved as “date not known”</span>}
-                      </label>
-                      {earlierDateError && (
-                        <p role="alert" className="text-xs font-semibold text-expense">
-                          {earlierDateError}
-                        </p>
-                      )}
-                      {!lent && (
-                        <LinkTransactionField
-                          related={linkSplit.related}
-                          others={linkSplit.others}
-                          owed={anchor ? Math.max(0, anchor.amountDue - anchor.amountPaid) : 0}
-                          dueDate={anchor?.dueDate ?? new Date()}
-                          linked={linkedTx}
-                          accountName={(id) => accounts.find((a) => a.id === id)?.name ?? "Account"}
-                          mismatch={linkMismatch}
-                          onPick={pickLink}
-                          onClear={() => setLinkedTx(null)}
-                        />
-                      )}
-                      {!lent && !earlierSplit && <HistoricalPeopleReconcile state={reconcile} accounts={accounts} showInstallment={(reconcileIds ?? touched).length > 1} locked={lenderDone && reconcile.failed.length === 0} />}
-                      {!earlierSplit && (
-                        <p className="text-xs font-medium text-foreground/80" data-testid="past-payment-effect">
-                          No account balance changes for the {lent ? "repayment" : "lender payment"}.
-                          {!lent && " People shares are only marked received where you say so above."}
-                        </p>
-                      )}
+                      <PayField label="GST" hint="For your records only.">
+                        <input type="number" inputMode="decimal" className={PAY_INPUT} value={gst} onChange={(e) => setGst(e.target.value)} />
+                      </PayField>
+                      <PayField label="Processing fee" hint="For your records only.">
+                        <input type="number" inputMode="decimal" className={PAY_INPUT} value={processingFee} onChange={(e) => setProcessingFee(e.target.value)} />
+                      </PayField>
                     </>
                   )}
-                </div>
-              </PanelSection>
-            </>
-          )}
-        </div>
-        {earlierSplit && (
-          <SheetRail label="People and effect">
-            <p className="rounded-[10px] border border-primary-accent-text/25 bg-primary/10 px-3 py-2 text-xs font-medium text-foreground/85" data-testid="past-payment-effect">
-              No account balance changes for the lender payment. People shares are only marked received where you say so below.
-            </p>
-            <HistoricalPeopleReconcile state={reconcile} accounts={accounts} showInstallment={(reconcileIds ?? touched).length > 1} locked={lenderDone && reconcile.failed.length === 0} />
-          </SheetRail>
+                </PayMore>
+              )}
+            </div>
+          </div>
         )}
-        {showRail && (
-          <SheetRail label="Payment context">
-          {/* What will happen — read off the same allocation the write performs. */}
-          {showPaymentDetails && !earlier && planAmount != null && (
-            <PanelSection className="shadow-e1" defaultOpen title="What will happen" summary={amountLabel}>
-              <section aria-label="Payment preview" className="flex flex-col gap-2.5" data-testid="payment-impact">
-                {reamortizes && prepaymentPreview && loanFigures ? (
-                  <div className="flex flex-col gap-1.5">
-                    <ImpactRow label="Due now · paid first" amount={Math.max(0, planAmount - extra)} />
-                    <ImpactRow label="Extra · reduces principal" amount={extra} />
-                    <PreviewLine label="Remaining principal" before={<Money exact amount={prepaymentPreview.principalBefore} />} after={<Money exact amount={prepaymentPreview.principalAfter} />} />
-                    {solved && <PreviewLine label="Installments left" before={prepaymentPreview.installmentCountBefore} after={solved.remainingInstallmentCount} />}
-                    {prepaymentPreview.outcome?.kind === "unsolvable" && (
-                      <p className="text-[11px] text-warning-foreground dark:text-warning">The schedule can&apos;t be re-planned automatically; the payment is still recorded.</p>
-                    )}
-                  </div>
-                ) : loanPreview ? (
-                  <PaymentPreview
-                    bare
-                    source={sourceLine}
-                    coverage={loanPreview.coverage}
-                    extraPrincipal={loanPreview.extraPrincipal}
-                    outstandingBefore={loanRow!.outstandingPrincipal}
-                    outstandingAfter={loanPreview.outstandingAfter}
-                    nextDue={loanPreview.nextDue}
-                  />
-                ) : emiAllocation ? (
-                  <PaymentPreview
-                    bare
-                    source={sourceLine}
-                    coverage={paymentCoverage(emiAllocation.portions.map((p) => ({ sequenceNumber: p.installment.sequenceNumber, amount: p.amount, remainingAfter: p.remainingAfter })))}
-                    outstandingBefore={emiAllocation.remainingBefore}
-                    outstandingAfter={emiAllocation.remainingAfter}
-                    nextDue={
-                      emiNext
-                        ? {
-                            amount: emiNext.remaining,
-                            covered: Math.max(0, emiNext.installment.amountDue - emiNext.remaining),
-                            sequenceNumber: emiNext.installment.sequenceNumber,
-                            dueDate: emiNext.installment.dueDate,
-                          }
-                        : null
-                    }
-                  />
-                ) : null}
-                {fundsApply && payingAccount && <PaymentSourceSummary account={payingAccount} amount={planAmount} paymentLabel={isLoan ? "Loan payment" : "EMI payment"} />}
-                {lentAccount && (
-                  <PreviewLine label={lentAccount.name} before={<Money exact amount={lentAccount.currentBalance} />} after={<Money exact amount={lentAccount.currentBalance + planAmount} />} />
-                )}
-                {!previewShown && sourceLine}
-                {emiRow && cardLabel && legPlan != null && <CardImpact plan={legPlan} cardLabel={cardLabel} />}
-                {peopleImpact && (
-                  <p className="text-xs text-foreground/80" data-testid="people-impact">
-                    <span className="font-semibold text-foreground">People: </span>
-                    {peopleImpact}
-                  </p>
-                )}
-                {postponedImpact && <p className="text-xs text-foreground/80">{postponedImpact}</p>}
-              </section>
-            </PanelSection>
-          )}
-          {showPaymentDetails && !earlier && !lent && (
-            <LinkedFundsPayNotice funds={linkedFundsForInstallment(linkedFunds, next.id)} accountName={(id) => accounts.find((a) => a.id === id)?.name} onUseAccount={needsAccount ? setAccountId : undefined} />
-          )}
-          {next && !earlier && showPaymentDetails && (
-            <PanelSection className="shadow-e1" title="More options" summary={note.trim() || (emiRow ? "Note, GST, fees" : "Note")}>
-              <div className="grid grid-cols-1 gap-3 @md:grid-cols-2">
-                <Field label="Note">
-                  <input className={LOAN_EMI_INPUT} placeholder="Optional" value={note} onChange={(e) => setNote(e.target.value)} />
-                </Field>
-                {emiRow && (
-                  <>
-                    <Field label="GST" hint="For your records only.">
-                      <input type="number" inputMode="decimal" className={LOAN_EMI_INPUT} value={gst} onChange={(e) => setGst(e.target.value)} />
-                    </Field>
-                    <Field label="Processing fee" hint="For your records only.">
-                      <input type="number" inputMode="decimal" className={LOAN_EMI_INPUT} value={processingFee} onChange={(e) => setProcessingFee(e.target.value)} />
-                    </Field>
-                  </>
+
+        {showPaymentDetails && next && earlier && (
+          <div className={cn("grid gap-3", earlierSplit && "@2xl:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)] @2xl:items-start")}>
+            <div className="flex min-w-0 flex-col gap-3">
+              <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 rounded-[10px] border border-border bg-secondary/60 px-3 py-2" data-testid="past-payment-header">
+                <span className="text-[13px] font-semibold text-foreground">
+                  {directPayer ? (
+                    <>
+                      Paid directly by {payerName} <span className="font-normal text-muted-foreground">· no account balance changes</span>
+                    </>
+                  ) : (
+                    <>
+                      Past payment <span className="font-normal text-muted-foreground">· {lent ? "received" : "paid"} before FlowFi — no account balance changes</span>
+                    </>
+                  )}
+                </span>
+                {!modeLocked && !directPayer && (
+                  <span className="flex flex-wrap gap-x-3 text-xs">
+                    <button type="button" onClick={() => setView("past")} className="font-semibold text-foreground underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                      Choose other installments
+                    </button>
+                    <button type="button" onClick={() => setMode("now")} className="font-semibold text-foreground underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                      {lent ? "Receive it now instead" : "Pay it now instead"}
+                    </button>
+                  </span>
                 )}
               </div>
-            </PanelSection>
-          )}
-          </SheetRail>
+              {payCard}
+            </div>
+            {earlierSplit && (
+              <div className="flex min-w-0 flex-col gap-3">
+                <PayCard tone="people" title="From people">
+                  <p className="text-xs font-medium text-foreground/85" data-testid="past-payment-effect">
+                    The lender payment doesn&apos;t change your accounts.
+                  </p>
+                  <HistoricalPeopleReconcile state={reconcile} accounts={accounts} showInstallment={(reconcileIds ?? touched).length > 1} locked={lenderDone && reconcile.failed.length === 0} viaLender={directPayer} />
+                </PayCard>
+              </div>
+            )}
+          </div>
         )}
-      </div>
       </div>
     </PaymentSheet>
   );
 }
 
-/** A step's title: its number in a small circle, then the name. */
-function StepTitle({ n, children }: { n: number; children: React.ReactNode }) {
+/** One figure of the statement strip: caption over value (a `dt` then its `dd`). `owed` = still to come in; `done` = nothing left. */
+function StripFact({ label, value, muted, tone }: { label: string; value: string; muted?: boolean; tone?: "owed" | "done" }) {
   return (
-    <span className="flex min-w-0 items-center gap-2">
-      <span aria-hidden className="grid size-5 shrink-0 place-items-center rounded-full bg-primary text-[11px] font-bold text-primary-foreground tabular-nums">
-        {n}
-      </span>
-      <span className="truncate">{children}</span>
-    </span>
-  );
-}
-
-function ImpactRow({ label, amount }: { label: string; amount: number }) {
-  return (
-    <div className="flex items-center justify-between gap-3 text-xs">
-      <span className="text-muted-foreground">{label}</span>
-      <Money exact amount={amount} className="text-xs text-foreground" />
-    </div>
-  );
-}
-
-/** One small figure in the summary line. `owed` = still to come in (not green); `done` = nothing left. */
-function SummaryFact({ label, value, muted, tone, hero }: { label: string; value: string; muted?: boolean; tone?: "owed" | "done"; hero?: boolean }) {
-  return (
-    <div className="flex items-baseline gap-1.5">
-      <dt className={hero ? "text-hero-foreground/68" : "text-muted-foreground"}>{label}</dt>
-      <dd
-        className={cn(
-          "font-semibold tabular-nums",
-          hero
-            ? muted
-              ? "text-hero-foreground/68"
-              : tone === "owed" || tone === "done"
-                ? "text-primary"
-                : "text-hero-foreground"
-            : muted
-              ? "text-muted-foreground"
-              : tone === "owed"
-                ? "text-settle-receivable-text"
-                : tone === "done"
-                  ? "text-success"
-                  : "text-foreground",
-        )}
-      >
-        {value}
-      </dd>
+    <div className="flex flex-col gap-0.5 px-3.5 first:pl-0 last:pr-0">
+      <dt className="text-[10.5px] font-medium text-muted-foreground">{label}</dt>
+      <dd className={cn("text-[13px] font-semibold tabular-nums", muted ? "text-muted-foreground" : tone === "owed" ? "text-settle-receivable-text" : tone === "done" ? "text-success" : "text-foreground")}>{value}</dd>
     </div>
   );
 }
@@ -1365,10 +1366,10 @@ function PaymentPreview({
       <div className="flex flex-col gap-1">
         {settled && (
           <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
-            <span className="min-w-0 text-sm font-medium text-foreground">
+            <span className="min-w-0 text-[13px] font-medium text-foreground">
               {settled.count === 1 ? `Installment #${settled.first}` : `${settled.count} installments · #${settled.first}–#${settled.last}`} · paid
             </span>
-            <Money exact amount={settled.amount} className="ml-auto text-base text-foreground" />
+            <Money exact amount={settled.amount} className="ml-auto text-sm text-foreground" />
           </div>
         )}
         {partial && (
@@ -1377,13 +1378,13 @@ function PaymentPreview({
               Installment #{partial.sequenceNumber} · part
               <span className="font-normal text-muted-foreground"> · {formatCurrencyExact(partial.left)} still due</span>
             </span>
-            <Money exact amount={partial.amount} className="ml-auto text-base text-foreground" />
+            <Money exact amount={partial.amount} className="ml-auto text-sm text-foreground" />
           </div>
         )}
         {extraPrincipal > 0 && (
           <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
             <span className="min-w-0 text-sm font-medium text-foreground">Extra · reduces principal</span>
-            <Money exact amount={extraPrincipal} className="ml-auto text-base text-foreground" />
+            <Money exact amount={extraPrincipal} className="ml-auto text-sm text-foreground" />
           </div>
         )}
         {source}

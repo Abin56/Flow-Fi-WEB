@@ -2,7 +2,7 @@
 
 import { HISTORICAL_PAYMENT_LABEL, historicalPaymentExplanation } from "@/features/loans/lib/historical-payment";
 import type { InstallmentPeopleStatus } from "@/features/loans/hooks/use-installment-people-status";
-import { ArrowRight, Check, ChevronRight, Receipt, RotateCcw, type LucideIcon } from "lucide-react";
+import { ArrowRight, Check, ChevronRight, HandCoins, Receipt, RotateCcw, type LucideIcon } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 import { ClayBadge } from "@/components/clay/clay-badge";
 import { ContextPanel } from "@/components/finance/context-panel";
@@ -14,6 +14,7 @@ import {
   paymentTypeLabel,
   type RecordedPaymentAction,
 } from "@/features/loans/lib/recorded-payments";
+import { LENDER_STATUS_TEXT } from "@/features/loans/lib/installment-table";
 import { useAccounts } from "@/hooks/use-accounts";
 import { useTransactions } from "@/hooks/use-transactions";
 import { formatCurrency, formatCurrencyExact } from "@/lib/format";
@@ -79,11 +80,11 @@ function dayMonth(d: Date): string {
 }
 
 /** "Paid" / "Overdue" / … — a small tinted pill. */
-function StatusPill({ status }: { status: InstallmentStatus }) {
+function StatusPill({ status, shared = false }: { status: InstallmentStatus; shared?: boolean }) {
   return (
     <span className={cn("inline-flex h-5 shrink-0 items-center gap-0.5 rounded-full px-1.5 text-[10.5px] leading-none font-semibold whitespace-nowrap", STATUS_PILL[status])}>
       {status === "paid" && <Check className="size-3" strokeWidth={2.75} aria-hidden />}
-      {STATUS_TEXT[status]}
+      {(shared ? LENDER_STATUS_TEXT : STATUS_TEXT)[status]}
     </span>
   );
 }
@@ -137,6 +138,7 @@ export function InstallmentList({
   fallbackSourceLabel,
   lent = false,
   peopleStatus,
+  onTheyPaid,
   scope = "all",
   limit,
 }: {
@@ -145,6 +147,11 @@ export function InstallmentList({
    * the two are separate (paying the lender never marks a person as paid).
    */
   peopleStatus?: ReadonlyMap<string, InstallmentPeopleStatus>;
+  /**
+   * Shared Loan / EMI: records that the assigned person already paid their share of this installment (People side only —
+   * the lender status above is a separate fact). Offered only where someone still owes a share.
+   */
+  onTheyPaid?: (installment: Installment) => void;
   installments: Installment[];
   total: number;
   closed: boolean;
@@ -212,6 +219,8 @@ export function InstallmentList({
     // A payment recorded as "already paid earlier" never moved an account, so it must not read "from <account>".
     const earlier = recorded?.recordedEarlier ?? null;
     const people = peopleStatus?.get(i.id) ?? null;
+    // Someone still owes a share (owed, or moved to a later cycle) — the schedule can record that they already paid it.
+    const canTheyPay = onTheyPaid != null && !lent && people != null && people.tone !== "received" && !i.isSkipped;
     const monthLong = i.dueDate.toLocaleDateString("en-IN", { month: "long", year: "numeric" });
     const dateLine =
       status === "paid"
@@ -250,7 +259,7 @@ export function InstallmentList({
           width="sm"
           testId={`installment-details-${i.sequenceNumber}`}
           title={`Installment ${i.sequenceNumber}${total > 0 ? ` of ${total}` : ""}`}
-          description={`${monthLong} · ${STATUS_TEXT[status]}`}
+          description={`${monthLong} · ${(people ? LENDER_STATUS_TEXT : STATUS_TEXT)[status]}`}
           onApply={canPay ? () => onPay(i) : undefined}
           applyLabel={lent ? `Record ${formatCurrency(remaining)}` : `Pay ${formatCurrency(remaining)}`}
           cancelLabel="Close"
@@ -268,7 +277,7 @@ export function InstallmentList({
                   #{i.sequenceNumber}
                   {total > 0 && <span className="font-medium text-muted-foreground"> / {total}</span>}
                 </span>
-                <StatusPill status={status} />
+                <StatusPill status={status} shared={people != null} />
               </span>
               <Money amount={i.amountDue} className={cn("text-[17px] leading-tight", status === "skipped" ? "text-muted-foreground line-through decoration-1" : "text-foreground")} />
               <span className={cn("truncate text-[11px]", status === "overdue" ? "font-semibold text-expense" : "text-muted-foreground")}>{dateLine}</span>
@@ -331,6 +340,19 @@ export function InstallmentList({
               </DetailLine>
             )}
           </dl>
+          {canTheyPay && (
+            <button
+              type="button"
+              onClick={() => {
+                setOpenId(null);
+                onTheyPaid(i);
+              }}
+              className={cn(CARD_ACTION, "mt-2.5 h-8 w-full border-border-strong bg-card text-foreground hover:bg-secondary")}
+            >
+              <HandCoins className="size-3.5" strokeWidth={1.75} />
+              They paid — record it
+            </button>
+          )}
           {recorded && (
             <button
               type="button"
@@ -343,9 +365,21 @@ export function InstallmentList({
           )}
           {!canPay && !recorded && <p className="mt-2 text-[11px] text-muted-foreground">{closed ? "Closed — reopen it to record payments." : "Nothing to pay for this installment."}</p>}
         </ContextPanel>
-        {(canPay || recorded) && (
+        {(canPay || recorded || canTheyPay) && (
           <div className="flex items-center gap-1.5 px-2.5 pt-0.5 pb-2.5">
             {canPay && <PayButton emphasized={emphasized} onClick={() => onPay(i)} label={`Pay installment ${i.sequenceNumber}, ${formatCurrency(remaining)}`} />}
+            {canTheyPay && (
+              <button
+                type="button"
+                onClick={() => onTheyPaid(i)}
+                aria-label={`Installment ${i.sequenceNumber}: record that they paid`}
+                title="Record that the person already paid their share"
+                data-testid={`they-paid-${i.sequenceNumber}`}
+                className={cn(CARD_ACTION, "flex-1 border-border-strong bg-card text-foreground hover:bg-secondary")}
+              >
+                They paid
+              </button>
+            )}
             {recorded && (
               <button
                 type="button"

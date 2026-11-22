@@ -18,6 +18,11 @@ import { formatDay } from "@/features/activity/lib/format-when";
 import { ActivityIcon } from "@/features/activity/components/activity-icon";
 import { useActivityFeed } from "@/features/activity/hooks/use-activity-feed";
 import { activityContext, activityKindLabel, activityTitle, filterActivity, type ActivityFilter, type ActivityItem } from "@/features/activity/lib/activity-classify";
+import { ConfirmDialog } from "@/components/finance";
+import { purgeReversedPersonLegs, reversedPersonLegs } from "@/features/activity/lib/purge-reversed";
+import { db } from "@/lib/firebase/client";
+import { useAuthStore } from "@/store/auth-store";
+import { toast } from "@/store/toast-store";
 import { formatCurrency } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -143,6 +148,24 @@ export function ActivityWorkspace() {
     return () => window.clearTimeout(id);
   }, []);
   const [query, setQuery] = useState("");
+  const uid = useAuthStore((s) => s.user?.uid);
+  const [clearOpen, setClearOpen] = useState(false);
+  const [clearing, setClearing] = useState(false);
+  const reversedLegs = useMemo(() => reversedPersonLegs(feed.items), [feed.items]);
+  async function clearReversed() {
+    if (!uid || clearing) return;
+    setClearing(true);
+    try {
+      const n = await purgeReversedPersonLegs(db, uid, reversedLegs);
+      await feed.refresh();
+      toast.success(`${n} reversed record${n === 1 ? "" : "s"} removed`);
+      setClearOpen(false);
+    } catch {
+      toast.error("Couldn't remove them — nothing else was changed. Try again.");
+    } finally {
+      setClearing(false);
+    }
+  }
   /** Days folded shut by the user — a view-only choice so a long history never forces a long scroll. */
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
 
@@ -280,6 +303,15 @@ export function ActivityWorkspace() {
             <span className="tabular-nums">
               <span className="font-semibold text-foreground">{rows.length}</span> {rows.length === 1 ? "action" : "actions"} · {groups.length} {groups.length === 1 ? "day" : "days"}
             </span>
+            {reversedLegs.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setClearOpen(true)}
+                className="rounded-full px-2.5 py-1 font-semibold text-foreground underline decoration-border-strong underline-offset-4 outline-none transition-colors hover:bg-primary/25 focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                Remove {reversedLegs.length} reversed People record{reversedLegs.length === 1 ? "" : "s"}
+              </button>
+            )}
             {groups.length > 1 && (
               <button
                 type="button"
@@ -338,6 +370,16 @@ export function ActivityWorkspace() {
         </div>
       )}
 
+      <ConfirmDialog
+        open={clearOpen}
+        onOpenChange={(o) => !clearing && setClearOpen(o)}
+        title={`Remove ${reversedLegs.length} reversed People record${reversedLegs.length === 1 ? "" : "s"}?`}
+        description="These repayments were already reversed, so no balance changes. This permanently removes them from Activity and the People Ledger and can't be undone."
+        variant="destructive"
+        confirmLabel={clearing ? "Removing…" : "Remove permanently"}
+        loading={clearing}
+        onConfirm={() => void clearReversed()}
+      />
       {drawerMounted && <ActivityDrawer item={open} names={feed.names} accounts={feed.accounts} onClose={() => setOpenId(null)} />}
       <ScrollNav />
     </div>

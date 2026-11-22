@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 import { startOperation } from "@/store/operation-progress-store";
 import type { Loan } from "@/lib/models/loan";
@@ -41,6 +41,8 @@ export interface LoansWorkspaceProps {
   openRequest?: { id: string; seq: number } | null;
   /** Incremented to open the Loan trash. */
   trashRequest?: number;
+  /** The dedicated page (`/loans/[id]`): this Loan's details are the page itself, driven by the route. */
+  pageAgreementId?: string | null;
 }
 
 /**
@@ -50,8 +52,12 @@ export interface LoansWorkspaceProps {
 export function LoansWorkspace({
   openRequest = null,
   trashRequest = 0,
+  pageAgreementId = null,
 }: LoansWorkspaceProps = {}) {
   const searchParams = useSearchParams();
+  const router = useRouter();
+  const pageMode = pageAgreementId != null;
+  const leavePage = () => router.replace("/loans/");
   const queryClient = useQueryClient();
   const { rows } = useLoanRows();
   const { rows: trashedRows } = useTrashedLoanRows();
@@ -85,9 +91,7 @@ export function LoansWorkspace({
     actions?.resumePendingDeletions().catch(() => undefined);
   }, [actions]);
 
-  const [activeRowId, setActiveRowId] = useState<string | null>(() =>
-    searchParams.get("agreement"),
-  );
+  const [activeRowId, setActiveRowId] = useState<string | null>(pageAgreementId);
   // Resolved live against `rows` on every render, instead of holding a snapshot of the row — `rows`
   // comes from a live Firestore subscription (see `hooks/use-loans.ts`), so re-deriving it here is what
   // makes edits/payments to the open loan show up in the schedule dialog without a manual refresh.
@@ -95,9 +99,7 @@ export function LoansWorkspace({
     () => rows.find((r) => r.loan.id === activeRowId) ?? null,
     [rows, activeRowId],
   );
-  const [scheduleOpen, setScheduleOpen] = useState(() =>
-    searchParams.has("agreement"),
-  );
+  const [scheduleOpen, setScheduleOpen] = useState(pageMode);
   const [editOpen, setEditOpen] = useState(false);
   const [trashOpen, setTrashOpen] = useState(false);
   // Record Payment resolves its loan live from `rows` (like `activeRow`), so the open surface shows the
@@ -117,9 +119,9 @@ export function LoansWorkspace({
   );
   // Back from People (`?agreement=<id>&pay=1[&installment=<id>]`): reopen Record Payment for that loan once, when it has loaded.
   const payHandoffRef = useRef(
-    searchParams.get("pay") === "1"
+    pageMode && searchParams.get("pay") === "1"
       ? {
-          loanId: searchParams.get("agreement"),
+          loanId: pageAgreementId,
           installmentId: searchParams.get("installment"),
           view:
             searchParams.get("view") === "past"
@@ -157,8 +159,8 @@ export function LoansWorkspace({
   } | null>(null);
   // From Balance Control's reconciliation guide (`?agreement=<id>&adjust=disbursement`): open Additional disbursement once.
   const adjustHandoffRef = useRef(
-    searchParams.get("adjust") === "disbursement"
-      ? searchParams.get("agreement")
+    pageMode && searchParams.get("adjust") === "disbursement"
+      ? pageAgreementId
       : null,
   );
   useEffect(() => {
@@ -219,9 +221,12 @@ export function LoansWorkspace({
 
   function openEdit(row: LoanRow) {
     // Edit is the creation screen itself, not a layer over the details: close the details, open the form,
-    // and saving or cancelling lands back on the Loan & EMI main page (like Add does).
-    setScheduleOpen(false);
-    setActiveRowId(null);
+    // and saving or cancelling lands back on the Loan & EMI main page (like Add does). On the dedicated
+    // page the details ARE the page, so the form simply opens over it and closing it returns there.
+    if (!pageMode) {
+      setScheduleOpen(false);
+      setActiveRowId(null);
+    }
     setEditId(row.loan.id);
     setEditSeq((n) => n + 1);
     setEditOpen(true);
@@ -254,6 +259,7 @@ export function LoansWorkspace({
       await actions.deleteLoan(row.loan);
       setScheduleOpen(false);
       setActiveRowId(null);
+      if (pageMode) leavePage();
       op.succeed({
         toast: {
           title: "Loan moved to trash",
@@ -317,14 +323,14 @@ export function LoansWorkspace({
     [actions, deleteTargetId],
   );
 
-  async function confirmPermanentDelete() {
+  async function confirmPermanentDelete(options: { reverseRepayments: boolean } = { reverseRepayments: false }) {
     if (!actions || !deleteTarget || purgeInFlight.current) return;
     const loan = deleteTarget;
     purgeInFlight.current = true;
     setPurging(true);
     const ok = await runPermanentDeletion({
       kind: "loan",
-      run: (onStage) => actions.permanentlyDeleteLoan(loan, { onStage }),
+      run: (onStage) => actions.permanentlyDeleteLoan(loan, { onStage, reverseRepayments: options.reverseRepayments }),
       refresh: () =>
         Promise.all(
           [
@@ -345,6 +351,7 @@ export function LoansWorkspace({
       if (activeRowId === loan.id) {
         setScheduleOpen(false);
         setActiveRowId(null);
+        if (pageMode) leavePage();
       }
     }
   }
@@ -359,6 +366,7 @@ export function LoansWorkspace({
             if (!open) setActiveRowId(null);
           }}
           row={activeRow}
+          page={pageMode}
           // Edit and the payment flows open as layers beside the details; the details stay put underneath.
           onEdit={openEdit}
           onDelete={handleDelete}

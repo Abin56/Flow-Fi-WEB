@@ -209,6 +209,10 @@ export function RecordedPaymentDialog({
           : postedFunding?.kind === "bank" && postedFunding.principalToCard > 0
             ? `${emiAccountLabel} · ${fmt(postedFunding.principalToCard)} of it paid to ${cardName}`
             : ((bankPaidEmi ? emiAccountLabel : emiCardLabel(emiRow!)) ?? emiAccountLabel ?? "Schedule only (no account)");
+  // Who paid the lender — read off what was recorded (an account-funded payment = me; a recorded-earlier one moved none of my accounts).
+  const directNote = earlierMark && action.note.startsWith("Paid directly by") ? action.note.split(" · ")[0] : null;
+  const paidByText = lent ? null : earlierMark ? (directNote ?? "Not from your accounts (paid before FlowFi, or by someone else)") : "You, from your account";
+  const receivedFromPeople = (peopleBreakdown?.participants ?? []).reduce((t, p) => t + Math.min(p.current?.received ?? 0, p.current?.share ?? 0), 0);
   // A past payment's edit keeps it past (the repositories carry the mark) — its People shares were never gated on it.
   const peopleGateAcknowledgement = earlierMark ? RECORDED_EARLIER_PEOPLE_ACK : undefined;
 
@@ -667,6 +671,7 @@ export function RecordedPaymentDialog({
                     : action.date.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }),
               },
               { label: "Installment", value: installmentRangeLabel(action.installmentSeqs) + (total ? ` of ${total}` : "") },
+              paidByText ? { label: "Who paid the lender", value: paidByText } : null,
               emiRow && originalBreakdowns.length > 0 ? { label: "Principal", value: formatCurrencyExact(principalPaid) } : null,
               emiRow && originalBreakdowns.length > 0 ? { label: "Interest", value: formatCurrencyExact(interestPaid) } : null,
               { label: loanRow ? (lent ? "Received into" : "Paid from") : postedFunding?.kind === "bank" ? "Paid from" : postedFunding?.kind === "noCardCharge" ? "Card charge" : "Charged to", value: sourceLabel },
@@ -699,7 +704,7 @@ export function RecordedPaymentDialog({
           {(peopleLoading || (peopleBreakdown?.participants.length ?? 0) > 0) && (
             <div className="flex flex-col gap-1.5 rounded-[6px] border border-border px-3 py-2.5" data-testid="recorded-payment-people">
               <p className="text-xs text-muted-foreground">
-                {lent ? "Repayment" : "Lender payment"} recorded above. Each person&apos;s share is tracked separately in People — this payment didn&apos;t mark anyone as paid.
+                {lent ? "Repayment" : "Lender payment"} recorded above. Money from people is tracked separately in People — {receivedFromPeople > 0.005 ? `${formatCurrencyExact(receivedFromPeople)} received so far for this installment` : "nothing received yet for this installment"}. Editing this payment never changes it.
               </p>
               <InstallmentPeoplePanel
                 breakdown={peopleBreakdown}
@@ -883,6 +888,14 @@ export function RecordedPaymentDialog({
         )}
       </section>
 
+      {paidByText && (
+        <p className="flex items-start gap-2 text-xs text-foreground" data-testid="edit-paid-by">
+          <Info className="mt-px size-3.5 shrink-0" strokeWidth={1.75} />
+          <span>
+            <span className="font-semibold">Who paid the lender:</span> {paidByText}. This stays as recorded — to change it, go back and mark the payment as unpaid, then record it again with the right payer.
+          </span>
+        </p>
+      )}
       <p className="flex items-start gap-2 text-[11px] text-muted-foreground">
         <Info className="mt-px size-3.5 shrink-0" strokeWidth={1.75} />
         {originalReversed

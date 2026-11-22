@@ -186,3 +186,20 @@ describe("installmentBreakdown — held advance is shown, never applied", () => 
     expect(who(b, "AMMA").advanceHeld).toBe(0);
   });
 });
+
+describe("installmentBreakdown — a general payment is shown apart from an installment-specific one", () => {
+  it("money paid toward the overall balance (no item chosen) never marks the share received, but is reported as generalCredit", () => {
+    const general = entry("g1", { personId: "amma", amount: 1000, obligationRef: null, transactionRef: "leg-g1" });
+    const b = breakdown([inst("oct", 1, OCT_5, 9000)], "oct", [general]);
+    const amma = who(b, "AMMA");
+    expect(amma.current).toMatchObject({ share: 3000, received: 0, remaining: 3000, state: "pending" });
+    expect(amma.generalCredit).toBe(1000);
+    expect(who(b, "Sanju").generalCredit).toBe(0);
+  });
+
+  it("a payment recorded AGAINST the installment is received, and is not double-counted as general credit", () => {
+    const b = breakdown([inst("oct", 1, OCT_5, 9000)], "oct", [paid("p1", "amma", 3000, "loan-inst:oct")]);
+    expect(who(b, "AMMA").current).toMatchObject({ received: 3000, remaining: 0, state: "received" });
+    expect(who(b, "AMMA").generalCredit).toBe(0);
+  });
+});

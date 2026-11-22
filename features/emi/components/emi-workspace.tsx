@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { StackProvider } from "@/components/finance/stack-layer";
 import { EmiScheduleDialog } from "@/features/emi/components/emi-schedule-dialog";
 import { EmiEditTermsDialog } from "@/features/emi/components/emi-edit-terms-dialog";
@@ -21,19 +21,23 @@ import { startOperation } from "@/store/operation-progress-store";
 export interface EmiWorkspaceProps {
   /** Opens this EMI's detail view — sent by the unified Loan & EMI list; `seq` makes repeat clicks count. */
   openRequest?: { id: string; seq: number } | null;
+  /** The dedicated page (`/loans/[id]`): this EMI's details are the page itself, driven by the route. */
+  pageAgreementId?: string | null;
 }
 
 /**
  * Every EMI dialog — schedule/details, record payment, close/reopen, delete — for the unified Loan & EMI
  * workspace, which owns the list and the single Add flow. Renders no list of its own.
  */
-export function EmiWorkspace({ openRequest = null }: EmiWorkspaceProps = {}) {
+export function EmiWorkspace({ openRequest = null, pageAgreementId = null }: EmiWorkspaceProps = {}) {
   const searchParams = useSearchParams();
+  const router = useRouter();
+  const pageMode = pageAgreementId != null;
   const { rows } = useEmiRows();
   const actions = useEmiActions();
   const queryClient = useQueryClient();
   const [activeRow, setActiveRow] = useState<EmiRow | null>(null);
-  const [handoffDetailId, setHandoffDetailId] = useState<string | null>(() => searchParams.get("agreement"));
+  const [handoffDetailId, setHandoffDetailId] = useState<string | null>(pageAgreementId);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   // Incremented per open so each Record Payment gets a fresh mount (clean form, new guard state).
@@ -64,7 +68,7 @@ export function EmiWorkspace({ openRequest = null }: EmiWorkspaceProps = {}) {
   }
 
   // Back from People (`?agreement=<id>&pay=1[&installment=<id>]`): reopen Record Payment on that installment once.
-  const payHandoffRef = useRef(searchParams.get("pay") === "1" ? { emiId: searchParams.get("agreement"), installmentId: searchParams.get("installment"), view: searchParams.get("view") === "past" ? ("past" as const) : ("pay" as const) } : null);
+  const payHandoffRef = useRef(pageMode && searchParams.get("pay") === "1" ? { emiId: pageAgreementId, installmentId: searchParams.get("installment"), view: searchParams.get("view") === "past" ? ("past" as const) : ("pay" as const) } : null);
   useEffect(() => {
     const handoff = payHandoffRef.current;
     const row = handoff?.emiId ? rows.find((r) => r.emi.id === handoff.emiId) : undefined;
@@ -87,13 +91,13 @@ export function EmiWorkspace({ openRequest = null }: EmiWorkspaceProps = {}) {
 
   // Permanent: the EMI, its schedule and breakdowns go, and its card charges are reversed on the card
   // account — card locked credit, dues and outstanding follow from the EMI being gone.
-  async function handleDelete() {
+  async function handleDelete(options: { reverseRepayments: boolean } = { reverseRepayments: false }) {
     if (!actions || !activeRowFresh || deleting) return;
     const emi = activeRowFresh.emi;
     setDeleting(true);
     const ok = await runPermanentDeletion({
       kind: "emi",
-      run: (onStage) => actions.deleteEmi(emi, { onStage }),
+      run: (onStage) => actions.deleteEmi(emi, { onStage, reverseRepayments: options.reverseRepayments }),
       refresh: () =>
         Promise.all(["cardLinkedEmiPayments", EMI_PAYMENT_HISTORY_KEY].map((key) => queryClient.invalidateQueries({ queryKey: [key], exact: false }))),
       retry: () => setDeleteOpen(true),
@@ -103,6 +107,7 @@ export function EmiWorkspace({ openRequest = null }: EmiWorkspaceProps = {}) {
       setDeleteOpen(false);
       setActiveRow(null);
       setHandoffDetailId(null);
+      if (pageMode) router.replace("/loans/");
     }
   }
 
@@ -149,6 +154,7 @@ export function EmiWorkspace({ openRequest = null }: EmiWorkspaceProps = {}) {
           }
         }}
         row={detail}
+        page={pageMode}
         onDelete={() => setDeleteOpen(true)}
         onRecordPayment={(_row, installment) => openPay(installment)}
         onRecordPastPayments={(row) => {

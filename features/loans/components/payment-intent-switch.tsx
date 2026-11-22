@@ -7,7 +7,7 @@ export type PaymentIntent = "now" | "past" | "many";
 
 /**
  * What is being recorded: a payment now, a past payment (paid before FlowFi — no balance change) or several installments
- * now. It is pinned under the sheet's header and shared by all three pages of the flow, so switching is a tab change in
+ * now. It is pinned under the sheet's header (one compact line — the hint is its tooltip) and shared by all three pages of the flow, so switching is a tab change in
  * the same sheet — never a new window — and "Pay now" is always one tap back.
  */
 export function PaymentIntentSwitch({
@@ -29,7 +29,7 @@ export function PaymentIntentSwitch({
     { value: "many", icon: Layers, label: lent ? "Several now" : "Pay several", hint: `Pick ${isLoan ? "installments" : "EMIs"}` },
   ];
   return (
-    <div role="radiogroup" aria-label="What are you recording?" className="mx-auto grid max-w-[44rem] grid-cols-3 gap-1 rounded-xl border border-border bg-secondary p-1" data-testid="payment-intent">
+    <div role="radiogroup" aria-label="What are you recording?" className="grid grid-cols-3 gap-0.5 rounded-[8px] border border-border bg-secondary p-0.5" data-testid="payment-intent">
       {options.map(({ value: v, icon: Icon, label, hint }) => {
         const on = v === value;
         return (
@@ -42,15 +42,12 @@ export function PaymentIntentSwitch({
             onClick={() => onChange(v)}
             title={hint}
             className={cn(
-              "flex min-w-0 flex-col items-center gap-0.5 rounded-[9px] px-1.5 py-1.5 text-center outline-none transition-[background-color,box-shadow,color] duration-150 focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60 sm:flex-row sm:justify-center sm:gap-2 sm:px-3 sm:text-left",
+              "flex h-8 min-w-0 items-center justify-center gap-1.5 rounded-[6px] px-2 text-center outline-none transition-[background-color,box-shadow,color] duration-150 focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60",
               on ? "bg-primary text-primary-foreground shadow-e1 ring-1 ring-primary-accent-text" : "text-muted-foreground hover:bg-card hover:text-foreground",
             )}
           >
-            <Icon className="size-4 shrink-0" strokeWidth={on ? 2.25 : 1.75} aria-hidden />
-            <span className="flex min-w-0 flex-col">
-              <span className="truncate text-[12.5px] font-semibold">{label}</span>
-              <span className={cn("hidden truncate text-[10.5px] font-medium sm:block", on ? "text-primary-foreground/70" : "text-muted-foreground")}>{hint}</span>
-            </span>
+            <Icon className="size-3.5 shrink-0" strokeWidth={on ? 2.25 : 1.75} aria-hidden />
+            <span className="truncate text-[12.5px] font-semibold">{label}</span>
           </button>
         );
       })}

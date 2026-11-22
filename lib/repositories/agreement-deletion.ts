@@ -47,6 +47,8 @@ import {
 } from "@/lib/engines/agreement-deletion";
 import { FirestoreCollections as C } from "@/lib/firestore/collections";
 import { recordEdit } from "@/lib/firestore/soft-deletable";
+import { deferralDocId } from "@/lib/models/person-payment-deferral";
+import { followUpDocId } from "@/lib/models/person-follow-up";
 import { accountFromFirestore, accountToFirestore, type Account } from "@/lib/models/account";
 import { emiFromFirestore, emiToFirestore, type Emi } from "@/lib/models/emi";
 import { expenseFromFirestore, expenseToFirestore, type Expense } from "@/lib/models/expense";
@@ -101,6 +103,12 @@ export interface AgreementDeletionImpact {
   /** Per account, the balance change deletion makes (positive = money goes back into it). */
   accountEffects: { accountId: string; accountName: string; delta: number }[];
   ledgerEntryCount: number;
+  /** People's own repayments (whole payments) that deleting also reverses — their cash legs and ledger entries. */
+  personRepaymentCount: number;
+  /** Transactions this agreement owns (creation money, payments, card charges) — removed, never refunded. */
+  transactionCount: number;
+  /** Why the delete cannot run right now (shown instead of the confirmation); null when it can. */
+  blockedReason: string | null;
   hasFinancialActivity: boolean;
 }
 
@@ -234,6 +242,91 @@ async function countLivePersonSettlements(r: Refs, agreement: Loan | Emi, instal
   return count;
 }
 
+/** One person's repayment (a whole People payment) and the records it created — what is purged once it is reverted. */
+interface PersonRepayment {
+  personId: string;
+  paymentId: string;
+  entryIds: string[];
+  transactionIds: string[];
+}
+
+async function deleteInChunks(firestore: Firestore, refsToDelete: DocumentReference[]) {
+  for (let i = 0; i < refsToDelete.length; i += CHUNK) {
+    const batch = writeBatch(firestore);
+    for (const ref of refsToDelete.slice(i, i + CHUNK)) batch.delete(ref);
+    await batch.commit();
+  }
+}
+
+/**
+ * People's "Revert payment" soft-deletes what a repayment created (ledger entries, the cash-leg / income Transactions). For a
+ * deleted agreement those would linger as "reversed" rows in People and Activity, so once the revert committed they are removed
+ * for good. Only records already soft-deleted by that revert are touched — a live record is never deleted here.
+ */
+async function purgeRevertedRepayment(firestore: Firestore, r: Refs, rep: PersonRepayment) {
+  const doomed: DocumentReference[] = [];
+  for (const id of rep.entryIds) {
+    const ref = doc(r.ledger(rep.personId), id);
+    const snap = await getDoc(ref);
+    if (snap.exists() && snap.data().deletedAt != null) doomed.push(ref);
+  }
+  for (const id of new Set(rep.transactionIds)) {
+    const ref = doc(r.transactions, id);
+    const snap = await getDoc(ref);
+    if (snap.exists() && snap.data().deletedAt != null) doomed.push(ref);
+  }
+  await deleteInChunks(firestore, doomed);
+}
+
+/** Postponements and reminders are keyed by this agreement's installments (`emi-inst:` / `loan-inst:`); with it gone they mean nothing. */
+async function removePeopleTracking(firestore: Firestore, r: Refs, kind: AgreementKind, agreement: Loan | Emi, installmentIds: readonly string[]) {
+  const prefix = kind === "loan" ? "loan-inst:" : "emi-inst:";
+  const doomed: DocumentReference[] = [];
+  for (const personId of participantPersonIds(agreement)) {
+    for (const id of installmentIds) {
+      doomed.push(doc(r.people, personId, "paymentDeferrals", deferralDocId(`${prefix}${id}`)));
+      doomed.push(doc(r.people, personId, "followUps", followUpDocId(`${prefix}${id}`)));
+    }
+  }
+  await deleteInChunks(firestore, doomed);
+}
+
+/**
+ * The people's live repayments recorded against this agreement's installments, as whole payments (the unit People's own
+ * "Revert payment" undoes). `blocked` says why they can't be reverted automatically: a repayment with no payment id, or one
+ * that ALSO settles something that isn't this agreement's installment (reverting it would change unrelated items).
+ */
+async function findPersonRepayments(r: Refs, agreement: Loan | Emi, installmentIds: ReadonlySet<string>): Promise<{ payments: PersonRepayment[]; blocked: string | null }> {
+  const found = new Map<string, PersonRepayment>();
+  let blocked: string | null = null;
+  const isMine = (e: LedgerEntry) => {
+    const ref = e.obligationRef ?? "";
+    return (e.sourceKind === "emiInstallment" || e.sourceKind === "loanInstallment") && installmentIds.has(ref.slice(ref.indexOf(":") + 1));
+  };
+  for (const personId of participantPersonIds(agreement)) {
+    const snap = await getDocs(query(r.ledger(personId), where("sourceKind", "in", ["emiInstallment", "loanInstallment"])));
+    for (const d of snap.docs) {
+      const e = d.data();
+      if (e.deletedAt != null || !isMine(e)) continue;
+      if (!e.paymentId) blocked = "A repayment recorded against this agreement can't be reversed automatically. Revert it in People first, then delete.";
+      else found.set(`${personId}|${e.paymentId}`, { personId, paymentId: e.paymentId, entryIds: [], transactionIds: [] });
+    }
+  }
+  for (const rep of found.values()) {
+    const { personId, paymentId } = rep;
+    const all = await getDocs(query(r.ledger(personId), where("paymentId", "==", paymentId)));
+    for (const d of all.docs) {
+      const e = d.data();
+      rep.entryIds.push(e.id);
+      for (const t of [e.transactionRef, e.incomeTransactionRef]) if (t) rep.transactionIds.push(t);
+    }
+    if (all.docs.some((d) => d.data().deletedAt == null && !isMine(d.data()))) {
+      blocked = "A person's repayment here also settles other items (another EMI/loan or an advance). Revert that payment in People first, then delete.";
+    }
+  }
+  return { payments: [...found.values()], blocked };
+}
+
 async function gather(r: Refs, kind: AgreementKind, agreement: Loan | Emi): Promise<Gathered> {
   const leaves = await readLeaves(r, kind, agreement.id, agreement.scheduleId);
   const paymentDocs = leaves.payments.map((d) => d.data());
@@ -275,12 +368,18 @@ export async function previewAgreementDeletion(firestore: Firestore, uid: string
   const agreement = await readAgreement(r, kind, agreementId);
   if (agreement == null) return null;
   const g = await gather(r, kind, agreement);
+  // People's repayments are reversed as part of the delete (when they belong only to this agreement), so they don't block it.
+  const repayments = g.livePersonSettlementCount > 0 ? await findPersonRepayments(r, agreement, new Set(g.installmentIds)) : { payments: [], blocked: null };
+  const cascade = g.livePersonSettlementCount > 0 && repayments.blocked == null;
   let plan;
+  let blockedReason: string | null = null;
   try {
-    plan = planAgreementDeletion({ kind, agreementId, ...g });
-  } catch {
+    plan = planAgreementDeletion({ kind, agreementId, ...g, livePersonSettlementCount: cascade ? 0 : g.livePersonSettlementCount });
+  } catch (e) {
     plan = null;
+    blockedReason = e instanceof AgreementDeletionBlockedError ? e.message : "This can't be deleted safely right now.";
   }
+  if (blockedReason == null && repayments.blocked != null) blockedReason = repayments.blocked;
   const accountIds = plan ? [...plan.accountDeltas.keys()] : [];
   const accountSnaps = await Promise.all(accountIds.map((id) => getDoc(doc(r.accounts, id))));
   return {
@@ -289,7 +388,10 @@ export async function previewAgreementDeletion(firestore: Firestore, uid: string
     paymentCount: g.paymentCount,
     accountEffects: accountIds.map((id, i) => ({ accountId: id, accountName: accountSnaps[i].data()?.name ?? "Account", delta: plan!.accountDeltas.get(id)! })),
     ledgerEntryCount: plan?.ledgerEntryIds.length ?? 0,
-    hasFinancialActivity: g.paymentCount > 0 || g.paidInstallmentCount > 0 || (plan?.ownedTransactions.length ?? 0) > 0 || (plan?.ledgerEntryIds.length ?? 0) > 0,
+    personRepaymentCount: cascade ? repayments.payments.length : 0,
+    transactionCount: plan?.ownedTransactions.length ?? 0,
+    blockedReason,
+    hasFinancialActivity: g.paymentCount > 0 || g.paidInstallmentCount > 0 || (plan?.ownedTransactions.length ?? 0) > 0 || (plan?.ledgerEntryIds.length ?? 0) > 0 || (cascade && repayments.payments.length > 0),
   };
 }
 
@@ -303,7 +405,11 @@ export async function permanentlyDeleteAgreement(
   uid: string,
   kind: AgreementKind,
   agreementId: string,
-  opts: { onStage?: (stage: AgreementDeletionStage) => void } = {},
+  opts: {
+    onStage?: (stage: AgreementDeletionStage) => void;
+    /** Reverts one whole People payment (`PersonPaymentRepository.revertPayment`). When given, the people's repayments against this agreement are reversed first instead of blocking the delete. */
+    revertPersonPayment?: (person: Person, paymentId: string) => Promise<void>;
+  } = {},
 ): Promise<AgreementDeletionResult> {
   const r = refs(firestore, uid);
   opts.onStage?.("checking");
@@ -321,7 +427,21 @@ export async function permanentlyDeleteAgreement(
     return { resumed: true, reversedTransactionCount: 0, accountDeltas: {}, personDelta: 0, ...removed };
   }
 
-  const g = await gather(r, kind, agreement);
+  let g = await gather(r, kind, agreement);
+  if (opts.revertPersonPayment && g.livePersonSettlementCount > 0) {
+    const found = await findPersonRepayments(r, agreement, new Set(g.installmentIds));
+    if (found.blocked) throw new AgreementDeletionBlockedError(`${found.blocked} Nothing was changed.`);
+    opts.onStage?.("reversing");
+    // Each repayment is one atomic, idempotent People revert (cash leg, ledger entries, person balance). If a later step
+    // fails, what was reverted stays reverted and the agreement is untouched — retrying simply continues.
+    for (const rep of found.payments) {
+      const snap = await getDoc(doc(r.people, rep.personId));
+      if (!snap.exists()) continue;
+      await opts.revertPersonPayment(snap.data(), rep.paymentId);
+      await purgeRevertedRepayment(firestore, r, rep);
+    }
+    g = await gather(r, kind, agreement);
+  }
   const preview = planAgreementDeletion({ kind, agreementId, ...g }); // throws AgreementDeletionBlockedError
   if (atomicWriteCount(preview) > MAX_ATOMIC_DELETION_WRITES) {
     throw new AgreementDeletionBlockedError(
@@ -408,6 +528,8 @@ export async function permanentlyDeleteAgreement(
   opts.onStage?.("removing");
   let removed;
   try {
+    // Best effort: a failure here only leaves harmless postponement/reminder records behind.
+    if (committed != null) await removePeopleTracking(firestore, r, kind, g.agreement, g.installmentIds).catch(() => undefined);
     removed = await removeLeaves(firestore, r, kind, agreementId, g.scheduleId);
   } catch (e) {
     throw new AgreementCleanupIncompleteError(e);

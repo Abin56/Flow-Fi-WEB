@@ -2,6 +2,13 @@
 
 import { ArrowUpRight, Building2, CheckCircle2, HandCoins, History, Lock, LockOpen, Pencil, Trash2, UserRound, Wallet } from "lucide-react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { useState } from "react";
+import { TheyPaidDialog } from "@/features/loans/components/they-paid-dialog";
+import { AgreementPeopleTab } from "@/features/loans/components/agreement-people-tab";
+import { AgreementScheduleTab } from "@/features/loans/components/agreement-schedule-tab";
+import { formatCurrency } from "@/lib/format";
+import { useAgreementPeople } from "@/features/loans/hooks/use-agreement-people";
 import { ClayButton } from "@/components/clay/clay-button";
 import { cn } from "@/lib/utils";
 import { AgreementFooter, AgreementPopup, NextStrip } from "@/features/loans/components/agreement-popup";
@@ -55,6 +62,8 @@ interface LoanScheduleDialogProps {
   paymentActions: RecordedPaymentAction[];
   /** Opens a recorded payment's details (where it can be edited). */
   onViewPayment: (action: RecordedPaymentAction) => void;
+  /** Draw as the dedicated page (`/loans/[id]`) instead of a window — same content and handlers. */
+  page?: boolean;
 }
 
 function GoTo({ href, label }: { href: string; label: string }) {
@@ -73,9 +82,14 @@ function GoTo({ href, label }: { href: string; label: string }) {
  *  schedule and history. One primary money action (Record Payment); the less common ones sit under "More
  *  payment options"; loan management (Edit/Close/Delete) stays visually quieter. `row` is resolved live by
  *  the parent from Firestore-backed rows, so every persisted change re-renders it in place. */
-export function LoanScheduleDialog({ open, onOpenChange, row, onEdit, onDelete, deleteLabel = "Delete Loan", linkedAccountName, onRecordPayment, onRecordPastPayments, onAdditionalDisbursement, onToggleClose, statusBusy = false, history, historyLoading, paymentActions, onViewPayment }: LoanScheduleDialogProps) {
+export function LoanScheduleDialog({ open, onOpenChange, row, onEdit, onDelete, deleteLabel = "Delete Loan", linkedAccountName, onRecordPayment, onRecordPastPayments, onAdditionalDisbursement, onToggleClose, statusBusy = false, history, historyLoading, paymentActions, onViewPayment, page }: LoanScheduleDialogProps) {
   // Shared loan: each installment's People side on its row (a loan I gave has no People shares).
   const peopleStatus = useInstallmentPeopleStatus(row && row.direction !== "given" ? { sourceKind: "loan", source: row.loan, installments: row.installments } : null);
+  const pathname = usePathname();
+  const { people } = useAgreementPeople(page && row && row.direction !== "given" ? { sourceKind: "loan", source: row.loan, installments: row.installments } : null);
+  // "They paid": the installment whose share the person already paid — the dialog mounts fresh per open (one batch id per save).
+  const [theyPaid, setTheyPaid] = useState<{ id: string; n: number } | null>(null);
+  const askTheyPaid = (installmentId: string) => setTheyPaid((prev) => ({ id: installmentId, n: (prev?.n ?? 0) + 1 }));
   if (!row) return null;
 
   const totalReceived = row.installments.reduce((sum, i) => sum + i.amountPaid, 0);
@@ -129,6 +143,7 @@ export function LoanScheduleDialog({ open, onOpenChange, row, onEdit, onDelete, 
     onViewPayment,
     lent,
     peopleStatus,
+    onTheyPaid: (i: Installment) => askTheyPaid(i.id),
   };
   const upcomingCount = row.installments.filter((i) => !i.isSkipped && remainingAmount(i) > 0).length;
 
@@ -136,10 +151,42 @@ export function LoanScheduleDialog({ open, onOpenChange, row, onEdit, onDelete, 
   const moneyBtn = "h-10 gap-1.5 rounded-[8px] px-3 text-[13px] whitespace-nowrap";
 
   return (
+    <>
     <AgreementPopup
       open={open}
       onOpenChange={onOpenChange}
-      testId="loan-popup"
+      testId={page ? "loan-page" : "loan-popup"}
+      page={
+        page
+          ? {
+              facts: `${row.lenderName}${interest ? ` · ${+interest.ratePercent.toFixed(2)}% ${interest.period === "monthly" ? "p.m." : "p.a."} ${interest.type === "flat" ? "flat" : "reducing"}` : " · No interest"}`,
+              stats: [
+                { label: "Original", value: formatCurrency(row.loan.loanAmount) },
+                { label: "Installment", value: formatCurrency(row.emiAmount) },
+                { label: lent ? "Received" : "Paid so far", value: formatCurrency(totalReceived) },
+                { label: "Total left", value: formatCurrency(totalRemaining) },
+                { label: "Next due", value: row.nextDueDate ? formatDateLong(row.nextDueDate) : "—", tone: nextOverdue ? "expense" : undefined },
+              ],
+              schedule: (
+                <AgreementScheduleTab
+                  installments={row.installments}
+                  actions={paymentActions}
+                  closed={isClosed}
+                  total={row.totalInstallments}
+                  lent={lent}
+                  people={people}
+                  onPay={(i) => onRecordPayment(row, i)}
+                  onViewPayment={onViewPayment}
+                  onTheyPaid={lent ? undefined : (i) => askTheyPaid(i.id)}
+                  peopleTarget={lent ? undefined : { sourceKind: "loan", source: row.loan, installments: row.installments }}
+                  returnTo={pathname || "/loans/"}
+                />
+              ),
+              people: <AgreementPeopleTab people={people} returnTo={pathname || "/loans/"} onTheyPaid={lent ? undefined : askTheyPaid} />,
+              peopleCount: people.length,
+            }
+          : undefined
+      }
       eyebrow="Loan"
       title={loanDisplayName(row)}
       subtitle={`${row.lenderName}${interest ? ` · ${+interest.ratePercent.toFixed(2)}% ${interest.period === "monthly" ? "p.m." : "p.a."} ${interest.type === "flat" ? "flat" : "reducing"}` : " · No interest"}`}
@@ -244,6 +291,18 @@ export function LoanScheduleDialog({ open, onOpenChange, row, onEdit, onDelete, 
         />
       }
     />
+    {theyPaid && (
+      <TheyPaidDialog
+        key={theyPaid.n}
+        open
+        onOpenChange={(o) => !o && setTheyPaid(null)}
+        sourceKind="loan"
+        source={row.loan}
+        installments={row.installments}
+        installmentId={theyPaid.id}
+      />
+    )}
+    </>
   );
 }
 

@@ -133,7 +133,7 @@ describe("permanently deleting a Loan (real emulator)", () => {
     expect(await balance(env, hdfc.id)).toBe(105000);
 
     const impact = await previewAgreementDeletion(env.db, UID, "loan", loan.id);
-    expect(impact).toMatchObject({ installmentCount: 5, paymentCount: 2, hasFinancialActivity: true });
+    expect(impact).toMatchObject({ installmentCount: 5, paymentCount: 2, transactionCount: 3, blockedReason: null, personRepaymentCount: 0, hasFinancialActivity: true });
     expect(impact!.accountEffects).toEqual([{ accountId: hdfc.id, accountName: "HDFC", delta: -75000 }]);
 
     const stages: string[] = [];

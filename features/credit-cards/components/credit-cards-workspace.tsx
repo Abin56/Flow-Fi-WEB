@@ -76,6 +76,7 @@ import {
   type CreditCardViewItem,
 } from "@/features/credit-cards/hooks/use-credit-cards-data";
 import { CARD_GRADIENT, CreditCardTile, cardFaceGradient } from "@/features/credit-cards/components/credit-card-tile";
+import { AccountTransactionsManager } from "@/features/accounts/components/account-transactions-manager";
 import { CardLimitSection } from "@/features/credit-cards/components/card-limit-section";
 import { CardFormPreview, type PreviewCard } from "@/features/credit-cards/components/card-form-preview";
 import { CreditUsageBar, CreditUsageBreakdownView } from "@/features/credit-cards/components/credit-usage-bar";
@@ -347,6 +348,8 @@ export function CreditCardsWorkspace() {
   const [addOpen, setAddOpen] = useState(false);
   const [editingCard, setEditingCard] = useState<CreditCardViewItem | null>(null);
   const [deletingCard, setDeletingCard] = useState<CreditCardViewItem | null>(null);
+  // "Manage transactions": clear a card's history while keeping the card (account id of the card).
+  const [manageTxnsAccountId, setManageTxnsAccountId] = useState<string | null>(null);
   const [deletingCardBusy, setDeletingCardBusy] = useState(false);
   const [cardDeletionImpact, setCardDeletionImpact] = useState<CreditCardDeletionImpact | null>(null);
   const [form, setForm] = useState<CardFormState>(emptyCardForm);
@@ -1180,6 +1183,7 @@ export function CreditCardsWorkspace() {
                   }}
                   onClick={() => selectCard(card.id)}
                   onEdit={() => openEdit(card)}
+                  onManageTransactions={() => setManageTxnsAccountId(card.card.accountId)}
                   onDelete={() => {
                     setCardDeletionImpact(null);
                     setDeletingCard(card);
@@ -1292,6 +1296,7 @@ export function CreditCardsWorkspace() {
               onEdit={() => openEdit(activeCard)}
               onAddToShared={() => openAddToSharedLimit(activeCard.sharedLimit!.id)}
               onViewTransactions={() => openCardHistory(activeCard)}
+              onManageTransactions={() => setManageTxnsAccountId(activeCard.card.accountId)}
               linkedNotice={
                 <LinkedFundsPayNotice
                   funds={linkedPendingForCard(linkedFunds, activeCard.card.accountId)}
@@ -1540,6 +1545,10 @@ export function CreditCardsWorkspace() {
       )}
 
       {cardFormDialog}
+
+      {manageTxnsAccountId != null && (
+        <AccountTransactionsManager open kind="card" accountId={manageTxnsAccountId} onOpenChange={(open) => !open && setManageTxnsAccountId(null)} />
+      )}
 
       {cancelPaymentId != null && <CardPaymentCancelDialog transactionId={cancelPaymentId} onClose={() => setCancelPaymentId(null)} />}
 
@@ -1897,6 +1906,7 @@ function SelectedCardPanel({
   onEdit,
   onAddToShared,
   onViewTransactions,
+  onManageTransactions,
 }: {
   card: CreditCardViewItem;
   usage: CreditUsageBreakdown;
@@ -1911,6 +1921,7 @@ function SelectedCardPanel({
   onEdit: () => void;
   onAddToShared: () => void;
   onViewTransactions: () => void;
+  onManageTransactions: () => void;
 }) {
   const shared = card.sharedLimit;
   const network = NETWORK_NAME[card.card.cardNetwork ?? ""] ?? null;
@@ -2105,6 +2116,13 @@ function SelectedCardPanel({
           >
             <span className="truncate">View all card transactions</span>
             <ArrowRight className="size-3.5 shrink-0 text-foreground/60 transition-transform group-hover:translate-x-0.5" />
+          </button>
+          <button
+            type="button"
+            onClick={onManageTransactions}
+            className="flex h-8 shrink-0 items-center rounded-[6px] px-2 text-xs font-semibold text-foreground outline-none transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            Manage transactions
           </button>
           <button type="button" disabled className="flex h-8 shrink-0 cursor-not-allowed items-center gap-1 rounded-[6px] px-1.5 text-xs font-semibold text-foreground/55">
             <RefreshCw className="size-3.5" strokeWidth={2} />

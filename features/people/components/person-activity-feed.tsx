@@ -18,10 +18,10 @@ import { cn } from "@/lib/utils";
 
 /** The filters — Money in / Money out are cash that really moved; Still owed includes part-paid items; one EMI filter. */
 type LensId = "all" | "in" | "out" | "owed" | "overdue" | "emi" | "settled";
-const LENSES: { id: LensId; label: string }[] = [
+const LENSES: { id: LensId; label: string; hint?: string }[] = [
   { id: "all", label: "Everything" },
-  { id: "in", label: "Money in" },
-  { id: "out", label: "Money out" },
+  { id: "in", label: "Received", hint: "Cash that came in from this person — payments received, money borrowed, advances received (the Money in column)" },
+  { id: "out", label: "Given", hint: "Cash you handed to this person — money given, payments made, advances given (the Money out column)" },
   { id: "owed", label: "Still owed" },
   { id: "overdue", label: "Overdue" },
   { id: "emi", label: "EMI" },
@@ -298,7 +298,7 @@ export function PersonActivityFeed({
   const isOverdue = (r: LedgerRow) =>
     r.state != null && r.state !== "settled" && (r.direction === "theyOwe" || r.direction === "iOwe") &&
     (r.overdue || (r.category === "emi" && new Date(r.date.getFullYear(), r.date.getMonth(), r.date.getDate()).getTime() < today && postponedOf(r.key) == null));
-  const rowMatches = (r: LedgerRow): boolean => {
+  const rowMatchesLens = (lens: LensId, r: LedgerRow): boolean => {
     switch (lens) {
       case "all": return true;
       case "in": return flowOf(viewOf(r, personName, lookups))?.dir === "in";
@@ -309,7 +309,7 @@ export function PersonActivityFeed({
       case "settled": return r.state === "settled";
     }
   };
-  const lineMatches = (l: PaymentLine): boolean => {
+  const lineMatchesLens = (lens: LensId, l: PaymentLine): boolean => {
     const cash = l.payment.source === "cash";
     switch (lens) {
       case "all": return true;
@@ -321,12 +321,19 @@ export function PersonActivityFeed({
     }
   };
 
+  const rowMatches = (r: LedgerRow) => rowMatchesLens(lens, r);
+  const lineMatches = (l: PaymentLine) => lineMatchesLens(lens, l);
   const visible = filterLedgerRows(rows, "all", search).filter(rowMatches);
   const showCarried = scope === "cycle" && !isLoading;
   const carried = showCarried ? filterLedgerRows(carriedRows, "all", search).filter(rowMatches) : [];
   const shownKeys = new Set([...rows, ...carriedRows].map((r) => r.key));
   const q = search.trim().toLowerCase();
   const visibleLines = paymentLines.filter((l) => !shownKeys.has(l.key) && lineMatches(l) && (!q || l.parent.title.toLowerCase().includes(q) || "payment".includes(q)));
+
+  // How many lines each filter would show in this scope (search ignored) — so a filter never leads to a surprise empty table.
+  const lensCount = (id: LensId) =>
+    (showCarried ? carriedRows : []).concat(rows).filter((r) => rowMatchesLens(id, r)).length +
+    paymentLines.filter((l) => !shownKeys.has(l.key) && lineMatchesLens(id, l)).length;
 
   const changeScope = (next: LedgerScope) => {
     onScopeChange(next);
@@ -355,28 +362,36 @@ export function PersonActivityFeed({
 
   return (
     <section className="flex min-w-0 flex-col">
-      <div className="flex shrink-0 flex-wrap items-center gap-x-2.5 gap-y-2 pb-2.5">
+      <div className="mb-2.5 flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 rounded-[12px] border border-border-strong/60 bg-card px-2 py-1.5 shadow-e1">
         <h2 className="sr-only">
           Transactions · {counts[scope]}
         </h2>
         <ScopeSwitch scope={scope} onScopeChange={changeScope} counts={counts} cycleLabel={cycleLabel} />
-        <span className="hidden h-5 w-px bg-border-strong/60 xl:block" aria-hidden />
-        {/* Quick lenses — presets over the same status / type filters */}
-        <div role="group" aria-label="Quick view" className="flex min-w-0 shrink-0 flex-wrap items-center gap-1">
+        <span className="hidden h-6 w-px bg-border-strong/60 xl:block" aria-hidden />
+        {/* Quick filters — presets over the same status / type filters, each with how many lines it shows */}
+        <div role="group" aria-label="Quick view" className="flex min-w-0 flex-wrap items-center gap-0.5 rounded-[8px] bg-secondary/70 p-[3px] ring-1 ring-border-strong/40 ring-inset">
           {LENSES.map((l) => {
             const on = lens === l.id;
+            const n = lensCount(l.id);
             return (
               <button
                 key={l.id}
                 type="button"
                 aria-pressed={on}
+                title={l.hint}
                 onClick={() => setLens(l.id)}
                 className={cn(
-                  "inline-flex h-7 items-center rounded-full px-3 text-[12.5px] font-medium outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-ring",
-                  on ? "bg-foreground text-background" : "text-foreground/70 hover:bg-secondary hover:text-foreground",
+                  "inline-flex h-7 items-center gap-1.5 rounded-[6px] px-3 text-[12.5px] whitespace-nowrap outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-ring",
+                  on ? "bg-foreground font-semibold text-background shadow-e1" : "font-medium text-foreground/70 hover:bg-card hover:text-foreground",
                 )}
               >
-                                {l.label}
+                {l.label}
+                <span
+                  data-testid={`lens-count-${l.id}`}
+                  className={cn("min-w-[1.1rem] rounded-[4px] px-1 text-center text-[10.5px] leading-[1.15rem] font-semibold tabular-nums", on ? "bg-background/20 text-background" : n === 0 ? "text-foreground/35" : "bg-card text-foreground/65")}
+                >
+                  {n}
+                </span>
               </button>
             );
           })}
@@ -390,11 +405,11 @@ export function PersonActivityFeed({
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search…"
                 aria-label="Search transactions"
-                className="h-7 w-full rounded-[6px] border border-border-strong bg-card pr-3 pl-8 text-[13px] text-foreground outline-none transition-colors placeholder:text-foreground/50 focus:border-primary-accent-text"
+                className="h-8 w-full rounded-[6px] border border-border-strong/70 bg-card pr-3 pl-8 text-[13px] text-foreground outline-none transition-colors placeholder:text-foreground/50 focus:border-primary-accent-text"
               />
             </div>
           )}
-          <button type="button" onClick={onExpand} title="Open the full transaction workspace" className={cn(WS_SECONDARY, "h-7 shrink-0 px-2.5 text-[12.5px]")}>
+          <button type="button" onClick={onExpand} title="Open the full transaction workspace" className={cn(WS_SECONDARY, "h-8 shrink-0 px-3 text-[12.5px]")}>
             <Maximize2 className="size-3.5" strokeWidth={1.75} />
             Expand
           </button>

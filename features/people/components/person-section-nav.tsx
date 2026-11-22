@@ -112,11 +112,11 @@ export function PersonTabBar({
         {balance && <span className={cn("shrink-0 text-[12.5px] font-semibold whitespace-nowrap tabular-nums", balanceTone)}>{balance}</span>}
         <span className="mx-1 h-4 w-px shrink-0 self-center bg-border-strong" />
       </div>
-      <div ref={listRef} role="tablist" aria-label="Person sections" onKeyDown={onKeyDown} className="relative flex min-w-0 items-center gap-0.5 rounded-full bg-secondary/70 p-[3px]">
+      <div ref={listRef} role="tablist" aria-label="Person sections" onKeyDown={onKeyDown} className="relative flex min-w-0 items-center gap-0.5 rounded-[8px] bg-secondary/70 p-[3px]">
         {indicator && (
           <span
             aria-hidden
-            className="pointer-events-none absolute top-[3px] bottom-[3px] rounded-full bg-card shadow-e1 ring-1 ring-border transition-[left,width] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none"
+            className="pointer-events-none absolute top-[3px] bottom-[3px] rounded-[6px] bg-card shadow-e1 ring-1 ring-border transition-[left,width] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none"
             style={{ left: indicator.left, width: indicator.width }}
           />
         )}
@@ -134,13 +134,13 @@ export function PersonTabBar({
               tabIndex={on ? 0 : -1}
               onClick={() => onChange(t.id)}
               className={cn(
-                "relative z-[1] inline-flex h-8 items-center gap-1.5 rounded-full px-3.5 text-[13px] font-semibold whitespace-nowrap outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-ring",
+                "relative z-[1] inline-flex h-8 items-center gap-1.5 rounded-[6px] px-3.5 text-[13px] font-semibold whitespace-nowrap outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-ring",
                 on ? "text-foreground" : "text-foreground/60 hover:text-foreground",
               )}
             >
               {t.label}
               {t.count != null && (
-                <span className={cn("rounded-full px-1.5 text-[11px] leading-[18px] font-semibold tabular-nums transition-colors", on ? "bg-primary/25 text-foreground" : "bg-foreground/[0.06] text-foreground/60")}>
+                <span className={cn("rounded-[4px] px-1.5 text-[11px] leading-[18px] font-semibold tabular-nums transition-colors", on ? "bg-primary/25 text-foreground" : "bg-foreground/[0.06] text-foreground/60")}>
                   {t.count}
                 </span>
               )}
@@ -157,7 +157,7 @@ export function PersonTabBar({
           tabIndex={compact ? 0 : -1}
           aria-hidden={!compact}
           className={cn(
-            "ml-auto inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-primary px-3.5 text-[13px] font-semibold text-primary-foreground transition-all duration-200 hover:brightness-105 disabled:opacity-50",
+            "ml-auto inline-flex h-8 shrink-0 items-center gap-1.5 rounded-[6px] bg-primary px-3.5 text-[13px] font-semibold text-primary-foreground transition-all duration-200 hover:brightness-105 disabled:opacity-50",
             compact ? "translate-y-0 opacity-100" : "pointer-events-none -translate-y-1 opacity-0",
           )}
         >

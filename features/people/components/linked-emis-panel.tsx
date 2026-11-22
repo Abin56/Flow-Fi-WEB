@@ -163,6 +163,11 @@ function InstallmentPips({ s, postponedOf }: { s: PersonLinkedEmi; postponedOf: 
 
 function LinkedEmiCard({ s, personName, source, saving, onToggle, index = 0 }: { s: PersonLinkedEmi; personName: string; source: LinkedEmiSource | undefined; saving: boolean; onToggle: () => void; index?: number }) {
   const [open, setOpen] = useState(false);
+  // The schedule opens on what still matters — the next unpaid installments — so it never needs an inner scroll area.
+  const [scheduleAll, setScheduleAll] = useState(false);
+  const unpaidRows = s.installments.filter((i) => i.remaining > 0.005);
+  const scheduleRows = scheduleAll ? s.installments : (unpaidRows.length > 0 ? unpaidRows : s.installments.slice(-3)).slice(0, 6);
+  const hiddenCount = s.installments.length - scheduleRows.length;
   const first = personName.split(" ")[0];
   const { postponedOf, amount: postponedAmount, allPastDuePostponed, firstMove } = usePostponedFacts(s);
   const line = settlementLine(s, first, allPastDuePostponed);
@@ -255,8 +260,8 @@ function LinkedEmiCard({ s, personName, source, saving, onToggle, index = 0 }: {
       </div>
 
       {open && (
-        <ul className="max-h-60 divide-y divide-border-strong/40 overflow-y-auto border-t border-border-strong/50 px-4 py-1 pl-[19px] duration-200 animate-in fade-in-0 slide-in-from-top-1" aria-label={`${s.name} monthly schedule`}>
-          {s.installments.map((i) => {
+        <ul className="divide-y divide-border-strong/40 border-t border-border-strong/50 px-4 py-1 pl-[19px] duration-200 animate-in fade-in-0 slide-in-from-top-1" aria-label={`${s.name} monthly schedule`}>
+          {scheduleRows.map((i) => {
             const moved = i.remaining > 0.005 ? postponedOf(i.key) : null;
             return (
               <li key={i.key} className="flex items-center gap-2 py-1.5">
@@ -277,6 +282,13 @@ function LinkedEmiCard({ s, personName, source, saving, onToggle, index = 0 }: {
               </li>
             );
           })}
+          {hiddenCount > 0 && (
+            <li className="py-1.5">
+              <button type="button" onClick={() => setScheduleAll(true)} className="text-[11.5px] font-semibold text-primary-accent-text outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring">
+                Show all {s.installments.length} installments
+              </button>
+            </li>
+          )}
         </ul>
       )}
     </li>
@@ -471,7 +483,7 @@ export function EmiResponsibilityBoard({
         <div className="mt-1.5 flex items-center gap-2 rounded-[10px] border border-dashed border-settle-receivable-edge/70 bg-settle-receivable-tint/45 px-2.5 py-1.5 text-[11.5px] text-foreground/80" data-testid="emi-board-general">
           <Layers className="size-3.5 shrink-0 text-settle-receivable-text" aria-hidden />
           <span className="min-w-0">
-            <b className="font-semibold text-foreground tabular-nums">{money(untied.credit)}</b> received toward the overall balance — not assigned to any installment, so it isn&apos;t in
+            <b className="font-semibold text-foreground tabular-nums">{money(untied.credit)}</b> received toward the overall balance — not linked to any installment, so it isn&apos;t in
             Repaid above.
           </span>
           <span className="ml-auto shrink-0 font-semibold text-foreground tabular-nums">{untied.owed < 0.005 ? "Nothing owed overall" : `${money(untied.owed)} still owed overall`}</span>
@@ -527,23 +539,40 @@ function AgreementRow({ s, personName, onOpen, index }: { s: PersonLinkedEmi; pe
  * amounts). Same figures as the board (`personLinkedEmis` + live deferrals); the full board stays on the Linked EMIs tab.
  */
 export function EmiAgreementList({ personName, summaries, onOpen }: { personName: string; summaries: PersonLinkedEmi[]; onOpen: () => void }) {
+  // One to three agreements show in full; beyond that the list folds (never an inner scroll area).
+  const [expanded, setExpanded] = useState(false);
   if (summaries.length === 0) return null;
   const first = personName.split(" ")[0];
+  const LIMIT = 3;
+  const shown = expanded ? summaries : summaries.slice(0, LIMIT);
   return (
     <div data-testid="linked-emi-snapshot">
       <ul className="-mx-2 divide-y divide-border-strong/40">
-        {summaries.map((s, i) => (
+        {shown.map((s, i) => (
           <AgreementRow key={s.key} s={s} personName={personName} onOpen={onOpen} index={i} />
         ))}
       </ul>
-      <p className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[10.5px] text-foreground/50">
+      {summaries.length > LIMIT && (
+        <button
+          type="button"
+          onClick={() => setExpanded((e) => !e)}
+          aria-expanded={expanded}
+          className="mt-0.5 rounded-[4px] text-[11.5px] font-semibold text-primary-accent-text outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          {expanded ? "Show fewer" : `Show all ${summaries.length}`}
+        </button>
+      )}
+      <p
+        className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[10.5px] text-foreground/50"
+        title={`Bank = installments paid to the lender; it doesn't settle ${first}'s share. Payments toward the overall balance aren't in Repaid.`}
+      >
         {RESPONSIBILITY_SEGMENTS.map((seg) => (
           <span key={seg.key} className="inline-flex items-center gap-1">
             <span className={cn("size-1.5 rounded-full", seg.dot)} aria-hidden />
             {seg.short}
           </span>
         ))}
-        <span>· Bank = lender installments paid; it doesn&apos;t settle {first}&apos;s share. Payments toward the overall balance aren&apos;t in Repaid.</span>
+        <span>· Bank = lender paid, not {first}</span>
       </p>
     </div>
   );

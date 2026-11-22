@@ -242,7 +242,10 @@ export function HistoricalPeopleReconcile({
   accounts,
   showInstallment,
   locked,
+  viaLender,
 }: {
+  /** The person paid the lender directly (rather than paying me): the intro says how to mark their share. */
+  viaLender?: boolean;
   state: HistoricalReconcileState;
   accounts: readonly Account[];
   /** Several installments: label each line with its installment number. */
@@ -279,8 +282,10 @@ export function HistoricalPeopleReconcile({
   return (
     <section aria-label="People sharing it" className="flex flex-col gap-2.5 rounded-[6px] border border-border p-3">
       <h3 className="text-sm font-semibold text-foreground">{solo ? `Has ${solo} already paid you their share?` : "Have these people already paid you their share?"}</h3>
-      <p className="-mt-1.5 text-[11.5px] text-muted-foreground">
-        You paid the lender. {solo ?? "Each person below"} owes you a share of each installment. Say how much {solo ?? "each person"} has already paid you back — anything you leave as “Not received yet” stays pending in People.
+      <p className="-mt-1.5 text-[11.5px] text-muted-foreground" data-testid="reconcile-intro">
+        {viaLender
+          ? `If ${solo ?? "they"} paid the lender for their share, choose “Received in full” and “Already in my account”. Anything left as “Not received yet” stays owed in People.`
+          : `Mark what ${solo ?? "each person"} has paid you. Anything left as “Not received yet” stays owed in People.`}
       </p>
       <ul className="flex flex-col divide-y divide-border">
         {people.map(([personId, personName]) => {
@@ -385,8 +390,8 @@ export function HistoricalPeopleReconcile({
           </label>
           {/* What the two per-row choices mean — the buttons alone don't say it. */}
           <p className="text-[11px] leading-snug text-muted-foreground">
-            <span className="font-semibold text-foreground/80">Already in my account</span> — you got that money earlier, so it&apos;s already in your balance and nothing changes.{" "}
-            <span className="font-semibold text-foreground/80">Add to my account</span> — FlowFi adds it to the account above now.
+            <span className="font-semibold text-foreground/80">Already in my account</span> — no balance change.{" "}
+            <span className="font-semibold text-foreground/80">Add to my account</span> — adds the money to the account above.
           </p>
         </div>
       )}
@@ -413,7 +418,7 @@ export function HistoricalPeopleReconcile({
           </ul>
           {pendingTotal > PAYMENT_EPSILON && (
             <p className="text-[11.5px] text-foreground/80">
-              The pending {formatCurrency(pendingTotal)} stays owed in the People ledger. Your lender payments above are not changed by it.
+              {formatCurrency(pendingTotal)} stays owed in People.
               {summary.total > PAYMENT_EPSILON && (
                 <> {summary.balanceChange > PAYMENT_EPSILON ? `Account balance +${formatCurrency(summary.balanceChange)}.` : "Account balance won't change."}</>
               )}
@@ -556,7 +561,7 @@ function ShareLineRow({
   );
 }
 
-function Segmented<T extends string>({
+export function Segmented<T extends string>({
   name,
   value,
   options,

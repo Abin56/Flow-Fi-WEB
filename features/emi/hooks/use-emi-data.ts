@@ -36,6 +36,7 @@ import {
   planEmiPaymentReversal,
 } from "@/features/emi/lib/emi-payment-allocation";
 import { assertEmiReversalStillValid, planEmiReversalPreflight } from "@/features/emi/lib/emi-reversal-guard";
+import { personPaymentReverter } from "@/lib/repositories/agreement-person-revert";
 import { PaymentReversalBlockedError } from "@/lib/repositories/loan-advance-payment-repository";
 import { useCategories } from "@/hooks/use-categories";
 import { useCreditCards, useEmis } from "@/hooks/use-credit-cards";
@@ -277,8 +278,9 @@ export function useEmiActions() {
        * and their card-account effect; card locked credit, dues and outstanding follow from the EMI being
        * gone — then removes its schedule and breakdowns. See `lib/repositories/agreement-deletion.ts`.
        */
-      deleteEmi: async (emi: Pick<Emi, "id">, opts: { onStage?: (stage: AgreementDeletionStage) => void } = {}) =>
-        permanentlyDeleteAgreement(db, uid, "emi", emi.id, opts),
+      deleteEmi: async (emi: Pick<Emi, "id">, opts: { onStage?: (stage: AgreementDeletionStage) => void; reverseRepayments?: boolean } = {}) =>
+        // People repayments are only reversed when the user explicitly chose to — never as a silent side effect.
+        permanentlyDeleteAgreement(db, uid, "emi", emi.id, { onStage: opts.onStage, ...(opts.reverseRepayments ? { revertPersonPayment: personPaymentReverter(uid) } : {}) }),
       /** Read-only: what `deleteEmi` would change — for its confirmation. */
       previewPermanentDeletion: (emi: Pick<Emi, "id">) => previewAgreementDeletion(db, uid, "emi", emi.id),
       /**

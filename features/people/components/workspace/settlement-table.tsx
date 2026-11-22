@@ -274,8 +274,8 @@ const BANK_STATUS: Record<EmiRowStatus, string> = {
 };
 
 const TH =
-  "sticky top-0 z-[2] border-b border-b-border-strong/70 bg-secondary/90 px-2.5 py-1.5 text-left text-[10.5px] font-bold tracking-[0.07em] whitespace-nowrap text-foreground/55 uppercase backdrop-blur";
-const TD = "border-b border-b-border-strong/30 px-2.5 py-1 align-middle";
+  "sticky top-0 z-[2] border-b border-r border-b-border-strong/70 border-r-border-strong/50 bg-secondary/90 px-2.5 py-1.5 text-left text-[10.5px] font-bold tracking-[0.07em] whitespace-nowrap text-foreground/55 uppercase backdrop-blur last:border-r-0";
+const TD = "border-b border-r border-b-border-strong/60 border-r-border-strong/40 px-2.5 py-1 align-middle last:border-r-0";
 const NUM = "text-right tabular-nums whitespace-nowrap";
 
 const isPaymentKind = (k: SettlementKind) => k === "paymentReceived" || k === "paymentMade" || k === "advance" || k === "advanceApplied";
@@ -1698,6 +1698,9 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
     const progress = obligation && !v.balance && row.state === "partial" ? `${money(v.paid ?? 0)} paid · ${money(row.remaining ?? 0)} left` : null;
     return [head, v.relation, progress].filter(Boolean).join(" · ");
   };
+  /** Only the figure that matters stays on the row (part paid · left); the descriptive sentence is a hover tooltip. */
+  const progressText = (v: SettlementRowView) =>
+    v.row.state != null && !v.balance && v.row.state === "partial" ? `${money(v.paid ?? 0)} paid · ${money(v.row.remaining ?? 0)} left` : "";
 
   const desktopRow = (v: SettlementRowView) => {
     const { row } = v;
@@ -1731,7 +1734,7 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
               <div className="min-w-0 flex-1">
                 {/* One line: title · chips · what it is. Postponement / follow-up notes drop to a second line only when they exist. */}
                 <div className="flex min-w-0 items-center gap-1.5">
-                  <span className={cn("max-w-[60%] shrink-0 truncate text-[13.5px] leading-tight font-semibold", muted ? "text-foreground/80" : "text-foreground")}>{v.title}</span>
+                  <span title={supportingText(v) || undefined} className={cn("max-w-[60%] shrink-0 truncate text-[13.5px] leading-tight font-semibold", muted ? "text-foreground/80" : "text-foreground")}>{v.title}</span>
                   {(v.kind === "emi" || v.kind === "loanEmi") && <BankPaidChip rowKey={v.row.key} />}
                   <ChevronDown className={cn("size-3.5 shrink-0 text-foreground/40 transition-transform", open && "rotate-180")} strokeWidth={2} aria-hidden />
                   {v.split ? (
@@ -1739,9 +1742,7 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
                   ) : v.row.statementRow?.settles && (v.kind === "paymentReceived" || v.kind === "paymentMade") ? (
                     <RepaysLine v={v} />
                   ) : (
-                    <p className="min-w-0 truncate text-[11.5px] leading-tight text-foreground/60" title={supportingText(v)}>
-                      {supportingText(v)}
-                    </p>
+                    progressText(v) && <p className="min-w-0 truncate text-[11.5px] leading-tight text-foreground/60">{progressText(v)}</p>
                   )}
                 </div>
                 <div className="flex min-w-0 items-baseline gap-x-3 empty:hidden">
