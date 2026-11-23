@@ -21,6 +21,7 @@ import {
   type PeopleFilter,
   type PeopleLedgerRow,
 } from "@/features/people/components/people-ledger-list";
+import { MonthlyPaymentSummary } from "@/features/people/components/monthly-payment-summary";
 import { PeopleCycleOverview, PeopleCycleOverviewSkeleton } from "@/features/people/components/people-cycle-overview";
 import { PeopleLedgerGrid, PeopleLedgerGridSkeleton } from "@/features/people/components/people-ledger-grid";
 import { cycleContaining } from "@/lib/engines/person-cycle-statement";
@@ -480,6 +481,7 @@ export function PeopleWorkspace() {
           className="flex animate-in flex-col gap-4 fade-in duration-200"
         >
           <PeopleCycleOverview rows={ledgerRows} />
+          <MonthlyPaymentSummary rows={ledgerRows} cycle={cycle} onOpenPerson={openPerson} />
           <UpcomingCycleAlert onOpen={openPerson} />
           <PeopleAttention onOpenPerson={openPerson} />
 

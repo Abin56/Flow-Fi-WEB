@@ -62,7 +62,7 @@ import { splitAllocation, type SplitAllocation } from "@/lib/split/split-allocat
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useAllLoanInstallments, useLoans } from "@/hooks/use-loans";
+import { useLoans } from "@/hooks/use-loans";
 import { usePeople } from "@/hooks/use-people";
 import { paidFromLabel } from "@/features/transactions/lib/funding-label";
 import { useExpenses } from "@/hooks/use-expenses";
@@ -87,7 +87,6 @@ import { useAccountFilter } from "@/features/transactions/hooks/use-account-filt
 import { Banner } from "@/components/feedback/banner";
 import { HISTORICAL_PAYMENT_LABEL, HISTORICAL_PAYMENT_SHORT, historicalPaymentExplanation } from "@/features/loans/lib/historical-payment";
 import { HistoricalPaymentFlagsProvider, useHistoricalPaymentFlags, useIsHistoricalPayment } from "@/features/loans/hooks/use-historical-payment-flags";
-import { loanTransactionLabel } from "@/features/loans/lib/loan-labels";
 import { findSameAmountDateDuplicateIds } from "@/features/transactions/lib/same-amount-date-duplicates";
 import { amountMatches, parseAmountQuery } from "@/features/transactions/lib/amount-search";
 import { useDuplicateGuardedCreate } from "@/lib/services/duplicate-detection/use-duplicate-guarded-create";
@@ -95,6 +94,7 @@ import { cn } from "@/lib/utils";
 import { DateInput } from "@/components/forms/date-input";
 import { StatementFootnote, StatementHeader, StatementNeedsAccount, StatementTable } from "@/features/transactions/components/transactions-statement-view";
 import { buildTransactionStatementView } from "@/features/transactions/lib/transaction-statement";
+import { PeoplePaymentsByMonth } from "@/features/transactions/components/people-payments-by-month";
 import { AccountBalanceHover, AccountBalanceRail, AccountFilterMenu, SelectedAccountBalance, accountBalanceViewFor, type AccountBalanceView } from "@/features/transactions/components/account-balance-preview";
 
 /**
@@ -110,9 +110,13 @@ function isAssignedToPerson(transaction: Pick<Transaction, "type" | "linkedPerso
   return transaction.type === "expense" && transaction.linkedPersonId != null && transaction.owesPersonToggle;
 }
 
-function loanTagFor(transaction: Pick<Transaction, "loanId" | "emiId">): { label: string } | null {
-  if (transaction.emiId != null) return { label: "EMI" };
-  if (transaction.loanId != null) return { label: "Loan" };
+/** Loan/EMI corner markers are no longer shown: the history reads as plain money in / out (details live in Loan & EMI). */
+/** Person / Loan / EMI cash legs carry a technical category ("Personal Loan") — not shown in the list. */
+function hideCategory(t: Pick<Transaction, "loanId" | "emiId" | "isPersonLedgerMovement">): boolean {
+  return t.loanId != null || t.emiId != null || t.isPersonLedgerMovement;
+}
+
+function loanTagFor(_transaction: Pick<Transaction, "loanId" | "emiId">): { label: string } | null {
   return null;
 }
 
@@ -254,25 +258,26 @@ export function TransactionsWorkspace() {
   // the same `linkedPersonId` reference tag the ledger entry already carries.
   const personNameFor = (t: Transaction): string | null =>
     t.isPersonLedgerMovement && t.linkedPersonId != null ? (personNameById.get(t.linkedPersonId) ?? "a person") : null;
-  // Loan-generated rows read as "Loan EMI — Home Loan" / "Extra Principal Payment — …" from their
-  // persisted loan metadata instead of the raw stored description; every other row is unchanged.
-  // Display only: an unnamed loan reads by its lender (as on the Loans page), and an installment payment
-  // names the installment it paid ("· #4") — nothing stored is changed.
   const { data: loans = [] } = useLoans();
   // Which Loan payments are "already paid earlier" — from the payment's structured flag (see historical-payment.ts).
   const listedTransactions = useMemo(() => rows.map((r) => r.transaction), [rows]);
   const isHistoricalPayment = useHistoricalPaymentFlags(listedTransactions, loans);
-  const { data: loanInstallments = [] } = useAllLoanInstallments();
-  const loanById = useMemo(() => new Map(loans.map((l) => [l.id, { direction: l.direction, name: l.name?.trim() || l.institutionName || (l.personId ? personNameById.get(l.personId) : null) || null }])), [loans, personNameById]);
-  const installmentSeqById = useMemo(() => new Map(loanInstallments.map((i) => [i.id, i.sequenceNumber])), [loanInstallments]);
+  // Plain money in / out wording. A person movement or a Loan / EMI leg never shows loan terminology: it reads
+  // "Received from X" / "Paid to X" (or "Money received" / "Money paid" when the other side isn't a known person or
+  // lender). A description the user wrote on an ordinary transaction is kept. Display only — nothing stored changes.
+  const loanCounterpartyById = useMemo(() => new Map(loans.map((l) => [l.id, (l.personId ? personNameById.get(l.personId) : null) || l.institutionName?.trim() || null])), [loans, personNameById]);
   const displayDescription = useMemo(() => {
     return (t: Transaction) => {
-      const label = t.loanId != null ? loanTransactionLabel(t, loanById.get(t.loanId) ?? null) : null;
-      if (label == null) return t.description;
-      const seq = t.installmentId != null && t.paymentAllocationType !== "principalPrepayment" ? installmentSeqById.get(t.installmentId) : undefined;
-      return seq != null ? `${label} · #${seq}` : label;
+      const incoming = t.type === "income";
+      if (t.loanId != null || t.emiId != null) {
+        const who = (t.loanId != null ? loanCounterpartyById.get(t.loanId) : null) ?? (t.linkedPersonId != null ? personNameById.get(t.linkedPersonId) : null) ?? null;
+        return who ? (incoming ? `Received from ${who}` : `Paid to ${who}`) : incoming ? "Money received" : "Money paid";
+      }
+      const who = t.isPersonLedgerMovement && t.linkedPersonId != null ? (personNameById.get(t.linkedPersonId) ?? null) : null;
+      if (who != null && (t.description.trim() === "" || t.description.trim() === who)) return incoming ? `Received from ${who}` : `Paid to ${who}`;
+      return t.description;
     };
-  }, [loanById, installmentSeqById]);
+  }, [loanCounterpartyById, personNameById]);
 
   const [search, setSearch] = useState("");
   const deferredSearch = useDeferredValue(search);
@@ -432,6 +437,23 @@ export function TransactionsWorkspace() {
   const statementPageRows = statementView?.rows.slice((safePage - 1) * rowsPerPage, safePage * rowsPerPage) ?? [];
   const rangeStart = count === 0 ? 0 : (safePage - 1) * rowsPerPage + 1;
   const rangeEnd = Math.min(safePage * rowsPerPage, count);
+
+  // Cash in / out per calendar month over the WHOLE filtered list (not just this page) for the month heading rows.
+  // Real cash only: transfers between your own accounts and rows already in the balance are skipped; People and
+  // Loan cash counts as the money that moved. Display only.
+  const monthTotals = useMemo(() => {
+    const map = new Map<number, { in: number; out: number }>();
+    for (const r of filtered) {
+      const t = r.transaction;
+      if (t.transferId || t.excludeFromCalculations) continue;
+      const key = monthKeyOf(t.dateTime);
+      const m = map.get(key) ?? { in: 0, out: 0 };
+      if (t.type === "income") m.in += t.amount;
+      else m.out += t.amount;
+      map.set(key, m);
+    }
+    return map;
+  }, [filtered]);
 
   const clearFilters = () => {
     setSearch("");
@@ -929,6 +951,7 @@ export function TransactionsWorkspace() {
 
       {/* ── What the list below adds up to — sits under the controls that change it ── */}
       {hasTransactions && <ViewSummary rows={filtered} />}
+      {hasTransactions && <PeoplePaymentsByMonth transactions={listedTransactions} personNameById={personNameById} />}
 
       {/* ── Ledger ── */}
       {!hasTransactions ? (
@@ -995,6 +1018,7 @@ export function TransactionsWorkspace() {
             <div className={cn("min-h-0 overflow-auto overscroll-contain", fullscreen ? "flex-1" : "max-h-[calc(100dvh-24rem)] min-h-[18rem]")}>
               <LedgerTable
                 rows={pageRows}
+                monthTotals={monthTotals}
                 offset={(safePage - 1) * rowsPerPage}
                 total={count}
                 duplicateIds={duplicateTransactionIds}
@@ -1044,7 +1068,7 @@ export function TransactionsWorkspace() {
                             className="truncate text-xs leading-snug text-muted-foreground"
                             title={`${shortDate(t.dateTime)} ${t.dateTime.getFullYear()} · ${row.category?.name ?? "Uncategorized"} · ${paidFromLabel(t, row.account?.name, personNameById) ?? "Unknown"}`}
                           >
-                            {shortDate(t.dateTime)} {t.dateTime.getFullYear()} · {row.category?.name ?? "Uncategorized"} · {paidFromLabel(t, row.account?.name, personNameById) ?? "Unknown"}
+                            {shortDate(t.dateTime)} {t.dateTime.getFullYear()} · {hideCategory(t) ? "" : `${row.category?.name ?? "Uncategorized"} · `}{paidFromLabel(t, row.account?.name, personNameById) ?? "Unknown"}
                           </span>
                         </span>
                         <Amount transaction={t} />
@@ -1689,6 +1713,7 @@ function TxnBadges({
 
 function LedgerTable({
   rows,
+  monthTotals,
   offset,
   total,
   duplicateIds,
@@ -1705,6 +1730,8 @@ function LedgerTable({
   onFilterAccount,
 }: {
   rows: TransactionRow[];
+  /** Cash in / out per month key (`monthKeyOf`) across the whole filtered list. */
+  monthTotals: ReadonlyMap<number, { in: number; out: number }>;
   offset: number;
   total: number;
   duplicateIds: Set<string>;
@@ -1795,7 +1822,18 @@ function LedgerTable({
                       monthBand(t.dateTime),
                     )}
                   >
-                    {t.dateTime.toLocaleDateString("en-IN", { month: "long", year: "numeric" })}
+                    {(() => {
+                      const m = monthTotals.get(monthKeyOf(t.dateTime)) ?? { in: 0, out: 0 };
+                      return (
+                        <div className="flex flex-wrap items-center gap-x-6 gap-y-0.5">
+                          <span>{t.dateTime.toLocaleDateString("en-IN", { month: "long", year: "numeric" })}</span>
+                          <span className="flex items-center gap-4 text-xs font-semibold normal-case tracking-normal tabular-nums" title="Cash in and out this month (transfers between your accounts excluded)">
+                            <span className="inline-flex items-center gap-1 text-success"><ArrowDownLeft className="size-3" strokeWidth={2.5} aria-hidden />In {formatCurrency(m.in)}</span>
+                            <span className="inline-flex items-center gap-1 text-expense"><ArrowUpRight className="size-3" strokeWidth={2.5} aria-hidden />Out {formatCurrency(m.out)}</span>
+                          </span>
+                        </div>
+                      );
+                    })()}
                   </td>
                 </tr>
               )}
@@ -1858,9 +1896,9 @@ function LedgerTable({
                         {/* One metadata line: category · account (when the Account column is hidden) · markers.
                             "Uncategorized" is noise on transfers/loans/people rows, so it only shows on plain income/expense. */}
                         <span className="truncate text-[11.5px] text-muted-foreground">
-                          {row.category?.name ?? (tone === "income" || tone === "expense" ? "Uncategorized" : null)}
+                          {hideCategory(row.transaction) ? null : (row.category?.name ?? (tone === "income" || tone === "expense" ? "Uncategorized" : null))}
                           <span className="lg:hidden">
-                            {row.category || tone === "income" || tone === "expense" ? " · " : ""}
+                            {!hideCategory(row.transaction) && (row.category || tone === "income" || tone === "expense") ? " · " : ""}
                             {paidFromLabel(row.transaction, row.account?.name) ?? "Unknown account"}
                           </span>
                         </span>

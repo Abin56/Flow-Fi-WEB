@@ -13,11 +13,7 @@ import { obligationStatus, summarizeToPay, summarizeYearSpend, type ObligationIt
 
 vi.mock("@/lib/firebase/client", () => ({ firebaseApp: {}, auth: {}, db: {}, storage: {} }));
 vi.mock("next/link", () => ({
-  default: ({ children, href, className }: { children: React.ReactNode; href: string; className?: string }) => (
-    <a href={href} className={className}>
-      {children}
-    </a>
-  ),
+  default: (props: React.ComponentProps<"a">) => <a {...props} />,
 }));
 
 const NOW = new Date(2026, 9, 12, 10);
@@ -115,10 +111,14 @@ const data = {
     total: 17000,
   },
 };
-vi.mock("@/features/my-money/hooks/use-my-money-data", () => ({ useMyMoneyData: () => data }));
+let viewData = data;
+vi.mock("@/features/my-money/hooks/use-my-money-data", () => ({ useMyMoneyData: () => viewData }));
 
 const { MyMoneyWorkspace } = await import("./my-money-workspace");
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  viewData = data;
+});
 
 function renderPage() {
   return render(
@@ -137,23 +137,33 @@ describe("MyMoneyWorkspace", () => {
     expect(summary.getByText(formatCurrency(1200))).toBeTruthy();
     expect(summary.getByText(formatCurrency(4200))).toBeTruthy();
     expect(summary.getByText(formatCurrency(17000))).toBeTruthy();
-    expect(summary.getByText("Outstanding today · 1 person")).toBeTruthy();
+    expect(summary.getByText("Owed today by 1 person")).toBeTruthy();
     // A running period compares amounts, never a %.
-    expect(summary.getByText(`Previous period: ${formatCurrency(9000)}`)).toBeTruthy();
+    expect(summary.getByText(`Last period ${formatCurrency(9000)}`)).toBeTruthy();
     expect(screen.getByText("Not in total")).toBeTruthy();
   });
 
-  it("keeps the period spending panel and adds a whole-year spending panel", () => {
+  it("shows both yearly and period spending details alongside payments", () => {
     renderPage();
-    expect(screen.getByRole("heading", { name: "Where your money went" })).toBeTruthy();
-    const year = within(screen.getByRole("region", { name: "Spending this year" }));
+    expect(screen.getByRole("heading", { name: "Spending this period" })).toBeTruthy();
+    const yearPanel = screen.getByRole("region", { name: "Spending this year" });
+    expect(screen.getByRole("region", { name: "Payments this period" })).toBeTruthy();
+    const year = within(yearPanel);
     // Year total, and the one category carrying all of it.
     expect(year.getAllByText(formatCurrency(10200))).toHaveLength(2);
     // Average over the 10 months that have begun by NOW (Jan–Oct).
     expect(year.getByText(formatCurrency(1020))).toBeTruthy();
     expect(year.getByText("Highest month").nextElementSibling?.textContent).toContain("Sep");
-    // Bars are real buttons that open that month's period.
-    fireEvent.click(year.getByRole("button", { name: /^September 2026: .*Open this period$/ }));
+    const categories = year.getByText("Spending by category").closest("details")!;
+    expect(categories.open).toBe(false);
+    fireEvent.click(year.getByText("Spending by category"));
+    expect(categories.open).toBe(true);
+    // Monthly amounts are rendered inside the buttons before any hover or selection.
+    const september = year.getByRole("button", { name: /^September 2026: .*Open this period$/ });
+    expect(within(september).getByText(formatCurrency(6000))).toBeTruthy();
+    expect(within(year.getByRole("button", { name: /^January 2026: / })).getByText(formatCurrency(0))).toBeTruthy();
+    expect(within(year.getByRole("button", { name: /^November 2026: not started yet/ })).getByText("—")).toBeTruthy();
+    fireEvent.click(september);
     expect(data.nav.pickMonth).toHaveBeenCalledWith(2026, 8);
   });
 
@@ -196,16 +206,49 @@ describe("MyMoneyWorkspace", () => {
   it("collapses Completed by default", () => {
     renderPage();
     expect(screen.queryByText("SBI Card")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: /^Completed/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Payments made/ }));
     expect(screen.getByText("SBI Card")).toBeTruthy();
     expect(screen.getByText("Card bill · Paid 5 Oct")).toBeTruthy();
     // No recorded payment date → said so; the due date is never presented as when it was paid.
     expect(screen.getByText("Bill · Bill due 10 Oct · payment date not recorded")).toBeTruthy();
   });
 
+  it("keeps payments outside the desktop previews available to expand", () => {
+    const extraDue = base({ key: "insurance", title: "Insurance", dueDate: new Date(2026, 9, 28), remaining: 600 });
+    const due = [...obligations, extraDue];
+    const extraPaid = Array.from({ length: 3 }, (_, index) => ({
+      ...data.completed.groups[0],
+      key: `bill:extra-${index}`,
+      title: `Extra payment ${index + 1}`,
+    }));
+    viewData = {
+      ...data,
+      obligations: due,
+      toPay: summarizeToPay(due),
+      completed: { groups: [...data.completed.groups, ...extraPaid], total: data.completed.total + 15000 },
+    };
+    renderPage();
+
+    const dueRow = screen.getByText("Insurance").closest("li");
+    const dueToggle = screen.getByRole("button", { name: "Show 2 more in Later this period" });
+    expect(dueRow?.classList.contains("md:hidden")).toBe(true);
+    fireEvent.click(dueToggle);
+    expect(dueToggle.getAttribute("aria-expanded")).toBe("true");
+    expect(dueRow?.classList.contains("md:hidden")).toBe(false);
+
+    const history = within(screen.getByRole("region", { name: "Completed payments" }));
+    fireEvent.click(history.getByRole("button", { name: /^Payments made/ }));
+    const paidRow = history.getByText("Extra payment 3").closest("li");
+    const paidToggle = history.getByRole("button", { name: "Show 1 more in Payments made" });
+    expect(paidRow?.classList.contains("md:hidden")).toBe(true);
+    fireEvent.click(paidToggle);
+    expect(paidToggle.getAttribute("aria-expanded")).toBe("true");
+    expect(paidRow?.classList.contains("md:hidden")).toBe(false);
+  });
+
   it("shows held advances apart from money to collect", () => {
     renderPage();
-    expect(screen.getByText(/in advances that haven.t been applied yet/)).toBeTruthy();
-    expect(screen.getByText(`${formatCurrency(300)} already received`)).toBeTruthy();
+    expect(screen.getByText(/Unused advances/).textContent).toContain(formatCurrency(500));
+    expect(screen.getByText(`${formatCurrency(300)} received`)).toBeTruthy();
   });
 });

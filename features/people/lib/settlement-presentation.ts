@@ -653,3 +653,8 @@ export function splitContextLine(ctx: SplitContext, money: (n: number) => string
   const split = ctx.participantCount >= 2 ? `${ctx.participantCount}-way split` : "assigned in full";
   return `Total price ${money(ctx.original)} · ${split}`;
 }
+
+/** True when a row's title is an engine-made generic one (not text the user wrote). */
+export function isGenericRowTitle(title: string): boolean {
+  return GENERIC_TITLES.has(title);
+}

@@ -34,9 +34,9 @@ export function MyMoneyCompactBar({
   const { toPay } = data;
   return (
     <CompactHeaderBar label="My Money quick bar" progress={progress} reduceMotion={reduceMotion} top={top}>
-      <span className="min-w-0 shrink-0 truncate px-2 font-heading text-sm font-bold tracking-tight text-foreground">My Money</span>
+      <span className="hidden min-w-0 shrink-0 truncate px-2 font-heading text-sm font-bold tracking-tight text-foreground min-[360px]:inline">My Money</span>
 
-      <div className="flex shrink-0 items-center gap-0.5">
+      <div className="flex min-w-0 items-center gap-0.5 sm:shrink-0">
         {!data.isCurrent && (
           <button type="button" onClick={data.nav.current} aria-label="Jump to this month" className={NAV_BUTTON}>
             <RotateCcw className="size-3.5" strokeWidth={2} />
@@ -45,7 +45,7 @@ export function MyMoneyCompactBar({
         <button type="button" onClick={data.nav.previous} aria-label="Previous period" className={NAV_BUTTON}>
           <ChevronLeft className="size-4" strokeWidth={1.9} />
         </button>
-        <span className="min-w-[4.5rem] px-1 text-center text-xs font-semibold text-foreground">{data.periodLabel}</span>
+        <span title={data.periodLabel} className="min-w-0 truncate px-1 text-center text-xs font-semibold text-foreground sm:min-w-[4.5rem]">{data.periodLabel}</span>
         <button type="button" onClick={data.nav.next} aria-label="Next period" className={NAV_BUTTON}>
           <ChevronRight className="size-4" strokeWidth={1.9} />
         </button>
@@ -67,7 +67,7 @@ export function MyMoneyCompactBar({
         <Link
           href={next.href}
           className={cn(
-            "ml-auto flex h-10 min-w-0 shrink-0 items-center gap-1.5 rounded-[6px] border px-2.5 text-xs font-semibold outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring sm:ml-0 sm:px-3",
+            "ml-auto flex h-10 min-w-0 items-center gap-1.5 rounded-[6px] border px-2.5 text-xs font-semibold outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring sm:ml-0 sm:shrink-0 sm:px-3",
             next.status === "overdue"
               ? "border-expense/60 bg-expense/10 text-expense hover:bg-expense/15"
               : "border-primary-accent-text bg-primary text-primary-foreground hover:opacity-90",

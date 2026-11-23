@@ -90,10 +90,7 @@ export function RecentPeopleTransactions({ onViewAll }: { onViewAll?: () => void
                   <p className="truncate text-xs text-muted-foreground">{txn.description}</p>
                 </div>
                 <span className="hidden text-xs text-muted-foreground sm:block">{txn.date}</span>
-                <Badge variant="secondary" className="hidden border-0 text-[10px] sm:inline-flex">
-                  {txn.category}
-                </Badge>
-                <Badge
+                 <Badge
                   variant="secondary"
                   className={cn("hidden border-0 text-[10px] sm:inline-flex", settled ? "bg-success/16 text-success" : "bg-warning/25 text-warning-foreground")}
                 >

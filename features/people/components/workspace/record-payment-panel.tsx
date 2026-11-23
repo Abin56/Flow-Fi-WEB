@@ -247,6 +247,8 @@ export function RecordPaymentPanel({
   // no account (the repository's `recordedEarlier`: money received only, settlement lines only, never future-dated).
   const [inBalance, setInBalance] = useState(initialInBalance);
   const [dateUnknown, setDateUnknown] = useState(false);
+  // Optional "why" for this payment — saved as the existing payment note; never required.
+  const [paymentNote, setPaymentNote] = useState("");
   // Per-item amounts once the user takes over a row (Full / Part / typing). null = automatic, oldest first.
   // Editing shows the payment exactly as it was allocated (not re-allocated oldest first).
   const [manual, setManual] = useState<Record<string, string> | null>(() =>
@@ -493,6 +495,7 @@ export function RecordPaymentPanel({
         amount,
         date: earlier && dateUnknown ? earlierPlaceholderDate : fromInputDate(date),
         accountId: accountId!,
+        ...(paymentNote.trim() && !initial ? { note: paymentNote.trim() } : {}),
         lines: general
           ? allocation.lines.map((l) => ({ key: GENERAL_PAYMENT_KEY, amount: l.amount, route: { kind: "general" as const } }))
           : paymentLines(options, allocation.lines),
@@ -979,6 +982,20 @@ export function RecordPaymentPanel({
                       onChange={(e) => setDate(e.target.value)}
                     />
                   </WsField>
+                  {!initial && (
+                    <WsField label="Description (optional)">
+                      <input
+                        type="text"
+                        value={paymentNote}
+                        maxLength={140}
+                        onChange={(e) => setPaymentNote(e.target.value)}
+                        placeholder="e.g. for rent, trip share"
+                        aria-label="Payment description (optional)"
+                        data-testid="rp-description"
+                        className={WS_FIELD}
+                      />
+                    </WsField>
+                  )}
                   {earlier && (
                     <label className="flex items-center gap-2 text-xs text-foreground">
                       <input type="checkbox" className="size-3.5 shrink-0 accent-[var(--color-primary)]" checked={dateUnknown} onChange={(e) => setDateUnknown(e.target.checked)} />

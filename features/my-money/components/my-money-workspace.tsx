@@ -25,7 +25,7 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { formatCurrency } from "@/lib/format";
+import { formatCurrency, formatCurrencyExact } from "@/lib/format";
 import { ordinalDay } from "@/lib/engines/month-cycle-range";
 import { cn } from "@/lib/utils";
 import { useCompactHeader } from "@/components/layout/compact-header";
@@ -36,8 +36,7 @@ import { useMyMoneyData, type CollectItem, type MyMoneyData, type SpendCategory 
 import { daysUntil, type CompletedGroup, type ObligationItem, type ObligationKind, type ObligationStatus, type SharedPerson } from "@/features/my-money/lib/my-money";
 
 const PANEL =
-  "overflow-hidden rounded-[12px] border border-border-strong/60 bg-card shadow-e1 transition-[box-shadow,border-color] duration-300 hover:border-border-strong hover:shadow-e2";
-const LABEL = "text-[11px] font-semibold tracking-[0.06em] text-foreground/70 uppercase";
+  "min-w-0 overflow-hidden rounded-xl border border-border-strong/60 bg-card shadow-e1";
 const ACTION =
   "inline-flex h-8 shrink-0 items-center gap-1 rounded-[7px] border border-border-strong bg-card px-2.5 text-xs font-semibold text-foreground transition-colors hover:border-primary-accent-text/60 hover:bg-primary/10 focus-visible:ring-2 focus-visible:ring-primary-accent-text focus-visible:outline-none";
 const ICON_BUTTON =
@@ -47,13 +46,6 @@ const MONTHS_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "S
 const KIND_ICON: Record<ObligationKind, LucideIcon> = { card: CreditCard, loan: Landmark, emi: Smartphone, bill: Receipt };
 const KIND_LABEL: Record<ObligationKind, string> = { card: "Card bill", loan: "Loan", emi: "EMI", bill: "Bill" };
 
-const STATUS_LABEL: Record<ObligationStatus, string> = {
-  overdue: "Overdue",
-  dueToday: "Due today",
-  dueSoon: "Due soon",
-  upcoming: "Upcoming",
-  paid: "Paid",
-};
 const STATUS_CHIP: Record<ObligationStatus, string> = {
   overdue: "bg-expense/12 text-expense ring-1 ring-expense/25",
   dueToday: "bg-warning/20 text-warning-foreground dark:text-warning ring-1 ring-warning/40",
@@ -113,18 +105,18 @@ function DateTile({ date, status, muted }: { date: Date; status: ObligationStatu
     <span
       aria-hidden
       className={cn(
-        "flex w-10 shrink-0 flex-col items-center justify-center rounded-[8px] py-1 ring-1 transition-transform duration-200 group-hover/row:scale-105",
+        "flex w-9 shrink-0 flex-col items-center justify-center rounded-lg py-1 ring-1 sm:w-10 md:w-7",
         muted ? "bg-muted text-foreground/60 ring-border-strong/50" : TILE_TONE[status],
       )}
     >
-      <span className="text-[9.5px] leading-none font-semibold tracking-[0.06em] uppercase opacity-85">{date.toLocaleDateString("en-IN", { month: "short" })}</span>
+      <span className="text-[10px] leading-none font-semibold">{date.toLocaleDateString("en-IN", { month: "short" })}</span>
       <span className="font-heading text-base leading-tight font-bold tabular-nums">{date.getDate()}</span>
     </span>
   );
 }
 
 function Chip({ className, children }: { className: string; children: React.ReactNode }) {
-  return <span className={cn("inline-flex h-5 shrink-0 items-center rounded-full px-2 text-[11px] font-semibold whitespace-nowrap", className)}>{children}</span>;
+  return <span className={cn("inline-flex min-h-5 items-center rounded-full px-2 py-0.5 text-[11px] leading-tight font-semibold", className)}>{children}</span>;
 }
 
 /** One header for every panel so titles, icons and "go to" links line up. */
@@ -138,24 +130,24 @@ function PanelHeader({
   id: string;
   icon: LucideIcon;
   title: string;
-  subtitle: React.ReactNode;
-  action?: { href: string; label: string };
+  subtitle?: React.ReactNode;
+  action?: { href: string; label: string; labelClassName?: string };
 }) {
   return (
-    <div className="flex items-center gap-3 border-b border-border-strong/50 bg-secondary/25 px-4 py-3 sm:px-5">
-      <span aria-hidden className="flex size-8 shrink-0 items-center justify-center rounded-[10px] bg-primary/10 text-primary-accent-text">
+    <div className="flex items-center gap-2.5 border-b border-border-strong/50 px-3 py-2.5 sm:px-4 md:gap-2 md:px-3 md:py-2">
+      <span aria-hidden className="flex size-8 shrink-0 items-center justify-center rounded-[10px] bg-primary/10 text-primary-accent-text md:size-6 md:rounded-md">
         <Icon className="size-4" strokeWidth={1.9} />
       </span>
       <div className="min-w-0 flex-1">
         <h2 id={id} className="font-heading text-[15px] leading-tight font-semibold text-foreground">
           {title}
         </h2>
-        <div className="space-y-0.5 text-xs leading-snug text-foreground/70">{subtitle}</div>
+        {subtitle && <div className="mt-0.5 space-y-0.5 text-xs leading-snug text-foreground/70">{subtitle}</div>}
       </div>
       {action && (
-        <Link href={action.href} className="group inline-flex shrink-0 items-center gap-1 rounded-[6px] py-1 text-xs font-semibold text-primary-accent-text hover:underline focus-visible:ring-2 focus-visible:ring-primary-accent-text focus-visible:outline-none">
-          {action.label}
-          <ArrowRight className="size-3 transition-transform group-hover:translate-x-0.5" strokeWidth={2.2} />
+        <Link href={action.href} title={action.labelClassName ? action.label : undefined} className="group inline-flex shrink-0 items-center gap-1 rounded-[6px] py-1 text-xs font-semibold text-primary-accent-text hover:underline focus-visible:ring-2 focus-visible:ring-primary-accent-text focus-visible:outline-none">
+          <span className={action.labelClassName}>{action.label}</span>
+          <ArrowRight aria-hidden className="size-3 transition-transform group-hover:translate-x-0.5" strokeWidth={2.2} />
         </Link>
       )}
     </div>
@@ -166,7 +158,7 @@ function InfoTip({ label, children }: { label: string; children: React.ReactNode
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <button type="button" aria-label={label} className="inline-flex size-5 items-center justify-center rounded-full text-foreground/55 hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary-accent-text focus-visible:outline-none">
+        <button type="button" aria-label={label} className="inline-flex size-5 shrink-0 items-center justify-center rounded-full text-foreground/55 hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary-accent-text focus-visible:outline-none">
           <Info className="size-3.5" />
         </button>
       </TooltipTrigger>
@@ -180,6 +172,9 @@ function InfoTip({ label, children }: { label: string; children: React.ReactNode
 function PeriodPicker({ data }: { data: MyMoneyData }) {
   const [open, setOpen] = useState(false);
   const selected = data.cycleRange.end;
+  const mobileLabel = data.isCustomCycle
+    ? data.periodLabel
+    : selected.toLocaleDateString("en-IN", { month: "short", year: "numeric" });
   const [year, setYear] = useState(selected.getFullYear());
   const today = new Date();
   return (
@@ -191,12 +186,12 @@ function PeriodPicker({ data }: { data: MyMoneyData }) {
       }}
     >
       <PopoverTrigger asChild>
-        <button type="button" aria-label="Choose period" className="min-w-[9.5rem] rounded-[6px] px-2 py-0.5 text-center transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-primary-accent-text focus-visible:outline-none">
+        <button type="button" aria-label={`Choose period, ${data.periodLabel}${data.isCustomCycle ? ` ${selected.getFullYear()}` : ""}`} title={data.isCustomCycle ? undefined : data.rangeLabel} className="min-h-8 rounded-md px-1.5 text-center transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-primary-accent-text focus-visible:outline-none max-[359px]:px-0.5 sm:px-2">
           <span className="flex items-center justify-center gap-1.5 text-sm leading-tight font-semibold text-foreground" aria-live="polite">
-            {data.periodLabel}
-            <CalendarDays className="size-3.5 text-foreground/60" />
+            <span className="min-[360px]:hidden">{mobileLabel}</span>
+            <span className="hidden min-[360px]:inline">{data.periodLabel}{data.isCustomCycle && ` ${selected.getFullYear()}`}</span>
+            <CalendarDays aria-hidden className="hidden size-3.5 shrink-0 text-foreground/60 sm:block" />
           </span>
-          <span className="block text-[11px] leading-tight text-foreground/65 tabular-nums">{data.rangeLabel}</span>
         </button>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-64 p-3">
@@ -240,43 +235,38 @@ function PeriodPicker({ data }: { data: MyMoneyData }) {
 
 function Header({ data, titleRef }: { data: MyMoneyData; /** Callback ref on the title block — what the compact bar watches. */ titleRef?: (el: HTMLDivElement | null) => void }) {
   return (
-    <header className="flex flex-wrap items-end justify-between gap-3">
+    <header className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
       <div ref={titleRef} className="min-w-0">
-        <h1 className="font-heading text-[22px] leading-tight font-bold tracking-tight text-foreground sm:text-2xl">My Money</h1>
-        <p className="mt-0.5 text-[13px] text-foreground/70">Your spending, upcoming payments, and money to collect — all in one place.</p>
+        <h1 className="font-heading text-[22px] leading-tight font-bold tracking-tight text-foreground max-[359px]:text-xl sm:text-2xl">My Money</h1>
       </div>
-      <div className="flex flex-wrap items-center gap-2">
-        {!data.isCurrent && (
-          <button
-            type="button"
-            onClick={data.nav.current}
-            className="inline-flex h-9 items-center gap-1.5 rounded-full border border-primary-accent-text/40 bg-primary/10 px-3 text-xs font-semibold text-foreground transition-colors hover:bg-primary/20 focus-visible:ring-2 focus-visible:ring-primary-accent-text focus-visible:outline-none"
-          >
-            <RotateCcw className="size-3" strokeWidth={2} />
-            This month
-          </button>
-        )}
+      <div className="flex min-w-0 flex-wrap items-center gap-1.5">
         <div className="flex items-center rounded-[8px] border border-border-strong bg-card p-0.5">
-          <button type="button" onClick={data.nav.previous} aria-label="Previous period" className={ICON_BUTTON}>
+          <button type="button" onClick={data.nav.previous} aria-label="Previous period" className={cn(ICON_BUTTON, "max-[359px]:size-7")}>
             <ChevronLeft className="size-4" strokeWidth={1.9} />
           </button>
           <PeriodPicker data={data} />
-          <button type="button" onClick={data.nav.next} aria-label="Next period" className={ICON_BUTTON}>
+          <button type="button" onClick={data.nav.next} aria-label="Next period" className={cn(ICON_BUTTON, "max-[359px]:size-7")}>
             <ChevronRight className="size-4" strokeWidth={1.9} />
           </button>
         </div>
         <InfoTip label="About this period">
           {data.isCustomCycle
-            ? `Periods follow your Month Cycle: the ${ordinalDay(data.startDay)} of each month to the day before the next. Card bills keep their own statement and due dates.`
-            : "Periods follow your Month Cycle (calendar month). Card bills keep their own statement and due dates."}
+            ? `Your month starts on the ${ordinalDay(data.startDay)}. Card bills follow their own dates.`
+            : "This period follows the calendar month. Card bills follow their own dates."}
         </InfoTip>
+        {!data.isCurrent && (
+          <button type="button" onClick={data.nav.current} className={ACTION}>
+            <RotateCcw aria-hidden className="size-3" />
+            This month
+          </button>
+        )}
         {!data.nav.isFollowingGlobalCycle && (
           <button
             type="button"
             onClick={data.nav.followGlobal}
             className="inline-flex h-7 items-center gap-1 rounded-[6px] border border-dashed border-border-strong px-2 text-xs font-semibold text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
           >
-            Sync with top-bar cycle
+            Follow top bar
           </button>
         )}
       </div>
@@ -295,11 +285,8 @@ function SummaryCell({
   tip,
   className,
   accent = "bg-secondary text-foreground/60",
-  bar = "bg-border-strong",
 }: {
   className?: string;
-  /** Thin status stripe along the cell's top edge — the figure's state at a glance. */
-  bar?: string;
   icon: LucideIcon;
   /** The icon chip's tint — signals the figure's state (overdue, due soon, clear, neutral). */
   accent?: string;
@@ -310,19 +297,16 @@ function SummaryCell({
   tip: string;
 }) {
   return (
-    <div className={cn("group/cell relative flex min-w-0 items-start gap-3 border-border-strong/50 px-4 py-3 transition-colors duration-200 hover:bg-secondary/30 sm:px-5", className)}>
-      <span aria-hidden className={cn("absolute inset-x-0 top-0 h-[2px] opacity-60 transition-opacity duration-200 group-hover/cell:opacity-100", bar)} />
-      <span aria-hidden className={cn("mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-[11px] ring-1 ring-inset ring-current/10 transition-transform duration-200 group-hover/cell:scale-105", accent)}>
-        <Icon className="size-4" strokeWidth={2} />
-      </span>
-      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <div className="flex items-center gap-1">
-          <span className={LABEL}>{label}</span>
-          <InfoTip label={`What ${label} means`}>{tip}</InfoTip>
-        </div>
-        <span className={cn("font-heading text-[1.3rem] leading-tight font-bold tracking-tight break-words text-foreground tabular-nums sm:text-[1.5rem]", tone)}>{formatCurrency(amount)}</span>
-        <span className="min-h-[1rem] line-clamp-2 text-xs leading-snug text-foreground/65">{meta}</span>
+    <div className={cn("min-w-0 border-border-strong/45 px-3 py-2 max-[359px]:px-2 max-[359px]:py-1 sm:px-4 sm:py-2.5 md:px-3 md:py-1.5", className)}>
+      <div className="mb-1 flex items-center gap-1.5 max-[359px]:mb-0.5 max-[359px]:gap-1">
+        <span aria-hidden className={cn("flex size-6 shrink-0 items-center justify-center rounded-md max-[359px]:size-5 md:size-5", accent)}>
+          <Icon className="size-3.5" strokeWidth={2} />
+        </span>
+        <span className="text-xs font-semibold leading-tight text-foreground/80 sm:text-sm md:text-xs lg:text-sm">{label}</span>
+        <InfoTip label={`What ${label} means`}>{tip}</InfoTip>
       </div>
+      <p className={cn("font-heading text-xl leading-tight font-bold tracking-tight wrap-anywhere tabular-nums sm:text-2xl", tone ?? "text-foreground")}>{formatCurrency(amount)}</p>
+      <div className="mt-0.5 text-xs leading-snug text-foreground/70 max-[359px]:text-[11px]">{meta}</div>
     </div>
   );
 }
@@ -332,13 +316,12 @@ function Summary({ data }: { data: MyMoneyData }) {
   const next = toPay.next;
   const comparison = spending.comparison;
   return (
-    <section id="mm-summary" aria-label="Period summary" className={PANEL}>
-      <div className="grid grid-cols-2 lg:grid-cols-4">
+    <section id="mm-summary" aria-label="Period summary" className={cn(PANEL, "@container/summary")}>
+      <div className="grid grid-cols-2 md:@min-[34rem]/summary:grid-cols-4">
         <SummaryCell
           label="To pay"
           icon={Wallet}
-          className="border-r border-b lg:border-b-0"
-          bar={toPay.overdue > 0 ? "bg-expense" : toPay.dueSoon > 0 ? "bg-warning" : toPay.count === 0 ? "bg-success" : "bg-primary-accent-text"}
+          className="border-r border-b md:@min-[34rem]/summary:border-b-0"
           amount={toPay.total}
           tone={toPay.count === 0 ? "text-success" : toPay.overdue > 0 ? "text-expense" : undefined}
           accent={toPay.overdue > 0 ? "bg-expense/10 text-expense" : toPay.dueSoon > 0 ? "bg-warning/15 text-warning-foreground dark:text-warning" : toPay.count === 0 ? "bg-success/12 text-success" : "bg-primary/10 text-primary-accent-text"}
@@ -355,24 +338,22 @@ function Summary({ data }: { data: MyMoneyData }) {
               `${toPay.count} payment${toPay.count === 1 ? "" : "s"} · next ${shortDate(toPay.next!.dueDate)}`
             )
           }
-          tip="What your lenders, card issuers and billers expect from you this period — including anything overdue from earlier — at what is still unpaid. It is cash to arrange, not new spending."
+          tip="Unpaid bills, card bills, loans and EMIs for this period, including older overdue payments."
         />
         <SummaryCell
           label="To collect"
           icon={HandCoins}
-          className="border-b lg:border-r lg:border-b-0"
-          bar={collect.total > 0 ? "bg-success" : "bg-border-strong"}
+          className="border-b md:@min-[34rem]/summary:border-r md:@min-[34rem]/summary:border-b-0"
           amount={collect.total}
           tone={collect.total > 0 ? "text-success" : undefined}
           accent="bg-success/12 text-success"
-          meta={collect.items.length === 0 ? "No one owes you today" : `Outstanding today · ${collect.items.length} ${collect.items.length === 1 ? "person" : "people"}`}
-          tip="The total other people owe you as of today, from the People Ledger — everything still outstanding, not only this period. Money you hold as an advance is not counted here."
+          meta={collect.items.length === 0 ? "No money to collect" : `Owed today by ${collect.items.length} ${collect.items.length === 1 ? "person" : "people"}`}
+          tip="What people still owe you today, across all periods. Advances are shown separately."
         />
         <SummaryCell
           label="My spending"
           icon={ShoppingBag}
           className="border-r"
-          bar="bg-primary-accent-text"
           accent="bg-primary/10 text-primary-accent-text"
           amount={spending.mySpend}
           meta={
@@ -385,21 +366,20 @@ function Summary({ data }: { data: MyMoneyData }) {
                 vs previous period
               </span>
             ) : comparison.kind === "inProgress" ? (
-              `Previous period: ${formatCurrency(comparison.previous)}`
+              `Last period ${formatCurrency(comparison.previous)}`
             ) : (
               `${spending.purchaseCount} purchase${spending.purchaseCount === 1 ? "" : "s"}`
             )
           }
-          tip="Your own consumption this period: your share of split purchases, no transfers, card bill payments, loan principal, reimbursements or advances."
+          tip="What you spent on yourself this period, including your part of shared expenses. Moving money and paying back debt are excluded."
         />
         <SummaryCell
-          label="Completed"
+          label="Paid"
           icon={CheckCircle2}
-          bar={completed.total > 0 ? "bg-success" : "bg-border-strong"}
           accent="bg-success/12 text-success"
           amount={completed.total}
-          meta={completed.groups.length === 0 ? "No payments yet" : `${completed.groups.length} obligation${completed.groups.length === 1 ? "" : "s"} paid`}
-          tip="Card bills, loan and EMI installments, and bills you paid during this period, by payment date. A bill payment with no recorded date is listed under the bill it paid and marked as such."
+          meta={completed.groups.length === 0 ? "No payments yet" : "This period"}
+          tip="Payments recorded this period. If a bill payment has no date, it appears in the bill’s due period."
         />
       </div>
       <NextUp data={data} next={next} />
@@ -408,33 +388,21 @@ function Summary({ data }: { data: MyMoneyData }) {
 }
 
 function NextUp({ data, next }: { data: MyMoneyData; next: ObligationItem | null }) {
-  if (next == null) {
-    return (
-      <div className="flex items-center gap-2 border-t border-border-strong/50 bg-success/[0.05] px-4 py-1.5 text-xs font-medium text-foreground/75 sm:px-5">
-        <CheckCircle2 className="size-3.5 shrink-0 text-success" />
-        <span>{data.isPast ? "Nothing from this period is still unpaid." : "You're all caught up for this period."}</span>
-      </div>
-    );
-  }
+  if (next == null) return null;
   const urgent = next.status === "overdue";
   return (
-    <div className={cn("flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-border-strong/50 px-4 py-1.5 sm:px-5", urgent ? "bg-expense/[0.06]" : "bg-warning/[0.07]")}>
-      <span className={cn("inline-flex items-center gap-1.5 text-[11px] font-bold tracking-[0.06em] uppercase", urgent ? "text-expense" : "text-warning-foreground dark:text-warning")}>
-        <span aria-hidden className="relative flex size-1.5">
-          <span className={cn("absolute inline-flex size-full animate-ping rounded-full opacity-60 motion-reduce:animate-none", urgent ? "bg-expense" : "bg-warning")} />
-          <span className={cn("relative inline-flex size-1.5 rounded-full", urgent ? "bg-expense" : "bg-warning")} />
-        </span>
-        Next
-      </span>
-      <span className="min-w-0 flex-1 text-sm text-foreground">
-        <span className="font-semibold">{next.title}</span>
-        <span className="text-foreground/70"> · </span>
-        <span className="font-semibold tabular-nums">{formatCurrency(next.remaining)}</span>
-        <span className="text-foreground/70"> · {dueText(next, data.now)}</span>
-      </span>
-      <Link href={next.href} className={ACTION}>
-        {next.actionLabel}
-        <ArrowRight className="size-3" strokeWidth={2.2} />
+    <div className={cn("flex items-center gap-2 border-t border-border-strong/50 px-3 py-1.5 max-[359px]:px-2 max-[359px]:py-1 sm:gap-3 sm:px-4", urgent ? "bg-expense/[0.07]" : "bg-warning/[0.08]")}>
+      <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", urgent ? "bg-expense" : "bg-warning")} />
+      <div className="min-w-0 flex-1 md:flex md:flex-wrap md:items-baseline md:gap-x-2">
+        <span className="sr-only">Next payment </span>
+        <p className="text-sm leading-snug font-semibold text-foreground wrap-anywhere">{next.title}</p>
+        <p className={cn("text-xs leading-snug", urgent ? "text-expense" : "text-foreground/70")}>
+          {dueText(next, data.now)} <span aria-hidden>·</span> <span className="font-semibold text-foreground tabular-nums">{formatCurrency(next.remaining)}</span>
+        </p>
+      </div>
+      <Link href={next.href} className={cn(ACTION, "border-primary-accent-text/50 bg-primary/12 px-2 sm:px-2.5 md:h-7")} aria-label={`${next.actionLabel}: ${next.title}`}>
+        {next.actionLabel === "Continue payment" ? "Continue" : next.actionLabel}
+        <ArrowRight aria-hidden className="size-3" strokeWidth={2.2} />
       </Link>
     </div>
   );
@@ -453,31 +421,33 @@ function SharedBreakdown({ item }: { item: ObligationItem }) {
   const shared = item.shared!;
   const isCard = item.kind === "card";
   return (
-    <div className="mt-2 rounded-[8px] border border-border-strong/50 bg-secondary/40">
+    <div className="mt-1.5 rounded-lg border border-border-strong/50 bg-secondary/35">
       <button
         type="button"
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
-        className="flex w-full flex-wrap items-center gap-x-3 gap-y-0.5 px-2.5 py-1.5 text-left text-xs text-foreground/80 focus-visible:ring-2 focus-visible:ring-primary-accent-text focus-visible:outline-none"
+        className="flex min-h-8 w-full items-center gap-2 px-2 py-1 text-left text-xs text-foreground/80 focus-visible:ring-2 focus-visible:ring-primary-accent-text focus-visible:outline-none"
       >
-        <Users className="size-3.5 shrink-0 text-foreground/60" />
-        <span>
-          {isCard ? "Includes others' share" : "Your share"}{" "}
-          <span className="font-semibold text-foreground tabular-nums">{formatCurrency(isCard ? shared.othersShare : shared.myShare)}</span>
+        <Users aria-hidden className="size-3.5 shrink-0 text-foreground/60" />
+        <span className="flex min-w-0 flex-1 flex-wrap gap-x-3 gap-y-0.5">
+          <span>
+            {isCard ? "Includes others' share" : "Your share"}{" "}
+            <span className="font-semibold text-foreground tabular-nums">{formatCurrency(isCard ? shared.othersShare : shared.myShare)}</span>
+          </span>
+          {!isCard && (
+            <span>
+              Others <span className="font-semibold text-foreground tabular-nums">{formatCurrency(shared.othersShare)}</span>
+            </span>
+          )}
+          {shared.toCollect > 0 ? (
+            <span>
+              To collect <span className="font-semibold text-foreground tabular-nums">{formatCurrency(shared.toCollect)}</span>
+            </span>
+          ) : (
+            <span className="font-semibold text-success">All shares collected</span>
+          )}
         </span>
-        {!isCard && (
-          <span>
-            Others <span className="font-semibold text-foreground tabular-nums">{formatCurrency(shared.othersShare)}</span>
-          </span>
-        )}
-        {shared.toCollect > 0 ? (
-          <span>
-            To collect <span className="font-semibold text-foreground tabular-nums">{formatCurrency(shared.toCollect)}</span>
-          </span>
-        ) : (
-          <span className="font-semibold text-success">All shares collected</span>
-        )}
-        <ChevronDown className={cn("ml-auto size-3.5 shrink-0 transition-transform", open && "rotate-180")} />
+        <ChevronDown aria-hidden className={cn("size-3.5 shrink-0 transition-transform", open && "rotate-180")} />
       </button>
       {open && (
         <ul className="border-t border-border-strong/50 px-2.5 py-1.5">
@@ -509,48 +479,54 @@ function SharedBreakdown({ item }: { item: ObligationItem }) {
   );
 }
 
-function ObligationRow({ item, now }: { item: ObligationItem; now: Date }) {
+function ObligationRow({ item, now, className }: { item: ObligationItem; now: Date; className?: string }) {
   const Icon = KIND_ICON[item.kind];
   const partial = item.amountPaid > 0 && item.remaining > 0;
   const paidPercent = item.amountDue > 0 ? Math.min(100, Math.round((item.amountPaid / item.amountDue) * 100)) : 0;
   const muted = !item.countsTowardTotal;
   const urgentChip = item.status === "overdue" || item.status === "dueToday" || item.status === "dueSoon";
+  const kind = KIND_LABEL[item.kind];
+  const lenderPrefix = `${item.title} · `;
+  const detail = item.detail.startsWith(lenderPrefix) ? item.detail.slice(lenderPrefix.length) : item.detail;
+  const action = muted ? "View" : item.actionLabel;
   return (
     <li
       className={cn(
-        "group/row border-l-[3px] px-4 py-2.5 transition-colors duration-150 hover:bg-secondary/40 sm:px-5",
+        "group/row border-l-2 px-3 py-2 transition-colors hover:bg-secondary/30 sm:px-4 md:px-3 md:py-1.5",
         muted ? "border-l-transparent" : item.status === "overdue" ? "border-l-expense" : item.status === "dueToday" || item.status === "dueSoon" ? "border-l-warning" : "border-l-transparent",
+        className,
       )}
     >
-      <div className="flex items-center gap-3">
+      <div className="flex items-start gap-2.5 sm:items-center sm:gap-3 md:gap-2 md:@max-[30rem]/payments:items-start">
         <DateTile date={item.dueDate} status={item.status} muted={muted} />
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm leading-snug font-semibold text-foreground">{item.title}</p>
-          <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-            <span className="flex min-w-0 items-center gap-1 text-xs text-foreground/70">
-              <Icon className="size-3 shrink-0" strokeWidth={2} aria-hidden />
-              <span className="truncate">
-                {KIND_LABEL[item.kind]} · {item.detail}
-              </span>
+          <p className="text-sm leading-snug font-semibold wrap-anywhere text-foreground">{item.title}</p>
+          <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+            <span className="flex min-w-0 items-start gap-1 text-xs text-foreground/70">
+              <Icon className="mt-0.5 size-3 shrink-0" strokeWidth={2} aria-hidden />
+              <span className="wrap-anywhere">{kind}{detail && detail !== kind && ` · ${detail}`}</span>
             </span>
-            {urgentChip && <Chip className={STATUS_CHIP[item.status]}>{STATUS_LABEL[item.status]}</Chip>}
+            {urgentChip ? (
+              <Chip className={STATUS_CHIP[item.status]}>{relativeDue(item, now)}</Chip>
+            ) : (
+              <span className="text-xs text-foreground/75">{relativeDue(item, now)}</span>
+            )}
             {partial && <Chip className="bg-warning/12 text-warning-foreground dark:text-warning ring-1 ring-warning/30">Partially paid</Chip>}
-            {item.billStillOpen && <Chip className="bg-secondary text-foreground/80 ring-1 ring-border-strong/60">Bill still open</Chip>}
-            {muted && <Chip className="bg-muted text-foreground/75 ring-1 ring-border-strong/60">Not in total</Chip>}
-            <span className={cn("text-xs whitespace-nowrap", item.status === "overdue" ? "font-semibold text-expense" : "text-foreground/75")}>{relativeDue(item, now)}</span>
           </div>
         </div>
-        <div className="shrink-0 text-right">
-          <p className={cn("text-[15px] leading-tight font-bold tabular-nums", muted ? "text-foreground/60" : "text-foreground")}>{formatCurrency(item.remaining)}</p>
-          {partial && <p className="text-[11px] text-foreground/65 tabular-nums">of {formatCurrency(item.amountDue)}</p>}
+        <div className="flex max-w-[45%] flex-col items-end gap-1 sm:max-w-none sm:shrink-0 sm:flex-row sm:items-center sm:gap-3 md:@max-[30rem]/payments:max-w-[45%] md:@max-[30rem]/payments:flex-col md:@max-[30rem]/payments:items-end md:@max-[30rem]/payments:gap-1">
+          <div className="min-w-0 text-right">
+            <p className={cn("text-sm leading-tight font-bold wrap-anywhere tabular-nums sm:text-[15px]", muted ? "text-foreground/70" : "text-foreground")}>{formatCurrency(item.remaining)}</p>
+            {partial && <p className="text-[11px] text-foreground/65 tabular-nums">of {formatCurrency(item.amountDue)}</p>}
+          </div>
+          <Link href={item.href} className={cn(ACTION, "px-2 sm:px-2.5 md:h-7 md:px-2")} aria-label={`${action}: ${item.title}`}>
+            {action === "Continue payment" ? "Continue" : action}
+            <ArrowRight aria-hidden className="size-3" strokeWidth={2.2} />
+          </Link>
         </div>
-        <Link href={item.href} className={cn(ACTION, "group/act")} aria-label={`${muted ? "View" : item.actionLabel}: ${item.title}`}>
-          {muted ? "View" : item.actionLabel}
-          <ArrowRight className="size-3 transition-transform duration-200 group-hover/act:translate-x-0.5" strokeWidth={2.2} />
-        </Link>
       </div>
 
-      <div className="pl-[52px]">
+      <div className="sm:pl-[52px] md:pl-9 md:@max-[26rem]/payments:pl-0">
           {partial && (
             <div className="mt-2 flex items-center gap-2">
               <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-secondary" role="progressbar" aria-valuenow={paidPercent} aria-valuemin={0} aria-valuemax={100} aria-label="Paid so far">
@@ -561,7 +537,7 @@ function ObligationRow({ item, now }: { item: ObligationItem; now: Date }) {
           )}
 
           {item.note && <p className="mt-1.5 text-xs text-foreground/70">{item.note}</p>}
-          {item.billStillOpen && <p className="mt-1 text-xs text-foreground/70">Amount so far — new purchases until the statement closes are added.</p>}
+          {item.billStillOpen && <p className="mt-1 text-xs text-foreground/70">This bill is still open, so the amount can change.</p>}
           {item.shared && <SharedBreakdown item={item} />}
       </div>
     </li>
@@ -569,9 +545,21 @@ function ObligationRow({ item, now }: { item: ObligationItem; now: Date }) {
 }
 
 const GROUP_HEADING =
-  "flex w-full items-center gap-2 border-t border-border-strong/40 bg-secondary/50 px-4 py-1.5 text-[11px] font-bold tracking-[0.06em] text-foreground/75 uppercase sm:px-5";
+  "flex w-full items-center gap-2 border-t border-border-strong/40 bg-secondary/55 px-3 py-1.5 text-xs font-semibold text-foreground/80 sm:px-4 md:px-3 md:py-1";
+
+function PaymentListToggle({ label, open, remaining, onClick }: { label: string; open: boolean; remaining: number; onClick: () => void }) {
+  const text = open ? "Show fewer" : `Show ${remaining} more`;
+  return (
+    <button type="button" aria-label={`${text} in ${label}`} aria-expanded={open} onClick={onClick} className="hidden min-h-7 w-full items-center gap-1 border-t border-border-strong/40 px-3 text-xs font-semibold text-primary-accent-text hover:bg-primary/10 focus-visible:ring-2 focus-visible:ring-primary-accent-text focus-visible:outline-none focus-visible:ring-inset md:flex">
+      {text}
+      <ChevronDown aria-hidden className={cn("size-3.5 transition-transform", open && "rotate-180")} />
+    </button>
+  );
+}
 
 function ObligationGroup({ title, items, now, attention = false }: { title: string; items: ObligationItem[]; now: Date; attention?: boolean }) {
+  const [showAll, setShowAll] = useState(false);
+  const previewCount = attention ? 2 : 1;
   if (items.length === 0) return null;
   const total = items.reduce((s, i) => s + i.remaining, 0);
   return (
@@ -583,10 +571,13 @@ function ObligationGroup({ title, items, now, attention = false }: { title: stri
         <span className="ml-auto tracking-normal text-foreground normal-case tabular-nums">{formatCurrency(total)}</span>
       </h3>
       <ul className="divide-y divide-border-strong/40">
-        {items.map((item) => (
-          <ObligationRow key={item.key} item={item} now={now} />
+        {items.map((item, index) => (
+          <ObligationRow key={item.key} item={item} now={now} className={!showAll && index >= previewCount ? "md:hidden" : undefined} />
         ))}
       </ul>
+      {items.length > previewCount && (
+        <PaymentListToggle label={title} open={showAll} remaining={items.length - previewCount} onClick={() => setShowAll((value) => !value)} />
+      )}
     </div>
   );
 }
@@ -630,13 +621,13 @@ function PeriodProgress({ data }: { data: MyMoneyData }) {
   const percent = Math.min(100, Math.round((paid / sum) * 100));
   const overdue = data.toPay.overdue > 0;
   return (
-    <div className="border-b border-border-strong/50 px-4 py-3 sm:px-5">
-      <div className="flex items-baseline justify-between gap-3 text-xs">
-        <span className={LABEL}>Period progress</span>
-        <span className="font-semibold text-foreground tabular-nums">{percent}% paid</span>
+    <div className="border-b border-border-strong/50 px-3 py-2.5 sm:px-4 md:px-3 md:py-1.5">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 text-xs text-foreground/70">
+        <span>Paid <strong className="text-foreground tabular-nums">{formatCurrency(paid)}</strong> <span className="tabular-nums">({percent}%)</span></span>
+        <span>Left to pay <strong className={cn("tabular-nums", overdue ? "text-expense" : "text-foreground")}>{formatCurrency(left)}</strong></span>
       </div>
       <div
-        className="mt-1.5 flex h-2 overflow-hidden rounded-full bg-secondary"
+        className="mt-1.5 flex h-1.5 overflow-hidden rounded-full bg-secondary md:mt-1 md:h-1"
         role="progressbar"
         aria-label="Share of this period's payments already paid"
         aria-valuenow={percent}
@@ -644,16 +635,6 @@ function PeriodProgress({ data }: { data: MyMoneyData }) {
         aria-valuemax={100}
       >
         <div className="h-full rounded-full bg-success transition-[width] duration-500 motion-reduce:transition-none" style={{ width: `${percent}%` }} />
-      </div>
-      <div className="mt-1.5 flex items-center justify-between gap-3 text-[11px] text-foreground/70">
-        <span className="inline-flex items-center gap-1.5">
-          <span aria-hidden className="size-1.5 rounded-full bg-success" />
-          Paid <span className="font-semibold text-foreground tabular-nums">{formatCurrency(paid)}</span>
-        </span>
-        <span className="inline-flex items-center gap-1.5">
-          <span aria-hidden className={cn("size-1.5 rounded-full", overdue ? "bg-expense" : left > 0 ? "bg-warning" : "bg-border-strong")} />
-          Left <span className={cn("font-semibold tabular-nums", overdue ? "text-expense" : "text-foreground")}>{formatCurrency(left)}</span>
-        </span>
       </div>
     </div>
   );
@@ -666,50 +647,43 @@ function ToPayPanel({ data }: { data: MyMoneyData }) {
   const elsewhere = data.obligations.filter((i) => !i.countsTowardTotal);
   const { toPay, collect } = data;
   return (
-    <section id="mm-to-pay-section" aria-labelledby="mm-to-pay" className={PANEL}>
-      <PanelHeader
-        id="mm-to-pay"
-        icon={CalendarDays}
-        title="Payments this period"
-        subtitle={
-          <p>
-            {toPay.count === 0 ? "All clear" : `${formatCurrency(toPay.total)} across ${toPay.count} payment${toPay.count === 1 ? "" : "s"}`}
-            {toPay.othersStillOwe > 0 && <> · {formatCurrency(toPay.othersStillOwe)} of it is others&apos; share to collect</>}
-          </p>
-        }
-      />
-      <PeriodProgress data={data} />
-      {collect.totalToGive > 0 && (
-        <Link
-          href="/people"
-          className="group flex items-center gap-2 border-b border-border-strong/50 bg-warning/[0.08] px-4 py-2 text-xs transition-colors hover:bg-warning/[0.14] focus-visible:ring-2 focus-visible:ring-primary-accent-text focus-visible:outline-none focus-visible:ring-inset sm:px-5"
-        >
-          <Users aria-hidden className="size-3.5 shrink-0 text-warning-foreground dark:text-warning" />
-          <span className="font-semibold text-foreground">You also owe people {formatCurrency(collect.totalToGive)}</span>
-          <span className="ml-auto flex items-center gap-1 font-semibold text-primary-accent-text">
-            Review
-            <ArrowRight className="size-3 transition-transform group-hover:translate-x-0.5" strokeWidth={2.2} />
-          </span>
-        </Link>
-      )}
+    <section id="mm-to-pay-section" aria-labelledby="mm-to-pay" className="@container/payments flex min-w-0 flex-col gap-3 md:gap-0 md:overflow-hidden md:rounded-xl md:border md:border-border-strong/60 md:bg-card md:shadow-e1">
+      <div className={cn(PANEL, "md:contents")}>
+        <PanelHeader
+          id="mm-to-pay"
+          icon={CalendarDays}
+          title="Payments this period"
+          subtitle={toPay.othersStillOwe > 0 && <p>{formatCurrency(toPay.othersStillOwe)} of this is owed to you</p>}
+        />
+        <PeriodProgress data={data} />
+        {collect.totalToGive > 0 && (
+          <Link
+            href="/people"
+            className="group flex items-center gap-2 border-b border-border-strong/50 bg-warning/[0.08] px-3 py-2 text-xs transition-colors hover:bg-warning/[0.14] focus-visible:ring-2 focus-visible:ring-primary-accent-text focus-visible:outline-none focus-visible:ring-inset sm:px-4 md:px-3 md:py-1.5"
+          >
+            <Users aria-hidden className="size-3.5 shrink-0 text-warning-foreground dark:text-warning" />
+            <span className="font-semibold text-foreground">You owe people {formatCurrency(collect.totalToGive)}</span>
+            <span className="ml-auto flex items-center gap-1 font-semibold text-primary-accent-text">
+              Review
+              <ArrowRight className="size-3 transition-transform group-hover:translate-x-0.5" strokeWidth={2.2} />
+            </span>
+          </Link>
+        )}
 
-      {data.obligations.length === 0 ? (
-        <div className="flex items-center gap-3 bg-success/[0.04] px-4 py-5 sm:px-5">
-          <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-success/12 text-success ring-4 ring-success/[0.07]">
-            <CheckCircle2 className="size-5" strokeWidth={1.9} />
-          </span>
-          <div className="min-w-0">
-            <p className="text-sm font-semibold text-foreground">No card bills, installments or bills due</p>
-            <p className="text-xs text-foreground/65">Nothing is scheduled or overdue for this period.</p>
+        {data.obligations.length === 0 ? (
+          <div className="flex items-center gap-2 px-3 py-3 text-sm text-foreground/75 sm:px-4 md:order-2 md:py-2">
+            <CheckCircle2 aria-hidden className="size-4 shrink-0 text-success" />
+            <p>No payments due this period.</p>
           </div>
-        </div>
-      ) : (
-        <div className="[&>*:first-child>h3]:border-t-0 [&>*:first-child>button]:border-t-0">
-          <ObligationGroup title="Needs attention" items={attention} now={data.now} attention />
-          <ObligationGroup title="Later this period" items={later} now={data.now} />
-          <CoveredElsewhere items={elsewhere} now={data.now} />
-        </div>
-      )}
+        ) : (
+          <div className="md:order-2 [&>*:first-child>h3]:border-t-0 [&>*:first-child>button]:border-t-0">
+            <ObligationGroup title="Needs attention" items={attention} now={data.now} attention />
+            <ObligationGroup title="Later this period" items={later} now={data.now} />
+            <CoveredElsewhere items={elsewhere} now={data.now} />
+          </div>
+        )}
+      </div>
+      <CompletedPanel data={data} />
     </section>
   );
 }
@@ -719,29 +693,31 @@ function ToPayPanel({ data }: { data: MyMoneyData }) {
 function CompletedPanel({ data }: { data: MyMoneyData }) {
   // Collapsed while there are payments to act on; open when nothing is pending so the page isn't mostly empty.
   const [userOpen, setUserOpen] = useState<boolean | null>(null);
+  const [showAll, setShowAll] = useState(false);
   const { groups, total } = data.completed;
+  const previewCount = 4;
   if (groups.length === 0) return null;
   const open = userOpen ?? data.obligations.length === 0;
   const setOpen = (fn: (o: boolean) => boolean) => setUserOpen(fn(open));
   return (
-    <section id="mm-completed" aria-label="Completed payments" className={PANEL}>
+    <section id="mm-completed" aria-label="Completed payments" className={cn(PANEL, "md:order-1 md:rounded-none md:border-0 md:border-b md:bg-secondary/20 md:shadow-none")}>
       <button
         type="button"
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
         className={cn(
-          "flex w-full items-center justify-between gap-3 bg-secondary/25 px-4 py-3 text-left transition-colors hover:bg-secondary/50 focus-visible:ring-2 focus-visible:ring-primary-accent-text focus-visible:outline-none focus-visible:ring-inset sm:px-5",
+          "flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left transition-colors hover:bg-secondary/50 focus-visible:ring-2 focus-visible:ring-primary-accent-text focus-visible:outline-none focus-visible:ring-inset sm:px-4 md:gap-2 md:px-3 md:py-1.5",
           open && "border-b border-border-strong/50",
         )}
       >
-        <span className="flex items-center gap-3">
-          <span aria-hidden className="flex size-8 shrink-0 items-center justify-center rounded-[10px] bg-success/12 text-success">
+        <span className="flex min-w-0 items-center gap-3 md:gap-2">
+          <span aria-hidden className="flex size-8 shrink-0 items-center justify-center rounded-[10px] bg-success/12 text-success md:size-6 md:rounded-md">
             <CheckCircle2 className="size-4" strokeWidth={1.9} />
           </span>
-          <span>
-            <span className="block font-heading text-[15px] leading-tight font-semibold text-foreground">Completed</span>
+          <span className="md:flex md:flex-wrap md:items-baseline md:gap-x-3">
+            <span className="block font-heading text-[15px] leading-tight font-semibold text-foreground">Payments made</span>
             <span className="block text-xs text-foreground/70">
-              {groups.length} paid · {formatCurrency(total)}
+              {groups.length} {groups.length === 1 ? "item" : "items"} · {formatCurrency(total)}
             </span>
           </span>
         </span>
@@ -750,11 +726,16 @@ function CompletedPanel({ data }: { data: MyMoneyData }) {
         </span>
       </button>
       {open && (
-        <ul className="divide-y divide-border-strong/40 motion-safe:animate-in motion-safe:fade-in-0 motion-safe:duration-200">
-          {groups.map((g) => (
-            <CompletedRow key={g.key} group={g} />
-          ))}
-        </ul>
+        <>
+          <ul className="divide-y divide-border-strong/40 motion-safe:animate-in motion-safe:fade-in-0 motion-safe:duration-200">
+            {groups.map((g, index) => (
+              <CompletedRow key={g.key} group={g} className={!showAll && index >= previewCount ? "md:hidden" : undefined} />
+            ))}
+          </ul>
+          {groups.length > previewCount && (
+            <PaymentListToggle label="Payments made" open={showAll} remaining={groups.length - previewCount} onClick={() => setShowAll((value) => !value)} />
+          )}
+        </>
       )}
     </section>
   );
@@ -770,11 +751,11 @@ function completedWhen(group: CompletedGroup): string {
   return dated ? `${kind} · ${dated} · ${formatCurrency(group.undatedAmount)} undated` : `${kind} · ${undated}`;
 }
 
-function CompletedRow({ group }: { group: CompletedGroup }) {
+function CompletedRow({ group, className }: { group: CompletedGroup; className?: string }) {
   const Icon = KIND_ICON[group.kind];
   return (
-    <li>
-      <Link href={group.href} className="group/row flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-secondary/40 focus-visible:bg-secondary/60 focus-visible:outline-none sm:px-5">
+    <li className={className}>
+      <Link href={group.href} className="group/row flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-secondary/40 focus-visible:bg-secondary/60 focus-visible:outline-none sm:px-5 md:gap-2 md:px-3 md:py-1.5">
         {group.lastDate ? (
           <DateTile date={group.lastDate} status="paid" muted={false} />
         ) : (
@@ -783,10 +764,10 @@ function CompletedRow({ group }: { group: CompletedGroup }) {
           </span>
         )}
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-sm leading-snug font-semibold text-foreground">{group.title}</span>
-          <span className="mt-0.5 flex min-w-0 items-center gap-1 text-xs text-foreground/70">
+          <span className="block text-sm leading-snug font-semibold wrap-anywhere text-foreground">{group.title}</span>
+          <span className="mt-0.5 flex min-w-0 items-center gap-1 text-xs leading-tight text-foreground/70">
             <Icon className="size-3 shrink-0" strokeWidth={2} aria-hidden />
-            <span className="truncate">{completedWhen(group)}</span>
+            <span>{completedWhen(group)}</span>
           </span>
         </span>
         <span className="flex shrink-0 items-center gap-1">
@@ -801,6 +782,8 @@ function CompletedRow({ group }: { group: CompletedGroup }) {
 // ─────────────────────────── to collect ───────────────────────────
 
 const COLLECT_PREVIEW = 5;
+const COLLECT_DESKTOP_PREVIEW = 3;
+const COLLECT_NARROW_PREVIEW = 1;
 
 function expectedText(expected: NonNullable<CollectItem["expected"]>): { text: string; className: string } {
   if (expected.status === "overdue") return { text: `Follow up · expected ${shortDate(expected.date)}`, className: "font-semibold text-expense" };
@@ -813,21 +796,21 @@ function CollectPanel({ data }: { data: MyMoneyData }) {
   const { collect } = data;
   const shown = showAll ? collect.items : collect.items.slice(0, COLLECT_PREVIEW);
   return (
-    <section id="mm-collect-section" aria-labelledby="mm-collect" className={PANEL}>
+    <section id="mm-collect-section" aria-labelledby="mm-collect" className={cn(PANEL, "@container/collect")}>
       <PanelHeader
         id="mm-collect"
         icon={HandCoins}
         title="Money to collect"
-        action={{ href: "/people", label: "People Ledger" }}
+        action={{ href: "/people", label: "People" }}
         subtitle={
           <>
-            <p title={data.isCurrent ? undefined : "Everything still outstanding today — not limited to this period"}>
-              <span className="font-semibold text-foreground tabular-nums">{formatCurrency(collect.total)}</span> outstanding today{data.isCurrent ? "" : " · all periods"}
+            <p>
+              <span className="font-semibold text-foreground tabular-nums">{formatCurrency(collect.total)}</span> owed <span className="md:hidden">to you </span>today
             </p>
             {collect.collectedInPeriod > 0 && (
-              <p className="inline-flex items-center gap-1 rounded-full bg-success/10 px-2 py-px text-[11px] font-semibold text-success tabular-nums">
+              <p className="inline-flex items-center gap-1 text-xs font-medium text-success tabular-nums">
                 <CheckCircle2 aria-hidden className="size-3" />
-                {formatCurrency(collect.collectedInPeriod)} received in this period
+                {formatCurrency(collect.collectedInPeriod)} received this period
               </p>
             )}
           </>
@@ -835,20 +818,26 @@ function CollectPanel({ data }: { data: MyMoneyData }) {
       />
 
       {collect.items.length === 0 ? (
-        <p className="px-4 py-5 text-sm text-foreground/75">No one owes you money right now.</p>
+        <p className="px-3 py-3 text-sm text-foreground/75 sm:px-4">No one owes you money right now.</p>
       ) : (
         <ul className="divide-y divide-border-strong/40">
-          {shown.map((p) => {
+          {shown.map((p, index) => {
             const expected = p.expected ? expectedText(p.expected) : null;
             return (
-              <li key={p.personId}>
-                <Link href={p.href} className="group flex items-start gap-3 px-4 py-2.5 transition-colors hover:bg-secondary/40 focus-visible:bg-secondary/60 focus-visible:outline-none">
-                  <span className={cn("mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-full text-sm font-bold ring-2 ring-card transition-transform duration-200 group-hover:scale-105", avatarTone(p.name))} aria-hidden>
+              <li
+                key={p.personId}
+                className={cn(
+                  !showAll && index >= COLLECT_DESKTOP_PREVIEW && "md:hidden",
+                  !showAll && index >= COLLECT_NARROW_PREVIEW && "md:@max-[18rem]/collect:hidden",
+                )}
+              >
+                <Link href={p.href} className="group flex items-start gap-2.5 px-3 py-2 transition-colors hover:bg-secondary/40 focus-visible:bg-secondary/60 focus-visible:outline-none sm:px-4 md:gap-2 md:px-3 md:py-1.5">
+                  <span className={cn("mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full text-xs font-bold md:size-6 md:@max-[19rem]/collect:hidden", avatarTone(p.name))} aria-hidden>
                     {p.name.trim().charAt(0).toUpperCase() || "?"}
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-semibold text-foreground">{p.name}</span>
-                    <span className="block truncate text-xs text-foreground/70">{p.reasons.length > 0 ? p.reasons.slice(0, 2).join(" · ") : "Waiting to receive"}</span>
+                    <span className="block text-sm font-semibold wrap-anywhere text-foreground md:leading-tight">{p.name}</span>
+                    {p.reasons.length > 0 && <span className="block text-xs text-foreground/70 md:leading-tight">{p.reasons.slice(0, 2).join(" · ")}</span>}
                     {(expected || p.partlyReceived > 0 || p.alsoOwe > 0) && (
                       <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px]">
                         {expected && (
@@ -857,7 +846,7 @@ function CollectPanel({ data }: { data: MyMoneyData }) {
                             {expected.text}
                           </span>
                         )}
-                        {p.partlyReceived > 0 && <span className="text-foreground/75">{formatCurrency(p.partlyReceived)} already received</span>}
+                        {p.partlyReceived > 0 && <span className="text-foreground/75">{formatCurrency(p.partlyReceived)} received</span>}
                         {p.alsoOwe > 0 && <span className="text-foreground/75">You owe them {formatCurrency(p.alsoOwe)}</span>}
                       </span>
                     )}
@@ -873,11 +862,16 @@ function CollectPanel({ data }: { data: MyMoneyData }) {
         </ul>
       )}
 
-      {collect.items.length > COLLECT_PREVIEW && (
+      {collect.items.length > COLLECT_NARROW_PREVIEW && (
         <button
           type="button"
+          aria-expanded={showAll}
           onClick={() => setShowAll((s) => !s)}
-          className="w-full border-t border-border-strong/50 px-4 py-2 text-xs font-semibold text-primary-accent-text transition-colors hover:bg-primary/10 focus-visible:ring-2 focus-visible:ring-primary-accent-text focus-visible:outline-none focus-visible:ring-inset"
+          className={cn(
+            "w-full border-t border-border-strong/50 px-4 py-2 text-xs font-semibold text-primary-accent-text transition-colors hover:bg-primary/10 focus-visible:ring-2 focus-visible:ring-primary-accent-text focus-visible:outline-none focus-visible:ring-inset md:py-1.5",
+            collect.items.length <= COLLECT_PREVIEW && "hidden",
+            collect.items.length > COLLECT_DESKTOP_PREVIEW ? "md:block" : "md:@max-[18rem]/collect:block",
+          )}
         >
           <span className="inline-flex items-center justify-center gap-1">
             {showAll ? "Show fewer" : `Show all ${collect.items.length}`}
@@ -886,9 +880,9 @@ function CollectPanel({ data }: { data: MyMoneyData }) {
         </button>
       )}
       {collect.advanceHeld > 0 && (
-        <p className="flex items-start gap-2 border-t border-border-strong/50 bg-secondary/40 px-4 py-2.5 text-xs text-foreground/75">
+        <p className="flex items-start gap-2 border-t border-border-strong/50 bg-secondary/40 px-4 py-2.5 text-xs text-foreground/75 md:px-3 md:py-1.5">
           <Info aria-hidden className="mt-0.5 size-3.5 shrink-0 text-foreground/55" />
-          <span>You&apos;re holding <span className="font-semibold text-foreground tabular-nums">{formatCurrency(collect.advanceHeld)}</span> in advances that haven&apos;t been applied yet.</span>
+          <span>Unused advances <span className="font-semibold text-foreground tabular-nums">{formatCurrency(collect.advanceHeld)}</span></span>
         </p>
       )}
     </section>
@@ -901,7 +895,7 @@ const CATEGORY_PREVIEW = 4;
 
 function CategoryBars({ categories }: { categories: SpendCategory[] }) {
   return (
-    <ul className="flex flex-col gap-3 px-4 py-3.5">
+    <ul className="flex flex-col gap-2.5 px-3 py-3 sm:px-4 md:gap-2 md:px-3 md:py-2">
       {categories.map((c) => {
         const Icon = categoryIconFor(c.iconKey);
         return (
@@ -911,7 +905,7 @@ function CategoryBars({ categories }: { categories: SpendCategory[] }) {
             </span>
             <span className="min-w-0 flex-1">
               <span className="flex items-baseline justify-between gap-2">
-                <span className="truncate text-sm font-medium text-foreground">{c.name}</span>
+                <span className="min-w-0 text-sm font-medium wrap-anywhere text-foreground">{c.name}</span>
                 <span className="shrink-0 text-sm font-semibold text-foreground tabular-nums">
                   {formatCurrency(c.amount)}
                   <span className="ml-1.5 text-[11px] font-medium text-foreground/60">{c.percent}%</span>
@@ -930,203 +924,185 @@ function CategoryBars({ categories }: { categories: SpendCategory[] }) {
 
 const MONTHS_LONG = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
-/** Extra to the per-period view above: the same "my spending" figures, folded across the whole year. */
 function YearSpendingPanel({ data }: { data: MyMoneyData }) {
   const [showAll, setShowAll] = useState(false);
   const ys = data.yearSpending;
   const categories = showAll ? ys.topCategories : ys.topCategories.slice(0, CATEGORY_PREVIEW);
-  const [hovered, setHovered] = useState<number | null>(null);
-  const maxMonth = Math.max(...ys.months.map((m) => m.amount), 0);
-  // The dashed average line shares the bars' scale, so it can never sit above the chart.
-  const scaleMax = Math.max(maxMonth, ys.monthlyAverage ?? 0);
-  const avgPercent = ys.monthlyAverage != null && ys.monthlyAverage > 0 && scaleMax > 0 ? Math.min(100, (ys.monthlyAverage / scaleMax) * 100) : null;
-  const selectedMonth = data.cycleRange.end.getFullYear() === ys.year ? data.cycleRange.end.getMonth() : -1;
-  const readout = ys.months[hovered ?? selectedMonth] ?? null;
   const { comparison } = ys;
   return (
     <section id="mm-year-spending" aria-labelledby="mm-year" className={PANEL}>
-      <div className="flex items-center gap-3 border-b border-border-strong/50 bg-secondary/25 px-4 py-3 sm:px-5">
-        <span aria-hidden className="flex size-8 shrink-0 items-center justify-center rounded-[10px] bg-primary/10 text-primary-accent-text">
+      <div className="flex items-center gap-2.5 border-b border-border-strong/40 bg-primary/[0.07] px-3 py-2 max-[359px]:gap-1.5 max-[359px]:px-2 max-[359px]:py-1 sm:px-4 md:gap-2 md:px-3 md:py-1.5">
+        <span aria-hidden className="hidden size-8 shrink-0 items-center justify-center rounded-lg bg-primary/15 text-primary-accent-text min-[360px]:flex md:hidden">
           <BarChart3 className="size-4" strokeWidth={1.9} />
         </span>
         <div className="min-w-0 flex-1">
           <h2 id="mm-year" className="font-heading text-[15px] leading-tight font-semibold text-foreground">
             Spending this year
           </h2>
-          <p className="text-xs leading-snug text-foreground/70 tabular-nums">{ys.rangeLabel}</p>
+          {data.isCustomCycle && <p className="mt-0.5 text-xs leading-snug text-foreground/75 tabular-nums">{ys.rangeLabel}</p>}
         </div>
-        <div className="flex items-center rounded-[8px] border border-border-strong bg-card p-0.5">
-          <button type="button" onClick={ys.nav.previous} aria-label="Previous year" className={cn(ICON_BUTTON, "size-7")}>
+        {ys.nav.isOverridden && (
+          <button type="button" onClick={ys.nav.reset} aria-label="Back to selected period’s year" title="Back to selected period’s year" className={cn(ICON_BUTTON, "shrink-0")}>
+            <RotateCcw aria-hidden className="size-3.5" />
+          </button>
+        )}
+        <div className="flex shrink-0 items-center rounded-lg border border-border-strong/70 bg-card">
+          <button type="button" onClick={ys.nav.previous} aria-label="Previous year" className={cn(ICON_BUTTON, "max-[359px]:size-7 md:size-7")}>
             <ChevronLeft className="size-4" strokeWidth={1.9} />
           </button>
-          <span className="min-w-[2.75rem] text-center text-sm font-semibold text-foreground tabular-nums" aria-live="polite">
+          <span className="min-w-9 text-center text-sm font-semibold text-foreground tabular-nums" aria-live="polite">
             {ys.year}
           </span>
-          <button type="button" onClick={ys.nav.next} aria-label="Next year" className={cn(ICON_BUTTON, "size-7")}>
+          <button type="button" onClick={ys.nav.next} aria-label="Next year" className={cn(ICON_BUTTON, "max-[359px]:size-7 md:size-7")}>
             <ChevronRight className="size-4" strokeWidth={1.9} />
           </button>
         </div>
       </div>
 
-      <div className="px-4 pt-3 pb-1 sm:px-5">
-        <div className="flex items-center gap-1">
-          <span className={LABEL}>My spending in {ys.year}</span>
-          <InfoTip label="What this year total means">
-            The same own-spending figure as the period view — your share of split purchases, no transfers, card bill payments, loan principal, reimbursements or advances — added up across every Month Cycle of the year.
-          </InfoTip>
-        </div>
-        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-          <p className="font-heading text-[1.65rem] leading-tight font-bold tracking-tight text-foreground tabular-nums">{formatCurrency(ys.total)}</p>
-          {comparison.kind === "change" ? (
-            <Chip className={cn("h-6 gap-1 ring-1", comparison.percent > 0 ? "bg-expense/10 text-expense ring-expense/25" : "bg-success/12 text-success ring-success/25")}>
-              {comparison.percent > 0 ? "▲ +" : comparison.percent < 0 ? "▼ " : ""}
-              {comparison.percent}% vs {ys.year - 1}
-            </Chip>
-          ) : comparison.kind === "inProgress" ? (
-            <Chip className="h-6 bg-secondary text-foreground/80 ring-1 ring-border-strong/60">{ys.year - 1}: {formatCurrency(comparison.previous)}</Chip>
-          ) : null}
-        </div>
-        <p className="text-xs leading-snug text-foreground/65">
-          {ys.activeMonths === 0
-            ? `Nothing recorded yet in ${ys.year}`
-            : `Across ${ys.activeMonths} month${ys.activeMonths === 1 ? "" : "s"} with spending${comparison.kind === "change" ? ` · ${ys.year - 1}: ${formatCurrency(comparison.previous)}` : ""}`}
-        </p>
-      </div>
-
-      <dl className="grid grid-cols-2 gap-px border-y border-border-strong/50 bg-border-strong/40 text-xs">
-        <div className="bg-card px-4 py-2.5 sm:px-5">
-          <dt className="text-foreground/70">Monthly average</dt>
-          <dd className="text-sm font-semibold text-foreground tabular-nums">{ys.monthlyAverage == null ? "—" : formatCurrency(ys.monthlyAverage)}</dd>
-        </div>
-        <div className="bg-card px-4 py-2.5 sm:px-5">
-          <dt className="text-foreground/70">Highest month</dt>
-          <dd className="text-sm font-semibold text-foreground tabular-nums">
-            {ys.peak ? (
-              <>
-                {MONTHS_SHORT[ys.peak.month]} <span className="font-medium text-foreground/70">· {formatCurrency(ys.peak.amount)}</span>
-              </>
-            ) : (
-              "—"
-            )}
-          </dd>
-        </div>
-      </dl>
-
-      <div className="px-4 pt-3 pb-3 sm:px-5">
-        <div className="mb-2 flex min-h-[1.25rem] items-center justify-between gap-2 text-xs" aria-live="polite">
-          {readout ? (
-            <>
-              <span className="font-semibold text-foreground">
-                {MONTHS_LONG[readout.month]} {ys.year}
-              </span>
-              <span className="text-foreground/75 tabular-nums">
-                {readout.started ? (
-                  <>
-                    <span className="font-semibold text-foreground">{formatCurrency(readout.amount)}</span>
-                    {ys.monthlyAverage != null && ys.monthlyAverage > 0 && readout.amount > 0 && (
-                      <span className="ml-1.5">
-                        {readout.amount >= ys.monthlyAverage ? "▲" : "▼"} {Math.abs(Math.round(((readout.amount - ys.monthlyAverage) / ys.monthlyAverage) * 100))}% vs avg
-                      </span>
-                    )}
-                  </>
-                ) : (
-                  "Not started yet"
-                )}
-              </span>
-            </>
-          ) : (
-            <span className="text-foreground/65">Tap a month to open it above</span>
-          )}
-        </div>
-        <div className="relative">
-          {avgPercent != null && (
-            <div aria-hidden className="pointer-events-none absolute inset-x-0 z-10 border-t border-dashed border-foreground/35" style={{ bottom: `${avgPercent}%` }}>
-              <span className="absolute -top-4 right-0 rounded bg-card/90 px-1 text-[9.5px] leading-4 font-semibold text-foreground/70">avg</span>
-            </div>
-          )}
-          <div className="flex h-28 items-end gap-[3px] border-b border-border-strong/60" role="group" aria-label={`Spending by month in ${ys.year}`} onMouseLeave={() => setHovered(null)}>
-            {ys.months.map((m) => {
-              const height = scaleMax > 0 ? Math.max(m.amount > 0 ? 4 : 0, Math.round((m.amount / scaleMax) * 100)) : 0;
-              const isSelected = m.month === selectedMonth;
-              const isPeak = ys.peak?.month === m.month && m.amount > 0;
-              return (
-                <button
-                  key={m.month}
-                  type="button"
-                  aria-label={`${MONTHS_LONG[m.month]} ${ys.year}: ${m.started ? formatCurrency(m.amount) : "not started yet"}. Open this period`}
-                  aria-pressed={isSelected}
-                  onClick={() => data.nav.pickMonth(ys.year, m.month)}
-                  onMouseEnter={() => setHovered(m.month)}
-                  onFocus={() => setHovered(m.month)}
-                  onBlur={() => setHovered(null)}
-                  className="group/bar flex h-full min-w-0 flex-1 flex-col justify-end rounded-t-[4px] focus-visible:ring-2 focus-visible:ring-primary-accent-text focus-visible:outline-none"
-                >
-                  <span
-                    className={cn(
-                      "block w-full rounded-t-[4px] transition-[background-color,height] duration-300 motion-reduce:transition-none",
-                      isSelected
-                        ? "bg-primary-accent-text"
-                        : m.started
-                          ? isPeak
-                            ? "bg-primary-accent-text/70 group-hover/bar:bg-primary-accent-text"
-                            : "bg-primary-accent-text/40 group-hover/bar:bg-primary-accent-text/75"
-                          : "bg-border-strong/30",
-                    )}
-                    style={{ height: m.started ? `${height}%` : "2px" }}
-                  />
-                </button>
-              );
-            })}
-          </div>
-        </div>
-        <div className="mt-1 flex gap-[3px]" aria-hidden>
-          {ys.months.map((m) => (
-            <span
-              key={m.month}
-              className={cn(
-                "min-w-0 flex-1 text-center text-[10px] leading-none",
-                m.month === selectedMonth ? "font-bold text-foreground" : m.isCurrent ? "font-semibold text-foreground/80" : "text-foreground/55",
+      <div className="grid gap-3 p-3 max-[359px]:gap-2 max-[359px]:p-2 sm:px-4 md:gap-2 md:p-2.5">
+        <div className="min-w-0">
+          <div className="max-[359px]:flex max-[359px]:flex-wrap max-[359px]:items-baseline max-[359px]:gap-x-2 md:flex md:flex-wrap md:items-baseline md:gap-x-2">
+            <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+              <p className="font-heading text-3xl leading-tight font-bold tracking-tight wrap-anywhere text-foreground tabular-nums max-[359px]:text-2xl md:text-2xl">
+                {formatCurrency(ys.total)}
+              </p>
+              <InfoTip label="What this year total means">Your own spending for the year, including your part of shared expenses.</InfoTip>
+              {comparison.kind === "change" && (
+                <Chip className={cn(comparison.percent > 0 ? "bg-expense/10 text-expense" : "bg-success/12 text-success")}>
+                  {comparison.percent > 0 ? "+" : ""}{comparison.percent}% vs {ys.year - 1}
+                </Chip>
               )}
-            >
-              {MONTHS_SHORT[m.month]}
-            </span>
-          ))}
+            </div>
+            <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-foreground/75">
+              {ys.activeMonths === 0 ? "No spending recorded" : `Spent in ${ys.activeMonths} ${ys.activeMonths === 1 ? "month" : "months"}`}
+              {comparison.kind !== "none" && <span>{ys.year - 1} total <strong className="text-foreground tabular-nums">{formatCurrency(comparison.previous)}</strong></span>}
+            </div>
+          </div>
+          <dl className="mt-2 grid grid-cols-2 gap-2 text-xs max-[359px]:mt-1 md:mt-1.5">
+            <div>
+              <dt className="text-foreground/70">Monthly average</dt>
+              <dd className="mt-0.5 font-semibold wrap-anywhere text-foreground tabular-nums">{ys.monthlyAverage == null ? "—" : formatCurrency(ys.monthlyAverage)}</dd>
+            </div>
+            <div>
+              <dt className="text-foreground/70">Highest month</dt>
+              <dd className="mt-0.5 font-semibold wrap-anywhere text-foreground tabular-nums">
+                {ys.peak ? `${MONTHS_SHORT[ys.peak.month]} · ${formatCurrency(ys.peak.amount)}` : "—"}
+              </dd>
+            </div>
+          </dl>
         </div>
+        <YearSpendingChart key={ys.year} data={data} />
       </div>
 
-      {categories.length === 0 ? (
-        <p className="border-t border-border-strong/50 px-4 py-4 text-xs text-foreground/70 sm:px-5">No spending of your own recorded for {ys.year}.</p>
-      ) : (
-        <div className="border-t border-border-strong/50">
-          <h3 className={cn(GROUP_HEADING, "border-t-0")}>
-            <span>By category</span>
-            <span className="text-foreground/60 tabular-nums">· {ys.topCategories.length}</span>
-          </h3>
+      {categories.length > 0 && (
+        <details className="group/year-categories border-t border-border-strong/50">
+          <summary className="flex min-h-9 cursor-pointer list-none items-center justify-between gap-2 px-3 py-2 text-xs font-semibold text-foreground/85 transition-colors hover:bg-secondary/60 focus-visible:ring-2 focus-visible:ring-primary-accent-text focus-visible:outline-none focus-visible:ring-inset sm:px-4 md:min-h-7 md:px-3 md:py-1 [&::-webkit-details-marker]:hidden">
+            Spending by category
+            <ChevronDown aria-hidden className="size-4 shrink-0 text-foreground/70 group-open/year-categories:rotate-180" />
+          </summary>
           <CategoryBars categories={categories} />
-        </div>
-      )}
-      {ys.topCategories.length > CATEGORY_PREVIEW && (
-        <button
-          type="button"
-          onClick={() => setShowAll((s) => !s)}
-          className="w-full border-t border-border-strong/50 px-4 py-2 text-xs font-semibold text-primary-accent-text transition-colors hover:bg-primary/10 focus-visible:ring-2 focus-visible:ring-primary-accent-text focus-visible:outline-none focus-visible:ring-inset"
-        >
-          <span className="inline-flex items-center justify-center gap-1">
-            {showAll ? "Show fewer" : `All ${ys.topCategories.length} categories`}
-            <ChevronDown className={cn("size-3.5 transition-transform", showAll && "rotate-180")} />
-          </span>
-        </button>
-      )}
-      {ys.nav.isOverridden && (
-        <button
-          type="button"
-          onClick={ys.nav.reset}
-          className="w-full border-t border-border-strong/50 px-4 py-2 text-xs font-semibold text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary-accent-text focus-visible:outline-none focus-visible:ring-inset"
-        >
-          Back to the selected period&apos;s year
-        </button>
+          {ys.topCategories.length > CATEGORY_PREVIEW && (
+            <button
+              type="button"
+              aria-expanded={showAll}
+              onClick={() => setShowAll((s) => !s)}
+              className="min-h-9 w-full border-t border-border-strong/50 px-3 py-2 text-xs font-semibold text-primary-accent-text transition-colors hover:bg-primary/10 focus-visible:ring-2 focus-visible:ring-primary-accent-text focus-visible:outline-none focus-visible:ring-inset"
+            >
+              {showAll ? "Show fewer" : `All ${ys.topCategories.length} categories`}
+            </button>
+          )}
+        </details>
       )}
     </section>
+  );
+}
+
+function YearSpendingChart({ data }: { data: MyMoneyData }) {
+  const [hovered, setHovered] = useState<number | null>(null);
+  const [focused, setFocused] = useState<number | null>(null);
+  const ys = data.yearSpending;
+  const scaleMax = Math.max(...ys.months.map((m) => m.amount), ys.monthlyAverage ?? 0, 0);
+  const average = ys.monthlyAverage ?? 0;
+  const avgPercent = average > 0 && scaleMax > 0 ? (average / scaleMax) * 100 : null;
+  const columnHeight = scaleMax === 0 ? "@min-[40rem]:h-9" : "@min-[40rem]:h-[4.5rem]";
+  const selectedMonth = data.cycleRange.end.getFullYear() === ys.year ? data.cycleRange.end.getMonth() : -1;
+  const readout = ys.months[hovered ?? focused ?? selectedMonth] ?? null;
+  const monthChanges = ys.months.map((month) =>
+    month.started && month.amount > 0 && average > 0 ? Math.round(((month.amount - average) / average) * 100) : null,
+  );
+  const changeFromAverage = readout ? monthChanges[readout.month] : null;
+  return (
+    <div className="@container flex min-w-0 flex-col rounded-lg bg-secondary/45 px-1.5 py-2 max-[359px]:py-1.5 sm:px-3 md:px-2 md:py-1.5">
+      <div className="order-last mt-1.5 flex min-h-4 flex-wrap items-baseline justify-between gap-x-2 px-0.5 text-xs @min-[40rem]:order-first @min-[40rem]:mt-0 @min-[40rem]:mb-1.5 md:sr-only md:@min-[40rem]:not-sr-only" aria-live="polite">
+        {readout ? (
+          <>
+            <span className="font-semibold text-foreground">{MONTHS_LONG[readout.month]}</span>
+            <span className="text-foreground/75 tabular-nums">
+              {readout.started ? (
+                <>
+                  <span className="font-semibold text-foreground">{formatCurrencyExact(readout.amount)}</span>
+                  {changeFromAverage != null && <span className="ml-1.5">{changeFromAverage > 0 ? "+" : ""}{changeFromAverage}% vs avg</span>}
+                </>
+              ) : "Starts later"}
+            </span>
+          </>
+        ) : (
+          <span className="text-foreground/75">Choose a month to view that period</span>
+        )}
+      </div>
+      <div className="relative grid grid-cols-4 gap-0.5 @min-[30rem]:grid-cols-6 @min-[40rem]:grid-cols-12 md:@min-[17rem]:grid-cols-6 md:@min-[40rem]:grid-cols-12" role="group" aria-label={`Spending by month in ${ys.year}`}>
+        {avgPercent != null && (
+          <div aria-hidden className={cn("pointer-events-none absolute inset-x-0 top-0 z-10 hidden @min-[40rem]:block", columnHeight)}>
+            <div className="absolute inset-x-0 border-t border-dashed border-foreground/35" style={{ bottom: `${avgPercent}%` }} />
+          </div>
+        )}
+        {ys.months.map((m) => {
+          const fill = m.started && m.amount > 0 ? `${Math.max(4, (m.amount / scaleMax) * 100)}%` : "2px";
+          const amount = m.started ? formatCurrencyExact(m.amount) : "—";
+          const change = monthChanges[m.month];
+          const isSelected = m.month === selectedMonth;
+          const isPeak = ys.peak?.month === m.month && m.amount > 0;
+          return (
+            <button
+              key={m.month}
+              type="button"
+              aria-label={`${MONTHS_LONG[m.month]} ${ys.year}: ${m.started ? amount : "not started yet"}. Open this period`}
+              title={change == null ? undefined : `${amount} · ${change > 0 ? "+" : ""}${change}% vs average`}
+              aria-pressed={isSelected}
+              onClick={() => data.nav.pickMonth(ys.year, m.month)}
+              onMouseEnter={() => setHovered(m.month)}
+              onMouseLeave={() => setHovered(null)}
+              onFocus={() => setFocused(m.month)}
+              onBlur={() => setFocused(null)}
+              className={cn(
+                "group/bar flex min-w-0 flex-col items-stretch gap-px rounded-md px-1 py-0.5 text-foreground/75 hover:bg-primary/12 focus-visible:z-20 focus-visible:ring-2 focus-visible:ring-primary-accent-text focus-visible:outline-none @min-[40rem]:px-0 @min-[40rem]:pt-0 md:p-0",
+                isSelected && "bg-primary/16 font-bold text-primary-accent-text",
+              )}
+            >
+              <span aria-hidden className={cn(
+                "order-last mx-auto mt-px flex h-0.5 w-full max-w-14 overflow-hidden rounded-full bg-border-strong/25 @min-[40rem]:order-first @min-[40rem]:mt-0 @min-[40rem]:max-w-none @min-[40rem]:items-end @min-[40rem]:justify-center @min-[40rem]:rounded-none @min-[40rem]:border-b @min-[40rem]:border-border-strong/50 @min-[40rem]:bg-transparent",
+                columnHeight,
+              )}>
+                <span
+                  className={cn(
+                    "block h-full w-(--bar-fill) rounded-t transition-colors motion-reduce:transition-none @min-[40rem]:h-(--bar-fill) @min-[40rem]:w-[68%]",
+                    m.started ? "bg-primary-accent-text/55 group-hover/bar:bg-primary-accent-text" : "bg-border-strong/45",
+                    (isSelected || isPeak) && "bg-primary-accent-text",
+                  )}
+                  style={{ "--bar-fill": fill } as React.CSSProperties}
+                />
+              </span>
+              <span aria-hidden className={cn("text-center text-[11px] leading-3 @min-[40rem]:mt-1", m.isCurrent && "font-semibold")}>{MONTHS_SHORT[m.month]}</span>
+              <span aria-hidden className={cn(
+                "text-center text-[11px] leading-3.5 font-semibold wrap-anywhere tabular-nums md:@min-[40rem]:text-xs/4",
+                m.amount !== 0 && m.started && "text-foreground",
+                isSelected && "text-primary-accent-text",
+              )}>{amount}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
@@ -1136,16 +1112,17 @@ function SpendingPanel({ data }: { data: MyMoneyData }) {
   if (spending.mySpend <= 0 && spending.othersShare <= 0) return null;
   const categories = showAll ? spending.topCategories : spending.topCategories.slice(0, CATEGORY_PREVIEW);
   return (
-    <section aria-labelledby="mm-spending" className={PANEL}>
-      <PanelHeader id="mm-spending" icon={ShoppingBag} title="Where your money went" subtitle={<p>Your own spending, by category</p>} action={{ href: "/transactions", label: "Transactions" }} />
+    <section aria-labelledby="mm-spending" className={cn(PANEL, "@container/period-spending")}>
+      <PanelHeader id="mm-spending" icon={ShoppingBag} title="Spending this period" action={{ href: "/transactions", label: "Transactions", labelClassName: "md:@max-[18rem]/period-spending:sr-only" }} />
 
       {categories.length === 0 && (
-        <p className="px-4 py-4 text-xs text-foreground/70 sm:px-5">No spending of your own recorded for this period yet.</p>
+        <p className="px-3 py-3 text-xs text-foreground/70 sm:px-4">No spending on yourself this period.</p>
       )}
       {categories.length > 0 && <CategoryBars categories={categories} />}
       {spending.topCategories.length > CATEGORY_PREVIEW && (
         <button
           type="button"
+          aria-expanded={showAll}
           onClick={() => setShowAll((s) => !s)}
           className="w-full border-t border-border-strong/50 px-4 py-2 text-xs font-semibold text-primary-accent-text transition-colors hover:bg-primary/10 focus-visible:ring-2 focus-visible:ring-primary-accent-text focus-visible:outline-none focus-visible:ring-inset"
         >
@@ -1157,7 +1134,7 @@ function SpendingPanel({ data }: { data: MyMoneyData }) {
       )}
 
       {(spending.sharedMine > 0 || spending.othersShare > 0) && (
-        <dl className="grid gap-1.5 border-t border-border-strong/50 bg-secondary/40 px-4 py-3 text-xs">
+        <dl className="grid gap-1.5 border-t border-border-strong/50 bg-secondary/40 px-4 py-3 text-xs md:px-3 md:py-2">
           {spending.sharedMine > 0 && (
             <div className="flex items-center justify-between gap-2">
               <dt className="flex items-center gap-1.5 text-foreground/75">
@@ -1171,7 +1148,7 @@ function SpendingPanel({ data }: { data: MyMoneyData }) {
             <div className="flex items-center justify-between gap-2">
               <dt className="flex items-center gap-1.5 text-foreground/75">
                 <HandCoins aria-hidden className="size-3.5 shrink-0 text-foreground/55" />
-                Paid for others (not your spending)</dt>
+                Paid for others</dt>
               <dd className="font-semibold text-foreground tabular-nums">{formatCurrency(spending.othersShare)}</dd>
             </div>
           )}
@@ -1183,21 +1160,32 @@ function SpendingPanel({ data }: { data: MyMoneyData }) {
 
 // ─────────────────────────── page ───────────────────────────
 
-function LoadingState() {
+function MoneyPanels({ payments, year, activity }: { payments: React.ReactNode; year: React.ReactNode; activity: React.ReactNode }) {
   return (
-    <div className="flex min-w-0 flex-col gap-4 px-1">
-      <Skeleton className="h-12 w-full max-w-md rounded-[10px]" />
-      <Skeleton className="h-40 w-full rounded-[14px]" />
-      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,22rem)]">
-        <div className="flex flex-col gap-4">
-          <Skeleton className="h-64 rounded-[14px]" />
-          <Skeleton className="h-16 rounded-[14px]" />
+    <div className="@container">
+      <div className="flex flex-col items-stretch gap-3 md:@min-[36rem]:grid md:@min-[36rem]:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)] md:@min-[36rem]:items-start md:@min-[58rem]:grid-cols-[minmax(0,1.35fr)_minmax(17rem,1fr)_minmax(15rem,.95fr)]">
+        <div className="order-2 flex min-w-0 flex-col gap-3 md:@min-[36rem]:order-1">
+          {payments}
         </div>
-        <div className="flex flex-col gap-4">
-          <Skeleton className="h-72 rounded-[14px]" />
-          <Skeleton className="h-48 rounded-[14px]" />
+        <div className="contents min-w-0 flex-col gap-3 md:gap-2 md:@min-[36rem]:order-2 md:@min-[36rem]:flex md:@min-[58rem]:contents">
+          <div className="order-1 min-w-0 md:@min-[36rem]:order-2">{year}</div>
+          <div className="order-3 flex min-w-0 flex-col gap-3 md:gap-2">{activity}</div>
         </div>
       </div>
+    </div>
+  );
+}
+
+function LoadingState() {
+  return (
+    <div className="flex min-w-0 flex-col gap-3 px-1" role="status" aria-label="Loading My Money">
+      <Skeleton className="h-9 w-36 rounded-lg" />
+      <Skeleton className="h-44 rounded-xl lg:h-32" />
+      <MoneyPanels
+        payments={<Skeleton className="h-48 rounded-xl" />}
+        year={<Skeleton className="h-56 rounded-xl md:h-48" />}
+        activity={<Skeleton className="h-36 rounded-xl" />}
+      />
     </div>
   );
 }
@@ -1207,21 +1195,15 @@ export function MyMoneyWorkspace() {
   const { watch: watchTitle, progress: barProgress, reduceMotion: barReduceMotion, barTop } = useCompactHeader();
   if (data.isLoading) return <LoadingState />;
   return (
-    <div className="flex min-w-0 flex-col gap-4 px-1">
+    <div className="flex min-w-0 flex-col gap-3 px-1 max-[359px]:gap-2">
       <MyMoneyCompactBar progress={barProgress} reduceMotion={barReduceMotion} top={barTop} data={data} next={data.toPay.next} />
       <Header data={data} titleRef={watchTitle} />
       <Summary data={data} />
-      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,22rem)] xl:grid-cols-[minmax(0,1fr)_minmax(0,24rem)] 2xl:grid-cols-[minmax(0,1fr)_minmax(0,26rem)]">
-        <div className="flex min-w-0 flex-col gap-4">
-          <ToPayPanel data={data} />
-          <CompletedPanel data={data} />
-        </div>
-        <div className="flex min-w-0 flex-col gap-4">
-          <CollectPanel data={data} />
-          <SpendingPanel data={data} />
-          <YearSpendingPanel data={data} />
-        </div>
-      </div>
+      <MoneyPanels
+        payments={<ToPayPanel data={data} />}
+        year={<YearSpendingPanel data={data} />}
+        activity={<><CollectPanel data={data} /><SpendingPanel data={data} /></>}
+      />
       <ScrollNav />
     </div>
   );
