@@ -2,7 +2,8 @@
 
 import { CheckCircle2, History, Maximize2, Plus, Search } from "lucide-react";
 import { useMemo, useState } from "react";
-import type { EntryEditValues, EntrySettleValues } from "@/features/people/components/workspace/ledger-ui";
+import { EntryEditForm, isEditable, type EntryEditValues, type EntrySettleValues } from "@/features/people/components/workspace/ledger-ui";
+import { transactionHref } from "@/features/people/lib/people-return-link";
 import { WS_SECONDARY } from "@/features/people/components/workspace/person-workspace-ui";
 import { cashOf, tableTypeLabel } from "@/features/people/components/workspace/settlement-table";
 import { usePostponedLookup } from "@/features/people/components/linked-emis-panel";
@@ -10,7 +11,7 @@ import type { PaymentLine, StatementBalance } from "@/features/people/lib/statem
 import type { SettlementLookupsWithAccounts } from "@/features/people/hooks/use-settlement-lookups";
 import { filterLedgerRows, type LedgerRow, type PaymentRecord } from "@/features/people/lib/person-ledger-rows";
 import { MoneyInOutList, type MoneyItem } from "@/features/people/components/money-in-out-list";
-import { isGenericRowTitle, rowMatchesTypeFilter, settlementKind } from "@/features/people/lib/settlement-presentation";
+import { isGenericRowTitle, settlementKind } from "@/features/people/lib/settlement-presentation";
 import type { PersonCycleStatement } from "@/lib/engines/person-cycle-statement";
 import { isOriginationTransactionId } from "@/lib/engines/loan-origination";
 import { money } from "@/lib/engines/person-cycle-statement-share";
@@ -262,32 +263,29 @@ export function PersonActivityFeed({
   const isOverdue = (r: LedgerRow) =>
     r.state != null && r.state !== "settled" && (r.direction === "theyOwe" || r.direction === "iOwe") &&
     (r.overdue || (r.category === "emi" && new Date(r.date.getFullYear(), r.date.getMonth(), r.date.getDate()).getTime() < today && postponedOf(r.key) == null));
-  const rowMatchesLens = (lens: LensId, r: LedgerRow): boolean => {
-    switch (lens) {
-      case "all": return true;
-      case "in": return metadata.get(r.key)?.cash?.dir === "in";
-      case "out": return metadata.get(r.key)?.cash?.dir === "out";
-      case "owed": return r.state === "open" || r.state === "partial";
-      case "overdue": return isOverdue(r);
-      case "emi": return rowMatchesTypeFilter(r, settlementKind(r, lookups), "emi");
-      case "settled": return r.state === "settled" || (r.statementRow?.settles != null && r.statementRow.settles.remainingAfter < 0.005);
-    }
+  // What the history lists: every recorded transaction with this person — money received / paid, and the shared,
+  // paid-for-them and paid-for-you items (marked, never counted as cash). Loan / EMI schedules, installments and the
+  // opening balance are not transactions here, so they never appear.
+  const listedKinds = new Set(["split", "assigned", "adjustment", "moneyReceived"]);
+  const isListed = (r: LedgerRow): boolean => {
+    const meta = metadata.get(r.key);
+    return meta != null && (meta.cash != null || listedKinds.has(meta.kind));
   };
+  /** Which way a row points for the person: cash direction, else who owes whom. */
+  const dirOf = (r: LedgerRow): "in" | "out" | null => {
+    const meta = metadata.get(r.key);
+    if (meta?.cash) return meta.cash.dir;
+    if (meta?.kind === "adjustment") return null;
+    return r.direction === "iOwe" ? "in" : "out";
+  };
+  const rowMatchesLens = (lens: LensId, r: LedgerRow): boolean => (lens === "all" ? isListed(r) : isListed(r) && dirOf(r) === (lens === "in" ? "in" : "out"));
   const lineMatchesLens = (lens: LensId, l: PaymentLine): boolean => {
-    const cash = l.payment.source === "cash";
-    switch (lens) {
-      case "all": return true;
-      case "in": return cash && l.payment.direction === "theyPaid";
-      case "out": return cash && l.payment.direction === "youPaid";
-      case "emi": return l.parent.category === "emi";
-      case "settled": return l.payment.remainingAfter < 0.005;
-      default: return false;
-    }
+    if (l.payment.source !== "cash") return false;
+    return lens === "all" || (lens === "in" ? l.payment.direction === "theyPaid" : l.payment.direction === "youPaid");
   };
 
-  // Only money that actually moved is listed — never an obligation, installment or schedule.
-  const rowMatches = (r: LedgerRow) => rowMatchesLens(lens, r) && metadata.get(r.key)?.cash != null;
-  const lineMatches = (l: PaymentLine) => lineMatchesLens(lens, l) && l.payment.source === "cash";
+  const rowMatches = (r: LedgerRow) => rowMatchesLens(lens, r);
+  const lineMatches = (l: PaymentLine) => lineMatchesLens(lens, l);
   const q = search.trim().toLowerCase();
   const visible = !q ? sourceRows.filter(rowMatches) : sourceRows.filter((row) => rowMatches(row) && (
     filterLedgerRows([row], "all", search).length > 0 ||
@@ -314,39 +312,68 @@ export function PersonActivityFeed({
     ...(handlers.editablePayment?.(p) && handlers.onEditPayment ? [{ id: "edit" as const, onClick: () => handlers.onEditPayment!(p) }] : []),
     ...(p.undo && handlers.onUndoPayment ? [{ id: "revert" as const, onClick: () => handlers.onUndoPayment!(parent, p) }] : []),
   ];
+  const hrefOfEntry = (entryId: string | null): string | null => {
+    const ref = entryId ? lookups.entriesById.get(entryId)?.transactionRef : null;
+    return ref ? transactionHref(ref, lookups.sourceReturn) : null;
+  };
+  const captionOf = (row: LedgerRow): string | null => {
+    if (row.state == null || row.remaining == null) return null;
+    if (row.state === "settled" || row.remaining < 0.005) return "Settled";
+    return `${money(row.remaining)} ${row.direction === "iOwe" ? "to pay" : "to receive"}`;
+  };
   const moneyItems: MoneyItem[] = [
     ...visible.flatMap((row): MoneyItem[] => {
       const meta = metadata.get(row.key);
-      if (!meta?.cash) return [];
+      if (!meta) return [];
+      const cash = meta.cash;
+      const dir = dirOf(row) ?? "out";
       const manual = meta.kind === "moneyGiven" || meta.kind === "moneyReceived";
+      const own = row.ownPayment;
+      const editing = handlers.editingKey === row.key;
+      const actions: MoneyItem["actions"] = [
+        ...(row.settle && row.state !== "settled" && !row.key.startsWith("loan") && row.direction !== "iOwe" ? [{ id: "record" as const, onClick: () => handlers.onSettleStart(row) }] : []),
+        ...(own ? paymentActions(row, own) ?? [] : []),
+        ...(!own && isEditable(row) && handlers.onEditStart ? [{ id: "edit" as const, onClick: () => (editing ? handlers.onEditCancel?.() : handlers.onEditStart!(row)) }] : []),
+        ...(!own && row.deletable && handlers.onDelete ? [{ id: "delete" as const, onClick: () => handlers.onDelete!(row) }] : []),
+      ];
       return [{
         key: row.key,
         date: row.date,
         createdAt: row.createdAt,
-        dir: meta.cash.dir,
-        amount: meta.cash.amount,
-        description: noteOfEntry(row.entryId) ?? (manual && !row.recordedLoanCash && !isGenericRowTitle(row.title) ? row.title : null),
+        dir,
+        kind: cash ? "cash" : "owed",
+        amount: cash ? cash.amount : row.amount,
+        title: cash ? (dir === "in" ? `Received from ${firstName}` : `Paid to ${firstName}`) : meta.kind === "adjustment" ? "Balance correction" : dir === "in" ? `${firstName} paid for you` : `Paid for ${firstName}`,
+        description: noteOfEntry(row.entryId) ?? ((manual || !cash) && !row.recordedLoanCash && !isGenericRowTitle(row.title) ? row.title : null),
         account: row.recordedLoanCash?.account ?? lookups.accountForEntry(row.entryId) ?? null,
         earlier: receivedEarlier(row.entryId),
-        actions: row.ownPayment
-          ? paymentActions(row, row.ownPayment)
-          : row.deletable && handlers.onDelete ? [{ id: "delete" as const, onClick: () => handlers.onDelete!(row) }] : [],
+        caption: captionOf(row),
+        openHref: hrefOfEntry(row.entryId),
+        actions,
+        extra: editing && handlers.onEditSubmit ? (
+          <div className="border-t border-border-subtle px-3 py-2"><EntryEditForm row={row} onCancel={() => handlers.onEditCancel?.()} onSubmit={(values) => handlers.onEditSubmit!(row, values)} /></div>
+        ) : undefined,
       }];
     }),
-    ...visibleLines.filter((l) => l.payment.source === "cash").map((l): MoneyItem => ({
+    ...visibleLines.map((l): MoneyItem => ({
       key: l.key,
       date: l.payment.date,
       createdAt: l.payment.date,
       dir: l.payment.direction === "theyPaid" ? "in" : "out",
+      kind: "cash",
       amount: l.payment.amount,
+      title: l.payment.direction === "theyPaid" ? `Received from ${firstName}` : `Paid to ${firstName}`,
       description: noteOfEntry(l.payment.entryId),
       account: lookups.accountForEntry(l.payment.entryId) ?? null,
       earlier: receivedEarlier(l.payment.entryId),
-      actions: paymentActions(l.parent, l.payment),
+      caption: null,
+      openHref: hrefOfEntry(l.payment.entryId),
+      actions: paymentActions(l.parent, l.payment) ?? [],
     })),
   ];
-  const moneyIn = moneyItems.filter((m) => m.dir === "in").reduce((n, m) => n + m.amount, 0);
-  const moneyOut = moneyItems.filter((m) => m.dir === "out").reduce((n, m) => n + m.amount, 0);
+  // Money really received / paid — shared and paid-for items are listed but never added here.
+  const moneyIn = moneyItems.filter((m) => m.kind === "cash" && m.dir === "in").reduce((n, m) => n + m.amount, 0);
+  const moneyOut = moneyItems.filter((m) => m.kind === "cash" && m.dir === "out").reduce((n, m) => n + m.amount, 0);
 
   const empty =
     sourceRows.length === 0 && carriedRows.length === 0 && appliedPayments.length === 0 ? (
@@ -432,7 +459,7 @@ export function PersonActivityFeed({
       )}
 
       {/* Only the table scrolls on larger screens; its header row sticks */}
-      <MoneyInOutList items={moneyItems} firstName={firstName} isLoading={isLoading} empty={sourceRows.length === 0 && appliedPayments.length === 0 ? empty : <p className="px-3 py-4 text-sm font-medium text-foreground/75">{hasFilters ? "No money movements match this search or filter." : `No money has moved with ${firstName} in this ${scope === "cycle" ? "cycle" : "history"} yet.`}</p>} />
+      <MoneyInOutList items={moneyItems} isLoading={isLoading} empty={sourceRows.length === 0 && appliedPayments.length === 0 ? empty : <p className="px-3 py-4 text-sm font-medium text-foreground/75">{hasFilters ? "No money movements match this search or filter." : `No money has moved with ${firstName} in this ${scope === "cycle" ? "cycle" : "history"} yet.`}</p>} />
 
     </section>
   );

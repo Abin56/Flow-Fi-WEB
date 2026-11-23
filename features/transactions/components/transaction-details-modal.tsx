@@ -179,8 +179,8 @@ const SPLIT_TYPE_OPTIONS: { value: SplitType; label: string }[] = [
  *  point for a new one, so they're not offered here. Edit mode offers "gave" as before; it offers
  *  "borrowed" only together with "paid directly", whose transitions `changeExpenseFunding` owns. */
 const PERSON_ENTRY_OPTIONS: { value: LedgerEntryType; label: string; description: string; icon: LucideIcon; tone: "expense" | "success" }[] = [
-  { value: "gave", label: "Money I Gave", description: "They owe me", icon: ArrowUpFromLine, tone: "expense" },
-  { value: "borrowed", label: "Money I Borrowed", description: "I owe them", icon: ArrowDownToLine, tone: "success" },
+  { value: "gave", label: "Money I Gave", description: "I paid for them — they owe me", icon: ArrowUpFromLine, tone: "expense" },
+  { value: "borrowed", label: "Money I Borrowed", description: "I owe them — not income", icon: ArrowDownToLine, tone: "success" },
 ];
 
 type BorrowFunding = "cash" | "person";
@@ -190,7 +190,7 @@ type BorrowFunding = "cash" | "person";
  *    (`recordBorrowedCash`); no expense, no income. Add mode only.
  *  - "person": they paid an expense for me → `createPersonFundedExpense` (no account, I owe them). */
 const BORROW_FUNDING_OPTIONS: { value: BorrowFunding; label: (name: string) => string; description: (name: string) => string }[] = [
-  { value: "cash", label: () => "Money received into my account", description: (name) => `${name} gave me money that I must repay later.` },
+  { value: "cash", label: () => "Money received into my account", description: (name) => `${name} gave me money I must repay. A loan I owe — not income.` },
   { value: "person", label: (name) => `${name} paid this expense for me`, description: (name) => `No money entered my account. I owe ${name} for this purchase.` },
 ];
 
@@ -594,7 +594,11 @@ export function TransactionDetailsModal({
   statementIntent = null,
   onRefreshBill = null,
   cardAvailableCredit = null,
+  classification = null,
 }: {
+  /** Edit mode — what this transaction really is when it is not ordinary income/spending (borrowed cash, a repayment, a
+   *  loan principal, an expense paid for someone). Shown read-only under the mode switch; never changes anything. */
+  classification?: { title: string; detail: string } | null;
   /** Add mode + transfer — each credit card ACCOUNT's current available credit (canonical card standings),
    *  so the preview can warn when a transfer out of a card goes beyond it. Display only. */
   cardAvailableCredit?: ReadonlyMap<string, number> | null;
@@ -1930,6 +1934,19 @@ export function TransactionDetailsModal({
             )}
             {transaction && linkedTransferId != null && (
               <LinkedTransferSummary legs={linkedTransferLegs} fee={linkedTransferFee} accounts={accounts} current={transaction} />
+            )}
+
+            {transaction && classification && (
+              <div className="mx-4 mb-2 flex items-start gap-2 rounded-[10px] border border-border bg-secondary/40 px-3 py-2 sm:mx-6" data-testid="txn-classification">
+                <Info className="mt-0.5 size-3.5 shrink-0 text-foreground/70" aria-hidden />
+                <div className="min-w-0 text-xs">
+                  <p className="font-semibold text-foreground">{classification.title}</p>
+                  <p className="text-foreground/75">{classification.detail}</p>
+                  {transaction.isPersonLedgerMovement && (
+                    <p className="mt-0.5 text-foreground/60">The Income / Expense label above only shows which way the cash moved. To change what this is, use Edit in People Ledger, which also keeps the repayment record in step.</p>
+                  )}
+                </div>
+              </div>
             )}
 
             <TxnModeSwitch

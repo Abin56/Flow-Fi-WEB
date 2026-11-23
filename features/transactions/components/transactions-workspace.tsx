@@ -66,6 +66,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useAllLoanInstallments, useLoans } from "@/hooks/use-loans";
 import { useAllEmiInstallments } from "@/hooks/use-emis";
 import { useEmis } from "@/hooks/use-credit-cards";
+import type { LedgerEntryType } from "@/lib/models/person";
+import { classificationNote } from "@/features/transactions/lib/classification-note";
 import { buildLoanPaymentInfo, type LoanPaymentInfo } from "@/features/transactions/lib/loan-payment-info";
 import { usePeople } from "@/hooks/use-people";
 import { paidFromLabel } from "@/features/transactions/lib/funding-label";
@@ -412,6 +414,12 @@ export function TransactionsWorkspace() {
   const duplicateTransactionIds = useMemo(() => findSameAmountDateDuplicateIds(rows.map((r) => r.transaction)), [rows]);
   // Cash legs of People "Borrowed" entries (`LedgerEntry.transactionRef`) — display only: they get the borrowed outline.
   const { entriesByPersonId } = usePeopleLedgerEntries();
+  // Which kind of People entry each cash leg belongs to — read-only, for the edit view's classification line.
+  const ledgerEntryTypeByTransactionId = useMemo(() => {
+    const m = new Map<string, LedgerEntryType>();
+    for (const e of Object.values(entriesByPersonId).flat()) if (e.deletedAt == null && e.transactionRef) m.set(e.transactionRef, e.type);
+    return m;
+  }, [entriesByPersonId]);
   const borrowedTransactionIds = useMemo(
     () => new Set(Object.values(entriesByPersonId).flat().filter((e) => e.type === "borrowed" && e.deletedAt == null && e.transactionRef).map((e) => e.transactionRef as string)),
     [entriesByPersonId],
@@ -1184,6 +1192,14 @@ export function TransactionsWorkspace() {
           }
         }}
         row={detailRow}
+        classification={
+          detailRow
+            ? classificationNote(detailRow.transaction, {
+                entryType: ledgerEntryTypeByTransactionId.get(detailRow.transaction.id) ?? null,
+                personName: detailRow.transaction.linkedPersonId != null ? (personNameById.get(detailRow.transaction.linkedPersonId) ?? null) : null,
+              })
+            : null
+        }
         returnLabel={peopleReturn?.label ?? null}
         expense={detailRow ? (expenseByTransactionId.get(detailRow.transaction.id) ?? null) : null}
         people={people}
