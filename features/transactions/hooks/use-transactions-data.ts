@@ -17,6 +17,13 @@
  */
 
 import { useMemo } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { deletePairedReceiptIfAny } from "@/features/activity/lib/paired-receipt-delete";
+import { useEmiActions } from "@/features/emi/hooks/use-emi-data";
+import { useLoanActions } from "@/features/loans/hooks/use-loans-data";
+import { DERIVED_QUERY_PREFIXES } from "@/features/loans/lib/derived-query-prefixes";
+import { usePeopleActions } from "@/features/people/hooks/use-people-data";
+import { toast } from "@/store/toast-store";
 import {
   Briefcase,
   Car,
@@ -181,6 +188,11 @@ export type FundingEdits = Parameters<LedgerRepository["changeExpenseFunding"]>[
 /** Create/edit/delete actions wired to the real repositories, scoped to the signed-in user. */
 export function useTransactionActions() {
   const uid = useAuthStore((s) => s.user?.uid);
+  // Only to undo a Loan / EMI payment together with the People receipt recorded with it (see `deletePairedReceiptIfAny`).
+  const loanActions = useLoanActions();
+  const emiActions = useEmiActions();
+  const peopleActions = usePeopleActions();
+  const queryClient = useQueryClient();
 
   return useMemo(() => {
     if (!uid) return null;
@@ -332,7 +344,31 @@ export function useTransactionActions() {
        * balances atomically, instead of orphaning the sibling leg.
        */
       deleteTransaction: (transaction: Transaction, expense?: Expense | null) =>
-        withErrorToast(() => deleteWithLinkedEffects(transaction, expense), "Couldn't delete transaction"),
+        withErrorToast(async () => {
+          // A People receipt recorded together with a Loan / EMI payment goes with that payment — same as Activity's Undo.
+          // Only that pair is routed here; every other transaction takes the ordinary delete below.
+          if (transaction.isPersonLedgerMovement && loanActions && emiActions && peopleActions) {
+            const paired = await deletePairedReceiptIfAny(
+              {
+                uid,
+                deleteTransactionWithLinkedEffects: (t) => deleteWithLinkedEffects(t),
+                revertPersonPayment: (person, paymentId) => peopleActions.revertPersonPayment(person, paymentId),
+                reverseLoanPayment: (params) => loanActions.reversePayment(params),
+                reverseEmiPayment: (emi, params) => emiActions.reversePayment(emi, params),
+                cancelBillPayment: async () => {
+                  throw new Error("Not a bill payment");
+                },
+              },
+              transaction.id,
+            );
+            if (paired.handled) {
+              await Promise.all(DERIVED_QUERY_PREFIXES.map((key) => queryClient.invalidateQueries({ queryKey: [key], exact: false })));
+              if (paired.warning) toast.warning("Deleted — schedule not restored", paired.warning);
+              return;
+            }
+          }
+          return deleteWithLinkedEffects(transaction, expense);
+        }, "Couldn't delete transaction"),
       /** `deleteTransaction` without the toast — for callers (Transaction Studio) that report errors themselves. */
       deleteTransactionWithLinkedEffects: (transaction: Transaction, expense?: Expense | null) => deleteWithLinkedEffects(transaction, expense),
       /**
@@ -416,7 +452,7 @@ export function useTransactionActions() {
       expenseRepository,
       installmentRepositoryFor: (scheduleId: string) => createInstallmentRepositoryFor(uid, scheduleId),
     };
-  }, [uid]);
+  }, [uid, loanActions, emiActions, peopleActions, queryClient]);
 }
 
 export type { TransactionType };
